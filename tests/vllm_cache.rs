@@ -1,26 +1,29 @@
-//! The multi-turn prefix-cache scenario (`tools/oracle/cache_trace.*`): the
-//! vLLM replay program on a unit step clock gives, for every turn, the
-//! first-token step, the last-token step and the cached tokens that the
-//! real scheduler gives (`cache_trace.out.csv`, from
-//! `tools/vllm_replay_oracle.py`). Lean proves the same for its executable
-//! semantics (`SeqOracle.lean`, `vllm_cache_trace`).
+//! The multi-turn prefix-cache scenario (`tools/oracle/cache_trace.*`).
+//!
+//! Its IR, `tools/oracle/cache_trace.ir.json`, is the vLLM replay program
+//! (`programs/vllm_replay.seq`) on a unit step clock with the scenario's
+//! engine, and the trace `cache_trace.csv` inlined as explicit sessions
+//! with turns: the IR carries its whole workload. Run, it gives for every
+//! turn the first-token step, the last-token step and the cached tokens
+//! that the real scheduler gives (`cache_trace.out.csv`, from
+//! `tools/vllm_replay_oracle.py`). The Lean theorem `vllm_cache_trace`
+//! of serving-queue-theory is generated from the same IR file.
+//! `SEQ_BLESS=1` rewrites the IR file (`make oracle-ir`).
 
 use std::path::Path;
 
-use seq::{Overrides, parser, run_file};
+use seq::{Overrides, Program, inline_trace, parser, program_path, run_ir};
 
-#[test]
-fn cache_trace_matches_the_real_scheduler() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let src = std::fs::read_to_string(dir.join("programs/vllm_replay.seq")).unwrap();
-    let csv = dir.join("tools/oracle/cache_trace.csv");
-    let src = src.replace(
-        "trace \"data/short_base.csv\" ordered;",
-        &format!("trace \"{}\" ordered;", csv.display()),
-    );
-    let tmp = std::env::temp_dir().join(format!("cache_trace_{}.seq", std::process::id()));
-    std::fs::write(&tmp, src).unwrap();
-    let mut ov = Overrides::default();
+fn dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
+}
+
+/// The scenario's IR, built from the program and the trace.
+fn cache_ir() -> Program {
+    let mut ov = Overrides {
+        trace: Some(dir().join("cache_trace.csv").display().to_string()),
+        ..Default::default()
+    };
     for (k, v) in [
         ("N", "3"),
         ("spacing", "3"),
@@ -38,8 +41,34 @@ fn cache_trace_matches_the_real_scheduler() {
         ov.lets
             .push((k.to_string(), parser::parse_expr(v).unwrap()));
     }
-    let r = run_file(&tmp, &ov).unwrap();
-    let _ = std::fs::remove_file(&tmp);
+    let src = std::fs::read_to_string(program_path("vllm_replay")).unwrap();
+    let p = seq::compile_source(&src, &ov).unwrap();
+    inline_trace(p, None).unwrap()
+}
+
+#[test]
+fn cache_ir_file_is_current() {
+    let path = dir().join("cache_trace.ir.json");
+    let want = cache_ir().to_json() + "\n";
+    if std::env::var_os("SEQ_BLESS").is_some() {
+        std::fs::write(&path, &want).unwrap();
+    } else {
+        let have = std::fs::read_to_string(&path).unwrap_or_default();
+        assert!(
+            have == want,
+            "{} is stale: run `make oracle-ir`",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn cache_trace_matches_the_real_scheduler() {
+    let ir =
+        Program::from_json(&std::fs::read_to_string(dir().join("cache_trace.ir.json")).unwrap())
+            .unwrap();
+    assert!(ir.trace.is_none(), "the IR carries its workload");
+    let r = run_ir(&ir, None).unwrap();
     let get = |name: &str| {
         let o = r.observe(name).unwrap();
         let mut m = std::collections::HashMap::new();
@@ -54,7 +83,7 @@ fn cache_trace_matches_the_real_scheduler() {
         get("latency"),
         get("cached_tokens"),
     );
-    let want = std::fs::read_to_string(dir.join("tools/oracle/cache_trace.out.csv")).unwrap();
+    let want = std::fs::read_to_string(dir().join("cache_trace.out.csv")).unwrap();
     let mut n = 0;
     for line in want.lines().skip(1) {
         let f: Vec<&str> = line.split(',').collect();

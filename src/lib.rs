@@ -80,21 +80,34 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 /// (the program file's directory), unless it was overridden.
 pub fn run_ir(p: &ir::Program, base: Option<&Path>) -> Result<Report, String> {
     p.validate()?;
-    let corpus = match &p.trace {
-        None => None,
-        Some(path) => {
-            let f = Path::new(path);
-            let full = if f.is_absolute() {
-                f.to_path_buf()
-            } else {
-                base.map_or_else(|| f.to_path_buf(), |b| b.join(f))
-            };
-            let text = std::fs::read_to_string(&full)
-                .map_err(|e| format!("cannot read trace {}: {e}", full.display()))?;
-            Some(trace::Corpus::from_csv(&text)?)
-        }
-    };
+    let corpus = load_trace(p, base)?;
     Ok(sim::Sim::new(p, corpus).run())
+}
+
+/// The program's trace corpus, if it names one; a relative path is resolved
+/// against `base`.
+pub fn load_trace(p: &ir::Program, base: Option<&Path>) -> Result<Option<trace::Corpus>, String> {
+    let Some(path) = &p.trace else {
+        return Ok(None);
+    };
+    let f = Path::new(path);
+    let full = if f.is_absolute() {
+        f.to_path_buf()
+    } else {
+        base.map_or_else(|| f.to_path_buf(), |b| b.join(f))
+    };
+    let text = std::fs::read_to_string(&full)
+        .map_err(|e| format!("cannot read trace {}: {e}", full.display()))?;
+    trace::Corpus::from_csv(&text).map(Some)
+}
+
+/// Replace the program's trace file by its sessions, as explicit sessions
+/// with turns in the IR (`ir::Program::inline_trace`).
+pub fn inline_trace(p: ir::Program, base: Option<&Path>) -> Result<ir::Program, String> {
+    match load_trace(&p, base)? {
+        None => Err("the program has no trace to inline".into()),
+        Some(c) => p.inline_trace(&c),
+    }
 }
 
 /// Parse, link and run program text. `base` resolves a relative trace path.

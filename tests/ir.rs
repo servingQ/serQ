@@ -97,3 +97,24 @@ fn explicit_sessions_preset_attributes() {
             .is_err()
     );
 }
+
+#[test]
+fn inlined_trace_runs_like_the_corpus() {
+    // the calibrated A100 replay over the full short-context trace (333
+    // sessions): the trace file and its sessions inlined into the IR give
+    // the same run
+    let path = seq::program_path("vllm_replay");
+    let src = std::fs::read_to_string(&path).unwrap();
+    let ov = Overrides {
+        horizon: Some(1500.0),
+        ..Default::default()
+    };
+    let p = compile_source(&src, &ov).unwrap();
+    let base = path.parent();
+    let from_trace = run_ir(&p, base).unwrap().text();
+    let inlined = seq::inline_trace(p, base).unwrap();
+    assert!(inlined.trace.is_none());
+    let q = Program::from_json(&inlined.to_json()).unwrap();
+    let from_ir = run_ir(&q, None).unwrap().text();
+    assert_eq!(from_trace, from_ir);
+}

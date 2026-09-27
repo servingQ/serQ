@@ -1,0 +1,818 @@
+{
+  "version": 2,
+  "attrs": [
+    "cached",
+    "serial",
+    "turn_no",
+    "new",
+    "out",
+    "think",
+    "more",
+    "forced",
+    "prev",
+    "prevout",
+    "t0",
+    "prompt",
+    "hitmax",
+    "c"
+  ],
+  "observes": [
+    "cached_tokens",
+    "prefix",
+    "sent",
+    "ttft",
+    "latency"
+  ],
+  "pools": [
+    {
+      "name": "kv",
+      "cap": 320.0,
+      "block": 16.0,
+      "evict": "Lru",
+      "preempt": "Lifo",
+      "queue": null,
+      "spill": null,
+      "admit_via": null
+    },
+    {
+      "name": "slots",
+      "cap": 4.0,
+      "block": null,
+      "evict": "Lru",
+      "preempt": "None",
+      "queue": null,
+      "spill": null,
+      "admit_via": 0
+    }
+  ],
+  "stages": [
+    {
+      "name": "engine",
+      "kind": {
+        "Step": {
+          "budget": {
+            "Num": 64.0
+          },
+          "cost": {
+            "Binary": [
+              "Add",
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Binary": [
+                          "Add",
+                          {
+                            "Num": 1.0
+                          },
+                          {
+                            "Binary": [
+                              "Mul",
+                              {
+                                "Num": 0.0
+                              },
+                              {
+                                "Ctx": "Ndec"
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "Binary": [
+                          "Mul",
+                          {
+                            "Num": 0.0
+                          },
+                          {
+                            "Ctx": "Kvb"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Binary": [
+                      "Mul",
+                      {
+                        "Num": 0.0
+                      },
+                      {
+                        "Ctx": "Npre"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Binary": [
+                  "Mul",
+                  {
+                    "Num": 0.0
+                  },
+                  {
+                    "Ctx": "Attn"
+                  }
+                ]
+              }
+            ]
+          },
+          "chunk": {
+            "Num": 0.0
+          },
+          "exclusive_prefill": false,
+          "decode_first": false,
+          "memory": 0
+        }
+      }
+    },
+    {
+      "name": "front",
+      "kind": "Delay"
+    },
+    {
+      "name": "gate",
+      "kind": "Delay"
+    },
+    {
+      "name": "tool",
+      "kind": "Delay"
+    }
+  ],
+  "arrival": {
+    "Sessions": [
+      {
+        "attrs": [],
+        "turns": [
+          [
+            [
+              3,
+              100.0
+            ],
+            [
+              4,
+              3.0
+            ],
+            [
+              5,
+              2.0
+            ],
+            [
+              7,
+              0.0
+            ]
+          ],
+          [
+            [
+              3,
+              150.0
+            ],
+            [
+              4,
+              3.0
+            ],
+            [
+              5,
+              2.0
+            ],
+            [
+              7,
+              0.0
+            ]
+          ],
+          [
+            [
+              3,
+              210.0
+            ],
+            [
+              4,
+              3.0
+            ],
+            [
+              5,
+              0.0
+            ],
+            [
+              7,
+              0.0
+            ]
+          ]
+        ]
+      },
+      {
+        "attrs": [],
+        "turns": [
+          [
+            [
+              3,
+              120.0
+            ],
+            [
+              4,
+              3.0
+            ],
+            [
+              5,
+              2.0
+            ],
+            [
+              7,
+              0.0
+            ]
+          ],
+          [
+            [
+              3,
+              180.0
+            ],
+            [
+              4,
+              3.0
+            ],
+            [
+              5,
+              2.0
+            ],
+            [
+              7,
+              0.0
+            ]
+          ],
+          [
+            [
+              3,
+              230.0
+            ],
+            [
+              4,
+              3.0
+            ],
+            [
+              5,
+              0.0
+            ],
+            [
+              7,
+              0.0
+            ]
+          ]
+        ]
+      },
+      {
+        "attrs": [],
+        "turns": [
+          [
+            [
+              3,
+              90.0
+            ],
+            [
+              4,
+              3.0
+            ],
+            [
+              5,
+              2.0
+            ],
+            [
+              7,
+              0.0
+            ]
+          ],
+          [
+            [
+              3,
+              140.0
+            ],
+            [
+              4,
+              3.0
+            ],
+            [
+              5,
+              2.0
+            ],
+            [
+              7,
+              0.0
+            ]
+          ],
+          [
+            [
+              3,
+              200.0
+            ],
+            [
+              4,
+              3.0
+            ],
+            [
+              5,
+              0.0
+            ],
+            [
+              7,
+              0.0
+            ]
+          ]
+        ]
+      }
+    ]
+  },
+  "trace": null,
+  "trace_ordered": false,
+  "init": 0,
+  "turn": 1,
+  "route": 2,
+  "blocks": [
+    [],
+    [],
+    [
+      {
+        "Run": {
+          "stage": {
+            "base": 2,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Plain",
+          "work": {
+            "Binary": [
+              "Mul",
+              {
+                "Attr": 1
+              },
+              {
+                "Num": 3.0
+              }
+            ]
+          },
+          "growing": null
+        }
+      },
+      {
+        "Set": [
+          8,
+          {
+            "Num": 0.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          9,
+          {
+            "Num": 0.0
+          }
+        ]
+      },
+      "Turn",
+      {
+        "Loop": 3
+      }
+    ],
+    [
+      {
+        "Set": [
+          10,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      },
+      {
+        "Set": [
+          11,
+          {
+            "Attr": 3
+          }
+        ]
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 1,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Plain",
+          "work": {
+            "Binary": [
+              "Add",
+              {
+                "Num": 0.0
+              },
+              {
+                "Binary": [
+                  "Mul",
+                  {
+                    "Num": 0.0
+                  },
+                  {
+                    "Attr": 11
+                  }
+                ]
+              }
+            ]
+          },
+          "growing": null
+        }
+      },
+      {
+        "Set": [
+          12,
+          {
+            "Cond": [
+              {
+                "Attr": 7
+              },
+              {
+                "Num": 0.0
+              },
+              {
+                "Binary": [
+                  "Mul",
+                  {
+                    "Call": [
+                      "Floor",
+                      [
+                        {
+                          "Expr": {
+                            "Binary": [
+                              "Div",
+                              {
+                                "Call": [
+                                  "Min",
+                                  [
+                                    {
+                                      "Expr": {
+                                        "Attr": 8
+                                      }
+                                    },
+                                    {
+                                      "Expr": {
+                                        "Binary": [
+                                          "Sub",
+                                          {
+                                            "Attr": 11
+                                          },
+                                          {
+                                            "Num": 1.0
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  ]
+                                ]
+                              },
+                              {
+                                "Num": 16.0
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    ]
+                  },
+                  {
+                    "Num": 16.0
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "Hold": {
+          "pools": [
+            [
+              {
+                "base": 1,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Num": 1.0
+              },
+              null
+            ],
+            [
+              {
+                "base": 0,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Call": [
+                      "Min",
+                      [
+                        {
+                          "Expr": {
+                            "Call": [
+                              "CachedIn",
+                              [
+                                {
+                                  "Pool": {
+                                    "base": 0,
+                                    "count": 1,
+                                    "index": null
+                                  }
+                                }
+                              ]
+                            ]
+                          }
+                        },
+                        {
+                          "Expr": {
+                            "Attr": 12
+                          }
+                        }
+                      ]
+                    ]
+                  },
+                  {
+                    "Call": [
+                      "Min",
+                      [
+                        {
+                          "Expr": {
+                            "Binary": [
+                              "Sub",
+                              {
+                                "Attr": 11
+                              },
+                              {
+                                "Call": [
+                                  "Min",
+                                  [
+                                    {
+                                      "Expr": {
+                                        "Call": [
+                                          "CachedIn",
+                                          [
+                                            {
+                                              "Pool": {
+                                                "base": 0,
+                                                "count": 1,
+                                                "index": null
+                                              }
+                                            }
+                                          ]
+                                        ]
+                                      }
+                                    },
+                                    {
+                                      "Expr": {
+                                        "Attr": 12
+                                      }
+                                    }
+                                  ]
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "Expr": {
+                            "Call": [
+                              "BudgetLeft",
+                              [
+                                {
+                                  "Stage": {
+                                    "base": 0,
+                                    "count": 1,
+                                    "index": null
+                                  }
+                                }
+                              ]
+                            ]
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              },
+              {
+                "Attr": 11
+              }
+            ]
+          ],
+          "reuse": {
+            "Attr": 12
+          },
+          "body": 4,
+          "cache": {
+            "Binary": [
+              "Sub",
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Attr": 11
+                  },
+                  {
+                    "Attr": 4
+                  }
+                ]
+              },
+              {
+                "Num": 1.0
+              }
+            ]
+          }
+        }
+      },
+      {
+        "Observe": [
+          4,
+          {
+            "Binary": [
+              "Sub",
+              {
+                "Ctx": "Now"
+              },
+              {
+                "Attr": 10
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "Set": [
+          8,
+          {
+            "Attr": 11
+          }
+        ]
+      },
+      {
+        "Set": [
+          9,
+          {
+            "Attr": 4
+          }
+        ]
+      },
+      {
+        "Branch": [
+          {
+            "Attr": 6
+          },
+          5,
+          6
+        ]
+      }
+    ],
+    [
+      {
+        "Set": [
+          13,
+          {
+            "Attr": 0
+          }
+        ]
+      },
+      {
+        "Observe": [
+          0,
+          {
+            "Attr": 13
+          }
+        ]
+      },
+      {
+        "Observe": [
+          1,
+          {
+            "Binary": [
+              "Add",
+              {
+                "Attr": 8
+              },
+              {
+                "Attr": 9
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "Observe": [
+          2,
+          {
+            "Attr": 10
+          }
+        ]
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Prefill",
+          "work": {
+            "Binary": [
+              "Sub",
+              {
+                "Attr": 11
+              },
+              {
+                "Attr": 13
+              }
+            ]
+          },
+          "growing": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          }
+        }
+      },
+      {
+        "Observe": [
+          3,
+          {
+            "Binary": [
+              "Sub",
+              {
+                "Ctx": "Now"
+              },
+              {
+                "Attr": 10
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Decode",
+          "work": {
+            "Binary": [
+              "Sub",
+              {
+                "Attr": 4
+              },
+              {
+                "Num": 1.0
+              }
+            ]
+          },
+          "growing": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          }
+        }
+      }
+    ],
+    [
+      {
+        "Run": {
+          "stage": {
+            "base": 3,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Plain",
+          "work": {
+            "Attr": 5
+          },
+          "growing": null
+        }
+      },
+      "Turn"
+    ],
+    [
+      "End"
+    ]
+  ],
+  "horizon": 6000.0,
+  "warmup": 0.0,
+  "seed": 1,
+  "slot_cached": 0,
+  "slot_serial": 1,
+  "slot_turn": 2,
+  "slot_new": 3,
+  "slot_out": 4,
+  "slot_think": 5,
+  "slot_more": 6,
+  "slot_forced": 7
+}

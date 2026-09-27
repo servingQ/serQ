@@ -124,6 +124,8 @@ struct Session {
     holds: Vec<Hold>,
     pending: Option<Pending>,
     trace: Option<(usize, usize)>,
+    /// (index in `CArrival::Sessions`, next turn) of a session with explicit turns
+    script: Option<(usize, usize)>,
     /// Order of the session's latest hold admission: residents of a step
     /// stage are served in this order (vLLM's `running` list is in order of
     /// admission; a preempted request re-enters at the end).
@@ -465,8 +467,9 @@ impl<'p> Sim<'p> {
                 }
             }
             CArrival::Sessions(ss) => {
-                for s in ss {
-                    self.spawn_with(&s.attrs);
+                for (k, s) in ss.iter().enumerate() {
+                    let script = (!s.turns.is_empty()).then_some(k);
+                    self.spawn_with(&s.attrs, script);
                 }
             }
             CArrival::None => {}
@@ -569,15 +572,15 @@ impl<'p> Sim<'p> {
     // ------------------------------------------------------ sessions ----
 
     fn spawn(&mut self) {
-        self.spawn_with(&[]);
+        self.spawn_with(&[], None);
     }
 
-    fn spawn_with(&mut self, preset: &[(usize, f64)]) {
+    fn spawn_with(&mut self, preset: &[(usize, f64)], script: Option<usize>) {
         let serial = self.next_serial;
         self.next_serial += 1;
         let mut attrs = vec![0.0; self.p.attrs.len()];
         attrs[self.p.slot_serial] = serial as f64;
-        let trace = self.trace.as_ref().map(|c| {
+        let trace = self.trace.as_ref().filter(|_| script.is_none()).map(|c| {
             let i = if self.p.trace_ordered {
                 (serial as usize) % c.sessions.len()
             } else {
@@ -597,6 +600,7 @@ impl<'p> Sim<'p> {
             holds: vec![],
             pending: None,
             trace,
+            script: script.map(|k| (k, 0)),
             adm_seq: u64::MAX,
         };
         let sid = match self.free.pop() {
@@ -657,7 +661,22 @@ impl<'p> Sim<'p> {
         if self.warm {
             self.turns += 1;
         }
-        if let Some((ci, ti)) = self.sessions[sid].trace {
+        if let Some((k, ti)) = self.sessions[sid].script {
+            let CArrival::Sessions(ss) = &p.arrival else {
+                unreachable!("explicit turns come from explicit sessions")
+            };
+            let turns = &ss[k].turns;
+            if ti < turns.len() {
+                for &(slot, v) in &turns[ti] {
+                    self.sessions[sid].attrs[slot] = v;
+                }
+                self.sessions[sid].attrs[p.slot_more] =
+                    if ti + 1 < turns.len() { 1.0 } else { 0.0 };
+                self.sessions[sid].script = Some((k, ti + 1));
+            } else {
+                self.sessions[sid].attrs[p.slot_more] = 0.0;
+            }
+        } else if let Some((ci, ti)) = self.sessions[sid].trace {
             let c = self.trace.as_ref().unwrap();
             let turns = &c.sessions[ci].turns;
             if ti < turns.len() {

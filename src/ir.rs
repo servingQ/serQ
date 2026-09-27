@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Version of the IR format. Bump on any change to the types below.
-pub const IR_VERSION: u32 = 1;
+pub const IR_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -281,10 +281,17 @@ pub struct Program {
     pub slot_forced: usize,
 }
 
-/// One explicit session of `CArrival::Sessions`: attribute slot, value.
+/// One explicit session of `CArrival::Sessions`: preset attributes
+/// (slot, value) and, optionally, the session's turns. A session with turns
+/// draws them in order at every `turn` statement instead of from the trace
+/// corpus: each sets its (slot, value) pairs, `more` is 1 while another turn
+/// remains (0 after the last), and `turn_no` counts turns, as for an
+/// ordered trace.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct SessionInit {
     pub attrs: Vec<(usize, f64)>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<Vec<(usize, f64)>>,
 }
 
 impl Program {
@@ -335,6 +342,46 @@ impl Program {
             out.push(init);
         }
         self.arrival = CArrival::Sessions(out);
+        Ok(self)
+    }
+
+    /// Replace an ordered trace corpus by explicit sessions with turns, so
+    /// that the IR carries its workload instance as data: `n` sessions (the
+    /// program's `batch` or `closed` count), session `i` replaying trace
+    /// session `i mod len`, each turn setting `new`, `out`, `think`,
+    /// `forced`. The program must arrive in a batch at time 0 (arrival
+    /// times are the route's business, e.g. a delay of `serial * spacing`).
+    pub fn inline_trace(mut self, corpus: &crate::trace::Corpus) -> Result<Program, String> {
+        let n = match self.arrival {
+            CArrival::Batch(n) => n,
+            ref a => return Err(format!("inline_trace needs `arrive batch(n)`, not {a:?}")),
+        };
+        if !self.trace_ordered {
+            return Err("inline_trace needs an ordered trace".into());
+        }
+        if corpus.sessions.is_empty() {
+            return Err("empty trace".into());
+        }
+        let sessions = (0..n)
+            .map(|i| SessionInit {
+                attrs: vec![],
+                turns: corpus.sessions[i % corpus.sessions.len()]
+                    .turns
+                    .iter()
+                    .map(|t| {
+                        vec![
+                            (self.slot_new, t.new),
+                            (self.slot_out, t.out),
+                            (self.slot_think, t.think),
+                            (self.slot_forced, t.forced),
+                        ]
+                    })
+                    .collect(),
+            })
+            .collect();
+        self.arrival = CArrival::Sessions(sessions);
+        self.trace = None;
+        self.trace_ordered = false;
         Ok(self)
     }
 
@@ -396,7 +443,7 @@ impl Program {
         }
         if let CArrival::Sessions(ss) = &self.arrival {
             for s in ss {
-                for (slot, _) in &s.attrs {
+                for (slot, _) in s.attrs.iter().chain(s.turns.iter().flatten()) {
                     v.attr(*slot)?;
                 }
             }

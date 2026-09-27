@@ -1,6 +1,6 @@
 //! `seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
 //! `seq-lang check FILE [--set k=expr]...`
-//! `seq-lang ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F]`
+//! `seq-lang ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]`
 //!
 //! FILE is program text (`.seq`) or IR (`.json`, as written by `seq-lang ir`).
 
@@ -11,7 +11,7 @@ use seq::{Overrides, parser};
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set name=expr]... [--trace F] [--json] [--dump DIR]\n  seq-lang check FILE [--set name=expr]...\n  seq-lang ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F]\n\nFILE is program text (.seq) or IR (.json, as written by `seq-lang ir`)."
+        "usage:\n  seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set name=expr]... [--trace F] [--json] [--dump DIR]\n  seq-lang check FILE [--set name=expr]...\n  seq-lang ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]\n\nFILE is program text (.seq) or IR (.json, as written by `seq-lang ir`)."
     );
     exit(2)
 }
@@ -31,6 +31,7 @@ fn main() {
     let mut ov = Overrides::default();
     let mut json = false;
     let mut dump: Option<String> = None;
+    let mut inline = false;
     let mut i = 2;
     while i < args.len() {
         let next = |i: &mut usize| -> String {
@@ -53,11 +54,20 @@ fn main() {
             }
             "--json" => json = true,
             "--dump" => dump = Some(next(&mut i)),
+            "--inline-trace" => inline = true,
             _ => usage(),
         }
         i += 1;
     }
-    let prog = seq::load(file, &ov).unwrap_or_else(|e| fail(file, e));
+    let base = if ov.trace.is_some() {
+        None
+    } else {
+        file.parent()
+    };
+    let mut prog = seq::load(file, &ov).unwrap_or_else(|e| fail(file, e));
+    if inline {
+        prog = seq::inline_trace(prog, base).unwrap_or_else(|e| fail(file, e));
+    }
     match cmd {
         "check" => println!(
             "OK: {} pool(s), {} stage(s), {} attribute(s), {} block(s)",
@@ -68,11 +78,6 @@ fn main() {
         ),
         "ir" => println!("{}", prog.to_json()),
         "run" => {
-            let base = if ov.trace.is_some() {
-                None
-            } else {
-                file.parent()
-            };
             let r = seq::run_ir(&prog, base).unwrap_or_else(|e| fail(file, e));
             if let Some(d) = &dump
                 && let Err(e) = r.dump(Path::new(d))

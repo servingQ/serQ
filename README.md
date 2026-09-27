@@ -41,6 +41,7 @@ cargo run --release -- run programs/vllm.seq --seed 2 --horizon 3000
 cargo run --release -- ir programs/vllm.seq > vllm.json      # the IR
 cargo run --release -- run vllm.json --seed 3                # run IR directly
 cargo run --release -- run programs/vllm_replay.seq --trace my_trace.csv
+cargo run --release -- ir programs/vllm_replay.seq --inline-trace   # the trace as the sessions' turns
 cargo run --release -- run programs/agentic.seq --set N=32 --set C=3e5 --set maxctx=1.5e5 --json
 cargo run --release -- check programs/replica.seq
 ```
@@ -48,11 +49,11 @@ cargo run --release -- check programs/replica.seq
 As a dependency, pin a release tag:
 
 ```toml
-seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.0-dev2" }
+seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.0-dev3" }
 ```
 
 The CLI can be installed with
-`cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-dev2 --locked --root <dir>`,
+`cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-dev3 --locked --root <dir>`,
 or taken from the release assets.
 
 ## Releases
