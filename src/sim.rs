@@ -457,11 +457,16 @@ impl<'p> Sim<'p> {
         if p.warmup > 0.0 {
             self.at(p.warmup, Ev::EndWarmup);
         }
-        match p.arrival {
+        match &p.arrival {
             CArrival::Poisson(_) => self.at(0.0, Ev::Arrive),
-            CArrival::Closed(n) | CArrival::Batch(n) => {
+            &CArrival::Closed(n) | &CArrival::Batch(n) => {
                 for _ in 0..n {
                     self.spawn();
+                }
+            }
+            CArrival::Sessions(ss) => {
+                for s in ss {
+                    self.spawn_with(&s.attrs);
                 }
             }
             CArrival::None => {}
@@ -564,6 +569,10 @@ impl<'p> Sim<'p> {
     // ------------------------------------------------------ sessions ----
 
     fn spawn(&mut self) {
+        self.spawn_with(&[]);
+    }
+
+    fn spawn_with(&mut self, preset: &[(usize, f64)]) {
         let serial = self.next_serial;
         self.next_serial += 1;
         let mut attrs = vec![0.0; self.p.attrs.len()];
@@ -603,9 +612,13 @@ impl<'p> Sim<'p> {
         self.by_serial.insert(serial, sid);
         self.live += 1;
         self.arrivals += 1;
-        // `init` runs at arrival, before the first `turn`.
+        // `init` runs at arrival, before the first `turn`; an explicit
+        // session's preset attributes then override it.
         let init = self.p.init;
         self.exec_workload_block(sid, init);
+        for &(slot, v) in preset {
+            self.sessions[sid].attrs[slot] = v;
+        }
         self.ready.push_back(sid);
     }
 

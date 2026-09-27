@@ -1,9 +1,16 @@
-# seQ: a language for the formal verification and simulation of LLM serving systems
+# seQ: the text syntax, the semantics, and the vLLM correspondence
+
+The definition of a seQ program is its IR (`docs/ir.md`, `src/ir.rs`).
+This document describes the text syntax, which compiles to the IR, and the
+semantics of the IR's constructs, written in terms of that syntax. Tools
+that know what they want to run build the IR directly (for example the
+vLLM oracle scenarios, `tools/oracle/*.ir.json`).
 
 Status: 2026-09-27 (moved into seQ from the research repository
 `serving-queue-theory` the same day). Reference implementation: the crate
 `seq-lang` at the repository root (Rust: parser, interpreter, CLI
-`seq-lang`). Programs: `programs/*.seq`. Checks: `make check`. The review
+`seq-lang`: `run`, `check`, and `ir` to print a program's IR). Programs:
+`programs/*.seq`. Checks: `make check`. The review
 of the first version against vLLM, the design decisions and the tooling
 survey are in `docs/review.md`.
 
@@ -236,6 +243,7 @@ two-resource replica is `programs/replica.seq` and
 | `pd_tandem.seq`, `lecture_pd.seq` | tandem PD, the lecture's disaggregated replica | capacity formulas within 2 %; stability |
 | `routing.seq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
 | `vllm.seq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
+| `vllm_request.seq` | one vLLM v1 request on the step clock; compiled per scenario to `tools/oracle/*.ir.json` | the six upstream oracle scenarios (`tests/vllm_oracle.rs`), the Lean theorems generated from the same IR |
 | `vllm_replay.seq` | vLLM v1 on the A100 testbed replaying the short-context trace | ten measured runs (Section 8) |
 
 ## 6. The simulator uses seQ

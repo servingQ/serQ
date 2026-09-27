@@ -5,6 +5,8 @@
 //! turn) and a *route* (the statements every session executes). See
 //! `docs/language.md` for the semantics.
 
+pub use crate::ir::{BinOp, Preempt, RunMode, UnOp};
+
 /// Expressions are evaluated to `f64`. Booleans are 0 / 1.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
@@ -36,43 +38,12 @@ pub struct Ref {
     pub index: Option<Box<Expr>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnOp {
-    Neg,
-    Not,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BinOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Pow,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    Eq,
-    Ne,
-    And,
-    Or,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum EvictOrder {
     /// Least recently released first.
     Lru,
     /// Ascending lexicographic key, evaluated per cached entry.
     By(Vec<Expr>),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Preempt {
-    /// A failed growth waits.
-    None,
-    /// A failed growth preempts the most recently admitted holder (vLLM).
-    Lifo,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -161,16 +132,6 @@ pub struct Workload {
     pub trace_ordered: bool,
     pub init: Vec<Stmt>,
     pub turn: Vec<Stmt>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunMode {
-    /// Work in seconds at rate 1 (fifo, ps, delay).
-    Plain,
-    /// Step stage: prefill of `w` tokens.
-    Prefill,
-    /// Step stage: decode of `w` tokens, one per iteration.
-    Decode,
 }
 
 #[derive(Clone, Debug, PartialEq)]

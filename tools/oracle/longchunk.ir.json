@@ -1,0 +1,285 @@
+{
+  "version": 1,
+  "attrs": [
+    "cached",
+    "serial",
+    "turn_no",
+    "new",
+    "out",
+    "think",
+    "more",
+    "forced",
+    "prompt",
+    "o",
+    "arrive"
+  ],
+  "observes": [
+    "first",
+    "done"
+  ],
+  "pools": [
+    {
+      "name": "slots",
+      "cap": 16.0,
+      "block": null,
+      "evict": "Lru",
+      "preempt": "None",
+      "queue": null,
+      "spill": null,
+      "admit_via": 0
+    },
+    {
+      "name": "kv",
+      "cap": 15984.0,
+      "block": 16.0,
+      "evict": "Lru",
+      "preempt": "Lifo",
+      "queue": null,
+      "spill": null,
+      "admit_via": null
+    }
+  ],
+  "stages": [
+    {
+      "name": "engine",
+      "kind": {
+        "Step": {
+          "budget": {
+            "Num": 4096.0
+          },
+          "cost": {
+            "Num": 1.0
+          },
+          "chunk": {
+            "Num": 1000.0
+          },
+          "exclusive_prefill": false,
+          "decode_first": false,
+          "memory": 1
+        }
+      }
+    },
+    {
+      "name": "gate",
+      "kind": "Delay"
+    }
+  ],
+  "arrival": {
+    "Sessions": [
+      {
+        "attrs": [
+          [
+            8,
+            3000.0
+          ],
+          [
+            9,
+            2.0
+          ],
+          [
+            10,
+            0.0
+          ]
+        ]
+      },
+      {
+        "attrs": [
+          [
+            8,
+            3000.0
+          ],
+          [
+            9,
+            2.0
+          ],
+          [
+            10,
+            0.0
+          ]
+        ]
+      }
+    ]
+  },
+  "trace": null,
+  "trace_ordered": false,
+  "init": 0,
+  "turn": 1,
+  "route": 2,
+  "blocks": [
+    [
+      {
+        "Set": [
+          8,
+          {
+            "Num": 1.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          9,
+          {
+            "Num": 1.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          10,
+          {
+            "Num": 0.0
+          }
+        ]
+      }
+    ],
+    [],
+    [
+      {
+        "Run": {
+          "stage": {
+            "base": 1,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Plain",
+          "work": {
+            "Attr": 10
+          },
+          "growing": null
+        }
+      },
+      {
+        "Hold": {
+          "pools": [
+            [
+              {
+                "base": 0,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Num": 1.0
+              },
+              null
+            ],
+            [
+              {
+                "base": 1,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Call": [
+                  "Min",
+                  [
+                    {
+                      "Expr": {
+                        "Attr": 8
+                      }
+                    },
+                    {
+                      "Expr": {
+                        "Call": [
+                          "BudgetLeft",
+                          [
+                            {
+                              "Stage": {
+                                "base": 0,
+                                "count": 1,
+                                "index": null
+                              }
+                            }
+                          ]
+                        ]
+                      }
+                    }
+                  ]
+                ]
+              },
+              {
+                "Attr": 8
+              }
+            ]
+          ],
+          "reuse": null,
+          "body": 3,
+          "cache": null
+        }
+      },
+      {
+        "Observe": [
+          1,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      },
+      "End"
+    ],
+    [
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Prefill",
+          "work": {
+            "Attr": 8
+          },
+          "growing": {
+            "base": 1,
+            "count": 1,
+            "index": null
+          }
+        }
+      },
+      {
+        "Observe": [
+          0,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Decode",
+          "work": {
+            "Binary": [
+              "Sub",
+              {
+                "Attr": 9
+              },
+              {
+                "Num": 1.0
+              }
+            ]
+          },
+          "growing": {
+            "base": 1,
+            "count": 1,
+            "index": null
+          }
+        }
+      }
+    ]
+  ],
+  "horizon": 100000.0,
+  "warmup": 0.0,
+  "seed": 1,
+  "slot_cached": 0,
+  "slot_serial": 1,
+  "slot_turn": 2,
+  "slot_new": 3,
+  "slot_out": 4,
+  "slot_think": 5,
+  "slot_more": 6,
+  "slot_forced": 7
+}

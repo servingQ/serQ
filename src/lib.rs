@@ -1,11 +1,12 @@
 //! # seQ
 //!
-//! A small language in which an LLM serving deployment is a program: a
-//! *deployment* of memory pools and stages, a *workload* of sessions, and a
-//! *route* every session follows. This crate parses, links and runs seQ
-//! programs as discrete-event simulations. The language is specified in
-//! `docs/language.md`; `programs/` holds the deployments of the
-//! paper and of vLLM v1.
+//! A seQ program describes an LLM serving deployment: memory pools and
+//! stages, a workload of sessions, and the route every session follows.
+//! Its definition is the IR (`ir::Program`, `docs/ir.md`): `sim` runs it,
+//! the Lean model is generated from it, and tools build or edit it as data.
+//! The text syntax (`parser`, `link`; `docs/language.md`) is one frontend
+//! that compiles to it. `programs/` holds example deployments, among them
+//! vLLM v1.
 //!
 //! ```no_run
 //! let src = std::fs::read_to_string("programs/mg1.seq").unwrap();
@@ -14,6 +15,7 @@
 //! ```
 
 pub mod ast;
+pub mod ir;
 pub mod lexer;
 pub mod link;
 pub mod parser;
@@ -24,42 +26,101 @@ pub mod trace;
 
 use std::path::Path;
 
+pub use ir::Program;
 pub use link::{Linked, Overrides};
 pub use report::Report;
 pub use stats::Estimate;
 
-/// Parse, link and run a program. `base` resolves a relative trace path.
-pub fn run_source(src: &str, ov: &Overrides, base: Option<&Path>) -> Result<Report, String> {
+/// Compile program text to IR (parse and link; `--set` overrides apply).
+pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
     let prog = parser::parse(src).map_err(|e| e.to_string())?;
-    let linked = link::link(&prog, ov).map_err(|e| e.to_string())?;
-    let corpus = match &linked.trace {
+    let mut p = link::link(&prog, ov).map_err(|e| e.to_string())?;
+    if let Some(t) = &ov.trace {
+        p.trace = Some(t.clone());
+    }
+    Ok(p)
+}
+
+/// Parse and link only (static checks).
+pub fn check_source(src: &str, ov: &Overrides) -> Result<Linked, String> {
+    compile_source(src, ov)
+}
+
+/// Load a program file as IR: `.json` is read as IR (only the run
+/// parameters and the trace can be overridden, since constants are already
+/// folded); anything else is compiled from text.
+pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    if path.extension().is_some_and(|e| e == "json") {
+        if !ov.lets.is_empty() {
+            return Err("--set applies to program text, not to IR (constants are folded)".into());
+        }
+        let mut p = ir::Program::from_json(&text)?;
+        if let Some(h) = ov.horizon {
+            p.horizon = h;
+        }
+        if let Some(w) = ov.warmup {
+            p.warmup = w;
+        }
+        if let Some(s) = ov.seed {
+            p.seed = s;
+        }
+        if let Some(t) = &ov.trace {
+            p.trace = Some(t.clone());
+        }
+        p.validate()?;
+        Ok(p)
+    } else {
+        compile_source(&text, ov)
+    }
+}
+
+/// Run an IR program. A relative trace path is resolved against `base`
+/// (the program file's directory), unless it was overridden.
+pub fn run_ir(p: &ir::Program, base: Option<&Path>) -> Result<Report, String> {
+    p.validate()?;
+    let corpus = match &p.trace {
         None => None,
         Some(path) => {
-            let p = Path::new(path);
-            let full = if p.is_absolute() {
-                p.to_path_buf()
+            let f = Path::new(path);
+            let full = if f.is_absolute() {
+                f.to_path_buf()
             } else {
-                base.map_or_else(|| p.to_path_buf(), |b| b.join(p))
+                base.map_or_else(|| f.to_path_buf(), |b| b.join(f))
             };
             let text = std::fs::read_to_string(&full)
                 .map_err(|e| format!("cannot read trace {}: {e}", full.display()))?;
             Some(trace::Corpus::from_csv(&text)?)
         }
     };
-    Ok(sim::Sim::new(&linked, corpus).run())
+    Ok(sim::Sim::new(p, corpus).run())
 }
 
-/// Parse and link only (static checks).
-pub fn check_source(src: &str, ov: &Overrides) -> Result<Linked, String> {
-    let prog = parser::parse(src).map_err(|e| e.to_string())?;
-    link::link(&prog, ov).map_err(|e| e.to_string())
+/// Parse, link and run program text. `base` resolves a relative trace path.
+pub fn run_source(src: &str, ov: &Overrides, base: Option<&Path>) -> Result<Report, String> {
+    let p = compile_source(src, ov)?;
+    run_ir(&p, if ov.trace.is_some() { None } else { base })
 }
 
-/// Read a program file and run it; `--set` style overrides apply.
+/// Read a program file (text or IR) and run it.
 pub fn run_file(path: &Path, ov: &Overrides) -> Result<Report, String> {
-    let src = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    run_source(&src, ov, path.parent())
+    let p = load(path, ov)?;
+    run_ir(
+        &p,
+        if ov.trace.is_some() {
+            None
+        } else {
+            path.parent()
+        },
+    )
+}
+
+/// The path of `programs/<name>.seq` in this crate.
+pub fn program_path(name: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("programs")
+        .join(format!("{name}.seq"))
 }
 
 /// Convenience for tests: run `programs/<name>.seq` with overrides given

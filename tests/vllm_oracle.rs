@@ -1,240 +1,158 @@
 //! Differential test against the real vLLM v1 scheduler (upstream
 //! `ref/vllm` at 0c87a197, `tools/vllm_oracle.py` driven with a fake model
-//! runner, rbln platform plugin disabled with `VLLM_PLUGINS=`). For each
-//! scenario in `tools/oracle/*.json` the oracle's output (`*.out.json`)
-//! gives the step of every request's first token and last token and the
-//! number of preemptions; the same scenario as a seQ program with an
-//! iteration cost of 1 must give the same steps.
+//! runner, rbln platform plugin disabled with `VLLM_PLUGINS=`).
+//!
+//! One program, `programs/vllm_request.seq`, is compiled to IR once per
+//! scenario of `tools/oracle/*.json` (the scenario's engine as constants),
+//! and the scenario's requests become the IR's explicit sessions. The
+//! result is committed as `tools/oracle/<name>.ir.json`: the IR is the
+//! artifact both sides use. This test runs it (an iteration costs 1) and
+//! compares with the oracle's answer (`*.out.json`: the step of every
+//! request's first and last token, the number of preemptions); the Lean
+//! theorems of serving-queue-theory are generated from the same files.
+//! `oracle_ir_files_are_current` fails if a file is stale; regenerate with
+//! `SEQ_BLESS=1 cargo test --release --test vllm_oracle` (`make oracle-ir`).
+//!
+//! The scenarios: `preempt` (the second request cannot grow its next chunk
+//! and preempts itself, vLLM `running[-1]`), `chunked` (a 3000-token prompt
+//! in 1024-token chunks, later requests share what its last chunk leaves),
+//! `seqcap` (`max_num_seqs = 2` admits two of four), `hol` (FCFS with
+//! head-of-line blocking on memory), `mixed` (mixed lengths and arrivals
+//! on a small pool), `longchunk` (`long_prefill_token_threshold`).
 
-use seq::{Overrides, run_source};
+use std::path::Path;
 
-#[derive(Clone)]
-struct Req {
-    prompt: usize,
-    out: usize,
-    arrive: usize,
+use seq::{Overrides, compile_source, parser, program_path, run_ir};
+use serde_json::Value;
+
+fn dir() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
 }
 
-struct Scenario {
-    budget: usize,
-    max_seqs: usize,
-    bs: usize,
-    blocks: usize,
-    chunk: usize,
-    reqs: Vec<Req>,
-    /// (first-token step, done step) per request, from the oracle
-    want: Vec<(f64, f64)>,
-    preemptions: u64,
+fn num(v: &Value, k: &str) -> f64 {
+    v.get(k).and_then(Value::as_f64).unwrap_or(0.0)
 }
 
-fn r(prompt: usize, out: usize, arrive: usize) -> Req {
-    Req {
-        prompt,
-        out,
-        arrive,
-    }
+fn read(name: &str) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(dir().join(name)).unwrap()).unwrap()
 }
 
-fn program(sc: &Scenario) -> String {
-    let n = sc.reqs.len();
-    let sel = |f: &dyn Fn(&Req) -> usize| -> String {
-        // nested conditionals on `serial`
-        let mut e = format!("{}", f(&sc.reqs[n - 1]));
-        for i in (0..n - 1).rev() {
-            e = format!("(serial == {i} ? {} : {e})", f(&sc.reqs[i]));
-        }
-        e
+/// The IR of a scenario: the program compiled with the scenario's engine,
+/// the requests as explicit sessions.
+fn oracle_ir(name: &str) -> seq::Program {
+    let sc: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir().join(format!("{name}.json"))).unwrap())
+            .unwrap();
+    let set = |k: &str, v: f64| (k.to_string(), parser::parse_expr(&format!("{v}")).unwrap());
+    let ov = Overrides {
+        lets: vec![
+            set("bs", num(&sc, "block_size")),
+            set("B", num(&sc, "budget")),
+            set("blocks", num(&sc, "num_blocks") - 1.0), // the null block
+            set("max_seqs", num(&sc, "max_seqs")),
+            set("chunk", num(&sc, "chunk")),
+        ],
+        ..Default::default()
     };
-    format!(
-        r#"
-        let bs = {bs};
-        let B = {budget};
-        pool kv {{ cap {blocks} * bs; block bs; evict lru; preempt lifo; }}
-        pool slots {{ cap {max_seqs}; admit via engine; }}
-        stage engine : step {{ budget B; chunk {chunk}; cost 1; memory kv; }}
-        stage gate : delay;
-        workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; set arrive = {arrive}; }} }}
-        route {{
-          run gate (arrive);
-          // the scheduler admits with the blocks of the chunk the budget the
-          // running requests leave allows, if the whole prompt fits
-          // (scheduler_reserve_full_isl), and grows from there
-          hold slots (1), kv (min(prompt, budget_left(engine))) fits (prompt) {{
-            run engine prefill (prompt) growing kv;
-            observe first = now;
-            observe who_first = serial;
-            run engine decode (o - 1) growing kv;
-          }}
-          observe done = now;
-          observe who = serial;
-          end;
-        }}
-        run {{ horizon 100000; }}
-        "#,
-        bs = sc.bs,
-        budget = sc.budget,
-        blocks = sc.blocks - 1, // the null block
-        max_seqs = sc.max_seqs,
-        chunk = sc.chunk,
-        prompt = sel(&|q| q.prompt),
-        out = sel(&|q| q.out),
-        arrive = sel(&|q| q.arrive),
-    )
+    let src = std::fs::read_to_string(program_path("vllm_request")).unwrap();
+    let reqs = sc["requests"].as_array().unwrap();
+    let sessions: Vec<Vec<(&str, f64)>> = reqs
+        .iter()
+        .map(|q| {
+            vec![
+                ("prompt", num(q, "prompt")),
+                ("o", num(q, "out")),
+                ("arrive", num(q, "arrive")),
+            ]
+        })
+        .collect();
+    compile_source(&src, &ov)
+        .unwrap()
+        .with_sessions(&sessions)
+        .unwrap()
 }
 
-fn check(name: &str, sc: &Scenario) {
-    let rep = run_source(&program(sc), &Overrides::default(), None).unwrap();
-    // observations are stored in the order they were made, so pair each
-    // value with the serial observed next to it
-    let who = &rep.observe("who").unwrap().samples;
-    let who_first = &rep.observe("who_first").unwrap().samples;
-    let first = &rep.observe("first").unwrap().samples;
-    let done = &rep.observe("done").unwrap().samples;
-    let mut got = vec![(0.0, 0.0); sc.reqs.len()];
-    for (k, &w) in who_first.iter().enumerate() {
-        got[w as usize].0 = first[k];
+fn check(name: &str) {
+    let ans = read(&format!("{name}.out.json"));
+    let ir = seq::Program::from_json(
+        &std::fs::read_to_string(dir().join(format!("{name}.ir.json"))).unwrap(),
+    )
+    .unwrap();
+    let n = match &ir.arrival {
+        seq::ir::CArrival::Sessions(s) => s.len(),
+        a => panic!("{name}: arrival {a:?}"),
+    };
+    let rep = run_ir(&ir, None).unwrap();
+    // every observation records the serial of the session that made it
+    let mut got = vec![(0.0, 0.0); n];
+    for &(t, s, _) in &rep.observe("first").unwrap().records {
+        got[s as usize].0 = t;
     }
-    for (k, &w) in who.iter().enumerate() {
-        got[w as usize].1 = done[k];
+    for &(t, s, _) in &rep.observe("done").unwrap().records {
+        got[s as usize].1 = t;
     }
+    let want: Vec<(f64, f64)> = (0..n)
+        .map(|i| {
+            let k = i.to_string();
+            (
+                ans["first"][&k].as_f64().unwrap(),
+                ans["done"][&k].as_f64().unwrap(),
+            )
+        })
+        .collect();
     assert_eq!(
         got,
-        sc.want,
+        want,
         "{name}: (first, done) per request\n{}",
         rep.text()
     );
     assert_eq!(
         rep.pool("kv").unwrap().preemptions,
-        sc.preemptions,
+        ans["preemptions"].as_u64().unwrap(),
         "{name}: preemptions"
     );
 }
 
-/// tools/oracle/preempt.json: two 80-token prompts on 10 blocks of 16 with
-/// a budget of 100; the second admits with the 20 tokens the budget
-/// leaves, cannot grow its own next chunk and preempts itself (vLLM
-/// `running[-1]`), then waits for the first to finish.
-#[test]
-fn preempt() {
-    check(
-        "preempt",
-        &Scenario {
-            budget: 100,
-            max_seqs: 16,
-            bs: 16,
-            blocks: 11,
-            chunk: 0,
-            reqs: vec![r(80, 30, 0), r(80, 30, 0)],
-            want: vec![(1.0, 30.0), (31.0, 60.0)],
-            preemptions: 1,
-        },
+fn scenarios() -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir())
+        .unwrap()
+        .filter_map(|e| {
+            let f = e.unwrap().file_name().into_string().unwrap();
+            f.strip_suffix(".out.json").map(str::to_string)
+        })
+        .filter(|n| dir().join(format!("{n}.json")).exists())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        ["chunked", "hol", "longchunk", "mixed", "preempt", "seqcap"],
+        "the oracle scenarios"
     );
+    names
 }
 
-/// tools/oracle/chunked.json: a 3000-token prompt takes three 1024 chunks;
-/// two later requests share the budget its last chunk leaves.
 #[test]
-fn chunked() {
-    check(
-        "chunked",
-        &Scenario {
-            budget: 1024,
-            max_seqs: 16,
-            bs: 16,
-            blocks: 1000,
-            chunk: 0,
-            reqs: vec![r(3000, 2, 0), r(700, 5, 1), r(100, 3, 1)],
-            want: vec![(3.0, 4.0), (4.0, 8.0), (4.0, 6.0)],
-            preemptions: 0,
-        },
-    );
+fn every_oracle_scenario() {
+    for n in scenarios() {
+        check(&n);
+    }
 }
 
-/// tools/oracle/seqcap.json: `max_num_seqs = 2` admits two of four.
 #[test]
-fn seqcap() {
-    check(
-        "seqcap",
-        &Scenario {
-            budget: 1024,
-            max_seqs: 2,
-            bs: 16,
-            blocks: 1000,
-            chunk: 0,
-            reqs: vec![r(1024, 5, 0); 4],
-            want: vec![(1.0, 5.0), (3.0, 7.0), (7.0, 11.0), (9.0, 13.0)],
-            preemptions: 0,
-        },
-    );
-}
-
-/// tools/oracle/hol.json: FCFS with head-of-line blocking: the 16-token
-/// third request waits behind a 96-token one that does not fit.
-#[test]
-fn head_of_line() {
-    check(
-        "hol",
-        &Scenario {
-            budget: 1024,
-            max_seqs: 16,
-            bs: 16,
-            blocks: 11,
-            chunk: 0,
-            reqs: vec![r(96, 10, 0), r(96, 10, 0), r(16, 3, 0)],
-            want: vec![(1.0, 10.0), (11.0, 20.0), (11.0, 13.0)],
-            preemptions: 0,
-        },
-    );
-}
-
-/// tools/oracle/mixed.json: six requests of mixed lengths and arrivals on
-/// 39 blocks with `max_num_seqs = 4` and a 512 budget.
-#[test]
-fn mixed() {
-    check(
-        "mixed",
-        &Scenario {
-            budget: 512,
-            max_seqs: 4,
-            bs: 16,
-            blocks: 40,
-            chunk: 0,
-            reqs: vec![
-                r(300, 40, 0),
-                r(200, 30, 2),
-                r(250, 20, 3),
-                r(150, 60, 3),
-                r(400, 10, 5),
-                r(100, 25, 9),
-            ],
-            want: vec![
-                (1.0, 40.0),
-                (3.0, 32.0),
-                (33.0, 52.0),
-                (41.0, 100.0),
-                (53.0, 62.0),
-                (63.0, 87.0),
-            ],
-            preemptions: 0,
-        },
-    );
-}
-
-/// tools/oracle/longchunk.json: `long_prefill_token_threshold = 1000`
-/// caps each request's chunk; two 3000-token prompts finish together.
-#[test]
-fn long_prefill_threshold() {
-    check(
-        "longchunk",
-        &Scenario {
-            budget: 4096,
-            max_seqs: 16,
-            bs: 16,
-            blocks: 1000,
-            chunk: 1000,
-            reqs: vec![r(3000, 2, 0), r(3000, 2, 0)],
-            want: vec![(3.0, 4.0), (3.0, 4.0)],
-            preemptions: 0,
-        },
-    );
+fn oracle_ir_files_are_current() {
+    let bless = std::env::var_os("SEQ_BLESS").is_some();
+    for n in scenarios() {
+        let path = dir().join(format!("{n}.ir.json"));
+        let want = oracle_ir(&n).to_json() + "\n";
+        if bless {
+            std::fs::write(&path, &want).unwrap();
+        } else {
+            let have = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(
+                have == want,
+                "{} is stale: run `make oracle-ir`",
+                path.display()
+            );
+        }
+    }
 }

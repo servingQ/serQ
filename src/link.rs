@@ -24,223 +24,13 @@ impl std::error::Error for LinkError {}
 
 type LResult<T> = Result<T, LinkError>;
 
-/// Context variables: meaningful only where the semantics supplies them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CtxVar {
-    /// Simulation clock.
-    Now,
-    /// Eviction keys and spill predicates: units of the entry.
-    Size,
-    /// Eviction keys: `now - last`.
-    Age,
-    /// Eviction keys: time the entry was released.
-    Last,
-    /// Eviction keys: 1 if the entry's session waits in a pool queue.
-    Queued,
-    /// PS capacity: jobs present.
-    N,
-    /// Step cost: tokens scheduled this iteration.
-    Ntok,
-    /// Step cost: decode residents scheduled.
-    Ndec,
-    /// Step cost: prefill tokens scheduled.
-    Npre,
-    /// Step cost: residents (scheduled or not).
-    Nres,
-    /// Step cost: memory held by the scheduled decode residents.
-    Kvb,
-    /// Step cost: memory held by the scheduled prefill residents.
-    Kvp,
-    /// Step cost: attention work of the prefill chunks, `Σ n (K + n/2)` with
-    /// `K` the position before the chunk (exact for `growing` runs).
-    Attn,
-}
+pub use crate::ir::{
+    BlockId, CArg, CArrival, CEvict, CExpr, CPool, CRef, CSpill, CStage, CStageKind, CStep, CStmt,
+    CtxVar, DistKind, Fun, IR_VERSION, SessionInit,
+};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Fun {
-    Min,
-    Max,
-    Abs,
-    Floor,
-    Ceil,
-    Sqrt,
-    Exp,
-    Ln,
-    Pow,
-    /// jobs present at a stage (queue + service)
-    Queue,
-    /// jobs in service at a stage
-    Busy,
-    /// unfinished work at a stage
-    Work,
-    Used,
-    Free,
-    /// this session's cached units in a pool
-    CachedIn,
-    Holders,
-    /// sessions waiting at a pool
-    Queued,
-    /// online price of a miss at a stage: `price(stage, s_hit, ds)`
-    Price,
-    /// step stage: tokens the next iteration leaves after its residents
-    BudgetLeft,
-    EstLambda,
-    EstRho,
-    EstWait,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DistKind {
-    Exp,
-    Det,
-    Uniform,
-    Erlang,
-    H2,
-    Bernoulli,
-}
-
-#[derive(Clone, Debug)]
-pub struct CRef {
-    pub base: usize,
-    pub count: usize,
-    pub index: Option<Box<CExpr>>,
-}
-
-#[derive(Clone, Debug)]
-pub enum CArg {
-    Expr(CExpr),
-    Pool(CRef),
-    Stage(CRef),
-}
-
-#[derive(Clone, Debug)]
-pub enum CExpr {
-    Num(f64),
-    Attr(usize),
-    Ctx(CtxVar),
-    Sample(DistKind, Vec<CExpr>),
-    Call(Fun, Vec<CArg>),
-    Unary(UnOp, Box<CExpr>),
-    Binary(BinOp, Box<CExpr>, Box<CExpr>),
-    Cond(Box<CExpr>, Box<CExpr>, Box<CExpr>),
-}
-
-pub type BlockId = usize;
-
-#[derive(Clone, Debug)]
-pub enum CStmt {
-    Turn,
-    Set(usize, CExpr),
-    Observe(usize, CExpr),
-    Hold {
-        pools: Vec<(CRef, CExpr, Option<CExpr>)>,
-        reuse: Option<CExpr>,
-        body: BlockId,
-        cache: Option<CExpr>,
-    },
-    Grow(CRef, CExpr),
-    Drop(CRef),
-    Run {
-        stage: CRef,
-        mode: RunMode,
-        work: CExpr,
-        growing: Option<CRef>,
-    },
-    Branch(CExpr, BlockId, BlockId),
-    Loop(BlockId),
-    Choose {
-        var: usize,
-        count: CExpr,
-        key: CExpr,
-    },
-    End,
-}
-
-#[derive(Clone, Debug)]
-pub struct CSpill {
-    pub to: usize,
-    pub via: usize,
-    pub work: CExpr,
-    pub when: CExpr,
-}
-
-#[derive(Clone, Debug)]
-pub struct CPool {
-    pub name: String,
-    pub cap: f64,
-    pub block: Option<f64>,
-    pub evict: CEvict,
-    pub preempt: Preempt,
-    pub queue: Option<CExpr>,
-    pub spill: Option<CSpill>,
-    pub admit_via: Option<usize>,
-}
-
-#[derive(Clone, Debug)]
-pub enum CEvict {
-    Lru,
-    By(Vec<CExpr>),
-}
-
-#[derive(Clone, Debug)]
-pub struct CStep {
-    pub budget: CExpr,
-    pub cost: CExpr,
-    pub chunk: CExpr,
-    pub exclusive_prefill: bool,
-    pub decode_first: bool,
-    pub memory: Option<usize>,
-}
-
-#[derive(Clone, Debug)]
-pub enum CStageKind {
-    Fifo(usize),
-    Ps(CExpr),
-    Delay,
-    Step(CStep),
-}
-
-#[derive(Clone, Debug)]
-pub struct CStage {
-    pub name: String,
-    pub kind: CStageKind,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum CArrival {
-    Poisson(f64),
-    Closed(usize),
-    Batch(usize),
-    None,
-}
-
-/// A linked program, ready to run.
-#[derive(Clone, Debug)]
-pub struct Linked {
-    pub attrs: Vec<String>,
-    pub observes: Vec<String>,
-    pub pools: Vec<CPool>,
-    pub stages: Vec<CStage>,
-    pub arrival: CArrival,
-    pub trace: Option<String>,
-    pub trace_ordered: bool,
-    pub init: BlockId,
-    pub turn: BlockId,
-    pub route: BlockId,
-    pub blocks: Vec<Vec<CStmt>>,
-    pub horizon: f64,
-    pub warmup: f64,
-    pub seed: u64,
-    /// Slots of the built-in attributes.
-    pub slot_cached: usize,
-    pub slot_serial: usize,
-    pub slot_turn: usize,
-    pub slot_new: usize,
-    pub slot_out: usize,
-    pub slot_think: usize,
-    pub slot_more: usize,
-    pub slot_forced: usize,
-}
+/// The linked program is the IR (`crate::ir::Program`); the old name stays.
+pub type Linked = crate::ir::Program;
 
 /// Overrides from the command line (`--set name=expr`).
 #[derive(Clone, Debug, Default)]
@@ -249,6 +39,9 @@ pub struct Overrides {
     pub horizon: Option<f64>,
     pub warmup: Option<f64>,
     pub seed: Option<u64>,
+    /// Replaces the program's trace file (resolved against the current
+    /// directory, not the program's).
+    pub trace: Option<String>,
 }
 
 struct Linker<'a> {
@@ -453,6 +246,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     }
     let slot = |lk: &Linker, n: &str| lk.attr_index[n];
     Ok(Linked {
+        version: IR_VERSION,
         slot_cached: slot(&lk, "cached"),
         slot_serial: slot(&lk, "serial"),
         slot_turn: slot(&lk, "turn_no"),
