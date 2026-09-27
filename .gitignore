@@ -1,0 +1,6 @@
+/target/
+lean/.lake/
+lean/build.log
+lean/axioms.log
+*.log
+__pycache__/

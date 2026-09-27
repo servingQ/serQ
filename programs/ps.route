@@ -1,0 +1,27 @@
+// M/G/1 processor sharing (paper `prop:decode`, insensitivity): the mean
+// number in the station is rho/(1-rho) whatever the service law.
+let lam = 0.7;
+let mean_s = 1.0;
+let cv2 = 9.0;
+let law = 1;
+
+stage svc : ps(1);
+
+workload {
+  arrive poisson(lam);
+  init {
+    set t0 = now;
+    set s = law == 0 ? mean_s
+          : law == 1 ? ~exp(mean_s)
+          : law == 2 ? ~erlang(4, mean_s)
+          : ~h2(mean_s, cv2);
+  }
+}
+
+route {
+  run svc (s);
+  observe sojourn = now - t0;
+  end;
+}
+
+run { horizon 250000; warmup 25000; seed 1; }

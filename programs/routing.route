@@ -1,0 +1,87 @@
+// Routing follow-up turns across replicas (paper §3.2, `prop:routing`;
+// `libqueuingsim::models::routing`): J FIFO replicas with unbounded KV; a
+// session's KV lives on the replica that served its last turn. New sessions
+// are placed with a skew (`hot` of them on replica 0). A turn served away
+// from its KV recomputes the prefix (a miss) or, if the policy allows,
+// migrates the KV over a shared FIFO link first.
+//   policy 0 affinity: always the home replica
+//          1 least loaded, recompute off home
+//          2 least loaded, fetch over the link when cheaper than a recompute
+//          3 myopic: min_j W_j + S_j
+//          4 lookahead: min_j W_j + S_j with migrate-or-recompute off home
+let J = 4;
+let rate = 0.9;      // sessions per second
+let hot = 0.5;
+let policy = 0;
+let s0 = 0.005;
+let a = 2e-5;
+let b = 2e-9;
+let d = 2e-4;
+let p = 0.9;
+let Z = 2.0;
+let bw = 2e6;        // migration link, tokens/s
+
+stage rep[4] : fifo;
+stage link : fifo;
+stage tool : delay;
+
+workload {
+  arrive poisson(rate);
+  init {
+    set home = ~bernoulli(hot) ? 0 : floor(~uniform(0, J));
+    set K = 0;
+    set first = 1;
+  }
+  turn {
+    set n = first ? ~uniform(5000, 15000) : ~exp(500);
+    set o = ~exp(200);
+  }
+}
+
+route {
+  loop {
+    turn;
+    set t0 = now;
+    set hit = s0 + a * n + b * n * (K + n / 2) + o * d;
+    set miss = s0 + a * (K + n) + b * (K + n) * (K + n) / 2 + o * d;
+    set mig = work(link) + K / bw;
+    set mv = 0;
+    branch (first) {
+      set j = home;
+      set S = miss;
+    } else {
+      branch (policy == 0) { set j = home; set S = hit; }
+      branch (policy == 1) {
+        choose j in J by (work(rep[j]));
+        set S = j == home ? hit : miss;
+      }
+      branch (policy == 2) {
+        choose j in J by (work(rep[j]));
+        set mv = j != home && mig < miss - hit;
+        set S = (j == home || mv) ? hit : miss;
+      }
+      branch (policy == 3) {
+        choose j in J by (work(rep[j]) + (j == home ? hit : miss));
+        set S = j == home ? hit : miss;
+      }
+      branch (policy == 4) {
+        choose j in J by (j == home ? work(rep[j]) + hit
+                                    : min(max(work(rep[j]), mig) + hit, work(rep[j]) + miss));
+        set mv = j != home && max(work(rep[j]), mig) + hit < work(rep[j]) + miss;
+        set S = (j == home || mv) ? hit : miss;
+      }
+    }
+    branch (mv) { run link (K / bw); observe migration = 1; }
+    run rep[j] (S);
+    set home = j;
+    branch (!first) {
+      observe response = now - t0;
+      observe hitrate = S == hit;
+    }
+    set first = 0;
+    set K = K + n + o;
+    branch (p) { run tool (~exp(Z)); } else { end; }
+  }
+}
+
+run { horizon 10500; warmup 500; seed 1; }

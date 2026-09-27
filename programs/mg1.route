@@ -1,0 +1,30 @@
+// M/G/1 FIFO (paper §2, `prop:pk`): Poisson turns at rate `lam`, one
+// server, i.i.d. service of mean `mean_s` drawn by `law`
+// (0 deterministic, 1 exponential, 2 Erlang-4, 3 balanced H2 with `cv2`).
+let lam = 0.8;
+let mean_s = 1.0;
+let cv2 = 4.0;
+let law = 1;
+
+stage svc : fifo;
+
+workload {
+  arrive poisson(lam);
+  init {
+    set t0 = now;
+    set s = law == 0 ? mean_s
+          : law == 1 ? ~exp(mean_s)
+          : law == 2 ? ~erlang(4, mean_s)
+          : ~h2(mean_s, cv2);
+  }
+}
+
+route {
+  run svc (s);
+  observe sojourn = now - t0;
+  observe wait = now - t0 - s;
+  observe service = s;
+  end;
+}
+
+run { horizon 250000; warmup 25000; seed 1; }

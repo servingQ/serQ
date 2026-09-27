@@ -1,0 +1,225 @@
+//! Abstract syntax of a ROUTE program.
+//!
+//! A program is a *deployment* (pools and stages), a *workload* (how
+//! sessions arrive and how a session's attributes evolve from turn to
+//! turn) and a *route* (the statements every session executes). See
+//! `docs/language.md` for the semantics.
+
+/// Expressions are evaluated to `f64`. Booleans are 0 / 1.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Expr {
+    Num(f64),
+    /// A session attribute or a `let` constant, resolved at link time.
+    Var(String),
+    /// `~exp(1.5)`: a fresh draw from a distribution.
+    Sample(String, Vec<Expr>),
+    /// `min(a, b)`, `price(stage, s, ds)`, `work(prefill[j])`, ...
+    Call(String, Vec<Arg>),
+    Unary(UnOp, Box<Expr>),
+    Binary(BinOp, Box<Expr>, Box<Expr>),
+    /// `c ? a : b`
+    Cond(Box<Expr>, Box<Expr>, Box<Expr>),
+}
+
+/// A call argument: an expression or a reference to a pool or stage
+/// (`kv`, `prefill[j]`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Arg {
+    Expr(Expr),
+    Ref(Ref),
+}
+
+/// A pool or stage reference, possibly indexed into an array.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ref {
+    pub name: String,
+    pub index: Option<Box<Expr>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnOp {
+    Neg,
+    Not,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Pow,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+    Ne,
+    And,
+    Or,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum EvictOrder {
+    /// Least recently released first.
+    Lru,
+    /// Ascending lexicographic key, evaluated per cached entry.
+    By(Vec<Expr>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Preempt {
+    /// A failed growth waits.
+    None,
+    /// A failed growth preempts the most recently admitted holder (vLLM).
+    Lifo,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum QueueOrder {
+    Fifo,
+    By(Expr),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Spill {
+    pub to: String,
+    pub via: String,
+    pub work: Expr,
+    pub when: Expr,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PoolDecl {
+    pub name: String,
+    pub count: usize,
+    pub cap: Expr,
+    pub block: Option<Expr>,
+    pub evict: EvictOrder,
+    pub preempt: Preempt,
+    pub queue: QueueOrder,
+    pub spill: Option<Spill>,
+    /// `admit via STAGE`: the queue is served by the stage's scheduler, at
+    /// the start of its iterations, while the iteration has budget left.
+    pub admit_via: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum StageKind {
+    /// `c` servers, one job each at rate 1, FIFO.
+    Fifo(Expr),
+    /// Processor sharing with capacity `phi(n)`, `n` the jobs present.
+    Ps(Expr),
+    /// Infinite server: every job at rate 1.
+    Delay,
+    /// Iterating engine (continuous batching with chunked prefill).
+    Step(StepSpec),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StepSpec {
+    /// Tokens per iteration (`max_num_batched_tokens`).
+    pub budget: Expr,
+    /// Seconds per iteration, in `ntok`, `ndec`, `npre`, `nres`, `kvb`.
+    pub cost: Expr,
+    /// Cap on one request's prefill chunk (`long_prefill_token_threshold`,
+    /// 0 = none).
+    pub chunk: Expr,
+    /// A prefill chunk runs alone and stalls every decode.
+    pub exclusive_prefill: bool,
+    /// Serve the decoding residents before the prefilling ones (the
+    /// paper's two-resource replica: prefill gets what decode leaves).
+    /// Default: admission order (vLLM's `running` list).
+    pub decode_first: bool,
+    /// Pool whose holdings of the scheduled residents give `kvb`.
+    pub memory: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StageDecl {
+    pub name: String,
+    pub count: usize,
+    pub kind: StageKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Arrival {
+    Poisson(Expr),
+    /// `n` sessions always live: an ended one is replaced at once.
+    Closed(Expr),
+    /// `n` sessions at time 0, never replaced.
+    Batch(Expr),
+    None,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Workload {
+    pub arrive: Arrival,
+    pub trace: Option<String>,
+    /// Sessions take the trace's sessions in order (session i = arrival i)
+    /// instead of a uniform draw.
+    pub trace_ordered: bool,
+    pub init: Vec<Stmt>,
+    pub turn: Vec<Stmt>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunMode {
+    /// Work in seconds at rate 1 (fifo, ps, delay).
+    Plain,
+    /// Step stage: prefill of `w` tokens.
+    Prefill,
+    /// Step stage: decode of `w` tokens, one per iteration.
+    Decode,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Stmt {
+    /// Draw the next turn's attributes from the workload.
+    Turn,
+    Set(String, Expr),
+    Observe(String, Expr),
+    Hold {
+        /// (pool, units allocated, units that must fit for the admission)
+        pools: Vec<(Ref, Expr, Option<Expr>)>,
+        /// `reuse (r)`: consume at most `r` units of the own cached prefix;
+        /// the rest stays cached, unusable, until evicted.
+        reuse: Option<Expr>,
+        body: Vec<Stmt>,
+        cache: Option<Expr>,
+    },
+    Grow(Ref, Expr),
+    Drop(Ref),
+    Run {
+        stage: Ref,
+        mode: RunMode,
+        work: Expr,
+        growing: Option<Ref>,
+    },
+    Branch(Expr, Vec<Stmt>, Vec<Stmt>),
+    Loop(Vec<Stmt>),
+    /// `choose j in 0..n by (expr)`: `j := argmin`.
+    Choose {
+        var: String,
+        count: Expr,
+        key: Expr,
+    },
+    End,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct RunOpts {
+    pub horizon: Option<Expr>,
+    pub warmup: Option<Expr>,
+    pub seed: Option<Expr>,
+}
+
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Program {
+    pub lets: Vec<(String, Expr)>,
+    pub pools: Vec<PoolDecl>,
+    pub stages: Vec<StageDecl>,
+    pub workload: Option<Workload>,
+    pub route: Vec<Stmt>,
+    pub run: RunOpts,
+}

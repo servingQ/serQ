@@ -1,0 +1,82 @@
+// Upstream vLLM v1 on one A100 (docs/testbed-gpu.md: Qwen3-8B, block 16,
+// chunked prefill with a 512-token budget, max_num_seqs 64, prefix caching,
+// 128 160-token KV pool) replaying the short-context trace: session i is
+// sent at i * spacing seconds, turn k+1 `think` seconds after turn k
+// completes, and the prompt of every turn is the trace's text, so the
+// reusable prefix of a follow-up is the previous prompt (full blocks). A
+// turn flagged `forced` carries a nonce and reuses nothing. Prefill cost
+// is the testbed's fit (c0 + a n + b n (K + n/2)), spent chunk by chunk;
+// c0 is the per-request front-end overhead outside the engine; a decode
+// iteration reads the weights (omega, the idle ITL) plus the batch's KV.
+let spacing = 3.5;     // seconds between session arrivals
+let N = 333;           // sessions in the trace
+let B = 512;           // max_num_batched_tokens
+let max_seqs = 64;     // max_num_seqs
+let bs = 16;           // block_size
+let blocks = 8010;     // 128 160 tokens / 16
+// step cost, fitted on the A100 step sweeps (data/exp/gpu_route/fit.json,
+// scripts/exp/fit_steps.py; MAPE 2.7 % decode, 5.6 % prefill, 5.7 % mixed)
+let c_it = 0.004;      // s per iteration on the served path (13.9 ms stepped by hand, less what async scheduling hides; fitted on the 5 s and 4.2 s runs)
+let d = 4.1053e-5;     // s per decoding request
+let e = 1.3786e-7;     // s per KV token held by the decoders
+let a = 5.1527e-5;     // s per prefill token
+let b = 4.0196e-9;     // s per prefill token per context token (attention)
+let c0 = 0.04;         // s per request outside the engine (fitted with c_it, data/exp/route/calibration.txt)
+let f = 0;             // s per prompt token outside the engine (0: not separable from c0 on these runs)
+
+pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
+pool slots { cap max_seqs; admit via engine; }  // the scheduler admits (scheduler.py:868)
+
+stage engine : step {
+  budget B;
+  cost c_it + d * ndec + e * kvb + a * npre + b * attn;
+  memory kv;
+}
+stage front : delay;
+stage gate : delay;
+stage tool : delay;
+
+workload {
+  arrive batch(N);
+  trace "data/short_base.csv" ordered;
+}
+
+route {
+  run gate (serial * spacing);
+  set prev = 0;
+  set prevout = 0;
+  turn;
+  loop {
+    set t0 = now;
+    set prompt = new;
+    run front (c0 + f * prompt);
+    // reusable: the common prefix with the previous turn's computed tokens
+    // (the previous prompt; the generated tokens are not in this prompt),
+    // never the whole prompt (the last token is recomputed for its logits)
+    // a forced turn carries a nonce at its head: nothing matches, and the
+    // old prefix stays in the cache, unusable, until it is evicted
+    set hitmax = forced ? 0 : floor(min(prev, prompt - 1) / bs) * bs;
+    // units are evaluated when the scheduler admits: the prefix still
+    // cached then, plus the chunk the step's remaining budget allows
+    // the admission needs room for the whole prompt (scheduler_reserve_full_isl,
+    // kv_cache_manager.py:515-531) but allocates only the first chunk
+    hold slots (1), kv (min(cachedin(kv), hitmax)
+                        + min(prompt - min(cachedin(kv), hitmax), budget_left(engine)))
+                    fits (prompt)
+         reuse (hitmax) {
+      set c = cached;
+      observe cached_tokens = c;
+      observe prefix = prev + prevout;
+      observe sent = t0;
+      run engine prefill (prompt - c) growing kv;
+      observe ttft = now - t0;
+      run engine decode (out - 1) growing kv;
+    } cache (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
+    observe latency = now - t0;
+    set prev = prompt;
+    set prevout = out;
+    branch (more) { run tool (think); turn; } else { end; }
+  }
+}
+
+run { horizon 6000; warmup 0; seed 1; }

@@ -1,0 +1,75 @@
+// vLLM v1 on one device (ref/vllm at 0c87a197, `vllm/v1/core/sched/
+// scheduler.py`, `kv_cache_manager.py`, `block_pool.py`), as a ROUTE
+// program. Continuous batching with chunked prefill: every iteration hands
+// a token budget to the running requests in admission order (one token per
+// decoding request, up to `chunk` per prefilling one), then admits waiting
+// requests FCFS while the request cap and the KV blocks allow, the first
+// that does not fit blocking the rest. KV memory is a block pool with a
+// block-level LRU prefix cache: a finished (or preempted) request's full
+// blocks stay cached and are evicted tail first when the free queue is
+// drained; the next turn of a session reuses its cached prefix (full blocks,
+// never the whole prompt). A request grows one block at a time as it
+// decodes; when no block is free the most recently admitted request is
+// preempted (its blocks freed to the cache, it re-enters the waiting queue
+// at the head and recomputes what was lost). See docs/language.md
+// §"vLLM" for the line-by-line correspondence.
+let B = 8192;          // max_num_batched_tokens
+let max_seqs = 16;     // max_num_seqs
+let blocks = 10000;    // num_gpu_blocks (less the null block)
+let bs = 16;           // block_size
+let chunk_cap = 0;     // long_prefill_token_threshold (0: none)
+let a = 2e-5;          // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident context token (s)
+let c0 = 0;            // fixed cost per iteration (s)
+let Lambda = 0.3;      // sessions per second
+let p = 0.9;           // continue after a turn
+let Z = 3.0;           // tool time (s)
+
+pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
+pool slots { cap max_seqs; }
+
+stage engine : step {
+  budget B;
+  chunk chunk_cap;
+  cost c0 + max(omega + beta * (kvb + kvp), ntok * a);
+  memory kv;
+}
+stage tool : delay;
+
+workload {
+  arrive poisson(Lambda);
+  init { set K = 0; }
+  turn {
+    set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
+    set o = ~exp(200) + 1;
+    set more = ~bernoulli(p);
+  }
+}
+
+route {
+  turn;
+  loop {
+    set t0 = now;
+    set prompt = K + n;
+    // prefix-cache lookup: cached full blocks of the prompt, never all of it
+    // (the last token is recomputed for its logits); the admission needs the
+    // hit's blocks plus those of the chunk the budget the running requests
+    // leave can take now (scheduler.py:1078-1128, 1214-1226); the rest is
+    // allocated as the request runs
+    set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
+    hold slots (1), kv (c + min(prompt - c, budget_left(engine))) {
+      set c = min(cached, floor((prompt - 1) / bs) * bs);
+      observe hit = c > 0;
+      observe prefill_tokens = prompt - c;
+      run engine prefill (prompt - c) growing kv;
+      observe ttft = now - t0;
+      run engine decode (o - 1) growing kv;
+    } cache (prompt + o);
+    observe response = now - t0;
+    set K = prompt + o;
+    branch (more) { run tool (~exp(Z)); turn; } else { end; }
+  }
+}
+
+run { horizon 2000; warmup 200; seed 1; }

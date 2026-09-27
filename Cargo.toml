@@ -1,0 +1,28 @@
+[package]
+name = "seq-lang"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "seQ: ROUTE, a language for formal verification and simulation of LLM serving systems (interpreter and CLI)"
+repository = "https://github.com/vrvrv/seQ"
+readme = "README.md"
+keywords = ["llm", "serving", "queueing", "simulation", "vllm"]
+categories = ["simulation", "science"]
+include = ["src/**", "tests/**", "programs/**", "tools/oracle/**", "Cargo.toml", "Cargo.lock", "README.md", "rust-toolchain.toml"]
+
+[lib]
+name = "seq"
+path = "src/lib.rs"
+
+[[bin]]
+name = "route"
+path = "src/main.rs"
+
+[dependencies]
+rand = "0.9"
+
+[profile.test]
+opt-level = 3
+
+[profile.dev.package."*"]
+opt-level = 3

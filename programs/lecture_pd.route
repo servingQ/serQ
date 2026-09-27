@@ -1,0 +1,61 @@
+// The disaggregated replica of the lecture notes (Example L1:ex:program):
+// a turn waits for KV memory at the prefill instance, is prefilled one at a
+// time in arrival order, ships its KV over a link whose bandwidth concurrent
+// transfers share, waits for memory at the decode instance, decodes in a
+// batch that shares the instance's throughput, and after a tool call
+// comes back for the next turn, a hit if its prefix is still cached.
+let Lambda = 0.5;     // sessions per second
+let p = 0.8;          // continue after a turn
+let kappa = 1.0;      // memory units per context token
+let MP = 4e5;         // prefill-instance pool
+let MD = 4e5;         // decode-instance pool
+let a = 2e-5;         // prefill (s/token)
+let b = 2e-9;         // prefill (s/token^2)
+let x0 = 0.002;       // link overhead (s)
+let Bw = 2e6;         // link bandwidth (tokens/s)
+let w = 2e-4;         // decode: seconds per token of the batch
+let phi_cap = 16;     // decode batch capacity phi(m) = min(m, phi_cap)
+
+pool memP { cap MP; evict lru; }
+pool memD { cap MD; }
+
+stage prefill : fifo;
+stage link : ps(1);
+stage decode : ps(min(n, phi_cap));
+stage tool : delay;
+
+workload {
+  arrive poisson(Lambda);
+  init { set K = 0; }
+  turn {
+    // the next turn's new tokens contain the previous output (n' >= o)
+    set n = K == 0 ? ~uniform(2000, 6000) : o + ~exp(500);
+    set o = ~exp(200);
+    set Z = ~exp(3);
+    set T = K + n;
+  }
+}
+
+route {
+  turn;
+  loop {
+    set t0 = now;
+    hold memP (kappa * T) {
+      // the hit indicator is decided at admission: H = (cached >= K)
+      set H = cached >= K;
+      set S = H ? a * n + b * n * (K + n / 2) : a * T + b * T * T / 2;
+      observe miss = 1 - H;
+      run prefill (S);
+      observe ttft = now - t0;
+      run link (x0 + kappa * T / Bw);
+    } cache (kappa * T);
+    hold memD (kappa * T) {
+      run decode (o * w);
+    }
+    observe response = now - t0;
+    set K = T;
+    branch (p) { run tool (Z); turn; } else { end; }
+  }
+}
+
+run { horizon 4000; warmup 400; seed 1; }

@@ -1,0 +1,2 @@
+{"budget": 1024, "max_seqs": 16, "block_size": 16, "num_blocks": 1000, "prefix_caching": false,
+ "requests": [{"prompt": 3000, "out": 2}, {"prompt": 700, "out": 5, "arrive": 1}, {"prompt": 100, "out": 3, "arrive": 1}]}

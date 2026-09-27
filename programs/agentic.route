@@ -1,0 +1,57 @@
+// The single-turn replica of `libqueuingsim::models::agentic`: N closed
+// agent programs cycle queue -> service (prefill + decode) -> tool call on
+// one FIFO replica with a finite KV pool of C tokens. Memory is taken when
+// service starts (the `slot` pool is the replica's queue), evicting
+// suspended programs shortest-first, tool calls before queued programs.
+// A follow-up turn is a hit iff its whole context is still resident.
+let N = 16;
+let C = 4e5;
+let maxctx = C / 2;
+let s0 = 0.005;   // per-turn overhead (s)
+let a = 2e-5;     // prefill, linear (s/token)
+let b = 2e-9;     // prefill, quadratic (s/token^2)
+let d = 2e-4;     // decode (s/token)
+let p = 0.9;      // resume probability
+let Z = 3.0;      // mean tool time (s)
+
+pool slot { cap 1; }
+pool kv { cap C; evict by (queued, size); }
+
+stage svc : fifo;
+stage tool : delay;
+
+workload {
+  arrive closed(N);
+  init { set K = 0; set cold = 1; }
+  turn {
+    set n = cold ? ~uniform(1e4, 3e4) : ~exp(1000);
+    set o = ~exp(300);
+  }
+}
+
+// libqueuingsim frees a finished session's KV: `drop kv;` before every `end;`
+route {
+  loop {
+    turn;
+    set t0 = now;
+    hold slot (1) {
+      hold kv (K + n + o) {
+        set hit = !cold && cached >= K;
+        set S = s0 + o * d
+              + (hit ? a * n + b * n * (K + n / 2)
+                     : a * (K + n) + b * (K + n) * (K + n) / 2);
+        run svc (S);
+      } cache (K + n + o);
+    }
+    observe response = now - t0;
+    observe service = S;
+    branch (!cold) { observe hit = hit; }
+    set K = K + n + o;
+    set cold = 0;
+    branch (K > maxctx) { drop kv; end; }
+    run tool (~exp(Z));
+    branch (p) { } else { drop kv; end; }
+  }
+}
+
+run { horizon 5500; warmup 500; seed 1; }

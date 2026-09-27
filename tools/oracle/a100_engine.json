@@ -1,0 +1,91 @@
+{
+ "meta": {
+  "date": "2026-09-27",
+  "engine": "vLLM 0.30.0+cu129, Qwen/Qwen3-8B bf16, 1x A100-SXM4-40GB (Lambda), in-process, synchronous scheduling, enforce_eager",
+  "script": "scripts/exp/lambda/route_cases.py scenarios"
+ },
+ "results": {
+  "chunked": {
+   "done": {
+    "0": 4,
+    "1": 8,
+    "2": 6
+   },
+   "first": {
+    "0": 3,
+    "1": 4,
+    "2": 4
+   },
+   "preemptions": 0
+  },
+  "hol": {
+   "done": {
+    "0": 10,
+    "1": 20,
+    "2": 13
+   },
+   "first": {
+    "0": 1,
+    "1": 11,
+    "2": 11
+   },
+   "preemptions": 0
+  },
+  "longchunk": {
+   "done": {
+    "0": 4,
+    "1": 4
+   },
+   "first": {
+    "0": 3,
+    "1": 3
+   },
+   "preemptions": 0
+  },
+  "mixed": {
+   "done": {
+    "0": 40,
+    "1": 32,
+    "2": 52,
+    "3": 100,
+    "4": 62,
+    "5": 87
+   },
+   "first": {
+    "0": 1,
+    "1": 3,
+    "2": 33,
+    "3": 41,
+    "4": 53,
+    "5": 63
+   },
+   "preemptions": 0
+  },
+  "preempt": {
+   "done": {
+    "0": 30,
+    "1": 60
+   },
+   "first": {
+    "0": 1,
+    "1": 31
+   },
+   "preemptions": 1
+  },
+  "seqcap": {
+   "done": {
+    "0": 5,
+    "1": 7,
+    "2": 11,
+    "3": 13
+   },
+   "first": {
+    "0": 1,
+    "1": 3,
+    "2": 7,
+    "3": 9
+   },
+   "preemptions": 0
+  }
+ }
+}

@@ -1,0 +1,410 @@
+# ROUTE: a language for the formal verification and simulation of LLM serving systems
+
+Status: 2026-09-27 (moved into seQ from the research repository
+`serving-queue-theory` the same day). Reference implementation: the crate
+`seq-lang` at the repository root (Rust: parser, interpreter, CLI `route`).
+Formal model: `lean/SeQ/Route.lean` (syntax `Route Env V`, pool semantics,
+memory invariant, surface syntax), `RouteExec.lean` (an executable
+semantics of the pool and step-engine fragment), `RouteOracle.lean` (the
+vLLM scheduler scenarios as theorems, generated), `RouteServe.lean`
+(serving order of a step engine). Programs: `programs/*.route`. Checks:
+`make check`. The review of the first version against vLLM, the design
+decisions and the tooling survey are in `docs/review.md`.
+
+Paths under `libqueuingsim/`, `scripts/exp/`, `data/exp/`, `paper/` and
+`lectures/` refer to `serving-queue-theory`, which uses a pinned release
+of seQ: its simulator cross-checks ROUTE programs against hand-written
+models (`libqueuingsim/tests/route_*.rs`), its Lean proofs describe the
+paper's replicas as ROUTE programs, and its testbed scripts produced the
+A100 measurements of Section 8. The two replica programs of the paper
+(`disaggregatedReplica`, `colocatedReplica`) live there
+(`lean/ServingQueueTheory/Deployments.lean`).
+
+## 1. What ROUTE is for
+
+A serving deployment is a program. The program names the resources of the
+deployment (memory pools, stages), says how sessions arrive and how a
+session's turns evolve (the workload), and gives the path every session
+takes through the resources (the route). One program has three uses:
+
+1. **Simulation.** `route run prog.route` executes it as a discrete-event
+   simulation and reports time averages, per-observation statistics and
+   per-turn records. `libqueuingsim` now runs ROUTE programs next to its
+   hand-written models (Section 6).
+2. **Formal verification.** The same syntax is an inductive type in Lean
+   with an operational semantics; properties of the language (the memory
+   invariant of every pool, the shares of a processor-sharing stage) and
+   of particular programs (well-formedness of the paper's replica) are
+   theorems. Programs can be written in ROUTE's own syntax inside Lean
+   (`[route| ... ]`).
+3. **Specification of production systems.** vLLM v1's engine is a
+   50-line program (`programs/vllm.route`, `vllm_replay.route`). It
+   reproduces the real scheduler request for request: on six
+   deterministic scenarios (also on the real A100 engine, and as Lean
+   theorems) and on the full 333-session agent trace (3 321 requests,
+   every first-token time and cached-token count identical to the real
+   scheduler driven by the same clock). With the cost model measured on
+   the A100 it predicts the measured runs' hit rates within 1–6 points,
+   including where the replica collapses (Section 8).
+
+The organising idea, unchanged from the lecture: a deployment does four
+things to a request: makes it **wait for a resource**, **runs** it on a
+stage, **frees** the resource (possibly keeping a prefix cached), and
+**sends it somewhere next**. v2 makes the first three one scoped
+statement (`hold`), generalises "resource" so that KV memory, request
+slots and offload tiers are the same kind of object (a pool), and adds
+the one stage kind the lecture could not express: the colocated engine
+that prefills in the compute its decode step leaves (`step`).
+
+## 2. Syntax
+
+```
+program  := item*
+item     := let NAME = expr ;
+          | pool NAME [ '[' N ']' ] { poolopt* }
+          | stage NAME [ '[' N ']' ] : kind ;
+          | workload { wlitem* }
+          | route block
+          | run { horizon expr ; warmup expr ; seed expr ; }
+poolopt  := cap expr ;                       -- capacity in units (default inf)
+          | block expr ;                     -- allocate and cache in blocks
+          | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
+          | preempt none ; | preempt lifo ;  -- what a failed growth does
+          | queue fifo ; | queue by ( expr ) ;        -- admission order
+          | admit via STAGE ;                -- the queue is served by a step stage's scheduler
+          | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
+kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
+          | ps ( expr in n )                 -- throughput phi(n) shared equally
+          | delay                            -- every job at rate 1, no waiting
+          | step { budget expr ; cost expr ; [chunk expr ;] [exclusive prefill ;]
+                   [decode first ;] [memory POOL ;] }
+wlitem   := arrive poisson ( rate ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
+          | trace "file.csv" [ordered] ;      -- replay sessions from a trace
+          | init block | turn block          -- only set / observe
+stmt     := turn ;                           -- next turn's attributes (workload `turn`, trace)
+          | set NAME = expr ;
+          | observe NAME = expr ;
+          | hold POOL ( expr ) [fits ( expr )] [, POOL ( expr ) [fits ( expr )]]*
+                 [reuse ( expr )] block [ cache ( expr ) ] ;
+          | grow POOL ( expr ) ;
+          | drop POOL ;                      -- discard the own cached prefix
+          | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
+          | branch ( expr ) block [ else block ]
+          | loop block
+          | choose NAME in expr by ( expr ) ; -- NAME := argmin over 0..n
+          | end ;
+```
+
+Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`,
+`~exp(mean)`, `~det(x)`, `~uniform(lo,hi)`, `~erlang(k,mean)`,
+`~h2(mean,cv2)`, `~bernoulli(p)`; `min`, `max`, `abs`, `floor`, `ceil`,
+`sqrt`, `exp`, `ln`, `pow`; observables `queue(s)`, `busy(s)`, `work(s)`,
+`used(p)`, `free(p)`, `cachedin(p)`, `holders(p)`, `queued(p)`,
+`budget_left(step)`, `price(s, s_hit, ds)` (the online price of a miss,
+`missPrice` with the stage's measured λ̂, ρ̂, Ŵ), `est_lambda(s)`,
+`est_rho(s)`, `est_wait(s)`; context variables `now`, `size`, `age`,
+`last`, `queued` (eviction keys and spill predicates), `n` (ps
+capacity), `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn` (step budget
+and cost; `attn = Σ n (K + n/2)` over the prefill chunks, `K` the position
+before the chunk). A name may not be both a `let` constant and a session
+attribute (the linker rejects it: an attribute would shadow the constant,
+and a stage's cost, which has no session, would read it as undefined). Built-in session attributes: `serial`, `turn_no`, `cached` (the
+prefix consumed at the last admission), and with a trace `new`, `out`,
+`think`, `more`, `forced`. Every name assigned by `set` or `choose` is a
+session attribute.
+
+## 3. Semantics
+
+**Configuration.** Time; the live sessions with their attributes,
+continuation (a stack of block frames), status (ready, queued at a pool,
+at a stage, waiting to grow, ended) and active holds; for each pool its
+capacity, the allocations of its holders (in admission order), its cache
+(entries of units, release time and release order, per session or dead),
+its admission queue and its growers; for each stage its jobs.
+
+**Commands take no time**; they run whenever a session is ready, in the
+order sessions became ready. Flow lets time pass at the stages. After
+every event the interpreter *settles*: it runs every ready session, then
+retries growers and admissions at every pool not served by a stage, until
+nothing changes; then it starts an iteration on every idle step stage that
+has residents or a waiting queue it serves, provided no other event is
+pending at the same instant (a scheduler step sees every arrival up to it).
+
+**Pools.** `hold m₁(u₁) fits(r₁), m₂(u₂) … reuse(ρ) { body } cache(ℓ)`
+joins the queue of `m₁`. The unit expressions are evaluated *when the
+session is admitted* (the lecture's `[Admit]` evaluates `c(x_r)` then;
+observables such as the cache or an engine's budget change while a
+session waits). The head of a queue is admitted when every pool of its hold
+has room for its `fits` units next to the allocated units (`used + r ≤ cap`,
+`r = max(u, fits)`; cached prefixes never block); the first that does not
+fit blocks the rest (head-of-line blocking). On admission the session
+consumes at most `ρ` units of its own cached prefix (`cached :=` what it
+consumed); the rest of that entry stays in the cache as a *dead* entry with
+the same age, unusable, until evicted; other entries are evicted in the
+pool's order until allocations and cache fit; `u` units are allocated and
+the body runs. At the end of the body the units are released and
+`min(ℓ, computed)` units stay cached, rounded down to blocks (`computed`
+is the allocation, or the position a `growing` run reached). The invariant
+`allocated + cached ≤ cap` holds in every reachable configuration
+(`RouteLang.Step.invariant`). `end` releases every hold but *keeps* the
+session's cached prefixes: the cache does not know that a session has left
+(lecture `[End]`; vLLM keeps the blocks). A program that models dropping
+them writes `drop POOL;` before `end;`. Eviction is per entry, or per block
+from the tail of the entry when the pool has `block b`; `evict lru` orders
+by release time and then release order, `evict by (k₁, …)` by the keys and
+then release order. A request that can never fit is rejected (vLLM
+`FINISHED_IGNORED`).
+
+A pool marked `admit via S` is not admitted at settle time: its queue is
+served by step stage `S`, at the start of an iteration, after the
+residents have taken their tokens, while the iteration has budget left, and
+not in an iteration that preempted (vLLM's waiting loop,
+`scheduler.py:868-1128`). `budget_left(S)` then evaluates to the budget
+left. Until then a waiting session's cached prefix is evictable, which is
+the *wait channel* of Lecture 5.
+
+`grow m (d)` enlarges the innermost hold on `m` by `d` (rounded to
+blocks). If it does not fit: with `preempt none` the session waits and
+resumes where it was; with `preempt lifo` the most recently admitted
+holder is preempted (vLLM `running[-1]`): its job leaves its stage, its
+hold is released with its computed prefix cached, and it re-enters the head
+of the pool's queue with the hold statement to execute again. The grower
+itself can be the victim.
+
+**Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
+`ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
+own at rate 1. `step { budget B; cost C; }`: an engine that runs
+iterations. The residents are served in the order their sessions were
+admitted (vLLM's `running` list; with `decode first` the decoding residents
+first): one token to a decoding job, up to `chunk` to a prefilling one,
+until the budget is spent; a `growing` job first grows its hold to the
+position it will reach (block by block, preempting if needed); then the
+stage admits from the queues it serves. The iteration lasts `C` seconds, an
+expression in `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn`; its
+tokens are applied when it ends. A run of zero work completes at once.
+`exclusive prefill` schedules only the first prefilling resident while one
+exists (the RBLN stack). Without a per-request chunk cap, serving in
+admission order *is* serving decode-first (`RouteLang.Serve.serve_eq_decode_first`;
+a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
+"prefill from the budget decode leaves" describes vLLM too.
+
+**Workload.** `init` runs at arrival, `turn` at every `turn` statement;
+with a `trace`, `turn` loads the next turn's `new`, `out`, `think`,
+`forced` and sets `more` (`ordered`: session `i` replays trace session `i`).
+Random draws use separate streams for arrivals, workload, route and
+eviction.
+
+**Statistics.** `observe x = e` records a sample after warm-up with the
+time, session and turn (`--dump DIR` writes them); the report gives per
+stage the time-average number present, utilisation, throughput, mean wait
+and service, and per pool the time-average used, cached, queue and
+holders, the mean queue wait, admissions, evictions, preemptions, spills
+and rejections.
+
+**Executable semantics in Lean.** `RouteExec.lean` defines the same rules
+for the fragment of pools and one step engine on the step clock (values in
+ℕ): `Exec.run` interprets a `Route Env ℕ` program for `n` sessions. It is
+the semantics the oracle theorems are about.
+
+
+## 4. From the lecture's version to v2
+
+| Lecture (L1:def:syntax, L1:def:semantics) | v2 | Why |
+|---|---|---|
+| `admit m c` … `free m [cache ℓ]` as separate actions | `hold m (c) { … } cache (ℓ)` | balance is syntactic; preemption is "abort the scope"; the memory invariant is provable per command |
+| one pool kind (KV bytes) | pools are counted resources with an optional cache: KV, request slots (`max_num_seqs`), live-session caps, offload tiers | the same guard and queue serve all of them; the lecture's "slots" remark becomes literal |
+| `serial`, `shared(φ)`, `external` | `fifo(c)`, `ps(φ)`, `delay`, **`step`** | the colocated engine (Exercise L1:exr:colocated) and vLLM's chunked prefill |
+| hit indicator `H ∈ {0,1}` | `cached` (units found), block-rounded | partial hits (block eviction, tail first) |
+| eviction order `E` as a name | `evict lru` / `evict by (keys)` with online estimates | the priced orders of §3 are expressible |
+| no growth, no preemption | `grow`, `growing`, `preempt lifo` | decode grows the KV; vLLM preempts |
+| `branch_p` with a constant | `branch (expr)` | traces decide continuation |
+| no measurement | `observe`, `--dump` | TTFT and the price are defined in the program |
+| no routing | stage arrays and `choose` | §3.2 |
+
+The lecture's disaggregated replica is `programs/lecture_pd.route` and,
+in Lean, `RouteLang.disaggregatedReplica`; the paper's colocated
+two-resource replica is `programs/replica.route` and
+`RouteLang.colocatedReplica`.
+
+## 5. Programs
+
+| Program | Deployment | Checked against |
+|---|---|---|
+| `mg1.route`, `ps.route`, `closed.route` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | closed forms (`route_closed_forms.rs`): M/M/1 sojourn, PK for four laws, PS insensitivity, MVA |
+| `agentic.route` | `models::agentic` (one FIFO replica, finite KV, SF eviction) | hand-written model, throughput within 3 %, hit rate within 0.5 pt, response within 3 % (`route_agentic.rs`) |
+| `replica.route` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/route/replica_seeds.csv`, `route_replica_and_pd.rs`) |
+| `pd_tandem.route`, `lecture_pd.route` | tandem PD, the lecture's disaggregated replica | capacity formulas within 2 %; stability |
+| `routing.route` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
+| `vllm.route` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
+| `vllm_replay.route` | vLLM v1 on the A100 testbed replaying the short-context trace | ten measured runs (Section 8) |
+
+## 6. The simulator uses ROUTE
+
+`libqueuingsim` depends on `route`; `libqueuingsim/tests/route_*.rs`
+run the programs above under `make sim` next to the hand-written models.
+The hand-written models stay as the second implementation the programs
+are checked against; new scenarios should be written as programs.
+
+## 7. vLLM v1 as a ROUTE program
+
+`programs/vllm.route` and `programs/vllm_replay.route` (upstream `ref/vllm`
+at 0c87a197; the A100 testbed runs vLLM 0.30.0, whose scheduler gives
+identical answers on the differential scenario below):
+
+| vLLM | ROUTE | Where |
+|---|---|---|
+| a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `step { budget B }`, residents in admission order; `pool slots { admit via engine; }` | `scheduler.py:577, 624-823, 868-1128` |
+| `max_num_seqs` | `pool slots { cap max_seqs }` in the hold | `scheduler.py:877-879` |
+| FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
+| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) fits (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
+| a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
+| chunked prefill, `long_prefill_token_threshold` | `run engine prefill (n) growing kv`, `chunk` | `scheduler.py:612-616, 675-676, 1115-1128` |
+| `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
+| preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
+| the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (prompt + out − 1)`; `reuse (floor(min(prev prompt, prompt − 1)/bs)·bs)`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
+| the free queue: freed blocks appended tail first (LRU), in the order requests finish | `evict lru` per block from the tail, ties by release order | `block_pool.py:776-805`, `single_type_kv_cache_manager.py:557-585` |
+| a finished session's blocks stay in the free queue | `end` keeps the cache | `block_pool.py:776-805` |
+| a forced miss (a nonce at the head of the prompt) matches nothing; the old blocks stay | `reuse (0)` | trace |
+
+Not modelled: the watermark (0 by default), the "alone" exception of the
+long-prefill threshold, encoder inputs, speculative decoding, sliding
+window, cross-session prefix sharing (out of scope), asynchronous
+scheduling (Section 8).
+
+**How the correspondence is checked.** Three oracles, all agreeing:
+
+1. *Deterministic scenarios* (`tools/oracle/*.json`): the real
+   scheduler driven by a fake model runner (`vllm_oracle.py`), the real
+   A100 engine with Qwen3-8B stepped by hand (`a100_engine.json`,
+   `scripts/exp/lambda/route_cases.py`), the ROUTE program
+   (`tests/vllm_oracle.rs`) and the Lean executable semantics
+   (`RouteOracle.lean`, one theorem per scenario, `decide +kernel`) give
+   the same first-token step, last-token step and preemption count for every
+   request (6 scenarios: self-preemption, chunked prefill sharing the
+   budget, the request cap, head-of-line blocking, the chunk cap, six mixed
+   requests with staggered arrivals on 39 blocks).
+2. *The trace at full scale* (`vllm_replay_oracle.py`,
+   `scripts/exp/diff_route_vllm.sh`): the real scheduler and KV-cache
+   manager replay the 333-session short-context trace with the trace's
+   token ids, on the same clock as ROUTE. ROUTE and the scheduler agree on
+   every request's send time, first-token time and cached tokens: 3 321 of
+   3 321, for a constant step cost and for the A100 cost model, on the
+   base and the forced-miss traces, and on 40-session runs with 1 000,
+   1 500 and 3 000 blocks (both deadlock at the same step on 1 000 blocks).
+   The same scenario on vLLM 0.30.0's scheduler gives the same answers.
+3. The search for the first differing step (`first_divergence.sh`) found
+   the six semantic differences the first version of the program had
+   (`docs/review.md` §3).
+
+## 8. vLLM on the A100 testbed
+
+`programs/vllm_replay.route` replays the short-context trace of
+`docs/testbed-gpu.md` (Qwen3-8B, block 16, budget 512, `max_num_seqs` 64,
+128 160-token pool, prefix caching; session `i` sent at `i·spacing`, turn
+`k+1` `think` seconds after turn `k`).
+
+**Engine cost, measured.** 3 022 steps of the A100 engine stepped by hand
+(decode batches of 1–64 at contexts 256–32k, prefill chunks at contexts
+0–32k; `tools/a100/steps.jsonl`, `scripts/exp/lambda/route_cases.py`)
+fit `c + d·ndec + e·kvb + a·npre + b·attn` with MAPE 2.7 % (decode), 5.6 %
+(prefill), 5.7 % (mixed): c = 13.9 ms, d = 41 µs, e = 0.138 µs, a = 51.5
+µs, b = 4.02 ns (`tools/a100/step_fit.json`). The same `a` and `b`
+explain the light-load one-chunk TTFTs of the served runs (slope 74 µs per
+new token ≈ a + b·K̄).
+
+**Why the first version under-predicted misses.** Not timing: the real
+scheduler replayed on ROUTE's clock loses *more* prefixes than the
+testbed. The first program pinned waiting requests' prefixes, cached only
+prompts, dropped finished sessions' blocks and differed in three smaller
+rules (§7, `docs/review.md` §3). With those fixed, the program and
+the scheduler agree request for request.
+
+**Two overhead constants.** What the served path adds (asynchronous
+scheduling overlaps CPU work with the GPU; the API server tokenises the
+text prompt) is two constants, `c_it` per step and `c0` per request.
+Fitted on the two light-load runs only (`scripts/exp/calibrate_route.py`,
+grid 4–14 ms × 0–40 ms, `data/exp/route/calibration.txt`: c_it = 4 ms,
+c0 = 40 ms), the held-out runs are predicted as follows:
+
+| run | TTFT measured / model (s) | full-hit measured / model |
+|---|---|---|
+| 5 s (fit) | 0.177 / 0.168 | 0.966 / 0.947 |
+| 4.2 s (fit) | 0.236 / 0.264 | 0.935 / 0.878 |
+| 3.5 s, two seeds | 0.507, 0.473 / 0.422 | 0.839, 0.840 / 0.821 |
+| 3.0 s | 0.473 / 0.605 | 0.828 / 0.775 |
+| 2.5 s (collapsed) | 34.6 / 39.1 | 0.216 / 0.192 |
+| 4.2 s, 10 % forced | 0.627 / 0.576 | 0.769 / 0.732 |
+| 3.5 s, 10 % forced, two seeds | 0.886, 1.122 / 0.795, 0.838 | 0.736, 0.724 / 0.712, 0.713 |
+| 2.5 s, 10 % forced (collapsed) | 41.8 / 49.6 | 0.089 / 0.104 |
+
+The ridge is flat: on a wider grid the light-load optimum moves to c_it = 0,
+c0 = 60 ms, which fits the light runs better (mean |log ratio| 0.033 against
+0.084) and the loaded runs worse (2.5 s: 14 s against 35 s measured). The
+light-load data alone do not identify the split; the served step trace
+(below) is what identifies it.
+
+**The measured replica is on the cliff at 3 s.** The 3.0 s run of
+2026-09-26 did not collapse (full-hit 0.83, TTFT 0.47 s); the rerun of
+2026-09-27 with per-iteration logging on (which slowed the 3.5 s run by
+30 %: TTFT 0.68 against 0.51 s) collapsed (full-hit 0.20, TTFT 32 s). The
+same workload on the same engine flips with a small change in per-step
+cost, as the feedback of Lecture 5 predicts at the edge.
+
+**Hypothesis H-pin, on the real scheduler.** Pinning a waiting request's
+cached prefix at arrival (`scripts/exp/lambda/steptrace/pinpatch.py`,
+released once the scheduler admits it) and replaying the trace at 3.0 s
+through the real scheduler on the A100 cost clock: full-hit 0.43 → 0.80,
+mean TTFT 20 s → 0.72 s (`--pin` of `vllm_replay_oracle.py`). ROUTE
+predicted the same with a one-line change of the program (no `admit via`):
+0.80.
+
+**Served step trace** (`scripts/exp/lambda/steptrace/sitecustomize.py`:
+the time of every `schedule()` and `update_from_output()` of the served
+engine with the step's composition; `data/exp/gpu_route/trace/`). With
+this light tracer instead of the stats logger the 3.0 s replay does not
+collapse: full-hit 0.832, mean TTFT 0.441 s (2026-09-26: 0.828, 0.473 s),
+so the logger's overhead is what pushed the earlier rerun over the cliff.
+Median served step periods are 18.7 ms (decode only) and 42 ms (a
+512-token prefill chunk), against 14 ms and 41–50 ms stepped by hand; a
+regression of served periods on the step quantities is too noisy to
+identify the constants (MAPE 25–56 %), so the calibrated pair
+(c_it, c0) = (4 ms, 40 ms) is an effective light-load calibration, not a
+decomposition of the served path.
+
+**Pre-registered predictions** (`data/exp/route/prereg/predictions.txt`,
+written before the traced runs finished; the pinned variant is the same
+program without `admit via engine`):
+
+| run | predicted TTFT / full-hit | measured TTFT / full-hit |
+|---|---|---|
+| 3.0 s, vLLM rule | 0.605 s / 0.775 | 0.441 s / 0.832 |
+| 3.0 s, pinned | 0.483 s / 0.792 | 0.413 s / 0.838 |
+| 2.5 s, pinned | 0.888 s / 0.752 | 0.878 s / 0.784 |
+| 2.5 s, vLLM rule | 39.1 s / 0.192 | 34.6 s / 0.216 (2026-09-26) |
+
+**H-pin holds on the served A100 engine.** With the waiting request's
+prefix pinned the 2.5 s replay does not collapse: mean TTFT 34.6 s → 0.88 s,
+full-hit 0.22 → 0.78; ROUTE predicted 0.89 s / 0.75 before the run. At
+3.0 s, where the vLLM rule does not collapse under the light tracer,
+pinning changes little (0.441 → 0.413 s, 0.832 → 0.838), as predicted
+(0.605 → 0.483 s). Caveat: the unpinned 2.5 s run is from 2026-09-26
+without the step tracer; the tracer adds per-step cost, which works against
+the pinned run, so the comparison is conservative. One run per point.
+
+## 9. Known limitations
+
+* Continuous work and fluid rates at `fifo`/`ps`/`delay` stages; the
+  `step` stage is discrete. The paper's `TwoStage` fluid server is the
+  step stage with the budget filled to the memory time; at ω = 0.2 ms
+  that is 5 000 iterations per simulated second, so long horizons are
+  slow (a `fluid` option for the step stage is the natural extension).
+* Cache entries are per session; cross-session prefix sharing (a common
+  system prompt) needs a content-addressed cache, not written yet.
+* One eviction order per pool; the priced orders use `price(stage, …)`
+  with the stage's online estimates, as `libqueuingsim` does.
+* The Lean model covers the syntax, the pool semantics and the stage
+  rates; the step stage and the session-level semantics (continuations,
+  flow) are not formalised yet, and there is no proof that the Rust
+  interpreter implements the Lean relation (the vLLM oracle and the
+  closed-form checks are the evidence; `docs/review.md` §4 lists
+  the tools that would close this gap).

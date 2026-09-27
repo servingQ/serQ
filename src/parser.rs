@@ -1,0 +1,811 @@
+//! Recursive-descent parser for ROUTE programs.
+//!
+//! ```text
+//! program  := item*
+//! item     := 'let' IDENT '=' expr ';'
+//!           | 'pool' IDENT ('[' NUM ']')? '{' poolopt* '}'
+//!           | 'stage' IDENT ('[' NUM ']')? ':' kind ';'
+//!           | 'workload' '{' wlitem* '}'
+//!           | 'route' block
+//!           | 'run' '{' ('horizon' | 'warmup' | 'seed') expr ';' ... '}'
+//! poolopt  := 'cap' expr ';' | 'block' expr ';'
+//!           | 'evict' ('lru' | 'by' '(' expr (',' expr)* ')') ';'
+//!           | 'preempt' ('lifo' | 'none') ';'
+//!           | 'queue' ('fifo' | 'by' '(' expr ')') ';'
+//!           | 'spill' IDENT 'via' IDENT '(' expr ')' 'when' '(' expr ')' ';'
+//! kind     := 'fifo' ('(' expr ')')? | 'ps' '(' expr ')' | 'delay'
+//!           | 'step' '{' stepopt* '}'
+//! stepopt  := 'budget' expr ';' | 'cost' expr ';' | 'chunk' expr ';'
+//!           | 'exclusive' 'prefill' ';' | 'memory' IDENT ';'
+//! wlitem   := 'arrive' ('poisson' '(' expr ')' | 'closed' '(' expr ')' | 'none') ';'
+//!           | 'trace' STRING ';' | 'init' block | 'turn' block
+//! block    := '{' stmt* '}'
+//! stmt     := 'turn' ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
+//!           | 'hold' ref '(' expr ')' (',' ref '(' expr ')')* block ('cache' '(' expr ')')? ';'?
+//!           | 'grow' ref '(' expr ')' ';' | 'drop' ref ';'
+//!           | 'run' ref ('prefill' | 'decode')? '(' expr ')' ('growing' ref)? ';'
+//!           | 'branch' '(' expr ')' block ('else' block)?
+//!           | 'loop' block | 'end' ';'
+//!           | 'choose' IDENT 'in' expr 'by' '(' expr ')' ';'
+//! ref      := IDENT ('[' expr ']')?
+//! ```
+
+use std::fmt;
+
+use crate::ast::*;
+use crate::lexer::{LexError, Tok, Token, lex};
+
+#[derive(Debug, Clone)]
+pub struct ParseError {
+    pub line: usize,
+    pub col: usize,
+    pub msg: String,
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}: {}", self.line, self.col, self.msg)
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+impl From<LexError> for ParseError {
+    fn from(e: LexError) -> Self {
+        ParseError {
+            line: e.line,
+            col: e.col,
+            msg: e.msg,
+        }
+    }
+}
+
+type PResult<T> = Result<T, ParseError>;
+
+struct Parser {
+    toks: Vec<Token>,
+    pos: usize,
+}
+
+pub fn parse(src: &str) -> PResult<Program> {
+    let toks = lex(src)?;
+    let mut p = Parser { toks, pos: 0 };
+    p.program()
+}
+
+/// Parse a standalone expression (used by `--set name=expr` on the CLI).
+pub fn parse_expr(src: &str) -> PResult<Expr> {
+    let toks = lex(src)?;
+    let mut p = Parser { toks, pos: 0 };
+    let e = p.expr()?;
+    p.expect(&Tok::Eof)?;
+    Ok(e)
+}
+
+impl Parser {
+    fn peek(&self) -> &Tok {
+        &self.toks[self.pos].tok
+    }
+
+    fn peek_at(&self, k: usize) -> &Tok {
+        let i = (self.pos + k).min(self.toks.len() - 1);
+        &self.toks[i].tok
+    }
+
+    fn err<T>(&self, msg: impl Into<String>) -> PResult<T> {
+        let t = &self.toks[self.pos];
+        Err(ParseError {
+            line: t.line,
+            col: t.col,
+            msg: msg.into(),
+        })
+    }
+
+    fn advance(&mut self) -> Tok {
+        let t = self.toks[self.pos].tok.clone();
+        if self.pos + 1 < self.toks.len() {
+            self.pos += 1;
+        }
+        t
+    }
+
+    fn expect(&mut self, t: &Tok) -> PResult<()> {
+        if self.peek() == t {
+            self.advance();
+            Ok(())
+        } else {
+            self.err(format!("expected {t}, found {}", self.peek()))
+        }
+    }
+
+    fn is_kw(&self, kw: &str) -> bool {
+        matches!(self.peek(), Tok::Ident(s) if s == kw)
+    }
+
+    fn eat_kw(&mut self, kw: &str) -> bool {
+        if self.is_kw(kw) {
+            self.advance();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn expect_kw(&mut self, kw: &str) -> PResult<()> {
+        if self.eat_kw(kw) {
+            Ok(())
+        } else {
+            self.err(format!("expected `{kw}`, found {}", self.peek()))
+        }
+    }
+
+    fn ident(&mut self) -> PResult<String> {
+        match self.advance() {
+            Tok::Ident(s) => Ok(s),
+            other => {
+                self.pos -= 1;
+                self.err(format!("expected identifier, found {other}"))
+            }
+        }
+    }
+
+    fn string(&mut self) -> PResult<String> {
+        match self.advance() {
+            Tok::Str(s) => Ok(s),
+            other => {
+                self.pos -= 1;
+                self.err(format!("expected string, found {other}"))
+            }
+        }
+    }
+
+    fn program(&mut self) -> PResult<Program> {
+        let mut prog = Program::default();
+        while *self.peek() != Tok::Eof {
+            if self.eat_kw("let") {
+                let name = self.ident()?;
+                self.expect(&Tok::Assign)?;
+                let e = self.expr()?;
+                self.expect(&Tok::Semi)?;
+                prog.lets.push((name, e));
+            } else if self.eat_kw("pool") {
+                prog.pools.push(self.pool()?);
+            } else if self.eat_kw("stage") {
+                prog.stages.push(self.stage()?);
+            } else if self.eat_kw("workload") {
+                if prog.workload.is_some() {
+                    return self.err("duplicate workload");
+                }
+                prog.workload = Some(self.workload()?);
+            } else if self.eat_kw("route") {
+                if !prog.route.is_empty() {
+                    return self.err("duplicate route");
+                }
+                prog.route = self.block()?;
+            } else if self.eat_kw("run") {
+                self.expect(&Tok::LBrace)?;
+                while *self.peek() != Tok::RBrace {
+                    let key = self.ident()?;
+                    let e = self.expr()?;
+                    self.expect(&Tok::Semi)?;
+                    match key.as_str() {
+                        "horizon" => prog.run.horizon = Some(e),
+                        "warmup" => prog.run.warmup = Some(e),
+                        "seed" => prog.run.seed = Some(e),
+                        other => return self.err(format!("unknown run option `{other}`")),
+                    }
+                }
+                self.expect(&Tok::RBrace)?;
+            } else {
+                return self.err(format!("unexpected {} at top level", self.peek()));
+            }
+        }
+        Ok(prog)
+    }
+
+    fn array_count(&mut self) -> PResult<usize> {
+        if *self.peek() == Tok::LBracket {
+            self.advance();
+            let n = match self.advance() {
+                Tok::Num(x) if x >= 1.0 && x.fract() == 0.0 => x as usize,
+                other => {
+                    self.pos -= 1;
+                    return self.err(format!(
+                        "array size must be a positive integer, found {other}"
+                    ));
+                }
+            };
+            self.expect(&Tok::RBracket)?;
+            Ok(n)
+        } else {
+            Ok(1)
+        }
+    }
+
+    fn pool(&mut self) -> PResult<PoolDecl> {
+        let name = self.ident()?;
+        let count = self.array_count()?;
+        self.expect(&Tok::LBrace)?;
+        let mut d = PoolDecl {
+            name,
+            count,
+            cap: Expr::Num(f64::INFINITY),
+            block: None,
+            evict: EvictOrder::Lru,
+            preempt: Preempt::None,
+            queue: QueueOrder::Fifo,
+            spill: None,
+            admit_via: None,
+        };
+        while *self.peek() != Tok::RBrace {
+            let key = self.ident()?;
+            match key.as_str() {
+                "cap" => d.cap = self.expr()?,
+                "block" => d.block = Some(self.expr()?),
+                "evict" => {
+                    if self.eat_kw("lru") {
+                        d.evict = EvictOrder::Lru;
+                    } else {
+                        self.expect_kw("by")?;
+                        self.expect(&Tok::LParen)?;
+                        let mut keys = vec![self.expr()?];
+                        while *self.peek() == Tok::Comma {
+                            self.advance();
+                            keys.push(self.expr()?);
+                        }
+                        self.expect(&Tok::RParen)?;
+                        d.evict = EvictOrder::By(keys);
+                    }
+                }
+                "preempt" => {
+                    d.preempt = if self.eat_kw("lifo") {
+                        Preempt::Lifo
+                    } else {
+                        self.expect_kw("none")?;
+                        Preempt::None
+                    }
+                }
+                "queue" => {
+                    d.queue = if self.eat_kw("fifo") {
+                        QueueOrder::Fifo
+                    } else {
+                        self.expect_kw("by")?;
+                        self.expect(&Tok::LParen)?;
+                        let e = self.expr()?;
+                        self.expect(&Tok::RParen)?;
+                        QueueOrder::By(e)
+                    }
+                }
+                "admit" => {
+                    self.expect_kw("via")?;
+                    d.admit_via = Some(self.ident()?);
+                }
+                "spill" => {
+                    let to = self.ident()?;
+                    self.expect_kw("via")?;
+                    let via = self.ident()?;
+                    self.expect(&Tok::LParen)?;
+                    let work = self.expr()?;
+                    self.expect(&Tok::RParen)?;
+                    self.expect_kw("when")?;
+                    self.expect(&Tok::LParen)?;
+                    let when = self.expr()?;
+                    self.expect(&Tok::RParen)?;
+                    d.spill = Some(Spill {
+                        to,
+                        via,
+                        work,
+                        when,
+                    });
+                }
+                other => return self.err(format!("unknown pool option `{other}`")),
+            }
+            self.expect(&Tok::Semi)?;
+        }
+        self.expect(&Tok::RBrace)?;
+        Ok(d)
+    }
+
+    fn stage(&mut self) -> PResult<StageDecl> {
+        let name = self.ident()?;
+        let count = self.array_count()?;
+        self.expect(&Tok::Colon)?;
+        let kind = if self.eat_kw("fifo") {
+            if *self.peek() == Tok::LParen {
+                self.advance();
+                let e = self.expr()?;
+                self.expect(&Tok::RParen)?;
+                StageKind::Fifo(e)
+            } else {
+                StageKind::Fifo(Expr::Num(1.0))
+            }
+        } else if self.eat_kw("ps") {
+            self.expect(&Tok::LParen)?;
+            let e = self.expr()?;
+            self.expect(&Tok::RParen)?;
+            StageKind::Ps(e)
+        } else if self.eat_kw("delay") {
+            StageKind::Delay
+        } else if self.eat_kw("step") {
+            self.expect(&Tok::LBrace)?;
+            let mut s = StepSpec {
+                budget: Expr::Num(f64::INFINITY),
+                cost: Expr::Num(0.0),
+                chunk: Expr::Num(0.0),
+                exclusive_prefill: false,
+                decode_first: false,
+                memory: None,
+            };
+            let mut has_cost = false;
+            while *self.peek() != Tok::RBrace {
+                let key = self.ident()?;
+                match key.as_str() {
+                    "budget" => s.budget = self.expr()?,
+                    "cost" => {
+                        s.cost = self.expr()?;
+                        has_cost = true;
+                    }
+                    "chunk" => s.chunk = self.expr()?,
+                    "exclusive" => {
+                        self.expect_kw("prefill")?;
+                        s.exclusive_prefill = true;
+                    }
+                    "decode" => {
+                        self.expect_kw("first")?;
+                        s.decode_first = true;
+                    }
+                    "memory" => s.memory = Some(self.ident()?),
+                    other => return self.err(format!("unknown step option `{other}`")),
+                }
+                self.expect(&Tok::Semi)?;
+            }
+            self.expect(&Tok::RBrace)?;
+            if !has_cost {
+                return self.err("a step stage needs `cost`");
+            }
+            StageKind::Step(s)
+        } else {
+            return self.err(format!("unknown stage kind {}", self.peek()));
+        };
+        // `step { ... }` needs no semicolon
+        if *self.peek() == Tok::Semi || !matches!(kind, StageKind::Step(_)) {
+            self.expect(&Tok::Semi)?;
+        }
+        Ok(StageDecl { name, count, kind })
+    }
+
+    fn workload(&mut self) -> PResult<Workload> {
+        self.expect(&Tok::LBrace)?;
+        let mut w = Workload {
+            arrive: Arrival::None,
+            trace: None,
+            trace_ordered: false,
+            init: vec![],
+            turn: vec![],
+        };
+        while *self.peek() != Tok::RBrace {
+            if self.eat_kw("arrive") {
+                w.arrive = if self.eat_kw("poisson") {
+                    self.expect(&Tok::LParen)?;
+                    let e = self.expr()?;
+                    self.expect(&Tok::RParen)?;
+                    Arrival::Poisson(e)
+                } else if self.eat_kw("closed") {
+                    self.expect(&Tok::LParen)?;
+                    let e = self.expr()?;
+                    self.expect(&Tok::RParen)?;
+                    Arrival::Closed(e)
+                } else if self.eat_kw("batch") {
+                    self.expect(&Tok::LParen)?;
+                    let e = self.expr()?;
+                    self.expect(&Tok::RParen)?;
+                    Arrival::Batch(e)
+                } else {
+                    self.expect_kw("none")?;
+                    Arrival::None
+                };
+                self.expect(&Tok::Semi)?;
+            } else if self.eat_kw("trace") {
+                w.trace = Some(self.string()?);
+                w.trace_ordered = self.eat_kw("ordered");
+                self.expect(&Tok::Semi)?;
+            } else if self.eat_kw("init") {
+                w.init = self.block()?;
+            } else if self.eat_kw("turn") {
+                w.turn = self.block()?;
+            } else {
+                return self.err(format!("unexpected {} in workload", self.peek()));
+            }
+        }
+        self.expect(&Tok::RBrace)?;
+        Ok(w)
+    }
+
+    fn block(&mut self) -> PResult<Vec<Stmt>> {
+        self.expect(&Tok::LBrace)?;
+        let mut v = vec![];
+        while *self.peek() != Tok::RBrace {
+            v.push(self.stmt()?);
+        }
+        self.expect(&Tok::RBrace)?;
+        Ok(v)
+    }
+
+    fn reference(&mut self) -> PResult<Ref> {
+        let name = self.ident()?;
+        let index = if *self.peek() == Tok::LBracket {
+            self.advance();
+            let e = self.expr()?;
+            self.expect(&Tok::RBracket)?;
+            Some(Box::new(e))
+        } else {
+            None
+        };
+        Ok(Ref { name, index })
+    }
+
+    fn paren_expr(&mut self) -> PResult<Expr> {
+        self.expect(&Tok::LParen)?;
+        let e = self.expr()?;
+        self.expect(&Tok::RParen)?;
+        Ok(e)
+    }
+
+    fn stmt(&mut self) -> PResult<Stmt> {
+        let kw = match self.peek() {
+            Tok::Ident(s) => s.clone(),
+            other => return self.err(format!("expected a statement, found {other}")),
+        };
+        match kw.as_str() {
+            "turn" => {
+                self.advance();
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Turn)
+            }
+            "end" => {
+                self.advance();
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::End)
+            }
+            "set" => {
+                self.advance();
+                let name = self.ident()?;
+                self.expect(&Tok::Assign)?;
+                let e = self.expr()?;
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Set(name, e))
+            }
+            "observe" => {
+                self.advance();
+                let name = self.ident()?;
+                self.expect(&Tok::Assign)?;
+                let e = self.expr()?;
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Observe(name, e))
+            }
+            "hold" => {
+                self.advance();
+                let mut pools = vec![];
+                loop {
+                    let r = self.reference()?;
+                    let e = self.paren_expr()?;
+                    let fits = if self.eat_kw("fits") {
+                        Some(self.paren_expr()?)
+                    } else {
+                        None
+                    };
+                    pools.push((r, e, fits));
+                    if *self.peek() == Tok::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                let reuse = if self.eat_kw("reuse") {
+                    Some(self.paren_expr()?)
+                } else {
+                    None
+                };
+                let body = self.block()?;
+                let cache = if self.eat_kw("cache") {
+                    Some(self.paren_expr()?)
+                } else {
+                    None
+                };
+                if *self.peek() == Tok::Semi {
+                    self.advance();
+                }
+                Ok(Stmt::Hold {
+                    pools,
+                    reuse,
+                    body,
+                    cache,
+                })
+            }
+            "grow" => {
+                self.advance();
+                let r = self.reference()?;
+                let e = self.paren_expr()?;
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Grow(r, e))
+            }
+            "drop" => {
+                self.advance();
+                let r = self.reference()?;
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Drop(r))
+            }
+            "run" => {
+                self.advance();
+                let stage = self.reference()?;
+                let mode = if self.eat_kw("prefill") {
+                    RunMode::Prefill
+                } else if self.eat_kw("decode") {
+                    RunMode::Decode
+                } else {
+                    RunMode::Plain
+                };
+                let work = self.paren_expr()?;
+                let growing = if self.eat_kw("growing") {
+                    Some(self.reference()?)
+                } else {
+                    None
+                };
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Run {
+                    stage,
+                    mode,
+                    work,
+                    growing,
+                })
+            }
+            "branch" => {
+                self.advance();
+                let p = self.paren_expr()?;
+                let then = self.block()?;
+                let els = if self.eat_kw("else") {
+                    self.block()?
+                } else {
+                    vec![]
+                };
+                Ok(Stmt::Branch(p, then, els))
+            }
+            "loop" => {
+                self.advance();
+                Ok(Stmt::Loop(self.block()?))
+            }
+            "choose" => {
+                self.advance();
+                let var = self.ident()?;
+                self.expect_kw("in")?;
+                let count = self.expr()?;
+                self.expect_kw("by")?;
+                let key = self.paren_expr()?;
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Choose { var, count, key })
+            }
+            other => self.err(format!("unknown statement `{other}`")),
+        }
+    }
+
+    // ---------------------------------------------------------- expressions
+
+    fn expr(&mut self) -> PResult<Expr> {
+        let c = self.or()?;
+        if *self.peek() == Tok::Question {
+            self.advance();
+            let a = self.expr()?;
+            self.expect(&Tok::Colon)?;
+            let b = self.expr()?;
+            return Ok(Expr::Cond(Box::new(c), Box::new(a), Box::new(b)));
+        }
+        Ok(c)
+    }
+
+    fn or(&mut self) -> PResult<Expr> {
+        let mut l = self.and()?;
+        while *self.peek() == Tok::OrOr {
+            self.advance();
+            let r = self.and()?;
+            l = Expr::Binary(BinOp::Or, Box::new(l), Box::new(r));
+        }
+        Ok(l)
+    }
+
+    fn and(&mut self) -> PResult<Expr> {
+        let mut l = self.cmp()?;
+        while *self.peek() == Tok::AndAnd {
+            self.advance();
+            let r = self.cmp()?;
+            l = Expr::Binary(BinOp::And, Box::new(l), Box::new(r));
+        }
+        Ok(l)
+    }
+
+    fn cmp(&mut self) -> PResult<Expr> {
+        let l = self.add()?;
+        let op = match self.peek() {
+            Tok::Lt => BinOp::Lt,
+            Tok::Le => BinOp::Le,
+            Tok::Gt => BinOp::Gt,
+            Tok::Ge => BinOp::Ge,
+            Tok::EqEq => BinOp::Eq,
+            Tok::Ne => BinOp::Ne,
+            _ => return Ok(l),
+        };
+        self.advance();
+        let r = self.add()?;
+        Ok(Expr::Binary(op, Box::new(l), Box::new(r)))
+    }
+
+    fn add(&mut self) -> PResult<Expr> {
+        let mut l = self.mul()?;
+        loop {
+            let op = match self.peek() {
+                Tok::Plus => BinOp::Add,
+                Tok::Minus => BinOp::Sub,
+                _ => return Ok(l),
+            };
+            self.advance();
+            let r = self.mul()?;
+            l = Expr::Binary(op, Box::new(l), Box::new(r));
+        }
+    }
+
+    fn mul(&mut self) -> PResult<Expr> {
+        let mut l = self.unary()?;
+        loop {
+            let op = match self.peek() {
+                Tok::Star => BinOp::Mul,
+                Tok::Slash => BinOp::Div,
+                _ => return Ok(l),
+            };
+            self.advance();
+            let r = self.unary()?;
+            l = Expr::Binary(op, Box::new(l), Box::new(r));
+        }
+    }
+
+    fn unary(&mut self) -> PResult<Expr> {
+        match self.peek() {
+            Tok::Minus => {
+                self.advance();
+                Ok(Expr::Unary(UnOp::Neg, Box::new(self.unary()?)))
+            }
+            Tok::Not => {
+                self.advance();
+                Ok(Expr::Unary(UnOp::Not, Box::new(self.unary()?)))
+            }
+            Tok::Tilde => {
+                self.advance();
+                let name = self.ident()?;
+                self.expect(&Tok::LParen)?;
+                let mut args = vec![];
+                if *self.peek() != Tok::RParen {
+                    args.push(self.expr()?);
+                    while *self.peek() == Tok::Comma {
+                        self.advance();
+                        args.push(self.expr()?);
+                    }
+                }
+                self.expect(&Tok::RParen)?;
+                Ok(Expr::Sample(name, args))
+            }
+            _ => self.pow(),
+        }
+    }
+
+    fn pow(&mut self) -> PResult<Expr> {
+        let base = self.atom()?;
+        if *self.peek() == Tok::Caret {
+            self.advance();
+            let e = self.unary()?;
+            return Ok(Expr::Binary(BinOp::Pow, Box::new(base), Box::new(e)));
+        }
+        Ok(base)
+    }
+
+    fn atom(&mut self) -> PResult<Expr> {
+        match self.advance() {
+            Tok::Num(x) => Ok(Expr::Num(x)),
+            Tok::LParen => {
+                let e = self.expr()?;
+                self.expect(&Tok::RParen)?;
+                Ok(e)
+            }
+            Tok::Ident(name) => {
+                if *self.peek() == Tok::LParen {
+                    self.advance();
+                    let mut args = vec![];
+                    if *self.peek() != Tok::RParen {
+                        args.push(self.arg()?);
+                        while *self.peek() == Tok::Comma {
+                            self.advance();
+                            args.push(self.arg()?);
+                        }
+                    }
+                    self.expect(&Tok::RParen)?;
+                    Ok(Expr::Call(name, args))
+                } else {
+                    Ok(Expr::Var(name))
+                }
+            }
+            other => {
+                self.pos -= 1;
+                self.err(format!("expected an expression, found {other}"))
+            }
+        }
+    }
+
+    /// A call argument. `name` followed by `[`, `,` or `)` and not
+    /// otherwise an operator is parsed as a reference; the linker decides
+    /// whether it names a pool, a stage or a variable.
+    fn arg(&mut self) -> PResult<Arg> {
+        if let Tok::Ident(name) = self.peek().clone() {
+            match self.peek_at(1) {
+                Tok::Comma | Tok::RParen => {
+                    self.advance();
+                    return Ok(Arg::Ref(Ref { name, index: None }));
+                }
+                Tok::LBracket => {
+                    self.advance();
+                    self.advance();
+                    let e = self.expr()?;
+                    self.expect(&Tok::RBracket)?;
+                    return Ok(Arg::Ref(Ref {
+                        name,
+                        index: Some(Box::new(e)),
+                    }));
+                }
+                _ => {}
+            }
+        }
+        Ok(Arg::Expr(self.expr()?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_a_small_program() {
+        let src = r#"
+            let a = 2e-5;
+            pool kv { cap 3e5; evict lru; preempt lifo; }
+            stage prefill : fifo;
+            stage decode : ps(min(n, 8));
+            stage tool : delay;
+            workload {
+              arrive poisson(0.3);
+              init { set K = 0; set n = ~uniform(1e4, 3e4); }
+              turn { set K = K + n + o; set n = ~exp(1000); }
+            }
+            route {
+              turn;
+              loop {
+                hold kv (K + n + o) {
+                  run prefill (a * (K + n - cached));
+                  observe ttft = now - t0;
+                  run decode (o * 2e-4);
+                } cache (K + n + o);
+                branch (0.9) { run tool (Z); turn; } else { end; }
+              }
+            }
+            run { horizon 1000; warmup 100; seed 1; }
+        "#;
+        let p = parse(src).unwrap();
+        assert_eq!(p.pools.len(), 1);
+        assert_eq!(p.stages.len(), 3);
+        assert_eq!(p.lets[0].0, "a");
+        assert!(matches!(p.route[1], Stmt::Loop(_)));
+    }
+
+    #[test]
+    fn precedence_and_refs() {
+        let e = parse_expr("1 + 2 * 3 ^ 2 < 20 && work(prefill[j]) > 0").unwrap();
+        assert!(matches!(e, Expr::Binary(BinOp::And, _, _)));
+        let e = parse_expr("-x ? a : b").unwrap();
+        assert!(matches!(e, Expr::Cond(..)));
+    }
+}

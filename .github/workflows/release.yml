@@ -1,0 +1,76 @@
+name: Release
+
+# Push a tag vX.Y.Z matching Cargo.toml's version:
+#   git tag v0.1.1 && git push origin v0.1.1
+# The full CI runs first; the release carries the packaged crate, the Linux
+# CLI and a source archive of the Lean package. Consumers pin the tag
+# (Cargo `git`/`tag`, Lake `git`/`rev` with `subDir = "lean"`).
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "existing tag to (re)release"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: check
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Tag matches Cargo.toml and lakefile.toml
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          l=$(sed -n 's/^version = "\(.*\)"/\1/p' lean/lakefile.toml | head -1)
+          test "v$v" = "$TAG" || { echo "::error::tag $TAG but Cargo.toml says $v"; exit 1; }
+          test "v$l" = "$TAG" || { echo "::error::tag $TAG but lean/lakefile.toml says $l"; exit 1; }
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install && cargo --version
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the CLI and package the crate
+        run: |
+          cargo build --release --locked
+          cargo package --locked --allow-dirty
+          mkdir -p dist
+          cp target/package/seq-lang-*.crate dist/
+          tar -C target/release -czf "dist/route-$TAG-x86_64-unknown-linux-gnu.tar.gz" route
+          git archive --format=tar.gz --prefix="seq-lean-$TAG/" HEAD lean > "dist/seq-lean-$TAG.tar.gz"
+          (cd dist && sha256sum * > SHA256SUMS)
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "seQ $TAG" --generate-notes --verify-tag
+          fi
+
+  crates-io:
+    # Off by default: crates.io is public and permanent. Enable with the
+    # repository variable PUBLISH_CRATES_IO=true and the secret
+    # CARGO_REGISTRY_TOKEN, after adding a `license` to Cargo.toml.
+    needs: release
+    if: vars.PUBLISH_CRATES_IO == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - run: rustup toolchain install
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
