@@ -1,4 +1,4 @@
-//! Abstract syntax of a ROUTE program.
+//! Abstract syntax of a seQ program.
 //!
 //! A program is a *deployment* (pools and stages), a *workload* (how
 //! sessions arrive and how a session's attributes evolve from turn to

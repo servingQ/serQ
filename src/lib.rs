@@ -1,14 +1,14 @@
-//! # ROUTE
+//! # seQ
 //!
 //! A small language in which an LLM serving deployment is a program: a
 //! *deployment* of memory pools and stages, a *workload* of sessions, and a
-//! *route* every session follows. This crate parses, links and runs ROUTE
+//! *route* every session follows. This crate parses, links and runs seQ
 //! programs as discrete-event simulations. The language is specified in
 //! `docs/language.md`; `programs/` holds the deployments of the
 //! paper and of vLLM v1.
 //!
 //! ```no_run
-//! let src = std::fs::read_to_string("programs/mg1.route").unwrap();
+//! let src = std::fs::read_to_string("programs/mg1.seq").unwrap();
 //! let report = seq::run_source(&src, &seq::Overrides::default(), None).unwrap();
 //! println!("{}", report.text());
 //! ```
@@ -62,12 +62,12 @@ pub fn run_file(path: &Path, ov: &Overrides) -> Result<Report, String> {
     run_source(&src, ov, path.parent())
 }
 
-/// Convenience for tests: run `programs/<name>.route` with overrides given
+/// Convenience for tests: run `programs/<name>.seq` with overrides given
 /// as `name=expr` strings.
 pub fn run_program(name: &str, sets: &[&str], seed: Option<u64>, horizon: Option<f64>) -> Report {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("programs")
-        .join(format!("{name}.route"));
+        .join(format!("{name}.seq"));
     let mut ov = Overrides {
         seed,
         horizon,

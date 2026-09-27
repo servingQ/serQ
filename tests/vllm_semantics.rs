@@ -1,4 +1,4 @@
-//! Deterministic scenarios on the vLLM v1 engine (`programs/vllm.route`
+//! Deterministic scenarios on the vLLM v1 engine (`programs/vllm.seq`
 //! and inline variants), each mirroring a behaviour of
 //! `ref/vllm/vllm/v1/core/sched/scheduler.py` (line numbers at commit
 //! 0c87a197). Iteration cost is 1, so times are scheduler steps.
@@ -111,7 +111,7 @@ fn chunked_prefill_takes_ceil_prompt_over_budget_steps() {
 fn long_prefill_threshold_applies_only_with_company() {
     let alone = run(&engine(1, "3000", "1", 1000, 16, 4096, 16, "chunk 1000;"));
     assert_eq!(alone.observe("ttft").unwrap().samples[0], 3.0);
-    // ROUTE applies `chunk` unconditionally: the "alone" exception of vLLM
+    // seQ applies `chunk` unconditionally: the "alone" exception of vLLM
     // (num_eligible_reqs > 1) is not modelled; document it.
 }
 

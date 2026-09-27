@@ -3,7 +3,7 @@
 //! first-token step, the last-token step and the cached tokens that the
 //! real scheduler gives (`cache_trace.out.csv`, from
 //! `tools/vllm_replay_oracle.py`). Lean proves the same for its executable
-//! semantics (`RouteOracle.lean`, `vllm_cache_trace`).
+//! semantics (`SeqOracle.lean`, `vllm_cache_trace`).
 
 use std::path::Path;
 
@@ -12,13 +12,13 @@ use seq::{Overrides, parser, run_file};
 #[test]
 fn cache_trace_matches_the_real_scheduler() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let src = std::fs::read_to_string(dir.join("programs/vllm_replay.route")).unwrap();
+    let src = std::fs::read_to_string(dir.join("programs/vllm_replay.seq")).unwrap();
     let csv = dir.join("tools/oracle/cache_trace.csv");
     let src = src.replace(
         "trace \"data/short_base.csv\" ordered;",
         &format!("trace \"{}\" ordered;", csv.display()),
     );
-    let tmp = std::env::temp_dir().join(format!("cache_trace_{}.route", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("cache_trace_{}.seq", std::process::id()));
     std::fs::write(&tmp, src).unwrap();
     let mut ov = Overrides::default();
     for (k, v) in [

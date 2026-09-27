@@ -3,7 +3,7 @@ name = "seq-lang"
 version = "0.1.0-dev1"
 edition = "2024"
 rust-version = "1.85"
-description = "seQ: ROUTE, a language for formal verification and simulation of LLM serving systems (interpreter and CLI)"
+description = "seQ: seQ, a language for formal verification and simulation of LLM serving systems (interpreter and CLI)"
 repository = "https://github.com/vrvrv/seQ"
 readme = "README.md"
 keywords = ["llm", "serving", "queueing", "simulation", "vllm"]
@@ -15,7 +15,7 @@ name = "seq"
 path = "src/lib.rs"
 
 [[bin]]
-name = "route"
+name = "seq-lang"
 path = "src/main.rs"
 
 [dependencies]

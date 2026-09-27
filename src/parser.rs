@@ -1,4 +1,4 @@
-//! Recursive-descent parser for ROUTE programs.
+//! Recursive-descent parser for seQ programs.
 //!
 //! ```text
 //! program  := item*

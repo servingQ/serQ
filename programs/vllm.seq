@@ -1,5 +1,5 @@
 // vLLM v1 on one device (ref/vllm at 0c87a197, `vllm/v1/core/sched/
-// scheduler.py`, `kv_cache_manager.py`, `block_pool.py`), as a ROUTE
+// scheduler.py`, `kv_cache_manager.py`, `block_pool.py`), as a seQ
 // program. Continuous batching with chunked prefill: every iteration hands
 // a token budget to the running requests in admission order (one token per
 // decoding request, up to `chunk` per prefilling one), then admits waiting

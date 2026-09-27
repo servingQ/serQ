@@ -1,5 +1,5 @@
-//! `route run FILE [--seed N] [--horizon T] [--warmup T] [--set k=expr]... [--json]`
-//! `route check FILE`
+//! `seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set k=expr]... [--json]`
+//! `seq-lang check FILE`
 
 use std::path::Path;
 use std::process::exit;
@@ -8,7 +8,7 @@ use seq::{Overrides, parser};
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  route run FILE [--seed N] [--horizon T] [--warmup T] [--set name=expr]... [--json] [--dump DIR]\n  route check FILE"
+        "usage:\n  seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set name=expr]... [--json] [--dump DIR]\n  seq-lang check FILE"
     );
     exit(2)
 }

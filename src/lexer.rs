@@ -1,4 +1,4 @@
-//! Tokens of the ROUTE surface syntax.
+//! Tokens of the seQ surface syntax.
 
 use std::fmt;
 

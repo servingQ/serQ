@@ -1,44 +1,44 @@
-# ROUTE: a language for the formal verification and simulation of LLM serving systems
+# seQ: a language for the formal verification and simulation of LLM serving systems
 
 Status: 2026-09-27 (moved into seQ from the research repository
 `serving-queue-theory` the same day). Reference implementation: the crate
-`seq-lang` at the repository root (Rust: parser, interpreter, CLI `route`).
-Formal model: `lean/SeQ/Route.lean` (syntax `Route Env V`, pool semantics,
-memory invariant, surface syntax), `RouteExec.lean` (an executable
-semantics of the pool and step-engine fragment), `RouteOracle.lean` (the
-vLLM scheduler scenarios as theorems, generated), `RouteServe.lean`
-(serving order of a step engine). Programs: `programs/*.route`. Checks:
-`make check`. The review of the first version against vLLM, the design
-decisions and the tooling survey are in `docs/review.md`.
+`seq-lang` at the repository root (Rust: parser, interpreter, CLI
+`seq-lang`). Programs: `programs/*.seq`. Checks: `make check`. The review
+of the first version against vLLM, the design decisions and the tooling
+survey are in `docs/review.md`.
 
-Paths under `libqueuingsim/`, `scripts/exp/`, `data/exp/`, `paper/` and
-`lectures/` refer to `serving-queue-theory`, which uses a pinned release
-of seQ: its simulator cross-checks ROUTE programs against hand-written
-models (`libqueuingsim/tests/route_*.rs`), its Lean proofs describe the
-paper's replicas as ROUTE programs, and its testbed scripts produced the
-A100 measurements of Section 8. The two replica programs of the paper
-(`disaggregatedReplica`, `colocatedReplica`) live there
-(`lean/ServingQueueTheory/Deployments.lean`).
+The formal model is in `serving-queue-theory`, which uses a pinned
+release of seQ: `lean/ServingQueueTheory/Seq.lean` (syntax `Route Env V`
+of the route block, pool semantics, memory invariant, surface syntax),
+`SeqExec.lean` (an executable semantics of the pool and step-engine
+fragment), `SeqOracle.lean` (the vLLM scheduler scenarios of
+`tools/oracle/` as theorems, generated), `SeqServe.lean` (serving order
+of a step engine) and `Deployments.lean` (the paper's two replicas as
+programs). Other paths under `libqueuingsim/`, `scripts/exp/`,
+`data/exp/`, `paper/` and `lectures/` also refer to that repository: its
+simulator cross-checks seQ programs against hand-written models
+(`libqueuingsim/tests/seq_*.rs`), and its testbed scripts produced the
+A100 measurements of Section 8.
 
-## 1. What ROUTE is for
+## 1. What seQ is for
 
 A serving deployment is a program. The program names the resources of the
 deployment (memory pools, stages), says how sessions arrive and how a
 session's turns evolve (the workload), and gives the path every session
 takes through the resources (the route). One program has three uses:
 
-1. **Simulation.** `route run prog.route` executes it as a discrete-event
+1. **Simulation.** `seq-lang run prog.seq` executes it as a discrete-event
    simulation and reports time averages, per-observation statistics and
-   per-turn records. `libqueuingsim` now runs ROUTE programs next to its
+   per-turn records. `libqueuingsim` now runs seQ programs next to its
    hand-written models (Section 6).
 2. **Formal verification.** The same syntax is an inductive type in Lean
    with an operational semantics; properties of the language (the memory
    invariant of every pool, the shares of a processor-sharing stage) and
    of particular programs (well-formedness of the paper's replica) are
-   theorems. Programs can be written in ROUTE's own syntax inside Lean
+   theorems. Programs can be written in seQ's own syntax inside Lean
    (`[route| ... ]`).
 3. **Specification of production systems.** vLLM v1's engine is a
-   50-line program (`programs/vllm.route`, `vllm_replay.route`). It
+   50-line program (`programs/vllm.seq`, `vllm_replay.seq`). It
    reproduces the real scheduler request for request: on six
    deterministic scenarios (also on the real A100 engine, and as Lean
    theorems) and on the full 333-session agent trace (3 321 requests,
@@ -146,7 +146,7 @@ the body runs. At the end of the body the units are released and
 `min(ℓ, computed)` units stay cached, rounded down to blocks (`computed`
 is the allocation, or the position a `growing` run reached). The invariant
 `allocated + cached ≤ cap` holds in every reachable configuration
-(`RouteLang.Step.invariant`). `end` releases every hold but *keeps* the
+(`SeqLang.Step.invariant`). `end` releases every hold but *keeps* the
 session's cached prefixes: the cache does not know that a session has left
 (lecture `[End]`; vLLM keeps the blocks). A program that models dropping
 them writes `drop POOL;` before `end;`. Eviction is per entry, or per block
@@ -184,7 +184,7 @@ expression in `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn`; its
 tokens are applied when it ends. A run of zero work completes at once.
 `exclusive prefill` schedules only the first prefilling resident while one
 exists (the RBLN stack). Without a per-request chunk cap, serving in
-admission order *is* serving decode-first (`RouteLang.Serve.serve_eq_decode_first`;
+admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`;
 a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 "prefill from the budget decode leaves" describes vLLM too.
 
@@ -201,7 +201,7 @@ and service, and per pool the time-average used, cached, queue and
 holders, the mean queue wait, admissions, evictions, preemptions, spills
 and rejections.
 
-**Executable semantics in Lean.** `RouteExec.lean` defines the same rules
+**Executable semantics in Lean.** `SeqExec.lean` defines the same rules
 for the fragment of pools and one step engine on the step clock (values in
 ℕ): `Exec.run` interprets a `Route Env ℕ` program for `n` sessions. It is
 the semantics the oracle theorems are about.
@@ -221,37 +221,37 @@ the semantics the oracle theorems are about.
 | no measurement | `observe`, `--dump` | TTFT and the price are defined in the program |
 | no routing | stage arrays and `choose` | §3.2 |
 
-The lecture's disaggregated replica is `programs/lecture_pd.route` and,
-in Lean, `RouteLang.disaggregatedReplica`; the paper's colocated
-two-resource replica is `programs/replica.route` and
-`RouteLang.colocatedReplica`.
+The lecture's disaggregated replica is `programs/lecture_pd.seq` and,
+in Lean, `SeqLang.disaggregatedReplica`; the paper's colocated
+two-resource replica is `programs/replica.seq` and
+`SeqLang.colocatedReplica`.
 
 ## 5. Programs
 
 | Program | Deployment | Checked against |
 |---|---|---|
-| `mg1.route`, `ps.route`, `closed.route` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | closed forms (`route_closed_forms.rs`): M/M/1 sojourn, PK for four laws, PS insensitivity, MVA |
-| `agentic.route` | `models::agentic` (one FIFO replica, finite KV, SF eviction) | hand-written model, throughput within 3 %, hit rate within 0.5 pt, response within 3 % (`route_agentic.rs`) |
-| `replica.route` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/route/replica_seeds.csv`, `route_replica_and_pd.rs`) |
-| `pd_tandem.route`, `lecture_pd.route` | tandem PD, the lecture's disaggregated replica | capacity formulas within 2 %; stability |
-| `routing.route` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
-| `vllm.route` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
-| `vllm_replay.route` | vLLM v1 on the A100 testbed replaying the short-context trace | ten measured runs (Section 8) |
+| `mg1.seq`, `ps.seq`, `closed.seq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | closed forms (`seq_closed_forms.rs`): M/M/1 sojourn, PK for four laws, PS insensitivity, MVA |
+| `agentic.seq` | `models::agentic` (one FIFO replica, finite KV, SF eviction) | hand-written model, throughput within 3 %, hit rate within 0.5 pt, response within 3 % (`seq_agentic.rs`) |
+| `replica.seq` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/seq/replica_seeds.csv`, `seq_replica_and_pd.rs`) |
+| `pd_tandem.seq`, `lecture_pd.seq` | tandem PD, the lecture's disaggregated replica | capacity formulas within 2 %; stability |
+| `routing.seq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
+| `vllm.seq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
+| `vllm_replay.seq` | vLLM v1 on the A100 testbed replaying the short-context trace | ten measured runs (Section 8) |
 
-## 6. The simulator uses ROUTE
+## 6. The simulator uses seQ
 
-`libqueuingsim` depends on `route`; `libqueuingsim/tests/route_*.rs`
+`libqueuingsim` depends on `seq-lang`; `libqueuingsim/tests/seq_*.rs`
 run the programs above under `make sim` next to the hand-written models.
 The hand-written models stay as the second implementation the programs
 are checked against; new scenarios should be written as programs.
 
-## 7. vLLM v1 as a ROUTE program
+## 7. vLLM v1 as a seQ program
 
-`programs/vllm.route` and `programs/vllm_replay.route` (upstream `ref/vllm`
+`programs/vllm.seq` and `programs/vllm_replay.seq` (upstream `ref/vllm`
 at 0c87a197; the A100 testbed runs vLLM 0.30.0, whose scheduler gives
 identical answers on the differential scenario below):
 
-| vLLM | ROUTE | Where |
+| vLLM | seQ | Where |
 |---|---|---|
 | a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `step { budget B }`, residents in admission order; `pool slots { admit via engine; }` | `scheduler.py:577, 624-823, 868-1128` |
 | `max_num_seqs` | `pool slots { cap max_seqs }` in the hold | `scheduler.py:877-879` |
@@ -276,17 +276,17 @@ scheduling (Section 8).
 1. *Deterministic scenarios* (`tools/oracle/*.json`): the real
    scheduler driven by a fake model runner (`vllm_oracle.py`), the real
    A100 engine with Qwen3-8B stepped by hand (`a100_engine.json`,
-   `scripts/exp/lambda/route_cases.py`), the ROUTE program
+   `scripts/exp/lambda/seq_cases.py`), the seQ program
    (`tests/vllm_oracle.rs`) and the Lean executable semantics
-   (`RouteOracle.lean`, one theorem per scenario, `decide +kernel`) give
+   (`SeqOracle.lean`, one theorem per scenario, `decide +kernel`) give
    the same first-token step, last-token step and preemption count for every
    request (6 scenarios: self-preemption, chunked prefill sharing the
    budget, the request cap, head-of-line blocking, the chunk cap, six mixed
    requests with staggered arrivals on 39 blocks).
 2. *The trace at full scale* (`vllm_replay_oracle.py`,
-   `scripts/exp/diff_route_vllm.sh`): the real scheduler and KV-cache
+   `scripts/exp/diff_seq_vllm.sh`): the real scheduler and KV-cache
    manager replay the 333-session short-context trace with the trace's
-   token ids, on the same clock as ROUTE. ROUTE and the scheduler agree on
+   token ids, on the same clock as seQ. seQ and the scheduler agree on
    every request's send time, first-token time and cached tokens: 3 321 of
    3 321, for a constant step cost and for the A100 cost model, on the
    base and the forced-miss traces, and on 40-session runs with 1 000,
@@ -298,14 +298,14 @@ scheduling (Section 8).
 
 ## 8. vLLM on the A100 testbed
 
-`programs/vllm_replay.route` replays the short-context trace of
+`programs/vllm_replay.seq` replays the short-context trace of
 `docs/testbed-gpu.md` (Qwen3-8B, block 16, budget 512, `max_num_seqs` 64,
 128 160-token pool, prefix caching; session `i` sent at `i·spacing`, turn
 `k+1` `think` seconds after turn `k`).
 
 **Engine cost, measured.** 3 022 steps of the A100 engine stepped by hand
 (decode batches of 1–64 at contexts 256–32k, prefill chunks at contexts
-0–32k; `tools/a100/steps.jsonl`, `scripts/exp/lambda/route_cases.py`)
+0–32k; `tools/a100/steps.jsonl`, `scripts/exp/lambda/seq_cases.py`)
 fit `c + d·ndec + e·kvb + a·npre + b·attn` with MAPE 2.7 % (decode), 5.6 %
 (prefill), 5.7 % (mixed): c = 13.9 ms, d = 41 µs, e = 0.138 µs, a = 51.5
 µs, b = 4.02 ns (`tools/a100/step_fit.json`). The same `a` and `b`
@@ -313,7 +313,7 @@ explain the light-load one-chunk TTFTs of the served runs (slope 74 µs per
 new token ≈ a + b·K̄).
 
 **Why the first version under-predicted misses.** Not timing: the real
-scheduler replayed on ROUTE's clock loses *more* prefixes than the
+scheduler replayed on seQ's clock loses *more* prefixes than the
 testbed. The first program pinned waiting requests' prefixes, cached only
 prompts, dropped finished sessions' blocks and differed in three smaller
 rules (§7, `docs/review.md` §3). With those fixed, the program and
@@ -322,8 +322,8 @@ the scheduler agree request for request.
 **Two overhead constants.** What the served path adds (asynchronous
 scheduling overlaps CPU work with the GPU; the API server tokenises the
 text prompt) is two constants, `c_it` per step and `c0` per request.
-Fitted on the two light-load runs only (`scripts/exp/calibrate_route.py`,
-grid 4–14 ms × 0–40 ms, `data/exp/route/calibration.txt`: c_it = 4 ms,
+Fitted on the two light-load runs only (`scripts/exp/calibrate_seq.py`,
+grid 4–14 ms × 0–40 ms, `data/exp/seq/calibration.txt`: c_it = 4 ms,
 c0 = 40 ms), the held-out runs are predicted as follows:
 
 | run | TTFT measured / model (s) | full-hit measured / model |
@@ -354,13 +354,13 @@ cost, as the feedback of Lecture 5 predicts at the edge.
 cached prefix at arrival (`scripts/exp/lambda/steptrace/pinpatch.py`,
 released once the scheduler admits it) and replaying the trace at 3.0 s
 through the real scheduler on the A100 cost clock: full-hit 0.43 → 0.80,
-mean TTFT 20 s → 0.72 s (`--pin` of `vllm_replay_oracle.py`). ROUTE
+mean TTFT 20 s → 0.72 s (`--pin` of `vllm_replay_oracle.py`). seQ
 predicted the same with a one-line change of the program (no `admit via`):
 0.80.
 
 **Served step trace** (`scripts/exp/lambda/steptrace/sitecustomize.py`:
 the time of every `schedule()` and `update_from_output()` of the served
-engine with the step's composition; `data/exp/gpu_route/trace/`). With
+engine with the step's composition; `data/exp/gpu_seq/trace/`). With
 this light tracer instead of the stats logger the 3.0 s replay does not
 collapse: full-hit 0.832, mean TTFT 0.441 s (2026-09-26: 0.828, 0.473 s),
 so the logger's overhead is what pushed the earlier rerun over the cliff.
@@ -371,7 +371,7 @@ identify the constants (MAPE 25–56 %), so the calibrated pair
 (c_it, c0) = (4 ms, 40 ms) is an effective light-load calibration, not a
 decomposition of the served path.
 
-**Pre-registered predictions** (`data/exp/route/prereg/predictions.txt`,
+**Pre-registered predictions** (`data/exp/seq/prereg/predictions.txt`,
 written before the traced runs finished; the pinned variant is the same
 program without `admit via engine`):
 
@@ -384,7 +384,7 @@ program without `admit via engine`):
 
 **H-pin holds on the served A100 engine.** With the waiting request's
 prefix pinned the 2.5 s replay does not collapse: mean TTFT 34.6 s → 0.88 s,
-full-hit 0.22 → 0.78; ROUTE predicted 0.89 s / 0.75 before the run. At
+full-hit 0.22 → 0.78; seQ predicted 0.89 s / 0.75 before the run. At
 3.0 s, where the vLLM rule does not collapse under the light tracer,
 pinning changes little (0.441 → 0.413 s, 0.832 → 0.838), as predicted
 (0.605 → 0.483 s). Caveat: the unpinned 2.5 s run is from 2026-09-26

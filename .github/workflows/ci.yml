@@ -9,7 +9,7 @@ on:
 
 jobs:
   rust:
-    name: ROUTE interpreter (seq-lang)
+    name: seQ interpreter (seq-lang)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -19,31 +19,3 @@ jobs:
       - name: fmt, clippy, tests, programs link, oracles agree
         run: scripts/check_rust.sh
 
-  lean:
-    name: Lean model (SeQ)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install elan
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-            | sh -s -- -y --default-toolchain none
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-      - name: Cache Mathlib oleans
-        uses: actions/cache@v4
-        with:
-          path: lean/.lake
-          key: lake-${{ runner.os }}-${{ hashFiles('lean/lake-manifest.json', 'lean/lean-toolchain') }}
-      - name: Fetch Mathlib cache
-        working-directory: lean
-        run: lake exe cache get
-      - name: Build, sorry check, axiom audit
-        run: scripts/check_lean.sh
-      - name: Upload audit log
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: lean-axiom-audit
-          path: |
-            lean/axioms.log
-            lean/build.log

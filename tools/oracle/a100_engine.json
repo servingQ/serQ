@@ -2,7 +2,7 @@
  "meta": {
   "date": "2026-09-27",
   "engine": "vLLM 0.30.0+cu129, Qwen/Qwen3-8B bf16, 1x A100-SXM4-40GB (Lambda), in-process, synchronous scheduling, enforce_eager",
-  "script": "scripts/exp/lambda/route_cases.py scenarios"
+  "script": "scripts/exp/lambda/seq_cases.py scenarios"
  },
  "results": {
   "chunked": {

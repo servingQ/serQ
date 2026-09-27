@@ -14,14 +14,14 @@ let B = 512;           // max_num_batched_tokens
 let max_seqs = 64;     // max_num_seqs
 let bs = 16;           // block_size
 let blocks = 8010;     // 128 160 tokens / 16
-// step cost, fitted on the A100 step sweeps (data/exp/gpu_route/fit.json,
+// step cost, fitted on the A100 step sweeps (data/exp/gpu_seq/fit.json,
 // scripts/exp/fit_steps.py; MAPE 2.7 % decode, 5.6 % prefill, 5.7 % mixed)
 let c_it = 0.004;      // s per iteration on the served path (13.9 ms stepped by hand, less what async scheduling hides; fitted on the 5 s and 4.2 s runs)
 let d = 4.1053e-5;     // s per decoding request
 let e = 1.3786e-7;     // s per KV token held by the decoders
 let a = 5.1527e-5;     // s per prefill token
 let b = 4.0196e-9;     // s per prefill token per context token (attention)
-let c0 = 0.04;         // s per request outside the engine (fitted with c_it, data/exp/route/calibration.txt)
+let c0 = 0.04;         // s per request outside the engine (fitted with c_it, data/exp/seq/calibration.txt)
 let f = 0;             // s per prompt token outside the engine (0: not separable from c0 on these runs)
 
 pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }

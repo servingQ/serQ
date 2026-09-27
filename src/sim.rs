@@ -1,4 +1,4 @@
-//! The ROUTE interpreter: a discrete-event simulator whose state is the
+//! The seQ interpreter: a discrete-event simulator whose state is the
 //! configuration of `docs/language.md`.
 //!
 //! Commands (the statements of a route) take no time and run whenever a
@@ -1129,7 +1129,7 @@ impl<'p> Sim<'p> {
             None => e.size,
         };
         e.size -= removed;
-        if std::env::var_os("ROUTE_TRACE_EVICT").is_some() {
+        if std::env::var_os("SEQ_TRACE_EVICT").is_some() {
             eprintln!("EVICT {:.4} {serial} {removed}", self.now);
         }
         let snap = e.snap.clone();
@@ -1862,7 +1862,7 @@ impl<'p> Sim<'p> {
             ..Default::default()
         };
         let cost = self.eval(&spec.cost, &ctx, Which::Route).max(0.0);
-        if std::env::var_os("ROUTE_TRACE_ITER").is_some() {
+        if std::env::var_os("SEQ_TRACE_ITER").is_some() {
             let parts: Vec<String> = assign
                 .iter()
                 .map(|&(id, t)| {
@@ -2256,7 +2256,7 @@ impl<'p> Sim<'p> {
     }
 
     fn report(&mut self) -> Report {
-        if std::env::var_os("ROUTE_DUMP_POOLS").is_some() {
+        if std::env::var_os("SEQ_DUMP_POOLS").is_some() {
             self.debug_pools();
         }
         let now = self.now;

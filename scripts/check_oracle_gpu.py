@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """The vLLM scheduler scenarios answered three ways must agree: the CPU
 oracle on upstream vLLM (tools/oracle/*.out.json), the real A100
-engine (tools/oracle/a100_engine.json), and ROUTE (tests/ and
-lean/SeQ/RouteOracle.lean check against *.out.json)."""
+engine (tools/oracle/a100_engine.json), and seQ (tests/ and
+lean/ServingQueueTheory/SeqOracle.lean check against *.out.json)."""
 import json
 import os
 import sys

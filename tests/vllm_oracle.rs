@@ -3,7 +3,7 @@
 //! runner, rbln platform plugin disabled with `VLLM_PLUGINS=`). For each
 //! scenario in `tools/oracle/*.json` the oracle's output (`*.out.json`)
 //! gives the step of every request's first token and last token and the
-//! number of preemptions; the same scenario as a ROUTE program with an
+//! number of preemptions; the same scenario as a seQ program with an
 //! iteration cost of 1 must give the same steps.
 
 use seq::{Overrides, run_source};
