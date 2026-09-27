@@ -25,6 +25,7 @@ theorems (`lean/SeQ/RouteOracle.lean`).
 | `lean/SeQ/` | syntax and pool semantics, executable semantics, oracle theorems, serving order |
 | `docs/language.md` | the language: syntax, semantics, vLLM correspondence, validation |
 | `docs/review.md` | review of the first version against vLLM, design, verification-tooling survey |
+| `scripts/fetch_vllm_ref.sh` | checks out the upstream vLLM source the docs cite (`ref/vllm`, 0c87a197) |
 
 ## Use
 
@@ -39,7 +40,7 @@ As a dependency (pin a release tag):
 
 ```toml
 # Cargo.toml
-seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.0" }
+seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.1" }
 ```
 
 ```toml
@@ -47,12 +48,12 @@ seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.
 [[require]]
 name = "seq"
 git = "https://github.com/vrvrv/seQ"
-rev = "v0.1.0"
+rev = "v0.1.1"
 subDir = "lean"
 ```
 
 The CLI is installed with
-`cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0 --locked --root <dir>`,
+`cargo install --git https://github.com/vrvrv/seQ --tag v0.1.1 --locked --root <dir>`,
 or taken from the release assets. Installing it into a directory on `PATH`
 shadows the system `route` command, so give it its own root.
 
