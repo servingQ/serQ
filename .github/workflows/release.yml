@@ -1,14 +1,14 @@
 name: Release
 
 # Push a tag vX.Y.Z matching Cargo.toml's version:
-#   git tag v0.1.1 && git push origin v0.1.1
+#   git tag v0.1.0-dev2 && git push origin v0.1.0-dev2   (a tag with "-" is a prerelease)
 # The full CI runs first; the release carries the packaged crate, the Linux
 # CLI and a source archive of the Lean package. Consumers pin the tag
 # (Cargo `git`/`tag`, Lake `git`/`rev` with `subDir = "lean"`).
 
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -56,7 +56,8 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
           else
-            gh release create "$TAG" dist/* --title "seQ $TAG" --generate-notes --verify-tag
+            pre=""; case "$TAG" in *-*) pre="--prerelease";; esac   # v0.1.0-dev1 etc.
+            gh release create "$TAG" dist/* --title "seQ $TAG" --generate-notes --verify-tag $pre
           fi
 
   crates-io:

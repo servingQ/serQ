@@ -40,7 +40,7 @@ As a dependency (pin a release tag):
 
 ```toml
 # Cargo.toml
-seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.1" }
+seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.0-dev1" }
 ```
 
 ```toml
@@ -48,12 +48,12 @@ seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.
 [[require]]
 name = "seq"
 git = "https://github.com/vrvrv/seQ"
-rev = "v0.1.1"
+rev = "v0.1.0-dev1"
 subDir = "lean"
 ```
 
 The CLI is installed with
-`cargo install --git https://github.com/vrvrv/seQ --tag v0.1.1 --locked --root <dir>`,
+`cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-dev1 --locked --root <dir>`,
 or taken from the release assets. Installing it into a directory on `PATH`
 shadows the system `route` command, so give it its own root.
 

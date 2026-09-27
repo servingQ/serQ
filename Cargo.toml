@@ -1,6 +1,6 @@
 [package]
 name = "seq-lang"
-version = "0.1.1"
+version = "0.1.0-dev1"
 edition = "2024"
 rust-version = "1.85"
 description = "seQ: ROUTE, a language for formal verification and simulation of LLM serving systems (interpreter and CLI)"
