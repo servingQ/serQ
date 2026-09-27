@@ -84,7 +84,7 @@ enum Status {
 }
 
 #[derive(Clone, Debug)]
-struct Hold {
+struct Hold<'p> {
     /// (pool, allocated units)
     pools: Vec<(usize, f64)>,
     /// Per pool: the session's position in its sequence, advanced by
@@ -93,36 +93,36 @@ struct Hold {
     /// Whether a `growing` run advanced `pos` (then `pos`, not the
     /// allocation, is what has been computed).
     grown: bool,
-    cache: Option<CExpr>,
+    cache: Option<&'p CExpr>,
     body: BlockId,
 }
 
 #[derive(Clone, Debug)]
-struct Pending {
+struct Pending<'p> {
     pools: Vec<(usize, f64)>,
     /// The unit expressions, re-evaluated at admission (the lecture's
     /// `[Admit]` evaluates `c(x_r)` then: observables such as the cache or
     /// the engine's budget may have changed while the session waited).
-    exprs: Vec<CExpr>,
+    exprs: Vec<&'p CExpr>,
     /// Per pool: units that must fit for the admission (default: the
     /// allocation), e.g. the whole prompt while only its first chunk is
     /// allocated (vLLM `scheduler_reserve_full_isl`).
-    fits: Vec<Option<CExpr>>,
+    fits: Vec<Option<&'p CExpr>>,
     need: Vec<f64>,
-    reuse: Option<CExpr>,
-    cache: Option<CExpr>,
+    reuse: Option<&'p CExpr>,
+    cache: Option<&'p CExpr>,
     body: BlockId,
     queued_at: f64,
 }
 
 #[derive(Clone, Debug)]
-struct Session {
+struct Session<'p> {
     serial: u64,
     attrs: Vec<f64>,
     frames: Vec<Frame>,
     status: Status,
-    holds: Vec<Hold>,
-    pending: Option<Pending>,
+    holds: Vec<Hold<'p>>,
+    pending: Option<Pending<'p>>,
     trace: Option<(usize, usize)>,
     /// (index in `CArrival::Sessions`, next turn) of a session with explicit turns
     script: Option<(usize, usize)>,
@@ -283,7 +283,7 @@ pub struct Sim<'p> {
     warm: bool,
     heap: BinaryHeap<Entry>,
     seq: u64,
-    sessions: Vec<Session>,
+    sessions: Vec<Session<'p>>,
     free: Vec<usize>,
     by_serial: HashMap<u64, usize>,
     next_serial: u64,
@@ -298,6 +298,13 @@ pub struct Sim<'p> {
     rng_trace: StdRng,
     trace: Option<Corpus>,
     observes: Vec<ObserveStat>,
+    /// Per pool: its eviction keys do not change while other entries are
+    /// evicted (no pool or stage queries, no sampling), so `make_room` can
+    /// key every entry once.
+    evict_static: Vec<bool>,
+    /// Debug switches (`SEQ_TRACE_EVICT`, `SEQ_TRACE_ITER`), read once.
+    trace_evict: bool,
+    trace_iter: bool,
     live: usize,
     live_avg: TimeAverage,
     /// While a stage admits from a queue it serves: (stage, budget left).
@@ -405,6 +412,16 @@ impl<'p> Sim<'p> {
             rng_evict: StdRng::seed_from_u64(seed ^ 0x2545_f491_4f6c_dd1d),
             rng_trace: StdRng::seed_from_u64(seed ^ 0x6a09_e667_f3bc_c908),
             trace,
+            evict_static: p
+                .pools
+                .iter()
+                .map(|q| match &q.evict {
+                    CEvict::Lru => true,
+                    CEvict::By(keys) => keys.iter().all(static_key),
+                })
+                .collect(),
+            trace_evict: std::env::var_os("SEQ_TRACE_EVICT").is_some(),
+            trace_iter: std::env::var_os("SEQ_TRACE_ITER").is_some(),
             observes: p
                 .observes
                 .iter()
@@ -627,17 +644,16 @@ impl<'p> Sim<'p> {
     }
 
     fn exec_workload_block(&mut self, sid: usize, block: BlockId) {
-        let n = self.p.blocks[block].len();
+        let p = self.p;
+        let n = p.blocks[block].len();
         for i in 0..n {
-            match &self.p.blocks[block][i] {
+            match &p.blocks[block][i] {
                 CStmt::Set(slot, e) => {
-                    let e = e.clone();
-                    let v = self.eval(&e, &Ctx::session(sid), Which::Workload);
+                    let v = self.eval(e, &Ctx::session(sid), Which::Workload);
                     self.sessions[sid].attrs[*slot] = v;
                 }
                 CStmt::Observe(k, e) => {
-                    let e = e.clone();
-                    let v = self.eval(&e, &Ctx::session(sid), Which::Workload);
+                    let v = self.eval(e, &Ctx::session(sid), Which::Workload);
                     self.observe_for(sid, *k, v);
                 }
                 _ => unreachable!("workload blocks only set and observe"),
@@ -836,8 +852,8 @@ impl<'p> Sim<'p> {
                         let pl = self.pool_index(r, sid);
                         let units = self.eval(e, &Ctx::session(sid), Which::Route).max(0.0);
                         ps.push((pl, units));
-                        exprs.push(e.clone());
-                        fits.push(f.clone());
+                        exprs.push(e);
+                        fits.push(f.as_ref());
                     }
                     let n = ps.len();
                     let pending = Pending {
@@ -845,8 +861,8 @@ impl<'p> Sim<'p> {
                         exprs,
                         fits,
                         need: vec![0.0; n],
-                        reuse: reuse.clone(),
-                        cache: cache.clone(),
+                        reuse: reuse.as_ref(),
+                        cache: cache.as_ref(),
                         body: *body,
                         queued_at: self.now,
                     };
@@ -932,7 +948,7 @@ impl<'p> Sim<'p> {
     /// Put a hold request in its pool's queue. `front`: a preempted
     /// session re-enters at the head (vLLM `waiting.prepend_request`).
     /// Returns false if the request can never fit (the session ends).
-    fn enqueue_hold(&mut self, sid: usize, pending: Pending, front: bool) -> bool {
+    fn enqueue_hold(&mut self, sid: usize, pending: Pending<'p>, front: bool) -> bool {
         for &(pl, units) in &pending.pools {
             if self.round_up(pl, units) > self.pools[pl].cap {
                 self.pools[pl].rejected += 1;
@@ -941,12 +957,10 @@ impl<'p> Sim<'p> {
             }
         }
         let pl = first_pool(&pending);
-        let key = match &self.p.pools[pl].queue {
+        let p = self.p;
+        let key = match &p.pools[pl].queue {
             None => self.sessions[sid].serial as f64,
-            Some(e) => {
-                let e = e.clone();
-                self.eval(&e, &Ctx::session(sid), Which::Route)
-            }
+            Some(e) => self.eval(e, &Ctx::session(sid), Which::Route),
         };
         self.sessions[sid].pending = Some(pending);
         self.sessions[sid].status = Status::Queued(pl);
@@ -971,17 +985,17 @@ impl<'p> Sim<'p> {
     }
 
     /// The hold request of a queued session with its units evaluated now.
-    fn pending_now(&mut self, sid: usize) -> Pending {
+    fn pending_now(&mut self, sid: usize) -> Pending<'p> {
         let mut pending = self.sessions[sid]
             .pending
             .clone()
             .expect("queued session has a hold");
         for k in 0..pending.pools.len() {
-            let e = pending.exprs[k].clone();
-            let u = self.eval(&e, &Ctx::session(sid), Which::Route).max(0.0);
+            let e = pending.exprs[k];
+            let u = self.eval(e, &Ctx::session(sid), Which::Route).max(0.0);
             pending.pools[k].1 = u;
-            pending.need[k] = match pending.fits[k].clone() {
-                Some(f) => self.eval(&f, &Ctx::session(sid), Which::Route).max(u),
+            pending.need[k] = match pending.fits[k] {
+                Some(f) => self.eval(f, &Ctx::session(sid), Which::Route).max(u),
                 None => u,
             };
         }
@@ -1021,7 +1035,7 @@ impl<'p> Sim<'p> {
             .map_or(0.0, |e| e.size)
     }
 
-    fn admit(&mut self, sid: usize, pending: Pending) {
+    fn admit(&mut self, sid: usize, pending: Pending<'p>) {
         let p = self.p;
         let serial = self.sessions[sid].serial;
         let mut cached_first = None;
@@ -1081,7 +1095,7 @@ impl<'p> Sim<'p> {
             pools: held,
             pos,
             grown: false,
-            cache: pending.cache.clone(),
+            cache: pending.cache,
             body: pending.body,
         });
         s.frames.push(Frame {
@@ -1094,9 +1108,35 @@ impl<'p> Sim<'p> {
 
     /// Evict cached prefixes until `need` more units fit.
     fn make_room(&mut self, pl: usize, need: f64) {
-        while self.pools[pl].used + self.pools[pl].cached + need > self.pools[pl].cap + 1e-9 {
-            if !self.evict_one(pl) {
-                break;
+        let over = |s: &Self| s.pools[pl].used + s.pools[pl].cached + need > s.pools[pl].cap + 1e-9;
+        // one victim is a linear scan; the heap pays off only for several
+        let short = self.pools[pl].used + self.pools[pl].cached + need - self.pools[pl].cap;
+        let several = self.pools[pl].block.is_some_and(|b| short > b + 1e-9);
+        if self.evict_static[pl] && several {
+            // The keys of the entries not evicted do not change within one
+            // call: key every entry once, then re-key only the one that
+            // shrank. The same victims, in the same order, as `evict_one`.
+            let serials: Vec<u64> = self.pools[pl].entries.keys().copied().collect();
+            let mut heap: BinaryHeap<std::cmp::Reverse<(KeyOrd, u64)>> = serials
+                .into_iter()
+                .map(|s| std::cmp::Reverse((KeyOrd(self.entry_key(pl, s)), s)))
+                .collect();
+            while over(self) {
+                let Some(std::cmp::Reverse((_, serial))) = heap.pop() else {
+                    break;
+                };
+                if self.evict_entry(pl, serial) {
+                    heap.push(std::cmp::Reverse((
+                        KeyOrd(self.entry_key(pl, serial)),
+                        serial,
+                    )));
+                }
+            }
+        } else {
+            while over(self) {
+                if !self.evict_one(pl) {
+                    break;
+                }
             }
         }
         debug_assert!(
@@ -1106,6 +1146,10 @@ impl<'p> Sim<'p> {
     }
 
     fn entry_key(&mut self, pl: usize, serial: u64) -> Vec<f64> {
+        if let CEvict::Lru = &self.p.pools[pl].evict {
+            let e = &self.pools[pl].entries[&serial];
+            return vec![e.last, e.seq as f64];
+        }
         let e = self.pools[pl].entries[&serial].clone();
         let live = self.by_serial.get(&serial).copied();
         let queued = live.is_some_and(|s| matches!(self.sessions[s].status, Status::Queued(_)));
@@ -1122,10 +1166,10 @@ impl<'p> Sim<'p> {
             queued: if queued { 1.0 } else { 0.0 },
             ..Default::default()
         };
-        match &self.p.pools[pl].evict {
+        let p = self.p;
+        match &p.pools[pl].evict {
             CEvict::Lru => vec![e.last, e.seq as f64],
             CEvict::By(keys) => {
-                let keys = keys.clone();
                 let mut v: Vec<f64> = keys
                     .iter()
                     .map(|k| self.eval(k, &ctx, Which::Evict))
@@ -1154,6 +1198,12 @@ impl<'p> Sim<'p> {
             }
         }
         let (_, serial) = best.unwrap();
+        self.evict_entry(pl, serial);
+        true
+    }
+
+    /// Evict entry `serial` (or its tail block); whether it is still cached.
+    fn evict_entry(&mut self, pl: usize, serial: u64) -> bool {
         let block = self.pools[pl].block;
         let e = self.pools[pl].entries.get_mut(&serial).unwrap();
         let removed = match block {
@@ -1161,7 +1211,7 @@ impl<'p> Sim<'p> {
             None => e.size,
         };
         e.size -= removed;
-        if std::env::var_os("SEQ_TRACE_EVICT").is_some() {
+        if self.trace_evict {
             eprintln!("EVICT {:.4} {serial} {removed}", self.now);
         }
         let snap = e.snap.clone();
@@ -1174,7 +1224,7 @@ impl<'p> Sim<'p> {
         self.pools[pl].cached -= removed;
         self.pools[pl].evicted_units += removed;
         self.spill(pl, serial, removed, last, snap);
-        true
+        !gone
     }
 
     fn spill(&mut self, pl: usize, serial: u64, units: f64, last: f64, snap: Vec<f64>) {
@@ -1426,35 +1476,36 @@ impl<'p> Sim<'p> {
                 }
             }
         }
-        let h_pools: Vec<(usize, f64, CExpr, Option<CExpr>)> = {
+        let h_pools: Vec<(usize, f64, &'p CExpr, Option<&'p CExpr>)> = {
             // re-evaluate the hold's requested units from the statement
             let parent = self.sessions[victim]
                 .frames
                 .last()
                 .cloned()
                 .expect("hold has a parent frame");
-            let stmt = &self.p.blocks[parent.block][parent.pc - 1];
+            let p = self.p;
+            let stmt = &p.blocks[parent.block][parent.pc - 1];
             let CStmt::Hold { pools, .. } = stmt else {
                 panic!("preempted frame is not a hold");
             };
-            let pools = pools.clone();
             let mut v = vec![];
-            for (r, e, f) in &pools {
+            for (r, e, f) in pools {
                 let q = self.pool_index(r, victim);
                 let u = self.eval(e, &Ctx::session(victim), Which::Route).max(0.0);
-                v.push((q, u, e.clone(), f.clone()));
+                v.push((q, u, e, f.as_ref()));
             }
             v
         };
-        let h_exprs: Vec<CExpr> = h_pools.iter().map(|x| x.2.clone()).collect();
-        let h_fits: Vec<Option<CExpr>> = h_pools.iter().map(|x| x.3.clone()).collect();
+        let h_exprs: Vec<&'p CExpr> = h_pools.iter().map(|x| x.2).collect();
+        let h_fits: Vec<Option<&'p CExpr>> = h_pools.iter().map(|x| x.3).collect();
         let h_pools: Vec<(usize, f64)> = h_pools.iter().map(|x| (x.0, x.1)).collect();
         let (body, cache) = {
             let parent = self.sessions[victim].frames.last().cloned().unwrap();
-            match &self.p.blocks[parent.block][parent.pc - 1] {
+            let p = self.p;
+            match &p.blocks[parent.block][parent.pc - 1] {
                 CStmt::Hold {
                     body, cache, reuse, ..
-                } => (*body, (cache.clone(), reuse.clone())),
+                } => (*body, (cache.as_ref(), reuse.as_ref())),
                 _ => unreachable!(),
             }
         };
@@ -1594,15 +1645,15 @@ impl<'p> Sim<'p> {
     }
 
     fn ps_phi(&mut self, st: usize, n: usize) -> f64 {
-        let CStageKind::Ps(phi) = &self.p.stages[st].kind else {
+        let p = self.p;
+        let CStageKind::Ps(phi) = &p.stages[st].kind else {
             unreachable!()
         };
-        let phi = phi.clone();
         let ctx = Ctx {
             n: n as f64,
             ..Default::default()
         };
-        self.eval(&phi, &ctx, Which::Route)
+        self.eval(phi, &ctx, Which::Route)
     }
 
     fn ps_reschedule(&mut self, st: usize) {
@@ -1771,11 +1822,11 @@ impl<'p> Sim<'p> {
     }
 
     fn start_iteration(&mut self, st: usize) {
-        let CStageKind::Step(spec) = &self.p.stages[st].kind else {
+        let p = self.p;
+        let CStageKind::Step(spec) = &p.stages[st].kind else {
             unreachable!()
         };
-        let spec = spec.clone();
-        let (_pre, budget, chunk, _want) = self.pre_iteration(st, &spec);
+        let (_pre, budget, chunk, _want) = self.pre_iteration(st, spec);
         let mut left = budget;
         let mut assign: Vec<(u64, f64)> = vec![];
         let mut i = 0;
@@ -1894,7 +1945,7 @@ impl<'p> Sim<'p> {
             ..Default::default()
         };
         let cost = self.eval(&spec.cost, &ctx, Which::Route).max(0.0);
-        if std::env::var_os("SEQ_TRACE_ITER").is_some() {
+        if self.trace_iter {
             let parts: Vec<String> = assign
                 .iter()
                 .map(|&(id, t)| {
@@ -2240,11 +2291,11 @@ impl<'p> Sim<'p> {
                 {
                     return left;
                 }
-                let CStageKind::Step(spec) = &self.p.stages[s].kind else {
+                let p = self.p;
+                let CStageKind::Step(spec) = &p.stages[s].kind else {
                     panic!("budget_left needs a step stage");
                 };
-                let spec = spec.clone();
-                let (_, budget, _, want) = self.pre_iteration(s, &spec);
+                let (_, budget, _, want) = self.pre_iteration(s, spec);
                 (budget - want).max(0.0)
             }
             Fun::EstLambda => {
@@ -2360,6 +2411,66 @@ impl<'p> Sim<'p> {
             stages,
             pools,
         }
+    }
+}
+
+/// An eviction key ordered lexicographically by `total_cmp` (the order of
+/// `lex_less`).
+#[derive(PartialEq)]
+struct KeyOrd(Vec<f64>);
+
+impl Eq for KeyOrd {}
+
+impl PartialOrd for KeyOrd {
+    fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
+        Some(self.cmp(o))
+    }
+}
+
+impl Ord for KeyOrd {
+    fn cmp(&self, o: &Self) -> Ordering {
+        for (x, y) in self.0.iter().zip(&o.0) {
+            match x.total_cmp(y) {
+                Ordering::Equal => {}
+                c => return c,
+            }
+        }
+        self.0.len().cmp(&o.0.len())
+    }
+}
+
+/// Whether an eviction key reads only its entry, the clock and the stage
+/// estimates (no pool or queue state, which eviction changes, and no
+/// sampling, whose draws would be reordered).
+fn static_key(e: &CExpr) -> bool {
+    match e {
+        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => true,
+        CExpr::Sample(..) => false,
+        CExpr::Call(f, args) => {
+            let ok = matches!(
+                f,
+                Fun::Min
+                    | Fun::Max
+                    | Fun::Abs
+                    | Fun::Floor
+                    | Fun::Ceil
+                    | Fun::Sqrt
+                    | Fun::Exp
+                    | Fun::Ln
+                    | Fun::Pow
+                    | Fun::Price
+                    | Fun::EstLambda
+                    | Fun::EstRho
+                    | Fun::EstWait
+            );
+            ok && args.iter().all(|a| match a {
+                CArg::Expr(x) => static_key(x),
+                CArg::Pool(_) | CArg::Stage(_) => true,
+            })
+        }
+        CExpr::Unary(_, x) => static_key(x),
+        CExpr::Binary(_, a, b) => static_key(a) && static_key(b),
+        CExpr::Cond(c, a, b) => static_key(c) && static_key(a) && static_key(b),
     }
 }
 
