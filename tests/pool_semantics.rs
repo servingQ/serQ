@@ -173,6 +173,42 @@ fn spill_to_a_tier_and_fetch_back() {
     assert_eq!(r.stage("link").unwrap().completed, 3);
 }
 
+/// A spill predicate sees `queued`, as the spec lists for it (the wait
+/// channel: spill the prefix of a session that is waiting to come back).
+/// s0 caches 6 and later queues for 20 behind s1's 24; s2, ahead of s0 by
+/// priority, takes 6 and must evict s0's entry while s0 waits: with
+/// `when (queued)` that is the one spill, with `when (!queued)` none.
+#[test]
+fn a_spill_predicate_sees_whether_the_session_is_queued() {
+    let prog = |when: &str| {
+        format!(
+            "pool kv {{ cap 30; evict lru; queue by (pri); spill tier via link (1) when ({when}); }}
+            pool tier {{ cap inf; }}
+            stage svc : fifo(3);
+            stage link : fifo;
+            stage gate : delay;
+            workload {{ arrive batch(3); init {{ set pri = serial == 2 ? 0 : 1; }} }}
+            session {{
+              branch (serial == 0) {{
+                hold kv (6) {{ run svc (0.5); }} cache (6);
+                run gate (0.6);
+                hold kv (20) {{ run svc (0.1); }}
+              }}
+              branch (serial == 1) {{ run gate (0.5); hold kv (24) {{ run svc (10); }} }}
+              branch (serial == 2) {{ run gate (1.2); hold kv (6) {{ run svc (1); }} }}
+              end;
+            }}
+            run {{ horizon 100; }}"
+        )
+    };
+    let r = run(&prog("queued"));
+    assert_eq!(r.pool("kv").unwrap().spills, 1, "{}", r.text());
+    assert_eq!(r.pool("kv").unwrap().evicted_entries, 1, "{}", r.text());
+    let r = run(&prog("!queued"));
+    assert_eq!(r.pool("kv").unwrap().spills, 0, "{}", r.text());
+    assert_eq!(r.pool("kv").unwrap().evicted_entries, 1, "{}", r.text());
+}
+
 /// `grow` with `preempt none` waits for room; the holder resumes when a
 /// release makes room.
 #[test]

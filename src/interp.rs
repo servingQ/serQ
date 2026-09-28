@@ -1251,6 +1251,9 @@ impl<'p> Interp<'p> {
             return;
         };
         let live = self.by_serial.get(&serial).copied();
+        // the same context an eviction key sees (`queued` included: the
+        // spec lists it for spill predicates, and this used to leave it 0)
+        let queued = live.is_some_and(|s| matches!(self.sessions[s].status, Status::Queued(_)));
         let ctx = Ctx {
             sid: live,
             snap: if live.is_some() {
@@ -1261,6 +1264,7 @@ impl<'p> Interp<'p> {
             size: units,
             age: self.now - last,
             last,
+            queued: if queued { 1.0 } else { 0.0 },
             ..Default::default()
         };
         if self.eval(&sp.when, &ctx, Which::Evict) == 0.0 {
