@@ -32,25 +32,37 @@ make draw-golden  # regenerate tests/golden/
 ## Design criteria
 
 A program is a specification someone reads, so the notation is part of the
-product. Three criteria, in the order they bite:
+product. Argued in #8, in the order they bite:
 
+0. **Unambiguity.** One construct, one meaning. First because it is the only one
+   where being wrong produces a wrong *answer* rather than a slow reader.
 1. **Intention-revealing.** The program should say what it means, not how it
    computes it. A serving engineer who does not know seQ should be able to read
    `programs/vllm.seq` as vLLM.
-2. **Neutrality.** No construct may encode one system's policy. seQ exists to
-   let you write vLLM's rule and then disagree with it; a rule the language
-   supplies is a rule you cannot change.
-3. **Simplicity.** A construct pays for the concept it adds. Sugar that rewrites
-   to the kernel at parse time costs nothing (`docs/language.md`, the serving
-   vocabulary); a new IR node costs every consumer. Prefer narrowing an existing
-   form to adding one.
+2. **Policy is written in the program, not in the language.** The test: for every
+   construct, can a program state the opposite? The language may supply a
+   *mechanism* a program selects and parameterises, not a *rule* it would
+   otherwise write. Four shipped constructs fail this today (#8) — apply it to
+   them before using it against something new.
+3. **Checkability.** A claim the program makes should be mechanically checkable.
+   This is what earns an IR change.
+
+Cost is not a criterion, it is a budget: sugar that rewrites to the kernel at
+parse time costs nothing (the serving vocabulary of `docs/language.md`), a new
+IR node costs every consumer. Prefer narrowing an existing form to adding one,
+and price the handshake above.
 
 ## Issues
 
 **Every design issue carries a Before/After** — the code as it is today next to
 the code as it would be, and the same for any generated artefact (a figure
-label, a report line) the change touches. Copy the "before" from the repository
-rather than paraphrasing it: half the value is that the reader can check it.
+label, a report line) the change touches.
+
+**Copy the Before from the repository, and run the After.** Half the value of a
+Before is that the reader can check it; an After that does not compile costs
+more than none. Both rules were broken in the first hour they existed — #14's
+Before was paraphrased and got the line wrong in a way that weakened its own
+argument, and #12's After was a parse error.
 
 Keep an issue to one change. An issue that needs several Before/Afters for
 unrelated things is several issues.
