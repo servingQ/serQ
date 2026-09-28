@@ -40,7 +40,7 @@ session {
   turn;
   loop {
     set t0 = now;
-    admit memP (kappa * T) {
+    enter memP (kappa * T) {
       // the hit indicator is decided at admission: H = (cached >= K)
       set H = cached >= K;
       set S = H ? a * n + b * n * (K + n / 2) : a * T + b * T * T / 2;
@@ -49,7 +49,7 @@ session {
       observe ttft = now - t0;
       transfer (x0 + kappa * T / Bw);
     } keep (kappa * T);
-    admit memD (kappa * T) {
+    enter memD (kappa * T) {
       decode (o * w);
     }
     observe response = now - t0;

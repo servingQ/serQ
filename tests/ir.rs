@@ -142,8 +142,8 @@ fn serving_forms_compile_to_the_kernel_ir() {
         "{deployment} session {{
             turn;
             loop {{
-              admit memP (T) {{ prefill (n + K); transfer (T / 100); }} keep (T);
-              admit memD (T) {{ decode (o); }}
+              enter memP (T) {{ prefill (n + K); transfer (T / 100); }} keep (T);
+              enter memD (T) {{ decode (o); }}
               set K = T;
               branch with (0.8) {{ tool Z; turn; }} else {{ end; }}
             }}
@@ -240,7 +240,7 @@ fn at_admission_is_substituted_into_the_header() {
         run { horizon 500; }";
     let bound = format!(
         "{head} session {{ turn; loop {{ set prompt = K + n;
-          admit reqs (1), kv (min(prompt, hit + budget_left(engine)))
+          enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
                 at admission (hit = min(cachedin(kv), prompt - 1)) {{
             prefill (prompt - cached) growing kv;
           }} keep (prompt + o);
@@ -248,7 +248,7 @@ fn at_admission_is_substituted_into_the_header() {
     );
     let inlined = format!(
         "{head} session {{ turn; loop {{ set prompt = K + n;
-          admit reqs (1), kv (min(prompt, min(cachedin(kv), prompt - 1) + budget_left(engine))) {{
+          enter reqs (1), kv (min(prompt, min(cachedin(kv), prompt - 1) + budget_left(engine))) {{
             prefill (prompt - cached) growing kv;
           }} keep (prompt + o);
           set K = prompt + o; end; }} }}"
@@ -303,4 +303,41 @@ fn fits_says_it_is_now_reserve() {
         run { horizon 10; }";
     let e = seq::compile_source(src, &seq::Overrides::default()).expect_err("rejected");
     assert!(e.contains("`fits` is now `reserve`"), "{e}");
+}
+
+/// `admit` was this statement's name. A program that still says it is told
+/// what happened, and told that the pool option keeps the word.
+#[test]
+fn admit_says_it_is_now_enter() {
+    let src = "pool kv { cap 100; } stage s : fifo;
+        workload { arrive poisson(1); }
+        session { admit kv (1) { run s (1); } end; }
+        run { horizon 10; }";
+    let e = seq::compile_source(src, &seq::Overrides::default()).expect_err("rejected");
+    assert!(e.contains("`admit` is now `enter`"), "{e}");
+    assert!(
+        e.contains("admit via"),
+        "and says the pool option is unchanged: {e}"
+    );
+}
+
+/// `enter … keep` is `hold … cache`, and the pool option `admit via` is a
+/// different keyword that the rename does not touch.
+#[test]
+fn enter_is_hold_and_admit_via_survives() {
+    let head = "pool kv { cap 1000; } pool reqs { cap 4; admit via engine; }
+        stage engine : step { budget 64; cost 1; memory kv; }
+        workload { arrive poisson(1); init { set n = 10; } }
+        run { horizon 20; }";
+    let sugar = format!(
+        "{head} session {{ enter reqs (1), kv (n) {{ prefill (n) growing kv; }} keep (n); end; }}"
+    );
+    let kernel = format!(
+        "{head} session {{ hold reqs (1), kv (n) {{ run engine prefill (n) growing kv; }} cache (n); end; }}"
+    );
+    let ov = seq::Overrides::default();
+    assert_eq!(
+        seq::compile_source(&sugar, &ov).unwrap().to_json(),
+        seq::compile_source(&kernel, &ov).unwrap().to_json()
+    );
 }
