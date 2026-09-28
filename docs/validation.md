@@ -41,6 +41,19 @@ scheduler disagree. That is what found the six semantic differences the first
 version of the program had. An aggregate that matches can still be wrong for
 compensating reasons; a first-divergence search cannot be fooled that way.
 
+### The citations themselves
+
+§7's table is eleven rows of "vLLM does X, here is the seQ construct, here is the
+upstream line range". `make check` now resolves all 42 of those ranges against the
+pinned `ref/vllm` and hashes their text (`scripts/check_citations.py`,
+`tools/citations.json`). A range that has moved, a file that no longer exists, or a
+citation nobody recorded fails the build.
+
+It checks the evidence, not the claim: a changed hash means an upstream range moved
+and someone has to re-read it, which is the work the table exists to make possible.
+The checkout is sparse and blobless — 4 MB, two seconds — and the paths it needs come
+from the checker itself, so a citation into a new file widens it automatically.
+
 ## 4. Theorems
 
 The same program is an inductive type in Lean with an operational semantics
