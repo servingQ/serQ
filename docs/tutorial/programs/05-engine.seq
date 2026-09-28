@@ -41,9 +41,12 @@ session {
   loop {
     set t0 = now;
     set prompt = K + n;
-    // how much of the prompt the cache can supply, in whole blocks
-    set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-    hold reqs (1), kv (c + min(prompt - c, budget_left(engine))) {
+    // how much of the prompt the cache could supply, in whole blocks. The
+    // cache itself is read inside the hold's units, so it is read when the
+    // request is admitted -- while it waits, its prefix is still evictable
+    set hitmax = floor((prompt - 1) / bs) * bs;
+    hold reqs (1), kv (min(cachedin(kv), hitmax)
+                       + min(prompt - min(cachedin(kv), hitmax), budget_left(engine))) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;
       run engine prefill (prompt - c) growing kv;

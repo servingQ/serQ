@@ -30,7 +30,7 @@
 <polygon class="body" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" points="419,256 485.6,256 567,276 419,276"/>
 <text x="424" y="271" text-anchor="start" font-size="8" fill="#6b7280" class="dim">growing</text>
 <text x="605" y="137" text-anchor="start" font-size="8" fill="#6b7280" class="dim">1</text>
-<text x="423" y="137" text-anchor="start" font-size="8" fill="#6b7280" class="dim">c + min(prompt - c, budget_left(~</text>
+<text x="423" y="137" text-anchor="start" font-size="8" fill="#6b7280" class="dim">min(cachedin(kv), hitmax) + min(~</text>
 <text x="423" y="300" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cache (prompt + o)</text>
 <text x="409" y="40" text-anchor="start" font-size="10" fill="#1d2021">pool kv</text>
 <text x="409" y="54" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 160000</text>
@@ -44,7 +44,7 @@
 <text x="69" y="110" text-anchor="start" font-size="10" fill="#1d2021">@</text>
 <text x="83" y="110" text-anchor="start" font-size="8" fill="#1d2021">loop</text>
 <text x="69" y="136" text-anchor="start" font-size="10" fill="#1d2021">[</text>
-<text x="83" y="136" text-anchor="start" font-size="8" fill="#1d2021">hold reqs (1), kv (c + min(prompt - c, budget_left(en~</text>
+<text x="83" y="136" text-anchor="start" font-size="8" fill="#1d2021">hold reqs (1), kv (min(cachedin(kv), hitmax) + min(pr~</text>
 <text x="69" y="162" text-anchor="start" font-size="10" fill="#1d2021">o</text>
 <text x="83" y="162" text-anchor="start" font-size="8" fill="#1d2021">observe hit = c &gt; 0</text>
 <text x="69" y="188" text-anchor="start" font-size="10" fill="#1d2021">o</text>

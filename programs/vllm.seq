@@ -57,8 +57,13 @@ session {
     // hit's blocks plus those of the chunk the budget the running requests
     // leave can take now (scheduler.py:1078-1128, 1214-1226); the rest is
     // allocated as the request runs
-    set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-    admit reqs (1), kv (c + min(prompt - c, budget_left(engine))) {
+    // `cachedin(kv)` is read inside the unit expression, so it is read when
+    // the scheduler admits (scheduler.py:932-939) and not when the request
+    // queues -- a waiting request's prefix is still evictable, which is the
+    // whole point of the wait channel
+    set hitmax = floor((prompt - 1) / bs) * bs;
+    admit reqs (1), kv (min(cachedin(kv), hitmax)
+                        + min(prompt - min(cachedin(kv), hitmax), budget_left(engine))) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;
       observe prefill_tokens = prompt - c;

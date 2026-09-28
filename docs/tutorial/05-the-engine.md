@@ -58,8 +58,9 @@ and stall every decode (the RBLN stack).
 ## Three new pieces of the session program
 
 ```rust
-set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-hold reqs (1), kv (c + min(prompt - c, budget_left(engine))) {
+set hitmax = floor((prompt - 1) / bs) * bs;
+hold reqs (1), kv (min(cachedin(kv), hitmax)
+                   + min(prompt - min(cachedin(kv), hitmax), budget_left(engine))) {
   run engine prefill (prompt - c) growing kv;
   run engine decode (o - 1) growing kv;
 } cache (prompt + o);
@@ -75,9 +76,14 @@ the statement" — which is what made `hold` a scope in chapter 2.
 
 **`budget_left(engine)`** — how many tokens the next iteration leaves after
 its residents. The admission asks for the hit's blocks plus the chunk that
-budget can take *now*. The expression is evaluated when the request is
-admitted, not when it queues, which is the rule chapter 2 flagged and this is
-the program that needs it.
+budget can take *now*.
+
+Both are read **when the request is admitted**, not when it queues — the rule
+chapter 2 flagged, and this is the program that needs it. That is why
+`cachedin(kv)` appears inside the units rather than in a `set` above them: a
+`set` would read the cache while the request was still queueing, and a waiting
+request's prefix is exactly what is still evictable. It is written twice
+because the language has no way to name a value at the time it is decided.
 
 **`admit via engine`** on a pool (not used above, but in
 `programs/vllm.seq`'s `reqs`) hands the pool's queue to the engine's
