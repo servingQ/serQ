@@ -1,7 +1,7 @@
 //! `seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
 //! `seq-lang check FILE [--set k=expr]...`
 //! `seq-lang ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]`
-//! `seq-lang draw FILE [--view deployment|route] [--format tikz|svg] [--out PATH] [--show-set]` (experimental)
+//! `seq-lang draw FILE [--view deployment|session] [--format tikz|svg] [--out PATH] [--show-set]` (experimental)
 //!
 //! FILE is program text (`.seq`) or IR (`.json`, as written by `seq-lang ir`).
 
@@ -12,7 +12,7 @@ use seq::{Overrides, parser};
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set name=expr]... [--trace F] [--json] [--dump DIR]\n  seq-lang check FILE [--set name=expr]...\n  seq-lang ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]\n  seq-lang draw FILE [--view deployment|route] [--format tikz|svg] [--out PATH] [--show-set]   (experimental)\n\nFILE is program text (.seq) or IR (.json, as written by `seq-lang ir`)."
+        "usage:\n  seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set name=expr]... [--trace F] [--json] [--dump DIR]\n  seq-lang check FILE [--set name=expr]...\n  seq-lang ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]\n  seq-lang draw FILE [--view deployment|session] [--format tikz|svg] [--out PATH] [--show-set]   (experimental)\n\nFILE is program text (.seq) or IR (.json, as written by `seq-lang ir`)."
     );
     exit(2)
 }
@@ -89,8 +89,8 @@ fn main() {
         "draw" => {
             let figure = match view.as_str() {
                 "deployment" => seq::deployment::figure(&prog),
-                "route" => seq::draw::figure(&prog, show_set),
-                v => fail(file, format!("unknown --view `{v}` (deployment, route)")),
+                "session" => seq::draw::figure(&prog, show_set),
+                v => fail(file, format!("unknown --view `{v}` (deployment, session)")),
             };
             let text = match format.as_str() {
                 "tikz" => seq::tikz::render(&figure),

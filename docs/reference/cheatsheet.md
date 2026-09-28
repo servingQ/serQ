@@ -12,7 +12,7 @@ pool NAME [ '[' N ']' ] { … }       // a counted resource
 stage NAME [ '[' N ']' ] : kind;    // where time passes
 
 workload { … }                      // how sessions arrive and turns evolve
-route { … }                         // what every session does
+session { … }                         // what every session does
 run { horizon …; warmup …; seed …; }
 ```
 

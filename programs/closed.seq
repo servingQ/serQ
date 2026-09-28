@@ -10,7 +10,7 @@ stage think : delay;
 
 workload { arrive closed(N); }
 
-route {
+session {
   loop {
     set t0 = now;
     set s = ~exp(1 / mu);

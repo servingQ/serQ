@@ -7,7 +7,7 @@ output may change between releases. §6 lists what is not done. Design
 discussion: [RFC #1](https://github.com/vrvrv/seQ/issues/1).
 
 ```
-seq-lang draw FILE [--view deployment|route] [--format tikz|svg]
+seq-lang draw FILE [--view deployment|session] [--format tikz|svg]
                    [--out PATH] [--set name=expr]... [--show-set]
 ```
 
@@ -39,12 +39,12 @@ Neither adds a type to `src/ir.rs`, so `IR_VERSION` is unaffected.
 `--view deployment`, the default: the program as a queueing network.
 
 Pools and stages are declared, but the arrows are not — the flow is a property
-of the route. `deployment::project` walks the route carrying a hold stack:
+of the session program. `deployment::project` walks it carrying a hold stack:
 
 | | |
 |---|---|
 | **Nodes** | one per stage a `Run` reaches; a `CRef` with `count > 1` is one node labelled `[N]` |
-| **Edges** | the successor relation on `Run`s in route order, threaded through `Branch` (both arms) and `Loop` (a back edge to the body's first station) |
+| **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a back edge to the body's first station) |
 | **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box — **the lecture's "instance" boundary** |
 | **Edge labels** | a `Branch` guard, via `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
@@ -96,19 +96,19 @@ independently hand-drawn answer key. Four differences are expected:
 4. **Cost labels are the real expressions** — `min(n, 16)` where the lecture
    writes `φ(m)`, since the IR holds the folded expression, not the symbol.
 
-## 3. The route view
+## 3. The session view
 
-`--view route`: one session's path, every statement kept.
+`--view session`: one session's path, every statement kept.
 
 Its subject is what a flowchart cannot show. `hold` is a *scope*, so it is
 drawn as a **band** — a region of a pool's column occupied over a span of the
-route — and the units a scope leaves cached are a **tail** that outlives the
+program — and the units a scope leaves cached are a **tail** that outlives the
 band. In `vllm.seq` that tail crosses the bottom of the `loop` and is consumed
 at the top of the next turn by `c = min(cachedin(kv), …)`: the loop's back
 edge and the cache tail are the same arrow, which is the feedback of Lecture 5
 and is spread over three places in the source.
 
-Vertical is position in the route, not time. **Band widths are nominal**: a
+Vertical is position in the program, not time. **Band widths are nominal**: a
 single session's allocation against a pool of 160 000 units would be
 invisible, and magnitude is not what this view is for. What the geometry
 carries is *when* a width is decided:
@@ -152,7 +152,7 @@ cheap — one `Figure`, two writers, and geometry tested instead of bytes.
 ```
 src/figure.rs      the geometry a view produces and a writer consumes
 src/deployment.rs  ir::Program -> Figure   the network projection
-src/draw.rs        ir::Program -> Figure   the route projection
+src/draw.rs        ir::Program -> Figure   the session projection
 src/tikz.rs        Figure -> String
 src/svg.rs         Figure -> String
 ```
@@ -171,7 +171,7 @@ every program in both views and both formats, and every IR file in
   the name.
 * **One station row.** A program with many stages runs off to the right
   instead of wrapping.
-* **Branch lanes in the route view are a rail, not a layout.** A program with
+* **Branch lanes in the session view are a rail, not a layout.** A program with
   deeply nested branches gets a tall figure, `routing.seq` most of all.
 * **Long expressions are elided** with `~` rather than wrapped or footnoted.
 * **`let` names are gone**: `cap blocks * bs` prints as `160000`. The IR folds

@@ -11,7 +11,7 @@ workload {
   turn { set s = ~exp(S); }
 }
 
-route {
+session {
   turn;
   set t0 = now;
   run server (s);

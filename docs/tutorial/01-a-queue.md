@@ -38,10 +38,10 @@ turn's attributes; `~exp(S)` is a fresh draw from an exponential with mean `S`.
 The other distributions are `~det`, `~uniform`, `~erlang`, `~h2` and
 `~bernoulli`.
 
-### `route`
+### `session`
 
 ```rust
-route {
+session {
   turn;
   set t0 = now;
   run server (s);
@@ -51,8 +51,8 @@ route {
 }
 ```
 
-The **route** is the program every session runs. `run server (s)` is `s`
-seconds of work at `server`. `now` is the clock. `observe name = expr` records
+A `session` block is what one session does, from arrival to `end`.
+`run server (s)` is `s` seconds of work at `server`. `now` is the clock. `observe name = expr` records
 a sample — this is how the program says what it measures, rather than the
 interpreter guessing.
 

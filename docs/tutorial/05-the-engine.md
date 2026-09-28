@@ -55,7 +55,7 @@ Other options: `chunk` caps one request's prefill chunk
 before prefilling ones, and `exclusive prefill` makes a prefill chunk run alone
 and stall every decode (the RBLN stack).
 
-## Three new pieces of the route
+## Three new pieces of the session program
 
 ```rust
 set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);

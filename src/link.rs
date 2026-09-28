@@ -112,7 +112,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         collect_attrs(&w.init, &mut lk);
         collect_attrs(&w.turn, &mut lk);
     }
-    collect_attrs(&prog.route, &mut lk);
+    collect_attrs(&prog.session, &mut lk);
     // An attribute would shadow a constant of the same name everywhere
     // (a stage's cost has no session, so the constant would read as NaN).
     for (name, _) in &prog.lets {
@@ -225,7 +225,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     };
     let init = lk.block(&init, true)?;
     let turn = lk.block(&turn, true)?;
-    let route = lk.block(&prog.route, false)?;
+    let session = lk.block(&prog.session, false)?;
     let horizon = match (&ov.horizon, &prog.run.horizon) {
         (Some(h), _) => *h,
         (None, Some(e)) => lk.const_eval(e)?,
@@ -264,7 +264,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         trace_ordered,
         init,
         turn,
-        route,
+        session,
         blocks: lk.blocks,
         horizon,
         warmup,

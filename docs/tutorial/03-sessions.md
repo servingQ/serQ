@@ -16,7 +16,7 @@ where all the interesting behaviour lives.
 ### `loop` and `turn`
 
 ```rust
-route {
+session {
   turn;
   loop {
     …

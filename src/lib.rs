@@ -1,7 +1,7 @@
 //! # seQ
 //!
 //! A seQ program describes an LLM serving deployment: memory pools and
-//! stages, a workload of sessions, and the route every session follows.
+//! stages, a workload of sessions, and the program every session runs.
 //! Its definition is the IR (`ir::Program`, `docs/ir.md`): `sim` runs it,
 //! the Lean model is generated from it, and tools build or edit it as data.
 //! The text syntax (`parser`, `link`; `docs/language.md`) is one frontend

@@ -20,7 +20,7 @@ stage engine : step {
   memory kv;
 }
 
-route {
+session {
   turn;
   loop {
     set prompt = K + n;

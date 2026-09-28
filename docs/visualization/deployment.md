@@ -7,15 +7,15 @@
 That is `programs/lecture_pd.seq`, and it is `fig:deployment` of Lecture 1 §2
 — generated.
 
-## The flow is projected from the route
+## The flow is projected from the session program
 
 Pools and stages are declared; the arrows are not. `deployment::project`
-walks the route carrying a hold stack:
+walks the session program carrying a hold stack:
 
 | | |
 |---|---|
 | **Nodes** | one per stage a `Run` reaches. A stage array is one node labelled `[N]` |
-| **Edges** | the successor relation on `Run`s in route order, threaded through `Branch` (both arms) and `Loop` (a back edge to the body's first station) |
+| **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a back edge to the body's first station) |
 | **Enclosure** | every `Run` is tagged with the `Hold`s around it; stations sharing a hold on pool `p` sit inside `p`'s dashed box — **the lecture's "instance" boundary** |
 | **Edge labels** | a `Branch` guard, printed by `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
@@ -59,7 +59,7 @@ does keep about 7 units of `batch` cached.
 
 ![The paper's two-resource replica](../assets/replica.deployment.svg)
 
-`replica.seq` holds `live` across the whole route including the tool call, and
+`replica.seq` holds `live` across the whole program including the tool call, and
 `batch` and `kv` only around the engine. The boxes nest accordingly, and the
 `tool` station sits inside `live` and outside the other two.
 

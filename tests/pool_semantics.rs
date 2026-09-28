@@ -26,7 +26,7 @@ fn eviction_order_is_the_declared_key() {
             stage svc : fifo;
             stage gate : delay;
             workload {{ arrive batch(3); init {{ set c = 10 * (serial + 1); }} }}
-            route {{
+            session {{
               run gate (serial);                 // 0, 1, 2: sequential first turns
               hold kv (c) {{ run svc (0.1); }} cache (c);
               run gate (10);
@@ -61,7 +61,7 @@ fn queued_sessions_are_evicted_after_suspended_ones() {
             stage svc : fifo;
             stage gate : delay;
             workload {{ arrive batch(4); }}
-            route {{
+            session {{
               branch (serial == 0) {{
                 hold slot (1) {{ hold kv (8) {{ run svc (1); }} cache (8); }}
                 run gate (2);                                   // t = 3: queue for the slot
@@ -112,7 +112,7 @@ fn block_pools_round_and_evict_by_block() {
         stage svc : fifo;
         stage gate : delay;
         workload { arrive batch(2); }
-        route {
+        session {
           run gate (serial);
           // s0 takes 55 -> 60 allocated, caches 55 -> 50 (five full blocks)
           // s1 takes 70 -> needs 70 of 100 - 0 used; cached 50 -> evict 2 blocks
@@ -137,7 +137,7 @@ fn block_pools_round_and_evict_by_block() {
 }
 
 /// `spill T via L (work) when (cond)`: an evicted prefix is written to a
-/// tier over a link; the route fetches it back (`cachedin`).
+/// tier over a link; the session fetches it back (`cachedin`).
 #[test]
 fn spill_to_a_tier_and_fetch_back() {
     let src = r#"
@@ -147,7 +147,7 @@ fn spill_to_a_tier_and_fetch_back() {
         stage link : fifo;
         stage gate : delay;
         workload { arrive batch(2); init { set c = serial == 0 ? 20 : 25; } }
-        route {
+        session {
           run gate (serial);
           hold kv (c) { run svc (1); } cache (c);
           run gate (5);
@@ -182,7 +182,7 @@ fn grow_waits_under_preempt_none() {
         stage svc : fifo(2);
         stage gate : delay;
         workload { arrive batch(2); }
-        route {
+        session {
           run gate (serial);
           hold kv (50) {
             run svc (5);
@@ -211,7 +211,7 @@ fn priority_queue_orders_admissions() {
         pool kv { cap 10; queue by (prio); }
         stage svc : fifo;
         workload { arrive batch(3); init { set prio = 2 - serial; } }
-        route {
+        session {
           hold kv (10) { observe order = serial; run svc (1); }
           end;
         }
@@ -233,7 +233,7 @@ fn oversized_requests_are_rejected() {
         pool kv { cap 10; }
         stage svc : fifo;
         workload { arrive batch(2); }
-        route { hold kv (serial == 0 ? 20 : 5) { run svc (1); } observe done = serial; end; }
+        session { hold kv (serial == 0 ? 20 : 5) { run svc (1); } observe done = serial; end; }
         run { horizon 100; }
     "#;
     let r = run(src);

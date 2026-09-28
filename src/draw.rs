@@ -1,12 +1,12 @@
-//! The route view: one session's path, at full fidelity.
+//! The session view: one session's path, at full fidelity.
 //!
-//! The deployment view (`crate::deployment`) quotients the route to its
-//! stages. This one keeps every statement. Its subject is the thing a
+//! The deployment view (`crate::deployment`) quotients the session program
+//! to its stages. This one keeps every statement. Its subject is the thing a
 //! flowchart cannot show: `hold` is a *scope*, so it is drawn as a band — a
-//! region of a pool's column occupied over a span of the route — and the
+//! region of a pool's column occupied over a span of the program — and the
 //! units a scope leaves cached are a tail that outlives the band.
 //!
-//! Vertical is position in the route, not time. Band widths are nominal:
+//! Vertical is position in the program, not time. Band widths are nominal:
 //! a single session's allocation against a pool of 160 000 units would be
 //! invisible, and magnitude is not what this view is for. What the geometry
 //! does carry is *when* a width is decided — a solid edge for a width the
@@ -27,7 +27,7 @@ const SPINE_CHARS: usize = 54;
 const MARGIN: f64 = 26.0;
 const HEAD_H: f64 = 46.0;
 
-/// How deeply `branch` and `loop` nest in the route. The spine has to start
+/// How deeply `branch` and `loop` nest in the session program. The spine has to start
 /// clear of the rails, and a rail drawn over the statement column is worse
 /// than a wide margin.
 fn control_depth(p: &Program, block: usize) -> usize {
@@ -354,7 +354,7 @@ impl<'a> Draw<'a> {
     }
 }
 
-/// The route figure of a program. `show_set` includes `set` statements, which
+/// The session figure of a program. `show_set` includes `set` statements, which
 /// are computation rather than resource movement and are off by default.
 pub fn figure(p: &Program, show_set: bool) -> Figure {
     let cols = held_pools(p);
@@ -364,7 +364,7 @@ pub fn figure(p: &Program, show_set: bool) -> Figure {
         bands: vec![],
         under: vec![],
         cols: cols.clone(),
-        spine_x: MARGIN + (control_depth(p, p.route) + 1) as f64 * RAIL_W,
+        spine_x: MARGIN + (control_depth(p, p.session) + 1) as f64 * RAIL_W,
         y: MARGIN + HEAD_H,
         depth: 0,
         show_set,
@@ -394,14 +394,14 @@ pub fn figure(p: &Program, show_set: bool) -> Figure {
     }
     d.f.text(
         pt(MARGIN, MARGIN + 14.0),
-        "route",
+        "session",
         Anchor::Start,
         TextSize::Normal,
     );
 
-    d.walk(p.route);
+    d.walk(p.session);
 
-    // Tails that no `drop` closed run past the end of the route.
+    // Tails that no `drop` closed run past the end of the session.
     let bottom = d.y + 8.0;
     let tails = std::mem::take(&mut d.open_tails);
     for (pool, from) in tails {
@@ -433,7 +433,7 @@ pub fn figure(p: &Program, show_set: bool) -> Figure {
     f
 }
 
-/// The pools a route figure gives a column to, for tests.
+/// The pools a session figure gives a column to, for tests.
 pub fn columns(p: &Program) -> Vec<usize> {
     held_pools(p)
 }

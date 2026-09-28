@@ -6,7 +6,7 @@
 //!           | 'pool' IDENT ('[' NUM ']')? '{' poolopt* '}'
 //!           | 'stage' IDENT ('[' NUM ']')? ':' kind ';'
 //!           | 'workload' '{' wlitem* '}'
-//!           | 'route' block
+//!           | 'session' block
 //!           | 'run' '{' ('horizon' | 'warmup' | 'seed') expr ';' ... '}'
 //! poolopt  := 'cap' expr ';' | 'block' expr ';'
 //!           | 'evict' ('lru' | 'by' '(' expr (',' expr)* ')') ';'
@@ -177,11 +177,11 @@ impl Parser {
                     return self.err("duplicate workload");
                 }
                 prog.workload = Some(self.workload()?);
-            } else if self.eat_kw("route") {
-                if !prog.route.is_empty() {
-                    return self.err("duplicate route");
+            } else if self.eat_kw("session") {
+                if !prog.session.is_empty() {
+                    return self.err("duplicate session");
                 }
-                prog.route = self.block()?;
+                prog.session = self.block()?;
             } else if self.eat_kw("run") {
                 self.expect(&Tok::LBrace)?;
                 while *self.peek() != Tok::RBrace {
@@ -781,7 +781,7 @@ mod tests {
               init { set K = 0; set n = ~uniform(1e4, 3e4); }
               turn { set K = K + n + o; set n = ~exp(1000); }
             }
-            route {
+            session {
               turn;
               loop {
                 hold kv (K + n + o) {
@@ -798,7 +798,7 @@ mod tests {
         assert_eq!(p.pools.len(), 1);
         assert_eq!(p.stages.len(), 3);
         assert_eq!(p.lets[0].0, "a");
-        assert!(matches!(p.route[1], Stmt::Loop(_)));
+        assert!(matches!(p.session[1], Stmt::Loop(_)));
     }
 
     #[test]

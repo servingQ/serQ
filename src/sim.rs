@@ -1,7 +1,7 @@
 //! The seQ interpreter: a discrete-event simulator whose state is the
 //! configuration of `docs/language.md`.
 //!
-//! Commands (the statements of a route) take no time and run whenever a
+//! Commands (the statements of a session) take no time and run whenever a
 //! session is *ready*; flow lets time pass at the stages. After every
 //! event the interpreter settles: it executes every ready session, retries
 //! growers and admissions at every pool until nothing changes, then starts
@@ -239,7 +239,7 @@ struct StageState {
 #[derive(Clone, Copy)]
 enum Which {
     Workload,
-    Route,
+    Session,
     Evict,
 }
 
@@ -293,7 +293,7 @@ pub struct Sim<'p> {
     ready: VecDeque<usize>,
     rng_arr: StdRng,
     rng_wl: StdRng,
-    rng_route: StdRng,
+    rng_session: StdRng,
     rng_evict: StdRng,
     rng_trace: StdRng,
     trace: Option<Corpus>,
@@ -408,7 +408,7 @@ impl<'p> Sim<'p> {
             ready: VecDeque::new(),
             rng_arr: StdRng::seed_from_u64(seed),
             rng_wl: StdRng::seed_from_u64(seed ^ 0x9e37_79b9_7f4a_7c15),
-            rng_route: StdRng::seed_from_u64(seed ^ 0x5851_f42d_4c95_7f2d),
+            rng_session: StdRng::seed_from_u64(seed ^ 0x5851_f42d_4c95_7f2d),
             rng_evict: StdRng::seed_from_u64(seed ^ 0x2545_f491_4f6c_dd1d),
             rng_trace: StdRng::seed_from_u64(seed ^ 0x6a09_e667_f3bc_c908),
             trace,
@@ -463,7 +463,7 @@ impl<'p> Sim<'p> {
     fn rng(&mut self, w: Which) -> &mut StdRng {
         match w {
             Which::Workload => &mut self.rng_wl,
-            Which::Route => &mut self.rng_route,
+            Which::Session => &mut self.rng_session,
             Which::Evict => &mut self.rng_evict,
         }
     }
@@ -609,7 +609,7 @@ impl<'p> Sim<'p> {
             serial,
             attrs,
             frames: vec![Frame {
-                block: self.p.route,
+                block: self.p.session,
                 pc: 0,
                 kind: FrameKind::Plain,
             }],
@@ -795,11 +795,11 @@ impl<'p> Sim<'p> {
             match stmt {
                 CStmt::Turn => self.do_turn(sid),
                 CStmt::Set(slot, e) => {
-                    let v = self.eval(e, &Ctx::session(sid), Which::Route);
+                    let v = self.eval(e, &Ctx::session(sid), Which::Session);
                     self.sessions[sid].attrs[*slot] = v;
                 }
                 CStmt::Observe(k, e) => {
-                    let v = self.eval(e, &Ctx::session(sid), Which::Route);
+                    let v = self.eval(e, &Ctx::session(sid), Which::Session);
                     self.observe_for(sid, *k, v);
                 }
                 CStmt::End => {
@@ -812,13 +812,13 @@ impl<'p> Sim<'p> {
                     kind: FrameKind::Loop,
                 }),
                 CStmt::Branch(pe, a, b) => {
-                    let pr = self.eval(pe, &Ctx::session(sid), Which::Route);
+                    let pr = self.eval(pe, &Ctx::session(sid), Which::Session);
                     let take = if pr >= 1.0 {
                         true
                     } else if pr <= 0.0 {
                         false
                     } else {
-                        self.rng_route.random::<f64>() < pr
+                        self.rng_session.random::<f64>() < pr
                     };
                     let blk = if take { *a } else { *b };
                     self.sessions[sid].frames.push(Frame {
@@ -828,11 +828,13 @@ impl<'p> Sim<'p> {
                     });
                 }
                 CStmt::Choose { var, count, key } => {
-                    let n = self.eval(count, &Ctx::session(sid), Which::Route).max(0.0) as usize;
+                    let n = self
+                        .eval(count, &Ctx::session(sid), Which::Session)
+                        .max(0.0) as usize;
                     let mut best: Option<(f64, usize)> = None;
                     for j in 0..n {
                         self.sessions[sid].attrs[*var] = j as f64;
-                        let k = self.eval(key, &Ctx::session(sid), Which::Route);
+                        let k = self.eval(key, &Ctx::session(sid), Which::Session);
                         if best.is_none_or(|b| k < b.0) {
                             best = Some((k, j));
                         }
@@ -850,7 +852,7 @@ impl<'p> Sim<'p> {
                     let mut fits = vec![];
                     for (r, e, f) in pools {
                         let pl = self.pool_index(r, sid);
-                        let units = self.eval(e, &Ctx::session(sid), Which::Route).max(0.0);
+                        let units = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
                         ps.push((pl, units));
                         exprs.push(e);
                         fits.push(f.as_ref());
@@ -871,7 +873,7 @@ impl<'p> Sim<'p> {
                 }
                 CStmt::Grow(r, e) => {
                     let pl = self.pool_index(r, sid);
-                    let units = self.eval(e, &Ctx::session(sid), Which::Route).max(0.0);
+                    let units = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
                     if !self.grow(sid, pl, units) {
                         return;
                     }
@@ -888,7 +890,7 @@ impl<'p> Sim<'p> {
                     growing,
                 } => {
                     let st = self.stage_index(stage, sid);
-                    let w = self.eval(work, &Ctx::session(sid), Which::Route).max(0.0);
+                    let w = self.eval(work, &Ctx::session(sid), Which::Session).max(0.0);
                     let g = growing.as_ref().map(|r| self.pool_index(r, sid));
                     self.start_job(st, Some(sid), w, *mode, g);
                     return;
@@ -901,7 +903,7 @@ impl<'p> Sim<'p> {
         match &r.index {
             None => r.base,
             Some(e) => {
-                let i = self.eval(e, &Ctx::session(sid), Which::Route);
+                let i = self.eval(e, &Ctx::session(sid), Which::Session);
                 let i = i.max(0.0) as usize;
                 assert!(
                     i < r.count,
@@ -917,7 +919,7 @@ impl<'p> Sim<'p> {
         match &r.index {
             None => r.base,
             Some(e) => {
-                let i = self.eval(e, &Ctx::session(sid), Which::Route);
+                let i = self.eval(e, &Ctx::session(sid), Which::Session);
                 let i = i.max(0.0) as usize;
                 assert!(
                     i < r.count,
@@ -960,7 +962,7 @@ impl<'p> Sim<'p> {
         let p = self.p;
         let key = match &p.pools[pl].queue {
             None => self.sessions[sid].serial as f64,
-            Some(e) => self.eval(e, &Ctx::session(sid), Which::Route),
+            Some(e) => self.eval(e, &Ctx::session(sid), Which::Session),
         };
         self.sessions[sid].pending = Some(pending);
         self.sessions[sid].status = Status::Queued(pl);
@@ -992,10 +994,10 @@ impl<'p> Sim<'p> {
             .expect("queued session has a hold");
         for k in 0..pending.pools.len() {
             let e = pending.exprs[k];
-            let u = self.eval(e, &Ctx::session(sid), Which::Route).max(0.0);
+            let u = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
             pending.pools[k].1 = u;
             pending.need[k] = match pending.fits[k] {
-                Some(f) => self.eval(f, &Ctx::session(sid), Which::Route).max(u),
+                Some(f) => self.eval(f, &Ctx::session(sid), Which::Session).max(u),
                 None => u,
             };
         }
@@ -1044,7 +1046,7 @@ impl<'p> Sim<'p> {
         let reuse = pending
             .reuse
             .as_ref()
-            .map(|e| self.eval(e, &Ctx::session(sid), Which::Route).max(0.0));
+            .map(|e| self.eval(e, &Ctx::session(sid), Which::Session).max(0.0));
         for (i, &(q, units)) in pending.pools.iter().enumerate() {
             let need = self.round_up(q, units);
             // consume the own prefix, at most `reuse` of it; the rest stays
@@ -1295,7 +1297,7 @@ impl<'p> Sim<'p> {
             self.pools[q].used -= alloc;
             self.pools[q].holders.retain(|&s| s != sid);
             if let Some(c) = &h.cache {
-                let want = self.eval(c, &Ctx::session(sid), Which::Route).max(0.0);
+                let want = self.eval(c, &Ctx::session(sid), Which::Session).max(0.0);
                 // only what was computed can be cached: the position of a
                 // growing hold, else the whole allocation
                 let computed = if h.grown { h.pos[k] } else { alloc };
@@ -1491,7 +1493,7 @@ impl<'p> Sim<'p> {
             let mut v = vec![];
             for (r, e, f) in pools {
                 let q = self.pool_index(r, victim);
-                let u = self.eval(e, &Ctx::session(victim), Which::Route).max(0.0);
+                let u = self.eval(e, &Ctx::session(victim), Which::Session).max(0.0);
                 v.push((q, u, e, f.as_ref()));
             }
             v
@@ -1653,7 +1655,7 @@ impl<'p> Sim<'p> {
             n: n as f64,
             ..Default::default()
         };
-        self.eval(phi, &ctx, Which::Route)
+        self.eval(phi, &ctx, Which::Session)
     }
 
     fn ps_reschedule(&mut self, st: usize) {
@@ -1796,7 +1798,7 @@ impl<'p> Sim<'p> {
             ..Default::default()
         };
         let mut want = 0.0;
-        let chunk0 = self.eval(&spec.chunk, &pre, Which::Route);
+        let chunk0 = self.eval(&spec.chunk, &pre, Which::Session);
         for &j in &residents0 {
             let job = &self.stages[st].jobs[&j];
             let mem = match (spec.memory, job.owner) {
@@ -1816,8 +1818,8 @@ impl<'p> Sim<'p> {
                 };
             }
         }
-        let budget = self.eval(&spec.budget, &pre, Which::Route);
-        let chunk = self.eval(&spec.chunk, &pre, Which::Route);
+        let budget = self.eval(&spec.budget, &pre, Which::Session);
+        let chunk = self.eval(&spec.chunk, &pre, Which::Session);
         (pre, budget, chunk, want)
     }
 
@@ -1944,7 +1946,7 @@ impl<'p> Sim<'p> {
             attn,
             ..Default::default()
         };
-        let cost = self.eval(&spec.cost, &ctx, Which::Route).max(0.0);
+        let cost = self.eval(&spec.cost, &ctx, Which::Session).max(0.0);
         if self.trace_iter {
             let parts: Vec<String> = assign
                 .iter()

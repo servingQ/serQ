@@ -38,7 +38,7 @@
 <text x="591" y="40" text-anchor="start" font-size="10" fill="#1d2021">pool slots</text>
 <text x="591" y="54" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 16</text>
 <path class="relation" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="2 3" d="M591 60 L759 60"/>
-<text x="26" y="40" text-anchor="start" font-size="10" fill="#1d2021">route</text>
+<text x="26" y="40" text-anchor="start" font-size="10" fill="#1d2021">session</text>
 <text x="69" y="84" text-anchor="start" font-size="10" fill="#1d2021">*</text>
 <text x="83" y="84" text-anchor="start" font-size="8" fill="#1d2021">turn</text>
 <text x="69" y="110" text-anchor="start" font-size="10" fill="#1d2021">@</text>

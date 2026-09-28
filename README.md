@@ -6,7 +6,7 @@ program, and the same program is simulated and checked against the real
 system.
 
 A seQ program describes a serving deployment: its memory pools and
-stages, a workload, and the route every session takes through them. Its
+stages, a workload, and the program every session runs. Its
 definition is an intermediate representation, the **IR** (`src/ir.rs`,
 `docs/ir.md`): a closed, versioned data structure that the interpreter
 runs, the Lean model is generated from, and tools build or edit as JSON.

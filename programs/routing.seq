@@ -38,7 +38,7 @@ workload {
   }
 }
 
-route {
+session {
   loop {
     turn;
     set t0 = now;

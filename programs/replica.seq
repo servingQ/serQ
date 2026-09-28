@@ -49,7 +49,7 @@ workload {
 }
 
 // libqueuingsim frees a finished session's KV: `drop kv;` before every `end;`
-route {
+session {
   set t_arr = now;
   hold live (1) {
     observe entry_wait = now - t_arr;

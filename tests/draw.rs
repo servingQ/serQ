@@ -42,7 +42,7 @@ fn pool(p: &Program, name: &str) -> usize {
 fn pools_of(p: &Program, net: &deployment::Net, stage_name: &str) -> Vec<String> {
     let i = net
         .node_of(stage(p, stage_name))
-        .expect("stage is on the route");
+        .expect("stage is on the session");
     net.nodes[i]
         .pools
         .iter()
@@ -180,7 +180,7 @@ fn growing_is_found_through_nested_holds() {
         pool kv { cap 100000; } pool slots { cap 8; } pool gate { cap 4; }
         stage engine : step { budget 512; cost 1e-3; memory kv; }
         workload { arrive poisson(0.2); turn { set n = 100; set o = 2; } }
-        route { turn;
+        session { turn;
           hold kv (32), slots (1) {
             hold gate (1) { run engine prefill (n) growing kv; }
           } cache (n + o);
@@ -201,7 +201,7 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
         pool kv { cap 100; }
         stage s1 : fifo; stage s2 : delay; stage s3 : fifo;
         workload { arrive poisson(0.2); }
-        route { hold kv (1) { run s1 (1); } run s2 (1); hold kv (1) { run s3 (1); } end; }
+        session { hold kv (1) { run s1 (1); } run s2 (1); hold kv (1) { run s3 (1); } end; }
         run { horizon 100; }
         "#,
     );
@@ -245,7 +245,7 @@ fn lanes_below_the_row_do_not_collide() {
     }
 }
 
-/// A route that opens with a branch has more than one entry station. A second
+/// A session that opens with a branch has more than one entry station. A second
 /// arrow along the row would run through the first one, and a second copy of
 /// the arrival label would be drawn on top of the first.
 #[test]
@@ -254,7 +254,7 @@ fn a_second_entry_point_does_not_overdraw_the_first() {
         r#"
         stage s1 : fifo; stage s2 : fifo;
         workload { arrive poisson(1); init { set a = 1; } }
-        route { branch (a) { run s1 (1); } else { run s2 (1); } end; }
+        session { branch (a) { run s1 (1); } else { run s2 (1); } end; }
         run { horizon 100; }
         "#,
     );
@@ -280,7 +280,7 @@ fn rails_stay_clear_of_the_spine() {
         r#"
         stage s : fifo;
         workload { arrive poisson(1); init { set a = 1; } }
-        route { branch (a) { branch (a) { branch (a) { branch (a) {
+        session { branch (a) { branch (a) { branch (a) { branch (a) {
                   branch (a) { run s (1); } } } } } end; }
         run { horizon 100; }
         "#,
@@ -314,7 +314,7 @@ fn negative_constants_reparse() {
         let k = 0 - 2;
         stage s : fifo;
         workload { arrive batch(1); turn { set a = 2; } }
-        route { turn; observe o = k ^ a; run s (1); end; }
+        session { turn; observe o = k ^ a; run s (1); end; }
         run { horizon 10; }
         "#,
     );
@@ -434,7 +434,7 @@ fn figures_are_fitted() {
     }
 }
 
-/// The route view gives a column to every pool a `hold` acquires.
+/// The session view gives a column to every pool a `hold` acquires.
 #[test]
 fn route_columns_are_the_held_pools() {
     let p = program("replica");
@@ -543,7 +543,7 @@ fn golden_files_are_current() {
         &seq::svg::render(&deployment::figure(&p)),
     );
     golden(
-        "vllm.route.svg",
+        "vllm.session.svg",
         &seq::svg::render(&draw::figure(&p, false)),
     );
 }
