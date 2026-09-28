@@ -1,9 +1,11 @@
 name: Release
 
-# Push a tag vX.Y.Z matching Cargo.toml's version:
-#   git tag v0.1.0-dev2 && git push origin v0.1.0-dev2   (a tag with "-" is a prerelease)
+# Push an annotated tag vX.Y.Z matching Cargo.toml's version:
+#   git tag -a v0.1.0-rc0 && git push origin v0.1.0-rc0   (a tag with "-" is a prerelease)
 # The full CI runs first; the release carries the packaged crate and the
-# Linux CLI. Consumers pin the tag (Cargo `git` + `tag`).
+# Linux CLI. Its notes are the tag message's body (what the release is,
+# written by hand) followed by GitHub's generated list of the pull requests
+# since the previous release. Consumers pin the tag (Cargo `git` + `tag`).
 
 on:
   push:
@@ -30,6 +32,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
+      - name: Fetch the annotated tag
+        # actions/checkout leaves a lightweight tag behind; the message is
+        # only on the annotated one (actions/checkout#290)
+        run: git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
       - name: Tag matches Cargo.toml
         run: |
           v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
@@ -45,15 +51,28 @@ jobs:
           cp target/package/seq-lang-*.crate dist/
           tar -C target/release -czf "dist/seq-lang-$TAG-x86_64-unknown-linux-gnu.tar.gz" seq-lang
           (cd dist && sha256sum * > SHA256SUMS)
+      - name: Release notes
+        # the tag message's body, then the generated pull request list
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            git tag -l --format='%(contents:body)' "$TAG"
+            echo
+            gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$TAG" --jq .body
+          } > notes.md
+          cat notes.md
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file notes.md
             gh release upload "$TAG" dist/* --clobber
           else
-            pre=""; case "$TAG" in *-*) pre="--prerelease";; esac   # v0.1.0-dev1 etc.
-            gh release create "$TAG" dist/* --title "seQ $TAG" --generate-notes --verify-tag $pre
+            pre=""; case "$TAG" in *-*) pre="--prerelease";; esac   # v0.1.0-rc0 etc.
+            gh release create "$TAG" dist/* --title "seQ $TAG" --notes-file notes.md --verify-tag $pre
           fi
 
   crates-io:
