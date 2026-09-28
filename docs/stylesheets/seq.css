@@ -1,0 +1,35 @@
+/* seQ code blocks: four roles, four colours.
+ *
+ * Material gives a highlight palette of eight slots, and `Keyword`,
+ * `Keyword.Declaration` and `Keyword.Pseudo` all land in one of them. The
+ * lexer puts seQ's four roles in four different slots (docs/hooks/seq_lexer.py);
+ * this fills the one slot that is otherwise grey, so that what a program
+ * *reads* is not the colour of a comment.
+ *
+ * Scoped to .language-seq: no other language on the site is touched.
+ */
+.language-seq {
+  /* what a program reads: cachedin, budget_left, now, kvb */
+  --seq-observable: #0b7a86;
+}
+
+[data-md-color-scheme="slate"] .language-seq {
+  --seq-observable: #5fd3e3;
+}
+
+.language-seq .nv,
+.language-seq .vc,
+.language-seq .vg,
+.language-seq .vi {
+  color: var(--seq-observable);
+}
+
+/* `~` is where the randomness enters, and it earns a colour of its own */
+.language-seq .se {
+  font-weight: 600;
+}
+
+/* the block a program is made of reads as its skeleton */
+.language-seq .k {
+  font-weight: 600;
+}

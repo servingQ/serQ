@@ -2,31 +2,66 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "seQ",
   "scopeName": "source.seq",
-  "fileTypes": ["seq"],
+  "fileTypes": [
+    "seq"
+  ],
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#strings" },
-    { "include": "#distributions" },
-    { "include": "#structure" },
-    { "include": "#statements" },
-    { "include": "#options" },
-    { "include": "#builtins" },
-    { "include": "#numbers" },
-    { "include": "#operators" }
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#distributions"
+    },
+    {
+      "include": "#structure"
+    },
+    {
+      "include": "#statements"
+    },
+    {
+      "include": "#options"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#operators"
+    }
   ],
   "repository": {
     "comments": {
       "patterns": [
-        { "name": "comment.line.double-slash.seq", "match": "//.*$" },
-        { "name": "comment.block.seq", "begin": "/\\*", "end": "\\*/" }
+        {
+          "name": "comment.line.double-slash.seq",
+          "match": "//.*$"
+        },
+        {
+          "name": "comment.block.seq",
+          "begin": "/\\*",
+          "end": "\\*/"
+        }
       ]
     },
-    "strings": { "name": "string.quoted.double.seq", "begin": "\"", "end": "\"" },
+    "strings": {
+      "name": "string.quoted.double.seq",
+      "begin": "\"",
+      "end": "\""
+    },
     "distributions": {
       "match": "(~)([a-z_][A-Za-z0-9_]*)",
       "captures": {
-        "1": { "name": "keyword.operator.sample.seq" },
-        "2": { "name": "support.function.distribution.seq" }
+        "1": {
+          "name": "constant.character.escape.seq"
+        },
+        "2": {
+          "name": "constant.character.escape.seq"
+        }
       }
     },
     "structure": {
@@ -34,18 +69,24 @@
       "match": "\\b(let|pool|stage|workload|session|run)\\b"
     },
     "statements": {
-      "name": "keyword.control.seq",
+      "name": "entity.name.function.seq",
       "match": "\\b(turn|set|observe|hold|enter|grow|drop|branch|with|loop|choose|end|reserve|reuse|cache|keep|at|admission|growing|on|in|by|else|prefill|transfer|decode|tool)\\b"
     },
     "options": {
-      "name": "storage.modifier.seq",
+      "name": "support.type.property-name.seq",
       "match": "\\b(cap|block|evict|lru|preempt|lifo|none|queue|fifo|admit|via|spill|when|ps|delay|step|budget|cost|chunk|exclusive|first|memory|arrive|poisson|closed|batch|trace|ordered|init|horizon|warmup|seed)\\b"
     },
     "builtins": {
-      "name": "support.function.seq",
-      "match": "\\b(min|max|abs|floor|ceil|sqrt|exp|ln|pow|busy|work|used|free|cachedin|holders|queued|price|budget_left|est_lambda|est_rho|est_wait|now|size|age|last|ntok|ndec|npre|nres|kvb|kvp|attn|cached|serial|turn_no|new|out|think|more|forced)\\b"
+      "name": "variable.language.seq",
+      "match": "\\b(busy|work|used|free|cachedin|holders|queued|price|budget_left|est_lambda|est_rho|est_wait|now|size|age|last|ntok|ndec|npre|nres|kvb|kvp|attn|cached|serial|turn_no|new|out|think|more|forced)\\b"
     },
-    "numbers": { "name": "constant.numeric.seq", "match": "\\b\\d+\\.?\\d*([eE][-+]?\\d+)?\\b" },
-    "operators": { "name": "keyword.operator.seq", "match": "[-+*/^<>=!&|?:]+" }
+    "numbers": {
+      "name": "constant.numeric.seq",
+      "match": "\\b\\d+\\.?\\d*([eE][-+]?\\d+)?\\b"
+    },
+    "operators": {
+      "name": "keyword.operator.seq",
+      "match": "[-+*/^<>=!&|?:]+"
+    }
   }
 }
