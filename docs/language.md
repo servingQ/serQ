@@ -181,8 +181,7 @@ loop {
 and vLLM's engine (`programs/vllm.seq`)
 
 ```
-admit reqs (1), kv (min(cachedin(kv), hitmax)
-                    + min(prompt - min(cachedin(kv), hitmax), budget_left(engine))) {
+admit reqs (1), kv (min(prompt, min(cachedin(kv), hitmax) + budget_left(engine))) {
   prefill (prompt - c) growing kv;
   decode (o - 1) growing kv;
 } keep (prompt + o);

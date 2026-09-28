@@ -45,8 +45,7 @@ session {
     // cache itself is read inside the hold's units, so it is read when the
     // request is admitted -- while it waits, its prefix is still evictable
     set hitmax = floor((prompt - 1) / bs) * bs;
-    hold reqs (1), kv (min(cachedin(kv), hitmax)
-                       + min(prompt - min(cachedin(kv), hitmax), budget_left(engine))) {
+    hold reqs (1), kv (min(prompt, min(cachedin(kv), hitmax) + budget_left(engine))) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;
       run engine prefill (prompt - c) growing kv;
