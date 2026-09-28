@@ -257,29 +257,19 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         return Err(LinkError("warmup must be below the horizon".into()));
     }
     // `hidden` names session attributes the scheduler's expressions may not
-    // read (`Program::validate` enforces it by moment); a name nothing sets
-    // is a mistake, not an attribute, and one the scheduler itself writes
-    // (`cached`, `computed`) cannot be hidden from it
-    let mut hidden: Vec<usize> = vec![];
+    // read; `Program::validate` enforces it by moment and rejects what the
+    // scheduler itself sets. A name nothing sets is a mistake, not an attribute
+    let mut hidden = vec![];
     if let Some(w) = prog.workload.as_ref() {
         for n in &w.hidden {
-            if n == "cached" || n == "computed" {
-                return Err(LinkError(format!(
-                    "hidden `{n}`: the scheduler sets it, so it cannot be hidden from the scheduler"
-                )));
-            }
-            let i = match lk.attr_index.get(n) {
-                Some(&i) => i,
+            match lk.attr_index.get(n) {
+                Some(&i) => hidden.push(i),
                 None => {
                     return Err(LinkError(format!(
                         "hidden `{n}`: no `set` or `choose` makes it a session attribute"
                     )));
                 }
-            };
-            if hidden.contains(&i) {
-                return Err(LinkError(format!("hidden `{n}` twice")));
             }
-            hidden.push(i);
         }
     }
     let slot = |lk: &Linker, n: &str| lk.attr_index[n];

@@ -84,6 +84,19 @@ fn malformed_ir_is_rejected() {
             .unwrap_err()
             .contains("hidden: attribute slot 99")
     );
+    // what the scheduler sets cannot be hidden from it, and a slot is hidden once
+    let mut bad = p.clone();
+    bad.hidden.push(bad.slot_cached);
+    let e = bad.validate().unwrap_err();
+    assert!(e.contains("hidden `cached`: the scheduler sets it"), "{e}");
+    let mut bad = p.clone();
+    let slot = (0..p.attrs.len())
+        .find(|&s| s != p.slot_cached && s != p.slot_computed)
+        .unwrap();
+    bad.hidden.push(slot);
+    bad.hidden.push(slot);
+    let e = bad.validate().unwrap_err();
+    assert!(e.contains("twice"), "{e}");
     let j = p.to_json().replace("\"Fifo\": 1", "\"Fifo\": \"x\"");
     assert!(Program::from_json(&j).is_err());
 }

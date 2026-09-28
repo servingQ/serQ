@@ -85,7 +85,7 @@ impl std::fmt::Display for Moment {
         f.write_str(match self {
             Moment::Session => "a session statement, a run or a hold's cache",
             Moment::Admit => {
-                "a hold's header (`enter`, `admit if … where`) or a queue key, read at admission"
+                "a hold's header (`hold`, `enter`, `admit if … where`) or a queue key, read at admission"
             }
             Moment::Evict => "an eviction key or spill clause",
             Moment::Ps => "a ps stage's capacity",
@@ -402,8 +402,10 @@ pub struct Program {
     /// `num_computed_tokens` only, scheduler.py:1560-1561).
     pub slot_computed: usize,
     /// Attribute slots the scheduler may not read: legal at `Moment::Session`
-    /// only, rejected by `validate` in a hold's header, a queue or eviction
-    /// key, a stage's budget, cost, chunk or serve keys. The output length
+    /// only, rejected by `validate` at every other moment (a hold's header, a
+    /// queue or eviction key, a spill clause, a ps capacity, a step stage's
+    /// budget, cost, chunk or serve keys); what the scheduler itself sets
+    /// (`cached`, `computed`) cannot be hidden from it. The output length
     /// `o` is the case: vLLM knows `max_tokens` (scheduler.py:639) and learns
     /// the length when `check_stop` sees EOS or the cap (sched/utils.py:98-119,
     /// called at scheduler.py:2426), so a program that reserves `prompt + o`
@@ -616,8 +618,18 @@ impl Program {
         ] {
             v.attr(slot)?;
         }
-        for &slot in &self.hidden {
+        for (k, &slot) in self.hidden.iter().enumerate() {
             v.attr(slot).map_err(|e| format!("hidden: {e}"))?;
+            // what the scheduler writes it cannot be kept from reading
+            if slot == self.slot_cached || slot == self.slot_computed {
+                return Err(format!(
+                    "hidden `{}`: the scheduler sets it, so it cannot be hidden from the scheduler",
+                    self.attrs[slot]
+                ));
+            }
+            if self.hidden[..k].contains(&slot) {
+                return Err(format!("hidden `{}` twice", self.attrs[slot]));
+            }
         }
         if !(self.horizon.is_finite() && self.warmup >= 0.0 && self.warmup < self.horizon) {
             return Err("run: need 0 <= warmup < horizon".into());

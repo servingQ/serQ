@@ -156,12 +156,12 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         ),
         (
             engine("queue by (age);", "", ""),
-            "pool `kv`: `age` is read in a hold's header (`enter`, `admit if … where`) or a queue key, read at admission",
+            "pool `kv`: `age` is read in a hold's header (`hold`, `enter`, `admit if … where`) or a queue key, read at admission",
             "an eviction key",
         ),
         (
             engine("", "", "hold kv (size) { run svc (1); }"),
-            "session: `size` is read in a hold's header (`enter`, `admit if … where`) or a queue key, read at admission",
+            "session: `size` is read in a hold's header (`hold`, `enter`, `admit if … where`) or a queue key, read at admission",
             "an eviction key",
         ),
         (
