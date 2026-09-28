@@ -1490,13 +1490,15 @@ impl<'p> Interp<'p> {
             .iter()
             .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
             .expect("victim holds the pool");
-        // progress since the last preemption for this pool: the position the
-        // hold reached on it (what a `growing` run computed, else the
-        // allocation)
+        // what the hold has computed on this pool: its position there, which
+        // starts at the cached prefix it consumed and advances with its
+        // `growing` runs. Not the allocation: a holder preempted before its
+        // first iteration has computed nothing of what it was allocated
+        // (vLLM: `num_computed_tokens` is 0 for it, and it has no output)
         let computed = {
             let h = &self.sessions[victim].holds[hi];
             let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
-            if h.grown { h.pos[k] } else { h.pools[k].1 }
+            h.pos[k]
         };
         if let Some(&prev) = self.sessions[victim].preempt_pos.get(&pl) {
             if computed <= prev + 1e-9 && !self.sessions[victim].stuck {

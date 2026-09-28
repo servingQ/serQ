@@ -130,6 +130,52 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
     );
 }
 
+/// A holder preempted before it computed anything resumes from nothing.
+/// B holds 32 tokens of the same pool for a fifo stage and is the latest
+/// admitted when A's decode needs a fifth block at step 2: B is the victim
+/// with `computed` 0, not its 32-token allocation, so a program reading
+/// `computed` does not invent an output token it never produced (vLLM's
+/// `num_computed_tokens` is 0 for a request preempted before its first
+/// step).
+#[test]
+fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
+    let src = r#"
+        let bs = 16;
+        pool kv { cap 6 * bs; block bs; evict lru; preempt lifo; }
+        stage engine : step { budget 1000; cost 1; memory kv; }
+        stage svc : fifo;
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; } }
+        session {
+          branch (serial == 0) {
+            hold kv (prompt) reserve (prompt) {
+              run engine prefill (prompt) growing kv;
+              run engine decode (o - 1) growing kv;
+            }
+          } else {
+            hold kv (prompt) { observe c2 = computed; run svc (100); }
+          }
+          observe done = now;
+          end;
+        }
+        run { horizon 200; }
+    "#;
+    let r = run(src);
+    assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
+    // first execution, then the re-execution after A frees its blocks at 20
+    assert_eq!(
+        r.observe("c2").unwrap().samples,
+        vec![0.0, 0.0],
+        "{}",
+        r.text()
+    );
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![20.0, 120.0],
+        "{}",
+        r.text()
+    );
+}
+
 /// scheduler.py:872-884, 1228-1235: FCFS with head-of-line blocking; a
 /// request that does not fit stops the waiting loop even if a later,
 /// smaller one would fit.
