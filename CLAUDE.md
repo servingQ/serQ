@@ -13,8 +13,9 @@ tests read; `.seq` is one frontend. So:
   included;
 - `serving-queue-theory`'s `scripts/gen_seq_oracle.py` pins that version and
   reads the IR by field name — it has to move in the same change;
-- a new `CExpr` or `CStmt` variant drops every oracle program out of the Lean
-  fragment until the generator is taught it.
+- a new `CExpr` or `CStmt` variant drops every oracle program that uses it
+  out of the Lean fragment until the generator is taught it (the generator
+  raises `Fragment` on a construct it does not know).
 
 Price an IR version at a cross-repository handshake, not a line of code.
 
