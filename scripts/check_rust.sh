@@ -36,4 +36,7 @@ for f in docs/tutorial/programs/*.seq; do
   t=$((t + 1))
 done
 python3 scripts/check_oracle_gpu.py
+# The docs' `file.py:line` evidence for the vLLM correspondence. Skips loudly
+# where ref/vllm is absent (scripts/fetch_vllm_ref.sh --sparse: 4 MB, 2 s).
+python3 scripts/check_citations.py
 echo "OK: seq-lang, $n programs link and draw, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 1 prefix-cache trace (CPU oracle = A100 engine = seQ)"

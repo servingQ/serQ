@@ -16,6 +16,8 @@ jobs:
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install && cargo --version
       - uses: Swatinem/rust-cache@v2
-      - name: fmt, clippy, tests, programs link, oracles agree
+      - name: the vLLM source the docs cite (4 MB, sparse)
+        run: scripts/fetch_vllm_ref.sh --sparse
+      - name: fmt, clippy, tests, programs link, oracles agree, citations resolve
         run: scripts/check_rust.sh
 
