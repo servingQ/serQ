@@ -44,8 +44,7 @@ stage engine : step {
   budget B;                   // tokens per iteration
   cost <expr>;                // seconds per iteration
   chunk C;                    // cap on one request's prefill chunk (0: none)
-  exclusive prefill;          // a prefill chunk runs alone
-  decode first;               // decoding residents before prefilling ones
+  serve decode first;         // one order: admission (default) | decode first | exclusive prefill
   memory kv;                  // the pool that gives kvb / kvp
 }
 ```
