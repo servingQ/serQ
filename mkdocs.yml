@@ -93,6 +93,6 @@ nav:
       - design/index.md
       - 철학: design/philosophy.md
       - 프론트엔드: design/frontend.md
-      - IR v4 (RFC #41): design/ir-v4.md
+      - "IR v4 (RFC #41)": design/ir-v4.md
       - 서브에이전트: design/subagents.md
   - Publishing this site: publishing.md
