@@ -1,20 +1,44 @@
-# 프론트엔드 설계: 모델, 인스턴스, 주장
+# Frontend design: model, instance, claims
 
-2026-09-28의 스케치입니다. 목적은 "서빙 시스템을 의미론적으로 표현하는 것"과 "표현된 시스템에 config를 넣어 돌리는 것"을 분리하는 것이고, [IR v4](ir-v4.md)와 독립입니다. 커널 프로세스 언어는 오늘의 IR과 같아서 `link(model, instance)`가 오늘의 닫힌 IR을 냅니다. 뒤에 붙은 자기 비판 두 번이 이 문서의 절반이고, 그 판정이 이슈로 낼 순서를 정합니다.
+A sketch of 2026-09-28. Its purpose is to separate "expressing a serving
+system semantically" from "injecting a configuration into that expression
+and running it", and it is independent of [IR v4](ir-v4.md). The kernel
+process language is today's IR, so `link(model, instance)` yields today's
+closed IR. The two self-critiques at the end are half of this document, and
+their verdicts set the order in which the pieces go to issues.
 
-## 핵심 결정 넷
+## Four decisions
 
-**1. 프로그램은 모델, 인스턴스, 주장의 세 문서.** 모델은 구조만 씁니다. 숫자는 구조적 상수(요청 1개) 말고는 전부 `param`이고 타입과 단위를 가집니다. 인스턴스는 한 모델의 파라미터 서명에 대한 값 배정이고, 트레이스, 비용 모델, 시드, 지평도 여기 속합니다. 주장은 모델에 대한 것(모든 인스턴스에서 성립, Lean)과 인스턴스에 대한 것(측정치나 오라클과 일치, `make check`)으로 나뉩니다. 모델은 자유변수를 가진 항, 인스턴스는 값매김, 의미는 `⟦M⟧ : Instance(M) → Process`입니다. ML의 functor와 signature가 이 관계입니다.
+**1. A program is three documents: model, instance, claims.** The model
+writes structure only. Every number except a structural constant (one
+request) is a `param` with a type and a unit. The instance is a valuation of
+one model's parameter signature; the trace, the cost model, the seeds and
+the horizon belong there. Claims split into those about the model (hold for
+every instance; Lean) and those about an instance (agree with measurements
+or the oracle; `make check`). The model is a term with free variables, the
+instance a valuation, the meaning `⟦M⟧ : Instance(M) → Process`: ML's functor
+and signature.
 
-**2. 세션은 효과를 일으키는 코루틴, 배치는 핸들러의 집합.** 세션이 하는 일은 여덟 효과입니다. `acquire`, `grow`, `release`, `run`, `sample`, `observe`, `turn`, `now`. 풀이 acquire/grow/release를, 스테이지가 run을, 워크로드가 turn을, 인스턴스가 sample과 observe를 처리합니다. 정책은 핸들러의 파라미터이므로 프로그램에 놓입니다.
+**2. A session is a coroutine that performs effects; the deployment is a set
+of handlers.** A session does eight things: `acquire`, `grow`, `release`,
+`run`, `sample`, `observe`, `turn`, `now`. Pools handle acquire/grow/release,
+stages handle run, the workload handles turn, the instance handles sample
+and observe. Policies are handler parameters, so they live in the program.
 
-**3. 평가 시점은 치환이 아니라 블록.** admission 시점에 핸들러가 한 번 실행하는 블록을 둡니다. 바깥에서 읽은 값은 블록 안에 스냅샷으로만 들어갑니다. vLLM의 "스케줄러가 집을 때 조회"와 H-pin의 "도착 때 조회"가 둘 다 표현되고 차이가 문법에서 보입니다.
+**3. Time of evaluation is a block, not a substitution.** A block the handler
+runs once at admission. A value read outside enters the block only as a
+snapshot. vLLM's "look up when the scheduler takes me" and H-pin's "look up
+on arrival" are both expressible and differ visibly.
 
-**4. 자원은 스코프이자 affine 값.** `acquire … as h { … }`는 스코프, `h : Held<kv>`는 스코프 안에서만 쓰는 affine 값. `grow`는 `h`에만.
+**4. A resource is a scope and an affine value.** `acquire … as h { … }` is a
+scope; `h : Held<kv>` is an affine value usable only inside it; `grow` takes
+`h`.
 
-그 위에 둘. 단위는 타입(`tokens`, `s`, `count`), 블록 반올림은 `kv.blocks(p - 1)`. 서빙 어휘는 trait(`impl Prefill, Decode`).
+Two small ones on top. Units are types (`tokens`, `s`, `count`), block
+rounding is `kv.blocks(p - 1)`. The serving vocabulary is a trait
+(`impl Prefill, Decode`).
 
-## vLLM을 세 문서로
+## vLLM as three documents
 
 ```
 model vllm {
@@ -77,7 +101,9 @@ model vllm {
 }
 ```
 
-H-pin은 `let hit = …` 한 줄을 `at admission` 블록 밖으로 옮기는 것입니다. 지금은 같은 변경이 `admit via` 삭제라서 의도가 보이지 않았습니다.
+H-pin is moving the one line `let hit = …` out of the `at admission` block.
+Today the same change is the deletion of `admit via`, and the intent is not
+visible.
 
 ```
 instance a100_short of vllm {
@@ -99,50 +125,79 @@ claims a100_short {
 }
 ```
 
-## 의미론
+## Semantics
 
-전이 두 종류의 LTS입니다. 순간 전이는 효과의 처리, 시간 전이는 스테이지가 일을 진행하는 지연. 순간 전이가 하나라도 가능하면 시간은 흐르지 않습니다(seQ의 settle, timed automata의 maximal progress). 난수는 스트림별 효과라 프로그램은 시드의 결정적 함수입니다.
+An LTS with two kinds of transition: instantaneous (handling an effect) and
+timed (a stage advancing work). Time does not pass while an instantaneous
+transition is enabled (seQ's settle; maximal progress of timed automata).
+Randomness is a per-stream effect, so a program is a deterministic function
+of its seeds.
 
-| 효과 | 핸들러 | 핸들러의 정책 식 |
+| Effect | Handler | The handler's policy expressions |
 |---|---|---|
 | `acquire`, `grow`, `release` | Pool | `evict`, `on_full`, `admit`, `grain` |
 | `run` | Stage | `serve`, `budget`, `chunk`, `cost` |
-| `turn` | Workload | 분포 또는 트레이스 |
-| `sample`, `observe`, `now` | Instance | 시드, 기록 대상, 시계 |
+| `turn` | Workload | distribution or trace |
+| `sample`, `observe`, `now` | Instance | seeds, what is recorded, the clock |
 
-## 자기 비판 1: "새 정리가 생기는가"로 재면
+## Self-critique 1: measured by "does a new theorem appear"
 
-- **효과와 핸들러는 메커니즘이 아니라 비유.** "vLLM 오라클은 다른 핸들러"라고 했지만 `vllm_replay_oracle.py`는 `schedule()`을 통째로 돌립니다. admission, 서빙 순서, preemption을 한 스텝에서 같이 결정하므로 효과별 핸들러로 쪼개 꽂을 수 없습니다. Lean에서는 핸들러 합성 기계가 더 붙어 더 많은 일입니다.
-- **모델/인스턴스 분리는 Lean에 주장만큼 주지 않는다.** 기호 파라미터를 넣는 순간 `decide`가 사라지고 사람이 증명합니다. 예로 든 두 주장은 이미 의미론의 정리로 있습니다. 새로 생기는 것은 "모든 인스턴스에서 성립하는 이 프로그램의 안전 성질"뿐이고, 그것은 [IR v4](ir-v4.md) §7의 deadlock 정리처럼 자동자 위에서만 쓸 수 있습니다. 시뮬레이터 쪽 진짜 이득은 스윕과 보정이 1급이 되는 것입니다.
-- **`at admission` 블록은 읽힘을 IR 노드로 산다.** `~`를 허용하는 프로그램이 없으니 새 정리도 없습니다.
-- **`Held<P>`는 뺀다.** 스코프가 이미 정리를 주고, affine 타입은 Lean에 타이핑 판단 하나를 더 형식화하게 만듭니다.
-- **단위 타입은 마찰이 있다.** 비용 식은 `s/token²` 계수를 섞고 정책 식은 토큰 수에 `ln`을 씁니다. #14의 라벨이 먼저입니다.
+- **Effects and handlers are a metaphor, not a mechanism.** "The vLLM oracle
+  is another handler" was said, but `vllm_replay_oracle.py` runs `schedule()`
+  whole. Admission, serving order and preemption are decided together in one
+  step, so they cannot be plugged in per effect. In Lean the handler
+  composition machinery is more work, not less.
+- **The model/instance split gives Lean less than claimed.** With symbolic
+  parameters `decide` is gone and a person proves. The two example claims
+  already exist as theorems of the semantics. What is new is "a safety
+  property of this program for every instance", and that can only be written
+  on the automaton, like the deadlock theorem of [IR v4](ir-v4.md) §7. The real
+  gain on the simulator side is that sweeps and calibration become
+  first-class.
+- **The `at admission` block buys readability with an IR node.** No program
+  draws inside it, so there is no new theorem.
+- **Drop `Held<P>`.** The scope already gives the theorem, and an affine type
+  is one more typing judgment to formalise in Lean.
+- **Unit types have friction.** Cost expressions mix `s/token²` coefficients
+  and policy expressions take `ln` of a token count. The labels of #14 come
+  first.
 
-## 자기 비판 2: "규칙이 줄고 표현이 직접적인가"로 재면
+## Self-critique 2: measured by "do rules disappear and is expression more direct"
 
-이 잣대가 기준 1과 맞고, 이 잣대에서는 대부분이 살아남습니다. 단순함은 프로그램 줄 수가 아니라 독자가 알아야 하는 규칙의 수로 잽니다.
+This is the measure that matches criterion 1, and under it most of the
+pieces survive. Simplicity is measured not in program lines but in the
+number of rules a reader must know.
 
-| 조각 | 사라지는 것 | 새로 알아야 하는 것 | 판정 |
+| Piece | What disappears | What must be learned | Verdict |
 |---|---|---|---|
-| admission 블록 | `at admission (x = e)` 절, `~` 금지 규칙, 린트 하나, 헤더 절의 시점 불일치(#31) | 블록 하나 = 시점 하나, 동사 셋 (`need`, `take`, `reuse`) | 채택. `~`를 계속 금지하면 치환으로 정의할 수 있어 IR 그대로 |
-| trait 어휘 | "Which stage" 문단의 해소 규칙, `prefill on P2` 특수형 | `impl Prefill` 한 줄 | 채택 |
-| 단위 라벨과 `kv.blocks(e)` | 상수 옆 주석 관행, 블록 반올림 식 | 단위 이름 셋 | 채택, 검사는 나중 |
-| 정책을 식으로 | `decode first`와 `exclusive prefill`, 암묵 HOL blocking | `serve = by (…)` 식과 이름 붙은 기본값 | 채택 ([IR v4](ir-v4.md) §3) |
-| 모델/인스턴스 | `let` 상수 블록, 실험마다 프로그램 복사 | 서명 타입 언어, 문서가 셋 | 조건부. 모델 안의 숫자를 링커가 거부해야 함. 옛 형태가 남으면 두 표기가 생겨 기준 0 위반 |
-| claims | §5의 "무엇에 검사됐는가" 표를 밖에서 찾는 일 | 주장 문법 | 조건부 |
-| 효과와 핸들러 | 없음 (프로그램에는) | 없음 | 문서의 구조로만. 스펙 §3을 표 하나와 시간 규칙 한 문단으로 다시 쓸 수 있음 |
-| `Held<P>` | 없음 | 타입 하나 | 제거 |
+| admission block | the `at admission (x = e)` clause, the `~` ban, one lint, the mixed viewpoints of the header clauses (#31) | one block = one moment, three verbs (`need`, `take`, `reuse`) | adopt. If `~` stays forbidden it is definable by substitution, so the IR is unchanged |
+| trait vocabulary | the "Which stage" resolution paragraph, the `prefill on P2` special form | one line, `impl Prefill` | adopt |
+| unit labels and `kv.blocks(e)` | the comment convention next to constants, the block-rounding expression | three unit names | adopt, checking later |
+| policies as expressions | `decode first` and `exclusive prefill`, implicit HOL blocking | a `serve = by (…)` expression with named defaults | adopt ([IR v4](ir-v4.md) §3) |
+| model / instance | the `let` constant block, one program copied per experiment | a signature type language, three documents | conditional. The linker must reject a number inside the model; if the old form survives there are two spellings, against criterion 0 |
+| claims | looking up "what was it checked against" in the §5 table | a claims grammar | conditional |
+| effects and handlers | nothing (in programs) | nothing | as the structure of the document only: spec §3 becomes one table and one paragraph on time |
+| `Held<P>` | nothing | one type | remove |
 
-커널은 줄지 않습니다. 열한 개 문장은 이미 작고 그게 Lean이 읽는 것이라 그대로가 맞습니다. 이 설계가 단순하게 만드는 층은 표면 문법과 스펙입니다.
+The kernel does not shrink. Its eleven statements are already small and they
+are what Lean reads, so they stay. What this design simplifies is the
+surface syntax and the spec.
 
-## 재는 방법
+## How to measure it
 
-프로그램 열두 개를 새 문법으로 옮겨 세 숫자를 셉니다. 프로그램마다 줄 수와 주석 줄 수, 스펙 §2와 §3에서 사라지는 문단 수, 그리고 `vllm.seq`와 `vllm_replay.seq`가 한 모델의 두 인스턴스로 합쳐지는가. 마지막은 반반입니다. replay의 `front` 스테이지는 구조적 차이라 모델에 두고 한 인스턴스에서 비용을 0으로 놓아야 하는데, 그것이 어색하면 분리가 덜 된 것입니다.
+Move the twelve programs to the new syntax and count three numbers: lines
+and comment lines per program, paragraphs that disappear from spec §2 and
+§3, and whether `vllm.seq` and `vllm_replay.seq` become two instances of one
+model. The last is even odds: replay's `front` stage is a structural
+difference, so it has to sit in the model with a zero cost in one instance,
+and if that is awkward the split is not finished.
 
-## 이슈로 낼 순서
+## Order of issues
 
-1. admission 블록 (sugar, IR 변경 없음). #23과 #31의 절반을 닫습니다.
-2. trait 어휘 (파서, IR 변경 없음). #5의 해소 규칙을 선언으로 대체합니다.
-3. 단위 라벨 (#14의 검사 없는 쪽).
-4. 모델/인스턴스 분리. 옛 형태를 금지하는 조건을 명시한 RFC로.
-5. claims. 4 다음에.
+1. The admission block (sugar, no IR change). Closes #23 and half of #31.
+2. Trait vocabulary (parser, no IR change). Replaces #5's resolution rule
+   with a declaration.
+3. Unit labels (the unchecked half of #14).
+4. Model / instance split, as an RFC that states the condition forbidding the
+   old form.
+5. Claims, after 4.

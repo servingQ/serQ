@@ -75,6 +75,11 @@ the IR v4 RFC and the subagent review. The IR is expected to keep evolving; a
 design change adds a document there, and a rejected idea stays in that
 document's self-critique with the reason.
 
+Everything under `docs/` is written in English (the site is); issues and pull
+request descriptions are written in Korean. A nav title that contains `#`
+must be quoted in `mkdocs.yml`, or YAML reads it as a comment and the strict
+build aborts.
+
 ## Working with GitHub here
 
 `gh pr edit` and `gh issue edit` fail on this repository:

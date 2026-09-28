@@ -1,38 +1,93 @@
-# 철학: 수학적으로 무엇이고, 언어학적으로 어떻게 자라는가
+# Philosophy: what it is mathematically, how it grows linguistically
 
-2026-09-28의 논의를 정리한 것입니다. seQ는 철학을 이미 반쯤 골라 놓았고, 이 문서는 그것에 이름을 붙입니다. 한 줄로 하면 이렇습니다.
+A record of the discussion of 2026-09-28. seQ had already half chosen its
+philosophy; this document gives it a name. In one line:
 
-> 수학적으로는 **자원 위의 확률적 프로세스이고, 그 정의가 곧 정리의 대상**이다. 언어학적으로는 **주어가 고정된 문장과, 정의적 확장으로만 자라는 어휘**다.
+> Mathematically, **a stochastic process over resources whose definition is
+> the object of theorems**. Linguistically, **sentences with a fixed subject,
+> and a vocabulary that grows only by definitional extension**.
 
-## 수학: 불변식은 검사가 아니라 구조여야 한다
+## Mathematics: an invariant should be structure, not a check
 
-**세션은 프로세스, 풀은 자원, 스테이지는 서버.** 의미론은 확률적 시간 전이계입니다. 세션 블록이 순차 프로세스이고 풀과 스테이지가 공유 자원이라는 점에서 PEPA나 Modest 같은 확률 프로세스 대수와 같은 자리에 있습니다. "커맨드는 시간이 없고 흐름만 시간을 쓴다"는 순간 전이와 시간 전이의 구분이라는 계산 규칙입니다.
+**Sessions are processes, pools are resources, stages are servers.** The
+semantics is a stochastic timed transition system. A session block is a
+sequential process and pools and stages are shared resources, which puts seQ
+where the stochastic process algebras (PEPA, Modest) are. "Commands take no
+time and only flow does" is then the computational rule that separates
+instantaneous from timed transitions.
 
-**`hold`가 원형.** admit과 free를 스코프 하나로 접자 메모리 불변식이 "검사할 것"에서 "위반할 수 없는 것"이 됐습니다. RAII와 separation logic의 scoped ownership이 한 것과 같은 수입니다. 새 IR 노드를 심사하는 질문은 이것입니다. 이 노드가 어떤 성질을 구조적으로 보장하는가. 답이 없으면 sugar로 남깁니다.
+**`hold` is the archetype.** Folding admit and free into one scope turned the
+memory invariant from something to check into something that cannot be
+violated, the same move as RAII and the scoped ownership of separation
+logic. The question for a new IR node is: which property does this node
+guarantee structurally? Without an answer it stays sugar.
 
-**시점은 타입.** 이 언어에서 가장 자주 틀리는 것은 값이 아니라 언제 평가되는가입니다. `set`은 세션이 준비된 시점, hold 헤더는 admission 시점인데 둘이 같은 모양이라 vLLM 프로그램이 틀렸습니다. `at admission`, 린트 하나, "바인딩은 `~` 불가" 규칙은 한 문제의 세 조각입니다. 표현식마다 평가 시각이 있고, 난수 추출과 라이브 상태 읽기는 그 시각에 묶인 효과입니다. 끝까지 밀면 시제가 둘인 타입 시스템이고, [IR v4](ir-v4.md) §1이 그 첫걸음입니다.
+**Time of evaluation is a type.** What is most often wrong in this language is
+not a value but *when* it is evaluated. `set` is read when the session is
+ready, a hold's header at admission, and the two look alike, which is how
+the vLLM program went wrong. `at admission`, one lint and the rule "a
+binding may not draw" are three pieces of one problem: every expression has
+a moment, and a draw or a read of live state is an effect bound to that
+moment. Pushed to the end it is a type system with two tenses; [IR v4](ir-v4.md)
+§1 is its first step.
 
-**랜덤은 명시적 효과이고 프로그램은 시드의 결정적 함수.** 스트림이 넷으로 나뉘어 있고, `~`가 표시이며, #13이 암묵적 draw를 없앴습니다. 실제 스케줄러를 같은 시계로 돌려 첫 번째로 갈라지는 스텝을 찾는 방법은 이 성질 없이는 불가능합니다. 오라클을 가능하게 한 성질입니다.
+**Randomness is an explicit effect and a program is a deterministic function
+of its seeds.** The streams are four, `~` marks a draw, #13 removed the
+implicit one. Replaying the real scheduler on the same clock and searching
+for the first step that differs is impossible without this property; it is
+what made the oracle possible.
 
-**Lean 조각이 중심이고 나머지는 유체 확장.** ℕ 시계 위의 pool과 step engine 조각이 정리의 대상이고, f64 시간 위의 fifo, ps, delay는 유체 근사입니다. 새 IR 노드는 조각에 들어가거나 "유체 전용"이라고 표시되어야 합니다. 조각이 전체를 향해 자라야지 전체가 조각에서 멀어지면 안 됩니다.
+**The Lean fragment is the centre; the rest is a fluid extension.** The pool
+and step-engine fragment on an ℕ clock is what the theorems are about; fifo,
+ps and delay on f64 time are fluid approximations. A new IR node enters the
+fragment or is marked fluid-only. The fragment should grow towards the whole,
+not the whole away from the fragment.
 
-**시뮬레이션에서 해석으로.** 프로그램은 지금 시뮬레이터의 입력이고 폐형식은 밖에서 대조합니다. 검사 가능성을 끝까지 밀면 프로그램이 주장을 쓰고 도구가 그 주장을 정리나 통계 검정으로 바꿉니다. `mg1.seq`가 M/G/1이라는 사실은 구조에서 판정할 수 있습니다. 비싸지만 "왜 IR을 바꾸는가"에 대한 답으로는 가장 좋은 종류입니다.
+**From simulation to analysis.** A program is today the simulator's input and
+the closed forms are checked outside. Pushed to the end, checkability means
+the program states a claim and the tool turns it into a theorem or a
+statistical test. That `mg1.seq` is an M/G/1 is decidable from its
+structure. Expensive, but the best kind of answer to "why change the IR".
 
-## 언어: 주어 고정, 정의적 확장, 위치로만 다의
+## Language: a fixed subject, definitional extension, polysemy by position only
 
-**블록마다 주어가 하나.** deployment의 주어는 시스템, workload는 환경, session은 세션 하나입니다. `admit`이 틀렸던 이유는 스케줄러의 동사가 세션의 문장에 들어왔기 때문이고, `admit via`가 풀 옵션에 있는 것은 맞습니다(#31). 키워드를 심사하는 질문은 하나입니다. 이 단어의 주어가 이 블록의 주어인가.
+**One subject per block.** The subject of the deployment is the system, of
+the workload the environment, of the session one session. `admit` was wrong
+because the scheduler's verb entered the session's sentence; `admit via` as
+a pool option is right (#31). The one question for a keyword: is this word's
+subject the block's subject?
 
-**어휘는 정의적 확장으로만 자란다.** 커널(`hold`, `run`)이 자원의 언어, 서빙 어휘(`enter`, `prefill`, `keep`)가 도메인의 언어이며 후자는 파서의 재작성으로 정의됩니다. 수학에서 새 기호를 약어로 정의하는 것과 같고, 보수적 확장이라 새 정리가 생기지 않습니다. 그래서 공짜입니다. 재작성으로 정의되면 어휘, 아니면 커널이고, 커널은 검사 가능성으로만 값을 치릅니다. `CLAUDE.md`의 비용 예산이 이 원리입니다.
+**Vocabulary grows only by definitional extension.** The kernel (`hold`,
+`run`) is the language of resources, the serving vocabulary (`enter`,
+`prefill`, `keep`) the language of the domain, and the latter is defined by a
+parser rewrite. That is how mathematics introduces a symbol as an
+abbreviation: a conservative extension, no new theorems, hence free. If it
+is definable by a rewrite it is vocabulary; otherwise it is kernel, and the
+kernel pays only in checkability. `CLAUDE.md`'s cost budget is this
+principle.
 
-**위치는 다의를 허용하고 의미는 허용하지 않는다.** 기준 0의 "한 구성물 한 의미"와 #19의 "`decode`가 네 자리"는 충돌하지 않습니다. 같은 자리에서의 두 뜻만 금지하면 됩니다. `branch (p)`가 그 위반이었습니다.
+**Position may resolve polysemy; meaning may not.** Criterion 0's "one
+construct, one meaning" and #19's "`decode` in four places" do not conflict.
+Only two meanings in the same position are forbidden; `branch (p)` was that
+violation.
 
-**도메인 이름이 이기되 주어가 더 이긴다.** `reserve`가 좋은 이유는 upstream의 `scheduler_reserve_full_isl`과 같은 말이면서 세션이 주어이기 때문입니다. 순서는 문법 주어, upstream 이름, 새로 지은 이름입니다.
+**A domain name wins, the subject wins more.** `reserve` is good because it is
+upstream's word (`scheduler_reserve_full_isl`) and the session is its
+subject. The order is: grammatical subject, upstream name, invented name.
 
-**프로세스는 명령형, 정책은 선언형.** 세션 블록은 순차이고 그래야 합니다. 요청의 생애가 실제로 순서입니다. 정책은 식입니다(`evict by`, `budget`, `cost`, `choose by`). 이 경계를 넘는 것이 냄새입니다. `routing.seq`의 정책 번호 분기 다섯 단은 프로그램 하나에 배치 다섯을 담은 것이고, IR이 데이터라는 원칙대로면 sweep은 IR 편집이지 프로그램의 분기가 아닙니다.
+**Process imperative, policy declarative.** The session block is sequential
+and should be; a request's life is a sequence. Policies are expressions
+(`evict by`, `budget`, `cost`, `choose by`). Crossing that line is a smell:
+the five-way policy switch of `routing.seq` is one program carrying five
+deployments, and by the principle that the IR is data, a sweep is an IR edit,
+not a branch in the program.
 
-## 이 철학이 바로 시키는 일
+## What this philosophy asks for now
 
-- #31을 "주어" 규칙으로 닫고 스펙에 한 줄로 적는다.
-- #21의 세 번째 줄을 채택한다. IR 버전은 모양이 아니라 의미를 식별한다.
-- 기준 2 위반 넷 중 `exclusive prefill`과 `decode first`는 순서 절 하나로(#19 B, [IR v4](ir-v4.md) §3). `price`는 빌트인을 빼고 프로그램의 식으로. HOL blocking은 queue 옵션으로.
-- "시점" 원리를 스펙 §3에 한 문단으로 적는다.
+- Close #31 with the subject rule and write it into the spec in one line.
+- Adopt the third line of #21: an IR version identifies meaning, not shape.
+- Of the four criterion-2 violations, fold `exclusive prefill` and
+  `decode first` into one order clause (#19 B, [IR v4](ir-v4.md) §3); take the
+  `price` builtin out into a program expression; make HOL blocking a queue
+  option.
+- Write the "moment" principle into spec §3 as one paragraph.

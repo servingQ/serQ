@@ -1,41 +1,70 @@
-# 설계
+# Design
 
-seQ의 설계 문서가 모이는 자리입니다. `docs/language.md`가 지금의 언어를, `docs/ir.md`가 지금의 IR을 적는다면, 여기는 **왜 그 모양인가, 무엇이 그것을 바꾸려 하는가, 다음 모양은 무엇인가**를 적습니다.
+The design record of seQ. `docs/language.md` describes the language as it
+is and `docs/ir.md` the IR as it is; this directory records **why they have
+the shape they have, what is pushing them to change, and what the next shape
+is**.
 
-## IR은 생명체다
+## The IR is a living thing
 
-IR은 완성되는 것이 아닙니다. 요구사항에 맞게 끊임없이 진화하고, 언제나 더 좋은 해법을 찾습니다. 이 문장은 구호가 아니라 작업 규칙이고, 아래 다섯 항으로 풀립니다.
+The IR is never finished. It evolves with the requirements and keeps looking
+for a better solution. That is a working rule, not a slogan, and it unfolds
+into five items.
 
-**1. 선택압은 검증에서 온다.** IR을 바꾸라고 요구하는 것은 취향이 아니라 검증이 잡은 것입니다. `docs/review.md` §3의 버그 열다섯 개, 오라클이 지나지 않은 경로, Lean이 쓸 수 없는 문장, 시뮬레이터가 느린 구간. 요구사항은 이런 형태로 적힙니다. "이 프로그램이 이 버그를 낼 수 있었다"가 요구사항이고, "이 개념이 그 부류를 불가능하게 한다"가 해법입니다.
+**1. Selection pressure comes from verification.** What asks the IR to change
+is not taste but what a check caught: the fifteen defects of
+`docs/review.md` §3, a path no oracle exercised, a statement Lean cannot
+write, a regime where the simulator is slow. A requirement is written in
+that form. "This program could produce this defect" is the requirement;
+"this concept makes that class impossible" is the solution.
 
-**2. 변이는 RFC, 선택은 세 소비자가 한다.** 제안은 이슈(`rfc`, `design` 라벨)로 나오고, 살아남는 기준은 IR의 세 소비자가 무엇을 얻는가입니다. 인터프리터에는 새로 막히는 틀린 답이나 속도, Lean에는 새로 쓸 수 있는 문장이나 사라지는 undefined behavior, 오라클에는 새로 일치하는 경로. 그리고 넷째로, 독자에게 사라지는 규칙. 이 넷 중 하나도 답하지 못하는 변이는 패러다임의 매력이지 도구의 힘이 아닙니다. [프론트엔드 설계](frontend.md)의 판정 표가 그 잣대를 실제로 적용한 예입니다.
+**2. Variation is an RFC; selection is done by the three consumers.** A
+proposal is an issue (labels `rfc`, `design`), and the test it must pass is
+what the IR's three consumers gain. The interpreter: a wrong answer that is
+now impossible, or speed. Lean: a statement that can now be written, or an
+undefined behaviour that is gone. The oracle: a path that now agrees. And a
+fourth, the reader: a rule that disappears. A variation that answers none of
+the four is the charm of a paradigm, not the power of a tool. The verdict
+table of the [frontend sketch](frontend.md) applies that test.
 
-**3. 가격은 handshake다.** IR 버전 하나는 `serving-queue-theory`의 생성기, 오라클 IR 일곱 개, Lean 조각이 함께 움직이는 일입니다. 모양이 아니라 의미를 식별하는 버전 정책(#21)이 그 가격을 정합니다. 같은 모양에 다른 의미는 가장 비싼 변경입니다. 옛 리더가 조용히 틀리기 때문입니다.
+**3. The price is a handshake.** One IR version moves `serving-queue-theory`'s
+generator, the seven oracle IR files and the Lean fragment together. The
+version policy that identifies meaning rather than shape (#21) sets that
+price. The same shape with a different meaning is the most expensive change,
+because an old reader is silently wrong.
 
-**4. 결정은 이유와 함께 남는다.** 어떤 결정도 "왜"가 기록되어 있어야 뒤집을 수 있습니다. 채택한 것뿐 아니라 버린 것도 그 문서의 자기 비판 절에 이유와 함께 적습니다. 같은 제안을 두 번 논증하지 않기 위해서입니다.
+**4. A decision keeps its reason.** A decision can be reversed only if its
+"why" is recorded, so a rejected idea is recorded too, with its reason, in
+the self-critique section of the document that rejected it. That is so the
+same proposal is not argued twice.
 
-**5. 절멸은 없다.** 커밋된 IR 파일은 언제나 재생성 가능해야 합니다(`make oracle-ir`). 옛 프로그램은 새 프론트엔드로 다시 컴파일되어 같은 보고서를 내야 하고(`tests/ir.rs`), 그것이 안 되는 변경은 릴리스 노트에 무엇이 달라졌는지 적습니다.
+**5. Nothing goes extinct.** Committed IR files must always be regenerable
+(`make oracle-ir`). An old program must compile through the new frontend to
+the same report (`tests/ir.rs`), and a change for which that is not possible
+says what changed in its release note.
 
-## 어떻게 진화하는가
+## How it evolves
 
 ```
-검증이 잡은 것 ──▶ RFC 이슈 (Before/After, 그림책)
-                          │
-     세 소비자 + 독자의 잣대로 판정 ◀──┘
-                          │
-   채택 ──▶ IR 버전 (handshake) ──▶ docs/ir.md, docs/language.md 갱신
-   기각 ──▶ 설계 문서의 자기 비판 절에 이유와 함께
+what a check caught ──▶ RFC issue (Before/After, picture books)
+                                │
+   judged by the three consumers and the reader ◀──┘
+                                │
+   adopted ──▶ IR version (handshake) ──▶ docs/ir.md, docs/language.md updated
+   rejected ──▶ the design document's self-critique, with the reason
 ```
 
-설계 기준 자체(모호하지 않음, intention-revealing, 정책은 프로그램에, 검사 가능성)는 `CLAUDE.md`와 #8에 있고 여기서 반복하지 않습니다. 이 디렉터리는 그 기준을 **적용한 기록**입니다.
+The design criteria themselves (unambiguity, intention-revealing, policy in
+the program, checkability) are in `CLAUDE.md` and #8 and are not repeated
+here. This directory is the record of **applying** them.
 
-## 문서
+## Documents
 
-| 문서 | 무엇 | 상태 |
+| Document | What | Status |
 |---|---|---|
-| [철학](philosophy.md) | 수학적으로 무엇이고 언어학적으로 어떤 원리로 자라는가 | 2026-09-28 논의 |
-| [프론트엔드](frontend.md) | 모델/인스턴스 분리, 효과와 핸들러, admission 블록, trait 어휘, 단위. 자기 비판과 판정 표 포함 | 스케치, 이슈 전 |
-| [IR v4](ir-v4.md) | 암묵적인 것을 정적으로: 순간, 소유, 순서, 시각, 자동자, coalescing, 진행 검사 | RFC #41 |
-| [서브에이전트](subagents.md) | 세션이 세션을 만드는 것은 tool이 아니다: 내생 도착, hold-and-wait, 세션 간 캐시, `Spawn`/`Join` | 검토, v4b 대상 |
+| [Philosophy](philosophy.md) | What seQ is mathematically, and the principles by which its vocabulary grows | discussion of 2026-09-28 |
+| [Frontend](frontend.md) | Model / instance split, effects and handlers, the admission block, trait vocabulary, units. With two self-critiques and a verdict table | sketch, before issues |
+| [IR v4](ir-v4.md) | Making the implicit static: moments, ownership, declared orders, integer ticks, the session automaton, step coalescing, progress checks | RFC #41 |
+| [Subagents](subagents.md) | A session that spawns sessions is not a tool call: endogenous arrivals, hold-and-wait, cross-session cache, `Spawn`/`Join` | review, for v4b |
 
-새 설계 문서는 이 표에 한 줄을 더합니다.
+A new design document adds a row to this table.
