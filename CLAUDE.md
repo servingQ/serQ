@@ -53,6 +53,42 @@ parse time costs nothing (the serving vocabulary of `docs/language.md`), a new
 IR node costs every consumer. Prefer narrowing an existing form to adding one,
 and price the handshake above.
 
+## The vLLM reference: read the code, not the memory of it
+
+Every claim about what vLLM does is checked against the source in `ref/vllm`
+(`scripts/fetch_vllm_ref.sh`, pinned at `0c87a197`), and cited by `file:line`
+so that `scripts/check_citations.py` can catch the line moving. Not the
+paper, not the docs, not what a model remembers of the scheduler: open
+`vllm/v1/core/sched/scheduler.py`, `kv_cache_manager.py`, `block_pool.py` and
+read the function. The recovery after a preemption is the standing example:
+"abort the scope and re-execute" *sounded* like `_preempt_request`, and it is
+only for a request still in prefill — the function resets
+`num_computed_tokens` and keeps the generated tokens, which the program did
+not, and no oracle scenario exercised the path (#41 §5). If `ref/vllm` is not
+checked out, fetch it before answering; if the question is about a version
+other than the pinned one, say so and check out that revision.
+
+## Design documents
+
+`docs/design/` holds the design record: the philosophy, the frontend sketch,
+the IR v4 RFC and the subagent review. The IR is expected to keep evolving; a
+design change adds a document there, and a rejected idea stays in that
+document's self-critique with the reason.
+
+Everything under `docs/` is written in English (the site is); issues and pull
+request descriptions are written in Korean. A nav title that contains `#`
+must be quoted in `mkdocs.yml`, or YAML reads it as a comment and the strict
+build aborts.
+
+## Reviewing a change
+
+`.github/copilot-instructions.md` is the review checklist, for Copilot and
+for anyone else: the IR rules, the four design criteria, and six questions
+answered in order (purpose kept, simpler possible, complexity not grown,
+intention plainer, evidence is the code, one change). A review that does not
+answer all six is not done. Comments are in Korean, short: the finding and
+the evidence.
+
 ## Working with GitHub here
 
 `gh pr edit` and `gh issue edit` fail on this repository:

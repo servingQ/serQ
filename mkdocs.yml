@@ -89,4 +89,10 @@ nav:
       - Drawing figures: draw.md
       - Design review: review.md
   - How seQ is checked: validation.md
+  - Design:
+      - design/index.md
+      - Philosophy: design/philosophy.md
+      - Frontend: design/frontend.md
+      - "IR v4 (RFC #41)": design/ir-v4.md
+      - Subagents: design/subagents.md
   - Publishing this site: publishing.md
