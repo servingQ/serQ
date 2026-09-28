@@ -20,9 +20,9 @@ let Z = 3.0;           // tool time (s)
 let q = 0.3;           // a turn delegates instead of calling a tool
 let k = 3;             // subagents per delegation
 let pc = 0.7;          // a subagent continues after a turn
-let W = 15.0;          // the wait for the subagents (s): the mean of the longest of k
+let W = 14.7;          // the wait for the subagents (s): the mean of the longest of k
                        // `subagent` samples of a previous run (`--dump`)
-let kids = q * k / (1 - p);   // subagents per agent session
+let kids = q * k * p / (1 - p);   // subagents per agent session (a last turn does not delegate)
 
 pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
 pool reqs { cap max_seqs; }

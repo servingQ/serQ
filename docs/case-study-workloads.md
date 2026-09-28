@@ -84,16 +84,17 @@ subagents, and it is useful to see exactly what the approximation gives up.
 
 The approximation has three parts:
 
-- **The children arrive on their own.** A parent's turn delegates with
-  probability `q` to `k` subagents, so a parent creates
-  `kids = q · k / (1 − p)` of them on average. The program folds them into the
+- **The children arrive on their own.** A parent's turn that continues
+  delegates with probability `q` to `k` subagents. A parent continues
+  `p / (1 − p)` times on average, so it creates
+  `kids = q · k · p / (1 − p)` subagents. The program folds them into the
   one Poisson stream at rate `Lambda · (1 + kids)`, and marks an arrival as a
   subagent (`sub`) with probability `kids / (1 + kids)`.
 - **The parent waits a constant.** A delegating turn runs
   `run delegate (W)` on a `delay` stage. `W` comes from a previous run: the
   mean of the slowest of `k` `subagent` samples. For this program,
   `seq-lang run programs/vllm_subagents.seq --dump out` followed by that
-  statistic over `out/subagent.csv` returns about 15 s when `W = 15`, which is
+  statistic over `out/subagent.csv` returns 14.7 s when `W = 14.7`, which is
   the fixed point.
 - **A subagent's context is its own.** It starts from `K ~ uniform(2000,
   6000)`, which stands for the parent's context it copies. The cache does not
@@ -109,11 +110,11 @@ arrival rate, so compare the rows within a pair, not across the table):
 | `vllm_chat` | 1.61 | 0.80 | 221 | 4 | 67 | 0.10 |
 | `vllm` | 3.15 | 0.89 | 767 | 17 | 64 | 0.17 |
 | `vllm_subagents --set q=0` | 1.00 | 0.90 | 686 | 14 | 58 | 0.06 |
-| `vllm_subagents` | 3.84 | 0.67 | 2 020 | 54 | 114 | 0.29 |
+| `vllm_subagents` | 3.70 | 0.69 | 2 002 | 53 | 113 | 0.28 |
 
-For the same parent arrival rate, delegation makes 3.8 times as many requests.
+For the same parent arrival rate, delegation makes 3.7 times as many requests.
 Each first request of a subagent is a full miss on the context it copied, so
-the mean prefill triples and TTFT rises from 14 ms to 54 ms. The prefill row
+the mean prefill triples and TTFT rises from 14 ms to 53 ms. The prefill row
 is an upper bound: the real vLLM would hit on the shared prefix, and this seQ
 program cannot.
 
