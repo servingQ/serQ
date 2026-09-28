@@ -47,8 +47,12 @@ jobs:
           name: site
           path: site
           retention-days: 30
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      # Only the deploying run needs the Pages configuration. A pull request
+      # builds and stops, so it must not fail merely because Pages is off.
+      - if: github.event_name != 'pull_request'
+        uses: actions/configure-pages@v5
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
