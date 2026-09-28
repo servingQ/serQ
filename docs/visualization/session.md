@@ -38,7 +38,7 @@ What the geometry carries is *when a width is decided*:
 | **faded** tail | `cache (ℓ)`: units that stay after the scope ends |
 | a rule across the column | `drop POOL` cuts the tail |
 
-In the figure above, `hold reqs (1), kv (c + min(prompt - c, budget_left(engine)))`
+In the figure above, `admit reqs (1), kv (min(cachedin(kv), hitmax) + …)`
 gives one band of each kind, side by side. That difference is a real one in the
 semantics — unit expressions are evaluated at admission, not when the session
 queues — and it is the rule a reader of the source is most likely to miss.
