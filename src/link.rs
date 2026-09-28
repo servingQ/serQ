@@ -56,7 +56,7 @@ struct Linker<'a> {
 }
 
 pub const BUILTIN_ATTRS: [&str; 9] = [
-    "cached", "serial", "turn_no", "new", "out", "think", "more", "forced", "reached",
+    "cached", "serial", "turn_no", "new", "out", "think", "more", "forced", "computed",
 ];
 
 pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
@@ -258,7 +258,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         slot_think: slot(&lk, "think"),
         slot_more: slot(&lk, "more"),
         slot_forced: slot(&lk, "forced"),
-        slot_reached: slot(&lk, "reached"),
+        slot_computed: slot(&lk, "computed"),
         attrs: lk.attrs,
         observes: lk.observes,
         pools,

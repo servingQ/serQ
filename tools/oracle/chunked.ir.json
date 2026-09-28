@@ -9,7 +9,7 @@
     "think",
     "more",
     "forced",
-    "reached",
+    "computed",
     "prompt",
     "o",
     "arrive",
@@ -191,7 +191,33 @@
                   [
                     {
                       "Expr": {
-                        "Attr": 12
+                        "Cond": [
+                          {
+                            "Binary": [
+                              "Lt",
+                              {
+                                "Attr": 8
+                              },
+                              {
+                                "Attr": 9
+                              }
+                            ]
+                          },
+                          {
+                            "Attr": 9
+                          },
+                          {
+                            "Binary": [
+                              "Add",
+                              {
+                                "Attr": 8
+                              },
+                              {
+                                "Num": 1.0
+                              }
+                            ]
+                          }
+                        ]
                       }
                     },
                     {
@@ -313,11 +339,20 @@
         }
       },
       {
-        "Observe": [
-          0,
+        "Branch": [
           {
-            "Ctx": "Now"
-          }
+            "Binary": [
+              "Eq",
+              {
+                "Attr": 12
+              },
+              {
+                "Attr": 9
+              }
+            ]
+          },
+          4,
+          5
         ]
       },
       {
@@ -362,7 +397,18 @@
           }
         }
       }
-    ]
+    ],
+    [
+      {
+        "Observe": [
+          0,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      }
+    ],
+    []
   ],
   "horizon": 100000.0,
   "warmup": 0.0,
@@ -375,5 +421,5 @@
   "slot_think": 5,
   "slot_more": 6,
   "slot_forced": 7,
-  "slot_reached": 8
+  "slot_computed": 8
 }

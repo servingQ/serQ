@@ -80,7 +80,7 @@ fn growth_preempts_the_last_admitted_request() {
 /// decode is rescheduled with `num_tokens = prompt + outputs`
 /// (kv_cache_manager.py:515-531 reserves for that), recomputes their KV as
 /// one prefill and generates only what is left. The re-executed hold reads
-/// `reached`, the position it had computed, to say the same.
+/// `computed`, the position it had computed, to say the same.
 ///
 /// A (64 tokens, 20 out) and B (48, 40) are admitted at step 1 on 10 blocks
 /// of 16. Both grow a block at step 2 (A 5, B 4; 1 free). At step 18 A
@@ -100,11 +100,11 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; } }
         session {
           hold reqs (1), kv (min(known, 1000)) reserve (known)
-               at admission (known = reached < prompt ? prompt : reached + 1) {
-            set known = reached < prompt ? prompt : reached + 1;
+               at admission (known = computed < prompt ? prompt : computed + 1) {
+            set known = computed < prompt ? prompt : computed + 1;
             observe known = known;
             run engine prefill (known) growing kv;
-            observe first = now;
+            branch (known == prompt) { observe first = now; }
             run engine decode (o - 1 - (known - prompt)) growing kv;
           }
           observe done = now;
@@ -118,7 +118,9 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
     assert_eq!(kv.preemptions, 1, "{}", r.text());
     assert_eq!(kv.stuck, 0, "{}", r.text());
     assert_eq!(r.observe("known").unwrap().samples, vec![64.0, 48.0, 65.0]);
-    assert_eq!(r.observe("first").unwrap().samples, vec![1.0, 1.0, 21.0]);
+    // the first token is recorded once per request: B's re-prefill at 21 is
+    // not a first token (vLLM's oracle records `first` once, too)
+    assert_eq!(r.observe("first").unwrap().samples, vec![1.0, 1.0]);
     assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
     assert_eq!(
         r.observe("done").unwrap().samples,

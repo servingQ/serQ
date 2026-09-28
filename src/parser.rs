@@ -206,7 +206,15 @@ fn subst(e: &mut Expr, binds: &[(String, Expr)]) {
         Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
             Arg::Expr(x) => subst(x, binds),
             Arg::Ref(r) => {
-                if let Some(i) = &mut r.index {
+                // a bare identifier argument is parsed as a reference (it may
+                // name a pool or a stage); when it names a binding it is the
+                // binding, else `min(known, …)` would read the attribute
+                // `known` and not the header's `where known = …`
+                if r.index.is_none()
+                    && let Some((_, v)) = binds.iter().find(|(name, _)| *name == r.name)
+                {
+                    *a = Arg::Expr(v.clone());
+                } else if let Some(i) = &mut r.index {
                     subst(i, binds);
                 }
             }

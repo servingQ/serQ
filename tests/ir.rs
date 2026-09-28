@@ -274,6 +274,40 @@ fn at_admission_is_substituted_into_the_header() {
     );
 }
 
+/// A bare identifier argument (`min(hit, 10)`) is parsed as a reference,
+/// since it may name a pool or a stage; when it names a binding it is the
+/// binding. Before this the substitution skipped it and `hit` read the
+/// session attribute of that name, 0 on a first admission, silently.
+#[test]
+fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
+    let head = "pool kv { cap 1e5; block 16; evict lru; }
+        pool reqs { cap 8; }
+        stage engine : step { budget 512; cost 1e-3; memory kv; }
+        workload { arrive poisson(0.3); init { set K = 0; }
+                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
+        run { horizon 500; }";
+    let bound = format!(
+        "{head} session {{ turn; set prompt = K + n;
+          enter reqs (1), kv (min(hit, 10)) at admission (hit = min(cachedin(kv), prompt - 1)) {{
+            prefill (prompt - cached) growing kv;
+          }} keep (prompt + o); end; }}"
+    );
+    let inlined = format!(
+        "{head} session {{ turn; set prompt = K + n;
+          enter reqs (1), kv (min(min(cachedin(kv), prompt - 1), 10)) {{
+            prefill (prompt - cached) growing kv;
+          }} keep (prompt + o); end; }}"
+    );
+    let ov = seq::Overrides::default();
+    let a = seq::compile_source(&bound, &ov).expect("the clause compiles");
+    let b = seq::compile_source(&inlined, &ov).expect("the inlined form compiles");
+    assert_eq!(
+        a.to_json(),
+        b.to_json(),
+        "the bare `hit` must be the binding"
+    );
+}
+
 /// The bindings are substituted, so a name used twice would draw twice. That
 /// is not a binding anyone means to write, and the parser says so.
 #[test]

@@ -803,8 +803,8 @@ impl<'p> Interp<'p> {
                         for &(q, _) in &h.pools {
                             self.sessions[sid].preempt_pos.remove(&q);
                         }
-                        let slot_reached = self.p.slot_reached;
-                        self.sessions[sid].attrs[slot_reached] = 0.0;
+                        let slot_computed = self.p.slot_computed;
+                        self.sessions[sid].attrs[slot_computed] = 0.0;
                         self.try_admit_all();
                     }
                 }
@@ -1493,23 +1493,23 @@ impl<'p> Interp<'p> {
         // progress since the last preemption for this pool: the position the
         // hold reached on it (what a `growing` run computed, else the
         // allocation)
-        let reached = {
+        let computed = {
             let h = &self.sessions[victim].holds[hi];
             let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
             if h.grown { h.pos[k] } else { h.pools[k].1 }
         };
         if let Some(&prev) = self.sessions[victim].preempt_pos.get(&pl) {
-            if reached <= prev + 1e-9 && !self.sessions[victim].stuck {
+            if computed <= prev + 1e-9 && !self.sessions[victim].stuck {
                 self.sessions[victim].stuck = true;
                 self.pools[pl].stuck += 1;
             }
         }
-        self.sessions[victim].preempt_pos.insert(pl, reached);
+        self.sessions[victim].preempt_pos.insert(pl, computed);
         // the same value is what the re-executed hold resumes from (vLLM
         // keeps the generated tokens: `_preempt_request` resets
         // `num_computed_tokens` only)
-        let slot_reached = self.p.slot_reached;
-        self.sessions[victim].attrs[slot_reached] = reached;
+        let slot_computed = self.p.slot_computed;
+        self.sessions[victim].attrs[slot_computed] = computed;
         self.detach(victim);
         // unwind holds inner to `hi` (nested holds), then `hi` itself
         while self.sessions[victim].holds.len() > hi {

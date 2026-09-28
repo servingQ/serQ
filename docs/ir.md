@@ -65,7 +65,7 @@ variants as strings, `"Lru"`). `seq-lang ir FILE` prints it;
 | `init`, `turn`, `session` | block indices: the workload's `init` and `turn` blocks and the session program |
 | `blocks` | the statement blocks (an arena; bodies of holds, branches and loops refer to blocks by index) |
 | `horizon`, `warmup`, `seed` | the run |
-| `slot_cached`, `slot_serial`, … | slots of the built-in attributes (`cached`, `serial`, `turn_no`, `new`, `out`, `think`, `more`, `forced`, `reached`) |
+| `slot_cached`, `slot_serial`, … | slots of the built-in attributes (`cached`, `serial`, `turn_no`, `new`, `out`, `think`, `more`, `forced`, `computed`) |
 
 `Sessions`: all the sessions arrive at time 0; each one runs `init`, then
 its preset `attrs` overwrite what `init` set. A session may carry `turns`

@@ -9,7 +9,7 @@
     "think",
     "more",
     "forced",
-    "reached",
+    "computed",
     "prev",
     "prevout",
     "t0",
@@ -554,55 +554,7 @@
                                                 "Binary": [
                                                   "Div",
                                                   {
-                                                    "Call": [
-                                                      "Min",
-                                                      [
-                                                        {
-                                                          "Expr": {
-                                                            "Attr": 8
-                                                          }
-                                                        },
-                                                        {
-                                                          "Expr": {
-                                                            "Binary": [
-                                                              "Sub",
-                                                              {
-                                                                "Cond": [
-                                                                  {
-                                                                    "Binary": [
-                                                                      "Lt",
-                                                                      {
-                                                                        "Attr": 8
-                                                                      },
-                                                                      {
-                                                                        "Attr": 12
-                                                                      }
-                                                                    ]
-                                                                  },
-                                                                  {
-                                                                    "Attr": 12
-                                                                  },
-                                                                  {
-                                                                    "Binary": [
-                                                                      "Add",
-                                                                      {
-                                                                        "Attr": 8
-                                                                      },
-                                                                      {
-                                                                        "Num": 1.0
-                                                                      }
-                                                                    ]
-                                                                  }
-                                                                ]
-                                                              },
-                                                              {
-                                                                "Num": 1.0
-                                                              }
-                                                            ]
-                                                          }
-                                                        }
-                                                      ]
-                                                    ]
+                                                    "Attr": 8
                                                   },
                                                   {
                                                     "Num": 16.0
@@ -706,55 +658,7 @@
                                                             "Binary": [
                                                               "Div",
                                                               {
-                                                                "Call": [
-                                                                  "Min",
-                                                                  [
-                                                                    {
-                                                                      "Expr": {
-                                                                        "Attr": 8
-                                                                      }
-                                                                    },
-                                                                    {
-                                                                      "Expr": {
-                                                                        "Binary": [
-                                                                          "Sub",
-                                                                          {
-                                                                            "Cond": [
-                                                                              {
-                                                                                "Binary": [
-                                                                                  "Lt",
-                                                                                  {
-                                                                                    "Attr": 8
-                                                                                  },
-                                                                                  {
-                                                                                    "Attr": 12
-                                                                                  }
-                                                                                ]
-                                                                              },
-                                                                              {
-                                                                                "Attr": 12
-                                                                              },
-                                                                              {
-                                                                                "Binary": [
-                                                                                  "Add",
-                                                                                  {
-                                                                                    "Attr": 8
-                                                                                  },
-                                                                                  {
-                                                                                    "Num": 1.0
-                                                                                  }
-                                                                                ]
-                                                                              }
-                                                                            ]
-                                                                          },
-                                                                          {
-                                                                            "Num": 1.0
-                                                                          }
-                                                                        ]
-                                                                      }
-                                                                    }
-                                                                  ]
-                                                                ]
+                                                                "Attr": 8
                                                               },
                                                               {
                                                                 "Num": 16.0
@@ -855,55 +759,7 @@
                                 "Binary": [
                                   "Div",
                                   {
-                                    "Call": [
-                                      "Min",
-                                      [
-                                        {
-                                          "Expr": {
-                                            "Attr": 8
-                                          }
-                                        },
-                                        {
-                                          "Expr": {
-                                            "Binary": [
-                                              "Sub",
-                                              {
-                                                "Cond": [
-                                                  {
-                                                    "Binary": [
-                                                      "Lt",
-                                                      {
-                                                        "Attr": 8
-                                                      },
-                                                      {
-                                                        "Attr": 12
-                                                      }
-                                                    ]
-                                                  },
-                                                  {
-                                                    "Attr": 12
-                                                  },
-                                                  {
-                                                    "Binary": [
-                                                      "Add",
-                                                      {
-                                                        "Attr": 8
-                                                      },
-                                                      {
-                                                        "Num": 1.0
-                                                      }
-                                                    ]
-                                                  }
-                                                ]
-                                              },
-                                              {
-                                                "Num": 1.0
-                                              }
-                                            ]
-                                          }
-                                        }
-                                      ]
-                                    ]
+                                    "Attr": 8
                                   },
                                   {
                                     "Num": 16.0
@@ -982,8 +838,8 @@
           {
             "Attr": 6
           },
-          5,
-          6
+          7,
+          8
         ]
       }
     ],
@@ -1089,19 +945,20 @@
         }
       },
       {
-        "Observe": [
-          3,
+        "Branch": [
           {
             "Binary": [
-              "Sub",
+              "Eq",
               {
-                "Ctx": "Now"
+                "Attr": 14
               },
               {
-                "Attr": 11
+                "Attr": 12
               }
             ]
-          }
+          },
+          5,
+          6
         ]
       },
       {
@@ -1149,6 +1006,25 @@
     ],
     [
       {
+        "Observe": [
+          3,
+          {
+            "Binary": [
+              "Sub",
+              {
+                "Ctx": "Now"
+              },
+              {
+                "Attr": 11
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    [],
+    [
+      {
         "Run": {
           "stage": {
             "base": 3,
@@ -1179,5 +1055,5 @@
   "slot_think": 5,
   "slot_more": 6,
   "slot_forced": 7,
-  "slot_reached": 8
+  "slot_computed": 8
 }
