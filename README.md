@@ -1,9 +1,8 @@
 # seQ
 
 A language for the formal verification and simulation of LLM serving
-systems. The name follows seL4: a serving system is specified once, as a
-program, and the same program is simulated and checked against the real
-system.
+systems. A serving system is written once, as a program, and the same
+program is simulated and checked against the real system.
 
 A seQ program describes a serving deployment: its memory pools and
 stages, a workload, and the program every session runs. Its
