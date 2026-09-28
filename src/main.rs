@@ -1,6 +1,7 @@
 //! `seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
 //! `seq-lang check FILE [--set k=expr]...`
 //! `seq-lang ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]`
+//! `seq-lang draw FILE [--view deployment|route] [--format tikz|svg] [--out PATH] [--show-set]` (experimental)
 //!
 //! FILE is program text (`.seq`) or IR (`.json`, as written by `seq-lang ir`).
 
@@ -11,7 +12,7 @@ use seq::{Overrides, parser};
 
 fn usage() -> ! {
     eprintln!(
-        "usage:\n  seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set name=expr]... [--trace F] [--json] [--dump DIR]\n  seq-lang check FILE [--set name=expr]...\n  seq-lang ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]\n\nFILE is program text (.seq) or IR (.json, as written by `seq-lang ir`)."
+        "usage:\n  seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set name=expr]... [--trace F] [--json] [--dump DIR]\n  seq-lang check FILE [--set name=expr]...\n  seq-lang ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]\n  seq-lang draw FILE [--view deployment|route] [--format tikz|svg] [--out PATH] [--show-set]   (experimental)\n\nFILE is program text (.seq) or IR (.json, as written by `seq-lang ir`)."
     );
     exit(2)
 }
@@ -32,6 +33,10 @@ fn main() {
     let mut json = false;
     let mut dump: Option<String> = None;
     let mut inline = false;
+    let mut view = String::from("deployment");
+    let mut format = String::from("tikz");
+    let mut out: Option<String> = None;
+    let mut show_set = false;
     let mut i = 2;
     while i < args.len() {
         let next = |i: &mut usize| -> String {
@@ -55,6 +60,10 @@ fn main() {
             "--json" => json = true,
             "--dump" => dump = Some(next(&mut i)),
             "--inline-trace" => inline = true,
+            "--view" => view = next(&mut i),
+            "--format" => format = next(&mut i),
+            "--out" => out = Some(next(&mut i)),
+            "--show-set" => show_set = true,
             _ => usage(),
         }
         i += 1;
@@ -77,6 +86,27 @@ fn main() {
             prog.blocks.len()
         ),
         "ir" => println!("{}", prog.to_json()),
+        "draw" => {
+            let figure = match view.as_str() {
+                "deployment" => seq::deployment::figure(&prog),
+                "route" => seq::draw::figure(&prog, show_set),
+                v => fail(file, format!("unknown --view `{v}` (deployment, route)")),
+            };
+            let text = match format.as_str() {
+                "tikz" => seq::tikz::render(&figure),
+                "svg" => seq::svg::render(&figure),
+                f => fail(file, format!("unknown --format `{f}` (tikz, svg)")),
+            };
+            match &out {
+                None => print!("{text}"),
+                Some(path) => {
+                    if let Err(e) = std::fs::write(path, &text) {
+                        eprintln!("cannot write {path}: {e}");
+                        exit(1)
+                    }
+                }
+            }
+        }
         "run" => {
             let r = seq::run_ir(&prog, base).unwrap_or_else(|e| fail(file, e));
             if let Some(d) = &dump

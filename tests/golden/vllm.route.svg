@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="798" height="522" viewBox="0 0 798 522" role="img">
+<style>
+  text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  @media (prefers-color-scheme: dark) {
+    text { fill: #e8e6e3; } text.dim { fill: #9aa4b2; }
+    .bg { fill:#14171a }
+    .solid { fill:#232a31;stroke:#b6bfcc }
+    .body { fill:#232a31;stroke:#b6bfcc }
+    .admission { fill:#232a31;stroke:#b6bfcc }
+    .cached { fill:#33302a }
+    .fits { stroke:#9aa4b2 }
+    .enclosure { stroke:#9aa4b2 }
+    .station { fill:#26403d;stroke:#b6bfcc }
+    .cell { fill:#14171a;stroke:#b6bfcc }
+    .rail { stroke:#b6bfcc }
+    .flow { stroke:#b6bfcc }
+    .back { stroke:#b6bfcc }
+    .relation { stroke:#9aa4b2 }
+    .grow { stroke:#b6bfcc }
+  }
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker></defs>
+<rect class="bg" fill="#ffffff" x="0" y="0" width="798" height="522"/>
+<rect class="solid" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" x="614" y="124" width="148" height="156" rx="2"/>
+<rect class="admission" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" stroke-dasharray="5 3" x="432" y="124" width="148" height="156" rx="2"/>
+<rect class="cached" fill="#e6e2da" stroke="none" x="432" y="280" width="148" height="10" rx="1"/>
+<rect class="cached" fill="#e6e2da" stroke="none" x="432" y="290" width="148" height="206" rx="1"/>
+<polygon class="body" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" points="432,204 498.6,204 580,224 432,224"/>
+<text x="437" y="219" text-anchor="start" font-size="8" fill="#6b7280" class="dim">growing</text>
+<polygon class="body" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" points="432,256 498.6,256 580,276 432,276"/>
+<text x="437" y="271" text-anchor="start" font-size="8" fill="#6b7280" class="dim">growing</text>
+<text x="618" y="137" text-anchor="start" font-size="8" fill="#6b7280" class="dim">1</text>
+<text x="436" y="137" text-anchor="start" font-size="8" fill="#6b7280" class="dim">c + min(prompt - c, budget_left(~</text>
+<text x="436" y="300" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cache (prompt + o)</text>
+<text x="422" y="40" text-anchor="start" font-size="10" fill="#1d2021">pool kv</text>
+<text x="422" y="54" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 160000</text>
+<path class="relation" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="2 3" d="M422 60 L590 60"/>
+<text x="604" y="40" text-anchor="start" font-size="10" fill="#1d2021">pool slots</text>
+<text x="604" y="54" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 16</text>
+<path class="relation" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="2 3" d="M604 60 L772 60"/>
+<text x="26" y="40" text-anchor="start" font-size="10" fill="#1d2021">route</text>
+<text x="82" y="84" text-anchor="start" font-size="10" fill="#1d2021">*</text>
+<text x="96" y="84" text-anchor="start" font-size="8" fill="#1d2021">turn</text>
+<text x="82" y="110" text-anchor="start" font-size="10" fill="#1d2021">@</text>
+<text x="96" y="110" text-anchor="start" font-size="8" fill="#1d2021">loop</text>
+<text x="82" y="136" text-anchor="start" font-size="10" fill="#1d2021">[</text>
+<text x="96" y="136" text-anchor="start" font-size="8" fill="#1d2021">hold slots (1), kv (c + min(prompt - c, budget_left(e~</text>
+<text x="82" y="162" text-anchor="start" font-size="10" fill="#1d2021">o</text>
+<text x="96" y="162" text-anchor="start" font-size="8" fill="#1d2021">observe hit = c &gt; 0</text>
+<text x="82" y="188" text-anchor="start" font-size="10" fill="#1d2021">o</text>
+<text x="96" y="188" text-anchor="start" font-size="8" fill="#1d2021">observe prefill_tokens = prompt - c</text>
+<rect class="body" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" x="78" y="204" width="324" height="20" rx="2"/>
+<text x="84" y="217" text-anchor="start" font-size="8" fill="#1d2021">run engine prefill</text>
+<text x="210" y="217" text-anchor="start" font-size="8" fill="#6b7280" class="dim">(prompt - c)</text>
+<text x="82" y="240" text-anchor="start" font-size="10" fill="#1d2021">o</text>
+<text x="96" y="240" text-anchor="start" font-size="8" fill="#1d2021">observe ttft = now - t0</text>
+<rect class="body" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" x="78" y="256" width="324" height="20" rx="2"/>
+<text x="84" y="269" text-anchor="start" font-size="8" fill="#1d2021">run engine decode</text>
+<text x="210" y="269" text-anchor="start" font-size="8" fill="#6b7280" class="dim">(o - 1)</text>
+<text x="82" y="292" text-anchor="start" font-size="10" fill="#1d2021">]</text>
+<text x="96" y="292" text-anchor="start" font-size="8" fill="#1d2021">release</text>
+<text x="82" y="318" text-anchor="start" font-size="10" fill="#1d2021">o</text>
+<text x="96" y="318" text-anchor="start" font-size="8" fill="#1d2021">observe response = now - t0</text>
+<text x="82" y="344" text-anchor="start" font-size="10" fill="#1d2021">?</text>
+<text x="96" y="344" text-anchor="start" font-size="8" fill="#1d2021">branch (more)</text>
+<rect class="body" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" x="78" y="360" width="324" height="20" rx="2"/>
+<text x="84" y="373" text-anchor="start" font-size="8" fill="#1d2021">run tool</text>
+<text x="210" y="373" text-anchor="start" font-size="8" fill="#6b7280" class="dim">(~exp(3))</text>
+<text x="82" y="396" text-anchor="start" font-size="10" fill="#1d2021">*</text>
+<text x="96" y="396" text-anchor="start" font-size="8" fill="#1d2021">turn</text>
+<text x="82" y="422" text-anchor="start" font-size="10" fill="#1d2021">:</text>
+<text x="96" y="422" text-anchor="start" font-size="8" fill="#1d2021">else</text>
+<text x="82" y="448" text-anchor="start" font-size="10" fill="#1d2021">#</text>
+<text x="96" y="448" text-anchor="start" font-size="8" fill="#1d2021">end</text>
+<path class="relation" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="2 3" d="M43 348 L43 456"/>
+<path class="back" fill="none" stroke="#4b5563" stroke-width="1.1" stroke-dasharray="4 3" d="M34 466 L28 466 L28 108 L34 108" marker-end="url(#a)"/>
+<text x="38" y="478" text-anchor="start" font-size="8" fill="#6b7280" class="dim">back to the top of the turn</text>
+</svg>

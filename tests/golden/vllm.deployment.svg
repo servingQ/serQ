@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780.8" height="273" viewBox="0 0 780.8 273" role="img">
+<style>
+  text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  @media (prefers-color-scheme: dark) {
+    text { fill: #e8e6e3; } text.dim { fill: #9aa4b2; }
+    .bg { fill:#14171a }
+    .solid { fill:#232a31;stroke:#b6bfcc }
+    .body { fill:#232a31;stroke:#b6bfcc }
+    .admission { fill:#232a31;stroke:#b6bfcc }
+    .cached { fill:#33302a }
+    .fits { stroke:#9aa4b2 }
+    .enclosure { stroke:#9aa4b2 }
+    .station { fill:#26403d;stroke:#b6bfcc }
+    .cell { fill:#14171a;stroke:#b6bfcc }
+    .rail { stroke:#b6bfcc }
+    .flow { stroke:#b6bfcc }
+    .back { stroke:#b6bfcc }
+    .relation { stroke:#9aa4b2 }
+    .grow { stroke:#b6bfcc }
+  }
+</style>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker></defs>
+<rect class="bg" fill="#ffffff" x="0" y="0" width="780.8" height="273"/>
+<rect class="enclosure" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="6 4" x="275" y="72" width="202" height="134" rx="8"/>
+<text x="295" y="67" text-anchor="start" font-size="10" fill="#1d2021">pool kv</text>
+<path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M295 107 L325 107 M295 129 L325 129"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="297.14" y="109" width="6" height="18"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="305.71" y="109" width="6" height="18"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="314.29" y="109" width="6" height="18"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="333" y="107" width="5.74" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="340" y="107" width="5.74" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="347" y="107" width="5.74" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="354" y="107" width="5.74" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="333" y="118" width="5.74" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="340" y="118" width="5.74" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="347" y="118" width="5.74" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="354" y="118" width="5.74" height="8.58"/>
+<text x="295" y="142" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 160000</text>
+<text x="295" y="153" text-anchor="start" font-size="8" fill="#6b7280" class="dim">block 16</text>
+<text x="295" y="164" text-anchor="start" font-size="8" fill="#6b7280" class="dim">evict lru</text>
+<text x="295" y="175" text-anchor="start" font-size="8" fill="#6b7280" class="dim">preempt lifo</text>
+<rect class="cached" fill="#e6e2da" stroke="none" x="295" y="191" width="172" height="11" rx="2"/>
+<text x="381" y="199.5" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">prefix cache</text>
+<rect class="enclosure" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="6 4" x="162" y="57" width="350" height="155" rx="8"/>
+<text x="197" y="52" text-anchor="start" font-size="10" fill="#1d2021">pool slots</text>
+<path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M197 107 L227 107 M197 129 L227 129"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="199.14" y="109" width="6" height="18"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="207.71" y="109" width="6" height="18"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="216.29" y="109" width="6" height="18"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="235" y="107" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="238.5" y="107" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="242" y="107" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="245.5" y="107" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="249" y="107" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="252.5" y="107" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="256" y="107" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="259.5" y="107" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="235" y="118" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="238.5" y="118" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="242" y="118" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="245.5" y="118" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="249" y="118" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="252.5" y="118" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="256" y="118" width="2.87" height="8.58"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="259.5" y="118" width="2.87" height="8.58"/>
+<text x="197" y="142" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 16</text>
+<rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="373" y="92" width="84" height="52" rx="3"/>
+<rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="381" y="131" width="68" height="6"/>
+<rect class="solid" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" x="381" y="131" width="42.16" height="6"/>
+<text x="415" y="114" text-anchor="middle" font-size="10" fill="#1d2021">step</text>
+<text x="415" y="84" text-anchor="middle" font-size="10" fill="#1d2021">engine</text>
+<text x="415" y="157" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">budget 8192</text>
+<rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="586" y="92" width="84" height="52" rx="8"/>
+<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="600" cy="118" r="4"/>
+<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="614" cy="118" r="4"/>
+<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="628" cy="118" r="4"/>
+<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="642" cy="118" r="4"/>
+<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="656" cy="118" r="4"/>
+<text x="628" y="84" text-anchor="middle" font-size="10" fill="#1d2021">tool</text>
+<text x="628" y="157" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">delay</text>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M28 118 L373 118" marker-end="url(#a)"/>
+<text x="28" y="108" text-anchor="start" font-size="8" fill="#6b7280" class="dim">new sessions: Poisson 0.3</text>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M457 118 L586 118" marker-end="url(#a)"/>
+<text x="521.5" y="110" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">more</text>
+<path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M436 144 L436 234 L696 234" marker-end="url(#a)"/>
+<text x="700" y="237" text-anchor="start" font-size="8" fill="#6b7280" class="dim">ends (else)</text>
+<path class="back" fill="none" stroke="#4b5563" stroke-width="1.1" stroke-dasharray="4 3" d="M607 144 L607 234 L394 234 L394 144" marker-end="url(#a)"/>
+</svg>

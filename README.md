@@ -25,10 +25,12 @@ vLLM scheduler scenarios below are theorems.
 | `src/link.rs` | the text frontend's compiler to IR: name resolution, constants |
 | `src/sim.rs` | the interpreter: pools, stages incl. the `step` engine, sessions |
 | `src/report.rs`, `stats.rs`, `trace.rs` | reports, statistics, trace corpora |
+| `src/deployment.rs`, `draw.rs`, `figure.rs`, `svg.rs`, `tikz.rs` | `seq-lang draw` (experimental): a program as a figure |
 | `programs/*.seq` | example deployments: M/G/1, PS, closed, agentic replica, PD tandem, routing, the vLLM v1 engine and its A100 replay; `programs/data/*.csv` replay traces |
 | `tools/vllm_oracle.py`, `tools/vllm_replay_oracle.py`, `tools/oracle/` | the real vLLM v1 scheduler as an oracle, its recorded scenarios, the A100 engine's answers, and each scenario's IR (`*.ir.json`, from `programs/vllm_request.seq`) |
 | `tools/a100/` | A100 step sweeps behind the cost model of `vllm_replay.seq` |
 | `docs/ir.md` | the IR: why it comes first, format, validation, stability, the Lean fragment |
+| `docs/draw.md` | `seq-lang draw` (experimental): the two views, the notation, what is not done |
 | `docs/language.md` | the text syntax, the semantics, vLLM correspondence, validation |
 | `docs/review.md` | review of the first version against vLLM, design, verification-tooling survey |
 | `scripts/fetch_vllm_ref.sh` | checks out the upstream vLLM source the docs cite (`ref/vllm`, 0c87a197) |
@@ -36,7 +38,7 @@ vLLM scheduler scenarios below are theorems.
 ## Use
 
 ```bash
-make check      # fmt, clippy, tests, every program links, the oracles agree, IR files current
+make check      # fmt, clippy, tests, every program links and draws, the oracles agree, IR files current
 cargo run --release -- run programs/vllm.seq --seed 2 --horizon 3000
 cargo run --release -- ir programs/vllm.seq > vllm.json      # the IR
 cargo run --release -- run vllm.json --seed 3                # run IR directly
@@ -44,6 +46,7 @@ cargo run --release -- run programs/vllm_replay.seq --trace my_trace.csv
 cargo run --release -- ir programs/vllm_replay.seq --inline-trace   # the trace as the sessions' turns
 cargo run --release -- run programs/agentic.seq --set N=32 --set C=3e5 --set maxctx=1.5e5 --json
 cargo run --release -- check programs/replica.seq
+cargo run --release -- draw programs/vllm.seq --format svg --out vllm.svg   # experimental
 ```
 
 As a dependency, pin a release tag:
