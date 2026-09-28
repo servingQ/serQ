@@ -1,50 +1,42 @@
 # seQ
 
-A language for the formal verification and simulation of LLM serving
-systems. A serving system is written once, as a program, and the same
-program is simulated and checked against the real system.
+*pronounced "ser-Q" — **se**rving + **Q**ueue*
 
-A seQ program describes a serving deployment: its memory pools and
-stages, a workload, and the program every session runs. Its
-definition is an intermediate representation, the **IR** (`src/ir.rs`,
-`docs/ir.md`): a closed, versioned data structure that the interpreter
-runs, the Lean model is generated from, and tools build or edit as JSON.
-The text syntax (`programs/*.seq`, `docs/language.md`) is one frontend
-that compiles to it. This repository holds the Rust crate `seq-lang`
-(library `seq`, CLI `seq-lang`), example programs and the vLLM oracle. The vLLM v1 program (`programs/vllm.seq`) reproduces the
-upstream scheduler request for request. The Lean formalisation of the
-language lives in the research repository that uses seQ
-(`serving-queue-theory`, `lean/ServingQueueTheory/Seq*.lean`). There the
-vLLM scheduler scenarios below are theorems.
+A language in which an LLM serving deployment is a program: memory pools,
+stages, a workload and the policy every session runs, written once and both
+simulated and formally checked against the real system. `programs/vllm.seq`
+reproduces the upstream vLLM v1 scheduler request for request.
 
-| Path | Contents |
-|---|---|
-| `src/ir.rs` | the IR: types, JSON form, validation, explicit sessions |
-| `src/lexer.rs`, `parser.rs`, `ast.rs` | the text syntax |
-| `src/link.rs` | the text frontend's compiler to IR: name resolution, constants |
-| `src/interp.rs` | the interpreter: pools, stages incl. the `step` engine, sessions |
-| `src/report.rs`, `stats.rs`, `trace.rs` | reports, statistics, trace corpora |
-| `src/deployment.rs`, `draw.rs`, `figure.rs`, `svg.rs`, `tikz.rs` | `seq-lang draw` (experimental): a program as a figure |
-| `programs/*.seq` | example deployments: M/G/1, PS, closed, agentic replica, PD tandem, routing, the vLLM v1 engine and its A100 replay; `programs/data/*.csv` replay traces |
-| `tools/vllm_oracle.py`, `tools/vllm_replay_oracle.py`, `tools/oracle/` | the real vLLM v1 scheduler as an oracle, its recorded scenarios, the A100 engine's answers, and each scenario's IR (`*.ir.json`, from `programs/vllm_request.seq`) |
-| `tools/a100/` | A100 step sweeps behind the cost model of `vllm_replay.seq` |
-| `docs/ir.md` | the IR: why it comes first, format, validation, stability, the Lean fragment |
-| `docs/draw.md` | `seq-lang draw` (experimental): the two views, the notation, what is not done |
-| `docs/language.md` | the text syntax, the semantics, vLLM correspondence, validation |
-| `docs/review.md` | review of the first version against vLLM, design, verification-tooling survey |
-| `scripts/fetch_vllm_ref.sh` | checks out the upstream vLLM source the docs cite (`ref/vllm`, 0c87a197) |
+[![CI](https://github.com/vrvrv/seQ/actions/workflows/ci.yml/badge.svg)](https://github.com/vrvrv/seQ/actions/workflows/ci.yml)
+[![Docs](https://github.com/vrvrv/seQ/actions/workflows/docs.yml/badge.svg)](https://vrvrv.github.io/seQ/)
+[![Release](https://img.shields.io/github/v/release/vrvrv/seQ?include_prereleases&label=release)](https://github.com/vrvrv/seQ/releases)
+[![Rust](https://img.shields.io/badge/rust-1.98.1-orange.svg)](rust-toolchain.toml)
 
-## Use
+**[Read the docs →](https://vrvrv.github.io/seQ/)**
+
+## Why
+
+A serving system today is described three times and reconciled never: a
+paper's queueing model, a scheduler's source, and whatever load test last
+ran against it. seQ is one program instead. Its definition is an
+intermediate representation, the **IR** (`src/ir.rs`, [`docs/ir.md`][ir]) —
+a closed, versioned data structure that the interpreter runs, the Lean
+model is generated from, and tools build or edit as JSON. The text syntax
+([`programs/*.seq`][programs], [`docs/language.md`][language]) is one
+frontend that compiles to it. The Lean formalisation lives in the
+companion research repository, `serving-queue-theory`
+(`lean/ServingQueueTheory/Seq*.lean`), where the vLLM scenarios below are
+theorems.
+
+[ir]: docs/ir.md
+[language]: docs/language.md
+[programs]: programs/
+
+## Quickstart
 
 ```bash
-make check      # fmt, clippy, tests, every program links and draws, the oracles agree, IR files current
 cargo run --release -- run programs/vllm.seq --seed 2 --horizon 3000
 cargo run --release -- ir programs/vllm.seq > vllm.json      # the IR
-cargo run --release -- run vllm.json --seed 3                # run IR directly
-cargo run --release -- run programs/vllm_replay.seq --trace my_trace.csv
-cargo run --release -- ir programs/vllm_replay.seq --inline-trace   # the trace as the sessions' turns
-cargo run --release -- run programs/agentic.seq --set N=32 --set C=3e5 --set maxctx=1.5e5 --json
-cargo run --release -- check programs/replica.seq
 cargo run --release -- draw programs/vllm.seq --format svg --out vllm.svg   # experimental
 ```
 
@@ -54,19 +46,33 @@ As a dependency, pin a release tag:
 seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.0-rc0" }
 ```
 
-The CLI can be installed with
-`cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-rc0 --locked --root <dir>`,
-or taken from the release assets.
+Or install the CLI directly:
+
+```bash
+cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-rc0 --locked --root <dir>
+```
+
+## Layout
+
+| | |
+|---|---|
+| `src/` | IR, text syntax (lexer/parser/AST), the linker, the interpreter, reporting, drawing |
+| `programs/` | example deployments — M/G/1, PS, closed, agentic replica, PD tandem, routing, the vLLM v1 engine and its A100 replay |
+| `tools/` | the real vLLM v1 scheduler as an oracle, its recorded scenarios, the A100 cost-model sweeps |
+| `docs/` | the language spec, the IR definition, the design record — see the [full layout in `docs/ir.md`][ir] and [`docs/language.md`][language] |
+
+```
+make check   # fmt, clippy, tests, every program links and draws, the oracles agree
+```
+
+Every claim this project makes about vLLM is checked against the pinned
+source in `ref/vllm` and cited `file:line`, not remembered from a paper or a
+model's training data — see [`CLAUDE.md`](CLAUDE.md).
 
 ## Releases
 
-Pushing an annotated tag `vX.Y.Z`, `vX.Y.Z-rcN` or `vX.Y.Z-devN` that
-matches `Cargo.toml` runs `.github/workflows/release.yml`. It runs the full
-check, then publishes a GitHub release with the packaged crate and the
-Linux CLI. The release notes are the tag message's body (`git tag -a`),
-followed by the generated list of pull requests since the previous
-release. A tag with a dash is published as a prerelease. Publishing to crates.io is a separate
-job, which stays off until two things are set: the repository variable
-`PUBLISH_CRATES_IO` is `true`, and the secret `CARGO_REGISTRY_TOKEN`
-exists. crates.io is public and permanent, and the crate needs a
-`license` field first.
+Pushing an annotated tag `vX.Y.Z[-rcN|-devN]` matching `Cargo.toml` runs the
+full check and publishes a GitHub release with the packaged crate and the
+Linux CLI; a tag with a dash is a prerelease. Publishing to crates.io stays
+off until the repository is licensed. See
+[`.github/workflows/release.yml`](.github/workflows/release.yml).
