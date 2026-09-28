@@ -93,7 +93,8 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | set NAME = expr ;
           | observe NAME = expr ;
           | hold POOL ( expr ) [fits ( expr )] [, POOL ( expr ) [fits ( expr )]]*
-                 [reuse ( expr )] block [ cache ( expr ) ] ;
+                 [reuse ( expr )] [at admission ( NAME = expr , ... )]
+                 block [ cache ( expr ) ] ;
           | grow POOL ( expr ) ;
           | drop POOL ;                      -- discard the own cached prefix
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
@@ -181,7 +182,8 @@ loop {
 and vLLM's engine (`programs/vllm.seq`)
 
 ```
-admit reqs (1), kv (min(prompt, min(cachedin(kv), hitmax) + budget_left(engine))) {
+admit reqs (1), kv (min(prompt, hit + budget_left(engine)))
+                    at admission (hit = min(cachedin(kv), hitmax)) {
   prefill (prompt - c) growing kv;
   decode (o - 1) growing kv;
 } keep (prompt + o);
@@ -277,6 +279,24 @@ exists (the RBLN stack). Without a per-request chunk cap, serving in
 admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`;
 a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 "prefill from the budget decode leaves" describes vLLM too.
+
+**`at admission`.** Everything in a hold's header — the units, `fits`,
+`reuse`, `cache` — is evaluated when the session is admitted, and a `set`
+above the hold is not. The two look the same, which is how
+`programs/vllm.seq` came to read its prefix cache at the moment the session
+queued rather than the moment the scheduler took it. `at admission (hit = e)`
+gives the header a place to name what it is written in terms of:
+
+```
+admit reqs (1), kv (min(prompt, hit + budget_left(engine)))
+      at admission (hit = min(cachedin(kv), hitmax)) { … }
+```
+
+The bindings are substituted into the header's expressions by the parser, so
+the AST, the IR, the interpreter and the Lean model know nothing of them, and
+a program that uses the clause has the IR of the one that inlines by hand. A
+later binding sees the earlier ones. A binding may not draw (`~`): it is
+substituted, so a name used twice would draw twice.
 
 **Branching.** `branch (e)` takes the first block when `e` is non-zero.
 `branch with (p)` takes it with probability `p`, and is sugar the parser

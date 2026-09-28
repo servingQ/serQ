@@ -60,10 +60,10 @@ session {
     // cached then, plus the chunk the step's remaining budget allows
     // the admission needs room for the whole prompt (scheduler_reserve_full_isl,
     // kv_cache_manager.py:515-531) but allocates only the first chunk
-    admit reqs (1), kv (min(cachedin(kv), hitmax)
-                         + min(prompt - min(cachedin(kv), hitmax), budget_left(engine)))
-                     fits (prompt)
-          reuse (hitmax) {
+    admit reqs (1), kv (hit + min(prompt - hit, budget_left(engine)))
+          fits (prompt)
+          reuse (hitmax)
+          at admission (hit = min(cachedin(kv), hitmax)) {
       set c = cached;
       observe cached_tokens = c;
       observe prefix = prev + prevout;

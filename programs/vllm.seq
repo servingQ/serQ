@@ -64,7 +64,8 @@ session {
     // the budget allows, which is `min(prompt, hit + budget)`: the whole
     // prompt, or as far as the hit and the budget reach, whichever is less
     set hitmax = floor((prompt - 1) / bs) * bs;
-    admit reqs (1), kv (min(prompt, min(cachedin(kv), hitmax) + budget_left(engine))) {
+    admit reqs (1), kv (min(prompt, hit + budget_left(engine)))
+          at admission (hit = min(cachedin(kv), hitmax)) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;
       observe prefill_tokens = prompt - c;
