@@ -23,6 +23,7 @@
 //! wlitem   := 'arrive' ('poisson' '(' expr ')' | 'closed' '(' expr ')' | 'batch' '(' expr ')' | 'none') ';'
 //!           | 'trace' STRING ('ordered')? ';' | 'init' block | 'turn' block
 //!           | 'session' block                  -- the session's side, with 'request'
+//!           | 'hidden' IDENT (',' IDENT)* ';'
 //! block    := '{' stmt* '}'
 //! stmt     := 'turn' ';' | 'request' ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
 //!           | ('hold' | 'enter') ref '(' expr ')' (',' ref '(' expr ')')* block ('cache' '(' expr ')')? ';'?
@@ -661,9 +662,17 @@ impl Parser {
             trace_ordered: false,
             init: vec![],
             turn: vec![],
+            hidden: vec![],
         };
         while *self.peek() != Tok::RBrace {
-            if self.eat_kw("arrive") {
+            if self.eat_kw("hidden") {
+                w.hidden.push(self.ident()?);
+                while *self.peek() == Tok::Comma {
+                    self.expect(&Tok::Comma)?;
+                    w.hidden.push(self.ident()?);
+                }
+                self.expect(&Tok::Semi)?;
+            } else if self.eat_kw("arrive") {
                 w.arrive = if self.eat_kw("poisson") {
                     self.expect(&Tok::LParen)?;
                     let e = self.expr()?;

@@ -100,7 +100,7 @@ attribute marked "not readable at a scheduler moment" is checked by the same
 per-position table.
 
 ```rust
-pub struct Program { …, pub hidden: Vec<usize> /* attr slots illegal at Admit/Step/Evict */, … }
+pub struct Program { …, pub hidden: Vec<usize> /* attr slots legal at Session only */, … }
 ```
 
 A bound, when needed, is a separate attribute the program declares

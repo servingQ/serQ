@@ -19,6 +19,7 @@ stage engine : step {
 
 workload {
   arrive poisson(Lambda);
+  hidden o;
   init { set K = 0; }
   turn { set n = ~exp(500); set o = ~exp(200) + 1; set more = ~bernoulli(p); }
   session {

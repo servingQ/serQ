@@ -148,6 +148,10 @@ pub struct Workload {
     pub trace_ordered: bool,
     pub init: Vec<Stmt>,
     pub turn: Vec<Stmt>,
+    /// Attributes the scheduler may not read (`hidden o;`): legal in
+    /// session statements, rejected at every other moment (a hold's header, a queue or
+    /// eviction key, a spill clause, a ps capacity, a step stage's budget, cost, chunk or serve keys).
+    pub hidden: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

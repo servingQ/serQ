@@ -117,6 +117,7 @@ workload {
   trace "file.csv" [ordered];
   init { … }                // once, at arrival
   turn { … }                // at every `turn` statement
+  hidden o;                 // the scheduler may not read these (headers, keys, budgets)
 }
 ```
 
