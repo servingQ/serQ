@@ -48,6 +48,9 @@ pub struct PoolReport {
     pub preemptions: u64,
     pub spills: u64,
     pub rejected: u64,
+    /// Sessions preempted a second time without progress past their
+    /// previous preemption: a livelock the run would otherwise hide.
+    pub stuck: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -148,12 +151,12 @@ impl Report {
         if !self.pools.is_empty() {
             let _ = writeln!(
                 s,
-                "pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej"
+                "pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej stuck"
             );
             for p in &self.pools {
                 let _ = writeln!(
                     s,
-                    "  {:<12} {:>9.1} {:>9.1} {:>6.3} {:>7.3} {:>7.4} {:>7} {:>8} {:>9.0} {:>7} {:>5} {:>3}",
+                    "  {:<12} {:>9.1} {:>9.1} {:>6.3} {:>7.3} {:>7.4} {:>7} {:>8} {:>9.0} {:>7} {:>5} {:>3} {:>5}",
                     p.name,
                     p.mean_used,
                     p.mean_cached,
@@ -165,8 +168,18 @@ impl Report {
                     p.evicted_units,
                     p.preemptions,
                     p.spills,
-                    p.rejected
+                    p.rejected,
+                    p.stuck
                 );
+            }
+            for p in &self.pools {
+                if p.stuck > 0 {
+                    let _ = writeln!(
+                        s,
+                        "stuck: {} session(s) preempted again at pool `{}` without progress since their previous preemption (a hold that can never fit re-executes forever)",
+                        p.stuck, p.name
+                    );
+                }
             }
         }
         s
@@ -234,7 +247,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{}}}",
+                "{{\"name\":\"{}\",\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{}}}",
                 p.name,
                 f(p.mean_used),
                 f(p.mean_cached),
@@ -246,7 +259,8 @@ impl Report {
                 f(p.evicted_units),
                 p.preemptions,
                 p.spills,
-                p.rejected
+                p.rejected,
+                p.stuck
             );
         }
         s.push_str("]}");

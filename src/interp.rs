@@ -130,6 +130,11 @@ struct Session<'p> {
     /// stage are served in this order (vLLM's `running` list is in order of
     /// admission; a preempted request re-enters at the end).
     adm_seq: u64,
+    /// Position the session's hold had reached when it was last preempted,
+    /// `None` once a hold completed. A second preemption at the same or a
+    /// lower position is no progress: the session is `stuck`.
+    preempt_pos: Option<f64>,
+    stuck: bool,
 }
 
 // ------------------------------------------------------------- pools ----
@@ -167,6 +172,9 @@ struct PoolState {
     preemptions: u64,
     spills: u64,
     rejected: u64,
+    /// Sessions preempted again without having advanced past the position
+    /// of their previous preemption (a self-preemption livelock, typically).
+    stuck: u64,
 }
 
 // ------------------------------------------------------------ stages ----
@@ -355,6 +363,7 @@ impl<'p> Interp<'p> {
                 preemptions: 0,
                 spills: 0,
                 rejected: 0,
+                stuck: 0,
             })
             .collect();
         let stages = p
@@ -619,6 +628,8 @@ impl<'p> Interp<'p> {
             trace,
             script: script.map(|k| (k, 0)),
             adm_seq: u64::MAX,
+            preempt_pos: None,
+            stuck: false,
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -785,6 +796,7 @@ impl<'p> Interp<'p> {
                             .pop()
                             .expect("hold frame has a hold");
                         self.release_hold(sid, &h);
+                        self.sessions[sid].preempt_pos = None;
                         self.try_admit_all();
                     }
                 }
@@ -1466,6 +1478,23 @@ impl<'p> Interp<'p> {
             .iter()
             .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
             .expect("victim holds the pool");
+        // progress since the last preemption: the position the hold reached
+        // (what a `growing` run computed, else the allocation)
+        let reached = {
+            let h = &self.sessions[victim].holds[hi];
+            if h.grown {
+                h.pos.iter().copied().fold(0.0, f64::max)
+            } else {
+                h.pools.iter().map(|&(_, u)| u).fold(0.0, f64::max)
+            }
+        };
+        if let Some(prev) = self.sessions[victim].preempt_pos {
+            if reached <= prev + 1e-9 && !self.sessions[victim].stuck {
+                self.sessions[victim].stuck = true;
+                self.pools[pl].stuck += 1;
+            }
+        }
+        self.sessions[victim].preempt_pos = Some(reached);
         self.detach(victim);
         // unwind holds inner to `hi` (nested holds), then `hi` itself
         while self.sessions[victim].holds.len() > hi {
@@ -1910,7 +1939,15 @@ impl<'p> Interp<'p> {
                 break;
             }
         }
-        if assign.is_empty() {
+        // An iteration that scheduled nothing is no iteration, unless it
+        // preempted: then it is the scheduler step that only preempted (vLLM's
+        // `schedule()` returns with `preempted_reqs` and admits nothing,
+        // scheduler.py:869; the oracle counts the step), and the next
+        // iteration re-admits the victim. Dropping it left the engine idle
+        // with the victim queued and no event to wake it: a deadlock where
+        // vLLM livelocks.
+        let preempted = self.pools.iter().map(|p| p.preemptions).sum::<u64>() > preempt0;
+        if assign.is_empty() && !preempted {
             return;
         }
         let ntok: f64 = assign.iter().map(|a| a.1).sum();
@@ -2398,6 +2435,7 @@ impl<'p> Interp<'p> {
                 preemptions: pl.preemptions,
                 spills: pl.spills,
                 rejected: pl.rejected,
+                stuck: pl.stuck,
             })
             .collect();
         Report {

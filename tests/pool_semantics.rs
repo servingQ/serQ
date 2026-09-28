@@ -240,3 +240,32 @@ fn oversized_requests_are_rejected() {
     assert_eq!(r.observe("done").unwrap().samples, vec![1.0]);
     assert_eq!(r.pool("kv").unwrap().rejected, 1);
 }
+
+/// A hold that fits at admission but can never grow to what its body needs
+/// preempts itself, re-enters at the head of the queue, and does it again:
+/// a livelock the run would otherwise hide behind a preemption count. The
+/// report counts the session once as `stuck` (preempted again at the same
+/// position) and says so.
+#[test]
+fn a_hold_that_can_never_fit_is_reported_stuck() {
+    let src = r#"
+        pool reqs { cap 4; admit via engine; }
+        pool kv { cap 160; block 16; evict lru; preempt lifo; }
+        stage engine : step { budget 1000; chunk 0; cost 1; memory kv; }
+        workload { arrive batch(1); }
+        session {
+          hold reqs (1), kv (100) reserve (100) {
+            run engine prefill (100) growing kv;
+            run engine decode (100) growing kv;
+          }
+          end;
+        }
+        run { horizon 400; }
+    "#;
+    let r = run(src);
+    let kv = r.pool("kv").unwrap();
+    assert!(kv.preemptions >= 2, "{}", r.text());
+    assert_eq!(kv.stuck, 1, "{}", r.text());
+    assert!(r.text().contains("stuck: 1 session(s)"), "{}", r.text());
+    assert_eq!(r.ended, 0, "{}", r.text());
+}
