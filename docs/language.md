@@ -104,7 +104,7 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | choose NAME in expr by ( expr ) ; -- NAME := argmin over 0..n
           | end ;
           | serving                          -- the serving vocabulary, sugar for hold and run
-serving  := admit POOL ( expr ) … block [ keep ( expr ) ] ;   -- as hold … cache
+serving  := enter POOL ( expr ) … block [ keep ( expr ) ] ;   -- as hold … cache
           | prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | transfer [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | decode   [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
@@ -143,7 +143,7 @@ unchanged.
 
 | Serving form | Kernel |
 |---|---|
-| `admit P (c) … { body } keep (ℓ);` | `hold P (c) … { body } cache (ℓ);` (`reserve`, `reuse`, several pools: as in `hold`) |
+| `enter P (c) … { body } keep (ℓ);` | `hold P (c) … { body } cache (ℓ);` (`reserve`, `reuse`, several pools: as in `hold`) |
 | `prefill S;` | `run prefill (S);`, or on a step engine `E`: `run E prefill (S);` |
 | `transfer X;` | `run link (X);` |
 | `decode D;` | `run decode (D);`, or on a step engine `E`: `run E decode (D);` |
@@ -173,8 +173,8 @@ The lecture's disaggregated replica (`programs/lecture_pd.seq`) then reads
 ```
 turn;
 loop {
-  admit memP (kappa * T) { prefill S; transfer (x0 + kappa * T / Bw); } keep (kappa * T);
-  admit memD (kappa * T) { decode (o * w); }
+  enter memP (kappa * T) { prefill S; transfer (x0 + kappa * T / Bw); } keep (kappa * T);
+  enter memD (kappa * T) { decode (o * w); }
   branch with (p) { tool Z; turn; } else { end; }
 }
 ```
@@ -182,7 +182,7 @@ loop {
 and vLLM's engine (`programs/vllm.seq`)
 
 ```
-admit reqs (1), kv (min(prompt, hit + budget_left(engine)))
+enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
                     at admission (hit = min(cachedin(kv), hitmax)) {
   prefill (prompt - c) growing kv;
   decode (o - 1) growing kv;
@@ -291,7 +291,7 @@ queued rather than the moment the scheduler took it. `at admission (hit = e)`
 gives the header a place to name what it is written in terms of:
 
 ```
-admit reqs (1), kv (min(prompt, hit + budget_left(engine)))
+enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
       at admission (hit = min(cachedin(kv), hitmax)) { … }
 ```
 
@@ -300,6 +300,12 @@ the AST, the IR, the interpreter and the Lean model know nothing of them, and
 a program that uses the clause has the IR of the one that inlines by hand. A
 later binding sees the earlier ones. A binding may not draw (`~`): it is
 substituted, so a name used twice would draw twice.
+
+**`enter` and `admit via`.** The scheduler admits; the session enters. The
+statement is named from the session's side, like every other statement in a
+`session` block, and `admit` stays the name of the *pool option* that hands a
+queue to a stage's scheduler (`admit via S`) — which is the scheduler's side,
+and is the one place the word belongs.
 
 **Branching.** `branch (e)` takes the first block when `e` is non-zero.
 `branch with (p)` takes it with probability `p`, and is sugar the parser

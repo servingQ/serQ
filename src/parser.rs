@@ -21,14 +21,14 @@
 //!           | 'trace' STRING ';' | 'init' block | 'turn' block
 //! block    := '{' stmt* '}'
 //! stmt     := 'turn' ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
-//!           | 'hold' ref '(' expr ')' (',' ref '(' expr ')')* block ('cache' '(' expr ')')? ';'?
+//!           | ('hold' | 'enter') ref '(' expr ')' (',' ref '(' expr ')')* block ('cache' '(' expr ')')? ';'?
 //!           | 'grow' ref '(' expr ')' ';' | 'drop' ref ';'
 //!           | 'run' ref ('prefill' | 'decode')? '(' expr ')' ('growing' ref)? ';'
 //!           | 'branch' ('with')? '(' expr ')' block ('else' block)?
 //!           | 'loop' block | 'end' ';'
 //!           | 'choose' IDENT 'in' expr 'by' '(' expr ')' ';'
 //!           | serving
-//! serving  := 'admit' ... 'keep' ...            -- as 'hold' ... 'cache' ...
+//! serving  := 'enter' ... 'keep' ...            -- as 'hold' ... 'cache' ...
 //!           | role ('[' expr ']' | 'on' ref)? expr ('growing' ref)? ';'
 //! role     := 'prefill' | 'transfer' | 'decode' | 'tool'
 //! ref      := IDENT ('[' expr ']')?
@@ -609,11 +609,15 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Observe(name, e))
             }
-            // `admit ... keep (l)` is `hold ... cache (l)`
-            "hold" | "admit" => {
+            // `enter ... keep (l)` is `hold ... cache (l)`
+            "hold" | "enter" => {
                 self.advance();
                 self.hold()
             }
+            "admit" => self.err(
+                "`admit` is now `enter`: the scheduler admits, the session enters \
+                 (the pool option `admit via` is unchanged)",
+            ),
             "grow" => {
                 self.advance();
                 let r = self.reference()?;
@@ -1146,8 +1150,8 @@ mod tests {
         same(
             &format!(
                 "{PD} session {{
-                    admit kv (K) {{ prefill S; transfer X; }} keep (K);
-                    admit kv (K) reserve (F) reuse (R) {{ decode D; }}
+                    enter kv (K) {{ prefill S; transfer X; }} keep (K);
+                    enter kv (K) reserve (F) reuse (R) {{ decode D; }}
                     branch with (p) {{ tool Z; turn; }} else {{ end; }}
                 }}"
             ),
@@ -1166,7 +1170,7 @@ mod tests {
         same(
             &format!(
                 "{ENGINE} session {{
-                    admit kv (c) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} keep (c);
+                    enter kv (c) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} keep (c);
                     tool (~exp(Z));
                 }}"
             ),
