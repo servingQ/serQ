@@ -354,7 +354,21 @@ until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); then the
 stage admits from the queues it serves. The iteration lasts `C` seconds, an
 expression in `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn`; its
-tokens are applied when it ends. A run of zero work completes at once.
+tokens are applied when it ends. A run of zero work completes at once. An
+iteration that schedules no token is not an iteration, unless it preempted:
+then it is the scheduler step that only preempted (vLLM's `schedule()`
+admits nothing in a step with `preempted_reqs`, `scheduler.py:869`, and the
+oracle driver counts the step; the Lean model's `startIteration` returns
+the empty iteration and its `tick` re-admits at the next one), and the next
+iteration re-admits the victim. It lasts `C` at zero tokens, which is a
+modelling choice: the real engine skips the forward pass of an empty step,
+so the fixed part of `C` overstates it. Before this rule the interpreter
+dropped that step, against the Lean model, and with the victim queued and
+no event left the run ended with a session in the queue. A hold whose body
+can never fit then preempts itself forever; vLLM never runs that program,
+since it refuses at start-up a KV cache that cannot hold one request of
+`max_model_len` (`kv_cache_utils.py:965`), a check seQ does not have, which
+is what the `stuck` counter below is for.
 `exclusive prefill` schedules only the first prefilling resident while one
 exists (the RBLN stack). Without a per-request chunk cap, serving in
 admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`;
@@ -415,8 +429,13 @@ errors rather than warnings; neither has a legitimate instance in
 time, session and turn (`--dump DIR` writes them); the report gives per
 stage the time-average number present, utilisation, throughput, mean wait
 and service, and per pool the time-average used, cached, queue and
-holders, the mean queue wait, admissions, evictions, preemptions, spills
-and rejections.
+holders, the mean queue wait, admissions, evictions, preemptions, spills,
+rejections and `stuck`: sessions preempted a second time without having
+advanced past the position of their previous preemption. A hold that fits at
+admission but can never grow to what its body needs (`prompt + out > cap`
+under `preempt lifo`) preempts itself and re-executes forever; the run would
+otherwise end at the horizon with nothing but a preemption count, and the
+report now names the livelock.
 
 **Executable semantics in Lean.** `SeqExec.lean` defines the same rules
 for the fragment of pools and one step engine on the step clock (values in

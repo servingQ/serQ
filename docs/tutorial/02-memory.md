@@ -58,8 +58,8 @@ observe        count        mean      95% CI      cv2       p99
   response      75462      1.0959 ±0.0090      0.944    4.8777
 stage          number   util    done   thru      wait   service  iters
   server         0.795  0.560   75462  0.7943    0.0000    1.0012      0
-pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej
-  mem                2.8       0.0  0.075   0.795  0.0947   79460        0         0       0     0   0
+pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej stuck
+  mem                2.8       0.0  0.075   0.795  0.0947   79460        0         0       0     0   0     0
 ```
 
 Note `wait 0.0000` at the stage: nobody queues for a server. All the waiting

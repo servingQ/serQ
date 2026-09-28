@@ -43,6 +43,7 @@ PATHS = {
     "kv_cache_manager.py": "vllm/v1/core/kv_cache_manager.py",
     "single_type_kv_cache_manager.py": "vllm/v1/core/single_type_kv_cache_manager.py",
     "block_pool.py": "vllm/v1/core/block_pool.py",
+    "kv_cache_utils.py": "vllm/v1/core/kv_cache_utils.py",
     "config/scheduler.py": "vllm/config/scheduler.py",
     "request.py": "vllm/v1/request.py",
 }

@@ -108,11 +108,11 @@ observe        count        mean      95% CI      cv2       p99
   ttft          43947      0.0181 ±0.0007      1.276    0.0798
   response      43947      0.0633 ±0.0011      0.645    0.2429
 stage          number   util    done   thru      wait   service  iters
-  engine         0.153  0.138   43947  4.8830    0.0000    0.0313 9164050
+  engine         0.153  0.138   87894  4.8830    0.0000    0.0313 9164050
   tool           5.822  0.998   35044  1.9469    0.0000    2.9903      0
-pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej
-  kv               729.8   28515.3  0.000   0.153     NaN   48810      218   1760208       0     0   0
-  reqs               0.2       0.0  0.000   0.153  0.0007   48810        0         0       0     0   0
+pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej stuck
+  kv               729.8   28515.4  0.000   0.153     NaN   48810      218   1760208       0     0   0     0
+  reqs               0.2       0.0  0.002   0.153  0.0007   48810        0         0       0     0   0     0
 ```
 
 **9 164 050 iterations.** That is what `step` costs you: the engine is

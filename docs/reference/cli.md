@@ -51,7 +51,7 @@ seq-lang run programs/vllm.seq --json | jq '.pools[] | select(.name=="kv") | .pr
 |---|---|
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
 | `stages[]` | `name`, `mean_number`, `utilization`, `completed`, `throughput`, `mean_wait`, `mean_service`, `iterations` |
-| `pools[]` | `name`, `mean_used`, `mean_cached`, `mean_queue`, `mean_holders`, `mean_wait`, `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected` |
+| `pools[]` | `name`, `mean_used`, `mean_cached`, `mean_queue`, `mean_holders`, `mean_wait`, `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected`, `stuck` (sessions preempted again without progress since their previous preemption) |
 
 ## Make targets
 

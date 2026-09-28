@@ -240,3 +240,73 @@ fn oversized_requests_are_rejected() {
     assert_eq!(r.observe("done").unwrap().samples, vec![1.0]);
     assert_eq!(r.pool("kv").unwrap().rejected, 1);
 }
+
+/// A hold that fits at admission but can never grow to what its body needs
+/// preempts itself, re-enters at the head of the queue, and does it again:
+/// a livelock the run would otherwise hide behind a preemption count. The
+/// report counts the session once as `stuck` (preempted again at the same
+/// position) and says so.
+///
+/// On 10 blocks of 16 (160 tokens) with a 1000-token budget: step 1
+/// prefills the 100-token prompt (7 blocks), steps 2..61 decode tokens
+/// 101..160 (block 8 at 113, 9 at 129, 10 at 145), step 62 needs an 11th
+/// block, none is free, the request is `running[-1]` and preempts itself:
+/// the step schedules nothing and is not skipped (vLLM's `schedule()` runs
+/// it and admits nothing, scheduler.py:869). Step 63 re-admits and
+/// prefills again. The cycle is 62 steps, so preemptions fall at 62, 124,
+/// …, 372: six before the horizon of 400, the second of them at the same
+/// position (160) as the first.
+#[test]
+fn a_hold_that_can_never_fit_is_reported_stuck() {
+    let src = r#"
+        pool reqs { cap 4; admit via engine; }
+        pool kv { cap 160; block 16; evict lru; preempt lifo; }
+        stage engine : step { budget 1000; chunk 0; cost 1; memory kv; }
+        workload { arrive batch(1); }
+        session {
+          hold reqs (1), kv (100) reserve (100) {
+            run engine prefill (100) growing kv;
+            run engine decode (100) growing kv;
+          }
+          end;
+        }
+        run { horizon 400; }
+    "#;
+    let r = run(src);
+    let kv = r.pool("kv").unwrap();
+    assert_eq!(kv.preemptions, 6, "{}", r.text());
+    assert_eq!(kv.admissions, 7, "{}", r.text());
+    assert_eq!(kv.stuck, 1, "{}", r.text());
+    assert!(r.text().contains("stuck: 1 session(s)"), "{}", r.text());
+    assert_eq!(r.ended, 0, "{}", r.text());
+    // one step per unit of time, and the step that starts at the horizon
+    // is counted when it starts
+    assert_eq!(r.stage("engine").unwrap().iterations, 401, "{}", r.text());
+}
+
+/// The step that only preempted lasts `C` at zero tokens. With `cost ntok`
+/// that is 0: the step ends at the same instant and the next one re-admits,
+/// so a zero cost is one more event at that instant, not a loop. Prefill
+/// 100 costs 100, sixty decodes cost 60, the preempting step 0: preemptions
+/// at t = 160 and 320, the third prefill would end at 420 > 400.
+#[test]
+fn a_zero_cost_preempting_step_does_not_hang() {
+    let src = r#"
+        pool reqs { cap 4; admit via engine; }
+        pool kv { cap 160; block 16; evict lru; preempt lifo; }
+        stage engine : step { budget 1000; chunk 0; cost ntok; memory kv; }
+        workload { arrive batch(1); }
+        session {
+          hold reqs (1), kv (100) reserve (100) {
+            run engine prefill (100) growing kv;
+            run engine decode (100) growing kv;
+          }
+          end;
+        }
+        run { horizon 400; }
+    "#;
+    let r = run(src);
+    let kv = r.pool("kv").unwrap();
+    assert_eq!(kv.preemptions, 2, "{}", r.text());
+    assert_eq!(kv.stuck, 1, "{}", r.text());
+}

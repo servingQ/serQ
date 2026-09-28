@@ -130,6 +130,12 @@ struct Session<'p> {
     /// stage are served in this order (vLLM's `running` list is in order of
     /// admission; a preempted request re-enters at the end).
     adm_seq: u64,
+    /// Per pool, the position the session's hold had reached on that pool
+    /// when it was last preempted for it; cleared when a hold completes. A
+    /// second preemption for the same pool at the same or a lower position
+    /// is no progress there: the session is `stuck`.
+    preempt_pos: HashMap<usize, f64>,
+    stuck: bool,
 }
 
 // ------------------------------------------------------------- pools ----
@@ -167,6 +173,9 @@ struct PoolState {
     preemptions: u64,
     spills: u64,
     rejected: u64,
+    /// Sessions preempted again without having advanced past the position
+    /// of their previous preemption (a self-preemption livelock, typically).
+    stuck: u64,
 }
 
 // ------------------------------------------------------------ stages ----
@@ -355,6 +364,7 @@ impl<'p> Interp<'p> {
                 preemptions: 0,
                 spills: 0,
                 rejected: 0,
+                stuck: 0,
             })
             .collect();
         let stages = p
@@ -619,6 +629,8 @@ impl<'p> Interp<'p> {
             trace,
             script: script.map(|k| (k, 0)),
             adm_seq: u64::MAX,
+            preempt_pos: HashMap::new(),
+            stuck: false,
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -785,6 +797,11 @@ impl<'p> Interp<'p> {
                             .pop()
                             .expect("hold frame has a hold");
                         self.release_hold(sid, &h);
+                        // this hold completed: its pools' preemption positions
+                        // are history (an enclosing hold keeps its own)
+                        for &(q, _) in &h.pools {
+                            self.sessions[sid].preempt_pos.remove(&q);
+                        }
                         self.try_admit_all();
                     }
                 }
@@ -1466,6 +1483,21 @@ impl<'p> Interp<'p> {
             .iter()
             .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
             .expect("victim holds the pool");
+        // progress since the last preemption for this pool: the position the
+        // hold reached on it (what a `growing` run computed, else the
+        // allocation)
+        let reached = {
+            let h = &self.sessions[victim].holds[hi];
+            let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
+            if h.grown { h.pos[k] } else { h.pools[k].1 }
+        };
+        if let Some(&prev) = self.sessions[victim].preempt_pos.get(&pl) {
+            if reached <= prev + 1e-9 && !self.sessions[victim].stuck {
+                self.sessions[victim].stuck = true;
+                self.pools[pl].stuck += 1;
+            }
+        }
+        self.sessions[victim].preempt_pos.insert(pl, reached);
         self.detach(victim);
         // unwind holds inner to `hi` (nested holds), then `hi` itself
         while self.sessions[victim].holds.len() > hi {
@@ -1910,7 +1942,16 @@ impl<'p> Interp<'p> {
                 break;
             }
         }
-        if assign.is_empty() {
+        // An iteration that scheduled nothing is no iteration, unless it
+        // preempted: then it is the scheduler step that only preempted (vLLM's
+        // `schedule()` returns with `preempted_reqs` and admits nothing,
+        // scheduler.py:869; the oracle driver counts the step; the Lean
+        // model's `startIteration` returns the empty iteration and `tick`
+        // re-admits at the next), and the next iteration re-admits the
+        // victim. Dropping it left the engine idle with the victim queued and
+        // no event to wake it.
+        let preempted = self.pools.iter().map(|p| p.preemptions).sum::<u64>() > preempt0;
+        if assign.is_empty() && !preempted {
             return;
         }
         let ntok: f64 = assign.iter().map(|a| a.1).sum();
@@ -2398,6 +2439,7 @@ impl<'p> Interp<'p> {
                 preemptions: pl.preemptions,
                 spills: pl.spills,
                 rejected: pl.rejected,
+                stuck: pl.stuck,
             })
             .collect();
         Report {
