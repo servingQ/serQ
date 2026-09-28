@@ -25,6 +25,17 @@ In the order they bite:
 
 Sugar that rewrites to the kernel at parse time is cheap; a new IR node costs every consumer. Prefer narrowing an existing form to adding one.
 
+## The questions a review answers
+
+Ask them in this order and write down the answer to each, including "no finding"; a review that skips one is incomplete. Every finding names a file and line and says what a reader would see there.
+
+1. **Purpose kept.** After the change, is a program still a specification a serving engineer reads, and do the three consumers still agree: does `make check` pass, are the oracle scenarios and the trace unchanged or changed for a stated reason, does the §7 correspondence table of `docs/language.md` still hold line by line against `ref/vllm`? A change that makes `programs/vllm.seq` read less like vLLM fails here even if every test passes.
+2. **Simpler is possible.** Could the change be sugar instead of an IR node? Could an existing form be narrowed instead of a new one added? Does one meaning now have two spellings, or one thing two mechanisms (criterion 0)? If a construct was added, name the construct that could have carried it.
+3. **Complexity did not grow.** Count what a reader must now know: the rules of `docs/language.md` §2 and §3, the fields and variants of `src/ir.rs`. A change that adds a rule must remove one or say which rule it replaces. A new IR field or variant is in the Lean fragment, or the change says it is outside it and why.
+4. **Intention could be plainer.** Every new name is read from the side it is written on (the session's side in a `session` block, the scheduler's in a `server` block or a pool option); an upstream name is used where the mechanism is upstream's and not otherwise; an error message says what was read, where, and where it exists. Propose the plainer spelling, not the observation that one might exist.
+5. **Evidence is the code, not the implementation.** A Before is copied from the repository, an After was run. A test's expected numbers are derived from the upstream code or the semantics by hand and the derivation is in the test's comment; a test that asserts what the implementation happens to do is not evidence. What is not verified is stated as such in the PR (an oracle path never exercised, a scenario that needs a machine the author lacks).
+6. **One change.** The PR does one thing and moves everything that thing touches: the spec, `docs/ir.md`, the tutorial, the editor grammars and `docs/hooks/seq_lexer.py`, the regenerated `tools/oracle/*.ir.json` and `tests/golden/`. Anything else in the diff is a separate PR.
+
 ## Not worth a comment
 
 Formatting and lint — `make check` runs `cargo fmt` and `clippy` in CI.

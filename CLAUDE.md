@@ -80,6 +80,15 @@ request descriptions are written in Korean. A nav title that contains `#`
 must be quoted in `mkdocs.yml`, or YAML reads it as a comment and the strict
 build aborts.
 
+## Reviewing a change
+
+`.github/copilot-instructions.md` is the review checklist, for Copilot and
+for anyone else: the IR rules, the four design criteria, and six questions
+answered in order (purpose kept, simpler possible, complexity not grown,
+intention plainer, evidence is the code, one change). A review that does not
+answer all six is not done. Comments are in Korean, short: the finding and
+the evidence.
+
 ## Working with GitHub here
 
 `gh pr edit` and `gh issue edit` fail on this repository:
