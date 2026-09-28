@@ -608,3 +608,267 @@ impl Validator<'_> {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Printing expressions back to source form.
+//
+// The IR keeps no source text: names are slots and `let` constants are folded.
+// Anything that shows a program to a person - a figure's label, an error that
+// wants to quote the expression it is about - needs them back. The precedence
+// levels below are those of `parser.rs`, so the output re-parses to the same
+// tree (modulo the folded constants, which are numbers by then).
+// ---------------------------------------------------------------------------
+
+/// Precedence levels of `parser.rs`, lowest binding first.
+mod prec {
+    pub const COND: u8 = 0;
+    pub const OR: u8 = 1;
+    pub const AND: u8 = 2;
+    pub const CMP: u8 = 3;
+    pub const ADD: u8 = 4;
+    pub const MUL: u8 = 5;
+    pub const UNARY: u8 = 6;
+    pub const POW: u8 = 7;
+    pub const ATOM: u8 = 8;
+}
+
+impl BinOp {
+    fn symbol(self) -> &'static str {
+        match self {
+            BinOp::Add => "+",
+            BinOp::Sub => "-",
+            BinOp::Mul => "*",
+            BinOp::Div => "/",
+            BinOp::Pow => "^",
+            BinOp::Lt => "<",
+            BinOp::Le => "<=",
+            BinOp::Gt => ">",
+            BinOp::Ge => ">=",
+            BinOp::Eq => "==",
+            BinOp::Ne => "!=",
+            BinOp::And => "&&",
+            BinOp::Or => "||",
+        }
+    }
+
+    fn precedence(self) -> u8 {
+        match self {
+            BinOp::Or => prec::OR,
+            BinOp::And => prec::AND,
+            BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne => prec::CMP,
+            BinOp::Add | BinOp::Sub => prec::ADD,
+            BinOp::Mul | BinOp::Div => prec::MUL,
+            BinOp::Pow => prec::POW,
+        }
+    }
+}
+
+impl CtxVar {
+    fn name(self) -> &'static str {
+        match self {
+            CtxVar::Now => "now",
+            CtxVar::Size => "size",
+            CtxVar::Age => "age",
+            CtxVar::Last => "last",
+            CtxVar::Queued => "queued",
+            CtxVar::N => "n",
+            CtxVar::Ntok => "ntok",
+            CtxVar::Ndec => "ndec",
+            CtxVar::Npre => "npre",
+            CtxVar::Nres => "nres",
+            CtxVar::Kvb => "kvb",
+            CtxVar::Kvp => "kvp",
+            CtxVar::Attn => "attn",
+        }
+    }
+}
+
+impl Fun {
+    fn name(self) -> &'static str {
+        match self {
+            Fun::Min => "min",
+            Fun::Max => "max",
+            Fun::Abs => "abs",
+            Fun::Floor => "floor",
+            Fun::Ceil => "ceil",
+            Fun::Sqrt => "sqrt",
+            Fun::Exp => "exp",
+            Fun::Ln => "ln",
+            Fun::Pow => "pow",
+            Fun::Queue => "queue",
+            Fun::Busy => "busy",
+            Fun::Work => "work",
+            Fun::Used => "used",
+            Fun::Free => "free",
+            Fun::CachedIn => "cachedin",
+            Fun::Holders => "holders",
+            Fun::Queued => "queued",
+            Fun::Price => "price",
+            Fun::BudgetLeft => "budget_left",
+            Fun::EstLambda => "est_lambda",
+            Fun::EstRho => "est_rho",
+            Fun::EstWait => "est_wait",
+        }
+    }
+}
+
+impl DistKind {
+    fn name(self) -> &'static str {
+        match self {
+            DistKind::Exp => "exp",
+            DistKind::Det => "det",
+            DistKind::Uniform => "uniform",
+            DistKind::Erlang => "erlang",
+            DistKind::H2 => "h2",
+            DistKind::Bernoulli => "bernoulli",
+        }
+    }
+}
+
+/// A number as a person would write it in a program: `16`, `2e-5`, `inf`.
+///
+/// Rust's `{}` writes `0.000000002` for `2e-9`, which is unreadable in a
+/// label; `{:e}` writes `1.6e5` for `160000`, which is worse. Whole numbers
+/// that fit take the plain form, the rest take whichever is shorter.
+pub fn show_num(x: f64) -> String {
+    if x.is_nan() {
+        return "nan".into();
+    }
+    if x.is_infinite() {
+        return if x < 0.0 { "-inf".into() } else { "inf".into() };
+    }
+    if x == x.trunc() && x.abs() < 1e15 {
+        return format!("{}", x as i64);
+    }
+    let plain = format!("{x}");
+    let sci = format!("{x:e}");
+    if sci.len() < plain.len() { sci } else { plain }
+}
+
+impl Program {
+    /// An expression in source form, with attribute, pool and stage names.
+    ///
+    /// `let` constants were folded at link time, so they come back as their
+    /// values: `cap blocks * bs` prints as `160000`.
+    pub fn show_expr(&self, e: &CExpr) -> String {
+        let mut s = String::new();
+        self.write_expr(&mut s, e, prec::COND);
+        s
+    }
+
+    /// A pool reference: `kv`, `rep[j]`.
+    pub fn show_pool_ref(&self, r: &CRef) -> String {
+        self.show_ref(r, |i| self.pools.get(i).map(|p| p.name.as_str()))
+    }
+
+    /// A stage reference: `engine`, `rep[j]`.
+    pub fn show_stage_ref(&self, r: &CRef) -> String {
+        self.show_ref(r, |i| self.stages.get(i).map(|s| s.name.as_str()))
+    }
+
+    fn show_ref<'a>(&self, r: &CRef, name: impl Fn(usize) -> Option<&'a str>) -> String {
+        let base = name(r.base).unwrap_or("?").to_string();
+        match &r.index {
+            None => base,
+            Some(i) => format!("{base}[{}]", self.show_expr(i)),
+        }
+    }
+
+    fn attr_name(&self, slot: usize) -> &str {
+        self.attrs.get(slot).map_or("?", String::as_str)
+    }
+
+    fn write_expr(&self, out: &mut String, e: &CExpr, min: u8) {
+        use std::fmt::Write as _;
+        match e {
+            CExpr::Num(x) => {
+                // `pow()` parses `atom() '^' unary()`, so a folded negative
+                // constant on the left of `^` has to be bracketed or the
+                // output re-parses as `-(2 ^ a)`.
+                if *x < 0.0 && min >= prec::UNARY {
+                    let _ = write!(out, "({})", show_num(*x));
+                } else {
+                    out.push_str(&show_num(*x));
+                }
+            }
+            CExpr::Attr(slot) => out.push_str(self.attr_name(*slot)),
+            CExpr::Ctx(v) => out.push_str(v.name()),
+            CExpr::Sample(d, args) => {
+                let _ = write!(out, "~{}(", d.name());
+                for (i, a) in args.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    self.write_expr(out, a, prec::COND);
+                }
+                out.push(')');
+            }
+            CExpr::Call(f, args) => {
+                let _ = write!(out, "{}(", f.name());
+                self.write_list(out, args);
+                out.push(')');
+            }
+            CExpr::Unary(op, a) => {
+                let wrap = min > prec::UNARY;
+                if wrap {
+                    out.push('(');
+                }
+                out.push_str(match op {
+                    UnOp::Neg => "-",
+                    UnOp::Not => "!",
+                });
+                self.write_expr(out, a, prec::UNARY);
+                if wrap {
+                    out.push(')');
+                }
+            }
+            CExpr::Binary(op, a, b) => {
+                let p = op.precedence();
+                let wrap = min > p;
+                if wrap {
+                    out.push('(');
+                }
+                // `^` is right associative and takes an atom on the left;
+                // every other operator is left associative.
+                let (l, r) = if *op == BinOp::Pow {
+                    (prec::ATOM, prec::UNARY)
+                } else {
+                    (p, p + 1)
+                };
+                self.write_expr(out, a, l);
+                let _ = write!(out, " {} ", op.symbol());
+                self.write_expr(out, b, r);
+                if wrap {
+                    out.push(')');
+                }
+            }
+            CExpr::Cond(c, a, b) => {
+                let wrap = min > prec::COND;
+                if wrap {
+                    out.push('(');
+                }
+                self.write_expr(out, c, prec::OR);
+                out.push_str(" ? ");
+                self.write_expr(out, a, prec::COND);
+                out.push_str(" : ");
+                self.write_expr(out, b, prec::COND);
+                if wrap {
+                    out.push(')');
+                }
+            }
+        }
+    }
+
+    fn write_list(&self, out: &mut String, args: &[CArg]) {
+        for (i, a) in args.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
+            match a {
+                CArg::Expr(e) => self.write_expr(out, e, prec::COND),
+                CArg::Pool(r) => out.push_str(&self.show_pool_ref(r)),
+                CArg::Stage(r) => out.push_str(&self.show_stage_ref(r)),
+            }
+        }
+    }
+}

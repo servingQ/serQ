@@ -15,6 +15,9 @@
 //! ```
 
 pub mod ast;
+pub mod deployment;
+pub mod draw;
+pub mod figure;
 pub mod ir;
 pub mod lexer;
 pub mod link;
@@ -22,6 +25,8 @@ pub mod parser;
 pub mod report;
 pub mod sim;
 pub mod stats;
+pub mod svg;
+pub mod tikz;
 pub mod trace;
 
 use std::path::Path;
