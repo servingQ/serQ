@@ -21,7 +21,7 @@ stage decode : fifo(N - NP);
 
 workload { arrive closed(jobs); }
 
-route {
+session {
   loop {
     set t0 = now;
     set sp = ~exp(sP);

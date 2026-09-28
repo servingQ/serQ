@@ -60,10 +60,10 @@ fn malformed_ir_is_rejected() {
     bad.version = 0;
     assert!(bad.validate().unwrap_err().contains("version"));
     let mut bad = p.clone();
-    bad.route = bad.blocks.len();
+    bad.session = bad.blocks.len();
     assert!(bad.validate().unwrap_err().contains("out of range"));
     let mut bad = p.clone();
-    bad.blocks[bad.route].push(seq::ir::CStmt::Set(99, seq::ir::CExpr::Num(1.0)));
+    bad.blocks[bad.session].push(seq::ir::CStmt::Set(99, seq::ir::CExpr::Num(1.0)));
     assert!(bad.validate().unwrap_err().contains("attribute slot 99"));
     let j = p.to_json().replace("\"Fifo\": 1", "\"Fifo\": \"x\"");
     assert!(Program::from_json(&j).is_err());
@@ -75,7 +75,7 @@ fn explicit_sessions_preset_attributes() {
     let src = r#"
         stage d : delay;
         workload { arrive batch(1); init { set w = 1; } }
-        route { run d (w); observe done = now; end; }
+        session { run d (w); observe done = now; end; }
         run { horizon 100; }
     "#;
     let p = compile_source(src, &Overrides::default())

@@ -2,7 +2,7 @@
 //!
 //! A program is a *deployment* (pools and stages), a *workload* (how
 //! sessions arrive and how a session's attributes evolve from turn to
-//! turn) and a *route* (the statements every session executes). See
+//! turn) and a *session* (the statements every session executes). See
 //! `docs/language.md` for the semantics.
 
 pub use crate::ir::{BinOp, Preempt, RunMode, UnOp};
@@ -181,6 +181,6 @@ pub struct Program {
     pub pools: Vec<PoolDecl>,
     pub stages: Vec<StageDecl>,
     pub workload: Option<Workload>,
-    pub route: Vec<Stmt>,
+    pub session: Vec<Stmt>,
     pub run: RunOpts,
 }

@@ -121,8 +121,9 @@ What it misses or gets wrong:
   with forced-miss flags, so a measured run and its program consume the
   same sessions.
 
-Kept from the lecture: the syntax's three parts (deployment, workload,
-route); commands take no time, flow at stages; the memory invariant; the
+Kept from the lecture: the syntax's three parts (deployment, workload, and
+the per-session program, which the lecture called the route and v2 calls
+`session`); commands take no time, flow at stages; the memory invariant; the
 hit decided at admission; sessions as the unit that moves.
 
 ## 3. What the validation found (self-review)
@@ -175,7 +176,7 @@ programs):
   [K tutorial](https://kframework.org/exports/K.html),
   [user manual](https://kframework.org/docs/user_manual/),
   [LLVM backend](https://pi2labs.org/papers/semantics-based-execution-llvm-k-framework)).
-  Fit: the operational semantics of §3 of `route-language.md` is a K
+  Fit: the operational semantics of §3 of `language.md` is a K
   configuration with cells for sessions, pools and stages, and
   `kprove` could check reachability properties of small programs.
   Against: K has no native stochastic or timed semantics (random draws

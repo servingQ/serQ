@@ -30,7 +30,7 @@ workload {
 }
 
 // libqueuingsim frees a finished session's KV: `drop kv;` before every `end;`
-route {
+session {
   loop {
     turn;
     set t0 = now;

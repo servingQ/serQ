@@ -18,7 +18,7 @@ workload {
   }
 }
 
-route {
+session {
   run svc (s);
   observe sojourn = now - t0;
   end;

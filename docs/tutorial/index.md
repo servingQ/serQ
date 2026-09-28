@@ -9,7 +9,7 @@ preemption — and watched it fall off a cliff.
 
 | | Chapter | The idea | New syntax |
 |---|---|---|---|
-| 1 | [A queue](01-a-queue.md) | requests wait for a server | `stage`, `workload`, `route`, `run`, `observe` |
+| 1 | [A queue](01-a-queue.md) | requests wait for a server | `stage`, `workload`, `session`, `run`, `observe` |
 | 2 | [Memory is a resource](02-memory.md) | requests also wait for *memory* | `pool`, `hold` |
 | 3 | [Sessions and turns](03-sessions.md) | a session is many turns with thinking in between | `loop`, `turn`, `branch`, `delay` |
 | 4 | [The prefix cache](04-prefix-cache.md) | a finished turn leaves its context behind | `cache`, `cached`, `evict`, `drop` |

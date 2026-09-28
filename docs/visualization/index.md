@@ -7,7 +7,7 @@
     Design discussion: [RFC #1](https://github.com/vrvrv/seQ/issues/1).
 
 ```
-seq-lang draw FILE [--view deployment|route] [--format tikz|svg]
+seq-lang draw FILE [--view deployment|session] [--format tikz|svg]
                    [--out PATH] [--set name=expr]... [--show-set]
 ```
 
@@ -39,7 +39,7 @@ RNG — the same IR gives the same bytes.
     queues and prefix caches, the instance boundaries, and the flow between
     them. The default.
 
-- ### [Route](route.md)
+- ### [Session](session.md)
 
     One session's path with every statement kept, in which `hold` is a band
     over a pool's column and `cache` is a tail that outlives it.
@@ -52,9 +52,9 @@ Here is `programs/vllm.seq` — vLLM v1's engine — in each:
 
 ![vLLM v1 as a queueing network](../assets/vllm.deployment.svg)
 
-**Route**
+**Session**
 
-![vLLM v1's route](../assets/vllm.route.svg)
+![vLLM v1's session program](../assets/vllm.session.svg)
 
 ## Formats
 
@@ -82,7 +82,7 @@ result black.
 ```
 src/figure.rs      the geometry a view produces and a writer consumes
 src/deployment.rs  ir::Program -> Figure   the network projection
-src/draw.rs        ir::Program -> Figure   the route projection
+src/draw.rs        ir::Program -> Figure   the session projection
 src/tikz.rs        Figure -> String
 src/svg.rs         Figure -> String
 ```
@@ -99,7 +99,7 @@ views and both formats, and every IR file in `tools/oracle/`.
   the name says the two boxes are the same pool.
 * **One station row.** A program with many stages runs off to the right
   instead of wrapping.
-* **Branch lanes in the route view are a rail, not a layout.** Deeply nested
+* **Branch lanes in the session view are a rail, not a layout.** Deeply nested
   branches give a tall figure; `routing.seq` most of all.
 * **Long expressions are elided** with `~` rather than wrapped or footnoted.
 * **`let` names are gone.** `cap blocks * bs` prints as `160000` — the IR

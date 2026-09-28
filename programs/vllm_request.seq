@@ -16,7 +16,7 @@ stage gate : delay;
 
 workload { arrive batch(1); init { set prompt = 1; set o = 1; set arrive = 0; } }
 
-route {
+session {
   run gate (arrive);
   // the scheduler admits with the blocks of the chunk the budget the
   // running requests leave allows, if the whole prompt fits

@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Version of the IR format. Bump on any change to the types below.
-pub const IR_VERSION: u32 = 2;
+pub const IR_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -248,7 +248,7 @@ pub enum CArrival {
 }
 
 /// A seQ program in IR form: the deployment (pools, stages), the workload
-/// (arrival, `init`/`turn` blocks, trace, or explicit sessions), the route
+/// (arrival, `init`/`turn` blocks, trace, or explicit sessions), the session
 /// (statement blocks) and the run parameters. Every name is resolved to an
 /// index and every constant is folded; the tables `attrs` and `observes`
 /// keep the names for tools.
@@ -265,7 +265,7 @@ pub struct Program {
     pub trace_ordered: bool,
     pub init: BlockId,
     pub turn: BlockId,
-    pub route: BlockId,
+    pub session: BlockId,
     pub blocks: Vec<Vec<CStmt>>,
     pub horizon: f64,
     pub warmup: f64,
@@ -350,7 +350,7 @@ impl Program {
     /// program's `batch` or `closed` count), session `i` replaying trace
     /// session `i mod len`, each turn setting `new`, `out`, `think`,
     /// `forced`. The program must arrive in a batch at time 0 (arrival
-    /// times are the route's business, e.g. a delay of `serial * spacing`).
+    /// times are the session's business, e.g. a delay of `serial * spacing`).
     pub fn inline_trace(mut self, corpus: &crate::trace::Corpus) -> Result<Program, String> {
         let n = match self.arrival {
             CArrival::Batch(n) => n,
@@ -404,7 +404,7 @@ impl Program {
         for (k, blk) in [
             ("init", self.init),
             ("turn", self.turn),
-            ("route", self.route),
+            ("session", self.session),
         ] {
             v.block(blk).map_err(|e| format!("{k}: {e}"))?;
         }

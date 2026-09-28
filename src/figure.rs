@@ -1,10 +1,10 @@
 //! The geometry a view produces and a writer consumes.
 //!
-//! Both views (`draw` for the route, `deployment` for the queueing network)
-//! produce a `Figure`; both writers (`svg`, `tikz`) consume one. Nothing in
-//! here knows about seQ, and nothing in a writer decides a coordinate: a
-//! figure is the test surface, which is why the tests assert on rectangles
-//! rather than on bytes.
+//! Both views (`draw` for the session program, `deployment` for the queueing
+//! network) produce a `Figure`; both writers (`svg`, `tikz`) consume one.
+//! Nothing in here knows about seQ, and nothing in a writer decides a
+//! coordinate: a figure is the test surface, which is why the tests assert on
+//! rectangles rather than on bytes.
 //!
 //! Coordinates are points, x to the right and y **downwards**, origin at the
 //! figure's top left. The TikZ writer flips y on the way out.

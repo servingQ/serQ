@@ -26,7 +26,7 @@ fn engine(
         pool slots {{ cap {max_seqs}; }}
         stage engine : step {{ budget {budget}; cost 1; memory kv; {extra} }}
         workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }} }}
-        route {{
+        session {{
           set t0 = now;
           hold slots (1), kv (min(prompt, {budget})) {{
             observe admitted = now - t0;
@@ -127,7 +127,7 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         pool slots { cap 16; }
         stage engine : step { budget 8192; cost 1; memory kv; }
         workload { arrive batch(1); init { set K = 0; set turns = 0; } }
-        route {
+        session {
           loop {
             set prompt = K + 100;
             set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
@@ -166,7 +166,7 @@ fn lru_eviction_drops_tail_blocks_first() {
         stage engine : step { budget 8192; cost 1; memory kv; }
         stage gate : delay;
         workload { arrive batch(2); init { set K = 0; set turns = 0; } }
-        route {
+        session {
           // session 0 runs first (160 tokens -> 10 blocks cached), then session 1
           // takes 12 blocks, evicting 2 of session 0's from its tail; session 0's
           // second turn then reuses 8 blocks.

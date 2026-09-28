@@ -1,7 +1,7 @@
 //! The deployment view: a seQ program as a queueing network.
 //!
 //! Pools and stages are declared, but the arrows between them are not: the
-//! flow is a property of the route. This module projects the route onto the
+//! flow is a property of the session program. This module projects it onto the
 //! stages — the statements disappear, the `Run`s become stations, and the
 //! `Hold`s become the boundaries drawn around them — and lays the result out.
 //!
@@ -27,7 +27,7 @@ pub enum End {
     Exit,
 }
 
-/// A station: one stage the route reaches.
+/// A station: one stage the session reaches.
 #[derive(Clone, Debug)]
 pub struct Node {
     pub stage: usize,
@@ -51,7 +51,7 @@ pub struct Edge {
     pub back: bool,
 }
 
-/// The route, projected onto the stages.
+/// The session program, projected onto the stages.
 #[derive(Clone, Debug, Default)]
 pub struct Net {
     pub nodes: Vec<Node>,
@@ -63,7 +63,7 @@ pub struct Net {
 }
 
 impl Net {
-    /// The node for a stage, if the route reaches it.
+    /// The node for a stage, if the session reaches it.
     pub fn node_of(&self, stage: usize) -> Option<usize> {
         self.nodes.iter().position(|n| n.stage == stage)
     }
@@ -326,7 +326,7 @@ fn arrival_label(p: &Program) -> String {
     }
 }
 
-/// Project a program's route onto its stages.
+/// Project the session program onto the stages.
 pub fn project(p: &Program) -> Net {
     let mut w = Walker {
         p,
@@ -340,8 +340,8 @@ pub fn project(p: &Program) -> Net {
         pending: vec![],
         arm: None,
     };
-    w.walk(p.route);
-    // Anything still on the frontier ran off the end of the route.
+    w.walk(p.session);
+    // Anything still on the frontier ran off the end of the session program.
     let frontier = std::mem::take(&mut w.frontier);
     for (from, label) in frontier {
         if from != End::Arrival {
@@ -439,7 +439,7 @@ pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
         }
     }
     let mut out = BTreeMap::new();
-    walk(p, p.route, &mut vec![], &mut out);
+    walk(p, p.session, &mut vec![], &mut out);
     out
 }
 
@@ -721,7 +721,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     f.edge(vec![pt(MARGIN, y), pt(r.x, y)], EdgeStyle::Flow);
                     f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
                 } else {
-                    // A route that opens with a branch has more than one entry
+                    // A session that opens with a branch has more than one entry
                     // station. A second arrow along the row would run straight
                     // through the first one, so it takes a lane of its own.
                     let ly = lane(&mut lanes);

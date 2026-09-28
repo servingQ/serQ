@@ -41,7 +41,7 @@ workload {
   trace "data/short_base.csv" ordered;
 }
 
-route {
+session {
   run gate (serial * spacing);
   set prev = 0;
   set prevout = 0;

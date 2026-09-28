@@ -16,7 +16,7 @@ workload {
   }
 }
 
-route {
+session {
   turn;
   set t0 = now;
   hold mem (c) {

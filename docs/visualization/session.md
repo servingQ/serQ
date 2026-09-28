@@ -1,17 +1,17 @@
-# The route view
+# The session view
 
-`--view route`: one session's path, with every statement kept.
+`--view session`: one session's path, with every statement kept.
 
-![vLLM v1's route](../assets/vllm.route.svg)
+![vLLM v1's session program](../assets/vllm.session.svg)
 
 ## Why it is not a flowchart
 
-The deployment view quotients the route to its stages. This one keeps
+The deployment view quotients the session program to its stages. This one keeps
 everything, and its subject is the thing a node-and-arrow diagram cannot show:
 `hold` is a **scope**.
 
 So a hold is drawn as a **band** — a region of a pool's column occupied over a
-span of the route — and the units a scope leaves cached are a **tail** that
+span of the program — and the units a scope leaves cached are a **tail** that
 outlives the band. In `vllm.seq` that tail crosses the bottom of the `loop` and
 is consumed at the top of the next turn by `c = min(cachedin(kv), …)`:
 
@@ -23,7 +23,7 @@ call forty lines apart.
 
 ## Widths are nominal; edges are not
 
-Vertical is position in the route, not time. Band widths are **not to scale** —
+Vertical is position in the program, not time. Band widths are **not to scale** —
 a single session's allocation against a pool of 160 000 units would be
 invisible, and magnitude is not what this view is for.
 
@@ -68,7 +68,7 @@ includes them.
 the information: in the figure above it sits between the prefill run and the
 decode run, inside the band, which is the definition of the quantity.
 
-## Reading the vLLM route
+## Reading the vLLM session
 
 Three things the figure states that the 50 lines of source do not:
 

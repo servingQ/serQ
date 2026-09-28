@@ -16,7 +16,7 @@ survey are in `docs/review.md`.
 
 The formal model is in `serving-queue-theory`, which uses a pinned
 release of seQ: `lean/ServingQueueTheory/Seq.lean` (syntax `Route Env V`
-of the route block, pool semantics, memory invariant, surface syntax),
+of the `session` block, pool semantics, memory invariant, surface syntax),
 `SeqExec.lean` (an executable semantics of the pool and step-engine
 fragment), `SeqOracle.lean` (the vLLM scheduler scenarios of
 `tools/oracle/` as theorems, generated), `SeqServe.lean` (serving order
@@ -32,7 +32,7 @@ A100 measurements of Section 8.
 A serving deployment is a program. The program names the resources of the
 deployment (memory pools, stages), says how sessions arrive and how a
 session's turns evolve (the workload), and gives the path every session
-takes through the resources (the route). One program has three uses:
+runs as a session. One program has three uses:
 
 1. **Simulation.** `seq-lang run prog.seq` executes it as a discrete-event
    simulation and reports time averages, per-observation statistics and
@@ -43,7 +43,8 @@ takes through the resources (the route). One program has three uses:
    invariant of every pool, the shares of a processor-sharing stage) and
    of particular programs (well-formedness of the paper's replica) are
    theorems. Programs can be written in seQ's own syntax inside Lean
-   (`[route| ... ]`).
+   (`[route| ... ]`; the Lean type and its quotation still carry the block's
+   former name, `route`, until the companion change lands there).
 3. **Specification of production systems.** vLLM v1's engine is a
    50-line program (`programs/vllm.seq`, `vllm_replay.seq`). It
    reproduces the real scheduler request for request: on six
@@ -71,7 +72,7 @@ item     := let NAME = expr ;
           | pool NAME [ '[' N ']' ] { poolopt* }
           | stage NAME [ '[' N ']' ] : kind ;
           | workload { wlitem* }
-          | route block
+          | session block
           | run { horizon expr ; warmup expr ; seed expr ; }
 poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
@@ -198,7 +199,7 @@ a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 **Workload.** `init` runs at arrival, `turn` at every `turn` statement;
 with a `trace`, `turn` loads the next turn's `new`, `out`, `think`,
 `forced` and sets `more` (`ordered`: session `i` replays trace session `i`).
-Random draws use separate streams for arrivals, workload, route and
+Random draws use separate streams for arrivals, workload, the session and
 eviction.
 
 **Statistics.** `observe x = e` records a sample after warm-up with the
@@ -210,7 +211,8 @@ and rejections.
 
 **Executable semantics in Lean.** `SeqExec.lean` defines the same rules
 for the fragment of pools and one step engine on the step clock (values in
-ℕ): `Exec.run` interprets a `Route Env ℕ` program for `n` sessions. It is
+ℕ): `Exec.run` interprets a `Route Env ℕ` program for `n` sessions (the Lean
+type keeps the block's former name for now). It is
 the semantics the oracle theorems are about.
 
 

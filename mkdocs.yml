@@ -73,7 +73,7 @@ nav:
   - Visualization:
       - visualization/index.md
       - Deployment view: visualization/deployment.md
-      - Route view: visualization/route.md
+      - Session view: visualization/session.md
   - Case study — vLLM v1: case-study-vllm.md
   - Reference:
       - reference/cheatsheet.md
