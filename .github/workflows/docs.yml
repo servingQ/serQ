@@ -16,8 +16,15 @@ on:
       - .github/workflows/docs.yml
   workflow_dispatch:
 
+# One deployment at a time; a newer commit supersedes an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -34,14 +41,27 @@ jobs:
       # The pages include programs/*.seq and docs/tutorial/programs/*.seq with
       # pymdownx.snippets, so --strict fails if one is renamed or removed.
       - run: mkdocs build --strict
-      # The site is an artifact rather than a deployment: this repository is
-      # private, its documentation quotes unpublished measurements and
-      # pre-registered predictions, and GitHub Pages for a private repository
-      # needs a plan that supports private Pages. Anyone with repository access
-      # can download this and open index.html. To publish instead, see
-      # `docs/publishing.md`.
+      # A reviewer of a docs pull request can download this and open it.
       - uses: actions/upload-artifact@v4
         with:
           name: site
           path: site
           retention-days: 30
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    # The site is public (docs/publishing.md). Only main publishes; a pull
+    # request builds and uploads the artifact and stops there.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
