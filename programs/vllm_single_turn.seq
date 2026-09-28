@@ -1,18 +1,7 @@
-// vLLM v1 on one device (ref/vllm at 0c87a197, `vllm/v1/core/sched/
-// scheduler.py`, `kv_cache_manager.py`, `block_pool.py`), as a seQ
-// program. Continuous batching with chunked prefill: every iteration hands
-// a token budget to the running requests in admission order (one token per
-// decoding request, up to `chunk` per prefilling one), then admits waiting
-// requests FCFS while the request cap and the KV blocks allow, the first
-// that does not fit blocking the rest. KV memory is a block pool with a
-// block-level LRU prefix cache: a finished (or preempted) request's full
-// blocks stay cached and are evicted tail first when the free queue is
-// drained; the next turn of a session reuses its cached prefix (full blocks,
-// never the whole prompt). A request grows one block at a time as it
-// decodes; when no block is free the most recently admitted request is
-// preempted (its blocks freed to the cache, it re-enters the waiting queue
-// at the head and recomputes what was lost). See docs/language.md
-// §"vLLM" for the line-by-line correspondence.
+// vLLM v1 serving single-turn requests: a session is one request — a
+// prompt, an answer, gone. The engine (the constants down to `c0`, the
+// pools, the stage and the `server` block) is `programs/vllm.seq`'s line
+// for line; only the workload differs (docs/case-study-workloads.md).
 let B = 8192;          // max_num_batched_tokens
 let max_seqs = 16;     // max_num_seqs
 let blocks = 10000;    // num_gpu_blocks (less the null block)
@@ -22,9 +11,7 @@ let a = 2e-5;          // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
 let c0 = 0;            // fixed cost per iteration (s)
-let Lambda = 0.3;      // sessions per second
-let p = 0.9;           // continue after a turn
-let Z = 3.0;           // tool time (s)
+let Lambda = 3.0;      // requests per second
 
 pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
 pool reqs { cap max_seqs; }
@@ -35,33 +22,22 @@ stage engine : step {
   cost c0 + max(omega + beta * (kvb + kvp), ntok * a);
   memory kv;
 }
-stage tool : delay;
 
 // --8<-- [start:workload]
-// The client: sessions arrive, each turn brings a prompt of n new tokens
-// on a context of K and wants o tokens back, and after a turn the session
-// calls a tool and comes back with probability p. Nothing here is vLLM.
+// A request arrives, is served, and its session ends: no context carries
+// over, so `K` stays 0 and the prefix cache is never read back (entries
+// are per session, docs/language.md §9).
 workload {
   arrive poisson(Lambda);
-  hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   init { set K = 0; }
   turn {
-    set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
+    set n = ~uniform(1000, 3000);
     set o = ~exp(200) + 1;
-    set more = ~bernoulli(p);
   }
-  session {
-    turn;
-    loop {
-      request;
-      set K = prompt + o;
-      branch (more) { tool (~exp(Z)); turn; } else { end; }
-    }
-  }
+  session { turn; request; end; }
 }
 // --8<-- [end:workload]
 
-// The engine: what vLLM does with one request.
 server {
   set t0 = now;
   set prompt = K + n;
