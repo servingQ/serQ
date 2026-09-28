@@ -101,6 +101,9 @@ GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.proj
 REST API instead — `gh api -X PATCH repos/vrvrv/seQ/pulls/N --input -` with a
 JSON body, or `.../issues/N`. Creating works; only editing is affected.
 
+PR titles are Conventional Commits, `type(scope): subject`; CI checks it
+(`.github/workflows/pr-title.yml`).
+
 Branch from `origin/main`, not from whatever `main` points at locally:
 `git fetch && git checkout -b <name> origin/main`. Three branches were built
 on a stale `main` in one sitting, and one of them would have reverted a rename
