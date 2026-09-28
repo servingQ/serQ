@@ -22,6 +22,19 @@ it in `syntaxes/` with
 }
 ```
 
+## GitHub
+
+GitHub highlights by [Linguist](https://github.com/github-linguist/linguist),
+which has no seQ, and adding one there needs the language to be in use across
+many public repositories. Until then `.gitattributes` maps `.seq` to Rust,
+which shares the comment syntax, the number literals and four keywords. The
+words that carry a program's meaning stay plain — that is the cost of an
+approximation we do not control, and it is still better than no colour at all.
+
+Markdown fences are a different matter: a ```seq fence renders plain on
+GitHub and highlighted on the site, because a fence's language is Linguist's
+to resolve and the site's renderer is ours.
+
 ## The documentation site
 
 `docs/hooks/seq_lexer.py` is a Pygments lexer that mkdocs loads through

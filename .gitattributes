@@ -1,0 +1,16 @@
+# GitHub highlights by Linguist, which has no seQ. Until there is one, `.seq`
+# files borrow Rust's grammar: the same `//` and `/* */` comments, the same
+# `2e-9` number literals, lowercase identifiers, and `let`, `loop`, `else` and
+# `in` happen to be keywords in both. The words that carry a seQ program's
+# meaning - `enter`, `observe`, `prefill` - stay uncoloured, which is the cost
+# of an approximation we do not control.
+#
+# Where the renderer *is* ours, it uses the real thing: the documentation site
+# highlights ```seq with docs/hooks/seq_lexer.py, and editors/ has grammars
+# for Neovim and for TextMate.
+*.seq linguist-language=Rust
+
+# Generated, and large: keep them out of diffs and language statistics.
+tools/oracle/*.ir.json linguist-generated=true
+tests/golden/*         linguist-generated=true
+docs/assets/*.svg      linguist-generated=true
