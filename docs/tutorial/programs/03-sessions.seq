@@ -27,7 +27,7 @@ session {
     observe response = now - t0;
     set K = K + n + o;
     observe context = K;
-    branch (p) { run tool (~exp(Z)); turn; } else { end; }
+    branch with (p) { run tool (~exp(Z)); turn; } else { end; }
   }
 }
 

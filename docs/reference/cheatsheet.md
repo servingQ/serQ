@@ -69,7 +69,8 @@ prefill S;  transfer X;  decode D;  tool Z;   // run on the stage of that name
                                    // (a step engine plays prefill and decode)
 prefill[j] S;  prefill on P (S);   // an instance of an array; an explicit stage
 
-branch (e) { … } [else { … }]
+branch (e) { … } [else { … }]      // a test: e is 0 or 1
+branch with (p) { … } [else { … }] // a draw: with probability p
 loop { … }
 choose j in n by (expr);           // j := argmin over 0..n
 end;

@@ -756,6 +756,21 @@ impl Program {
         s
     }
 
+    /// A `branch` guard, as a figure should label it.
+    ///
+    /// `branch with (p)` is sugar for `branch (~bernoulli(p))`, so the draw
+    /// reaches here as a `Sample`. Rendering it `w.p. p` is what the lecture's
+    /// own figure writes by hand ("resume w.p. p"), and it is the only thing
+    /// that tells a reader this edge is a draw rather than a test.
+    pub fn show_guard(&self, e: &CExpr) -> String {
+        match e {
+            CExpr::Sample(DistKind::Bernoulli, args) if args.len() == 1 => {
+                format!("w.p. {}", self.show_expr(&args[0]))
+            }
+            _ => self.show_expr(e),
+        }
+    }
+
     /// A pool reference: `kv`, `rep[j]`.
     pub fn show_pool_ref(&self, r: &CRef) -> String {
         self.show_ref(r, |i| self.pools.get(i).map(|p| p.name.as_str()))

@@ -73,7 +73,7 @@ session {
       branch (K > maxctx) { drop kv; end; }
       // whether the session continues is decided when the tool returns
       run tool (~exp(Z));
-      branch (p) { } else { drop kv; end; }
+      branch with (p) { } else { drop kv; end; }
     }
   }
 }

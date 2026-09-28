@@ -97,7 +97,8 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | grow POOL ( expr ) ;
           | drop POOL ;                      -- discard the own cached prefix
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
-          | branch ( expr ) block [ else block ]
+          | branch ( expr ) block [ else block ]          -- a test
+          | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
           | loop block
           | choose NAME in expr by ( expr ) ; -- NAME := argmin over 0..n
           | end ;
@@ -173,7 +174,7 @@ turn;
 loop {
   admit memP (kappa * T) { prefill S; transfer (x0 + kappa * T / Bw); } keep (kappa * T);
   admit memD (kappa * T) { decode (o * w); }
-  branch (p) { tool Z; turn; } else { end; }
+  branch with (p) { tool Z; turn; } else { end; }
 }
 ```
 
@@ -277,6 +278,15 @@ admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`
 a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 "prefill from the budget decode leaves" describes vLLM too.
 
+**Branching.** `branch (e)` takes the first block when `e` is non-zero.
+`branch with (p)` takes it with probability `p`, and is sugar the parser
+rewrites to `branch (~bernoulli(p))` — the IR, the interpreter and the Lean
+model know only the one form. The two spellings are not interchangeable to a
+reader and were not distinguishable before: a guard strictly between 0 and 1
+has always been drawn as a probability (a guard of 0 or 1 consumes no draw, a
+fractional one exactly one, from the session's stream). Write the draw as
+`branch with` so that the program, and the figure, say which one it is.
+
 **Workload.** `init` runs at arrival, `turn` at every `turn` statement;
 with a `trace`, `turn` loads the next turn's `new`, `out`, `think`,
 `forced` and sets `more` (`ordered`: session `i` replays trace session `i`).
@@ -307,7 +317,7 @@ the semantics the oracle theorems are about.
 | hit indicator `H ∈ {0,1}` | `cached` (units found), block-rounded | partial hits (block eviction, tail first) |
 | eviction order `E` as a name | `evict lru` / `evict by (keys)` with online estimates | the priced orders of §3 are expressible |
 | no growth, no preemption | `grow`, `growing`, `preempt lifo` | decode grows the KV; vLLM preempts |
-| `branch_p` with a constant | `branch (expr)` | traces decide continuation |
+| `branch_p` with a constant | `branch (expr)` tests, `branch with (expr)` draws | traces decide continuation; the probability keeps a spelling of its own |
 | no measurement | `observe`, `--dump` | TTFT and the price are defined in the program |
 | no routing | stage arrays and `choose` | §3.2 |
 

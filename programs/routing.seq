@@ -80,7 +80,7 @@ session {
     }
     set first = 0;
     set K = K + n + o;
-    branch (p) { run tool (~exp(Z)); } else { end; }
+    branch with (p) { run tool (~exp(Z)); } else { end; }
   }
 }
 

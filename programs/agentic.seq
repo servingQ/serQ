@@ -50,7 +50,7 @@ session {
     set cold = 0;
     branch (K > maxctx) { drop kv; end; }
     run tool (~exp(Z));
-    branch (p) { } else { drop kv; end; }
+    branch with (p) { } else { drop kv; end; }
   }
 }
 
