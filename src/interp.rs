@@ -1829,12 +1829,13 @@ impl<'p> Interp<'p> {
     /// token each. Returns the context and the tokens the residents want.
     fn pre_iteration(&mut self, st: usize, spec: &CStep) -> (Ctx, f64, f64, f64) {
         let residents0 = self.residents(st);
+        // what `budget` and `chunk` see (`Moment::Budget`): the residents,
+        // how many decode, and the memory each kind holds; all of it before
+        // either expression is read, so `chunk` is read once with it
         let mut pre = Ctx {
             nres: residents0.len() as f64,
             ..Default::default()
         };
-        let mut want = 0.0;
-        let chunk0 = self.eval(&spec.chunk, &pre, Which::Session);
         for &j in &residents0 {
             let job = &self.stages[st].jobs[&j];
             let mem = match (spec.memory, job.owner) {
@@ -1844,18 +1845,23 @@ impl<'p> Interp<'p> {
             if job.mode == RunMode::Decode {
                 pre.ndec += 1.0;
                 pre.kvb += mem;
-                want += 1.0f64.min(job.work);
             } else {
                 pre.kvp += mem;
-                want += if chunk0 > 0.0 {
-                    job.work.min(chunk0)
-                } else {
-                    job.work
-                };
             }
         }
         let budget = self.eval(&spec.budget, &pre, Which::Session);
         let chunk = self.eval(&spec.chunk, &pre, Which::Session);
+        let mut want = 0.0;
+        for &j in &residents0 {
+            let job = &self.stages[st].jobs[&j];
+            want += if job.mode == RunMode::Decode {
+                1.0f64.min(job.work)
+            } else if chunk > 0.0 {
+                job.work.min(chunk)
+            } else {
+                job.work
+            };
+        }
         (pre, budget, chunk, want)
     }
 

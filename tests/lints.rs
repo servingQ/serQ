@@ -125,27 +125,96 @@ fn a_context_variable_outside_its_moment_is_rejected() {
             enter reqs (1), kv (n) {{ prefill (n) growing kv; }} end; }}"
     );
     let e = check(&src).expect_err("rejected");
+    assert!(
+        e.starts_with("session: "),
+        "names the block by its role: {e}"
+    );
     assert!(e.contains("`ntok` is read in a session statement"), "{e}");
-    assert!(e.contains("exists only in a step stage's budget"), "{e}");
-    // and the other way: an eviction key is not a session statement
-    let src = "let bs = 16;
-        pool kv { cap 1e5; block bs; evict by (ntok); }
-        pool reqs { cap 8; }
-        stage engine : step { budget 512; cost 1e-3; memory kv; }
-        workload { arrive poisson(0.3); init { set K = 0; }
-                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
-        run { horizon 500; }
-        session { turn; enter reqs (1), kv (n) { prefill (n) growing kv; } end; }";
-    let e = check(src).expect_err("rejected");
-    assert!(e.contains("pool `kv`"), "{e}");
-    assert!(e.contains("`ntok` is read in an eviction key"), "{e}");
-    // what the table allows still links: `age` in an eviction key, `n` in a
-    // ps capacity, `ntok` in a cost, `now` anywhere
-    let src = "pool kv { cap 1e5; evict by (age, size); }
-        stage svc : ps (min(n, 4));
-        stage engine : step { budget 512; cost 1e-3 * ntok + now * 0; memory kv; }
+    assert!(e.contains("exists only in a step stage's cost"), "{e}");
+    // every other moment refuses what it does not supply, and says where it
+    // was read and where it exists
+    let engine = |pool: &str, stage: &str, session: &str| {
+        format!(
+            "let bs = 16;
+            pool kv {{ cap 1e5; block bs; {pool} }}
+            pool reqs {{ cap 8; }}
+            stage engine : step {{ budget 512; cost 1e-3; memory kv; {stage} }}
+            stage svc : ps (4);
+            workload {{ arrive poisson(0.3); init {{ set K = 0; }}
+                       turn {{ set m = ~exp(500); set o = ~exp(200) + 1; }} }}
+            run {{ horizon 500; }}
+            session {{ turn; {session} enter reqs (1), kv (m) {{ prefill (m) growing kv; }} end; }}"
+        )
+    };
+    // (the prompt is `m`, not `n`: a session attribute named `n` would
+    // shadow the ps capacity variable, which is the case below)
+    for (src, where_read, exists) in [
+        (
+            engine("evict by (ntok);", "", ""),
+            "pool `kv`: `ntok` is read in an eviction key",
+            "a step stage's cost",
+        ),
+        (
+            engine("queue by (age);", "", ""),
+            "pool `kv`: `age` is read in a hold's header or a queue key, read at admission",
+            "an eviction key",
+        ),
+        (
+            engine("", "", "hold kv (size) { run svc (1); }"),
+            "session: `size` is read in a hold's header or a queue key, read at admission",
+            "an eviction key",
+        ),
+        (
+            engine("", "", "hold kv (1) { run svc (n); }"),
+            "session: `n` is read in a session statement",
+            "a ps stage's capacity",
+        ),
+        (
+            engine("", "budget ntok + 512;", ""),
+            "stage `engine`: `ntok` is read in a step stage's budget or chunk",
+            "a step stage's cost",
+        ),
+        (
+            engine("", "chunk attn;", ""),
+            "stage `engine`: `attn` is read in a step stage's budget or chunk",
+            "a step stage's cost",
+        ),
+        (
+            engine("", "cost age;", ""),
+            "stage `engine`: `age` is read in a step stage's cost",
+            "an eviction key",
+        ),
+        (
+            engine("", "", "set x = init_age; set y = age;"),
+            "init: `init_age`",
+            "",
+        ),
+    ] {
+        if where_read.starts_with("init:") {
+            // an `init` statement is named as such
+            let src = engine("", "", "").replace("init { set K = 0; }", "init { set K = age; }");
+            let e = check(&src).expect_err("rejected");
+            assert!(e.starts_with("init: `age`"), "{e}");
+            continue;
+        }
+        let e = match check(&src) {
+            Err(e) => e,
+            Ok(()) => panic!("linked, but should have said `{where_read}`"),
+        };
+        assert!(e.contains(where_read), "want `{where_read}` in: {e}");
+        assert!(e.contains(exists), "want `{exists}` in: {e}");
+    }
+    // what the table allows still links: `age`, `size` and a pool index in
+    // an eviction key, `n` in a ps capacity, the residents' variables in a
+    // budget and a chunk, `ntok` in a cost, `now` at every moment
+    let src =
+        "pool kv[2] { cap 1e5; evict by (age, size + used(kv[size > 1e9 ? 1 : 0]) * 0, now * 0); }
+        stage svc : ps (min(n, 4) + now * 0);
+        stage engine : step { budget 512 + nres + ndec + kvb * 0 + kvp * 0 + now * 0;
+                              chunk ndec > 0 ? 64 : 128;
+                              cost 1e-3 * ntok + npre * 0 + attn * 0 + now * 0; memory kv; }
         workload { arrive poisson(0.3); turn { set n = ~exp(500); } }
-        session { turn; set t = now; hold kv (n) { run svc (n); } end; }
+        session { turn; set t = now; hold kv[0] (n) { run svc (n); } end; }
         run { horizon 500; }";
     check(src).expect("links");
 }

@@ -126,9 +126,10 @@ Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`,
 `missPrice` with the stage's measured λ̂, ρ̂, Ŵ), `est_lambda(s)`,
 `est_rho(s)`, `est_wait(s)`; context variables `now`, `size`, `age`,
 `last`, `queued` (eviction keys and spill predicates), `n` (ps
-capacity), `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn` (step budget
-and cost; `attn = Σ n (K + n/2)` over the prefill chunks, `K` the position
-before the chunk). Each context variable exists at the one place named in
+capacity), `nres`, `ndec`, `kvb`, `kvp` (a step stage's budget, chunk and
+cost: the residents before the iteration), `ntok`, `npre`, `attn` (its cost
+only: what the iteration scheduled; `attn = Σ n (K + n/2)` over the prefill
+chunks, `K` the position before the chunk). Each context variable exists at the one place named in
 its parenthesis (`now` everywhere), and reading it anywhere else is a link
 error rather than a 0: `set x = ntok;` in a session, or `evict by (ntok)`,
 does not link (`docs/ir.md`, Moments). A name may not be both a `let` constant and a session
@@ -379,8 +380,9 @@ a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 "prefill from the budget decode leaves" describes vLLM too.
 
 **`at admission`.** Everything in a hold's header — the units, `reserve`,
-`reuse`, `cache` — is evaluated when the session is admitted, and a `set`
-above the hold is not. The two look the same, which is how
+`reuse` — is evaluated when the session is admitted, and a `set` above the
+hold is not (`cache` is read when the session releases, `SeqExec.lean`'s
+`release` and the interpreter agree). The two look the same, which is how
 `programs/vllm.seq` came to read its prefix cache at the moment the session
 queued rather than the moment the scheduler took it. `at admission (hit = e)`
 gives the header a place to name what it is written in terms of:

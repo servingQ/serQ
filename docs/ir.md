@@ -110,10 +110,19 @@ its position in the IR, and a context variable exists at one of them:
 
 | Moment (`ir::Moment`) | Positions | Context variables |
 |---|---|---|
-| `Session` | statements of `init`, `turn`, `session`; a hold's units, `reserve`, `reuse`, `cache`; a run's work; `Grow`, `Branch`, `Choose`; a pool's queue key; a `CRef` index | `Now` |
+| `Session` | statements of `init`, `turn`, `session`; a run's work; a hold's `cache` (read when the session releases); `Grow`, `Branch`, `Choose` | `Now` |
+| `Admit` | a hold's units, `reserve`, `reuse`; a pool's queue key (read when the scheduler admits or orders the session, not when it reaches the statement) | `Now` |
 | `Evict` | eviction keys, a spill's `work` and `when` | `Size`, `Age`, `Last`, `Queued`, `Now` |
 | `Ps` | a `ps` stage's capacity | `N`, `Now` |
-| `Step` | a step stage's `budget`, `cost`, `chunk` | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
+| `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
+| `Step` | a step stage's `cost`, evaluated after the iteration is scheduled | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
+
+The index of a pool or stage reference (`CRef.index`) is evaluated with the
+expression around it, so at that expression's moment: `evict by (size +
+used(kv[size]))` is legal. The table is what the interpreter fills into its
+context at each position (`interp.rs`: `Ctx`), not a policy: `ntok` in a
+budget would read 0 because the tokens are not scheduled yet, so the budget
+may not read it.
 
 Before this check the variable read as 0 anywhere else and the program ran
 (`age` in a session statement, `ntok` in a queue key); the doc comment said
@@ -123,6 +132,10 @@ did not change, so it is not a version bump; an IR file that used to pass
 and now fails was reading a value the semantics never supplied.
 
 ## Stability
+
+An IR file that validated before and is rejected now was reading a context
+variable at a moment that never supplied it (Moments, above): the check got
+stricter, the format did not change, and no version was bumped for it.
 
 - Any change to the types in `src/ir.rs` bumps `IR_VERSION`. A field rename
   counts: `route` became `session` in 3, and every reader has to move with it.
