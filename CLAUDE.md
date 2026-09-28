@@ -101,6 +101,11 @@ GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.proj
 REST API instead — `gh api -X PATCH repos/vrvrv/seQ/pulls/N --input -` with a
 JSON body, or `.../issues/N`. Creating works; only editing is affected.
 
+A PR title is a Conventional Commit — `type(scope): subject`, the subject in
+Korean: `feat(ir): 문맥 변수는 그것을 공급하는 순간에서만 읽는다`.
+`.github/workflows/pr-title.yml` fails the PR otherwise. Types are the standard ones (`feat`, `fix`, `docs`,
+`refactor`, `test`, `ci`, `chore`, …); the scope is optional.
+
 Branch from `origin/main`, not from whatever `main` points at locally:
 `git fetch && git checkout -b <name> origin/main`. Three branches were built
 on a stale `main` in one sitting, and one of them would have reverted a rename
