@@ -55,8 +55,8 @@ observe        count        mean      95% CI      cv2       p99
 stage          number   util    done   thru      wait   service  iters
   engine         0.155  0.137   43947  2.4415    0.0073    0.0562      0
   tool           5.822  0.998   35044  1.9469    0.0000    2.9903      0
-pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej
-  kv               758.5   28834.6  0.000   0.155  0.0000   48810        0         0       0     0   0
+pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej stuck
+  kv               758.5   28834.6  0.000   0.155  0.0000   48810        0         0       0     0   0     0
 ```
 
 A perfect hit rate, and the response time falls from 0.180 s to 0.064 s against

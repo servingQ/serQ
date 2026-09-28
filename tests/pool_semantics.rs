@@ -275,6 +275,7 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
     let r = run(src);
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 6, "{}", r.text());
+    assert_eq!(kv.admissions, 7, "{}", r.text());
     assert_eq!(kv.stuck, 1, "{}", r.text());
     assert!(r.text().contains("stuck: 1 session(s)"), "{}", r.text());
     assert_eq!(r.ended, 0, "{}", r.text());

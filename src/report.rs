@@ -176,7 +176,7 @@ impl Report {
                 if p.stuck > 0 {
                     let _ = writeln!(
                         s,
-                        "stuck: {} session(s) preempted again at pool `{}` without progress since their previous preemption (a hold that can never fit re-executes forever)",
+                        "stuck: {} session(s) preempted again at pool `{}` without passing the position of their previous preemption",
                         p.stuck, p.name
                     );
                 }

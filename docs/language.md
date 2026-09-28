@@ -358,9 +358,17 @@ tokens are applied when it ends. A run of zero work completes at once. An
 iteration that schedules no token is not an iteration, unless it preempted:
 then it is the scheduler step that only preempted (vLLM's `schedule()`
 admits nothing in a step with `preempted_reqs`, `scheduler.py:869`, and the
-oracle counts the step), it lasts `C` at zero tokens, and the next iteration
-re-admits the victim. Before this rule the engine dropped that step and, with
-the victim queued and no event left, the run deadlocked where vLLM livelocks.
+oracle driver counts the step; the Lean model's `startIteration` returns
+the empty iteration and its `tick` re-admits at the next one), and the next
+iteration re-admits the victim. It lasts `C` at zero tokens, which is a
+modelling choice: the real engine skips the forward pass of an empty step,
+so the fixed part of `C` overstates it. Before this rule the interpreter
+dropped that step, against the Lean model, and with the victim queued and
+no event left the run ended with a session in the queue. A hold whose body
+can never fit then preempts itself forever; vLLM never runs that program,
+since it refuses at start-up a KV cache that cannot hold one request of
+`max_model_len` (`kv_cache_utils.py:965`), a check seQ does not have, which
+is what the `stuck` counter below is for.
 `exclusive prefill` schedules only the first prefilling resident while one
 exists (the RBLN stack). Without a per-request chunk cap, serving in
 admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`;

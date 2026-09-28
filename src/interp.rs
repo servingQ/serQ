@@ -797,7 +797,11 @@ impl<'p> Interp<'p> {
                             .pop()
                             .expect("hold frame has a hold");
                         self.release_hold(sid, &h);
-                        self.sessions[sid].preempt_pos.clear();
+                        // this hold completed: its pools' preemption positions
+                        // are history (an enclosing hold keeps its own)
+                        for &(q, _) in &h.pools {
+                            self.sessions[sid].preempt_pos.remove(&q);
+                        }
                         self.try_admit_all();
                     }
                 }
@@ -1941,10 +1945,11 @@ impl<'p> Interp<'p> {
         // An iteration that scheduled nothing is no iteration, unless it
         // preempted: then it is the scheduler step that only preempted (vLLM's
         // `schedule()` returns with `preempted_reqs` and admits nothing,
-        // scheduler.py:869; the oracle counts the step), and the next
-        // iteration re-admits the victim. Dropping it left the engine idle
-        // with the victim queued and no event to wake it: a deadlock where
-        // vLLM livelocks.
+        // scheduler.py:869; the oracle driver counts the step; the Lean
+        // model's `startIteration` returns the empty iteration and `tick`
+        // re-admits at the next), and the next iteration re-admits the
+        // victim. Dropping it left the engine idle with the victim queued and
+        // no event to wake it.
         let preempted = self.pools.iter().map(|p| p.preemptions).sum::<u64>() > preempt0;
         if assign.is_empty() && !preempted {
             return;
