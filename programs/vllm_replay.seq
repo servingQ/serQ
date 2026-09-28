@@ -41,7 +41,7 @@ stage tool : delay;
 workload {
   arrive batch(N);
   trace "data/short_base.csv" ordered;
-  hidden out;            // the scheduler knows max_tokens, not the length
+  hidden out;            // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   session {
     run gate (serial * spacing);
     set prev = 0;

@@ -42,7 +42,7 @@ stage tool : delay;
 // calls a tool and comes back with probability p. Nothing here is vLLM.
 workload {
   arrive poisson(Lambda);
-  hidden o;              // the scheduler knows max_tokens, not the length
+  hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   init { set K = 0; }
   turn {
     set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);

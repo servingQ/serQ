@@ -402,8 +402,10 @@ pub struct Program {
     /// Attribute slots the scheduler may not read: legal at `Moment::Session`
     /// only, rejected by `validate` in a hold's header, a queue or eviction
     /// key, a stage's budget, cost, chunk or serve keys. The output length
-    /// `o` is the case: vLLM knows `max_tokens` and learns the length at EOS,
-    /// so a program that reserves `prompt + o` is one vLLM cannot be.
+    /// `o` is the case: vLLM knows `max_tokens` (scheduler.py:639) and learns
+    /// the length when `check_stop` sees EOS or the cap (sched/utils.py:98-119,
+    /// called at scheduler.py:2426), so a program that reserves `prompt + o`
+    /// is one vLLM cannot be.
     pub hidden: Vec<usize>,
 }
 

@@ -432,7 +432,9 @@ substituted, so a name used twice would draw twice.
 **`hidden`.** The output length `o` is drawn at `turn`, before the request,
 and nothing in the semantics stops a hold's header, a queue key or a budget
 from reading it: `reserve (prompt + o)` is a program vLLM cannot be, since
-the scheduler knows `max_tokens` and learns the length at EOS. `hidden o;`
+the scheduler knows `max_tokens` (scheduler.py:639) and learns the length
+only when `check_stop` sees EOS or the cap (sched/utils.py:98-119, called at
+scheduler.py:2426). `hidden o;`
 in the workload says so, and the check is the same per-position table that
 places the context variables: a hidden attribute may be read in a session
 statement (`decode (o - 1)`), a run or a hold's `cache`, and is a link

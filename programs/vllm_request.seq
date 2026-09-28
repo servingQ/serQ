@@ -16,7 +16,7 @@ stage gate : delay;
 
 workload {
   arrive batch(1);
-  hidden o;              // the scheduler knows max_tokens, not the length
+  hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   init { set prompt = 1; set o = 1; set arrive = 0; }
   session { run gate (arrive); request; end; }
 }

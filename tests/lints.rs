@@ -288,7 +288,8 @@ fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
 }
 
 /// `hidden o;`: the scheduler does not know the output length (vLLM knows
-/// `max_tokens` and learns the length at EOS). A hidden attribute is read
+/// `max_tokens`, scheduler.py:639, and learns the length when `check_stop`
+/// sees EOS or the cap, sched/utils.py:98-119). A hidden attribute is read
 /// in session statements and rejected at every scheduler moment.
 #[test]
 fn a_hidden_attribute_is_not_read_by_the_scheduler() {
