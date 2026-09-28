@@ -27,5 +27,13 @@ for f in tools/oracle/*.ir.json; do
       || { echo "FAIL: $f does not draw ($v)"; exit 1; }
   done
 done
+# The tutorial's programs are included into docs/tutorial/*.md with
+# pymdownx.snippets, so `mkdocs build --strict` catches a renamed file but not
+# one that has stopped linking after a change to the language.
+t=0
+for f in docs/tutorial/programs/*.seq; do
+  ./target/release/seq-lang check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
+  t=$((t + 1))
+done
 python3 scripts/check_oracle_gpu.py
-echo "OK: seq-lang, $n programs link and draw, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 1 prefix-cache trace (CPU oracle = A100 engine = seQ)"
+echo "OK: seq-lang, $n programs link and draw, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 1 prefix-cache trace (CPU oracle = A100 engine = seQ)"
