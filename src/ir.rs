@@ -76,6 +76,8 @@ pub enum Moment {
     /// A step stage's `cost`: evaluated after the iteration is scheduled,
     /// from what it scheduled (`ntok`, `npre`, `attn` as well).
     Step,
+    /// A step stage's `serve by` keys: evaluated for one resident.
+    Serve,
 }
 
 impl std::fmt::Display for Moment {
@@ -87,6 +89,7 @@ impl std::fmt::Display for Moment {
             Moment::Ps => "a ps stage's capacity",
             Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
             Moment::Step => "a step stage's cost, after the iteration",
+            Moment::Serve => "a step stage's serve keys",
         })
     }
 }
@@ -121,6 +124,13 @@ pub enum CtxVar {
     /// Step cost: attention work of the prefill chunks, `Σ n (K + n/2)` with
     /// `K` the position before the chunk (exact for `growing` runs).
     Attn,
+    /// Serve keys: 1 if the resident is decoding, 0 if prefilling.
+    Decoding,
+    /// Serve keys: the resident's admission sequence number (its place in
+    /// vLLM's `running` list).
+    Admitted,
+    /// Serve keys: tokens the resident's run has left.
+    Remaining,
 }
 
 impl CtxVar {
@@ -140,6 +150,9 @@ impl CtxVar {
             CtxVar::Kvb => "kvb",
             CtxVar::Kvp => "kvp",
             CtxVar::Attn => "attn",
+            CtxVar::Decoding => "decoding",
+            CtxVar::Admitted => "admitted",
+            CtxVar::Remaining => "remaining",
         }
     }
 
@@ -156,6 +169,7 @@ impl CtxVar {
                 &[Moment::Budget, Moment::Step]
             }
             CtxVar::Ntok | CtxVar::Npre | CtxVar::Attn => &[Moment::Step],
+            CtxVar::Decoding | CtxVar::Admitted | CtxVar::Remaining => &[Moment::Serve],
         }
     }
 }
@@ -298,18 +312,20 @@ pub struct CStep {
 }
 
 /// How a step stage serves its residents, said once: an order (`Admission`,
-/// `DecodeFirst`) or the rule that a prefill runs alone (`ExclusivePrefill`,
-/// which keeps admission order and stalls the decodes; it is not an order,
-/// and the one field means a program cannot combine it with another
-/// order). Two booleans described this before (`exclusive_prefill`,
-/// `decode_first`) and could both be set; the Lean fragment reads only
-/// `Admission`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// or `By(keys)` over the residents) or the rule that a prefill runs alone
+/// (`ExclusivePrefill`, which keeps admission order and stalls the decodes;
+/// it is not an order, and the one field means a program cannot combine it
+/// with another order). Two booleans described this before
+/// (`exclusive_prefill`, `decode_first`) and could both be set; the Lean
+/// fragment reads only `Admission`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CServe {
     /// Admission order (vLLM's `running` list).
     Admission,
-    /// Decoding residents first, then prefilling ones, each in admission order.
-    DecodeFirst,
+    /// Ascending keys, evaluated per resident at `Moment::Serve`
+    /// (`Decoding`, `Admitted`, `Remaining`, `Now`), ties in admission
+    /// order. `decode first` is `By([decoding ? 0 : 1])`.
+    By(Vec<CExpr>),
     /// Only the first prefilling resident while one exists; decodes stall.
     ExclusivePrefill,
 }
@@ -548,6 +564,11 @@ impl Program {
                     v.expr(&st.budget, Moment::Budget).map_err(at)?;
                     v.expr(&st.chunk, Moment::Budget).map_err(at)?;
                     v.expr(&st.cost, Moment::Step).map_err(at)?;
+                    if let CServe::By(keys) = &st.serve {
+                        for k in keys {
+                            v.expr(k, Moment::Serve).map_err(at)?;
+                        }
+                    }
                     if let Some(m) = st.memory {
                         v.pool(m)?;
                     }

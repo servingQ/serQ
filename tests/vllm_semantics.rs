@@ -176,6 +176,66 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
     );
 }
 
+/// `serve by (keys)`: the order the iteration hands its budget out in is an
+/// expression over the residents, so a program can state a policy vLLM
+/// does not have. With one token of budget per step, admission order gives
+/// everything to A until it is done (A: prompt + 9 decodes = step 10, then
+/// B: 11, 12, 13); shortest-remaining-first serves B as soon as it has
+/// less left (B: prefill at 2, decodes at 3 and 4; A resumes and ends at
+/// 13). `decode first` is `by (decoding ? 0 : 1)`.
+#[test]
+fn serve_by_orders_residents_by_the_declared_keys() {
+    let prog = |serve: &str| {
+        format!(
+            "pool kv {{ cap 1000; }}
+            stage engine : step {{ budget 1; cost 1; memory kv; {serve} }}
+            workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }} }}
+            session {{
+              hold kv (100) {{
+                run engine prefill (1) growing kv;
+                run engine decode (o - 1) growing kv;
+              }}
+              observe done = now;
+              observe order = serial;
+              end;
+            }}
+            run {{ horizon 100; }}"
+        )
+    };
+    let r = run(&prog("serve admission;"));
+    assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![10.0, 13.0],
+        "{}",
+        r.text()
+    );
+    let r = run(&prog("serve by (remaining);"));
+    assert_eq!(r.observe("order").unwrap().samples, vec![1.0, 0.0]);
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![4.0, 13.0],
+        "{}",
+        r.text()
+    );
+    // `decode first` and its expansion are the same program
+    let ir = |s: &str| {
+        seq::compile_source(&prog(s), &Overrides::default())
+            .unwrap()
+            .to_json()
+    };
+    assert_eq!(
+        ir("serve decode first;"),
+        ir("serve by (decoding ? 0 : 1);")
+    );
+    // a serve key is read at its own moment only
+    let e = seq::compile_source(&prog("serve by (ntok);"), &Overrides::default()).unwrap_err();
+    assert!(
+        e.contains("`ntok` is read in a step stage's serve keys"),
+        "{e}"
+    );
+}
+
 /// scheduler.py:872-884, 1228-1235: FCFS with head-of-line blocking; a
 /// request that does not fit stops the waiting loop even if a later,
 /// smaller one would fit.

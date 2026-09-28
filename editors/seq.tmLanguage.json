@@ -78,7 +78,7 @@
     },
     "builtins": {
       "name": "variable.language.seq",
-      "match": "\\b(busy|work|used|free|cachedin|holders|queued|price|budget_left|est_lambda|est_rho|est_wait|now|size|age|last|ntok|ndec|npre|nres|kvb|kvp|attn|cached|serial|turn_no|new|out|think|more|forced|computed)\\b"
+      "match": "\\b(busy|work|used|free|cachedin|holders|queued|price|budget_left|est_lambda|est_rho|est_wait|now|size|age|last|ntok|ndec|npre|nres|kvb|kvp|attn|decoding|admitted|remaining|cached|serial|turn_no|new|out|think|more|forced|computed)\\b"
     },
     "numbers": {
       "name": "constant.numeric.seq",

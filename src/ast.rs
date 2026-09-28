@@ -106,13 +106,17 @@ pub struct StepSpec {
 
 /// `serve` of a step stage: one order, where two booleans (`exclusive
 /// prefill`, `decode first`) used to describe it and could both be set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Serve {
     /// Admission order (vLLM's `running` list). The default.
     Admission,
     /// The decoding residents before the prefilling ones (the paper's
-    /// two-resource replica: prefill gets what decode leaves).
+    /// two-resource replica: prefill gets what decode leaves). Sugar: the
+    /// linker writes it as `by (decoding ? 0 : 1)`.
     DecodeFirst,
+    /// Ascending keys over the residents (`decoding`, `admitted`,
+    /// `remaining`, `now`), ties in admission order.
+    By(Vec<Expr>),
     /// Only the first prefilling resident while one exists; every decode
     /// stalls (the RBLN stack).
     ExclusivePrefill,

@@ -17,7 +17,8 @@
 //! kind     := 'fifo' ('(' expr ')')? | 'ps' '(' expr ')' | 'delay'
 //!           | 'step' '{' stepopt* '}'
 //! stepopt  := 'budget' expr ';' | 'cost' expr ';' | 'chunk' expr ';'
-//!           | 'serve' ('admission' | 'decode' 'first' | 'exclusive' 'prefill') ';'
+//!           | 'serve' ('admission' | 'decode' 'first' | 'exclusive' 'prefill'
+//!                     | 'by' '(' expr (',' expr)* ')') ';'
 //!           | 'memory' IDENT ';'
 //! wlitem   := 'arrive' ('poisson' '(' expr ')' | 'closed' '(' expr ')' | 'batch' '(' expr ')' | 'none') ';'
 //!           | 'trace' STRING ('ordered')? ';' | 'init' block | 'turn' block
@@ -606,9 +607,18 @@ impl Parser {
                         } else if self.eat_kw("exclusive") {
                             self.expect_kw("prefill")?;
                             Serve::ExclusivePrefill
+                        } else if self.eat_kw("by") {
+                            self.expect(&Tok::LParen)?;
+                            let mut keys = vec![self.expr()?];
+                            while *self.peek() == Tok::Comma {
+                                self.expect(&Tok::Comma)?;
+                                keys.push(self.expr()?);
+                            }
+                            self.expect(&Tok::RParen)?;
+                            Serve::By(keys)
                         } else {
                             return self.err(format!(
-                                "`serve` takes `admission`, `decode first` or `exclusive prefill`, found {}",
+                                "`serve` takes `admission`, `decode first`, `exclusive prefill` or `by (keys)`, found {}",
                                 self.peek()
                             ));
                         };

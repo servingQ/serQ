@@ -192,9 +192,17 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                 budget: lk.expr(&sp.budget)?,
                 cost: lk.expr(&sp.cost)?,
                 chunk: lk.expr(&sp.chunk)?,
-                serve: match sp.serve {
+                serve: match &sp.serve {
                     Serve::Admission => CServe::Admission,
-                    Serve::DecodeFirst => CServe::DecodeFirst,
+                    // `decode first` is `by (decoding ? 0 : 1)`: the IR knows one form
+                    Serve::DecodeFirst => CServe::By(vec![CExpr::Cond(
+                        Box::new(CExpr::Ctx(CtxVar::Decoding)),
+                        Box::new(CExpr::Num(0.0)),
+                        Box::new(CExpr::Num(1.0)),
+                    )]),
+                    Serve::By(keys) => {
+                        CServe::By(keys.iter().map(|k| lk.expr(k)).collect::<Result<_, _>>()?)
+                    }
                     Serve::ExclusivePrefill => CServe::ExclusivePrefill,
                 },
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
@@ -426,6 +434,9 @@ impl Linker<'_> {
                         "kvb" => CExpr::Ctx(CtxVar::Kvb),
                         "kvp" => CExpr::Ctx(CtxVar::Kvp),
                         "attn" => CExpr::Ctx(CtxVar::Attn),
+                        "decoding" => CExpr::Ctx(CtxVar::Decoding),
+                        "admitted" => CExpr::Ctx(CtxVar::Admitted),
+                        "remaining" => CExpr::Ctx(CtxVar::Remaining),
                         "inf" => CExpr::Num(f64::INFINITY),
                         _ => return Err(LinkError(format!("unknown name `{n}`"))),
                     }
