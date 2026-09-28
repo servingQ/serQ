@@ -50,7 +50,7 @@ fn exempt(word: &str) -> bool {
     matches!(
         word,
         // kept only to tell an old program what its keyword became
-        "fits" | "admit"
+        "fits"
             // matched inside `pool`/`stage`/`workload` bodies as option values
             // that are already covered by the option list under another name
             | "lru" | "lifo" | "none" | "fcfs"

@@ -305,20 +305,89 @@ fn fits_says_it_is_now_reserve() {
     assert!(e.contains("`fits` is now `reserve`"), "{e}");
 }
 
-/// `admit` was this statement's name. A program that still says it is told
-/// what happened, and told that the pool option keeps the word.
+/// `admit` was this statement's name in a `session`, and is now the
+/// server's word. A program that still says it there is told what happened,
+/// and told that the pool option keeps the word.
 #[test]
-fn admit_says_it_is_now_enter() {
+fn admit_in_a_session_says_it_is_the_servers_word() {
     let src = "pool kv { cap 100; } stage s : fifo;
         workload { arrive poisson(1); }
         session { admit kv (1) { run s (1); } end; }
         run { horizon 10; }";
     let e = seq::compile_source(src, &seq::Overrides::default()).expect_err("rejected");
-    assert!(e.contains("`admit` is now `enter`"), "{e}");
+    assert!(e.contains("`admit` is the server's word"), "{e}");
+    assert!(e.contains("write `enter`"), "{e}");
     assert!(
         e.contains("admit via"),
         "and says the pool option is unchanged: {e}"
     );
+}
+
+/// `workload { session { … request; … } }` with `server { … }` is the
+/// session written from its two sides, and compiles to the IR of the same
+/// program written as one `session` block: the split is the parser's, and
+/// `admit if … fit where …` is `enter … at admission (…)`.
+#[test]
+fn the_two_sides_compile_to_the_session_ir() {
+    let head = "pool kv { cap 1e5; block 16; evict lru; }
+        pool reqs { cap 8; }
+        stage engine : step { budget 512; cost 1e-3; memory kv; }
+        stage tool : delay;
+        run { horizon 500; seed 1; }";
+    let client = "arrive poisson(0.3); init { set K = 0; }
+        turn { set n = ~exp(500); set o = ~exp(200) + 1; set more = ~bernoulli(0.9); }";
+    let split = format!(
+        "{head}
+        workload {{ {client}
+          session {{
+            turn;
+            loop {{
+              request;
+              set K = prompt + o;
+              branch (more) {{ tool (~exp(3)); turn; }} else {{ end; }}
+            }}
+          }}
+        }}
+        server {{
+          set t0 = now;
+          set prompt = K + n;
+          admit if reqs (1), kv (min(prompt, hit + budget_left(engine))) fit
+                where hit = min(cachedin(kv), prompt - 1) {{
+            prefill (prompt - cached) growing kv;
+            observe ttft = now - t0;
+            decode (o - 1) growing kv;
+          }} keep (prompt + o);
+          observe response = now - t0;
+        }}"
+    );
+    let flat = format!(
+        "{head}
+        workload {{ {client} }}
+        session {{
+          turn;
+          loop {{
+            set t0 = now;
+            set prompt = K + n;
+            enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
+                  at admission (hit = min(cachedin(kv), prompt - 1)) {{
+              prefill (prompt - cached) growing kv;
+              observe ttft = now - t0;
+              decode (o - 1) growing kv;
+            }} keep (prompt + o);
+            observe response = now - t0;
+            set K = prompt + o;
+            branch (more) {{ tool (~exp(3)); turn; }} else {{ end; }}
+          }}
+        }}"
+    );
+    let ov = seq::Overrides::default();
+    let a = seq::compile_source(&split, &ov).expect("the two sides compile");
+    let b = seq::compile_source(&flat, &ov).expect("the session block compiles");
+    assert_eq!(a.to_json(), b.to_json(), "one session, one IR");
+    // and the same run: nothing downstream of the parser can tell
+    let ra = seq::run_source(&split, &ov, None).unwrap();
+    let rb = seq::run_source(&flat, &ov, None).unwrap();
+    assert_eq!(ra.json(), rb.json());
 }
 
 /// `enter … keep` is `hold … cache`, and the pool option `admit via` is a

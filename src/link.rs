@@ -537,6 +537,12 @@ impl Linker<'_> {
                 }
                 Stmt::Turn => CStmt::Turn,
                 Stmt::End => CStmt::End,
+                Stmt::Request => {
+                    return Err(LinkError(
+                        "`request` survived parsing: the parser splices the server in its place"
+                            .into(),
+                    ));
+                }
                 Stmt::Hold {
                     pools,
                     reuse,

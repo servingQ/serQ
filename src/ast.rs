@@ -2,8 +2,10 @@
 //!
 //! A program is a *deployment* (pools and stages), a *workload* (how
 //! sessions arrive and how a session's attributes evolve from turn to
-//! turn) and a *session* (the statements every session executes). See
-//! `docs/language.md` for the semantics.
+//! turn) and a *session* (the statements every session executes). A
+//! program written as `workload { … session { … request; … } }` and
+//! `server { … }` arrives here with the server spliced into the session:
+//! the split is the parser's. See `docs/language.md` for the semantics.
 
 pub use crate::ir::{BinOp, Preempt, RunMode, UnOp};
 
@@ -138,6 +140,10 @@ pub struct Workload {
 pub enum Stmt {
     /// Draw the next turn's attributes from the workload.
     Turn,
+    /// `request;` in a workload's `session`: the request runs the `server`
+    /// block. Parse-time only: the parser splices the server's statements
+    /// in its place before it returns, so the linker never sees one.
+    Request,
     Set(String, Expr),
     Observe(String, Expr),
     Hold {
