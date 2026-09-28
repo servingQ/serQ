@@ -1886,7 +1886,13 @@ impl<'p> Interp<'p> {
         let (_pre, budget, chunk, _want) = self.pre_iteration(st, spec);
         let mut left = budget;
         let mut assign: Vec<(u64, f64)> = vec![];
-        let mut i = 0;
+        // Every resident is considered once per iteration, in the serving
+        // order as it stands when it is its turn. The order is re-read after
+        // each one because a growth may have preempted a resident and an
+        // admission may have added one, and under `serve by` a newcomer can
+        // sort ahead of residents already served: the set of the served, not
+        // an index into the list, is what says who is next.
+        let mut served: BTreeSet<u64> = BTreeSet::new();
         let mut prefill_taken = false;
         let exclusive = matches!(spec.serve, CServe::ExclusivePrefill);
         let any_prefill = self
@@ -1897,7 +1903,7 @@ impl<'p> Interp<'p> {
         let mut attn = 0.0;
         loop {
             let residents = self.serving_order(st, &spec.serve);
-            if i >= residents.len() {
+            let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
                 // the running requests are served; admit waiting ones with
                 // the budget left, unless this iteration preempted
                 // (scheduler.py:869, `if not preempted_reqs`)
@@ -1906,8 +1912,8 @@ impl<'p> Interp<'p> {
                     continue;
                 }
                 break;
-            }
-            let id = residents[i];
+            };
+            served.insert(id);
             let (mode, remaining, growing, owner) = {
                 let j = &self.stages[st].jobs[&id];
                 (j.mode, j.work, j.growing, j.owner)
@@ -1926,7 +1932,6 @@ impl<'p> Interp<'p> {
             let blocked = exclusive && any_prefill && (mode == RunMode::Decode || prefill_taken);
             let tokens = if blocked { 0.0 } else { want.min(left) };
             if tokens <= 0.0 {
-                i += 1;
                 continue;
             }
             // growth before the tokens are committed: the hold must cover
@@ -1935,17 +1940,13 @@ impl<'p> Interp<'p> {
             if let (Some(pl), Some(sid)) = (growing, owner) {
                 if matches!(self.sessions[sid].status, Status::Growing(..)) {
                     // stalled from an earlier iteration: no tokens
-                    i += 1;
                     continue;
                 }
                 let (alloc, pos) = self.hold_alloc_pos(sid, pl);
                 let need = pos + tokens - alloc;
                 if need > 1e-9 && !self.grow(sid, pl, need) {
-                    // preempted (lifo): no longer a resident, re-read the
-                    // list; waiting (none): stalls as a resident
-                    if matches!(self.sessions[sid].status, Status::Growing(..)) {
-                        i += 1;
-                    }
+                    // preempted (lifo): no longer a resident; waiting
+                    // (none): stalls as a resident. Either way, no tokens
                     continue;
                 }
                 if mode == RunMode::Prefill {
@@ -1960,7 +1961,6 @@ impl<'p> Interp<'p> {
             if mode == RunMode::Prefill {
                 prefill_taken = true;
             }
-            i += 1;
             if left <= 0.0 {
                 break;
             }
