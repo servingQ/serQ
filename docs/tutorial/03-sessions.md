@@ -7,7 +7,7 @@ where all the interesting behaviour lives.
 
 ## The program
 
-```rust title="docs/tutorial/programs/03-sessions.seq"
+```seq title="docs/tutorial/programs/03-sessions.seq"
 --8<-- "docs/tutorial/programs/03-sessions.seq"
 ```
 
@@ -15,7 +15,7 @@ where all the interesting behaviour lives.
 
 ### `loop` and `turn`
 
-```rust
+```seq
 session {
   turn;
   loop {
@@ -37,7 +37,7 @@ reader — and the figure — tell it from a test.
 
 ### Attributes carry state across turns
 
-```rust
+```seq
 init { set K = 0; }
 …
 set K = K + n + o;
@@ -50,7 +50,7 @@ on: it grows without bound, and memory does not.
 
 ### `delay`
 
-```rust
+```seq
 stage tool : delay;
 ```
 

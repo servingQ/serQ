@@ -7,7 +7,7 @@ engine, the path a session takes through them — is written down once, as a
 program. That one program is then simulated, checked against the real system,
 and reasoned about formally.
 
-```rust
+```seq
 pool kv    { cap blocks * bs; block bs; evict lru; preempt lifo; }
 pool reqs { cap max_seqs; admit via engine; }
 

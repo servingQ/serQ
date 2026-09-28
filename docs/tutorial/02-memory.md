@@ -10,7 +10,7 @@ is a counted resource with a capacity, a queue and, later, a cache.
 
 ## The program
 
-```rust title="docs/tutorial/programs/02-memory.seq"
+```seq title="docs/tutorial/programs/02-memory.seq"
 --8<-- "docs/tutorial/programs/02-memory.seq"
 ```
 
@@ -18,7 +18,7 @@ Four servers now, so compute is not the constraint. Ten memory units are.
 
 ## `hold` is the whole idea
 
-```rust
+```seq
 hold mem (c) {
   observe admit_wait = now - t0;
   run server (s);

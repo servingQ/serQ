@@ -6,7 +6,7 @@ long.
 
 ## The program
 
-```rust title="docs/tutorial/programs/01-queue.seq"
+```seq title="docs/tutorial/programs/01-queue.seq"
 --8<-- "docs/tutorial/programs/01-queue.seq"
 ```
 
@@ -14,7 +14,7 @@ Four blocks, and every seQ program has the same four.
 
 ### `stage`
 
-```rust
+```seq
 stage server : fifo;
 ```
 
@@ -26,7 +26,7 @@ no waiting at all) and `step`, the LLM engine, which arrives in
 
 ### `workload`
 
-```rust
+```seq
 workload {
   arrive poisson(Lambda);
   turn { set s = ~exp(S); }
@@ -40,7 +40,7 @@ The other distributions are `~det`, `~uniform`, `~erlang`, `~h2` and
 
 ### `session`
 
-```rust
+```seq
 session {
   turn;
   set t0 = now;
@@ -58,7 +58,7 @@ interpreter guessing.
 
 ### `run`
 
-```rust
+```seq
 run { horizon 100000; warmup 5000; seed 1; }
 ```
 
