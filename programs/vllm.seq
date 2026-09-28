@@ -58,17 +58,17 @@ session {
     // leave can take now (scheduler.py:1078-1128, 1214-1226); the rest is
     // allocated as the request runs
     set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-    hold slots (1), kv (c + min(prompt - c, budget_left(engine))) {
+    admit slots (1), kv (c + min(prompt - c, budget_left(engine))) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;
       observe prefill_tokens = prompt - c;
-      run engine prefill (prompt - c) growing kv;
+      prefill (prompt - c) growing kv;
       observe ttft = now - t0;
-      run engine decode (o - 1) growing kv;
-    } cache (prompt + o);
+      decode (o - 1) growing kv;
+    } keep (prompt + o);
     observe response = now - t0;
     set K = prompt + o;
-    branch (more) { run tool (~exp(Z)); turn; } else { end; }
+    branch (more) { tool (~exp(Z)); turn; } else { end; }
   }
 }
 

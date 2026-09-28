@@ -25,7 +25,7 @@ out).
 | FCFS with head-of-line blocking (`if new_blocks is None: break`) | the pool's `fifo` queue; the first request that does not fit blocks the rest | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt, but only the first chunk is allocated | `kv (c + min(prompt - c, budget_left(engine)))` with `fits (prompt)` | `kv_cache_manager.py:515-531` |
 | a waiting request's prefix is looked up only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939` |
-| chunked prefill, `long_prefill_token_threshold` | `run engine prefill (…) growing kv`, `chunk` | `scheduler.py:612-616, 675-676` |
+| chunked prefill, `long_prefill_token_threshold` | `prefill (…) growing kv` (the serving form of `run engine prefill (…) growing kv`), `chunk` | `scheduler.py:612-616, 675-676` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preempt `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, the hold re-executed | `scheduler.py:742-813, 1539-1582` |
 | the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (prompt + o)` with `set c = min(cached, floor((prompt-1)/bs)*bs)` | `kv_cache_manager.py:289-300` |

@@ -40,21 +40,21 @@ session {
   turn;
   loop {
     set t0 = now;
-    hold memP (kappa * T) {
+    admit memP (kappa * T) {
       // the hit indicator is decided at admission: H = (cached >= K)
       set H = cached >= K;
       set S = H ? a * n + b * n * (K + n / 2) : a * T + b * T * T / 2;
       observe miss = 1 - H;
-      run prefill (S);
+      prefill S;
       observe ttft = now - t0;
-      run link (x0 + kappa * T / Bw);
-    } cache (kappa * T);
-    hold memD (kappa * T) {
-      run decode (o * w);
+      transfer (x0 + kappa * T / Bw);
+    } keep (kappa * T);
+    admit memD (kappa * T) {
+      decode (o * w);
     }
     observe response = now - t0;
     set K = T;
-    branch (p) { run tool (Z); turn; } else { end; }
+    branch (p) { tool Z; turn; } else { end; }
   }
 }
 

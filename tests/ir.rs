@@ -118,3 +118,49 @@ fn inlined_trace_runs_like_the_corpus() {
     let from_ir = run_ir(&q, None).unwrap().text();
     assert_eq!(from_trace, from_ir);
 }
+
+/// The serving vocabulary is sugar: a program written with `admit`,
+/// `prefill`, `transfer`, `decode` and `tool` compiles to the IR of the
+/// same program written with `hold` and `run`.
+#[test]
+fn serving_forms_compile_to_the_kernel_ir() {
+    let deployment = r#"
+        pool memP { cap 1000; evict lru; }
+        pool memD { cap 1000; }
+        stage prefill : fifo;
+        stage link : ps(1);
+        stage decode : ps(min(n, 4));
+        stage tool : delay;
+        workload {
+          arrive poisson(0.5);
+          init { set K = 0; }
+          turn { set n = ~exp(100); set o = ~exp(20); set Z = ~exp(3); set T = K + n; }
+        }
+        run { horizon 100; seed 1; }
+    "#;
+    let serving = format!(
+        "{deployment} session {{
+            turn;
+            loop {{
+              admit memP (T) {{ prefill (n + K); transfer (T / 100); }} keep (T);
+              admit memD (T) {{ decode (o); }}
+              set K = T;
+              branch (0.8) {{ tool Z; turn; }} else {{ end; }}
+            }}
+        }}"
+    );
+    let kernel = format!(
+        "{deployment} session {{
+            turn;
+            loop {{
+              hold memP (T) {{ run prefill (n + K); run link (T / 100); }} cache (T);
+              hold memD (T) {{ run decode (o); }}
+              set K = T;
+              branch (0.8) {{ run tool (Z); turn; }} else {{ end; }}
+            }}
+        }}"
+    );
+    let a = compile_source(&serving, &Overrides::default()).unwrap();
+    let b = compile_source(&kernel, &Overrides::default()).unwrap();
+    assert_eq!(a.to_json(), b.to_json());
+}
