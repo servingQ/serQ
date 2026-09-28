@@ -85,8 +85,9 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
           | ps ( expr in n )                 -- throughput phi(n) shared equally
           | delay                            -- every job at rate 1, no waiting
-          | step { budget expr ; cost expr ; [chunk expr ;] [exclusive prefill ;]
-                   [decode first ;] [memory POOL ;] }
+          | step { budget expr ; cost expr ; [chunk expr ;]
+                   [serve admission ; | serve decode first ; | serve exclusive prefill ;]
+                   [memory POOL ;] }
 wlitem   := arrive poisson ( rate ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
           | init block | turn block          -- only set / observe
@@ -351,9 +352,12 @@ itself can be the victim.
 **Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
 own at rate 1. `step { budget B; cost C; }`: an engine that runs
-iterations. The residents are served in the order their sessions were
-admitted (vLLM's `running` list; with `decode first` the decoding residents
-first): one token to a decoding job, up to `chunk` to a prefilling one,
+iterations. The residents are served the way `serve` names, said once per
+stage: an order, `admission` (the order their sessions were admitted,
+vLLM's `running` list; the default) or `decode first` (the decoding
+residents before the prefilling ones), or the rule `exclusive prefill`,
+below, which is not an order and so cannot be combined with one. One token
+to a decoding job, up to `chunk` to a prefilling one,
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); then the
 stage admits from the queues it serves. The iteration lasts `C` seconds, an
@@ -373,8 +377,8 @@ can never fit then preempts itself forever; vLLM never runs that program,
 since it refuses at start-up a KV cache that cannot hold one request of
 `max_model_len` (`kv_cache_utils.py:965`), a check seQ does not have, which
 is what the `stuck` counter below is for.
-`exclusive prefill` schedules only the first prefilling resident while one
-exists (the RBLN stack). Without a per-request chunk cap, serving in
+`serve exclusive prefill` schedules only the first prefilling resident while
+one exists (the RBLN stack). Without a per-request chunk cap, serving in
 admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`;
 a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 "prefill from the budget decode leaves" describes vLLM too.
@@ -474,7 +478,7 @@ two-resource replica is `programs/replica.seq` and
 |---|---|---|
 | `mg1.seq`, `ps.seq`, `closed.seq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | closed forms (`seq_closed_forms.rs`): M/M/1 sojourn, PK for four laws, PS insensitivity, MVA |
 | `agentic.seq` | `models::agentic` (one FIFO replica, finite KV, SF eviction) | hand-written model, throughput within 3 %, hit rate within 0.5 pt, response within 3 % (`seq_agentic.rs`) |
-| `replica.seq` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/seq/replica_seeds.csv`, `seq_replica_and_pd.rs`) |
+| `replica.seq` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`serve decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/seq/replica_seeds.csv`, `seq_replica_and_pd.rs`) |
 | `pd_tandem.seq`, `lecture_pd.seq` | tandem PD, the lecture's disaggregated replica | capacity formulas within 2 %; stability |
 | `routing.seq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
 | `vllm.seq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |

@@ -219,6 +219,46 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     check(src).expect("links");
 }
 
+/// `serve` is said once per step stage, in one of three spellings, and the
+/// two options it replaced are parse errors that name it.
+#[test]
+fn serve_is_one_order_said_once() {
+    let step = |opts: &str| {
+        format!(
+            "pool kv {{ cap 1e5; }}
+            stage engine : step {{ budget 512; cost 1; memory kv; {opts} }}
+            workload {{ arrive batch(1); }}
+            session {{ hold kv (1) {{ run engine prefill (1) growing kv; }} end; }}
+            run {{ horizon 10; }}"
+        )
+    };
+    for ok in [
+        "",
+        "serve admission;",
+        "serve decode first;",
+        "serve exclusive prefill;",
+    ] {
+        check(&step(ok)).unwrap_or_else(|e| panic!("{ok}: {e}"));
+    }
+    let e = check(&step("serve decode first; serve admission;")).expect_err("twice");
+    assert!(e.contains("`serve` twice"), "{e}");
+    for (old, new) in [
+        (
+            "decode first;",
+            "`decode first;` is now `serve decode first;`",
+        ),
+        (
+            "exclusive prefill;",
+            "`exclusive prefill;` is now `serve exclusive prefill;`",
+        ),
+    ] {
+        let e = check(&step(old)).expect_err(old);
+        assert!(e.contains(new), "the error names the new spelling: {e}");
+    }
+    let e = check(&step("serve shortest;")).expect_err("unknown");
+    assert!(e.contains("`serve` takes"), "{e}");
+}
+
 /// The lints exist to be errors, which is only defensible if nothing real
 /// trips them.
 #[test]

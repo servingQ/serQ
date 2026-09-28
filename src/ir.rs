@@ -9,7 +9,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Version of the IR format. Bump on any change to the types below.
-pub const IR_VERSION: u32 = 3;
+/// 2 added the sessions' turns; 3 renamed `route` to `session`; 4 replaced
+/// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`.
+pub const IR_VERSION: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -289,9 +291,27 @@ pub struct CStep {
     pub budget: CExpr,
     pub cost: CExpr,
     pub chunk: CExpr,
-    pub exclusive_prefill: bool,
-    pub decode_first: bool,
+    /// How the iteration serves its residents: an order, or the
+    /// exclusive-prefill rule.
+    pub serve: CServe,
     pub memory: Option<usize>,
+}
+
+/// How a step stage serves its residents, said once: an order (`Admission`,
+/// `DecodeFirst`) or the rule that a prefill runs alone (`ExclusivePrefill`,
+/// which keeps admission order and stalls the decodes; it is not an order,
+/// and the one field means a program cannot combine it with another
+/// order). Two booleans described this before (`exclusive_prefill`,
+/// `decode_first`) and could both be set; the Lean fragment reads only
+/// `Admission`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CServe {
+    /// Admission order (vLLM's `running` list).
+    Admission,
+    /// Decoding residents first, then prefilling ones, each in admission order.
+    DecodeFirst,
+    /// Only the first prefilling resident while one exists; decodes stall.
+    ExclusivePrefill,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

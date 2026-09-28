@@ -25,8 +25,8 @@ impl std::error::Error for LinkError {}
 type LResult<T> = Result<T, LinkError>;
 
 pub use crate::ir::{
-    BlockId, CArg, CArrival, CEvict, CExpr, CPool, CRef, CSpill, CStage, CStageKind, CStep, CStmt,
-    CtxVar, DistKind, Fun, IR_VERSION, SessionInit,
+    BlockId, CArg, CArrival, CEvict, CExpr, CPool, CRef, CServe, CSpill, CStage, CStageKind, CStep,
+    CStmt, CtxVar, DistKind, Fun, IR_VERSION, SessionInit,
 };
 
 /// The linked program is the IR (`crate::ir::Program`); the old name stays.
@@ -192,8 +192,11 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                 budget: lk.expr(&sp.budget)?,
                 cost: lk.expr(&sp.cost)?,
                 chunk: lk.expr(&sp.chunk)?,
-                exclusive_prefill: sp.exclusive_prefill,
-                decode_first: sp.decode_first,
+                serve: match sp.serve {
+                    Serve::Admission => CServe::Admission,
+                    Serve::DecodeFirst => CServe::DecodeFirst,
+                    Serve::ExclusivePrefill => CServe::ExclusivePrefill,
+                },
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
             }),
         };

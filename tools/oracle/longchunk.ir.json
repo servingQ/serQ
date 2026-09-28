@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "attrs": [
     "cached",
     "serial",
@@ -53,8 +53,7 @@
           "chunk": {
             "Num": 1000.0
           },
-          "exclusive_prefill": false,
-          "decode_first": false,
+          "serve": "Admission",
           "memory": 1
         }
       }

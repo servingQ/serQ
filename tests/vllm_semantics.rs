@@ -222,7 +222,7 @@ fn exclusive_prefill_stalls_decodes() {
         16,
         1024,
         16,
-        "exclusive prefill;",
+        "serve exclusive prefill;",
     ));
     // request 0: 1 prefill step + 9 decode steps = 10 when sharing; with
     // exclusive prefill it waits for request 1's two chunks: 12
