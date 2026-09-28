@@ -172,6 +172,10 @@ pub struct CStep { …, pub serve: COrder, … }               // replaces decod
 With `serve` an expression, #19's option B and the two criterion-2
 violations of #8 (`exclusive prefill`, `decode first`) close together.
 
+**Outcome.** `serve` became an expression (#50). `COrder.tie` was not
+added: each collection has one tie, so the field would carry no
+information. The rules are stated in `docs/language.md` §3 (Ties).
+
 ## 4. Time is superdense over integer ticks
 
 An instant is `(t, n)`: `t` an integer tick, `n` the order within the same

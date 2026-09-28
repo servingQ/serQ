@@ -139,6 +139,14 @@ undefined behaviour is. The check is stricter validation of IR whose types
 did not change, so it is not a version bump; an IR file that used to pass
 and now fails was reading a value the semantics never supplied.
 
+## Ties
+
+The IR carries no field for what breaks a tie: every ordered collection
+has one rule, stated in `docs/language.md` §3 (Ties), so a `tie` field
+(the IR v4 RFC's `COrder`) would carry no information. A Lean model of a
+collection uses the same event number (`SeqExec.lean`'s `lru`: release
+order).
+
 ## Stability
 
 An IR file that validated before and is rejected now was reading a context
