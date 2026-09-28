@@ -98,14 +98,24 @@ pub struct StepSpec {
     /// Cap on one request's prefill chunk (`long_prefill_token_threshold`,
     /// 0 = none).
     pub chunk: Expr,
-    /// A prefill chunk runs alone and stalls every decode.
-    pub exclusive_prefill: bool,
-    /// Serve the decoding residents before the prefilling ones (the
-    /// paper's two-resource replica: prefill gets what decode leaves).
-    /// Default: admission order (vLLM's `running` list).
-    pub decode_first: bool,
+    /// The order the iteration serves its residents in (`serve …;`).
+    pub serve: Serve,
     /// Pool whose holdings of the scheduled residents give `kvb`.
     pub memory: Option<String>,
+}
+
+/// `serve` of a step stage: one order, where two booleans (`exclusive
+/// prefill`, `decode first`) used to describe it and could both be set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Serve {
+    /// Admission order (vLLM's `running` list). The default.
+    Admission,
+    /// The decoding residents before the prefilling ones (the paper's
+    /// two-resource replica: prefill gets what decode leaves).
+    DecodeFirst,
+    /// Only the first prefilling resident while one exists; every decode
+    /// stalls (the RBLN stack).
+    ExclusivePrefill,
 }
 
 #[derive(Clone, Debug, PartialEq)]

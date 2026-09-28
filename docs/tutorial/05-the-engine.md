@@ -51,9 +51,11 @@ scheduled, whichever is larger. On an A100 with Qwen3-8B, fitting
 measurement enters the model.
 
 Other options: `chunk` caps one request's prefill chunk
-(`long_prefill_token_threshold`), `decode first` serves decoding residents
-before prefilling ones, and `exclusive prefill` makes a prefill chunk run alone
-and stall every decode (the RBLN stack).
+(`long_prefill_token_threshold`), and `serve` names the one order the
+iteration serves its residents in: `serve admission` (vLLM's `running` list,
+the default), `serve decode first` (decoding residents before prefilling
+ones), or `serve exclusive prefill` (a prefill chunk runs alone and stalls
+every decode, the RBLN stack).
 
 ## Three new pieces of the session program
 

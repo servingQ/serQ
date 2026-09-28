@@ -85,8 +85,9 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
           | ps ( expr in n )                 -- throughput phi(n) shared equally
           | delay                            -- every job at rate 1, no waiting
-          | step { budget expr ; cost expr ; [chunk expr ;] [exclusive prefill ;]
-                   [decode first ;] [memory POOL ;] }
+          | step { budget expr ; cost expr ; [chunk expr ;]
+                   [serve admission ; | serve decode first ; | serve exclusive prefill ;]
+                   [memory POOL ;] }
 wlitem   := arrive poisson ( rate ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
           | init block | turn block          -- only set / observe
@@ -351,9 +352,11 @@ itself can be the victim.
 **Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
 own at rate 1. `step { budget B; cost C; }`: an engine that runs
-iterations. The residents are served in the order their sessions were
-admitted (vLLM's `running` list; with `decode first` the decoding residents
-first): one token to a decoding job, up to `chunk` to a prefilling one,
+iterations. The residents are served in the order `serve` names, one order
+per stage: `admission`, the order their sessions were admitted (vLLM's
+`running` list; the default), `decode first`, the decoding residents before
+the prefilling ones, or `exclusive prefill`, below. One token to a decoding
+job, up to `chunk` to a prefilling one,
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); then the
 stage admits from the queues it serves. The iteration lasts `C` seconds, an
@@ -373,8 +376,8 @@ can never fit then preempts itself forever; vLLM never runs that program,
 since it refuses at start-up a KV cache that cannot hold one request of
 `max_model_len` (`kv_cache_utils.py:965`), a check seQ does not have, which
 is what the `stuck` counter below is for.
-`exclusive prefill` schedules only the first prefilling resident while one
-exists (the RBLN stack). Without a per-request chunk cap, serving in
+`serve exclusive prefill` schedules only the first prefilling resident while
+one exists (the RBLN stack). Without a per-request chunk cap, serving in
 admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`;
 a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 "prefill from the budget decode leaves" describes vLLM too.

@@ -27,7 +27,7 @@ pool kv { cap C; evict by (queued, size); }
 stage engine : step {
   budget max(ndec, (omega + beta * kvb) / a);    // fill the memory time
   cost max(omega + beta * kvb, ntok * a);
-  decode first;                                  // prefill in what decode leaves
+  serve decode first;                            // prefill in what decode leaves
   memory kv;
 }
 stage tool : delay;

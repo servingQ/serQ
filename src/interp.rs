@@ -1875,7 +1875,7 @@ impl<'p> Interp<'p> {
         let mut assign: Vec<(u64, f64)> = vec![];
         let mut i = 0;
         let mut prefill_taken = false;
-        let exclusive = spec.exclusive_prefill;
+        let exclusive = spec.serve == CServe::ExclusivePrefill;
         let any_prefill = self
             .residents(st)
             .iter()
@@ -1883,7 +1883,7 @@ impl<'p> Interp<'p> {
         let preempt0: u64 = self.pools.iter().map(|p| p.preemptions).sum();
         let mut attn = 0.0;
         loop {
-            let residents = self.serving_order(st, spec.decode_first);
+            let residents = self.serving_order(st, spec.serve);
             if i >= residents.len() {
                 // the running requests are served; admit waiting ones with
                 // the budget left, unless this iteration preempted
@@ -2091,9 +2091,13 @@ impl<'p> Interp<'p> {
     }
 
     /// Residents in the order the iteration serves them.
-    fn serving_order(&self, st: usize, decode_first: bool) -> Vec<u64> {
+    /// Residents in the order the iteration serves them: admission order,
+    /// or the decoding ones first (a stable sort, so admission order within
+    /// each kind). `ExclusivePrefill` keeps admission order and stalls the
+    /// decodes in the loop instead.
+    fn serving_order(&self, st: usize, serve: CServe) -> Vec<u64> {
         let mut r = self.residents(st);
-        if decode_first {
+        if serve == CServe::DecodeFirst {
             let jobs = &self.stages[st].jobs;
             r.sort_by_key(|j| jobs[j].mode != RunMode::Decode);
         }

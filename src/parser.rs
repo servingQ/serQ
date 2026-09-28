@@ -17,7 +17,8 @@
 //! kind     := 'fifo' ('(' expr ')')? | 'ps' '(' expr ')' | 'delay'
 //!           | 'step' '{' stepopt* '}'
 //! stepopt  := 'budget' expr ';' | 'cost' expr ';' | 'chunk' expr ';'
-//!           | 'exclusive' 'prefill' ';' | 'memory' IDENT ';'
+//!           | 'serve' ('admission' | 'decode' 'first' | 'exclusive' 'prefill') ';'
+//!           | 'memory' IDENT ';'
 //! wlitem   := 'arrive' ('poisson' '(' expr ')' | 'closed' '(' expr ')' | 'batch' '(' expr ')' | 'none') ';'
 //!           | 'trace' STRING ('ordered')? ';' | 'init' block | 'turn' block
 //!           | 'session' block                  -- the session's side, with 'request'
@@ -568,11 +569,11 @@ impl Parser {
                 budget: Expr::Num(f64::INFINITY),
                 cost: Expr::Num(0.0),
                 chunk: Expr::Num(0.0),
-                exclusive_prefill: false,
-                decode_first: false,
+                serve: Serve::Admission,
                 memory: None,
             };
             let mut has_cost = false;
+            let mut has_serve = false;
             while *self.peek() != Tok::RBrace {
                 let key = self.ident()?;
                 match key.as_str() {
@@ -582,13 +583,30 @@ impl Parser {
                         has_cost = true;
                     }
                     "chunk" => s.chunk = self.expr()?,
-                    "exclusive" => {
-                        self.expect_kw("prefill")?;
-                        s.exclusive_prefill = true;
+                    "serve" => {
+                        if has_serve {
+                            return self.err("a step stage serves its residents in one order");
+                        }
+                        has_serve = true;
+                        s.serve = if self.eat_kw("admission") {
+                            Serve::Admission
+                        } else if self.eat_kw("decode") {
+                            self.expect_kw("first")?;
+                            Serve::DecodeFirst
+                        } else if self.eat_kw("exclusive") {
+                            self.expect_kw("prefill")?;
+                            Serve::ExclusivePrefill
+                        } else {
+                            return self.err(format!(
+                                "`serve` takes `admission`, `decode first` or `exclusive prefill`, found {}",
+                                self.peek()
+                            ));
+                        };
                     }
-                    "decode" => {
-                        self.expect_kw("first")?;
-                        s.decode_first = true;
+                    "exclusive" | "decode" => {
+                        return self.err(format!(
+                            "`{key} …` is now `serve {key} …`: a step stage serves its residents in one order"
+                        ));
                     }
                     "memory" => s.memory = Some(self.ident()?),
                     other => return self.err(format!("unknown step option `{other}`")),

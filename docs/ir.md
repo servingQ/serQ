@@ -15,8 +15,9 @@ the program. A tool that knows what it wants to run (a scenario from JSON,
 a parameter sweep, a trace replay) builds or edits the IR as data instead
 of generating text.
 
-Source: `src/ir.rs`. Version: `IR_VERSION = 3` (2 added the sessions' turns;
-3 renamed the `route` field to `session`).
+Source: `src/ir.rs`. Version: `IR_VERSION = 4` (2 added the sessions' turns;
+3 renamed the `route` field to `session`; 4 replaced `CStep`'s two booleans
+`exclusive_prefill` and `decode_first` by the one order `serve`).
 
 ## Why an IR first
 
@@ -58,7 +59,7 @@ variants as strings, `"Lru"`). `seq-lang ir FILE` prints it;
 | `attrs` | attribute names; an attribute is referenced by its index (slot) |
 | `observes` | observation names, by index |
 | `pools` | `CPool`: `name`, `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, `Lifo`), `queue` (order key), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
-| `stages` | `CStage`: `name`, `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `exclusive_prefill`, `decode_first`, `memory` (pool index) |
+| `stages` | `CStage`: `name`, `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (`Admission`, `DecodeFirst`, `ExclusivePrefill`: the one order the iteration serves residents in), `memory` (pool index) |
 | `arrival` | `Poisson(rate)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
 | `init`, `turn`, `session` | block indices: the workload's `init` and `turn` blocks and the session program |

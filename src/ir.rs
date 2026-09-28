@@ -9,7 +9,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Version of the IR format. Bump on any change to the types below.
-pub const IR_VERSION: u32 = 3;
+/// 2 added the sessions' turns; 3 renamed `route` to `session`; 4 replaced
+/// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`.
+pub const IR_VERSION: u32 = 4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -289,9 +291,22 @@ pub struct CStep {
     pub budget: CExpr,
     pub cost: CExpr,
     pub chunk: CExpr,
-    pub exclusive_prefill: bool,
-    pub decode_first: bool,
+    /// The order the iteration serves its residents in.
+    pub serve: CServe,
     pub memory: Option<usize>,
+}
+
+/// The one serving order of a step stage. Two booleans described it before
+/// (`exclusive_prefill`, `decode_first`) and could both be set, which named
+/// no order; the Lean fragment reads only `Admission`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CServe {
+    /// Admission order (vLLM's `running` list).
+    Admission,
+    /// Decoding residents first, then prefilling ones, each in admission order.
+    DecodeFirst,
+    /// Only the first prefilling resident while one exists; decodes stall.
+    ExclusivePrefill,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
