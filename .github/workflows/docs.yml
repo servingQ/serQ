@@ -16,9 +16,11 @@ on:
       - .github/workflows/docs.yml
   workflow_dispatch:
 
-# One deployment at a time; a newer commit supersedes an in-flight one.
+# One deployment at a time on main, where a newer commit supersedes an
+# in-flight one. Keyed by ref, or two pull requests touching the docs cancel
+# each other's build and neither reports.
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
