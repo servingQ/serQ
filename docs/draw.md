@@ -165,10 +165,10 @@ every program in both views and both formats, and every IR file in
 
 ## 6. Not done
 
-* **Enclosures assume a pool's stations are contiguous** in first-visit order.
-  Holds nest in the route, so they are — except for a stage visited both
-  inside and outside a hold, where the pool set is intersected and the box may
-  be tighter than a reader expects.
+* **A pool held in two places gets two enclosures.** That is correct — a box
+  spanning both would swallow the stations between them — but a reader may
+  want to see that the two boxes are the same pool, and nothing says so beyond
+  the name.
 * **One station row.** A program with many stages runs off to the right
   instead of wrapping.
 * **Branch lanes in the route view are a rail, not a layout.** A program with

@@ -27,6 +27,26 @@ const SPINE_CHARS: usize = 54;
 const MARGIN: f64 = 26.0;
 const HEAD_H: f64 = 46.0;
 
+/// How deeply `branch` and `loop` nest in the route. The spine has to start
+/// clear of the rails, and a rail drawn over the statement column is worse
+/// than a wide margin.
+fn control_depth(p: &Program, block: usize) -> usize {
+    let Some(stmts) = p.blocks.get(block) else {
+        return 0;
+    };
+    let mut max = 0;
+    for s in stmts {
+        let d = match s {
+            CStmt::Branch(_, t, e) => 1 + control_depth(p, *t).max(control_depth(p, *e)),
+            CStmt::Loop(b) => 1 + control_depth(p, *b),
+            CStmt::Hold { body, .. } => control_depth(p, *body),
+            _ => 0,
+        };
+        max = max.max(d);
+    }
+    max
+}
+
 /// Pools that any `hold` in the program acquires, in declaration order.
 fn held_pools(p: &Program) -> Vec<usize> {
     let mut v: Vec<usize> = vec![];
@@ -67,10 +87,11 @@ struct Draw<'a> {
     spine_x: f64,
     y: f64,
     depth: usize,
-    max_depth: usize,
     show_set: bool,
     /// Tails still open at the bottom of the figure, by pool.
     open_tails: Vec<(usize, f64)>,
+    /// Per hold body, the pools its `cache` clause can leave units in.
+    cache_targets: std::collections::BTreeMap<usize, Vec<usize>>,
 }
 
 impl Draw<'_> {
@@ -251,7 +272,7 @@ impl<'a> Draw<'a> {
                 let bottom = self.y;
                 self.marker("]", "release".into());
                 let label_chars = (COL_W / TextSize::Small.char_width()) as usize - 2;
-                let targets = crate::deployment::cache_targets(self.p, pools, *body);
+                let targets = self.cache_targets.get(body).cloned().unwrap_or_default();
                 for (r, units, fits) in pools {
                     let Some(x) = self.col_x(r.base) else {
                         continue;
@@ -286,9 +307,7 @@ impl<'a> Draw<'a> {
                 let top = self.y;
                 self.marker("?", format!("branch ({})", self.p.show_expr(c)));
                 self.depth += 1;
-                self.max_depth = self.max_depth.max(self.depth);
                 self.walk(*t);
-                let mid = self.y;
                 self.depth -= 1;
                 if !self.p.blocks.get(*e).map(Vec::is_empty).unwrap_or(true) {
                     self.marker(":", "else".into());
@@ -302,14 +321,12 @@ impl<'a> Draw<'a> {
                     style: EdgeStyle::Relation,
                     arrow: false,
                 });
-                let _ = mid;
             }
             CStmt::Loop(body) => {
                 let x = self.rail_x();
                 let top = self.y;
                 self.marker("@", "loop".into());
                 self.depth += 1;
-                self.max_depth = self.max_depth.max(self.depth);
                 self.walk(*body);
                 self.depth -= 1;
                 let bottom = self.y;
@@ -347,12 +364,12 @@ pub fn figure(p: &Program, show_set: bool) -> Figure {
         bands: vec![],
         under: vec![],
         cols: cols.clone(),
-        spine_x: MARGIN + 4.0 * RAIL_W,
+        spine_x: MARGIN + (control_depth(p, p.route) + 1) as f64 * RAIL_W,
         y: MARGIN + HEAD_H,
         depth: 0,
-        max_depth: 0,
         show_set,
         open_tails: vec![],
+        cache_targets: crate::deployment::cache_targets(p),
     };
 
     for (i, &pool) in cols.iter().enumerate() {

@@ -781,7 +781,16 @@ impl Program {
     fn write_expr(&self, out: &mut String, e: &CExpr, min: u8) {
         use std::fmt::Write as _;
         match e {
-            CExpr::Num(x) => out.push_str(&show_num(*x)),
+            CExpr::Num(x) => {
+                // `pow()` parses `atom() '^' unary()`, so a folded negative
+                // constant on the left of `^` has to be bracketed or the
+                // output re-parses as `-(2 ^ a)`.
+                if *x < 0.0 && min >= prec::UNARY {
+                    let _ = write!(out, "({})", show_num(*x));
+                } else {
+                    out.push_str(&show_num(*x));
+                }
+            }
             CExpr::Attr(slot) => out.push_str(self.attr_name(*slot)),
             CExpr::Ctx(v) => out.push_str(v.name()),
             CExpr::Sample(d, args) => {

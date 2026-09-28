@@ -165,6 +165,177 @@ fn choose_annotates_the_station_it_selects() {
     assert!(net.nodes[link].note.is_none(), "the link is not chosen");
 }
 
+fn compile(src: &str) -> Program {
+    compile_source(src, &Overrides::default()).expect("the fixture compiles")
+}
+
+/// `grow` advances the *innermost* hold holding the pool, so a `growing` run
+/// nested inside another hold still belongs to the outer one. Walking only
+/// `Run`/`Branch`/`Loop` misses it and the figure claims a prefix cache on
+/// pools the interpreter never caches in.
+#[test]
+fn growing_is_found_through_nested_holds() {
+    let p = compile(
+        r#"
+        pool kv { cap 100000; } pool slots { cap 8; } pool gate { cap 4; }
+        stage engine : step { budget 512; cost 1e-3; memory kv; }
+        workload { arrive poisson(0.2); turn { set n = 100; set o = 2; } }
+        route { turn;
+          hold kv (32), slots (1) {
+            hold gate (1) { run engine prefill (n) growing kv; }
+          } cache (n + o);
+          end; }
+        run { horizon 200; }
+        "#,
+    );
+    let net = deployment::project(&p);
+    assert_eq!(net.cached, vec![pool(&p, "kv")], "slots is never cached in");
+}
+
+/// A pool held around two stations with an unheld one between them gets one
+/// enclosure per run, not one box swallowing the station in the middle.
+#[test]
+fn disjoint_holds_of_one_pool_get_separate_enclosures() {
+    let p = compile(
+        r#"
+        pool kv { cap 100; }
+        stage s1 : fifo; stage s2 : delay; stage s3 : fifo;
+        workload { arrive poisson(0.2); }
+        route { hold kv (1) { run s1 (1); } run s2 (1); hold kv (1) { run s3 (1); } end; }
+        run { horizon 100; }
+        "#,
+    );
+    let net = deployment::project(&p);
+    let f = deployment::layout(&p, &net);
+    assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 2);
+    // and the station in the middle is in neither
+    let middle = f.stations()[1].0;
+    assert!(
+        f.boxes(BoxStyle::Enclosure)
+            .iter()
+            .all(|b| !b.contains(&middle))
+    );
+}
+
+/// Feedback edges, early exits and second entry points all need a lane below
+/// the station row, and must not be given the same one.
+#[test]
+fn lanes_below_the_row_do_not_collide() {
+    for name in PROGRAMS {
+        let p = program(name);
+        let f = deployment::figure(&p);
+        let mut ys: Vec<f64> = f
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                seq::figure::Item::Edge { pts, .. } if pts.len() >= 3 => Some(pts[1].y),
+                _ => None,
+            })
+            .collect();
+        ys.sort_by(f64::total_cmp);
+        for w in ys.windows(2) {
+            assert!(w[1] - w[0] > 1.0 || w[1] == w[0], "{name}: lanes at {w:?}");
+        }
+        let unique = {
+            let mut v = ys.clone();
+            v.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+            v.len()
+        };
+        assert_eq!(unique, ys.len(), "{name}: two routed edges share a lane");
+    }
+}
+
+/// A route that opens with a branch has more than one entry station. A second
+/// arrow along the row would run through the first one, and a second copy of
+/// the arrival label would be drawn on top of the first.
+#[test]
+fn a_second_entry_point_does_not_overdraw_the_first() {
+    let p = compile(
+        r#"
+        stage s1 : fifo; stage s2 : fifo;
+        workload { arrive poisson(1); init { set a = 1; } }
+        route { branch (a) { run s1 (1); } else { run s2 (1); } end; }
+        run { horizon 100; }
+        "#,
+    );
+    let net = deployment::project(&p);
+    assert_eq!(
+        net.edges.iter().filter(|e| e.from == End::Arrival).count(),
+        2
+    );
+    let f = deployment::layout(&p, &net);
+    let labels = f
+        .items
+        .iter()
+        .filter(|i| matches!(i, seq::figure::Item::Text { text, .. } if text.starts_with("new sessions")))
+        .count();
+    assert_eq!(labels, 1, "the arrival label is drawn once");
+}
+
+/// The spine has to start clear of the control rails, however deep the
+/// program's `branch`es and `loop`s go.
+#[test]
+fn rails_stay_clear_of_the_spine() {
+    let p = compile(
+        r#"
+        stage s : fifo;
+        workload { arrive poisson(1); init { set a = 1; } }
+        route { branch (a) { branch (a) { branch (a) { branch (a) {
+                  branch (a) { run s (1); } } } } } end; }
+        run { horizon 100; }
+        "#,
+    );
+    let f = draw::figure(&p, false);
+    let left = f
+        .boxes(BoxStyle::Body)
+        .iter()
+        .map(|r| r.x)
+        .fold(f64::MAX, f64::min);
+    for item in &f.items {
+        if let seq::figure::Item::Edge { pts, .. } = item {
+            for q in pts {
+                assert!(
+                    q.x < left,
+                    "a rail at x={} reaches the spine at {left}",
+                    q.x
+                );
+            }
+        }
+    }
+}
+
+/// `pow()` parses `atom() '^' unary()`, so a `let` folded to a negative value
+/// has to be bracketed on the left of `^` or the output re-parses as a
+/// different tree.
+#[test]
+fn negative_constants_reparse() {
+    let p = compile(
+        r#"
+        let k = 0 - 2;
+        stage s : fifo;
+        workload { arrive batch(1); turn { set a = 2; } }
+        route { turn; observe o = k ^ a; run s (1); end; }
+        run { horizon 10; }
+        "#,
+    );
+    let printed = p
+        .blocks
+        .iter()
+        .flatten()
+        .find_map(|s| match s {
+            seq::ir::CStmt::Observe(_, e) => Some(p.show_expr(e)),
+            _ => None,
+        })
+        .expect("the observe is there");
+    assert_eq!(printed, "(-2) ^ a");
+    // and it means what it says
+    let round = seq::parser::parse_expr(&printed).expect("re-parses");
+    assert!(matches!(
+        round,
+        seq::ast::Expr::Binary(seq::ast::BinOp::Pow, ..)
+    ));
+}
+
 /// `release_hold` caches the growing run's position when a hold grew, and the
 /// allocation otherwise, so a hold with `growing` caches in that pool alone.
 /// `replica.seq` has no `growing` and really does keep a unit of `batch`.

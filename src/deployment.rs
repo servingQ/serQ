@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 
 use crate::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt};
-use crate::ir::{CArg, CArrival, CExpr, CRef, CStageKind, CStmt, Program};
+use crate::ir::{CArg, CArrival, CExpr, CStageKind, CStmt, Program};
 
 // --- the projection ---------------------------------------------------------
 
@@ -354,20 +354,10 @@ pub fn project(p: &Program) -> Net {
         }
     }
     let mut cached: Vec<usize> = vec![];
-    for block in &p.blocks {
-        for s in block {
-            if let CStmt::Hold {
-                pools,
-                body,
-                cache: Some(_),
-                ..
-            } = s
-            {
-                for pool in cache_targets(p, pools, *body) {
-                    if !cached.contains(&pool) {
-                        cached.push(pool);
-                    }
-                }
+    for pools in cache_targets(p).values() {
+        for &pool in pools {
+            if !cached.contains(&pool) {
+                cached.push(pool);
             }
         }
     }
@@ -375,49 +365,82 @@ pub fn project(p: &Program) -> Net {
     w.net
 }
 
-/// Which of a hold's pools its `cache` clause can leave units in.
+/// For every `hold` with a `cache` clause, the pools that clause can leave
+/// units in - keyed by the hold's body block, which is unique to it.
 ///
-/// `release_hold` caches `min(cache, computed)` per pool, where `computed` is
-/// the allocation - unless the hold grew, and then it is the position the
-/// growing run reached, which only the grown pool has. So a hold with a
-/// `growing` run caches in that pool alone, and one without caches in all of
-/// them. `programs/replica.seq` is the case that makes the difference
-/// visible: its `hold batch (1), kv (...)` really does keep a unit of `batch`
-/// cached.
-pub(crate) fn cache_targets(
-    p: &Program,
-    pools: &[(CRef, CExpr, Option<CExpr>)],
-    body: usize,
-) -> Vec<usize> {
-    let grown = grown_pool(p, body);
-    match grown {
-        Some(g) if pools.iter().any(|(r, _, _)| r.base == g) => vec![g],
-        _ => pools.iter().map(|(r, _, _)| r.base).collect(),
+/// `release_hold` (`sim.rs`) caches `min(cache, computed)` per pool, where
+/// `computed` is the allocation unless the hold grew, and then it is the
+/// position the growing run reached, which only a grown pool has. `grow`
+/// advances the *innermost* hold holding that pool, so a `growing` run deep
+/// inside nested holds can belong to an outer one, and a hold may be grown in
+/// more than one pool. `programs/replica.seq` is the case that makes this
+/// visible: its `hold batch (1), kv (...)` has no `growing` at all and really
+/// does keep a unit of `batch` cached.
+pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
+    struct Frame {
+        body: usize,
+        pools: Vec<usize>,
+        grown: Vec<usize>,
     }
-}
-
-/// The pool a `growing` run in this block enlarges, if there is one.
-fn grown_pool(p: &Program, block: usize) -> Option<usize> {
-    let stmts = p.blocks.get(block)?;
-    for s in stmts {
-        match s {
-            CStmt::Run {
-                growing: Some(g), ..
-            } => return Some(g.base),
-            CStmt::Branch(_, t, e) => {
-                if let Some(g) = grown_pool(p, *t).or_else(|| grown_pool(p, *e)) {
-                    return Some(g);
+    fn walk(
+        p: &Program,
+        block: usize,
+        stack: &mut Vec<Frame>,
+        out: &mut BTreeMap<usize, Vec<usize>>,
+    ) {
+        let Some(stmts) = p.blocks.get(block) else {
+            return;
+        };
+        for s in stmts {
+            match s {
+                CStmt::Hold {
+                    pools, body, cache, ..
+                } => {
+                    stack.push(Frame {
+                        body: *body,
+                        pools: pools.iter().map(|(r, _, _)| r.base).collect(),
+                        grown: vec![],
+                    });
+                    walk(p, *body, stack, out);
+                    let f = stack.pop().expect("pushed above");
+                    if cache.is_some() {
+                        let targets = if f.grown.is_empty() {
+                            f.pools.clone()
+                        } else {
+                            f.grown.clone()
+                        };
+                        out.insert(f.body, targets);
+                    }
                 }
-            }
-            CStmt::Loop(b) => {
-                if let Some(g) = grown_pool(p, *b) {
-                    return Some(g);
+                CStmt::Run {
+                    growing: Some(g), ..
+                } => {
+                    // the innermost hold that holds this pool is the one that grows
+                    if let Some(f) = stack.iter_mut().rev().find(|f| f.pools.contains(&g.base))
+                        && !f.grown.contains(&g.base)
+                    {
+                        f.grown.push(g.base);
+                    }
                 }
+                CStmt::Grow(g, _) => {
+                    if let Some(f) = stack.iter_mut().rev().find(|f| f.pools.contains(&g.base))
+                        && !f.grown.contains(&g.base)
+                    {
+                        f.grown.push(g.base);
+                    }
+                }
+                CStmt::Branch(_, t, e) => {
+                    walk(p, *t, stack, out);
+                    walk(p, *e, stack, out);
+                }
+                CStmt::Loop(b) => walk(p, *b, stack, out),
+                _ => {}
             }
-            _ => {}
         }
     }
-    None
+    let mut out = BTreeMap::new();
+    walk(p, p.route, &mut vec![], &mut out);
+    out
 }
 
 // --- layout -----------------------------------------------------------------
@@ -449,18 +472,38 @@ struct Group {
     glyph_x: f64,
 }
 
+/// The enclosures: one per **maximal run of consecutive stations** a pool is
+/// held across, not one per pool.
+///
+/// A pool held around two stations with an unheld one between them (two
+/// separate `hold`s of the same pool) would otherwise get a box that swallows
+/// the station in the middle, and the figure would assert a hold the program
+/// does not make.
 fn groups(net: &Net) -> Vec<Group> {
-    let mut span: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
-    for (i, n) in net.nodes.iter().enumerate() {
-        for &p in &n.pools {
-            let e = span.entry(p).or_insert((i, i));
-            e.0 = e.0.min(i);
-            e.1 = e.1.max(i);
+    let mut runs: Vec<(usize, usize, usize)> = vec![];
+    let pools: Vec<usize> = {
+        let mut v: Vec<usize> = net.nodes.iter().flat_map(|n| n.pools.clone()).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    for pool in pools {
+        let mut i = 0;
+        while i < net.nodes.len() {
+            if !net.nodes[i].pools.contains(&pool) {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < net.nodes.len() && net.nodes[i].pools.contains(&pool) {
+                i += 1;
+            }
+            runs.push((pool, start, i - 1));
         }
     }
-    let mut gs: Vec<Group> = span
+    let mut gs: Vec<Group> = runs
         .into_iter()
-        .map(|(pool, (first, last))| Group {
+        .map(|(pool, first, last)| Group {
             pool,
             first,
             last,
@@ -656,18 +699,39 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         }
     }
 
-    let mut backs = 0.0;
-    let mut exits = 0.0;
+    // One counter for every edge that needs a lane below the station row:
+    // feedback, an early exit and a second entry point must not share one.
+    let mut lanes = 0.0;
+    let deep = below.iter().copied().fold(0.0, f64::max);
+    let lane = |n: &mut f64| {
+        *n += 1.0;
+        row_y + STATION_H + deep + BACK_DROP + *n * 22.0
+    };
+    let mut arrivals = 0;
     for e in &net.edges {
         let label = e.label.clone();
         match (e.from, e.to) {
             (End::Arrival, End::Node(i)) => {
                 let r = rects[i];
                 let y = r.centre().y;
-                // The arrow starts at the margin and the label rides above it,
-                // clear of the pool glyphs it passes.
-                f.edge(vec![pt(MARGIN, y), pt(r.x, y)], EdgeStyle::Flow);
-                f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
+                arrivals += 1;
+                if arrivals == 1 {
+                    // The arrow starts at the margin and the label rides above
+                    // it, clear of the pool glyphs it passes.
+                    f.edge(vec![pt(MARGIN, y), pt(r.x, y)], EdgeStyle::Flow);
+                    f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
+                } else {
+                    // A route that opens with a branch has more than one entry
+                    // station. A second arrow along the row would run straight
+                    // through the first one, so it takes a lane of its own.
+                    let ly = lane(&mut lanes);
+                    let x = r.x + r.w * 0.25;
+                    f.push(Item::Edge {
+                        pts: vec![pt(MARGIN, y), pt(MARGIN, ly), pt(x, ly), pt(x, r.bottom())],
+                        style: EdgeStyle::Flow,
+                        arrow: true,
+                    });
+                }
             }
             (End::Node(i), End::Exit) => {
                 let r = rects[i];
@@ -689,9 +753,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 } else {
                     // An earlier station's exit drops into a lane of its own
                     // rather than running a line through the stations after it.
-                    exits += 1.0;
-                    let deep = below.iter().copied().fold(0.0, f64::max);
-                    let y = row_y + STATION_H + deep + BACK_DROP + exits * 22.0;
+                    let y = lane(&mut lanes);
                     f.push(Item::Edge {
                         pts: vec![
                             pt(r.x + r.w * 0.75, r.bottom()),
@@ -720,9 +782,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             }
             (End::Node(a), End::Node(b)) => {
                 let (ra, rb) = (rects[a], rects[b]);
-                backs += 1.0;
-                let deep = below.iter().copied().fold(0.0, f64::max);
-                let y = row_y + STATION_H + deep + BACK_DROP + backs * 22.0;
+                let y = lane(&mut lanes);
                 let (ax, bx) = (ra.x + ra.w * 0.25, rb.x + rb.w * 0.25);
                 f.push(Item::Edge {
                     pts: vec![

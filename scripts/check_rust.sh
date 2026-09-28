@@ -22,8 +22,10 @@ for f in programs/*.seq; do
   n=$((n + 1))
 done
 for f in tools/oracle/*.ir.json; do
-  ./target/release/seq-lang draw "$f" --view deployment >/dev/null \
-    || { echo "FAIL: $f does not draw"; exit 1; }
+  for v in deployment route; do
+    ./target/release/seq-lang draw "$f" --view "$v" >/dev/null \
+      || { echo "FAIL: $f does not draw ($v)"; exit 1; }
+  done
 done
 python3 scripts/check_oracle_gpu.py
 echo "OK: seq-lang, $n programs link and draw, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 1 prefix-cache trace (CPU oracle = A100 engine = seQ)"
