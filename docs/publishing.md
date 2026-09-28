@@ -19,62 +19,75 @@ mkdocs serve          # http://127.0.0.1:8000
 
 ## If you decide to publish
 
-### Private GitHub Pages — visible only to people with repository access
+### Private GitHub Pages — not available for this repository
 
-Needs a plan that supports private Pages (GitHub Pro, Team or Enterprise
-Cloud). On the plan this repository is on today the API answers
-`422 Current plan does not support private GitHub Pages`, and a Pages site
-created anyway is **public**.
+Access control for a Pages site is a **GitHub Enterprise Cloud** feature, and
+only for project sites published from a private or internal repository **owned
+by an organization**:
 
-Once the plan allows it:
+> To publish a GitHub Pages site privately, your organization must use GitHub
+> Enterprise Cloud.
 
-1. Settings → Pages → Source: **GitHub Actions**, Visibility: **Private**.
-2. Restore the deploy job — add back to `.github/workflows/docs.yml`:
+`vrvrv/seQ` is a personal repository, so this is not a plan upgrade away — the
+option does not apply. The API says so directly:
 
-    ```yaml
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
+```console
+$ gh api -X PUT repos/vrvrv/seQ/pages -F public=false
+422 Current plan does not support private GitHub Pages
+```
 
-    concurrency:
-      group: pages
-      cancel-in-progress: true
-    ```
+Note that the two things are separate, and the first one already works here:
 
-    and, after the build step:
+| | Requires |
+|---|---|
+| publishing a Pages site **from** a private repository | GitHub Pro or above (Free needs a public repository) |
+| making the published **site** private | Enterprise Cloud, organization-owned repository |
 
-    ```yaml
-          - uses: actions/configure-pages@v5
-          - uses: actions/upload-pages-artifact@v3
-            with:
-              path: site
-
-      deploy:
-        needs: build
-        runs-on: ubuntu-22.04
-        environment:
-          name: github-pages
-          url: ${{ steps.deploy.outputs.page_url }}
-        steps:
-          - id: deploy
-            uses: actions/deploy-pages@v4
-    ```
-
-3. Confirm the visibility afterwards — creating a Pages site defaults to
-   public:
-
-    ```bash
-    gh api repos/vrvrv/seQ/pages --jq '.public'   # must be false
-    ```
+Making this work would mean transferring the repository to an organization on
+Enterprise Cloud. That is a decision about where the project lives, not about
+documentation.
 
 ### Public GitHub Pages
 
-The same, without step 3 — and with the understanding that
-`vrvrv.github.io/seQ` is world-readable and indexed. Before that, decide what
-should come out of the pages: [How seQ is checked](validation.md) and the
-[case study](case-study-vllm.md) both quote measured numbers and the
-pre-registered predictions.
+This works on the current plan today. Restore the deploy job — add back to
+`.github/workflows/docs.yml`:
+
+```yaml
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+```
+
+and, after the build step:
+
+```yaml
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+```
+
+Then Settings → Pages → Source: **GitHub Actions**. The site is served at
+`vrvrv.github.io/seQ` — with the understanding that
+it is world-readable and indexed. Before that, decide what should come out of
+the pages: [How seQ is checked](validation.md) and the [case
+study](case-study-vllm.md) both quote measured numbers and the pre-registered
+predictions.
 
 ### Somewhere else
 
