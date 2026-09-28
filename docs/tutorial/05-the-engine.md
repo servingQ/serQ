@@ -59,7 +59,8 @@ and stall every decode (the RBLN stack).
 
 ```rust
 set hitmax = floor((prompt - 1) / bs) * bs;
-hold reqs (1), kv (min(prompt, min(cachedin(kv), hitmax) + budget_left(engine))) {
+hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+     at admission (hit = min(cachedin(kv), hitmax)) {
   run engine prefill (prompt - c) growing kv;
   run engine decode (o - 1) growing kv;
 } cache (prompt + o);
@@ -81,10 +82,13 @@ Both are read **when the request is admitted**, not when it queues — the rule
 chapter 2 flagged, and this is the program that needs it. That is why
 `cachedin(kv)` appears inside the units rather than in a `set` above them: a
 `set` would read the cache while the request was still queueing, and a waiting
-request's prefix is exactly what is still evictable.
+request's prefix is exactly what is still evictable. `at admission (hit = …)`
+is where a header names what it is written in terms of — the parser
+substitutes it, so the program that uses it and the program that inlines by
+hand have the same IR.
 
-The units read `min(prompt, hit + budget)` — the whole prompt, or as far as the
-hit and the budget reach, whichever is less.
+The units then read `min(prompt, hit + budget)` — the whole prompt, or as far
+as the hit and the budget reach, whichever is less.
 
 **`admit via engine`** on a pool (not used above, but in
 `programs/vllm.seq`'s `reqs`) hands the pool's queue to the engine's

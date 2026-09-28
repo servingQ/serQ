@@ -224,3 +224,71 @@ fn a_draw_is_labelled_w_p() {
     let svg = seq::svg::render(&seq::draw::figure(&p, false));
     assert!(svg.contains("w.p. 0.8"), "the session view labels it too");
 }
+
+/// `at admission (hit = e)` names a value the hold's header is written in
+/// terms of. Everything in a header is evaluated when the session is
+/// admitted; a `set` above the hold is not, and looks the same - which is the
+/// bug the vLLM program carried. The clause is substituted at parse time, so
+/// it must reach the kernel as the inlined expression and nothing else.
+#[test]
+fn at_admission_is_substituted_into_the_header() {
+    let head = "pool kv { cap 1e5; block 16; evict lru; }
+        pool reqs { cap 8; }
+        stage engine : step { budget 512; cost 1e-3; memory kv; }
+        workload { arrive poisson(0.3); init { set K = 0; }
+                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
+        run { horizon 500; }";
+    let bound = format!(
+        "{head} session {{ turn; loop {{ set prompt = K + n;
+          admit reqs (1), kv (min(prompt, hit + budget_left(engine)))
+                at admission (hit = min(cachedin(kv), prompt - 1)) {{
+            prefill (prompt - cached) growing kv;
+          }} keep (prompt + o);
+          set K = prompt + o; end; }} }}"
+    );
+    let inlined = format!(
+        "{head} session {{ turn; loop {{ set prompt = K + n;
+          admit reqs (1), kv (min(prompt, min(cachedin(kv), prompt - 1) + budget_left(engine))) {{
+            prefill (prompt - cached) growing kv;
+          }} keep (prompt + o);
+          set K = prompt + o; end; }} }}"
+    );
+    let ov = seq::Overrides::default();
+    let a = seq::compile_source(&bound, &ov).expect("the clause compiles");
+    let b = seq::compile_source(&inlined, &ov).expect("the inlined form compiles");
+    assert_eq!(
+        a.to_json(),
+        b.to_json(),
+        "the clause must vanish into the header"
+    );
+}
+
+/// The bindings are substituted, so a name used twice would draw twice. That
+/// is not a binding anyone means to write, and the parser says so.
+#[test]
+fn at_admission_rejects_a_draw() {
+    let src = "pool kv { cap 100; } stage s : fifo;
+        workload { arrive poisson(1); }
+        session { hold kv (x) at admission (x = ~exp(3)) { run s (1); } end; }
+        run { horizon 10; }";
+    let e = seq::compile_source(src, &seq::Overrides::default()).expect_err("rejected");
+    assert!(e.contains("draws a sample"), "{e}");
+}
+
+/// A later binding sees the earlier ones, so a header can be written in steps.
+#[test]
+fn at_admission_bindings_are_sequential() {
+    let head = "pool kv { cap 1000; } stage s : fifo;
+        workload { arrive poisson(1); init { set n = 10; } }
+        run { horizon 10; }";
+    let steps = format!(
+        "{head} session {{ hold kv (need) at admission (half = n / 2, need = half + 1)
+           {{ run s (1); }} end; }}"
+    );
+    let flat = format!("{head} session {{ hold kv (n / 2 + 1) {{ run s (1); }} end; }}");
+    let ov = seq::Overrides::default();
+    assert_eq!(
+        seq::compile_source(&steps, &ov).unwrap().to_json(),
+        seq::compile_source(&flat, &ov).unwrap().to_json()
+    );
+}

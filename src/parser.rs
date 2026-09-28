@@ -155,6 +155,52 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
     Ok(e)
 }
 
+/// Replace every `Var(name)` of an `at admission` binding by its expression.
+fn subst(e: &mut Expr, binds: &[(String, Expr)]) {
+    match e {
+        Expr::Var(n) => {
+            if let Some((_, v)) = binds.iter().find(|(name, _)| name == n) {
+                *e = v.clone();
+            }
+        }
+        Expr::Num(_) => {}
+        Expr::Sample(_, args) => args.iter_mut().for_each(|a| subst(a, binds)),
+        Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
+            Arg::Expr(x) => subst(x, binds),
+            Arg::Ref(r) => {
+                if let Some(i) = &mut r.index {
+                    subst(i, binds);
+                }
+            }
+        }),
+        Expr::Unary(_, a) => subst(a, binds),
+        Expr::Binary(_, a, b) => {
+            subst(a, binds);
+            subst(b, binds);
+        }
+        Expr::Cond(c, a, b) => {
+            subst(c, binds);
+            subst(a, binds);
+            subst(b, binds);
+        }
+    }
+}
+
+/// Does this expression draw?
+fn has_sample(e: &Expr) -> bool {
+    match e {
+        Expr::Sample(..) => true,
+        Expr::Num(_) | Expr::Var(_) => false,
+        Expr::Call(_, args) => args.iter().any(|a| match a {
+            Arg::Expr(x) => has_sample(x),
+            Arg::Ref(r) => r.index.as_ref().is_some_and(|i| has_sample(i)),
+        }),
+        Expr::Unary(_, a) => has_sample(a),
+        Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
+        Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
+    }
+}
+
 impl Parser {
     fn peek(&self) -> &Tok {
         &self.toks[self.pos].tok
@@ -668,17 +714,37 @@ impl Parser {
                 break;
             }
         }
-        let reuse = if self.eat_kw("reuse") {
+        let mut reuse = if self.eat_kw("reuse") {
             Some(self.paren_expr()?)
         } else {
             None
         };
+        // `at admission (hit = e, ...)` names values the header is written in
+        // terms of. Everything in a hold's header is evaluated when the
+        // session is admitted; a `set` above the hold is not, and looks the
+        // same. The bindings are substituted into the header's expressions
+        // here, so the AST, the IR and the interpreter never see them.
+        let binds = self.at_admission()?;
+        if !binds.is_empty() {
+            for (_, e, fits) in &mut pools {
+                subst(e, &binds);
+                if let Some(f) = fits {
+                    subst(f, &binds);
+                }
+            }
+            if let Some(r) = &mut reuse {
+                subst(r, &binds);
+            }
+        }
         let body = self.block()?;
-        let cache = if self.eat_kw("cache") || self.eat_kw("keep") {
+        let mut cache = if self.eat_kw("cache") || self.eat_kw("keep") {
             Some(self.paren_expr()?)
         } else {
             None
         };
+        if let Some(c) = &mut cache {
+            subst(c, &binds);
+        }
         if *self.peek() == Tok::Semi {
             self.advance();
         }
@@ -688,6 +754,45 @@ impl Parser {
             body,
             cache,
         })
+    }
+
+    /// `at admission (hit = e, need = f)`: names for a hold's header.
+    ///
+    /// A later binding sees the earlier ones, so a header can be written in
+    /// steps. Samples are rejected: the bindings are substituted, and a name
+    /// used twice would draw twice.
+    fn at_admission(&mut self) -> PResult<Vec<(String, Expr)>> {
+        let mut binds: Vec<(String, Expr)> = vec![];
+        if !self.eat_kw("at") {
+            return Ok(binds);
+        }
+        if !self.eat_kw("admission") {
+            return self.err("expected `admission` after `at`");
+        }
+        self.expect(&Tok::LParen)?;
+        loop {
+            let name = self.ident()?;
+            if binds.iter().any(|(n, _)| *n == name) {
+                return self.err(format!("`{name}` is bound twice in one `at admission`"));
+            }
+            self.expect(&Tok::Assign)?;
+            let mut e = self.expr()?;
+            if has_sample(&e) {
+                return self.err(format!(
+                    "`{name}` draws a sample: an `at admission` binding is substituted, \
+                     so a name used twice would draw twice"
+                ));
+            }
+            subst(&mut e, &binds);
+            binds.push((name, e));
+            if *self.peek() == Tok::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect(&Tok::RParen)?;
+        Ok(binds)
     }
 
     /// `prefill S;`, `transfer[j] X;`, `decode on E (D) growing kv;`, ...:

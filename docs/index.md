@@ -22,7 +22,8 @@ session {
   loop {
     set prompt = K + n;
     set hitmax = floor((prompt - 1) / bs) * bs;
-    admit reqs (1), kv (min(prompt, min(cachedin(kv), hitmax) + budget_left(engine))) {
+    admit reqs (1), kv (min(prompt, hit + budget_left(engine)))
+          at admission (hit = min(cachedin(kv), hitmax)) {
       prefill (prompt - c) growing kv;
       observe ttft = now - t0;
       decode (o - 1) growing kv;
