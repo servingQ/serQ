@@ -22,12 +22,12 @@ session {
   loop {
     set prompt = K + n;
     set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-    hold reqs (1), kv (c + min(prompt - c, budget_left(engine))) {
-      run engine prefill (prompt - c) growing kv;
+    admit reqs (1), kv (c + min(prompt - c, budget_left(engine))) {
+      prefill (prompt - c) growing kv;
       observe ttft = now - t0;
-      run engine decode (o - 1) growing kv;
-    } cache (prompt + o);
-    branch (more) { run tool (~exp(Z)); turn; } else { end; }
+      decode (o - 1) growing kv;
+    } keep (prompt + o);
+    branch (more) { tool (~exp(Z)); turn; } else { end; }
   }
 }
 ```
