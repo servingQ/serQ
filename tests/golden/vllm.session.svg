@@ -30,7 +30,7 @@
 <polygon class="body" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" points="419,256 485.6,256 567,276 419,276"/>
 <text x="424" y="271" text-anchor="start" font-size="8" fill="#6b7280" class="dim">growing</text>
 <text x="605" y="137" text-anchor="start" font-size="8" fill="#6b7280" class="dim">1</text>
-<text x="423" y="137" text-anchor="start" font-size="8" fill="#6b7280" class="dim">min(prompt, min(cachedin(kv), hi~</text>
+<text x="423" y="137" text-anchor="start" font-size="8" fill="#6b7280" class="dim">min(known, min(cachedin(kv), flo~</text>
 <text x="423" y="300" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cache (prompt + o)</text>
 <text x="409" y="40" text-anchor="start" font-size="10" fill="#1d2021">pool kv</text>
 <text x="409" y="54" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 160000</text>
@@ -44,19 +44,19 @@
 <text x="69" y="110" text-anchor="start" font-size="10" fill="#1d2021">@</text>
 <text x="83" y="110" text-anchor="start" font-size="8" fill="#1d2021">loop</text>
 <text x="69" y="136" text-anchor="start" font-size="10" fill="#1d2021">[</text>
-<text x="83" y="136" text-anchor="start" font-size="8" fill="#1d2021">hold reqs (1), kv (min(prompt, min(cachedin(kv), hitm~</text>
+<text x="83" y="136" text-anchor="start" font-size="8" fill="#1d2021">hold reqs (1), kv (min(known, min(cachedin(kv), floor~</text>
 <text x="69" y="162" text-anchor="start" font-size="10" fill="#1d2021">o</text>
 <text x="83" y="162" text-anchor="start" font-size="8" fill="#1d2021">observe hit = c &gt; 0</text>
 <text x="69" y="188" text-anchor="start" font-size="10" fill="#1d2021">o</text>
-<text x="83" y="188" text-anchor="start" font-size="8" fill="#1d2021">observe prefill_tokens = prompt - c</text>
+<text x="83" y="188" text-anchor="start" font-size="8" fill="#1d2021">observe prefill_tokens = known - c</text>
 <rect class="body" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" x="65" y="204" width="324" height="20" rx="2"/>
 <text x="71" y="217" text-anchor="start" font-size="8" fill="#1d2021">run engine prefill</text>
-<text x="197" y="217" text-anchor="start" font-size="8" fill="#6b7280" class="dim">(prompt - c)</text>
+<text x="197" y="217" text-anchor="start" font-size="8" fill="#6b7280" class="dim">(known - c)</text>
 <text x="69" y="240" text-anchor="start" font-size="10" fill="#1d2021">o</text>
 <text x="83" y="240" text-anchor="start" font-size="8" fill="#1d2021">observe ttft = now - t0</text>
 <rect class="body" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" x="65" y="256" width="324" height="20" rx="2"/>
 <text x="71" y="269" text-anchor="start" font-size="8" fill="#1d2021">run engine decode</text>
-<text x="197" y="269" text-anchor="start" font-size="8" fill="#6b7280" class="dim">(o - 1)</text>
+<text x="197" y="269" text-anchor="start" font-size="8" fill="#6b7280" class="dim">(o - 1 - (known - prompt))</text>
 <text x="69" y="292" text-anchor="start" font-size="10" fill="#1d2021">]</text>
 <text x="83" y="292" text-anchor="start" font-size="8" fill="#1d2021">release</text>
 <text x="69" y="318" text-anchor="start" font-size="10" fill="#1d2021">o</text>

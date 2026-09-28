@@ -136,9 +136,10 @@ error rather than a 0: `set x = ntok;` in a session, or `evict by (ntok)`,
 does not link (`docs/ir.md`, Moments). A name may not be both a `let` constant and a session
 attribute (the linker rejects it: an attribute would shadow the constant,
 and a stage's cost, which has no session, would read it as undefined). Built-in session attributes: `serial`, `turn_no`, `cached` (the
-prefix consumed at the last admission), and with a trace `new`, `out`,
-`think`, `more`, `forced`. Every name assigned by `set` or `choose` is a
-session attribute.
+prefix consumed at the last admission), `reached` (the position the hold
+had computed when it was preempted, 0 otherwise; below), and with a trace
+`new`, `out`, `think`, `more`, `forced`. Every name assigned by `set` or
+`choose` is a session attribute.
 
 ### The serving vocabulary
 
@@ -347,7 +348,17 @@ resumes where it was; with `preempt lifo` the most recently admitted
 holder is preempted (vLLM `running[-1]`): its job leaves its stage, its
 hold is released with its computed prefix cached, and it re-enters the head
 of the pool's queue with the hold statement to execute again. The grower
-itself can be the victim.
+itself can be the victim. The re-executed hold finds `reached` set to the
+position the hold had computed (0 on a first execution and after a hold
+completes), so a program can resume rather than restart: vLLM's
+`_preempt_request` resets `num_computed_tokens` and keeps the request's
+output tokens (`scheduler.py:1560-1561`), so the request is rescheduled with
+`num_tokens = prompt + outputs`, reserves and recomputes that many
+(`kv_cache_manager.py:515-531`) and generates only the rest. The vLLM
+programs write `known = reached < prompt ? prompt : reached + 1` (the token
+sampled at `reached` is the request's too), `prefill (known - c)` and
+`decode (o - 1 - (known - prompt))`. A program that recomputes from the
+prompt alone says so by not reading `reached`.
 
 **Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
@@ -508,6 +519,7 @@ identical answers on the differential scenario below):
 | chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk` | `scheduler.py:612-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
+| a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `reached` read by the re-executed hold: `known = reached < prompt ? prompt : reached + 1`, `prefill (known - c)`, `decode (o - 1 - (known - prompt))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |
 | the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (prompt + out − 1)`; `reuse (floor(min(prev prompt, prompt − 1)/bs)·bs)`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
 | the free queue: freed blocks appended tail first (LRU), in the order requests finish | `evict lru` per block from the tail, ties by release order | `block_pool.py:776-805`, `single_type_kv_cache_manager.py:557-585` |
 | a finished session's blocks stay in the free queue | `end` keeps the cache | `block_pool.py:776-805` |

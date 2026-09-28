@@ -798,10 +798,13 @@ impl<'p> Interp<'p> {
                             .expect("hold frame has a hold");
                         self.release_hold(sid, &h);
                         // this hold completed: its pools' preemption positions
-                        // are history (an enclosing hold keeps its own)
+                        // are history (an enclosing hold keeps its own), and
+                        // there is nothing to resume from
                         for &(q, _) in &h.pools {
                             self.sessions[sid].preempt_pos.remove(&q);
                         }
+                        let slot_reached = self.p.slot_reached;
+                        self.sessions[sid].attrs[slot_reached] = 0.0;
                         self.try_admit_all();
                     }
                 }
@@ -1502,6 +1505,11 @@ impl<'p> Interp<'p> {
             }
         }
         self.sessions[victim].preempt_pos.insert(pl, reached);
+        // the same value is what the re-executed hold resumes from (vLLM
+        // keeps the generated tokens: `_preempt_request` resets
+        // `num_computed_tokens` only)
+        let slot_reached = self.p.slot_reached;
+        self.sessions[victim].attrs[slot_reached] = reached;
         self.detach(victim);
         // unwind holds inner to `hi` (nested holds), then `hi` itself
         while self.sessions[victim].holds.len() > hi {

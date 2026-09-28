@@ -22,12 +22,19 @@ workload {
 
 server {
   // the scheduler admits with the blocks of the chunk the budget the
-  // running requests leave allows, if the whole prompt fits
-  // (scheduler_reserve_full_isl), and grows from there
-  admit if reqs (1), kv (min(prompt, budget_left(engine))) reserve (prompt) fit {
-    prefill (prompt) growing kv;
+  // running requests leave allows, if the whole sequence fits
+  // (scheduler_reserve_full_isl: `request.num_tokens`, prompt and generated
+  // tokens, kv_cache_manager.py:515-531), and grows from there.
+  // A preempted request keeps its generated tokens and only its computed KV
+  // is dropped (scheduler.py:1560-1561): re-executed, the server recomputes
+  // every token it has (`known`: the prompt, or the position it had reached
+  // plus the token sampled there) and generates only what is left
+  admit if reqs (1), kv (min(known, budget_left(engine))) reserve (known) fit
+        where known = reached < prompt ? prompt : reached + 1 {
+    set known = reached < prompt ? prompt : reached + 1;
+    prefill (known) growing kv;
     observe first = now;
-    decode (o - 1) growing kv;
+    decode (o - 1 - (known - prompt)) growing kv;
   }
   observe done = now;
 }

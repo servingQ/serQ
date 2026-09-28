@@ -373,6 +373,13 @@ pub struct Program {
     pub slot_think: usize,
     pub slot_more: usize,
     pub slot_forced: usize,
+    /// `reached`: the position the session's hold had reached when it was
+    /// preempted (what its `growing` runs had computed), 0 when it enters a
+    /// hold for the first time or after a hold completed. A re-executed hold
+    /// reads it to resume: vLLM keeps a preempted request's generated tokens
+    /// and recomputes their KV (`_preempt_request` resets
+    /// `num_computed_tokens` only, scheduler.py:1560-1561).
+    pub slot_reached: usize,
 }
 
 /// One explicit session of `CArrival::Sessions`: preset attributes
@@ -563,6 +570,7 @@ impl Program {
             self.slot_think,
             self.slot_more,
             self.slot_forced,
+            self.slot_reached,
         ] {
             v.attr(slot)?;
         }
