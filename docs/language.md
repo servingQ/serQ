@@ -370,6 +370,25 @@ and diverges from the interpreter; no oracle scenario takes that path, and
 the recorded scenario that will is the change that teaches the Lean model
 the attribute.
 
+**Ties.** Every order in the semantics is a declared key followed by a
+declared number, the sequence number of a named event (for `choose`, the
+index), so that two items with equal keys never fall to the order a data
+structure happens to hold them in. A pool's queue:
+the key (`queue by`), then the order the sessions joined the queue (`fifo`
+is that order alone); a preempted session re-enters at the head, ahead of
+the key. Eviction: the keys (`evict by`) or the release time (`lru`), then
+the order the entries were released. A step stage's residents: the
+`serve by` keys, then admission order. The preemption victim: the most
+recently admitted holder. `choose`: the smallest key, then the smallest
+index. A pool's growers: the order they stalled, the head blocking the
+rest. Events at one instant: the order they were scheduled; sessions run
+in the order they became ready; jobs of a `ps` stage with equal finish
+tags finish in the order they started. Each pool has one queue, and a hold
+on several pools waits in its first pool's; where the heads of two queues
+both wait for room in one pool, or one stage serves several queues, the
+pool declared first is served first. A reader who finds an order not
+covered here has found a bug.
+
 **Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
 own at rate 1. `step { budget B; cost C; }`: an engine that runs
