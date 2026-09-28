@@ -798,10 +798,13 @@ impl<'p> Interp<'p> {
                             .expect("hold frame has a hold");
                         self.release_hold(sid, &h);
                         // this hold completed: its pools' preemption positions
-                        // are history (an enclosing hold keeps its own)
+                        // are history (an enclosing hold keeps its own), and
+                        // there is nothing to resume from
                         for &(q, _) in &h.pools {
                             self.sessions[sid].preempt_pos.remove(&q);
                         }
+                        let slot_computed = self.p.slot_computed;
+                        self.sessions[sid].attrs[slot_computed] = 0.0;
                         self.try_admit_all();
                     }
                 }
@@ -1487,21 +1490,28 @@ impl<'p> Interp<'p> {
             .iter()
             .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
             .expect("victim holds the pool");
-        // progress since the last preemption for this pool: the position the
-        // hold reached on it (what a `growing` run computed, else the
-        // allocation)
-        let reached = {
+        // what the hold has computed on this pool: its position there, which
+        // starts at the cached prefix it consumed and advances with its
+        // `growing` runs. Not the allocation: a holder preempted before its
+        // first iteration has computed nothing of what it was allocated
+        // (vLLM: `num_computed_tokens` is 0 for it, and it has no output)
+        let computed = {
             let h = &self.sessions[victim].holds[hi];
             let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
-            if h.grown { h.pos[k] } else { h.pools[k].1 }
+            h.pos[k]
         };
         if let Some(&prev) = self.sessions[victim].preempt_pos.get(&pl) {
-            if reached <= prev + 1e-9 && !self.sessions[victim].stuck {
+            if computed <= prev + 1e-9 && !self.sessions[victim].stuck {
                 self.sessions[victim].stuck = true;
                 self.pools[pl].stuck += 1;
             }
         }
-        self.sessions[victim].preempt_pos.insert(pl, reached);
+        self.sessions[victim].preempt_pos.insert(pl, computed);
+        // the same value is what the re-executed hold resumes from (vLLM
+        // keeps the generated tokens: `_preempt_request` resets
+        // `num_computed_tokens` only)
+        let slot_computed = self.p.slot_computed;
+        self.sessions[victim].attrs[slot_computed] = computed;
         self.detach(victim);
         // unwind holds inner to `hi` (nested holds), then `hi` itself
         while self.sessions[victim].holds.len() > hi {

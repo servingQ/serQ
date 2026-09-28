@@ -9,9 +9,11 @@
     "think",
     "more",
     "forced",
+    "computed",
     "prompt",
     "o",
-    "arrive"
+    "arrive",
+    "known"
   ],
   "observes": [
     "first",
@@ -68,15 +70,15 @@
       {
         "attrs": [
           [
-            8,
+            9,
             3000.0
           ],
           [
-            9,
+            10,
             2.0
           ],
           [
-            10,
+            11,
             0.0
           ]
         ]
@@ -84,15 +86,15 @@
       {
         "attrs": [
           [
-            8,
+            9,
             3000.0
           ],
           [
-            9,
+            10,
             2.0
           ],
           [
-            10,
+            11,
             0.0
           ]
         ]
@@ -108,14 +110,6 @@
     [
       {
         "Set": [
-          8,
-          {
-            "Num": 1.0
-          }
-        ]
-      },
-      {
-        "Set": [
           9,
           {
             "Num": 1.0
@@ -125,6 +119,14 @@
       {
         "Set": [
           10,
+          {
+            "Num": 1.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          11,
           {
             "Num": 0.0
           }
@@ -142,7 +144,7 @@
           },
           "mode": "Plain",
           "work": {
-            "Attr": 10
+            "Attr": 11
           },
           "growing": null
         }
@@ -173,7 +175,33 @@
                   [
                     {
                       "Expr": {
-                        "Attr": 8
+                        "Cond": [
+                          {
+                            "Binary": [
+                              "Lt",
+                              {
+                                "Attr": 8
+                              },
+                              {
+                                "Attr": 9
+                              }
+                            ]
+                          },
+                          {
+                            "Attr": 9
+                          },
+                          {
+                            "Binary": [
+                              "Add",
+                              {
+                                "Attr": 8
+                              },
+                              {
+                                "Num": 1.0
+                              }
+                            ]
+                          }
+                        ]
                       }
                     },
                     {
@@ -196,7 +224,33 @@
                 ]
               },
               {
-                "Attr": 8
+                "Cond": [
+                  {
+                    "Binary": [
+                      "Lt",
+                      {
+                        "Attr": 8
+                      },
+                      {
+                        "Attr": 9
+                      }
+                    ]
+                  },
+                  {
+                    "Attr": 9
+                  },
+                  {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Attr": 8
+                      },
+                      {
+                        "Num": 1.0
+                      }
+                    ]
+                  }
+                ]
               }
             ]
           ],
@@ -217,6 +271,40 @@
     ],
     [
       {
+        "Set": [
+          12,
+          {
+            "Cond": [
+              {
+                "Binary": [
+                  "Lt",
+                  {
+                    "Attr": 8
+                  },
+                  {
+                    "Attr": 9
+                  }
+                ]
+              },
+              {
+                "Attr": 9
+              },
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Attr": 8
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
         "Run": {
           "stage": {
             "base": 0,
@@ -225,7 +313,7 @@
           },
           "mode": "Prefill",
           "work": {
-            "Attr": 8
+            "Attr": 12
           },
           "growing": {
             "base": 1,
@@ -235,11 +323,20 @@
         }
       },
       {
-        "Observe": [
-          0,
+        "Branch": [
           {
-            "Ctx": "Now"
-          }
+            "Binary": [
+              "Eq",
+              {
+                "Attr": 12
+              },
+              {
+                "Attr": 9
+              }
+            ]
+          },
+          4,
+          5
         ]
       },
       {
@@ -254,10 +351,26 @@
             "Binary": [
               "Sub",
               {
-                "Attr": 9
+                "Binary": [
+                  "Sub",
+                  {
+                    "Attr": 10
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
               },
               {
-                "Num": 1.0
+                "Binary": [
+                  "Sub",
+                  {
+                    "Attr": 12
+                  },
+                  {
+                    "Attr": 9
+                  }
+                ]
               }
             ]
           },
@@ -268,7 +381,18 @@
           }
         }
       }
-    ]
+    ],
+    [
+      {
+        "Observe": [
+          0,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      }
+    ],
+    []
   ],
   "horizon": 100000.0,
   "warmup": 0.0,
@@ -280,5 +404,6 @@
   "slot_out": 4,
   "slot_think": 5,
   "slot_more": 6,
-  "slot_forced": 7
+  "slot_forced": 7,
+  "slot_computed": 8
 }

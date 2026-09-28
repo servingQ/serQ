@@ -65,16 +65,21 @@ server {
   // the prefix hit (full blocks, never the whole prompt) is looked up when
   // the scheduler admits (scheduler.py:932-939), and the admission takes the
   // hit plus the chunk the budget allows (scheduler.py:1078-1128, 1214-1226);
-  // docs/language.md §7 "Admission" has the argument
-  set hitmax = floor((prompt - 1) / bs) * bs;
-  admit if reqs (1), kv (min(prompt, hit + budget_left(engine))) fit
-        where hit = min(cachedin(kv), hitmax) {
-    set c = min(cached, floor((prompt - 1) / bs) * bs);
+  // docs/language.md §7 "Admission" has the argument.
+  // `known` is every token the request has: the prompt, or after a
+  // preemption the position it had reached plus the token sampled there
+  // (vLLM keeps the generated tokens and drops only their KV,
+  // scheduler.py:1560-1561); the hit can cover all but the last of them
+  admit if reqs (1), kv (min(known, hit + budget_left(engine))) fit
+        where known = computed < prompt ? prompt : computed + 1,
+              hit = min(cachedin(kv), floor((known - 1) / bs) * bs) {
+    set known = computed < prompt ? prompt : computed + 1;
+    set c = min(cached, floor((known - 1) / bs) * bs);
     observe hit = c > 0;
-    observe prefill_tokens = prompt - c;
-    prefill (prompt - c) growing kv;
-    observe ttft = now - t0;
-    decode (o - 1) growing kv;
+    observe prefill_tokens = known - c;
+    prefill (known - c) growing kv;
+    branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
+    decode (o - 1 - (known - prompt)) growing kv;
   } keep (prompt + o);
   observe response = now - t0;
 }

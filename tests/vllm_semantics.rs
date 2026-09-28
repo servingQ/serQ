@@ -75,6 +75,107 @@ fn growth_preempts_the_last_admitted_request() {
     assert!(done[1] > 20.0, "{done:?}");
 }
 
+/// scheduler.py:1560-1561: `_preempt_request` resets `num_computed_tokens`
+/// and keeps the request's output tokens, so a request preempted during
+/// decode is rescheduled with `num_tokens = prompt + outputs`
+/// (kv_cache_manager.py:515-531 reserves for that), recomputes their KV as
+/// one prefill and generates only what is left. The re-executed hold reads
+/// `computed`, the position it had computed, to say the same.
+///
+/// A (64 tokens, 20 out) and B (48, 40) are admitted at step 1 on 10 blocks
+/// of 16. Both grow a block at step 2 (A 5, B 4; 1 free). At step 18 A
+/// reaches token 81 and takes the last block; B needs its 65th slot and is
+/// the last admitted: preempted with 64 tokens computed and 17 outputs
+/// (one from the prefill, sixteen decodes). It needs 65 tokens = 5 blocks;
+/// 4 are free until A finishes at step 20. Step 21: B recomputes 65 tokens
+/// in one prefill (its 18th output), then decodes 22 more: done at 43.
+/// Recomputing the prompt alone and every output again would end at 60.
+#[test]
+fn a_request_preempted_during_decode_resumes_from_its_outputs() {
+    let src = r#"
+        let bs = 16;
+        pool kv { cap 10 * bs; block bs; evict lru; preempt lifo; }
+        pool reqs { cap 16; }
+        stage engine : step { budget 1000; cost 1; memory kv; }
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; } }
+        session {
+          hold reqs (1), kv (min(known, 1000)) reserve (known)
+               at admission (known = computed < prompt ? prompt : computed + 1) {
+            set known = computed < prompt ? prompt : computed + 1;
+            observe known = known;
+            run engine prefill (known) growing kv;
+            branch (known == prompt) { observe first = now; }
+            run engine decode (o - 1 - (known - prompt)) growing kv;
+          }
+          observe done = now;
+          observe order = serial;
+          end;
+        }
+        run { horizon 1000; }
+    "#;
+    let r = run(src);
+    let kv = r.pool("kv").unwrap();
+    assert_eq!(kv.preemptions, 1, "{}", r.text());
+    assert_eq!(kv.stuck, 0, "{}", r.text());
+    assert_eq!(r.observe("known").unwrap().samples, vec![64.0, 48.0, 65.0]);
+    // the first token is recorded once per request: B's re-prefill at 21 is
+    // not a first token (vLLM's oracle records `first` once, too)
+    assert_eq!(r.observe("first").unwrap().samples, vec![1.0, 1.0]);
+    assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![20.0, 43.0],
+        "{}",
+        r.text()
+    );
+}
+
+/// A holder preempted before it computed anything resumes from nothing.
+/// B holds 32 tokens of the same pool for a fifo stage and is the latest
+/// admitted when A's decode needs a fifth block at step 2: B is the victim
+/// with `computed` 0, not its 32-token allocation, so a program reading
+/// `computed` does not invent an output token it never produced (vLLM's
+/// `num_computed_tokens` is 0 for a request preempted before its first
+/// step).
+#[test]
+fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
+    let src = r#"
+        let bs = 16;
+        pool kv { cap 6 * bs; block bs; evict lru; preempt lifo; }
+        stage engine : step { budget 1000; cost 1; memory kv; }
+        stage svc : fifo;
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; } }
+        session {
+          branch (serial == 0) {
+            hold kv (prompt) reserve (prompt) {
+              run engine prefill (prompt) growing kv;
+              run engine decode (o - 1) growing kv;
+            }
+          } else {
+            hold kv (prompt) { observe c2 = computed; run svc (100); }
+          }
+          observe done = now;
+          end;
+        }
+        run { horizon 200; }
+    "#;
+    let r = run(src);
+    assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
+    // first execution, then the re-execution after A frees its blocks at 20
+    assert_eq!(
+        r.observe("c2").unwrap().samples,
+        vec![0.0, 0.0],
+        "{}",
+        r.text()
+    );
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![20.0, 120.0],
+        "{}",
+        r.text()
+    );
+}
+
 /// scheduler.py:872-884, 1228-1235: FCFS with head-of-line blocking; a
 /// request that does not fit stops the waiting loop even if a later,
 /// smaller one would fit.

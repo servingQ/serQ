@@ -55,8 +55,8 @@ struct Linker<'a> {
     prog: &'a Program,
 }
 
-pub const BUILTIN_ATTRS: [&str; 8] = [
-    "cached", "serial", "turn_no", "new", "out", "think", "more", "forced",
+pub const BUILTIN_ATTRS: [&str; 9] = [
+    "cached", "serial", "turn_no", "new", "out", "think", "more", "forced", "computed",
 ];
 
 pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
@@ -258,6 +258,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         slot_think: slot(&lk, "think"),
         slot_more: slot(&lk, "more"),
         slot_forced: slot(&lk, "forced"),
+        slot_computed: slot(&lk, "computed"),
         attrs: lk.attrs,
         observes: lk.observes,
         pools,

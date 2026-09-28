@@ -103,8 +103,9 @@ Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 | `ps` capacity | `n` |
 | `step` budget and cost | `ntok` `ndec` `npre` `nres` `kvb` `kvp` `attn` |
 
-**Built-in session attributes** `serial` `turn_no` `cached`, and with a trace
-`new` `out` `think` `more` `forced`.
+**Built-in session attributes** `serial` `turn_no` `cached` `computed` (what a
+preempted hold had computed; 0 otherwise), and with a trace `new` `out`
+`think` `more` `forced`.
 
 ## Workload
 

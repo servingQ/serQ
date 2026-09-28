@@ -68,18 +68,24 @@ server {
   set hitmax = forced ? 0 : floor(min(prev, prompt - 1) / bs) * bs;
   // the header is evaluated when the scheduler admits: the prefix still
   // cached then, plus the chunk the step's remaining budget allows
-  // the admission needs room for the whole prompt (scheduler_reserve_full_isl,
-  // kv_cache_manager.py:515-531) but allocates only the first chunk
-  admit if reqs (1), kv (hit + min(prompt - hit, budget_left(engine))) reserve (prompt) fit
-        reuse (hitmax)
-        where hit = min(cachedin(kv), hitmax) {
+  // the admission needs room for the whole sequence (scheduler_reserve_full_isl,
+  // kv_cache_manager.py:515-531) but allocates only the first chunk.
+  // A preempted request keeps its generated tokens (scheduler.py:1560-1561):
+  // `known` is the prompt plus those, its own cached blocks up to `known - 1`
+  // are reusable again (a forced turn's included: they carry its nonce), and
+  // it generates only what is left
+  admit if reqs (1), kv (hit + min(known - hit, budget_left(engine))) reserve (known) fit
+        reuse (max(hitmax, floor(computed / bs) * bs))
+        where known = computed < prompt ? prompt : computed + 1,
+              hit = min(cachedin(kv), max(hitmax, floor(computed / bs) * bs)) {
+    set known = computed < prompt ? prompt : computed + 1;
     set c = cached;
     observe cached_tokens = c;
     observe prefix = prev + prevout;
     observe sent = t0;
-    prefill (prompt - c) growing kv;
-    observe ttft = now - t0;
-    decode (out - 1) growing kv;
+    prefill (known - c) growing kv;
+    branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
+    decode (out - 1 - (known - prompt)) growing kv;
   } keep (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
   observe latency = now - t0;
 }
