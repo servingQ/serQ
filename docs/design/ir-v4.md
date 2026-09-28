@@ -3,8 +3,7 @@
 The body of RFC [#41](https://github.com/vrvrv/seQ/issues/41). The issue is
 where the discussion happens and this document follows its outcome. Every
 After is a sketch and was not compiled. Every Before is copied from the
-repository. Each concept has a picture book for a five-year-old (at the end;
-they are private artifacts and need to be shared to be opened).
+repository.
 
 ## In one line
 
@@ -37,8 +36,6 @@ interpreter bug and a statistics problem; the IR cannot fix them, and they
 are left out.
 
 ## 1. Every expression belongs to one moment of evaluation
-
-Picture book: [Look from where you stand](https://claude.ai/artifact/WMxGr1RvWeiWPzSVLybE7w)
 
 Today `CtxVar` is documented as "meaningful only where the semantics supplies
 them", and that is what an undefined behaviour is: `budget_left` read in a
@@ -112,8 +109,6 @@ is what the theorem of §7 needs.
 
 ## 2. A unit always has exactly one owner
 
-Picture book: [A brick is always in one box](https://claude.ai/artifact/GvY7xFGJ7PgaCjpkA9h7pp)
-
 Every unit of a pool is in one of three states: owned by a hold (allocated),
 owned by the cache (kept, remembering one key eligible to borrow it back),
 or free. The only transitions are moves. Acquire moves free or cached units
@@ -152,8 +147,6 @@ debug_assert_eq!(p.allocated + p.cached + p.free, p.cap);
 
 ## 3. Every order is a declared key and a named sequence number breaks ties
 
-Picture book: [The ticket decides](https://claude.ai/artifact/E4eZ7WnErxSYcJMnh5UfJ1)
-
 Every ordered collection in the IR (a pool's queue, the residents of a step
 stage, the eviction order, the preemption victim, the ties of `choose`) is
 defined by a key tuple whose last element must be the sequence number of a
@@ -180,8 +173,6 @@ With `serve` an expression, #19's option B and the two criterion-2
 violations of #8 (`exclusive prefill`, `decode first`) close together.
 
 ## 4. Time is superdense over integer ticks
-
-Picture book: [Even at three o'clock there is a first and a second](https://claude.ai/artifact/Ay3Eqd9PXbExfTp2ovXjnK)
 
 An instant is `(t, n)`: `t` an integer tick, `n` the order within the same
 `t`. The settle rule becomes "finish every `n` before `t` advances", and
@@ -215,8 +206,6 @@ pub struct Program { …, pub tick_ns: u64, pub horizon: u64, pub warmup: u64, �
 ```
 
 ## 5. A session is an automaton, not a stack
-
-Picture book: [The piece is always on one square](https://claude.ai/artifact/MoULVkKwvVqvypSS11oAHq)
 
 Today a session's state is "a stack of block frames", and Lean has not
 formalised the session-level semantics (§9 limitation 4). The program has no
@@ -319,8 +308,6 @@ pub struct Scope { pub parent: Option<ScopeId>, pub hold: Option<HoldSpec>, pub 
 
 ## 6. Step coalescing
 
-Picture book: [Identical pages turn at once](https://claude.ai/artifact/McVWxCUB9LZzq41EQuHTwj)
-
 While the resident composition does not change, iterations repeat
 deterministically. The number `k` of iterations to the next event has a
 closed form, and `k` of them can be applied at once. The 5 000 iterations
@@ -415,12 +402,3 @@ right by definition.
 The frontend (model/instance split, trait vocabulary, unit labels) is
 independent of this RFC and goes to separate issues. This RFC is about the
 IR only.
-
-## Picture books
-
-1. [Look from where you stand](https://claude.ai/artifact/WMxGr1RvWeiWPzSVLybE7w) — moments
-2. [A brick is always in one box](https://claude.ai/artifact/GvY7xFGJ7PgaCjpkA9h7pp) — ownership
-3. [The ticket decides](https://claude.ai/artifact/E4eZ7WnErxSYcJMnh5UfJ1) — order
-4. [Even at three o'clock there is a first and a second](https://claude.ai/artifact/Ay3Eqd9PXbExfTp2ovXjnK) — time
-5. [The piece is always on one square](https://claude.ai/artifact/MoULVkKwvVqvypSS11oAHq) — automaton
-6. [Identical pages turn at once](https://claude.ai/artifact/McVWxCUB9LZzq41EQuHTwj) — coalescing
