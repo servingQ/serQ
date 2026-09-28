@@ -7,9 +7,6 @@ engine, the path a session takes through them — is written down once, as a
 program. That one program is then simulated, checked against the real system,
 and reasoned about formally.
 
-The name follows seL4: a system is specified once, and the specification is the
-thing that gets verified.
-
 ```rust
 pool kv    { cap blocks * bs; block bs; evict lru; preempt lifo; }
 pool slots { cap max_seqs; admit via engine; }
