@@ -35,6 +35,9 @@ theme:
         icon: material/weather-sunny
         name: Light mode
 
+hooks:
+  - docs/hooks/seq_lexer.py
+
 markdown_extensions:
   - admonition
   - attr_list

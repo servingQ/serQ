@@ -9,7 +9,7 @@ first-token time, every cached-token count. 3 321 of 3 321.
 
 ## The program
 
-```rust title="programs/vllm.seq"
+```seq title="programs/vllm.seq"
 --8<-- "programs/vllm.seq"
 ```
 

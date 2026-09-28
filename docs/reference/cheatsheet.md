@@ -5,7 +5,7 @@ one-page version.
 
 ## Shape of a program
 
-```rust
+```seq
 let NAME = expr;                    // constants, overridable with --set
 
 pool NAME [ '[' N ']' ] { … }       // a counted resource
@@ -18,7 +18,7 @@ run { horizon …; warmup …; seed …; }
 
 ## Pools
 
-```rust
+```seq
 pool kv {
   cap 160000;                 // capacity in units (default: inf)
   block 16;                   // allocate and cache in blocks
@@ -39,7 +39,7 @@ pool kv {
 | `delay` | infinite servers — every job at rate 1, no waiting |
 | `step { … }` | an iterating engine (continuous batching) |
 
-```rust
+```seq
 stage engine : step {
   budget B;                   // tokens per iteration
   cost <expr>;                // seconds per iteration
@@ -52,7 +52,7 @@ stage engine : step {
 
 ## Statements
 
-```rust
+```seq
 turn;                              // draw the next turn's attributes
 set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
@@ -109,7 +109,7 @@ Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 
 ## Workload
 
-```rust
+```seq
 workload {
   arrive poisson(λ);        // or closed(n), batch(n), none
   trace "file.csv" [ordered];
@@ -130,3 +130,10 @@ workload {
 6. **`end` keeps the session's cached prefixes.** Write `drop P;` first if you
    want them gone.
 7. **`allocated + cached ≤ cap`** holds in every reachable configuration.
+
+## Editor support
+
+Syntax files for Neovim/Vim and for anything that reads TextMate grammars are
+in [`editors/`](https://github.com/vrvrv/seQ/tree/main/editors). The pages
+here are highlighted by a Pygments lexer (`docs/hooks/seq_lexer.py`), and
+`make check` fails if any of the three falls behind the parser.

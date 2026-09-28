@@ -8,13 +8,13 @@ property of the traffic.
 
 ## The program
 
-```rust title="docs/tutorial/programs/04-cache.seq"
+```seq title="docs/tutorial/programs/04-cache.seq"
 --8<-- "docs/tutorial/programs/04-cache.seq"
 ```
 
 ## `cache`, `cached`, `evict`, `drop`
 
-```rust
+```seq
 hold kv (K + n + o) {
   set hit = cached >= K;
   run engine ((hit ? a * n : a * (K + n)) + d * o);

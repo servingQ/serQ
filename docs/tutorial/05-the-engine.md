@@ -13,7 +13,7 @@ language could not express.
 
 ## The program
 
-```rust title="docs/tutorial/programs/05-engine.seq"
+```seq title="docs/tutorial/programs/05-engine.seq"
 --8<-- "docs/tutorial/programs/05-engine.seq"
 ```
 
@@ -23,7 +23,7 @@ Its deployment, drawn by [`seq-lang draw`](../visualization/index.md):
 
 ## The `step` stage
 
-```rust
+```seq
 stage engine : step {
   budget B;
   cost max(omega + beta * (kvb + kvp), ntok * alpha);
@@ -57,7 +57,7 @@ and stall every decode (the RBLN stack).
 
 ## Three new pieces of the session program
 
-```rust
+```seq
 set hitmax = floor((prompt - 1) / bs) * bs;
 hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
      at admission (hit = min(cachedin(kv), hitmax)) {
