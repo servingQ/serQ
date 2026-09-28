@@ -72,7 +72,8 @@ item     := let NAME = expr ;
           | pool NAME [ '[' N ']' ] { poolopt* }
           | stage NAME [ '[' N ']' ] : kind ;
           | workload { wlitem* }
-          | session block
+          | session block                     -- the session, in one block
+          | server block                      -- or its server side, with the session inside workload
           | run { horizon expr ; warmup expr ; seed expr ; }
 poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
@@ -89,7 +90,9 @@ kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 
 wlitem   := arrive poisson ( rate ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
           | init block | turn block          -- only set / observe
+          | session block                    -- the session's side; says `request`
 stmt     := turn ;                           -- next turn's attributes (workload `turn`, trace)
+          | request ;                        -- the server block, once (workload `session` only)
           | set NAME = expr ;
           | observe NAME = expr ;
           | hold POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]*
@@ -105,6 +108,9 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | end ;
           | serving                          -- the serving vocabulary, sugar for hold and run
 serving  := enter POOL ( expr ) … block [ keep ( expr ) ] ;   -- as hold … cache
+          | admit if POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]* fit
+                 [reuse ( expr )] [where NAME = expr , ... ] block [ keep ( expr ) ] ;
+                                             -- the same, in a server block
           | prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | transfer [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | decode   [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
@@ -179,7 +185,8 @@ loop {
 }
 ```
 
-and vLLM's engine (`programs/vllm.seq`)
+and vLLM's engine (`programs/vllm.seq`, whose `server` block spells the
+same hold from the scheduler's side, below)
 
 ```
 enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
@@ -197,13 +204,84 @@ scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
 
 | Form | In the lifecycle | vLLM |
 |---|---|---|
-| `admit reqs (1), kv (c + …) { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
+| `admit if reqs (1), kv (hit + …) fit where hit = … { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
 | `prefill (n) growing kv` | prefill in chunks of the budget, a block allocated as the request advances; a missing block preempts `running[-1]` | the running loop, `scheduler.py:624-823`; `allocate_slots` at `scheduler.py:743`; `_preempt_request`, `scheduler.py:1539-1582` (`preempt lifo`) |
 | `decode (o) growing kv` | one token per iteration, a block every `block_size` tokens | the same loop and `allocate_slots` with one new token |
 | `transfer X` | the KV of a prefilled request moves to the decode instance | the KV connector: `WAITING_FOR_REMOTE_KVS` at `scheduler.py:1267`, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`, `_connector_finished`, `scheduler.py:2929`; not in `vllm.seq`, which is one device |
 | `} keep (prompt + o)` | release: the blocks go to the free queue, the full ones stay cached | `_free_request`, `scheduler.py:2628`; `free`, `kv_cache_manager.py:610-619`; `cache_blocks`, `kv_cache_manager.py:802-812` |
 | `tool Z; turn;` | the session thinks and comes back with a longer prompt | outside the engine: the session's next request, `add_request`, `scheduler.py:2536` |
 | `end` | the session leaves; its blocks stay in the free queue | `finish_requests`, `scheduler.py:2564` |
+
+### The two sides
+
+A `session` block writes a session's whole life in one place: what the
+client does (arrive, think, decide whether to go on) next to what the
+deployment does with each request. `programs/vllm.seq` is headed "vLLM v1
+on one device", and its session block held three statements vLLM does not
+execute — the tool call, the next turn, the exit — and one variable, the
+context length `K`, that belongs to the conversation rather than to the
+engine. The same program written from its two sides:
+
+```
+workload {
+  arrive poisson(Lambda);
+  init { set K = 0; }
+  turn { … }
+  session {
+    turn;
+    loop {
+      request;
+      set K = prompt + o;
+      branch (more) { tool (~exp(Z)); turn; } else { end; }
+    }
+  }
+}
+
+server {
+  set prompt = K + n;
+  set hitmax = floor((prompt - 1) / bs) * bs;
+  admit if reqs (1), kv (min(prompt, hit + budget_left(engine))) fit
+        where hit = min(cachedin(kv), hitmax) {
+    prefill (prompt - c) growing kv;
+    decode (o - 1) growing kv;
+  } keep (prompt + o);
+}
+```
+
+`request;` runs the server once. The parser splices the server's
+statements in its place — at any depth, as often as it is written — so the
+AST, the IR and everything downstream see the one session they saw before.
+The three vLLM programs compile to the IR they compiled to as `session`
+blocks (`tests/ir.rs`, `src/parser.rs` tests), and `tools/oracle/*.ir.json`
+did not move: the two sides are sugar, at the price of the serving
+vocabulary.
+
+Each side owns its words, and the parser holds a program to that, because
+a decision written on both sides would be two constructs for one meaning:
+
+| | the session's side (`session` inside `workload`) | the server's side (`server`) |
+|---|---|---|
+| the next turn, the exit | `turn;`, `end;` | refused: a server is done with a request when its block is |
+| the request | `request;` | refused: a server does not request itself |
+| admission | `enter P (u), … at admission (x = e) { … } keep (ℓ)` | `admit if P (u), … fit where x = e { … } keep (ℓ)` |
+| the kernel | `hold` | `hold` |
+
+`admit if … fit` is the hold `enter … at admission` is, spelled by the
+scheduler: the pools listed are the ones that must have room (`used + r ≤
+cap`, §3), the units are what the admission takes, and `fit` is the whole
+condition. The condition is not an expression on purpose. A free predicate
+would part the test from the allocation (a program could admit on 10 units
+and take 20, and nothing could check it), would have to be re-evaluated at
+every event rather than when a pool changes, and would leave the Lean
+fragment; where the test does differ from the allocation, `reserve` says
+so by name (vLLM's `scheduler_reserve_full_isl`). The binding clause is
+`where` rather than `at admission` because in a server the header *is* the
+admission and has no other moment to name; in a `session` the clause still
+has to say when.
+
+A `session` at top level stays the kernel form and the one the tutorial
+teaches. The two forms are exclusive in one program; a workload's `session`
+without a `server`, or a `server` that is never requested, is an error.
 
 ## 3. Semantics
 
@@ -301,11 +379,12 @@ a program that uses the clause has the IR of the one that inlines by hand. A
 later binding sees the earlier ones. A binding may not draw (`~`): it is
 substituted, so a name used twice would draw twice.
 
-**`enter` and `admit via`.** The scheduler admits; the session enters. The
-statement is named from the session's side, like every other statement in a
-`session` block, and `admit` stays the name of the *pool option* that hands a
-queue to a stage's scheduler (`admit via S`) — which is the scheduler's side,
-and is the one place the word belongs.
+**`enter`, `admit if` and `admit via`.** The scheduler admits; the session
+enters. The statement is named from the side it is written on: `enter` in
+a `session` block, like every other statement there, and `admit if … fit`
+in a `server` block (§2, the two sides), where the scheduler is the one
+speaking. `admit` is also the name of the *pool option* that hands a queue
+to a stage's scheduler (`admit via S`), the scheduler's side again.
 
 **Branching.** `branch (e)` takes the first block when `e` is non-zero.
 `branch with (p)` takes it with probability `p`, and is sugar the parser
@@ -410,6 +489,21 @@ Not modelled: the watermark (0 by default), the "alone" exception of the
 long-prefill threshold, encoder inputs, speculative decoding, sliding
 window, cross-session prefix sharing (out of scope), asynchronous
 scheduling (Section 8).
+
+**Admission.** The header of `admit if` in `programs/vllm.seq` is the
+prefix-cache lookup and the allocation of the first chunk, and both happen
+when the scheduler admits the request, not when it queues. The hit is the
+cached *full blocks* of the prompt, never all of it, since the last token
+is recomputed for its logits: `hitmax = floor((prompt − 1) / bs) · bs`.
+`cachedin(kv)` is read in the header, so it is read in the waiting loop
+(`scheduler.py:932-939`), and until then a waiting request's prefix is
+still evictable — which is the point of the wait channel, and the moment
+the first version of the program got wrong (§3). The units are the hit
+plus the chunk the budget the running requests leave can take now,
+`min(prompt, hit + budget_left(engine))` (`scheduler.py:1078-1128,
+1214-1226`): the whole prompt, or as far as the hit and the budget reach,
+whichever is less. The rest is allocated as the request runs
+(`growing kv`).
 
 **How the correspondence is checked.** Three oracles, all agreeing:
 

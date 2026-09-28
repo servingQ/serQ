@@ -37,6 +37,9 @@ stage engine : step {
 }
 stage tool : delay;
 
+// The client: sessions arrive, each turn brings a prompt of n new tokens
+// on a context of K and wants o tokens back, and after a turn the session
+// calls a tool and comes back with probability p. Nothing here is vLLM.
 workload {
   arrive poisson(Lambda);
   init { set K = 0; }
@@ -45,38 +48,35 @@ workload {
     set o = ~exp(200) + 1;
     set more = ~bernoulli(p);
   }
+  session {
+    turn;
+    loop {
+      request;
+      set K = prompt + o;
+      branch (more) { tool (~exp(Z)); turn; } else { end; }
+    }
+  }
 }
 
-session {
-  turn;
-  loop {
-    set t0 = now;
-    set prompt = K + n;
-    // prefix-cache lookup: cached full blocks of the prompt, never all of it
-    // (the last token is recomputed for its logits); the admission needs the
-    // hit's blocks plus those of the chunk the budget the running requests
-    // leave can take now (scheduler.py:1078-1128, 1214-1226); the rest is
-    // allocated as the request runs
-    // `cachedin(kv)` is read inside the unit expression, so it is read when
-    // the scheduler admits (scheduler.py:932-939) and not when the request
-    // queues -- a waiting request's prefix is still evictable, which is the
-    // whole point of the wait channel. The units are the hit plus the chunk
-    // the budget allows, which is `min(prompt, hit + budget)`: the whole
-    // prompt, or as far as the hit and the budget reach, whichever is less
-    set hitmax = floor((prompt - 1) / bs) * bs;
-    enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
-          at admission (hit = min(cachedin(kv), hitmax)) {
-      set c = min(cached, floor((prompt - 1) / bs) * bs);
-      observe hit = c > 0;
-      observe prefill_tokens = prompt - c;
-      prefill (prompt - c) growing kv;
-      observe ttft = now - t0;
-      decode (o - 1) growing kv;
-    } keep (prompt + o);
-    observe response = now - t0;
-    set K = prompt + o;
-    branch (more) { tool (~exp(Z)); turn; } else { end; }
-  }
+// The engine: what vLLM does with one request.
+server {
+  set t0 = now;
+  set prompt = K + n;
+  // the prefix hit (full blocks, never the whole prompt) is looked up when
+  // the scheduler admits (scheduler.py:932-939), and the admission takes the
+  // hit plus the chunk the budget allows (scheduler.py:1078-1128, 1214-1226);
+  // docs/language.md §7 "Admission" has the argument
+  set hitmax = floor((prompt - 1) / bs) * bs;
+  admit if reqs (1), kv (min(prompt, hit + budget_left(engine))) fit
+        where hit = min(cachedin(kv), hitmax) {
+    set c = min(cached, floor((prompt - 1) / bs) * bs);
+    observe hit = c > 0;
+    observe prefill_tokens = prompt - c;
+    prefill (prompt - c) growing kv;
+    observe ttft = now - t0;
+    decode (o - 1) growing kv;
+  } keep (prompt + o);
+  observe response = now - t0;
 }
 
 run { horizon 2000; warmup 200; seed 1; }

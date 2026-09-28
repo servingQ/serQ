@@ -36,47 +36,52 @@ stage front : delay;
 stage gate : delay;
 stage tool : delay;
 
+// The client: the trace's sessions, sent `spacing` apart; a turn is sent
+// `think` seconds after the previous one completes.
 workload {
   arrive batch(N);
   trace "data/short_base.csv" ordered;
+  session {
+    run gate (serial * spacing);
+    set prev = 0;
+    set prevout = 0;
+    turn;
+    loop {
+      request;
+      set prev = prompt;
+      set prevout = out;
+      branch (more) { tool think; turn; } else { end; }
+    }
+  }
 }
 
-session {
-  run gate (serial * spacing);
-  set prev = 0;
-  set prevout = 0;
-  turn;
-  loop {
-    set t0 = now;
-    set prompt = new;
-    run front (c0 + f * prompt);
-    // reusable: the common prefix with the previous turn's computed tokens
-    // (the previous prompt; the generated tokens are not in this prompt),
-    // never the whole prompt (the last token is recomputed for its logits)
-    // a forced turn carries a nonce at its head: nothing matches, and the
-    // old prefix stays in the cache, unusable, until it is evicted
-    set hitmax = forced ? 0 : floor(min(prev, prompt - 1) / bs) * bs;
-    // units are evaluated when the scheduler admits: the prefix still
-    // cached then, plus the chunk the step's remaining budget allows
-    // the admission needs room for the whole prompt (scheduler_reserve_full_isl,
-    // kv_cache_manager.py:515-531) but allocates only the first chunk
-    enter reqs (1), kv (hit + min(prompt - hit, budget_left(engine)))
-          reserve (prompt)
-          reuse (hitmax)
-          at admission (hit = min(cachedin(kv), hitmax)) {
-      set c = cached;
-      observe cached_tokens = c;
-      observe prefix = prev + prevout;
-      observe sent = t0;
-      prefill (prompt - c) growing kv;
-      observe ttft = now - t0;
-      decode (out - 1) growing kv;
-    } keep (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
-    observe latency = now - t0;
-    set prev = prompt;
-    set prevout = out;
-    branch (more) { tool think; turn; } else { end; }
-  }
+// The served path: the front end, then the engine.
+server {
+  set t0 = now;
+  set prompt = new;
+  run front (c0 + f * prompt);
+  // reusable: the common prefix with the previous turn's computed tokens
+  // (the previous prompt; the generated tokens are not in this prompt),
+  // never the whole prompt (the last token is recomputed for its logits)
+  // a forced turn carries a nonce at its head: nothing matches, and the
+  // old prefix stays in the cache, unusable, until it is evicted
+  set hitmax = forced ? 0 : floor(min(prev, prompt - 1) / bs) * bs;
+  // the header is evaluated when the scheduler admits: the prefix still
+  // cached then, plus the chunk the step's remaining budget allows
+  // the admission needs room for the whole prompt (scheduler_reserve_full_isl,
+  // kv_cache_manager.py:515-531) but allocates only the first chunk
+  admit if reqs (1), kv (hit + min(prompt - hit, budget_left(engine))) reserve (prompt) fit
+        reuse (hitmax)
+        where hit = min(cachedin(kv), hitmax) {
+    set c = cached;
+    observe cached_tokens = c;
+    observe prefix = prev + prevout;
+    observe sent = t0;
+    prefill (prompt - c) growing kv;
+    observe ttft = now - t0;
+    decode (out - 1) growing kv;
+  } keep (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
+  observe latency = now - t0;
 }
 
 run { horizon 6000; warmup 0; seed 1; }

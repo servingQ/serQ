@@ -7,6 +7,7 @@
 //!           | 'stage' IDENT ('[' NUM ']')? ':' kind ';'
 //!           | 'workload' '{' wlitem* '}'
 //!           | 'session' block
+//!           | 'server' block
 //!           | 'run' '{' ('horizon' | 'warmup' | 'seed') expr ';' ... '}'
 //! poolopt  := 'cap' expr ';' | 'block' expr ';'
 //!           | 'evict' ('lru' | 'by' '(' expr (',' expr)* ')') ';'
@@ -17,11 +18,14 @@
 //!           | 'step' '{' stepopt* '}'
 //! stepopt  := 'budget' expr ';' | 'cost' expr ';' | 'chunk' expr ';'
 //!           | 'exclusive' 'prefill' ';' | 'memory' IDENT ';'
-//! wlitem   := 'arrive' ('poisson' '(' expr ')' | 'closed' '(' expr ')' | 'none') ';'
-//!           | 'trace' STRING ';' | 'init' block | 'turn' block
+//! wlitem   := 'arrive' ('poisson' '(' expr ')' | 'closed' '(' expr ')' | 'batch' '(' expr ')' | 'none') ';'
+//!           | 'trace' STRING ('ordered')? ';' | 'init' block | 'turn' block
+//!           | 'session' block                  -- the session's side, with 'request'
 //! block    := '{' stmt* '}'
-//! stmt     := 'turn' ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
+//! stmt     := 'turn' ';' | 'request' ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
 //!           | ('hold' | 'enter') ref '(' expr ')' (',' ref '(' expr ')')* block ('cache' '(' expr ')')? ';'?
+//!           | 'admit' 'if' ref '(' expr ')' (',' ref '(' expr ')')* 'fit'
+//!                 ('where' IDENT '=' expr (',' IDENT '=' expr)*)? block ('keep' '(' expr ')')? ';'?
 //!           | 'grow' ref '(' expr ')' ';' | 'drop' ref ';'
 //!           | 'run' ref ('prefill' | 'decode')? '(' expr ')' ('growing' ref)? ';'
 //!           | 'branch' ('with')? '(' expr ')' block ('else' block)?
@@ -41,6 +45,17 @@
 //! `transfer`, `decode`, `tool`), else, for `prefill` and `decode`, the
 //! `step` engine; `on STAGE` names it explicitly. On a step engine the run
 //! gets the role's mode (`run E prefill (S)`), elsewhere it is plain.
+//!
+//! The two sides. `workload { … session { … request; … } }` and
+//! `server { … }` are one session written from its two sides: the client's
+//! (arrivals, turns, thinking, whether to go on) and the server's (what
+//! the deployment does with one request). The parser splices the server's
+//! statements in place of every `request;`, so the AST holds one session
+//! and the IR is the one the same program written as `session { … }`
+//! compiles to. Each side has its words: `request`, `turn` and `end` are
+//! the session's and are refused in a `server`; `admit if … fit where …`
+//! is the server's spelling of `enter … at admission (…)` and is refused
+//! outside one. `hold`, the kernel, is written anywhere.
 
 use std::fmt;
 
@@ -80,6 +95,21 @@ struct Parser {
     /// The stages declared so far, (name, is a step engine): what the
     /// serving forms resolve their stage against.
     stages: Vec<(String, bool)>,
+    /// Which side the statement being parsed is on.
+    side: Side,
+    /// The workload's `session` block and the `server` block, each with the
+    /// position of its keyword, until `assemble` puts them together.
+    wl_session: Option<(usize, Vec<Stmt>)>,
+    server: Option<(usize, Vec<Stmt>)>,
+}
+
+/// Where a statement sits: a top-level `session`, the `session` inside
+/// `workload` (the only place `request` is a statement) or `server`.
+#[derive(Clone, Copy, PartialEq)]
+enum Side {
+    Session,
+    WorkloadSession,
+    Server,
 }
 
 /// A serving form: a statement that desugars to `run` on the stage that
@@ -138,6 +168,9 @@ pub fn parse(src: &str) -> PResult<Program> {
         toks,
         pos: 0,
         stages: vec![],
+        side: Side::Session,
+        wl_session: None,
+        server: None,
     };
     p.program()
 }
@@ -149,13 +182,17 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
         toks,
         pos: 0,
         stages: vec![],
+        side: Side::Session,
+        wl_session: None,
+        server: None,
     };
     let e = p.expr()?;
     p.expect(&Tok::Eof)?;
     Ok(e)
 }
 
-/// Replace every `Var(name)` of an `at admission` binding by its expression.
+/// Replace every `Var(name)` of a header binding (`at admission (…)`,
+/// `where …`) by its expression.
 fn subst(e: &mut Expr, binds: &[(String, Expr)]) {
     match e {
         Expr::Var(n) => {
@@ -199,6 +236,31 @@ fn has_sample(e: &Expr) -> bool {
         Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
         Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
     }
+}
+
+/// Replace every `request;` in `stmts`, at any depth, by the server's
+/// statements. Returns how many were replaced.
+fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
+    let mut n = 0;
+    let mut out = Vec::with_capacity(stmts.len());
+    for mut s in std::mem::take(stmts) {
+        match &mut s {
+            Stmt::Request => {
+                n += 1;
+                out.extend(server.iter().cloned());
+                continue;
+            }
+            Stmt::Hold { body, .. } | Stmt::Loop(body) => n += splice(body, server),
+            Stmt::Branch(_, a, b) => {
+                n += splice(a, server);
+                n += splice(b, server);
+            }
+            _ => {}
+        }
+        out.push(s);
+    }
+    *stmts = out;
+    n
 }
 
 impl Parser {
@@ -307,7 +369,18 @@ impl Parser {
                 if !prog.session.is_empty() {
                     return self.err("duplicate session");
                 }
+                self.side = Side::Session;
                 prog.session = self.block()?;
+            } else if self.is_kw("server") {
+                let at = self.pos;
+                self.advance();
+                if self.server.is_some() {
+                    return self.err_at(at, "duplicate server");
+                }
+                self.side = Side::Server;
+                let body = self.block()?;
+                self.side = Side::Session;
+                self.server = Some((at, body));
             } else if self.eat_kw("run") {
                 self.expect(&Tok::LBrace)?;
                 while *self.peek() != Tok::RBrace {
@@ -326,7 +399,44 @@ impl Parser {
                 return self.err(format!("unexpected {} at top level", self.peek()));
             }
         }
+        self.assemble(&mut prog)?;
         Ok(prog)
+    }
+
+    /// Put the two sides together: the server's statements in place of
+    /// every `request;` of the workload's session, which becomes the
+    /// program's session. A side without the other is an error, and so is a
+    /// third session at top level.
+    fn assemble(&mut self, prog: &mut Program) -> PResult<()> {
+        match (self.wl_session.take(), self.server.take()) {
+            (None, None) => Ok(()),
+            (Some((at, _)), None) => self.err_at(
+                at,
+                "a `session` inside `workload` is written against a `server` block; \
+                 without one, write `session` at top level",
+            ),
+            (None, Some((at, _))) => self.err_at(
+                at,
+                "`server` needs a `session` inside `workload` that says `request;`",
+            ),
+            (Some((s_at, mut session)), Some((v_at, server))) => {
+                if !prog.session.is_empty() {
+                    return self.err_at(
+                        s_at,
+                        "a program has one session: inside `workload` (with a `server`) \
+                         or at top level, not both",
+                    );
+                }
+                if splice(&mut session, &server) == 0 {
+                    return self.err_at(
+                        v_at,
+                        "`server` is never requested: the workload's session has no `request;`",
+                    );
+                }
+                prog.session = session;
+                Ok(())
+            }
+        }
     }
 
     fn array_count(&mut self) -> PResult<usize> {
@@ -539,6 +649,16 @@ impl Parser {
                 w.init = self.block()?;
             } else if self.eat_kw("turn") {
                 w.turn = self.block()?;
+            } else if self.is_kw("session") {
+                let at = self.pos;
+                self.advance();
+                if self.wl_session.is_some() {
+                    return self.err_at(at, "duplicate session in workload");
+                }
+                self.side = Side::WorkloadSession;
+                let body = self.block()?;
+                self.side = Side::Session;
+                self.wl_session = Some((at, body));
             } else {
                 return self.err(format!("unexpected {} in workload", self.peek()));
             }
@@ -584,14 +704,44 @@ impl Parser {
         };
         match kw.as_str() {
             "turn" => {
+                if self.side == Side::Server {
+                    return self.err(
+                        "`turn` is the session's: the next turn is the workload's decision, \
+                         not the server's",
+                    );
+                }
                 self.advance();
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Turn)
             }
             "end" => {
+                if self.side == Side::Server {
+                    return self.err(
+                        "`end` is the session's: a server is done with a request when its \
+                         block is, and whether the session goes on is the workload's",
+                    );
+                }
                 self.advance();
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::End)
+            }
+            "request" => {
+                match self.side {
+                    Side::WorkloadSession => {}
+                    Side::Server => {
+                        return self
+                            .err("`request` inside `server`: a server does not request itself");
+                    }
+                    Side::Session => {
+                        return self.err(
+                            "`request` is a statement of the `session` inside `workload`, \
+                             next to a `server` block",
+                        );
+                    }
+                }
+                self.advance();
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Request)
             }
             "set" => {
                 self.advance();
@@ -611,13 +761,36 @@ impl Parser {
             }
             // `enter ... keep (l)` is `hold ... cache (l)`
             "hold" | "enter" => {
+                if kw == "enter" && self.side == Side::Server {
+                    return self.err(
+                        "`enter` is the session's word; in a `server` block write \
+                         `admit if … fit`",
+                    );
+                }
                 self.advance();
-                self.hold()
+                self.hold(false)
             }
-            "admit" => self.err(
-                "`admit` is now `enter`: the scheduler admits, the session enters \
-                 (the pool option `admit via` is unchanged)",
-            ),
+            // `admit if P (u), … fit where x = e { body } keep (l)` is the
+            // server's spelling of `enter P (u), … at admission (x = e) { body }
+            // keep (l)`: in a server the header is the admission, so the
+            // clause does not have to say when.
+            "admit" => {
+                if self.side != Side::Server {
+                    return self.err(
+                        "`admit` is the server's word: the scheduler admits, the session \
+                         enters. In a `session` block write `enter`, in a `server` block \
+                         `admit if … fit` (the pool option `admit via` is unchanged)",
+                    );
+                }
+                self.advance();
+                if !self.eat_kw("if") {
+                    return self.err(format!(
+                        "expected `if` after `admit` (`admit if reqs (1), kv (u) fit …`), found {}",
+                        self.peek()
+                    ));
+                }
+                self.hold(true)
+            }
             "grow" => {
                 self.advance();
                 let r = self.reference()?;
@@ -700,8 +873,9 @@ impl Parser {
         }
     }
 
-    /// The rest of a `hold` (or `admit`) statement, after the keyword.
-    fn hold(&mut self) -> PResult<Stmt> {
+    /// The rest of a `hold` or `enter` statement after the keyword, or of
+    /// `admit if` (`admit`) after the `if`.
+    fn hold(&mut self, admit: bool) -> PResult<Stmt> {
         let mut pools = vec![];
         loop {
             let r = self.reference()?;
@@ -723,17 +897,42 @@ impl Parser {
                 break;
             }
         }
+        if admit && !self.eat_kw("fit") {
+            return self.err(format!(
+                "expected `fit` after the pools of `admit if`, found {}",
+                self.peek()
+            ));
+        }
         let mut reuse = if self.eat_kw("reuse") {
             Some(self.paren_expr()?)
         } else {
             None
         };
-        // `at admission (hit = e, ...)` names values the header is written in
-        // terms of. Everything in a hold's header is evaluated when the
-        // session is admitted; a `set` above the hold is not, and looks the
-        // same. The bindings are substituted into the header's expressions
-        // here, so the AST, the IR and the interpreter never see them.
-        let binds = self.at_admission()?;
+        // `at admission (hit = e, ...)` (`where hit = e, ...` in a server)
+        // names values the header is written in terms of. Everything in a
+        // hold's header is evaluated when the session is admitted; a `set`
+        // above the hold is not, and looks the same. The bindings are
+        // substituted into the header's expressions here, so the AST, the
+        // IR and the interpreter never see them.
+        let binds = if admit {
+            if self.is_kw("at") {
+                return self
+                    .err("in `admit if … fit` the header is the admission: write `where hit = …`");
+            }
+            if self.eat_kw("where") {
+                self.bindings("where")?
+            } else {
+                vec![]
+            }
+        } else {
+            if self.is_kw("where") {
+                return self.err(
+                    "`where` is the server's clause; in `enter` and `hold` write \
+                     `at admission (hit = …)`",
+                );
+            }
+            self.at_admission()?
+        };
         if !binds.is_empty() {
             for (_, e, reserve) in &mut pools {
                 subst(e, &binds);
@@ -771,24 +970,32 @@ impl Parser {
     /// steps. Samples are rejected: the bindings are substituted, and a name
     /// used twice would draw twice.
     fn at_admission(&mut self) -> PResult<Vec<(String, Expr)>> {
-        let mut binds: Vec<(String, Expr)> = vec![];
         if !self.eat_kw("at") {
-            return Ok(binds);
+            return Ok(vec![]);
         }
         if !self.eat_kw("admission") {
             return self.err("expected `admission` after `at`");
         }
         self.expect(&Tok::LParen)?;
+        let binds = self.bindings("at admission")?;
+        self.expect(&Tok::RParen)?;
+        Ok(binds)
+    }
+
+    /// `name = e, name = f, …`: the bindings of an `at admission (…)` or a
+    /// `where` clause, after its keyword. `clause` names it in errors.
+    fn bindings(&mut self, clause: &str) -> PResult<Vec<(String, Expr)>> {
+        let mut binds: Vec<(String, Expr)> = vec![];
         loop {
             let name = self.ident()?;
             if binds.iter().any(|(n, _)| *n == name) {
-                return self.err(format!("`{name}` is bound twice in one `at admission`"));
+                return self.err(format!("`{name}` is bound twice in one `{clause}`"));
             }
             self.expect(&Tok::Assign)?;
             let mut e = self.expr()?;
             if has_sample(&e) {
                 return self.err(format!(
-                    "`{name}` draws a sample: an `at admission` binding is substituted, \
+                    "`{name}` draws a sample: a `{clause}` binding is substituted, \
                      so a name used twice would draw twice"
                 ));
             }
@@ -800,7 +1007,6 @@ impl Parser {
                 break;
             }
         }
-        self.expect(&Tok::RParen)?;
         Ok(binds)
     }
 
@@ -1225,5 +1431,162 @@ mod tests {
         );
         let e = parse("stage tool : delay; session { tool on other Z; }").unwrap_err();
         assert!(e.msg.contains("no stage `other` is declared above"), "{e}");
+    }
+
+    const DEPLOYMENT: &str = r#"
+        pool kv { cap 1000; block 16; evict lru; }
+        pool reqs { cap 4; }
+        stage engine : step { budget 64; cost 1; memory kv; }
+        stage tool : delay;
+    "#;
+
+    const CLIENT: &str =
+        "arrive poisson(1); init { set K = 0; } turn { set n = 10; set o = 5; set more = 1; }";
+
+    /// `workload { session { … request; … } }` and `server { … }` parse to
+    /// the session block that has the server in place of the request, and
+    /// `admit if … fit where …` to the `enter … at admission (…)` it spells.
+    #[test]
+    fn the_two_sides_are_one_session() {
+        same(
+            &format!(
+                "{DEPLOYMENT} workload {{ {CLIENT}
+                    session {{
+                      turn;
+                      loop {{
+                        request;
+                        set K = prompt + o;
+                        branch (more) {{ tool 3; turn; }} else {{ end; }}
+                      }}
+                    }}
+                }}
+                server {{
+                  set prompt = K + n;
+                  admit if reqs (1), kv (min(prompt, hit + budget_left(engine))) fit
+                        where hit = min(cachedin(kv), prompt - 1) {{
+                    prefill (prompt - cached) growing kv;
+                    decode (o - 1) growing kv;
+                  }} keep (prompt + o);
+                }}"
+            ),
+            &format!(
+                "{DEPLOYMENT} workload {{ {CLIENT} }}
+                session {{
+                  turn;
+                  loop {{
+                    set prompt = K + n;
+                    enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
+                          at admission (hit = min(cachedin(kv), prompt - 1)) {{
+                      prefill (prompt - cached) growing kv;
+                      decode (o - 1) growing kv;
+                    }} keep (prompt + o);
+                    set K = prompt + o;
+                    branch (more) {{ tool 3; turn; }} else {{ end; }}
+                  }}
+                }}"
+            ),
+        );
+    }
+
+    #[test]
+    fn request_is_spliced_at_any_depth_and_as_often_as_written() {
+        same(
+            "stage s : fifo; workload { session { branch (x) { request; } else { loop { request; end; } } } }
+             server { run s (1); }",
+            "stage s : fifo; workload { } session { branch (x) { run s (1); } else { loop { run s (1); end; } } }",
+        );
+        // the kernel is written on either side
+        same(
+            "pool kv { cap 1; } workload { session { request; end; } } server { hold kv (1) { } }",
+            "pool kv { cap 1; } workload { } session { hold kv (1) { } end; }",
+        );
+        // the order of the blocks does not matter
+        same(
+            "stage s : fifo; server { run s (1); } workload { session { request; end; } }",
+            "stage s : fifo; workload { } session { run s (1); end; }",
+        );
+    }
+
+    fn refused(src: &str, needle: &str) {
+        let e = parse(src).unwrap_err();
+        assert!(e.msg.contains(needle), "{src}\n  {e}");
+    }
+
+    #[test]
+    fn each_side_keeps_its_words() {
+        const WL: &str = "workload { session { request; } }";
+        // the session's words in a server
+        refused(
+            &format!("stage s : fifo; {WL} server {{ turn; }}"),
+            "`turn` is the session's",
+        );
+        refused(
+            &format!("stage s : fifo; {WL} server {{ end; }}"),
+            "`end` is the session's",
+        );
+        refused(
+            &format!("stage s : fifo; {WL} server {{ request; }}"),
+            "does not request itself",
+        );
+        refused(
+            &format!("pool kv {{ cap 1; }} {WL} server {{ enter kv (1) {{ }} }}"),
+            "`enter` is the session's word",
+        );
+        // the server's words in a session
+        refused(
+            "pool kv { cap 1; } session { admit if kv (1) fit { } }",
+            "`admit` is the server's word",
+        );
+        refused(
+            "pool kv { cap 1; } session { request; }",
+            "`session` inside `workload`",
+        );
+        refused(
+            "pool kv { cap 1; } session { enter kv (1) where x = 1 { } }",
+            "`where` is the server's clause",
+        );
+        // and the server's form is one form
+        refused(
+            &format!(
+                "pool kv {{ cap 1; }} {WL} server {{ admit if kv (1) fit at admission (x = 1) {{ }} }}"
+            ),
+            "the header is the admission",
+        );
+        refused(
+            &format!("pool kv {{ cap 1; }} {WL} server {{ admit kv (1) {{ }} }}"),
+            "expected `if` after `admit`",
+        );
+        refused(
+            &format!("pool kv {{ cap 1; }} {WL} server {{ admit if kv (1) {{ }} }}"),
+            "expected `fit`",
+        );
+    }
+
+    #[test]
+    fn a_side_needs_the_other() {
+        refused(
+            "stage s : fifo; workload { session { run s (1); } }",
+            "written against a `server` block",
+        );
+        refused(
+            "stage s : fifo; server { run s (1); }",
+            "`server` needs a `session` inside `workload`",
+        );
+        refused(
+            "stage s : fifo; workload { session { run s (1); } } server { run s (1); }",
+            "never requested",
+        );
+        refused(
+            "stage s : fifo; workload { session { request; } } server { run s (1); } session { run s (1); }",
+            "one session",
+        );
+        refused(
+            "stage s : fifo; session { run s (1); } workload { session { request; } } server { run s (1); }",
+            "one session",
+        );
+        refused(
+            "stage s : fifo; server { run s (1); } server { run s (1); }",
+            "duplicate server",
+        );
     }
 }
