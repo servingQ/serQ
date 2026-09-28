@@ -114,6 +114,42 @@ fn zero_and_one_are_tests() {
     }
 }
 
+/// A context variable outside the moment that supplies it. `ntok` is what a
+/// step stage's budget and cost see for one iteration; in a session
+/// statement it used to read as 0 and the program ran. The IR's validator
+/// knows the table, and the linker now runs it on what it produces.
+#[test]
+fn a_context_variable_outside_its_moment_is_rejected() {
+    let src = format!(
+        "{ENGINE} session {{ turn; set x = ntok;
+            enter reqs (1), kv (n) {{ prefill (n) growing kv; }} end; }}"
+    );
+    let e = check(&src).expect_err("rejected");
+    assert!(e.contains("`ntok` is read in a session statement"), "{e}");
+    assert!(e.contains("exists only in a step stage's budget"), "{e}");
+    // and the other way: an eviction key is not a session statement
+    let src = "let bs = 16;
+        pool kv { cap 1e5; block bs; evict by (ntok); }
+        pool reqs { cap 8; }
+        stage engine : step { budget 512; cost 1e-3; memory kv; }
+        workload { arrive poisson(0.3); init { set K = 0; }
+                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
+        run { horizon 500; }
+        session { turn; enter reqs (1), kv (n) { prefill (n) growing kv; } end; }";
+    let e = check(src).expect_err("rejected");
+    assert!(e.contains("pool `kv`"), "{e}");
+    assert!(e.contains("`ntok` is read in an eviction key"), "{e}");
+    // what the table allows still links: `age` in an eviction key, `n` in a
+    // ps capacity, `ntok` in a cost, `now` anywhere
+    let src = "pool kv { cap 1e5; evict by (age, size); }
+        stage svc : ps (min(n, 4));
+        stage engine : step { budget 512; cost 1e-3 * ntok + now * 0; memory kv; }
+        workload { arrive poisson(0.3); turn { set n = ~exp(500); } }
+        session { turn; set t = now; hold kv (n) { run svc (n); } end; }
+        run { horizon 500; }";
+    check(src).expect("links");
+}
+
 /// The lints exist to be errors, which is only defensible if nothing real
 /// trips them.
 #[test]

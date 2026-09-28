@@ -128,7 +128,10 @@ Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`,
 `last`, `queued` (eviction keys and spill predicates), `n` (ps
 capacity), `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn` (step budget
 and cost; `attn = Σ n (K + n/2)` over the prefill chunks, `K` the position
-before the chunk). A name may not be both a `let` constant and a session
+before the chunk). Each context variable exists at the one place named in
+its parenthesis (`now` everywhere), and reading it anywhere else is a link
+error rather than a 0: `set x = ntok;` in a session, or `evict by (ntok)`,
+does not link (`docs/ir.md`, Moments). A name may not be both a `let` constant and a session
 attribute (the linker rejects it: an attribute would shadow the constant,
 and a stage's cost, which has no session, would read it as undefined). Built-in session attributes: `serial`, `turn_no`, `cached` (the
 prefix consumed at the last admission), and with a trace `new`, `out`,
