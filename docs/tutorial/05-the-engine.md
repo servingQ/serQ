@@ -59,7 +59,7 @@ and stall every decode (the RBLN stack).
 
 ```rust
 set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-hold slots (1), kv (c + min(prompt - c, budget_left(engine))) {
+hold reqs (1), kv (c + min(prompt - c, budget_left(engine))) {
   run engine prefill (prompt - c) growing kv;
   run engine decode (o - 1) growing kv;
 } cache (prompt + o);
@@ -80,7 +80,7 @@ admitted, not when it queues, which is the rule chapter 2 flagged and this is
 the program that needs it.
 
 **`admit via engine`** on a pool (not used above, but in
-`programs/vllm.seq`'s `slots`) hands the pool's queue to the engine's
+`programs/vllm.seq`'s `reqs`) hands the pool's queue to the engine's
 scheduler: waiting requests are admitted at the start of an iteration, with
 the budget left, and never in an iteration that preempted.
 
@@ -101,7 +101,7 @@ stage          number   util    done   thru      wait   service  iters
   tool           5.822  0.998   35044  1.9469    0.0000    2.9903      0
 pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej
   kv               729.8   28515.3  0.000   0.153     NaN   48810      218   1760208       0     0   0
-  slots              0.2       0.0  0.000   0.153  0.0007   48810        0         0       0     0   0
+  reqs               0.2       0.0  0.000   0.153  0.0007   48810        0         0       0     0   0
 ```
 
 **9 164 050 iterations.** That is what `step` costs you: the engine is
@@ -118,7 +118,7 @@ iteration granularity instead of as one service time.
 !!! note "`wait NaN` on the `kv` pool"
     A hold on several pools joins the queue of the **first** one, so `kv` never
     has a queue of its own and its mean wait is 0/0. Cosmetic; the queueing is
-    all on `slots`.
+    all on `reqs`.
 
 ---
 

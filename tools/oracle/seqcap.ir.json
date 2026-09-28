@@ -19,7 +19,7 @@
   ],
   "pools": [
     {
-      "name": "slots",
+      "name": "reqs",
       "cap": 2.0,
       "block": null,
       "evict": "Lru",

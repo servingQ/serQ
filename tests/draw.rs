@@ -177,11 +177,11 @@ fn compile(src: &str) -> Program {
 fn growing_is_found_through_nested_holds() {
     let p = compile(
         r#"
-        pool kv { cap 100000; } pool slots { cap 8; } pool gate { cap 4; }
+        pool kv { cap 100000; } pool reqs { cap 8; } pool gate { cap 4; }
         stage engine : step { budget 512; cost 1e-3; memory kv; }
         workload { arrive poisson(0.2); turn { set n = 100; set o = 2; } }
         session { turn;
-          hold kv (32), slots (1) {
+          hold kv (32), reqs (1) {
             hold gate (1) { run engine prefill (n) growing kv; }
           } cache (n + o);
           end; }
@@ -189,7 +189,7 @@ fn growing_is_found_through_nested_holds() {
         "#,
     );
     let net = deployment::project(&p);
-    assert_eq!(net.cached, vec![pool(&p, "kv")], "slots is never cached in");
+    assert_eq!(net.cached, vec![pool(&p, "kv")], "reqs is never cached in");
 }
 
 /// A pool held around two stations with an unheld one between them gets one
@@ -343,7 +343,7 @@ fn negative_constants_reparse() {
 fn cache_targets_follow_the_release_rule() {
     let p = program("vllm");
     let net = deployment::project(&p);
-    assert_eq!(net.cached, vec![pool(&p, "kv")], "growing kv, so not slots");
+    assert_eq!(net.cached, vec![pool(&p, "kv")], "growing kv, so not reqs");
 
     let p = program("replica");
     let net = deployment::project(&p);
@@ -454,7 +454,7 @@ fn route_columns_are_the_held_pools() {
 fn band_style_says_when_the_width_is_decided() {
     let p = program("vllm");
     let f = draw::figure(&p, false);
-    assert_eq!(f.boxes(BoxStyle::Solid).len(), 1, "hold slots (1)");
+    assert_eq!(f.boxes(BoxStyle::Solid).len(), 1, "hold reqs (1)");
     assert_eq!(
         f.boxes(BoxStyle::Admission).len(),
         1,

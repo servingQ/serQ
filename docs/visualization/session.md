@@ -38,7 +38,7 @@ What the geometry carries is *when a width is decided*:
 | **faded** tail | `cache (ℓ)`: units that stay after the scope ends |
 | a rule across the column | `drop POOL` cuts the tail |
 
-In the figure above, `hold slots (1), kv (c + min(prompt - c, budget_left(engine)))`
+In the figure above, `hold reqs (1), kv (c + min(prompt - c, budget_left(engine)))`
 gives one band of each kind, side by side. That difference is a real one in the
 semantics — unit expressions are evaluated at admission, not when the session
 queues — and it is the rule a reader of the source is most likely to miss.
@@ -72,7 +72,7 @@ decode run, inside the band, which is the definition of the quantity.
 
 Three things the figure states that the 50 lines of source do not:
 
-1. **`slots` and `kv` are held together, for exactly the same span.** The
+1. **`reqs` and `kv` are held together, for exactly the same span.** The
    admission is atomic over both; the request cap and the blocks are checked
    as one thing, which is what vLLM does.
 2. **The `kv` band widens twice** — once during prefill and once during

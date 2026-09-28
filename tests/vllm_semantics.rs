@@ -23,12 +23,12 @@ fn engine(
         r#"
         let bs = {bs};
         pool kv {{ cap {blocks} * bs; block bs; evict lru; preempt lifo; }}
-        pool slots {{ cap {max_seqs}; }}
+        pool reqs {{ cap {max_seqs}; }}
         stage engine : step {{ budget {budget}; cost 1; memory kv; {extra} }}
         workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }} }}
         session {{
           set t0 = now;
-          hold slots (1), kv (min(prompt, {budget})) {{
+          hold reqs (1), kv (min(prompt, {budget})) {{
             observe admitted = now - t0;
             observe who_admitted = serial;
             run engine prefill (prompt) growing kv;
@@ -124,14 +124,14 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
     let src = r#"
         let bs = 16;
         pool kv { cap 1000 * bs; block bs; evict lru; preempt lifo; }
-        pool slots { cap 16; }
+        pool reqs { cap 16; }
         stage engine : step { budget 8192; cost 1; memory kv; }
         workload { arrive batch(1); init { set K = 0; set turns = 0; } }
         session {
           loop {
             set prompt = K + 100;
             set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-            hold slots (1), kv (c + min(prompt - c, 8192)) {
+            hold reqs (1), kv (c + min(prompt - c, 8192)) {
               observe cached_seen = cached;
               observe prefill_tokens = prompt - min(cached, floor((prompt - 1) / bs) * bs);
               run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
@@ -162,7 +162,7 @@ fn lru_eviction_drops_tail_blocks_first() {
     let src = r#"
         let bs = 16;
         pool kv { cap 20 * bs; block bs; evict lru; preempt lifo; }
-        pool slots { cap 16; }
+        pool reqs { cap 16; }
         stage engine : step { budget 8192; cost 1; memory kv; }
         stage gate : delay;
         workload { arrive batch(2); init { set K = 0; set turns = 0; } }
@@ -174,7 +174,7 @@ fn lru_eviction_drops_tail_blocks_first() {
           loop {
             set prompt = serial == 0 ? K + 160 : 192;
             set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-            hold slots (1), kv (c + min(prompt - c, 8192)) {
+            hold reqs (1), kv (c + min(prompt - c, 8192)) {
               branch (serial == 0) { observe cached0 = cached; }
               run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
             } cache (prompt);
