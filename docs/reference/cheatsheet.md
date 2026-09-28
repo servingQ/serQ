@@ -63,6 +63,12 @@ drop P;                            // discard the own cached prefix
 
 run S [prefill|decode] (w) [growing P];
 
+// the serving vocabulary: the same statements, named by the request lifecycle
+admit P (u) … { … } [keep (ℓ)];    // hold … cache
+prefill S;  transfer X;  decode D;  tool Z;   // run on the stage of that name
+                                   // (a step engine plays prefill and decode)
+prefill[j] S;  prefill on P (S);   // an instance of an array; an explicit stage
+
 branch (e) { … } [else { … }]
 loop { … }
 choose j in n by (expr);           // j := argmin over 0..n

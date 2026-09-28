@@ -27,8 +27,20 @@
 //!           | 'branch' '(' expr ')' block ('else' block)?
 //!           | 'loop' block | 'end' ';'
 //!           | 'choose' IDENT 'in' expr 'by' '(' expr ')' ';'
+//!           | serving
+//! serving  := 'admit' ... 'keep' ...            -- as 'hold' ... 'cache' ...
+//!           | role ('[' expr ']' | 'on' ref)? expr ('growing' ref)? ';'
+//! role     := 'prefill' | 'transfer' | 'decode' | 'tool'
 //! ref      := IDENT ('[' expr ']')?
 //! ```
+//!
+//! The serving forms (`serving`) are sugar: they are rewritten to `hold`
+//! and `run` here, so the AST, the IR and the interpreter know only the
+//! kernel. A role finds its stage among the stages declared above the
+//! statement: the stage of the role's name (`prefill`, `link` or
+//! `transfer`, `decode`, `tool`), else, for `prefill` and `decode`, the
+//! `step` engine; `on STAGE` names it explicitly. On a step engine the run
+//! gets the role's mode (`run E prefill (S)`), elsewhere it is plain.
 
 use std::fmt;
 
@@ -65,18 +77,79 @@ type PResult<T> = Result<T, ParseError>;
 struct Parser {
     toks: Vec<Token>,
     pos: usize,
+    /// The stages declared so far, (name, is a step engine): what the
+    /// serving forms resolve their stage against.
+    stages: Vec<(String, bool)>,
+}
+
+/// A serving form: a statement that desugars to `run` on the stage that
+/// plays the role.
+#[derive(Clone, Copy, PartialEq)]
+enum Role {
+    Prefill,
+    Transfer,
+    Decode,
+    Tool,
+}
+
+impl Role {
+    fn of(kw: &str) -> Option<Role> {
+        match kw {
+            "prefill" => Some(Role::Prefill),
+            "transfer" => Some(Role::Transfer),
+            "decode" => Some(Role::Decode),
+            "tool" => Some(Role::Tool),
+            _ => None,
+        }
+    }
+
+    fn keyword(self) -> &'static str {
+        match self {
+            Role::Prefill => "prefill",
+            Role::Transfer => "transfer",
+            Role::Decode => "decode",
+            Role::Tool => "tool",
+        }
+    }
+
+    /// The stage names that play the role by default.
+    fn names(self) -> &'static [&'static str] {
+        match self {
+            Role::Prefill => &["prefill"],
+            Role::Transfer => &["link", "transfer"],
+            Role::Decode => &["decode"],
+            Role::Tool => &["tool"],
+        }
+    }
+
+    /// The run mode on a step engine, for the roles an engine plays.
+    fn step_mode(self) -> Option<RunMode> {
+        match self {
+            Role::Prefill => Some(RunMode::Prefill),
+            Role::Decode => Some(RunMode::Decode),
+            Role::Transfer | Role::Tool => None,
+        }
+    }
 }
 
 pub fn parse(src: &str) -> PResult<Program> {
     let toks = lex(src)?;
-    let mut p = Parser { toks, pos: 0 };
+    let mut p = Parser {
+        toks,
+        pos: 0,
+        stages: vec![],
+    };
     p.program()
 }
 
 /// Parse a standalone expression (used by `--set name=expr` on the CLI).
 pub fn parse_expr(src: &str) -> PResult<Expr> {
     let toks = lex(src)?;
-    let mut p = Parser { toks, pos: 0 };
+    let mut p = Parser {
+        toks,
+        pos: 0,
+        stages: vec![],
+    };
     let e = p.expr()?;
     p.expect(&Tok::Eof)?;
     Ok(e)
@@ -93,7 +166,11 @@ impl Parser {
     }
 
     fn err<T>(&self, msg: impl Into<String>) -> PResult<T> {
-        let t = &self.toks[self.pos];
+        self.err_at(self.pos, msg)
+    }
+
+    fn err_at<T>(&self, pos: usize, msg: impl Into<String>) -> PResult<T> {
+        let t = &self.toks[pos];
         Err(ParseError {
             line: t.line,
             col: t.col,
@@ -171,7 +248,10 @@ impl Parser {
             } else if self.eat_kw("pool") {
                 prog.pools.push(self.pool()?);
             } else if self.eat_kw("stage") {
-                prog.stages.push(self.stage()?);
+                let d = self.stage()?;
+                self.stages
+                    .push((d.name.clone(), matches!(d.kind, StageKind::Step(_))));
+                prog.stages.push(d);
             } else if self.eat_kw("workload") {
                 if prog.workload.is_some() {
                     return self.err("duplicate workload");
@@ -483,44 +563,10 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Observe(name, e))
             }
-            "hold" => {
+            // `admit ... keep (l)` is `hold ... cache (l)`
+            "hold" | "admit" => {
                 self.advance();
-                let mut pools = vec![];
-                loop {
-                    let r = self.reference()?;
-                    let e = self.paren_expr()?;
-                    let fits = if self.eat_kw("fits") {
-                        Some(self.paren_expr()?)
-                    } else {
-                        None
-                    };
-                    pools.push((r, e, fits));
-                    if *self.peek() == Tok::Comma {
-                        self.advance();
-                    } else {
-                        break;
-                    }
-                }
-                let reuse = if self.eat_kw("reuse") {
-                    Some(self.paren_expr()?)
-                } else {
-                    None
-                };
-                let body = self.block()?;
-                let cache = if self.eat_kw("cache") {
-                    Some(self.paren_expr()?)
-                } else {
-                    None
-                };
-                if *self.peek() == Tok::Semi {
-                    self.advance();
-                }
-                Ok(Stmt::Hold {
-                    pools,
-                    reuse,
-                    body,
-                    cache,
-                })
+                self.hold()
             }
             "grow" => {
                 self.advance();
@@ -584,7 +630,152 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Choose { var, count, key })
             }
-            other => self.err(format!("unknown statement `{other}`")),
+            other => match Role::of(other) {
+                Some(role) => self.serving(role),
+                None => self.err(format!("unknown statement `{other}`")),
+            },
+        }
+    }
+
+    /// The rest of a `hold` (or `admit`) statement, after the keyword.
+    fn hold(&mut self) -> PResult<Stmt> {
+        let mut pools = vec![];
+        loop {
+            let r = self.reference()?;
+            let e = self.paren_expr()?;
+            let fits = if self.eat_kw("fits") {
+                Some(self.paren_expr()?)
+            } else {
+                None
+            };
+            pools.push((r, e, fits));
+            if *self.peek() == Tok::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        let reuse = if self.eat_kw("reuse") {
+            Some(self.paren_expr()?)
+        } else {
+            None
+        };
+        let body = self.block()?;
+        let cache = if self.eat_kw("cache") || self.eat_kw("keep") {
+            Some(self.paren_expr()?)
+        } else {
+            None
+        };
+        if *self.peek() == Tok::Semi {
+            self.advance();
+        }
+        Ok(Stmt::Hold {
+            pools,
+            reuse,
+            body,
+            cache,
+        })
+    }
+
+    /// `prefill S;`, `transfer[j] X;`, `decode on E (D) growing kv;`, ...:
+    /// a `run` on the stage that plays the role.
+    fn serving(&mut self, role: Role) -> PResult<Stmt> {
+        let at = self.pos;
+        self.advance();
+        let kw = role.keyword();
+        let stage = if self.eat_kw("on") {
+            let r = self.reference()?;
+            if !self.stages.iter().any(|(n, _)| *n == r.name) {
+                return self.err_at(
+                    at,
+                    format!(
+                        "`{kw} on {}`: no stage `{}` is declared above",
+                        r.name, r.name
+                    ),
+                );
+            }
+            r
+        } else {
+            let index = if *self.peek() == Tok::LBracket {
+                self.advance();
+                let e = self.expr()?;
+                self.expect(&Tok::RBracket)?;
+                Some(Box::new(e))
+            } else {
+                None
+            };
+            let name = self.role_stage(role, at)?;
+            Ref { name, index }
+        };
+        let is_step = self
+            .stages
+            .iter()
+            .any(|(n, step)| *n == stage.name && *step);
+        let mode = match role.step_mode() {
+            Some(m) if is_step => m,
+            _ => RunMode::Plain,
+        };
+        let work = self.expr()?;
+        let growing = if self.eat_kw("growing") {
+            Some(self.reference()?)
+        } else {
+            None
+        };
+        self.expect(&Tok::Semi)?;
+        Ok(Stmt::Run {
+            stage,
+            mode,
+            work,
+            growing,
+        })
+    }
+
+    /// The stage a role names when none is given: the stage of the role's
+    /// name, else (for `prefill` and `decode`) the step engine; exactly one.
+    fn role_stage(&self, role: Role, at: usize) -> PResult<String> {
+        let kw = role.keyword();
+        let mut found: Vec<&str> = self
+            .stages
+            .iter()
+            .filter(|(n, _)| role.names().contains(&n.as_str()))
+            .map(|(n, _)| n.as_str())
+            .collect();
+        if found.is_empty() && role.step_mode().is_some() {
+            found = self
+                .stages
+                .iter()
+                .filter(|(_, step)| *step)
+                .map(|(n, _)| n.as_str())
+                .collect();
+        }
+        match found.len() {
+            1 => Ok(found[0].to_string()),
+            0 => {
+                let names = role
+                    .names()
+                    .iter()
+                    .map(|n| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(" or ");
+                let engine = if role.step_mode().is_some() {
+                    ", declare a `step` engine"
+                } else {
+                    ""
+                };
+                self.err_at(
+                    at,
+                    format!(
+                        "no stage declared above plays `{kw}`: name a stage {names}{engine}, or write `{kw} on STAGE (...)`"
+                    ),
+                )
+            }
+            _ => self.err_at(
+                at,
+                format!(
+                    "several stages play `{kw}` ({}): write `{kw} on STAGE (...)`",
+                    found.join(", ")
+                ),
+            ),
         }
     }
 
@@ -807,5 +998,105 @@ mod tests {
         assert!(matches!(e, Expr::Binary(BinOp::And, _, _)));
         let e = parse_expr("-x ? a : b").unwrap();
         assert!(matches!(e, Expr::Cond(..)));
+    }
+
+    const PD: &str = r#"
+        pool kv { cap 100; }
+        stage prefill : fifo;
+        stage link : ps(1);
+        stage decode : ps(n);
+        stage tool : delay;
+    "#;
+
+    const ENGINE: &str = r#"
+        pool kv { cap 100; }
+        stage engine : step { cost 1; }
+        stage tool : delay;
+    "#;
+
+    fn same(a: &str, b: &str) {
+        assert_eq!(parse(a).unwrap(), parse(b).unwrap());
+    }
+
+    #[test]
+    fn serving_forms_desugar_to_the_kernel() {
+        same(
+            &format!(
+                "{PD} session {{
+                    admit kv (K) {{ prefill S; transfer X; }} keep (K);
+                    admit kv (K) fits (F) reuse (R) {{ decode D; }}
+                    branch (p) {{ tool Z; turn; }} else {{ end; }}
+                }}"
+            ),
+            &format!(
+                "{PD} session {{
+                    hold kv (K) {{ run prefill (S); run link (X); }} cache (K);
+                    hold kv (K) fits (F) reuse (R) {{ run decode (D); }}
+                    branch (p) {{ run tool (Z); turn; }} else {{ end; }}
+                }}"
+            ),
+        );
+    }
+
+    #[test]
+    fn serving_forms_on_a_step_engine() {
+        same(
+            &format!(
+                "{ENGINE} session {{
+                    admit kv (c) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} keep (c);
+                    tool (~exp(Z));
+                }}"
+            ),
+            &format!(
+                "{ENGINE} session {{
+                    hold kv (c) {{ run engine prefill (n) growing kv; run engine decode (o - 1) growing kv; }} cache (c);
+                    run tool (~exp(Z));
+                }}"
+            ),
+        );
+    }
+
+    #[test]
+    fn serving_forms_name_their_stage_explicitly() {
+        // the role's stage array, indexed
+        same(
+            "stage prefill[2] : fifo; session { choose j in 2 by (work(prefill[j])); prefill[j] S; }",
+            "stage prefill[2] : fifo; session { choose j in 2 by (work(prefill[j])); run prefill[j] (S); }",
+        );
+        // any stage, with the mode a step engine needs
+        same(
+            &format!(
+                "{ENGINE} stage rep[2] : fifo; session {{ prefill on rep[1] S; decode on engine (D); }}"
+            ),
+            &format!(
+                "{ENGINE} stage rep[2] : fifo; session {{ run rep[1] (S); run engine decode (D); }}"
+            ),
+        );
+        // a stage named `transfer` plays transfer
+        same(
+            "stage transfer : fifo; session { transfer X; }",
+            "stage transfer : fifo; session { run transfer (X); }",
+        );
+    }
+
+    #[test]
+    fn serving_forms_need_exactly_one_stage() {
+        let e = parse("stage svc : fifo; session { prefill S; }").unwrap_err();
+        assert!(
+            e.msg.contains("no stage declared above plays `prefill`"),
+            "{e}"
+        );
+        assert_eq!((e.line, e.col), (1, 29));
+        let e =
+            parse("stage a : step { cost 1; } stage b : step { cost 1; } session { decode D; }")
+                .unwrap_err();
+        assert!(e.msg.contains("several stages play `decode` (a, b)"), "{e}");
+        let e = parse("stage engine : step { cost 1; } session { transfer X; }").unwrap_err();
+        assert!(
+            e.msg.contains("no stage declared above plays `transfer`"),
+            "{e}"
+        );
+        let e = parse("stage tool : delay; session { tool on other Z; }").unwrap_err();
+        assert!(e.msg.contains("no stage `other` is declared above"), "{e}");
     }
 }

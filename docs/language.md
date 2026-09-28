@@ -101,6 +101,12 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | loop block
           | choose NAME in expr by ( expr ) ; -- NAME := argmin over 0..n
           | end ;
+          | serving                          -- the serving vocabulary, sugar for hold and run
+serving  := admit POOL ( expr ) … block [ keep ( expr ) ] ;   -- as hold … cache
+          | prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
+          | transfer [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
+          | decode   [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
+          | tool     [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
 ```
 
 Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`,
@@ -120,6 +126,81 @@ and a stage's cost, which has no session, would read it as undefined). Built-in 
 prefix consumed at the last admission), and with a trace `new`, `out`,
 `think`, `more`, `forced`. Every name assigned by `set` or `choose` is a
 session attribute.
+
+### The serving vocabulary
+
+The statements above are about resources: `hold` a pool, `run` a stage,
+free and cache at the end of the scope. A reader from serving systems
+expects the request lifecycle (admission, prefill, KV transfer, decode,
+release, tool call, next turn) and had to reconstruct it from which stage
+a `run` names. The serving forms name it. They are sugar: the parser
+rewrites each to the kernel statement it stands for, so the AST, the IR
+(`seq-lang ir` prints the kernel), the interpreter and the Lean model know
+nothing of them, and every program written with `hold` and `run` is
+unchanged.
+
+| Serving form | Kernel |
+|---|---|
+| `admit P (c) … { body } keep (ℓ);` | `hold P (c) … { body } cache (ℓ);` (`fits`, `reuse`, several pools: as in `hold`) |
+| `prefill S;` | `run prefill (S);`, or on a step engine `E`: `run E prefill (S);` |
+| `transfer X;` | `run link (X);` |
+| `decode D;` | `run decode (D);`, or on a step engine `E`: `run E decode (D);` |
+| `tool Z;` | `run tool (Z);` |
+| `prefill (S) growing kv;` | `run E prefill (S) growing kv;` (`growing` passes through; a form never adds it) |
+| `prefill[j] S;` | `run prefill[j] (S);` (the index applies to the role's stage array) |
+| `prefill on P[j] (S);` | `run P[j] (S);`, or `run P[j] prefill (S);` when `P` is a step engine |
+
+**Which stage.** A form finds its stage among the stages declared above
+it (declarations come first in every program here): the stage whose name
+is the role's, `prefill`, `link` (or `transfer`), `decode`, `tool`;
+failing that, for `prefill` and `decode`, the `step` engine, since prefill
+and decode share its iteration. Exactly one must qualify: with none
+(`stage svc : fifo;` and `prefill S;`) or several (two step engines) the
+parser stops at the form and says so. `on STAGE` names the stage
+explicitly; with several instances of a role, `choose j …; prefill[j] S;`
+serves an array and `prefill on P2 (S);` stages that are not one. On a
+step engine the run gets the role's mode (`run E prefill`), elsewhere it
+is plain, so the linker's rule (the mode is required on a step stage and
+forbidden elsewhere) is met by construction; `transfer` and `tool` on a
+step engine are rejected by the linker as `run E (X)` would be. A linker
+error inside a form (an unknown name in `S`, say) speaks of the kernel
+statement.
+
+The lecture's disaggregated replica (`programs/lecture_pd.seq`) then reads
+
+```
+turn;
+loop {
+  admit memP (kappa * T) { prefill S; transfer (x0 + kappa * T / Bw); } keep (kappa * T);
+  admit memD (kappa * T) { decode (o * w); }
+  branch (p) { tool Z; turn; } else { end; }
+}
+```
+
+and vLLM's engine (`programs/vllm.seq`)
+
+```
+admit slots (1), kv (c + min(prompt - c, budget_left(engine))) {
+  prefill (prompt - c) growing kv;
+  decode (o - 1) growing kv;
+} keep (prompt + o);
+```
+
+Both compile to the IR they compiled to before the rewrite
+(`src/parser.rs` tests, `tests/ir.rs`).
+
+**Against vLLM.** Each form is one part of a request's life in the v1
+scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
+
+| Form | In the lifecycle | vLLM |
+|---|---|---|
+| `admit slots (1), kv (c + …) { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
+| `prefill (n) growing kv` | prefill in chunks of the budget, a block allocated as the request advances; a missing block preempts `running[-1]` | the running loop, `scheduler.py:624-823`; `allocate_slots` at `scheduler.py:743`; `_preempt_request`, `scheduler.py:1539-1582` (`preempt lifo`) |
+| `decode (o) growing kv` | one token per iteration, a block every `block_size` tokens | the same loop and `allocate_slots` with one new token |
+| `transfer X` | the KV of a prefilled request moves to the decode instance | the KV connector: `WAITING_FOR_REMOTE_KVS` at `scheduler.py:1267`, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`, `_connector_finished`, `scheduler.py:2929`; not in `vllm.seq`, which is one device |
+| `} keep (prompt + o)` | release: the blocks go to the free queue, the full ones stay cached | `_free_request`, `scheduler.py:2628`; `free`, `kv_cache_manager.py:610-619`; `cache_blocks`, `kv_cache_manager.py:802-812` |
+| `tool Z; turn;` | the session thinks and comes back with a longer prompt | outside the engine: the session's next request, `add_request`, `scheduler.py:2536` |
+| `end` | the session leaves; its blocks stay in the free queue | `finish_requests`, `scheduler.py:2564` |
 
 ## 3. Semantics
 
@@ -268,7 +349,7 @@ identical answers on the differential scenario below):
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) fits (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `run engine prefill (n) growing kv`, `chunk` | `scheduler.py:612-616, 675-676, 1115-1128` |
+| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk` | `scheduler.py:612-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
 | the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (prompt + out − 1)`; `reuse (floor(min(prev prompt, prompt − 1)/bs)·bs)`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
