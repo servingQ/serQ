@@ -60,10 +60,12 @@ or taken from the release assets.
 
 ## Releases
 
-Pushing a tag `vX.Y.Z` or `vX.Y.Z-devN` that matches `Cargo.toml` runs
-`.github/workflows/release.yml`. It runs the full check, then publishes a
-GitHub release with the packaged crate and the Linux CLI. A tag with a
-dash is published as a prerelease. Publishing to crates.io is a separate
+Pushing an annotated tag `vX.Y.Z`, `vX.Y.Z-rcN` or `vX.Y.Z-devN` that
+matches `Cargo.toml` runs `.github/workflows/release.yml`. It runs the full
+check, then publishes a GitHub release with the packaged crate and the
+Linux CLI. The release notes are the tag message's body (`git tag -a`),
+followed by the generated list of pull requests since the previous
+release. A tag with a dash is published as a prerelease. Publishing to crates.io is a separate
 job, which stays off until two things are set: the repository variable
 `PUBLISH_CRATES_IO` is `true`, and the secret `CARGO_REGISTRY_TOKEN`
 exists. crates.io is public and permanent, and the crate needs a
