@@ -291,14 +291,19 @@ pub struct CStep {
     pub budget: CExpr,
     pub cost: CExpr,
     pub chunk: CExpr,
-    /// The order the iteration serves its residents in.
+    /// How the iteration serves its residents: an order, or the
+    /// exclusive-prefill rule.
     pub serve: CServe,
     pub memory: Option<usize>,
 }
 
-/// The one serving order of a step stage. Two booleans described it before
-/// (`exclusive_prefill`, `decode_first`) and could both be set, which named
-/// no order; the Lean fragment reads only `Admission`.
+/// How a step stage serves its residents, said once: an order (`Admission`,
+/// `DecodeFirst`) or the rule that a prefill runs alone (`ExclusivePrefill`,
+/// which keeps admission order and stalls the decodes; it is not an order,
+/// and the one field means a program cannot combine it with another
+/// order). Two booleans described this before (`exclusive_prefill`,
+/// `decode_first`) and could both be set; the Lean fragment reads only
+/// `Admission`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CServe {
     /// Admission order (vLLM's `running` list).

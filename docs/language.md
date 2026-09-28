@@ -352,11 +352,12 @@ itself can be the victim.
 **Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
 own at rate 1. `step { budget B; cost C; }`: an engine that runs
-iterations. The residents are served in the order `serve` names, one order
-per stage: `admission`, the order their sessions were admitted (vLLM's
-`running` list; the default), `decode first`, the decoding residents before
-the prefilling ones, or `exclusive prefill`, below. One token to a decoding
-job, up to `chunk` to a prefilling one,
+iterations. The residents are served the way `serve` names, said once per
+stage: an order, `admission` (the order their sessions were admitted,
+vLLM's `running` list; the default) or `decode first` (the decoding
+residents before the prefilling ones), or the rule `exclusive prefill`,
+below, which is not an order and so cannot be combined with one. One token
+to a decoding job, up to `chunk` to a prefilling one,
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); then the
 stage admits from the queues it serves. The iteration lasts `C` seconds, an

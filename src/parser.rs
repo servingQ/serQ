@@ -585,7 +585,9 @@ impl Parser {
                     "chunk" => s.chunk = self.expr()?,
                     "serve" => {
                         if has_serve {
-                            return self.err("a step stage serves its residents in one order");
+                            return self.err(
+                                "`serve` twice: a step stage serves its residents in one way",
+                            );
                         }
                         has_serve = true;
                         s.serve = if self.eat_kw("admission") {
@@ -603,10 +605,15 @@ impl Parser {
                             ));
                         };
                     }
-                    "exclusive" | "decode" => {
-                        return self.err(format!(
-                            "`{key} …` is now `serve {key} …`: a step stage serves its residents in one order"
-                        ));
+                    "exclusive" => {
+                        return self.err(
+                            "`exclusive prefill;` is now `serve exclusive prefill;`: a step stage serves its residents in one way",
+                        );
+                    }
+                    "decode" => {
+                        return self.err(
+                            "`decode first;` is now `serve decode first;`: a step stage serves its residents in one way",
+                        );
                     }
                     "memory" => s.memory = Some(self.ident()?),
                     other => return self.err(format!("unknown step option `{other}`")),

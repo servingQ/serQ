@@ -241,10 +241,16 @@ fn serve_is_one_order_said_once() {
         check(&step(ok)).unwrap_or_else(|e| panic!("{ok}: {e}"));
     }
     let e = check(&step("serve decode first; serve admission;")).expect_err("twice");
-    assert!(e.contains("one order"), "{e}");
+    assert!(e.contains("`serve` twice"), "{e}");
     for (old, new) in [
-        ("decode first;", "serve decode"),
-        ("exclusive prefill;", "serve exclusive"),
+        (
+            "decode first;",
+            "`decode first;` is now `serve decode first;`",
+        ),
+        (
+            "exclusive prefill;",
+            "`exclusive prefill;` is now `serve exclusive prefill;`",
+        ),
     ] {
         let e = check(&step(old)).expect_err(old);
         assert!(e.contains(new), "the error names the new spelling: {e}");

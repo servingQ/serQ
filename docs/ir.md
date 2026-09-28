@@ -59,7 +59,7 @@ variants as strings, `"Lru"`). `seq-lang ir FILE` prints it;
 | `attrs` | attribute names; an attribute is referenced by its index (slot) |
 | `observes` | observation names, by index |
 | `pools` | `CPool`: `name`, `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, `Lifo`), `queue` (order key), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
-| `stages` | `CStage`: `name`, `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (`Admission`, `DecodeFirst`, `ExclusivePrefill`: the one order the iteration serves residents in), `memory` (pool index) |
+| `stages` | `CStage`: `name`, `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: the orders `Admission`, `DecodeFirst`, or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `memory` (pool index) |
 | `arrival` | `Poisson(rate)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
 | `init`, `turn`, `session` | block indices: the workload's `init` and `turn` blocks and the session program |
