@@ -102,9 +102,14 @@ start, report the spread across seeds, not one seed's interval.
 
 Write the two designs as one program with a `let` that selects between them,
 or as two programs that differ in one line, and run both on the same seeds.
-Arrivals, the workload, each session and eviction draw from separate random
-streams ([language](language.md) §3), so the same seed gives both designs the
-same arrivals, provided neither changes what the `workload` block draws. The
+Arrivals, the workload, the sessions and eviction draw from separate random
+streams ([language](language.md) §3), but the workload and session streams
+are each shared by every session and consumed in event order
+(`src/interp.rs`, `rng_wl`, `rng_session`). So with the same seed the two
+designs get the same arrival times. Once one design changes when things
+happen, the turn draws (`n`, `o`, `more`) and the tool times go to different
+sessions, and the traffic is no longer paired. To give both designs exactly
+the same sessions, replay a trace with `trace "file.csv" ordered`. The
 pre-registered prediction in the [vLLM case study](case-study-vllm.md) is this
 kind of comparison: the same program with and without `admit via engine`.
 
@@ -142,13 +147,16 @@ There are three kinds of result, and a program meets them differently:
 
 | | holds for | where |
 |---|---|---|
-| properties of the language | every program | `Seq.lean`: `SeqLang.Step.invariant` (`allocated + cached ≤ cap` in every reachable state of every pool); `SeqServe.lean`: `SeqLang.Serve.serve_eq_decode_first` |
+| properties of the semantics | the model, not one program | `Seq.lean`: `SeqLang.Step.invariant` (every command of the pool model keeps `allocated + cached ≤ cap`); `SeqServe.lean`: `SeqLang.Serve.serve_eq_decode_first` (without a per-request chunk cap, serving in admission order is serving decode-first) |
 | a program's outcome on a scenario | one IR file and one workload | `SeqOracle.lean`, generated: one theorem per scenario, proved by `decide +kernel` |
-| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica`, `disaggregatedReplica` and their well-formedness, used by the paper's proofs |
+| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`programs/replica.seq`), `disaggregatedReplica` (`programs/lecture_pd.seq`), with their well-formedness |
 
-The first kind needs nothing from a program. The second is how a specific
-program is checked. The third is written by hand next to the program it
-describes, and a change of that program should change it too.
+The first kind needs nothing from a program. It is about the pool model and
+the serving order, and it is not yet connected to the executable semantics
+that runs programs ([validation](validation.md), what is not proved). The
+second is how a specific program is checked. The third is written by hand in
+serving-queue-theory, so a change to the program it describes has to be
+repeated there.
 
 ### From a program to a theorem
 
@@ -192,16 +200,25 @@ The steps:
 3. **Lean:** `make lean` builds the project, which checks every theorem
    by evaluation in the kernel. It also fails on a `sorry` or on any axiom
    beyond `propext`, `Classical.choice` and `Quot.sound`, and checks that
-   `SeqOracle.lean` is what the generator produces from the pinned seQ.
+   `SeqOracle.lean` is what the generator produces from the **pinned** seQ.
+   A file written from a local seQ with `SEQ_SRC` therefore builds, but
+   `make lean` reports it `STALE` until the pin moves to a release that
+   contains the change. To try a local change, run `lake build` in `lean/`
+   instead.
 
 ### Adding a scenario
 
 1. Write `tools/oracle/<name>.json`: the engine (`budget`, `max_seqs`,
    `block_size`, `num_blocks`, optionally `chunk`) and the `requests`
    (`prompt`, `out`, optionally `arrive`).
-2. Run `tools/vllm_oracle.py tools/oracle/<name>.json` against `ref/vllm`, and
-   save its output as `tools/oracle/<name>.out.json`. This is the answer the
-   theorem will state.
+2. Run `VLLM_PLUGINS= python tools/vllm_oracle.py tools/oracle/<name>.json`
+   and save its output as `tools/oracle/<name>.out.json`. This is the answer
+   the theorem will state. The script drives the real scheduler: it needs a
+   Python environment with vLLM installed and a full vLLM checkout at the
+   pinned revision beside the seQ checkout (`../ref/vllm`, which it imports
+   `tests.v1.core.utils` from). The sparse `ref/vllm` that
+   `scripts/fetch_vllm_ref.sh --sparse` makes for the citation check is not
+   enough.
 3. Add the name to the list in `tests/vllm_oracle.rs::scenarios`, run
    `make oracle-ir`, then `make check`. The interpreter now has to agree.
 4. In serving-queue-theory, after the pin moves to a seQ release that has
@@ -214,13 +231,14 @@ The steps:
 The Lean semantics runs a fragment of the IR ([IR](ir.md), the Lean
 fragment). In practice, a program is in it when:
 
-- the time is the step clock: one step engine as stage 0 with `cost 1`, any
-  other stage a `delay`;
+- the time is the step clock: one step engine as stage 0 with `cost 1`,
+  serving its residents in admission order (no `serve` clause but the
+  default), and any other stage a `delay`;
 - the pools are LRU, and either admitted via the engine or the engine's
   memory with `preempt lifo`, with no queue key and no spill;
 - nothing is drawn: no `~`, no `poisson` arrivals; the sessions are
-  explicit, with preset attributes (a trace is inlined with
-  `seq-lang ir --inline-trace`);
+  explicit, with preset attributes, and the workload has no `turn` block (a
+  trace is inlined with `seq-lang ir --inline-trace`);
 - the statements are `turn`, `hold`, `run`, `set`, `observe`, `branch`,
   `loop` and `end`, and the expressions are naturals, attributes, `now`,
   `cachedin`, `budget_left`, `min`, `max`, `+`, `-`, `*`, `floor(a / b)`,
