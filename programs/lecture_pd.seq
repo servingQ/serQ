@@ -54,7 +54,7 @@ session {
     }
     observe response = now - t0;
     set K = T;
-    branch (p) { tool Z; turn; } else { end; }
+    branch with (p) { tool Z; turn; } else { end; }
   }
 }
 

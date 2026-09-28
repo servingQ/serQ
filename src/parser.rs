@@ -993,7 +993,7 @@ mod tests {
                   observe ttft = now - t0;
                   run decode (o * 2e-4);
                 } cache (K + n + o);
-                branch (0.9) { run tool (Z); turn; } else { end; }
+                branch with (0.9) { run tool (Z); turn; } else { end; }
               }
             }
             run { horizon 1000; warmup 100; seed 1; }
@@ -1038,14 +1038,14 @@ mod tests {
                 "{PD} session {{
                     admit kv (K) {{ prefill S; transfer X; }} keep (K);
                     admit kv (K) fits (F) reuse (R) {{ decode D; }}
-                    branch (p) {{ tool Z; turn; }} else {{ end; }}
+                    branch with (p) {{ tool Z; turn; }} else {{ end; }}
                 }}"
             ),
             &format!(
                 "{PD} session {{
                     hold kv (K) {{ run prefill (S); run link (X); }} cache (K);
                     hold kv (K) fits (F) reuse (R) {{ run decode (D); }}
-                    branch (p) {{ run tool (Z); turn; }} else {{ end; }}
+                    branch with (p) {{ run tool (Z); turn; }} else {{ end; }}
                 }}"
             ),
         );

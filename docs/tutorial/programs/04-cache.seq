@@ -37,7 +37,7 @@ session {
     observe response = now - t0;
     branch (K > 0) { observe hitrate = hit; }
     set K = K + n + o;
-    branch (p) { run tool (~exp(Z)); turn; } else { drop kv; end; }
+    branch with (p) { run tool (~exp(Z)); turn; } else { drop kv; end; }
   }
 }
 

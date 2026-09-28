@@ -205,7 +205,7 @@ impl Walker<'_> {
                     let saved = self.frontier.clone();
                     let outer = self.arm.take();
                     self.frontier = saved.clone();
-                    self.arm = Some(self.p.show_expr(&c));
+                    self.arm = Some(self.p.show_guard(&c));
                     self.walk(t);
                     let then_out = std::mem::take(&mut self.frontier);
                     self.frontier = saved;

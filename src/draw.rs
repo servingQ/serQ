@@ -305,7 +305,7 @@ impl<'a> Draw<'a> {
             CStmt::Branch(c, t, e) => {
                 let x = self.rail_x();
                 let top = self.y;
-                self.marker("?", format!("branch ({})", self.p.show_expr(c)));
+                self.marker("?", format!("branch ({})", self.p.show_guard(c)));
                 self.depth += 1;
                 self.walk(*t);
                 self.depth -= 1;

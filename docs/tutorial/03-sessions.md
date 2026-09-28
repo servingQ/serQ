@@ -20,15 +20,20 @@ session {
   turn;
   loop {
     …
-    branch (p) { run tool (~exp(Z)); turn; } else { end; }
+    branch with (p) { run tool (~exp(Z)); turn; } else { end; }
   }
 }
 ```
 
 `turn;` runs the workload's `turn` block, drawing the next turn's attributes.
-`loop` repeats until something inside it ends the session. `branch (e) { … }
-else { … }` is the conditional; the guard is an expression, so continuation can
-depend on the session's state and not just a coin.
+`loop` repeats until something inside it ends the session.
+
+There are two branches, and the difference matters. `branch (e) { … } else { … }`
+is the **conditional** — it takes the first block when `e` is non-zero, so the
+guard can depend on the session's state. `branch with (p) { … }` is a **draw**:
+it takes the first block with probability `p`. Here the session continues with
+probability `p = 0.8`, so it is a draw, and writing it that way is what lets a
+reader — and the figure — tell it from a test.
 
 ### Attributes carry state across turns
 
