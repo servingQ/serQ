@@ -273,14 +273,14 @@ impl<'a> Draw<'a> {
                 self.marker("]", "release".into());
                 let label_chars = (COL_W / TextSize::Small.char_width()) as usize - 2;
                 let targets = self.cache_targets.get(body).cloned().unwrap_or_default();
-                for (r, units, fits) in pools {
+                for (r, units, reserve) in pools {
                     let Some(x) = self.col_x(r.base) else {
                         continue;
                     };
-                    if let Some(fx) = fits {
+                    if let Some(fx) = reserve {
                         let fr = Rect::new(x + 3.0, top - 3.0, COL_W - 6.0, bottom - top + 6.0);
-                        self.band_box(fr, BoxStyle::Fits, 2.0);
-                        let t = elide(&format!("fits ({})", self.p.show_expr(fx)), label_chars);
+                        self.band_box(fr, BoxStyle::Reserve, 2.0);
+                        let t = elide(&format!("reserve ({})", self.p.show_expr(fx)), label_chars);
                         self.under_note(pt(fr.x + 2.0, fr.y - 4.0), t);
                     }
                     let band =

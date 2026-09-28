@@ -82,7 +82,7 @@ runs identically (`tests/ir.rs`).
 |---|---|
 | `Turn` | draw the next turn's attributes (workload `turn` block or trace) |
 | `Set(slot, e)`, `Observe(k, e)` | assign an attribute, record an observation |
-| `Hold {pools: [(pool, units, fits?)], reuse?, body, cache?}` | acquire units of every pool (admission gate `fits` if given), run `body`, release; `reuse` bounds the own cached prefix consumed, `cache` the units left cached |
+| `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; `reuse` bounds the own cached prefix consumed, `cache` the units left cached |
 | `Grow(pool, e)`, `Drop(pool)` | grow the current hold, drop the own cached entry |
 | `Run {stage, mode, work, growing?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed |
 | `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}`, `End` | control; `End` ends the session |

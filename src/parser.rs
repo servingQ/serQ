@@ -702,12 +702,17 @@ impl Parser {
         loop {
             let r = self.reference()?;
             let e = self.paren_expr()?;
-            let fits = if self.eat_kw("fits") {
+            // `fits` was this clause's name until it was renamed for saying
+            // what the pool observes rather than what the session requires.
+            if self.is_kw("fits") {
+                return self.err("`fits` is now `reserve`");
+            }
+            let reserve = if self.eat_kw("reserve") {
                 Some(self.paren_expr()?)
             } else {
                 None
             };
-            pools.push((r, e, fits));
+            pools.push((r, e, reserve));
             if *self.peek() == Tok::Comma {
                 self.advance();
             } else {
@@ -726,9 +731,9 @@ impl Parser {
         // here, so the AST, the IR and the interpreter never see them.
         let binds = self.at_admission()?;
         if !binds.is_empty() {
-            for (_, e, fits) in &mut pools {
+            for (_, e, reserve) in &mut pools {
                 subst(e, &binds);
-                if let Some(f) = fits {
+                if let Some(f) = reserve {
                     subst(f, &binds);
                 }
             }
@@ -1142,14 +1147,14 @@ mod tests {
             &format!(
                 "{PD} session {{
                     admit kv (K) {{ prefill S; transfer X; }} keep (K);
-                    admit kv (K) fits (F) reuse (R) {{ decode D; }}
+                    admit kv (K) reserve (F) reuse (R) {{ decode D; }}
                     branch with (p) {{ tool Z; turn; }} else {{ end; }}
                 }}"
             ),
             &format!(
                 "{PD} session {{
                     hold kv (K) {{ run prefill (S); run link (X); }} cache (K);
-                    hold kv (K) fits (F) reuse (R) {{ run decode (D); }}
+                    hold kv (K) reserve (F) reuse (R) {{ run decode (D); }}
                     branch with (p) {{ run tool (Z); turn; }} else {{ end; }}
                 }}"
             ),

@@ -150,7 +150,7 @@ vLLM scheduler on seQ's clock and searching for the first differing step
 | accounting differs by one block after a turn of prompt 2845 + 4 tokens | vLLM caches every computed full block, generated tokens included; the program cached the prompt only | `cache (prompt + out − 1)` with `reuse (common prefix)`; the rest is a dead entry |
 | 520 blocks cached in vLLM, 0 in seQ, after a session's last turn | `end` dropped the session's prefixes; vLLM keeps them | `end` keeps the cache (the lecture's `[End]`); `drop` is explicit |
 | two requests finishing a prefill in one step swap places | the "keep your place" rule | residents in admission order |
-| a request admitted with budget left by seQ, not by vLLM | `scheduler_reserve_full_isl`: the whole prompt must fit | `fits (prompt)` |
+| a request admitted with budget left by seQ, not by vLLM | `scheduler_reserve_full_isl`: the whole prompt must fit | `reserve (prompt)` |
 | two sessions released in the same step evicted in the wrong order | LRU ties broken by session number | ties by release order |
 | the forced-miss replay diverges from the first forced turn | the oracle added a second nonce; `drop` removed blocks vLLM keeps | the trace's ids as they are; `reuse (0)` |
 | the cost model reads 0 | a `let` named like a session attribute is shadowed by it | the linker rejects the clash |

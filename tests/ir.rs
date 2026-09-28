@@ -292,3 +292,15 @@ fn at_admission_bindings_are_sequential() {
         seq::compile_source(&flat, &ov).unwrap().to_json()
     );
 }
+
+/// `fits` was this clause's name. A program that still says it gets told what
+/// happened rather than a parse error about a brace.
+#[test]
+fn fits_says_it_is_now_reserve() {
+    let src = "pool kv { cap 100; } stage s : fifo;
+        workload { arrive poisson(1); }
+        session { hold kv (1) fits (2) { run s (1); } end; }
+        run { horizon 10; }";
+    let e = seq::compile_source(src, &seq::Overrides::default()).expect_err("rejected");
+    assert!(e.contains("`fits` is now `reserve`"), "{e}");
+}

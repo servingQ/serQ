@@ -8,7 +8,7 @@
     .body { fill:#232a31;stroke:#b6bfcc }
     .admission { fill:#232a31;stroke:#b6bfcc }
     .cached { fill:#33302a }
-    .fits { stroke:#9aa4b2 }
+    .reserve { stroke:#9aa4b2 }
     .enclosure { stroke:#9aa4b2 }
     .station { fill:#26403d;stroke:#b6bfcc }
     .cell { fill:#14171a;stroke:#b6bfcc }

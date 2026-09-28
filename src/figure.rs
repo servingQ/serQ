@@ -74,8 +74,8 @@ pub enum BoxStyle {
     Admission,
     /// Units that stay cached after the scope ends.
     Cached,
-    /// `fits (r)`: what must be free for the admission.
-    Fits,
+    /// `reserve (r)`: what must be free for the admission.
+    Reserve,
     /// An enclosure: a pool's instance boundary.
     Enclosure,
     /// A filled body: a run box, a station's rectangle.

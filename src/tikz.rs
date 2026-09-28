@@ -53,7 +53,7 @@ fn box_style(s: BoxStyle) -> &'static str {
         BoxStyle::Solid => "seqsolid",
         BoxStyle::Admission => "seqadmission",
         BoxStyle::Cached => "seqcached",
-        BoxStyle::Fits => "seqfits",
+        BoxStyle::Reserve => "seqfits",
         BoxStyle::Enclosure => "seqenclosure",
         BoxStyle::Body => "seqbody",
     }

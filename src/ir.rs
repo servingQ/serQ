@@ -561,10 +561,10 @@ impl Validator<'_> {
                 body,
                 cache,
             } => {
-                for (r, u, fits) in pools {
+                for (r, u, reserve) in pools {
                     self.cref(r, np, "pool")?;
                     self.expr(u)?;
-                    if let Some(f) = fits {
+                    if let Some(f) = reserve {
                         self.expr(f)?;
                     }
                 }

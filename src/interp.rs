@@ -107,7 +107,7 @@ struct Pending<'p> {
     /// Per pool: units that must fit for the admission (default: the
     /// allocation), e.g. the whole prompt while only its first chunk is
     /// allocated (vLLM `scheduler_reserve_full_isl`).
-    fits: Vec<Option<&'p CExpr>>,
+    reserve: Vec<Option<&'p CExpr>>,
     need: Vec<f64>,
     reuse: Option<&'p CExpr>,
     cache: Option<&'p CExpr>,
@@ -849,19 +849,19 @@ impl<'p> Interp<'p> {
                 } => {
                     let mut ps = vec![];
                     let mut exprs = vec![];
-                    let mut fits = vec![];
+                    let mut reserve = vec![];
                     for (r, e, f) in pools {
                         let pl = self.pool_index(r, sid);
                         let units = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
                         ps.push((pl, units));
                         exprs.push(e);
-                        fits.push(f.as_ref());
+                        reserve.push(f.as_ref());
                     }
                     let n = ps.len();
                     let pending = Pending {
                         pools: ps,
                         exprs,
-                        fits,
+                        reserve,
                         need: vec![0.0; n],
                         reuse: reuse.as_ref(),
                         cache: cache.as_ref(),
@@ -996,7 +996,7 @@ impl<'p> Interp<'p> {
             let e = pending.exprs[k];
             let u = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
             pending.pools[k].1 = u;
-            pending.need[k] = match pending.fits[k] {
+            pending.need[k] = match pending.reserve[k] {
                 Some(f) => self.eval(f, &Ctx::session(sid), Which::Session).max(u),
                 None => u,
             };
@@ -1015,14 +1015,14 @@ impl<'p> Interp<'p> {
             let pending = self.pending_now(sid);
             // The guard counts only allocated units: cached prefixes never
             // block an admission (they are evicted as needed).
-            let fits = pending
+            let reserve = pending
                 .pools
                 .iter()
                 .zip(&pending.need)
                 .all(|(&(q, _), &need)| {
                     self.pools[q].used + self.round_up(q, need) <= self.pools[q].cap + 1e-9
                 });
-            if !fits {
+            if !reserve {
                 break;
             }
             self.pools[pl].queue.pop_front();
@@ -1517,7 +1517,7 @@ impl<'p> Interp<'p> {
         let pending = Pending {
             pools: h_pools,
             exprs: h_exprs,
-            fits: h_fits,
+            reserve: h_fits,
             need: vec![0.0; n],
             reuse,
             cache,
@@ -2015,14 +2015,14 @@ impl<'p> Interp<'p> {
             self.admit_budget = Some((st, left));
             let pending = self.pending_now(sid);
             self.admit_budget = None;
-            let fits = pending
+            let reserve = pending
                 .pools
                 .iter()
                 .zip(&pending.need)
                 .all(|(&(q, _), &need)| {
                     self.pools[q].used + self.round_up(q, need) <= self.pools[q].cap + 1e-9
                 });
-            if !fits {
+            if !reserve {
                 return false;
             }
             self.pools[pl].queue.pop_front();
