@@ -8,7 +8,7 @@
     .body { fill:#232a31;stroke:#b6bfcc }
     .admission { fill:#232a31;stroke:#b6bfcc }
     .cached { fill:#33302a }
-    .fits { stroke:#9aa4b2 }
+    .reserve { stroke:#9aa4b2 }
     .enclosure { stroke:#9aa4b2 }
     .station { fill:#26403d;stroke:#b6bfcc }
     .cell { fill:#14171a;stroke:#b6bfcc }
@@ -41,7 +41,7 @@
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M246 103 L320 103" marker-end="url(#a)"/>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M28 103 L28 177 L341 177 L341 129" marker-end="url(#a)"/>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M404 103 L478 103" marker-end="url(#a)"/>
-<text x="441" y="95" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">0.9</text>
+<text x="441" y="95" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">w.p. 0.9</text>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M383 129 L383 199 L588 199" marker-end="url(#a)"/>
 <text x="592" y="202" text-anchor="start" font-size="8" fill="#6b7280" class="dim">ends (else)</text>
 <path class="back" fill="none" stroke="#4b5563" stroke-width="1.1" stroke-dasharray="4 3" d="M499 129 L499 221 L183 221 L183 129" marker-end="url(#a)"/>

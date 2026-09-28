@@ -21,7 +21,7 @@ session {
   // the scheduler admits with the blocks of the chunk the budget the
   // running requests leave allows, if the whole prompt fits
   // (scheduler_reserve_full_isl), and grows from there
-  admit reqs (1), kv (min(prompt, budget_left(engine))) fits (prompt) {
+  admit reqs (1), kv (min(prompt, budget_left(engine))) reserve (prompt) {
     prefill (prompt) growing kv;
     observe first = now;
     decode (o - 1) growing kv;

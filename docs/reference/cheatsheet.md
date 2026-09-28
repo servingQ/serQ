@@ -57,7 +57,7 @@ turn;                              // draw the next turn's attributes
 set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
 
-hold P (u) [fits (r)] [, Q (v)]* [reuse (ρ)]
+hold P (u) [reserve (r)] [, Q (v)]* [reuse (ρ)]
      [at admission (name = e, …)]      // names for the header, read at admission
      { … } [cache (ℓ)];
 grow P (d);                        // enlarge the innermost hold

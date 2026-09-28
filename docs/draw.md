@@ -118,7 +118,7 @@ carries is *when* a width is decided:
 | solid edge | the width is `CExpr::Num` after linking — the constants fix it |
 | dashed edge | the width is evaluated **at admission** (`docs/language.md` §3) |
 | widening wedge | a `growing` run enlarges the hold as it proceeds |
-| light outer outline | `fits (r)`: what must be free for the admission, against what is allocated |
+| light outer outline | `reserve (r)`: what must be free for the admission, against what is allocated |
 | faded tail | `cache (ℓ)`: units that stay after the scope ends |
 | a rule across the column | `drop POOL` cuts the tail |
 

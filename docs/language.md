@@ -92,7 +92,7 @@ wlitem   := arrive poisson ( rate ) ; | arrive closed ( n ) ; | arrive batch ( n
 stmt     := turn ;                           -- next turn's attributes (workload `turn`, trace)
           | set NAME = expr ;
           | observe NAME = expr ;
-          | hold POOL ( expr ) [fits ( expr )] [, POOL ( expr ) [fits ( expr )]]*
+          | hold POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]*
                  [reuse ( expr )] [at admission ( NAME = expr , ... )]
                  block [ cache ( expr ) ] ;
           | grow POOL ( expr ) ;
@@ -143,7 +143,7 @@ unchanged.
 
 | Serving form | Kernel |
 |---|---|
-| `admit P (c) … { body } keep (ℓ);` | `hold P (c) … { body } cache (ℓ);` (`fits`, `reuse`, several pools: as in `hold`) |
+| `admit P (c) … { body } keep (ℓ);` | `hold P (c) … { body } cache (ℓ);` (`reserve`, `reuse`, several pools: as in `hold`) |
 | `prefill S;` | `run prefill (S);`, or on a step engine `E`: `run E prefill (S);` |
 | `transfer X;` | `run link (X);` |
 | `decode D;` | `run decode (D);`, or on a step engine `E`: `run E decode (D);` |
@@ -222,13 +222,16 @@ nothing changes; then it starts an iteration on every idle step stage that
 has residents or a waiting queue it serves, provided no other event is
 pending at the same instant (a scheduler step sees every arrival up to it).
 
-**Pools.** `hold m₁(u₁) fits(r₁), m₂(u₂) … reuse(ρ) { body } cache(ℓ)`
+**Pools.** `hold m₁(u₁) reserve(r₁), m₂(u₂) … reuse(ρ) { body } cache(ℓ)`
 joins the queue of `m₁`. The unit expressions are evaluated *when the
 session is admitted* (the lecture's `[Admit]` evaluates `c(x_r)` then;
 observables such as the cache or an engine's budget change while a
 session waits). The head of a queue is admitted when every pool of its hold
-has room for its `fits` units next to the allocated units (`used + r ≤ cap`,
-`r = max(u, fits)`; cached prefixes never block); the first that does not
+has room for its `reserve` units next to the allocated units (`used + r ≤ cap`,
+`r = max(u, reserve)`; cached prefixes never block). `reserve` is the clause
+for "do not let me in until there is room for this", which is separate from
+how much the hold then takes; vLLM spells the same rule
+`scheduler_reserve_full_isl`; the first that does not
 fit blocks the rest (head-of-line blocking). On admission the session
 consumes at most `ρ` units of its own cached prefix (`cached :=` what it
 consumed); the rest of that entry stays in the cache as a *dead* entry with
@@ -280,7 +283,7 @@ admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`
 a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 "prefill from the budget decode leaves" describes vLLM too.
 
-**`at admission`.** Everything in a hold's header — the units, `fits`,
+**`at admission`.** Everything in a hold's header — the units, `reserve`,
 `reuse`, `cache` — is evaluated when the session is admitted, and a `set`
 above the hold is not. The two look the same, which is how
 `programs/vllm.seq` came to read its prefix cache at the moment the session
@@ -377,7 +380,7 @@ identical answers on the differential scenario below):
 | a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `step { budget B }`, residents in admission order; `pool reqs { admit via engine; }` | `scheduler.py:577, 624-823, 868-1128` |
 | `max_num_seqs` | `pool reqs { cap max_seqs }` in the hold | `scheduler.py:877-879` |
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
-| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) fits (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
+| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
 | chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk` | `scheduler.py:612-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |

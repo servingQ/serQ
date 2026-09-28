@@ -29,7 +29,7 @@ fn box_class(s: BoxStyle) -> &'static str {
         BoxStyle::Solid => "solid",
         BoxStyle::Admission => "admission",
         BoxStyle::Cached => "cached",
-        BoxStyle::Fits => "fits",
+        BoxStyle::Reserve => "reserve",
         BoxStyle::Enclosure => "enclosure",
         BoxStyle::Body => "body",
     }
@@ -88,7 +88,7 @@ const PAINTS: &[Paint] = &[
         dark: "fill:#33302a",
     },
     Paint {
-        class: "fits",
+        class: "reserve",
         light: "fill=\"none\" stroke=\"#6b7280\" stroke-width=\".8\" stroke-dasharray=\"2 3\"",
         dark: "stroke:#9aa4b2",
     },
