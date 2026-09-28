@@ -176,6 +176,121 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
     );
 }
 
+/// `serve by (keys)`: the order the iteration hands its budget out in is an
+/// expression over the residents, so a program can state a policy vLLM
+/// does not have. With one token of budget per step, admission order gives
+/// everything to A until it is done (A: prompt + 9 decodes = step 10, then
+/// B: 11, 12, 13); shortest-remaining-first serves B as soon as it has
+/// less left (B: prefill at 2, decodes at 3 and 4; A resumes and ends at
+/// 13). `decode first` is `by (decoding ? 0 : 1)`.
+#[test]
+fn serve_by_orders_residents_by_the_declared_keys() {
+    let prog = |serve: &str| {
+        format!(
+            "pool kv {{ cap 1000; }}
+            stage engine : step {{ budget 1; cost 1; memory kv; {serve} }}
+            workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }} }}
+            session {{
+              hold kv (100) {{
+                run engine prefill (1) growing kv;
+                run engine decode (o - 1) growing kv;
+              }}
+              observe done = now;
+              observe order = serial;
+              end;
+            }}
+            run {{ horizon 100; }}"
+        )
+    };
+    let r = run(&prog("serve admission;"));
+    assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![10.0, 13.0],
+        "{}",
+        r.text()
+    );
+    let r = run(&prog("serve by (remaining);"));
+    assert_eq!(r.observe("order").unwrap().samples, vec![1.0, 0.0]);
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![4.0, 13.0],
+        "{}",
+        r.text()
+    );
+    // ties fall to admission order: a constant key is admission order, and
+    // a second key decides where the first is equal
+    let r = run(&prog("serve by (1);"));
+    assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
+    assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
+    let r = run(&prog("serve by (1, remaining);"));
+    assert_eq!(r.observe("order").unwrap().samples, vec![1.0, 0.0]);
+    assert_eq!(r.observe("done").unwrap().samples, vec![4.0, 13.0]);
+    // and the opposite order is a program too
+    let r = run(&prog("serve by (-remaining);"));
+    assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
+    assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
+    // `decode first` and its expansion are the same program
+    let ir = |s: &str| {
+        seq::compile_source(&prog(s), &Overrides::default())
+            .unwrap()
+            .to_json()
+    };
+    assert_eq!(
+        ir("serve decode first;"),
+        ir("serve by (decoding ? 0 : 1);")
+    );
+    // a serve key is read at its own moment only
+    let e = seq::compile_source(&prog("serve by (ntok);"), &Overrides::default()).unwrap_err();
+    assert!(
+        e.contains("`ntok` is read in a step stage's serve keys"),
+        "{e}"
+    );
+}
+
+/// A resident admitted in the middle of an iteration (with the budget the
+/// residents left) may sort ahead of residents already served under `serve
+/// by`. Each resident is served once: the newcomer gets the budget left,
+/// nobody is served twice, nobody is skipped. Budget 2: at step 2 A's
+/// decode (3 left) takes one token, B is admitted with the other and sorts
+/// first by `remaining` (1 < 3); B prefills at 2 and, with one output, is
+/// done at 2; A decodes at 2, 3, 4. An index into a re-sorted list would
+/// have given A both tokens at step 2 and B nothing.
+#[test]
+fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
+    let src = r#"
+        pool reqs { cap 8; admit via engine; }
+        pool kv { cap 1e5; }
+        stage engine : step { budget 2; cost 1; memory kv; serve by (remaining); }
+        stage gate : delay;
+        workload { arrive batch(2); init { set arrive = serial; set o = serial == 0 ? 4 : 1; } }
+        session {
+          run gate (arrive);
+          hold reqs (1), kv (10) {
+            run engine prefill (1) growing kv;
+            run engine decode (o - 1) growing kv;
+          }
+          observe done = now;
+          observe order = serial;
+          end;
+        }
+        run { horizon 50; }
+    "#;
+    let r = run(src);
+    assert_eq!(
+        r.observe("order").unwrap().samples,
+        vec![1.0, 0.0],
+        "{}",
+        r.text()
+    );
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![2.0, 4.0],
+        "{}",
+        r.text()
+    );
+}
+
 /// scheduler.py:872-884, 1228-1235: FCFS with head-of-line blocking; a
 /// request that does not fit stops the waiting loop even if a later,
 /// smaller one would fit.

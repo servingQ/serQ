@@ -268,6 +268,9 @@ struct Ctx {
     kvb: f64,
     kvp: f64,
     attn: f64,
+    decoding: f64,
+    admission: f64,
+    remaining: f64,
 }
 
 impl Ctx {
@@ -1880,12 +1883,18 @@ impl<'p> Interp<'p> {
         let CStageKind::Step(spec) = &p.stages[st].kind else {
             unreachable!()
         };
-        let (_pre, budget, chunk, _want) = self.pre_iteration(st, spec);
+        let (pre, budget, chunk, _want) = self.pre_iteration(st, spec);
         let mut left = budget;
         let mut assign: Vec<(u64, f64)> = vec![];
-        let mut i = 0;
+        // Every resident is considered once per iteration, in the serving
+        // order as it stands when it is its turn. The order is re-read after
+        // each one because a growth may have preempted a resident and an
+        // admission may have added one, and under `serve by` a newcomer can
+        // sort ahead of residents already served: the set of the served, not
+        // an index into the list, is what says who is next.
+        let mut served: BTreeSet<u64> = BTreeSet::new();
         let mut prefill_taken = false;
-        let exclusive = spec.serve == CServe::ExclusivePrefill;
+        let exclusive = matches!(spec.serve, CServe::ExclusivePrefill);
         let any_prefill = self
             .residents(st)
             .iter()
@@ -1893,8 +1902,8 @@ impl<'p> Interp<'p> {
         let preempt0: u64 = self.pools.iter().map(|p| p.preemptions).sum();
         let mut attn = 0.0;
         loop {
-            let residents = self.serving_order(st, spec.serve);
-            if i >= residents.len() {
+            let residents = self.serving_order(st, &spec.serve, &pre);
+            let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
                 // the running requests are served; admit waiting ones with
                 // the budget left, unless this iteration preempted
                 // (scheduler.py:869, `if not preempted_reqs`)
@@ -1903,8 +1912,8 @@ impl<'p> Interp<'p> {
                     continue;
                 }
                 break;
-            }
-            let id = residents[i];
+            };
+            served.insert(id);
             let (mode, remaining, growing, owner) = {
                 let j = &self.stages[st].jobs[&id];
                 (j.mode, j.work, j.growing, j.owner)
@@ -1923,7 +1932,6 @@ impl<'p> Interp<'p> {
             let blocked = exclusive && any_prefill && (mode == RunMode::Decode || prefill_taken);
             let tokens = if blocked { 0.0 } else { want.min(left) };
             if tokens <= 0.0 {
-                i += 1;
                 continue;
             }
             // growth before the tokens are committed: the hold must cover
@@ -1932,17 +1940,13 @@ impl<'p> Interp<'p> {
             if let (Some(pl), Some(sid)) = (growing, owner) {
                 if matches!(self.sessions[sid].status, Status::Growing(..)) {
                     // stalled from an earlier iteration: no tokens
-                    i += 1;
                     continue;
                 }
                 let (alloc, pos) = self.hold_alloc_pos(sid, pl);
                 let need = pos + tokens - alloc;
                 if need > 1e-9 && !self.grow(sid, pl, need) {
-                    // preempted (lifo): no longer a resident, re-read the
-                    // list; waiting (none): stalls as a resident
-                    if matches!(self.sessions[sid].status, Status::Growing(..)) {
-                        i += 1;
-                    }
+                    // preempted (lifo): no longer a resident; waiting
+                    // (none): stalls as a resident. Either way, no tokens
                     continue;
                 }
                 if mode == RunMode::Prefill {
@@ -1957,7 +1961,6 @@ impl<'p> Interp<'p> {
             if mode == RunMode::Prefill {
                 prefill_taken = true;
             }
-            i += 1;
             if left <= 0.0 {
                 break;
             }
@@ -2101,17 +2104,49 @@ impl<'p> Interp<'p> {
     }
 
     /// Residents in the order the iteration serves them.
-    /// Residents in the order the iteration serves them: admission order,
-    /// or the decoding ones first (a stable sort, so admission order within
-    /// each kind). `ExclusivePrefill` keeps admission order and stalls the
-    /// decodes in the loop instead.
-    fn serving_order(&self, st: usize, serve: CServe) -> Vec<u64> {
+    /// Residents in the order the iteration serves them: admission order, or
+    /// ascending `serve by` keys evaluated per resident (`decoding`,
+    /// `admission`, `remaining`, and the residents' variables of `pre`),
+    /// ties in admission order (a stable sort of the admission-ordered
+    /// list; no keys is that list). `ExclusivePrefill` keeps admission order
+    /// and stalls the decodes in the loop instead.
+    fn serving_order(&mut self, st: usize, serve: &CServe, pre: &Ctx) -> Vec<u64> {
         let mut r = self.residents(st);
-        if serve == CServe::DecodeFirst {
-            let jobs = &self.stages[st].jobs;
-            r.sort_by_key(|j| jobs[j].mode != RunMode::Decode);
+        let CServe::By(keys) = serve else {
+            return r;
+        };
+        if keys.is_empty() {
+            return r;
         }
-        r
+        let mut keyed: Vec<(Vec<f64>, u64)> = r
+            .drain(..)
+            .map(|id| {
+                let (owner, decoding, remaining) = {
+                    let j = &self.stages[st].jobs[&id];
+                    (j.owner, (j.mode == RunMode::Decode) as u8 as f64, j.work)
+                };
+                let ctx = Ctx {
+                    sid: owner,
+                    decoding,
+                    admission: owner.map_or(0.0, |s| self.sessions[s].adm_seq as f64),
+                    remaining,
+                    ..pre.clone()
+                };
+                let k = keys
+                    .iter()
+                    .map(|e| self.eval(e, &ctx, Which::Session))
+                    .collect();
+                (k, id)
+            })
+            .collect();
+        keyed.sort_by(|a, b| {
+            a.0.iter()
+                .zip(&b.0)
+                .map(|(x, y)| x.total_cmp(y))
+                .find(|o| *o != Ordering::Equal)
+                .unwrap_or(Ordering::Equal)
+        });
+        keyed.into_iter().map(|(_, id)| id).collect()
     }
 
     fn residents(&self, st: usize) -> Vec<u64> {
@@ -2175,6 +2210,9 @@ impl<'p> Interp<'p> {
                 CtxVar::Kvb => ctx.kvb,
                 CtxVar::Kvp => ctx.kvp,
                 CtxVar::Attn => ctx.attn,
+                CtxVar::Decoding => ctx.decoding,
+                CtxVar::Admission => ctx.admission,
+                CtxVar::Remaining => ctx.remaining,
             },
             CExpr::Sample(kind, args) => {
                 let a: Vec<f64> = args.iter().map(|x| self.eval(x, ctx, w)).collect();

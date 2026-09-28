@@ -44,7 +44,7 @@ stage engine : step {
   budget B;                   // tokens per iteration
   cost <expr>;                // seconds per iteration
   chunk C;                    // cap on one request's prefill chunk (0: none)
-  serve decode first;         // one order: admission (default) | decode first | exclusive prefill
+  serve by (remaining);       // admission (default) | by (keys…) | decode first | exclusive prefill
   memory kv;                  // the pool that gives kvb / kvp
 }
 ```
@@ -101,7 +101,9 @@ Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 | anywhere | `now` |
 | eviction keys, spill predicates | `size` `age` `last` `queued` |
 | `ps` capacity | `n` |
-| `step` budget and cost | `ntok` `ndec` `npre` `nres` `kvb` `kvp` `attn` |
+| `step` budget and chunk | `nres` `ndec` `kvb` `kvp` (the residents, before the iteration) |
+| `step` cost | `ntok` `ndec` `npre` `nres` `kvb` `kvp` `attn` |
+| `step` `serve by` keys | `decoding` `admission` `remaining` (per resident), and `nres` `ndec` `kvb` `kvp` |
 
 **Built-in session attributes** `serial` `turn_no` `cached` `computed` (what a
 preempted hold had computed; 0 otherwise), and with a trace `new` `out`

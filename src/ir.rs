@@ -76,6 +76,8 @@ pub enum Moment {
     /// A step stage's `cost`: evaluated after the iteration is scheduled,
     /// from what it scheduled (`ntok`, `npre`, `attn` as well).
     Step,
+    /// A step stage's `serve by` keys: evaluated for one resident.
+    Serve,
 }
 
 impl std::fmt::Display for Moment {
@@ -87,6 +89,7 @@ impl std::fmt::Display for Moment {
             Moment::Ps => "a ps stage's capacity",
             Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
             Moment::Step => "a step stage's cost, after the iteration",
+            Moment::Serve => "a step stage's serve keys",
         })
     }
 }
@@ -121,6 +124,13 @@ pub enum CtxVar {
     /// Step cost: attention work of the prefill chunks, `Σ n (K + n/2)` with
     /// `K` the position before the chunk (exact for `growing` runs).
     Attn,
+    /// Serve keys: 1 if the resident is decoding, 0 if prefilling.
+    Decoding,
+    /// Serve keys: the resident's admission sequence number (its place in
+    /// vLLM's `running` list); `serve by (admission)` is admission order.
+    Admission,
+    /// Serve keys: tokens the resident's run has left.
+    Remaining,
 }
 
 impl CtxVar {
@@ -140,6 +150,9 @@ impl CtxVar {
             CtxVar::Kvb => "kvb",
             CtxVar::Kvp => "kvp",
             CtxVar::Attn => "attn",
+            CtxVar::Decoding => "decoding",
+            CtxVar::Admission => "admission",
+            CtxVar::Remaining => "remaining",
         }
     }
 
@@ -152,10 +165,13 @@ impl CtxVar {
             CtxVar::N => &[Moment::Ps],
             // the residents are known before the iteration; the tokens
             // scheduled, the prefill tokens and the attention work only after
+            // (the serve keys see the residents too: they are known when the
+            // order is taken)
             CtxVar::Nres | CtxVar::Ndec | CtxVar::Kvb | CtxVar::Kvp => {
-                &[Moment::Budget, Moment::Step]
+                &[Moment::Budget, Moment::Step, Moment::Serve]
             }
             CtxVar::Ntok | CtxVar::Npre | CtxVar::Attn => &[Moment::Step],
+            CtxVar::Decoding | CtxVar::Admission | CtxVar::Remaining => &[Moment::Serve],
         }
     }
 }
@@ -298,18 +314,21 @@ pub struct CStep {
 }
 
 /// How a step stage serves its residents, said once: an order (`Admission`,
-/// `DecodeFirst`) or the rule that a prefill runs alone (`ExclusivePrefill`,
-/// which keeps admission order and stalls the decodes; it is not an order,
-/// and the one field means a program cannot combine it with another
-/// order). Two booleans described this before (`exclusive_prefill`,
-/// `decode_first`) and could both be set; the Lean fragment reads only
-/// `Admission`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// or `By(keys)` over the residents) or the rule that a prefill runs alone
+/// (`ExclusivePrefill`, which keeps admission order and stalls the decodes;
+/// it is not an order, and the one field means a program cannot combine it
+/// with another order). Two booleans described this before
+/// (`exclusive_prefill`, `decode_first`) and could both be set; the Lean
+/// fragment reads only `By([])`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CServe {
-    /// Admission order (vLLM's `running` list).
-    Admission,
-    /// Decoding residents first, then prefilling ones, each in admission order.
-    DecodeFirst,
+    /// Ascending keys, evaluated per resident at `Moment::Serve`
+    /// (`Decoding`, `Admission`, `Remaining`, the residents' `Nres`, `Ndec`,
+    /// `Kvb`, `Kvp`, and `Now`), ties in admission order. No keys is
+    /// admission order itself (vLLM's `running` list; `serve admission`), and
+    /// `decode first` is `By([decoding ? 0 : 1])`. A key may not draw: it is
+    /// read for every resident at every iteration.
+    By(Vec<CExpr>),
     /// Only the first prefilling resident while one exists; decodes stall.
     ExclusivePrefill,
 }
@@ -548,6 +567,19 @@ impl Program {
                     v.expr(&st.budget, Moment::Budget).map_err(at)?;
                     v.expr(&st.chunk, Moment::Budget).map_err(at)?;
                     v.expr(&st.cost, Moment::Step).map_err(at)?;
+                    if let CServe::By(keys) = &st.serve {
+                        for k in keys {
+                            v.expr(k, Moment::Serve).map_err(at)?;
+                            if draws(k) {
+                                return Err(at(
+                                    "a serve key may not draw (`~`): it is read for every \
+                                     resident at every iteration, and the order would change \
+                                     under the scheduler's feet"
+                                        .into(),
+                                ));
+                            }
+                        }
+                    }
                     if let Some(m) = st.memory {
                         v.pool(m)?;
                     }
@@ -578,6 +610,21 @@ impl Program {
             return Err("run: need 0 <= warmup < horizon".into());
         }
         Ok(())
+    }
+}
+
+/// Whether an expression samples a distribution anywhere.
+fn draws(e: &CExpr) -> bool {
+    match e {
+        CExpr::Sample(..) => true,
+        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => false,
+        CExpr::Call(_, args) => args.iter().any(|a| match a {
+            CArg::Expr(x) => draws(x),
+            CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().is_some_and(|i| draws(i)),
+        }),
+        CExpr::Unary(_, x) => draws(x),
+        CExpr::Binary(_, a, b) => draws(a) || draws(b),
+        CExpr::Cond(c, a, b) => draws(c) || draws(a) || draws(b),
     }
 }
 

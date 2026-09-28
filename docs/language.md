@@ -86,7 +86,8 @@ kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 
           | ps ( expr in n )                 -- throughput phi(n) shared equally
           | delay                            -- every job at rate 1, no waiting
           | step { budget expr ; cost expr ; [chunk expr ;]
-                   [serve admission ; | serve decode first ; | serve exclusive prefill ;]
+                   [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
+                    | serve exclusive prefill ;]
                    [memory POOL ;] }
 wlitem   := arrive poisson ( rate ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
@@ -130,7 +131,9 @@ Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`,
 capacity), `nres`, `ndec`, `kvb`, `kvp` (a step stage's budget, chunk and
 cost: the residents before the iteration), `ntok`, `npre`, `attn` (its cost
 only: what the iteration scheduled; `attn = Σ n (K + n/2)` over the prefill
-chunks, `K` the position before the chunk). Each context variable exists at the one place named in
+chunks, `K` the position before the chunk), `decoding`, `admission`,
+`remaining` (a step stage's `serve by` keys, per resident; the keys read the
+residents' four as well). Each context variable exists at the one place named in
 its parenthesis (`now` everywhere), and reading it anywhere else is a link
 error rather than a 0: `set x = ntok;` in a session, or `evict by (ntok)`,
 does not link (`docs/ir.md`, Moments). A name may not be both a `let` constant and a session
@@ -369,11 +372,18 @@ the attribute.
 `ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
 own at rate 1. `step { budget B; cost C; }`: an engine that runs
 iterations. The residents are served the way `serve` names, said once per
-stage: an order, `admission` (the order their sessions were admitted,
-vLLM's `running` list; the default) or `decode first` (the decoding
-residents before the prefilling ones), or the rule `exclusive prefill`,
-below, which is not an order and so cannot be combined with one. One token
-to a decoding job, up to `chunk` to a prefilling one,
+stage: an order, `by (k₁, …)` (ascending keys evaluated for each resident
+with `decoding`, 1 for a decoding resident, `admission`, its admission
+sequence number, `remaining`, the tokens its run has left, and the
+residents' `nres`, `ndec`, `kvb`, `kvp`; ties in admission order; a key may
+not draw), or the rule `exclusive prefill`, below, which is not an order and
+so cannot be combined with one. `admission` (the order their sessions were
+admitted, vLLM's `running` list; the default) is `by` with no keys, where
+every resident ties, and `decode first` is `by (decoding ? 0 : 1)`; the IR
+knows only `by`. A scheduler that serves the shortest
+remaining run first is `serve by (remaining)`, the opposite `serve by
+(-remaining)`. One token to a decoding job, up to `chunk` to a prefilling
+one,
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); then the
 stage admits from the queues it serves. The iteration lasts `C` seconds, an
