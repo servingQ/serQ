@@ -60,10 +60,11 @@ session {
     // `cachedin(kv)` is read inside the unit expression, so it is read when
     // the scheduler admits (scheduler.py:932-939) and not when the request
     // queues -- a waiting request's prefix is still evictable, which is the
-    // whole point of the wait channel
+    // whole point of the wait channel. The units are the hit plus the chunk
+    // the budget allows, which is `min(prompt, hit + budget)`: the whole
+    // prompt, or as far as the hit and the budget reach, whichever is less
     set hitmax = floor((prompt - 1) / bs) * bs;
-    admit reqs (1), kv (min(cachedin(kv), hitmax)
-                        + min(prompt - min(cachedin(kv), hitmax), budget_left(engine))) {
+    admit reqs (1), kv (min(prompt, min(cachedin(kv), hitmax) + budget_left(engine))) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;
       observe prefill_tokens = prompt - c;
