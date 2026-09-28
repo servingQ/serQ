@@ -54,7 +54,7 @@ Other options: `chunk` caps one request's prefill chunk
 (`long_prefill_token_threshold`), and `serve` names the one order the
 iteration serves its residents in: `serve admission` (vLLM's `running` list,
 the default), `serve by (keys)` (ascending keys per resident, from
-`decoding`, `admitted` and `remaining`; `serve decode first` is
+`decoding`, `admission` and `remaining`; `serve decode first` is
 `serve by (decoding ? 0 : 1)`), or `serve exclusive prefill` (a prefill
 chunk runs alone and stalls every decode, the RBLN stack).
 

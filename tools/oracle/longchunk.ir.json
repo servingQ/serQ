@@ -55,7 +55,9 @@
           "chunk": {
             "Num": 1000.0
           },
-          "serve": "Admission",
+          "serve": {
+            "By": []
+          },
           "memory": 1
         }
       }

@@ -269,7 +269,7 @@ struct Ctx {
     kvp: f64,
     attn: f64,
     decoding: f64,
-    admitted: f64,
+    admission: f64,
     remaining: f64,
 }
 
@@ -1883,7 +1883,7 @@ impl<'p> Interp<'p> {
         let CStageKind::Step(spec) = &p.stages[st].kind else {
             unreachable!()
         };
-        let (_pre, budget, chunk, _want) = self.pre_iteration(st, spec);
+        let (pre, budget, chunk, _want) = self.pre_iteration(st, spec);
         let mut left = budget;
         let mut assign: Vec<(u64, f64)> = vec![];
         // Every resident is considered once per iteration, in the serving
@@ -1902,7 +1902,7 @@ impl<'p> Interp<'p> {
         let preempt0: u64 = self.pools.iter().map(|p| p.preemptions).sum();
         let mut attn = 0.0;
         loop {
-            let residents = self.serving_order(st, &spec.serve);
+            let residents = self.serving_order(st, &spec.serve, &pre);
             let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
                 // the running requests are served; admit waiting ones with
                 // the budget left, unless this iteration preempted
@@ -2106,14 +2106,18 @@ impl<'p> Interp<'p> {
     /// Residents in the order the iteration serves them.
     /// Residents in the order the iteration serves them: admission order, or
     /// ascending `serve by` keys evaluated per resident (`decoding`,
-    /// `admitted`, `remaining`), ties in admission order (a stable sort of
-    /// the admission-ordered list). `ExclusivePrefill` keeps admission order
+    /// `admission`, `remaining`, and the residents' variables of `pre`),
+    /// ties in admission order (a stable sort of the admission-ordered
+    /// list; no keys is that list). `ExclusivePrefill` keeps admission order
     /// and stalls the decodes in the loop instead.
-    fn serving_order(&mut self, st: usize, serve: &CServe) -> Vec<u64> {
+    fn serving_order(&mut self, st: usize, serve: &CServe, pre: &Ctx) -> Vec<u64> {
         let mut r = self.residents(st);
         let CServe::By(keys) = serve else {
             return r;
         };
+        if keys.is_empty() {
+            return r;
+        }
         let mut keyed: Vec<(Vec<f64>, u64)> = r
             .drain(..)
             .map(|id| {
@@ -2124,9 +2128,9 @@ impl<'p> Interp<'p> {
                 let ctx = Ctx {
                     sid: owner,
                     decoding,
-                    admitted: owner.map_or(0.0, |s| self.sessions[s].adm_seq as f64),
+                    admission: owner.map_or(0.0, |s| self.sessions[s].adm_seq as f64),
                     remaining,
-                    ..Default::default()
+                    ..pre.clone()
                 };
                 let k = keys
                     .iter()
@@ -2138,7 +2142,7 @@ impl<'p> Interp<'p> {
         keyed.sort_by(|a, b| {
             a.0.iter()
                 .zip(&b.0)
-                .map(|(x, y)| x.partial_cmp(y).unwrap_or(Ordering::Equal))
+                .map(|(x, y)| x.total_cmp(y))
                 .find(|o| *o != Ordering::Equal)
                 .unwrap_or(Ordering::Equal)
         });
@@ -2207,7 +2211,7 @@ impl<'p> Interp<'p> {
                 CtxVar::Kvp => ctx.kvp,
                 CtxVar::Attn => ctx.attn,
                 CtxVar::Decoding => ctx.decoding,
-                CtxVar::Admitted => ctx.admitted,
+                CtxVar::Admission => ctx.admission,
                 CtxVar::Remaining => ctx.remaining,
             },
             CExpr::Sample(kind, args) => {

@@ -103,7 +103,7 @@ Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 | `ps` capacity | `n` |
 | `step` budget and chunk | `nres` `ndec` `kvb` `kvp` (the residents, before the iteration) |
 | `step` cost | `ntok` `ndec` `npre` `nres` `kvb` `kvp` `attn` |
-| `step` `serve by` keys | `decoding` `admitted` `remaining` (per resident) |
+| `step` `serve by` keys | `decoding` `admission` `remaining` (per resident), and `nres` `ndec` `kvb` `kvp` |
 
 **Built-in session attributes** `serial` `turn_no` `cached` `computed` (what a
 preempted hold had computed; 0 otherwise), and with a trace `new` `out`

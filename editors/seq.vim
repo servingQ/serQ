@@ -16,7 +16,7 @@ syn keyword seqOption       init horizon warmup seed
 syn keyword seqBuiltin      busy work used free cachedin holders queued price
 syn keyword seqBuiltin      budget_left est_lambda
 syn keyword seqBuiltin      est_rho est_wait now size age last ntok ndec npre nres
-syn keyword seqBuiltin      kvb kvp attn decoding admitted remaining
+syn keyword seqBuiltin      kvb kvp attn decoding admission remaining
 syn keyword seqBuiltin      cached serial turn_no new out think more forced computed
 
 " Four roles, four groups: the skeleton (Structure), what a session does

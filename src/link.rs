@@ -193,7 +193,8 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                 cost: lk.expr(&sp.cost)?,
                 chunk: lk.expr(&sp.chunk)?,
                 serve: match &sp.serve {
-                    Serve::Admission => CServe::Admission,
+                    // no keys: every resident ties, and ties are admission order
+                    Serve::Admission => CServe::By(vec![]),
                     // `decode first` is `by (decoding ? 0 : 1)`: the IR knows one form
                     Serve::DecodeFirst => CServe::By(vec![CExpr::Cond(
                         Box::new(CExpr::Ctx(CtxVar::Decoding)),
@@ -435,7 +436,7 @@ impl Linker<'_> {
                         "kvp" => CExpr::Ctx(CtxVar::Kvp),
                         "attn" => CExpr::Ctx(CtxVar::Attn),
                         "decoding" => CExpr::Ctx(CtxVar::Decoding),
-                        "admitted" => CExpr::Ctx(CtxVar::Admitted),
+                        "admission" => CExpr::Ctx(CtxVar::Admission),
                         "remaining" => CExpr::Ctx(CtxVar::Remaining),
                         "inf" => CExpr::Num(f64::INFINITY),
                         _ => return Err(LinkError(format!("unknown name `{n}`"))),

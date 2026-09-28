@@ -259,6 +259,34 @@ fn serve_is_one_order_said_once() {
     assert!(e.contains("`serve` takes"), "{e}");
 }
 
+/// `serve admission` is `by` with no keys (every resident ties, and ties are
+/// admission order), so the IR knows one form; a serve key may read the
+/// residents' variables and may not draw.
+#[test]
+fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
+    let step = |opts: &str| {
+        format!(
+            "pool kv {{ cap 1e5; }}
+            stage engine : step {{ budget 512; cost 1; memory kv; {opts} }}
+            workload {{ arrive batch(1); }}
+            session {{ hold kv (1) {{ run engine prefill (1) growing kv; }} end; }}
+            run {{ horizon 10; }}"
+        )
+    };
+    let ir = |s: &str| {
+        seq::compile_source(&step(s), &Overrides::default())
+            .unwrap()
+            .to_json()
+    };
+    assert_eq!(ir("serve admission;"), ir(""));
+    assert!(ir("serve admission;").contains("\"By\": []"));
+    check(&step("serve by (nres > 4 ? -remaining : admission);"))
+        .expect("the residents' variables are keys");
+    let e = check(&step("serve by (~uniform(0, 1));")).expect_err("a draw");
+    assert!(e.contains("stage `engine`"), "{e}");
+    assert!(e.contains("a serve key may not draw"), "{e}");
+}
+
 /// The lints exist to be errors, which is only defensible if nothing real
 /// trips them.
 #[test]
