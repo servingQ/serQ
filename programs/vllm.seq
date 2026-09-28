@@ -27,7 +27,7 @@ let p = 0.9;           // continue after a turn
 let Z = 3.0;           // tool time (s)
 
 pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool slots { cap max_seqs; }
+pool reqs { cap max_seqs; }
 
 stage engine : step {
   budget B;
@@ -58,7 +58,7 @@ session {
     // leave can take now (scheduler.py:1078-1128, 1214-1226); the rest is
     // allocated as the request runs
     set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-    admit slots (1), kv (c + min(prompt - c, budget_left(engine))) {
+    admit reqs (1), kv (c + min(prompt - c, budget_left(engine))) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;
       observe prefill_tokens = prompt - c;

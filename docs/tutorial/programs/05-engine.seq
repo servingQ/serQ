@@ -16,7 +16,7 @@ let p = 0.8;
 let Z = 3.0;
 
 pool kv    { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool slots { cap max_seqs; admit via engine; }
+pool reqs { cap max_seqs; admit via engine; }
 
 stage engine : step {
   budget B;
@@ -43,7 +43,7 @@ session {
     set prompt = K + n;
     // how much of the prompt the cache can supply, in whole blocks
     set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-    hold slots (1), kv (c + min(prompt - c, budget_left(engine))) {
+    hold reqs (1), kv (c + min(prompt - c, budget_left(engine))) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;
       run engine prefill (prompt - c) growing kv;

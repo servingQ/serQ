@@ -35,7 +35,7 @@
       "admit_via": null
     },
     {
-      "name": "slots",
+      "name": "reqs",
       "cap": 4.0,
       "block": null,
       "evict": "Lru",

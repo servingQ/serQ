@@ -180,7 +180,7 @@ loop {
 and vLLM's engine (`programs/vllm.seq`)
 
 ```
-admit slots (1), kv (c + min(prompt - c, budget_left(engine))) {
+admit reqs (1), kv (c + min(prompt - c, budget_left(engine))) {
   prefill (prompt - c) growing kv;
   decode (o - 1) growing kv;
 } keep (prompt + o);
@@ -194,7 +194,7 @@ scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
 
 | Form | In the lifecycle | vLLM |
 |---|---|---|
-| `admit slots (1), kv (c + …) { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
+| `admit reqs (1), kv (c + …) { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
 | `prefill (n) growing kv` | prefill in chunks of the budget, a block allocated as the request advances; a missing block preempts `running[-1]` | the running loop, `scheduler.py:624-823`; `allocate_slots` at `scheduler.py:743`; `_preempt_request`, `scheduler.py:1539-1582` (`preempt lifo`) |
 | `decode (o) growing kv` | one token per iteration, a block every `block_size` tokens | the same loop and `allocate_slots` with one new token |
 | `transfer X` | the KV of a prefilled request moves to the decode instance | the KV connector: `WAITING_FOR_REMOTE_KVS` at `scheduler.py:1267`, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`, `_connector_finished`, `scheduler.py:2929`; not in `vllm.seq`, which is one device |
@@ -302,7 +302,7 @@ the semantics the oracle theorems are about.
 | Lecture (L1:def:syntax, L1:def:semantics) | v2 | Why |
 |---|---|---|
 | `admit m c` … `free m [cache ℓ]` as separate actions | `hold m (c) { … } cache (ℓ)` | balance is syntactic; preemption is "abort the scope"; the memory invariant is provable per command |
-| one pool kind (KV bytes) | pools are counted resources with an optional cache: KV, request slots (`max_num_seqs`), live-session caps, offload tiers | the same guard and queue serve all of them; the lecture's "slots" remark becomes literal |
+| one pool kind (KV bytes) | pools are counted resources with an optional cache: KV, request slots (`max_num_seqs`), live-session caps, offload tiers | the same guard and queue serve all of them; the lecture's "slots" remark becomes a pool (`reqs`, one unit per running request) |
 | `serial`, `shared(φ)`, `external` | `fifo(c)`, `ps(φ)`, `delay`, **`step`** | the colocated engine (Exercise L1:exr:colocated) and vLLM's chunked prefill |
 | hit indicator `H ∈ {0,1}` | `cached` (units found), block-rounded | partial hits (block eviction, tail first) |
 | eviction order `E` as a name | `evict lru` / `evict by (keys)` with online estimates | the priced orders of §3 are expressible |
@@ -344,8 +344,8 @@ identical answers on the differential scenario below):
 
 | vLLM | seQ | Where |
 |---|---|---|
-| a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `step { budget B }`, residents in admission order; `pool slots { admit via engine; }` | `scheduler.py:577, 624-823, 868-1128` |
-| `max_num_seqs` | `pool slots { cap max_seqs }` in the hold | `scheduler.py:877-879` |
+| a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `step { budget B }`, residents in admission order; `pool reqs { admit via engine; }` | `scheduler.py:577, 624-823, 868-1128` |
+| `max_num_seqs` | `pool reqs { cap max_seqs }` in the hold | `scheduler.py:877-879` |
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) fits (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |

@@ -21,7 +21,7 @@ out).
 | vLLM | seQ | Where |
 |---|---|---|
 | a token budget per step: running requests first in `running` order, then waiting requests with what is left | `step { budget B }`, residents in admission order | `scheduler.py:577, 624-823, 868-1128` |
-| `max_num_seqs` | `pool slots { cap max_seqs }` in the hold | `scheduler.py:877-879` |
+| `max_num_seqs` | `pool reqs { cap max_seqs }` in the hold | `scheduler.py:877-879` |
 | FCFS with head-of-line blocking (`if new_blocks is None: break`) | the pool's `fifo` queue; the first request that does not fit blocks the rest | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt, but only the first chunk is allocated | `kv (c + min(prompt - c, budget_left(engine)))` with `fits (prompt)` | `kv_cache_manager.py:515-531` |
 | a waiting request's prefix is looked up only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939` |

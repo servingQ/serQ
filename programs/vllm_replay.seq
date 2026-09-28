@@ -25,7 +25,7 @@ let c0 = 0.04;         // s per request outside the engine (fitted with c_it, da
 let f = 0;             // s per prompt token outside the engine (0: not separable from c0 on these runs)
 
 pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool slots { cap max_seqs; admit via engine; }  // the scheduler admits (scheduler.py:868)
+pool reqs { cap max_seqs; admit via engine; }  // the scheduler admits (scheduler.py:868)
 
 stage engine : step {
   budget B;
@@ -60,7 +60,7 @@ session {
     // cached then, plus the chunk the step's remaining budget allows
     // the admission needs room for the whole prompt (scheduler_reserve_full_isl,
     // kv_cache_manager.py:515-531) but allocates only the first chunk
-    hold slots (1), kv (min(cachedin(kv), hitmax)
+    hold reqs (1), kv (min(cachedin(kv), hitmax)
                         + min(prompt - min(cachedin(kv), hitmax), budget_left(engine)))
                     fits (prompt)
          reuse (hitmax) {
