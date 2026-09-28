@@ -60,22 +60,22 @@ session {
     // cached then, plus the chunk the step's remaining budget allows
     // the admission needs room for the whole prompt (scheduler_reserve_full_isl,
     // kv_cache_manager.py:515-531) but allocates only the first chunk
-    hold reqs (1), kv (min(cachedin(kv), hitmax)
-                        + min(prompt - min(cachedin(kv), hitmax), budget_left(engine)))
-                    fits (prompt)
-         reuse (hitmax) {
+    admit reqs (1), kv (min(cachedin(kv), hitmax)
+                         + min(prompt - min(cachedin(kv), hitmax), budget_left(engine)))
+                     fits (prompt)
+          reuse (hitmax) {
       set c = cached;
       observe cached_tokens = c;
       observe prefix = prev + prevout;
       observe sent = t0;
-      run engine prefill (prompt - c) growing kv;
+      prefill (prompt - c) growing kv;
       observe ttft = now - t0;
-      run engine decode (out - 1) growing kv;
-    } cache (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
+      decode (out - 1) growing kv;
+    } keep (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
     observe latency = now - t0;
     set prev = prompt;
     set prevout = out;
-    branch (more) { run tool (think); turn; } else { end; }
+    branch (more) { tool think; turn; } else { end; }
   }
 }
 
