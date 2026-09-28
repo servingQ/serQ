@@ -130,10 +130,11 @@ struct Session<'p> {
     /// stage are served in this order (vLLM's `running` list is in order of
     /// admission; a preempted request re-enters at the end).
     adm_seq: u64,
-    /// Position the session's hold had reached when it was last preempted,
-    /// `None` once a hold completed. A second preemption at the same or a
-    /// lower position is no progress: the session is `stuck`.
-    preempt_pos: Option<f64>,
+    /// Per pool, the position the session's hold had reached on that pool
+    /// when it was last preempted for it; cleared when a hold completes. A
+    /// second preemption for the same pool at the same or a lower position
+    /// is no progress there: the session is `stuck`.
+    preempt_pos: HashMap<usize, f64>,
     stuck: bool,
 }
 
@@ -628,7 +629,7 @@ impl<'p> Interp<'p> {
             trace,
             script: script.map(|k| (k, 0)),
             adm_seq: u64::MAX,
-            preempt_pos: None,
+            preempt_pos: HashMap::new(),
             stuck: false,
         };
         let sid = match self.free.pop() {
@@ -796,7 +797,7 @@ impl<'p> Interp<'p> {
                             .pop()
                             .expect("hold frame has a hold");
                         self.release_hold(sid, &h);
-                        self.sessions[sid].preempt_pos = None;
+                        self.sessions[sid].preempt_pos.clear();
                         self.try_admit_all();
                     }
                 }
@@ -1478,23 +1479,21 @@ impl<'p> Interp<'p> {
             .iter()
             .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
             .expect("victim holds the pool");
-        // progress since the last preemption: the position the hold reached
-        // (what a `growing` run computed, else the allocation)
+        // progress since the last preemption for this pool: the position the
+        // hold reached on it (what a `growing` run computed, else the
+        // allocation)
         let reached = {
             let h = &self.sessions[victim].holds[hi];
-            if h.grown {
-                h.pos.iter().copied().fold(0.0, f64::max)
-            } else {
-                h.pools.iter().map(|&(_, u)| u).fold(0.0, f64::max)
-            }
+            let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
+            if h.grown { h.pos[k] } else { h.pools[k].1 }
         };
-        if let Some(prev) = self.sessions[victim].preempt_pos {
+        if let Some(&prev) = self.sessions[victim].preempt_pos.get(&pl) {
             if reached <= prev + 1e-9 && !self.sessions[victim].stuck {
                 self.sessions[victim].stuck = true;
                 self.pools[pl].stuck += 1;
             }
         }
-        self.sessions[victim].preempt_pos = Some(reached);
+        self.sessions[victim].preempt_pos.insert(pl, reached);
         self.detach(victim);
         // unwind holds inner to `hi` (nested holds), then `hi` itself
         while self.sessions[victim].holds.len() > hi {

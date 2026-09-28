@@ -77,8 +77,9 @@ throughput, mean wait and mean service. `iters` is non-zero only for `step`
 stages.
 
 Per pool: the time-average units used and cached, queue length, holders, mean
-queue wait, and counters for admissions, evictions, preemptions, spills and
-rejections.
+queue wait, and counters for admissions, evictions, preemptions, spills,
+rejections and `stuck` (sessions preempted again without progress since
+their previous preemption, which a run would otherwise hide).
 
 ## Changing a program without editing it
 
