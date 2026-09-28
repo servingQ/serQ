@@ -235,6 +235,7 @@ engine. The same program written from its two sides:
 ```
 workload {
   arrive poisson(Lambda);
+  hidden o;
   init { set K = 0; }
   turn { … }
   session {
@@ -440,9 +441,11 @@ places the context variables: a hidden attribute may be read in a session
 statement (`decode (o - 1)`), a run or a hold's `cache`, and is a link
 error in a hold's units, `reserve` or `reuse` (read at admission, whether
 written `enter … at admission` or `admit if … where`), a queue or eviction
-key, a spill clause, or a stage's budget, cost, chunk or serve keys. A
-bound the scheduler is allowed to know is a separate attribute the program
-declares. The three vLLM programs hide `o` (`out` in the replay).
+key, a spill clause, or a stage's budget, cost, chunk or serve keys. An
+attribute the scheduler itself sets (`cached`, `computed`) cannot be hidden.
+The three vLLM programs hide `o` (`out` in the replay); a bound the
+scheduler may know (`max_tokens`) would be a second, unhidden attribute, as
+in the IR v4 design record.
 
 **`enter`, `admit if` and `admit via`.** The scheduler admits; the session
 enters. The statement is named from the side it is written on: `enter` in
@@ -551,6 +554,7 @@ identical answers on the differential scenario below):
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
 | a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `prefill (known - c)`, `decode (o - 1 - (known - prompt))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |
+| the scheduler reserves by `num_tokens` (prompt and generated so far), never by the final length: it knows `max_tokens` and learns the length when `check_stop` sees EOS or the cap | `hidden o;`: no header, key or budget reads `o` | `kv_cache_manager.py:517`, `scheduler.py:639, 2426`, `sched/utils.py:98-119` |
 | the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (prompt + out − 1)`; `reuse (floor(min(prev prompt, prompt − 1)/bs)·bs)`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
 | the free queue: freed blocks appended tail first (LRU), in the order requests finish | `evict lru` per block from the tail, ties by release order | `block_pool.py:776-805`, `single_type_kv_cache_manager.py:557-585` |
 | a finished session's blocks stay in the free queue | `end` keeps the cache | `block_pool.py:776-805` |

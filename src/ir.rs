@@ -84,7 +84,9 @@ impl std::fmt::Display for Moment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Moment::Session => "a session statement, a run or a hold's cache",
-            Moment::Admit => "a hold's header or a queue key, read at admission",
+            Moment::Admit => {
+                "a hold's header (`enter`, `admit if … where`) or a queue key, read at admission"
+            }
             Moment::Evict => "an eviction key or spill clause",
             Moment::Ps => "a ps stage's capacity",
             Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
@@ -616,9 +618,6 @@ impl Program {
         }
         for &slot in &self.hidden {
             v.attr(slot).map_err(|e| format!("hidden: {e}"))?;
-        }
-        for slot in [] {
-            v.attr(slot)?;
         }
         if !(self.horizon.is_finite() && self.warmup >= 0.0 && self.warmup < self.horizon) {
             return Err("run: need 0 <= warmup < horizon".into());

@@ -107,7 +107,7 @@ every context variable is read at the moment that supplies it.
 `Program::from_json`, `run_ir` and the linker (`compile_source`) call it,
 so a text program meets the same check as IR from files and tools.
 
-**Moments.** An expression is evaluated at one of four moments, fixed by
+**Moments.** An expression is evaluated at one moment, fixed by
 its position in the IR, and a context variable exists at one of them:
 
 | Moment (`ir::Moment`) | Positions | Context variables |
@@ -128,7 +128,9 @@ budget would read 0 because the tokens are not scheduled yet, so the budget
 may not read it.
 
 An attribute listed in `hidden` may be read at `Session` only; at every
-other moment it is what the scheduler would be peeking at.
+other moment it is what the scheduler would be peeking at. The field is a
+check, not a semantics: a program that validates runs the same with or
+without it, so the Lean generator does not read it.
 
 Before this check the variable read as 0 anywhere else and the program ran
 (`age` in a session statement, `ntok` in a queue key); the doc comment said
