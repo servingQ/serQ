@@ -63,8 +63,9 @@ server {
   set t0 = now;
   set prompt = K + n;
   // the prefix hit (full blocks, never the whole prompt) is looked up when
-  // the scheduler admits, and the admission takes the hit plus the chunk
-  // the budget allows; see docs/language.md §7 "Admission"
+  // the scheduler admits (scheduler.py:932-939), and the admission takes the
+  // hit plus the chunk the budget allows (scheduler.py:1078-1128, 1214-1226);
+  // docs/language.md §7 "Admission" has the argument
   set hitmax = floor((prompt - 1) / bs) * bs;
   admit if reqs (1), kv (min(prompt, hit + budget_left(engine))) fit
         where hit = min(cachedin(kv), hitmax) {
