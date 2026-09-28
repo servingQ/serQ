@@ -234,7 +234,7 @@ struct StageState {
     iterations: u64,
 }
 
-// --------------------------------------------------------------- sim ----
+// ------------------------------------------------------------ interp ----
 
 #[derive(Clone, Copy)]
 enum Which {
@@ -277,7 +277,7 @@ struct ObserveStat {
     records: Vec<(f64, u64, u32)>,
 }
 
-pub struct Sim<'p> {
+pub struct Interp<'p> {
     p: &'p Linked,
     now: f64,
     warm: bool,
@@ -329,7 +329,7 @@ fn first_pool(pending: &Pending) -> usize {
     pending.pools[0].0
 }
 
-impl<'p> Sim<'p> {
+impl<'p> Interp<'p> {
     pub fn new(p: &'p Linked, trace: Option<Corpus>) -> Self {
         let seed = p.seed;
         let pools = p
@@ -392,7 +392,7 @@ impl<'p> Sim<'p> {
                 iterations: 0,
             })
             .collect();
-        Sim {
+        Interp {
             p,
             now: 0.0,
             warm: p.warmup <= 0.0,

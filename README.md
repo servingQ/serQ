@@ -22,7 +22,7 @@ vLLM scheduler scenarios below are theorems.
 | `src/ir.rs` | the IR: types, JSON form, validation, explicit sessions |
 | `src/lexer.rs`, `parser.rs`, `ast.rs` | the text syntax |
 | `src/link.rs` | the text frontend's compiler to IR: name resolution, constants |
-| `src/sim.rs` | the interpreter: pools, stages incl. the `step` engine, sessions |
+| `src/interp.rs` | the interpreter: pools, stages incl. the `step` engine, sessions |
 | `src/report.rs`, `stats.rs`, `trace.rs` | reports, statistics, trace corpora |
 | `src/deployment.rs`, `draw.rs`, `figure.rs`, `svg.rs`, `tikz.rs` | `seq-lang draw` (experimental): a program as a figure |
 | `programs/*.seq` | example deployments: M/G/1, PS, closed, agentic replica, PD tandem, routing, the vLLM v1 engine and its A100 replay; `programs/data/*.csv` replay traces |
