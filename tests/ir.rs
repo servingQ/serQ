@@ -191,14 +191,14 @@ fn branch_with_is_sugar_for_bernoulli() {
         "`branch with` must reach the kernel as a bernoulli sample"
     );
 
-    // and the bare guard it replaces is the same run, which is what lets the
-    // corpus be rewritten without moving a single reported number
-    let bare = format!(
-        "{head} session {{ turn; loop {{ branch (0.8) {{ run tool (Z); turn; }} else {{ end; }} }} }}"
-    );
+    // and the same run as the explicit draw. The bare `branch (0.8)` this
+    // replaced is a link error now (`tests/lints.rs`), so the corpus-wide
+    // "no reported number moved" check that justified the rewrite cannot be
+    // written any more - it was run once, over all sixteen programs, before
+    // the lint existed.
     let one = seq::run_source(&sugar, &ov, None).expect("runs");
-    let two = seq::run_source(&bare, &ov, None).expect("runs");
-    assert_eq!(one.text(), two.text(), "the rewrite must not move a run");
+    let two = seq::run_source(&explicit, &ov, None).expect("runs");
+    assert_eq!(one.text(), two.text(), "the sugar must not move a run");
 }
 
 /// A figure has to say which edges are draws. The lecture's own

@@ -322,6 +322,16 @@ with a `trace`, `turn` loads the next turn's `new`, `out`, `think`,
 Random draws use separate streams for arrivals, workload, the session and
 eviction.
 
+**Lints.** Linking rejects two programs that are well formed and almost
+certainly not what their author meant. A `set` that reads live pool or stage
+state (`cachedin`, `budget_left`, `used`, …) and is then used in a hold's
+header: the header is read at admission and the `set` is not, so the value
+reaching the header is the one from before the session queued — `at admission`
+is the clause for it. And a `branch` whose guard is a constant strictly
+between 0 and 1: that is a draw, and `branch with` is how to say so. Both are
+errors rather than warnings; neither has a legitimate instance in
+`programs/`, and a warning nobody acts on is worse than no check.
+
 **Statistics.** `observe x = e` records a sample after warm-up with the
 time, session and turn (`--dump DIR` writes them); the report gives per
 stage the time-average number present, utilisation, throughput, mean wait
