@@ -64,5 +64,9 @@ more than none. Both rules were broken in the first hour they existed — #14's
 Before was paraphrased and got the line wrong in a way that weakened its own
 argument, and #12's After was a parse error.
 
+**Write issues in Korean, short, and unwrapped** — one paragraph per line, no
+hard wrap at a column, so the browser sets the width. Say the finding and the
+evidence; leave out the argument for the argument.
+
 Keep an issue to one change. An issue that needs several Before/Afters for
 unrelated things is several issues.
