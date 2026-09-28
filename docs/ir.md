@@ -90,8 +90,8 @@ runs identically (`tests/ir.rs`).
 ### Expressions (`CExpr`)
 
 `Num`, `Attr(slot)`, `Ctx(var)` (`Now`, `Size`, `Age`, `Last`, `Queued`,
-`N`, `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`: meaningful only
-where the semantics supplies them), `Sample(dist, args)`,
+`N`, `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`: each exists at
+one *moment*, below, and `Now` at every one), `Sample(dist, args)`,
 `Call(fun, args)` (arithmetic functions, pool and stage queries such as
 `CachedIn(pool)`, `BudgetLeft(stage)`), `Unary`, `Binary`, `Cond`. Pool
 and stage references are `CRef {base, count, index?}` (a family of
@@ -100,11 +100,42 @@ and stage references are `CRef {base, count, index?}` (a family of
 ## Validation
 
 `Program::validate` checks the version, that every block, attribute,
-observation, pool and stage index exists, and the run parameters.
-`Program::from_json` and `run_ir` call it. The text frontend always
-produces valid IR; the check guards IR from files and tools.
+observation, pool and stage index exists, the run parameters, and that
+every context variable is read at the moment that supplies it.
+`Program::from_json`, `run_ir` and the linker (`compile_source`) call it,
+so a text program meets the same check as IR from files and tools.
+
+**Moments.** An expression is evaluated at one of four moments, fixed by
+its position in the IR, and a context variable exists at one of them:
+
+| Moment (`ir::Moment`) | Positions | Context variables |
+|---|---|---|
+| `Session` | statements of `init`, `turn`, `session`; a run's work; a hold's `cache` (read when the session releases); `Grow`, `Branch`, `Choose` | `Now` |
+| `Admit` | a hold's units, `reserve`, `reuse`; a pool's queue key (read when the scheduler admits or orders the session, not when it reaches the statement) | `Now` |
+| `Evict` | eviction keys, a spill's `work` and `when` | `Size`, `Age`, `Last`, `Queued`, `Now` |
+| `Ps` | a `ps` stage's capacity | `N`, `Now` |
+| `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
+| `Step` | a step stage's `cost`, evaluated after the iteration is scheduled | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
+
+The index of a pool or stage reference (`CRef.index`) is evaluated with the
+expression around it, so at that expression's moment: `evict by (size +
+used(kv[size]))` is legal. The table is what the interpreter fills into its
+context at each position (`interp.rs`: `Ctx`), not a policy: `ntok` in a
+budget would read 0 because the tokens are not scheduled yet, so the budget
+may not read it.
+
+Before this check the variable read as 0 anywhere else and the program ran
+(`age` in a session statement, `ntok` in a queue key); the doc comment said
+"meaningful only where the semantics supplies them", which is what an
+undefined behaviour is. The check is stricter validation of IR whose types
+did not change, so it is not a version bump; an IR file that used to pass
+and now fails was reading a value the semantics never supplied.
 
 ## Stability
+
+An IR file that validated before and is rejected now was reading a context
+variable at a moment that never supplied it (Moments, above): the check got
+stricter, the format did not change, and no version was bumped for it.
 
 - Any change to the types in `src/ir.rs` bumps `IR_VERSION`. A field rename
   counts: `route` became `session` in 3, and every reader has to move with it.

@@ -65,6 +65,17 @@ fn malformed_ir_is_rejected() {
     let mut bad = p.clone();
     bad.blocks[bad.session].push(seq::ir::CStmt::Set(99, seq::ir::CExpr::Num(1.0)));
     assert!(bad.validate().unwrap_err().contains("attribute slot 99"));
+    // a context variable outside the moment that supplies it: `ntok` exists
+    // in a step stage's budget and cost, not in a session statement
+    let mut bad = p.clone();
+    bad.blocks[bad.session].push(seq::ir::CStmt::Set(
+        0,
+        seq::ir::CExpr::Ctx(seq::ir::CtxVar::Ntok),
+    ));
+    let e = bad.validate().unwrap_err();
+    assert!(e.starts_with("session: "), "{e}");
+    assert!(e.contains("`ntok` is read in a session statement"), "{e}");
+    assert!(e.contains("exists only in a step stage's cost"), "{e}");
     let j = p.to_json().replace("\"Fifo\": 1", "\"Fifo\": \"x\"");
     assert!(Program::from_json(&j).is_err());
 }

@@ -44,6 +44,10 @@ pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> 
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
     }
+    // The linker resolves names; the IR's own check is what knows which
+    // moment supplies which context variable (`age` in a session statement,
+    // `ntok` in a queue key), so a text program meets it too.
+    p.validate()?;
     Ok(p)
 }
 

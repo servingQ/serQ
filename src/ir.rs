@@ -52,7 +52,44 @@ pub enum RunMode {
     Decode,
 }
 
-/// Context variables: meaningful only where the semantics supplies them.
+/// Where an expression is evaluated. Every context variable is supplied at
+/// exactly one moment (`CtxVar::moment`), and `Program::validate` rejects it
+/// anywhere else: before, `age` in a session statement or `ntok` in a queue
+/// key read as 0 and the program ran.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Moment {
+    /// A statement of the `init`, `turn` or `session` block, a run's work,
+    /// a hold's `cache`: evaluated by the session when it gets there.
+    Session,
+    /// A hold's units, `reserve` and `reuse`, and a pool's queue key:
+    /// evaluated for one session when the scheduler admits or orders it.
+    Admit,
+    /// An eviction key or a spill clause: evaluated for one cache entry.
+    Evict,
+    /// A `ps` stage's capacity: evaluated for the stage's jobs.
+    Ps,
+    /// A step stage's `budget` and `chunk`: evaluated before the iteration,
+    /// from the residents (`nres`, `ndec`, `kvb`, `kvp`).
+    Budget,
+    /// A step stage's `cost`: evaluated after the iteration is scheduled,
+    /// from what it scheduled (`ntok`, `npre`, `attn` as well).
+    Step,
+}
+
+impl std::fmt::Display for Moment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Moment::Session => "a session statement, a run or a hold's cache",
+            Moment::Admit => "a hold's header or a queue key, read at admission",
+            Moment::Evict => "an eviction key or spill clause",
+            Moment::Ps => "a ps stage's capacity",
+            Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
+            Moment::Step => "a step stage's cost, after the iteration",
+        })
+    }
+}
+
+/// Context variables: each exists at one `Moment` (`now` at every one).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CtxVar {
     /// Simulation clock.
@@ -82,6 +119,43 @@ pub enum CtxVar {
     /// Step cost: attention work of the prefill chunks, `Σ n (K + n/2)` with
     /// `K` the position before the chunk (exact for `growing` runs).
     Attn,
+}
+
+impl CtxVar {
+    /// The source spelling (`link.rs` maps the same names).
+    fn name(self) -> &'static str {
+        match self {
+            CtxVar::Now => "now",
+            CtxVar::Size => "size",
+            CtxVar::Age => "age",
+            CtxVar::Last => "last",
+            CtxVar::Queued => "queued",
+            CtxVar::N => "n",
+            CtxVar::Ntok => "ntok",
+            CtxVar::Ndec => "ndec",
+            CtxVar::Npre => "npre",
+            CtxVar::Nres => "nres",
+            CtxVar::Kvb => "kvb",
+            CtxVar::Kvp => "kvp",
+            CtxVar::Attn => "attn",
+        }
+    }
+
+    /// The moments that supply the variable, as the interpreter fills its
+    /// context; empty for `now`, which every moment supplies.
+    pub fn moments(self) -> &'static [Moment] {
+        match self {
+            CtxVar::Now => &[],
+            CtxVar::Size | CtxVar::Age | CtxVar::Last | CtxVar::Queued => &[Moment::Evict],
+            CtxVar::N => &[Moment::Ps],
+            // the residents are known before the iteration; the tokens
+            // scheduled, the prefill tokens and the attention work only after
+            CtxVar::Nres | CtxVar::Ndec | CtxVar::Kvb | CtxVar::Kvp => {
+                &[Moment::Budget, Moment::Step]
+            }
+            CtxVar::Ntok | CtxVar::Npre | CtxVar::Attn => &[Moment::Step],
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -385,8 +459,9 @@ impl Program {
         Ok(self)
     }
 
-    /// Structural checks: every index refers to something that exists.
-    /// The text frontend produces valid IR; this guards IR read from JSON
+    /// Structural checks: every index refers to something that exists, and
+    /// every context variable is read at the moment that supplies it. The
+    /// linker runs it on what it produces; it also guards IR read from JSON
     /// or built by tools.
     pub fn validate(&self) -> Result<(), String> {
         if self.version != IR_VERSION {
@@ -397,8 +472,17 @@ impl Program {
         }
         let v = Validator { p: self };
         for (i, b) in self.blocks.iter().enumerate() {
+            // a text program has no block numbers: name the block by its role
+            // (every block that is not `init` or `turn` belongs to the session)
+            let role = if i == self.init {
+                "init"
+            } else if i == self.turn {
+                "turn"
+            } else {
+                "session"
+            };
             for s in b {
-                v.stmt(s).map_err(|e| format!("block {i}: {e}"))?;
+                v.stmt(s).map_err(|e| format!("{role}: {e}"))?;
             }
         }
         for (k, blk) in [
@@ -409,32 +493,34 @@ impl Program {
             v.block(blk).map_err(|e| format!("{k}: {e}"))?;
         }
         for p in &self.pools {
+            let at = |e| format!("pool `{}`: {e}", p.name);
             if let Some(e) = &p.queue {
-                v.expr(e)?;
+                v.expr(e, Moment::Admit).map_err(at)?;
             }
             if let CEvict::By(keys) = &p.evict {
                 for e in keys {
-                    v.expr(e)?;
+                    v.expr(e, Moment::Evict).map_err(at)?;
                 }
             }
             if let Some(s) = &p.spill {
                 v.pool(s.to)?;
                 v.stage(s.via)?;
-                v.expr(&s.work)?;
-                v.expr(&s.when)?;
+                v.expr(&s.work, Moment::Evict).map_err(at)?;
+                v.expr(&s.when, Moment::Evict).map_err(at)?;
             }
             if let Some(s) = p.admit_via {
                 v.stage(s)?;
             }
         }
         for s in &self.stages {
+            let at = |e| format!("stage `{}`: {e}", s.name);
             match &s.kind {
                 CStageKind::Fifo(_) | CStageKind::Delay => {}
-                CStageKind::Ps(e) => v.expr(e)?,
+                CStageKind::Ps(e) => v.expr(e, Moment::Ps).map_err(at)?,
                 CStageKind::Step(st) => {
-                    v.expr(&st.budget)?;
-                    v.expr(&st.cost)?;
-                    v.expr(&st.chunk)?;
+                    v.expr(&st.budget, Moment::Budget).map_err(at)?;
+                    v.expr(&st.chunk, Moment::Budget).map_err(at)?;
+                    v.expr(&st.cost, Moment::Step).map_err(at)?;
                     if let Some(m) = st.memory {
                         v.pool(m)?;
                     }
@@ -507,7 +593,9 @@ impl Validator<'_> {
             Err(format!("stage {a} out of range"))
         }
     }
-    fn cref(&self, r: &CRef, n: usize, what: &str) -> Result<(), String> {
+    /// A pool or stage reference; its index is evaluated with the expression
+    /// around it, so at the same moment.
+    fn cref(&self, r: &CRef, n: usize, what: &str, m: Moment) -> Result<(), String> {
         if r.count == 0 || r.base + r.count > n {
             return Err(format!(
                 "{what} reference {}..{} out of range",
@@ -516,44 +604,59 @@ impl Validator<'_> {
             ));
         }
         if let Some(e) = &r.index {
-            self.expr(e)?;
+            self.expr(e, m)?;
         }
         Ok(())
     }
-    fn expr(&self, e: &CExpr) -> Result<(), String> {
+    /// The expression is well formed and reads only what moment `m` supplies.
+    fn expr(&self, e: &CExpr, m: Moment) -> Result<(), String> {
         match e {
-            CExpr::Num(_) | CExpr::Ctx(_) => Ok(()),
+            CExpr::Num(_) => Ok(()),
+            CExpr::Ctx(v) => {
+                let at = v.moments();
+                if at.is_empty() || at.contains(&m) {
+                    Ok(())
+                } else {
+                    let only: Vec<String> = at.iter().map(|x| x.to_string()).collect();
+                    Err(format!(
+                        "`{}` is read in {m}, but it exists only in {}",
+                        v.name(),
+                        only.join(" or ")
+                    ))
+                }
+            }
             CExpr::Attr(a) => self.attr(*a),
-            CExpr::Sample(_, xs) => xs.iter().try_for_each(|x| self.expr(x)),
+            CExpr::Sample(_, xs) => xs.iter().try_for_each(|x| self.expr(x, m)),
             CExpr::Call(_, args) => args.iter().try_for_each(|a| match a {
-                CArg::Expr(x) => self.expr(x),
-                CArg::Pool(r) => self.cref(r, self.p.pools.len(), "pool"),
-                CArg::Stage(r) => self.cref(r, self.p.stages.len(), "stage"),
+                CArg::Expr(x) => self.expr(x, m),
+                CArg::Pool(r) => self.cref(r, self.p.pools.len(), "pool", m),
+                CArg::Stage(r) => self.cref(r, self.p.stages.len(), "stage", m),
             }),
-            CExpr::Unary(_, x) => self.expr(x),
+            CExpr::Unary(_, x) => self.expr(x, m),
             CExpr::Binary(_, a, b) => {
-                self.expr(a)?;
-                self.expr(b)
+                self.expr(a, m)?;
+                self.expr(b, m)
             }
             CExpr::Cond(c, a, b) => {
-                self.expr(c)?;
-                self.expr(a)?;
-                self.expr(b)
+                self.expr(c, m)?;
+                self.expr(a, m)?;
+                self.expr(b, m)
             }
         }
     }
     fn stmt(&self, s: &CStmt) -> Result<(), String> {
         let np = self.p.pools.len();
         let ns = self.p.stages.len();
+        let m = Moment::Session;
         match s {
             CStmt::Turn | CStmt::End => Ok(()),
             CStmt::Set(a, e) => {
                 self.attr(*a)?;
-                self.expr(e)
+                self.expr(e, m)
             }
             CStmt::Observe(k, e) => {
                 self.observe(*k)?;
-                self.expr(e)
+                self.expr(e, m)
             }
             CStmt::Hold {
                 pools,
@@ -561,49 +664,51 @@ impl Validator<'_> {
                 body,
                 cache,
             } => {
+                // the header is read when the scheduler admits; `cache` when
+                // the session releases
                 for (r, u, reserve) in pools {
-                    self.cref(r, np, "pool")?;
-                    self.expr(u)?;
+                    self.cref(r, np, "pool", m)?;
+                    self.expr(u, Moment::Admit)?;
                     if let Some(f) = reserve {
-                        self.expr(f)?;
+                        self.expr(f, Moment::Admit)?;
                     }
                 }
                 if let Some(e) = reuse {
-                    self.expr(e)?;
+                    self.expr(e, Moment::Admit)?;
                 }
                 if let Some(e) = cache {
-                    self.expr(e)?;
+                    self.expr(e, m)?;
                 }
                 self.block(*body)
             }
             CStmt::Grow(r, e) => {
-                self.cref(r, np, "pool")?;
-                self.expr(e)
+                self.cref(r, np, "pool", m)?;
+                self.expr(e, m)
             }
-            CStmt::Drop(r) => self.cref(r, np, "pool"),
+            CStmt::Drop(r) => self.cref(r, np, "pool", m),
             CStmt::Run {
                 stage,
                 work,
                 growing,
                 ..
             } => {
-                self.cref(stage, ns, "stage")?;
-                self.expr(work)?;
+                self.cref(stage, ns, "stage", m)?;
+                self.expr(work, m)?;
                 if let Some(g) = growing {
-                    self.cref(g, np, "pool")?;
+                    self.cref(g, np, "pool", m)?;
                 }
                 Ok(())
             }
             CStmt::Branch(c, a, b) => {
-                self.expr(c)?;
+                self.expr(c, m)?;
                 self.block(*a)?;
                 self.block(*b)
             }
             CStmt::Loop(b) => self.block(*b),
             CStmt::Choose { var, count, key } => {
                 self.attr(*var)?;
-                self.expr(count)?;
-                self.expr(key)
+                self.expr(count, m)?;
+                self.expr(key, m)
             }
         }
     }
@@ -659,26 +764,6 @@ impl BinOp {
             BinOp::Add | BinOp::Sub => prec::ADD,
             BinOp::Mul | BinOp::Div => prec::MUL,
             BinOp::Pow => prec::POW,
-        }
-    }
-}
-
-impl CtxVar {
-    fn name(self) -> &'static str {
-        match self {
-            CtxVar::Now => "now",
-            CtxVar::Size => "size",
-            CtxVar::Age => "age",
-            CtxVar::Last => "last",
-            CtxVar::Queued => "queued",
-            CtxVar::N => "n",
-            CtxVar::Ntok => "ntok",
-            CtxVar::Ndec => "ndec",
-            CtxVar::Npre => "npre",
-            CtxVar::Nres => "nres",
-            CtxVar::Kvb => "kvb",
-            CtxVar::Kvp => "kvp",
-            CtxVar::Attn => "attn",
         }
     }
 }
