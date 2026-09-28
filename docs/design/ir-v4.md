@@ -169,7 +169,7 @@ pub struct Program { …, pub tick_ns: u64, pub horizon: u64, pub warmup: u64, �
 
 **어떤 오라클도 이 경로를 지나지 않았습니다.** `tools/oracle/*.out.json`의 preemptions: `chunked` 0, `hol` 0, `longchunk` 0, `mixed` 0, `seqcap` 0, `preempt` 1. 그 1은 가용 블록 10개에서 prefill 도중의 self-preemption이라 토큰을 만들기 전입니다. `programs/vllm_replay.seq`를 spacing 3.5 s와 2.5 s로 돌린 보고서의 `kv` 행은 둘 다 `preempt 0`이고, KV 사용은 128 160 토큰 중 793과 1 865입니다. 2.5 s의 붕괴는 `reqs` 큐 대기 35.8 s이고 메모리 압박이 아닙니다. 3 321건 일치는 preemption 복구를 한 번도 시험하지 않았습니다.
 
-**Before** (`src/interp.rs:1463-1477`, `ref/vllm/vllm/v1/core/sched/scheduler.py:1560-1561`)
+**Before** (`src/interp.rs:1463-1477`, `scheduler.py:1560-1561`)
 
 ```rust
     fn preempt(&mut self, victim: usize, pl: usize) {
