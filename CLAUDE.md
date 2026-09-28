@@ -52,6 +52,23 @@ parse time costs nothing (the serving vocabulary of `docs/language.md`), a new
 IR node costs every consumer. Prefer narrowing an existing form to adding one,
 and price the handshake above.
 
+## Working with GitHub here
+
+`gh pr edit` and `gh issue edit` fail on this repository:
+
+```
+GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.projectCards)
+```
+
+`gh` queries `projectCards` when it edits, and that field now errors. Use the
+REST API instead — `gh api -X PATCH repos/vrvrv/seQ/pulls/N --input -` with a
+JSON body, or `.../issues/N`. Creating works; only editing is affected.
+
+Branch from `origin/main`, not from whatever `main` points at locally:
+`git fetch && git checkout -b <name> origin/main`. Three branches were built
+on a stale `main` in one sitting, and one of them would have reverted a rename
+that had landed in between.
+
 ## Issues
 
 **Every design issue carries a Before/After** — the code as it is today next to
