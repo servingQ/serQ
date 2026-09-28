@@ -245,7 +245,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         return Err(LinkError("warmup must be below the horizon".into()));
     }
     let slot = |lk: &Linker, n: &str| lk.attr_index[n];
-    Ok(Linked {
+    let linked = Linked {
         version: IR_VERSION,
         slot_cached: slot(&lk, "cached"),
         slot_serial: slot(&lk, "serial"),
@@ -269,7 +269,9 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         horizon,
         warmup,
         seed,
-    })
+    };
+    crate::lint::lint(&linked).map_err(LinkError)?;
+    Ok(linked)
 }
 
 fn collect_attrs(stmts: &[Stmt], lk: &mut Linker) {

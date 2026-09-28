@@ -41,6 +41,14 @@ scheduler disagree. That is what found the six semantic differences the first
 version of the program had. An aggregate that matches can still be wrong for
 compensating reasons; a first-divergence search cannot be fooled that way.
 
+### The lints
+
+Two of the defects this repository shipped are now link errors: a hold header
+that reads a `set` bound before the session queued, and a `branch` whose
+constant guard is a probability. Each is checked against the whole corpus in
+`tests/lints.rs` — they are errors, not warnings, which is only defensible
+while nothing real trips them.
+
 ### The citations themselves
 
 §7's table is eleven rows of "vLLM does X, here is the seQ construct, here is the

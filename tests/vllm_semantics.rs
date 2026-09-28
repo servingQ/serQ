@@ -130,8 +130,8 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         session {
           loop {
             set prompt = K + 100;
-            set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-            hold reqs (1), kv (c + min(prompt - c, 8192)) {
+            hold reqs (1), kv (c + min(prompt - c, 8192))
+                 at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
               observe cached_seen = cached;
               observe prefill_tokens = prompt - min(cached, floor((prompt - 1) / bs) * bs);
               run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
@@ -173,8 +173,8 @@ fn lru_eviction_drops_tail_blocks_first() {
           run gate (serial * 2);
           loop {
             set prompt = serial == 0 ? K + 160 : 192;
-            set c = min(cachedin(kv), floor((prompt - 1) / bs) * bs);
-            hold reqs (1), kv (c + min(prompt - c, 8192)) {
+            hold reqs (1), kv (c + min(prompt - c, 8192))
+                 at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
               branch (serial == 0) { observe cached0 = cached; }
               run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
             } cache (prompt);
