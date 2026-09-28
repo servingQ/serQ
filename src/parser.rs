@@ -24,7 +24,7 @@
 //!           | 'hold' ref '(' expr ')' (',' ref '(' expr ')')* block ('cache' '(' expr ')')? ';'?
 //!           | 'grow' ref '(' expr ')' ';' | 'drop' ref ';'
 //!           | 'run' ref ('prefill' | 'decode')? '(' expr ')' ('growing' ref)? ';'
-//!           | 'branch' '(' expr ')' block ('else' block)?
+//!           | 'branch' ('with')? '(' expr ')' block ('else' block)?
 //!           | 'loop' block | 'end' ';'
 //!           | 'choose' IDENT 'in' expr 'by' '(' expr ')' ';'
 //!           | serving
@@ -607,14 +607,27 @@ impl Parser {
             }
             "branch" => {
                 self.advance();
-                let p = self.paren_expr()?;
+                // `branch with (p)` is a draw, and says so. It rewrites to
+                // `branch (~bernoulli(p))`, which the interpreter already
+                // treats identically to a bare `branch (p)`: the sample and
+                // the guard draw from the same stream with the same
+                // comparison, and the resulting 0/1 then short-circuits the
+                // guard without a second draw. So the sugar is free and every
+                // existing run is unmoved.
+                let draw = self.eat_kw("with");
+                let e = self.paren_expr()?;
+                let guard = if draw {
+                    Expr::Sample("bernoulli".into(), vec![e])
+                } else {
+                    e
+                };
                 let then = self.block()?;
                 let els = if self.eat_kw("else") {
                     self.block()?
                 } else {
                     vec![]
                 };
-                Ok(Stmt::Branch(p, then, els))
+                Ok(Stmt::Branch(guard, then, els))
             }
             "loop" => {
                 self.advance();
