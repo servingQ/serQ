@@ -287,6 +287,50 @@ fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
     assert!(e.contains("a serve key may not draw"), "{e}");
 }
 
+/// `hidden o;`: the scheduler does not know the output length (vLLM knows
+/// `max_tokens` and learns the length at EOS). A hidden attribute is read
+/// in session statements and rejected at every scheduler moment.
+#[test]
+fn a_hidden_attribute_is_not_read_by_the_scheduler() {
+    let wl = "let bs = 16;
+        pool kv { cap 1e5; block bs; evict lru; }
+        pool reqs { cap 8; }
+        stage engine : step { budget 512; cost 1e-3; memory kv; }
+        workload { arrive poisson(0.3); hidden o; init { set K = 0; }
+                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
+        run { horizon 500; }";
+    // the body may read it
+    let ok = format!(
+        "{wl} session {{ turn; enter reqs (1), kv (n) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} keep (n + o); end; }}"
+    );
+    check(&ok).expect("links");
+    // a hold's header may not: the reservation is the scheduler's
+    let bad = format!(
+        "{wl} session {{ turn; enter reqs (1), kv (n) reserve (n + o) {{ prefill (n) growing kv; }} end; }}"
+    );
+    let e = check(&bad).expect_err("rejected");
+    assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
+    assert!(e.contains("read at admission"), "{e}");
+    // nor a stage's budget
+    let bad = "let bs = 16;
+        pool kv { cap 1e5; block bs; evict lru; }
+        stage engine : step { budget 512 + o; cost 1e-3; memory kv; }
+        workload { arrive poisson(0.3); hidden o; turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
+        run { horizon 500; }
+        session { turn; hold kv (n) { prefill (n) growing kv; } end; }";
+    let e = check(bad).expect_err("rejected");
+    assert!(e.contains("stage `engine`"), "{e}");
+    assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
+    // a name nothing sets is not an attribute
+    let bad = "pool kv { cap 1e5; }
+        stage svc : fifo;
+        workload { arrive poisson(0.3); hidden nothing; }
+        run { horizon 500; }
+        session { hold kv (1) { run svc (1); } end; }";
+    let e = check(bad).expect_err("rejected");
+    assert!(e.contains("hidden `nothing`"), "{e}");
+}
+
 /// The lints exist to be errors, which is only defensible if nothing real
 /// trips them.
 #[test]

@@ -93,6 +93,7 @@ wlitem   := arrive poisson ( rate ) ; | arrive closed ( n ) ; | arrive batch ( n
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
           | init block | turn block          -- only set / observe
           | session block                    -- the session's side; says `request`
+          | hidden NAME [, NAME]* ;           -- the scheduler may not read these
 stmt     := turn ;                           -- next turn's attributes (workload `turn`, trace)
           | request ;                        -- the server block, once (workload `session` only)
           | set NAME = expr ;
@@ -427,6 +428,19 @@ the AST, the IR, the interpreter and the Lean model know nothing of them, and
 a program that uses the clause has the IR of the one that inlines by hand. A
 later binding sees the earlier ones. A binding may not draw (`~`): it is
 substituted, so a name used twice would draw twice.
+
+**`hidden`.** The output length `o` is drawn at `turn`, before the request,
+and nothing in the semantics stops a hold's header, a queue key or a budget
+from reading it: `reserve (prompt + o)` is a program vLLM cannot be, since
+the scheduler knows `max_tokens` and learns the length at EOS. `hidden o;`
+in the workload says so, and the check is the same per-position table that
+places the context variables: a hidden attribute may be read in a session
+statement (`decode (o - 1)`), a run or a hold's `cache`, and is a link
+error in a hold's units, `reserve` or `reuse` (read at admission, whether
+written `enter … at admission` or `admit if … where`), a queue or eviction
+key, a spill clause, or a stage's budget, cost, chunk or serve keys. A
+bound the scheduler is allowed to know is a separate attribute the program
+declares. The three vLLM programs hide `o` (`out` in the replay).
 
 **`enter`, `admit if` and `admit via`.** The scheduler admits; the session
 enters. The statement is named from the side it is written on: `enter` in

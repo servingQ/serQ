@@ -256,9 +256,26 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     if warmup >= horizon {
         return Err(LinkError("warmup must be below the horizon".into()));
     }
+    // `hidden` names session attributes the scheduler's expressions may not
+    // read (`Program::validate` enforces it by moment); a name nothing sets
+    // is a mistake, not an attribute
+    let mut hidden = vec![];
+    if let Some(w) = prog.workload.as_ref() {
+        for n in &w.hidden {
+            match lk.attr_index.get(n) {
+                Some(&i) => hidden.push(i),
+                None => {
+                    return Err(LinkError(format!(
+                        "hidden `{n}`: no `set` or `choose` makes it a session attribute"
+                    )));
+                }
+            }
+        }
+    }
     let slot = |lk: &Linker, n: &str| lk.attr_index[n];
     let linked = Linked {
         version: IR_VERSION,
+        hidden,
         slot_cached: slot(&lk, "cached"),
         slot_serial: slot(&lk, "serial"),
         slot_turn: slot(&lk, "turn_no"),

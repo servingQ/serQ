@@ -76,6 +76,14 @@ fn malformed_ir_is_rejected() {
     assert!(e.starts_with("session: "), "{e}");
     assert!(e.contains("`ntok` is read in a session statement"), "{e}");
     assert!(e.contains("exists only in a step stage's cost"), "{e}");
+    // a hidden slot that does not exist
+    let mut bad = p.clone();
+    bad.hidden.push(99);
+    assert!(
+        bad.validate()
+            .unwrap_err()
+            .contains("hidden: attribute slot 99")
+    );
     let j = p.to_json().replace("\"Fifo\": 1", "\"Fifo\": \"x\"");
     assert!(Program::from_json(&j).is_err());
 }

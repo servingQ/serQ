@@ -399,6 +399,12 @@ pub struct Program {
     /// and recomputes their KV (`_preempt_request` resets
     /// `num_computed_tokens` only, scheduler.py:1560-1561).
     pub slot_computed: usize,
+    /// Attribute slots the scheduler may not read: legal at `Moment::Session`
+    /// only, rejected by `validate` in a hold's header, a queue or eviction
+    /// key, a stage's budget, cost, chunk or serve keys. The output length
+    /// `o` is the case: vLLM knows `max_tokens` and learns the length at EOS,
+    /// so a program that reserves `prompt + o` is one vLLM cannot be.
+    pub hidden: Vec<usize>,
 }
 
 /// One explicit session of `CArrival::Sessions`: preset attributes
@@ -606,6 +612,12 @@ impl Program {
         ] {
             v.attr(slot)?;
         }
+        for &slot in &self.hidden {
+            v.attr(slot).map_err(|e| format!("hidden: {e}"))?;
+        }
+        for slot in [] {
+            v.attr(slot)?;
+        }
         if !(self.horizon.is_finite() && self.warmup >= 0.0 && self.warmup < self.horizon) {
             return Err("run: need 0 <= warmup < horizon".into());
         }
@@ -700,7 +712,16 @@ impl Validator<'_> {
                     ))
                 }
             }
-            CExpr::Attr(a) => self.attr(*a),
+            CExpr::Attr(a) => {
+                self.attr(*a)?;
+                if m != Moment::Session && self.p.hidden.contains(a) {
+                    return Err(format!(
+                        "`{}` is hidden from the scheduler, but is read in {m}",
+                        self.p.attrs[*a]
+                    ));
+                }
+                Ok(())
+            }
             CExpr::Sample(_, xs) => xs.iter().try_for_each(|x| self.expr(x, m)),
             CExpr::Call(_, args) => args.iter().try_for_each(|a| match a {
                 CArg::Expr(x) => self.expr(x, m),

@@ -11,7 +11,7 @@ syn keyword seqStatement    loop choose end reserve reuse cache keep at admissio
 syn keyword seqStatement    growing on in by else prefill transfer decode tool
 syn keyword seqOption       cap block evict lru preempt lifo none queue fifo admit
 syn keyword seqOption       via spill when ps delay step budget cost chunk serve exclusive
-syn keyword seqOption       first memory arrive poisson closed batch trace ordered
+syn keyword seqOption       first memory arrive poisson closed batch trace ordered hidden
 syn keyword seqOption       init horizon warmup seed
 syn keyword seqBuiltin      busy work used free cachedin holders queued price
 syn keyword seqBuiltin      budget_left est_lambda
