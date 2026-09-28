@@ -1,5 +1,22 @@
 # Editor support for `.seq`
 
+## Four roles, four colours
+
+A program's **shape** is `pool`, `stage`, `session`; what a session **does** is
+`enter`, `prefill`, `observe`, `branch`; the **knobs** are `cap`, `evict`,
+`budget`, `cost`; and what it **reads** is `cachedin`, `budget_left`, `now`,
+`kvb`. Each lands in a different colour group, so the shape of a program is
+legible before a word of it is read, and `~` gets one of its own — that is
+where the randomness enters.
+
+Arithmetic (`min`, `floor`, `pow`) stays plain. It is how a program computes,
+not what it means, and leaving it uncoloured is what lets the observable
+colour mean exactly one thing.
+
+The first attempt put all four in `Keyword`, `Keyword.Declaration` and
+`Keyword.Pseudo`, which most themes — Material included — render in a single
+colour. Four roles, one colour, which is no better than none.
+
 ## Neovim / Vim
 
 ```vim

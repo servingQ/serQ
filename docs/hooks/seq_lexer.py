@@ -1,5 +1,13 @@
 """Register a Pygments lexer for seQ, so ```seq fences highlight.
 
+Four roles, four colours. A program's shape is `pool`/`stage`/`session`; what
+a session *does* is `enter`, `prefill`, `observe`; the knobs are `cap`,
+`evict`, `budget`; and what it *reads* is `cachedin`, `budget_left`, `now`.
+A reader should be able to tell those apart before reading a word, so each
+lands in a different colour group, and `~` gets its own because that is where
+the randomness enters. Arithmetic stays plain: it is how a program computes,
+not what it means.
+
 The pages fenced 25 blocks as ```rust, which is close enough to look right
 and wrong in the places that matter: `hold`, `enter`, `observe` and `~exp`
 are not Rust, and the words that carry a seQ program's meaning were the ones
@@ -38,13 +46,20 @@ OPTIONS = (
 )
 
 # Observables and arithmetic: things a program reads rather than declares.
+# Short, ordinary words are left out on purpose: `n`, `out`, `new`, `size`,
+# `age`, `last` are context variables in the one place the semantics supplies
+# them and ordinary attribute names everywhere else, and a lexer cannot tell.
+# Colouring a program's own `n` as a builtin is worse than leaving it plain.
+# Arithmetic is not a role: `min`, `floor` and `pow` are how a program
+# computes, not what it means, and they read as calls without help. Leaving
+# them plain is what lets the observable colour mean exactly one thing.
+ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow")
+
 BUILTINS = (
-    "min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow",
-    "queue", "busy", "work", "used", "free", "cachedin", "holders", "queued",
+    "busy", "work", "used", "free", "cachedin", "holders", "queued",
     "price", "budget_left", "est_lambda", "est_rho", "est_wait",
-    "now", "size", "age", "last", "n", "ntok", "ndec", "npre", "nres",
-    "kvb", "kvp", "attn", "cached", "serial", "turn_no", "new", "out",
-    "think", "more", "forced",
+    "now", "ntok", "ndec", "npre", "nres", "kvb", "kvp", "attn",
+    "cached", "serial", "turn_no", "think", "more", "forced",
 )
 
 
@@ -60,11 +75,17 @@ class SeqLexer(RegexLexer):
             (r'"[^"]*"', String),
             # a distribution is written `~name(...)`, and the tilde is the
             # thing to see: it is where the randomness enters
-            (r"(~)([a-z_][\w]*)", bygroups(Operator, Name.Builtin)),
-            (words(STRUCTURE, suffix=r"\b"), Keyword.Declaration),
-            (words(STATEMENTS, suffix=r"\b"), Keyword),
-            (words(OPTIONS, suffix=r"\b"), Keyword.Pseudo),
-            (words(BUILTINS, suffix=r"\b"), Name.Builtin),
+            (r"(~)([a-z_][\w]*)", bygroups(String.Escape, String.Escape)),
+            # The four roles have to land in four *different* colour groups.
+            # A theme that renders `Keyword`, `Keyword.Declaration` and
+            # `Keyword.Pseudo` alike - which most do, Material included -
+            # would collapse them back into one, which is the whole point of
+            # separating them.
+            (words(STRUCTURE, suffix=r"\b"), Keyword),          # the skeleton
+            (words(STATEMENTS, suffix=r"\b"), Name.Function),   # what a session does
+            (words(OPTIONS, suffix=r"\b"), Name.Builtin),       # the knobs
+            (words(BUILTINS, suffix=r"\b"), Name.Variable),     # what a program reads
+            (words(ARITHMETIC, suffix=r"\b"), Name),            # how it computes
             (r"\d+\.?\d*([eE][-+]?\d+)?", Number),
             (r"[-+*/^<>=!&|?:]+", Operator),
             (r"[{}()\[\],;]", Punctuation),
