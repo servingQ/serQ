@@ -39,6 +39,26 @@ fn json_round_trip_is_exact() {
     }
 }
 
+/// A folded constant is any double, not one a person typed:
+/// `0.1 * (1 + 0.3 * 3 * 0.9 / (1 - 0.9))` is 0.9100000000000001, which serde_json's default float parser read back
+/// as 0.91. The round trip needs `float_roundtrip`.
+#[test]
+fn a_folded_constant_survives_the_round_trip() {
+    let src = "let rate = 0.1 * (1 + 0.3 * 3 * 0.9 / (1 - 0.9));
+        stage svc : fifo;
+        workload { arrive poisson(rate); }
+        session { run svc (~exp(1)); end; }
+        run { horizon 10; }";
+    let j = compile_source(src, &Overrides::default())
+        .unwrap()
+        .to_json();
+    assert!(
+        j.contains("0.9100000000000001"),
+        "the constant is folded: {j}"
+    );
+    assert_eq!(j, Program::from_json(&j).unwrap().to_json());
+}
+
 #[test]
 fn ir_runs_like_text() {
     for path in programs() {
