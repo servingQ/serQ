@@ -203,7 +203,7 @@ programs):
   used for verified storage and OS components; PLDI 2026 gives it a
   semantic foundation (VerusBelt) ([Verus, OOPSLA 2023](https://dl.acm.org/doi/10.1145/3586037),
   [VerusBelt, PLDI 2026](https://pldi26.sigplan.org/details/pldi-2026-papers/82/VerusBelt-A-Semantic-Foundation-for-Verus-s-Proof-Oriented-Extensions-to-the-Rust-Ty)).
-  Fit: the pool accounting in `sim.rs` (`used + cached ≤ cap`, block
+  Fit: the pool accounting in `interp.rs` (`used + cached ≤ cap`, block
   rounding, holder lists) is the kind of invariant Verus proves on the
   actual code. Against: Verus needs its own toolchain and `vstd`; the
   event loop with `f64` time is outside its comfort zone.
@@ -221,7 +221,7 @@ programs):
   [Aeneas/Rust/Lean report, Sept 2026](https://arxiv.org/html/2609.15648),
   [Rust-to-Lean pipeline experience report](https://arxiv.org/html/2605.30106)).
   Fit: the most direct way to connect the Rust pool code to
-  `SeqLang.Step`: translate `sim.rs`'s pool functions (they are safe
+  `SeqLang.Step`: translate `interp.rs`'s pool functions (they are safe
   Rust over `Vec`/`HashMap`) and prove them refinements of the Lean
   relation. Against: `HashMap`/`BinaryHeap`/`f64` and the borrow
   patterns of the event loop would need restructuring into a pure core
@@ -271,7 +271,7 @@ gives for free:
    `decide`/`native_decide`-free evaluation. The Rust crate stays the
    simulator; its parser should be regenerated from the Lean syntax or
    replaced by a `pest`/`lalrpop` grammar generated from one source.
-2. *Aeneas for the pool core.* Factor `sim.rs`'s pool operations into a
+2. *Aeneas for the pool core.* Factor `interp.rs`'s pool operations into a
    pure module (`Vec`-based, no `f64` in the invariant-carrying part:
    units as `u64` tokens) and translate it with Aeneas; prove the
    translation refines `SeqLang.Step`. Until then, *Kani* harnesses on

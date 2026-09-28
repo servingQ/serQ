@@ -2,7 +2,7 @@
 //!
 //! A seQ program describes an LLM serving deployment: memory pools and
 //! stages, a workload of sessions, and the program every session runs.
-//! Its definition is the IR (`ir::Program`, `docs/ir.md`): `sim` runs it,
+//! Its definition is the IR (`ir::Program`, `docs/ir.md`): `interp` runs it,
 //! the Lean model is generated from it, and tools build or edit it as data.
 //! The text syntax (`parser`, `link`; `docs/language.md`) is one frontend
 //! that compiles to it. `programs/` holds example deployments, among them
@@ -18,12 +18,12 @@ pub mod ast;
 pub mod deployment;
 pub mod draw;
 pub mod figure;
+pub mod interp;
 pub mod ir;
 pub mod lexer;
 pub mod link;
 pub mod parser;
 pub mod report;
-pub mod sim;
 pub mod stats;
 pub mod svg;
 pub mod tikz;
@@ -86,7 +86,7 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 pub fn run_ir(p: &ir::Program, base: Option<&Path>) -> Result<Report, String> {
     p.validate()?;
     let corpus = load_trace(p, base)?;
-    Ok(sim::Sim::new(p, corpus).run())
+    Ok(interp::Interp::new(p, corpus).run())
 }
 
 /// The program's trace corpus, if it names one; a relative path is resolved

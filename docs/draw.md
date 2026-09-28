@@ -72,7 +72,7 @@ names — `rep[j]`, not whatever station happens to come next.
 A pool's eviction order is drawn only where something is cached in it: an
 order over an empty cache says nothing.
 
-Which pool a `cache` clause leaves units in follows `sim.rs::release_hold`: a
+Which pool a `cache` clause leaves units in follows `interp.rs::release_hold`: a
 hold with a `growing` run caches in that pool alone, and one without caches in
 all of its pools. `replica.seq` is the case that makes the difference visible
 — its `hold batch (1), kv (…)` really does keep a unit of `batch` cached.

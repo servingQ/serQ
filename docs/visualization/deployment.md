@@ -49,7 +49,7 @@ over an empty cache says nothing.
 
 ### Which pool holds the cache
 
-This follows `sim.rs::release_hold` rather than the syntax: a hold with a
+This follows `interp.rs::release_hold` rather than the syntax: a hold with a
 `growing` run caches in **that pool alone**, and one without caches in **all**
 of its pools. `programs/replica.seq` is the case that makes the difference
 visible — its `hold batch (1), kv (…)` has no `growing`, and the run really

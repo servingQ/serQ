@@ -4,7 +4,7 @@ The IR is the definition of a seQ program. Everything else is built around
 it:
 
 ```
-  program text (.seq)  ──parse + link──▶  IR (ir::Program, JSON)  ──▶  interpreter (sim)
+  program text (.seq)  ──parse + link──▶  IR (ir::Program, JSON)  ──▶  interpreter (interp)
   tools (Rust / JSON) ──────build/edit──▶                          ──▶  Lean model (generated)
                                                                    ──▶  checks, diffs, archives
 ```

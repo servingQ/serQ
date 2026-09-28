@@ -368,7 +368,7 @@ pub fn project(p: &Program) -> Net {
 /// For every `hold` with a `cache` clause, the pools that clause can leave
 /// units in - keyed by the hold's body block, which is unique to it.
 ///
-/// `release_hold` (`sim.rs`) caches `min(cache, computed)` per pool, where
+/// `release_hold` (`interp.rs`) caches `min(cache, computed)` per pool, where
 /// `computed` is the allocation unless the hold grew, and then it is the
 /// position the growing run reached, which only a grown pool has. `grow`
 /// advances the *innermost* hold holding that pool, so a `growing` run deep
