@@ -1,0 +1,3 @@
+# The documentation site (mkdocs.yml). Pinned so that a rebuild of an old
+# commit produces the page that commit described.
+mkdocs-material==9.7.7

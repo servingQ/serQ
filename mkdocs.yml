@@ -1,0 +1,85 @@
+site_name: seQ
+site_description: A language for the formal verification and simulation of LLM serving systems
+site_url: https://vrvrv.github.io/seQ/
+repo_url: https://github.com/vrvrv/seQ
+repo_name: vrvrv/seQ
+edit_uri: edit/main/docs/
+copyright: seQ — a serving deployment is a program
+
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.indexes
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Tutorial:
+      - tutorial/index.md
+      - 1. A queue: tutorial/01-a-queue.md
+      - 2. Memory is a resource: tutorial/02-memory.md
+      - 3. Sessions and turns: tutorial/03-sessions.md
+      - 4. The prefix cache: tutorial/04-prefix-cache.md
+      - 5. The engine: tutorial/05-the-engine.md
+      - 6. The cliff: tutorial/06-the-cliff.md
+  - Visualization:
+      - visualization/index.md
+      - Deployment view: visualization/deployment.md
+      - Route view: visualization/route.md
+  - Case study — vLLM v1: case-study-vllm.md
+  - Reference:
+      - reference/cheatsheet.md
+      - reference/cli.md
+      - The language: language.md
+      - The IR: ir.md
+      - Drawing figures: draw.md
+      - Design review: review.md
+  - How seQ is checked: validation.md
