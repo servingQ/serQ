@@ -1,4 +1,4 @@
-# Case study: vLLM v1 in 50 lines
+# Case study: vLLM in 50 lines
 
 `examples/multi-turn/vllm.seq` is vLLM v1's engine. Not "a model of" it: on six
 deterministic scenarios and on a 333-session, 3 321-request trace it gives the

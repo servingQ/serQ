@@ -82,7 +82,7 @@ nav:
           - Deployment view: visualization/deployment.md
           - Session view: visualization/session.md
       - Case studies:
-          - vLLM v1: case-study-vllm.md
+          - vLLM: case-study-vllm.md
           - "One engine, four workloads": case-study-workloads.md
           - Prefill/decode over NIXL: case-study-pd.md
   - Developer Guide:
