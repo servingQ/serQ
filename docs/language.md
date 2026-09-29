@@ -520,8 +520,9 @@ rejections and `stuck`: sessions preempted a second time without having
 advanced past the position of their previous preemption. A hold that fits at
 admission but can never grow to what its body needs (`prompt + out > cap`
 under `preempt lifo`) preempts itself and re-executes forever; the run would
-otherwise end at the horizon with nothing but a preemption count, and the
-report now names the livelock.
+otherwise end at the horizon with nothing but a preemption count; the
+report names the livelock, and `seq-lang run` exits with status 1 after
+printing it, since the run is not a result.
 
 **Executable semantics in Lean.** `SeqExec.lean` defines the same rules
 for the fragment of pools and one step engine on the step clock (values in
