@@ -5,7 +5,9 @@
 A language in which an LLM serving deployment is a program: memory pools,
 stages, a workload and the policy every session runs, written once and both
 simulated and formally checked against the real system. `programs/vllm.seq`
-reproduces the upstream vLLM v1 scheduler request for request.
+reproduces the upstream vLLM v1 scheduler request for request — the
+correspondence, cited `file:line` against `ref/vllm`, is
+[`docs/language.md` §7][language].
 
 [![CI](https://github.com/vrvrv/seQ/actions/workflows/ci.yml/badge.svg)](https://github.com/vrvrv/seQ/actions/workflows/ci.yml)
 [![Docs](https://github.com/vrvrv/seQ/actions/workflows/docs.yml/badge.svg)](https://vrvrv.github.io/seQ/)
@@ -59,7 +61,7 @@ cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-rc0 --locked --roo
 | `src/` | IR, text syntax (lexer/parser/AST), the linker, the interpreter, reporting, drawing |
 | `programs/` | example deployments — M/G/1, PS, closed, agentic replica, PD tandem, routing, the vLLM v1 engine and its A100 replay |
 | `tools/` | the real vLLM v1 scheduler as an oracle, its recorded scenarios, the A100 cost-model sweeps |
-| `docs/` | the language spec, the IR definition, the design record — see the [full layout in `docs/ir.md`][ir] and [`docs/language.md`][language] |
+| `docs/` | [the IR definition][ir], [the text syntax and vLLM correspondence][language], the design record (`docs/review.md`, `docs/design/`) |
 
 ```
 make check   # fmt, clippy, tests, every program links and draws, the oracles agree
@@ -68,11 +70,3 @@ make check   # fmt, clippy, tests, every program links and draws, the oracles ag
 Every claim this project makes about vLLM is checked against the pinned
 source in `ref/vllm` and cited `file:line`, not remembered from a paper or a
 model's training data — see [`CLAUDE.md`](CLAUDE.md).
-
-## Releases
-
-Pushing an annotated tag `vX.Y.Z[-rcN|-devN]` matching `Cargo.toml` runs the
-full check and publishes a GitHub release with the packaged crate and the
-Linux CLI; a tag with a dash is a prerelease. Publishing to crates.io stays
-off until the repository is licensed. See
-[`.github/workflows/release.yml`](.github/workflows/release.yml).
