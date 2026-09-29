@@ -30,6 +30,38 @@ fn program(name: &str) -> Program {
     compile_source(&src, &Overrides::default()).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
+fn session_labels(p: &Program) -> Vec<String> {
+    draw::figure(p, false)
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            seq::figure::Item::Text {
+                text, dim: false, ..
+            } => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn session_labels_use_serving_words_from_kernel_ir() {
+    let labels = session_labels(&program("vllm"));
+    assert!(labels.iter().any(|s| s.starts_with("enter reqs (1), kv (")));
+    assert!(labels.iter().any(|s| s == "prefill"));
+    assert!(labels.iter().any(|s| s == "decode"));
+    assert!(labels.iter().any(|s| s == "tool"));
+    assert!(
+        !labels
+            .iter()
+            .any(|s| s.starts_with("hold ") || s.starts_with("run engine"))
+    );
+
+    let labels = session_labels(&program("llmd_pd"));
+    assert!(labels.iter().any(|s| s == "prefill on P[i]"));
+    assert!(labels.iter().any(|s| s == "decode on D[j]"));
+    assert!(labels.iter().any(|s| s == "transfer[j]"));
+}
+
 fn stage(p: &Program, name: &str) -> usize {
     p.stage_index(name)
         .unwrap_or_else(|| panic!("no stage {name}"))
