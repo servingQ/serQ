@@ -58,7 +58,7 @@ fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir:
     }
     // The linker resolves names; the IR's own check is what knows which
     // moment supplies which context variable (`age` in a session statement,
-    // `ntok` in a queue key), so a text program meets it too.
+    // `tokens` in a queue key), so a text program meets it too.
     p.validate()?;
     Ok(p)
 }

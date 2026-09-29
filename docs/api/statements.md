@@ -145,7 +145,7 @@ run STAGE [prefill | decode] (work) [growing POOL];
 |---|---|---|
 | `STAGE` | `stage` | Indexed when the stage is an array. |
 | mode | `prefill` \| `decode` | Required on a `step` stage, forbidden on any other. |
-| `work` | `expr` | Clock time at rate 1 (`fifo`, `delay`), or at `φ(n)/n` (`ps`), or tokens on a `step` stage. A run of zero work completes at once. |
+| `work` | `expr` | Clock time at rate 1 (`fifo`, `delay`), or at `φ(present)/present` (`ps`), or tokens on a `step` stage. A run of zero work completes at once. |
 | `growing` | `pool` | Only on a `step` stage. The hold on this pool grows block by block as the run advances, preempting if needed. |
 
 Blocks the session until the work is done.

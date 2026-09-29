@@ -241,9 +241,9 @@ fn serve_by_orders_residents_by_the_declared_keys() {
         ir("serve by (decoding ? 0 : 1);")
     );
     // a serve key is read at its own moment only
-    let e = seq::compile_source(&prog("serve by (ntok);"), &Overrides::default()).unwrap_err();
+    let e = seq::compile_source(&prog("serve by (tokens);"), &Overrides::default()).unwrap_err();
     assert!(
-        e.contains("`ntok` is read in a step stage's serve keys"),
+        e.contains("`tokens` is read in a step stage's serve keys"),
         "{e}"
     );
 }

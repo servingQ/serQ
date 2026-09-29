@@ -16,7 +16,7 @@ fn run(src: &str) -> seq::Report {
 #[test]
 fn eviction_order_is_the_declared_key() {
     for (order, want_hit) in [
-        ("evict by (queued, size);", [1.0]),
+        ("evict by (waiting, size);", [1.0]),
         ("evict lru;", [1.0]),
         ("evict by (-size);", [0.0]),
     ] {
@@ -45,13 +45,13 @@ fn eviction_order_is_the_declared_key() {
 }
 
 /// Sessions in a tool call are evicted before sessions waiting in a
-/// queue (`queued`), whatever their size: s0 (8 cached, queued for the
+/// queue (`waiting`), whatever their size: s0 (8 cached, queued for the
 /// slot) survives and s1 (10 cached, in a tool call) is evicted when s2
 /// needs 20 of a 30-token pool. Plain shortest-first would drop s0.
 #[test]
 fn queued_sessions_are_evicted_after_suspended_ones() {
     for (order, want0, want1) in [
-        ("evict by (queued, size);", 1.0, 0.0),
+        ("evict by (waiting, size);", 1.0, 0.0),
         ("evict by (size);", 0.0, 1.0),
     ] {
         let src = format!(
@@ -173,11 +173,11 @@ fn spill_to_a_tier_and_fetch_back() {
     assert_eq!(r.stage("link").unwrap().completed, 3);
 }
 
-/// A spill predicate sees `queued`, as the spec lists for it (the wait
+/// A spill predicate sees `waiting`, as the spec lists for it (the wait
 /// channel: spill the prefix of a session that is waiting to come back).
 /// s0 caches 6 and later queues for 20 behind s1's 24; s2, ahead of s0 by
 /// priority, takes 6 and must evict s0's entry while s0 waits: with
-/// `when (queued)` that is the one spill, with `when (!queued)` none.
+/// `when (waiting)` that is the one spill, with `when (!waiting)` none.
 #[test]
 fn a_spill_predicate_sees_whether_the_session_is_queued() {
     let prog = |when: &str| {
@@ -201,10 +201,10 @@ fn a_spill_predicate_sees_whether_the_session_is_queued() {
             run {{ horizon 100; }}"
         )
     };
-    let r = run(&prog("queued"));
+    let r = run(&prog("waiting"));
     assert_eq!(r.pool("kv").unwrap().spills, 1, "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().evicted_entries, 1, "{}", r.text());
-    let r = run(&prog("!queued"));
+    let r = run(&prog("!waiting"));
     assert_eq!(r.pool("kv").unwrap().spills, 0, "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().evicted_entries, 1, "{}", r.text());
 }
@@ -338,7 +338,7 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
     assert_eq!(r.stage("engine").unwrap().iterations, 401, "{}", r.text());
 }
 
-/// The step that only preempted lasts `C` at zero tokens. With `cost ntok`
+/// The step that only preempted lasts `C` at zero tokens. With `cost tokens`
 /// that is 0: the step ends at the same instant and the next one re-admits,
 /// so a zero cost is one more event at that instant, not a loop. Prefill
 /// 100 costs 100, sixty decodes cost 60, the preempting step 0: preemptions
@@ -348,7 +348,7 @@ fn a_zero_cost_preempting_step_does_not_hang() {
     let src = r#"
         pool reqs { cap 4; admit via engine; }
         pool kv { cap 160; block 16; evict lru; preempt lifo; }
-        stage engine : step { budget 1000; chunk 0; cost ntok; memory kv; }
+        stage engine : step { budget 1000; chunk 0; cost tokens; memory kv; }
         workload { arrive batch(1); }
         session {
           hold reqs (1), kv (100) reserve (100) {

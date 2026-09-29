@@ -59,7 +59,7 @@ pub enum RunMode {
 
 /// Where an expression is evaluated. Every context variable is supplied at
 /// exactly one moment (`CtxVar::moment`), and `Program::validate` rejects it
-/// anywhere else: before, `age` in a session statement or `ntok` in a queue
+/// anywhere else: before, `age` in a session statement or `tokens` in a queue
 /// key read as 0 and the program ran.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Moment {
@@ -74,10 +74,10 @@ pub enum Moment {
     /// A `ps` stage's capacity: evaluated for the stage's jobs.
     Ps,
     /// A step stage's `budget` and `chunk`: evaluated before the iteration,
-    /// from the residents (`nres`, `ndec`, `kvb`, `kvp`).
+    /// from the residents (`residents`, `decoders`, `kv_decode`, `kv_prefill`).
     Budget,
     /// A step stage's `cost`: evaluated after the iteration is scheduled,
-    /// from what it scheduled (`ntok`, `npre`, `attn` as well).
+    /// from what it scheduled (`tokens`, `prefilled`, `attention` as well).
     Step,
     /// A step stage's `serve by` keys: evaluated for one resident.
     Serve,
@@ -146,15 +146,15 @@ impl CtxVar {
             CtxVar::Size => "size",
             CtxVar::Age => "age",
             CtxVar::Last => "last",
-            CtxVar::Queued => "queued",
-            CtxVar::N => "n",
-            CtxVar::Ntok => "ntok",
-            CtxVar::Ndec => "ndec",
-            CtxVar::Npre => "npre",
-            CtxVar::Nres => "nres",
-            CtxVar::Kvb => "kvb",
-            CtxVar::Kvp => "kvp",
-            CtxVar::Attn => "attn",
+            CtxVar::Queued => "waiting",
+            CtxVar::N => "present",
+            CtxVar::Ntok => "tokens",
+            CtxVar::Ndec => "decoders",
+            CtxVar::Npre => "prefilled",
+            CtxVar::Nres => "residents",
+            CtxVar::Kvb => "kv_decode",
+            CtxVar::Kvp => "kv_prefill",
+            CtxVar::Attn => "attention",
             CtxVar::Decoding => "decoding",
             CtxVar::Admission => "admission",
             CtxVar::Remaining => "remaining",

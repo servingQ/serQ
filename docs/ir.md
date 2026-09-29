@@ -128,7 +128,7 @@ its position in the IR, and a context variable exists at one of them:
 The index of a pool or stage reference (`CRef.index`) is evaluated with the
 expression around it, so at that expression's moment: `evict by (size +
 used(kv[size]))` is legal. The table is what the interpreter fills into its
-context at each position (`interp.rs`: `Ctx`), not a policy: `ntok` in a
+context at each position (`interp.rs`: `Ctx`), not a policy: `tokens` in a
 budget would read 0 because the tokens are not scheduled yet, so the budget
 may not read it.
 
@@ -138,7 +138,7 @@ check, not a semantics: a program that validates runs the same with or
 without it, so the Lean generator does not read it.
 
 Before this check the variable read as 0 anywhere else and the program ran
-(`age` in a session statement, `ntok` in a queue key); the doc comment said
+(`age` in a session statement, `tokens` in a queue key); the doc comment said
 "meaningful only where the semantics supplies them", which is what an
 undefined behaviour is. The check is stricter validation of IR whose types
 did not change, so it is not a version bump; an IR file that used to pass

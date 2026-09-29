@@ -47,10 +47,12 @@ OPTIONS = (
 )
 
 # Observables and arithmetic: things a program reads rather than declares.
-# Short, ordinary words are left out on purpose: `n`, `out`, `new`, `size`,
-# `age`, `last` are context variables in the one place the semantics supplies
-# them and ordinary attribute names everywhere else, and a lexer cannot tell.
-# Colouring a program's own `n` as a builtin is worse than leaving it plain.
+# Short, ordinary words are left out on purpose: `size`, `age`, `last`,
+# `tokens`, `present`, `waiting`, `residents`, `decoders`, `prefilled`,
+# `attention` are context variables in the one place the semantics supplies
+# them and ordinary attribute names everywhere else (`out` and `new` are
+# attributes), and a lexer cannot tell. Colouring a program's own `tokens` as
+# a builtin is worse than leaving it plain.
 # Arithmetic is not a role: `min`, `floor` and `pow` are how a program
 # computes, not what it means, and they read as calls without help. Leaving
 # them plain is what lets the observable colour mean exactly one thing.
@@ -59,7 +61,7 @@ ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow")
 BUILTINS = (
     "busy", "work", "used", "free", "cachedin", "holders", "queued",
     "price", "budget_left", "est_lambda", "est_rho", "est_wait",
-    "now", "ntok", "ndec", "npre", "nres", "kvb", "kvp", "attn",
+    "now", "kv_decode", "kv_prefill",
     "decoding", "admission", "remaining",
     "cached", "serial", "turn_no", "think", "more", "forced", "computed",
 )

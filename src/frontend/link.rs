@@ -1,7 +1,7 @@
 //! Linking: resolve names to slots and compile expressions.
 //!
 //! Every `Var` becomes a session-attribute slot, a constant, or a
-//! context variable (`size`, `n`, `ntok`, ...). Pool and stage references
+//! context variable (`size`, `n`, `tokens`, ...). Pool and stage references
 //! become base indices plus an optional index expression. Statement blocks
 //! are stored in an arena so that a session's continuation is a stack of
 //! `(block, pc)` frames.
@@ -105,15 +105,15 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 16] = [
     ("size", CtxVar::Size),
     ("age", CtxVar::Age),
     ("last", CtxVar::Last),
-    ("queued", CtxVar::Queued),
-    ("n", CtxVar::N),
-    ("ntok", CtxVar::Ntok),
-    ("ndec", CtxVar::Ndec),
-    ("npre", CtxVar::Npre),
-    ("nres", CtxVar::Nres),
-    ("kvb", CtxVar::Kvb),
-    ("kvp", CtxVar::Kvp),
-    ("attn", CtxVar::Attn),
+    ("waiting", CtxVar::Queued),
+    ("present", CtxVar::N),
+    ("tokens", CtxVar::Ntok),
+    ("decoders", CtxVar::Ndec),
+    ("prefilled", CtxVar::Npre),
+    ("residents", CtxVar::Nres),
+    ("kv_decode", CtxVar::Kvb),
+    ("kv_prefill", CtxVar::Kvp),
+    ("attention", CtxVar::Attn),
     ("decoding", CtxVar::Decoding),
     ("admission", CtxVar::Admission),
     ("remaining", CtxVar::Remaining),
@@ -146,6 +146,20 @@ pub const FUNCTIONS: [&str; 22] = [
     "est_lambda",
     "est_rho",
     "est_wait",
+];
+
+/// Context variables renamed for what they mean (#139), for a program that
+/// still says the old name: it is refused with the new one.
+const RENAMED: [(&str, &str); 9] = [
+    ("queued", "waiting"),
+    ("n", "present"),
+    ("ntok", "tokens"),
+    ("ndec", "decoders"),
+    ("npre", "prefilled"),
+    ("nres", "residents"),
+    ("kvb", "kv_decode"),
+    ("kvp", "kv_prefill"),
+    ("attn", "attention"),
 ];
 
 pub const BUILTIN_ATTRS: [&str; 9] = [
@@ -787,6 +801,10 @@ impl Linker<'_> {
                         CExpr::Ctx(v)
                     } else if n == "inf" {
                         CExpr::Num(f64::INFINITY)
+                    } else if let Some((_, new)) = RENAMED.iter().find(|(old, _)| old == n) {
+                        return Err(LinkError::new(format!(
+                            "the context variable `{n}` is now `{new}`"
+                        )));
                     } else {
                         return Err(self.unknown("name", n));
                     }

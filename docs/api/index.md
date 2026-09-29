@@ -15,7 +15,7 @@ is the specification and argues the design; this section is the lookup.
 | [Serving vocabulary](serving.md) | `enter`, `admit if`, `prefill`, `transfer`, `decode`, `tool` |
 | [Functions](functions.md) | arithmetic functions and observables |
 | [Distributions](distributions.md) | `~exp`, `~det`, `~uniform`, `~erlang`, `~h2`, `~bernoulli` |
-| [Context variables](context.md) | `ntok`, `age`, `remaining`, … and the moment each exists at |
+| [Context variables](context.md) | `tokens`, `age`, `remaining`, … and the moment each exists at |
 | [Attributes](attributes.md) | the built-in session attributes |
 
 ## Types

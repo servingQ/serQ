@@ -2,7 +2,7 @@
 
 A context variable is supplied by the scheduler at one *moment* and exists only
 there (`now` at every moment). Reading it anywhere else is a link error rather
-than a 0: `set x = ntok;` in a session, or `evict by (ntok)`, does not link.
+than a 0: `set x = tokens;` in a session, or `evict by (tokens)`, does not link.
 
 ## Moments
 
@@ -24,27 +24,26 @@ than a 0: `set x = ntok;` in a session, or `evict by (ntok)`, does not link.
 | `size` | number | `Evict` | units of the entry |
 | `age` | number | `Evict` | `now − last` |
 | `last` | number | `Evict` | time the entry was released |
-| `queued` | 0 / 1 | `Evict` | 1 if the entry's session waits in a pool queue |
-| `n` | number | `Ps` | jobs present |
-| `nres` | number | `Budget`, `Step`, `Serve` | residents, scheduled or not |
-| `ndec` | number | `Budget`, `Step`, `Serve` | decode residents |
-| `kvb` | number | `Budget`, `Step`, `Serve` | memory held in the stage's `memory` pool by the decode residents (0 without `memory`) |
-| `kvp` | number | `Budget`, `Step`, `Serve` | the same, by the prefill residents |
-| `ntok` | number | `Step` | tokens scheduled this iteration |
-| `npre` | number | `Step` | prefill tokens scheduled |
-| `attn` | number | `Step` | attention work of the prefill chunks, `Σ n (K + n/2)`, `K` the position before a chunk (exact for `growing` runs) |
+| `waiting` | 0 / 1 | `Evict` | 1 if the entry's session waits in a pool queue |
+| `present` | number | `Ps` | jobs present |
+| `residents` | number | `Budget`, `Step`, `Serve` | residents, scheduled or not |
+| `decoders` | number | `Budget`, `Step`, `Serve` | decode residents |
+| `kv_decode` | number | `Budget`, `Step`, `Serve` | memory held in the stage's `memory` pool by the decode residents (0 without `memory`) |
+| `kv_prefill` | number | `Budget`, `Step`, `Serve` | the same, by the prefill residents |
+| `tokens` | number | `Step` | tokens scheduled this iteration |
+| `prefilled` | number | `Step` | prefill tokens scheduled |
+| `attention` | number | `Step` | attention work of the prefill chunks, `Σ n (K + n/2)`, `K` the position before a chunk (exact for `growing` runs) |
 | `decoding` | 0 / 1 | `Serve` | 1 if the resident is decoding, 0 if prefilling |
 | `admission` | number | `Serve` | the resident's admission sequence number (its place in vLLM's `running` list) |
 | `remaining` | number | `Serve` | tokens the resident's run has left |
 
-`nres`, `ndec`, `kvb` and `kvp` are totals over the residents, the same for
+`residents`, `decoders`, `kv_decode` and `kv_prefill` are totals over the residents, the same for
 every resident at `Serve`. At `Budget` and `Serve` they count every resident
-before the iteration. At `Step`, `ndec`, `kvb` and `kvp` count only the
-residents the iteration scheduled, and `nres` every resident.
+before the iteration. At `Step`, `decoders`, `kv_decode` and `kv_prefill` count only the
+residents the iteration scheduled, and `residents` every resident.
 
-`queued` (a context variable at `Evict`) and `queued(p)`
-([function](functions.md#pool)) are different things: a 0/1 for one entry, and
-the length of a pool's queue.
+`waiting` (a context variable at `Evict`, 0 or 1 for one entry) is not
+`queued(p)` ([function](functions.md#pool)), the length of a pool's queue.
 
 ## Reading hidden attributes
 

@@ -123,14 +123,14 @@ fn zero_and_one_are_tests() {
     }
 }
 
-/// A context variable outside the moment that supplies it. `ntok` is what a
+/// A context variable outside the moment that supplies it. `tokens` is what a
 /// step stage's budget and cost see for one iteration; in a session
 /// statement it used to read as 0 and the program ran. The IR's validator
 /// knows the table, and the linker now runs it on what it produces.
 #[test]
 fn a_context_variable_outside_its_moment_is_rejected() {
     let src = format!(
-        "{ENGINE} session {{ turn; set x = ntok;
+        "{ENGINE} session {{ turn; set x = tokens;
             enter reqs (1), kv (n) {{ prefill (n) growing kv; }} end; }}"
     );
     let e = check(&src).expect_err("rejected");
@@ -138,7 +138,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         e.starts_with("session: "),
         "names the block by its role: {e}"
     );
-    assert!(e.contains("`ntok` is read in a session statement"), "{e}");
+    assert!(e.contains("`tokens` is read in a session statement"), "{e}");
     assert!(e.contains("exists only in a step stage's cost"), "{e}");
     // every other moment refuses what it does not supply, and says where it
     // was read and where it exists
@@ -155,12 +155,12 @@ fn a_context_variable_outside_its_moment_is_rejected() {
             session {{ turn; {session} enter reqs (1), kv (m) {{ prefill (m) growing kv; }} end; }}"
         )
     };
-    // (the prompt is `m`, not `n`: a session attribute named `n` would
-    // shadow the ps capacity variable, which is the case below)
+    // (the prompt is `m`: a session attribute named `present` would shadow
+    // the ps capacity variable)
     for (src, where_read, exists) in [
         (
-            engine("evict by (ntok);", "", ""),
-            "pool `kv`: `ntok` is read in an eviction key",
+            engine("evict by (tokens);", "", ""),
+            "pool `kv`: `tokens` is read in an eviction key",
             "a step stage's cost",
         ),
         (
@@ -174,18 +174,18 @@ fn a_context_variable_outside_its_moment_is_rejected() {
             "an eviction key",
         ),
         (
-            engine("", "", "hold kv (1) { run svc (n); }"),
-            "session: `n` is read in a session statement",
+            engine("", "", "hold kv (1) { run svc (present); }"),
+            "session: `present` is read in a session statement",
             "a ps stage's capacity",
         ),
         (
-            engine("", "budget ntok + 512;", ""),
-            "stage `engine`: `ntok` is read in a step stage's budget or chunk",
+            engine("", "budget tokens + 512;", ""),
+            "stage `engine`: `tokens` is read in a step stage's budget or chunk",
             "a step stage's cost",
         ),
         (
-            engine("", "chunk attn;", ""),
-            "stage `engine`: `attn` is read in a step stage's budget or chunk",
+            engine("", "chunk attention;", ""),
+            "stage `engine`: `attention` is read in a step stage's budget or chunk",
             "a step stage's cost",
         ),
         (
@@ -214,14 +214,14 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         assert!(e.contains(exists), "want `{exists}` in: {e}");
     }
     // what the table allows still links: `age`, `size` and a pool index in
-    // an eviction key, `n` in a ps capacity, the residents' variables in a
-    // budget and a chunk, `ntok` in a cost, `now` at every moment
+    // an eviction key, `present` in a ps capacity, the residents' variables in a
+    // budget and a chunk, `tokens` in a cost, `now` at every moment
     let src =
         "pool kv[2] { cap 1e5; evict by (age, size + used(kv[size > 1e9 ? 1 : 0]) * 0, now * 0); }
-        stage svc : ps (min(n, 4) + now * 0);
-        stage engine[2] : step { budget 512 + nres + ndec + kvb * 0 + kvp * 0 + now * 0;
-                              chunk ndec > 0 ? 64 : 128;
-                              cost 1e-3 * ntok + npre * 0 + attn * 0 + now * 0; memory kv; }
+        stage svc : ps (min(present, 4) + now * 0);
+        stage engine[2] : step { budget 512 + residents + decoders + kv_decode * 0 + kv_prefill * 0 + now * 0;
+                              chunk decoders > 0 ? 64 : 128;
+                              cost 1e-3 * tokens + prefilled * 0 + attention * 0 + now * 0; memory kv; }
         workload { arrive poisson(0.3); turn { set n = ~exp(500); } }
         session { turn; set t = now; hold kv[0] (n) { run svc (n); } end; }
         run { horizon 500; }";
@@ -289,7 +289,7 @@ fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
     };
     assert_eq!(ir("serve admission;"), ir(""));
     assert!(ir("serve admission;").contains("\"By\": []"));
-    check(&step("serve by (nres > 4 ? -remaining : admission);"))
+    check(&step("serve by (residents > 4 ? -remaining : admission);"))
         .expect("the residents' variables are keys");
     let e = check(&step("serve by (~uniform(0, 1));")).expect_err("a draw");
     assert!(e.contains("stage `engine`"), "{e}");
@@ -393,5 +393,26 @@ fn no_false_positives_on_the_corpus() {
         let src = std::fs::read_to_string(&path).unwrap();
         seq::compile_source_at(&src, path.parent(), &Overrides::default())
             .unwrap_or_else(|e| panic!("{name} is a real program and must link: {e}"));
+    }
+}
+
+/// A context variable renamed for what it means (#139) says its new name.
+#[test]
+fn an_old_context_variable_name_says_the_new_one() {
+    for (old, new) in [
+        ("ntok", "tokens"),
+        ("kvb", "kv_decode"),
+        ("queued", "waiting"),
+    ] {
+        let (key, cost) = if old == "queued" {
+            (old, "1")
+        } else {
+            ("size", old)
+        };
+        let src = format!(
+            "pool kv {{ cap 10; evict by ({key}); }}\nstage e : step {{ cost {cost}; memory kv; }}\nsession {{ end; }}\n"
+        );
+        let e = compile_source(&src, &Overrides::default()).unwrap_err();
+        assert!(e.contains(&format!("`{old}` is now `{new}`")), "{e}");
     }
 }

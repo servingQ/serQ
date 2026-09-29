@@ -52,12 +52,12 @@ pool kvD[2] { cap blocksD * bs; block bs; evict lru; preempt lifo; admit via D; 
 
 stage P[2] : step {
   budget B;
-  cost c0 + max(omega + beta * (kvb + kvp), ntok * a);
+  cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
   memory kvP;
 }
 stage D[2] : step {
   budget B;
-  cost c0 + max(omega + beta * (kvb + kvp), ntok * a);
+  cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
   memory kvD;
 }
 stage link[2] : ps(1);     // a decoder's NIC: its reads share the bandwidth
