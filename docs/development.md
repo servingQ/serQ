@@ -42,22 +42,29 @@ fixed ([one engine, four workloads](case-study-workloads.md)).
 
 ### Read the report
 
-A run prints one block per `observe`, stage and pool:
+A run prints its run line and then three tables: the `observe`s, the stages
+and the pools, each column as wide as its widest entry:
 
 ```
 $ seq-lang run examples/multi-turn/vllm.seq --horizon 300 --warmup 30
-run: horizon 300 warmup 30 seed 1 events 166040 arrivals 95 ended 82 turns 821 mean live 8.390
-observe        count        mean      95% CI      cv2       p99
-  hit             821      0.8916 ±0.0221      0.122    1.0000
-  prefill_tokens    821    702.2233 ±38.6706     0.994 2880.9830
-  ttft            821      0.0145 ±0.0008      0.988    0.0582
-  response        820      0.0628 ±0.0034      0.645    0.2365
-stage          number   util    done   thru      wait   service  iters
-  engine         0.191  0.172    1641  6.0778    0.0000    0.0314 165200
-  tool           8.198  1.000     732  2.7111    0.0000    2.9894      0
-pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej stuck
-  kv              1561.4  143802.5  0.000   0.191     NaN     840       78    606064       0     0   0     0
-  reqs               0.2       0.0  0.000   0.191  0.0000     840        0         0       0     0   0     0
+run: horizon 300 end 300 warmup 30 seed 1 events 166040 arrivals 95 ended 82 turns 821 mean live 8.390
+
+observe         count      mean    95% CI    cv2        p99
+--------------  -----  --------  --------  -----  ---------
+hit               821    0.8916   ±0.0221  0.122     1.0000
+prefill_tokens    821  702.2233  ±38.6706  0.994  2880.9830
+ttft              821    0.0145   ±0.0008  0.988     0.0582
+response          820    0.0628   ±0.0034  0.645     0.2365
+
+stage   number   util  done    thru    wait  service   iters
+------  ------  -----  ----  ------  ------  -------  ------
+engine   0.191  0.172  1641  6.0778  0.0000   0.0314  165200
+tool     8.198  1.000   732  2.7111  0.0000   2.9894       0
+
+pool    used    cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
+----  ------  --------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
+kv    1561.4  143802.5  0.000    0.191     NaN     840        78    606064        0      0    0      0
+reqs     0.2       0.0  0.000    0.191  0.0000     840         0         0        0      0    0      0
 ```
 
 The metrics are the program's own: `ttft` is whatever the `observe ttft = …`

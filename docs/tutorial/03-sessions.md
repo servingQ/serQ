@@ -66,13 +66,17 @@ seq-lang run docs/tutorial/programs/03-sessions.seq
 ```
 
 ```text
-run: horizon 20000 warmup 2000 seed 1 events 97621 arrivals 9905 ended 8903 turns 43950 mean live 6.262
-observe        count        mean      95% CI      cv2       p99
-  response      43950      0.1801 ±0.0069      0.467    0.6162
-  context       43950   4935.0401 ±118.4264    0.436 16699.0270
-stage          number   util    done   thru      wait   service  iters
-  engine         0.440  0.329   43950  2.4417    0.0453    0.1348      0
-  tool           5.822  0.998   35047  1.9471    0.0000    2.9902      0
+run: horizon 20000 end 20000 warmup 2000 seed 1 events 97621 arrivals 9905 ended 8903 turns 43950 mean live 6.262
+
+observe   count       mean     95% CI    cv2         p99
+--------  -----  ---------  ---------  -----  ----------
+response  43950     0.1801    ±0.0069  0.467      0.6162
+context   43950  4935.0401  ±118.4264  0.436  16699.0270
+
+stage   number   util   done    thru    wait  service  iters
+------  ------  -----  -----  ------  ------  -------  -----
+engine   0.440  0.329  43950  2.4417  0.0453   0.1348      0
+tool     5.822  0.998  35047  1.9471  0.0000   2.9902      0
 ```
 
 Three numbers are worth reading carefully.
