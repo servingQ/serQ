@@ -407,18 +407,20 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
 }
 
 /// `examples/pd-disaggregation/llmd_nixl_pull.seq`'s router sends a request either
-/// to a prefiller and over the link (remote), or straight to the decoder
-/// (local); a request whose KV is already there skips the link. Every turn
+/// to a prefiller and over the link (remote), after the read's fixed wait
+/// (`setup`), or straight to the decoder (local); a request whose KV is
+/// already there skips both. Every turn
 /// ends at the decoder, which the session leaves or resumes after a tool call.
 #[test]
 fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
-    let (pf, link, d, tool) = (at("P"), at("link"), at("D"), at("tool"));
+    let (pf, setup, link, d, tool) = (at("P"), at("setup"), at("link"), at("D"), at("tool"));
     assert!(net.has_edge(End::Arrival, pf), "remote");
     assert!(net.has_edge(End::Arrival, d), "local");
-    assert!(net.has_edge(pf, link));
+    assert!(net.has_edge(pf, setup));
+    assert!(net.has_edge(setup, link));
     assert!(net.has_edge(link, d));
     assert!(net.has_edge(pf, d), "the KV is already on the decoder");
     assert!(net.has_edge(d, tool), "more");

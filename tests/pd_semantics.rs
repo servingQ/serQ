@@ -342,10 +342,18 @@ fn an_engine_serves_its_queues_in_declaration_order() {
 fn the_pd_program_survives_decoder_memory_pressure() {
     let src = std::fs::read_to_string(seq::program_path("llmd_nixl_pull")).unwrap();
     let ov = Overrides {
-        lets: vec![(
-            "blocksD".into(),
-            seq::frontend::parser::parse_expr("1200").unwrap(),
-        )],
+        // decoders of 19 200 tokens at twice the default load: with requests
+        // bounded by max_model_len, the pressure that makes both preempt
+        lets: vec![
+            (
+                "blocksD".into(),
+                seq::frontend::parser::parse_expr("1200").unwrap(),
+            ),
+            (
+                "Lambda".into(),
+                seq::frontend::parser::parse_expr("1.2").unwrap(),
+            ),
+        ],
         horizon: Some(400.0),
         warmup: Some(50.0),
         ..Default::default()
