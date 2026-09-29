@@ -86,7 +86,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | admit via STAGE ;                -- the queue is served by a step stage's scheduler
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
-          | ps ( expr )                      -- throughput phi(n) shared equally; expr reads n
+          | ps ( expr )                      -- throughput phi(present) shared equally; expr reads present
           | delay                            -- every job at rate 1, no waiting
           | step { budget expr ; cost expr ; [chunk expr ;]
                    [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
@@ -201,7 +201,7 @@ unchanged.
 The argument is work in the unit of the stage it runs on, and the two
 metavariables say which: `W` is the time the job takes alone on a `fifo`,
 `ps` or `delay` stage (seconds, when the program's clock is seconds; a `ps`
-stage serves it at `φ(n)/n`), `T` is tokens on a step engine, the unit of
+stage serves it at `φ(present)/present`), `T` is tokens on a step engine, the unit of
 its `budget`. The same form takes either; the Which-stage rule below
 decides.
 
@@ -486,7 +486,7 @@ pool declared first is served first. A reader who finds an order not
 covered here has found a bug.
 
 **Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
-`ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
+`ps(φ)`: every job at once, each at `φ(present)/present`. `delay`: every job on its
 own at rate 1. `step { budget B; cost C; }`: an engine that runs
 iterations. A plain `run`'s work is time at rate 1, the clock's unit; a step
 engine's `prefill` and `decode` work is in the unit of `B`, tokens. The
@@ -496,7 +496,7 @@ its times are iterations. The residents are served the way `serve` names, said o
 stage: an order, `by (k₁, …)` (ascending keys evaluated for each resident
 with `decoding`, 1 for a decoding resident, `admission`, its admission
 sequence number, `remaining`, the tokens its run has left, and the
-residents' `residents`, `decoders`, `kv_decode`, `kv_prefill`; ties in admission order; a key may
+totals `residents`, `decoders`, `kv_decode`, `kv_prefill`; ties in admission order; a key may
 not draw), or the rule `exclusive prefill`, below, which is not an order and
 so cannot be combined with one. `admission` (the order their sessions were
 admitted, vLLM's `running` list; the default) is `by` with no keys, where

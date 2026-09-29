@@ -85,7 +85,7 @@
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="479.8" y="133" width="5.74" height="8.58"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="486.8" y="133" width="5.74" height="8.58"/>
 <text x="427.8" y="157" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 600000</text>
-<text x="427.8" y="168" text-anchor="start" font-size="8" fill="#6b7280" class="dim">evict by (queued, size)</text>
+<text x="427.8" y="168" text-anchor="start" font-size="8" fill="#6b7280" class="dim">evict by (waiting, size)</text>
 <rect class="cached" fill="#e6e2da" stroke="none" x="427.8" y="184" width="172" height="11" rx="2"/>
 <text x="513.8" y="192.5" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">prefix cache</text>
 <rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="505.8" y="107" width="84" height="52" rx="3"/>

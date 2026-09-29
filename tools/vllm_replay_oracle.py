@@ -140,8 +140,9 @@ def main():
                 r["cached"] = nr.num_computed_tokens
         ids = list(out.num_scheduled_tokens.keys())
         # the cost expression of vllm_replay.seq, in the same quantities:
-        # kvb / kvp = KV units held (allocated blocks) by the scheduled
-        # decoding / prefilling requests, npre = prefill tokens scheduled
+        # kv_decode / kv_prefill = KV units held (allocated blocks) by the
+        # scheduled decoding / prefilling requests, prefilled = prefill tokens
+        # scheduled (the variables below keep the old short names)
         ntok = 0
         npre = 0
         kvb = 0

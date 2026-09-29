@@ -129,7 +129,7 @@ pub struct PoolDecl {
 pub enum StageKind {
     /// `c` servers, one job each at rate 1, FIFO.
     Fifo(Expr),
-    /// Processor sharing with capacity `phi(n)`, `n` the jobs present.
+    /// Processor sharing with capacity `phi(present)`, `present` the jobs present.
     Ps(Expr),
     /// Infinite server: every job at rate 1.
     Delay,

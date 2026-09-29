@@ -9,7 +9,7 @@ A stage is where time passes, and where a [`run`](statements.md#run) takes it.
 | Kind | Servers | Unit of `run`'s work |
 |---|---|---|
 | [`fifo(c)`](#fifo) | `c`, one job each | clock time at rate 1 |
-| [`ps(φ)`](#ps) | all jobs at once | clock time, at rate `φ(n)/n` per job |
+| [`ps(φ)`](#ps) | all jobs at once | clock time, at rate `φ(present)/present` per job |
 | [`delay`](#delay) | infinite | clock time at rate 1 |
 | [`step { … }`](#step) | an iterating engine | the unit of `budget` (tokens) |
 
@@ -86,7 +86,7 @@ that schedules no token is not one, unless it preempted.
 | `decode first` | decodes before prefills | `By([decoding ? 0 : 1])` |
 | `exclusive prefill` | only the first prefilling resident while one exists; decodes stall | `ExclusivePrefill` |
 
-Keys read `decoding`, `admission`, `remaining` and the residents' `residents`,
+Keys read `decoding`, `admission`, `remaining` and the totals `residents`,
 `decoders`, `kv_decode`, `kv_prefill`, and may not draw. `serve by (remaining)` is
 shortest-remaining-first; `serve by (-remaining)` is the opposite.
 `exclusive prefill` is not an order and cannot be combined with one.

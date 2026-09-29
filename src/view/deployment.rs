@@ -842,7 +842,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
 }
 
 /// A pool's options, one short line each. They are stacked in the glyph
-/// column rather than run together beside the name: `evict by (queued, size)`
+/// column rather than run together beside the name: `evict by (waiting, size)`
 /// is wider than a station, and a note that reaches the next glyph is worse
 /// than no note.
 fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
