@@ -20,10 +20,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: the vLLM source the docs cite, at the pin (sparse)
         run: scripts/fetch_vllm_ref.sh --sparse
-      - name: the same files at upstream main
+      - name: the same files at upstream main, one commit
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/fetch_vllm_tip.sh tip/vllm | tee -a "$GITHUB_STEP_SUMMARY"
+        run: |
+          set -o pipefail
+          scripts/fetch_vllm_tip.sh tip/vllm | tee -a "$GITHUB_STEP_SUMMARY"
       - name: every cited range's text, looked for in the tip
         run: |
           set -o pipefail
