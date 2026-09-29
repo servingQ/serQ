@@ -7,11 +7,15 @@
 //! `server { … }` arrives here with the server spliced into the session:
 //! the split is the parser's. See `docs/language.md` for the semantics.
 
+pub use crate::diagnostic::Span;
+
 pub use crate::ir::{BinOp, Preempt, RunMode, UnOp};
 
 /// Expressions are evaluated to `f64`. Booleans are 0 / 1.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
+    /// Original identifier location, retained through header substitution.
+    Located(Span, Box<Expr>),
     Num(f64),
     /// A session attribute or a `let` constant, resolved at link time.
     Var(String),
@@ -36,8 +40,51 @@ pub enum Arg {
 /// A pool or stage reference, possibly indexed into an array.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ref {
+    pub span: Option<Span>,
     pub name: String,
     pub index: Option<Box<Expr>>,
+}
+
+impl Ref {
+    /// Ownership checks compare the written target, not where it was written.
+    /// In particular, q[i] and q[j] remain different targets.
+    pub(crate) fn same_target(&self, other: &Self) -> bool {
+        self.name == other.name
+            && match (&self.index, &other.index) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.same_syntax(b),
+                _ => false,
+            }
+    }
+}
+
+impl Expr {
+    fn same_syntax(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Located(_, a), b) => a.same_syntax(b),
+            (a, Self::Located(_, b)) => a.same_syntax(b),
+            (Self::Unary(aop, a), Self::Unary(bop, b)) => aop == bop && a.same_syntax(b),
+            (Self::Binary(aop, a, b), Self::Binary(bop, c, d)) => {
+                aop == bop && a.same_syntax(c) && b.same_syntax(d)
+            }
+            (Self::Cond(a, b, c), Self::Cond(d, e, f)) => {
+                a.same_syntax(d) && b.same_syntax(e) && c.same_syntax(f)
+            }
+            (Self::Sample(a, xs), Self::Sample(b, ys)) => {
+                a == b && xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| x.same_syntax(y))
+            }
+            (Self::Call(a, xs), Self::Call(b, ys)) => {
+                a == b
+                    && xs.len() == ys.len()
+                    && xs.iter().zip(ys).all(|(x, y)| match (x, y) {
+                        (Arg::Expr(a), Arg::Expr(b)) => a.same_syntax(b),
+                        (Arg::Ref(a), Arg::Ref(b)) => a.same_target(b),
+                        _ => false,
+                    })
+            }
+            _ => self == other,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -56,14 +103,15 @@ pub enum QueueOrder {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Spill {
-    pub to: String,
-    pub via: String,
+    pub to: Ref,
+    pub via: Ref,
     pub work: Expr,
     pub when: Expr,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PoolDecl {
+    pub span: Option<Span>,
     pub name: String,
     pub count: usize,
     pub cap: Expr,
@@ -74,7 +122,7 @@ pub struct PoolDecl {
     pub spill: Option<Spill>,
     /// `admit via STAGE`: the queue is served by the stage's scheduler, at
     /// the start of its iterations, while the iteration has budget left.
-    pub admit_via: Option<String>,
+    pub admit_via: Option<Ref>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -101,7 +149,7 @@ pub struct StepSpec {
     /// The order the iteration serves its residents in (`serve …;`).
     pub serve: Serve,
     /// Pool whose holdings of the scheduled residents give `kvb`.
-    pub memory: Option<String>,
+    pub memory: Option<Ref>,
 }
 
 /// `serve` of a step stage: one order, where two booleans (`exclusive
@@ -124,6 +172,7 @@ pub enum Serve {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StageDecl {
+    pub span: Option<Span>,
     pub name: String,
     pub count: usize,
     pub kind: StageKind,
@@ -213,10 +262,152 @@ pub struct RunOpts {
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Program {
+    /// Locations of constants and assigned attributes, for diagnostic notes.
+    pub definitions: Vec<(String, Span)>,
     pub lets: Vec<(String, Expr)>,
     pub pools: Vec<PoolDecl>,
     pub stages: Vec<StageDecl>,
     pub workload: Option<Workload>,
     pub session: Vec<Stmt>,
     pub run: RunOpts,
+}
+
+/// Parser equivalence tests compare syntax after desugaring; the two spellings
+/// necessarily have different source locations. Diagnostic tests check those
+/// locations separately.
+#[cfg(test)]
+pub(crate) fn without_locations(mut p: Program) -> Program {
+    fn expr(e: &mut Expr) {
+        while let Expr::Located(_, inner) = e {
+            *e = *inner.clone();
+        }
+        match e {
+            Expr::Sample(_, args) => args.iter_mut().for_each(expr),
+            Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
+                Arg::Expr(e) => expr(e),
+                Arg::Ref(r) => reference(r),
+            }),
+            Expr::Unary(_, e) => expr(e),
+            Expr::Binary(_, a, b) => {
+                expr(a);
+                expr(b);
+            }
+            Expr::Cond(a, b, c) => {
+                expr(a);
+                expr(b);
+                expr(c);
+            }
+            _ => {}
+        }
+    }
+    fn reference(r: &mut Ref) {
+        r.span = None;
+        if let Some(e) = &mut r.index {
+            expr(e);
+        }
+    }
+    fn block(stmts: &mut [Stmt]) {
+        for s in stmts {
+            match s {
+                Stmt::Set(_, e) | Stmt::Observe(_, e) => expr(e),
+                Stmt::Hold {
+                    pools,
+                    reuse,
+                    body,
+                    cache,
+                    lease,
+                } => {
+                    for (r, e, reserve) in pools {
+                        reference(r);
+                        expr(e);
+                        reserve.iter_mut().for_each(expr);
+                    }
+                    reuse.iter_mut().for_each(expr);
+                    cache.iter_mut().for_each(expr);
+                    if let Some((r, duration)) = lease {
+                        reference(r);
+                        expr(duration);
+                    }
+                    block(body);
+                }
+                Stmt::Grow(r, e) | Stmt::Load(r, e) => {
+                    reference(r);
+                    expr(e);
+                }
+                Stmt::Drop(r) | Stmt::Release(r) => reference(r),
+                Stmt::Run {
+                    stage,
+                    work,
+                    growing,
+                    ..
+                } => {
+                    reference(stage);
+                    expr(work);
+                    growing.iter_mut().for_each(reference);
+                }
+                Stmt::Branch(e, a, b) => {
+                    expr(e);
+                    block(a);
+                    block(b);
+                }
+                Stmt::Loop(b) => block(b),
+                Stmt::Choose { count, key, .. } => {
+                    expr(count);
+                    expr(key);
+                }
+                _ => {}
+            }
+        }
+    }
+    p.definitions.clear();
+    for (_, e) in &mut p.lets {
+        expr(e);
+    }
+    for d in &mut p.pools {
+        d.span = None;
+        expr(&mut d.cap);
+        d.block.iter_mut().for_each(expr);
+        if let EvictOrder::By(keys) = &mut d.evict {
+            keys.iter_mut().for_each(expr);
+        }
+        if let QueueOrder::By(e) = &mut d.queue {
+            expr(e);
+        }
+        if let Some(s) = &mut d.spill {
+            reference(&mut s.to);
+            reference(&mut s.via);
+            expr(&mut s.work);
+            expr(&mut s.when);
+        }
+        d.admit_via.iter_mut().for_each(reference);
+    }
+    for d in &mut p.stages {
+        d.span = None;
+        match &mut d.kind {
+            StageKind::Fifo(e) | StageKind::Ps(e) => expr(e),
+            StageKind::Step(s) => {
+                expr(&mut s.budget);
+                expr(&mut s.cost);
+                expr(&mut s.chunk);
+                s.memory.iter_mut().for_each(reference);
+                if let Serve::By(keys) = &mut s.serve {
+                    keys.iter_mut().for_each(expr);
+                }
+            }
+            StageKind::Delay => {}
+        }
+    }
+    if let Some(w) = &mut p.workload {
+        match &mut w.arrive {
+            Arrival::Poisson(e) | Arrival::Closed(e) | Arrival::Batch(e) => expr(e),
+            Arrival::None => {}
+        }
+        block(&mut w.init);
+        block(&mut w.turn);
+    }
+    block(&mut p.session);
+    p.run.horizon.iter_mut().for_each(expr);
+    p.run.warmup.iter_mut().for_each(expr);
+    p.run.seed.iter_mut().for_each(expr);
+    p
 }
