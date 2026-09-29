@@ -6,9 +6,26 @@ pub struct Span {
     pub col: usize,
     /// Length in Unicode scalar values, as in the lexer's columns.
     pub len: usize,
+    /// 0 for the program, `n` for the `n`th library (`Source`) it uses.
+    pub file: usize,
+}
+
+/// A library a program `use`s: its path as written and its text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Source {
+    pub path: String,
+    pub text: String,
 }
 
 impl Span {
+    /// Render against the program's text, or the library the span is in.
+    pub fn render_in(self, source: &str, libs: &[Source], message: &str) -> String {
+        match self.file.checked_sub(1).and_then(|i| libs.get(i)) {
+            Some(lib) => format!("{}:{}", lib.path, self.render(&lib.text, message)),
+            None => self.render(source, message),
+        }
+    }
+
     pub fn render(self, source: &str, message: &str) -> String {
         let (first, rest) = message.split_once('\n').unwrap_or((message, ""));
         let line = source

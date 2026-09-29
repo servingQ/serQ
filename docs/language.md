@@ -69,6 +69,7 @@ that prefills in the compute its decode step leaves (`step`).
 ```
 program  := item*
 item     := let NAME = expr ;
+          | use "file.seq" ;                  -- the definitions of a library, next to this file
           | def NAME ( NAME , ... ) = expr ;   -- a name for an expression: NAME ( arg , ... )
           | def NAME ( NAME , ... ) block      -- a name for statements: NAME ( arg , ... ) ;
           | pool NAME [ '[' N ']' ] { poolopt* }
@@ -219,8 +220,8 @@ step engine are rejected by the linker as `run E (X)` would be. A linker
 error inside a form (an unknown name in `W`, say) speaks of the kernel
 statement.
 
-vLLM's engine (`examples/multi-turn/vllm.seq`, whose `server` block spells the
-same hold from the scheduler's side, below) then reads
+vLLM's engine (`lib/vllm.seq`'s `vllm_request`, which spells the same hold
+from the scheduler's side, below) then reads
 
 ```
 enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
@@ -670,7 +671,7 @@ are checked against; new scenarios should be written as programs.
 
 ## 7. vLLM v1 as a seQ program
 
-`examples/multi-turn/vllm.seq` and `examples/replay/vllm_replay.seq` (upstream `ref/vllm`
+`examples/multi-turn/vllm.seq`, whose engine is `vllm_request` in `lib/vllm.seq`, and `examples/replay/vllm_replay.seq` (upstream `ref/vllm`
 at 0c87a197; the A100 testbed runs vLLM 0.30.0, whose scheduler gives
 identical answers on the differential scenario below):
 
@@ -696,7 +697,7 @@ long-prefill threshold, encoder inputs, speculative decoding, sliding
 window, cross-session prefix sharing (out of scope), asynchronous
 scheduling (Section 8).
 
-**Admission.** The header of `admit if` in `examples/multi-turn/vllm.seq` is the
+**Admission.** The header of `admit if` in `lib/vllm.seq`'s `vllm_request` is the
 prefix-cache lookup and the allocation of the first chunk, and both happen
 when the scheduler admits the request, not when it queues. `known` is
 every token the request has: the prompt, or after a preemption the tokens

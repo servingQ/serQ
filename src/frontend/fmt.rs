@@ -55,7 +55,13 @@ fn format_code(tokens: &[&Token]) -> String {
 /// Format program text while keeping comments, blank lines, token spellings,
 /// and line breaks. Formatting twice has the same result as formatting once.
 pub fn format(src: &str) -> Result<String, String> {
-    parser::parse(src).map_err(|e| e.render(src))?;
+    format_at(src, None)
+}
+
+/// Format the text of a program file in `base`, whose `use`s are read to
+/// check the text parses.
+pub fn format_at(src: &str, base: Option<&std::path::Path>) -> Result<String, String> {
+    parser::parse_at(src, base).map_err(|e| e.render(src))?;
     let tokens = lex(src).map_err(|e| e.to_string())?;
     let lines: Vec<&str> = src.lines().collect();
     let mut by_line: Vec<Vec<&Token>> = vec![vec![]; lines.len() + 1];
@@ -147,7 +153,7 @@ pub fn format(src: &str) -> Result<String, String> {
     if src.is_empty() {
         out.clear();
     }
-    parser::parse(&out)
+    parser::parse_at(&out, base)
         .map_err(|e| format!("formatter produced invalid syntax: {}", e.render(&out)))?;
     let formatted = lex(&out).map_err(|e| e.to_string())?;
     let before: Vec<&Tok> = tokens.iter().map(|t| &t.tok).collect();

@@ -29,8 +29,18 @@ pub use ir::Program;
 
 /// Compile program text to IR (parse and link; `--set` overrides apply).
 pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
-    let prog = frontend::parser::parse(src).map_err(|e| e.render(src))?;
-    let mut p = frontend::link::link(&prog, ov).map_err(|e| e.render(src))?;
+    compile_source_at(src, None, ov)
+}
+
+/// Compile the text of a program file in `base`, next to which its `use`s
+/// read their libraries.
+pub fn compile_source_at(
+    src: &str,
+    base: Option<&Path>,
+    ov: &Overrides,
+) -> Result<ir::Program, String> {
+    let prog = frontend::parser::parse_at(src, base).map_err(|e| e.render(src))?;
+    let mut p = frontend::link::link(&prog, ov).map_err(|e| e.render_in(src, &prog.libs))?;
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
     }
@@ -75,7 +85,7 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
         p.validate()?;
         Ok(p)
     } else {
-        compile_source(&text, ov)
+        compile_source_at(&text, path.parent(), ov)
     }
 }
 
@@ -120,7 +130,7 @@ pub fn inline_trace(p: ir::Program, base: Option<&Path>) -> Result<ir::Program, 
 
 /// Parse, link and run program text. `base` resolves a relative trace path.
 pub fn run_source(src: &str, ov: &Overrides, base: Option<&Path>) -> Result<Report, String> {
-    let p = compile_source(src, ov)?;
+    let p = compile_source_at(src, base, ov)?;
     run_ir(&p, if ov.trace.is_some() { None } else { base })
 }
 

@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::frontend::ast::*;
+use crate::frontend::diagnostic::Source;
 
 #[derive(Debug, Clone)]
 pub struct LinkError {
@@ -33,8 +34,13 @@ impl LinkError {
     }
 
     pub fn render(&self, source: &str) -> String {
+        self.render_in(source, &[])
+    }
+
+    /// Render against the program's text or the library the error is in.
+    pub fn render_in(&self, source: &str, libs: &[Source]) -> String {
         match self.span {
-            Some(span) => span.render(source, &format!("link error: {}", self.message)),
+            Some(span) => span.render_in(source, libs, &format!("link error: {}", self.message)),
             None => self.to_string(),
         }
     }
@@ -516,13 +522,18 @@ impl Linker<'_> {
         }
     }
 
+    /// `line:col`, with the library's path when the span is in one.
+    fn place(&self, span: Span) -> String {
+        match span.file.checked_sub(1).and_then(|i| self.prog.libs.get(i)) {
+            Some(lib) => format!("{}:{}:{}", lib.path, span.line, span.col),
+            None => format!("{}:{}", span.line, span.col),
+        }
+    }
+
     fn duplicate(&self, kind: &str, name: &str, span: Option<Span>) -> LinkError {
         let mut message = format!("duplicate {kind} `{name}`");
         if let Some(first) = self.declaration(kind, name) {
-            message.push_str(&format!(
-                "\nnote: first declared at {}:{}",
-                first.line, first.col
-            ));
+            message.push_str(&format!("\nnote: first declared at {}", self.place(first)));
         }
         message.push_str("\nhelp: rename or remove the duplicate declaration");
         LinkError::new(message).at(span)
@@ -549,8 +560,8 @@ impl Linker<'_> {
             message.push_str(&format!("\nhelp: did you mean {kind} `{candidate}`?"));
             if let Some(span) = self.declaration(kind, &candidate) {
                 message.push_str(&format!(
-                    "\nnote: `{candidate}` declared at {}:{}",
-                    span.line, span.col
+                    "\nnote: `{candidate}` declared at {}",
+                    self.place(span)
                 ));
             }
         } else if kind == "name" {

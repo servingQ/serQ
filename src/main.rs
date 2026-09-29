@@ -73,7 +73,8 @@ fn format_files(args: &[String]) {
             fail(file, "fmt expects a .seq file");
         }
         let source = std::fs::read_to_string(file).unwrap_or_else(|e| fail(file, e));
-        let formatted = seq::frontend::fmt::format(&source).unwrap_or_else(|e| fail(file, e));
+        let formatted =
+            seq::frontend::fmt::format_at(&source, file.parent()).unwrap_or_else(|e| fail(file, e));
         if source != formatted {
             changes.push((file, formatted));
         }

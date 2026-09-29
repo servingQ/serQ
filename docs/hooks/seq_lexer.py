@@ -26,7 +26,7 @@ from pygments.lexers import _mapping
 from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String, Text
 
 # The blocks a program is made of.
-STRUCTURE = ("let", "def", "pool", "stage", "workload", "session", "server", "run")
+STRUCTURE = ("let", "def", "use", "pool", "stage", "workload", "session", "server", "run")
 
 # Statements, in the session and server blocks.
 STATEMENTS = (

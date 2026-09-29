@@ -67,7 +67,7 @@ PATHS = {
     "disagg_proxy_pushconnector_demo.py": "examples/disaggregated/disaggregated_serving/disagg_proxy_pushconnector_demo.py",
 }
 
-SOURCES = ["docs/**/*.md", "src/**/*.rs", "tests/**/*.rs", "examples/*/*.seq", "README.md"]
+SOURCES = ["docs/**/*.md", "src/**/*.rs", "tests/**/*.rs", "examples/*/*.seq", "lib/*.seq", "README.md"]
 
 # `scheduler.py:742-813, 869, 1539-1582` -- one file, then a list of ranges.
 CITE = re.compile(r"\b((?:[\w.]+/)?[\w.]+\.py):((?:\s*\d+(?:-\d+)?\s*,)*\s*\d+(?:-\d+)?)")

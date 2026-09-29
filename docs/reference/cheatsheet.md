@@ -9,6 +9,7 @@ one-page version.
 let NAME = expr;                    // constants, overridable with --set
 def NAME(x, …) = expr;              // a name for an expression, expanded where it is used
 def NAME(x, …) { … }                // a name for statements: NAME(a, …);
+use "file.seq";                     // the defs of a library, relative to this file
 
 pool NAME [ '[' N ']' ] { … }       // a counted resource
 stage NAME [ '[' N ']' ] : kind;    // where time passes
