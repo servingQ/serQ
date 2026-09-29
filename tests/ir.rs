@@ -493,3 +493,18 @@ fn enter_is_hold_and_admit_via_survives() {
         seq::compile_source(&kernel, &ov).unwrap().to_json()
     );
 }
+
+/// A label shows a number as it would have been written: folding noise goes,
+/// whole numbers keep every digit, and code to paste back is exact.
+#[test]
+fn numbers_read_as_written() {
+    use seq::ir::{show_num, show_num_exact};
+    assert_eq!(show_num(0.9100000000000001), "0.91"); // vllm_subagents.seq's folded arrival rate
+    assert_eq!(show_num(1e-5 * 3.0), "3e-5");
+    assert_eq!(show_num(-0.91), "-0.91");
+    assert_eq!(show_num(2e-9), "2e-9");
+    assert_eq!(show_num(160000.0), "160000");
+    assert_eq!(show_num(1234567890123.0), "1234567890123");
+    assert_eq!(show_num(f64::INFINITY), "inf");
+    assert_eq!(show_num_exact(0.9100000000000001), "0.9100000000000001");
+}

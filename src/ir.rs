@@ -1034,8 +1034,20 @@ impl DistKind {
 ///
 /// Rust's `{}` writes `0.000000002` for `2e-9`, which is unreadable in a
 /// label; `{:e}` writes `1.6e5` for `160000`, which is worse. Whole numbers
-/// that fit take the plain form, the rest take whichever is shorter.
+/// that fit take the plain form, the rest take whichever is shorter. A
+/// fraction is shown to 12 significant digits: `0.1 * (1 + 8.1)` folds to
+/// `0.9100000000000001`, which nobody wrote. Where the text is code to paste
+/// back, `show_num_exact` keeps every digit.
 pub fn show_num(x: f64) -> String {
+    if x.is_finite() && x != x.trunc() {
+        let r: f64 = format!("{x:.11e}").parse().unwrap_or(x);
+        return show_num_exact(r);
+    }
+    show_num_exact(x)
+}
+
+/// `show_num` without the rounding: the shortest text that reads back as `x`.
+pub fn show_num_exact(x: f64) -> String {
     if x.is_nan() {
         return "nan".into();
     }
