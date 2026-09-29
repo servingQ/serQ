@@ -103,7 +103,7 @@ Two results worth naming:
 - Cache entries are per session. Cross-session prefix sharing — a common system
   prompt, SGLang's RadixAttention — needs a content-addressed cache and is not
   written.
-- The prefill/decode program (`examples/pd-disaggregation/llmd_pd.seq`) is checked against the
+- The prefill/decode program (`examples/pd-disaggregation/llmd_nixl_pull.seq`) is checked against the
   source line by line and by deterministic tests of its statements, not yet
   against a machine or a scheduler oracle: that oracle would
   drive two vLLM schedulers and a fake connector ([case

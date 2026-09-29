@@ -18,7 +18,7 @@ const PROGRAMS: [&str; 8] = [
     "routing",
     "vllm",
     "vllm_request",
-    "llmd_pd",
+    "llmd_nixl_pull",
 ];
 
 fn program(name: &str) -> Program {
@@ -50,7 +50,7 @@ fn pools_of(p: &Program, net: &deployment::Net, stage_name: &str) -> Vec<String>
 // --- the station kinds -----------------------------------------------------
 
 /// Each stage kind has its glyph: `mg1.seq` is one FIFO server, `ps.seq` one
-/// processor-sharing server, and `llmd_pd.seq` has a step engine on each
+/// processor-sharing server, and `llmd_nixl_pull.seq` has a step engine on each
 /// side, a processor-sharing link and a delay for the tool call.
 #[test]
 fn stations_take_their_stage_kind() {
@@ -64,7 +64,7 @@ fn stations_take_their_stage_kind() {
     };
     assert_eq!(kinds("mg1"), [StationKind::Fifo]);
     assert_eq!(kinds("ps"), [StationKind::Ps]);
-    let p = program("llmd_pd");
+    let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     for (name, kind) in [
         ("P", StationKind::Step),
@@ -352,7 +352,7 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
     assert!(pools_of(&p, &net, "s3").is_empty());
 }
 
-/// `examples/pd-disaggregation/llmd_pd.seq`: the prompt's KV is in the prefiller's pool
+/// `examples/pd-disaggregation/llmd_nixl_pull.seq`: the prompt's KV is in the prefiller's pool
 /// through the transfer (leased past its scope) and in the decoder's from
 /// the transfer on, so the link station is inside both enclosures, the
 /// prefill station in the prefiller's only and the decode station in the
@@ -360,7 +360,7 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
 /// encloses the prefill station alone.
 #[test]
 fn a_transfer_puts_the_link_in_both_enclosures() {
-    let p = program("llmd_pd");
+    let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "P"), ["reqsP", "kvP"]);
     assert_eq!(pools_of(&p, &net, "link"), ["kvP", "kvD", "reqsD"]);
@@ -373,13 +373,13 @@ fn a_transfer_puts_the_link_in_both_enclosures() {
     assert_eq!(boxes.iter().filter(|b| b.contains(&rect)).count(), 3);
 }
 
-/// `examples/pd-disaggregation/llmd_pd.seq`'s router sends a request either
+/// `examples/pd-disaggregation/llmd_nixl_pull.seq`'s router sends a request either
 /// to a prefiller and over the link (remote), or straight to the decoder
 /// (local); a request whose KV is already there skips the link. Every turn
 /// ends at the decoder, which the session leaves or resumes after a tool call.
 #[test]
 fn the_router_branches_to_a_remote_or_a_local_prefill() {
-    let p = program("llmd_pd");
+    let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
     let (pf, link, d, tool) = (at("P"), at("link"), at("D"), at("tool"));
@@ -511,9 +511,9 @@ fn golden_files_are_current() {
         "vllm.deployment.svg",
         &seq::view::svg::render(&deployment::figure(&p)),
     );
-    let p = program("llmd_pd");
+    let p = program("llmd_nixl_pull");
     golden(
-        "llmd_pd.deployment.svg",
+        "llmd_nixl_pull.deployment.svg",
         &seq::view::svg::render(&deployment::figure(&p)),
     );
 }

@@ -271,7 +271,7 @@ of `n` tokens arrived from outside the engine: the enclosing hold's
 computed position on `Q` advances by `n` (within its allocation), as a
 `growing` run's would token by token, so `keep` and `cached` count them.
 `transfer (X) from P to Q (n)` is the two around the link run.
-`examples/pd-disaggregation/llmd_pd.seq` is the whole path, and `docs/case-study-pd.md` its
+`examples/pd-disaggregation/llmd_nixl_pull.seq` is the whole path, and `docs/case-study-pd.md` its
 line-by-line correspondence with llm-d and the NIXL connector.
 
 **Against vLLM.** Each form is one part of a request's life in the v1
@@ -282,7 +282,7 @@ scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
 | `admit if reqs (1), kv (hit + …) fit where hit = … { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
 | `prefill (n) growing kv` | prefill in chunks of the budget, a block allocated as the request advances; a missing block preempts `running[-1]` | the running loop, `scheduler.py:624-823`; `allocate_slots` at `scheduler.py:743`; `_preempt_request`, `scheduler.py:1539-1582` (`preempt lifo`) |
 | `decode (o) growing kv` | one token per iteration, a block every `block_size` tokens | the same loop and `allocate_slots` with one new token |
-| `} keep (prompt) lease kvP (inf)` on the prefiller's hold, then `transfer (X) from kvP to kvD (n)` inside the decoder's | the KV of a prefilled request moves to the decode instance: the prefiller's blocks wait, the decoder allocates and reads, the prefiller frees | the KV connector, `examples/pd-disaggregation/llmd_pd.seq`: the decoder parks the request at `scheduler.py:1264-1294` (`WAITING_FOR_REMOTE_KVS`), its blocks allocated for the whole prompt; the read done, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; the prefiller keeps its blocks leased at `_connector_finished`, `scheduler.py:2929-2982`, and frees them at `scheduler.py:3135-3138` |
+| `} keep (prompt) lease kvP (inf)` on the prefiller's hold, then `transfer (X) from kvP to kvD (n)` inside the decoder's | the KV of a prefilled request moves to the decode instance: the prefiller's blocks wait, the decoder allocates and reads, the prefiller frees | the KV connector, `examples/pd-disaggregation/llmd_nixl_pull.seq`: the decoder parks the request at `scheduler.py:1264-1294` (`WAITING_FOR_REMOTE_KVS`), its blocks allocated for the whole prompt; the read done, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; the prefiller keeps its blocks leased at `_connector_finished`, `scheduler.py:2929-2982`, and frees them at `scheduler.py:3135-3138` |
 | `} keep (prompt + o)` | release: the blocks go to the free queue, the full ones stay cached | `_free_request`, `scheduler.py:2628`; `free`, `kv_cache_manager.py:610-619`; `cache_blocks`, `kv_cache_manager.py:802-812` |
 | `tool Z; turn;` | the session thinks and comes back with a longer prompt | outside the engine: the session's next request, `add_request`, `scheduler.py:2536` |
 | `end` | the session leaves; its blocks stay in the free queue | `finish_requests`, `scheduler.py:2564` |
@@ -423,10 +423,10 @@ not in an iteration that preempted (vLLM's waiting loop,
 q[N] { admit via S; }` next to `stage S[N]` serves `q[i]` by `S[i]`, and
 `stage E[N] : step { memory kv; }` next to `pool kv[N]` counts `kv[i]` for
 `E[i]`; next to a family of one, every member gets that one, and any other
-pair of counts is a link error (`examples/pd-disaggregation/llmd_pd.seq` is the xPyD case,
+pair of counts is a link error (`examples/pd-disaggregation/llmd_nixl_pull.seq` is the xPyD case,
 `docs/case-study-pd.md` §Writing xPyD). A stage that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
-stops the iteration's admissions; `examples/pd-disaggregation/llmd_pd.seq` declares the
+stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.seq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
 ones, as vLLM serves `skipped_waiting` before `waiting`
 (`scheduler.py:2383-2385`). `budget_left(S)` then evaluates to the budget
@@ -641,7 +641,7 @@ and, in Lean, `Deployments.colocatedReplica`.
 | `mg1.seq`, `ps.seq`, `closed.seq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | closed forms (`seq_closed_forms.rs`): M/M/1 sojourn, PK for four laws, PS insensitivity, MVA |
 | `replica.seq` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`serve decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/seq/replica_seeds.csv`, `seq_replica_and_pd.rs`) |
 | `routing.seq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
-| `llmd_pd.seq` | llm-d's prefill/decode disaggregation on vLLM with the NIXL connector: the router, the sidecar, two prefill and two decode instances (`docs/case-study-pd.md`) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle yet |
+| `llmd_nixl_pull.seq` | llm-d's prefill/decode disaggregation on vLLM with the NIXL connector: the router, the sidecar, two prefill and two decode instances (`docs/case-study-pd.md`) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle yet |
 | `vllm.seq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
 | `vllm_single_turn.seq`, `vllm_chat.seq`, `vllm_subagents.seq` | `vllm.seq`'s engine under a single-turn, a chat and an approximated subagent workload ([case study](case-study-workloads.md)) | the engine is `vllm.seq`'s text (`tests/workloads.rs`) |
 | `vllm_request.seq` | one vLLM v1 request on the step clock; compiled per scenario to `tools/oracle/*.ir.json` | the six upstream oracle scenarios (`tests/vllm_oracle.rs`), the Lean theorems generated from the same IR |
@@ -832,11 +832,11 @@ the pinned run, so the comparison is conservative. One run per point.
 * A session is one sequence of statements, so it waits at one pool at a
   time. NIXL's push mode lets a proxy send the decode request while the
   prefill runs, so the decoder allocates *during* the prefill and the write
-  starts the moment it ends; `examples/pd-disaggregation/llmd_pd.seq` writes the decoder's
+  starts the moment it ends; `examples/pd-disaggregation/llmd_nixl_pull.seq` writes the decoder's
   admission after the prefill, which is the pull mode and the llm-d
   sidecar's serial dispatch. A reservation a session joins now and enters
   later is the construct for it (`docs/design/pd-transfer.md`).
-* A lease's bound is one number: `examples/pd-disaggregation/llmd_pd.seq` writes `inf` for
+* A lease's bound is one number: `examples/pd-disaggregation/llmd_nixl_pull.seq` writes `inf` for
   a prefiller whose lease the decoder's heartbeats renew, `30` would be
   one nobody renews; the heartbeat itself (a 5 s message that adds 20 s)
   is not a construct, and a decoder that dies mid-wait is not a session

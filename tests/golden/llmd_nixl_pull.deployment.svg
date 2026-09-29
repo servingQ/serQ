@@ -5,10 +5,7 @@
     text { fill: #e8e6e3; } text.dim { fill: #9aa4b2; }
     .bg { fill:#14171a }
     .solid { fill:#232a31;stroke:#b6bfcc }
-    .body { fill:#232a31;stroke:#b6bfcc }
-    .admission { fill:#232a31;stroke:#b6bfcc }
     .cached { fill:#33302a }
-    .reserve { stroke:#9aa4b2 }
     .enclosure { stroke:#9aa4b2 }
     .station { fill:#26403d;stroke:#b6bfcc }
     .cell { fill:#14171a;stroke:#b6bfcc }
@@ -16,7 +13,6 @@
     .flow { stroke:#b6bfcc }
     .back { stroke:#b6bfcc }
     .relation { stroke:#9aa4b2 }
-    .grow { stroke:#b6bfcc }
   }
 </style>
 <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker></defs>

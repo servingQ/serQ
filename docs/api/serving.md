@@ -86,7 +86,7 @@ allocates before the prefill instance frees.
 
 ### Example
 
-From `examples/pd-disaggregation/llmd_pd.seq`, the prefiller's lease and the
+From `examples/pd-disaggregation/llmd_nixl_pull.seq`, the prefiller's lease and the
 decoder's read:
 
 ```seq

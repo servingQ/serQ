@@ -1,6 +1,6 @@
 # Case study: prefill/decode disaggregation over NIXL
 
-`examples/pd-disaggregation/llmd_pd.seq` is llm-d's prefill/decode split on vLLM: the router
+`examples/pd-disaggregation/llmd_nixl_pull.seq` is llm-d's prefill/decode split on vLLM: the router
 that decides which pod prefills and which decodes, the sidecar that sends
 the prompt to one and the decode request to the other, and the two
 schedulers that hand the KV over with the NIXL connector. Every line is
@@ -12,7 +12,7 @@ It is a specification checked against the code, not yet against a
 scheduler oracle. What the program cannot say without two new statements,
 and what it still cannot say, is in [The KV transfer](design/pd-transfer.md).
 
-![llm-d prefill/decode over NIXL as a queueing network](assets/llmd_pd.deployment.svg)
+![llm-d prefill/decode over NIXL as a queueing network](assets/llmd_nixl_pull.deployment.svg)
 
 The prompt's KV is in the prefiller's pool through the transfer and in the
 decoder's from the transfer on, which is why the two enclosures cross at the
@@ -35,8 +35,8 @@ and block 16. What differs from the guide is written next to each number.
 
 ## In seQ
 
-```seq title="examples/pd-disaggregation/llmd_pd.seq"
---8<-- "examples/pd-disaggregation/llmd_pd.seq"
+```seq title="examples/pd-disaggregation/llmd_nixl_pull.seq"
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.seq"
 ```
 
 ### Line by line

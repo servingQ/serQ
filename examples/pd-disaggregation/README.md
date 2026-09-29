@@ -1,6 +1,6 @@
 # Prefill/decode examples
 
-`llmd_pd.seq` describes a serving deployment.
+`llmd_nixl_pull.seq` describes a serving deployment.
 
 `pd_open.seq` and `pd_tandem.seq` are research comparison fixtures for
 serving-queue-theory's queueing models. The open model uses Poisson arrivals;
