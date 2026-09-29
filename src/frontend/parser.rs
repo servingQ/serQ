@@ -171,6 +171,11 @@ struct Def {
     /// `set`s, `choose`s and bindings, and `cached` and `computed` if it
     /// holds. An argument that reads one would read the body's value.
     assigns: Vec<String>,
+    /// The names the body reads other than its parameters, and the
+    /// functions of pool or stage state it calls, itself or through a
+    /// definition it uses: what an argument that uses it reads.
+    reads: Vec<String>,
+    calls: Vec<String>,
     /// The body says `turn;` or `request;`, itself or through a definition.
     turn: bool,
     request: bool,
@@ -1260,6 +1265,8 @@ impl Parser {
         let mut assigns = assigned_tokens(&body);
         let mut turn = says(&body, "turn");
         let mut request = says(&body, "request");
+        let (mut reads, mut calls) = self.reads_of(&body);
+        reads.retain(|n| !params.contains(n));
         for d in &used {
             assigns.extend(d.assigns.iter().cloned());
             turn |= d.turn;
@@ -1267,6 +1274,8 @@ impl Parser {
         }
         assigns.sort();
         assigns.dedup();
+        calls.sort();
+        calls.dedup();
         self.defs.push(Def {
             line: self.toks[at].line,
             col: self.toks[at].col,
@@ -1276,10 +1285,37 @@ impl Parser {
             body,
             draws,
             assigns,
+            reads,
+            calls,
             turn,
             request,
         });
         Ok(())
+    }
+
+    /// The names `toks` read and the functions of live state they call,
+    /// joined over the definitions they use.
+    fn reads_of(&self, toks: &[Token]) -> (Vec<String>, Vec<String>) {
+        let mut reads = vec![];
+        let mut calls = vec![];
+        for (k, t) in toks.iter().enumerate() {
+            let Tok::Ident(n) = &t.tok else { continue };
+            let called = toks.get(k + 1).is_some_and(|t| t.tok == Tok::LParen);
+            if called && FUNCTIONS.contains(&n.as_str()) {
+                if !PURE.contains(&n.as_str()) {
+                    calls.push(n.clone());
+                }
+            } else if !called && !KEYWORDS.contains(&n.as_str()) {
+                reads.push(n.clone());
+            }
+        }
+        for d in self.defs.iter().filter(|d| uses(toks, &d.name)) {
+            reads.extend(d.reads.iter().cloned());
+            calls.extend(d.calls.iter().cloned());
+        }
+        reads.sort();
+        reads.dedup();
+        (reads, calls)
     }
 
     /// Does one of the definitions `toks` uses draw?
@@ -1354,11 +1390,8 @@ impl Parser {
             if a.is_empty() {
                 return self.err_at(at, format!("`{}`: the argument for `{p}` is empty", d.name));
             }
-            if let Some(n) = d
-                .assigns
-                .iter()
-                .find(|n| a.iter().any(|t| t.tok == Tok::Ident(n.to_string())))
-            {
+            let (reads, _) = self.reads_of(a);
+            if let Some(n) = d.assigns.iter().find(|n| reads.contains(n)) {
                 return self.err_at(at, capture_message(&d.name, p, n));
             }
             let uses = d
@@ -1379,29 +1412,15 @@ impl Parser {
         }
         if d.stmts {
             for (p, a) in d.params.iter().zip(&args) {
-                let live = a.windows(2).find_map(|w| match (&w[0].tok, &w[1].tok) {
-                    (Tok::Ident(f), Tok::LParen)
-                        if FUNCTIONS.contains(&f.as_str()) && !PURE.contains(&f.as_str()) =>
-                    {
-                        Some(f.clone())
-                    }
-                    _ => None,
-                });
-                if let Some(f) = live {
+                let (_, calls) = self.reads_of(a);
+                if let Some(f) = calls.first() {
                     return self.err_at(at, live_message(&d.name, p, &format!("{f}(…)")));
                 }
             }
         }
         let (turn, request) = (d.turn, d.request);
         if d.stmts {
-            let mut reads: Vec<String> = args
-                .iter()
-                .flatten()
-                .filter_map(|t| match &t.tok {
-                    Tok::Ident(n) => Some(n.clone()),
-                    _ => None,
-                })
-                .collect();
+            let mut reads: Vec<String> = args.iter().flat_map(|a| self.reads_of(a).0).collect();
             reads.sort();
             reads.dedup();
             self.deferred.push(Deferred {
@@ -2920,6 +2939,19 @@ mod tests {
             "{ENGINE} def f(x) {{ observe b = x; }} session {{ set n = 1; f(n); }}"
         ))
         .unwrap();
+        // and through an expression the argument uses
+        assert!(
+            err("stage svc : fifo; def clock() = now; def timed(t) { run svc (1); observe took = now - t; } session { timed(clock()); }")
+                .contains("reads `now`")
+        );
+        assert!(
+            err("def occ(p) = used(p); def f(q) { observe b = q; } session { f(occ(kv)); }")
+                .contains("reads `used(…)`")
+        );
+        assert!(
+            err("def plus(x) = s + x; def f(v) { set s = 10; observe o = v; } session { f(plus(1)); }")
+                .contains("which `f` assigns")
+        );
         // and through a definition the body uses
         assert!(
             err("def reset() { set s = 10; } def f(x) { reset(); observe o = x; } session { f(s + 1); }")
