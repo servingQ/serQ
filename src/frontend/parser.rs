@@ -129,6 +129,20 @@ struct Parser {
     /// The token ranges uses were expanded into, innermost last, to say
     /// where an error inside one was used.
     expanded: Vec<Expanded>,
+    /// Uses whose arguments read names a `turn;` or `request;` in the body
+    /// might assign, which only the whole program says: checked at its end.
+    deferred: Vec<Deferred>,
+}
+
+/// A use of a `def` whose body says `turn;` or `request;`, with the names
+/// its arguments read.
+struct Deferred {
+    name: String,
+    line: usize,
+    col: usize,
+    reads: Vec<String>,
+    turn: bool,
+    request: bool,
 }
 
 /// The tokens a use of a `def` became, and where it was used.
@@ -160,7 +174,7 @@ struct Def {
 
 /// Tokens a program may expand to. Definitions use only earlier ones, so
 /// an expansion ends; one can still double at every level.
-const MAX_TOKENS: usize = 1_000_000;
+const MAX_TOKENS: usize = 100_000;
 
 /// The distributions of `~name(…)`, which a `def` may not be named.
 const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bernoulli"];
@@ -328,6 +342,7 @@ pub fn parse(src: &str) -> PResult<Program> {
         bind_at: vec![],
         defs: vec![],
         expanded: vec![],
+        deferred: vec![],
     };
     p.program()
 }
@@ -347,6 +362,7 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
         bind_at: vec![],
         defs: vec![],
         expanded: vec![],
+        deferred: vec![],
     };
     let e = p.expr()?;
     p.expect(&Tok::Eof)?;
@@ -408,6 +424,31 @@ fn has_sample(e: &Expr) -> bool {
         Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
         Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
     }
+}
+
+/// The names `set` or `choose` assigns anywhere in `stmts`.
+fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
+    for s in stmts {
+        match s {
+            Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => out.push(n.clone()),
+            Stmt::Hold { body, .. } | Stmt::Loop(body) => assigned_in(body, out),
+            Stmt::Branch(_, a, b) => {
+                assigned_in(a, out);
+                assigned_in(b, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// An argument of `def` reads `n`, which the body assigns before it reads
+/// the parameter `p`.
+fn capture_message(def: &str, p: &str, n: &str) -> String {
+    format!(
+        "the argument for `{p}` reads `{n}`, which `{def}` assigns: it would read the \
+         body's `{n}`, not this one\nhelp: `set` the value under another name first and \
+         pass that; a key over a `choose` of the body is written where the `choose` is"
+    )
 }
 
 /// Do these tokens use the definition `name`, `name(`?
@@ -845,9 +886,14 @@ impl Parser {
                 return self.err(format!("unexpected {} at top level", self.peek()));
             }
         }
+        let mut served = vec![];
+        if let Some((_, server)) = &self.server {
+            assigned_in(server, &mut served);
+        }
         self.assemble(&mut prog)?;
         self.check_body_bindings(&prog)?;
         self.check_def_names(&prog)?;
+        self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
         Ok(prog)
     }
@@ -978,6 +1024,40 @@ impl Parser {
         Ok(())
     }
 
+    /// A use whose body says `turn;` or `request;` may not pass an argument
+    /// that reads what the workload's `turn` or the server assigns.
+    fn check_deferred(&self, prog: &Program, served: &[String]) -> PResult<()> {
+        // a turn draws the workload's `turn` block, or a trace's attributes
+        let mut turned: Vec<String> = BUILTIN_ATTRS.iter().map(|a| a.to_string()).collect();
+        if let Some(w) = &prog.workload {
+            assigned_in(&w.turn, &mut turned);
+        }
+        for u in &self.deferred {
+            let found = u
+                .reads
+                .iter()
+                .find(|n| (u.turn && turned.contains(n)) || (u.request && served.contains(*n)));
+            if let Some(n) = found {
+                let by = if u.turn && turned.contains(n) {
+                    "`turn;`"
+                } else {
+                    "`request;`"
+                };
+                return Err(ParseError {
+                    line: u.line,
+                    col: u.col,
+                    msg: format!(
+                        "an argument of `{}` reads `{n}`, which its {by} assigns: it would \
+                         read the new `{n}`, not this one\nhelp: `set` the value under \
+                         another name first and pass that",
+                        u.name
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// A `def` named like a declaration would be one name for two things.
     fn check_def_names(&self, prog: &Program) -> PResult<()> {
         for d in &self.defs {
@@ -1085,13 +1165,20 @@ impl Parser {
         // a parameter where the body names what it assigns would put an
         // argument there, which is not a name
         for w in body.windows(2) {
-            if let (Tok::Ident(kw), Tok::Ident(n)) = (&w[0].tok, &w[1].tok)
-                && matches!(kw.as_str(), "set" | "observe" | "choose")
+            let named = match (&w[0].tok, &w[1].tok) {
+                (Tok::Ident(kw), Tok::Ident(n)) if kw == "choose" => Some(n),
+                (Tok::Ident(n), Tok::Assign) => Some(n),
+                _ => None,
+            };
+            if let Some(n) = named
                 && params.contains(n)
             {
                 return self.err_at(
                     at,
-                    format!("`{kw} {n}`: `{n}` is a parameter, and `{kw}` names what it assigns"),
+                    format!(
+                        "`{n}` is a parameter, and the body names with it what it assigns \
+                         or binds"
+                    ),
                 );
             }
         }
@@ -1191,6 +1278,17 @@ impl Parser {
                         && prev != Some(&Tok::Ident("observe".into()));
                     (chosen || assigned).then_some(n.as_str())
                 })
+                .chain(
+                    // an admission sets what the scheduler tells the session
+                    d.body
+                        .iter()
+                        .any(|t| {
+                            matches!(&t.tok, Tok::Ident(k) if k == "hold" || k == "enter" || k == "admit")
+                        })
+                        .then_some(["cached", "computed"])
+                        .into_iter()
+                        .flatten(),
+                )
                 .collect()
         } else {
             vec![]
@@ -1203,15 +1301,7 @@ impl Parser {
                 .iter()
                 .find(|n| a.iter().any(|t| t.tok == Tok::Ident(n.to_string())))
             {
-                return self.err_at(
-                    at,
-                    format!(
-                        "the argument for `{p}` reads `{n}`, which `{}` assigns: it would read \
-                         the body's `{n}`, not this one\nhelp: `set` the value under another \
-                         name first and pass that",
-                        d.name
-                    ),
-                );
+                return self.err_at(at, capture_message(&d.name, p, n));
             }
             let uses = d
                 .body
@@ -1228,6 +1318,32 @@ impl Parser {
                     ),
                 );
             }
+        }
+        let says = |w: &str| {
+            d.body
+                .windows(2)
+                .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
+        };
+        let (turn, request) = (says("turn"), says("request"));
+        if turn || request {
+            let mut reads: Vec<String> = args
+                .iter()
+                .flatten()
+                .filter_map(|t| match &t.tok {
+                    Tok::Ident(n) => Some(n.clone()),
+                    _ => None,
+                })
+                .collect();
+            reads.sort();
+            reads.dedup();
+            self.deferred.push(Deferred {
+                name: d.name.clone(),
+                line: use_line,
+                col: use_col,
+                reads,
+                turn,
+                request,
+            });
         }
         let mut end = self.pos;
         if d.stmts {
@@ -1277,8 +1393,11 @@ impl Parser {
         }
         // the expansions this one is inside grow by what it adds
         let grown = out.len() as isize - (end - at) as isize;
-        for e in &mut self.expanded {
-            if e.start <= at && at < e.end {
+        for e in self.expanded.iter_mut().rev() {
+            if e.end <= at {
+                continue;
+            }
+            if e.start <= at {
                 e.end = (e.end as isize + grown) as usize;
             }
         }
@@ -2698,6 +2817,23 @@ mod tests {
         ))
         .unwrap();
         assert!(err("def f(p) { set p = 1; } session { f(2); }").contains("is a parameter"));
+        assert!(
+            err("def f(h) { enter kv (h) at admission (h = 3) { observe a = h; } } session { f(2); }")
+                .contains("is a parameter")
+        );
+        // what a turn, a request or an admission assigns is captured too
+        assert!(
+            err("def next(x) { turn; observe p = x; } workload { turn { set n = 1; } } session { next(n); end; }")
+                .contains("which its `turn;` assigns")
+        );
+        assert!(
+            err("def go(x) { request; observe b = x; } workload { init { set t0 = 0; } session { go(t0); end; } } server { set t0 = now; }")
+                .contains("which its `request;` assigns")
+        );
+        assert!(
+            err("def take(x) { enter kv (4) { observe got = x; } } session { take(cached); }")
+                .contains("which `take` assigns")
+        );
         // a name that is a declaration's
         assert!(err("def kv(x) = x; session { }").contains("also a pool"));
         assert!(err("def engine(x) = x; session { }").contains("also a stage"));

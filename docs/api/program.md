@@ -47,13 +47,16 @@ set hitmax = reusable(prompt);
 | Argument | Type | Description |
 |---|---|---|
 | `NAME` | identifier | Not a keyword, a function, a distribution, a pool, a stage or a `let`, and not defined twice. Defined before its first use; a body uses only the definitions before it, so none reaches itself. |
-| `PARAM` | identifier | Not a keyword or a function, and not the name a `set`, `observe` or `choose` in the body assigns. |
+| `PARAM` | identifier | Not a keyword or a function, and not a name the body assigns or binds (`set p =`, `choose p`, `p =` in a binding). |
 | `arg` | `expr` or reference | A reference (`kv`, `kvD[j]`) is put in as written, so it may name a pool or a stage; any other argument is put in inside parentheses. An argument that draws (itself, or through a definition that draws) may be passed only to a parameter the body reads once, and an argument may not read a name the body assigns. |
 
 Only the parameters are the definition's own. Every other name in the body is
 the program's: an attribute the body sets is the session's attribute, as it
 would be written out. So that a use reads as a call, an argument that reads
-such a name is refused rather than read after the body's `set`. An error in
+a name the body assigns is refused rather than read after the assignment:
+a `set`, `choose` or binding of the body, the attributes a hold's admission
+sets (`cached`, `computed`) when the body holds, and what a `turn;` or
+`request;` in the body assigns. An error in
 an expansion is reported in the body, with a note naming the use.
 
 ## `pool`
