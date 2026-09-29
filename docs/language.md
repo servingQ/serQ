@@ -416,8 +416,9 @@ session's cached prefixes: the cache does not know that a session has left
 them writes `drop POOL;` before `end;`. Eviction is per entry, or per block
 from the tail of the entry when the pool has `block b`; `evict lru` orders
 by release time and then release order, `evict by (k₁, …)` by the keys and
-then release order. A request that can never fit is rejected (vLLM
-`FINISHED_IGNORED`).
+then release order. A request that can never fit — its units, or its
+`reserve` when that is larger, above the cap, as they evaluate when the
+session joins the queue — is rejected (vLLM `FINISHED_IGNORED`).
 
 A pool marked `admit via S` is not admitted at settle time: its queue is
 served by step stage `S`, at the start of an iteration, after the
@@ -523,7 +524,9 @@ no event left the run ended with a session in the queue. A hold whose body
 can never fit then preempts itself forever; vLLM never runs that program,
 since it refuses at start-up a KV cache that cannot hold one request of
 `max_model_len` (`kv_cache_utils.py:965`), a check seQ does not have, which
-is what the `stuck` counter below is for.
+is what the `stuck` counter below is for. A hold that reserves what it
+will need (`reserve (known)` after a preemption) is rejected instead, once
+the reservation is above the cap.
 `serve exclusive prefill` schedules only the first prefilling resident while
 one exists (the RBLN stack). Without a per-request chunk cap, serving in
 admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`;
