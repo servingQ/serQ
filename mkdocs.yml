@@ -88,7 +88,6 @@ nav:
   - Developer Guide:
       - Development guide: development.md
       - How seQ is checked: validation.md
-      - Design review: review.md
       - Design:
           - design/index.md
           - Philosophy: design/philosophy.md

@@ -94,6 +94,7 @@ is ordinary control flow: `branch`, `loop`, `end`.
 | use a program in the simulator or in Lean | [Development guide](development.md) |
 
 !!! note "The reference documents"
-    [The language](language.md), [The IR](ir.md) and the [design
-    review](review.md) are the specification-grade documents. They are complete
-    and dense. The tutorial is the way in; those are what you read afterwards.
+    [The language](language.md) and [The IR](ir.md) are the specification-grade
+    documents. They are complete and dense. The tutorial is the way in; those are
+    what you read afterwards, and the [API reference](api/index.md) is where you
+    look a construct up.
