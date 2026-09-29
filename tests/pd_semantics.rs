@@ -360,6 +360,33 @@ fn the_pd_program_survives_decoder_memory_pressure() {
     );
 }
 
+/// A new request on the decoder queues at its blocks, behind the requests
+/// whose KV has arrived, not at its slot in front of them. Queued at the
+/// slots, a local prefill whose prompt does not fit next to a request that
+/// has just been read would stand in front of that request, which needs a
+/// slot and holds the blocks the local prefill waits for: neither ends,
+/// and nothing after them does. On decoders of 1 100 blocks the program
+/// with seed 20 stops so with the local prefill queued at the slots: by
+/// t = 800, 131 of 470 sessions have ended and 119 are live on average;
+/// queued at the blocks, 430 have ended and 15 are live.
+#[test]
+fn a_local_prefill_does_not_block_an_arrived_transfer() {
+    let path = seq::program_path("llmd_nixl_pull");
+    let src = std::fs::read_to_string(&path).unwrap();
+    let ov = Overrides {
+        lets: vec![(
+            "blocksD".into(),
+            seq::frontend::parser::parse_expr("1100").unwrap(),
+        )],
+        horizon: Some(800.0),
+        warmup: Some(50.0),
+        seed: Some(20),
+        ..Default::default()
+    };
+    let r = run_source(&src, &ov, path.parent()).unwrap();
+    assert!(r.mean_live < 30.0, "{}", r.text());
+}
+
 /// `release` and `load` name the pool as the enclosing hold wrote it,
 /// index included: `hold q[0] { load q[1] (1); }` would look for a hold the
 /// session does not have.
