@@ -108,7 +108,9 @@ pub fn load_trace(p: &ir::Program, base: Option<&Path>) -> Result<Option<trace::
     };
     let text = std::fs::read_to_string(&full)
         .map_err(|e| format!("cannot read trace {}: {e}", full.display()))?;
-    trace::Corpus::from_csv(&text).map(Some)
+    trace::Corpus::from_csv(&text)
+        .map(Some)
+        .map_err(|e| format!("trace {}: {e}", full.display()))
 }
 
 /// Replace the program's trace file by its sessions, as explicit sessions
