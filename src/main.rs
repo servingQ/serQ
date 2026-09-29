@@ -2,6 +2,7 @@
 //! `seq-lang check FILE [--set k=expr]...`
 //! `seq-lang ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]`
 //! `seq-lang draw FILE [--view deployment|session] [--format tikz|svg] [--out PATH] [--show-set]` (experimental)
+//! `seq-lang fmt [--check] FILE...`
 //!
 //! FILE is program text (`.seq`) or IR (`.json`, as written by `seq-lang ir`).
 
@@ -22,7 +23,8 @@ fn usage(cmd: &str) -> &'static str {
         "draw" => {
             "seq-lang draw FILE [--set name=expr]... [--view deployment|session] [--format tikz|svg] [--out PATH] [--show-set]"
         }
-        _ => "seq-lang <run|check|ir|draw> FILE [OPTIONS]",
+        "fmt" => "seq-lang fmt [--check] FILE...",
+        _ => "seq-lang <run|check|ir|draw|fmt> FILE [OPTIONS]",
     }
 }
 
@@ -50,14 +52,59 @@ fn fail(file: &Path, e: impl std::fmt::Display) -> ! {
     exit(1)
 }
 
+fn format_files(args: &[String]) {
+    let mut check = false;
+    let mut files = Vec::new();
+    for arg in args.iter().skip(1) {
+        if arg == "--check" {
+            check = true;
+        } else if arg.starts_with('-') {
+            argument_error("fmt", format!("unknown option `{arg}`"));
+        } else {
+            files.push(Path::new(arg));
+        }
+    }
+    if files.is_empty() {
+        argument_error("fmt", "missing FILE\nhelp: supply one or more .seq files");
+    }
+    // Read and validate the whole batch before writing any file.
+    let mut changes = Vec::new();
+    for file in files {
+        if file.extension().is_none_or(|ext| ext != "seq") {
+            fail(file, "fmt expects a .seq file");
+        }
+        let source = std::fs::read_to_string(file).unwrap_or_else(|e| fail(file, e));
+        let formatted = seq::fmt::format(&source).unwrap_or_else(|e| fail(file, e));
+        if source != formatted {
+            changes.push((file, formatted));
+        }
+    }
+    if check {
+        for (file, _) in &changes {
+            eprintln!("would reformat {}", file.display());
+        }
+        if !changes.is_empty() {
+            exit(1);
+        }
+    } else {
+        for (file, formatted) in changes {
+            std::fs::write(file, formatted).unwrap_or_else(|e| fail(file, e));
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("");
-    if !matches!(cmd, "run" | "check" | "ir" | "draw") {
+    if !matches!(cmd, "run" | "check" | "ir" | "draw" | "fmt") {
         argument_error(
             cmd,
-            format!("unknown command `{cmd}`\nhelp: choose run, check, ir, or draw"),
+            format!("unknown command `{cmd}`\nhelp: choose run, check, ir, draw, or fmt"),
         );
+    }
+    if cmd == "fmt" {
+        format_files(&args);
+        return;
     }
     if args.get(1).is_none_or(|s| s.starts_with("--")) {
         argument_error(

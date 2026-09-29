@@ -15,7 +15,7 @@ let Lambda = 0.5;
 let p = 0.8;
 let Z = 3.0;
 
-pool kv    { cap blocks * bs; block bs; evict lru; preempt lifo; }
+pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
 pool reqs { cap max_seqs; admit via engine; }
 
 stage engine : step {

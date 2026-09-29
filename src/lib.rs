@@ -19,6 +19,7 @@ pub mod deployment;
 pub mod diagnostic;
 pub mod draw;
 pub mod figure;
+pub mod fmt;
 pub mod interp;
 pub mod ir;
 pub mod lexer;

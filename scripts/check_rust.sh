@@ -10,6 +10,7 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --release --locked
 cargo build --release --locked --quiet
+./target/release/seq-lang fmt --check programs/*.seq docs/tutorial/programs/*.seq
 n=0
 for f in programs/*.seq; do
   ./target/release/seq-lang check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
