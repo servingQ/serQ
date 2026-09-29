@@ -82,8 +82,6 @@ struct Walker<'a> {
     /// it (a `release` takes one off before its hold ends).
     holds: Vec<(usize, usize)>,
     next_hold: usize,
-    /// Frames waiting to learn which station a loop body starts at.
-    capture: Vec<Vec<usize>>,
     /// `choose`s that have not yet found the station they select, as
     /// (attribute slot, label). A `choose` names an index, so it belongs to
     /// the station whose reference reads that attribute - `rep[j]`, not
@@ -104,11 +102,6 @@ impl Walker<'_> {
     }
 
     fn attach(&mut self, node: usize) {
-        for frame in &mut self.capture {
-            if frame.is_empty() {
-                frame.push(node);
-            }
-        }
         let arm = self.arm.take();
         let frontier = std::mem::take(&mut self.frontier);
         for (from, label) in frontier {
@@ -255,23 +248,13 @@ impl Walker<'_> {
                     self.arm = outer;
                 }
                 CStmt::Loop(body) => {
-                    self.capture.push(vec![]);
+                    // The second pass starts where the first ended, so every
+                    // way back into the body is drawn, from every arm, with
+                    // the guard of the arm it takes; edges already there are
+                    // not drawn twice.
                     self.walk(body);
-                    let entries = self.capture.pop().unwrap_or_default();
-                    let back = std::mem::take(&mut self.frontier);
-                    for (from, label) in back {
-                        for &e in &entries {
-                            if from == End::Node(e) {
-                                continue;
-                            }
-                            self.push_edge(Edge {
-                                from,
-                                to: End::Node(e),
-                                label: label.clone(),
-                                back: true,
-                            });
-                        }
-                    }
+                    self.walk(body);
+                    self.frontier.clear();
                     // A loop is left only by `end`, which already recorded it.
                 }
                 CStmt::End => {
@@ -375,7 +358,6 @@ pub fn project(p: &Program) -> Net {
         frontier: vec![(End::Arrival, None)],
         holds: vec![],
         next_hold: 0,
-        capture: vec![],
         pending: vec![],
         arm: None,
     };

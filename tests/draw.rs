@@ -390,8 +390,87 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     assert!(net.has_edge(pf, d), "the KV is already on the decoder");
     assert!(net.has_edge(d, tool), "more");
     assert!(net.has_edge(d, End::Exit));
-    assert!(net.has_edge(tool, pf), "next turn");
+    assert!(net.has_edge(tool, pf), "next turn, remote");
+    assert!(net.has_edge(tool, d), "next turn, local");
     assert!(net.arrival.contains("Poisson"));
+}
+
+// --- loops ------------------------------------------------------------------
+
+/// A session program over stages `A`, `B`, `C`, projected.
+fn shape(session: &str) -> (Program, deployment::Net) {
+    let src = format!(
+        "stage A : delay; stage B : delay; stage C : delay;
+         workload {{ arrive poisson(1); }}
+         session {{ {session} }}
+         run {{ horizon 1; }}"
+    );
+    let p = compile_source(&src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    (p, net)
+}
+
+fn edge<'a>(
+    p: &Program,
+    net: &'a deployment::Net,
+    from: &str,
+    to: &str,
+) -> Option<&'a deployment::Edge> {
+    let at = |name: &str| match name {
+        "arrival" => End::Arrival,
+        "exit" => End::Exit,
+        _ => End::Node(net.node_of(stage(p, name)).unwrap()),
+    };
+    let (from, to) = (at(from), at(to));
+    net.edges.iter().find(|e| e.from == from && e.to == to)
+}
+
+/// A loop body that starts with a branch is re-entered down every arm, and
+/// the arrow back says which.
+#[test]
+fn a_loop_returns_to_every_arm() {
+    let (p, net) = shape(
+        "loop { set a = ~bernoulli(0.5); branch (a) { run A (1); } else { run B (1); } run C (1); }",
+    );
+    for (to, label) in [("A", "a"), ("B", "else")] {
+        let e = edge(&p, &net, "C", to).unwrap_or_else(|| panic!("C -> {to}"));
+        assert!(e.back, "C -> {to} returns");
+        assert_eq!(e.label.as_deref(), Some(label));
+    }
+}
+
+/// A loop whose body is a loop: each arm follows the other.
+#[test]
+fn a_nested_loop_returns_to_every_arm() {
+    let (p, net) = shape(
+        "run C (1); loop { loop { set a = ~bernoulli(0.5); branch (a) { run A (1); } else { run B (1); } } }",
+    );
+    assert!(edge(&p, &net, "A", "B").is_some());
+    assert!(edge(&p, &net, "B", "A").is_some());
+    assert!(edge(&p, &net, "C", "A").is_some() && edge(&p, &net, "C", "B").is_some());
+}
+
+/// An arm with no station of its own reaches the station after the branch:
+/// the loop comes back to `A` down the other arm, and down the empty one it
+/// would come back to `B` itself, which is a visit, not an edge.
+#[test]
+fn a_loop_through_an_empty_arm() {
+    let (p, net) =
+        shape("loop { set a = ~bernoulli(0.5); branch (a) { } else { run A (1); } run B (1); }");
+    assert!(edge(&p, &net, "B", "A").is_some_and(|e| e.back));
+    assert!(edge(&p, &net, "B", "B").is_none());
+    assert!(edge(&p, &net, "arrival", "B").is_some());
+}
+
+/// A body that can end before its first station ends from wherever the
+/// loop came from: the arrival the first time, the last station after.
+#[test]
+fn a_loop_that_can_end_before_a_station() {
+    let (p, net) =
+        shape("loop { set c = ~bernoulli(0.5); branch (c) { end; } run A (1); run B (1); }");
+    assert!(edge(&p, &net, "arrival", "exit").is_some());
+    assert!(edge(&p, &net, "B", "exit").is_some());
+    assert!(edge(&p, &net, "B", "A").is_some_and(|e| e.back));
 }
 
 /// Every enclosure holds the stations it encloses, and enclosures either nest
@@ -516,4 +595,21 @@ fn golden_files_are_current() {
         "llmd_nixl_pull.deployment.svg",
         &seq::view::svg::render(&deployment::figure(&p)),
     );
+}
+
+/// `routing.seq`'s next turn migrates or stays: back to the link, and
+/// straight back to a replica. `pd_tandem.seq`'s job re-enters down both
+/// arms of its `mode` branch; the projection is structural, so it draws
+/// both although `mode` is one constant in a run.
+#[test]
+fn the_examples_return_down_every_arm() {
+    let p = program("routing");
+    let net = deployment::project(&p);
+    assert!(edge(&p, &net, "tool", "link").is_some_and(|e| e.back));
+    assert!(edge(&p, &net, "tool", "rep").is_some_and(|e| e.back));
+    let p = program("pd_tandem");
+    let net = deployment::project(&p);
+    assert!(edge(&p, &net, "decode", "agg").is_some_and(|e| e.back));
+    assert!(edge(&p, &net, "decode", "prefill").is_some_and(|e| e.back));
+    assert!(edge(&p, &net, "agg", "prefill").is_some());
 }
