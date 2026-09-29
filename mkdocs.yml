@@ -102,4 +102,5 @@ nav:
       - The KV transfer: design/pd-transfer.md
       - Queues: design/queue.md
       - Explicit gateways: design/explicit-gateways.md
+      - Serving composition: design/serving-composition.md
   - Publishing this site: publishing.md

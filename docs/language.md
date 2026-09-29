@@ -388,24 +388,31 @@ Four roles are built into the parser, and a queue declares which it plays:
 
 | Role | Entries | The queue |
 |---|---|---|
-| `gateway` | `route { … }` | `request Q;` enters this queue's `route`; each gateway is a single queue |
+| `gateway` | `route { … }` | the serving entry can call `Q.route();`; each gateway is a single queue |
 | `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `keep`, a transfer) is the entry's |
 | `decode` | `decode (prompt)`, `decode (prompt) from Q` | a local prefill, or with the KV `Q`'s entry leased for this request |
 | `link` | `transfer (n)` | the NIC: the body is the time to read `n` tokens |
 
-The workload names its entry point with `request gw;`, where `gw` is a
-queue declared with the `gateway` role. The parser checks that the target
-exists and plays that role, then expands its `route` at the request site.
+Keep the serving binding outside the workload: `server { gw.route(); }`
+selects the gateway and the workload submits a bare `request;`. A gateway
+is optional: the server can instead call an engine entry directly. This
+keeps the same client process usable with different serving systems.
+
+The older `request gw;` spelling is also supported, where `gw` is a queue
+declared with the `gateway` role. The parser checks that the target exists
+and plays that role, then expands its `route` at the request site.
 Declarations may follow the workload, and several gateways may coexist;
 there is no default gateway. Declaring a gateway does not execute it or
-register it as the `server`. Bare `request;` retains its existing meaning:
-it targets a separate `server { … }` block and fails without one.
+register it as the `server`. Bare `request;` targets a separate
+`server { … }` block and fails without one.
 
 `queue`, `pool`, `serve`, `request` and `mark` are language syntax. The role
 names and their entry signatures in the table are predefined vocabulary;
 `gw`, `P`, `D` and `nic` are names declared by this program. There is
-currently no `import` or user-defined role syntax; the proposed separation
-is discussed in [Explicit gateways](design/explicit-gateways.md).
+currently no `import` or user-defined role syntax; explicit topology,
+implementation slots and required-router checks are proposed in
+[Serving composition](design/serving-composition.md), not implemented
+syntax or validation rules.
 
 The deployment calls an entry where the request goes: `P[i].prefill
 (prompt);`, `D[j].decode (prompt) from P[i];`, and inside the decoder

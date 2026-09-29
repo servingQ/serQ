@@ -77,7 +77,7 @@ to each number.
 
 The deployment is queues: `NP` prefill instances and `ND` decode instances,
 each with its own KV pool, request-slot pool, engine and NIC, and one
-gateway selected by `request gw;` in the workload's session.
+gateway selected by `server { gw.route(); }`; the workload uses `request;`.
 
 ```
 queue gw : gateway { route { … } }                 // the router and the sidecar

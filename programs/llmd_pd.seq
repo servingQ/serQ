@@ -161,6 +161,9 @@ queue nic[ND] : link {
 }
 stage tool : delay;
 
+// The serving entry is chosen here; the workload only submits requests.
+server { gw.route(); }
+
 // The client: sessions arrive, each turn brings a prompt of n new tokens on
 // a context of K and wants o tokens back, and after a turn the session calls
 // a tool and comes back with probability p.
@@ -176,7 +179,7 @@ workload {
   session {
     turn;
     loop {
-      request gw;
+      request;
       set K = prompt + o;
       branch (more) { tool (~exp(Z)); turn; } else { end; }
     }

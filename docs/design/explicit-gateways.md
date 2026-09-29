@@ -1,5 +1,11 @@
 # Explicit gateways
 
+**Superseded design.** [Serving composition](serving-composition.md) keeps
+the explicit binding but places it outside the workload. The current
+`llmd_pd.seq` uses `server { gw.route(); }` and a bare client `request;`.
+The named-request syntax below remains supported, but is not the chosen
+workload/system boundary. This record preserves the rejected design.
+
 The workload must say where it sends a request. A `gateway` role describes
 a queue's entry; declaring that role must not register a default server.
 

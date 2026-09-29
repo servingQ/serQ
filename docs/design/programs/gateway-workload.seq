@@ -1,0 +1,11 @@
+// The client depends on the request contract, not on component names.
+workload {
+  arrive batch(2);
+  init { set prompt = serial == 0 ? 2 : 1; }
+  session {
+    request;
+    observe client_done = now;
+    end;
+  }
+}
+

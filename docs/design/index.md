@@ -68,6 +68,7 @@ here. This directory is the record of **applying** them.
 | [Subagents](subagents.md) | A session that spawns sessions is not a tool call: endogenous arrivals, hold-and-wait, cross-session cache, `Spawn`/`Join` | review, for v4b |
 | [The KV transfer](pd-transfer.md) | Prefill/decode disaggregation as llm-d and the NIXL connector do it, in pull and push mode; `release`, `load`, `transfer … from … to …`; the reservation push mode still wants | IR v5, with `programs/llmd_pd.seq` |
 | [Queues](queue.md) | gateway, prefill, link and decode as roles of one `queue` that owns its pools, its stage and the entries holding a request's admission, allocation and service; what an entry may read; sugar over IR v5 | RFC #72, with `programs/llmd_pd.seq` |
-| [Explicit gateways](explicit-gateways.md) | `request gw;` selects a gateway by name; predefined vocabulary and the proposed import boundary | PR #87 follow-up |
+| [Explicit gateways](explicit-gateways.md) | Historical named-request design; superseded because the workload must not name the serving entry | PR #87 follow-up |
+| [Serving composition](serving-composition.md) | Topology and semantics, including instance counts, in the model; configuration, budget and cost in the implementation; gateway admission and routing through explicit ports | design with executable witnesses |
 
 A new design document adds a row to this table.

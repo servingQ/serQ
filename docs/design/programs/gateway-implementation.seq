@@ -1,0 +1,8 @@
+// Numeric bindings for the fixed model. No component count or edge lives here.
+let gateway_limit = 1;
+let kv_capacity = 100;
+let router_work = 1;
+let prefill_work = 2;
+let transfer_work = 2;
+let decode_work = 3;
+

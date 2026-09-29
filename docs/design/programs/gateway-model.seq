@@ -1,0 +1,51 @@
+// Executable model fragment. Counts, bindings and admission/routing semantics
+// belong here; parameter values come from gateway-implementation.seq.
+queue gw : gateway {
+  pool inflight { cap gateway_limit; }
+  serve fifo;
+  route {
+    admit if inflight (1) fit {
+      observe admitted = now;
+      run (router_work);
+      choose j in 2 by (work(D[j]));
+      branch (prompt > 1) {
+        P.prefill(prompt);
+        D[j].decode(prompt) from P;
+      } else {
+        D[j].decode(prompt);
+      }
+      observe completed = now;
+    }
+  }
+}
+
+queue P : prefill {
+  pool kv { cap kv_capacity; }
+  serve delay;
+  prefill (prompt) {
+    admit if kv (prompt) fit { run (prefill_work); } lease kv (inf);
+  }
+}
+
+queue D[2] : decode {
+  pool kv { cap kv_capacity; }
+  serve delay;
+  decode (prompt) {
+    admit if kv (prompt) fit { run (decode_work); }
+  }
+  decode (prompt) from src {
+    admit if kv (prompt) fit {
+      nic[self].transfer(prompt) from src to kv (prompt);
+      observe source_after_copy = used(src);
+      run (decode_work);
+    }
+  }
+}
+
+queue nic[2] : link {
+  serve delay;
+  transfer (n) { run (transfer_work); }
+}
+
+server { gw.route(); }
+
