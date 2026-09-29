@@ -9,7 +9,7 @@
  * Scoped to .language-seq: no other language on the site is touched.
  */
 .language-seq {
-  /* what a program reads: cachedin, budget_left, now, kvb */
+  /* what a program reads: cachedin, budget_left, now, kv_decode */
   --seq-observable: #0b7a86;
 }
 

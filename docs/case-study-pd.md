@@ -89,7 +89,7 @@ stage link[2] : ps(1);
 A family of `N` written next to a family of `N` is joined member for
 member: `admit via P` on `reqsP[2]` means `reqsP[i]` is served by `P[i]`,
 and `memory kvP` on `P[2]` means `P[i]` counts `kvP[i]` as its residents'
-memory (`kvb`, `kvp`). Next to a family of one, every member gets that one;
+memory (`kv_decode`, `kv_prefill`). Next to a family of one, every member gets that one;
 any other pair of counts is a link error. A family's size is a literal
 (`[2]`), so the router's `choose j in ND` and the declarations carry the
 same number twice; a mismatch shows up as an index out of range at the

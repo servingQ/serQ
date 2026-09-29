@@ -62,7 +62,7 @@ evict by (k1, k2, …);
 | `by (k1, …)` | ascending keys, then release order |
 
 Keys are evaluated per cache entry at the `Evict` moment and may read `size`,
-`age`, `last` and `queued` ([context variables](context.md)), and the entry's
+`age`, `last` and `waiting` ([context variables](context.md)), and the entry's
 session's attributes: current while the session lives, as they were at its
 last release after it has ended. The smallest key goes first.
 

@@ -26,7 +26,7 @@ Its deployment, drawn by [`seq-lang draw`](../visualization/index.md):
 ```seq
 stage engine : step {
   budget B;
-  cost max(omega + beta * (kvb + kvp), ntok * alpha);
+  cost max(omega + beta * (kv_decode + kv_prefill), tokens * alpha);
   memory kv;
 }
 ```
@@ -36,17 +36,17 @@ stage engine : step {
 
 | Variable | Meaning |
 |---|---|
-| `ntok` | tokens scheduled this iteration |
-| `ndec` | decoding residents scheduled |
-| `npre` | prefill tokens scheduled |
-| `nres` | residents, scheduled or not |
-| `kvb`, `kvp` | memory held by the scheduled decode / prefill residents |
-| `attn` | attention work of the prefill chunks, \(\sum n(K + n/2)\) |
+| `tokens` | tokens scheduled this iteration |
+| `decoders` | decoding residents scheduled |
+| `prefilled` | prefill tokens scheduled |
+| `residents` | residents, scheduled or not |
+| `kv_decode`, `kv_prefill` | memory held by the scheduled decode / prefill residents |
+| `attention` | attention work of the prefill chunks, \(\sum n(K + n/2)\) |
 
 The cost above is the standard roofline: an iteration takes either the time to
 read the weights and the residents' KV, or the time to compute the tokens it
 scheduled, whichever is larger. On an A100 with Qwen3-8B, fitting
-`c + d·ndec + e·kvb + a·npre + b·attn` to 3 022 measured steps gives a MAPE of
+`c + d·decoders + e·kv_decode + a·prefilled + b·attention` to 3 022 measured steps gives a MAPE of
 2.7 % for decode and 5.6 % for prefill — the cost expression is where a real
 measurement enters the model.
 

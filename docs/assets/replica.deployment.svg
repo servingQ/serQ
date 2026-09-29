@@ -93,7 +93,7 @@
 <rect class="solid" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" x="513.8" y="146" width="42.16" height="6"/>
 <text x="547.8" y="129" text-anchor="middle" font-size="10" fill="#1d2021">step</text>
 <text x="547.8" y="99" text-anchor="middle" font-size="10" fill="#1d2021">engine</text>
-<text x="547.8" y="172" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">budget max(ndec, (2e-4 + 2e-9 * kvb) / 2e-5)</text>
+<text x="547.8" y="172" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">budget max(decoders, (2e-4 + 2e-9 * kv_decode) / 2e-5)</text>
 <rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="718.8" y="107" width="84" height="52" rx="8"/>
 <circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="732.8" cy="133" r="4"/>
 <circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="746.8" cy="133" r="4"/>

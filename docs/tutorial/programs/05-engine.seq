@@ -22,7 +22,7 @@ stage engine : step {
   budget B;
   // an iteration costs whichever is larger: reading the weights and the
   // residents' KV, or computing the tokens it scheduled
-  cost max(omega + beta * (kvb + kvp), ntok * alpha);
+  cost max(omega + beta * (kv_decode + kv_prefill), tokens * alpha);
   memory kv;
 }
 stage tool : delay;

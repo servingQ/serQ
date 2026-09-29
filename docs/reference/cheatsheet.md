@@ -38,7 +38,7 @@ pool kv {
 | Kind | Meaning |
 |---|---|
 | `fifo` / `fifo(c)` | `c` servers, one job each at rate 1, arrival order |
-| `ps(φ)` | processor sharing: throughput `φ`, which may read `n` (jobs present), split equally |
+| `ps(φ)` | processor sharing: throughput `φ`, which may read `present` (jobs present), split equally |
 | `delay` | infinite servers — every job at rate 1, no waiting |
 | `step { … }` | an iterating engine (continuous batching) |
 
@@ -48,7 +48,7 @@ stage engine : step {
   cost <expr>;                // clock time per iteration (1: the step clock)
   chunk C;                    // cap on one request's prefill chunk (0: none)
   serve by (remaining);       // admission (default) | by (keys…) | decode first | exclusive prefill
-  memory kv;                  // the pool that gives kvb / kvp
+  memory kv;                  // the pool that gives kv_decode / kv_prefill
 }
 ```
 
@@ -106,11 +106,11 @@ Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 | Where | Names |
 |---|---|
 | anywhere | `now` |
-| eviction keys, spill predicates | `size` `age` `last` `queued` |
-| `ps` capacity | `n` |
-| `step` budget and chunk | `nres` `ndec` `kvb` `kvp` (the residents, before the iteration) |
-| `step` cost | `ntok` `ndec` `npre` `nres` `kvb` `kvp` `attn` |
-| `step` `serve by` keys | `decoding` `admission` `remaining` (per resident), and `nres` `ndec` `kvb` `kvp` |
+| eviction keys, spill predicates | `size` `age` `last` `waiting` |
+| `ps` capacity | `present` |
+| `step` budget and chunk | `residents` `decoders` `kv_decode` `kv_prefill` (the residents, before the iteration) |
+| `step` cost | `tokens` `decoders` `prefilled` `residents` `kv_decode` `kv_prefill` `attention` |
+| `step` `serve by` keys | `decoding` `admission` `remaining` (per resident), and `residents` `decoders` `kv_decode` `kv_prefill` |
 
 **Built-in session attributes** `serial` `turn_no` `cached` `computed` (what a
 preempted hold had computed; 0 otherwise), and with a trace `new` `out`

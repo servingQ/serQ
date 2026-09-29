@@ -158,15 +158,15 @@ non-zero operand is true; only a `branch` guard is held to 0 or 1),
 time), `price(s, s_hit, ds)` (the online price of a miss,
 `missPrice` with the stage's measured λ̂, ρ̂, Ŵ), `est_lambda(s)`,
 `est_rho(s)`, `est_wait(s)`; context variables `now`, `size`, `age`,
-`last`, `queued` (eviction keys and spill predicates), `n` (ps
-capacity), `nres`, `ndec`, `kvb`, `kvp` (a step stage's budget, chunk and
-cost: the residents before the iteration), `ntok`, `npre`, `attn` (its cost
-only: what the iteration scheduled; `attn = Σ n (K + n/2)` over the prefill
+`last`, `waiting` (eviction keys and spill predicates), `present` (ps
+capacity), `residents`, `decoders`, `kv_decode`, `kv_prefill` (a step stage's budget, chunk and
+cost: the residents before the iteration), `tokens`, `prefilled`, `attention` (its cost
+only: what the iteration scheduled; `attention = Σ n (K + n/2)` over the prefill
 chunks, `K` the position before the chunk), `decoding`, `admission`,
 `remaining` (a step stage's `serve by` keys, per resident; the keys read the
 residents' four as well). Each context variable exists at the one place named in
 its parenthesis (`now` everywhere), and reading it anywhere else is a link
-error rather than a 0: `set x = ntok;` in a session, or `evict by (ntok)`,
+error rather than a 0: `set x = tokens;` in a session, or `evict by (tokens)`,
 does not link (`docs/ir.md`, Moments). A name may not be both a `let` constant and a session
 attribute (the linker rejects it: an attribute would shadow the constant,
 and a stage's cost, which has no session, would read it as undefined). Built-in session attributes: `serial`, `turn_no`, `cached` (the
@@ -496,7 +496,7 @@ its times are iterations. The residents are served the way `serve` names, said o
 stage: an order, `by (k₁, …)` (ascending keys evaluated for each resident
 with `decoding`, 1 for a decoding resident, `admission`, its admission
 sequence number, `remaining`, the tokens its run has left, and the
-residents' `nres`, `ndec`, `kvb`, `kvp`; ties in admission order; a key may
+residents' `residents`, `decoders`, `kv_decode`, `kv_prefill`; ties in admission order; a key may
 not draw), or the rule `exclusive prefill`, below, which is not an order and
 so cannot be combined with one. `admission` (the order their sessions were
 admitted, vLLM's `running` list; the default) is `by` with no keys, where
@@ -508,7 +508,7 @@ one,
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); then the
 stage admits from the queues it serves. The iteration advances the clock by
-`C`, an expression in `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn`; its
+`C`, an expression in `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`; its
 tokens are applied when it ends. A run of zero work completes at once. An
 iteration that schedules no token is not an iteration, unless it preempted:
 then it is the scheduler step that only preempted (vLLM's `schedule()`
@@ -751,7 +751,7 @@ request runs (`growing kv`).
 **Engine cost, measured.** 3 022 steps of the A100 engine stepped by hand
 (decode batches of 1–64 at contexts 256–32k, prefill chunks at contexts
 0–32k; `tools/a100/steps.jsonl`, `scripts/exp/lambda/seq_cases.py`)
-fit `c + d·ndec + e·kvb + a·npre + b·attn` with MAPE 2.7 % (decode), 5.6 %
+fit `c + d·decoders + e·kv_decode + a·prefilled + b·attention` with MAPE 2.7 % (decode), 5.6 %
 (prefill), 5.7 % (mixed): c = 13.9 ms, d = 41 µs, e = 0.138 µs, a = 51.5
 µs, b = 4.02 ns (`tools/a100/step_fit.json`). The same `a` and `b`
 explain the light-load one-chunk TTFTs of the served runs (slope 74 µs per

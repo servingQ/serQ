@@ -86,7 +86,7 @@ fn malformed_ir_is_rejected() {
     let mut bad = p.clone();
     bad.blocks[bad.session].push(seq::ir::CStmt::Set(99, seq::ir::CExpr::Num(1.0)));
     assert!(bad.validate().unwrap_err().contains("attribute slot 99"));
-    // a context variable outside the moment that supplies it: `ntok` exists
+    // a context variable outside the moment that supplies it: `tokens` exists
     // in a step stage's budget and cost, not in a session statement
     let mut bad = p.clone();
     bad.blocks[bad.session].push(seq::ir::CStmt::Set(
@@ -95,7 +95,7 @@ fn malformed_ir_is_rejected() {
     ));
     let e = bad.validate().unwrap_err();
     assert!(e.starts_with("session: "), "{e}");
-    assert!(e.contains("`ntok` is read in a session statement"), "{e}");
+    assert!(e.contains("`tokens` is read in a session statement"), "{e}");
     assert!(e.contains("exists only in a step stage's cost"), "{e}");
     // a hidden slot that does not exist
     let mut bad = p.clone();
@@ -182,7 +182,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
         pool memD { cap 1000; }
         stage prefill : fifo;
         stage link : ps(1);
-        stage decode : ps(min(n, 4));
+        stage decode : ps(min(present, 4));
         stage tool : delay;
         workload {
           arrive poisson(0.5);

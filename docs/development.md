@@ -126,8 +126,8 @@ The parameters of a program are measurements, and the program says where each
 one comes from:
 
 - **An engine cost model.** Fit `cost` to measured iterations, as
-  `examples/replay/vllm_replay.seq` does for the A100: an expression in `ntok`,
-  `ndec`, `npre`, `kvb`, `kvp`, `attn`.
+  `examples/replay/vllm_replay.seq` does for the A100: an expression in `tokens`,
+  `decoders`, `prefilled`, `kv_decode`, `kv_prefill`, `attention`.
 - **Traffic from a trace.** `trace "file.csv"` in the `workload` replays
   sessions turn by turn. The columns are `session,turn,new,out,think,forced`
   (`examples/replay/data/`), and `--trace F` swaps the file without editing the

@@ -59,7 +59,7 @@ ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow")
 BUILTINS = (
     "busy", "work", "used", "free", "cachedin", "holders", "queued",
     "price", "budget_left", "est_lambda", "est_rho", "est_wait",
-    "now", "ntok", "ndec", "npre", "nres", "kvb", "kvp", "attn",
+    "now", "waiting", "present", "tokens", "decoders", "prefilled", "residents", "kv_decode", "kv_prefill", "attention",
     "decoding", "admission", "remaining",
     "cached", "serial", "turn_no", "think", "more", "forced", "computed",
 )

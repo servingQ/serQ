@@ -141,14 +141,14 @@ pub enum StageKind {
 pub struct StepSpec {
     /// Tokens per iteration (`max_num_batched_tokens`).
     pub budget: Expr,
-    /// Seconds per iteration, in `ntok`, `ndec`, `npre`, `nres`, `kvb`.
+    /// Seconds per iteration, in `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`.
     pub cost: Expr,
     /// Cap on one request's prefill chunk (`long_prefill_token_threshold`,
     /// 0 = none).
     pub chunk: Expr,
     /// The order the iteration serves its residents in (`serve …;`).
     pub serve: Serve,
-    /// Pool whose holdings of the scheduled residents give `kvb`.
+    /// Pool whose holdings of the scheduled residents give `kv_decode`.
     pub memory: Option<Ref>,
 }
 

@@ -29,7 +29,7 @@ pool reqs { cap max_seqs; admit via engine; }  // the scheduler admits (schedule
 
 stage engine : step {
   budget B;
-  cost c_it + d * ndec + e * kvb + a * npre + b * attn;
+  cost c_it + d * decoders + e * kv_decode + a * prefilled + b * attention;
   memory kv;
 }
 stage front : delay;

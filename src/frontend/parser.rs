@@ -2730,7 +2730,7 @@ mod tests {
             let a = 2e-5;
             pool kv { cap 3e5; evict lru; preempt lifo; }
             stage prefill : fifo;
-            stage decode : ps(min(n, 8));
+            stage decode : ps(min(present, 8));
             stage tool : delay;
             workload {
               arrive poisson(0.3);
@@ -2770,7 +2770,7 @@ mod tests {
         pool kvD { cap 100; }
         stage prefill : fifo;
         stage link : ps(1);
-        stage decode : ps(n);
+        stage decode : ps(present);
         stage tool : delay;
     "#;
 

@@ -13,7 +13,7 @@ pool reqs { cap max_seqs; admit via engine; }
 
 stage engine : step {
   budget B;
-  cost c0 + max(omega + beta * (kvb + kvp), ntok * a);
+  cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
   memory kv;
 }
 

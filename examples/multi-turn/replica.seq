@@ -8,7 +8,7 @@
 // fluid `TwoStage` server of `libqueuingsim::models::batch` at iteration
 // granularity. Sessions: two classes (agents, one-shot documents); at most
 // `cap` live sessions (the rest wait to enter), batch cap `B`, a KV pool of
-// `C` tokens with shortest-first eviction (tool calls before queued turns).
+// `C` tokens with shortest-first eviction (tool calls before waiting turns).
 let Lambda = 0.28;   // sessions per second
 let cap = 24;        // live sessions (entry queue beyond)
 let B = 8;           // batch cap (prefilling and decoding turns)
@@ -22,11 +22,11 @@ let beta = 2e-9;     // KV read per iteration per context token (s)
 
 pool live { cap cap; }
 pool batch { cap B; }
-pool kv { cap C; evict by (queued, size); }
+pool kv { cap C; evict by (waiting, size); }
 
 stage engine : step {
-  budget max(ndec, (omega + beta * kvb) / a);    // fill the memory time
-  cost max(omega + beta * kvb, ntok * a);
+  budget max(decoders, (omega + beta * kv_decode) / a);    // fill the memory time
+  cost max(omega + beta * kv_decode, tokens * a);
   serve decode first;                            // prefill in what decode leaves
   memory kv;
 }
