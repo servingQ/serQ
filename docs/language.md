@@ -223,7 +223,7 @@ enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
 ```
 
 Both compile to the IR they compiled to before the rewrite
-(`src/parser.rs` tests, `tests/ir.rs`).
+(`src/frontend/parser.rs` tests, `tests/ir.rs`).
 
 **A KV transfer.** The lecture's replica above holds the prefill
 instance's memory through the transfer and queues for the decode instance's
@@ -314,7 +314,7 @@ server {
 statements in its place — at any depth, as often as it is written — so the
 AST, the IR and everything downstream see the one session they saw before.
 The three vLLM programs compile to the IR they compiled to as `session`
-blocks (`tests/ir.rs`, `src/parser.rs` tests), and `tools/oracle/*.ir.json`
+blocks (`tests/ir.rs`, `src/frontend/parser.rs` tests), and `tools/oracle/*.ir.json`
 did not move: the two sides are sugar, at the price of the serving
 vocabulary.
 

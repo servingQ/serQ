@@ -62,8 +62,8 @@
 
 use std::fmt;
 
-use crate::ast::*;
-use crate::lexer::{LexError, Tok, Token, lex};
+use crate::frontend::ast::*;
+use crate::frontend::lexer::{LexError, Tok, Token, lex};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -1162,7 +1162,7 @@ impl Parser {
             let ref_at = self.pos;
             let r = self.reference()?;
             if !self.stages.iter().any(|(n, _)| *n == r.name) {
-                let help = crate::diagnostic::suggestion(
+                let help = crate::frontend::diagnostic::suggestion(
                     &r.name,
                     self.stages.iter().map(|(name, _)| name.as_str()),
                 )

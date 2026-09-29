@@ -105,7 +105,7 @@ or as two programs that differ in one line, and run both on the same seeds.
 Arrivals, the workload, the sessions and eviction draw from separate random
 streams ([language](language.md) §3), but the workload and session streams
 are each shared by every session and consumed in event order
-(`src/interp.rs`, `rng_wl`, `rng_session`). So with the same seed the two
+(`src/sim/interp.rs`, `rng_wl`, `rng_session`). So with the same seed the two
 designs get the same arrival times. Once one design changes when things
 happen, the turn draws (`n`, `o`, `more`) and the tool times go to different
 sessions, and the traffic is no longer paired. To give both designs exactly

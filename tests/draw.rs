@@ -5,10 +5,10 @@
 //! than its images: a coordinate that moved is a diagnosable failure, and a
 //! diff of two SVGs is not. The golden files at the bottom guard the writers.
 
-use seq::deployment::{self, End};
-use seq::draw;
-use seq::figure::{BoxStyle, Figure, StationKind};
 use seq::ir::Program;
+use seq::view::deployment::{self, End};
+use seq::view::figure::{BoxStyle, Figure, StationKind};
+use seq::view::session;
 use seq::{Overrides, compile_source, program_path};
 
 const PROGRAMS: [&str; 9] = [
@@ -29,11 +29,11 @@ fn program(name: &str) -> Program {
 }
 
 fn session_labels(p: &Program) -> Vec<String> {
-    draw::figure(p, false)
+    session::figure(p, false)
         .items
         .into_iter()
         .filter_map(|item| match item {
-            seq::figure::Item::Text {
+            seq::view::figure::Item::Text {
                 text, dim: false, ..
             } => Some(text),
             _ => None,
@@ -259,7 +259,7 @@ fn lanes_below_the_row_do_not_collide() {
             .items
             .iter()
             .filter_map(|i| match i {
-                seq::figure::Item::Edge { pts, .. } if pts.len() >= 3 => Some(pts[1].y),
+                seq::view::figure::Item::Edge { pts, .. } if pts.len() >= 3 => Some(pts[1].y),
                 _ => None,
             })
             .collect();
@@ -298,7 +298,7 @@ fn a_second_entry_point_does_not_overdraw_the_first() {
     let labels = f
         .items
         .iter()
-        .filter(|i| matches!(i, seq::figure::Item::Text { text, .. } if text.starts_with("new sessions")))
+        .filter(|i| matches!(i, seq::view::figure::Item::Text { text, .. } if text.starts_with("new sessions")))
         .count();
     assert_eq!(labels, 1, "the arrival label is drawn once");
 }
@@ -316,14 +316,14 @@ fn rails_stay_clear_of_the_spine() {
         run { horizon 100; }
         "#,
     );
-    let f = draw::figure(&p, false);
+    let f = session::figure(&p, false);
     let left = f
         .boxes(BoxStyle::Body)
         .iter()
         .map(|r| r.x)
         .fold(f64::MAX, f64::min);
     for item in &f.items {
-        if let seq::figure::Item::Edge { pts, .. } = item {
+        if let seq::view::figure::Item::Edge { pts, .. } = item {
             for q in pts {
                 assert!(
                     q.x < left,
@@ -360,10 +360,10 @@ fn negative_constants_reparse() {
         .expect("the observe is there");
     assert_eq!(printed, "(-2) ^ a");
     // and it means what it says
-    let round = seq::parser::parse_expr(&printed).expect("re-parses");
+    let round = seq::frontend::parser::parse_expr(&printed).expect("re-parses");
     assert!(matches!(
         round,
-        seq::ast::Expr::Binary(seq::ast::BinOp::Pow, ..)
+        seq::frontend::ast::Expr::Binary(seq::frontend::ast::BinOp::Pow, ..)
     ));
 }
 
@@ -507,7 +507,7 @@ fn enclosures_contain_their_stations_and_nest() {
 fn figures_are_fitted() {
     for name in PROGRAMS {
         let p = program(name);
-        for f in [deployment::figure(&p), draw::figure(&p, false)] {
+        for f in [deployment::figure(&p), session::figure(&p, false)] {
             assert!(f.width > 0.0 && f.height > 0.0, "{name}: empty figure");
             for r in f
                 .boxes(BoxStyle::Enclosure)
@@ -528,14 +528,14 @@ fn figures_are_fitted() {
 #[test]
 fn route_columns_are_the_held_pools() {
     let p = program("replica");
-    let cols: Vec<&str> = draw::columns(&p)
+    let cols: Vec<&str> = session::columns(&p)
         .iter()
         .map(|&i| p.pools[i].name.as_str())
         .collect();
     assert_eq!(cols, ["live", "batch", "kv"]);
 
     let p = program("routing");
-    assert!(draw::columns(&p).is_empty(), "routing.seq holds nothing");
+    assert!(session::columns(&p).is_empty(), "routing.seq holds nothing");
 }
 
 /// A width the constants fix is drawn solid; one evaluated at admission is
@@ -543,7 +543,7 @@ fn route_columns_are_the_held_pools() {
 #[test]
 fn band_style_says_when_the_width_is_decided() {
     let p = program("vllm");
-    let f = draw::figure(&p, false);
+    let f = session::figure(&p, false);
     assert_eq!(f.boxes(BoxStyle::Solid).len(), 1, "hold reqs (1)");
     assert_eq!(
         f.boxes(BoxStyle::Admission).len(),
@@ -564,11 +564,11 @@ fn band_style_says_when_the_width_is_decided() {
 fn every_program_renders() {
     for name in PROGRAMS {
         let p = program(name);
-        for f in [deployment::figure(&p), draw::figure(&p, true)] {
-            let svg = seq::svg::render(&f);
+        for f in [deployment::figure(&p), session::figure(&p, true)] {
+            let svg = seq::view::svg::render(&f);
             assert!(svg.starts_with("<svg"), "{name}: not an svg");
             assert!(svg.ends_with("</svg>\n"));
-            let tikz = seq::tikz::render(&f);
+            let tikz = seq::view::tikz::render(&f);
             assert!(
                 tikz.contains("\\begin{tikzpicture}"),
                 "{name}: not a tikzpicture"
@@ -583,7 +583,7 @@ fn every_program_renders() {
 #[test]
 fn tikz_escapes_labels() {
     let p = program("vllm");
-    let tikz = seq::tikz::render(&deployment::figure(&p));
+    let tikz = seq::view::tikz::render(&deployment::figure(&p));
     for (i, line) in tikz.lines().enumerate() {
         if !line.trim_start().starts_with("\\node") {
             continue;
@@ -621,28 +621,28 @@ fn golden_files_are_current() {
     let p = program("lecture_pd");
     golden(
         "lecture_pd.deployment.tex",
-        &seq::tikz::render(&deployment::figure(&p)),
+        &seq::view::tikz::render(&deployment::figure(&p)),
     );
     golden(
         "lecture_pd.deployment.svg",
-        &seq::svg::render(&deployment::figure(&p)),
+        &seq::view::svg::render(&deployment::figure(&p)),
     );
     let p = program("vllm");
     golden(
         "vllm.deployment.svg",
-        &seq::svg::render(&deployment::figure(&p)),
+        &seq::view::svg::render(&deployment::figure(&p)),
     );
     golden(
         "vllm.session.svg",
-        &seq::svg::render(&draw::figure(&p, false)),
+        &seq::view::svg::render(&session::figure(&p, false)),
     );
     let p = program("llmd_pd");
     golden(
         "llmd_pd.deployment.svg",
-        &seq::svg::render(&deployment::figure(&p)),
+        &seq::view::svg::render(&deployment::figure(&p)),
     );
     golden(
         "llmd_pd.session.svg",
-        &seq::svg::render(&draw::figure(&p, false)),
+        &seq::view::svg::render(&session::figure(&p, false)),
     );
 }

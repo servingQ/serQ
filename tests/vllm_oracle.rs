@@ -22,7 +22,8 @@
 
 use std::path::Path;
 
-use seq::{Overrides, compile_source, parser, program_path, run_ir};
+use seq::frontend::parser;
+use seq::{Overrides, compile_source, program_path, run_ir};
 use serde_json::Value;
 
 fn dir() -> std::path::PathBuf {

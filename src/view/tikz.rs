@@ -10,7 +10,7 @@
 
 use std::fmt::Write as _;
 
-use crate::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, StationKind};
+use crate::view::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, StationKind};
 
 /// LaTeX-escape a label. seQ expressions carry `_`, `^`, `~`, `<` and `&`.
 fn esc(s: &str) -> String {
@@ -246,9 +246,9 @@ pub fn render(f: &Figure) -> String {
                     Anchor::End => "base east",
                 };
                 let sz = match size {
-                    crate::figure::TextSize::Title => "\\small",
-                    crate::figure::TextSize::Normal => "\\footnotesize",
-                    crate::figure::TextSize::Small => "\\scriptsize",
+                    crate::view::figure::TextSize::Title => "\\small",
+                    crate::view::figure::TextSize::Normal => "\\footnotesize",
+                    crate::view::figure::TextSize::Small => "\\scriptsize",
                 };
                 let colour = if *dim { "text=seqdim, " } else { "" };
                 let _ = writeln!(

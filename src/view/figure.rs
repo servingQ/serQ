@@ -1,6 +1,6 @@
 //! The geometry a view produces and a writer consumes.
 //!
-//! Both views (`draw` for the session program, `deployment` for the queueing
+//! Both views (`session` for the session program, `deployment` for the queueing
 //! network) produce a `Figure`; both writers (`svg`, `tikz`) consume one.
 //! Nothing in here knows about seQ, and nothing in a writer decides a
 //! coordinate: a figure is the test surface, which is why the tests assert on

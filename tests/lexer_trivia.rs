@@ -4,7 +4,7 @@
 //! the only thing that reads the source, so if it keeps every comment and
 //! every blank line, a tool that rewrites a program can put them back.
 
-use seq::lexer::{lex, unlex};
+use seq::frontend::lexer::{lex, unlex};
 use std::path::{Path, PathBuf};
 
 fn seq_files(dir: &Path, out: &mut Vec<PathBuf>) {

@@ -166,7 +166,7 @@ priced as such. What a change to `src/ir.rs` does to the version:
 - **Old files still parse, different meaning: bump, and say so in the
   release note.** An old reader parses the file and disagrees with the new
   one about what it means; the version is the only warning it gets. The
-  signal in a diff is a change to `docs/language.md` §3 or `src/interp.rs`
+  signal in a diff is a change to `docs/language.md` §3 or `src/sim/interp.rs`
   that alters what an existing statement or field does while `src/ir.rs`
   keeps the field or node. The interpreter setting `computed` on a
   preemption while the Lean fragment does not (`docs/language.md` §3,
