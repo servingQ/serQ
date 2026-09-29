@@ -62,3 +62,25 @@ fn a_program_that_does_not_load_exits_1() {
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("nowhere"));
 }
+
+#[test]
+fn a_runtime_guard_error_exits_1_without_a_panic() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-runtime-guard");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("guard.seq");
+    std::fs::write(
+        &file,
+        "stage svc : delay; workload { arrive batch(1); init { set c = 5; set K = 10; } }\n\
+         session { branch (c / K) { run svc (1); } end; } run { horizon 10; }\n",
+    )
+    .unwrap();
+    let out = seq_lang().arg("run").arg(&file).output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("guard.seq: `branch (c / K)`: the guard is 0.5, not 0 or 1"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}

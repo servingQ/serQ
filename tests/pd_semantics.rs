@@ -132,14 +132,7 @@ fn load_must_fit_the_allocation() {
         session { hold kv (10) { load kv (11); } end; }
         run { horizon 10; }
     "#;
-    let got = std::panic::catch_unwind(|| run(src));
-    let msg = match got {
-        Ok(_) => panic!("ran"),
-        Err(e) => e.downcast_ref::<String>().cloned().unwrap_or_else(|| {
-            e.downcast_ref::<&str>()
-                .map_or(String::new(), |s| s.to_string())
-        }),
-    };
+    let msg = run_source(src, &Overrides::default(), None).unwrap_err();
     assert!(msg.contains("must fit the allocation"), "{msg}");
 }
 

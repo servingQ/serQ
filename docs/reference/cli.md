@@ -68,7 +68,7 @@ An unknown command or option, a missing value, or an invalid value prints the
 problem and a correction hint to stderr and exits with code 2. Options belonging
 to another command are rejected rather than ignored. `--seed` takes an unsigned
 integer, `--horizon` a finite positive number, and `--warmup` a finite nonnegative
-number. Program loading and validation errors exit with code 1. Failed commands
+number. Program loading, validation, and runtime errors exit with code 1. Failed commands
 do not write a report to stdout.
 
 Trace CSV errors identify the actual trace path, row, and column name, followed

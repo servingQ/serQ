@@ -92,7 +92,7 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 pub fn run_ir(p: &ir::Program, base: Option<&Path>) -> Result<Report, String> {
     p.validate()?;
     let corpus = load_trace(p, base)?;
-    Ok(interp::Interp::new(p, corpus).run())
+    interp::Interp::new(p, corpus).run()
 }
 
 /// The program's trace corpus, if it names one; a relative path is resolved
