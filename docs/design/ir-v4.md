@@ -110,7 +110,7 @@ is what the theorem of §7 needs.
 **Outcome.** The moment table landed as `ir::Moment` and the per-position
 check in `Program::validate` (#44), and `hidden` as `Program.hidden` (#51).
 The admission block node was not added: `at admission (x = e)` and
-`admit if … where x = e` are parser substitutions into the hold's header,
+`admit if … fit where x = e` are parser substitutions into the hold's header,
 so `CStmt::Hold` is unchanged and the check reads the substituted
 expressions. No program declares `max_out` yet.
 
@@ -415,7 +415,8 @@ admission block and `hidden` of 1, the `on_end` move of 2, the `stuck`
 report of 7. #21's "same shape, different meaning → bump plus release note"
 applies here. The preemption-recovery bug of 5 is fixed before v4a in
 today's interpreter by exposing the run position as an attribute, with one
-oracle scenario added.
+oracle scenario added. Of v4a, the admission block node and the `on_end`
+move were not added (§1, §2 **Outcome**); 4 is open.
 
 **v4b** (redesign): 5, then 6 on top, and the theorem of 7. The equation of
 2 goes into either, after the Lean-side check.
