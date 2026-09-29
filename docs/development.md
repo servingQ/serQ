@@ -253,8 +253,10 @@ theorem until the generator can translate it.
 
 ### Changing the IR
 
-Any change to the types in `src/ir.rs`, a renamed field included, bumps
-`IR_VERSION`. The generator pins the version it reads and refuses any other
+`IR_VERSION` identifies meaning, not shape ([IR](ir.md), Stability): a field
+or variant removed, renamed or retyped, or a change of meaning under the same
+shape, bumps it once the version is tagged. The generator pins the version it
+reads and refuses any other
 (`IR version N (this generator reads M)`). So an IR change is two changes in
 two repositories: seQ bumps the version and regenerates `tools/oracle/`, and
 serving-queue-theory moves the generator's pin, teaches it the new node if a
