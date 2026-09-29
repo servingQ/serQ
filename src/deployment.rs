@@ -349,6 +349,7 @@ fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>
 fn arrival_label(p: &Program) -> String {
     match &p.arrival {
         CArrival::Poisson(r) => format!("Poisson {}", crate::ir::show_num(*r)),
+        CArrival::Renewal(e) => format!("renewal interarrival {}", p.show_expr(e)),
         CArrival::Closed(n) => format!("closed, {n} live"),
         CArrival::Batch(n) => format!("{n} at t=0"),
         CArrival::Sessions(s) => {

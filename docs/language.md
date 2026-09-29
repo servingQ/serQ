@@ -74,7 +74,7 @@ item     := let NAME = expr ;
           | workload { wlitem* }
           | session block                     -- the session, in one block
           | server block                      -- or its server side, with the session inside workload
-          | run { horizon expr ; warmup expr ; seed expr ; }
+          | run { horizon expr ; warmup expr ; seed expr ; arrivals expr ; }
 poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
@@ -89,7 +89,7 @@ kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 
                    [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
                     | serve exclusive prefill ;]
                    [memory POOL ;] }
-wlitem   := arrive poisson ( rate ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
+wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
           | init block | turn block          -- only set / observe
           | session block                    -- the session's side; says `request`
@@ -125,6 +125,11 @@ serving  := enter POOL ( expr ) … block [ keep ( expr ) ] [ lease POOL ( expr 
           | decode   [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | tool     [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
 ```
+
+`arrive renewal(~h2(mean, cv2));` supplies sampled interarrival times instead
+of exponential gaps. `run { arrivals N; }` optionally caps an open workload at
+N arrivals and drains those sessions; `horizon` remains the safety limit while
+the arrivals are being generated.
 
 Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b` (a
 non-zero operand is true; only a `branch` guard is held to 0 or 1),

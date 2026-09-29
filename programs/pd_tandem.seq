@@ -14,10 +14,10 @@ let K = 1.0;
 let jobs = 320;
 let mode = 1;   // 0 aggregated, 1 disaggregated
 
-stage agg : fifo(N);
-stage prefill : fifo(NP);
+stage agg : fifo(max(N, 1));
+stage prefill : fifo(max(NP, 1));
 stage link : fifo;
-stage decode : fifo(N - NP);
+stage decode : fifo(max(N - NP, 1));
 
 workload { arrive closed(jobs); }
 
@@ -26,11 +26,12 @@ session {
     set t0 = now;
     set sp = ~exp(sP);
     set sd = ~exp(sD);
+    set kv = ~exp(K);
     branch (mode == 0) {
       run agg (sp + sd + I);
     } else {
       run prefill (sp / gP);
-      run link (K / bnet);
+      run link (kv / bnet);
       run decode (sd / gD);
     }
     observe latency = now - t0;

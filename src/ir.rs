@@ -222,21 +222,21 @@ pub enum DistKind {
     Bernoulli,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CRef {
     pub base: usize,
     pub count: usize,
     pub index: Option<Box<CExpr>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CArg {
     Expr(CExpr),
     Pool(CRef),
     Stage(CRef),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CExpr {
     /// A constant. JSON has no infinity, so `inf` is written as the string
     /// `"inf"` (`-inf` as `"-inf"`) and read back from either form.
@@ -414,6 +414,8 @@ pub struct CStage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CArrival {
     Poisson(f64),
+    /// Open renewal process with a sampled interarrival-time expression.
+    Renewal(CExpr),
     Closed(usize),
     Batch(usize),
     /// Explicit sessions, all arriving at time 0: each one's attributes
@@ -447,6 +449,9 @@ pub struct Program {
     pub horizon: f64,
     pub warmup: f64,
     pub seed: u64,
+    /// Maximum open-population arrivals before draining active sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrivals: Option<usize>,
     /// Slots of the built-in attributes.
     pub slot_cached: usize,
     pub slot_serial: usize,
@@ -660,6 +665,25 @@ impl Program {
                 }
             }
         }
+        if let CArrival::Renewal(e) = &self.arrival {
+            v.expr(e, Moment::Session)?;
+            if !draws(e) {
+                return Err("renewal arrival must sample an interarrival time".into());
+            }
+            if !arrival_expr_is_pure(e) {
+                return Err(
+                    "renewal arrival may use only constants and sampled distributions".into(),
+                );
+            }
+        }
+        if let Some(n) = self.arrivals {
+            if n == 0 {
+                return Err("run: arrivals must be positive".into());
+            }
+            if !matches!(self.arrival, CArrival::Poisson(_) | CArrival::Renewal(_)) {
+                return Err("run: arrivals applies only to poisson or renewal workloads".into());
+            }
+        }
         if let CArrival::Sessions(ss) = &self.arrival {
             for s in ss {
                 for (slot, _) in s.attrs.iter().chain(s.turns.iter().flatten()) {
@@ -712,6 +736,23 @@ fn draws(e: &CExpr) -> bool {
         CExpr::Unary(_, x) => draws(x),
         CExpr::Binary(_, a, b) => draws(a) || draws(b),
         CExpr::Cond(c, a, b) => draws(c) || draws(a) || draws(b),
+    }
+}
+
+fn arrival_expr_is_pure(e: &CExpr) -> bool {
+    match e {
+        CExpr::Num(_) => true,
+        CExpr::Sample(_, args) => args.iter().all(arrival_expr_is_pure),
+        CExpr::Unary(_, x) => arrival_expr_is_pure(x),
+        CExpr::Binary(_, a, b) => arrival_expr_is_pure(a) && arrival_expr_is_pure(b),
+        CExpr::Cond(c, a, b) => {
+            arrival_expr_is_pure(c) && arrival_expr_is_pure(a) && arrival_expr_is_pure(b)
+        }
+        CExpr::Call(_, args) => args.iter().all(|arg| match arg {
+            CArg::Expr(x) => arrival_expr_is_pure(x),
+            CArg::Pool(_) | CArg::Stage(_) => false,
+        }),
+        CExpr::Attr(_) | CExpr::Ctx(_) => false,
     }
 }
 

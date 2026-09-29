@@ -62,11 +62,11 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `observes` | observation names, by index |
 | `pools` | `CPool`: `name`, `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, `Lifo`), `queue` (order key), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
 | `stages` | `CStage`: `name`, `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `memory` (pool index) |
-| `arrival` | `Poisson(rate)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
+| `arrival` | `Poisson(rate)`, `Renewal(sampled gap)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
 | `init`, `turn`, `session` | block indices: the workload's `init` and `turn` blocks and the session program |
 | `blocks` | the statement blocks (an arena; bodies of holds, branches and loops refer to blocks by index) |
-| `horizon`, `warmup`, `seed` | the run |
+| `horizon`, `warmup`, `seed`, `arrivals` | the run; `arrivals` optionally caps an open arrival stream and drains active sessions |
 | `hidden` | attribute slots the scheduler may not read (`hidden o;`): legal at the `Session` moment only, below |
 | `slot_cached`, `slot_serial`, … | slots of the built-in attributes (`cached`, `serial`, `turn_no`, `new`, `out`, `think`, `more`, `forced`, `computed`) |
 

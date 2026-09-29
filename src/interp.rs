@@ -278,6 +278,7 @@ struct StageState {
 
 #[derive(Clone, Copy)]
 enum Which {
+    Arrival,
     Workload,
     Session,
     Evict,
@@ -512,6 +513,7 @@ impl<'p> Interp<'p> {
 
     fn rng(&mut self, w: Which) -> &mut StdRng {
         match w {
+            Which::Arrival => &mut self.rng_arr,
             Which::Workload => &mut self.rng_wl,
             Which::Session => &mut self.rng_session,
             Which::Evict => &mut self.rng_evict,
@@ -528,6 +530,14 @@ impl<'p> Interp<'p> {
         }
         match &p.arrival {
             CArrival::Poisson(_) => self.at(0.0, Ev::Arrive),
+            CArrival::Renewal(e) => {
+                let gap = self.eval(e, &Ctx::default(), Which::Arrival);
+                assert!(
+                    gap.is_finite() && gap > 0.0,
+                    "renewal interarrival must be positive and finite"
+                );
+                self.at(gap, Ev::Arrive);
+            }
             &CArrival::Closed(n) | &CArrival::Batch(n) => {
                 for _ in 0..n {
                     self.spawn();
@@ -546,7 +556,15 @@ impl<'p> Interp<'p> {
             return Err(error);
         }
         while let Some(e) = self.heap.peek() {
-            if e.time > p.horizon {
+            let arrivals_done = p.arrivals.is_some_and(|n| self.arrivals >= n as u64);
+            if arrivals_done && self.live == 0 {
+                if !self.warm && p.warmup > self.now {
+                    self.now = p.warmup;
+                    self.handle(Ev::EndWarmup);
+                }
+                break;
+            }
+            if e.time > p.horizon && !arrivals_done {
                 break;
             }
             let e = self.heap.pop().unwrap();
@@ -558,7 +576,12 @@ impl<'p> Interp<'p> {
                 return Err(error);
             }
         }
-        self.now = p.horizon;
+        if !p
+            .arrivals
+            .is_some_and(|n| self.arrivals >= n as u64 && self.live == 0)
+        {
+            self.now = p.horizon;
+        }
         Ok(self.report())
     }
 
@@ -580,10 +603,20 @@ impl<'p> Interp<'p> {
                 }
             }
             Ev::Arrive => {
-                if let CArrival::Poisson(rate) = self.p.arrival {
-                    let gap = -(1.0 - self.rng_arr.random::<f64>()).ln() / rate;
-                    let t = self.now + gap;
-                    self.at(t, Ev::Arrive);
+                match self.p.arrival.clone() {
+                    CArrival::Poisson(rate) if self.may_schedule_open_arrival() => {
+                        let gap = -(1.0 - self.rng_arr.random::<f64>()).ln() / rate;
+                        self.at(self.now + gap, Ev::Arrive);
+                    }
+                    CArrival::Renewal(e) if self.may_schedule_open_arrival() => {
+                        let gap = self.eval(&e, &Ctx::default(), Which::Arrival);
+                        assert!(
+                            gap.is_finite() && gap > 0.0,
+                            "renewal interarrival must be positive and finite"
+                        );
+                        self.at(self.now + gap, Ev::Arrive);
+                    }
+                    _ => {}
                 }
                 self.spawn();
             }
@@ -598,6 +631,12 @@ impl<'p> Interp<'p> {
                 }
             }
         }
+    }
+
+    fn may_schedule_open_arrival(&self) -> bool {
+        self.p
+            .arrivals
+            .is_none_or(|n| self.arrivals < (n as u64).saturating_sub(1))
     }
 
     fn settle(&mut self) {
@@ -2756,7 +2795,7 @@ impl<'p> Interp<'p> {
             })
             .collect();
         Report {
-            horizon: p.horizon,
+            horizon: now,
             warmup: p.warmup,
             seed: p.seed,
             events: self.events,
