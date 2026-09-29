@@ -451,7 +451,8 @@ fn a_nested_loop_returns_to_every_arm() {
 }
 
 /// An arm with no station of its own reaches the station after the branch:
-/// the loop comes back to both, and a station does not return to itself.
+/// the loop comes back to `A` down the other arm, and down the empty one it
+/// would come back to `B` itself, which is a visit, not an edge.
 #[test]
 fn a_loop_through_an_empty_arm() {
     let (p, net) =
@@ -597,8 +598,9 @@ fn golden_files_are_current() {
 }
 
 /// `routing.seq`'s next turn migrates or stays: back to the link, and
-/// straight back to a replica. `pd_tandem.seq`'s closed loop re-enters
-/// whichever mode it runs.
+/// straight back to a replica. `pd_tandem.seq`'s job re-enters down both
+/// arms of its `mode` branch; the projection is structural, so it draws
+/// both although `mode` is one constant in a run.
 #[test]
 fn the_examples_return_down_every_arm() {
     let p = program("routing");
