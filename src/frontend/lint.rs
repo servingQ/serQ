@@ -171,7 +171,7 @@ fn constant_probability_guard(p: &Program, block: usize, out: &mut Vec<String>) 
                     && *x != 0.0
                     && *x != 1.0
                 {
-                    let g = crate::ir::show_num(*x);
+                    let g = crate::ir::show_num_exact(*x);
                     out.push(if *x > 0.0 && *x < 1.0 {
                         format!(
                             "`branch ({g})` is not a test: a guard is 0 or 1, and a constant \
