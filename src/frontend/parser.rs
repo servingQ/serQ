@@ -448,6 +448,21 @@ fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
     }
 }
 
+/// An argument of the statements `def` reads the clock or live state,
+/// which the body would read where it reads the parameter.
+fn live_message(def: &str, p: &str, what: &str) -> String {
+    let of = if p.is_empty() {
+        String::from("an argument")
+    } else {
+        format!("the argument for `{p}`")
+    };
+    format!(
+        "{of} of `{def}` reads `{what}`, which changes while statements run: the body would \
+         read it where it reads the parameter, not here\nhelp: `set` the value first \
+         (`set t = {what};`) and pass the name"
+    )
+}
+
 /// An argument of `def` reads `n`, which the body assigns before it reads
 /// the parameter `p`.
 fn capture_message(def: &str, p: &str, n: &str) -> String {
@@ -482,6 +497,11 @@ fn assigned_tokens(b: &[Token]) -> Vec<String> {
     }
     out
 }
+
+/// The functions of a value alone; the others read pool or stage state.
+const PURE: [&str; 9] = [
+    "min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow",
+];
 
 /// Do these tokens say the statement `w;`?
 fn says(b: &[Token], w: &str) -> bool {
@@ -694,9 +714,6 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
 /// the program's attributes and `lets` its constants, which shadow a
 /// context variable of the same name as the linker resolves them.
 fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
-    const PURE: [&str; 9] = [
-        "min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow",
-    ];
     let var = |v: &str| {
         let shadowed = attrs.iter().chain(lets).any(|a| a == v);
         (v == "cached" || (!shadowed && is_context_var(v))).then(|| v.to_string())
@@ -1072,7 +1089,23 @@ impl Parser {
         if let Some(w) = &prog.workload {
             assigned_in(&w.turn, &mut turned);
         }
+        let lets: Vec<&str> = prog.lets.iter().map(|(n, _)| n.as_str()).collect();
+        let attrs: Vec<&str> = self
+            .definitions
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .filter(|n| !lets.contains(n))
+            .collect();
         for u in &self.deferred {
+            if let Some(v) = u.reads.iter().find(|v| {
+                is_context_var(v) && !attrs.contains(&v.as_str()) && !lets.contains(&v.as_str())
+            }) {
+                return Err(ParseError {
+                    line: u.line,
+                    col: u.col,
+                    msg: live_message(&u.name, "", v),
+                });
+            }
             let found = u
                 .reads
                 .iter()
@@ -1344,8 +1377,23 @@ impl Parser {
                 );
             }
         }
+        if d.stmts {
+            for (p, a) in d.params.iter().zip(&args) {
+                let live = a.windows(2).find_map(|w| match (&w[0].tok, &w[1].tok) {
+                    (Tok::Ident(f), Tok::LParen)
+                        if FUNCTIONS.contains(&f.as_str()) && !PURE.contains(&f.as_str()) =>
+                    {
+                        Some(f.clone())
+                    }
+                    _ => None,
+                });
+                if let Some(f) = live {
+                    return self.err_at(at, live_message(&d.name, p, &format!("{f}(…)")));
+                }
+            }
+        }
         let (turn, request) = (d.turn, d.request);
-        if turn || request {
+        if d.stmts {
             let mut reads: Vec<String> = args
                 .iter()
                 .flatten()
@@ -2854,6 +2902,24 @@ mod tests {
             err("def take(x) { enter kv (4) { observe got = x; } } session { take(cached); }")
                 .contains("which `take` assigns")
         );
+        // the clock and live state are read where the body reads them
+        assert!(
+            err("stage svc : fifo; def timed(t) { run svc (1); observe took = now - t; } session { timed(now); }")
+                .contains("reads `now`, which changes")
+        );
+        assert!(
+            err("def f(q) { observe b = q; } session { f(used(kv)); }").contains("reads `used(…)`")
+        );
+        // an expression's argument is read where the expression is
+        parse(&format!(
+            "{ENGINE} def g(x) = x + 1; session {{ set a = g(now); }}"
+        ))
+        .unwrap();
+        // `n` is an attribute when the program sets it
+        parse(&format!(
+            "{ENGINE} def f(x) {{ observe b = x; }} session {{ set n = 1; f(n); }}"
+        ))
+        .unwrap();
         // and through a definition the body uses
         assert!(
             err("def reset() { set s = 10; } def f(x) { reset(); observe o = x; } session { f(s + 1); }")
