@@ -48,7 +48,7 @@ link.
 | the decoder's scheduler looks at its waiting queue only at a step with budget left and a running slot free | `admit via D` on both of the decoder's pools; `reqsD[j] (0) reserve (1)` — a slot must be free, none is taken | `scheduler.py:872-879` |
 | the decoder's local prefix hit, then the connector: for a remote prefill every prompt token beyond the local hit is external and loaded asynchronously | `kvD[j] (known) reserve (known)` with `reuse (floor((known - 1) / bs) * bs)`; `c = cached` is the local hit | `scheduler.py:932-954`; `nixl/pull_scheduler.py:34-66` |
 | blocks are allocated for the whole prompt, and the request is parked, `WAITING_FOR_REMOTE_KVS`, holding them and no slot; one transfer per request | the hold on `kvD[j]`; `transferred` is `do_remote_prefill`, spent | `scheduler.py:1199-1226, 1264-1294`; `nixl/pull_scheduler.py:108-189` |
-| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `transfer[j] (x0 + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c)` on the decoder's link | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks` |
+| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `transfer[j] (x0 + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c)` on the decoder's link | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
 | the read done, the blocks are cached, the last prompt token is marked uncomputed (its logits are needed), and the request is back in the waiting queue, served before new arrivals | `load kvD[j] (prompt - 1 - c)` inside the transfer; `admit if reqsD[j] (1) fit`, with `reqsD` declared before `kvD` | `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; `_try_promote_blocked_waiting_request`, `scheduler.py:3079-3092`; `scheduler.py:2383-2385` |
 | the prefiller frees the leased blocks when the read completes | `release kvP[i]` inside the transfer | `_update_from_kv_xfer_finished`, `scheduler.py:3113-3138` |
 | the decoder recomputes the last prompt token and decodes; a request preempted afterwards is rescheduled without a second transfer, prefilling locally what it lost | `prefill on D[j] (known - c) growing kvD[j]; decode on D[j] (o - 1 - (known - prompt)) growing kvD[j];` with `known` from `computed` | `scheduler.py:1560-1561`; `nixl/pull_scheduler.py:187-189` |
@@ -88,8 +88,12 @@ decoder's blocks a prefill earlier and saves one decoder step of latency.
 The reservation that would write it exactly is priced in
 [The KV transfer](design/pd-transfer.md).
 
-**Not modelled**: the lease's expiry and the decoder's heartbeats (30 s,
-`nixl/base_scheduler.py:199-238`; they matter only when a decoder dies);
+**Not modelled**: the lease's expiry and the decoder's heartbeats (the
+lease is granted at `nixl/pull_scheduler.py:248-269`, reaped at
+`nixl/base_worker.py:2982-3008`, extended by heartbeats the decoder tracks
+from `nixl/base_scheduler.py:199-238`, sends at `nixl/base_worker.py:3141-3170`
+and the prefiller applies at `nixl/base_worker.py:3010-3030`; they matter
+only when a decoder dies);
 bidirectional transfer for multi-turn (`bidirectional_kv_xfer`, the
 decoder's blocks read back by the prefiller); the host buffer on
 accelerators NIXL cannot read directly; tensor-parallel fan-out of the

@@ -52,9 +52,10 @@ struct Linker<'a> {
     pools: HashMap<String, (usize, usize)>,
     stages: HashMap<String, (usize, usize)>,
     blocks: Vec<Vec<CStmt>>,
-    /// Pool bases of the holds enclosing the statement being linked, for
-    /// `release` and `load`, which act on an enclosing hold.
-    held: Vec<usize>,
+    /// The pool references of the holds enclosing the statement being
+    /// linked, as written, for `release` and `load`, which act on an
+    /// enclosing hold: `hold kv[i]` encloses `release kv[i]`, not `kv[j]`.
+    held: Vec<Ref>,
     prog: &'a Program,
 }
 
@@ -416,13 +417,23 @@ impl Linker<'_> {
     }
 
     /// A pool reference a statement acts on through an enclosing hold
-    /// (`release`, `load`): the statement must be inside a hold of it.
+    /// (`release`, `load`): the statement must be inside a hold that names
+    /// the pool the same way, index included, or it would look for a hold
+    /// the session may not have.
     fn enclosed_pool(&self, r: &Ref, what: &str) -> LResult<CRef> {
         let cr = self.pool_ref(r)?;
-        if !self.held.contains(&cr.base) {
+        if !self.held.contains(r) {
+            let shown = match &r.index {
+                None => r.name.clone(),
+                Some(_) => format!("{}[…]", r.name),
+            };
+            let hint = if self.held.iter().any(|h| h.name == r.name) {
+                ": write the pool as the enclosing hold does, index included"
+            } else {
+                ": it acts on an enclosing hold's allocation"
+            };
             return Err(LinkError(format!(
-                "`{what} {}` outside a hold of `{}`: it acts on an enclosing hold's allocation",
-                r.name, r.name
+                "`{what} {shown}` outside a hold of `{shown}`{hint}"
             )));
         }
         Ok(cr)
@@ -646,6 +657,7 @@ impl Linker<'_> {
                     body,
                     cache,
                 } => {
+                    let pools_src = pools;
                     let pools = pools
                         .iter()
                         .map(|(r, e, f)| {
@@ -659,8 +671,8 @@ impl Linker<'_> {
                     let reuse = reuse.as_ref().map(|c| self.expr(c)).transpose()?;
                     let cache = cache.as_ref().map(|c| self.expr(c)).transpose()?;
                     let depth = self.held.len();
-                    for (r, _, _) in &pools {
-                        self.held.push(r.base);
+                    for (r, _, _) in pools_src {
+                        self.held.push(r.clone());
                     }
                     let body = self.block(body, false)?;
                     self.held.truncate(depth);

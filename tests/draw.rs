@@ -389,6 +389,22 @@ fn no_overlapping_enclosures(f: &Figure, name: &str) {
     }
 }
 
+/// A `release` in one arm of a branch does not reach the other, and after
+/// the branch the pool encloses a station only if both arms still hold it.
+#[test]
+fn a_release_in_one_arm_does_not_reach_the_other() {
+    let p = compile(
+        "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
+         workload { arrive batch(1); init { set c = 1; } }
+         session { hold p (1) { branch (c) { release p; run s1 (1); } else { run s2 (1); } run s3 (1); } end; }
+         run { horizon 10; }",
+    );
+    let net = deployment::project(&p);
+    assert!(pools_of(&p, &net, "s1").is_empty());
+    assert_eq!(pools_of(&p, &net, "s2"), ["p"]);
+    assert!(pools_of(&p, &net, "s3").is_empty());
+}
+
 /// `programs/llmd_pd.seq`: the prompt's KV is in the prefiller's pool
 /// through the transfer and in the decoder's from the transfer on, so the
 /// link station is inside both enclosures, the prefill station in the

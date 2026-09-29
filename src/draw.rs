@@ -91,8 +91,10 @@ struct Draw<'a> {
     /// Tails still open at the bottom of the figure, by pool.
     open_tails: Vec<(usize, f64)>,
     /// Rows at which a `release` gave a pool back before its hold ended, by
-    /// pool; the hold's band for that pool stops there.
-    released: Vec<(usize, f64)>,
+    /// pool, with the control depth it was written at: the hold's band for
+    /// that pool stops there when the release is on every path (written at
+    /// the hold's own depth), and only the marker says it otherwise.
+    released: Vec<(usize, f64, usize)>,
     /// Per hold body, the pools its `cache` clause can leave units in.
     cache_targets: std::collections::BTreeMap<usize, Vec<usize>>,
 }
@@ -221,7 +223,7 @@ impl<'a> Draw<'a> {
             CStmt::Release(r) => {
                 let y = self.y;
                 self.marker("]", format!("release {}", self.p.show_pool_ref(r)));
-                self.released.push((r.base, y));
+                self.released.push((r.base, y, self.depth));
             }
             CStmt::Run {
                 stage,
@@ -272,6 +274,7 @@ impl<'a> Draw<'a> {
                 cache,
             } => {
                 let top = self.y;
+                let depth = self.depth;
                 if let Some(rho) = reuse {
                     self.marker("v", format!("reuse ({})", self.p.show_expr(rho)));
                 }
@@ -291,15 +294,16 @@ impl<'a> Draw<'a> {
                     let Some(x) = self.col_x(r.base) else {
                         continue;
                     };
-                    // a `release` inside the body ended this pool's hold early
-                    let bottom = match self
+                    // a `release` in the body, on every path, ended this
+                    // pool's hold early; one inside a branch is a marker only
+                    let end = self
                         .released
                         .iter()
-                        .rposition(|&(q, y)| q == r.base && y > top && y <= bottom)
-                    {
-                        Some(i) => self.released.remove(i).1,
-                        None => bottom,
-                    };
+                        .rposition(|&(q, y, d)| q == r.base && d == depth && y > top && y <= bottom)
+                        .map(|i| self.released[i].1);
+                    self.released
+                        .retain(|&(q, y, _)| !(q == r.base && y > top && y <= bottom));
+                    let bottom = end.unwrap_or(bottom);
                     if let Some(fx) = reserve {
                         let fr = Rect::new(x + 3.0, top - 3.0, COL_W - 6.0, bottom - top + 6.0);
                         self.band_box(fr, BoxStyle::Reserve, 2.0);

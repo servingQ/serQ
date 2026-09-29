@@ -367,3 +367,60 @@ fn the_pd_program_survives_decoder_memory_pressure() {
         r.text()
     );
 }
+
+/// `release` and `load` name the pool as the enclosing hold wrote it,
+/// index included: `hold q[0] { load q[1] (1); }` would look for a hold the
+/// session does not have.
+#[test]
+fn release_and_load_name_the_pool_as_the_hold_does() {
+    let program = |body: &str| {
+        format!(
+            "pool q[2] {{ cap 10; }} stage svc : delay;
+             workload {{ arrive batch(1); init {{ set j = 0; }} }}
+             session {{ {body} end; }} run {{ horizon 10; }}"
+        )
+    };
+    let e = check_source(
+        &program("hold q[0] (1) { load q[1] (1); }"),
+        &Overrides::default(),
+    )
+    .expect_err("linked");
+    assert!(e.contains("index included"), "{e}");
+    let e = check_source(
+        &program("hold q[j] (1) { release q[0]; }"),
+        &Overrides::default(),
+    )
+    .expect_err("linked");
+    assert!(e.contains("index included"), "{e}");
+    check_source(
+        &program("hold q[j] (1) { run svc (1); release q[j]; }"),
+        &Overrides::default(),
+    )
+    .expect("links");
+}
+
+/// `preempt lifo` on an engine's memory with nobody resident: the grower
+/// waits for room instead of preempting a holder that is away from the
+/// engine (leased, parked). A holds 10 and B holds 10 of 20 at a delay
+/// stage; A's growth at t = 1 finds no room and no resident, and goes
+/// through when B releases at 5.
+#[test]
+fn a_grow_with_nobody_to_preempt_waits() {
+    let src = r#"
+        pool kv { cap 20; preempt lifo; }
+        stage engine : step { budget 100; cost 1; memory kv; }
+        stage svc : delay;
+        workload { arrive batch(2); }
+        session {
+          hold kv (10) {
+            branch (serial == 0) { run svc (1); grow kv (10); observe grew = now; run svc (1); }
+            else { run svc (5); }
+          }
+          end;
+        }
+        run { horizon 50; }
+    "#;
+    let r = run(src);
+    assert_eq!(samples(&r, "grew"), [5.0], "{}", r.text());
+    assert_eq!(r.pool("kv").unwrap().preemptions, 0, "{}", r.text());
+}

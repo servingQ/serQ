@@ -1454,8 +1454,19 @@ impl<'p> Interp<'p> {
                 }
                 return true;
             }
-            match self.p.pools[pl].preempt {
-                Preempt::None => {
+            let victim = match self.p.pools[pl].preempt {
+                Preempt::None => None,
+                Preempt::Lifo => self.lifo_victim(pl),
+            };
+            match victim {
+                Some(victim) => {
+                    self.preempt(victim, pl);
+                    if victim == sid {
+                        return false;
+                    }
+                }
+                // `preempt none`, or nobody to preempt: wait for room
+                None => {
                     let resume = match self.sessions[sid].status {
                         Status::InStage(st, j) => Some((st, j)),
                         _ => None,
@@ -1463,13 +1474,6 @@ impl<'p> Interp<'p> {
                     self.sessions[sid].status = Status::Growing(pl, units, resume);
                     self.pools[pl].growers.push_back(sid);
                     return false;
-                }
-                Preempt::Lifo => {
-                    let victim = self.lifo_victim(pl);
-                    self.preempt(victim, pl);
-                    if victim == sid {
-                        return false;
-                    }
                 }
             }
         }
@@ -1485,9 +1489,10 @@ impl<'p> Interp<'p> {
     /// keeps its blocks leased for the decoder's read and is in no `running`
     /// list, and a decoder's request waiting for that read
     /// (`WAITING_FOR_REMOTE_KVS`) holds its blocks and is not in `running`
-    /// either. A pool that is no engine's memory: its most recently admitted
-    /// holder.
-    fn lifo_victim(&self, pl: usize) -> usize {
+    /// either; with no resident holding the pool there is nobody to preempt
+    /// and the grower waits. A pool that is no engine's memory: its most
+    /// recently admitted holder.
+    fn lifo_victim(&self, pl: usize) -> Option<usize> {
         let engines: Vec<usize> = self
             .p
             .stages
@@ -1497,18 +1502,16 @@ impl<'p> Interp<'p> {
             .map(|(i, _)| i)
             .collect();
         let holders = &self.pools[pl].holders;
-        if !engines.is_empty()
-            && let Some(s) = holders
-                .iter()
-                .copied()
-                .filter(|&s| {
-                    matches!(self.sessions[s].status, Status::InStage(x, _) if engines.contains(&x))
-                })
-                .max_by_key(|&s| self.sessions[s].adm_seq)
-        {
-            return s;
+        if engines.is_empty() {
+            return holders.last().copied();
         }
-        *holders.last().expect("a grower holds the pool")
+        holders
+            .iter()
+            .copied()
+            .filter(|&s| {
+                matches!(self.sessions[s].status, Status::InStage(x, _) if engines.contains(&x))
+            })
+            .max_by_key(|&s| self.sessions[s].adm_seq)
     }
 
     fn retry_growers(&mut self, pl: usize) {

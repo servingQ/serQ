@@ -224,13 +224,20 @@ impl Walker<'_> {
                     // is what keeps a chain of guards from multiplying out.
                     let saved = self.frontier.clone();
                     let outer = self.arm.take();
+                    // each arm starts from the holds at the branch; a
+                    // `release` in one arm does not reach the other, and
+                    // after the branch a pool is held only where both arms
+                    // still hold it
+                    let held = self.holds.clone();
                     self.frontier = saved.clone();
                     self.arm = Some(self.p.show_guard(&c));
                     self.walk(t);
                     let then_out = std::mem::take(&mut self.frontier);
+                    let then_held = std::mem::replace(&mut self.holds, held);
                     self.frontier = saved;
                     self.arm = Some("else".into());
                     self.walk(e);
+                    self.holds.retain(|h| then_held.contains(h));
                     let mut out = then_out;
                     out.append(&mut self.frontier);
                     dedupe(&mut out);

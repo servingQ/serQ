@@ -20,8 +20,11 @@ prefiller, the request's slot is freed when its token is sampled and its
 blocks are *leased*: `request_finished` returns `delay_free_blocks`
 (`nixl/pull_scheduler.py:191-292`), the blocks stay allocated
 (`scheduler.py:2628-2657`) until the decoder's read completes
-(`scheduler.py:3135-3138`) or the lease expires (30 s, extended by the
-decoder's heartbeats while the request waits, `nixl_kv_cache_lease.md`).
+(`scheduler.py:3135-3138`) or the lease expires (30 s, granted at
+`nixl/pull_scheduler.py:248-269`, reaped at `nixl/base_worker.py:2982-3008`,
+extended by the decoder's heartbeats while the request waits:
+`nixl/base_scheduler.py:199-238`, `nixl/base_worker.py:3141-3170`, `3010-3030`;
+the design note is vLLM's `docs/design/nixl_kv_cache_lease.md`).
 On the decoder, the scheduler takes the request from its waiting queue at a
 step with budget left and a running slot free (`scheduler.py:872-879`),
 allocates blocks for the whole prompt beyond its local hit
@@ -199,8 +202,8 @@ choose between them.
   scheduler's.
 
 - **The lease's expiry is not modelled.** It fires only when a decoder
-  dies; a timed release of a hold would be a pool option, and there is no
-  program that needs it.
+  dies (`nixl/base_worker.py:2982-3008`); a timed release of a hold would
+  be a pool option, and there is no program that needs it.
 
 - **`load` and `Lean`.** Neither statement is in the Lean fragment. A
   hold's per-pool release is the `[Free]` transition applied to one entry
