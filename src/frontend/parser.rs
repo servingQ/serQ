@@ -37,7 +37,8 @@
 //!           | serving
 //! serving  := 'enter' ... 'keep' ...            -- as 'hold' ... 'cache' ...
 //!           | role ('[' expr ']' | 'on' ref)? expr ('growing' ref)? ';'
-//! role     := 'prefill' | 'transfer' | 'decode' | 'tool'
+//!           | 'transfer' ('[' expr ']' | 'on' ref)? expr 'from' ref 'to' ref '(' expr ')' ';'
+//! role     := 'prefill' | 'decode' | 'tool'
 //! ref      := IDENT ('[' expr ']')?
 //! ```
 //!
@@ -1157,8 +1158,8 @@ impl Parser {
         Ok(binds)
     }
 
-    /// `prefill S;`, `transfer[j] X;`, `decode on E (D) growing kv;`, ...:
-    /// a `run` on the stage that plays the role.
+    /// `prefill S;`, `transfer[j] X from P to Q (n);`, `decode on E (D)
+    /// growing kv;`, ...: a `run` on the stage that plays the role.
     fn serving(&mut self, role: Role) -> PResult<Vec<Stmt>> {
         let at = self.pos;
         let span = Some(self.span());
@@ -1235,6 +1236,22 @@ impl Parser {
                 Stmt::Load(to, units),
                 Stmt::Release(from),
             ]);
+        }
+        // A KV transfer leaves one hold and enters another; a link that
+        // only takes time is the kernel's `run`, and says so.
+        if role == Role::Transfer {
+            let at_stage = if stage.index.is_some() {
+                format!("{}[…]", stage.name)
+            } else {
+                stage.name.clone()
+            };
+            return self.err_at(
+                at,
+                format!(
+                    "`transfer` without `from P to Q (n)`: a KV transfer leaves the lease (or hold) on P and enters the hold on Q\n\
+                     help: write `transfer (w) from P to Q (n);`, or `run {at_stage} (w);` for a link that only takes time"
+                ),
+            );
         }
         self.expect(&Tok::Semi)?;
         Ok(vec![Stmt::Run {
@@ -1526,6 +1543,7 @@ mod tests {
 
     const PD: &str = r#"
         pool kv { cap 100; }
+        pool kvD { cap 100; }
         stage prefill : fifo;
         stage link : ps(1);
         stage decode : ps(n);
@@ -1550,14 +1568,16 @@ mod tests {
         same(
             &format!(
                 "{PD} session {{
-                    enter kv (K) {{ prefill S; transfer X; }} keep (K);
+                    enter kv (K) {{ prefill S; }} keep (K) lease kv (inf);
+                    enter kvD (K) {{ transfer X from kv to kvD (K); }}
                     enter kv (K) reserve (F) reuse (R) {{ decode D; }}
                     branch with (p) {{ tool Z; turn; }} else {{ end; }}
                 }}"
             ),
             &format!(
                 "{PD} session {{
-                    hold kv (K) {{ run prefill (S); run link (X); }} cache (K);
+                    hold kv (K) {{ run prefill (S); }} cache (K) lease kv (inf);
+                    hold kvD (K) {{ run link (X); load kvD (K); release kv; }}
                     hold kv (K) reserve (F) reuse (R) {{ run decode (D); }}
                     branch with (p) {{ run tool (Z); turn; }} else {{ end; }}
                 }}"
@@ -1601,9 +1621,37 @@ mod tests {
         );
         // a stage named `transfer` plays transfer
         same(
-            "stage transfer : fifo; session { transfer X; }",
-            "stage transfer : fifo; session { run transfer (X); }",
+            "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
+             session { hold b (1) { hold a (1) { transfer X from a to b (1); } } }",
+            "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
+             session { hold b (1) { hold a (1) { run transfer (X); load b (1); release a; } } }",
         );
+    }
+
+    #[test]
+    fn a_transfer_says_where_the_kv_goes() {
+        // without `from P to Q` it would be a link that stores and forwards,
+        // which is the kernel's `run`, not a transfer
+        let e = parse(&format!(
+            "{PD} session {{ enter kv (K) {{ transfer X; }} }}"
+        ))
+        .unwrap_err();
+        assert!(
+            e.msg.contains("`transfer` without `from P to Q (n)`"),
+            "{e}"
+        );
+        assert!(e.msg.contains("`run link (w);`"), "{e}");
+        let e = parse("stage link[2] : ps(1); session { transfer[0] X; }").unwrap_err();
+        assert!(e.msg.contains("`run link[…] (w);`"), "{e}");
+        let e = parse(
+            "pool kv { cap 1; } stage nic : ps(1); session { transfer on nic X growing kv; }",
+        )
+        .unwrap_err();
+        assert!(
+            e.msg.contains("`transfer` without `from P to Q (n)`"),
+            "{e}"
+        );
+        assert!(e.msg.contains("`run nic (w);`"), "{e}");
     }
 
     #[test]

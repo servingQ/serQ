@@ -8,10 +8,9 @@ and the interpreter know nothing of it.
 |---|---|
 | [`enter P (u) … { body } keep (ℓ);`](#enter) | `hold P (u) … { body } cache (ℓ);` |
 | [`admit if P (u) … fit where … { body } keep (ℓ);`](#admit-if) | `hold`, in a `server` block |
-| [`prefill W;`](#prefill-decode-tool-transfer) | `run prefill (W);` or `run E prefill (T);` |
-| [`decode W;`](#prefill-decode-tool-transfer) | `run decode (W);` or `run E decode (T);` |
-| [`tool Z;`](#prefill-decode-tool-transfer) | `run tool (Z);` |
-| [`transfer X;`](#prefill-decode-tool-transfer) | `run link (X);` |
+| [`prefill W;`](#prefill-decode-tool) | `run prefill (W);` or `run E prefill (T);` |
+| [`decode W;`](#prefill-decode-tool) | `run decode (W);` or `run E decode (T);` |
+| [`tool Z;`](#prefill-decode-tool) | `run tool (Z);` |
 | [`transfer (X) from P to Q (n);`](#transfer-from-to) | `run link (X); load Q (n); release P;` |
 
 ## `enter`
@@ -43,13 +42,12 @@ and take 20. Where the test differs from the allocation, `reserve` says so.
 
 Only in a `server` block; `enter` only in a `session` block.
 
-## `prefill`, `decode`, `tool`, `transfer`
+## `prefill`, `decode`, `tool`
 
 ```seq
-prefill  [ '[' j ']' | on STAGE ] work [growing POOL];
-decode   [ '[' j ']' | on STAGE ] work [growing POOL];
-tool     [ '[' j ']' | on STAGE ] work;
-transfer [ '[' j ']' | on STAGE ] work;
+prefill [ '[' j ']' | on STAGE ] work [growing POOL];
+decode  [ '[' j ']' | on STAGE ] work [growing POOL];
+tool    [ '[' j ']' | on STAGE ] work;
 ```
 
 | Argument | Type | Description |
@@ -65,7 +63,9 @@ declared above it: the stage named for the role (`prefill`, `link` or
 `step` engine. Exactly one must qualify: with none or several the parser stops
 at the form. On a step engine the run gets the role's mode; elsewhere it is
 plain. `transfer` and `tool` on a step engine are link errors, so they take no
-`growing`, which needs one.
+`growing`, which needs one. `transfer` finds its stage by the same rule and
+always says where the KV goes ([below](#transfer-from-to)); a link that only
+takes time is `run link (X);`.
 
 ## `transfer … from … to`
 
