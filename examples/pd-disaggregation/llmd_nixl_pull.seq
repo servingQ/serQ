@@ -122,7 +122,6 @@ server {
     admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit
           reuse (floor((known - 1) / bs) * bs)
           where known = computed < prompt ? prompt : computed + 1 {
-      set known = computed < prompt ? prompt : computed + 1;
       set c = cached;
       branch (!transferred) {
         // WAITING_FOR_REMOTE_KVS: every block past the local hit is read
@@ -149,7 +148,6 @@ server {
     admit if reqsD[j] (1), kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known) fit
           where known = computed < prompt ? prompt : computed + 1,
                 hit = min(cachedin(kvD[j]), floor((known - 1) / bs) * bs) {
-      set known = computed < prompt ? prompt : computed + 1;
       set c = min(cached, floor((known - 1) / bs) * bs);
       observe local_tokens = known - c;
       prefill on D[j] (known - c) growing kvD[j];

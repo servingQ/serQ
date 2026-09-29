@@ -117,6 +117,12 @@ struct Parser {
     /// position of its keyword, until `assemble` puts them together.
     wl_session: Option<(usize, Vec<Stmt>)>,
     server: Option<(usize, Vec<Stmt>)>,
+    /// Header bindings the body of their hold reads, with the position of
+    /// the name: `set` at the top of the body, checked once the program's
+    /// attributes are known (`check_body_bindings`).
+    body_binds: Vec<(usize, String, Expr)>,
+    /// The token position of each name `bindings` read, in order.
+    bind_at: Vec<usize>,
 }
 
 /// Where a statement sits: a top-level `session`, the `session` inside
@@ -188,6 +194,8 @@ pub fn parse(src: &str) -> PResult<Program> {
         side: Side::Session,
         wl_session: None,
         server: None,
+        body_binds: vec![],
+        bind_at: vec![],
     };
     p.program()
 }
@@ -203,6 +211,8 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
         side: Side::Session,
         wl_session: None,
         server: None,
+        body_binds: vec![],
+        bind_at: vec![],
     };
     let e = p.expr()?;
     p.expect(&Tok::Eof)?;
@@ -265,6 +275,139 @@ fn has_sample(e: &Expr) -> bool {
         Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
     }
 }
+
+/// Does this expression read the name `n` (an attribute, a constant, or a
+/// binding)?
+fn expr_reads(e: &Expr, n: &str) -> bool {
+    match e {
+        Expr::Located(_, inner) => expr_reads(inner, n),
+        Expr::Var(v) => v == n,
+        Expr::Num(_) => false,
+        Expr::Sample(_, args) => args.iter().any(|a| expr_reads(a, n)),
+        Expr::Call(_, args) => args.iter().any(|a| match a {
+            Arg::Expr(x) => expr_reads(x, n),
+            Arg::Ref(r) => ref_reads(r, n) || (r.index.is_none() && r.name == n),
+        }),
+        Expr::Unary(_, a) => expr_reads(a, n),
+        Expr::Binary(_, a, b) => expr_reads(a, n) || expr_reads(b, n),
+        Expr::Cond(c, a, b) => expr_reads(c, n) || expr_reads(a, n) || expr_reads(b, n),
+    }
+}
+
+fn ref_reads(r: &Ref, n: &str) -> bool {
+    r.index.as_ref().is_some_and(|i| expr_reads(i, n))
+}
+
+/// Does this statement read the name `n` anywhere, its blocks included?
+fn stmt_reads(s: &Stmt, n: &str) -> bool {
+    let block = |b: &[Stmt]| b.iter().any(|s| stmt_reads(s, n));
+    match s {
+        Stmt::Turn | Stmt::Request | Stmt::End => false,
+        Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
+        Stmt::Hold {
+            pools,
+            reuse,
+            body,
+            cache,
+            lease,
+        } => {
+            pools.iter().any(|(r, u, f)| {
+                ref_reads(r, n) || expr_reads(u, n) || f.as_ref().is_some_and(|f| expr_reads(f, n))
+            }) || reuse.as_ref().is_some_and(|e| expr_reads(e, n))
+                || block(body)
+                || cache.as_ref().is_some_and(|e| expr_reads(e, n))
+                || lease
+                    .as_ref()
+                    .is_some_and(|(r, t)| ref_reads(r, n) || expr_reads(t, n))
+        }
+        Stmt::Grow(r, e) | Stmt::Load(r, e) => ref_reads(r, n) || expr_reads(e, n),
+        Stmt::Drop(r) | Stmt::Release(r) => ref_reads(r, n),
+        Stmt::Run {
+            stage,
+            work,
+            growing,
+            ..
+        } => {
+            ref_reads(stage, n)
+                || expr_reads(work, n)
+                || growing.as_ref().is_some_and(|g| ref_reads(g, n))
+        }
+        Stmt::Branch(c, a, b) => expr_reads(c, n) || block(a) || block(b),
+        Stmt::Loop(b) => block(b),
+        Stmt::Choose { count, key, .. } => expr_reads(count, n) || expr_reads(key, n),
+    }
+}
+
+/// The names `set` or `choose` assigns anywhere in `stmts`.
+fn assigned(stmts: &[Stmt], out: &mut Vec<String>) {
+    for s in stmts {
+        match s {
+            Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => out.push(n.clone()),
+            Stmt::Hold { body, .. } | Stmt::Loop(body) => assigned(body, out),
+            Stmt::Branch(_, a, b) => {
+                assigned(a, out);
+                assigned(b, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The first thing `e` reads whose value at a hold's admission is not its
+/// value in the hold's body: an observable of pool or stage state, a
+/// context variable, or `cached`, which the admission sets. `attrs` are
+/// the program's attributes and `lets` its constants, which shadow a
+/// context variable of the same name as the linker resolves them.
+fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
+    const PURE: [&str; 9] = [
+        "min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow",
+    ];
+    let var = |v: &str| {
+        let shadowed = attrs.iter().chain(lets).any(|a| a == v);
+        (v == "cached" || (!shadowed && CONTEXT_VARS.contains(&v))).then(|| v.to_string())
+    };
+    match e {
+        Expr::Located(_, inner) => live_read(inner, attrs, lets),
+        Expr::Num(_) => None,
+        Expr::Var(v) => var(v),
+        Expr::Sample(_, args) => args.iter().find_map(|a| live_read(a, attrs, lets)),
+        Expr::Call(f, args) => {
+            if !PURE.contains(&f.as_str()) {
+                return Some(format!("{f}(…)"));
+            }
+            args.iter().find_map(|a| match a {
+                Arg::Expr(x) => live_read(x, attrs, lets),
+                Arg::Ref(r) if r.index.is_none() => var(&r.name),
+                Arg::Ref(_) => None,
+            })
+        }
+        Expr::Unary(_, a) => live_read(a, attrs, lets),
+        Expr::Binary(_, a, b) => live_read(a, attrs, lets).or_else(|| live_read(b, attrs, lets)),
+        Expr::Cond(c, a, b) => live_read(c, attrs, lets)
+            .or_else(|| live_read(a, attrs, lets))
+            .or_else(|| live_read(b, attrs, lets)),
+    }
+}
+
+/// The context variables (`docs/api/context.md`), as the linker names them.
+const CONTEXT_VARS: [&str; 16] = [
+    "now",
+    "size",
+    "age",
+    "last",
+    "queued",
+    "n",
+    "ntok",
+    "ndec",
+    "npre",
+    "nres",
+    "kvb",
+    "kvp",
+    "attn",
+    "decoding",
+    "admission",
+    "remaining",
+];
 
 /// Replace every `request;` in `stmts`, at any depth, by the server's
 /// statements. Returns how many were replaced.
@@ -456,6 +599,7 @@ impl Parser {
             }
         }
         self.assemble(&mut prog)?;
+        self.check_body_bindings(&prog)?;
         prog.definitions = std::mem::take(&mut self.definitions);
         Ok(prog)
     }
@@ -494,6 +638,35 @@ impl Parser {
                 Ok(())
             }
         }
+    }
+
+    /// A binding its hold's body reads was set at the top of the body; that
+    /// is its admission value only if it reads attributes and constants.
+    fn check_body_bindings(&self, prog: &Program) -> PResult<()> {
+        if self.body_binds.is_empty() {
+            return Ok(());
+        }
+        let mut attrs = vec![];
+        assigned(&prog.session, &mut attrs);
+        if let Some(w) = &prog.workload {
+            assigned(&w.init, &mut attrs);
+            assigned(&w.turn, &mut attrs);
+        }
+        let lets: Vec<String> = prog.lets.iter().map(|(n, _)| n.clone()).collect();
+        for (at, name, e) in &self.body_binds {
+            if let Some(what) = live_read(e, &attrs, &lets) {
+                return self.err_at(
+                    *at,
+                    format!(
+                        "the body reads `{name}`, and `{name}` reads `{what}`: the body \
+                         sees a binding that reads only attributes and constants\n\
+                         help: in the body read `cached` for the units the admission \
+                         consumed, or name the value with `set` in the body"
+                    ),
+                );
+            }
+        }
+        Ok(())
     }
 
     fn array_count(&mut self) -> PResult<usize> {
@@ -1051,6 +1224,7 @@ impl Parser {
         // above the hold is not, and looks the same. The bindings are
         // substituted into the header's expressions here, so the AST, the
         // IR and the interpreter never see them.
+        self.bind_at.clear();
         let binds = if admit {
             if self.is_kw("at") {
                 return self
@@ -1081,7 +1255,24 @@ impl Parser {
                 subst(r, &binds);
             }
         }
-        let body = self.block()?;
+        let bind_at = std::mem::take(&mut self.bind_at);
+        let mut body = self.block()?;
+        // A binding the body reads is set at the top of the body, to the
+        // value it had at the admission: the body runs at the admission's
+        // instant, so an expression of attributes and constants reads the
+        // same there. One that reads live state does not, and is refused
+        // once the program's attributes are known.
+        let mut sets = vec![];
+        for ((name, e), &at) in binds.iter().zip(&bind_at) {
+            if body.iter().any(|s| stmt_reads(s, name)) {
+                sets.push(Stmt::Set(name.clone(), e.clone()));
+                self.body_binds.push((at, name.clone(), e.clone()));
+            }
+        }
+        if !sets.is_empty() {
+            sets.append(&mut body);
+            body = sets;
+        }
         let mut cache = if self.eat_kw("cache") || self.eat_kw("keep") {
             Some(self.paren_expr()?)
         } else {
@@ -1135,6 +1326,7 @@ impl Parser {
     fn bindings(&mut self, clause: &str) -> PResult<Vec<(String, Expr)>> {
         let mut binds: Vec<(String, Expr)> = vec![];
         loop {
+            self.bind_at.push(self.pos);
             let name = self.ident()?;
             if binds.iter().any(|(n, _)| *n == name) {
                 return self.err(format!("`{name}` is bound twice in one `{clause}`"));
@@ -1626,6 +1818,59 @@ mod tests {
             "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
              session { hold b (1) { hold a (1) { run transfer (X); load b (1); release a; } } }",
         );
+    }
+
+    #[test]
+    fn a_binding_the_body_reads_is_set_at_the_top_of_the_body() {
+        // the body sees `known` at its admission value, which for attributes
+        // and constants is the value it has at the top of the body
+        same(
+            &format!(
+                "{ENGINE} session {{
+                    enter kv (known) at admission (known = computed < p ? p : computed + 1) {{
+                        prefill (known - cached) growing kv;
+                    }}
+                    end;
+                }}"
+            ),
+            &format!(
+                "{ENGINE} session {{
+                    hold kv (computed < p ? p : computed + 1) {{
+                        set known = computed < p ? p : computed + 1;
+                        run engine prefill (known - cached) growing kv;
+                    }}
+                    end;
+                }}"
+            ),
+        );
+        // a binding the body does not read stays in the header
+        same(
+            &format!("{ENGINE} session {{ enter kv (h) at admission (h = 1) {{ }} }}"),
+            &format!("{ENGINE} session {{ hold kv (1) {{ }} }}"),
+        );
+    }
+
+    #[test]
+    fn the_body_does_not_see_a_binding_of_live_state() {
+        // at the top of the body the admission has consumed the prefix, so
+        // `cachedin(kv)` there is not what the header read
+        for binding in ["hit = min(cachedin(kv), p)", "hit = cached", "hit = now"] {
+            let e = parse(&format!(
+                "{ENGINE} session {{ enter kv (hit) at admission ({binding}) {{ observe h = hit; }} }}"
+            ))
+            .unwrap_err();
+            assert!(
+                e.msg.contains("the body reads `hit`"),
+                "{binding}: {}",
+                e.msg
+            );
+            assert!(e.msg.contains("read `cached`"), "{}", e.msg);
+        }
+        // `n` is a context variable unless the program assigns it
+        let src = format!(
+            "{ENGINE} session {{ set n = 3; enter kv (m) at admission (m = n + 1) {{ observe x = m; }} }}"
+        );
+        parse(&src).unwrap();
     }
 
     #[test]

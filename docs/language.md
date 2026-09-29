@@ -545,6 +545,14 @@ a program that uses the clause has the IR of the one that inlines by hand. A
 later binding sees the earlier ones. A binding may not draw (`~`): it is
 substituted, so a name used twice would draw twice.
 
+The body sees a binding too. One the body reads is set at its top, `set
+known = e;`, which is its admission value because the body starts at the
+admission's instant and `e` reads only attributes and constants. A binding
+that reads live state — an observable such as `cachedin(kv)`, a context
+variable, or `cached`, which the admission itself sets — has another value
+there, so the body reading it is a parse error; the body reads `cached`, the
+units the admission consumed.
+
 **`hidden`.** The output length `o` is drawn at `turn`, before the request,
 and nothing in the semantics stops a hold's header, a queue key or a budget
 from reading it: `reserve (prompt + o)` is a program vLLM cannot be, since
