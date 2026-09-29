@@ -40,7 +40,7 @@ ps ( expr )
 stage link[2] : ps(1);     // a decoder's NIC: its reads share the bandwidth
 ```
 
-(`examples/pd-disaggregation/llmd_pd.seq`)
+(`examples/pd-disaggregation/llmd_nixl_pull.seq`)
 
 ## `delay`
 

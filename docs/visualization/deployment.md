@@ -2,9 +2,9 @@
 
 The program as a queueing network.
 
-![llm-d prefill/decode over NIXL](../assets/llmd_pd.deployment.svg)
+![llm-d prefill/decode over NIXL](../assets/llmd_nixl_pull.deployment.svg)
 
-That is `examples/pd-disaggregation/llmd_pd.seq`: two prefill and two decode
+That is `examples/pd-disaggregation/llmd_nixl_pull.seq`: two prefill and two decode
 instances, the KV read over NIXL. The link sits where the prefiller's `kvP`
 box and the decoder's `kvD` box cross: the prefiller's blocks stay leased
 until the read ends, and the decoder's are allocated before it starts.
