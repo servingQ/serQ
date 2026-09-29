@@ -20,6 +20,7 @@ let d = 2e-4;
 let p = 0.9;
 let Z = 2.0;
 let bw = 2e6;        // migration link, tokens/s
+let dv = 0.0;        // decode KV-read cost, seconds/token^2
 
 stage rep[4] : fifo;
 stage link : fifo;
@@ -42,8 +43,8 @@ session {
   loop {
     turn;
     set t0 = now;
-    set hit = s0 + a * n + b * n * (K + n / 2) + o * d;
-    set miss = s0 + a * (K + n) + b * (K + n) * (K + n) / 2 + o * d;
+    set hit = s0 + a * n + b * n * (K + n / 2) + o * (d + dv * (K + n));
+    set miss = s0 + a * (K + n) + b * (K + n) * (K + n) / 2 + o * (d + dv * (K + n));
     set mig = work(link) + K / bw;
     set mv = 0;
     branch (first) {
@@ -77,7 +78,9 @@ session {
     branch (!first) {
       observe response = now - t0;
       observe hitrate = S == hit;
+      observe context = K;
     }
+    observe service = S;
     set first = 0;
     set K = K + n + o;
     branch with (p) { run tool (~exp(Z)); } else { end; }

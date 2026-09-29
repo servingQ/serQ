@@ -45,13 +45,13 @@ cargo run --release -- draw programs/vllm.seq --format svg --out vllm.svg   # ex
 As a dependency, pin a release tag:
 
 ```toml
-seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.0-rc2" }
+seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.0-rc3" }
 ```
 
 Or install the CLI directly:
 
 ```bash
-cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-rc2 --locked --root <dir>
+cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-rc3 --locked --root <dir>
 ```
 
 ## Layout
