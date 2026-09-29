@@ -16,6 +16,9 @@ jobs:
   drift:
     name: cited ranges still present upstream
     runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash # -eo pipefail: a failure before `tee` fails the step
     steps:
       - uses: actions/checkout@v4
       - name: the vLLM source the docs cite, at the pin (sparse)
@@ -24,9 +27,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -o pipefail
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
           scripts/fetch_vllm_tip.sh tip/vllm | tee -a "$GITHUB_STEP_SUMMARY"
       - name: every cited range's text, looked for in the tip
         run: |
-          set -o pipefail
           python3 scripts/check_citations.py --tip tip/vllm | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

@@ -5,6 +5,8 @@
 # GitHub API, no clone: `gh` must be authenticated (GH_TOKEN in CI).
 # `main` is resolved to one commit first, and every file is fetched at that
 # commit, so the nine are one snapshot and the line printed names it.
+# VLLM_TIP_REF=<sha|branch> fetches another revision (default main): on a
+# red day, the suspect commit and its parent, to see which one moved a range.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DIR="${1:-tip/vllm}"

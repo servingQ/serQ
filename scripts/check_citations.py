@@ -141,8 +141,10 @@ def drift(tip_dir):
         seen.add(key)
         if "\n".join(tip.splitlines()[lo - 1 : hi]) == body:
             same += 1
-        elif body in tip:
-            at = tip[: tip.index(body)].count("\n") + 1
+        elif (i := f"\n{tip}\n".find(f"\n{body}\n")) >= 0:
+            # anchored at line boundaries: a one-line citation is otherwise a
+            # substring of the same statement at a deeper indentation
+            at = f"\n{tip}\n"[:i].count("\n") + 1
             moved.append(f"{key} -> line {at}")
         else:
             gone[key] = [site]
@@ -158,7 +160,11 @@ def drift(tip_dir):
 
 def main():
     if "--tip" in sys.argv:
-        return drift(sys.argv[sys.argv.index("--tip") + 1])
+        at = sys.argv.index("--tip") + 1
+        if at >= len(sys.argv):
+            print("usage: scripts/check_citations.py --tip DIR", file=sys.stderr)
+            return 2
+        return drift(sys.argv[at])
     if "--paths" in sys.argv:
         # What a checkout has to contain for this script to run. The fetch
         # script reads it, so adding a citation to a new file widens the
