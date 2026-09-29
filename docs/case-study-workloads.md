@@ -1,10 +1,12 @@
 # Case study: one engine, four workloads
 
 A serving system is an engine plus the traffic it serves, and a program says
-which part is which. The pools, the stages and the `server` block are the
-engine: what vLLM does with one request. The `workload` block is the client:
-when sessions arrive, what each turn sends, what happens between turns, and
-when a session leaves. [The vLLM case study](case-study-vllm.md) held the
+which part is which. The pools, `stage engine` and the `server` block are
+the engine: what vLLM does with one request. The `workload` block is the
+client: when sessions arrive, what each turn sends, what happens between
+turns, and when a session leaves. The `delay` stages a workload runs between
+turns (`tool`, `user`, `delegate`) belong to the client too: they are the
+time a session spends outside the engine. [The vLLM case study](case-study-vllm.md) held the
 workload fixed and checked the engine against the real scheduler. This page
 holds the engine fixed and changes the client.
 
@@ -39,7 +41,11 @@ request of that session will read it, so here the cache only takes up space
 until LRU evicts it. The hit rate is 0.
 
 What this does not show: in a real single-turn deployment, requests share a
-system prompt, and vLLM's cache is content-addressed, so they hit on it. seQ
+system prompt, and vLLM's cache is content-addressed: a block's hash is its
+parent's hash, its token ids and extra keys (LoRA, multimodal inputs,
+`cache_salt`), with no request id (`kv_cache_utils.py:650-680`), and a lookup
+finds any cached block with that hash (`block_pool.py:197-223`). So they hit
+on it. seQ
 keeps one cache entry per session ([language](language.md) §9), so a shared
 prefix cannot be written yet.
 
@@ -118,8 +124,9 @@ arrival rate, so compare the rows within a pair, not across the table):
 For the same parent arrival rate, delegation makes 3.7 times as many requests.
 Each first request of a subagent is a full miss on the context it copied, so
 the mean prefill triples and TTFT rises from 14 ms to 53 ms. The prefill row
-is an upper bound: the real vLLM would hit on the shared prefix, and this seQ
-program cannot.
+is an upper bound: the real vLLM would hit on the shared prefix, since its
+cache is content-addressed (`kv_cache_utils.py:650-680`,
+`block_pool.py:197-223`), and this seQ program cannot.
 
 What the approximation cannot show, in the order of
 [the subagent design](design/subagents.md):
