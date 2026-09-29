@@ -13,6 +13,13 @@ first-token time, every cached-token count. 3 321 of 3 321.
 --8<-- "examples/multi-turn/vllm.seq"
 ```
 
+What the server does with one request is `vllm_request`, which the program
+reads from the library it shares with the other vLLM programs:
+
+```seq title="lib/vllm.seq"
+--8<-- "lib/vllm.seq"
+```
+
 ## Line by line against the scheduler
 
 Upstream is `ref/vllm` at `0c87a197` (`scripts/fetch_vllm_ref.sh` checks it

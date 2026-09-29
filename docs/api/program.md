@@ -2,7 +2,7 @@
 
 ```
 program := item*
-item    := let | def | pool | stage | workload | session | server | run
+item    := let | def | use | pool | stage | workload | session | server | run
 ```
 
 Items are read in order and declarations come first: a [serving form](serving.md)
@@ -60,6 +60,31 @@ sets (`cached`, `computed`) when the body holds, and what a `turn;` or
 live state (`now`, `used(kv)`): the body would read it after its runs. Name
 the value with `set` first and pass the name. An error in
 an expansion is reported in the body, with a note naming the use.
+
+## `use`
+
+```seq
+use "path";
+```
+
+Reads the definitions of a library: `path` is a file of `def`s (and `use`s),
+relative to the file the `use` is in, and its definitions are the program's
+from here on. A library read once is not read again. An error in a library
+is reported in the library, with the uses it was expanded from.
+
+```seq
+use "../../lib/vllm.seq";
+…
+server {
+  set t0 = now;
+  set prompt = K + n;
+  vllm_request(reqs, kv, engine, prompt, o, bs, t0);
+  observe response = now - t0;
+}
+```
+
+(`examples/multi-turn/vllm.seq`; the library is `lib/vllm.seq`.) A program
+given as text rather than read from a file cannot `use`.
 
 ## `pool`
 

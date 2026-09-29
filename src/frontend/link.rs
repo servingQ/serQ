@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::frontend::ast::*;
+use crate::frontend::diagnostic::Source;
 
 #[derive(Debug, Clone)]
 pub struct LinkError {
@@ -33,8 +34,13 @@ impl LinkError {
     }
 
     pub fn render(&self, source: &str) -> String {
+        self.render_in(source, &[])
+    }
+
+    /// Render against the program's text or the library the error is in.
+    pub fn render_in(&self, source: &str, libs: &[Source]) -> String {
         match self.span {
-            Some(span) => span.render(source, &format!("link error: {}", self.message)),
+            Some(span) => span.render_in(source, libs, &format!("link error: {}", self.message)),
             None => self.to_string(),
         }
     }

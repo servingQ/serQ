@@ -19,6 +19,8 @@
 // stay cached), and the decoder's request queues once more for a running slot
 // and a token of budget, recomputes the last prompt token for its logits,
 // and decodes. docs/case-study-pd.md has the line-by-line correspondence.
+use "../../lib/vllm.seq";
+
 let NP = 2;            // prefill instances
 let ND = 2;            // decode instances
 let B = 8192;          // max_num_batched_tokens
@@ -38,10 +40,6 @@ let minp = 0;          // prefix-based-pd-decider promptTokens
 let Lambda = 0.6;      // sessions per second
 let p = 0.9;           // continue after a turn
 let Z = 3.0;           // tool time (s)
-
-// What a cache hit may cover of a request of x tokens: its full blocks, and
-// never the last token, which is computed for its logits.
-def reusable(x) = floor((x - 1) / bs) * bs;
 
 pool reqsP[2] { cap max_seqsP; admit via P; }
 pool kvP[2] { cap blocksP * bs; block bs; evict lru; preempt lifo; }
@@ -92,7 +90,7 @@ workload {
 server {
   set t0 = now;
   set prompt = K + n;
-  set hitmax = reusable(prompt);
+  set hitmax = reusable(prompt, bs);
   // The router. Decode profile first: the least busy decode pod
   // (active-request-scorer). Then the decider: a remote prefill only when the
   // prompt's uncached suffix on that pod is long enough
@@ -124,7 +122,7 @@ server {
     // and a running slot free - it takes neither (the request is parked,
     // not running) - and reuses the full blocks it has of the prompt.
     admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit
-          reuse (reusable(known))
+          reuse (reusable(known, bs))
           where known = computed < prompt ? prompt : computed + 1 {
       set c = cached;
       branch (!transferred) {
@@ -151,8 +149,8 @@ server {
     // on one device (examples/multi-turn/vllm.seq).
     admit if reqsD[j] (1), kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known) fit
           where known = computed < prompt ? prompt : computed + 1,
-                hit = min(cachedin(kvD[j]), reusable(known)) {
-      set c = min(cached, reusable(known));
+                hit = min(cachedin(kvD[j]), reusable(known, bs)) {
+      set c = min(cached, reusable(known, bs));
       observe local_tokens = known - c;
       prefill on D[j] (known - c) growing kvD[j];
       branch (known == prompt) { observe ttft = now - t0; }

@@ -8,7 +8,7 @@
 use seq::ir::Program;
 use seq::view::deployment::{self, End};
 use seq::view::figure::{BoxStyle, Figure, StationKind};
-use seq::{Overrides, compile_source, program_path};
+use seq::{Overrides, compile_source, compile_source_at, program_path};
 
 const PROGRAMS: [&str; 8] = [
     "mg1",
@@ -22,8 +22,10 @@ const PROGRAMS: [&str; 8] = [
 ];
 
 fn program(name: &str) -> Program {
-    let src = std::fs::read_to_string(program_path(name)).unwrap();
-    compile_source(&src, &Overrides::default()).unwrap_or_else(|e| panic!("{name}: {e}"))
+    let path = program_path(name);
+    let src = std::fs::read_to_string(&path).unwrap();
+    compile_source_at(&src, path.parent(), &Overrides::default())
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
 fn stage(p: &Program, name: &str) -> usize {

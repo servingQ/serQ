@@ -134,7 +134,7 @@ pub enum StageKind {
     /// Infinite server: every job at rate 1.
     Delay,
     /// Iterating engine (continuous batching with chunked prefill).
-    Step(StepSpec),
+    Step(Box<StepSpec>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -268,6 +268,8 @@ pub struct RunOpts {
 pub struct Program {
     /// Locations of constants and assigned attributes, for diagnostic notes.
     pub definitions: Vec<(String, Span)>,
+    /// The libraries `use` read, for the spans that point into them.
+    pub libs: Vec<crate::frontend::diagnostic::Source>,
     pub lets: Vec<(String, Expr)>,
     pub pools: Vec<PoolDecl>,
     pub stages: Vec<StageDecl>,

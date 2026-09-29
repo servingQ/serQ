@@ -350,7 +350,8 @@ fn the_pd_program_survives_decoder_memory_pressure() {
         warmup: Some(50.0),
         ..Default::default()
     };
-    let r = run_source(&src, &ov, None).unwrap();
+    let path = seq::program_path("llmd_nixl_pull");
+    let r = run_source(&src, &ov, path.parent()).unwrap();
     assert!(r.pool("kvD").unwrap().preemptions > 0, "{}", r.text());
     assert!(
         r.observe("lease").unwrap().samples.len() > 100,

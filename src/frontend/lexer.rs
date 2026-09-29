@@ -98,6 +98,9 @@ pub struct Token {
     pub text: String,
     /// Everything between the previous token and this one.
     pub leading: Vec<Trivia>,
+    /// The file the token was read from: 0 for the program, `n` for the
+    /// `n`th library a `use` read.
+    pub file: usize,
 }
 
 /// The tokens and their trivia, concatenated, are the source again.
@@ -142,6 +145,7 @@ fn emit(
         col,
         text: chars[start..end].iter().collect(),
         leading: std::mem::take(pending),
+        file: 0,
     });
 }
 
@@ -376,6 +380,7 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
         col,
         text: String::new(),
         leading: std::mem::take(&mut pending),
+        file: 0,
     });
     Ok(out)
 }

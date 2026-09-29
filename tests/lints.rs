@@ -389,8 +389,9 @@ fn no_false_positives_on_the_corpus() {
         "vllm_request",
         "vllm_replay",
     ] {
-        let src = std::fs::read_to_string(program_path(name)).unwrap();
-        compile_source(&src, &Overrides::default())
+        let path = program_path(name);
+        let src = std::fs::read_to_string(&path).unwrap();
+        seq::compile_source_at(&src, path.parent(), &Overrides::default())
             .unwrap_or_else(|e| panic!("{name} is a real program and must link: {e}"));
     }
 }
