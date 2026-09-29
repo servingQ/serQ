@@ -1,15 +1,15 @@
 # Serving systems: declarations, implementations, workloads
 
-Status: design proposal with executable semantic witnesses. The `model`,
-`implementation`, `component`, `connect` and typed-interface notation below
+Status: design proposal with executable semantic witnesses. The `def`, `impl`,
+`bind`, `fn`, `component`, `connect` and typed-interface notation below
 is a sketch, not accepted seQ syntax. The separate example fragments at the
 end run through the existing parser. No module loader or new IR node is
 implemented by this document.
 
 ## Decision
 
-**A model declares topology and semantics; an implementation fills its
-configuration and expression slots; a workload knows the request contract.**
+**`def` declares topology and semantics; `impl` binds configuration values
+and named functions to its slots; a workload knows the request contract.**
 
 Instance counts belong to the model. Two prefillers and four decoders are
 a different topology from one prefiller and one decoder. An implementation
@@ -53,12 +53,132 @@ but cannot introduce an edge, change the workflow or move the decision
 across admission. A generic configuration dictionary must not silently
 acquire the power to replace the model's semantics.
 
+## Definitions, implementations and functions
+
+The outer boundary is `def` / `impl`. `def` names a reusable component or
+composed serving model. It owns topology, instance counts, resource and
+protocol semantics, and the signatures of required configuration and
+functions. `impl` names the definition it completes and binds those slots
+to external configuration values and named functions. These replace the
+earlier sketch's `model` and `implementation` keywords; they are not extra
+spellings.
+
+A definition does not create an instance: a `component` declaration does,
+with the count fixed by its containing model. An `impl` cannot add an
+instance or edge, replace the admission protocol or change the evaluation
+moment. In particular, `def` is more than a field layout: the process that
+acquires a permit and releases it on completion remains part of the model.
+
+The declaration/implementation boundary applies to functions too. A
+`fn` signature ending in `;` declares an implementation slot in `def`.
+A module-level `fn` supplies the reusable computation; a `bind` in `impl`
+connects it to the slot. Importing a function does not bind it automatically.
+An `impl` is a static binding table, not another process body.
+
+Signature excerpts, not complete component definitions or runnable syntax:
+
+```text
+def Router {
+  config: RouterConfig;
+  fn choose_decode(req: Request, candidates: DecodeCandidates,
+                   cfg: RouterConfig) -> DecodeTarget;
+}
+
+def Decode {
+  config: EngineConfig;
+  fn budget(state: BudgetState, cfg: EngineConfig) -> Tokens;
+  fn cost(batch: StepBatch, cfg: EngineConfig) -> Seconds;
+}
+
+// Policy module: these can be imported and reused by other components.
+fn token_budget(state: BudgetState, cfg: EngineConfig) -> Tokens =
+  cfg.max_batch_tokens;
+fn affine_step_cost(batch: StepBatch, cfg: EngineConfig) -> Seconds =
+  cfg.base_seconds + cfg.seconds_per_token * batch.ntok;
+
+// Binding excerpt; profile.decode is an immutable EngineConfig value.
+impl Decode {
+  bind config = profile.decode;
+  bind budget = token_budget;
+  bind cost = affine_step_cost;
+}
+```
+
+`EngineConfig` is a declared record schema for capacities, block size,
+token budget and timing coefficients. It has no instance-count field.
+Its coefficients carry the indicated units; they are not builtin
+measurements. A constant budget is still computed by a function at the
+declared budget moment. The model passes its bound `config` and the
+appropriate state view when invoking each hook; passing config is
+explicit in the function contract, not an ambient global lookup.
+
+At composition time, `bind config` resolves and validates an immutable
+value, while `bind cost` resolves a function symbol and checks its
+signature. It does not invoke the function. Runtime calls then receive the
+dynamic batch and bound config. Different instances can reuse the same
+function with different config values, without runtime function pointers,
+closures or an implicit default implementation.
+
+The composition explicitly selects one root `impl` for the serving
+definition, with one binding per required instantiated slot. Alternative
+profile modules may supply different implementations; imports do not
+merge them or resolve conflicts by file order. The standalone `impl Decode`
+above and the root `impl PDServing` below are separate examples, not two
+layers to apply cumulatively. Generic traits, inheritance and overlapping
+implementation rules are not needed for this boundary.
+
+The complete definitions also declare their ports, protocol, resources
+and evaluation moments. `Gateway` contains the router and admission
+controller definitions; the router's functions return choices, while the
+gateway's declared process performs admission, dispatch and completion.
+The signature excerpt does not replace that process with an arbitrary
+callback. Each routing decision still has a separate required slot: a
+`choose_decode` body cannot fill `choose_prefill` or the local/remote slot.
+
+The first `fn` mechanism should be deliberately small:
+
+- Functions return values and have no process effects. They cannot acquire
+  a pool, run a stage, wait, mutate session state, sample or alter topology.
+  Such operations remain in the component's declared process. A router's
+  simulated service time is charged by that process, not by executing its
+  selection function in the host language.
+- Inputs are explicit, read-only views. A budget receives pre-selection
+  state, cost receives the selected batch, and routing receives visible
+  request fields and candidate metrics exposed by its contract. No ambient
+  access to hidden output length, global queues or mutable client state is
+  gained by moving an expression into a function. Immutable implementation
+  constants and explicitly imported pure helpers can be in lexical scope.
+- A call evaluates at its enclosing hook's declared moment. Function
+  parameters denote argument values at that call, not expressions that
+  can be replayed after a wait. Helper calls must retain the same visibility
+  and moment restrictions transitively.
+- A router must return a member of the supplied candidate set. Role type
+  alone is insufficient: an unrelated decoder is still an invalid result.
+  The frontend must prove membership for a supported selection form or
+  provide a checked lowering; this is not established by the scalar cost
+  witnesses in this PR.
+- Start with named, statically resolved calls and expression bodies. Reject
+  recursion and call cycles; closures and functions stored in runtime data
+  are outside this proposal. Preserve both the definition and call-site
+  locations in diagnostics.
+
+For example, `fn budget(state) = cost(batch)` must not gain access to a
+batch that has not been selected yet. Missing required bindings, wrong
+signatures, duplicate bindings and unknown component paths are composition
+errors. Filling a budget or router slot cannot change instance counts.
+
+Pure scalar helpers are candidates for expansion into existing expressions
+with hygienic bindings. The frontend must establish that equivalence with
+tests before claiming no IR change. Typed state views, candidate sets and
+target-valued routing functions need their own lowering design; introducing
+`fn` does not automatically make those types supported by today's IR.
+
 ## Topology is a set of bindings, not a linear execution schedule
 
 Proposed declaration notation:
 
 ```text
-model PDServing {
+def PDServing {
   component gw     : Gateway;
   component P[2]   : Prefill;
   component D[2]   : Decode;
@@ -205,9 +325,9 @@ Illustrative control flow, not a new mandatory gateway algorithm:
 Gateway.request(req) {
   with admission.acquire(req) as permit {
     router.process(req);
-    d = router.choose(decoders, req);
-    if router.needs_remote(req, d) {
-      p = router.choose(prefillers, req);
+    d = router.choose_decode(req, decoders, router.config);
+    if router.needs_remote(req, d, router.config) {
+      p = router.choose_prefill(req, prefillers, router.config);
       kv = prefillers[p].prefill(req);
       return decoders[d].decode(req, from = kv);
     }
@@ -266,38 +386,57 @@ covers wait-based admission and successful synchronous completion only.
 
 ## Implementation slots have contracts
 
-Example implementation sketch for the fixed topology above:
+Example binding sketch for the fixed topology above. `profile` is an
+imported immutable configuration record; function names refer to explicitly
+defined or imported policies with signatures matching their target slots:
 
 ```text
-implementation Measured of PDServing {
-  gw.admission.capacity = 64;
-  gw.router.choose(decoders, req, state) = least_work(state);
-  gw.router.choose(prefillers, req, state) = least_work(state);
-  gw.router.needs_remote(req, d) = req.prompt > remote_threshold;
-  gw.router.cost(req) = route_base + route_per_token * req.prompt;
-  gw.router.remote_threshold = 512;
+impl PDServing {
+  bind gw.admission.config = profile.gateway.admission;
+  bind gw.router.config = profile.gateway.router;
+  bind gw.router.choose_decode = least_work_decode;
+  bind gw.router.choose_prefill = least_work_prefill;
+  bind gw.router.needs_remote = remote_over_threshold;
+  bind gw.router.cost = affine_route_cost;
 
-  P[*].kv.capacity = 128000;
-  P[*].kv.block = 16;
-  P[*].budget(state) = 512;
-  P[*].cost(batch) = c0 + a * batch.ntok;
+  bind P[*].config = profile.prefill;
+  bind P[*].budget = token_budget;
+  bind P[*].cost = affine_step_cost;
 
-  D[*].kv.capacity = 160000;
-  D[*].kv.block = 16;
-  D[*].budget(state) = 512;
-  D[*].cost(batch) = d0 + b * batch.ntok;
+  bind D[*].config = profile.decode;
+  bind D[*].budget = token_budget;
+  bind D[*].cost = affine_step_cost;
 
-  nic[*].cost(copy) = x0 + copy.tokens / bandwidth;
+  bind nic[*].config = profile.transfer;
+  bind nic[*].cost = transfer_cost;
 }
 ```
 
-The coefficient names must be supplied by this implementation's own
-configuration; the numbers and formula shapes above are illustrative,
-not measured claims. There is no `replicas` or `instances` setting here.
-Per-instance overrides may specialise existing paths such as `D[1]`;
-`D[2]`, an unknown key or a missing required slot must fail elaboration.
-Changing from 2P2D to 4P8D requires another declared topology (or an explicit
-model-level structural variant), never an implementation override.
+`D[*]` fills the same declared slot on each existing instance; it does not
+instantiate decoders. P and D use the same engine config schema and pure
+functions here, with different bound values. Their protocols are still
+defined by their respective component definitions.
+
+For example, `profile.decode` could contain `kv_capacity = 160000`,
+`kv_block = 16`, `max_batch_tokens = 512` and the two timing coefficients
+read by `affine_step_cost`. These are illustrative values, not measured
+claims. There is no `replicas` or `instances` setting. The record's fields,
+types and constraints must match the declared schema; a generic map of
+unvalidated settings cannot replace it.
+
+Per-instance bindings may address existing paths such as `D[1]`. Choose
+either a uniform `D[*].config` binding or disjoint indexed bindings for
+that slot; combining a wildcard and an overlapping indexed binding is an
+error, not a last-write-wins override. `D[2]`, an unknown config key or a
+missing required slot must fail elaboration. Changing from 2P2D to 4P8D
+requires another declared topology (or an explicit model-level structural
+variant), never an implementation binding.
+
+The routing requirement uses this same binding check. Two candidates at
+`gw.decoders` require `bind gw.router.choose_decode = ...`; an admission
+config alone, or a function merely imported into the module, does not
+complete that slot. Zero-cost routing still needs an explicit selection
+function whenever there is a choice.
 
 Budget and cost are expression bodies, not values computed while loading
 configuration. A budget sees the declared pre-selection state. A step cost
@@ -308,9 +447,9 @@ sampling and evaluation frequency must be specified for every exposed
 hook; moving its body to another file must not change any of them.
 
 The initial implementation can support pure expression hooks, including
-router selection. `least_work` above is a proposed policy definition, not
-a builtin that the parser already accepts. Its state view and tie-breaking
-must be specified by the selected implementation. No arbitrary
+router selection. The policy names above denote proposed definitions, not
+builtins that the parser already accepts. Their state views and tie-breaking
+must be specified by those definitions. No arbitrary
 host-language plugin, I/O callback or opaque hardware object is needed;
 these would hide the process from IR validation and the oracle consumers.
 
@@ -321,10 +460,11 @@ for example, `import { Gateway, Prefill, Decode } from "std/serving"`.
 Those exports need to contain the entry/port signatures, information
 visibility and behaviour contracts that elaboration actually uses.
 
-Language syntax (`model`, resource scopes, expressions and connections)
-remains syntax. Components and their model definitions are importable;
-workload definitions and implementation profiles can also have their own
-modules. A role import must not merely toggle a hardcoded keyword table.
+Language syntax (`def`, `impl`, `bind`, `fn`, resource scopes, expressions
+and connections) remains syntax. Named component definitions, typed config
+values and pure helper functions are importable; workload definitions and
+implementation profiles can also have their own modules. A role import
+must not merely toggle a hardcoded keyword table.
 The full multi-file frontend must retain original filenames and spans in
 diagnostics. The concatenation used by the tests below is only a witness,
 not the proposed module system.
@@ -374,7 +514,7 @@ frontend and checks results derived by hand:
 | Read `ntok` when computing that batch's budget | Rejected by IR moment validation |
 
 The last three budget/cost checks bind AST expression slots in a test
-helper; they do not implement `implementation { ... }` syntax. The tests
+helper; they do not implement `def` / `impl` / `bind` / `fn` syntax. The tests
 establish feasibility for these serial cases, not the correctness of a
 future port type checker, loader, rejection path or cancellation protocol.
 In particular, the existing parser has no declarative candidate bindings
@@ -387,8 +527,10 @@ for that work, not a claim about these six tests.
    signatures match. No undeclared global component references survive.
 2. Family counts and elementwise/shared mappings are fixed by the model.
    An implementation cannot mutate either.
-3. Every implementation slot is supplied, correctly typed and valid for
-   its evaluation moment; unknown slots and conflicting overrides fail.
+3. Every required implementation slot has exactly one binding, correctly
+   typed and valid for its evaluation moment. Config schemas reject
+   unknown keys; functions must match the target signature. Overlapping
+   wildcard/indexed bindings and unknown slots fail.
 4. Workload and component names are in distinct scopes. Only request fields,
    response fields, declared observations and permitted context cross them.
 5. Resource acquisition, leases and cleanup follow the declared protocol.
@@ -424,6 +566,22 @@ versus priority, retaining versus reselecting a route, waiting versus
 rejecting. Expose them as deliberate model contracts or change the model.
 Instance counts are structural regardless of being integers.
 
+**Use `def` and `fn` as interchangeable function keywords.** That adds two
+spellings for one construct. The proposed split earns two names only if
+`def` defines components and their processes, while `fn` computes values.
+The outer definition/implementation boundary is `def` / `impl`; `fn`
+declares the slots and defines the separately bound computations.
+
+**Write function bodies inline in `impl`.** This mixes selecting a profile
+with defining its policies. A binding table makes reuse and missing slots
+explicit, and lets one named function run with different immutable config
+values. Keep one way to fill a function slot: bind a named definition.
+
+**Put the whole gateway in an implementation function.** An unrestricted
+function could reorder admission, dispatch to undeclared destinations or
+finish the permit early. Keep the process in the component definition;
+bind implementation functions only at declared policy and numerical slots.
+
 **All of this is sugar.** Only the already-supported sequential, scoped
 behaviours have that evidence. Concurrent dispatch, queued timeout,
 cancellation or request-result control flow may require kernel work and a
@@ -439,8 +597,9 @@ First move the entry binding out of the workload using the existing server
 block and pin the semantics with the witnesses above. Next add explicit
 ports and static wiring for the existing roles, including scalar, family
 and elementwise bindings, optional gateway entry and required-router
-diagnostics. Then add model parameter/expression signatures
-and implementation checking, preserving counts in the model. Add imports
+diagnostics. Then add reusable `def` definitions, typed config schemas,
+`fn` signatures and pure bodies, and `impl` binding validation, preserving
+counts in the model. Add imports
 when there are real model/interface definitions to export. Handle new
 request outcomes and concurrency with their own semantic tests and IR
 decision, rather than attaching them to the syntax change.
