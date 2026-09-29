@@ -56,7 +56,7 @@ would be written out. So that a use reads as a call, an argument that reads
 a name the body assigns is refused rather than read after the assignment:
 a `set`, `choose` or binding of the body, the attributes a hold's admission
 sets (`cached`, `computed`) when the body holds, and what a `turn;` or
-`request;` in the body assigns. An error in
+`request;` in the body assigns, directly or through a definition the body uses. An error in
 an expansion is reported in the body, with a note naming the use.
 
 ## `pool`

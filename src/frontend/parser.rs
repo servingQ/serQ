@@ -167,6 +167,13 @@ struct Def {
     body: Vec<Token>,
     /// The body draws, itself or through a definition it uses.
     draws: bool,
+    /// What the body assigns, itself or through a definition it uses: its
+    /// `set`s, `choose`s and bindings, and `cached` and `computed` if it
+    /// holds. An argument that reads one would read the body's value.
+    assigns: Vec<String>,
+    /// The body says `turn;` or `request;`, itself or through a definition.
+    turn: bool,
+    request: bool,
     /// Where the name is written.
     line: usize,
     col: usize,
@@ -449,6 +456,37 @@ fn capture_message(def: &str, p: &str, n: &str) -> String {
          body's `{n}`, not this one\nhelp: `set` the value under another name first and \
          pass that; a key over a `choose` of the body is written where the `choose` is"
     )
+}
+
+/// The names a body's tokens assign: `set n =`, `choose n`, a binding
+/// `n =` (not an observation's name, which is no attribute), and `cached`
+/// and `computed` if it holds, which its admission sets.
+fn assigned_tokens(b: &[Token]) -> Vec<String> {
+    let mut out: Vec<String> = (0..b.len())
+        .filter_map(|k| {
+            let Tok::Ident(n) = &b[k].tok else {
+                return None;
+            };
+            let prev = k.checked_sub(1).map(|j| &b[j].tok);
+            let chosen = prev == Some(&Tok::Ident("choose".into()));
+            let assigned = b.get(k + 1).is_some_and(|t| t.tok == Tok::Assign)
+                && prev != Some(&Tok::Ident("observe".into()));
+            (chosen || assigned).then(|| n.clone())
+        })
+        .collect();
+    let holds = b
+        .iter()
+        .any(|t| matches!(&t.tok, Tok::Ident(k) if k == "hold" || k == "enter" || k == "admit"));
+    if holds {
+        out.extend(["cached".to_string(), "computed".to_string()]);
+    }
+    out
+}
+
+/// Do these tokens say the statement `w;`?
+fn says(b: &[Token], w: &str) -> bool {
+    b.windows(2)
+        .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
 }
 
 /// Do these tokens use the definition `name`, `name(`?
@@ -886,7 +924,9 @@ impl Parser {
                 return self.err(format!("unexpected {} at top level", self.peek()));
             }
         }
-        let mut served = vec![];
+        // a request runs the server, whose admissions set `cached` and
+        // `computed` too
+        let mut served: Vec<String> = vec!["cached".into(), "computed".into()];
         if let Some((_, server)) = &self.server {
             assigned_in(server, &mut served);
         }
@@ -1183,6 +1223,17 @@ impl Parser {
             }
         }
         let draws = body.iter().any(|t| t.tok == Tok::Tilde) || self.draws_through(&body);
+        let used: Vec<&Def> = self.defs.iter().filter(|d| uses(&body, &d.name)).collect();
+        let mut assigns = assigned_tokens(&body);
+        let mut turn = says(&body, "turn");
+        let mut request = says(&body, "request");
+        for d in &used {
+            assigns.extend(d.assigns.iter().cloned());
+            turn |= d.turn;
+            request |= d.request;
+        }
+        assigns.sort();
+        assigns.dedup();
         self.defs.push(Def {
             line: self.toks[at].line,
             col: self.toks[at].col,
@@ -1191,6 +1242,9 @@ impl Parser {
             stmts,
             body,
             draws,
+            assigns,
+            turn,
+            request,
         });
         Ok(())
     }
@@ -1263,41 +1317,12 @@ impl Parser {
         }
         // the names the body assigns: an argument that reads one would read
         // the body's value, not the one at the use
-        let assigned: Vec<&str> = if d.stmts {
-            let b = &d.body;
-            (0..b.len())
-                .filter_map(|k| {
-                    let Tok::Ident(n) = &b[k].tok else {
-                        return None;
-                    };
-                    let prev = k.checked_sub(1).map(|j| &b[j].tok);
-                    let chosen = prev == Some(&Tok::Ident("choose".into()));
-                    // `set n =`, a binding `n =`; an observation's name is not
-                    // an attribute
-                    let assigned = b.get(k + 1).is_some_and(|t| t.tok == Tok::Assign)
-                        && prev != Some(&Tok::Ident("observe".into()));
-                    (chosen || assigned).then_some(n.as_str())
-                })
-                .chain(
-                    // an admission sets what the scheduler tells the session
-                    d.body
-                        .iter()
-                        .any(|t| {
-                            matches!(&t.tok, Tok::Ident(k) if k == "hold" || k == "enter" || k == "admit")
-                        })
-                        .then_some(["cached", "computed"])
-                        .into_iter()
-                        .flatten(),
-                )
-                .collect()
-        } else {
-            vec![]
-        };
         for (p, a) in d.params.iter().zip(&args) {
             if a.is_empty() {
                 return self.err_at(at, format!("`{}`: the argument for `{p}` is empty", d.name));
             }
-            if let Some(n) = assigned
+            if let Some(n) = d
+                .assigns
                 .iter()
                 .find(|n| a.iter().any(|t| t.tok == Tok::Ident(n.to_string())))
             {
@@ -1319,12 +1344,7 @@ impl Parser {
                 );
             }
         }
-        let says = |w: &str| {
-            d.body
-                .windows(2)
-                .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
-        };
-        let (turn, request) = (says("turn"), says("request"));
+        let (turn, request) = (d.turn, d.request);
         if turn || request {
             let mut reads: Vec<String> = args
                 .iter()
@@ -2833,6 +2853,19 @@ mod tests {
         assert!(
             err("def take(x) { enter kv (4) { observe got = x; } } session { take(cached); }")
                 .contains("which `take` assigns")
+        );
+        // and through a definition the body uses
+        assert!(
+            err("def reset() { set s = 10; } def f(x) { reset(); observe o = x; } session { f(s + 1); }")
+                .contains("which `f` assigns")
+        );
+        assert!(
+            err("def adv() { turn; } def next(x) { adv(); observe p = x; } workload { turn { set n = 1; } } session { next(n); end; }")
+                .contains("which its `turn;` assigns")
+        );
+        assert!(
+            err("def ask() { request; } def go(x) { ask(); observe b = x; } workload { session { go(cached); end; } } server { }")
+                .contains("which its `request;` assigns")
         );
         // a name that is a declaration's
         assert!(err("def kv(x) = x; session { }").contains("also a pool"));
