@@ -8,6 +8,7 @@ seq-lang ir    FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T]
                     [--trace F] [--inline-trace]
 seq-lang draw  FILE [--view deployment|session] [--format tikz|svg] [--out PATH]
                     [--show-set]                                  (experimental)
+seq-lang fmt   [--check] FILE...
 ```
 
 `FILE` is program text (`.seq`) or IR (`.json`, as written by `seq-lang ir`).
@@ -20,6 +21,7 @@ seq-lang draw  FILE [--view deployment|session] [--format tikz|svg] [--out PATH]
 | `check` | parse, resolve every name and fold the constants; print a summary. This is what `make check` runs over every program |
 | `ir` | print the program's [IR](../ir.md) as JSON |
 | `draw` | render the program as a figure ([visualization](../visualization/index.md)) |
+| `fmt` | format one or more `.seq` files in place; comments, blank lines, number spellings, and aligned trailing comments are preserved |
 
 ## Options
 
@@ -36,6 +38,7 @@ seq-lang draw  FILE [--view deployment|session] [--format tikz|svg] [--out PATH]
 | `--view` | draw | `deployment` (default) or `session` |
 | `--format` | draw | `tikz` (default) or `svg` |
 | `--out PATH` | draw | write to a file instead of stdout |
+| `--check` | fmt | exit with code 1 and list files that need formatting, without writing them |
 | `--show-set` | draw | include `set` statements in the session view |
 
 ## The JSON report
@@ -62,6 +65,10 @@ seq-lang run programs/vllm.seq --json | jq '.pools[] | select(.name=="kv") | .pr
 | `make draw-golden` | regenerate `tests/golden/` |
 
 ## Input errors
+
+`fmt` parses every input before writing any file. It leaves the batch untouched
+if one file has a syntax error. `make check` runs `fmt --check` on the example
+and tutorial programs.
 
 Commands and their supported options are checked before the program is opened.
 An unknown command or option, a missing value, or an invalid value prints the

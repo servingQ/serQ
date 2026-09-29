@@ -38,4 +38,4 @@ Ask them in this order and write down the answer to each, including "no finding"
 
 ## Not worth a comment
 
-Formatting and lint — `make check` runs `cargo fmt` and `clippy` in CI.
+Formatting and lint — `make check` runs `cargo fmt`, `clippy`, and `seq-lang fmt --check` on the `.seq` examples in CI.
