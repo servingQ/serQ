@@ -355,7 +355,7 @@ fn the_pd_program_survives_decoder_memory_pressure() {
         ..Default::default()
     };
     let r = run_source(&src, &ov, None).unwrap();
-    assert!(r.pool("kvD").unwrap().preemptions > 0, "{}", r.text());
+    assert!(r.pool("D.kv").unwrap().preemptions > 0, "{}", r.text());
     assert!(
         r.observe("lease").unwrap().samples.len() > 100,
         "{}",

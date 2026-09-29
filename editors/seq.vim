@@ -4,11 +4,11 @@
 "   au BufRead,BufNewFile *.seq set filetype=seq
 if exists("b:current_syntax") | finish | endif
 
-syn keyword seqDeclaration let pool stage workload session server run
+syn keyword seqDeclaration let pool stage workload session server run queue gateway link route
 syn keyword seqStatement    turn request set observe hold enter admit if fit where
 syn keyword seqStatement    grow drop release load lease from to branch with
 syn keyword seqStatement    loop choose end reserve reuse cache keep at admission
-syn keyword seqStatement    growing on in by else prefill transfer decode tool
+syn keyword seqStatement    growing on in by else prefill transfer decode tool mark self
 syn keyword seqOption       cap block evict lru preempt lifo none queue fifo admit
 syn keyword seqOption       via spill when ps delay step budget cost chunk serve exclusive
 syn keyword seqOption       first memory arrive poisson closed batch trace ordered hidden

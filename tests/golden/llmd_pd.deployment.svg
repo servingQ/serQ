@@ -22,7 +22,7 @@
 <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker></defs>
 <rect class="bg" fill="#ffffff" x="0" y="0" width="1362.8" height="317"/>
 <rect class="enclosure" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="6 4" x="275" y="72" width="202" height="92" rx="8"/>
-<text x="295" y="67" text-anchor="start" font-size="10" fill="#1d2021">pool reqsP</text>
+<text x="295" y="67" text-anchor="start" font-size="10" fill="#1d2021">pool P.reqs</text>
 <path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M295 107 L325 107 M295 129 L325 129"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="297.14" y="109" width="6" height="18"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="305.71" y="109" width="6" height="18"/>
@@ -48,7 +48,7 @@
 <path class="relation" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="2 3" d="M310 105 L415 86" marker-end="url(#a)"/>
 <text x="313" y="98" text-anchor="start" font-size="8" fill="#6b7280" class="dim">admit via</text>
 <rect class="enclosure" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="6 4" x="162" y="57" width="719" height="164" rx="8"/>
-<text x="197" y="52" text-anchor="start" font-size="10" fill="#1d2021">pool kvP</text>
+<text x="197" y="52" text-anchor="start" font-size="10" fill="#1d2021">pool P.kv</text>
 <path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M197 107 L227 107 M197 129 L227 129"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="199.14" y="109" width="6" height="18"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="207.71" y="109" width="6" height="18"/>
@@ -68,7 +68,7 @@
 <rect class="cached" fill="#e6e2da" stroke="none" x="197" y="206" width="674" height="11" rx="2"/>
 <text x="534" y="214.5" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">prefix cache</text>
 <rect class="enclosure" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="6 4" x="664" y="72" width="395" height="92" rx="8"/>
-<text x="684" y="67" text-anchor="start" font-size="10" fill="#1d2021">pool reqsD</text>
+<text x="684" y="67" text-anchor="start" font-size="10" fill="#1d2021">pool D.reqs</text>
 <path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M684 107 L714 107 M684 129 L714 129"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="686.14" y="109" width="6" height="18"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="694.71" y="109" width="6" height="18"/>
@@ -86,7 +86,7 @@
 <path class="relation" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="2 3" d="M699 105 L997 86" marker-end="url(#a)"/>
 <text x="702" y="98" text-anchor="start" font-size="8" fill="#6b7280" class="dim">admit via</text>
 <rect class="enclosure" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="6 4" x="551" y="57" width="543" height="175" rx="8"/>
-<text x="586" y="52" text-anchor="start" font-size="10" fill="#1d2021">pool kvD</text>
+<text x="586" y="52" text-anchor="start" font-size="10" fill="#1d2021">pool D.kv</text>
 <path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M586 107 L616 107 M586 129 L616 129"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="588.14" y="109" width="6" height="18"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="596.71" y="109" width="6" height="18"/>
@@ -116,7 +116,7 @@
 <text x="415" y="157" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">budget 8192</text>
 <circle class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" cx="804" cy="118" r="26"/>
 <text x="804" y="121.5" text-anchor="middle" font-size="10" fill="#1d2021">PS</text>
-<text x="804" y="84" text-anchor="middle" font-size="10" fill="#1d2021">link[j]</text>
+<text x="804" y="84" text-anchor="middle" font-size="10" fill="#1d2021">nic[j]</text>
 <text x="804" y="157" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">1</text>
 <rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="955" y="92" width="84" height="52" rx="3"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="963" y="131" width="68" height="6"/>
@@ -135,7 +135,7 @@
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M28 118 L373 118" marker-end="url(#a)"/>
 <text x="28" y="108" text-anchor="start" font-size="8" fill="#6b7280" class="dim">new sessions: Poisson 0.6</text>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M457 118 L762 118" marker-end="url(#a)"/>
-<text x="609.5" y="110" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">!transferred</text>
+<text x="609.5" y="110" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">!D.transferred</text>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M846 118 L955 118" marker-end="url(#a)"/>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M457 118 L955 118" marker-end="url(#a)"/>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M28 118 L28 245 L976 245 L976 144" marker-end="url(#a)"/>

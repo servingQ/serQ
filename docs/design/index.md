@@ -67,5 +67,6 @@ here. This directory is the record of **applying** them.
 | [IR v4](ir-v4.md) | Making the implicit static: moments, ownership, declared orders, integer ticks, the session automaton, step coalescing, progress checks | RFC #41 |
 | [Subagents](subagents.md) | A session that spawns sessions is not a tool call: endogenous arrivals, hold-and-wait, cross-session cache, `Spawn`/`Join` | review, for v4b |
 | [The KV transfer](pd-transfer.md) | Prefill/decode disaggregation as llm-d and the NIXL connector do it, in pull and push mode; `release`, `load`, `transfer … from … to …`; the reservation push mode still wants | IR v5, with `programs/llmd_pd.seq` |
+| [Queues](queue.md) | gateway, prefill, link and decode as roles of one `queue` that owns its pools, its stage and the entries holding a request's admission, allocation and service; what an entry may read; sugar over IR v5 | RFC #72, with `programs/llmd_pd.seq` |
 
 A new design document adds a row to this table.

@@ -431,13 +431,13 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
 fn a_transfer_puts_the_link_in_both_enclosures() {
     let p = program("llmd_pd");
     let net = deployment::project(&p);
-    assert_eq!(pools_of(&p, &net, "P"), ["reqsP", "kvP"]);
-    assert_eq!(pools_of(&p, &net, "link"), ["kvP", "kvD", "reqsD"]);
-    assert_eq!(pools_of(&p, &net, "D"), ["kvD", "reqsD"]);
+    assert_eq!(pools_of(&p, &net, "P"), ["P.reqs", "P.kv"]);
+    assert_eq!(pools_of(&p, &net, "nic"), ["P.kv", "D.kv", "D.reqs"]);
+    assert_eq!(pools_of(&p, &net, "D"), ["D.kv", "D.reqs"]);
     assert!(pools_of(&p, &net, "tool").is_empty());
     let f = deployment::layout(&p, &net);
     let boxes = f.boxes(BoxStyle::Enclosure);
-    let link = net.node_of(stage(&p, "link")).unwrap();
+    let link = net.node_of(stage(&p, "nic")).unwrap();
     let (rect, _) = f.stations()[link];
     assert_eq!(boxes.iter().filter(|b| b.contains(&rect)).count(), 3);
 }

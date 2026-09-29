@@ -66,11 +66,11 @@
     },
     "structure": {
       "name": "keyword.other.declaration.seq",
-      "match": "\\b(let|pool|stage|workload|session|server|run)\\b"
+      "match": "\\b(let|pool|stage|workload|session|server|run|queue|gateway|link|route)\\b"
     },
     "statements": {
       "name": "entity.name.function.seq",
-      "match": "\\b(turn|request|set|observe|hold|enter|admit|if|fit|where|grow|drop|release|load|lease|from|to|branch|with|loop|choose|end|reserve|reuse|cache|keep|at|admission|growing|on|in|by|else|prefill|transfer|decode|tool)\\b"
+      "match": "\\b(turn|request|set|observe|hold|enter|admit|if|fit|where|grow|drop|release|load|lease|from|to|branch|with|loop|choose|end|reserve|reuse|cache|keep|at|admission|growing|on|in|by|else|prefill|transfer|decode|tool|mark|self)\\b"
     },
     "options": {
       "name": "support.type.property-name.seq",

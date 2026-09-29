@@ -24,6 +24,7 @@ pub mod lexer;
 pub mod link;
 pub mod lint;
 pub mod parser;
+pub mod queue;
 pub mod report;
 pub mod stats;
 pub mod svg;

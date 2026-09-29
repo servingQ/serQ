@@ -8,7 +8,10 @@
 //!           | 'workload' '{' wlitem* '}'
 //!           | 'session' block
 //!           | 'server' block
+//!           | 'queue' IDENT ('[' expr ']')? (':' IDENT (',' IDENT)*)? '{' qitem* '}'
 //!           | 'run' '{' ('horizon' | 'warmup' | 'seed') expr ';' ... '}'
+//! qitem    := 'pool' IDENT '{' poolopt* '}' | 'serve' kind
+//!           | IDENT ('(' IDENT (',' IDENT)* ')')? ('from' IDENT)? block   -- an entry (crate::queue)
 //! poolopt  := 'cap' expr ';' | 'block' expr ';'
 //!           | 'evict' ('lru' | 'by' '(' expr (',' expr)* ')') ';'
 //!           | 'preempt' ('lifo' | 'none') ';'
@@ -64,6 +67,7 @@ use std::fmt;
 
 use crate::ast::*;
 use crate::lexer::{LexError, Tok, Token, lex};
+use crate::queue::{self, QueueDecl};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -104,6 +108,14 @@ struct Parser {
     /// position of its keyword, until `assemble` puts them together.
     wl_session: Option<(usize, Vec<Stmt>)>,
     server: Option<(usize, Vec<Stmt>)>,
+    /// The queues declared so far; their entries are expanded in `assemble`.
+    queues: Vec<QueueDecl>,
+    /// `let` constants with a constant value, for a family's size.
+    consts: Vec<(String, f64)>,
+    /// The queue whose entry is being parsed.
+    in_queue: Option<usize>,
+    /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
+    dotted_reads: Vec<(usize, String)>,
 }
 
 /// Where a statement sits: a top-level `session`, the `session` inside
@@ -167,28 +179,14 @@ impl Role {
 
 pub fn parse(src: &str) -> PResult<Program> {
     let toks = lex(src)?;
-    let mut p = Parser {
-        toks,
-        pos: 0,
-        stages: vec![],
-        side: Side::Session,
-        wl_session: None,
-        server: None,
-    };
+    let mut p = Parser::new(toks);
     p.program()
 }
 
 /// Parse a standalone expression (used by `--set name=expr` on the CLI).
 pub fn parse_expr(src: &str) -> PResult<Expr> {
     let toks = lex(src)?;
-    let mut p = Parser {
-        toks,
-        pos: 0,
-        stages: vec![],
-        side: Side::Session,
-        wl_session: None,
-        server: None,
-    };
+    let mut p = Parser::new(toks);
     let e = p.expr()?;
     p.expect(&Tok::Eof)?;
     Ok(e)
@@ -274,7 +272,172 @@ fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
     n
 }
 
+/// The names an expression reads: variables and references.
+fn names(e: &Expr, vars: &mut Vec<String>, refs: &mut Vec<Ref>) {
+    match e {
+        Expr::Num(_) => {}
+        Expr::Var(n) => vars.push(n.clone()),
+        Expr::Sample(_, args) => args.iter().for_each(|a| names(a, vars, refs)),
+        Expr::Call(_, args) => args.iter().for_each(|a| match a {
+            Arg::Expr(x) => names(x, vars, refs),
+            Arg::Ref(r) => {
+                if let Some(i) = &r.index {
+                    names(i, vars, refs);
+                }
+                refs.push(r.clone());
+            }
+        }),
+        Expr::Unary(_, a) => names(a, vars, refs),
+        Expr::Binary(_, a, b) => {
+            names(a, vars, refs);
+            names(b, vars, refs);
+        }
+        Expr::Cond(c, a, b) => {
+            names(c, vars, refs);
+            names(a, vars, refs);
+            names(b, vars, refs);
+        }
+    }
+}
+
+/// The context an expression may read anywhere: the pool, stage and
+/// step-iteration variables, and the built-in session attributes.
+const CONTEXT: &[&str] = &[
+    "size",
+    "age",
+    "last",
+    "queued",
+    "n",
+    "ntok",
+    "ndec",
+    "npre",
+    "nres",
+    "kvb",
+    "kvp",
+    "attn",
+    "decoding",
+    "admission",
+    "remaining",
+    "cached",
+    "computed",
+    "serial",
+    "turn_no",
+    "new",
+    "out",
+    "think",
+    "more",
+    "forced",
+];
+
+/// An entry's body: what it `set`s or `choose`s, what it `mark`s, and the
+/// pools its holds lease.
+fn collect_entry(
+    stmts: &[Stmt],
+    locals: &mut Vec<String>,
+    marks: &mut Vec<String>,
+    leased: &mut Vec<String>,
+) {
+    for s in stmts {
+        match s {
+            Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => {
+                if !locals.contains(n) {
+                    locals.push(n.clone());
+                }
+            }
+            Stmt::Mark(n) => {
+                if !marks.contains(n) {
+                    marks.push(n.clone());
+                }
+            }
+            Stmt::Hold { body, lease, .. } => {
+                if let Some((r, _)) = lease
+                    && !leased.contains(&r.name)
+                {
+                    leased.push(r.name.clone());
+                }
+                collect_entry(body, locals, marks, leased);
+            }
+            Stmt::Loop(body) => collect_entry(body, locals, marks, leased),
+            Stmt::Branch(_, a, b) => {
+                collect_entry(a, locals, marks, leased);
+                collect_entry(b, locals, marks, leased);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The expressions of an entry's body, the holds' headers apart from the
+/// rest: the header is the admission and sees less.
+fn split_reads<'a>(stmts: &'a [Stmt], headers: &mut Vec<&'a Expr>, bodies: &mut Vec<&'a Expr>) {
+    for s in stmts {
+        match s {
+            Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Mark(_) => {}
+            Stmt::Set(_, e) | Stmt::Observe(_, e) | Stmt::Grow(_, e) | Stmt::Load(_, e) => {
+                bodies.push(e)
+            }
+            Stmt::Drop(_) | Stmt::Release(_) => {}
+            Stmt::Hold {
+                pools,
+                reuse,
+                body,
+                cache,
+                lease,
+            } => {
+                for (_, e, f) in pools {
+                    headers.push(e);
+                    if let Some(f) = f {
+                        headers.push(f);
+                    }
+                }
+                if let Some(r) = reuse {
+                    headers.push(r);
+                }
+                if let Some(c) = cache {
+                    bodies.push(c);
+                }
+                if let Some((_, t)) = lease {
+                    bodies.push(t);
+                }
+                split_reads(body, headers, bodies);
+            }
+            Stmt::Run { work, .. } => bodies.push(work),
+            Stmt::Branch(p, a, b) => {
+                bodies.push(p);
+                split_reads(a, headers, bodies);
+                split_reads(b, headers, bodies);
+            }
+            Stmt::Loop(b) => split_reads(b, headers, bodies),
+            Stmt::Choose { count, key, .. } => {
+                bodies.push(count);
+                bodies.push(key);
+            }
+            Stmt::Call { args, to, .. } => {
+                bodies.extend(args.iter());
+                if let Some((_, m)) = to {
+                    bodies.push(m);
+                }
+            }
+        }
+    }
+}
+
 impl Parser {
+    fn new(toks: Vec<Token>) -> Parser {
+        Parser {
+            toks,
+            pos: 0,
+            stages: vec![],
+            side: Side::Session,
+            wl_session: None,
+            server: None,
+            queues: vec![],
+            consts: vec![],
+            in_queue: None,
+            dotted_reads: vec![],
+        }
+    }
+
     fn peek(&self) -> &Tok {
         &self.toks[self.pos].tok
     }
@@ -363,9 +526,16 @@ impl Parser {
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
+                if let Some(v) = self.const_value(&e) {
+                    self.consts.push((name.clone(), v));
+                }
                 prog.lets.push((name, e));
             } else if self.eat_kw("pool") {
                 prog.pools.push(self.pool()?);
+            } else if self.is_kw("queue") {
+                let at = self.pos;
+                self.advance();
+                self.queue(&mut prog, at)?;
             } else if self.eat_kw("stage") {
                 let d = self.stage()?;
                 self.stages
@@ -385,6 +555,16 @@ impl Parser {
             } else if self.is_kw("server") {
                 let at = self.pos;
                 self.advance();
+                if self
+                    .queues
+                    .iter()
+                    .any(|q| q.roles.iter().any(|r| r == "gateway"))
+                {
+                    return self.err_at(
+                        at,
+                        "a gateway and a `server` block: the gateway's `route` is the server",
+                    );
+                }
                 if self.server.is_some() {
                     return self.err_at(at, "duplicate server");
                 }
@@ -419,6 +599,63 @@ impl Parser {
     /// program's session. A side without the other is an error, and so is a
     /// third session at top level.
     fn assemble(&mut self, prog: &mut Program) -> PResult<()> {
+        // Queues first: every entry call in place, so the sides are plain
+        // statements when they are put together.
+        if !self.queues.is_empty() {
+            let hidden: Vec<String> = prog
+                .workload
+                .as_ref()
+                .map(|w| w.hidden.clone())
+                .unwrap_or_default();
+            for q in &self.queues {
+                for e in &q.entries {
+                    if let Some(n) = e.reads.iter().find(|n| !hidden.contains(n)) {
+                        return self.err_at(
+                            e.at,
+                            format!(
+                                "`{}.{}` reads `{n}`, a session attribute set outside the queue: an \
+                                 entry sees its parameters, the queue's pools, the context and the \
+                                 request's `hidden` attributes; pass `{n}` as a parameter or `mark` \
+                                 a moment for the caller to read",
+                                q.name, e.verb
+                            ),
+                        );
+                    }
+                }
+            }
+            for (at, name) in std::mem::take(&mut self.dotted_reads) {
+                let (qn, field) = name.split_once('.').expect("a dotted name");
+                let ok = self.queues.iter().any(|q| {
+                    q.name == qn
+                        && (q.marks.iter().any(|m| m == field)
+                            || q.pools.iter().any(|p| p == field))
+                });
+                if !ok {
+                    return self.err_at(
+                        at,
+                        format!("`{name}`: no entry of `{qn}` marks `{field}`, and `{qn}` has no pool `{field}`"),
+                    );
+                }
+            }
+            let queues = std::mem::take(&mut self.queues);
+            let expand = |stmts: &mut Vec<Stmt>| -> PResult<()> {
+                queue::expand(stmts, &queues).map_err(|e| {
+                    let t = &self.toks[e.at.min(self.toks.len() - 1)];
+                    ParseError {
+                        line: t.line,
+                        col: t.col,
+                        msg: e.msg,
+                    }
+                })
+            };
+            if let Some((_, s)) = &mut self.wl_session {
+                expand(s)?;
+            }
+            if let Some((_, s)) = &mut self.server {
+                expand(s)?;
+            }
+            expand(&mut prog.session)?;
+        }
         match (self.wl_session.take(), self.server.take()) {
             (None, None) => Ok(()),
             (Some((at, _)), None) => self.err_at(
@@ -450,16 +687,26 @@ impl Parser {
         }
     }
 
+    /// `[N]` after a name: a family's size, a positive integer or a `let`
+    /// constant that is one (`queue D[ND]`).
     fn array_count(&mut self) -> PResult<usize> {
         if *self.peek() == Tok::LBracket {
             self.advance();
-            let n = match self.advance() {
-                Tok::Num(x) if x >= 1.0 && x.fract() == 0.0 => x as usize,
-                other => {
-                    self.pos -= 1;
-                    return self.err(format!(
-                        "array size must be a positive integer, found {other}"
-                    ));
+            let at = self.pos;
+            let e = self.expr()?;
+            let n = match self.const_value(&e) {
+                Some(x) if x >= 1.0 && x.fract() == 0.0 => x as usize,
+                Some(x) => {
+                    return self.err_at(
+                        at,
+                        format!("array size must be a positive integer, found {x}"),
+                    );
+                }
+                None => {
+                    return self.err_at(
+                        at,
+                        "array size must be a positive integer or a `let` constant that is one",
+                    );
                 }
             };
             self.expect(&Tok::RBracket)?;
@@ -467,6 +714,20 @@ impl Parser {
         } else {
             Ok(1)
         }
+    }
+
+    /// The value of a constant expression over numbers and `let` constants,
+    /// if it is one.
+    fn const_value(&self, e: &Expr) -> Option<f64> {
+        Some(match e {
+            Expr::Num(x) => *x,
+            Expr::Var(n) => self.consts.iter().rev().find(|(c, _)| c == n)?.1,
+            Expr::Unary(UnOp::Neg, a) => -self.const_value(a)?,
+            Expr::Binary(op, a, b) => {
+                crate::link::binop(*op, self.const_value(a)?, self.const_value(b)?)
+            }
+            _ => return None,
+        })
     }
 
     fn pool(&mut self) -> PResult<PoolDecl> {
@@ -557,6 +818,13 @@ impl Parser {
         let name = self.ident()?;
         let count = self.array_count()?;
         self.expect(&Tok::Colon)?;
+        let kind = self.stage_kind()?;
+        Ok(StageDecl { name, count, kind })
+    }
+
+    /// A stage's kind, `fifo`, `ps (phi)`, `delay` or `step { … }`, with its
+    /// closing semicolon (none after `step { … }`).
+    fn stage_kind(&mut self) -> PResult<StageKind> {
         let kind = if self.eat_kw("fifo") {
             if *self.peek() == Tok::LParen {
                 self.advance();
@@ -651,7 +919,352 @@ impl Parser {
         if *self.peek() == Tok::Semi || !matches!(kind, StageKind::Step(_)) {
             self.expect(&Tok::Semi)?;
         }
-        Ok(StageDecl { name, count, kind })
+        Ok(kind)
+    }
+
+    // ------------------------------------------------------------- queues
+
+    /// `queue NAME [N] [: ROLE, …] { pool …; serve kind; VERB (params) [from NAME] block; … }`
+    /// after the keyword. The pools go to the program as `NAME.pool`, the
+    /// stage as `NAME`, and the entries wait for their calls (`assemble`).
+    /// A gateway's `route` body is the program's server.
+    fn queue(&mut self, prog: &mut Program, at: usize) -> PResult<()> {
+        let name = self.ident()?;
+        if Role::of(&name).is_some() || queue::ROLES.iter().any(|(r, _)| *r == name) {
+            return self.err_at(
+                at + 1,
+                format!("`{name}` is a serving word; a queue needs another name"),
+            );
+        }
+        if self.queues.iter().any(|q| q.name == name) {
+            return self.err_at(at + 1, format!("duplicate queue `{name}`"));
+        }
+        let count = self.array_count()?;
+        let mut roles = vec![];
+        if *self.peek() == Tok::Colon {
+            self.advance();
+            loop {
+                let r_at = self.pos;
+                let r = self.ident()?;
+                if !queue::ROLES.iter().any(|(name, _)| *name == r) {
+                    return self.err_at(
+                        r_at,
+                        format!(
+                            "unknown role `{r}`: a queue plays gateway, prefill, decode or link"
+                        ),
+                    );
+                }
+                if roles.contains(&r) {
+                    return self.err_at(r_at, format!("role `{r}` twice"));
+                }
+                roles.push(r);
+                if *self.peek() == Tok::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+        }
+        let is_gateway = roles.iter().any(|r| r == "gateway");
+        if is_gateway && count != 1 {
+            return self.err_at(
+                at,
+                "a gateway is one queue, not a family: the requests enter it",
+            );
+        }
+        if is_gateway
+            && self
+                .queues
+                .iter()
+                .any(|q| q.roles.iter().any(|r| r == "gateway"))
+        {
+            return self.err_at(at, "a program has one gateway");
+        }
+        self.queues.push(QueueDecl {
+            name: name.clone(),
+            count,
+            roles: roles.clone(),
+            pools: vec![],
+            has_stage: false,
+            entries: vec![],
+            leased: None,
+            marks: vec![],
+            at,
+        });
+        let qi = self.queues.len() - 1;
+        self.expect(&Tok::LBrace)?;
+        while *self.peek() != Tok::RBrace {
+            if self.eat_kw("pool") {
+                let mut d = self.pool()?;
+                if self.queues[qi].pools.contains(&d.name) {
+                    return self.err(format!("duplicate pool `{}` in queue `{name}`", d.name));
+                }
+                self.queues[qi].pools.push(d.name.clone());
+                d.name = format!("{name}.{}", d.name);
+                d.count = count;
+                prog.pools.push(d);
+            } else if self.is_kw("serve") {
+                let s_at = self.pos;
+                self.advance();
+                if self.queues[qi].has_stage {
+                    return self
+                        .err_at(s_at, format!("`serve` twice: queue `{name}` is one stage"));
+                }
+                let mut kind = self.stage_kind()?;
+                if let StageKind::Step(s) = &mut kind
+                    && let Some(m) = &s.memory
+                    && self.queues[qi].pools.contains(m)
+                {
+                    s.memory = Some(format!("{name}.{m}"));
+                }
+                self.queues[qi].has_stage = true;
+                self.stages
+                    .push((name.clone(), matches!(kind, StageKind::Step(_))));
+                prog.stages.push(StageDecl {
+                    name: name.clone(),
+                    count,
+                    kind,
+                });
+            } else if let Tok::Ident(verb) = self.peek().clone() {
+                self.entry(qi, verb)?;
+            } else {
+                return self.err(format!(
+                    "expected `pool`, `serve` or an entry in queue `{name}`, found {}",
+                    self.peek()
+                ));
+            }
+        }
+        self.expect(&Tok::RBrace)?;
+        // every role's entries are there, and nothing else
+        let q = &self.queues[qi];
+        for r in &roles {
+            let (_, entries) = queue::ROLES.iter().find(|(n, _)| n == r).expect("a role");
+            // a role's first entry is required; the others (`decode … from`) may be left out
+            let (verb, _, from) = entries[0];
+            if q.entry(verb, from).is_none() {
+                return self.err_at(
+                    at,
+                    format!("queue `{name}` plays `{r}` and has no `{verb}` entry"),
+                );
+            }
+        }
+        for e in &q.entries {
+            let role = queue::role_of_verb(&e.verb, e.from.is_some());
+            match role {
+                Some(r) if roles.iter().any(|x| x == r) => {}
+                Some(r) => {
+                    return self.err_at(
+                        e.at,
+                        format!(
+                            "`{}` is an entry of a `{r}` queue; declare `queue {name} : {r}`",
+                            e.verb
+                        ),
+                    );
+                }
+                None => {
+                    let hint = if e.from.is_some() {
+                        format!(": `{}` takes no `from`", e.verb)
+                    } else {
+                        String::new()
+                    };
+                    return self.err_at(
+                        e.at,
+                        format!("`{}` is not an entry of any role{hint}", e.verb),
+                    );
+                }
+            }
+        }
+        if is_gateway {
+            if self.server.is_some() {
+                return self.err_at(
+                    at,
+                    "a gateway and a `server` block: the gateway's `route` is the server",
+                );
+            }
+            let body = queue::gateway_body(q).map_err(|e| {
+                let t = &self.toks[e.at.min(self.toks.len() - 1)];
+                ParseError {
+                    line: t.line,
+                    col: t.col,
+                    msg: e.msg,
+                }
+            })?;
+            self.server = Some((at, body));
+        }
+        Ok(())
+    }
+
+    /// `VERB (params) [from NAME] block` inside a queue: parsed on the
+    /// server's side, with the queue's own stage the one the serving forms
+    /// name.
+    fn entry(&mut self, qi: usize, verb: String) -> PResult<()> {
+        let at = self.pos;
+        self.advance();
+        let mut params = vec![];
+        // `route { … }`: an entry without parameters needs no `()`
+        if *self.peek() == Tok::LParen {
+            self.advance();
+            if *self.peek() != Tok::RParen {
+                loop {
+                    let p = self.ident()?;
+                    if params.contains(&p) {
+                        return self.err(format!("parameter `{p}` twice"));
+                    }
+                    params.push(p);
+                    if *self.peek() == Tok::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect(&Tok::RParen)?;
+        }
+        let from = if self.eat_kw("from") {
+            Some(self.ident()?)
+        } else {
+            None
+        };
+        let qname = self.queues[qi].name.clone();
+        if self.queues[qi].entry(&verb, from.is_some()).is_some() {
+            return self.err_at(at, format!("queue `{qname}` has `{verb}` twice"));
+        }
+        let outer_side = self.side;
+        let outer_stages = std::mem::take(&mut self.stages);
+        if self.queues[qi].has_stage {
+            self.stages
+                .push(outer_stages.last().cloned().expect("the queue's stage"));
+        }
+        self.side = Side::Server;
+        self.in_queue = Some(qi);
+        let body = self.block();
+        self.in_queue = None;
+        self.side = outer_side;
+        self.stages = outer_stages;
+        let body = body?;
+        // what the body sets is the entry's; what it marks the caller reads;
+        // what it leases a `from` takes
+        let mut locals = vec![];
+        let mut marks = vec![];
+        let mut leased = vec![];
+        collect_entry(&body, &mut locals, &mut marks, &mut leased);
+        if let Some(p) = locals.iter().find(|l| params.contains(l)) {
+            return self.err_at(at, format!("`{qname}.{verb}` sets its parameter `{p}`"));
+        }
+        let q = &self.queues[qi];
+        for l in &leased {
+            if !q.pools.contains(l) {
+                return self.err_at(
+                    at,
+                    format!("`{qname}.{verb}` leases `{l}`, which is not a pool of `{qname}`"),
+                );
+            }
+            if let Some(other) = &q.leased
+                && other != l
+            {
+                return self.err_at(
+                    at,
+                    format!(
+                        "`{qname}` leases `{other}` and `{l}`: a `from {qname}` needs one pool to take"
+                    ),
+                );
+            }
+        }
+        // the header sees the parameters and the queue's own; the body also
+        // the context and the request's hidden attributes
+        let mut reads = vec![];
+        let is_gateway = q.roles.iter().any(|r| r == "gateway");
+        let allowed_var = |n: &str, header: bool| -> bool {
+            params.iter().any(|p| p == n)
+                || n == "self"
+                || n == "inf"
+                || self.consts.iter().any(|(c, _)| c == n)
+                || CONTEXT.contains(&n)
+                || (!header && (n == "now" || locals.contains(&n.to_string()) || n.contains('.')))
+        };
+        let own_ref = |r: &Ref| -> bool {
+            q.pools.contains(&r.name)
+                || r.name == qname
+                || from.as_deref() == Some(r.name.as_str())
+                || params.contains(&r.name)
+        };
+        if !is_gateway {
+            let mut headers = vec![];
+            let mut bodies = vec![];
+            split_reads(&body, &mut headers, &mut bodies);
+            for (e, header) in headers
+                .iter()
+                .map(|e| (e, true))
+                .chain(bodies.iter().map(|e| (e, false)))
+            {
+                let mut vars = vec![];
+                let mut refs = vec![];
+                names(e, &mut vars, &mut refs);
+                for v in vars {
+                    if allowed_var(&v, header) {
+                        continue;
+                    }
+                    if header {
+                        return self.err_at(
+                            at,
+                            format!(
+                                "`{qname}.{verb}`: the header reads `{v}`; an entry's header sees its \
+                                 parameters and the queue's pools and stage. Pass `{v}` as a parameter",
+                            ),
+                        );
+                    }
+                    if !reads.contains(&v) {
+                        reads.push(v);
+                    }
+                }
+                for r in refs {
+                    // a bare identifier argument may be a variable; a dotted
+                    // one is another queue's pool
+                    if r.index.is_none()
+                        && !own_ref(&r)
+                        && !r.name.contains('.')
+                        && allowed_var(&r.name, header)
+                    {
+                        continue;
+                    }
+                    if r.index.is_none() && !own_ref(&r) && !r.name.contains('.') && !header {
+                        if !reads.contains(&r.name) {
+                            reads.push(r.name.clone());
+                        }
+                        continue;
+                    }
+                    if !own_ref(&r) {
+                        return self.err_at(
+                            at,
+                            format!(
+                                "`{qname}.{verb}` reads `{}`, which is not a pool or stage of `{qname}`: \
+                                 a queue sees its own; the deployment reads across queues",
+                                r.name
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+        let q = &mut self.queues[qi];
+        if let Some(l) = leased.first() {
+            q.leased = Some(l.clone());
+        }
+        for m in marks {
+            if !q.marks.contains(&m) {
+                q.marks.push(m);
+            }
+        }
+        q.entries.push(queue::Entry {
+            verb,
+            params,
+            from,
+            body,
+            locals: if is_gateway { vec![] } else { locals },
+            reads,
+            at,
+        });
+        Ok(())
     }
 
     fn workload(&mut self) -> PResult<Workload> {
@@ -742,6 +1355,8 @@ impl Parser {
         Ok(())
     }
 
+    /// `name`, `name[i]`, `Q.p` or `Q[i].p`: a pool or stage, the last two a
+    /// queue's, read from outside it.
     fn reference(&mut self) -> PResult<Ref> {
         let name = self.ident()?;
         let index = if *self.peek() == Tok::LBracket {
@@ -752,7 +1367,134 @@ impl Parser {
         } else {
             None
         };
+        let name = if *self.peek() == Tok::Dot {
+            self.advance();
+            format!("{name}.{}", self.ident()?)
+        } else {
+            name
+        };
         Ok(Ref { name, index })
+    }
+
+    /// A pool a statement acts on (hold, grow, drop, release, load, lease): a
+    /// queue's pool is its entries' alone.
+    fn own_pool(&mut self, what: &str) -> PResult<Ref> {
+        let at = self.pos;
+        let r = self.reference()?;
+        let here = self.in_queue.map(|qi| self.queues[qi].name.as_str());
+        if let Some((q, p)) = r.name.split_once('.')
+            && here != Some(q)
+        {
+            return self.err_at(
+                at,
+                format!(
+                    "`{what} {}`: `{p}` is a pool of queue `{q}`, and only `{q}`'s entries hold it; \
+                     call one (`{q}.verb (…)`)",
+                    r.name
+                ),
+            );
+        }
+        Ok(r)
+    }
+
+    /// `Q[i].verb (args) [from S[k]] [to P (m)];`
+    fn call(&mut self) -> PResult<Stmt> {
+        let at = self.pos;
+        let name = self.ident()?;
+        let index = if *self.peek() == Tok::LBracket {
+            self.advance();
+            let e = self.expr()?;
+            self.expect(&Tok::RBracket)?;
+            Some(Box::new(e))
+        } else {
+            None
+        };
+        if *self.peek() != Tok::Dot {
+            return self.err_at(
+                at,
+                format!("`{name}[…]` as a statement: a queue's entry is `{name}[i].verb (…)`"),
+            );
+        }
+        self.advance();
+        let verb = self.ident()?;
+        self.expect(&Tok::LParen)?;
+        let mut args = vec![];
+        if *self.peek() != Tok::RParen {
+            args.push(self.expr()?);
+            while *self.peek() == Tok::Comma {
+                self.advance();
+                args.push(self.expr()?);
+            }
+        }
+        self.expect(&Tok::RParen)?;
+        let from = if self.eat_kw("from") {
+            Some(self.reference()?)
+        } else {
+            None
+        };
+        let to = if self.eat_kw("to") {
+            let r = self.reference()?;
+            let m = self.paren_expr()?;
+            Some((r, m))
+        } else {
+            None
+        };
+        self.expect(&Tok::Semi)?;
+        Ok(Stmt::Call {
+            queue: Ref { name, index },
+            verb,
+            args,
+            from,
+            to,
+        })
+    }
+
+    /// At an identifier followed by `[` or `.`: does the reference (`p[i]`,
+    /// `Q.p`, `Q[i].p`) end the call argument?
+    fn ref_ends_arg(&self) -> bool {
+        let mut k = 1;
+        if *self.peek_at(k) == Tok::LBracket {
+            let mut depth = 0;
+            loop {
+                match self.peek_at(k) {
+                    Tok::LBracket => depth += 1,
+                    Tok::RBracket => {
+                        depth -= 1;
+                        if depth == 0 {
+                            k += 1;
+                            break;
+                        }
+                    }
+                    Tok::Eof => return false,
+                    _ => {}
+                }
+                k += 1;
+            }
+        }
+        if *self.peek_at(k) == Tok::Dot {
+            k += 2;
+        }
+        matches!(self.peek_at(k), Tok::Comma | Tok::RParen)
+    }
+
+    /// At `[`: is the matching `]` followed by `.`? (`Q[i].x` in an expression)
+    fn in_expr_index_dot(&self) -> bool {
+        let mut depth = 0;
+        let mut k = 0;
+        loop {
+            match self.peek_at(k) {
+                Tok::LBracket => depth += 1,
+                Tok::RBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return *self.peek_at(k + 1) == Tok::Dot;
+                    }
+                }
+                Tok::Eof => return false,
+                _ => {}
+            }
+            k += 1;
+        }
     }
 
     fn paren_expr(&mut self) -> PResult<Expr> {
@@ -858,33 +1600,50 @@ impl Parser {
             }
             "grow" => {
                 self.advance();
-                let r = self.reference()?;
+                let r = self.own_pool("grow")?;
                 let e = self.paren_expr()?;
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Grow(r, e))
             }
             "drop" => {
                 self.advance();
-                let r = self.reference()?;
+                let r = self.own_pool("drop")?;
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Drop(r))
             }
             "release" => {
                 self.advance();
-                let r = self.reference()?;
+                let r = self.own_pool("release")?;
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Release(r))
             }
             "load" => {
                 self.advance();
-                let r = self.reference()?;
+                let r = self.own_pool("load")?;
                 let e = self.paren_expr()?;
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Load(r, e))
             }
             "run" => {
                 self.advance();
-                let stage = self.reference()?;
+                // `run (X);` inside a queue: its own stage
+                let stage = if *self.peek() == Tok::LParen {
+                    match self.in_queue {
+                        Some(qi) if self.queues[qi].has_stage => Ref {
+                            name: self.queues[qi].name.clone(),
+                            index: None,
+                        },
+                        Some(qi) => {
+                            return self.err(format!(
+                                "`run (…)` in queue `{}`, which has no `serve`",
+                                self.queues[qi].name
+                            ));
+                        }
+                        None => return self.err("`run` names a stage: `run STAGE (X)`"),
+                    }
+                } else {
+                    self.reference()?
+                };
                 let mode = if self.eat_kw("prefill") {
                     RunMode::Prefill
                 } else if self.eat_kw("decode") {
@@ -944,6 +1703,19 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Choose { var, count, key })
             }
+            "mark" => {
+                if self.in_queue.is_none() {
+                    return self.err(
+                        "`mark` is a queue entry's statement: it names a moment the caller reads",
+                    );
+                }
+                self.advance();
+                let name = self.ident()?;
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Mark(name))
+            }
+            // `Q.verb (…);`, `Q[i].verb (…) from S[k] to p (m);`: a queue's entry
+            _ if matches!(self.peek_at(1), Tok::Dot | Tok::LBracket) => self.call(),
             // the serving forms (`prefill`, `transfer`, `decode`, `tool`) are
             // parsed by `stmt_into`, since one of them stands for several
             // statements
@@ -955,8 +1727,9 @@ impl Parser {
     /// `admit if` (`admit`) after the `if`.
     fn hold(&mut self, admit: bool) -> PResult<Stmt> {
         let mut pools = vec![];
+        let what = if admit { "admit if" } else { "hold" };
         loop {
-            let r = self.reference()?;
+            let r = self.own_pool(what)?;
             let e = self.paren_expr()?;
             // `fits` was this clause's name until it was renamed for saying
             // what the pool observes rather than what the session requires.
@@ -1034,7 +1807,7 @@ impl Parser {
         // `lease P (t)`: the allocation on `P` outlives the scope, for the
         // session's transfer to take, for at most `t` seconds
         let lease = if self.eat_kw("lease") {
-            let r = self.reference()?;
+            let r = self.own_pool("lease")?;
             let mut t = self.paren_expr()?;
             subst(&mut t, &binds);
             Some((r, t))
@@ -1366,7 +2139,28 @@ impl Parser {
                     }
                     self.expect(&Tok::RParen)?;
                     Ok(Expr::Call(name, args))
+                } else if *self.peek() == Tok::Dot
+                    || (*self.peek() == Tok::LBracket && self.in_expr_index_dot())
+                {
+                    // `Q.x`, `Q[i].x`: a moment an entry of `Q` marked (the
+                    // index is the member the session was in; the attribute
+                    // is the session's)
+                    let at = self.pos - 1;
+                    if *self.peek() == Tok::LBracket {
+                        self.advance();
+                        self.expr()?;
+                        self.expect(&Tok::RBracket)?;
+                    }
+                    self.expect(&Tok::Dot)?;
+                    let field = self.ident()?;
+                    let name = format!("{name}.{field}");
+                    self.dotted_reads.push((at, name.clone()));
+                    Ok(Expr::Var(name))
                 } else {
+                    if name == "self" && self.in_queue.is_none() {
+                        self.pos -= 1;
+                        return self.err("`self` is a queue entry's word: the member's own index");
+                    }
                     Ok(Expr::Var(name))
                 }
             }
@@ -1387,15 +2181,10 @@ impl Parser {
                     self.advance();
                     return Ok(Arg::Ref(Ref { name, index: None }));
                 }
-                Tok::LBracket => {
-                    self.advance();
-                    self.advance();
-                    let e = self.expr()?;
-                    self.expect(&Tok::RBracket)?;
-                    return Ok(Arg::Ref(Ref {
-                        name,
-                        index: Some(Box::new(e)),
-                    }));
+                // `kv[j]`, `D[j].kv`, `D.kv`: a reference, dotted when a queue's,
+                // when nothing but `,` or `)` follows it
+                Tok::LBracket | Tok::Dot if self.ref_ends_arg() => {
+                    return Ok(Arg::Ref(self.reference()?));
                 }
                 _ => {}
             }
