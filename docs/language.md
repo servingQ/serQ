@@ -100,6 +100,7 @@ wlitem   := arrive poisson ( rate ) ; | arrive closed ( n ) ; | arrive batch ( n
           | hidden NAME [, NAME]* ;           -- the scheduler may not read these
 stmt     := turn ;                           -- next turn's attributes (workload `turn`, trace)
           | request ;                        -- the server block, once (workload `session` only)
+          | request QUEUE ;                  -- the named gateway's route, once (workload `session` only)
           | set NAME = expr ;
           | observe NAME = expr ;
           | hold POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]*
@@ -383,14 +384,28 @@ does with one request. The body is the server's statements; `run (X)` with
 no stage names the queue's own; `self` is the member's index in a family.
 A family's size may be a `let` constant (`queue D[ND]`).
 
-Four roles are the vocabulary, and a queue declares which it plays:
+Four roles are built into the parser, and a queue declares which it plays:
 
 | Role | Entries | The queue |
 |---|---|---|
-| `gateway` | `route { … }` | where `request;` enters: its body is the server; one per program |
+| `gateway` | `route { … }` | `request Q;` enters this queue's `route`; each gateway is a single queue |
 | `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `keep`, a transfer) is the entry's |
 | `decode` | `decode (prompt)`, `decode (prompt) from Q` | a local prefill, or with the KV `Q`'s entry leased for this request |
 | `link` | `transfer (n)` | the NIC: the body is the time to read `n` tokens |
+
+The workload names its entry point with `request gw;`, where `gw` is a
+queue declared with the `gateway` role. The parser checks that the target
+exists and plays that role, then expands its `route` at the request site.
+Declarations may follow the workload, and several gateways may coexist;
+there is no default gateway. Declaring a gateway does not execute it or
+register it as the `server`. Bare `request;` retains its existing meaning:
+it targets a separate `server { … }` block and fails without one.
+
+`queue`, `pool`, `serve`, `request` and `mark` are language syntax. The role
+names and their entry signatures in the table are predefined vocabulary;
+`gw`, `P`, `D` and `nic` are names declared by this program. There is
+currently no `import` or user-defined role syntax; the proposed separation
+is discussed in [Explicit gateways](design/explicit-gateways.md).
 
 The deployment calls an entry where the request goes: `P[i].prefill
 (prompt);`, `D[j].decode (prompt) from P[i];`, and inside the decoder

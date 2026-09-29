@@ -28,7 +28,7 @@
 //!           | 'session' block                  -- the session's side, with 'request'
 //!           | 'hidden' IDENT (',' IDENT)* ';'
 //! block    := '{' stmt* '}'
-//! stmt     := 'turn' ';' | 'request' ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
+//! stmt     := 'turn' ';' | 'request' IDENT? ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
 //!           | ('hold' | 'enter') ref '(' expr ')' (',' ref '(' expr ')')* block ('cache' '(' expr ')')? ';'?
 //!           | 'admit' 'if' ref '(' expr ')' (',' ref '(' expr ')')* 'fit'
 //!                 ('where' IDENT '=' expr (',' IDENT '=' expr)*)? block ('keep' '(' expr ')')? ';'?
@@ -128,6 +128,8 @@ struct Parser {
     in_queue: Option<usize>,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
     dotted_reads: Vec<(usize, String)>,
+    /// Request sites and their explicit gateway, resolved after declarations.
+    requests: Vec<(usize, Option<String>)>,
 }
 
 /// Where a statement sits: a top-level `session`, the `session` inside
@@ -451,6 +453,7 @@ impl Parser {
             consts: vec![],
             in_queue: None,
             dotted_reads: vec![],
+            requests: vec![],
         }
     }
 
@@ -598,16 +601,6 @@ impl Parser {
             } else if self.is_kw("server") {
                 let at = self.pos;
                 self.advance();
-                if self
-                    .queues
-                    .iter()
-                    .any(|q| q.roles.iter().any(|r| r == "gateway"))
-                {
-                    return self.err_at(
-                        at,
-                        "a gateway and a `server` block: the gateway's `route` is the server",
-                    );
-                }
                 if self.server.is_some() {
                     return self.err_at(at, "duplicate server");
                 }
@@ -638,11 +631,39 @@ impl Parser {
         Ok(prog)
     }
 
-    /// Put the two sides together: the server's statements in place of
-    /// every `request;` of the workload's session, which becomes the
-    /// program's session. A side without the other is an error, and so is a
-    /// third session at top level.
+    /// Resolve named gateway requests, then expand entries and splice the
+    /// anonymous server at bare `request;` sites. The workload's session
+    /// becomes the program's session; a second top-level session is an error.
     fn assemble(&mut self, prog: &mut Program) -> PResult<()> {
+        for (at, target) in &self.requests {
+            match target {
+                Some(name) => {
+                    let Some(q) = self.queues.iter().find(|q| q.name == *name) else {
+                        return self.err_at(
+                            *at,
+                            format!("`request {name}`: no queue `{name}` is declared"),
+                        );
+                    };
+                    if !q.roles.iter().any(|role| role == "gateway") {
+                        return self.err_at(
+                            *at,
+                            format!("`request {name}`: queue `{name}` does not play `gateway`"),
+                        );
+                    }
+                }
+                None if self.server.is_none() => {
+                    return self.err_at(
+                        *at,
+                        "`request;` needs a `server` block; name a gateway with `request NAME;`",
+                    );
+                }
+                None => {}
+            }
+        }
+        if self.wl_session.is_some() && !prog.session.is_empty() {
+            return self
+                .err("a program has one session: inside `workload` or at top level, not both");
+        }
         // Queues first: every entry call in place, so the sides are plain
         // statements when they are put together.
         if !self.queues.is_empty() {
@@ -702,23 +723,22 @@ impl Parser {
         }
         match (self.wl_session.take(), self.server.take()) {
             (None, None) => Ok(()),
+            (Some((_, session)), None)
+                if self.requests.iter().any(|(_, target)| target.is_some()) =>
+            {
+                prog.session = session;
+                Ok(())
+            }
             (Some((at, _)), None) => self.err_at(
                 at,
                 "a `session` inside `workload` is written against a `server` block; \
-                 without one, write `session` at top level",
+                 name a gateway with `request NAME;`, or write `session` at top level",
             ),
             (None, Some((at, _))) => self.err_at(
                 at,
                 "`server` needs a `session` inside `workload` that says `request;`",
             ),
-            (Some((s_at, mut session)), Some((v_at, server))) => {
-                if !prog.session.is_empty() {
-                    return self.err_at(
-                        s_at,
-                        "a program has one session: inside `workload` (with a `server`) \
-                         or at top level, not both",
-                    );
-                }
+            (Some((_, mut session)), Some((v_at, server))) => {
                 if splice(&mut session, &server) == 0 {
                     return self.err_at(
                         v_at,
@@ -980,7 +1000,7 @@ impl Parser {
     /// `queue NAME [N] [: ROLE, …] { pool …; serve kind; VERB (params) [from NAME] block; … }`
     /// after the keyword. The pools go to the program as `NAME.pool`, the
     /// stage as `NAME`, and the entries wait for their calls (`assemble`).
-    /// A gateway's `route` body is the program's server.
+    /// A gateway's `route` body is selected explicitly by `request NAME;`.
     fn queue(&mut self, prog: &mut Program, at: usize) -> PResult<()> {
         let span = Some(self.span());
         let name = self.ident()?;
@@ -1025,14 +1045,6 @@ impl Parser {
                 at,
                 "a gateway is one queue, not a family: the requests enter it",
             );
-        }
-        if is_gateway
-            && self
-                .queues
-                .iter()
-                .any(|q| q.roles.iter().any(|r| r == "gateway"))
-        {
-            return self.err_at(at, "a program has one gateway");
         }
         self.queues.push(QueueDecl {
             name: name.clone(),
@@ -1128,23 +1140,6 @@ impl Parser {
                     );
                 }
             }
-        }
-        if is_gateway {
-            if self.server.is_some() {
-                return self.err_at(
-                    at,
-                    "a gateway and a `server` block: the gateway's `route` is the server",
-                );
-            }
-            let body = queue::gateway_body(q).map_err(|e| {
-                let t = &self.toks[e.at.min(self.toks.len() - 1)];
-                ParseError {
-                    line: t.line,
-                    col: t.col,
-                    msg: e.msg,
-                }
-            })?;
-            self.server = Some((at, body));
         }
         Ok(())
     }
@@ -1593,19 +1588,32 @@ impl Parser {
                 match self.side {
                     Side::WorkloadSession => {}
                     Side::Server => {
-                        return self
-                            .err("`request` inside `server`: a server does not request itself");
+                        return self.err("`request` inside a server or queue entry: a server does not request itself");
                     }
                     Side::Session => {
-                        return self.err(
-                            "`request` is a statement of the `session` inside `workload`, \
-                             next to a `server` block",
-                        );
+                        return self
+                            .err("`request` is a statement of the `session` inside `workload`");
                     }
                 }
+                let at = self.pos;
                 self.advance();
-                self.expect(&Tok::Semi)?;
-                Ok(Stmt::Request)
+                if *self.peek() == Tok::Semi {
+                    self.advance();
+                    self.requests.push((at, None));
+                    Ok(Stmt::Request)
+                } else {
+                    let target_at = self.pos;
+                    let queue = self.bare_reference()?;
+                    self.expect(&Tok::Semi)?;
+                    self.requests.push((target_at, Some(queue.name.clone())));
+                    Ok(Stmt::Call {
+                        queue,
+                        verb: "route".into(),
+                        args: vec![],
+                        from: None,
+                        to: None,
+                    })
+                }
             }
             "set" => {
                 self.advance();

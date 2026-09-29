@@ -108,7 +108,7 @@ fn desugaring_keeps_server_and_header_binding_locations() {
 
 #[test]
 fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
-    let src = "queue engine : prefill {\n  serve fifo;\n  prefill (prompt) { run (prompt); }\n}\nqueue gw : gateway { route {\n  engine.prefill (missing);\n} }\nworkload { arrive batch(1); session { request; end; } }\nrun { horizon 10; }";
+    let src = "queue engine : prefill {\n  serve fifo;\n  prefill (prompt) { run (prompt); }\n}\nqueue gw : gateway { route {\n  engine.prefill (missing);\n} }\nworkload { arrive batch(1); session { request gw; end; } }\nrun { horizon 10; }";
     let err = compile_source(src, &Overrides::default()).unwrap_err();
     // Parameter substitution must point to the argument at the call site,
     // rather than the parameter inside the queue's entry.

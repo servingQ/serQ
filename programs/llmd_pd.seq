@@ -176,7 +176,7 @@ workload {
   session {
     turn;
     loop {
-      request;
+      request gw;
       set K = prompt + o;
       branch (more) { tool (~exp(Z)); turn; } else { end; }
     }

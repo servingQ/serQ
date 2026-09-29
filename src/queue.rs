@@ -338,21 +338,6 @@ fn has_sample(e: &Expr) -> bool {
     }
 }
 
-/// A gateway's `route` body as the program's server: its own pools and
-/// marks named, nothing else renamed (the gateway reads and sets the
-/// session's attributes).
-pub fn gateway_body(q: &QueueDecl) -> Result<Vec<Stmt>, ExpandError> {
-    let entry = q.entry("route", false).expect("a gateway has `route`");
-    let ctx = Ctx {
-        q,
-        index: None,
-        params: vec![],
-        from: None,
-        at: q.at,
-    };
-    ctx.stmts(&entry.body)
-}
-
 /// Replace every `Call` in `stmts`, at any depth, by the entry's body. An
 /// entry may call another queue's entry (the decoder's `nic[self].transfer`),
 /// so the replacement is expanded too; a cycle is cut at a depth no program

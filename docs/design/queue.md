@@ -36,6 +36,7 @@ qitem := pool NAME { poolopt* }                  -- the queue's own; only its en
        | serve kind ;                            -- the Q of admit via Q, budget_left(Q), work(Q)
        | VERB [ ( NAME, ... ) ] [ from NAME ] block
 stmt  += QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
+       | request QUEUE ;                          -- workload session: this gateway's route
        | mark NAME ;                             -- in an entry: now, read by the caller as Q.NAME
 expr  += QUEUE [ '[' expr ']' ] . NAME            -- from outside, reads only: holders(D[j].kv), D[j].first_token
        | self                                     -- a member's own index; a bare Q inside Q is Q[self]
@@ -45,7 +46,7 @@ expr  += QUEUE [ '[' expr ']' ] . NAME            -- from outside, reads only: h
 
 | Role | Entries | |
 |---|---|---|
-| `gateway` | `route` | where the workload's `request;` enters; its body is the server; one per program |
+| `gateway` | `route` | the workload's `request Q;` selects this queue's `route`; no implicit registration |
 | `prefill` | `prefill (prompt)` | computes the prompt; how the KV is left (`lease`, `keep`, a transfer) is the entry's |
 | `decode` | `decode (prompt)`, `decode (prompt) from Q` | told apart by the `from` |
 | `link` | `transfer (n)` | the body sees `n`; `from S to P (m)` are the call's, and the linker writes `load P (m); release S` after the run |
@@ -80,12 +81,16 @@ expr  += QUEUE [ '[' expr ']' ] . NAME            -- from outside, reads only: h
 | `Q[i].decode (…) from S[k]` | the body's `src` := `S.kv[k]` |
 | `L[j].transfer (n) from src to kv (m)` | `run L[j] (t); load Q.kv[i] (m); release src`, `t` the link entry's `run (…)` |
 | `mark x;` / `Q[i].x` | `set Q.x = now;` / the attribute |
-| the gateway's `route` | the `server` block; `request;` splices it |
+| `request Q;` | the named gateway's `route` body in place; no request node in the IR |
 
 `IR_VERSION` is 5, `serving-queue-theory`'s generator is untouched, and
 `tools/oracle/*.ir.json` did not move: the oracle programs
 (`vllm_request.seq`, `vllm_replay.seq`) are not written with queues in this
 change.
+
+Gateway selection is explicit: see [Explicit gateways](explicit-gateways.md)
+for the replacement of the original implicit registration and the boundary
+between language syntax, predefined roles and program names.
 
 ## Before and After
 
@@ -159,7 +164,9 @@ model/instance split of the [frontend sketch](frontend.md), item 4. This
 document makes the unit that split will parameterise.
 
 **No `role` declaration.** The four roles are the vocabulary; a program
-cannot add one. Criterion 2 is met by the queue choosing its roles and the
+cannot add one, and no `import` syntax exists yet. Moving reusable role
+definitions into a standard library needs a role-definition mechanism first
+([design direction](explicit-gateways.md#predefined-vocabulary-and-imports)). Criterion 2 is met by the queue choosing its roles and the
 entry choosing how the KV leaves; a fifth role would be an issue.
 
 **The oracle programs are not queues.** `vllm.seq` and its three workload

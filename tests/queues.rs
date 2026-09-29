@@ -32,10 +32,10 @@ fn refused(src: &str, needle: &str) {
     assert!(e.contains(needle), "{src}\n  {e}");
 }
 
-const WORKLOAD: &str = "workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request; end; } } run { horizon 100; }";
+const WORKLOAD: &str = "workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request gw; end; } } run { horizon 100; }";
 
 /// The engine's admission, allocation and service inside the queue; the
-/// gateway's `route` is the server; the family's size is a constant.
+/// named request selects the gateway's `route`; the family's size is a constant.
 #[test]
 fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
     same_ir(
@@ -63,7 +63,8 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
                }} keep (prompt + o);
                observe done = now;
              }}
-             {WORKLOAD}"
+             {}",
+            WORKLOAD.replace("request gw;", "request;")
         ),
         &[("E.kv", "kv")],
     );
@@ -101,7 +102,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
         }
       }
       queue nic[ND] : link { serve ps(1); transfer (n) { run (n / Bw); } }
-      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request; end; } }
+      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request gw; end; } }
       run { horizon 100; }";
     let flat = "
       let NP = 1; let ND = 2; let Bw = 1000;
@@ -196,7 +197,7 @@ fn an_entry_sees_its_parameters_and_its_queue() {
 
 #[test]
 fn roles_and_entries_agree() {
-    let rest = "workload { arrive batch(1); init { set prompt = 1; } session { request; end; } } run { horizon 1; }";
+    let rest = "workload { arrive batch(1); init { set prompt = 1; } session { request gw; end; } } run { horizon 1; }";
     refused(
         &format!("queue gw : gateway {{ route {{ }} }} queue P : prefill {{ serve fifo; }} {rest}"),
         "plays `prefill` and has no `prefill` entry",
@@ -215,7 +216,7 @@ fn roles_and_entries_agree() {
     );
     refused(
         &format!("queue gw : gateway {{ route {{ }} }} server {{ }} {rest}"),
-        "the gateway's `route` is the server",
+        "never requested",
     );
     refused(
         &format!("queue gw[2] : gateway {{ route {{ }} }} {rest}"),
@@ -237,7 +238,7 @@ fn a_call_is_checked_against_the_entry() {
     let program = |route: &str| {
         format!(
             "queue gw : gateway {{ route {{ {route} }} }} {decls}
-             workload {{ arrive batch(1); init {{ set prompt = 1; set j = 0; }} session {{ request; end; }} }} run {{ horizon 1; }}"
+             workload {{ arrive batch(1); init {{ set prompt = 1; set j = 0; }} session {{ request gw; end; }} }} run {{ horizon 1; }}"
         )
     };
     refused(&program("D.decode (prompt);"), "is a family of 2; index it");
@@ -264,14 +265,14 @@ fn a_call_is_checked_against_the_entry() {
     );
     refused(
         "queue gw : gateway { route { observe s = self; } } stage s : fifo;
-         workload { arrive batch(1); session { request; end; } } run { horizon 1; }",
+         workload { arrive batch(1); session { request gw; end; } } run { horizon 1; }",
         "not a family",
     );
 }
 
 #[test]
 fn a_family_size_is_a_constant() {
-    let rest = "queue gw : gateway { route { E[j].decode (1); } } workload { arrive batch(1); init { set j = 0; } session { request; end; } } run { horizon 1; }";
+    let rest = "queue gw : gateway { route { E[j].decode (1); } } workload { arrive batch(1); init { set j = 0; } session { request gw; end; } } run { horizon 1; }";
     let decl = |n: &str| {
         format!(
             "let N = 2; queue E[{n}] : decode {{ pool kv {{ cap 10; }} serve step {{ cost 1; memory kv; }} decode (p) {{ admit if kv (p) fit {{ prefill (p) growing kv; }} }} }} {rest}"
@@ -281,4 +282,74 @@ fn a_family_size_is_a_constant() {
     assert!(parse(&decl("N + 1")).is_ok());
     refused(&decl("N / 4"), "array size must be a positive integer");
     refused(&decl("j"), "positive integer or a `let` constant");
+}
+
+#[test]
+fn requests_select_named_gateways_in_nested_sessions_and_before_declarations() {
+    // Declaration order does not select a default. The session chooses two
+    // gateways, while the third gateway contributes no executable statements.
+    let queues = "
+      workload { arrive batch(1); session {
+        loop { branch (1) { request second; } else { request first; } end; }
+      } }
+      queue unused : gateway { route { observe unused = 99; } }
+      queue first : gateway { route { observe selected = 1; } }
+      queue second : gateway { route { observe selected = 2; } }
+      run { horizon 1; }";
+    let flat = "
+      workload { arrive batch(1); }
+      session { loop { branch (1) { observe selected = 2; } else { observe selected = 1; } end; } }
+      run { horizon 1; }";
+    same_ir(queues, flat, &[]);
+    same_ir(&queues.replace("second", "router"), flat, &[]);
+}
+
+#[test]
+fn a_gateway_declaration_does_not_bind_an_anonymous_request() {
+    refused(
+        "queue gw : gateway { route { } } workload { session { request; } }",
+        "name a gateway with `request NAME;`",
+    );
+    // Mixing named and unnamed requests must not let an unresolved request
+    // survive simply because the session already has an explicit target.
+    refused(
+        "queue gw : gateway { route { } } workload { session { request gw; request; } }",
+        "name a gateway with `request NAME;`",
+    );
+    refused(
+        "queue gw : gateway { route { } } workload { session { request missing; } }",
+        "no queue `missing` is declared",
+    );
+    refused(
+        "queue P : prefill { serve fifo; prefill (p) { run (p); } }
+         workload { session { request P; } }",
+        "does not play `gateway`",
+    );
+    refused(
+        "queue gw : gateway { route { } } session { request gw; }",
+        "`session` inside `workload`",
+    );
+    refused(
+        "queue gw : gateway { route { request gw; } }",
+        "does not request itself",
+    );
+    refused(
+        "queue gw : gateway { route { } }
+         workload { session { request gw; } } session { end; }",
+        "one session",
+    );
+}
+
+#[test]
+fn named_gateways_and_anonymous_servers_have_distinct_requests() {
+    same_ir(
+        "queue gw : gateway { route { observe selected = 2; } }
+         server { observe selected = 1; }
+         workload { arrive batch(1); session { request; request gw; end; } }
+         run { horizon 1; }",
+        "workload { arrive batch(1); }
+         session { observe selected = 1; observe selected = 2; end; }
+         run { horizon 1; }",
+        &[],
+    );
 }
