@@ -58,17 +58,20 @@ observe name = expr;               // record a sample
 
 hold P (u) [reserve (r)] [, Q (v)]* [reuse (ρ)]
      [at admission (name = e, …)]      // names for the header, read at admission
-     { … } [cache (ℓ)];
+     { … } [cache (ℓ)] [lease P (t)];   // lease: P's units outlive the scope until released, t seconds, or the end
 grow P (d);                        // enlarge the innermost hold
 drop P;                            // discard the own cached prefix
+release P;                         // give the enclosing hold's units of P back now, or end a lease of P
+load P (n);                        // the KV of n tokens arrived: computed position += n
 
 run S [prefill|decode] (w) [growing P];
 
 // the serving vocabulary: the same statements, named by the request lifecycle
-enter P (u) … { … } [keep (ℓ)];    // hold … cache
+enter P (u) … { … } [keep (ℓ)] [lease P (t)];    // hold … cache
 prefill W;  transfer X;  decode W;  tool Z;   // run on the stage of that name: W is
                                    // time on a fifo/ps/delay stage (seconds)
 prefill T;  decode T;              // on a step engine: T is tokens, the budget's unit
+transfer (X) from P to Q (n);      // run link (X); load Q (n); release P
 prefill[j] W;  prefill on P (W);   // an instance of an array; an explicit stage
 
 branch (e) { … } [else { … }]      // a test: e is 0 or 1

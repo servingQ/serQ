@@ -52,6 +52,13 @@ struct Linker<'a> {
     pools: HashMap<String, (usize, usize)>,
     stages: HashMap<String, (usize, usize)>,
     blocks: Vec<Vec<CStmt>>,
+    /// The pool references of the holds enclosing the statement being
+    /// linked, as written, for `release` and `load`, which act on an
+    /// enclosing hold: `hold kv[i]` encloses `release kv[i]`, not `kv[j]`.
+    held: Vec<Ref>,
+    /// Pool references some hold of the program leases, as written: a
+    /// `release` of one may stand outside any hold of it.
+    leased: Vec<Ref>,
     prog: &'a Program,
 }
 
@@ -81,6 +88,8 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         pools: HashMap::new(),
         stages: HashMap::new(),
         blocks: vec![],
+        held: vec![],
+        leased: vec![],
         prog,
     };
     for a in BUILTIN_ATTRS {
@@ -120,6 +129,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         collect_attrs(&w.turn, &mut lk);
     }
     collect_attrs(&prog.session, &mut lk);
+    collect_leases(&prog.session, &mut lk.leased);
     // An attribute would shadow a constant of the same name everywhere
     // (a stage's cost has no session, so the constant would read as NaN).
     for (name, _) in &prog.lets {
@@ -165,8 +175,13 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                 })
             }
         };
-        let admit_via = p.admit_via.as_ref().map(|n| lk.stage_base(n)).transpose()?;
-        for _ in 0..p.count {
+        let admit_via = p.admit_via.as_ref().map(|n| lk.stage_span(n)).transpose()?;
+        for i in 0..p.count {
+            // `pool q[N] { admit via S; }` with `stage S[N]`: q[i] is served
+            // by S[i]; with one stage, every q[i] by it
+            let admit_via = admit_via
+                .map(|(b, c)| member(b, c, i, p.count, &p.name, "admit via"))
+                .transpose()?;
             pools.push(CPool {
                 admit_via,
                 name: p.name.clone(),
@@ -216,10 +231,20 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
             }),
         };
-        for _ in 0..s.count {
+        let memory = match &s.kind {
+            StageKind::Step(sp) => sp.memory.as_ref().map(|m| lk.pool_span(m)).transpose()?,
+            _ => None,
+        };
+        for i in 0..s.count {
+            let mut kind = kind.clone();
+            // `stage E[N] : step { memory kv; }` with `pool kv[N]`: E[i]'s
+            // memory is kv[i]; with one pool, every E[i]'s is it
+            if let (CStageKind::Step(st), Some((b, c))) = (&mut kind, memory) {
+                st.memory = Some(member(b, c, i, s.count, &s.name, "memory")?);
+            }
             stages.push(CStage {
                 name: s.name.clone(),
-                kind: kind.clone(),
+                kind,
             });
         }
     }
@@ -311,6 +336,44 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     Ok(linked)
 }
 
+/// Member `i` of an `n`-family's counterpart in a family of `count` from
+/// `base`: element for element when the counts match, the one member when
+/// there is one, and an error otherwise.
+fn member(base: usize, count: usize, i: usize, n: usize, who: &str, what: &str) -> LResult<usize> {
+    if count == n {
+        Ok(base + i)
+    } else if count == 1 {
+        Ok(base)
+    } else {
+        Err(LinkError(format!(
+            "`{who}`: `{what}` names a family of {count}, and `{who}` is a family of {n}: \
+             one for one, or one for all"
+        )))
+    }
+}
+
+/// Every pool reference a hold leases, anywhere in the session.
+fn collect_leases(stmts: &[Stmt], out: &mut Vec<Ref>) {
+    for s in stmts {
+        match s {
+            Stmt::Hold { body, lease, .. } => {
+                if let Some((r, _)) = lease
+                    && !out.contains(r)
+                {
+                    out.push(r.clone());
+                }
+                collect_leases(body, out);
+            }
+            Stmt::Loop(body) => collect_leases(body, out),
+            Stmt::Branch(_, a, b) => {
+                collect_leases(a, out);
+                collect_leases(b, out);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn collect_attrs(stmts: &[Stmt], lk: &mut Linker) {
     for s in stmts {
         match s {
@@ -345,6 +408,22 @@ impl Linker<'_> {
             .ok_or_else(|| LinkError(format!("unknown pool `{name}`")))
     }
 
+    /// A pool family: (base, count).
+    fn pool_span(&self, name: &str) -> LResult<(usize, usize)> {
+        self.pools
+            .get(name)
+            .copied()
+            .ok_or_else(|| LinkError(format!("unknown pool `{name}`")))
+    }
+
+    /// A stage family: (base, count).
+    fn stage_span(&self, name: &str) -> LResult<(usize, usize)> {
+        self.stages
+            .get(name)
+            .copied()
+            .ok_or_else(|| LinkError(format!("unknown stage `{name}`")))
+    }
+
     fn stage_base(&self, name: &str) -> LResult<usize> {
         self.stages
             .get(name)
@@ -369,6 +448,37 @@ impl Linker<'_> {
             Some(e) => Some(Box::new(self.expr(e)?)),
         };
         Ok(CRef { base, count, index })
+    }
+
+    /// A pool reference a statement acts on through an enclosing hold
+    /// (`release`, `load`): the statement must be inside a hold that names
+    /// the pool the same way, index included, or it would look for a hold
+    /// the session may not have. A `release` may also take a lease, so it
+    /// stands anywhere when some hold leases the pool (`or_leased`).
+    fn enclosed_pool(&self, r: &Ref, what: &str, or_leased: bool) -> LResult<CRef> {
+        let cr = self.pool_ref(r)?;
+        if !self.held.contains(r) && !(or_leased && self.leased.contains(r)) {
+            let shown = match &r.index {
+                None => r.name.clone(),
+                Some(_) => format!("{}[…]", r.name),
+            };
+            let hint = if self
+                .held
+                .iter()
+                .chain(&self.leased)
+                .any(|h| h.name == r.name)
+            {
+                ": write the pool as the hold does, index included"
+            } else if or_leased {
+                ": it takes an enclosing hold's allocation, or a lease of it"
+            } else {
+                ": it acts on an enclosing hold's allocation"
+            };
+            return Err(LinkError(format!(
+                "`{what} {shown}` outside a hold of `{shown}`{hint}"
+            )));
+        }
+        Ok(cr)
     }
 
     fn pool_ref(&self, r: &Ref) -> LResult<CRef> {
@@ -588,7 +698,9 @@ impl Linker<'_> {
                     reuse,
                     body,
                     cache,
+                    lease,
                 } => {
+                    let pools_src = pools;
                     let pools = pools
                         .iter()
                         .map(|(r, e, f)| {
@@ -601,16 +713,42 @@ impl Linker<'_> {
                         .collect::<LResult<Vec<_>>>()?;
                     let reuse = reuse.as_ref().map(|c| self.expr(c)).transpose()?;
                     let cache = cache.as_ref().map(|c| self.expr(c)).transpose()?;
+                    let depth = self.held.len();
+                    for (r, _, _) in pools_src {
+                        self.held.push(r.clone());
+                    }
                     let body = self.block(body, false)?;
+                    self.held.truncate(depth);
+                    let lease = match lease {
+                        None => None,
+                        Some((r, t)) => {
+                            if !pools_src.iter().any(|(q, _, _)| q == r) {
+                                return Err(LinkError(format!(
+                                    "`lease {}`: the hold does not take that pool (write it as the hold does, index included)",
+                                    r.name
+                                )));
+                            }
+                            Some((self.pool_ref(r)?, self.expr(t)?))
+                        }
+                    };
                     CStmt::Hold {
                         pools,
                         reuse,
                         body,
                         cache,
+                        lease,
                     }
                 }
                 Stmt::Grow(r, e) => CStmt::Grow(self.pool_ref(r)?, self.expr(e)?),
                 Stmt::Drop(r) => CStmt::Drop(self.pool_ref(r)?),
+                Stmt::Release(r) => {
+                    let cr = self.enclosed_pool(r, "release", true)?;
+                    CStmt::Release(cr)
+                }
+                Stmt::Load(r, e) => {
+                    let cr = self.enclosed_pool(r, "load", false)?;
+                    CStmt::Load(cr, self.expr(e)?)
+                }
                 Stmt::Run {
                     stage,
                     mode,

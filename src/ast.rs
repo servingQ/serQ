@@ -172,9 +172,21 @@ pub enum Stmt {
         reuse: Option<Expr>,
         body: Vec<Stmt>,
         cache: Option<Expr>,
+        /// `lease P (t)`: at the scope's end the allocation on `P` (one of
+        /// the hold's pools) stays, neither evictable nor a preemption
+        /// victim, until a `release`/`transfer … from P` of this session
+        /// takes it, `t` seconds pass, or the session ends; then `cache`
+        /// applies.
+        lease: Option<(Ref, Expr)>,
     },
     Grow(Ref, Expr),
     Drop(Ref),
+    /// `release P;`: the innermost enclosing hold gives its allocation on
+    /// `P` back now, caching per its clause.
+    Release(Ref),
+    /// `load P (n);`: the KV of `n` tokens arrived from outside the engine;
+    /// the innermost enclosing hold's computed position on `P` advances.
+    Load(Ref, Expr),
     Run {
         stage: Ref,
         mode: RunMode,

@@ -78,8 +78,10 @@ struct Walker<'a> {
     net: Net,
     /// Ends the next station will be reached from, with the label of the path.
     frontier: Vec<(End, Option<String>)>,
-    /// Pools held right now, outermost first.
-    holds: Vec<usize>,
+    /// Pools held right now, outermost first, each with the hold that took
+    /// it (a `release` takes one off before its hold ends).
+    holds: Vec<(usize, usize)>,
+    next_hold: usize,
     /// Frames waiting to learn which station a loop body starts at.
     capture: Vec<Vec<usize>>,
     /// `choose`s that have not yet found the station they select, as
@@ -155,7 +157,9 @@ impl Walker<'_> {
             Some(i) => {
                 // Seen before: it belongs only to the pools held every time.
                 let held = &self.holds;
-                self.net.nodes[i].pools.retain(|p| held.contains(p));
+                self.net.nodes[i]
+                    .pools
+                    .retain(|p| held.iter().any(|&(q, _)| q == *p));
                 i
             }
             None => {
@@ -166,7 +170,13 @@ impl Walker<'_> {
                     kind,
                     inner,
                     note: kind_note,
-                    pools: self.holds.clone(),
+                    pools: self.holds.iter().fold(vec![], |mut v, &(q, _)| {
+                        // nested holds of one pool are one enclosure
+                        if !v.contains(&q) {
+                            v.push(q);
+                        }
+                        v
+                    }),
                 });
                 self.net.nodes.len() - 1
             }
@@ -190,13 +200,33 @@ impl Walker<'_> {
                     let note = stage.index.as_ref().and_then(|i| self.claim_choose(i));
                     self.visit_stage(stage.base, label, note);
                 }
-                CStmt::Hold { pools, body, .. } => {
-                    let depth = self.holds.len();
+                CStmt::Hold {
+                    pools, body, lease, ..
+                } => {
+                    let id = self.next_hold;
+                    self.next_hold += 1;
                     for (r, _, _) in &pools {
-                        self.holds.push(r.base);
+                        self.holds.push((r.base, id));
                     }
                     self.walk(body);
-                    self.holds.truncate(depth);
+                    // by hold, not by depth: a `release` inside may have
+                    // taken an outer hold's pool off the stack already
+                    let leased = lease
+                        .as_ref()
+                        .filter(|(r, _)| self.holds.iter().any(|&(q, h)| q == r.base && h == id));
+                    self.holds.retain(|&(_, h)| h != id);
+                    // a leased pool stays held past the scope, until the
+                    // `release` that takes it
+                    if let Some((r, _)) = leased {
+                        self.holds.push((r.base, id));
+                    }
+                }
+                CStmt::Release(r) => {
+                    // the pool leaves the enclosure here: the stations after
+                    // this one are not inside it
+                    if let Some(i) = self.holds.iter().rposition(|&(p, _)| p == r.base) {
+                        self.holds.remove(i);
+                    }
                 }
                 CStmt::Branch(c, t, e) => {
                     // The guard labels the first edge the arm takes. An arm
@@ -204,13 +234,20 @@ impl Walker<'_> {
                     // is what keeps a chain of guards from multiplying out.
                     let saved = self.frontier.clone();
                     let outer = self.arm.take();
+                    // each arm starts from the holds at the branch; a
+                    // `release` in one arm does not reach the other, and
+                    // after the branch a pool is held only where both arms
+                    // still hold it
+                    let held = self.holds.clone();
                     self.frontier = saved.clone();
                     self.arm = Some(self.p.show_guard(&c));
                     self.walk(t);
                     let then_out = std::mem::take(&mut self.frontier);
+                    let then_held = std::mem::replace(&mut self.holds, held);
                     self.frontier = saved;
                     self.arm = Some("else".into());
                     self.walk(e);
+                    self.holds.retain(|h| then_held.contains(h));
                     let mut out = then_out;
                     out.append(&mut self.frontier);
                     dedupe(&mut out);
@@ -258,7 +295,7 @@ impl Walker<'_> {
                     self.pending.push((var, label));
                 }
                 CStmt::Turn | CStmt::Set(..) | CStmt::Observe(..) => {}
-                CStmt::Grow(..) | CStmt::Drop(..) => {}
+                CStmt::Grow(..) | CStmt::Drop(..) | CStmt::Load(..) => {}
             }
         }
     }
@@ -336,6 +373,7 @@ pub fn project(p: &Program) -> Net {
         },
         frontier: vec![(End::Arrival, None)],
         holds: vec![],
+        next_hold: 0,
         capture: vec![],
         pending: vec![],
         arm: None,
@@ -422,7 +460,8 @@ pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
                         f.grown.push(g.base);
                     }
                 }
-                CStmt::Grow(g, _) => {
+                // a load computes into the hold the way a growing run does
+                CStmt::Grow(g, _) | CStmt::Load(g, _) => {
                     if let Some(f) = stack.iter_mut().rev().find(|f| f.pools.contains(&g.base))
                         && !f.grown.contains(&g.base)
                     {

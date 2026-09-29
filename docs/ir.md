@@ -15,7 +15,7 @@ the program. A tool that knows what it wants to run (a scenario from JSON,
 a parameter sweep, a trace replay) builds or edits the IR as data instead
 of generating text.
 
-Source: `src/ir.rs`. Version: `IR_VERSION = 4` (2 added the sessions' turns;
+Source: `src/ir.rs`. Version: `IR_VERSION = 5` (2 added the sessions' turns;
 3 renamed the `route` field to `session`; 4 replaced `CStep`'s two booleans
 `exclusive_prefill` and `decode_first` by the one order `serve`).
 
@@ -48,7 +48,9 @@ Source: `src/ir.rs`. Version: `IR_VERSION = 4` (2 added the sessions' turns;
 
 JSON (`serde`): structs are objects with the field names below, enums are
 externally tagged (`{"Num": 3.0}`, `{"Binary": ["Add", a, b]}`, unit
-variants as strings, `"Lru"`). `seq-lang ir FILE` prints it;
+variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
+(`inf` in a program, a pool without `cap`) is the string `"inf"` or
+`"-inf"`, and a reader of `Num` or `cap` takes a number or that string. `seq-lang ir FILE` prints it;
 `seq-lang run/check FILE.json` reads it.
 
 ### `Program`
@@ -84,8 +86,10 @@ runs identically (`tests/ir.rs`).
 |---|---|
 | `Turn` | draw the next turn's attributes (workload `turn` block or trace) |
 | `Set(slot, e)`, `Observe(k, e)` | assign an attribute, record an observation |
-| `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; `reuse` bounds the own cached prefix consumed, `cache` the units left cached |
+| `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?, lease?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; `reuse` bounds the own cached prefix consumed, `cache` the units left cached; `lease: (pool, t)` keeps that pool's allocation past the scope, neither evictable nor a preemption victim, until the session's `Release` of it, `t` seconds, or its end (vLLM's `delay_free_blocks`) |
 | `Grow(pool, e)`, `Drop(pool)` | grow the current hold, drop the own cached entry |
+| `Release(pool)` | give the innermost enclosing hold's allocation on the pool back now, or end the session's lease of it, caching per the hold's `cache`; nothing held or leased there is a no-op. A KV transfer between instances is `Run` (the link), `Load` (the destination) and `Release` (the source's lease) |
+| `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
 | `Run {stage, mode, work, growing?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed |
 | `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}`, `End` | control; `End` ends the session |
 
@@ -112,7 +116,7 @@ its position in the IR, and a context variable exists at one of them:
 
 | Moment (`ir::Moment`) | Positions | Context variables |
 |---|---|---|
-| `Session` | statements of `init`, `turn`, `session`; a run's work; a hold's `cache` (read when the session releases); `Grow`, `Branch`, `Choose` | `Now` |
+| `Session` | statements of `init`, `turn`, `session`; a run's work; a hold's `cache` (read when the session releases); `Grow`, `Load`, `Branch`, `Choose` | `Now` |
 | `Admit` | a hold's units, `reserve`, `reuse`; a pool's queue key (read when the scheduler admits or orders the session, not when it reaches the statement) | `Now` |
 | `Evict` | eviction keys, a spill's `work` and `when` | `Size`, `Age`, `Last`, `Queued`, `Now` |
 | `Ps` | a `ps` stage's capacity | `N`, `Now` |
@@ -188,12 +192,17 @@ priced as such. What a change to `src/ir.rs` does to the version:
 
 A version is a release, and the lines above decide one thing: whether a
 change to a *tagged* version opens the next number. While the version at
-`IR_VERSION` has no tag (4 today: `v0.1.0-rc0` is 3), no line bumps; the
+`IR_VERSION` has no tag (5 today: `v0.1.0-rc0` is 3), no line bumps; the
 change is listed in the coming tag's message, which is the release note,
 and the handshake happens once, at the tag. A reader on an untagged version
 reads a commit, not a version: under 4, `serve` moved twice and the
 generator followed twice (#45, #50), while `slot_computed` and `hidden`
 joined without a reader noticing.
+
+Version 5 carries `Release`, `Load` and `Hold.lease` for KV transfer and
+allocations that outlive their hold scope. The oracle programs use none of
+these mechanisms; their regenerated IR has the new version and a `null`
+`lease`. The generator pins 5 in the matching `serving-queue-theory` change.
 
 ## The Lean fragment
 
@@ -202,6 +211,9 @@ the IR on a step clock over natural numbers: pools with LRU eviction and
 LIFO preemption, one step engine (stage 0) with unit iteration cost, delay
 stages, explicit sessions with preset attributes and turns, and the
 statements `Turn`, `Hold`, `Run`, `Set`, `Observe`, `Branch`, `Loop`, `End`
+(not `Release`, `Load` or a hold with a `lease`: a program with a KV
+transfer is outside the fragment until `SeqExec.lean` gives a hold's pool
+its own release)
 with expressions built from integer constants, attributes, `Now`,
 `CachedIn`, `BudgetLeft`, `min`, `max`, `+`, `-` (truncated at 0), `*`,
 `floor(a / b)`, comparisons and conditionals. A constant expression over
