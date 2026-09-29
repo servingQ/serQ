@@ -80,6 +80,9 @@ pub struct ParseError {
 
 impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(lib) = &self.origin {
+            write!(f, "{}:", lib.path)?;
+        }
         write!(f, "{}:{}: {}", self.line, self.col, self.msg)
     }
 }
@@ -148,6 +151,8 @@ struct Parser {
     /// directory of each, and each one's canonical path, read once.
     libs: Vec<Source>,
     lib_dirs: Vec<PathBuf>,
+    /// Each library's directory as the program named it, for display.
+    lib_shown_dirs: Vec<PathBuf>,
     read: Vec<PathBuf>,
 }
 
@@ -385,6 +390,7 @@ pub fn parse_at(src: &str, base: Option<&Path>) -> PResult<Program> {
         base: None,
         libs: vec![],
         lib_dirs: vec![],
+        lib_shown_dirs: vec![],
         read: vec![],
     };
     p.base = base.map(Path::to_path_buf);
@@ -410,6 +416,7 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
         base: None,
         libs: vec![],
         lib_dirs: vec![],
+        lib_shown_dirs: vec![],
         read: vec![],
     };
     let e = p.expr()?;
@@ -949,9 +956,12 @@ impl Parser {
                     self.peek()
                 ));
             }
+            let (item, item_file) = (self.pos, self.toks[self.pos].file);
             if self.is_kw("use") {
                 self.use_library()?;
-            } else if self.eat_kw("let") {
+                continue;
+            }
+            if self.eat_kw("let") {
                 let name = self.definition()?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
@@ -1004,6 +1014,16 @@ impl Parser {
                 self.expect(&Tok::RBrace)?;
             } else {
                 return self.err(format!("unexpected {} at top level", self.peek()));
+            }
+            // a library's definition ends in the library: the program does not
+            // finish it, nor it the program's
+            let last = self.toks[self.pos.saturating_sub(1)].file;
+            if last != item_file {
+                return self.err_at(
+                    item,
+                    "this item does not end in the file it starts in: a library's \
+                     definitions are whole",
+                );
             }
         }
         // a request runs the server, whose admissions set `cached` and
@@ -1221,7 +1241,10 @@ impl Parser {
                 ),
             );
         };
-        let full = dir.join(&path);
+        let full = match file.checked_sub(1) {
+            Some(i) => self.lib_shown_dirs[i].join(&path),
+            None => dir.join(&path),
+        };
         let canonical = full
             .canonicalize()
             .or_else(|e| self.err_at(at, format!("cannot read `{path}`: {e}")))?;
@@ -1230,6 +1253,8 @@ impl Parser {
             let text = std::fs::read_to_string(&canonical)
                 .or_else(|e| self.err_at(at, format!("cannot read `{path}`: {e}")))?;
             let shown = full.display().to_string();
+            self.lib_shown_dirs
+                .push(full.parent().map(Path::to_path_buf).unwrap_or_default());
             let lib = Source { path: shown, text };
             toks = lex(&lib.text).map_err(|e| ParseError {
                 line: e.line,
@@ -1250,6 +1275,9 @@ impl Parser {
                     .unwrap_or_default(),
             );
             self.read.push(canonical);
+        }
+        if self.toks.len() + toks.len() > MAX_TOKENS {
+            return self.err_at(at, "the libraries are more than a program can hold");
         }
         self.toks.splice(at..self.pos, toks);
         self.pos = at;

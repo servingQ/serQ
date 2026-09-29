@@ -84,7 +84,10 @@ server {
 ```
 
 (`examples/multi-turn/vllm.seq`; the library is `lib/vllm.seq`.) A program
-given as text rather than read from a file cannot `use`.
+given as text rather than read from a file cannot `use`. The library's names
+are the program's, as for any [`def`](#def): what a statement definition
+sets is the session's attribute, and what it observes is the program's
+observation, so a library says in its comments which names it takes.
 
 ## `pool`
 

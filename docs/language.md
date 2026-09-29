@@ -220,8 +220,8 @@ step engine are rejected by the linker as `run E (X)` would be. A linker
 error inside a form (an unknown name in `W`, say) speaks of the kernel
 statement.
 
-vLLM's engine (`examples/multi-turn/vllm.seq`, whose `server` block spells the
-same hold from the scheduler's side, below) then reads
+vLLM's engine (`lib/vllm.seq`'s `vllm_request`, which spells the same hold
+from the scheduler's side, below) then reads
 
 ```
 enter reqs (1), kv (min(prompt, hit + budget_left(engine)))

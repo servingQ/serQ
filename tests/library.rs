@@ -90,6 +90,47 @@ fn a_library_holds_definitions() {
 }
 
 #[test]
+fn a_library_definition_is_whole() {
+    // the program cannot finish a library's definition
+    for (lib, main) in [
+        ("def", "take(n) { set a = n; }\n"),
+        ("def g(x) = x +", "1;\n"),
+    ] {
+        let d = dir(
+            "whole",
+            &[
+                ("lib.seq", lib),
+                (
+                    "main.seq",
+                    &format!("use \"lib.seq\";\n{main}session {{ end; }}\n"),
+                ),
+            ],
+        );
+        let e = compile(&d, "main.seq").unwrap_err();
+        assert!(
+            e.contains("does not end in the file it starts in"),
+            "{lib}: {e}"
+        );
+    }
+}
+
+#[test]
+fn a_link_note_names_the_library() {
+    let d = dir(
+        "note",
+        &[
+            ("lib.seq", "def take(n) {\n  set admitted = n;\n}\n"),
+            (
+                "main.seq",
+                "use \"lib.seq\";\nsession { take(1); observe x = admittedd; end; }\n",
+            ),
+        ],
+    );
+    let e = compile(&d, "main.seq").unwrap_err();
+    assert!(e.contains("lib.seq:2:7"), "{e}");
+}
+
+#[test]
 fn a_use_needs_a_file() {
     let e = compile_source(
         "use \"lib.seq\";\nsession { end; }\n",
@@ -107,8 +148,8 @@ fn a_use_needs_a_file() {
 
 #[test]
 fn the_library_is_one_definition_of_the_vllm_engine() {
-    // the four workload programs and the P/D program read their engine from
-    // `lib/vllm.seq`, and none of them writes it out
+    // the four workload programs read their engine from `lib/vllm.seq`, and
+    // none of them writes it out
     for name in ["vllm", "vllm_chat", "vllm_single_turn", "vllm_subagents"] {
         let src = std::fs::read_to_string(seq::program_path(name)).unwrap();
         assert!(src.contains("use \"../../lib/vllm.seq\";"), "{name}");

@@ -20,6 +20,11 @@ def reusable(x, bs) = floor((x - 1) / bs) * bs;
 // reached plus the token sampled there (vLLM keeps the generated tokens and
 // drops only their KV, scheduler.py:1560-1561); the hit can cover all but
 // the last of them.
+//
+// A definition's names are the program's: the request sets the session
+// attributes `known` and `c`, and observes `hit` (a prefix hit),
+// `prefill_tokens` (the tokens prefilled) and `ttft` (time to first token,
+// from `t0`). `bs` is `kv`'s block size.
 def vllm_request(reqs, kv, engine, prompt, o, bs, t0) {
   admit if reqs (1), kv (min(known, hit + budget_left(engine))) fit
         where known = computed < prompt ? prompt : computed + 1,
