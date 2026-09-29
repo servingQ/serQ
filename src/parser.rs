@@ -1031,6 +1031,16 @@ impl Parser {
         if let Some(c) = &mut cache {
             subst(c, &binds);
         }
+        // `lease P (t)`: the allocation on `P` outlives the scope, for the
+        // session's transfer to take, for at most `t` seconds
+        let lease = if self.eat_kw("lease") {
+            let r = self.reference()?;
+            let mut t = self.paren_expr()?;
+            subst(&mut t, &binds);
+            Some((r, t))
+        } else {
+            None
+        };
         if *self.peek() == Tok::Semi {
             self.advance();
         }
@@ -1039,6 +1049,7 @@ impl Parser {
             reuse,
             body,
             cache,
+            lease,
         })
     }
 

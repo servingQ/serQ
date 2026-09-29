@@ -322,7 +322,8 @@
           ],
           "reuse": null,
           "body": 3,
-          "cache": null
+          "cache": null,
+          "lease": null
         }
       },
       {

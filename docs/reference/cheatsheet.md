@@ -58,16 +58,16 @@ observe name = expr;               // record a sample
 
 hold P (u) [reserve (r)] [, Q (v)]* [reuse (ρ)]
      [at admission (name = e, …)]      // names for the header, read at admission
-     { … } [cache (ℓ)];
+     { … } [cache (ℓ)] [lease P (t)];   // lease: P's units outlive the scope until released, t seconds, or the end
 grow P (d);                        // enlarge the innermost hold
 drop P;                            // discard the own cached prefix
-release P;                         // give the enclosing hold's units of P back now
+release P;                         // give the enclosing hold's units of P back now, or end a lease of P
 load P (n);                        // the KV of n tokens arrived: computed position += n
 
 run S [prefill|decode] (w) [growing P];
 
 // the serving vocabulary: the same statements, named by the request lifecycle
-enter P (u) … { … } [keep (ℓ)];    // hold … cache
+enter P (u) … { … } [keep (ℓ)] [lease P (t)];    // hold … cache
 prefill S;  transfer X;  decode D;  tool Z;   // run on the stage of that name
 transfer (X) from P to Q (n);      // run link (X); load Q (n); release P
                                    // (a step engine plays prefill and decode)

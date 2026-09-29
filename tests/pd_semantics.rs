@@ -160,8 +160,8 @@ fn release_and_load_need_an_enclosing_hold() {
     }
 }
 
-/// The transfer idiom: the KV is in both pools during the link run and in
-/// the destination alone after it. The source's next session (queued at
+/// The transfer: the source's lease outlives its scope, the KV is in both
+/// pools during the link run and in the destination alone after it. The source's next session (queued at
 /// 0.5) is admitted when the transfer ends (t = 2), the destination's
 /// (queued at 1.5) when the decode ends (t = 3).
 #[test]
@@ -176,14 +176,12 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
         workload { arrive batch(3); init { set kind = serial; } }
         session {
           branch (kind == 0) {
-            hold memP (10) {
-              prefill (1);
-              hold memD (10) {
-                transfer (1) from memP to memD (10);
-                observe p_holders = holders(memP);
-                observe d_used = used(memD);
-                decode (1);
-              }
+            hold memP (10) { prefill (1); } lease memP (inf);
+            hold memD (10) {
+              transfer (1) from memP to memD (10);
+              observe p_holders = holders(memP);
+              observe d_used = used(memD);
+              decode (1);
             }
           }
           branch (kind == 1) { run gate (0.5); hold memP (10) { observe p_admitted = now; } }
@@ -237,13 +235,10 @@ fn decode_pressure_backs_into_the_prefill_pool() {
         workload { arrive batch(6); }
         session {
           run gate (serial * 0.01);
-          hold memP (10) {
-            prefill (0.1);
-            observe prefilled = serial;
-            hold memD (10) {
-              transfer (0.1) from memP to memD (10);
-              decode (10);
-            }
+          hold memP (10) { prefill (0.1); observe prefilled = serial; } lease memP (inf);
+          hold memD (10) {
+            transfer (0.1) from memP to memD (10);
+            decode (10);
           }
           end;
         }
@@ -423,4 +418,112 @@ fn a_grow_with_nobody_to_preempt_waits() {
     let r = run(src);
     assert_eq!(samples(&r, "grew"), [5.0], "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().preemptions, 0, "{}", r.text());
+}
+
+/// `lease P (t)`: the allocation outlives the scope. Untaken, it ends at
+/// the bound and keeps its cache; session 1 (queued at 0.5 for the whole
+/// pool) is admitted at 3, when session 0's lease of 2 s ends, not at 1.
+#[test]
+fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
+    let src = r#"
+        pool kv { cap 10; }
+        stage svc : delay;
+        stage gate : delay;
+        workload { arrive batch(2); }
+        session {
+          branch (serial == 0) {
+            hold kv (10) { run svc (1); } cache (10) lease kv (2);
+            observe leased = used(kv);
+            run svc (5);
+            hold kv (10) { observe hit = cached; }
+          } else {
+            run gate (0.5);
+            hold kv (10) { observe admitted = now; }
+          }
+          end;
+        }
+        run { horizon 100; }
+    "#;
+    let r = run(src);
+    assert_eq!(
+        samples(&r, "leased"),
+        [10.0],
+        "still allocated after the scope"
+    );
+    assert_eq!(samples(&r, "admitted"), [3.0], "{}", r.text());
+    // session 1 held the whole pool at 3, which evicted session 0's cache
+    assert_eq!(samples(&r, "hit"), [0.0]);
+}
+
+/// A lease the session never takes ends with the session, and `cache`
+/// applies then: the next session finds the pool free at once and the
+/// cache still there for its owner would have been.
+#[test]
+fn a_lease_ends_with_the_session() {
+    let src = r#"
+        pool kv { cap 10; }
+        stage svc : delay;
+        workload { arrive batch(2); }
+        session {
+          branch (serial == 0) {
+            hold kv (10) { run svc (1); } cache (10) lease kv (inf);
+            run svc (1);
+          } else {
+            run svc (0.5);
+            hold kv (10) { observe admitted = now; }
+          }
+          end;
+        }
+        run { horizon 100; }
+    "#;
+    let r = run(src);
+    assert_eq!(samples(&r, "admitted"), [2.0], "{}", r.text());
+}
+
+/// A lease is never a preemption victim: with `preempt lifo` on a pool
+/// that is no engine's memory, the last holder in a scope is preempted,
+/// not the session whose lease is the most recent allocation.
+#[test]
+fn a_lease_is_not_a_preemption_victim() {
+    let src = r#"
+        pool kv { cap 20; preempt lifo; }
+        stage svc : delay;
+        workload { arrive batch(2); }
+        session {
+          branch (serial == 0) {
+            hold kv (5) { run svc (1); grow kv (10); observe grew = now; run svc (1); }
+          } else {
+            run svc (0.5);
+            hold kv (10) { run svc (0.1); } lease kv (inf);
+            run svc (2);
+            release kv;
+            observe released = now;
+          }
+          end;
+        }
+        run { horizon 100; }
+    "#;
+    let r = run(src);
+    // session 0 needs 15 of 20 at t = 1 and again at 2; session 1's lease
+    // holds 10 and is not the victim: the only holder in a scope is the
+    // grower, which preempts itself twice, re-enters at once (5 fit) and
+    // grows at 3, after the lease was released at 2.6
+    assert_eq!(r.pool("kv").unwrap().preemptions, 2, "{}", r.text());
+    assert_eq!(samples(&r, "released"), [2.6]);
+    assert_eq!(samples(&r, "grew"), [3.0], "{}", r.text());
+}
+
+/// `lease` names one of the hold's pools, as the hold writes it.
+#[test]
+fn a_lease_names_a_pool_of_the_hold() {
+    let bad = "pool a { cap 1; } pool b { cap 1; } stage svc : delay;
+               workload { arrive batch(1); }
+               session { hold a (1) { run svc (1); } lease b (1); end; } run { horizon 10; }";
+    let e = check_source(bad, &Overrides::default()).expect_err("linked");
+    assert!(e.contains("does not take that pool"), "{e}");
+    // and a `release` of a leased pool links outside any hold of it
+    let ok = "pool a { cap 1; } stage svc : delay;
+              workload { arrive batch(1); }
+              session { hold a (1) { run svc (1); } lease a (1); run svc (1); release a; end; } run { horizon 10; }";
+    check_source(ok, &Overrides::default()).expect("links");
 }

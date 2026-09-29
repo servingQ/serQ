@@ -45,7 +45,7 @@ of the session program. `deployment::project` walks it carrying a hold stack:
 |---|---|
 | **Nodes** | one per stage a `Run` reaches; a `CRef` with `count > 1` is one node labelled `[N]` |
 | **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a back edge to the body's first station) |
-| **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box — **the lecture's "instance" boundary**. A `Release` takes its pool off the stations after it, so a KV transfer draws two boxes that cross at the link station (`programs/llmd_pd.seq`) |
+| **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box — **the lecture's "instance" boundary**. A leased pool stays on the stations after its hold and a `Release` takes it off, so a KV transfer draws two boxes that cross at the link station (`programs/llmd_pd.seq`) |
 | **Edge labels** | a `Branch` guard, via `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
 

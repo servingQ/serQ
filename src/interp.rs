@@ -24,8 +24,21 @@ use crate::trace::Corpus;
 
 enum Ev {
     Arrive,
-    Finish { stage: usize, job: u64, epoch: u64 },
-    IterEnd { stage: usize, epoch: u64 },
+    Finish {
+        stage: usize,
+        job: u64,
+        epoch: u64,
+    },
+    IterEnd {
+        stage: usize,
+        epoch: u64,
+    },
+    /// A lease's time is up: `serial` guards against a reused session slot.
+    LeaseEnd {
+        sid: usize,
+        serial: u64,
+        id: u64,
+    },
     EndWarmup,
 }
 
@@ -94,7 +107,21 @@ struct Hold<'p> {
     /// allocation, is what has been computed).
     grown: bool,
     cache: Option<&'p CExpr>,
+    /// The pool whose allocation outlives the scope, and for how long.
+    lease: Option<(usize, &'p CExpr)>,
     body: BlockId,
+}
+
+/// An allocation that outlived its scope (`lease P (t)`): the session's
+/// until its `release` of the pool, the expiry or its end, then cached per
+/// `cache`. Not a hold: no `grow`, no `growing`, no preemption.
+#[derive(Clone, Debug)]
+struct Lease<'p> {
+    id: u64,
+    pool: usize,
+    alloc: f64,
+    computed: f64,
+    cache: Option<&'p CExpr>,
 }
 
 #[derive(Clone, Debug)]
@@ -111,6 +138,7 @@ struct Pending<'p> {
     need: Vec<f64>,
     reuse: Option<&'p CExpr>,
     cache: Option<&'p CExpr>,
+    lease: Option<(usize, &'p CExpr)>,
     body: BlockId,
     queued_at: f64,
 }
@@ -136,6 +164,8 @@ struct Session<'p> {
     /// is no progress there: the session is `stuck`.
     preempt_pos: HashMap<usize, f64>,
     stuck: bool,
+    /// Allocations that outlived their scope (`lease`).
+    leases: Vec<Lease<'p>>,
 }
 
 // ------------------------------------------------------------- pools ----
@@ -322,6 +352,7 @@ pub struct Interp<'p> {
     /// While a stage admits from a queue it serves: (stage, budget left).
     admit_budget: Option<(usize, f64)>,
     next_dead: u64,
+    next_lease: u64,
     removed_last: f64,
     next_adm: u64,
     next_release: u64,
@@ -448,6 +479,7 @@ impl<'p> Interp<'p> {
             live_avg: TimeAverage::new(0.0, 0.0),
             admit_budget: None,
             next_dead: 0,
+            next_lease: 0,
             removed_last: 0.0,
             next_adm: 0,
             next_release: 0,
@@ -546,6 +578,14 @@ impl<'p> Interp<'p> {
             }
             Ev::Finish { stage, job, epoch } => self.on_finish(stage, job, epoch),
             Ev::IterEnd { stage, epoch } => self.on_iter_end(stage, epoch),
+            Ev::LeaseEnd { sid, serial, id } => {
+                if self.sessions[sid].serial == serial
+                    && let Some(i) = self.sessions[sid].leases.iter().position(|l| l.id == id)
+                {
+                    self.end_lease(sid, i);
+                    self.try_admit_all();
+                }
+            }
         }
     }
 
@@ -634,6 +674,7 @@ impl<'p> Interp<'p> {
             adm_seq: u64::MAX,
             preempt_pos: HashMap::new(),
             stuck: false,
+            leases: vec![],
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -735,6 +776,9 @@ impl<'p> Interp<'p> {
         while let Some(h) = self.sessions[sid].holds.pop() {
             self.release_hold(sid, &h);
         }
+        while !self.sessions[sid].leases.is_empty() {
+            self.end_lease(sid, 0);
+        }
         self.sessions[sid].status = Status::Ended;
         self.sessions[sid].frames.clear();
         let serial = self.sessions[sid].serial;
@@ -799,7 +843,7 @@ impl<'p> Interp<'p> {
                             .holds
                             .pop()
                             .expect("hold frame has a hold");
-                        self.release_hold(sid, &h);
+                        self.end_hold(sid, &h);
                         // this hold completed: its pools' preemption positions
                         // are history (an enclosing hold keeps its own), and
                         // there is nothing to resume from
@@ -869,6 +913,7 @@ impl<'p> Interp<'p> {
                     reuse,
                     body,
                     cache,
+                    lease,
                 } => {
                     let mut ps = vec![];
                     let mut exprs = vec![];
@@ -880,6 +925,7 @@ impl<'p> Interp<'p> {
                         exprs.push(e);
                         reserve.push(f.as_ref());
                     }
+                    let lease = lease.as_ref().map(|(r, t)| (self.pool_index(r, sid), t));
                     let n = ps.len();
                     let pending = Pending {
                         pools: ps,
@@ -888,6 +934,7 @@ impl<'p> Interp<'p> {
                         need: vec![0.0; n],
                         reuse: reuse.as_ref(),
                         cache: cache.as_ref(),
+                        lease,
                         body: *body,
                         queued_at: self.now,
                     };
@@ -1131,6 +1178,7 @@ impl<'p> Interp<'p> {
             pos,
             grown: false,
             cache: pending.cache,
+            lease: pending.lease,
             body: pending.body,
         });
         s.frames.push(Frame {
@@ -1328,6 +1376,7 @@ impl<'p> Interp<'p> {
         self.removed_last
     }
 
+    /// A preempted or ended hold gives everything back at once.
     fn release_hold(&mut self, sid: usize, h: &Hold<'p>) {
         for (k, &(q, alloc)) in h.pools.iter().enumerate() {
             // only what was computed can be cached: the position of a
@@ -1335,6 +1384,41 @@ impl<'p> Interp<'p> {
             let computed = if h.grown { h.pos[k] } else { alloc };
             self.release_units(sid, q, alloc, computed, h.cache);
         }
+    }
+
+    /// The scope's end: every pool is given back, except the leased one,
+    /// whose allocation stays the session's (neither evictable nor a
+    /// preemption victim) until its `release`, the expiry or the session's
+    /// end.
+    fn end_hold(&mut self, sid: usize, h: &Hold<'p>) {
+        for (k, &(q, alloc)) in h.pools.iter().enumerate() {
+            let computed = if h.grown { h.pos[k] } else { alloc };
+            match h.lease {
+                Some((lp, t)) if lp == q => {
+                    let t = self.eval(t, &Ctx::session(sid), Which::Session).max(0.0);
+                    let id = self.next_lease;
+                    self.next_lease += 1;
+                    self.sessions[sid].leases.push(Lease {
+                        id,
+                        pool: q,
+                        alloc,
+                        computed,
+                        cache: h.cache,
+                    });
+                    if t.is_finite() {
+                        let serial = self.sessions[sid].serial;
+                        self.at(self.now + t, Ev::LeaseEnd { sid, serial, id });
+                    }
+                }
+                _ => self.release_units(sid, q, alloc, computed, h.cache),
+            }
+        }
+    }
+
+    /// A lease ends: the units go back, `cache` applies.
+    fn end_lease(&mut self, sid: usize, i: usize) {
+        let l = self.sessions[sid].leases.remove(i);
+        self.release_units(sid, l.pool, l.alloc, l.computed, l.cache);
     }
 
     /// Give `alloc` units of `q` back, keeping `min(cache, computed)` of them
@@ -1374,7 +1458,8 @@ impl<'p> Interp<'p> {
 
     /// `release P`: the innermost hold on `pl` gives its allocation there
     /// back now, caching per its clause, and no longer holds `pl`; its scope
-    /// end then has nothing left there. Nothing held on `pl`: a no-op (a
+    /// end then has nothing left there. With no hold on `pl`, the session's
+    /// lease of it ends (the transfer took the KV). Neither: a no-op (a
     /// hold re-executed after a preemption reaches the statement again).
     fn release_early(&mut self, sid: usize, pl: usize) {
         let Some(hi) = self.sessions[sid]
@@ -1382,6 +1467,9 @@ impl<'p> Interp<'p> {
             .iter()
             .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
         else {
+            if let Some(i) = self.sessions[sid].leases.iter().position(|l| l.pool == pl) {
+                self.end_lease(sid, i);
+            }
             return;
         };
         let h = &mut self.sessions[sid].holds[hi];
@@ -1503,7 +1591,14 @@ impl<'p> Interp<'p> {
             .collect();
         let holders = &self.pools[pl].holders;
         if engines.is_empty() {
-            return holders.last().copied();
+            // the last holder that holds the pool in a scope: a lease is
+            // not preempted
+            return holders.iter().copied().rev().find(|&s| {
+                self.sessions[s]
+                    .holds
+                    .iter()
+                    .any(|h| h.pools.iter().any(|&(q, _)| q == pl))
+            });
         }
         holders
             .iter()
@@ -1658,6 +1753,17 @@ impl<'p> Interp<'p> {
         let h_exprs: Vec<&'p CExpr> = h_pools.iter().map(|x| x.2).collect();
         let h_fits: Vec<Option<&'p CExpr>> = h_pools.iter().map(|x| x.3).collect();
         let h_pools: Vec<(usize, f64)> = h_pools.iter().map(|x| (x.0, x.1)).collect();
+        let lease_pool = {
+            let parent = self.sessions[victim].frames.last().cloned().unwrap();
+            let p = self.p;
+            match &p.blocks[parent.block][parent.pc - 1] {
+                CStmt::Hold {
+                    lease: Some((r, t)),
+                    ..
+                } => Some((self.pool_index(r, victim), t)),
+                _ => None,
+            }
+        };
         let (body, cache) = {
             let parent = self.sessions[victim].frames.last().cloned().unwrap();
             let p = self.p;
@@ -1678,6 +1784,7 @@ impl<'p> Interp<'p> {
             need: vec![0.0; n],
             reuse,
             cache,
+            lease: lease_pool,
             body,
             queued_at: self.now,
         };

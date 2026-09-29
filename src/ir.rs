@@ -238,7 +238,9 @@ pub enum CArg {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CExpr {
-    Num(f64),
+    /// A constant. JSON has no infinity, so `inf` is written as the string
+    /// `"inf"` (`-inf` as `"-inf"`) and read back from either form.
+    Num(#[serde(with = "real")] f64),
     Attr(usize),
     Ctx(CtxVar),
     Sample(DistKind, Vec<CExpr>),
@@ -246,6 +248,42 @@ pub enum CExpr {
     Unary(UnOp, Box<CExpr>),
     Binary(BinOp, Box<CExpr>, Box<CExpr>),
     Cond(Box<CExpr>, Box<CExpr>, Box<CExpr>),
+}
+
+/// An `f64` in JSON, infinities included: a number when finite, the string
+/// `"inf"` or `"-inf"` otherwise (JSON has no infinity, and serde_json
+/// writes `null`, which does not read back). Used for `CExpr::Num` and a
+/// pool's `cap`.
+mod real {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(untagged)]
+    enum Real {
+        Num(f64),
+        Str(String),
+    }
+
+    pub fn serialize<S: Serializer>(x: &f64, s: S) -> Result<S::Ok, S::Error> {
+        if x.is_finite() {
+            Real::Num(*x).serialize(s)
+        } else {
+            Real::Str(if *x < 0.0 { "-inf" } else { "inf" }.into()).serialize(s)
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
+        match Real::deserialize(d)? {
+            Real::Num(x) => Ok(x),
+            Real::Str(s) => match s.as_str() {
+                "inf" => Ok(f64::INFINITY),
+                "-inf" => Ok(f64::NEG_INFINITY),
+                other => Err(serde::de::Error::custom(format!(
+                    "expected a number, \"inf\" or \"-inf\", found \"{other}\""
+                ))),
+            },
+        }
+    }
 }
 
 pub type BlockId = usize;
@@ -260,6 +298,13 @@ pub enum CStmt {
         reuse: Option<CExpr>,
         body: BlockId,
         cache: Option<CExpr>,
+        /// The pool (one of `pools`) whose allocation outlives the scope as
+        /// a lease, and for how long at most: it stays allocated, neither
+        /// evictable nor a preemption victim, until the session's `Release`
+        /// of it, the expiry, or the session's end; then `cache` applies.
+        /// vLLM's prefiller keeps a finished request's blocks this way for
+        /// the decoder's read (`delay_free_blocks`).
+        lease: Option<(CRef, CExpr)>,
     },
     Grow(CRef, CExpr),
     Drop(CRef),
@@ -303,6 +348,9 @@ pub struct CSpill {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CPool {
     pub name: String,
+    /// Capacity in units; `inf` (a pool without `cap`) is the string
+    /// `"inf"` in JSON, as for `CExpr::Num`.
+    #[serde(with = "real")]
     pub cap: f64,
     pub block: Option<f64>,
     pub evict: CEvict,
@@ -786,6 +834,7 @@ impl Validator<'_> {
                 reuse,
                 body,
                 cache,
+                lease,
             } => {
                 // the header is read when the scheduler admits; `cache` when
                 // the session releases
@@ -801,6 +850,10 @@ impl Validator<'_> {
                 }
                 if let Some(e) = cache {
                     self.expr(e, m)?;
+                }
+                if let Some((r, t)) = lease {
+                    self.cref(r, np, "pool", m)?;
+                    self.expr(t, m)?;
                 }
                 self.block(*body)
             }

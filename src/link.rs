@@ -56,6 +56,9 @@ struct Linker<'a> {
     /// linked, as written, for `release` and `load`, which act on an
     /// enclosing hold: `hold kv[i]` encloses `release kv[i]`, not `kv[j]`.
     held: Vec<Ref>,
+    /// Pool references some hold of the program leases, as written: a
+    /// `release` of one may stand outside any hold of it.
+    leased: Vec<Ref>,
     prog: &'a Program,
 }
 
@@ -73,6 +76,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         stages: HashMap::new(),
         blocks: vec![],
         held: vec![],
+        leased: vec![],
         prog,
     };
     for a in BUILTIN_ATTRS {
@@ -118,6 +122,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         collect_attrs(&w.turn, &mut lk);
     }
     collect_attrs(&prog.session, &mut lk);
+    collect_leases(&prog.session, &mut lk.leased);
     // An attribute would shadow a constant of the same name everywhere
     // (a stage's cost has no session, so the constant would read as NaN).
     for (name, _) in &prog.lets {
@@ -340,6 +345,28 @@ fn member(base: usize, count: usize, i: usize, n: usize, who: &str, what: &str) 
     }
 }
 
+/// Every pool reference a hold leases, anywhere in the session.
+fn collect_leases(stmts: &[Stmt], out: &mut Vec<Ref>) {
+    for s in stmts {
+        match s {
+            Stmt::Hold { body, lease, .. } => {
+                if let Some((r, _)) = lease
+                    && !out.contains(r)
+                {
+                    out.push(r.clone());
+                }
+                collect_leases(body, out);
+            }
+            Stmt::Loop(body) => collect_leases(body, out),
+            Stmt::Branch(_, a, b) => {
+                collect_leases(a, out);
+                collect_leases(b, out);
+            }
+            _ => {}
+        }
+    }
+}
+
 fn collect_attrs(stmts: &[Stmt], lk: &mut Linker) {
     for s in stmts {
         match s {
@@ -419,16 +446,24 @@ impl Linker<'_> {
     /// A pool reference a statement acts on through an enclosing hold
     /// (`release`, `load`): the statement must be inside a hold that names
     /// the pool the same way, index included, or it would look for a hold
-    /// the session may not have.
-    fn enclosed_pool(&self, r: &Ref, what: &str) -> LResult<CRef> {
+    /// the session may not have. A `release` may also take a lease, so it
+    /// stands anywhere when some hold leases the pool (`or_leased`).
+    fn enclosed_pool(&self, r: &Ref, what: &str, or_leased: bool) -> LResult<CRef> {
         let cr = self.pool_ref(r)?;
-        if !self.held.contains(r) {
+        if !self.held.contains(r) && !(or_leased && self.leased.contains(r)) {
             let shown = match &r.index {
                 None => r.name.clone(),
                 Some(_) => format!("{}[…]", r.name),
             };
-            let hint = if self.held.iter().any(|h| h.name == r.name) {
-                ": write the pool as the enclosing hold does, index included"
+            let hint = if self
+                .held
+                .iter()
+                .chain(&self.leased)
+                .any(|h| h.name == r.name)
+            {
+                ": write the pool as the hold does, index included"
+            } else if or_leased {
+                ": it takes an enclosing hold's allocation, or a lease of it"
             } else {
                 ": it acts on an enclosing hold's allocation"
             };
@@ -656,6 +691,7 @@ impl Linker<'_> {
                     reuse,
                     body,
                     cache,
+                    lease,
                 } => {
                     let pools_src = pools;
                     let pools = pools
@@ -676,21 +712,34 @@ impl Linker<'_> {
                     }
                     let body = self.block(body, false)?;
                     self.held.truncate(depth);
+                    let lease = match lease {
+                        None => None,
+                        Some((r, t)) => {
+                            if !pools_src.iter().any(|(q, _, _)| q == r) {
+                                return Err(LinkError(format!(
+                                    "`lease {}`: the hold does not take that pool (write it as the hold does, index included)",
+                                    r.name
+                                )));
+                            }
+                            Some((self.pool_ref(r)?, self.expr(t)?))
+                        }
+                    };
                     CStmt::Hold {
                         pools,
                         reuse,
                         body,
                         cache,
+                        lease,
                     }
                 }
                 Stmt::Grow(r, e) => CStmt::Grow(self.pool_ref(r)?, self.expr(e)?),
                 Stmt::Drop(r) => CStmt::Drop(self.pool_ref(r)?),
                 Stmt::Release(r) => {
-                    let cr = self.enclosed_pool(r, "release")?;
+                    let cr = self.enclosed_pool(r, "release", true)?;
                     CStmt::Release(cr)
                 }
                 Stmt::Load(r, e) => {
-                    let cr = self.enclosed_pool(r, "load")?;
+                    let cr = self.enclosed_pool(r, "load", false)?;
                     CStmt::Load(cr, self.expr(e)?)
                 }
                 Stmt::Run {

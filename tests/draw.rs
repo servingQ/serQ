@@ -405,11 +405,27 @@ fn a_release_in_one_arm_does_not_reach_the_other() {
     assert!(pools_of(&p, &net, "s3").is_empty());
 }
 
+/// A leased pool stays on the stations after its hold, until the
+/// `release` that takes it.
+#[test]
+fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
+    let p = compile(
+        "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
+         workload { arrive batch(1); }
+         session { hold p (1) { run s1 (1); } lease p (inf); run s2 (1); release p; run s3 (1); end; }
+         run { horizon 10; }",
+    );
+    let net = deployment::project(&p);
+    assert_eq!(pools_of(&p, &net, "s1"), ["p"]);
+    assert_eq!(pools_of(&p, &net, "s2"), ["p"]);
+    assert!(pools_of(&p, &net, "s3").is_empty());
+}
+
 /// `programs/llmd_pd.seq`: the prompt's KV is in the prefiller's pool
-/// through the transfer and in the decoder's from the transfer on, so the
-/// link station is inside both enclosures, the prefill station in the
-/// prefiller's only and the decode station in the decoder's only. The
-/// prefiller's request slot is released before the transfer, so it
+/// through the transfer (leased past its scope) and in the decoder's from
+/// the transfer on, so the link station is inside both enclosures, the
+/// prefill station in the prefiller's only and the decode station in the
+/// decoder's only. The prefiller's request slot ends with its scope, so it
 /// encloses the prefill station alone.
 #[test]
 fn a_transfer_puts_the_link_in_both_enclosures() {

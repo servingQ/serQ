@@ -200,7 +200,9 @@ impl Walker<'_> {
                     let note = stage.index.as_ref().and_then(|i| self.claim_choose(i));
                     self.visit_stage(stage.base, label, note);
                 }
-                CStmt::Hold { pools, body, .. } => {
+                CStmt::Hold {
+                    pools, body, lease, ..
+                } => {
                     let id = self.next_hold;
                     self.next_hold += 1;
                     for (r, _, _) in &pools {
@@ -209,7 +211,15 @@ impl Walker<'_> {
                     self.walk(body);
                     // by hold, not by depth: a `release` inside may have
                     // taken an outer hold's pool off the stack already
+                    let leased = lease
+                        .as_ref()
+                        .filter(|(r, _)| self.holds.iter().any(|&(q, h)| q == r.base && h == id));
                     self.holds.retain(|&(_, h)| h != id);
+                    // a leased pool stays held past the scope, until the
+                    // `release` that takes it
+                    if let Some((r, _)) = leased {
+                        self.holds.push((r.base, id));
+                    }
                 }
                 CStmt::Release(r) => {
                     // the pool leaves the enclosure here: the stations after

@@ -1,4 +1,4 @@
-# The KV transfer: a hold that gives one pool back early
+# The KV transfer: a hold whose blocks outlive it
 
 The prefill/decode split of llm-d over vLLM's NIXL connector, checked
 against the source (llm-d `8a2f37d`, the router `13eebdb`, vLLM `0c87a197`),
@@ -68,7 +68,8 @@ queue for `memD` holding nothing. The scoped `hold` cannot write the real
 thing: `memP` is held from the prefiller's admission to the end of the read,
 `memD` from the decoder's admission to the end of the decode, and the second
 begins before the first ends without ending after it. Two scopes either nest
-or are disjoint.
+or are disjoint, and the prefiller's request is *finished* — out of its
+scope — while its blocks are still its own.
 
 Two smaller things the program also could not say: the prefiller frees the
 request's *slot* while its *blocks* stay (one hold on `reqsP, kvP` ends both
@@ -77,10 +78,11 @@ decoder (`keep` and `cached` count only what a `growing` run computed).
 
 ## After
 
-Two kernel statements, one serving form.
+One clause on a hold, two kernel statements, one serving form.
 
 ```
-release P;           // the innermost enclosing hold gives its allocation on P back now, caching per its keep
+hold P (u), … { … } cache (ℓ) lease P (t);   // P's allocation outlives the scope: until the session's release of it, t seconds, or its end
+release P;           // the enclosing hold's allocation on P, or the session's lease of it, given back now, caching per keep
 load Q (n);          // the KV of n tokens arrived: the enclosing hold's computed position on Q advances by n
 transfer (w) from P to Q (n);   // = run link (w); load Q (n); release P;
 ```
@@ -92,38 +94,44 @@ admit if reqsP[i] (1), kvP[i] (min(prompt, hit + budget_left(P[i]))) reserve (pr
       where hit = min(cachedin(kvP[i]), hitmax) {
   set c = cached;
   prefill on P[i] (prompt - c) growing kvP[i];
-  release reqsP[i];                                           // finished on P: the slot goes, the blocks stay leased
-  admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit
-        reuse (floor((known - 1) / bs) * bs)
-        where known = computed < prompt ? prompt : computed + 1 {
-    set known = computed < prompt ? prompt : computed + 1;
-    set c = cached;
-    branch (!transferred) {
-      transfer[j] (x0 + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
-      set transferred = 1;
-      set c = prompt - 1;
-    }
-    admit if reqsD[j] (1) fit {
-      prefill on D[j] (known - c) growing kvD[j];
-      decode on D[j] (o - 1 - (known - prompt)) growing kvD[j];
-    }
-  } keep (prompt + o);
-} keep (prompt);
+} keep (prompt) lease kvP[i] (inf);       // finished on P: the slot goes, the blocks wait for the decoder's read
+admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit
+      reuse (floor((known - 1) / bs) * bs)
+      where known = computed < prompt ? prompt : computed + 1 {
+  set known = computed < prompt ? prompt : computed + 1;
+  set c = cached;
+  branch (!transferred) {
+    transfer[j] (x0 + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);   // takes the lease
+    set transferred = 1;
+    set c = prompt - 1;
+  }
+  admit if reqsD[j] (1) fit {
+    prefill on D[j] (known - c) growing kvD[j];
+    decode on D[j] (o - 1 - (known - prompt)) growing kvD[j];
+  }
+} keep (prompt + o);
 ```
 
-Every line is one thing the source does (the case study has the table).
-`reqsD[j] (0) reserve (1)` is the decoder's gate for a parked request:
-there must be a free running slot, and it takes none. `transferred` is
-`do_remote_prefill`, spent after one transfer, so a request preempted on
-the decoder afterwards recomputes locally.
+The program reads in the order the request travels: the prefiller's
+scope, the decoder's scope, and between them the one line that says what
+the prefiller's `}` does *not* free. Every line is one thing the source
+does (the case study has the table). `lease kvP[i] (inf)` is
+`delay_free_blocks` with a lease the decoder's heartbeats renew; `30` would
+be a prefiller nobody heartbeats. `reqsD[j] (0) reserve (1)` is the
+decoder's gate for a parked request: there must be a free running slot,
+and it takes none. `transferred` is `do_remote_prefill`, spent after one
+transfer, so a request preempted on the decoder afterwards recomputes
+locally.
 
-The linker requires `release` and `load` to be lexically inside a hold on
-their pool; the interpreter removes the pool from the hold at the release,
-so the scope's end has nothing to give back, and a release of a pool the
-session holds nothing of is a no-op — a hold re-executed after a preemption
-reaches the statement again. `load` must fit the allocation: vLLM's decoder
-allocates the whole prompt before it reads, and a program that wants growth
-writes `grow` first.
+A lease is an allocation without a scope: it stays in `used`, it is not
+evictable, and it is not a preemption victim (no hold to unwind). It ends
+in one of three ways, all of them finite — the session's `release` of the
+pool (a `transfer … from` it), the expiry, or the session's end — and
+`cache` applies then. The linker lets a `release P` stand outside any hold
+of `P` when some hold of the program leases `P`; inside a hold it ends the
+innermost hold's allocation on `P` first. `load` must fit the allocation:
+vLLM's decoder allocates the whole prompt before it reads, and a program
+that wants growth writes `grow` first.
 
 Two consequences in the interpreter, both readings of rules the language
 already claimed:
@@ -151,10 +159,28 @@ admit via D; }` and `stage D[2] : step { memory kvD; }` mean what they say.
 
 **Not `acquire`/`free` as separate statements.** That was the lecture's
 language, and v2 folded them into a scope so that balance is syntactic and
-the memory invariant is a lemma about one command. `release` keeps that: a
-hold still bounds every lifetime, and can end one of its pools sooner. The
-invariant `allocated + cached ≤ cap` is unchanged, since a release is the
-same transition the scope's end performs.
+the memory invariant is a lemma about one command. A lease is the one
+allocation that outlives its scope, and it is bounded three ways where a
+free `acquire` was bounded by nothing: the lease names its pool at the
+scope, its expiry is a number, and the session's end collects it. The
+invariant `allocated + cached ≤ cap` is unchanged, since a lease's end is
+the same transition the scope's end performs.
+
+**Not the decoder's hold nested inside the prefiller's.** That was the
+first form of this change: `release reqsP` inside the prefiller's scope,
+the decoder's `admit if` inside it, `release kvP` inside the transfer. It
+is the same IR, and it reads as the wrong thing — a decoder admitted
+*inside* a prefiller's request — when what happens is a prefiller's request
+that ends with its blocks still pinned. The lease says that at the `}`
+where it happens, and the two scopes stand in the order the request
+travels.
+
+**Not a timed lease alone.** vLLM's first design was a single 480 s
+timeout on the prefiller, and its lease note names the two failures: a
+crashed decoder pins gigabytes for minutes, and a short timeout frees
+blocks a queued decoder was about to read. The lease here ends at the
+transfer first and at the bound second, and the bound is a number the
+program chooses.
 
 **Not a `move P -> Q` node with its own admission.** One statement that
 admits at `Q`, transfers and frees `P` would need a preemption rule of its
@@ -181,7 +207,7 @@ choose between them.
 
   ```
   book kvD (prompt) reserve (prompt);            // join D's queue; the scheduler allocates when it gets there
-  admit if reqsP (1), kvP (…) fit { prefill on P (…) growing kvP; release reqsP; }
+  admit if reqsP (1), kvP (…) fit { prefill on P (…) growing kvP; } keep (prompt) lease kvP (inf);
   enter kvD { transfer (w) from kvP to kvD (n); … }   // open the booking, waiting if it is not granted yet
   ```
 
@@ -201,15 +227,16 @@ choose between them.
   the source by line; the program's answers are not yet checked against the
   scheduler's.
 
-- **The lease's expiry is not modelled.** It fires only when a decoder
-  dies (`nixl/base_worker.py:2982-3008`); a timed release of a hold would
-  be a pool option, and there is no program that needs it.
+- **The heartbeat is a number, not a construct.** The lease's bound is
+  one expression: `inf` for a prefiller whose lease the decoder renews
+  every 5 s (`nixl/base_worker.py:3141-3170`), `30` for one nobody renews.
+  A decoder that dies mid-wait, which is what the renewal exists for
+  (`nixl/base_worker.py:2982-3008`), is not a session the language has.
 
-- **`load` and `Lean`.** Neither statement is in the Lean fragment. A
-  hold's per-pool release is the `[Free]` transition applied to one entry
-  of a hold with several, and `load` moves the position `SeqExec.lean` does
-  not keep per pool yet. The generator fails on both, so no oracle program
-  is affected.
+- **`lease`, `load` and Lean.** None of the three is in the Lean
+  fragment. A lease is the `[Free]` transition deferred to a later event,
+  and `load` moves the position `SeqExec.lean` does not keep per pool yet.
+  The generator fails on all of them, so no oracle program is affected.
 
 - **The figure.** Two enclosures that cross at the link station is the
   right picture and the layout draws them at one depth, with their glyph
@@ -220,7 +247,7 @@ choose between them.
 
 | Consumer | Gains | Pays |
 |---|---|---|
-| interpreter | the lease coupling, xPyD families, the decoder's two admissions | one release path shared with the scope's end; the victim rule; the queue order made explicit |
-| Lean | nothing yet; the fragment refuses both statements | the generator's pin moves to 5 (one line in `gen_seq_oracle.py`) |
-| oracle | nothing; the seven IR files change only in `version` | regeneration (`make oracle-ir`) |
-| reader | `release`, `load`, `transfer … from … to …`; the two-line rule for the victim and the queue order | two statements and one form to learn |
+| interpreter | the lease coupling, xPyD families, the decoder's two admissions | leases on the session with an expiry event; one release path shared with the scope's end; the victim rule; the queue order made explicit |
+| Lean | nothing yet; the fragment refuses the clause and both statements | the generator's pin moves to 5 (one line in `gen_seq_oracle.py`) |
+| oracle | nothing; the seven IR files change only in `version` and a `null` lease | regeneration (`make oracle-ir`) |
+| reader | `lease`, `release`, `load`, `transfer … from … to …`; the two-line rule for the victim and the queue order | one clause, two statements and one form to learn |
