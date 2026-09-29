@@ -239,6 +239,96 @@ decoder with room for one, a prefiller with room for two; the
 store-and-forward program prefills all six at once, the NIXL program stops
 after the decoder is full and the two leases have taken the prefiller.
 
+## On the A6000 testbed
+
+One Lambda Cloud `gpu_4x_a6000` node (four RTX A6000, 48 GB each, PCIe;
+vLLM at `0c87a197`, NIXL 1.4.1 over UCX with `cuda_ipc,cuda_copy,tcp,sm`;
+Qwen3-8B, block 16, budget 8 192, `max_num_seqs` 16 on a prefiller and 64
+on a decoder, 192 000-token KV pools) ran the deployment of
+`programs/llmd_pd_replay.seq`: one prefiller, one decoder, vLLM's own
+proxy in front (`tests/v1/kv_connector/nixl_integration/toy_proxy_server.py`
+for pull, `disagg_proxy_pushconnector_demo.py` for push), replaying the
+short-context trace of the [vLLM case study](case-study-vllm.md) — 96
+sessions sent 3 s apart, 957 requests, prompts of 2 000–30 000 token ids
+sent as ids so that every length is the trace's — with the scripts and the
+raw records in `tools/a6000/`.
+
+**The constants, from lone requests.** Fourteen requests of 512–32 000
+tokens through the proxy with nothing else in flight
+(`tools/a6000/pull1x1_probe.jsonl`, fitted by `fit_probe.py`): a transfer
+takes 10 ms + tokens / 99 800 s (13 of 14; one 32 000-token read took 1.5 s
+and was left out), a prefill 119 µs per token + 7.06 ns per token per
+context token, a decode step 24 ms, and the rest of a lone request's TTFT —
+the two proxy hops, the API servers — 63 ms. Those eight numbers are the
+`let`s of the program; nothing is fitted on the replay.
+
+**Pull, request for request** (`tools/a6000/pull1x1_s3_rounds.jsonl`,
+`compare.py`):
+
+| | measured | `llmd_pd_replay.seq` |
+|---|---|---|
+| mean TTFT | 1.300 s | 1.088 s |
+| median TTFT | 0.692 s | 0.562 s |
+| p99 TTFT | 5.98 s | 5.11 s |
+| first turns, mean | 1.284 s | 1.116 s |
+| follow-up turns, mean | 1.302 s | 1.085 s |
+| decoder's cached tokens on follow-ups, mean | 5 774 | 5 769 |
+| follow-ups with the cached count exactly right | | 742 of 861 |
+
+The cache agrees: the decoder's `cached_tokens` is the program's
+`d_cached` on 742 of 861 follow-ups, and 113 of the other 119 are one
+block (16 tokens) lower on the machine, which is the same question as the
+vLLM case study's `keep (prompt + out - 1)` — whether the block a request's
+last step fills is cached before the request is freed on the decode side of
+a transfer — and belongs to the P/D oracle. The time is under-predicted
+where the prefiller queues: requests measured under 0.5 s are predicted
+within 0.14 s, those measured above 3 s are predicted 1–2 s short, and the
+prefiller's `running` reached 10 with a 6-deep queue. The lone-request
+constants say what one request costs; what several cost together on this
+proxy — which forwards the prefill leg unstreamed and the decode leg
+streamed from one Python process — is not in them, as the A100 replay's
+two served-path constants were not in its step fit either. The prefiller's
+KV usage averaged 11 % and peaked at 77 %; the leases are short at this
+load (47 ms mean in the program).
+
+**Push, the same trace** (`NixlPushConnector` on both engines, vLLM's
+`disagg_proxy_pushconnector_demo.py`, `tools/a6000/push1x1_s3_rounds.jsonl`).
+The lone requests are the pull run's within noise up to 4 096 tokens
+(`tools/a6000/push1x1_probe.jsonl`: 0.09–0.86 s against 0.14–0.69 s) and
+one to two seconds slower at 8 192 tokens and above, where some writes stall;
+the first request paid 3.6 s for the handshake. Under the replay's load the
+deployment collapsed: the prefiller's 1 944 writes averaged 1.03 s each
+(`nixl_xfer_time_seconds` on the prefiller; 41 ms of it the submission),
+requests parked on the decoder waiting for their write held the decoder's
+KV at 94 % on average and 100 % at peak with 100 to 150 requests waiting on
+each side, the mean TTFT was 95 s and the 96 sessions took 1 468 s against
+435 s in pull mode. This is the commit's push connector as shipped
+(`vllm/distributed/kv_transfer/kv_connector/v1/nixl/push_worker.py`, one
+writer thread per rank) through a demo proxy, on one node over `cuda_ipc`;
+it is a measurement of that, not of push mode in general.
+
+The program says what such a write time does. With the pull constants and
+`x0` set to the measured 1.03 s per transfer, `llmd_pd_replay.seq` gives a
+mean TTFT of 73 s, a mean lease of 21 s, and 57 000 tokens of the decoder's
+pool allocated on average (30 %; measured 94 %): the transfers form a
+queue whose throughput is one per second against 2.2 requests per second,
+so every arrival after the first minute waits behind it, holding its blocks
+on both instances — the coupling of the lease table above, reached from the
+transfer's side. The decoder's occupancy is under-predicted because the
+program's link is a processor-sharing stage and the decoder allocates only
+when the request is taken, while the real writer serialises and the real
+decoder took every request as it came (its `waiting` was the parked ones);
+the shape is the same.
+
+Two things the runs settle about the two modes. Through a serial proxy the
+lifecycle is the one program: the same trace, the same admissions, and the
+cache agreeing request for request in pull mode. And the mode is a
+*constant* of that program, not a construct: what changed between the runs
+is `x0` (and, in an xPyD deployment, which NIC the transfer runs on), and
+with the measured constant the program predicts the collapse the run
+showed.
+
+
 ## Why you should believe it
 
 The claim is weaker than the [vLLM case study](case-study-vllm.md)'s, and
@@ -254,13 +344,19 @@ the difference is the point of saying so.
    moment the link run ends, an untaken lease ends at its bound and keeps
    its cache, a re-executed hold releases nothing twice, the prefiller
    stops when the decoder is full.
-3. **No oracle yet.** `tools/vllm_oracle.py` drives one real scheduler with
-   a fake model runner. The oracle this program wants drives two — a
-   producer and a consumer with a fake NIXL connector that reports a read
-   complete after a chosen number of steps — and compares, per request, the
-   step the decoder parks it, the step the prefiller frees its blocks and
-   the decoder's first-token step. Until it exists, the program's answers
-   are checked against what the code says, not against what it computes.
+3. **The machine, request for request.** The A6000 runs above: the
+   decoder's cached tokens agree with the program on 742 of 861 follow-ups
+   in pull mode, the lone-request constants predict a lightly loaded
+   prefiller's TTFT within 0.14 s and under-predict a queued one's by a
+   third, and the measured push-mode write time reproduces the collapse.
+   Two runs at one load, not a sweep.
+4. **No scheduler oracle yet.** `tools/vllm_oracle.py` drives one real
+   scheduler with a fake model runner. The oracle this program wants drives
+   two — a producer and a consumer with a fake NIXL connector that reports a
+   read complete after a chosen number of steps — and compares, per request,
+   the step the decoder parks it, the step the prefiller frees its blocks
+   and the decoder's first-token step. The one-block cache disagreement of
+   the pull run is the first question for it.
 
 ---
 

@@ -96,9 +96,11 @@ Two results worth naming:
   prompt, SGLang's RadixAttention — needs a content-addressed cache and is not
   written.
 - The prefill/decode program (`programs/llmd_pd.seq`) is checked against the
-  source line by line and by deterministic tests of its statements, not yet
-  against a scheduler oracle: that oracle would drive two vLLM schedulers and
-  a fake connector ([case study](case-study-pd.md)).
+  source line by line, by deterministic tests of its statements, and against
+  one A6000 run in each NIXL mode (`programs/llmd_pd_replay.seq`,
+  `tools/a6000/`), not yet against a scheduler oracle: that oracle would
+  drive two vLLM schedulers and a fake connector ([case
+  study](case-study-pd.md)).
 
 ## Against a real machine
 
