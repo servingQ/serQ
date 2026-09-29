@@ -48,5 +48,4 @@ not descriptions of an actual serving deployment. Their `mode` switch is
 part of the paired experiment: both variants draw the same work demands.
 A deployment drawing includes both topologies and should not be presented
 as the active topology for one mode. The directory README makes this scope
-explicit; real deployments are illustrated by `llmd_pd.seq` and
-`lecture_pd.seq`.
+explicit; a real deployment is illustrated by `llmd_pd.seq`.

@@ -39,7 +39,7 @@ Three things the walk deliberately does *not* do:
 | `Fifo(c)` | circle, `FIFO`, the server count when `c ≠ 1` |
 | `Ps(φ)` | circle, `PS`, with `φ` beneath |
 | `Delay` | rounded box of small circles — infinitely many servers |
-| `Step { … }` | rounded box with a token-budget bar. The lecture has no glyph for this: the colocated engine is the one stage kind it could not express |
+| `Step { … }` | rounded box with a token-budget bar: an iterating engine, not a queueing station |
 | a pool enclosing a station | dashed rounded box, options stacked in the column at its left |
 | finite `cap` | a slot grid — `cap` cells when `cap ≤ 32`, schematic above that. `kv` at 160 000 is not 160 000 squares |
 | a pool a hold caches in | a grey strip along the bottom of its box |
