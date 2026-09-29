@@ -1,3 +1,4 @@
-# Codex Auto preset: work inside this repository and request approval at the boundary.
+# Work in the repository; automatically review requests to cross the sandbox boundary.
 sandbox_mode = "workspace-write"
 approval_policy = "on-request"
+approvals_reviewer = "auto_review"
