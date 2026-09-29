@@ -1,0 +1,163 @@
+// Prefill/decode disaggregation as llm-d runs it on vLLM: the llm-d router
+// (llm-d/llm-d at 8a2f37d, llm-d/llm-d-inference-scheduler at 13eebdb) in
+// front of NP prefill and ND decode instances that hand the KV over with the
+// NIXL connector in its pull mode (ref/vllm at 0c87a197,
+// `vllm/distributed/kv_transfer/kv_connector/v1/nixl/`).
+//
+// One request: the router picks a decode pod (the least busy) and asks its
+// prefix-cache estimate how much of the prompt that pod already has; a long
+// enough uncached suffix means a remote prefill, for which it picks a prefill
+// pod (a cache-warm one, then the least loaded); a short one means the decode
+// pod prefills the prompt itself. On a remote prefill the decode pod's sidecar
+// sends the prompt to the prefiller with max_tokens = 1, waits for its
+// answer, and only then sends the decode request to its own engine. The
+// prefiller's scheduler frees the request's slot when the one token is
+// sampled but keeps its blocks leased for the decoder's read; the decoder's
+// scheduler takes the request when the whole prompt fits in its blocks and
+// parks it (WAITING_FOR_REMOTE_KVS) while its worker reads the KV from the
+// prefiller; the read done, the prefiller frees the lease (its full blocks
+// stay cached), and the decoder's request queues once more for a running slot
+// and a token of budget, recomputes the last prompt token for its logits,
+// and decodes. docs/case-study-pd.md has the line-by-line correspondence.
+let NP = 2;            // prefill instances
+let ND = 2;            // decode instances
+let B = 8192;          // max_num_batched_tokens
+let max_seqsP = 16;    // max_num_seqs on a prefiller
+let max_seqsD = 64;    // max_num_seqs on a decoder
+let blocksP = 10000;   // num_gpu_blocks on a prefiller
+let blocksD = 10000;   // num_gpu_blocks on a decoder
+let bs = 16;           // block_size
+let a = 2e-5;          // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident context token (s)
+let c0 = 0;            // fixed cost per iteration (s)
+let Bw = 2e5;          // NIXL read bandwidth into a decoder, tokens/s (128 KB per token at 25 GB/s)
+let x0 = 0.002;        // per-transfer overhead: handshake, notification (s)
+let thr = 512;         // prefix-based-pd-decider nonCachedTokens (1: the guide's always-disagg-pd-decider)
+let minp = 0;          // prefix-based-pd-decider promptTokens
+let Lambda = 0.6;      // sessions per second
+let p = 0.9;           // continue after a turn
+let Z = 3.0;           // tool time (s)
+
+pool reqsP[2] { cap max_seqsP; admit via P; }
+pool kvP[2] { cap blocksP * bs; block bs; evict lru; preempt lifo; }
+// A decoder's scheduler serves its queues in this order: the requests whose
+// KV has arrived first (vLLM's `skipped_waiting`, scheduler.py:2383-2385),
+// then the new ones, and the first that does not fit stops the step's
+// admissions.
+pool reqsD[2] { cap max_seqsD; admit via D; }
+pool kvD[2] { cap blocksD * bs; block bs; evict lru; preempt lifo; admit via D; }
+
+stage P[2] : step {
+  budget B;
+  cost c0 + max(omega + beta * (kvb + kvp), ntok * a);
+  memory kvP;
+}
+stage D[2] : step {
+  budget B;
+  cost c0 + max(omega + beta * (kvb + kvp), ntok * a);
+  memory kvD;
+}
+stage link[2] : ps(1);     // a decoder's NIC: its reads share the bandwidth
+stage tool : delay;
+
+// The client: sessions arrive, each turn brings a prompt of n new tokens on
+// a context of K and wants o tokens back, and after a turn the session calls
+// a tool and comes back with probability p.
+workload {
+  arrive poisson(Lambda);
+  hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+  init { set K = 0; }
+  turn {
+    set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
+    set o = ~exp(200) + 1;
+    set more = ~bernoulli(p);
+  }
+  session {
+    turn;
+    loop {
+      request;
+      set K = prompt + o;
+      branch (more) { tool (~exp(Z)); turn; } else { end; }
+    }
+  }
+}
+
+// The deployment: what the router, the sidecar and the two schedulers do
+// with one request.
+server {
+  set t0 = now;
+  set prompt = K + n;
+  set hitmax = floor((prompt - 1) / bs) * bs;
+  // The router. Decode profile first: the least busy decode pod
+  // (active-request-scorer). Then the decider: a remote prefill only when the
+  // prompt's uncached suffix on that pod is long enough
+  // (prefix-based-pd-decider: nonCachedTokens, promptTokens); the estimate is
+  // the router's own prefix-cache picture of the pod.
+  choose j in ND by (holders(kvD[j]) + queued(kvD[j]));
+  set hitD = min(cachedin(kvD[j]), hitmax);
+  set remote = prompt >= minp && prompt - hitD >= thr;
+  set transferred = 0;   // one KV transfer per request (nixl/pull_scheduler.py:187-189)
+  branch (remote) {
+    // Prefill profile: a pod that has the prefix (prefix-cache-affinity-filter),
+    // then the least loaded (token-load-scorer).
+    choose i in NP by ((cachedin(kvP[i]) > 0 ? 0 : 1) * 1e9 + work(P[i]) + queued(reqsP[i]));
+    // The prefiller's scheduler: a slot and the blocks of the first chunk,
+    // room for the whole prompt (scheduler_reserve_full_isl); vLLM's engine
+    // on one device (programs/vllm.seq) with no decode.
+    admit if reqsP[i] (1), kvP[i] (min(prompt, hit + budget_left(P[i]))) reserve (prompt) fit
+          where hit = min(cachedin(kvP[i]), hitmax) {
+      set c = cached;
+      prefill on P[i] (prompt - c) growing kvP[i];      // chunked; one token is sampled and discarded
+      // The request is finished on the prefiller: its slot goes, its blocks
+      // stay leased for the decoder (request_finished: delay_free_blocks).
+      release reqsP[i];
+      set t1 = now;
+      // The sidecar sends the decode request. The decoder's scheduler takes
+      // it when the whole prompt fits its blocks, at a step with budget left
+      // and a running slot free - it takes neither (the request is parked,
+      // not running) - and reuses the full blocks it has of the prompt.
+      admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit
+            reuse (floor((known - 1) / bs) * bs)
+            where known = computed < prompt ? prompt : computed + 1 {
+        set known = computed < prompt ? prompt : computed + 1;
+        set c = cached;
+        branch (!transferred) {
+          // WAITING_FOR_REMOTE_KVS: every block past the local hit is read
+          // from the prefiller over NIXL; the read done, the prefiller frees
+          // the lease. The last prompt token is recomputed for its logits.
+          observe remote_tokens = prompt - c;
+          transfer[j] (x0 + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
+          observe lease = now - t1;      // how long the prefiller's blocks stayed leased
+          set transferred = 1;
+          set c = prompt - 1;
+        }
+        // Back in the waiting queue: a running slot and a token of budget.
+        // A request preempted on the decoder afterwards recomputes what it
+        // lost here, as any local prefill would (do_remote_prefill is spent).
+        admit if reqsD[j] (1) fit {
+          prefill on D[j] (known - c) growing kvD[j];
+          branch (known == prompt) { observe ttft = now - t0; }
+          decode on D[j] (o - 1 - (known - prompt)) growing kvD[j];
+        }
+      } keep (prompt + o);
+    } keep (prompt);             // the prefiller keeps the prompt's full blocks cached
+  } else {
+    // Decode only: the decode pod prefills the prompt itself - vLLM's engine
+    // on one device (programs/vllm.seq).
+    admit if reqsD[j] (1), kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known) fit
+          where known = computed < prompt ? prompt : computed + 1,
+                hit = min(cachedin(kvD[j]), floor((known - 1) / bs) * bs) {
+      set known = computed < prompt ? prompt : computed + 1;
+      set c = min(cached, floor((known - 1) / bs) * bs);
+      observe local_tokens = known - c;
+      prefill on D[j] (known - c) growing kvD[j];
+      branch (known == prompt) { observe ttft = now - t0; }
+      decode on D[j] (o - 1 - (known - prompt)) growing kvD[j];
+    } keep (prompt + o);
+  }
+  observe remote = remote;
+  observe response = now - t0;
+}
+
+run { horizon 2000; warmup 200; seed 1; }

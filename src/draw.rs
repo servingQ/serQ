@@ -90,6 +90,9 @@ struct Draw<'a> {
     show_set: bool,
     /// Tails still open at the bottom of the figure, by pool.
     open_tails: Vec<(usize, f64)>,
+    /// Rows at which a `release` gave a pool back before its hold ended, by
+    /// pool; the hold's band for that pool stops there.
+    released: Vec<(usize, f64)>,
     /// Per hold body, the pools its `cache` clause can leave units in.
     cache_targets: std::collections::BTreeMap<usize, Vec<usize>>,
 }
@@ -209,6 +212,17 @@ impl<'a> Draw<'a> {
                     format!("grow {} ({})", self.p.show_pool_ref(r), self.p.show_expr(d)),
                 );
             }
+            CStmt::Load(r, n) => {
+                self.marker(
+                    "+",
+                    format!("load {} ({})", self.p.show_pool_ref(r), self.p.show_expr(n)),
+                );
+            }
+            CStmt::Release(r) => {
+                let y = self.y;
+                self.marker("]", format!("release {}", self.p.show_pool_ref(r)));
+                self.released.push((r.base, y));
+            }
             CStmt::Run {
                 stage,
                 mode,
@@ -276,6 +290,15 @@ impl<'a> Draw<'a> {
                 for (r, units, reserve) in pools {
                     let Some(x) = self.col_x(r.base) else {
                         continue;
+                    };
+                    // a `release` inside the body ended this pool's hold early
+                    let bottom = match self
+                        .released
+                        .iter()
+                        .rposition(|&(q, y)| q == r.base && y > top && y <= bottom)
+                    {
+                        Some(i) => self.released.remove(i).1,
+                        None => bottom,
                     };
                     if let Some(fx) = reserve {
                         let fr = Rect::new(x + 3.0, top - 3.0, COL_W - 6.0, bottom - top + 6.0);
@@ -369,6 +392,7 @@ pub fn figure(p: &Program, show_set: bool) -> Figure {
         depth: 0,
         show_set,
         open_tails: vec![],
+        released: vec![],
         cache_targets: crate::deployment::cache_targets(p),
     };
 

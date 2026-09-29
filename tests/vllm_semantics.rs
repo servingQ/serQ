@@ -136,13 +136,14 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
 /// with `computed` 0, not its 32-token allocation, so a program reading
 /// `computed` does not invent an output token it never produced (vLLM's
 /// `num_computed_tokens` is 0 for a request preempted before its first
-/// step).
+/// step). The pool is no engine's memory here: with `memory kv` a holder
+/// away from the engine is not in its `running` list and is not a victim.
 #[test]
 fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
     let src = r#"
         let bs = 16;
         pool kv { cap 6 * bs; block bs; evict lru; preempt lifo; }
-        stage engine : step { budget 1000; cost 1; memory kv; }
+        stage engine : step { budget 1000; cost 1; }
         stage svc : fifo;
         workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; } }
         session {

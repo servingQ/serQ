@@ -61,12 +61,15 @@ hold P (u) [reserve (r)] [, Q (v)]* [reuse (ρ)]
      { … } [cache (ℓ)];
 grow P (d);                        // enlarge the innermost hold
 drop P;                            // discard the own cached prefix
+release P;                         // give the enclosing hold's units of P back now
+load P (n);                        // the KV of n tokens arrived: computed position += n
 
 run S [prefill|decode] (w) [growing P];
 
 // the serving vocabulary: the same statements, named by the request lifecycle
 enter P (u) … { … } [keep (ℓ)];    // hold … cache
 prefill S;  transfer X;  decode D;  tool Z;   // run on the stage of that name
+transfer (X) from P to Q (n);      // run link (X); load Q (n); release P
                                    // (a step engine plays prefill and decode)
 prefill[j] S;  prefill on P (S);   // an instance of an array; an explicit stage
 

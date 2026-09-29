@@ -175,6 +175,12 @@ pub enum Stmt {
     },
     Grow(Ref, Expr),
     Drop(Ref),
+    /// `release P;`: the innermost enclosing hold gives its allocation on
+    /// `P` back now, caching per its clause.
+    Release(Ref),
+    /// `load P (n);`: the KV of `n` tokens arrived from outside the engine;
+    /// the innermost enclosing hold's computed position on `P` advances.
+    Load(Ref, Expr),
     Run {
         stage: Ref,
         mode: RunMode,

@@ -723,10 +723,23 @@ impl Parser {
         self.expect(&Tok::LBrace)?;
         let mut v = vec![];
         while *self.peek() != Tok::RBrace {
-            v.push(self.stmt()?);
+            self.stmt_into(&mut v)?;
         }
         self.expect(&Tok::RBrace)?;
         Ok(v)
+    }
+
+    /// One statement into `out`. A serving form is parsed here because
+    /// `transfer … from P to Q (n)` stands for three kernel statements.
+    fn stmt_into(&mut self, out: &mut Vec<Stmt>) -> PResult<()> {
+        if let Tok::Ident(s) = self.peek()
+            && let Some(role) = Role::of(s)
+        {
+            out.extend(self.serving(role)?);
+            return Ok(());
+        }
+        out.push(self.stmt()?);
+        Ok(())
     }
 
     fn reference(&mut self) -> PResult<Ref> {
@@ -856,6 +869,19 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Drop(r))
             }
+            "release" => {
+                self.advance();
+                let r = self.reference()?;
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Release(r))
+            }
+            "load" => {
+                self.advance();
+                let r = self.reference()?;
+                let e = self.paren_expr()?;
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Load(r, e))
+            }
             "run" => {
                 self.advance();
                 let stage = self.reference()?;
@@ -918,10 +944,10 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Choose { var, count, key })
             }
-            other => match Role::of(other) {
-                Some(role) => self.serving(role),
-                None => self.err(format!("unknown statement `{other}`")),
-            },
+            // the serving forms (`prefill`, `transfer`, `decode`, `tool`) are
+            // parsed by `stmt_into`, since one of them stands for several
+            // statements
+            other => self.err(format!("unknown statement `{other}`")),
         }
     }
 
@@ -1064,7 +1090,7 @@ impl Parser {
 
     /// `prefill S;`, `transfer[j] X;`, `decode on E (D) growing kv;`, ...:
     /// a `run` on the stage that plays the role.
-    fn serving(&mut self, role: Role) -> PResult<Stmt> {
+    fn serving(&mut self, role: Role) -> PResult<Vec<Stmt>> {
         let at = self.pos;
         self.advance();
         let kw = role.keyword();
@@ -1106,13 +1132,40 @@ impl Parser {
         } else {
             None
         };
+        // `transfer (w) from P to Q (n);`: the KV of `n` tokens moves from
+        // the session's hold on `P` to its hold on `Q` over the link. Sugar
+        // for `run link (w); load Q (n); release P;` - the link takes the
+        // time, the tokens count as computed at `Q`, and `P` is free.
+        if role == Role::Transfer && self.eat_kw("from") {
+            if growing.is_some() {
+                return self.err_at(
+                    at,
+                    "`transfer … from P to Q`: a transfer does not grow a pool",
+                );
+            }
+            let from = self.reference()?;
+            self.expect_kw("to")?;
+            let to = self.reference()?;
+            let units = self.paren_expr()?;
+            self.expect(&Tok::Semi)?;
+            return Ok(vec![
+                Stmt::Run {
+                    stage,
+                    mode,
+                    work,
+                    growing: None,
+                },
+                Stmt::Load(to, units),
+                Stmt::Release(from),
+            ]);
+        }
         self.expect(&Tok::Semi)?;
-        Ok(Stmt::Run {
+        Ok(vec![Stmt::Run {
             stage,
             mode,
             work,
             growing,
-        })
+        }])
     }
 
     /// The stage a role names when none is given: the stage of the role's

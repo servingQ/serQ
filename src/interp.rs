@@ -906,6 +906,16 @@ impl<'p> Interp<'p> {
                     let serial = self.sessions[sid].serial;
                     self.remove_entry(pl, serial);
                 }
+                CStmt::Release(r) => {
+                    let pl = self.pool_index(r, sid);
+                    self.release_early(sid, pl);
+                    self.try_admit_all();
+                }
+                CStmt::Load(r, e) => {
+                    let pl = self.pool_index(r, sid);
+                    let n = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
+                    self.load(sid, pl, n);
+                }
                 CStmt::Run {
                     stage,
                     mode,
@@ -1318,35 +1328,97 @@ impl<'p> Interp<'p> {
         self.removed_last
     }
 
-    fn release_hold(&mut self, sid: usize, h: &Hold) {
-        let serial = self.sessions[sid].serial;
+    fn release_hold(&mut self, sid: usize, h: &Hold<'p>) {
         for (k, &(q, alloc)) in h.pools.iter().enumerate() {
-            self.pools[q].used -= alloc;
-            self.pools[q].holders.retain(|&s| s != sid);
-            if let Some(c) = &h.cache {
-                let want = self.eval(c, &Ctx::session(sid), Which::Session).max(0.0);
-                // only what was computed can be cached: the position of a
-                // growing hold, else the whole allocation
-                let computed = if h.grown { h.pos[k] } else { alloc };
-                let keep = self.round_down(q, want.min(computed));
-                if keep > 0.0 {
-                    let snap = self.sessions[sid].attrs.clone();
-                    self.remove_entry(q, serial);
-                    let rseq = self.next_release;
-                    self.next_release += 1;
-                    self.pools[q].entries.insert(
-                        serial,
-                        CacheEntry {
-                            seq: rseq,
-                            size: keep,
-                            last: self.now,
-                            snap,
-                        },
-                    );
-                    self.pools[q].cached += keep;
-                }
+            // only what was computed can be cached: the position of a
+            // growing hold, else the whole allocation
+            let computed = if h.grown { h.pos[k] } else { alloc };
+            self.release_units(sid, q, alloc, computed, h.cache);
+        }
+    }
+
+    /// Give `alloc` units of `q` back, keeping `min(cache, computed)` of them
+    /// cached (rounded down to blocks) for the session.
+    fn release_units(
+        &mut self,
+        sid: usize,
+        q: usize,
+        alloc: f64,
+        computed: f64,
+        cache: Option<&'p CExpr>,
+    ) {
+        let serial = self.sessions[sid].serial;
+        self.pools[q].used -= alloc;
+        self.pools[q].holders.retain(|&s| s != sid);
+        if let Some(c) = cache {
+            let want = self.eval(c, &Ctx::session(sid), Which::Session).max(0.0);
+            let keep = self.round_down(q, want.min(computed));
+            if keep > 0.0 {
+                let snap = self.sessions[sid].attrs.clone();
+                self.remove_entry(q, serial);
+                let rseq = self.next_release;
+                self.next_release += 1;
+                self.pools[q].entries.insert(
+                    serial,
+                    CacheEntry {
+                        seq: rseq,
+                        size: keep,
+                        last: self.now,
+                        snap,
+                    },
+                );
+                self.pools[q].cached += keep;
             }
         }
+    }
+
+    /// `release P`: the innermost hold on `pl` gives its allocation there
+    /// back now, caching per its clause, and no longer holds `pl`; its scope
+    /// end then has nothing left there. Nothing held on `pl`: a no-op (a
+    /// hold re-executed after a preemption reaches the statement again).
+    fn release_early(&mut self, sid: usize, pl: usize) {
+        let Some(hi) = self.sessions[sid]
+            .holds
+            .iter()
+            .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
+        else {
+            return;
+        };
+        let h = &mut self.sessions[sid].holds[hi];
+        let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
+        let (q, alloc) = h.pools.remove(k);
+        let pos = h.pos.remove(k);
+        let computed = if h.grown { pos } else { alloc };
+        let cache = h.cache;
+        self.release_units(sid, q, alloc, computed, cache);
+        self.sessions[sid].preempt_pos.remove(&q);
+    }
+
+    /// `load P (n)`: the KV of `n` tokens arrived from outside the engine;
+    /// the innermost hold's position on `pl` advances by `n`, which its
+    /// allocation must cover (`grow` first, or allocate at admission, as
+    /// vLLM's decoder allocates the whole prompt before it reads).
+    fn load(&mut self, sid: usize, pl: usize, n: f64) {
+        let name = &self.p.pools[pl].name;
+        let Some(hi) = self.sessions[sid]
+            .holds
+            .iter()
+            .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
+        else {
+            panic!("`load {name}` outside a hold of `{name}`");
+        };
+        let h = &mut self.sessions[sid].holds[hi];
+        let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
+        let alloc = h.pools[k].1;
+        if h.pos[k] + n > alloc + 1e-9 {
+            panic!(
+                "`load {name} ({n})`: the hold has {alloc} allocated and {} computed; \
+                 a load must fit the allocation (grow first)",
+                h.pos[k]
+            );
+        }
+        h.pos[k] += n;
+        h.grown = true;
     }
 
     /// Allocate `units` more for the innermost hold of `sid` on `pl`.
@@ -1393,10 +1465,7 @@ impl<'p> Interp<'p> {
                     return false;
                 }
                 Preempt::Lifo => {
-                    let victim = *self.pools[pl]
-                        .holders
-                        .last()
-                        .expect("a grower holds the pool");
+                    let victim = self.lifo_victim(pl);
                     self.preempt(victim, pl);
                     if victim == sid {
                         return false;
@@ -1404,6 +1473,42 @@ impl<'p> Interp<'p> {
                 }
             }
         }
+    }
+
+    /// vLLM's `running[-1]` (scheduler.py:742-813): among the holders of
+    /// `pl` that are residents of a step stage whose memory `pl` is, the one
+    /// admitted last - by the session's latest admission, which is the
+    /// residents' serving order (`running` is in order of scheduling, and a
+    /// request that queued once more for a slot after its KV arrived took
+    /// its place then, not when its blocks were allocated). A holder that
+    /// has left the engine is not preempted: a prefiller's finished request
+    /// keeps its blocks leased for the decoder's read and is in no `running`
+    /// list, and a decoder's request waiting for that read
+    /// (`WAITING_FOR_REMOTE_KVS`) holds its blocks and is not in `running`
+    /// either. A pool that is no engine's memory: its most recently admitted
+    /// holder.
+    fn lifo_victim(&self, pl: usize) -> usize {
+        let engines: Vec<usize> = self
+            .p
+            .stages
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(&s.kind, CStageKind::Step(st) if st.memory == Some(pl)))
+            .map(|(i, _)| i)
+            .collect();
+        let holders = &self.pools[pl].holders;
+        if !engines.is_empty()
+            && let Some(s) = holders
+                .iter()
+                .copied()
+                .filter(|&s| {
+                    matches!(self.sessions[s].status, Status::InStage(x, _) if engines.contains(&x))
+                })
+                .max_by_key(|&s| self.sessions[s].adm_seq)
+        {
+            return s;
+        }
+        *holders.last().expect("a grower holds the pool")
     }
 
     fn retry_growers(&mut self, pl: usize) {

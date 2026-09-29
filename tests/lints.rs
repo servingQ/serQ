@@ -210,7 +210,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     let src =
         "pool kv[2] { cap 1e5; evict by (age, size + used(kv[size > 1e9 ? 1 : 0]) * 0, now * 0); }
         stage svc : ps (min(n, 4) + now * 0);
-        stage engine : step { budget 512 + nres + ndec + kvb * 0 + kvp * 0 + now * 0;
+        stage engine[2] : step { budget 512 + nres + ndec + kvb * 0 + kvp * 0 + now * 0;
                               chunk ndec > 0 ? 64 : 128;
                               cost 1e-3 * ntok + npre * 0 + attn * 0 + now * 0; memory kv; }
         workload { arrive poisson(0.3); turn { set n = ~exp(500); } }

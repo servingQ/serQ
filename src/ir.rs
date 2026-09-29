@@ -10,8 +10,9 @@ use serde::{Deserialize, Serialize};
 
 /// Version of the IR format. Bump on any change to the types below.
 /// 2 added the sessions' turns; 3 renamed `route` to `session`; 4 replaced
-/// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`.
-pub const IR_VERSION: u32 = 4;
+/// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`; 5 added
+/// `Release` and `Load`.
+pub const IR_VERSION: u32 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -262,6 +263,19 @@ pub enum CStmt {
     },
     Grow(CRef, CExpr),
     Drop(CRef),
+    /// Release the innermost enclosing hold's allocation on the pool now,
+    /// caching per that hold's `cache` clause; the scope's end then has
+    /// nothing left there. A pool the session holds nothing of is a no-op (a
+    /// hold re-executed after a preemption reaches the statement again). The
+    /// KV of a prefill/decode split lives in two pools whose lifetimes
+    /// overlap without nesting - the decode instance allocates before the
+    /// prefill instance frees - which a scope alone cannot say.
+    Release(CRef),
+    /// The KV of `e` tokens arrives from outside the engine (a NIXL read, an
+    /// offload tier): the innermost enclosing hold's computed position on the
+    /// pool advances by `e`, within its allocation (a program that needs
+    /// more grows first). What a `growing` run does token by token, at once.
+    Load(CRef, CExpr),
     Run {
         stage: CRef,
         mode: RunMode,
@@ -794,7 +808,11 @@ impl Validator<'_> {
                 self.cref(r, np, "pool", m)?;
                 self.expr(e, m)
             }
-            CStmt::Drop(r) => self.cref(r, np, "pool", m),
+            CStmt::Drop(r) | CStmt::Release(r) => self.cref(r, np, "pool", m),
+            CStmt::Load(r, e) => {
+                self.cref(r, np, "pool", m)?;
+                self.expr(e, m)
+            }
             CStmt::Run {
                 stage,
                 work,

@@ -52,6 +52,9 @@ struct Linker<'a> {
     pools: HashMap<String, (usize, usize)>,
     stages: HashMap<String, (usize, usize)>,
     blocks: Vec<Vec<CStmt>>,
+    /// Pool bases of the holds enclosing the statement being linked, for
+    /// `release` and `load`, which act on an enclosing hold.
+    held: Vec<usize>,
     prog: &'a Program,
 }
 
@@ -68,6 +71,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         pools: HashMap::new(),
         stages: HashMap::new(),
         blocks: vec![],
+        held: vec![],
         prog,
     };
     for a in BUILTIN_ATTRS {
@@ -158,8 +162,13 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                 })
             }
         };
-        let admit_via = p.admit_via.as_ref().map(|n| lk.stage_base(n)).transpose()?;
-        for _ in 0..p.count {
+        let admit_via = p.admit_via.as_ref().map(|n| lk.stage_span(n)).transpose()?;
+        for i in 0..p.count {
+            // `pool q[N] { admit via S; }` with `stage S[N]`: q[i] is served
+            // by S[i]; with one stage, every q[i] by it
+            let admit_via = admit_via
+                .map(|(b, c)| member(b, c, i, p.count, &p.name, "admit via"))
+                .transpose()?;
             pools.push(CPool {
                 admit_via,
                 name: p.name.clone(),
@@ -209,10 +218,20 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
             }),
         };
-        for _ in 0..s.count {
+        let memory = match &s.kind {
+            StageKind::Step(sp) => sp.memory.as_ref().map(|m| lk.pool_span(m)).transpose()?,
+            _ => None,
+        };
+        for i in 0..s.count {
+            let mut kind = kind.clone();
+            // `stage E[N] : step { memory kv; }` with `pool kv[N]`: E[i]'s
+            // memory is kv[i]; with one pool, every E[i]'s is it
+            if let (CStageKind::Step(st), Some((b, c))) = (&mut kind, memory) {
+                st.memory = Some(member(b, c, i, s.count, &s.name, "memory")?);
+            }
             stages.push(CStage {
                 name: s.name.clone(),
-                kind: kind.clone(),
+                kind,
             });
         }
     }
@@ -304,6 +323,22 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     Ok(linked)
 }
 
+/// Member `i` of an `n`-family's counterpart in a family of `count` from
+/// `base`: element for element when the counts match, the one member when
+/// there is one, and an error otherwise.
+fn member(base: usize, count: usize, i: usize, n: usize, who: &str, what: &str) -> LResult<usize> {
+    if count == n {
+        Ok(base + i)
+    } else if count == 1 {
+        Ok(base)
+    } else {
+        Err(LinkError(format!(
+            "`{who}`: `{what}` names a family of {count}, and `{who}` is a family of {n}: \
+             one for one, or one for all"
+        )))
+    }
+}
+
 fn collect_attrs(stmts: &[Stmt], lk: &mut Linker) {
     for s in stmts {
         match s {
@@ -338,6 +373,22 @@ impl Linker<'_> {
             .ok_or_else(|| LinkError(format!("unknown pool `{name}`")))
     }
 
+    /// A pool family: (base, count).
+    fn pool_span(&self, name: &str) -> LResult<(usize, usize)> {
+        self.pools
+            .get(name)
+            .copied()
+            .ok_or_else(|| LinkError(format!("unknown pool `{name}`")))
+    }
+
+    /// A stage family: (base, count).
+    fn stage_span(&self, name: &str) -> LResult<(usize, usize)> {
+        self.stages
+            .get(name)
+            .copied()
+            .ok_or_else(|| LinkError(format!("unknown stage `{name}`")))
+    }
+
     fn stage_base(&self, name: &str) -> LResult<usize> {
         self.stages
             .get(name)
@@ -362,6 +413,19 @@ impl Linker<'_> {
             Some(e) => Some(Box::new(self.expr(e)?)),
         };
         Ok(CRef { base, count, index })
+    }
+
+    /// A pool reference a statement acts on through an enclosing hold
+    /// (`release`, `load`): the statement must be inside a hold of it.
+    fn enclosed_pool(&self, r: &Ref, what: &str) -> LResult<CRef> {
+        let cr = self.pool_ref(r)?;
+        if !self.held.contains(&cr.base) {
+            return Err(LinkError(format!(
+                "`{what} {}` outside a hold of `{}`: it acts on an enclosing hold's allocation",
+                r.name, r.name
+            )));
+        }
+        Ok(cr)
     }
 
     fn pool_ref(&self, r: &Ref) -> LResult<CRef> {
@@ -594,7 +658,12 @@ impl Linker<'_> {
                         .collect::<LResult<Vec<_>>>()?;
                     let reuse = reuse.as_ref().map(|c| self.expr(c)).transpose()?;
                     let cache = cache.as_ref().map(|c| self.expr(c)).transpose()?;
+                    let depth = self.held.len();
+                    for (r, _, _) in &pools {
+                        self.held.push(r.base);
+                    }
                     let body = self.block(body, false)?;
+                    self.held.truncate(depth);
                     CStmt::Hold {
                         pools,
                         reuse,
@@ -604,6 +673,14 @@ impl Linker<'_> {
                 }
                 Stmt::Grow(r, e) => CStmt::Grow(self.pool_ref(r)?, self.expr(e)?),
                 Stmt::Drop(r) => CStmt::Drop(self.pool_ref(r)?),
+                Stmt::Release(r) => {
+                    let cr = self.enclosed_pool(r, "release")?;
+                    CStmt::Release(cr)
+                }
+                Stmt::Load(r, e) => {
+                    let cr = self.enclosed_pool(r, "load")?;
+                    CStmt::Load(cr, self.expr(e)?)
+                }
                 Stmt::Run {
                     stage,
                     mode,

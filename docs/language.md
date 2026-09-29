@@ -103,6 +103,8 @@ stmt     := turn ;                           -- next turn's attributes (workload
                  block [ cache ( expr ) ] ;
           | grow POOL ( expr ) ;
           | drop POOL ;                      -- discard the own cached prefix
+          | release POOL ;                   -- give the enclosing hold's allocation on POOL back now
+          | load POOL ( expr ) ;             -- the KV of expr tokens arrived: the enclosing hold's computed position advances
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
           | branch ( expr ) block [ else block ]          -- a test
           | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
@@ -116,6 +118,8 @@ serving  := enter POOL ( expr ) … block [ keep ( expr ) ] ;   -- as hold … c
                                              -- the same, in a server block
           | prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | transfer [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
+          | transfer [ '[' expr ']' | on STAGE ] expr from POOL to POOL ( expr ) ;
+                                             -- the KV moves: run link; load; release
           | decode   [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | tool     [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
 ```
@@ -162,6 +166,7 @@ unchanged.
 | `enter P (c) … { body } keep (ℓ);` | `hold P (c) … { body } cache (ℓ);` (`reserve`, `reuse`, several pools: as in `hold`) |
 | `prefill S;` | `run prefill (S);`, or on a step engine `E`: `run E prefill (S);` |
 | `transfer X;` | `run link (X);` |
+| `transfer (X) from P to Q (n);` | `run link (X); load Q (n); release P;` — the KV of `n` tokens moves from the session's hold on `P` to its hold on `Q`: the link takes the time, the tokens count as computed at `Q`, and `P` is given back (below, *A KV transfer*) |
 | `decode D;` | `run decode (D);`, or on a step engine `E`: `run E decode (D);` |
 | `tool Z;` | `run tool (Z);` |
 | `prefill (S) growing kv;` | `run E prefill (S) growing kv;` (`growing` passes through; a form never adds it) |
@@ -209,6 +214,36 @@ enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
 Both compile to the IR they compiled to before the rewrite
 (`src/parser.rs` tests, `tests/ir.rs`).
 
+**A KV transfer.** The lecture's replica above holds the prefill
+instance's memory through the transfer and queues for the decode instance's
+afterwards: a store-and-forward link with a buffer nobody has. A NIXL
+transfer between two vLLM instances has no buffer: the decode instance
+allocates the prompt's blocks *first*, the bytes are read into them, and the
+prefill instance frees its copy *after*. The two holds overlap without
+nesting — the destination is taken before the source is given back — which
+a scope alone cannot say, so a hold may give one of its pools back early:
+
+```
+admit if reqsP (1), kvP (…) fit … {
+  prefill on P (prompt - c) growing kvP;
+  release reqsP;                     // the request is finished on P: the slot goes, the blocks stay leased
+  admit if kvD (prompt) reserve (prompt), reqsD (0) reserve (1) fit … {
+    transfer (x0 + (prompt - c) / Bw) from kvP to kvD (prompt - 1 - c);
+    admit if reqsD (1) fit { prefill on D (1) growing kvD; decode on D (o - 1) growing kvD; }
+  } keep (prompt + o);
+} keep (prompt);
+```
+
+`release P` gives the innermost enclosing hold's allocation on `P` back
+now, caching per that hold's `keep`; the scope's end then has nothing left
+there. `load Q (n)` says the KV of `n` tokens arrived from outside the
+engine: the enclosing hold's computed position on `Q` advances by `n`
+(within its allocation), as a `growing` run's would token by token, so
+`keep` and `cached` count them. `transfer (X) from P to Q (n)` is the two
+around the link run. `programs/llmd_pd.seq` is the whole path, and
+`docs/case-study-pd.md` its line-by-line correspondence with llm-d and the
+NIXL connector.
+
 **Against vLLM.** Each form is one part of a request's life in the v1
 scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
 
@@ -217,7 +252,7 @@ scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
 | `admit if reqs (1), kv (hit + …) fit where hit = … { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
 | `prefill (n) growing kv` | prefill in chunks of the budget, a block allocated as the request advances; a missing block preempts `running[-1]` | the running loop, `scheduler.py:624-823`; `allocate_slots` at `scheduler.py:743`; `_preempt_request`, `scheduler.py:1539-1582` (`preempt lifo`) |
 | `decode (o) growing kv` | one token per iteration, a block every `block_size` tokens | the same loop and `allocate_slots` with one new token |
-| `transfer X` | the KV of a prefilled request moves to the decode instance | the KV connector: `WAITING_FOR_REMOTE_KVS` at `scheduler.py:1267`, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`, `_connector_finished`, `scheduler.py:2929`; not in `vllm.seq`, which is one device |
+| `transfer (X) from kvP to kvD (n)` inside a hold on `kvD` inside a hold on `kvP` | the KV of a prefilled request moves to the decode instance: the decoder has allocated, reads, the prefiller frees | the KV connector, `programs/llmd_pd.seq`: the decoder parks the request at `scheduler.py:1264-1294` (`WAITING_FOR_REMOTE_KVS`), its blocks allocated for the whole prompt; the read done, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; the prefiller keeps its blocks leased at `_connector_finished`, `scheduler.py:2929-2982`, and frees them at `scheduler.py:3135-3138` |
 | `} keep (prompt + o)` | release: the blocks go to the free queue, the full ones stay cached | `_free_request`, `scheduler.py:2628`; `free`, `kv_cache_manager.py:610-619`; `cache_blocks`, `kv_cache_manager.py:802-812` |
 | `tool Z; turn;` | the session thinks and comes back with a longer prompt | outside the engine: the session's next request, `add_request`, `scheduler.py:2536` |
 | `end` | the session leaves; its blocks stay in the free queue | `finish_requests`, `scheduler.py:2564` |
@@ -328,7 +363,14 @@ the same age, unusable, until evicted; other entries are evicted in the
 pool's order until allocations and cache fit; `u` units are allocated and
 the body runs. At the end of the body the units are released and
 `min(ℓ, computed)` units stay cached, rounded down to blocks (`computed`
-is the allocation, or the position a `growing` run reached). The invariant
+is the allocation, or the position a `growing` run or a `load` reached).
+`release m` inside the body does the same for `m` alone, at that point:
+the innermost enclosing hold on `m` gives its allocation there back,
+caching per its clause, and holds `m` no longer; a session that holds
+nothing on `m` releases nothing (a hold re-executed after a preemption
+reaches the statement again). `load m (n)` advances the innermost
+enclosing hold's position on `m` by `n` tokens, which its allocation must
+cover; the KV of a transfer counts as computed from then on. The invariant
 `allocated + cached ≤ cap` holds in every reachable configuration
 (`SeqLang.Step.invariant`). `end` releases every hold but *keeps* the
 session's cached prefixes: the cache does not know that a session has left
@@ -343,16 +385,27 @@ A pool marked `admit via S` is not admitted at settle time: its queue is
 served by step stage `S`, at the start of an iteration, after the
 residents have taken their tokens, while the iteration has budget left, and
 not in an iteration that preempted (vLLM's waiting loop,
-`scheduler.py:868-1128`). `budget_left(S)` then evaluates to the budget
+`scheduler.py:868-1128`). A stage that serves several queues tries them in
+the order their pools are declared, and the first head that does not fit
+stops the iteration's admissions; `programs/llmd_pd.seq` declares the
+decoder's queue of requests whose KV has arrived before its queue of new
+ones, as vLLM serves `skipped_waiting` before `waiting`
+(`scheduler.py:2383-2385`). `budget_left(S)` then evaluates to the budget
 left. Until then a waiting session's cached prefix is evictable, which is
 the *wait channel* of Lecture 5.
 
 `grow m (d)` enlarges the innermost hold on `m` by `d` (rounded to
 blocks). If it does not fit: with `preempt none` the session waits and
-resumes where it was; with `preempt lifo` the most recently admitted
-holder is preempted (vLLM `running[-1]`): its job leaves its stage, its
-hold is released with its computed prefix cached, and it re-enters the head
-of the pool's queue with the hold statement to execute again. The grower
+resumes where it was; with `preempt lifo` the holder that is a
+resident of the step stage the pool is the memory of and was admitted last
+— by the session's latest admission, the residents' serving order — is
+preempted (vLLM `running[-1]`, `scheduler.py:742-813`: a holder away from
+the engine — a prefiller's finished request keeping its blocks leased, a
+decoder's request parked for a read — is in no `running` list; a pool that
+is no engine's memory preempts its most recently admitted holder): its job
+leaves its stage, its hold is released with its computed prefix cached, and
+it re-enters the head of the pool's queue with the hold statement to
+execute again. The grower
 itself can be the victim. The re-executed hold finds `computed` set to the
 position the hold had computed (0 on a first execution and after a hold
 completes), so a program can resume rather than restart: vLLM's
@@ -546,6 +599,7 @@ two-resource replica is `programs/replica.seq` and
 | `replica.seq` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`serve decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/seq/replica_seeds.csv`, `seq_replica_and_pd.rs`) |
 | `pd_tandem.seq`, `lecture_pd.seq` | tandem PD, the lecture's disaggregated replica | capacity formulas within 2 %; stability |
 | `routing.seq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
+| `llmd_pd.seq` | llm-d's prefill/decode disaggregation on vLLM with the NIXL connector: the router, the sidecar, two prefill and two decode instances (`docs/case-study-pd.md`) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle yet |
 | `vllm.seq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
 | `vllm_single_turn.seq`, `vllm_chat.seq`, `vllm_subagents.seq` | `vllm.seq`'s engine under a single-turn, a chat and an approximated subagent workload ([case study](case-study-workloads.md)) | the engine is `vllm.seq`'s text (`tests/workloads.rs`) |
 | `vllm_request.seq` | one vLLM v1 request on the step clock; compiled per scenario to `tools/oracle/*.ir.json` | the six upstream oracle scenarios (`tests/vllm_oracle.rs`), the Lean theorems generated from the same IR |
@@ -733,6 +787,16 @@ the pinned run, so the comparison is conservative. One run per point.
   slow (a `fluid` option for the step stage is the natural extension).
 * Cache entries are per session; cross-session prefix sharing (a common
   system prompt) needs a content-addressed cache, not written yet.
+* A session is one sequence of statements, so it waits at one pool at a
+  time. NIXL's push mode lets a proxy send the decode request while the
+  prefill runs, so the decoder allocates *during* the prefill and the write
+  starts the moment it ends; `programs/llmd_pd.seq` writes the decoder's
+  admission after the prefill, which is the pull mode and the llm-d
+  sidecar's serial dispatch. A reservation a session joins now and enters
+  later is the construct for it (`docs/design/pd-transfer.md`).
+* The prefiller's lease on transferred blocks is held until the read
+  completes; its expiry (30 s, extended by the decoder's heartbeats) is not
+  modelled, since it fires only when a decoder dies.
 * One eviction order per pool; the priced orders use `price(stage, …)`
   with the stage's online estimates, as `libqueuingsim` does.
 * The Lean model covers the syntax, the pool semantics and the stage

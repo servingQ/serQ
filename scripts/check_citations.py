@@ -47,6 +47,13 @@ PATHS = {
     "sched/utils.py": "vllm/v1/core/sched/utils.py",
     "config/scheduler.py": "vllm/config/scheduler.py",
     "request.py": "vllm/v1/request.py",
+    # the NIXL connector's scheduler side (prefill/decode disaggregation)
+    "nixl/base_scheduler.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_scheduler.py",
+    "nixl/pull_scheduler.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/pull_scheduler.py",
+    "nixl/push_scheduler.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/push_scheduler.py",
+    "nixl/connector.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/connector.py",
+    "kv_connector/v1/base.py": "vllm/distributed/kv_transfer/kv_connector/v1/base.py",
+    "disagg_proxy_pushconnector_demo.py": "examples/disaggregated/disaggregated_serving/disagg_proxy_pushconnector_demo.py",
 }
 
 SOURCES = ["docs/**/*.md", "src/**/*.rs", "tests/**/*.rs", "programs/*.seq", "README.md"]
