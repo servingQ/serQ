@@ -845,7 +845,8 @@ impl<'p> Interp<'p> {
                         false
                     } else {
                         panic!(
-                            "`branch`: the guard is {pr}, not 0 or 1; a draw is written `branch with (p)`"
+                            "`branch ({})`: the guard is {pr}, not 0 or 1; a draw is written `branch with (p)`",
+                            self.p.show_expr(pe)
                         );
                     };
                     let blk = if take { *a } else { *b };

@@ -168,15 +168,18 @@ fn constant_probability_guard(p: &Program, block: usize, out: &mut Vec<String>) 
         match s {
             CStmt::Branch(g, t, e) => {
                 if let CExpr::Num(x) = g
-                    && *x > 0.0
-                    && *x < 1.0
+                    && *x != 0.0
+                    && *x != 1.0
                 {
-                    out.push(format!(
-                        "`branch ({})` is not a test: a guard is 0 or 1, and a constant \
-                         strictly between them is a probability. Write `branch with ({})`.",
-                        crate::ir::show_num(*x),
-                        crate::ir::show_num(*x)
-                    ));
+                    let g = crate::ir::show_num(*x);
+                    out.push(if *x > 0.0 && *x < 1.0 {
+                        format!(
+                            "`branch ({g})` is not a test: a guard is 0 or 1, and a constant \
+                             strictly between them is a probability. Write `branch with ({g})`."
+                        )
+                    } else {
+                        format!("`branch ({g})` is not a test: a guard is 0 or 1.")
+                    });
                 }
                 constant_probability_guard(p, *t, out);
                 constant_probability_guard(p, *e, out);

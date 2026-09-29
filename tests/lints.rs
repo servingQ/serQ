@@ -99,6 +99,14 @@ fn a_constant_probability_guard_is_rejected() {
     let e = check(src).expect_err("rejected");
     assert!(e.contains("`branch (0.8)` is not a test"), "{e}");
     assert!(e.contains("branch with (0.8)"), "{e}");
+    // a constant that is neither 0 nor 1 and not a probability either
+    let e = check(&src.replace("branch (0.8)", "branch (2)")).expect_err("rejected");
+    assert!(
+        e.contains("`branch (2)` is not a test: a guard is 0 or 1."),
+        "{e}"
+    );
+    assert!(!e.contains("branch with"), "{e}");
+    check(&src.replace("branch (0.8)", "branch (1)")).expect("0 and 1 are tests");
 }
 
 /// 0 and 1 are tests, not draws, and stay legal.
