@@ -119,6 +119,9 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 16] = [
     ("remaining", CtxVar::Remaining),
 ];
 
+/// Calls the linker folds to a constant from a declaration.
+pub const FOLDED: [&str; 1] = ["blocksize"];
+
 /// The functions a call may name, as the linker resolves them below.
 pub const FUNCTIONS: [&str; 22] = [
     "min",
@@ -660,6 +663,48 @@ impl Linker<'_> {
         self.cref(r, &self.stages, "stage")
     }
 
+    /// `blocksize(p)`: the `block` of pool `p`, a constant the linker folds,
+    /// so a definition takes the pool and not its block size beside it.
+    fn blocksize(&self, args: &[Arg]) -> LResult<f64> {
+        let r = match args {
+            [Arg::Ref(r)] => r,
+            [Arg::Expr(_)] => {
+                return Err(LinkError::new(
+                    "`blocksize` takes a pool, not an expression".into(),
+                ));
+            }
+            _ => {
+                return Err(LinkError::new(format!(
+                    "`blocksize` takes one pool, got {} argument(s)",
+                    args.len()
+                )));
+            }
+        };
+        // the reference as any pool function's: an array is indexed, and the
+        // index links (every member has the declaration's block)
+        self.pool_ref(r)?;
+        if r.index.as_deref().is_some_and(has_draw) {
+            return Err(LinkError::new(
+                "`blocksize`'s index draws, and the folded number would drop the draw".into(),
+            )
+            .at(r.span));
+        }
+        let d = self
+            .prog
+            .pools
+            .iter()
+            .find(|d| d.name == r.name)
+            .ok_or_else(|| self.unknown("pool", &r.name).at(r.span))?;
+        match &d.block {
+            Some(b) => self.const_eval(b),
+            None => Err(LinkError::new(format!(
+                "`blocksize({})`: pool `{}` has no `block`",
+                r.name, r.name
+            ))
+            .at(r.span)),
+        }
+    }
+
     /// Evaluate a constant expression (no attributes, no samples).
     fn const_eval(&self, e: &Expr) -> LResult<f64> {
         Ok(match e {
@@ -687,6 +732,14 @@ impl Linker<'_> {
                 } else {
                     self.const_eval(b)?
                 }
+            }
+            Expr::Call(f, _) if f == "blocksize" => {
+                return Err(LinkError::new(
+                    "`blocksize` is not a constant: in a constant position (a `let`, `cap`, \
+                     `block`, an array size, `horizon`, a rate) name the value with a `let` \
+                     both use"
+                        .into(),
+                ));
             }
             Expr::Call(f, args) => {
                 let xs: Vec<f64> = args
@@ -761,6 +814,7 @@ impl Linker<'_> {
                     args.iter().map(|a| self.expr(a)).collect::<LResult<_>>()?,
                 )
             }
+            Expr::Call(f, args) if f == "blocksize" => CExpr::Num(self.blocksize(args)?),
             Expr::Call(f, args) => {
                 let (fun, sig): (Fun, &[&str]) = match f.as_str() {
                     "min" => (Fun::Min, &["e", "e"]),
@@ -984,5 +1038,21 @@ pub fn binop(op: BinOp, a: f64, b: f64) -> f64 {
         BinOp::Ne => t(a != b),
         BinOp::And => t(a != 0.0 && b != 0.0),
         BinOp::Or => t(a != 0.0 || b != 0.0),
+    }
+}
+
+/// Does this expression draw?
+fn has_draw(e: &Expr) -> bool {
+    match e {
+        Expr::Located(_, inner) => has_draw(inner),
+        Expr::Sample(..) => true,
+        Expr::Num(_) | Expr::Var(_) => false,
+        Expr::Call(_, args) => args.iter().any(|a| match a {
+            Arg::Expr(x) => has_draw(x),
+            Arg::Ref(r) => r.index.as_deref().is_some_and(has_draw),
+        }),
+        Expr::Unary(_, a) => has_draw(a),
+        Expr::Binary(_, a, b) => has_draw(a) || has_draw(b),
+        Expr::Cond(c, a, b) => has_draw(c) || has_draw(a) || has_draw(b),
     }
 }

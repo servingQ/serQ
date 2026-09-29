@@ -154,7 +154,8 @@ non-zero operand is true; only a `branch` guard is held to 0 or 1),
 `~h2(mean,cv2)`, `~bernoulli(p)`; `min`, `max`, `abs`, `floor`, `ceil`,
 `sqrt`, `exp`, `ln`, `pow`; observables `queue(s)`, `busy(s)`, `work(s)`,
 `used(p)`, `free(p)`, `cachedin(p)`, `holders(p)`, `queued(p)`,
-`budget_left(step)`, `price(s, s_hit, ds)` (the online price of a miss,
+`budget_left(step)`, `blocksize(p)` (the pool's `block`, folded at link
+time), `price(s, s_hit, ds)` (the online price of a miss,
 `missPrice` with the stage's measured λ̂, ρ̂, Ŵ), `est_lambda(s)`,
 `est_rho(s)`, `est_wait(s)`; context variables `now`, `size`, `age`,
 `last`, `queued` (eviction keys and spill predicates), `n` (ps

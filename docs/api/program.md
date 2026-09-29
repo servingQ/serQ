@@ -78,7 +78,7 @@ use "../../lib/vllm.seq";
 server {
   set t0 = now;
   set prompt = K + n;
-  vllm_request(reqs, kv, engine, prompt, o, bs, t0);
+  vllm_request(reqs, kv, engine, prompt, o, t0);
   observe response = now - t0;
 }
 ```
