@@ -4,6 +4,9 @@
 //! `seq-lang draw FILE [--view deployment|session] [--format tikz|svg] [--out PATH] [--show-set]` (experimental)
 //!
 //! FILE is program text (`.seq`) or IR (`.json`, as written by `seq-lang ir`).
+//!
+//! Exit status: 0; 1 when the file does not load, an output cannot be
+//! written, or `run` reports a `stuck` session; 2 on a usage error.
 
 use std::path::Path;
 use std::process::exit;
@@ -119,6 +122,11 @@ fn main() {
                 println!("{}", r.json());
             } else {
                 print!("{}", r.text());
+            }
+            // a session preempted again without progress is a livelock the
+            // report names as `stuck`; the run is not a result
+            if r.pools.iter().any(|p| p.stuck > 0) {
+                exit(1)
             }
         }
         _ => usage(),

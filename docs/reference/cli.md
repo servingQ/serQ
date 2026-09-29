@@ -38,6 +38,14 @@ seq-lang draw  FILE [--view deployment|session] [--format tikz|svg] [--out PATH]
 | `--out PATH` | draw | write to a file instead of stdout |
 | `--show-set` | draw | include `set` statements in the session view |
 
+## Exit status
+
+| | |
+|---|---|
+| 0 | done |
+| 1 | the file does not load, an output cannot be written, or `run` reports a `stuck` session (the report is printed first) |
+| 2 | usage |
+
 ## The JSON report
 
 `observes` is an object keyed by name; `stages` and `pools` are arrays.
