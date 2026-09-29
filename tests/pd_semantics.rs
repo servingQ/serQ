@@ -300,7 +300,7 @@ fn a_re_executed_hold_releases_nothing_twice() {
 
 /// A step stage that serves several queues tries them in the order their
 /// pools are declared, and the first head that does not fit stops the
-/// step's admissions. `programs/llmd_pd.seq` relies on it: the decoder's
+/// step's admissions. `examples/pd-disaggregation/llmd_pd.seq` relies on it: the decoder's
 /// requests whose KV has arrived (its `reqsD` queue) are declared before
 /// the new ones (`kvD`), as vLLM serves `skipped_waiting` before `waiting`.
 #[test]
@@ -342,7 +342,10 @@ fn an_engine_serves_its_queues_in_declaration_order() {
 fn the_pd_program_survives_decoder_memory_pressure() {
     let src = std::fs::read_to_string(seq::program_path("llmd_pd")).unwrap();
     let ov = Overrides {
-        lets: vec![("blocksD".into(), seq::parser::parse_expr("1200").unwrap())],
+        lets: vec![(
+            "blocksD".into(),
+            seq::frontend::parser::parse_expr("1200").unwrap(),
+        )],
         horizon: Some(400.0),
         warmup: Some(50.0),
         ..Default::default()

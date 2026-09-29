@@ -9,7 +9,8 @@
 use std::path::Path;
 use std::process::exit;
 
-use seq::{Overrides, parser};
+use seq::Overrides;
+use seq::frontend::parser;
 
 fn usage(cmd: &str) -> &'static str {
     match cmd {
@@ -74,7 +75,7 @@ fn format_files(args: &[String]) {
             fail(file, "fmt expects a .seq file");
         }
         let source = std::fs::read_to_string(file).unwrap_or_else(|e| fail(file, e));
-        let formatted = seq::fmt::format(&source).unwrap_or_else(|e| fail(file, e));
+        let formatted = seq::frontend::fmt::format(&source).unwrap_or_else(|e| fail(file, e));
         if source != formatted {
             changes.push((file, formatted));
         }
@@ -236,13 +237,13 @@ fn main() {
         "ir" => println!("{}", prog.to_json()),
         "draw" => {
             let figure = match view.as_str() {
-                "deployment" => seq::deployment::figure(&prog),
-                "session" => seq::draw::figure(&prog, show_set),
+                "deployment" => seq::view::deployment::figure(&prog),
+                "session" => seq::view::session::figure(&prog, show_set),
                 v => fail(file, format!("unknown --view `{v}` (deployment, session)")),
             };
             let text = match format.as_str() {
-                "tikz" => seq::tikz::render(&figure),
-                "svg" => seq::svg::render(&figure),
+                "tikz" => seq::view::tikz::render(&figure),
+                "svg" => seq::view::svg::render(&figure),
                 f => fail(file, format!("unknown --format `{f}` (tikz, svg)")),
             };
             match &out {

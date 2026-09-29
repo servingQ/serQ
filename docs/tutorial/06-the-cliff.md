@@ -80,7 +80,7 @@ they come back.
 
 ## This is not an artefact of the model
 
-`programs/vllm_replay.seq` is this same structure fitted to an A100 running
+`examples/replay/vllm_replay.seq` is this same structure fitted to an A100 running
 Qwen3-8B, replaying a measured 333-session trace. The measured replica
 collapsed between a 3.0 s and a 2.5 s session spacing; the program predicted a
 mean TTFT of 39.1 s against 34.6 s measured, and a full-hit rate of 0.192

@@ -1,10 +1,12 @@
 //! The seQ intermediate representation (IR).
 //!
-//! The IR is the definition of a seQ program: the interpreter (`interp`) runs
+//! The IR is the definition of a seQ program: the interpreter (`engine::interp`) runs
 //! it, the Lean model is generated from it, and tools build or edit it as
-//! data. The text syntax (`parser` + `link`) is one frontend that compiles
+//! data. The text syntax (`frontend`) is one frontend that compiles
 //! to it. The format is serialised as JSON (`Program::to_json`), carries a
 //! version, and is checked on load (`Program::validate`). See `docs/ir.md`.
+
+pub mod trace;
 
 use serde::{Deserialize, Serialize};
 
@@ -550,7 +552,7 @@ impl Program {
     /// session `i mod len`, each turn setting `new`, `out`, `think`,
     /// `forced`. The program must arrive in a batch at time 0 (arrival
     /// times are the session's business, e.g. a delay of `serial * spacing`).
-    pub fn inline_trace(mut self, corpus: &crate::trace::Corpus) -> Result<Program, String> {
+    pub fn inline_trace(mut self, corpus: &crate::ir::trace::Corpus) -> Result<Program, String> {
         let n = match self.arrival {
             CArrival::Batch(n) => n,
             ref a => return Err(format!("inline_trace needs `arrive batch(n)`, not {a:?}")),

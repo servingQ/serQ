@@ -2,8 +2,8 @@
 //! and comment positions; the parser has already checked the source before
 //! this module changes whitespace.
 
-use crate::lexer::{Tok, Token, lex};
-use crate::parser;
+use crate::frontend::lexer::{Tok, Token, lex};
+use crate::frontend::parser;
 
 fn is_close(t: &Tok) -> bool {
     matches!(

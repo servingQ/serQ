@@ -5,7 +5,7 @@ separates *semantics* from *timing* when seQ and a measured run disagree.
 
 Each scheduler step lasts
     c_step + max(omega + beta * decode_kv, a * ntok + b * sum_chunks n (K + n/2))
-seconds (the cost expression of `programs/vllm_replay.seq`), the
+seconds (the cost expression of `examples/replay/vllm_replay.seq`), the
 requests carry the trace's real token ids (so prefix hashing is exact), a
 request enters the scheduler `c0` after it is sent, session i sends its
 first turn at i * spacing and turn k+1 `think` seconds after turn k

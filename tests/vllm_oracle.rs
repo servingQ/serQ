@@ -2,7 +2,7 @@
 //! `ref/vllm` at 0c87a197, `tools/vllm_oracle.py` driven with a fake model
 //! runner, rbln platform plugin disabled with `VLLM_PLUGINS=`).
 //!
-//! One program, `programs/vllm_request.seq`, is compiled to IR once per
+//! One program, `examples/oracle/vllm_request.seq`, is compiled to IR once per
 //! scenario of `tools/oracle/*.json` (the scenario's engine as constants),
 //! and the scenario's requests become the IR's explicit sessions. The
 //! result is committed as `tools/oracle/<name>.ir.json`: the IR is the
@@ -22,7 +22,8 @@
 
 use std::path::Path;
 
-use seq::{Overrides, compile_source, parser, program_path, run_ir};
+use seq::frontend::parser;
+use seq::{Overrides, compile_source, program_path, run_ir};
 use serde_json::Value;
 
 fn dir() -> std::path::PathBuf {

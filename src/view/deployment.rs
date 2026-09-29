@@ -6,13 +6,15 @@
 //! `Hold`s become the boundaries drawn around them — and lays the result out.
 //!
 //! The picture it produces is the one of Lecture 1 §2 (`fig:deployment` of
-//! `serving-queue-theory`), for which `programs/lecture_pd.seq` is the
+//! `serving-queue-theory`), for which `examples/pd-disaggregation/lecture_pd.seq` is the
 //! program. See `tests/deployment.rs`.
 
 use std::collections::BTreeMap;
 
-use crate::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt};
 use crate::ir::{CArg, CArrival, CExpr, CStageKind, CStmt, Program};
+use crate::view::figure::{
+    Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
+};
 
 // --- the projection ---------------------------------------------------------
 
@@ -412,7 +414,7 @@ pub fn project(p: &Program) -> Net {
 /// position the growing run reached, which only a grown pool has. `grow`
 /// advances the *innermost* hold holding that pool, so a `growing` run deep
 /// inside nested holds can belong to an outer one, and a hold may be grown in
-/// more than one pool. `programs/replica.seq` is the case that makes this
+/// more than one pool. `examples/multi-turn/replica.seq` is the case that makes this
 /// visible: its `hold batch (1), kv (...)` has no `growing` at all and really
 /// does keep a unit of `batch` cached.
 pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {

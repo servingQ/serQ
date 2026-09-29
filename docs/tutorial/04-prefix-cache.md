@@ -33,12 +33,12 @@ prefix is evictable. That gap is the *wait channel*, and chapter 6 is about
 what it does.
 
 **`evict lru`** orders eviction by release time. `evict by (k₁, …)` orders by
-whatever the program says — `agentic.seq` uses `evict by (queued, size)`, which
+whatever the program says — `replica.seq` uses `evict by (queued, size)`, which
 throws out queued sessions' short prefixes first.
 
 **`drop kv;`** before `end` discards the session's prefix. Without it the
 prefix survives the session, which is not an oversight: vLLM keeps a finished
-request's blocks in the free queue, and `programs/vllm.seq` models that by not
+request's blocks in the free queue, and `examples/multi-turn/vllm.seq` models that by not
 dropping.
 
 ## Running it

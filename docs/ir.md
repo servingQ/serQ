@@ -26,11 +26,11 @@ Source: `src/ir.rs`. Version: `IR_VERSION = 5` (2 added the sessions' turns;
   oracle tests run the IR. Before the IR existed, the vLLM request program
   had three hand-kept copies: the Rust test built it as a string per
   scenario, the Lean generator held a hand-written Lean version, and
-  `programs/vllm.seq` was a third variant. Now there is one file,
-  `programs/vllm_request.seq`, compiled once per scenario into
+  `examples/multi-turn/vllm.seq` was a third variant. Now there is one file,
+  `examples/oracle/vllm_request.seq`, compiled once per scenario into
   `tools/oracle/<name>.ir.json`, and both the Rust test and the Lean
   theorems read those files. The multi-turn cache scenario is the IR of
-  `programs/vllm_replay.seq` with its trace inlined
+  `examples/replay/vllm_replay.seq` with its trace inlined
   (`tools/oracle/cache_trace.ir.json`), so its Lean program is generated
   too.
 - **The workload instance is data.** Which sessions arrive with which
@@ -166,7 +166,7 @@ priced as such. What a change to `src/ir.rs` does to the version:
 - **Old files still parse, different meaning: bump, and say so in the
   release note.** An old reader parses the file and disagrees with the new
   one about what it means; the version is the only warning it gets. The
-  signal in a diff is a change to `docs/language.md` §3 or `src/interp.rs`
+  signal in a diff is a change to `docs/language.md` §3 or `src/engine/interp.rs`
   that alters what an existing statement or field does while `src/ir.rs`
   keeps the field or node. The interpreter setting `computed` on a
   preemption while the Lean fragment does not (`docs/language.md` §3,

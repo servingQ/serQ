@@ -1,6 +1,6 @@
 mod common;
 use common::{Fixture, PROGRAM, failure};
-use seq::lexer::{lex, unlex};
+use seq::frontend::lexer::{lex, unlex};
 
 #[test]
 fn unterminated_comments_point_to_the_opening_delimiter() {

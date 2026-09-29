@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::ast::*;
+use crate::frontend::ast::*;
 
 #[derive(Debug, Clone)]
 pub struct LinkError {
@@ -377,7 +377,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         seed,
         arrivals,
     };
-    crate::lint::lint(&linked).map_err(LinkError::new)?;
+    crate::frontend::lint::lint(&linked).map_err(LinkError::new)?;
     Ok(linked)
 }
 
@@ -498,7 +498,7 @@ impl Linker<'_> {
         } else {
             format!("unknown {kind} `{name}`")
         };
-        if let Some(candidate) = crate::diagnostic::suggestion(name, names.into_iter()) {
+        if let Some(candidate) = crate::frontend::diagnostic::suggestion(name, names.into_iter()) {
             message.push_str(&format!("\nhelp: did you mean {kind} `{candidate}`?"));
             if let Some(span) = self.declaration(kind, &candidate) {
                 message.push_str(&format!(

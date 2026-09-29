@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The seQ interpreter and CLI (crate seq-lang): fmt + clippy + tests (pool
 # semantics, the vLLM scheduler scenarios against the upstream oracle in
-# tools/oracle), a static check of every program in programs/, and the
+# tools/oracle), a static check of every program in examples/, and the
 # agreement of the CPU vLLM oracle with the A100 engine.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -10,9 +10,9 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --release --locked
 cargo build --release --locked --quiet
-./target/release/seq-lang fmt --check programs/*.seq docs/tutorial/programs/*.seq
+./target/release/seq-lang fmt --check examples/*/*.seq docs/tutorial/programs/*.seq
 n=0
-for f in programs/*.seq; do
+for f in examples/*/*.seq; do
   ./target/release/seq-lang check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
   for v in deployment session; do
     for fmt in tikz svg; do

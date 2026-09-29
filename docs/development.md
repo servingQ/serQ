@@ -22,19 +22,19 @@ never interpret different programs.
 ### Write, check, look
 
 ```bash
-seq-lang check programs/my.seq                       # parse, resolve names, lint
-seq-lang draw  programs/my.seq --view session --format svg --out my.svg
-seq-lang run   programs/my.seq
+seq-lang check examples/my.seq                       # parse, resolve names, lint
+seq-lang draw  examples/my.seq --view session --format svg --out my.svg
+seq-lang run   examples/my.seq
 ```
 
-`check` is what `make check` runs over every `programs/*.seq`, and it also
+`check` is what `make check` runs over every `examples/*/*.seq`, and it also
 catches the two lints (a stale header read, a draw written as a test,
 [language](language.md) §3). Draw the session view before trusting a run. It
 shows the program as the interpreter sees it, with every serving form
 rewritten to `hold` and `run`, which is where a hold that closes one
 statement too early becomes visible ([visualization](visualization/index.md)).
 
-Keep the engine and the client apart, as the programs in `programs/` do: the
+Keep the engine and the client apart, as the programs in `examples/` do: the
 pools, the stages and a `server` block for the deployment, and `workload` for
 the traffic ([the two sides](language.md#the-two-sides)). Then a question
 about traffic is an edit of `workload` alone, and a test can hold the engine
@@ -45,7 +45,7 @@ fixed ([one engine, four workloads](case-study-workloads.md)).
 A run prints one block per `observe`, stage and pool:
 
 ```
-$ seq-lang run programs/vllm.seq --horizon 300 --warmup 30
+$ seq-lang run examples/multi-turn/vllm.seq --horizon 300 --warmup 30
 run: horizon 300 warmup 30 seed 1 events 166040 arrivals 95 ended 82 turns 821 mean live 8.390
 observe        count        mean      95% CI      cv2       p99
   hit             821      0.8916 ±0.0221      0.122    1.0000
@@ -80,7 +80,7 @@ over `--set`, with a few seeds per point:
 ```bash
 for lam in 0.3 0.6 0.9; do
   for seed in 1 2 3; do
-    seq-lang run programs/vllm.seq --set Lambda=$lam --seed $seed --json \
+    seq-lang run examples/multi-turn/vllm.seq --set Lambda=$lam --seed $seed --json \
       | jq -r --arg l $lam --arg s $seed \
           '[$l, $s, .observes.ttft.mean, (.pools[] | select(.name=="kv") | .preemptions)] | @tsv'
   done
@@ -105,7 +105,7 @@ or as two programs that differ in one line, and run both on the same seeds.
 Arrivals, the workload, the sessions and eviction draw from separate random
 streams ([language](language.md) §3), but the workload and session streams
 are each shared by every session and consumed in event order
-(`src/interp.rs`, `rng_wl`, `rng_session`). So with the same seed the two
+(`src/engine/interp.rs`, `rng_wl`, `rng_session`). So with the same seed the two
 designs get the same arrival times. Once one design changes when things
 happen, the turn draws (`n`, `o`, `more`) and the tool times go to different
 sessions, and the traffic is no longer paired. To give both designs exactly
@@ -119,21 +119,21 @@ The parameters of a program are measurements, and the program says where each
 one comes from:
 
 - **An engine cost model.** Fit `cost` to measured iterations, as
-  `programs/vllm_replay.seq` does for the A100: an expression in `ntok`,
+  `examples/replay/vllm_replay.seq` does for the A100: an expression in `ntok`,
   `ndec`, `npre`, `kvb`, `kvp`, `attn`.
 - **Traffic from a trace.** `trace "file.csv"` in the `workload` replays
   sessions turn by turn. The columns are `session,turn,new,out,think,forced`
-  (`programs/data/`), and `--trace F` swaps the file without editing the
+  (`examples/replay/data/`), and `--trace F` swaps the file without editing the
   program.
 - **A quantity the program cannot compute itself.** For example, the subagent
-  wait `W` of `programs/vllm_subagents.seq` is taken from the program's own
+  wait `W` of `examples/subagent/vllm_subagents.seq` is taken from the program's own
   output. Run the program, compute the statistic from `--dump`, set it with
   `--set`, and repeat until it stops moving. Write the fixed point into the
   `let` with a comment that says how it was obtained.
 
 ### Add a program to the repository
 
-Put it in `programs/`. `make check` then links it and draws it in both views
+Put it in the `examples/` directory of its workload (`single-turn/`, `multi-turn/`, `subagent/`, `pd-disaggregation/`, `replay/`); names are unique across them. `make check` then links it and draws it in both views
 and both formats. Add a row to [language](language.md) §5 saying what it
 models and what it is checked against, and a test that checks that claim.
 A program that cites vLLM cites it as `file.py:lines`, and
@@ -149,7 +149,7 @@ There are three kinds of result, and a program meets them differently:
 |---|---|---|
 | properties of the semantics | the model, not one program | `Seq.lean`: `SeqLang.Step.invariant` (every command of the pool model keeps `allocated + cached ≤ cap`); `SeqServe.lean`: `SeqLang.Serve.serve_eq_decode_first` (without a per-request chunk cap, serving in admission order is serving decode-first) |
 | a program's outcome on a scenario | one IR file and one workload | `SeqOracle.lean`, generated: one theorem per scenario, proved by `decide +kernel` |
-| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`programs/replica.seq`), `disaggregatedReplica` (`programs/lecture_pd.seq`), with their well-formedness |
+| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`examples/multi-turn/replica.seq`), `disaggregatedReplica` (`examples/pd-disaggregation/lecture_pd.seq`), with their well-formedness |
 
 The first kind needs nothing from a program. It is about the pool model and
 the serving order, and it is not yet connected to the executable semantics
@@ -182,7 +182,7 @@ The steps:
 
 1. **seQ:** compile the program to IR once per scenario. For the request
    scenarios, `tests/vllm_oracle.rs` does this: it compiles
-   `programs/vllm_request.seq` with each scenario's engine as `let`
+   `examples/oracle/vllm_request.seq` with each scenario's engine as `let`
    overrides and its requests as explicit sessions. `make oracle-ir` writes
    `tools/oracle/<name>.ir.json`, and `make check` fails if a committed file
    is stale.

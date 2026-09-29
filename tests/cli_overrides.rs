@@ -1,6 +1,7 @@
 mod common;
 use common::{Fixture, PROGRAM, failure};
-use seq::{Overrides, compile_source, parser};
+use seq::frontend::parser;
+use seq::{Overrides, compile_source};
 
 #[test]
 fn misspelled_and_empty_override_names_do_not_produce_ir() {

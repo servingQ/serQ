@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use crate::stats::Estimate;
+use crate::engine::stats::Estimate;
 
 #[derive(Clone, Debug)]
 pub struct ObserveReport {

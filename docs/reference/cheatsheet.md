@@ -137,10 +137,3 @@ workload {
 6. **`end` keeps the session's cached prefixes.** Write `drop P;` first if you
    want them gone.
 7. **`allocated + cached ≤ cap`** holds in every reachable configuration.
-
-## Editor support
-
-Syntax files for Neovim/Vim and for anything that reads TextMate grammars are
-in [`editors/`](https://github.com/vrvrv/seQ/tree/main/editors). The pages
-here are highlighted by a Pygments lexer (`docs/hooks/seq_lexer.py`), and
-`make check` fails if any of the three falls behind the parser.

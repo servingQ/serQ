@@ -46,8 +46,8 @@ seq-lang fmt   [--check] FILE...
 `observes` is an object keyed by name; `stages` and `pools` are arrays.
 
 ```bash
-seq-lang run programs/vllm.seq --json | jq '.observes.ttft.mean'
-seq-lang run programs/vllm.seq --json | jq '.pools[] | select(.name=="kv") | .preemptions'
+seq-lang run examples/multi-turn/vllm.seq --json | jq '.observes.ttft.mean'
+seq-lang run examples/multi-turn/vllm.seq --json | jq '.pools[] | select(.name=="kv") | .preemptions'
 ```
 
 | Path | |

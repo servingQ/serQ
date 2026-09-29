@@ -3,7 +3,7 @@
 The prefill/decode split of llm-d over vLLM's NIXL connector, checked
 against the source (llm-d `8a2f37d`, the router `13eebdb`, vLLM `0c87a197`),
 and what the language had to gain to state it. Before is the repository as
-it was; After runs (`programs/llmd_pd.seq`, `tests/pd_semantics.rs`,
+it was; After runs (`examples/pd-disaggregation/llmd_pd.seq`, `tests/pd_semantics.rs`,
 `docs/case-study-pd.md`). IR version 5.
 
 ## What the systems do
@@ -53,7 +53,7 @@ buffer on the link.
 
 ## Before
 
-`programs/lecture_pd.seq` holds the prefill instance's memory through the
+`examples/pd-disaggregation/lecture_pd.seq` holds the prefill instance's memory through the
 transfer and queues for the decode instance's afterwards:
 
 ```
@@ -87,7 +87,7 @@ load Q (n);          // the KV of n tokens arrived: the enclosing hold's compute
 transfer (w) from P to Q (n);   // = run link (w); load Q (n); release P;
 ```
 
-The transfer of `programs/llmd_pd.seq`, from the server's side:
+The transfer of `examples/pd-disaggregation/llmd_pd.seq`, from the server's side:
 
 ```
 admit if reqsP[i] (1), kvP[i] (min(prompt, hit + budget_left(P[i]))) reserve (prompt) fit

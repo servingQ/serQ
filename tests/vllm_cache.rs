@@ -1,7 +1,7 @@
 //! The multi-turn prefix-cache scenario (`tools/oracle/cache_trace.*`).
 //!
 //! Its IR, `tools/oracle/cache_trace.ir.json`, is the vLLM replay program
-//! (`programs/vllm_replay.seq`) on a unit step clock with the scenario's
+//! (`examples/replay/vllm_replay.seq`) on a unit step clock with the scenario's
 //! engine, and the trace `cache_trace.csv` inlined as explicit sessions
 //! with turns: the IR carries its whole workload. Run, it gives for every
 //! turn the first-token step, the last-token step and the cached tokens
@@ -12,7 +12,8 @@
 
 use std::path::Path;
 
-use seq::{Overrides, Program, inline_trace, parser, program_path, run_ir};
+use seq::frontend::parser;
+use seq::{Overrides, Program, inline_trace, program_path, run_ir};
 
 fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")

@@ -1,6 +1,6 @@
 # `seq-lang draw`: a program as a figure
 
-**Status: experimental.** The command works and every program in `programs/`
+**Status: experimental.** The command works and every program in `examples/`
 and every IR file in `tools/oracle/` renders under `make check`, but the
 notation, the flags and the output are not stable, and `--format svg`/`tikz`
 output may change between releases. §6 lists what is not done. Design
@@ -27,7 +27,7 @@ the model: it is the same term in a second notation.
 before the IR, the vLLM request program had three hand-kept copies. A figure
 drawn by hand would be a fourth. `fig:deployment` in Lecture 1 §2 of
 `serving-queue-theory` is exactly that — hand-written TikZ for a deployment
-that `programs/lecture_pd.seq` already defines. `tests/draw.rs` asserts that
+that `examples/pd-disaggregation/lecture_pd.seq` already defines. `tests/draw.rs` asserts that
 the generated figure has that figure's topology.
 
 Both views are pure functions of `ir::Program`. They run no simulation, draw
@@ -45,7 +45,7 @@ of the session program. `deployment::project` walks it carrying a hold stack:
 |---|---|
 | **Nodes** | one per stage a `Run` reaches; a `CRef` with `count > 1` is one node labelled `[N]` |
 | **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a back edge to the body's first station) |
-| **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box — **the lecture's "instance" boundary**. A leased pool stays on the stations after its hold and a `Release` takes it off, so a KV transfer draws two boxes that cross at the link station (`programs/llmd_pd.seq`) |
+| **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box — **the lecture's "instance" boundary**. A leased pool stays on the stations after its hold and a `Release` takes it off, so a KV transfer draws two boxes that cross at the link station (`examples/pd-disaggregation/llmd_pd.seq`) |
 | **Edge labels** | a `Branch` guard, via `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
 
@@ -159,11 +159,11 @@ cheap — one `Figure`, two writers, and geometry tested instead of bytes.
 ## 5. Layout and tests
 
 ```
-src/figure.rs      the geometry a view produces and a writer consumes
-src/deployment.rs  ir::Program -> Figure   the network projection
-src/draw.rs        ir::Program -> Figure   the session projection
-src/tikz.rs        Figure -> String
-src/svg.rs         Figure -> String
+src/view/figure.rs     the geometry a view produces and a writer consumes
+src/view/deployment.rs ir::Program -> Figure   the network projection
+src/view/session.rs    ir::Program -> Figure   the session projection
+src/view/tikz.rs       Figure -> String
+src/view/svg.rs        Figure -> String
 ```
 
 `Figure` is the test surface; no writer decides a coordinate. `tests/draw.rs`

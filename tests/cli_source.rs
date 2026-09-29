@@ -1,6 +1,7 @@
 mod common;
 use common::{Fixture, PROGRAM, failure};
-use seq::{Overrides, compile_source, parser};
+use seq::frontend::parser;
+use seq::{Overrides, compile_source};
 
 #[test]
 fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {

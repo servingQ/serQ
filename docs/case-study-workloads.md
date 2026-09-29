@@ -10,7 +10,7 @@ time a session spends outside the engine. [The vLLM case study](case-study-vllm.
 workload fixed and checked the engine against the real scheduler. This page
 holds the engine fixed and changes the client.
 
-The four programs below run `programs/vllm.seq`'s engine line for line: the
+The four programs below run `examples/multi-turn/vllm.seq`'s engine line for line: the
 constants from `B` to `c0`, `pool kv` to the end of `stage engine`, and the
 `server` block. `tests/workloads.rs` fails if one of them drifts, so the only
 thing that differs between them is what is written inside `workload`.
@@ -29,8 +29,8 @@ told `max_tokens`, not the length of the answer, so no scheduling key may read
 
 ## Single turn
 
-```seq title="programs/vllm_single_turn.seq"
---8<-- "programs/vllm_single_turn.seq:workload"
+```seq title="examples/single-turn/vllm_single_turn.seq"
+--8<-- "examples/single-turn/vllm_single_turn.seq:workload"
 ```
 
 `session { turn; request; end; }` is the whole client: one request, then the
@@ -51,8 +51,8 @@ prefix cannot be written yet.
 
 ## Multi-turn chat
 
-```seq title="programs/vllm_chat.seq"
---8<-- "programs/vllm_chat.seq:workload"
+```seq title="examples/multi-turn/vllm_chat.seq"
+--8<-- "examples/multi-turn/vllm_chat.seq:workload"
 ```
 
 Turns are what make the cache matter. Each turn sends back the whole
@@ -65,11 +65,11 @@ say it was.
 
 ## Multi-turn agent
 
-```seq title="programs/vllm.seq"
---8<-- "programs/vllm.seq:workload"
+```seq title="examples/multi-turn/vllm.seq"
+--8<-- "examples/multi-turn/vllm.seq:workload"
 ```
 
-This is `programs/vllm.seq`, the program the vLLM case study checks. Its
+This is `examples/multi-turn/vllm.seq`, the program the vLLM case study checks. Its
 shape is the same as the chat's. The differences are only in the numbers: the
 gap is a tool call (3 s rather than 20 s), each turn brings back a tool's
 output (`~exp(500)` new tokens rather than `~exp(100)`), and the first prompt
@@ -87,8 +87,8 @@ the IR](design/subagents.md) explains why that needs two new statements,
 `spawn` and `join`. Until those exist, the program below approximates
 subagents, and it is useful to see exactly what the approximation gives up.
 
-```seq title="programs/vllm_subagents.seq"
---8<-- "programs/vllm_subagents.seq:workload"
+```seq title="examples/subagent/vllm_subagents.seq"
+--8<-- "examples/subagent/vllm_subagents.seq:workload"
 ```
 
 The approximation has three parts:
@@ -102,7 +102,7 @@ The approximation has three parts:
 - **The parent waits a constant.** A delegating turn runs
   `run delegate (W)` on a `delay` stage. `W` comes from a previous run: the
   mean of the slowest of `k` `subagent` samples. For this program,
-  `seq-lang run programs/vllm_subagents.seq --dump out` followed by that
+  `seq-lang run examples/subagent/vllm_subagents.seq --dump out` followed by that
   statistic over `out/subagent.csv` returns 14.7 s when `W = 14.7`, which is
   the fixed point.
 - **A subagent's context is its own.** It starts from `K ~ uniform(2000,

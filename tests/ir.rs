@@ -7,9 +7,10 @@ use std::path::Path;
 use seq::{Overrides, Program, compile_source, run_ir, run_source};
 
 fn programs() -> Vec<std::path::PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("programs");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
     let mut v: Vec<_> = std::fs::read_dir(&dir)
         .unwrap()
+        .flat_map(|g| std::fs::read_dir(g.unwrap().path()).unwrap())
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|e| e == "seq"))
         .collect();
@@ -262,7 +263,7 @@ fn a_draw_is_labelled_w_p() {
         session { turn; loop { run svc (1); branch with (0.8) { run tool (Z); turn; } else { end; } } }
         run { horizon 100; }";
     let p = seq::compile_source(src, &seq::Overrides::default()).unwrap();
-    let svg = seq::svg::render(&seq::deployment::figure(&p));
+    let svg = seq::view::svg::render(&seq::view::deployment::figure(&p));
     assert!(
         svg.contains("w.p. 0.8"),
         "the deployment view labels the draw"
@@ -271,7 +272,7 @@ fn a_draw_is_labelled_w_p() {
         !svg.contains("~bernoulli"),
         "and does not leak the desugaring"
     );
-    let svg = seq::svg::render(&seq::draw::figure(&p, false));
+    let svg = seq::view::svg::render(&seq::view::session::figure(&p, false));
     assert!(svg.contains("w.p. 0.8"), "the session view labels it too");
 }
 

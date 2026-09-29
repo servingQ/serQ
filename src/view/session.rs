@@ -1,6 +1,6 @@
 //! The session view: one session's path, at full fidelity.
 //!
-//! The deployment view (`crate::deployment`) quotients the session program
+//! The deployment view (`crate::view::deployment`) quotients the session program
 //! to its stages. This one keeps every statement. Its subject is the thing a
 //! flowchart cannot show: `hold` is a *scope*, so it is drawn as a band — a
 //! region of a pool's column occupied over a span of the program — and the
@@ -12,8 +12,8 @@
 //! does carry is *when* a width is decided — a solid edge for a width the
 //! constants fix, a dashed one for a width evaluated at admission.
 
-use crate::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, TextSize, pt};
 use crate::ir::{CExpr, CRef, CStageKind, CStmt, Program, RunMode};
+use crate::view::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, TextSize, pt};
 
 const ROW_H: f64 = 26.0;
 const COL_W: f64 = 168.0;
@@ -133,7 +133,7 @@ impl Draw<'_> {
             self.open_tails.push((pool, to));
         }
     }
-    fn under_note(&mut self, at: crate::figure::Point, text: String) {
+    fn under_note(&mut self, at: crate::view::figure::Point, text: String) {
         self.under.push(Item::Text {
             at,
             text,
@@ -480,7 +480,7 @@ pub fn figure(p: &Program, show_set: bool) -> Figure {
         open_tails: vec![],
         released: vec![],
         leases: vec![],
-        cache_targets: crate::deployment::cache_targets(p),
+        cache_targets: crate::view::deployment::cache_targets(p),
     };
 
     for (i, &pool) in cols.iter().enumerate() {

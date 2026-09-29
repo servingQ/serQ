@@ -43,7 +43,7 @@ product. Argued in #8, in the order they bite:
    where being wrong produces a wrong *answer* rather than a slow reader.
 1. **Intention-revealing.** The program should say what it means, not how it
    computes it. A serving engineer who does not know seQ should be able to read
-   `programs/vllm.seq` as vLLM.
+   `examples/multi-turn/vllm.seq` as vLLM.
 2. **Policy is written in the program, not in the language.** The test: for every
    construct, can a program state the opposite? The language may supply a
    *mechanism* a program selects and parameterises, not a *rule* it would
@@ -105,8 +105,8 @@ GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.proj
 REST API instead — `gh api -X PATCH repos/vrvrv/seQ/pulls/N --input -` with a
 JSON body, or `.../issues/N`. Creating works; only editing is affected.
 
-PR titles are Conventional Commits, `type(scope): subject`; CI checks it
-(`.github/workflows/pr-title.yml`).
+PR titles are Conventional Commits, `type(scope): subject`, and the subject is
+written in English; CI checks the form (`.github/workflows/pr-title.yml`).
 
 Branch from `origin/main`, not from whatever `main` points at locally:
 `git fetch && git checkout -b <name> origin/main`. Three branches were built

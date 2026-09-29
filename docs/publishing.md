@@ -14,7 +14,7 @@ you add here as published.
 `main` builds with `mkdocs build --strict` and deploys through
 `actions/deploy-pages`, rather than `mkdocs gh-deploy`, so the site is always
 rebuilt from the commit it describes. A pull request touching `docs/`,
-`programs/` or `mkdocs.yml` builds and uploads the result as a `site`
+`examples/` or `mkdocs.yml` builds and uploads the result as a `site`
 artifact but does not deploy — download it from the run to review a change
 before it lands.
 

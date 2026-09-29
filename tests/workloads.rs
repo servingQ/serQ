@@ -1,7 +1,7 @@
 //! One engine, four workloads (`docs/case-study-workloads.md`).
 //!
 //! The case study's claim is that the single-turn, chat and subagent programs
-//! run `programs/vllm.seq`'s engine and differ from it only in the client.
+//! run `examples/multi-turn/vllm.seq`'s engine and differ from it only in the client.
 //! The engine is the text a reader would compare: the constants from `B` to
 //! `c0`, the declarations from `pool kv` to the end of `stage engine`, and the
 //! `server` block. Held to the text, not the IR, because the server is spliced

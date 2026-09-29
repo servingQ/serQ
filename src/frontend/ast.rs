@@ -7,7 +7,7 @@
 //! `server { … }` arrives here with the server spliced into the session:
 //! the split is the parser's. See `docs/language.md` for the semantics.
 
-pub use crate::diagnostic::Span;
+pub use crate::frontend::diagnostic::Span;
 
 pub use crate::ir::{BinOp, Preempt, RunMode, UnOp};
 
