@@ -208,14 +208,15 @@ A100-shaped step cost of `examples/multi-turn/vllm.seq`, a 200 000 token/s link.
 **The decider.** The guide's `always-disagg-pd-decider` sends every prompt
 to a prefiller; the `prefix-based-pd-decider` keeps a follow-up turn whose
 context the decoder already has on the decoder. At 0.6 sessions per
-second:
+second, the median over seeds 1–5 (`--seed N --set thr=…`; one seed's mean
+TTFT lies up to 40 % from the median, most at `never`):
 
 | `thr` (nonCachedTokens) | remote prefills | mean TTFT | mean response |
 |---|---|---|---|
-| 1 (always) | 100 % | 46.6 ms | 90.6 ms |
+| 1 (always) | 100 % | 44.1 ms | 87.7 ms |
 | 512 | 65 % | 40.6 ms | 84.4 ms |
-| 2 048 | 30 % | 39.6 ms | 83.7 ms |
-| never (decode only) | 0 % | 66.0 ms | 120.1 ms |
+| 2 048 | 30 % | 39.5 ms | 83.4 ms |
+| never (decode only) | 0 % | 58.0 ms | 108.7 ms |
 
 Disaggregating everything costs a transfer per request, disaggregating
 nothing costs every decoder a prefill in its decode steps, and the decider

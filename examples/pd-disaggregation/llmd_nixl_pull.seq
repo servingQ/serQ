@@ -147,7 +147,7 @@ server {
   } else {
     // Decode only: the decode pod prefills the prompt itself - vLLM's engine
     // on one device (examples/multi-turn/vllm.seq).
-    admit if reqsD[j] (1), kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known) fit
+    admit if kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known), reqsD[j] (1) fit
           where known = computed < prompt ? prompt : computed + 1,
                 hit = min(cachedin(kvD[j]), reusable(known, bs)) {
       set c = min(cached, reusable(known, bs));
