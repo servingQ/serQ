@@ -70,3 +70,8 @@ to another command are rejected rather than ignored. `--seed` takes an unsigned
 integer, `--horizon` a finite positive number, and `--warmup` a finite nonnegative
 number. Program loading and validation errors exit with code 1. Failed commands
 do not write a report to stdout.
+
+Trace CSV errors identify the actual trace path, row, and column name, followed
+by a correction hint. Paths declared in the program are relative to its directory;
+`--trace` paths are relative to the current directory. `run` and
+`ir --inline-trace` use the same trace diagnostics.
