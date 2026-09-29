@@ -1,18 +1,10 @@
-// vLLM v1 on one device (ref/vllm at 0c87a197, `vllm/v1/core/sched/
-// scheduler.py`, `kv_cache_manager.py`, `block_pool.py`), as a seQ
-// program. Continuous batching with chunked prefill: every iteration hands
-// a token budget to the running requests in admission order (one token per
-// decoding request, up to `chunk` per prefilling one), then admits waiting
-// requests FCFS while the request cap and the KV blocks allow, the first
-// that does not fit blocking the rest. KV memory is a block pool with a
-// block-level LRU prefix cache: a finished (or preempted) request's full
-// blocks stay cached and are evicted tail first when the free queue is
-// drained; the next turn of a session reuses its cached prefix (full blocks,
-// never the whole prompt). A request grows one block at a time as it
-// decodes; when no block is free the most recently admitted request is
-// preempted (its blocks freed to the cache, it re-enters the waiting queue
-// at the head and recomputes what was lost). See docs/language.md
-// §"vLLM" for the line-by-line correspondence.
+// vLLM v1 serving agents that delegate to subagents, approximated: seQ has
+// no statement that creates a session (docs/design/subagents.md), so the
+// subagents arrive as sessions of their own in the same Poisson stream,
+// and a parent waits for them at a delay stage for `W`, the time the
+// slowest of its subagents took in a previous run. The engine is
+// `programs/vllm.seq`'s line for line (docs/case-study-workloads.md).
+// `--set q=0` is the same agents without subagents.
 let B = 8192;          // max_num_batched_tokens
 let max_seqs = 16;     // max_num_seqs
 let blocks = 10000;    // num_gpu_blocks (less the null block)
@@ -22,9 +14,15 @@ let a = 2e-5;          // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
 let c0 = 0;            // fixed cost per iteration (s)
-let Lambda = 0.3;      // sessions per second
-let p = 0.9;           // continue after a turn
+let Lambda = 0.1;      // agent sessions per second
+let p = 0.9;           // the agent continues after a turn
 let Z = 3.0;           // tool time (s)
+let q = 0.3;           // a turn delegates instead of calling a tool
+let k = 3;             // subagents per delegation
+let pc = 0.7;          // a subagent continues after a turn
+let W = 14.7;          // the wait for the subagents (s): the mean of the longest of k
+                       // `subagent` samples of a previous run (`--dump`)
+let kids = q * k * p / (1 - p);   // subagents per agent session (a last turn does not delegate)
 
 pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
 pool reqs { cap max_seqs; }
@@ -36,32 +34,44 @@ stage engine : step {
   memory kv;
 }
 stage tool : delay;
+stage delegate : delay;
 
 // --8<-- [start:workload]
-// The client: sessions arrive, each turn brings a prompt of n new tokens
-// on a context of K and wants o tokens back, and after a turn the session
-// calls a tool and comes back with probability p. Nothing here is vLLM.
+// An arrival is a subagent with probability kids / (1 + kids), so the
+// stream carries both at the rate the parents would create them. A
+// subagent starts from a context of its own: the parent's context it
+// copies is not shared across sessions (docs/language.md §9).
 workload {
-  arrive poisson(Lambda);
+  arrive poisson(Lambda * (1 + kids));
   hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
-  init { set K = 0; }
+  init {
+    set sub = ~bernoulli(kids / (1 + kids));
+    set K = sub ? ~uniform(2000, 6000) : 0;
+    set t_s = now;
+  }
   turn {
     set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
     set o = ~exp(200) + 1;
-    set more = ~bernoulli(p);
+    set more = ~bernoulli(sub ? pc : p);
+    set fan = sub ? 0 : ~bernoulli(q);
   }
   session {
     turn;
     loop {
       request;
       set K = prompt + o;
-      branch (more) { tool (~exp(Z)); turn; } else { end; }
+      branch (more) {
+        branch (fan) { run delegate (W); } else { tool (~exp(Z)); }
+        turn;
+      } else {
+        branch (sub) { observe subagent = now - t_s; }
+        end;
+      }
     }
   }
 }
 // --8<-- [end:workload]
 
-// The engine: what vLLM does with one request.
 server {
   set t0 = now;
   set prompt = K + n;

@@ -88,6 +88,7 @@ is ordinary control flow: `branch`, `loop`, `end`.
 | build it and run something | [Getting started](getting-started.md) |
 | learn the language from scratch | [Tutorial](tutorial/index.md) — six chapters, each a runnable program |
 | see a real system written in it | [Case study: vLLM v1](case-study-vllm.md) |
+| see one engine serve single-turn, chat and agent traffic | [Case study: one engine, four workloads](case-study-workloads.md) |
 | look something up | [Cheatsheet](reference/cheatsheet.md), [CLI](reference/cli.md) |
 | know why any of this should be believed | [How seQ is checked](validation.md) |
 

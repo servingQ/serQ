@@ -547,6 +547,7 @@ two-resource replica is `programs/replica.seq` and
 | `pd_tandem.seq`, `lecture_pd.seq` | tandem PD, the lecture's disaggregated replica | capacity formulas within 2 %; stability |
 | `routing.seq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
 | `vllm.seq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
+| `vllm_single_turn.seq`, `vllm_chat.seq`, `vllm_subagents.seq` | `vllm.seq`'s engine under a single-turn, a chat and an approximated subagent workload ([case study](case-study-workloads.md)) | the engine is `vllm.seq`'s text (`tests/workloads.rs`) |
 | `vllm_request.seq` | one vLLM v1 request on the step clock; compiled per scenario to `tools/oracle/*.ir.json` | the six upstream oracle scenarios (`tests/vllm_oracle.rs`), the Lean theorems generated from the same IR |
 | `vllm_replay.seq` | vLLM v1 on the A100 testbed replaying the short-context trace | ten measured runs (Section 8) |
 
