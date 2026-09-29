@@ -25,7 +25,8 @@ walks the session program carrying a hold stack:
 Three things the walk deliberately does *not* do:
 
 - **Two runs at the same stage in a row** are two visits, not a flow between
-  stations. `vllm.seq` prefills and decodes at one engine; there is no arrow.
+  stations. `vllm.seq` prefills and decodes at one engine; there is no arrow
+  (below).
 - **A chain of guards that moves nobody** collapses to one edge.
   `routing.seq`'s five sibling `branch (policy == k)` blocks would otherwise
   multiply out to 68 edges with labels like `else, 0 == 0, 0 == 1, …`.
@@ -34,9 +35,8 @@ Three things the walk deliberately does *not* do:
 
 ![vLLM v1: one engine](../assets/vllm.deployment.svg)
 
-`examples/multi-turn/vllm.seq` prefills and decodes a request at one `step`
-engine, inside its request slot (`reqs`) and its KV blocks (`kv`): one
-station, and no arrow between the two phases. The dashed arrow is the next
+That is `examples/multi-turn/vllm.seq`, inside its request slot (`reqs`)
+and its KV blocks (`kv`). The dashed arrow back to `engine` is the next
 turn, after the tool call.
 
 ## Glyphs
