@@ -11,7 +11,8 @@ tests read; `.seq` is one frontend. So:
 
 - `IR_VERSION` identifies meaning, not shape (`docs/ir.md` §Stability): a
   removed, renamed or retyped field bumps it, and so does a change of meaning
-  under the same shape; an added field or a stricter check does not, and a
+  under the same shape, whatever the serde attributes (`turns` bumped 2); an
+  added field a reader may ignore, or a stricter check, does not, and a
   version without a tag accumulates changes under one number;
 - `serving-queue-theory`'s `scripts/gen_seq_oracle.py` pins that version and
   reads the IR by field name — it has to move in the same change;
