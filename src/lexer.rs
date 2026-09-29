@@ -201,7 +201,14 @@ pub fn lex(src: &str) -> Result<Vec<Token>, LexError> {
                 }
                 i += 1;
             }
-            i = (i + 2).min(n); // an unterminated block comment runs to the end
+            if i == n {
+                return Err(LexError {
+                    line: sline,
+                    col: scol,
+                    msg: "unterminated block comment\nhelp: close this comment with `*/`".into(),
+                });
+            }
+            i += 2;
             col += 2;
             pending.push(Trivia {
                 kind: TriviaKind::Block,
@@ -398,7 +405,7 @@ mod tests {
             "// leading\n\nlet a = 1; /* mid */ let b = \"two words\";\n",
             "  ",
             "",
-            "let a = 1; /* unterminated",
+            "let a = 1; /* terminated */",
             "\u{fffd}dent",
         ] {
             let Ok(toks) = lex(src) else { continue };
