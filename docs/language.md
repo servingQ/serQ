@@ -160,13 +160,19 @@ unchanged.
 | Serving form | Kernel |
 |---|---|
 | `enter P (c) … { body } keep (ℓ);` | `hold P (c) … { body } cache (ℓ);` (`reserve`, `reuse`, several pools: as in `hold`) |
-| `prefill S;` | `run prefill (S);`, or on a step engine `E`: `run E prefill (S);` |
+| `prefill W;` | `run prefill (W);`, or on a step engine `E`: `run E prefill (T);` |
 | `transfer X;` | `run link (X);` |
-| `decode D;` | `run decode (D);`, or on a step engine `E`: `run E decode (D);` |
+| `decode W;` | `run decode (W);`, or on a step engine `E`: `run E decode (T);` |
 | `tool Z;` | `run tool (Z);` |
-| `prefill (S) growing kv;` | `run E prefill (S) growing kv;` (`growing` passes through; a form never adds it) |
-| `prefill[j] S;` | `run prefill[j] (S);` (the index applies to the role's stage array) |
-| `prefill on P[j] (S);` | `run P[j] (S);`, or `run P[j] prefill (S);` when `P` is a step engine |
+| `prefill (T) growing kv;` | `run E prefill (T) growing kv;` (`growing` passes through; a form never adds it) |
+| `prefill[j] W;` | `run prefill[j] (W);` (the index applies to the role's stage array) |
+| `prefill on P[j] (W);` | `run P[j] (W);`, or `run P[j] prefill (T);` when `P` is a step engine |
+
+The argument is work in the unit of the stage it runs on, and the two
+metavariables say which: `W` is service at rate 1 on a `fifo`, `ps` or
+`delay` stage (seconds, when the program's clock is seconds), `T` is tokens
+on a step engine, the unit of its `budget`. The same form takes either;
+the Which-stage rule below decides.
 
 **Which stage.** A form finds its stage among the stages declared above
 it (declarations come first in every program here): the stage whose name
@@ -392,7 +398,11 @@ covered here has found a bug.
 **Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
 own at rate 1. `step { budget B; cost C; }`: an engine that runs
-iterations. The residents are served the way `serve` names, said once per
+iterations. A plain `run`'s work is in the unit of its stage's rate; a step
+engine's `prefill` and `decode` work is in the unit of `B`, tokens. The
+clock itself has no unit: a program whose costs are seconds runs in seconds,
+and `programs/vllm_request.seq` runs on the step clock with `cost 1`, so
+its times are iterations. The residents are served the way `serve` names, said once per
 stage: an order, `by (k₁, …)` (ascending keys evaluated for each resident
 with `decoding`, 1 for a decoding resident, `admission`, its admission
 sequence number, `remaining`, the tokens its run has left, and the
@@ -407,7 +417,7 @@ remaining run first is `serve by (remaining)`, the opposite `serve by
 one,
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); then the
-stage admits from the queues it serves. The iteration lasts `C` seconds, an
+stage admits from the queues it serves. The iteration lasts `C` on the clock, an
 expression in `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn`; its
 tokens are applied when it ends. A run of zero work completes at once. An
 iteration that schedules no token is not an iteration, unless it preempted:

@@ -66,8 +66,9 @@ run S [prefill|decode] (w) [growing P];
 
 // the serving vocabulary: the same statements, named by the request lifecycle
 enter P (u) … { … } [keep (ℓ)];    // hold … cache
-prefill S;  transfer X;  decode D;  tool Z;   // run on the stage of that name
-                                   // (a step engine plays prefill and decode)
+prefill W;  transfer X;  decode W;  tool Z;   // run on the stage of that name
+                                   // (a step engine plays prefill and decode;
+                                   //  W is in the stage's unit: seconds, or tokens on an engine)
 prefill[j] S;  prefill on P (S);   // an instance of an array; an explicit stage
 
 branch (e) { … } [else { … }]      // a test: e is 0 or 1
