@@ -68,6 +68,7 @@ pub struct Overrides {
     pub horizon: Option<f64>,
     pub warmup: Option<f64>,
     pub seed: Option<u64>,
+    pub arrivals: Option<usize>,
     /// Replaces the program's trace file (resolved against the current
     /// directory, not the program's).
     pub trace: Option<String>,
@@ -291,6 +292,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         Some(w) => {
             let a = match &w.arrive {
                 Arrival::Poisson(e) => CArrival::Poisson(lk.const_eval(e)?),
+                Arrival::Renewal(e) => CArrival::Renewal(lk.expr(e)?),
                 Arrival::Closed(e) => CArrival::Closed(lk.const_eval(e)? as usize),
                 Arrival::Batch(e) => CArrival::Batch(lk.const_eval(e)? as usize),
                 Arrival::None => CArrival::None,
@@ -321,6 +323,11 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         (Some(s), _) => *s,
         (None, Some(e)) => lk.const_eval(e)? as u64,
         (None, None) => 1,
+    };
+    let arrivals = match (ov.arrivals, &prog.run.arrivals) {
+        (Some(n), _) => Some(n),
+        (None, Some(e)) => Some(lk.const_eval(e)? as usize),
+        (None, None) => None,
     };
     if warmup >= horizon {
         return Err(LinkError::new("warmup must be below the horizon".into()));
@@ -368,6 +375,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         horizon,
         warmup,
         seed,
+        arrivals,
     };
     crate::frontend::lint::lint(&linked).map_err(LinkError::new)?;
     Ok(linked)

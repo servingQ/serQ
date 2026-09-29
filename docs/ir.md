@@ -15,9 +15,10 @@ the program. A tool that knows what it wants to run (a scenario from JSON,
 a parameter sweep, a trace replay) builds or edits the IR as data instead
 of generating text.
 
-Source: `src/ir.rs`. Version: `IR_VERSION = 5` (2 added the sessions' turns;
+Source: `src/ir.rs`. Version: `IR_VERSION = 6` (2 added the sessions' turns;
 3 renamed the `route` field to `session`; 4 replaced `CStep`'s two booleans
-`exclusive_prefill` and `decode_first` by the one order `serve`).
+`exclusive_prefill` and `decode_first` by the one order `serve`;
+5 added KV transfer and leases; 6 adds renewal arrivals and finite open runs).
 
 ## Why an IR first
 
@@ -62,11 +63,11 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `observes` | observation names, by index |
 | `pools` | `CPool`: `name`, `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, `Lifo`), `queue` (order key), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
 | `stages` | `CStage`: `name`, `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `memory` (pool index) |
-| `arrival` | `Poisson(rate)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
+| `arrival` | `Poisson(rate)`, `Renewal(gap expression)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
 | `init`, `turn`, `session` | block indices: the workload's `init` and `turn` blocks and the session program |
 | `blocks` | the statement blocks (an arena; bodies of holds, branches and loops refer to blocks by index) |
-| `horizon`, `warmup`, `seed` | the run |
+| `horizon`, `warmup`, `seed`, `arrivals` | the run; `arrivals` requires exactly N open arrivals and draining by `horizon` |
 | `hidden` | attribute slots the scheduler may not read (`hidden o;`): legal at the `Session` moment only, below |
 | `slot_cached`, `slot_serial`, … | slots of the built-in attributes (`cached`, `serial`, `turn_no`, `new`, `out`, `think`, `more`, `forced`, `computed`) |
 
@@ -203,6 +204,14 @@ Version 5 carries `Release`, `Load` and `Hold.lease` for KV transfer and
 allocations that outlive their hold scope. The oracle programs use none of
 these mechanisms; their regenerated IR has the new version and a `null`
 `lease`. The generator pins 5 in the matching `serving-queue-theory` change.
+
+Version 6 adds `Renewal(CExpr)` and `Program.arrivals`. A renewal gap may
+be constant or sampled, uses only constants and distributions, and the
+first arrival follows one gap. `Poisson(rate)` retains its initial arrival
+at zero. Finite runs must generate the requested arrivals and drain by the
+horizon; completion before or at warmup is an error. Both additions are
+outside the Lean fragment (which accepts explicit sessions); the matching
+generator pins 6 and rejects an arrival limit instead of ignoring it.
 
 ## The Lean fragment
 

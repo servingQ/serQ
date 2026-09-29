@@ -13,7 +13,7 @@ stage NAME [ '[' N ']' ] : kind;    // where time passes
 
 workload { … }                      // how sessions arrive and turns evolve
 session { … }                         // what every session does
-run { horizon …; warmup …; seed …; }
+run { horizon …; warmup …; seed …; arrivals …; }
 ```
 
 ## Pools
@@ -117,7 +117,7 @@ preempted hold had computed; 0 otherwise), and with a trace `new` `out`
 
 ```seq
 workload {
-  arrive poisson(λ);        // or closed(n), batch(n), none
+  arrive poisson(λ);        // renewal(~h2(mean, cv2)), closed(n), batch(n), none
   trace "file.csv" [ordered];
   init { … }                // once, at arrival
   turn { … }                // at every `turn` statement

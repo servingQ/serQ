@@ -8,7 +8,7 @@
 //!           | 'workload' '{' wlitem* '}'
 //!           | 'session' block
 //!           | 'server' block
-//!           | 'run' '{' ('horizon' | 'warmup' | 'seed') expr ';' ... '}'
+//!           | 'run' '{' ('horizon' | 'warmup' | 'seed' | 'arrivals') expr ';' ... '}'
 //! poolopt  := 'cap' expr ';' | 'block' expr ';'
 //!           | 'evict' ('lru' | 'by' '(' expr (',' expr)* ')') ';'
 //!           | 'preempt' ('lifo' | 'none') ';'
@@ -20,7 +20,7 @@
 //!           | 'serve' ('admission' | 'decode' 'first' | 'exclusive' 'prefill'
 //!                     | 'by' '(' expr (',' expr)* ')') ';'
 //!           | 'memory' IDENT ';'
-//! wlitem   := 'arrive' ('poisson' '(' expr ')' | 'closed' '(' expr ')' | 'batch' '(' expr ')' | 'none') ';'
+//! wlitem   := 'arrive' ('poisson' '(' expr ')' | 'renewal' '(' expr ')' | 'closed' '(' expr ')' | 'batch' '(' expr ')' | 'none') ';'
 //!           | 'trace' STRING ('ordered')? ';' | 'init' block | 'turn' block
 //!           | 'session' block                  -- the session's side, with 'request'
 //!           | 'hidden' IDENT (',' IDENT)* ';'
@@ -445,6 +445,7 @@ impl Parser {
                         "horizon" => prog.run.horizon = Some(e),
                         "warmup" => prog.run.warmup = Some(e),
                         "seed" => prog.run.seed = Some(e),
+                        "arrivals" => prog.run.arrivals = Some(e),
                         other => return self.err(format!("unknown run option `{other}`")),
                     }
                 }
@@ -731,6 +732,11 @@ impl Parser {
                     let e = self.expr()?;
                     self.expect(&Tok::RParen)?;
                     Arrival::Poisson(e)
+                } else if self.eat_kw("renewal") {
+                    self.expect(&Tok::LParen)?;
+                    let e = self.expr()?;
+                    self.expect(&Tok::RParen)?;
+                    Arrival::Renewal(e)
                 } else if self.eat_kw("closed") {
                     self.expect(&Tok::LParen)?;
                     let e = self.expr()?;

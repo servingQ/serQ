@@ -181,6 +181,8 @@ pub struct StageDecl {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Arrival {
     Poisson(Expr),
+    /// Renewal arrivals with independently sampled interarrival times.
+    Renewal(Expr),
     /// `n` sessions always live: an ended one is replaced at once.
     Closed(Expr),
     /// `n` sessions at time 0, never replaced.
@@ -258,6 +260,8 @@ pub struct RunOpts {
     pub horizon: Option<Expr>,
     pub warmup: Option<Expr>,
     pub seed: Option<Expr>,
+    /// Maximum open-population arrivals, followed by draining their sessions.
+    pub arrivals: Option<Expr>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -399,7 +403,9 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
     }
     if let Some(w) = &mut p.workload {
         match &mut w.arrive {
-            Arrival::Poisson(e) | Arrival::Closed(e) | Arrival::Batch(e) => expr(e),
+            Arrival::Poisson(e) | Arrival::Renewal(e) | Arrival::Closed(e) | Arrival::Batch(e) => {
+                expr(e)
+            }
             Arrival::None => {}
         }
         block(&mut w.init);
@@ -409,5 +415,6 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
     p.run.horizon.iter_mut().for_each(expr);
     p.run.warmup.iter_mut().for_each(expr);
     p.run.seed.iter_mut().for_each(expr);
+    p.run.arrivals.iter_mut().for_each(expr);
     p
 }

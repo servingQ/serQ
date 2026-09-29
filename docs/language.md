@@ -74,7 +74,7 @@ item     := let NAME = expr ;
           | workload { wlitem* }
           | session block                     -- the session, in one block
           | server block                      -- or its server side, with the session inside workload
-          | run { horizon expr ; warmup expr ; seed expr ; }
+          | run { horizon expr ; warmup expr ; seed expr ; arrivals expr ; }
 poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
@@ -89,7 +89,7 @@ kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 
                    [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
                     | serve exclusive prefill ;]
                    [memory POOL ;] }
-wlitem   := arrive poisson ( rate ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
+wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
           | init block | turn block          -- only set / observe
           | session block                    -- the session's side; says `request`
@@ -125,6 +125,26 @@ serving  := enter POOL ( expr ) … block [ keep ( expr ) ] [ lease POOL ( expr 
           | decode   [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | tool     [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
 ```
+
+`arrive renewal(~h2(mean, cv2));` supplies interarrival times; `renewal(2)`
+uses a constant two-second gap. Gaps must be positive and finite. The first
+renewal arrival occurs after one gap. For compatibility, `poisson(rate)`
+starts with an arrival at time zero, then uses exponential gaps of mean
+`1 / rate`. Thus `renewal(~exp(1 / rate))` has the same subsequent arrival
+schedule for the same seed, without the initial arrival at zero.
+
+`run { arrivals N; }` requires exactly N open-workload arrivals and drains
+their sessions. `horizon` bounds both arrival generation and draining;
+failure to generate N arrivals or drain every session by that deadline is
+an error. Draining before or at `warmup` is also an error because the
+measurement interval would be empty. The CLI accepts `--arrivals N` for
+`run` and `ir`, overriding the source value.
+
+Reports keep `horizon` as the configured deadline and expose the actual
+termination time as `end` in both text and JSON. Time averages and rates
+use `end - warmup`. Without an arrival limit, `end` equals `horizon`.
+See [the design decision](design/renewal-arrivals.md) for the first-arrival
+compatibility choice.
 
 Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b` (a
 non-zero operand is true; only a `branch` guard is held to 0 or 1),

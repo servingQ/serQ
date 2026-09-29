@@ -51,3 +51,58 @@ fn sdk_cannot_inject_an_undeclared_constant() {
     assert!(err.contains("unknown --set constant `outside`"));
     assert!(err.contains("available constants: (none)"));
 }
+
+#[test]
+fn arrival_override_applies_to_run_and_ir() {
+    let f = Fixture::new();
+    f.write(
+        "model.seq",
+        "workload { arrive renewal(2); } session { end; } run { horizon 10; arrivals 1; }",
+    );
+    for command in ["run", "ir"] {
+        let mut args = vec![command, "model.seq", "--arrivals", "3"];
+        if command == "run" {
+            args.push("--json");
+        }
+        let out = f.run(&args);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(json["arrivals"], 3);
+        for bad in ["0", "-1", "1.5", "abc"] {
+            failure(
+                &f.run(&[command, "model.seq", "--arrivals", bad]),
+                2,
+                &["--arrivals", "positive integer"],
+            );
+        }
+    }
+}
+
+#[test]
+fn arrival_override_also_applies_to_json_ir() {
+    let f = Fixture::new();
+    let program = compile_source(
+        "workload { arrive renewal(2); } session { end; } run { horizon 10; arrivals 1; }",
+        &Overrides::default(),
+    )
+    .unwrap();
+    f.write("model.json", &program.to_json());
+    for command in ["run", "ir"] {
+        let mut args = vec![command, "model.json", "--arrivals", "3"];
+        if command == "run" {
+            args.push("--json");
+        }
+        let out = f.run(&args);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(json["arrivals"], 3);
+    }
+}

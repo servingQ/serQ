@@ -1,6 +1,6 @@
-//! `seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
+//! `seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
 //! `seq-lang check FILE [--set k=expr]...`
-//! `seq-lang ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]`
+//! `seq-lang ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]`
 //! `seq-lang draw FILE [--view deployment|session] [--format tikz|svg] [--out PATH] [--show-set]` (experimental)
 //! `seq-lang fmt [--check] FILE...`
 //!
@@ -15,11 +15,11 @@ use seq::frontend::parser;
 fn usage(cmd: &str) -> &'static str {
     match cmd {
         "run" => {
-            "seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--set name=expr]... [--trace F] [--json] [--dump DIR]"
+            "seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set name=expr]... [--trace F] [--json] [--dump DIR]"
         }
         "check" => "seq-lang check FILE [--set name=expr]...",
         "ir" => {
-            "seq-lang ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--trace F] [--inline-trace]"
+            "seq-lang ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]"
         }
         "draw" => {
             "seq-lang draw FILE [--set name=expr]... [--view deployment|session] [--format tikz|svg] [--out PATH] [--show-set]"
@@ -127,7 +127,7 @@ fn main() {
         let flag = args[i].as_str();
         let allowed: &[&str] = match flag {
             "--set" => &["run", "check", "ir", "draw"],
-            "--seed" | "--horizon" | "--warmup" | "--trace" => &["run", "ir"],
+            "--seed" | "--horizon" | "--warmup" | "--arrivals" | "--trace" => &["run", "ir"],
             "--json" | "--dump" => &["run"],
             "--inline-trace" => &["ir"],
             "--view" | "--format" | "--out" | "--show-set" => &["draw"],
@@ -156,6 +156,12 @@ fn main() {
                 let value = next(&mut i);
                 ov.seed = Some(value.parse().unwrap_or_else(|_| argument_error(cmd,
                     format!("invalid value `{value}` for --seed; expected an unsigned integer\nhelp: use --seed 1"))));
+            }
+            "--arrivals" => {
+                let value = next(&mut i);
+                ov.arrivals = Some(value.parse::<usize>().ok().filter(|n| *n > 0).unwrap_or_else(|| {
+                    argument_error(cmd, format!("invalid value `{value}` for --arrivals; expected a positive integer"))
+                }));
             }
             "--horizon" => ov.horizon = Some(time_arg(cmd, flag, &next(&mut i), true)),
             "--warmup" => ov.warmup = Some(time_arg(cmd, flag, &next(&mut i), false)),
