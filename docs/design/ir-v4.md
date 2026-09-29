@@ -107,6 +107,13 @@ A bound, when needed, is a separate attribute the program declares
 (`max_out`). That the drawn `o` and the declared bound are different things
 is what the theorem of §7 needs.
 
+**Outcome.** The moment table landed as `ir::Moment` and the per-position
+check in `Program::validate` (#44), and `hidden` as `Program.hidden` (#51).
+The admission block node was not added: `at admission (x = e)` and
+`admit if … where x = e` are parser substitutions into the hold's header,
+so `CStmt::Hold` is unchanged and the check reads the substituted
+expressions. No program declares `max_out` yet.
+
 ## 2. A unit always has exactly one owner
 
 Every unit of a pool is in one of three states: owned by a hold (allocated),
@@ -144,6 +151,12 @@ pub struct CPool { …, pub on_end: EndMove /* Keep | Free */, … }
 // interp, debug build: after every event, for every finite pool
 debug_assert_eq!(p.allocated + p.cached + p.free, p.cap);
 ```
+
+**Outcome.** `on_end` was not added: `drop P; end;` already says the
+opposite of the default, so a pool option would be a second spelling of one
+thing (criterion 0). The equality invariant waits for the Lean model to
+state it; the invariant the spec states today is `allocated + cached ≤ cap`.
+The `Owned` type is open.
 
 ## 3. Every order is a declared key and a named sequence number breaks ties
 
@@ -310,6 +323,12 @@ pub enum StateKind { Turn, Acquire(HoldSpec), Run(RunSpec), Set(..), Observe(..)
 pub struct Scope { pub parent: Option<ScopeId>, pub hold: Option<HoldSpec>, pub reentry: StateId /* preemption target */ }
 ```
 
+**Outcome.** The first item landed by the exception path this section
+called second-best: a preempted hold is re-executed with `computed`, the
+position it had reached, and the vLLM programs resume from it (#49). No
+oracle scenario preempts during decode yet, and the Lean fragment does not
+set `computed` (#63). The automaton itself, `states` and `scopes`, is open.
+
 ## 6. Step coalescing
 
 While the resident composition does not change, iterations repeat
@@ -372,6 +391,11 @@ the earliest-admitted holder progresses breaks. The theorem gains "no join
 while holding a finite pool", and if the linker rejects a `Join` inside a
 `Hold` the hypothesis is structure. `Spawn`/`Join` themselves are in
 `docs/design/subagents.md` and belong to v4b.
+
+**Outcome.** The cheap half landed as the `stuck` count: a session
+preempted again without passing the position of its previous preemption is
+counted per pool and written in the report (#43). It does not fail a run
+yet (#64). The theorem is open.
 
 ## Value and cost
 
