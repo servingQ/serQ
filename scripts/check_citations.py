@@ -54,6 +54,7 @@ PATHS = {
     "block_pool.py": "vllm/v1/core/block_pool.py",
     "kv_cache_utils.py": "vllm/v1/core/kv_cache_utils.py",
     "sched/utils.py": "vllm/v1/core/sched/utils.py",
+    "input_processor.py": "vllm/v1/engine/input_processor.py",
     "config/scheduler.py": "vllm/config/scheduler.py",
     "request.py": "vllm/v1/request.py",
     # the NIXL connector's scheduler side (prefill/decode disaggregation)

@@ -91,7 +91,8 @@ decoder's read:
 
 ```seq
 admit if kvD (prompt) reserve (prompt), reqsD (0) reserve (1) fit … {
-  transfer (x0 + (prompt - c) / Bw) from kvP to kvD (prompt - 1 - c);
+  run setup (x0);
+  transfer ((prompt - c) / Bw) from kvP to kvD (prompt - 1 - c);
   …
 } keep (prompt + o);
 ```

@@ -257,7 +257,8 @@ admit if reqsP (1), kvP (…) fit … {
   prefill on P (prompt - c) growing kvP;
 } keep (prompt) lease kvP (inf);       // finished on P: the slot goes, the blocks wait for the decoder's read
 admit if kvD (prompt) reserve (prompt), reqsD (0) reserve (1) fit … {
-  transfer (x0 + (prompt - c) / Bw) from kvP to kvD (prompt - 1 - c);   // takes the lease
+  run setup (x0);
+  transfer ((prompt - c) / Bw) from kvP to kvD (prompt - 1 - c);   // takes the lease
   admit if reqsD (1) fit { prefill on D (1) growing kvD; decode on D (o - 1) growing kvD; }
 } keep (prompt + o);
 ```

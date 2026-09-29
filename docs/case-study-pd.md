@@ -56,6 +56,7 @@ and block 16. What differs from the guide is written next to each number.
 
 | vLLM | seQ | Where |
 |---|---|---|
+| a prompt of `max_model_len` tokens or more is refused before it is scheduled; a generation stops at `max_model_len` tokens; no KV cache smaller than one request of `max_model_len` is started | `branch (K + n >= max_model_len) { end; }` before the request; `set o = min(o, max_model_len - prompt)`; `max_model_len = 16384` below every pool | `input_processor.py:512-536`; `sched/utils.py:114-120`; `kv_cache_utils.py:965` |
 | the prefiller admits like any vLLM engine: a slot, the blocks of the first chunk, room for the whole prompt, the prefix hit looked up when the scheduler takes the request | `admit if reqsP[i] (1), kvP[i] (min(prompt, hit + budget_left(P[i]))) reserve (prompt) fit where hit = …` | the waiting loop, `scheduler.py:868-1128`; [the vLLM case study](case-study-vllm.md) |
 | the prefiller computes the prompt in chunks and samples one token, which the sidecar discards | `prefill on P[i] (prompt - c) growing kvP[i]` | `scheduler.py:624-823`; the truncation for Mamba and MTP only, `nixl/base_scheduler.py:409-436` |
 | the request finishes on the prefiller: its slot is freed, its blocks are not — `request_finished` returns `delay_free_blocks` and a lease of `kv_lease_duration` (30 s), renewed by the decoder's heartbeats while the request waits | `} keep (prompt) lease kvP[i] (inf);` — the scope ends, the slot goes, the blocks stay the session's | `nixl/pull_scheduler.py:191-292`; `_free_request`, `scheduler.py:2628-2657`; the renewal, `nixl/base_scheduler.py:199-238`, `nixl/base_worker.py:3010-3030` |
@@ -63,7 +64,7 @@ and block 16. What differs from the guide is written next to each number.
 | the decoder's scheduler looks at its waiting queue only at a step with budget left and a running slot free | `admit via D` on both of the decoder's pools; `reqsD[j] (0) reserve (1)` — a slot must be free, none is taken | `scheduler.py:872-879` |
 | the decoder's local prefix hit, then the connector: for a remote prefill every prompt token beyond the local hit is external and loaded asynchronously | `kvD[j] (known) reserve (known)` with `reuse (floor((known - 1) / bs) * bs)`; `c = cached` is the local hit | `scheduler.py:932-954`; `nixl/pull_scheduler.py:34-66` |
 | blocks are allocated for the whole prompt, and the request is parked, `WAITING_FOR_REMOTE_KVS`, holding them and no slot; one transfer per request | the hold on `kvD[j]`; `transferred` is `do_remote_prefill`, spent | `scheduler.py:1199-1226, 1264-1294`; `nixl/pull_scheduler.py:108-189` |
-| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `transfer[j] (x0 + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c)` on the decoder's link | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
+| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `run setup (x0); transfer[j] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c)`: a fixed wait, then the bytes on the decoder's link | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
 | the read done, the blocks are cached, the last prompt token is marked uncomputed (its logits are needed), and the request is back in the waiting queue, served before new arrivals | `load kvD[j] (prompt - 1 - c)` inside the transfer; `admit if reqsD[j] (1) fit`, with `reqsD` declared before `kvD` | `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; `_try_promote_blocked_waiting_request`, `scheduler.py:3079-3092`; `scheduler.py:2383-2385` |
 | the prefiller frees the leased blocks when the read completes | `release kvP[i]` inside the transfer takes the lease | `_update_from_kv_xfer_finished`, `scheduler.py:3113-3138` |
 | the decoder recomputes the last prompt token and decodes; a request preempted afterwards is rescheduled without a second transfer, prefilling locally what it lost | `prefill on D[j] (known - c) growing kvD[j]; decode on D[j] (o - 1 - (known - prompt)) growing kvD[j];` with `known` from `computed` | `scheduler.py:1560-1561`; `nixl/pull_scheduler.py:187-189` |
@@ -142,7 +143,8 @@ decoder is admitted, and the decoder's NIC does the copy:
 ```
 admit if reqsP[i] (1), kvP[i] (…) fit … { prefill on P[i] (…) growing kvP[i]; } keep (prompt) lease kvP[i] (inf);
 admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit … {
-  transfer[j] (x0 + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);   // the decoder's link[j] READs; the lease ends
+  run setup (x0);
+  transfer[j] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);   // the decoder's link[j] READs; the lease ends
   admit if reqsD[j] (1) fit { … }
 } keep (prompt + o);
 ```
@@ -156,7 +158,8 @@ decoder's admission (the registration, `nixl/push_scheduler.py:128-205`):
 stage linkP[2] : ps(1);                                   // the prefillers' NICs
 …
 admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit … {
-  transfer on linkP[i] (x0 + x_reg + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
+  run setup (x0 + x_reg);
+  transfer on linkP[i] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
   admit if reqsD[j] (1) fit { … }
 } keep (prompt + o);
 ```
@@ -202,49 +205,58 @@ its own (its estimate is taken to be the pod's cache).
 
 Two decode pods of 160 000 tokens each, two prefill pods, sessions of
 one to several turns (a prompt of 1 000–3 000 new tokens on a growing
-context, 200 output tokens, a 3 s tool call between turns, `p = 0.9`), the
-A100-shaped step cost of `examples/multi-turn/vllm.seq`, a 200 000 token/s link.
+context, 200 output tokens, a 3 s tool call between turns, `p = 0.9`), a
+`max_model_len` of 16 384 tokens, the A100-shaped step cost of
+`examples/multi-turn/vllm.seq`, a 200 000 token/s link. Every number
+below is the median over seeds 1–20 of a run of 10 000 s after 1 000 s
+of warm-up (`--seed N --horizon 10000 --warmup 1000 --set …`), with the
+range across the seeds where it says more than the median. About 1 % of
+turns reach `max_model_len` and end their session.
 
 **The decider.** The guide's `always-disagg-pd-decider` sends every prompt
 to a prefiller; the `prefix-based-pd-decider` keeps a follow-up turn whose
 context the decoder already has on the decoder. At 0.6 sessions per
-second, the median over seeds 1–5 (`--seed N --set thr=…`; one seed's mean
-TTFT lies up to 40 % from the median, most at `never`):
+second:
 
-| `thr` (nonCachedTokens) | remote prefills | mean TTFT | mean response |
+| `thr` (nonCachedTokens) | remote prefills | mean TTFT, median (range) | mean response |
 |---|---|---|---|
-| 1 (always) | 100 % | 44.1 ms | 87.7 ms |
-| 512 | 65 % | 40.6 ms | 84.4 ms |
-| 2 048 | 30 % | 39.5 ms | 83.4 ms |
-| never (decode only) | 0 % | 58.0 ms | 108.7 ms |
+| 1 (always) | 100 % | 29.2 ms (28.8–29.7) | 71.9 ms |
+| 512 | 59 % | 28.6 ms (28.0–29.0) | 71.2 ms |
+| 2 048 | 22 % | 29.1 ms (28.4–29.6) | 72.0 ms |
+| never (decode only) | 0 % | 29.4 ms (28.2–30.4) | 73.8 ms |
 
 Disaggregating everything costs a transfer per request, disaggregating
-nothing costs every decoder a prefill in its decode steps, and the decider
-sits between the two. With the guide's decode profile (the least busy pod,
+nothing costs every decoder a prefill in its decode steps, and at this
+load the two cost about the same: the four settings lie within a
+millisecond, and the decider's `thr = 512` is the lowest by less than the
+spread across seeds. With the guide's decode profile (the least busy pod,
 no prefix affinity) a follow-up turn often lands on the pod that does not
 have its context, and the prefiller — which does have it, through the
-affinity filter — prefills the new tokens only: 65 % of requests are remote
-at `thr = 512` although every first turn is a miss.
+affinity filter — prefills the new tokens only: 59 % of requests are
+remote at `thr = 512` although every first turn is a miss.
 
 **The lease.** A finished prefill's blocks stay allocated on the prefiller
 until the decoder has read them, and the decoder reads only once its own
 scheduler has room for the whole prompt. Shrinking the decoders' memory
-lengthens the lease and fills the prefillers (Λ = 0.6, `thr = 512`; the
-prefill pool is 160 000 tokens):
+lengthens the lease and grows what the prefillers hold (`thr = 512`; the
+prefill pool is 160 000 tokens; a decoder is never smaller than
+`max_model_len`):
 
-| decoder memory, tokens per pod | Λ, sessions/s | remote prefills | lease, mean | prefiller memory allocated, mean of 160 000 (pod 1 / pod 2) | prefiller queue, mean | mean TTFT | sessions completed |
-|---|---|---|---|---|---|---|---|
-| 160 000 | 0.6 | 65 % | 21 ms | 1 800 / 400 | 0.0 | 41 ms | 1 059 |
-| 32 000 | 0.6 | 91 % | 45 ms | 3 200 / 900 | 0.0 | 66 ms | 1 063 |
-| 160 000 | 1.2 | 78 % | 43 ms | 6 900 / 4 400 | 0.1 | 100 ms | 2 160 |
-| 32 000 | 1.2 | 95 % | 81 ms | 64 300 / 57 600 | 38.7 | 159 ms | 1 573 |
+| decoder memory, tokens per pod | Λ, sessions/s | remote prefills | lease, mean | prefiller memory allocated, mean per pod | prefiller queue, mean | mean TTFT |
+|---|---|---|---|---|---|---|
+| 160 000 | 0.6 | 59 % | 13 ms | 430 | 0.01 | 28.6 ms |
+| 32 000 | 0.6 | 86 % | 32 ms | 905 | 0.01 | 47.2 ms |
+| 17 600 | 0.6 | 92 % | 35 ms | 1 031 | 0.01 | 52.6 ms |
+| 160 000 | 1.2 | 72 % | 24 ms | 1 606 | 0.03 | 46.9 ms |
+| 32 000 | 1.2 | 93 % | 38 ms | 2 532 | 0.04 | 66.5 ms |
+| 17 600 | 1.2 | 96 % | 43 ms | 2 804 | 0.04 | 73.2 ms |
 
-At 1.2 sessions per second the prefillers have room and compute to spare
-(two of sixteen slots busy), and still their queues hold 39 requests: two
-fifths of each prefiller's memory is leased to requests parked at a decoder
-that has room for one or two of them. Smaller decoders also send *more*
-prompts to the prefillers — they cache less, so the decider's uncached
-suffix is longer — which is the other direction of the same coupling.
+Smaller decoders send *more* prompts to the prefillers — they cache less,
+so the decider's uncached suffix is longer — and each of those prompts
+waits longer for the decoder's room, so the prefillers hold two to three
+times the memory. At these loads that memory is still a few per cent of
+the pool and no prefiller queues; the deployment pays for the small
+decoders in TTFT, not yet in admissions.
 
 The decoder's shortage shows up as memory *on the prefiller*, which is the
 coupling a store-and-forward program gets backwards: its prefiller holds
