@@ -1113,8 +1113,14 @@ impl<'p> Interp<'p> {
     /// session re-enters at the head (vLLM `waiting.prepend_request`).
     /// Returns false if the request can never fit (the session ends).
     fn enqueue_hold(&mut self, sid: usize, pending: Pending<'p>, front: bool) -> bool {
-        for &(pl, units) in &pending.pools {
-            if self.round_up(pl, units) > self.pools[pl].cap {
+        for k in 0..pending.pools.len() {
+            let (pl, units) = pending.pools[k];
+            // what admission waits for: the units, or the reservation above them
+            let need = match pending.reserve[k] {
+                Some(f) => self.eval(f, &Ctx::session(sid), Which::Session).max(units),
+                None => units,
+            };
+            if self.round_up(pl, need) > self.pools[pl].cap {
                 self.pools[pl].rejected += 1;
                 self.end_session(sid);
                 return false;

@@ -415,7 +415,8 @@ session's cached prefixes: the cache does not know that a session has left
 them writes `drop POOL;` before `end;`. Eviction is per entry, or per block
 from the tail of the entry when the pool has `block b`; `evict lru` orders
 by release time and then release order, `evict by (k₁, …)` by the keys and
-then release order. A request that can never fit is rejected (vLLM
+then release order. A request that can never fit — its units, or its
+`reserve` when that is larger, above the cap — is rejected (vLLM
 `FINISHED_IGNORED`).
 
 A pool marked `admit via S` is not admitted at settle time: its queue is

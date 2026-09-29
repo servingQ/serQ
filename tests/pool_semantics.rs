@@ -277,6 +277,24 @@ fn oversized_requests_are_rejected() {
     assert_eq!(r.pool("kv").unwrap().rejected, 1);
 }
 
+/// Admission waits for the reservation, not only the units, so a reservation
+/// above the cap can never fit either: the session ends, and the sessions
+/// queued behind it are admitted. Without the check the first session waits
+/// at the head of the queue for ever and the other two with it.
+#[test]
+fn an_oversized_reservation_is_rejected() {
+    let src = r#"
+        pool kv { cap 10; }
+        stage svc : fifo;
+        workload { arrive batch(3); }
+        session { hold kv (1) reserve (serial == 0 ? 20 : 1) { run svc (1); } observe done = serial; end; }
+        run { horizon 100; }
+    "#;
+    let r = run(src);
+    assert_eq!(r.observe("done").unwrap().samples, vec![1.0, 2.0]);
+    assert_eq!(r.pool("kv").unwrap().rejected, 1);
+}
+
 /// A hold that fits at admission but can never grow to what its body needs
 /// preempts itself, re-enters at the head of the queue, and does it again:
 /// a livelock the run would otherwise hide behind a preemption count. The

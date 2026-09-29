@@ -27,7 +27,8 @@ queues the sessions that do not yet fit. Every option is optional.
 | [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
 
 The invariant `allocated + cached ≤ cap` holds in every reachable
-configuration. A request that can never fit is rejected (vLLM's
+configuration. A request that can never fit — its units, or its `reserve`
+when that is larger, above the cap — is rejected (vLLM's
 `FINISHED_IGNORED`).
 
 ## `cap`
