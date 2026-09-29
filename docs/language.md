@@ -169,28 +169,30 @@ unchanged.
 | `prefill on P[j] (W);` | `run P[j] (W);`, or `run P[j] prefill (T);` when `P` is a step engine |
 
 The argument is work in the unit of the stage it runs on, and the two
-metavariables say which: `W` is service at rate 1 on a `fifo`, `ps` or
-`delay` stage (seconds, when the program's clock is seconds), `T` is tokens
-on a step engine, the unit of its `budget`. The same form takes either;
-the Which-stage rule below decides.
+metavariables say which: `W` is the time the job takes alone on a `fifo`,
+`ps` or `delay` stage (seconds, when the program's clock is seconds; a `ps`
+stage serves it at `φ(n)/n`), `T` is tokens on a step engine, the unit of
+its `budget`. The same form takes either; the Which-stage rule below
+decides.
 
 **Which stage.** A form finds its stage among the stages declared above
 it (declarations come first in every program here): the stage whose name
 is the role's, `prefill`, `link` (or `transfer`), `decode`, `tool`;
 failing that, for `prefill` and `decode`, the `step` engine, since prefill
 and decode share its iteration. Exactly one must qualify: with none
-(`stage svc : fifo;` and `prefill S;`) or several (two step engines) the
+(`stage svc : fifo;` and `prefill W;`) or several (two step engines) the
 parser stops at the form and says so. `on STAGE` names the stage
-explicitly; with several instances of a role, `choose j …; prefill[j] S;`
-serves an array and `prefill on P2 (S);` stages that are not one. On a
+explicitly; with several instances of a role, `choose j …; prefill[j] W;`
+serves an array and `prefill on P2 (W);` stages that are not one. On a
 step engine the run gets the role's mode (`run E prefill`), elsewhere it
 is plain, so the linker's rule (the mode is required on a step stage and
 forbidden elsewhere) is met by construction; `transfer` and `tool` on a
 step engine are rejected by the linker as `run E (X)` would be. A linker
-error inside a form (an unknown name in `S`, say) speaks of the kernel
+error inside a form (an unknown name in `W`, say) speaks of the kernel
 statement.
 
 The lecture's disaggregated replica (`programs/lecture_pd.seq`) then reads
+(`T`, `S` and the rest are that program's own constants):
 
 ```
 turn;
@@ -398,7 +400,7 @@ covered here has found a bug.
 **Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
 own at rate 1. `step { budget B; cost C; }`: an engine that runs
-iterations. A plain `run`'s work is in the unit of its stage's rate; a step
+iterations. A plain `run`'s work is time at rate 1, the clock's unit; a step
 engine's `prefill` and `decode` work is in the unit of `B`, tokens. The
 clock itself has no unit: a program whose costs are seconds runs in seconds,
 and `programs/vllm_request.seq` runs on the step clock with `cost 1`, so
@@ -417,8 +419,8 @@ remaining run first is `serve by (remaining)`, the opposite `serve by
 one,
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); then the
-stage admits from the queues it serves. The iteration lasts `C` on the clock, an
-expression in `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn`; its
+stage admits from the queues it serves. The iteration advances the clock by
+`C`, an expression in `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn`; its
 tokens are applied when it ends. A run of zero work completes at once. An
 iteration that schedules no token is not an iteration, unless it preempted:
 then it is the scheduler step that only preempted (vLLM's `schedule()`
