@@ -165,7 +165,7 @@ unchanged.
 | `decode W;` | `run decode (W);`, or on a step engine `E`: `run E decode (T);` |
 | `tool Z;` | `run tool (Z);` |
 | `prefill (T) growing kv;` | `run E prefill (T) growing kv;` (`growing` passes through; a form never adds it) |
-| `prefill[j] W;` | `run prefill[j] (W);` (the index applies to the role's stage array) |
+| `prefill[j] W;` | `run prefill[j] (W);`, or `run prefill[j] prefill (T);` when the array is step engines (the index applies to the role's stage array) |
 | `prefill on P[j] (W);` | `run P[j] (W);`, or `run P[j] prefill (T);` when `P` is a step engine |
 
 The argument is work in the unit of the stage it runs on, and the two
