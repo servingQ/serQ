@@ -13,13 +13,13 @@ cargo build --release
 Or install the CLI straight from a release tag:
 
 ```bash
-cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-rc0 --locked --root ~/.local
+cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-rc1 --locked --root ~/.local
 ```
 
 As a dependency, pin a tag:
 
 ```toml
-seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.0-rc0" }
+seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.0-rc1" }
 ```
 
 ## Run your first program
