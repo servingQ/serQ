@@ -2,7 +2,7 @@
 
 ```seq
 workload {
-  arrive poisson(rate);  |  arrive closed(n);  |  arrive batch(n);  |  arrive none;
+  arrive poisson(rate);  |  arrive renewal(gap);  |  arrive closed(n);  |  arrive batch(n);  |  arrive none;
   trace "file.csv" [ordered];
   init block
   turn block
@@ -18,10 +18,30 @@ only `set` and `observe`. Random draws in the workload use their own stream.
 
 | Form | Argument | Sessions arrive |
 |---|---|---|
-| `poisson(rate)` | `const`, arrivals per clock unit | at exponential gaps of mean `1/rate`, forever |
+| `poisson(rate)` | `const`, arrivals per clock unit | one at time 0, then at exponential gaps of mean `1/rate` |
+| `renewal(gap)` | `expr` of constants and draws | after one gap, then at every further gap; `gap` is evaluated anew for each |
 | `closed(n)` | `const`, positive integer | `n` at time 0, and a new one whenever a session ends |
 | `batch(n)` | `const`, positive integer | `n` at time 0, and no more |
 | `none` | | never (the default) |
+
+`poisson` and `renewal` are *open*: they arrive until the horizon, or until
+[`run { arrivals N; }`](program.md#run) has had its `N`.
+
+### `renewal`
+
+```seq
+arrive renewal(~h2(2, 4));     // interarrival times of mean 2, CV² 4
+arrive renewal(2);             // one every 2 clock units
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `gap` | `expr` | The interarrival time. It may read numbers, `let` constants, [functions](functions.md#arithmetic) of them and [draws](distributions.md), and not a session attribute, a pool, a stage or a context variable. Each gap must be positive and finite, or the run aborts. |
+
+The first arrival is one gap after time 0, where `poisson` has one at 0: with
+the same seed, `renewal(~exp(1 / rate))` arrives at the same times as
+`poisson(rate)` after its first arrival, and has no arrival at 0
+([design](../design/renewal-arrivals.md)). Gaps draw from the arrival stream.
 
 ## `trace`
 

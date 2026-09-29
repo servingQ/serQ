@@ -91,7 +91,7 @@ and a `server` next to a top-level `session` are errors.
 ## `run`
 
 ```seq
-run { horizon expr; warmup expr; seed expr; }
+run { horizon expr; warmup expr; seed expr; arrivals expr; }
 ```
 
 | Field | Type | Default | Description |
@@ -99,8 +99,23 @@ run { horizon expr; warmup expr; seed expr; }
 | `horizon` | `const` | required | End of the simulation, in the program's clock unit. |
 | `warmup` | `const` | `0` | Samples before this time are discarded. Must be below `horizon`. |
 | `seed` | `const` | `1` | Seed of the random streams. Arrivals, the workload, the session, eviction and trace sampling each draw from their own. |
+| `arrivals` | `const`, a positive integer | none | Stop after exactly this many arrivals and run until their sessions have all ended. Only with an open workload (`poisson` or `renewal`). |
 
-`--horizon`, `--warmup` and `--seed` override them ([CLI](../reference/cli.md)).
+`--horizon`, `--warmup`, `--seed` and `--arrivals` override them ([CLI](../reference/cli.md)).
+
+### A finite run
+
+Without `arrivals` the run ends at `horizon`. With it, the run ends when the
+`N`-th session has arrived and every session has ended, and `horizon` is the
+deadline for both. It is an error if the deadline passes with fewer than `N`
+arrivals or with a session still live, and if the run drains at or before
+`warmup`, which would leave nothing to measure. The report gives the time the
+run ended as `end`, and its rates and time averages are over `end − warmup`.
+
+```seq
+workload { arrive renewal(~h2(2, 4)); … }
+run { horizon 1e5; warmup 0; arrivals 1000; }
+```
 
 !!! note
     The `run` *statement* ([`run STAGE …`](statements.md#run)) and the `run`

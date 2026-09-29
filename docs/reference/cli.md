@@ -1,11 +1,11 @@
 # CLI reference
 
 ```
-seq-lang run   FILE [--seed N] [--horizon T] [--warmup T] [--set name=expr]...
+seq-lang run   FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set name=expr]...
                     [--trace F] [--json] [--dump DIR]
 seq-lang check FILE [--set name=expr]...
 seq-lang ir    FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T]
-                    [--trace F] [--inline-trace]
+                    [--arrivals N] [--trace F] [--inline-trace]
 seq-lang draw  FILE [--view deployment|session] [--format tikz|svg] [--out PATH]
                     [--show-set]                                  (experimental)
 seq-lang fmt   [--check] FILE...
@@ -30,6 +30,7 @@ seq-lang fmt   [--check] FILE...
 | `--seed N` | run, ir | RNG seed, overriding the program's `run` block |
 | `--horizon T` | run, ir | simulated seconds |
 | `--warmup T` | run, ir | seconds discarded before anything is recorded |
+| `--arrivals N` | run, ir | stop after `N` arrivals and drain their sessions, overriding the `run` block's `arrivals` ([a finite run](../api/program.md#a-finite-run)); open workloads only |
 | `--set name=expr` | all | override a declared `let` constant (unknown names are errors; the last override of a name wins). **Rejected on `.json`**: an IR's constants are already folded |
 | `--trace F` | run, ir | replace the program's trace corpus |
 | `--inline-trace` | ir | turn the trace file into the sessions' turns, as `CArrival::Sessions` data |
@@ -52,6 +53,7 @@ seq-lang run examples/multi-turn/vllm.seq --json | jq '.pools[] | select(.name==
 
 | Path | |
 |---|---|
+| top level | `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals`, `ended`, `turns`, `mean_live` |
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
 | `stages[]` | `name`, `mean_number`, `utilization`, `completed`, `throughput`, `mean_wait`, `mean_service`, `iterations` |
 | `pools[]` | `name`, `mean_used`, `mean_cached`, `mean_queue`, `mean_holders`, `mean_wait`, `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected`, `stuck` (sessions preempted again without progress since their previous preemption) |
@@ -74,8 +76,8 @@ Commands and their supported options are checked before the program is opened.
 An unknown command or option, a missing value, or an invalid value prints the
 problem and a correction hint to stderr and exits with code 2. Options belonging
 to another command are rejected rather than ignored. `--seed` takes an unsigned
-integer, `--horizon` a finite positive number, and `--warmup` a finite nonnegative
-number. Program loading, validation, and runtime errors exit with code 1. Failed commands
+integer, `--horizon` a finite positive number, `--warmup` a finite nonnegative
+number, and `--arrivals` a positive integer. Program loading, validation, and runtime errors exit with code 1. Failed commands
 do not write a report to stdout.
 
 Trace CSV errors identify the actual trace path, row, and column name, followed
