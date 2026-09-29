@@ -32,6 +32,13 @@ Three things the walk deliberately does *not* do:
 - **A `choose` annotates the station it selects** — the one whose reference
   reads the attribute it names, `rep[j]`, not whatever station comes next.
 
+![vLLM v1: one engine](../assets/vllm.deployment.svg)
+
+`examples/multi-turn/vllm.seq` prefills and decodes a request at one `step`
+engine, inside its request slot (`reqs`) and its KV blocks (`kv`): one
+station, and no arrow between the two phases. The dashed arrow is the next
+turn, after the tool call.
+
 ## Glyphs
 
 | IR | Glyph |
