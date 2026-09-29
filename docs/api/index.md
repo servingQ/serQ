@@ -12,7 +12,7 @@ is the specification and argues the design; this section is the lookup.
 | [Stage](stage.md) | `fifo`, `ps`, `delay`, `step` |
 | [Workload](workload.md) | `arrive`, `trace`, `init`, `turn`, `hidden` |
 | [Statements](statements.md) | the kernel: `hold`, `run`, `grow`, `branch`, … |
-| [Serving vocabulary](serving.md) | `enter`, `admit if`, `prefill`, `transfer`, `decode`, `tool` |
+| [Serving vocabulary](serving.md) | `prefill`, `transfer`, `decode`, `tool` |
 | [Functions](functions.md) | arithmetic functions and observables |
 | [Distributions](distributions.md) | `~exp`, `~det`, `~uniform`, `~erlang`, `~h2`, `~bernoulli` |
 | [Context variables](context.md) | `tokens`, `age`, `remaining`, … and the moment each exists at |

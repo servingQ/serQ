@@ -75,10 +75,10 @@ server {
   // `known` is the prompt plus those, its own cached blocks up to `known - 1`
   // are reusable again (a forced turn's included: they carry its nonce), and
   // it generates only what is left
-  admit if reqs (1), kv (hit + min(known - hit, budget_left(engine))) reserve (known) fit
-        reuse (max(hitmax, floor(computed / bs) * bs))
-        where known = computed < prompt ? prompt : computed + 1,
-              hit = min(cachedin(kv), max(hitmax, floor(computed / bs) * bs)) {
+  hold reqs (1), kv (hit + min(known - hit, budget_left(engine))) reserve (known)
+       reuse (max(hitmax, floor(computed / bs) * bs))
+       at admission (known = computed < prompt ? prompt : computed + 1,
+                     hit = min(cachedin(kv), max(hitmax, floor(computed / bs) * bs))) {
     set c = cached;
     observe cached_tokens = c;
     observe prefix = prev + prevout;
@@ -86,7 +86,7 @@ server {
     prefill (known - c) growing kv;
     branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
     decode (out - 1 - (known - prompt)) growing kv;
-  } keep (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
+  } cache (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
   observe latency = now - t0;
 }
 

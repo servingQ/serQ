@@ -35,7 +35,7 @@ told `max_tokens`, not the length of the answer, so no scheduling key may read
 
 `session { turn; request; end; }` is the whole client: one request, then the
 session leaves. `K` stays 0 because nothing carries over, so the server's
-`prompt = K + n` is just the new tokens. The `keep (prompt + o)` in the
+`prompt = K + n` is just the new tokens. The `cache (prompt + o)` in the
 server still caches the prefix when the request finishes, but no later
 request of that session will read it, so here the cache only takes up space
 until LRU evicts it. The hit rate is 0.

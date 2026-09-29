@@ -70,7 +70,7 @@ load P (n);                        // the KV of n tokens arrived: computed posit
 run S [prefill|decode] (w) [growing P];
 
 // the serving vocabulary: the same statements, named by the request lifecycle
-enter P (u) … { … } [keep (ℓ)] [lease P (t)];    // hold … cache
+hold P (u) … { … } [keep (ℓ)] [lease P (t)];    // hold … cache
 prefill W;  decode W;  tool Z;     // run on the stage of that name: W is
                                    // time on a fifo/ps/delay stage (seconds)
 prefill T;  decode T;              // on a step engine: T is tokens, the budget's unit

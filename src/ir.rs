@@ -87,9 +87,7 @@ impl std::fmt::Display for Moment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Moment::Session => "a session statement, a run or a hold's cache",
-            Moment::Admit => {
-                "a hold's header (`hold`, `enter`, `admit if … where`) or a queue key, read at admission"
-            }
+            Moment::Admit => "a hold's header or a queue key, read at admission",
             Moment::Evict => "an eviction key or spill clause",
             Moment::Ps => "a ps stage's capacity",
             Moment::Budget => "a step stage's budget or chunk, planned before the iteration",

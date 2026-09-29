@@ -57,9 +57,8 @@
 //! statements in place of every `request;`, so the AST holds one session
 //! and the IR is the one the same program written as `session { … }`
 //! compiles to. Each side has its words: `request`, `turn` and `end` are
-//! the session's and are refused in a `server`; `admit if … fit where …`
-//! is the server's spelling of `enter … at admission (…)` and is refused
-//! outside one. `hold`, the kernel, is written anywhere.
+//! the session's and are refused in a `server`. An admission is written
+//! one way on both sides: `hold … at admission (…) { … } cache (…)`.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -220,7 +219,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 84] = [
+pub const KEYWORDS: [&str; 79] = [
     "admission",
     "admit",
     "arrivals",
@@ -244,12 +243,10 @@ pub const KEYWORDS: [&str; 84] = [
     "drop",
     "else",
     "end",
-    "enter",
     "evict",
     "exclusive",
     "fifo",
     "first",
-    "fit",
     "fits",
     "from",
     "grow",
@@ -257,10 +254,8 @@ pub const KEYWORDS: [&str; 84] = [
     "hidden",
     "hold",
     "horizon",
-    "if",
     "in",
     "init",
-    "keep",
     "lease",
     "let",
     "lifo",
@@ -302,7 +297,6 @@ pub const KEYWORDS: [&str; 84] = [
     "via",
     "warmup",
     "when",
-    "where",
     "with",
     "workload",
 ];
@@ -549,7 +543,7 @@ fn assigned_tokens(b: &[Token]) -> Vec<String> {
         .collect();
     let holds = b
         .iter()
-        .any(|t| matches!(&t.tok, Tok::Ident(k) if k == "hold" || k == "enter" || k == "admit"));
+        .any(|t| matches!(&t.tok, Tok::Ident(k) if k == "hold"));
     if holds {
         out.extend(["cached".to_string(), "computed".to_string()]);
     }
@@ -559,6 +553,33 @@ fn assigned_tokens(b: &[Token]) -> Vec<String> {
 /// The functions of a value alone; the others read pool or stage state.
 const PURE: [&str; 9] = [
     "min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow",
+];
+
+/// The words #136 took out of the language, with what a program writes
+/// instead: one spelling for one admission.
+fn retired(word: &str) -> Option<&'static str> {
+    RETIRED
+        .iter()
+        .find(|(w, _)| *w == word)
+        .map(|(_, now)| *now)
+}
+
+const RETIRED: [(&str, &str); 5] = [
+    (
+        "enter",
+        "`enter` is now `hold`: `hold P (u) … at admission (x = e) { … } cache (ℓ);`",
+    ),
+    (
+        "admit",
+        "`admit if … fit where x = e { … } keep (ℓ)` is now `hold … at admission (x = e) \
+         { … } cache (ℓ)` (the pool option `admit via` is unchanged)",
+    ),
+    ("keep", "`keep` is now `cache`"),
+    ("where", "`where x = e` is now `at admission (x = e)`"),
+    (
+        "fit",
+        "`fit` is gone: the pools of a `hold` are the condition",
+    ),
 ];
 
 /// Do these tokens say the statement `w;`?
@@ -2068,36 +2089,9 @@ impl Parser {
                 Ok(Stmt::Observe(name, e))
             }
             // `enter ... keep (l)` is `hold ... cache (l)`
-            "hold" | "enter" => {
-                if kw == "enter" && self.side == Side::Server {
-                    return self.err(
-                        "`enter` is the session's word; in a `server` block write \
-                         `admit if … fit`",
-                    );
-                }
+            "hold" => {
                 self.advance();
-                self.hold(false)
-            }
-            // `admit if P (u), … fit where x = e { body } keep (l)` is the
-            // server's spelling of `enter P (u), … at admission (x = e) { body }
-            // keep (l)`: in a server the header is the admission, so the
-            // clause does not have to say when.
-            "admit" => {
-                if self.side != Side::Server {
-                    return self.err(
-                        "`admit` is the server's word: the scheduler admits, the session \
-                         enters. In a `session` block write `enter`, in a `server` block \
-                         `admit if … fit` (the pool option `admit via` is unchanged)",
-                    );
-                }
-                self.advance();
-                if !self.eat_kw("if") {
-                    return self.err(format!(
-                        "expected `if` after `admit` (`admit if reqs (1), kv (u) fit …`), found {}",
-                        self.peek()
-                    ));
-                }
-                self.hold(true)
+                self.hold()
             }
             "grow" => {
                 self.advance();
@@ -2188,13 +2182,15 @@ impl Parser {
             // the serving forms (`prefill`, `transfer`, `decode`, `tool`) are
             // parsed by `stmt_into`, since one of them stands for several
             // statements
-            other => self.err(format!("unknown statement `{other}`")),
+            other => match retired(other) {
+                Some(now) => self.err(now),
+                None => self.err(format!("unknown statement `{other}`")),
+            },
         }
     }
 
-    /// The rest of a `hold` or `enter` statement after the keyword, or of
-    /// `admit if` (`admit`) after the `if`.
-    fn hold(&mut self, admit: bool) -> PResult<Stmt> {
+    /// The rest of a `hold` statement after the keyword.
+    fn hold(&mut self) -> PResult<Stmt> {
         let mut pools = vec![];
         loop {
             let r = self.reference()?;
@@ -2216,43 +2212,23 @@ impl Parser {
                 break;
             }
         }
-        if admit && !self.eat_kw("fit") {
-            return self.err(format!(
-                "expected `fit` after the pools of `admit if`, found {}",
-                self.peek()
-            ));
-        }
         let mut reuse = if self.eat_kw("reuse") {
             Some(self.paren_expr()?)
         } else {
             None
         };
-        // `at admission (hit = e, ...)` (`where hit = e, ...` in a server)
-        // names values the header is written in terms of. Everything in a
-        // hold's header is evaluated when the session is admitted; a `set`
-        // above the hold is not, and looks the same. The bindings are
-        // substituted into the header's expressions here, so the AST, the
-        // IR and the interpreter never see them.
+        // `at admission (hit = e, ...)` names values the header is written in
+        // terms of. Everything in a hold's header is evaluated when the
+        // session is admitted; a `set` above the hold is not, and looks the
+        // same. The bindings are substituted into the header's expressions
+        // here, so the interpreter never sees them.
         self.bind_at.clear();
-        let binds = if admit {
-            if self.is_kw("at") {
-                return self
-                    .err("in `admit if … fit` the header is the admission: write `where hit = …`");
-            }
-            if self.eat_kw("where") {
-                self.bindings("where")?
-            } else {
-                vec![]
-            }
-        } else {
-            if self.is_kw("where") {
-                return self.err(
-                    "`where` is the server's clause; in `enter` and `hold` write \
-                     `at admission (hit = …)`",
-                );
-            }
-            self.at_admission()?
-        };
+        if let Tok::Ident(w) = self.peek()
+            && let Some(now) = retired(w)
+        {
+            return self.err(now);
+        }
+        let binds = self.at_admission()?;
         if !binds.is_empty() {
             for (_, e, reserve) in &mut pools {
                 subst(e, &binds);
@@ -2282,7 +2258,12 @@ impl Parser {
             sets.append(&mut body);
             body = sets;
         }
-        let mut cache = if self.eat_kw("cache") || self.eat_kw("keep") {
+        if let Tok::Ident(w) = self.peek()
+            && w == "keep"
+        {
+            return self.err(retired("keep").unwrap());
+        }
+        let mut cache = if self.eat_kw("cache") {
             Some(self.paren_expr()?)
         } else {
             None
@@ -2330,8 +2311,8 @@ impl Parser {
         Ok(binds)
     }
 
-    /// `name = e, name = f, …`: the bindings of an `at admission (…)` or a
-    /// `where` clause, after its keyword. `clause` names it in errors.
+    /// `name = e, name = f, …`: the bindings of an `at admission (…)`, after
+    /// its keyword. `clause` names it in errors.
     fn bindings(&mut self, clause: &str) -> PResult<Vec<(String, Expr)>> {
         let mut binds: Vec<(String, Expr)> = vec![];
         loop {
@@ -2792,9 +2773,9 @@ mod tests {
         same(
             &format!(
                 "{PD} session {{
-                    enter kv (K) {{ prefill S; }} keep (K) lease kv (inf);
-                    enter kvD (K) {{ transfer X from kv to kvD (K); }}
-                    enter kv (K) reserve (F) reuse (R) {{ decode D; }}
+                    hold kv (K) {{ prefill S; }} cache (K) lease kv (inf);
+                    hold kvD (K) {{ transfer X from kv to kvD (K); }}
+                    hold kv (K) reserve (F) reuse (R) {{ decode D; }}
                     branch with (p) {{ tool Z; turn; }} else {{ end; }}
                 }}"
             ),
@@ -2814,7 +2795,7 @@ mod tests {
         same(
             &format!(
                 "{ENGINE} session {{
-                    enter kv (c) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} keep (c);
+                    hold kv (c) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} cache (c);
                     tool (~exp(Z));
                 }}"
             ),
@@ -2859,7 +2840,7 @@ mod tests {
         same(
             &format!(
                 "{ENGINE} session {{
-                    enter kv (known) at admission (known = computed < p ? p : computed + 1) {{
+                    hold kv (known) at admission (known = computed < p ? p : computed + 1) {{
                         prefill (known - cached) growing kv;
                     }}
                     end;
@@ -2877,7 +2858,7 @@ mod tests {
         );
         // a binding the body does not read stays in the header
         same(
-            &format!("{ENGINE} session {{ enter kv (h) at admission (h = 1) {{ }} }}"),
+            &format!("{ENGINE} session {{ hold kv (h) at admission (h = 1) {{ }} }}"),
             &format!("{ENGINE} session {{ hold kv (1) {{ }} }}"),
         );
     }
@@ -2892,7 +2873,7 @@ mod tests {
             ("hit = now", "with a `set` in the body"),
         ] {
             let e = parse(&format!(
-                "{ENGINE} session {{ enter kv (hit) at admission ({binding}) {{ observe h = hit; }} }}"
+                "{ENGINE} session {{ hold kv (hit) at admission ({binding}) {{ observe h = hit; }} }}"
             ))
             .unwrap_err();
             assert!(
@@ -2904,7 +2885,7 @@ mod tests {
         }
         // `n` is a context variable unless the program assigns it
         let src = format!(
-            "{ENGINE} session {{ set n = 3; enter kv (m) at admission (m = n + 1) {{ observe x = m; }} }}"
+            "{ENGINE} session {{ set n = 3; hold kv (m) at admission (m = n + 1) {{ observe x = m; }} }}"
         );
         parse(&src).unwrap();
     }
@@ -2931,24 +2912,24 @@ mod tests {
             };
             let name = binding.split(' ').next().unwrap();
             let e = parse(&format!(
-                "{pre} {ENGINE} session {{ {assign} enter kv (1) at admission ({binding}) {{ observe a = {name}; }} }}"
+                "{pre} {ENGINE} session {{ {assign} hold kv (1) at admission ({binding}) {{ observe a = {name}; }} }}"
             ))
             .unwrap_err();
             assert!(e.msg.contains(what), "{binding}: {}", e.msg);
         }
         let e = parse(&format!(
-            "{ENGINE} session {{ enter kv (1) at admission (k = k + 1) {{ observe a = k; }} }}"
+            "{ENGINE} session {{ hold kv (1) at admission (k = k + 1) {{ observe a = k; }} }}"
         ))
         .unwrap_err();
         assert!(e.msg.contains("reads itself"), "{}", e.msg);
         let e = parse(&format!(
-            "{ENGINE} session {{ enter kv (1) at admission (j = k, k = 5) {{ observe a = j; }} }}"
+            "{ENGINE} session {{ hold kv (1) at admission (j = k, k = 5) {{ observe a = j; }} }}"
         ))
         .unwrap_err();
         assert!(e.msg.contains("bound after it"), "{}", e.msg);
         // an attribute the body sets itself is not the binding
         let e = parse(&format!(
-            "{ENGINE} session {{ enter kv (hit) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }} }}"
+            "{ENGINE} session {{ hold kv (hit) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }} }}"
         ))
         .unwrap_err();
         assert!(e.msg.contains("an attribute the program sets"), "{}", e.msg);
@@ -2958,18 +2939,18 @@ mod tests {
     fn a_binding_is_read_only_in_its_hold() {
         for after in [
             "observe b = k;",
-            "enter kv (k) { }",
+            "hold kv (k) { }",
             "branch (k > 1) { } else { }",
         ] {
             let e = parse(&format!(
-                "{ENGINE} session {{ enter kv (1) at admission (k = 2) {{ observe a = k; }} {after} }}"
+                "{ENGINE} session {{ hold kv (1) at admission (k = 2) {{ observe a = k; }} {after} }}"
             ))
             .unwrap_err();
             assert!(e.msg.contains("outside the body"), "{after}: {}", e.msg);
         }
         let e = parse(
             "pool kv { cap 100; queue by (k); } stage engine : step { cost 1; }
-             session { enter kv (1) at admission (k = 2) { observe a = k; } }",
+             session { hold kv (1) at admission (k = 2) { observe a = k; } }",
         )
         .unwrap_err();
         assert!(e.msg.contains("outside the body"), "{}", e.msg);
@@ -2977,10 +2958,10 @@ mod tests {
         // over a live outer binding its body does not read
         parse(&format!(
             "{ENGINE} session {{
-                enter kv (1) at admission (k = 2) {{ observe a = k; }}
-                enter kv (1) at admission (k = 3) {{ observe b = k; }}
-                enter kv (h) at admission (h = cachedin(kv)) {{
-                    enter kv (1) at admission (h = 1) {{ observe c = h; }}
+                hold kv (1) at admission (k = 2) {{ observe a = k; }}
+                hold kv (1) at admission (k = 3) {{ observe b = k; }}
+                hold kv (h) at admission (h = cachedin(kv)) {{
+                    hold kv (1) at admission (h = 1) {{ observe c = h; }}
                 }}
             }}"
         ))
@@ -3006,7 +2987,7 @@ mod tests {
         // parsed where it stands, so a serving form finds its stage there
         same(
             "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
-             def put(p, s, n) { enter p (n) { prefill on s (n) growing p; } keep (n); }
+             def put(p, s, n) { hold p (n) { prefill on s (n) growing p; } cache (n); }
              session { choose j in 2 by (used(kv[j])); put(kv[j], E[j], k + 1); end; }",
             "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
              session {
@@ -3015,16 +2996,16 @@ mod tests {
                 end;
              }",
         );
-        // the side is the use's: `admit if` in a server
+        // the side is the use's: a `hold` in a server
         same(
             &format!(
-                "{ENGINE} def take(n) {{ admit if kv (n) fit {{ prefill (n) growing kv; }} }}
+                "{ENGINE} def take(n) {{ hold kv (n) {{ prefill (n) growing kv; }} }}
                  workload {{ session {{ request; end; }} }}
                  server {{ take(4); }}"
             ),
             &format!(
                 "{ENGINE} workload {{ session {{ request; end; }} }}
-                 server {{ admit if kv (4) fit {{ prefill (4) growing kv; }} }}"
+                 server {{ hold kv (4) {{ prefill (4) growing kv; }} }}"
             ),
         );
     }
@@ -3074,8 +3055,10 @@ mod tests {
         .unwrap();
         assert!(err("def f(p) { set p = 1; } session { f(2); }").contains("is a parameter"));
         assert!(
-            err("def f(h) { enter kv (h) at admission (h = 3) { observe a = h; } } session { f(2); }")
-                .contains("is a parameter")
+            err(
+                "def f(h) { hold kv (h) at admission (h = 3) { observe a = h; } } session { f(2); }"
+            )
+            .contains("is a parameter")
         );
         // what a turn, a request or an admission assigns is captured too
         assert!(
@@ -3087,7 +3070,7 @@ mod tests {
                 .contains("which its `request;` assigns")
         );
         assert!(
-            err("def take(x) { enter kv (4) { observe got = x; } } session { take(cached); }")
+            err("def take(x) { hold kv (4) { observe got = x; } } session { take(cached); }")
                 .contains("which `take` assigns")
         );
         // the clock and live state are read where the body reads them
@@ -3143,9 +3126,8 @@ mod tests {
         ))
         .unwrap();
         // an error in the body says where the definition was used
-        let e = err(
-            "def take(n) { enter kv (n) { } } workload { session { request; end; } } server { take(4); }",
-        );
+        let e =
+            err("def take(n) { turn; } workload { session { request; end; } } server { take(4); }");
         assert!(e.contains("note: in `take`, used at"), "{e}");
         assert!(err("def f(x) = x; def f(y) = y; session { }").contains("defined twice"));
         // an argument used once may draw
@@ -3165,10 +3147,7 @@ mod tests {
     fn a_transfer_says_where_the_kv_goes() {
         // without `from P to Q` it would be a link that stores and forwards,
         // which is the kernel's `run`, not a transfer
-        let e = parse(&format!(
-            "{PD} session {{ enter kv (K) {{ transfer X; }} }}"
-        ))
-        .unwrap_err();
+        let e = parse(&format!("{PD} session {{ hold kv (K) {{ transfer X; }} }}")).unwrap_err();
         assert!(
             e.msg.contains("`transfer` without `from P to Q (n)`"),
             "{e}"
@@ -3219,8 +3198,7 @@ mod tests {
         "arrive poisson(1); init { set K = 0; } turn { set n = 10; set o = 5; set more = 1; }";
 
     /// `workload { session { … request; … } }` and `server { … }` parse to
-    /// the session block that has the server in place of the request, and
-    /// `admit if … fit where …` to the `enter … at admission (…)` it spells.
+    /// the session block that has the server in place of the request.
     #[test]
     fn the_two_sides_are_one_session() {
         same(
@@ -3237,11 +3215,11 @@ mod tests {
                 }}
                 server {{
                   set prompt = K + n;
-                  admit if reqs (1), kv (min(prompt, hit + budget_left(engine))) fit
-                        where hit = min(cachedin(kv), prompt - 1) {{
+                  hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+                        at admission (hit = min(cachedin(kv), prompt - 1)) {{
                     prefill (prompt - cached) growing kv;
                     decode (o - 1) growing kv;
-                  }} keep (prompt + o);
+                  }} cache (prompt + o);
                 }}"
             ),
             &format!(
@@ -3250,11 +3228,11 @@ mod tests {
                   turn;
                   loop {{
                     set prompt = K + n;
-                    enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
+                    hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
                           at admission (hit = min(cachedin(kv), prompt - 1)) {{
                       prefill (prompt - cached) growing kv;
                       decode (o - 1) growing kv;
-                    }} keep (prompt + o);
+                    }} cache (prompt + o);
                     set K = prompt + o;
                     branch (more) {{ tool 3; turn; }} else {{ end; }}
                   }}
@@ -3304,37 +3282,38 @@ mod tests {
             "does not request itself",
         );
         refused(
-            &format!("pool kv {{ cap 1; }} {WL} server {{ enter kv (1) {{ }} }}"),
-            "`enter` is the session's word",
-        );
-        // the server's words in a session
-        refused(
-            "pool kv { cap 1; } session { admit if kv (1) fit { } }",
-            "`admit` is the server's word",
-        );
-        refused(
             "pool kv { cap 1; } session { request; }",
             "`session` inside `workload`",
         );
-        refused(
-            "pool kv { cap 1; } session { enter kv (1) where x = 1 { } }",
-            "`where` is the server's clause",
-        );
-        // and the server's form is one form
-        refused(
-            &format!(
-                "pool kv {{ cap 1; }} {WL} server {{ admit if kv (1) fit at admission (x = 1) {{ }} }}"
+    }
+
+    #[test]
+    fn one_admission_is_written_one_way() {
+        // the words #136 took out say what a program writes instead
+        const WL: &str = "workload { session { request; } }";
+        for (src, now) in [
+            ("session { enter kv (1) { } }", "`enter` is now `hold`"),
+            (
+                &*format!("{WL} server {{ admit if kv (1) fit {{ }} }}"),
+                "is now `hold … at admission",
             ),
-            "the header is the admission",
-        );
-        refused(
-            &format!("pool kv {{ cap 1; }} {WL} server {{ admit kv (1) {{ }} }}"),
-            "expected `if` after `admit`",
-        );
-        refused(
-            &format!("pool kv {{ cap 1; }} {WL} server {{ admit if kv (1) {{ }} }}"),
-            "expected `fit`",
-        );
+            (
+                "session { hold kv (1) { } keep (1); }",
+                "`keep` is now `cache`",
+            ),
+            (
+                "session { hold kv (1) where x = 1 { } }",
+                "`where x = e` is now `at admission (x = e)`",
+            ),
+            ("session { hold kv (1) fit { } }", "`fit` is gone"),
+        ] {
+            refused(&format!("pool kv {{ cap 1; }} {src}"), now);
+        }
+        // `hold` is written on either side, with its bindings
+        parse(&format!(
+            "pool kv {{ cap 1; }} {WL} server {{ hold kv (x) at admission (x = 1) {{ }} cache (1); }}"
+        ))
+        .unwrap();
     }
 
     #[test]

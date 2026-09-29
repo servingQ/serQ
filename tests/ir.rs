@@ -195,8 +195,8 @@ fn serving_forms_compile_to_the_kernel_ir() {
         "{deployment} session {{
             turn;
             loop {{
-              enter memP (T) {{ prefill (n + K); }} keep (T) lease memP (inf);
-              enter memD (T) {{ transfer (T / 100) from memP to memD (T); decode (o); }}
+              hold memP (T) {{ prefill (n + K); }} cache (T) lease memP (inf);
+              hold memD (T) {{ transfer (T / 100) from memP to memD (T); decode (o); }}
               set K = T;
               branch with (0.8) {{ tool Z; turn; }} else {{ end; }}
             }}
@@ -289,17 +289,17 @@ fn at_admission_is_substituted_into_the_header() {
         run { horizon 500; }";
     let bound = format!(
         "{head} session {{ turn; loop {{ set prompt = K + n;
-          enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
+          hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
                 at admission (hit = min(cachedin(kv), prompt - 1)) {{
             prefill (prompt - cached) growing kv;
-          }} keep (prompt + o);
+          }} cache (prompt + o);
           set K = prompt + o; end; }} }}"
     );
     let inlined = format!(
         "{head} session {{ turn; loop {{ set prompt = K + n;
-          enter reqs (1), kv (min(prompt, min(cachedin(kv), prompt - 1) + budget_left(engine))) {{
+          hold reqs (1), kv (min(prompt, min(cachedin(kv), prompt - 1) + budget_left(engine))) {{
             prefill (prompt - cached) growing kv;
-          }} keep (prompt + o);
+          }} cache (prompt + o);
           set K = prompt + o; end; }} }}"
     );
     let ov = seq::Overrides::default();
@@ -326,15 +326,15 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
         run { horizon 500; }";
     let bound = format!(
         "{head} session {{ turn; set prompt = K + n;
-          enter reqs (1), kv (min(hit, 10)) at admission (hit = min(cachedin(kv), prompt - 1)) {{
+          hold reqs (1), kv (min(hit, 10)) at admission (hit = min(cachedin(kv), prompt - 1)) {{
             prefill (prompt - cached) growing kv;
-          }} keep (prompt + o); end; }}"
+          }} cache (prompt + o); end; }}"
     );
     let inlined = format!(
         "{head} session {{ turn; set prompt = K + n;
-          enter reqs (1), kv (min(min(cachedin(kv), prompt - 1), 10)) {{
+          hold reqs (1), kv (min(min(cachedin(kv), prompt - 1), 10)) {{
             prefill (prompt - cached) growing kv;
-          }} keep (prompt + o); end; }}"
+          }} cache (prompt + o); end; }}"
     );
     let ov = seq::Overrides::default();
     let a = seq::compile_source(&bound, &ov).expect("the clause compiles");
@@ -388,18 +388,17 @@ fn fits_says_it_is_now_reserve() {
     assert!(e.contains("`fits` is now `reserve`"), "{e}");
 }
 
-/// `admit` was this statement's name in a `session`, and is now the
-/// server's word. A program that still says it there is told what happened,
-/// and told that the pool option keeps the word.
+/// `admit` was once this statement's name, then the server's `admit if`,
+/// and is now only the pool option. A program that still says it is told
+/// what to write, and that the pool option keeps the word.
 #[test]
-fn admit_in_a_session_says_it_is_the_servers_word() {
+fn admit_as_a_statement_says_what_to_write() {
     let src = "pool kv { cap 100; } stage s : fifo;
         workload { arrive poisson(1); }
         session { admit kv (1) { run s (1); } end; }
         run { horizon 10; }";
     let e = seq::compile_source(src, &seq::Overrides::default()).expect_err("rejected");
-    assert!(e.contains("`admit` is the server's word"), "{e}");
-    assert!(e.contains("write `enter`"), "{e}");
+    assert!(e.contains("is now `hold … at admission"), "{e}");
     assert!(
         e.contains("admit via"),
         "and says the pool option is unchanged: {e}"
@@ -408,8 +407,7 @@ fn admit_in_a_session_says_it_is_the_servers_word() {
 
 /// `workload { session { … request; … } }` with `server { … }` is the
 /// session written from its two sides, and compiles to the IR of the same
-/// program written as one `session` block: the split is the parser's, and
-/// `admit if … fit where …` is `enter … at admission (…)`.
+/// program written as one `session` block: the split is the parser's.
 #[test]
 fn the_two_sides_compile_to_the_session_ir() {
     let head = "pool kv { cap 1e5; block 16; evict lru; }
@@ -434,12 +432,12 @@ fn the_two_sides_compile_to_the_session_ir() {
         server {{
           set t0 = now;
           set prompt = K + n;
-          admit if reqs (1), kv (min(prompt, hit + budget_left(engine))) fit
-                where hit = min(cachedin(kv), prompt - 1) {{
+          hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+                at admission (hit = min(cachedin(kv), prompt - 1)) {{
             prefill (prompt - cached) growing kv;
             observe ttft = now - t0;
             decode (o - 1) growing kv;
-          }} keep (prompt + o);
+          }} cache (prompt + o);
           observe response = now - t0;
         }}"
     );
@@ -451,12 +449,12 @@ fn the_two_sides_compile_to_the_session_ir() {
           loop {{
             set t0 = now;
             set prompt = K + n;
-            enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
+            hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
                   at admission (hit = min(cachedin(kv), prompt - 1)) {{
               prefill (prompt - cached) growing kv;
               observe ttft = now - t0;
               decode (o - 1) growing kv;
-            }} keep (prompt + o);
+            }} cache (prompt + o);
             observe response = now - t0;
             set K = prompt + o;
             branch (more) {{ tool (~exp(3)); turn; }} else {{ end; }}
@@ -482,7 +480,7 @@ fn enter_is_hold_and_admit_via_survives() {
         workload { arrive poisson(1); init { set n = 10; } }
         run { horizon 20; }";
     let sugar = format!(
-        "{head} session {{ enter reqs (1), kv (n) {{ prefill (n) growing kv; }} keep (n); end; }}"
+        "{head} session {{ hold reqs (1), kv (n) {{ prefill (n) growing kv; }} cache (n); end; }}"
     );
     let kernel = format!(
         "{head} session {{ hold reqs (1), kv (n) {{ run engine prefill (n) growing kv; }} cache (n); end; }}"

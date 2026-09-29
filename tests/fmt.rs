@@ -13,17 +13,17 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
                   stage engine : step { budget B; cost 1; memory kv; }\n\
                   workload { arrive batch(1); session { request; end; } }\n\
                   server {\n\
-                  admit if kv (1) fit\n\
-                  where hit = 1,\n\
-                  value = hit + 1 {\n\
+                  hold kv (1)\n\
+                  at admission (hit = 1,\n\
+                  value = hit + 1) {\n\
                   prefill (1) growing kv;\n\
-                  } keep (1);\n\
+                  } cache (1);\n\
                   }\n\
                   run { horizon 1; }\n";
     let formatted = format(source).unwrap();
     assert!(
         formatted.contains(
-            "  admit if kv (1) fit\n        where hit = 1,\n              value = hit + 1 {"
+            "  hold kv (1)\n       at admission (hit = 1,\n                     value = hit + 1) {"
         ),
         "{formatted}"
     );

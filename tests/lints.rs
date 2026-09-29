@@ -29,8 +29,8 @@ fn a_stale_header_read_is_rejected() {
         "{ENGINE} session {{ turn; loop {{
             set prompt = K + n;
             set c = min(cachedin(kv), prompt - 1);
-            enter reqs (1), kv (c + min(prompt - c, budget_left(engine)))
-              {{ prefill (prompt - cached) growing kv; }} keep (prompt + o);
+            hold reqs (1), kv (c + min(prompt - c, budget_left(engine)))
+              {{ prefill (prompt - cached) growing kv; }} cache (prompt + o);
             set K = prompt + o; end; }} }}"
     );
     let e = check(&src).expect_err("rejected");
@@ -51,9 +51,9 @@ fn at_admission_is_the_way_through() {
     let src = format!(
         "{ENGINE} session {{ turn; loop {{
             set prompt = K + n;
-            enter reqs (1), kv (c + min(prompt - c, budget_left(engine)))
+            hold reqs (1), kv (c + min(prompt - c, budget_left(engine)))
               at admission (c = min(cachedin(kv), prompt - 1))
-              {{ prefill (prompt - cached) growing kv; }} keep (prompt + o);
+              {{ prefill (prompt - cached) growing kv; }} cache (prompt + o);
             set K = prompt + o; end; }} }}"
     );
     check(&src).expect("the clause is the way to say it");
@@ -67,7 +67,7 @@ fn a_reassignment_clears_the_lint() {
             set prompt = K + n;
             set c = min(cachedin(kv), prompt - 1);
             set c = 0;
-            enter reqs (1), kv (c + prompt) {{ prefill (prompt) growing kv; }} keep (prompt);
+            hold reqs (1), kv (c + prompt) {{ prefill (prompt) growing kv; }} cache (prompt);
             set K = prompt + o; end; }} }}"
     );
     check(&src).expect("the read no longer reaches the header");
@@ -80,9 +80,9 @@ fn a_read_inside_the_body_is_fine() {
     let src = format!(
         "{ENGINE} session {{ turn; loop {{
             set prompt = K + n;
-            enter reqs (1), kv (prompt) {{
+            hold reqs (1), kv (prompt) {{
               set c = min(cachedin(kv), prompt - 1);
-              observe hit = c; prefill (prompt) growing kv; }} keep (prompt);
+              observe hit = c; prefill (prompt) growing kv; }} cache (prompt);
             set K = prompt + o; end; }} }}"
     );
     check(&src).expect("after admission is not stale");
@@ -131,7 +131,7 @@ fn zero_and_one_are_tests() {
 fn a_context_variable_outside_its_moment_is_rejected() {
     let src = format!(
         "{ENGINE} session {{ turn; set x = tokens;
-            enter reqs (1), kv (n) {{ prefill (n) growing kv; }} end; }}"
+            hold reqs (1), kv (n) {{ prefill (n) growing kv; }} end; }}"
     );
     let e = check(&src).expect_err("rejected");
     assert!(
@@ -152,7 +152,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
             workload {{ arrive poisson(0.3); init {{ set K = 0; }}
                        turn {{ set m = ~exp(500); set o = ~exp(200) + 1; }} }}
             run {{ horizon 500; }}
-            session {{ turn; {session} enter reqs (1), kv (m) {{ prefill (m) growing kv; }} end; }}"
+            session {{ turn; {session} hold reqs (1), kv (m) {{ prefill (m) growing kv; }} end; }}"
         )
     };
     // (the prompt is `m`: a session attribute named `present` would shadow
@@ -165,12 +165,12 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         ),
         (
             engine("queue by (age);", "", ""),
-            "pool `kv`: `age` is read in a hold's header (`hold`, `enter`, `admit if … where`) or a queue key, read at admission",
+            "pool `kv`: `age` is read in a hold's header or a queue key, read at admission",
             "an eviction key",
         ),
         (
             engine("", "", "hold kv (size) { run svc (1); }"),
-            "session: `size` is read in a hold's header (`hold`, `enter`, `admit if … where`) or a queue key, read at admission",
+            "session: `size` is read in a hold's header or a queue key, read at admission",
             "an eviction key",
         ),
         (
@@ -311,12 +311,12 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
         run { horizon 500; }";
     // the body may read it
     let ok = format!(
-        "{wl} session {{ turn; enter reqs (1), kv (n) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} keep (n + o); end; }}"
+        "{wl} session {{ turn; hold reqs (1), kv (n) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} cache (n + o); end; }}"
     );
     check(&ok).expect("links");
     // a hold's header may not: the reservation is the scheduler's
     let bad = format!(
-        "{wl} session {{ turn; enter reqs (1), kv (n) reserve (n + o) {{ prefill (n) growing kv; }} end; }}"
+        "{wl} session {{ turn; hold reqs (1), kv (n) reserve (n + o) {{ prefill (n) growing kv; }} end; }}"
     );
     let e = check(&bad).expect_err("rejected");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
@@ -324,7 +324,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     // the server-block spelling substitutes the binding into the header,
     // and the check sees the substituted expression
     let bad = format!(
-        "{} server {{ admit if reqs (1), kv (n) reserve (need) fit where need = n + o {{ prefill (n) growing kv; }} }}",
+        "{} server {{ hold reqs (1), kv (n) reserve (need) at admission (need = n + o) {{ prefill (n) growing kv; }} }}",
         wl.replace(
             "init { set K = 0; }",
             "init { set K = 0; } session { turn; request; end; }"

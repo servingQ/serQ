@@ -100,7 +100,7 @@ fn desugaring_keeps_server_and_header_binding_locations() {
     let err = compile_source(src, &Overrides::default()).unwrap_err();
     assert!(err.contains("4:7:"), "{err}");
     assert!(err.contains("4 |   run svcc (1);"), "{err}");
-    let src = "pool kv { cap 10; }\nworkload { arrive batch(1); session { request; end; } }\nserver {\n  admit if kv (amount) fit where amount = missing { }\n}\nrun { horizon 10; }";
+    let src = "pool kv { cap 10; }\nworkload { arrive batch(1); session { request; end; } }\nserver {\n  hold kv (amount) at admission (amount = missing) { }\n}\nrun { horizon 10; }";
     let err = compile_source(src, &Overrides::default()).unwrap_err();
     // `missing`, in the binding, is where the failed expression was written.
     assert!(err.contains("4:43:"), "{err}");
