@@ -209,7 +209,7 @@ A100-shaped step cost of `examples/multi-turn/vllm.seq`, a 200 000 token/s link.
 to a prefiller; the `prefix-based-pd-decider` keeps a follow-up turn whose
 context the decoder already has on the decoder. At 0.6 sessions per
 second, the median over seeds 1–5 (`--seed N --set thr=…`; one seed's mean
-TTFT varies by ±15 % from the next):
+TTFT lies up to 40 % from the median, most at `never`):
 
 | `thr` (nonCachedTokens) | remote prefills | mean TTFT | mean response |
 |---|---|---|---|
