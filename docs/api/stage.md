@@ -37,11 +37,10 @@ ps ( expr )
 | `expr` | `expr` | `Ps` | Total throughput `φ(n)`, shared equally by the jobs present. The [context variable](context.md) `n` is the number of jobs. |
 
 ```seq
-stage link : ps(1);                    // one link, its bandwidth shared
-stage decode : ps(min(n, phi_cap));    // throughput grows with the batch up to a cap
+stage link[2] : ps(1);     // a decoder's NIC: its reads share the bandwidth
 ```
 
-(`examples/pd-disaggregation/lecture_pd.seq`)
+(`examples/pd-disaggregation/llmd_pd.seq`)
 
 ## `delay`
 

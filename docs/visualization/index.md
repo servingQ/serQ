@@ -20,10 +20,8 @@ is a fourth, and the cheapest of them: it needs no clock, no oracle and no
 proof.
 
 It is also the one that would otherwise become a hand-kept copy. `docs/ir.md`
-exists because the vLLM request program had three of those. The lecture notes
-have a fourth: `fig:deployment` in Lecture 1 §2 is hand-written TikZ for a
-deployment that `examples/pd-disaggregation/lecture_pd.seq` already defines, down to the last
-station.
+exists because the vLLM request program had three of those. A figure drawn
+by hand would be a fourth.
 
 The view is a pure function of `ir::Program`. No simulation, no clock, no
 RNG — the same IR gives the same bytes.
@@ -40,10 +38,9 @@ vLLM v1's engine:
 ## Formats
 
 **`--format tikz`** (default) writes a `tikzpicture` needing only
-`\usepackage{tikz}`. It is the default because the figure it replaces is TikZ
-source inside a LaTeX document, and a generated artefact substitutes for that
-only if the document can `\input` it: an image inherits neither the document's
-fonts nor its rules, and does not diff.
+`\usepackage{tikz}`. It is the default because a figure in a LaTeX document is
+best TikZ source the document can `\input`: an image inherits neither the
+document's fonts nor its rules, and does not diff.
 
 **`--format svg`** writes a standalone file. Colours are presentation
 attributes with a `prefers-color-scheme` override rather than CSS custom

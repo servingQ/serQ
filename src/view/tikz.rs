@@ -1,10 +1,8 @@
 //! A `Figure` as a TikZ picture.
 //!
-//! This is the backend that matters for the lecture notes: `fig:deployment`
-//! of `serving-queue-theory` is a `tikzpicture` inside `lecture1.tex`, and a
-//! generated figure replaces it only if the generated artefact is LaTeX
-//! source the document can `\input` — an image inherits neither the
-//! document's fonts nor its rules, and does not diff.
+//! The backend for a figure inside a LaTeX document: TikZ source the
+//! document can `\input` - an image inherits neither the document's fonts
+//! nor its rules, and does not diff.
 //!
 //! The output needs `\usepackage{tikz}` and nothing else.
 

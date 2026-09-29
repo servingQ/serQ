@@ -384,7 +384,6 @@ fn no_false_positives_on_the_corpus() {
         "ps",
         "closed",
         "replica",
-        "lecture_pd",
         "routing",
         "vllm",
         "vllm_request",

@@ -219,20 +219,8 @@ step engine are rejected by the linker as `run E (X)` would be. A linker
 error inside a form (an unknown name in `W`, say) speaks of the kernel
 statement.
 
-The lecture's disaggregated replica (`examples/pd-disaggregation/lecture_pd.seq`) then reads
-(`T`, `S` and the rest are that program's own constants):
-
-```
-turn;
-loop {
-  enter memP (kappa * T) { prefill S; transfer (x0 + kappa * T / Bw); } keep (kappa * T);
-  enter memD (kappa * T) { decode (o * w); }
-  branch with (p) { tool Z; turn; } else { end; }
-}
-```
-
-and vLLM's engine (`examples/multi-turn/vllm.seq`, whose `server` block spells the
-same hold from the scheduler's side, below)
+vLLM's engine (`examples/multi-turn/vllm.seq`, whose `server` block spells the
+same hold from the scheduler's side, below) then reads
 
 ```
 enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
@@ -242,13 +230,19 @@ enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
 } keep (prompt + o);
 ```
 
-Both compile to the IR they compiled to before the rewrite
+The forms compile to the IR they compiled to before the rewrite
 (`src/frontend/parser.rs` tests, `tests/ir.rs`).
 
-**A KV transfer.** The lecture's replica above holds the prefill
-instance's memory through the transfer and queues for the decode instance's
-afterwards: a store-and-forward link with a buffer nobody has. A NIXL
-transfer between two vLLM instances has no buffer: the decode instance
+**A KV transfer.** Written as two holds in a row,
+
+```
+enter memP (T) { prefill (n + K); transfer (T / 100); } keep (T);
+enter memD (T) { decode (o); }
+```
+
+a session holds the prefill instance's memory through the transfer and
+queues for the decode instance's afterwards: a store-and-forward link with a
+buffer nobody has. A NIXL transfer between two vLLM instances has no buffer: the decode instance
 allocates the prompt's blocks *first*, the bytes are read into them, and the
 prefill instance frees its copy *after*. The prefiller's blocks outlive the
 request's scope — its slot is freed when the token is sampled, its blocks
@@ -637,10 +631,8 @@ the semantics the oracle theorems are about.
 | no measurement | `observe`, `--dump` | TTFT and the price are defined in the program |
 | no routing | stage arrays and `choose` | §3.2 |
 
-The lecture's disaggregated replica is `examples/pd-disaggregation/lecture_pd.seq` and,
-in Lean, `SeqLang.disaggregatedReplica`; the paper's colocated
-two-resource replica is `examples/multi-turn/replica.seq` and
-`SeqLang.colocatedReplica`.
+The paper's colocated two-resource replica is `examples/multi-turn/replica.seq`
+and, in Lean, `Deployments.colocatedReplica`.
 
 ## 5. Programs
 
@@ -648,7 +640,6 @@ two-resource replica is `examples/multi-turn/replica.seq` and
 |---|---|---|
 | `mg1.seq`, `ps.seq`, `closed.seq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | closed forms (`seq_closed_forms.rs`): M/M/1 sojourn, PK for four laws, PS insensitivity, MVA |
 | `replica.seq` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`serve decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/seq/replica_seeds.csv`, `seq_replica_and_pd.rs`) |
-| `lecture_pd.seq` | the lecture's disaggregated replica | capacity formulas within 2 %; stability |
 | `routing.seq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
 | `llmd_pd.seq` | llm-d's prefill/decode disaggregation on vLLM with the NIXL connector: the router, the sidecar, two prefill and two decode instances (`docs/case-study-pd.md`) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle yet |
 | `vllm.seq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |

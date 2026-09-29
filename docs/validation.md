@@ -24,7 +24,6 @@ seQ programs next to them:
 | Program | Agreement |
 |---|---|
 | `replica.seq` | TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; over 20 seeds, hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05) |
-| `lecture_pd.seq` | capacity formulas within 2 % |
 | `routing.seq` | within 1–2 % on response and hit rate across five policies |
 
 ## 3. The real scheduler as an oracle

@@ -156,7 +156,7 @@ There are three kinds of result, and a program meets them differently:
 |---|---|---|
 | properties of the semantics | the model, not one program | `Seq.lean`: `SeqLang.Step.invariant` (every command of the pool model keeps `allocated + cached ≤ cap`); `SeqServe.lean`: `SeqLang.Serve.serve_eq_decode_first` (without a per-request chunk cap, serving in admission order is serving decode-first) |
 | a program's outcome on a scenario | one IR file and one workload | `SeqOracle.lean`, generated: one theorem per scenario, proved by `decide +kernel` |
-| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`examples/multi-turn/replica.seq`), `disaggregatedReplica` (`examples/pd-disaggregation/lecture_pd.seq`), with their well-formedness |
+| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`examples/multi-turn/replica.seq`), `disaggregatedReplica` (the lecture notes' store-and-forward replica, in `serving-queue-theory`; no seQ program), with their well-formedness |
 
 The first kind needs nothing from a program. It is about the pool model and
 the serving order, and it is not yet connected to the executable semantics
