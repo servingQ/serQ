@@ -71,12 +71,16 @@ seq-lang run docs/tutorial/programs/01-queue.seq
 ```
 
 ```text
-run: horizon 100000 warmup 5000 seed 1 events 158920 arrivals 79460 ended 75464 turns 75462 mean live 3.816
-observe        count        mean      95% CI      cv2       p99
-  response      75464      4.8040 ±0.2377      0.916   20.4865
-  wait          75464      3.8023 ±0.2330      1.394   19.3448
-stage          number   util    done   thru      wait   service  iters
-  server         3.816  0.796   75464  0.7944    3.8023    1.0017      0
+run: horizon 100000 end 100000 warmup 5000 seed 1 events 158920 arrivals 79460 ended 75464 turns 75462 mean live 3.816
+
+observe   count    mean   95% CI    cv2      p99
+--------  -----  ------  -------  -----  -------
+response  75464  4.8040  ±0.2377  0.916  20.4865
+wait      75464  3.8023  ±0.2330  1.394  19.3448
+
+stage   number   util   done    thru    wait  service  iters
+------  ------  -----  -----  ------  ------  -------  -----
+server   3.816  0.796  75464  0.7944  3.8023   1.0017      0
 ```
 
 ## Checking it against the textbook

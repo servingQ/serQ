@@ -29,13 +29,17 @@ seq-lang run examples/single-turn/mg1.seq
 ```
 
 ```text
-run: horizon 250000 warmup 25000 seed 1 events 397859 arrivals 198931 ended 179184 turns 0 mean live 3.877
-observe        count        mean      95% CI      cv2       p99
-  sojourn      179184      4.8684 ±0.2109      0.955   21.4103
-  wait         179184      3.8689 ±0.2074      1.446   20.3125
-  service      179184      0.9995 ±0.0048      1.005    4.5948
-stage          number   util    done   thru      wait   service  iters
-  svc            3.877  0.796  179184  0.7964    3.8689    0.9995      0
+run: horizon 250000 end 250000 warmup 25000 seed 1 events 397859 arrivals 198931 ended 179184 turns 0 mean live 3.877
+
+observe   count    mean   95% CI    cv2      p99
+-------  ------  ------  -------  -----  -------
+sojourn  179184  4.8684  ±0.2109  0.955  21.4103
+wait     179184  3.8689  ±0.2074  1.446  20.3125
+service  179184  0.9995  ±0.0048  1.005   4.5948
+
+stage  number   util    done    thru    wait  service  iters
+-----  ------  -----  ------  ------  ------  -------  -----
+svc     3.877  0.796  179184  0.7964  3.8689   0.9995      0
 ```
 
 That is an M/M/1 queue at 80 % utilisation. The closed form says the sojourn
@@ -50,7 +54,7 @@ Three blocks, always in this order.
 ### The run line
 
 ```text
-run: horizon 250000 warmup 25000 seed 1 events 397859 arrivals 198931 ended 179184 ...
+run: horizon 250000 end 250000 warmup 25000 seed 1 events 397859 arrivals 198931 ended 179184 ...
 ```
 
 `horizon` is simulated seconds, `warmup` the seconds discarded before anything
@@ -61,7 +65,7 @@ session).
 
 ### `observe`
 
-One line per `observe` name in the program. `mean` with a batch-means 95 %
+One row per `observe` name in the program. `mean` with a batch-means 95 %
 confidence interval, the squared coefficient of variation `cv2`, and the 99th
 percentile.
 

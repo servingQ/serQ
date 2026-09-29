@@ -120,62 +120,69 @@ impl Report {
             self.mean_live
         );
         if !self.observes.is_empty() {
-            let _ = writeln!(
-                s,
-                "observe        count        mean      95% CI      cv2       p99"
+            let rows = self.observes.iter().map(|o| {
+                vec![
+                    o.name.clone(),
+                    o.count.to_string(),
+                    format!("{:.4}", o.mean),
+                    format!("±{:.4}", o.ci.half_width),
+                    format!("{:.3}", o.cv2),
+                    format!("{:.4}", o.p99),
+                ]
+            });
+            table(
+                &mut s,
+                &["observe", "count", "mean", "95% CI", "cv2", "p99"],
+                rows,
             );
-            for o in &self.observes {
-                let _ = writeln!(
-                    s,
-                    "  {:<12} {:>6} {:>11.4} ±{:<9.4} {:>7.3} {:>9.4}",
-                    o.name, o.count, o.mean, o.ci.half_width, o.cv2, o.p99
-                );
-            }
         }
         if !self.stages.is_empty() {
-            let _ = writeln!(
-                s,
-                "stage          number   util    done   thru      wait   service  iters"
+            let rows = self.stages.iter().map(|st| {
+                vec![
+                    st.name.clone(),
+                    format!("{:.3}", st.mean_number),
+                    format!("{:.3}", st.utilization),
+                    st.completed.to_string(),
+                    format!("{:.4}", st.throughput),
+                    format!("{:.4}", st.mean_wait),
+                    format!("{:.4}", st.mean_service),
+                    st.iterations.to_string(),
+                ]
+            });
+            table(
+                &mut s,
+                &[
+                    "stage", "number", "util", "done", "thru", "wait", "service", "iters",
+                ],
+                rows,
             );
-            for st in &self.stages {
-                let _ = writeln!(
-                    s,
-                    "  {:<12} {:>7.3} {:>6.3} {:>7} {:>7.4} {:>9.4} {:>9.4} {:>6}",
-                    st.name,
-                    st.mean_number,
-                    st.utilization,
-                    st.completed,
-                    st.throughput,
-                    st.mean_wait,
-                    st.mean_service,
-                    st.iterations
-                );
-            }
         }
         if !self.pools.is_empty() {
-            let _ = writeln!(
-                s,
-                "pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej stuck"
+            let rows = self.pools.iter().map(|p| {
+                vec![
+                    p.name.clone(),
+                    format!("{:.1}", p.mean_used),
+                    format!("{:.1}", p.mean_cached),
+                    format!("{:.3}", p.mean_queue),
+                    format!("{:.3}", p.mean_holders),
+                    format!("{:.4}", p.mean_wait),
+                    p.admissions.to_string(),
+                    p.evicted_entries.to_string(),
+                    format!("{:.0}", p.evicted_units),
+                    p.preemptions.to_string(),
+                    p.spills.to_string(),
+                    p.rejected.to_string(),
+                    p.stuck.to_string(),
+                ]
+            });
+            table(
+                &mut s,
+                &[
+                    "pool", "used", "cached", "queue", "holders", "wait", "admits", "evict(n)",
+                    "evict(u)", "preempt", "spill", "rej", "stuck",
+                ],
+                rows,
             );
-            for p in &self.pools {
-                let _ = writeln!(
-                    s,
-                    "  {:<12} {:>9.1} {:>9.1} {:>6.3} {:>7.3} {:>7.4} {:>7} {:>8} {:>9.0} {:>7} {:>5} {:>3} {:>5}",
-                    p.name,
-                    p.mean_used,
-                    p.mean_cached,
-                    p.mean_queue,
-                    p.mean_holders,
-                    p.mean_wait,
-                    p.admissions,
-                    p.evicted_entries,
-                    p.evicted_units,
-                    p.preemptions,
-                    p.spills,
-                    p.rejected,
-                    p.stuck
-                );
-            }
             for p in &self.pools {
                 if p.stuck > 0 {
                     let _ = writeln!(
@@ -270,5 +277,66 @@ impl Report {
         }
         s.push_str("]}");
         s
+    }
+}
+
+/// One section of the text report: each column as wide as its widest cell,
+/// the name column left-aligned and the numbers right-aligned, a rule under
+/// the header, a blank line above. The width is measured in `char`s, so `±` counts as one.
+fn table(s: &mut String, header: &[&str], rows: impl Iterator<Item = Vec<String>>) {
+    let rows: Vec<Vec<String>> = rows.collect();
+    let width: Vec<usize> = (0..header.len())
+        .map(|c| {
+            rows.iter()
+                .map(|r| r[c].chars().count())
+                .chain([header[c].chars().count()])
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    s.push('\n');
+    let line = |s: &mut String, cells: &[&str]| {
+        let mut l = String::new();
+        for (c, (cell, w)) in cells.iter().zip(&width).enumerate() {
+            if c == 0 {
+                let _ = write!(l, "{cell:<w$}");
+            } else {
+                let _ = write!(l, "  {cell:>w$}");
+            }
+        }
+        let _ = writeln!(s, "{}", l.trim_end());
+    };
+    line(s, header);
+    let rule: Vec<String> = width.iter().map(|w| "-".repeat(*w)).collect();
+    line(s, &rule.iter().map(String::as_str).collect::<Vec<_>>());
+    for r in &rows {
+        line(s, &r.iter().map(String::as_str).collect::<Vec<_>>());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_long_name_or_a_wide_number_keeps_the_columns_aligned() {
+        let mut s = String::new();
+        table(
+            &mut s,
+            &["observe", "count", "95% CI"],
+            [
+                vec!["prefill_tokens".into(), "821".into(), "±38.6706".into()],
+                vec!["hit".into(), "1234567".into(), "±0.0221".into()],
+            ]
+            .into_iter(),
+        );
+        assert_eq!(
+            s,
+            "\n\
+             observe           count    95% CI\n\
+             --------------  -------  --------\n\
+             prefill_tokens      821  ±38.6706\n\
+             hit             1234567   ±0.0221\n"
+        );
     }
 }

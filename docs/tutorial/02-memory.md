@@ -52,14 +52,20 @@ seq-lang run docs/tutorial/programs/02-memory.seq
 ```
 
 ```text
-run: horizon 100000 warmup 5000 seed 1 events 158920 arrivals 79460 ended 75462 turns 75462 mean live 0.871
-observe        count        mean      95% CI      cv2       p99
-  admit_wait    75462      0.0947 ±0.0050     13.756    1.8649
-  response      75462      1.0959 ±0.0090      0.944    4.8777
-stage          number   util    done   thru      wait   service  iters
-  server         0.795  0.560   75462  0.7943    0.0000    1.0012      0
-pool             used     cached  queue holders    wait  admits evict(n)  evict(u) preempt spill rej stuck
-  mem                2.8       0.0  0.075   0.795  0.0947   79460        0         0       0     0   0     0
+run: horizon 100000 end 100000 warmup 5000 seed 1 events 158920 arrivals 79460 ended 75462 turns 75462 mean live 0.871
+
+observe     count    mean   95% CI     cv2     p99
+----------  -----  ------  -------  ------  ------
+admit_wait  75462  0.0947  ±0.0050  13.756  1.8649
+response    75462  1.0959  ±0.0090   0.944  4.8777
+
+stage   number   util   done    thru    wait  service  iters
+------  ------  -----  -----  ------  ------  -------  -----
+server   0.795  0.560  75462  0.7943  0.0000   1.0012      0
+
+pool  used  cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
+----  ----  ------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
+mem    2.8     0.0  0.075    0.795  0.0947   79460         0         0        0      0    0      0
 ```
 
 Note `wait 0.0000` at the stage: nobody queues for a server. All the waiting
