@@ -38,10 +38,9 @@ vLLM v1's engine:
 ## Formats
 
 **`--format tikz`** (default) writes a `tikzpicture` needing only
-`\usepackage{tikz}`. It is the default because the figure it replaces is TikZ
-source inside a LaTeX document, and a generated artefact substitutes for that
-only if the document can `\input` it: an image inherits neither the document's
-fonts nor its rules, and does not diff.
+`\usepackage{tikz}`. It is the default because a figure in a LaTeX document is
+best TikZ source the document can `\input`: an image inherits neither the
+document's fonts nor its rules, and does not diff.
 
 **`--format svg`** writes a standalone file. Colours are presentation
 attributes with a `prefers-color-scheme` override rather than CSS custom

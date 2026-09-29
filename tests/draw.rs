@@ -373,6 +373,27 @@ fn a_transfer_puts_the_link_in_both_enclosures() {
     assert_eq!(boxes.iter().filter(|b| b.contains(&rect)).count(), 3);
 }
 
+/// `examples/pd-disaggregation/llmd_pd.seq`'s router sends a request either
+/// to a prefiller and over the link (remote), or straight to the decoder
+/// (local); a request whose KV is already there skips the link. Every turn
+/// ends at the decoder, which the session leaves or resumes after a tool call.
+#[test]
+fn the_router_branches_to_a_remote_or_a_local_prefill() {
+    let p = program("llmd_pd");
+    let net = deployment::project(&p);
+    let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
+    let (pf, link, d, tool) = (at("P"), at("link"), at("D"), at("tool"));
+    assert!(net.has_edge(End::Arrival, pf), "remote");
+    assert!(net.has_edge(End::Arrival, d), "local");
+    assert!(net.has_edge(pf, link));
+    assert!(net.has_edge(link, d));
+    assert!(net.has_edge(pf, d), "the KV is already on the decoder");
+    assert!(net.has_edge(d, tool), "more");
+    assert!(net.has_edge(d, End::Exit));
+    assert!(net.has_edge(tool, pf), "next turn");
+    assert!(net.arrival.contains("Poisson"));
+}
+
 /// Every enclosure holds the stations it encloses, and enclosures either nest
 /// or stay apart - the property that makes the picture readable.
 #[test]

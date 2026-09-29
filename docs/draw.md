@@ -77,10 +77,9 @@ all of its pools. `replica.seq` is the case that makes the difference visible
 
 `--format tikz` (default) writes a `tikzpicture` that needs `\usepackage{tikz}`
 and nothing else, with the colours it uses defined above it. It is the default
-because the figure it replaces is TikZ source inside a LaTeX document, and a
-generated artefact substitutes for that only if the document can `\input` it:
-an image inherits neither the document's fonts nor its rules, and does not
-diff.
+because a figure in a LaTeX document is best TikZ source the document can
+`\input`: an image inherits neither the document's fonts nor its rules, and
+does not diff.
 
 `--format svg` writes a standalone SVG. Colours are written as presentation
 attributes with a `prefers-color-scheme` override, not as CSS custom
