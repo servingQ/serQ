@@ -357,20 +357,51 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
 /// the transfer on, so the link station is inside both enclosures, the
 /// prefill station in the prefiller's only and the decode station in the
 /// decoder's only. The prefiller's request slot ends with its scope, so it
-/// encloses the prefill station alone.
+/// encloses the prefill station alone. The decoder's slot is only reserved
+/// during the transfer (`reqsD[j] (0) reserve (1)`: the request is parked,
+/// not running, `scheduler.py:1264-1268`), so it encloses the decode
+/// station and not the link.
 #[test]
 fn a_transfer_puts_the_link_in_both_enclosures() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "P"), ["reqsP", "kvP"]);
-    assert_eq!(pools_of(&p, &net, "link"), ["kvP", "kvD", "reqsD"]);
+    assert_eq!(pools_of(&p, &net, "link"), ["kvP", "kvD"]);
     assert_eq!(pools_of(&p, &net, "D"), ["kvD", "reqsD"]);
     assert!(pools_of(&p, &net, "tool").is_empty());
     let f = deployment::layout(&p, &net);
     let boxes = f.boxes(BoxStyle::Enclosure);
     let link = net.node_of(stage(&p, "link")).unwrap();
     let (rect, _) = f.stations()[link];
-    assert_eq!(boxes.iter().filter(|b| b.contains(&rect)).count(), 3);
+    assert_eq!(boxes.iter().filter(|b| b.contains(&rect)).count(), 2);
+}
+
+fn pools_at(src: &str, stage_name: &str) -> Vec<String> {
+    let src = format!(
+        "pool p {{ cap 2; }} stage A : delay; workload {{ arrive poisson(1); }}
+         session {{ {src} }} run {{ horizon 1; }}"
+    );
+    let p = compile_source(&src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    pools_of(&p, &net, stage_name)
+}
+
+/// A hold of no units reserves and occupies nothing: it draws no boundary.
+#[test]
+fn a_reservation_only_hold_encloses_nothing() {
+    assert!(pools_at("hold p (0) reserve (1) { run A (1); }", "A").is_empty());
+    assert_eq!(pools_at("hold p (1) { run A (1); }", "A"), ["p"]);
+}
+
+/// A `release` gives back the innermost hold of its pool (`interp.rs`), so
+/// after releasing a reservation the outer hold still encloses - which a
+/// view that left the reservation off the hold stack would get wrong.
+#[test]
+fn a_release_takes_the_innermost_hold_even_of_no_units() {
+    assert_eq!(
+        pools_at("hold p (1) { hold p (0) { release p; run A (1); } }", "A"),
+        ["p"]
+    );
 }
 
 /// `examples/pd-disaggregation/llmd_nixl_pull.seq`'s router sends a request either
