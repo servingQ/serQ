@@ -2,7 +2,7 @@
 //!
 //! A seQ program describes an LLM serving deployment: memory pools and
 //! stages, a workload of sessions, and the program every session runs.
-//! Its definition is the IR (`ir::Program`, `docs/ir.md`): `sim::interp` runs it,
+//! Its definition is the IR (`ir::Program`, `docs/ir.md`): `engine::interp` runs it,
 //! the Lean model is generated from it, and tools build or edit it as data.
 //! The text syntax (`frontend`; `docs/language.md`) is one frontend
 //! that compiles to it. `examples/` holds example deployments, among them
@@ -14,18 +14,18 @@
 //! println!("{}", report.text());
 //! ```
 
+pub mod engine;
 pub mod frontend;
 pub mod ir;
-pub mod sim;
 pub mod view;
 
 use std::path::Path;
 
+pub use engine::dist::Dist;
+pub use engine::report::Report;
+pub use engine::stats::Estimate;
 pub use frontend::link::{Linked, Overrides};
 pub use ir::Program;
-pub use sim::dist::Dist;
-pub use sim::report::Report;
-pub use sim::stats::Estimate;
 
 /// Compile program text to IR (parse and link; `--set` overrides apply).
 pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
@@ -81,7 +81,7 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 pub fn run_ir(p: &ir::Program, base: Option<&Path>) -> Result<Report, String> {
     p.validate()?;
     let corpus = load_trace(p, base)?;
-    sim::interp::Interp::new(p, corpus).run()
+    engine::interp::Interp::new(p, corpus).run()
 }
 
 /// The program's trace corpus, if it names one; a relative path is resolved

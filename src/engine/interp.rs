@@ -14,12 +14,12 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
+use crate::engine::dist::Dist;
+use crate::engine::report::*;
+use crate::engine::stats::*;
 use crate::frontend::ast::{BinOp, Preempt, RunMode, UnOp};
 use crate::frontend::link::*;
 use crate::ir::trace::Corpus;
-use crate::sim::dist::Dist;
-use crate::sim::report::*;
-use crate::sim::stats::*;
 
 // ------------------------------------------------------------ events ----
 

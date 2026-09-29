@@ -1,6 +1,6 @@
 //! The seQ intermediate representation (IR).
 //!
-//! The IR is the definition of a seQ program: the interpreter (`sim::interp`) runs
+//! The IR is the definition of a seQ program: the interpreter (`engine::interp`) runs
 //! it, the Lean model is generated from it, and tools build or edit it as
 //! data. The text syntax (`frontend`) is one frontend that compiles
 //! to it. The format is serialised as JSON (`Program::to_json`), carries a
