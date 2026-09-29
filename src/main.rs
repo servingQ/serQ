@@ -74,7 +74,7 @@ fn format_files(args: &[String]) {
         }
         let source = std::fs::read_to_string(file).unwrap_or_else(|e| fail(file, e));
         let formatted =
-            seq::frontend::fmt::format_at(&source, file.parent()).unwrap_or_else(|e| fail(file, e));
+            seq::frontend::fmt::format_file(&source, file).unwrap_or_else(|e| fail(file, e));
         if source != formatted {
             changes.push((file, formatted));
         }

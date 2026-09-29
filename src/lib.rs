@@ -32,6 +32,13 @@ pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> 
     compile_source_at(src, None, ov)
 }
 
+/// Compile `src`, the text of the program file `path`: its `use`s read
+/// next to it, and a library that `use`s it back does not read it again.
+pub fn compile_file(src: &str, path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
+    let prog = frontend::parser::parse_file(src, path).map_err(|e| e.render(src))?;
+    finish(prog, src, ov)
+}
+
 /// Compile the text of a program file in `base`, next to which its `use`s
 /// read their libraries.
 pub fn compile_source_at(
@@ -40,6 +47,11 @@ pub fn compile_source_at(
     ov: &Overrides,
 ) -> Result<ir::Program, String> {
     let prog = frontend::parser::parse_at(src, base).map_err(|e| e.render(src))?;
+    finish(prog, src, ov)
+}
+
+/// Link a parsed program and check its IR.
+fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir::Program, String> {
     let mut p = frontend::link::link(&prog, ov).map_err(|e| e.render_in(src, &prog.libs))?;
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
@@ -85,7 +97,7 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
         p.validate()?;
         Ok(p)
     } else {
-        compile_source_at(&text, path.parent(), ov)
+        compile_file(&text, path, ov)
     }
 }
 

@@ -61,7 +61,19 @@ pub fn format(src: &str) -> Result<String, String> {
 /// Format the text of a program file in `base`, whose `use`s are read to
 /// check the text parses.
 pub fn format_at(src: &str, base: Option<&std::path::Path>) -> Result<String, String> {
-    parser::parse_at(src, base).map_err(|e| e.render(src))?;
+    format_with(src, &|s| parser::parse_at(s, base))
+}
+
+/// Format `src`, the text of the program file `path`.
+pub fn format_file(src: &str, path: &std::path::Path) -> Result<String, String> {
+    format_with(src, &|s| parser::parse_file(s, path))
+}
+
+fn format_with(
+    src: &str,
+    parse: &dyn Fn(&str) -> Result<crate::frontend::ast::Program, parser::ParseError>,
+) -> Result<String, String> {
+    parse(src).map_err(|e| e.render(src))?;
     let tokens = lex(src).map_err(|e| e.to_string())?;
     let lines: Vec<&str> = src.lines().collect();
     let mut by_line: Vec<Vec<&Token>> = vec![vec![]; lines.len() + 1];
@@ -153,8 +165,7 @@ pub fn format_at(src: &str, base: Option<&std::path::Path>) -> Result<String, St
     if src.is_empty() {
         out.clear();
     }
-    parser::parse_at(&out, base)
-        .map_err(|e| format!("formatter produced invalid syntax: {}", e.render(&out)))?;
+    parse(&out).map_err(|e| format!("formatter produced invalid syntax: {}", e.render(&out)))?;
     let formatted = lex(&out).map_err(|e| e.to_string())?;
     let before: Vec<&Tok> = tokens.iter().map(|t| &t.tok).collect();
     let after: Vec<&Tok> = formatted.iter().map(|t| &t.tok).collect();
