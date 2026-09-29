@@ -1,7 +1,7 @@
 //! The multi-turn prefix-cache scenario (`tools/oracle/cache_trace.*`).
 //!
 //! Its IR, `tools/oracle/cache_trace.ir.json`, is the vLLM replay program
-//! (`programs/vllm_replay.seq`) on a unit step clock with the scenario's
+//! (`examples/replay/vllm_replay.seq`) on a unit step clock with the scenario's
 //! engine, and the trace `cache_trace.csv` inlined as explicit sessions
 //! with turns: the IR carries its whole workload. Run, it gives for every
 //! turn the first-token step, the last-token step and the cached tokens

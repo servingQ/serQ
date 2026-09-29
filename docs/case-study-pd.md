@@ -1,6 +1,6 @@
 # Case study: prefill/decode disaggregation over NIXL
 
-`programs/llmd_pd.seq` is llm-d's prefill/decode split on vLLM: the router
+`examples/pd-disaggregation/llmd_pd.seq` is llm-d's prefill/decode split on vLLM: the router
 that decides which pod prefills and which decodes, the sidecar that sends
 the prompt to one and the decode request to the other, and the two
 schedulers that hand the KV over with the NIXL connector. Every line is
@@ -30,16 +30,13 @@ this:
 | sidecar | `llm-d-routing-sidecar` on each decode pod, connector `nixlv2`: prefill leg (`max_tokens = 1`, `do_remote_decode`), wait, decode leg with the prefiller's block ids; serial | `pkg/sidecar/proxy/connector_nixlv2.go` (router `13eebdb`) |
 | alternative decider | `prefix-based-pd-decider` with `nonCachedTokens`, `promptTokens`: remote prefill only when the uncached suffix on the chosen decoder is long enough | `docs/disaggregation.md`, `profilehandler/disagg/README.md` |
 
-The [testbed](#measured-and-predicted) below stands in one node for it:
-one or two prefillers and decoders, Qwen3-8B, block 16, and vLLM's own
-NIXL proxies in place of the sidecar (the same serial protocol for pull;
-the two legs at once for push). What differs from the guide is written next
-to each number.
+The examples below run on one prefiller or two, one decoder or two, with Qwen3-8B
+and block 16. What differs from the guide is written next to each number.
 
 ## In seQ
 
-```seq title="programs/llmd_pd.seq"
---8<-- "programs/llmd_pd.seq"
+```seq title="examples/pd-disaggregation/llmd_pd.seq"
+--8<-- "examples/pd-disaggregation/llmd_pd.seq"
 ```
 
 ### Line by line
@@ -52,7 +49,7 @@ to each number.
 | the decider: a remote prefill when the prompt's uncached suffix on the chosen decode pod is at least `nonCachedTokens`, and the prompt at least `promptTokens`; the cached part is the router's own estimate of the pod's prefix cache | `set hitD = min(cachedin(kvD[j]), hitmax); set remote = prompt >= minp && prompt - hitD >= thr;` | `prefix_based_pd_decider.go:266-303`; `disagg_profile_handler.go:353-366`. The guide runs `always-disagg-pd-decider`, which is `thr = 1` |
 | the prefill profile: pods that have the prefix (`prefix-cache-affinity-filter`), then the least loaded (`token-load-scorer`) | `choose i in NP by ((cachedin(kvP[i]) > 0 ? 0 : 1) * 1e9 + work(P[i]) + queued(reqsP[i]))` | the same values file |
 | the decode pod's sidecar sends the prompt to the prefiller with `max_tokens = 1` and `do_remote_decode`, waits for the answer, then sends the decode request to its own engine with the prefiller's block ids | the prefiller's hold, its blocks leased at its end, then the decoder's hold | `connector_nixlv2.go:69-232` (the prefill leg, `CapSingleToken` at 145), `261-379` (the decode leg) |
-| no prefill header: the request goes to the decode pod's engine as it is | the `else` branch: vLLM's engine on one device (`programs/vllm.seq`) | `dispatch.go:196-213` |
+| no prefill header: the request goes to the decode pod's engine as it is | the `else` branch: vLLM's engine on one device (`examples/multi-turn/vllm.seq`) | `dispatch.go:196-213` |
 | the two legs in parallel, so the decoder allocates while the prefiller works | not written: a session waits at one pool at a time ([The KV transfer](design/pd-transfer.md)) | `connector_nixlv2.go:60-67` (MoRI-IO write mode only); vLLM's push-mode proxy, `disagg_proxy_pushconnector_demo.py:227-270` |
 
 #### The two schedulers, against vLLM
@@ -112,7 +109,7 @@ own stage array (`link`).
 Going from 2P2D to 4P8D is the four literals and the two `let`s; the
 program does not change otherwise, which is the point of writing the router
 as `choose` over a family rather than as a branch per instance
-(`programs/routing.seq` still has the branch-per-policy shape the design
+(`examples/multi-turn/routing.seq` still has the branch-per-policy shape the design
 notes call a smell).
 
 ### The two modes
@@ -201,109 +198,12 @@ read; cross-session prefix sharing on either side (per session here, as in
 `vllm.seq`); the router's approximate prefix cache as a data structure of
 its own (its estimate is taken to be the pod's cache).
 
-## Measured and predicted
-
-### On the A6000 testbed
-
-One Lambda Cloud `gpu_4x_a6000` node (four RTX A6000, 48 GB each, PCIe;
-vLLM at `0c87a197`, NIXL 1.4.1 over UCX with `cuda_ipc,cuda_copy,tcp,sm`;
-Qwen3-8B, block 16, budget 8 192, `max_num_seqs` 16 on a prefiller and 64
-on a decoder, 192 000-token KV pools) ran the deployment of
-`programs/llmd_pd_replay.seq`: one prefiller, one decoder, vLLM's own
-proxy in front (`tests/v1/kv_connector/nixl_integration/toy_proxy_server.py`
-for pull, `disagg_proxy_pushconnector_demo.py` for push), replaying the
-short-context trace of the [vLLM case study](case-study-vllm.md) — 96
-sessions sent 3 s apart, 957 requests, prompts of 2 000–30 000 token ids
-sent as ids so that every length is the trace's — with the scripts and the
-raw records in `tools/a6000/`.
-
-**The constants, from lone requests.** Fourteen requests of 512–32 000
-tokens through the proxy with nothing else in flight
-(`tools/a6000/pull1x1_probe.jsonl`, fitted by `fit_probe.py`): a transfer
-takes 10 ms + tokens / 99 800 s (13 of 14; one 32 000-token read took 1.5 s
-and was left out), a prefill 119 µs per token + 7.06 ns per token per
-context token, a decode step 24 ms, and the rest of a lone request's TTFT —
-the two proxy hops, the API servers — 63 ms. Those eight numbers are the
-`let`s of the program; nothing is fitted on the replay.
-
-**Pull, request for request** (`tools/a6000/pull1x1_s3_rounds.jsonl`,
-`compare.py`):
-
-| | measured | `llmd_pd_replay.seq` |
-|---|---|---|
-| mean TTFT | 1.300 s | 1.088 s |
-| median TTFT | 0.692 s | 0.562 s |
-| p99 TTFT | 5.98 s | 5.11 s |
-| first turns, mean | 1.284 s | 1.116 s |
-| follow-up turns, mean | 1.302 s | 1.085 s |
-| decoder's cached tokens on follow-ups, mean | 5 774 | 5 769 |
-| follow-ups with the cached count exactly right | | 742 of 861 |
-
-The cache agrees: the decoder's `cached_tokens` is the program's
-`d_cached` on 742 of 861 follow-ups, and 113 of the other 119 are one
-block (16 tokens) lower on the machine, which is the same question as the
-vLLM case study's `keep (prompt + out - 1)` — whether the block a request's
-last step fills is cached before the request is freed on the decode side of
-a transfer — and belongs to the P/D oracle. The time is under-predicted
-where the prefiller queues: requests measured under 0.5 s are predicted
-within 0.14 s, those measured above 3 s are predicted 1–2 s short, and the
-prefiller's `running` reached 10 with a 6-deep queue. The lone-request
-constants say what one request costs; what several cost together on this
-proxy — which forwards the prefill leg unstreamed and the decode leg
-streamed from one Python process — is not in them, as the A100 replay's
-two served-path constants were not in its step fit either. The prefiller's
-KV usage averaged 11 % and peaked at 77 %; the leases are short at this
-load (47 ms mean in the program).
-
-**Push, the same trace** (`NixlPushConnector` on both engines, vLLM's
-`disagg_proxy_pushconnector_demo.py`, `tools/a6000/push1x1_s3_rounds.jsonl`).
-The lone requests are the pull run's within noise up to 4 096 tokens
-(`tools/a6000/push1x1_probe.jsonl`: 0.09–0.86 s against 0.14–0.69 s) and
-one to two seconds slower at 8 192 tokens and above, where some writes stall;
-the first request paid 3.6 s for the handshake. Under the replay's load the
-deployment collapsed: the prefiller's 1 944 writes averaged 1.03 s each
-(`nixl_xfer_time_seconds` on the prefiller; 41 ms of it the submission),
-requests parked on the decoder waiting for their write held the decoder's
-KV at 94 % on average and 100 % at peak with 100 to 150 requests waiting on
-each side, the mean TTFT was 95 s and the 96 sessions took 1 468 s against
-435 s in pull mode. This is the commit's push connector as shipped
-(`vllm/distributed/kv_transfer/kv_connector/v1/nixl/push_worker.py`, one
-writer thread per rank) through a demo proxy, on one node over `cuda_ipc`;
-it is a measurement of that, not of push mode in general.
-
-The program says what such a write time does. With the pull constants and
-`x0` set to the measured 1.03 s per transfer, `llmd_pd_replay.seq` gives a
-mean TTFT of 73 s, a mean lease of 21 s, and 57 000 tokens of the decoder's
-pool allocated on average (30 %; measured 94 %): the transfers form a
-queue whose throughput is one per second against 2.2 requests per second,
-so every arrival after the first minute waits behind it, holding its blocks
-on both instances — the coupling of the lease table above, reached from the
-transfer's side. The decoder's occupancy is under-predicted, and not by the
-link: with the link a one-at-a-time `fifo` stage the program gives 70 s and
-32 %. The gap is the dispatch. vLLM's push proxy sends the decode leg at
-once, so the real decoder took every request as it arrived and parked it
-with its blocks allocated while the prefiller was still queued and
-prefilling — 100 to 150 of them at a time — whereas the program's decoder
-is asked only after the prefill, the serial order a session can write. The
-collapse is in the program; the decoder's share of it is the concurrent
-dispatch the reservation of [The KV transfer](design/pd-transfer.md) would
-write, measured.
-
-Two things the runs settle about the two modes. Through a serial proxy the
-lifecycle is the one program: the same trace, the same admissions, and the
-cache agreeing request for request in pull mode. And the mode is a
-*constant* of that program, not a construct: what changed between the runs
-is `x0` (and, in an xPyD deployment, which NIC the transfer runs on), and
-with the measured constant the program predicts the collapse the run
-showed.
-
-
-### What the program predicts at loads the testbed did not run
+## What the program predicts
 
 Two decode pods of 160 000 tokens each, two prefill pods, sessions of
 one to several turns (a prompt of 1 000–3 000 new tokens on a growing
 context, 200 output tokens, a 3 s tool call between turns, `p = 0.9`), the
-A100-shaped step cost of `programs/vllm.seq`, a 200 000 token/s link.
+A100-shaped step cost of `examples/multi-turn/vllm.seq`, a 200 000 token/s link.
 
 **The decider.** The guide's `always-disagg-pd-decider` sends every prompt
 to a prefiller; the `prefix-based-pd-decider` keeps a follow-up turn whose
@@ -346,7 +246,7 @@ prompts to the prefillers — they cache less, so the decider's uncached
 suffix is longer — which is the other direction of the same coupling.
 
 The decoder's shortage shows up as memory *on the prefiller*, which is the
-coupling `programs/lecture_pd.seq` gets backwards: its prefiller holds
+coupling `examples/pd-disaggregation/lecture_pd.seq` gets backwards: its prefiller holds
 through the transfer and lets go before the session queues for the decoder,
 so a decoder with no room costs the prefiller nothing.
 `tests/pd_semantics.rs` has the deterministic version: six requests, a
@@ -369,12 +269,9 @@ the difference is the point of saying so.
    moment the link run ends, an untaken lease ends at its bound and keeps
    its cache, a re-executed hold releases nothing twice, the prefiller
    stops when the decoder is full.
-3. **The machine, request for request.** The A6000 runs above: the
-   decoder's cached tokens agree with the program on 742 of 861 follow-ups
-   in pull mode, the lone-request constants predict a lightly loaded
-   prefiller's TTFT within 0.14 s and under-predict a queued one's by a
-   third, and the measured push-mode write time reproduces the collapse.
-   Two runs at one load, not a sweep.
+3. **No machine.** No run of a real deployment is compared with the
+   program here: the numbers under "What the program predicts" are the
+   program's, not measurements.
 4. **No scheduler oracle yet.** `tools/vllm_oracle.py` drives one real
    scheduler with a fake model runner. The oracle this program wants drives
    two — a producer and a consumer with a fake NIXL connector that reports a

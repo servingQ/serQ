@@ -23,7 +23,7 @@ proof.
 It is also the one that would otherwise become a hand-kept copy. `docs/ir.md`
 exists because the vLLM request program had three of those. The lecture notes
 have a fourth: `fig:deployment` in Lecture 1 §2 is hand-written TikZ for a
-deployment that `programs/lecture_pd.seq` already defines, down to the last
+deployment that `examples/pd-disaggregation/lecture_pd.seq` already defines, down to the last
 station.
 
 Both views are pure functions of `ir::Program`. No simulation, no clock, no
@@ -46,7 +46,7 @@ RNG — the same IR gives the same bytes.
 
 </div>
 
-Here is `programs/vllm.seq` — vLLM v1's engine — in each:
+Here is `examples/multi-turn/vllm.seq` — vLLM v1's engine — in each:
 
 **Deployment**
 

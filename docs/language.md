@@ -10,7 +10,7 @@ Status: 2026-09-27 (moved into seQ from the research repository
 `serving-queue-theory` the same day). Reference implementation: the crate
 `seq-lang` at the repository root (Rust: parser, interpreter, CLI
 `seq-lang`: `run`, `check`, and `ir` to print a program's IR). Programs:
-`programs/*.seq`. Checks: `make check`. The review
+`examples/*/*.seq`. Checks: `make check`. The review
 of the first version against vLLM, the design decisions and the tooling
 survey are in `docs/review.md`.
 
@@ -46,7 +46,7 @@ runs as a session. One program has three uses:
    (`[route| ... ]`; the Lean type and its quotation still carry the block's
    former name, `route`, until the companion change lands there).
 3. **Specification of production systems.** vLLM v1's engine is a
-   50-line program (`programs/vllm.seq`, `vllm_replay.seq`). It
+   50-line program (`examples/multi-turn/vllm.seq`, `vllm_replay.seq`). It
    reproduces the real scheduler request for request: on six
    deterministic scenarios (also on the real A100 engine, and as Lean
    theorems) and on the full 333-session agent trace (3 321 requests,
@@ -199,7 +199,7 @@ step engine are rejected by the linker as `run E (X)` would be. A linker
 error inside a form (an unknown name in `W`, say) speaks of the kernel
 statement.
 
-The lecture's disaggregated replica (`programs/lecture_pd.seq`) then reads
+The lecture's disaggregated replica (`examples/pd-disaggregation/lecture_pd.seq`) then reads
 (`T`, `S` and the rest are that program's own constants):
 
 ```
@@ -211,7 +211,7 @@ loop {
 }
 ```
 
-and vLLM's engine (`programs/vllm.seq`, whose `server` block spells the
+and vLLM's engine (`examples/multi-turn/vllm.seq`, whose `server` block spells the
 same hold from the scheduler's side, below)
 
 ```
@@ -257,7 +257,7 @@ of `n` tokens arrived from outside the engine: the enclosing hold's
 computed position on `Q` advances by `n` (within its allocation), as a
 `growing` run's would token by token, so `keep` and `cached` count them.
 `transfer (X) from P to Q (n)` is the two around the link run.
-`programs/llmd_pd.seq` is the whole path, and `docs/case-study-pd.md` its
+`examples/pd-disaggregation/llmd_pd.seq` is the whole path, and `docs/case-study-pd.md` its
 line-by-line correspondence with llm-d and the NIXL connector.
 
 **Against vLLM.** Each form is one part of a request's life in the v1
@@ -268,7 +268,7 @@ scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
 | `admit if reqs (1), kv (hit + …) fit where hit = … { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
 | `prefill (n) growing kv` | prefill in chunks of the budget, a block allocated as the request advances; a missing block preempts `running[-1]` | the running loop, `scheduler.py:624-823`; `allocate_slots` at `scheduler.py:743`; `_preempt_request`, `scheduler.py:1539-1582` (`preempt lifo`) |
 | `decode (o) growing kv` | one token per iteration, a block every `block_size` tokens | the same loop and `allocate_slots` with one new token |
-| `} keep (prompt) lease kvP (inf)` on the prefiller's hold, then `transfer (X) from kvP to kvD (n)` inside the decoder's | the KV of a prefilled request moves to the decode instance: the prefiller's blocks wait, the decoder allocates and reads, the prefiller frees | the KV connector, `programs/llmd_pd.seq`: the decoder parks the request at `scheduler.py:1264-1294` (`WAITING_FOR_REMOTE_KVS`), its blocks allocated for the whole prompt; the read done, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; the prefiller keeps its blocks leased at `_connector_finished`, `scheduler.py:2929-2982`, and frees them at `scheduler.py:3135-3138` |
+| `} keep (prompt) lease kvP (inf)` on the prefiller's hold, then `transfer (X) from kvP to kvD (n)` inside the decoder's | the KV of a prefilled request moves to the decode instance: the prefiller's blocks wait, the decoder allocates and reads, the prefiller frees | the KV connector, `examples/pd-disaggregation/llmd_pd.seq`: the decoder parks the request at `scheduler.py:1264-1294` (`WAITING_FOR_REMOTE_KVS`), its blocks allocated for the whole prompt; the read done, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; the prefiller keeps its blocks leased at `_connector_finished`, `scheduler.py:2929-2982`, and frees them at `scheduler.py:3135-3138` |
 | `} keep (prompt + o)` | release: the blocks go to the free queue, the full ones stay cached | `_free_request`, `scheduler.py:2628`; `free`, `kv_cache_manager.py:610-619`; `cache_blocks`, `kv_cache_manager.py:802-812` |
 | `tool Z; turn;` | the session thinks and comes back with a longer prompt | outside the engine: the session's next request, `add_request`, `scheduler.py:2536` |
 | `end` | the session leaves; its blocks stay in the free queue | `finish_requests`, `scheduler.py:2564` |
@@ -277,7 +277,7 @@ scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
 
 A `session` block writes a session's whole life in one place: what the
 client does (arrive, think, decide whether to go on) next to what the
-deployment does with each request. `programs/vllm.seq` is headed "vLLM v1
+deployment does with each request. `examples/multi-turn/vllm.seq` is headed "vLLM v1
 on one device", and its session block held three statements vLLM does not
 execute — the tool call, the next turn, the exit — and one variable, the
 context length `K`, that belongs to the conversation rather than to the
@@ -409,10 +409,10 @@ not in an iteration that preempted (vLLM's waiting loop,
 q[N] { admit via S; }` next to `stage S[N]` serves `q[i]` by `S[i]`, and
 `stage E[N] : step { memory kv; }` next to `pool kv[N]` counts `kv[i]` for
 `E[i]`; next to a family of one, every member gets that one, and any other
-pair of counts is a link error (`programs/llmd_pd.seq` is the xPyD case,
+pair of counts is a link error (`examples/pd-disaggregation/llmd_pd.seq` is the xPyD case,
 `docs/case-study-pd.md` §Writing xPyD). A stage that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
-stops the iteration's admissions; `programs/llmd_pd.seq` declares the
+stops the iteration's admissions; `examples/pd-disaggregation/llmd_pd.seq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
 ones, as vLLM serves `skipped_waiting` before `waiting`
 (`scheduler.py:2383-2385`). `budget_left(S)` then evaluates to the budget
@@ -473,7 +473,7 @@ own at rate 1. `step { budget B; cost C; }`: an engine that runs
 iterations. A plain `run`'s work is time at rate 1, the clock's unit; a step
 engine's `prefill` and `decode` work is in the unit of `B`, tokens. The
 clock itself has no unit: a program whose costs are seconds runs in seconds,
-and `programs/vllm_request.seq` runs on the step clock with `cost 1`, so
+and `examples/oracle/vllm_request.seq` runs on the step clock with `cost 1`, so
 its times are iterations. The residents are served the way `serve` names, said once per
 stage: an order, `by (k₁, …)` (ascending keys evaluated for each resident
 with `decoding`, 1 for a decoding resident, `admission`, its admission
@@ -516,7 +516,7 @@ a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 `reuse` — is evaluated when the session is admitted, and a `set` above the
 hold is not (`cache` is read when the session releases, `SeqExec.lean`'s
 `release` and the interpreter agree). The two look the same, which is how
-`programs/vllm.seq` came to read its prefix cache at the moment the session
+`examples/multi-turn/vllm.seq` came to read its prefix cache at the moment the session
 queued rather than the moment the scheduler took it. `at admission (hit = e)`
 gives the header a place to name what it is written in terms of:
 
@@ -582,7 +582,7 @@ reaching the header is the one from before the session queued — `at admission`
 is the clause for it. And a `branch` whose guard is a constant strictly
 between 0 and 1: that is a draw, and `branch with` is how to say so. Both are
 errors rather than warnings; neither has a legitimate instance in
-`programs/`, and a warning nobody acts on is worse than no check.
+`examples/`, and a warning nobody acts on is worse than no check.
 
 **Statistics.** `observe x = e` records a sample after warm-up with the
 time, session and turn (`--dump DIR` writes them); the report gives per
@@ -617,9 +617,9 @@ the semantics the oracle theorems are about.
 | no measurement | `observe`, `--dump` | TTFT and the price are defined in the program |
 | no routing | stage arrays and `choose` | §3.2 |
 
-The lecture's disaggregated replica is `programs/lecture_pd.seq` and,
+The lecture's disaggregated replica is `examples/pd-disaggregation/lecture_pd.seq` and,
 in Lean, `SeqLang.disaggregatedReplica`; the paper's colocated
-two-resource replica is `programs/replica.seq` and
+two-resource replica is `examples/multi-turn/replica.seq` and
 `SeqLang.colocatedReplica`.
 
 ## 5. Programs
@@ -627,9 +627,8 @@ two-resource replica is `programs/replica.seq` and
 | Program | Deployment | Checked against |
 |---|---|---|
 | `mg1.seq`, `ps.seq`, `closed.seq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | closed forms (`seq_closed_forms.rs`): M/M/1 sojourn, PK for four laws, PS insensitivity, MVA |
-| `agentic.seq` | `models::agentic` (one FIFO replica, finite KV, SF eviction) | hand-written model, throughput within 3 %, hit rate within 0.5 pt, response within 3 % (`seq_agentic.rs`) |
 | `replica.seq` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`serve decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/seq/replica_seeds.csv`, `seq_replica_and_pd.rs`) |
-| `pd_tandem.seq`, `lecture_pd.seq` | tandem PD, the lecture's disaggregated replica | capacity formulas within 2 %; stability |
+| `lecture_pd.seq` | the lecture's disaggregated replica | capacity formulas within 2 %; stability |
 | `routing.seq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
 | `llmd_pd.seq` | llm-d's prefill/decode disaggregation on vLLM with the NIXL connector: the router, the sidecar, two prefill and two decode instances (`docs/case-study-pd.md`) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle yet |
 | `vllm.seq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
@@ -646,7 +645,7 @@ are checked against; new scenarios should be written as programs.
 
 ## 7. vLLM v1 as a seQ program
 
-`programs/vllm.seq` and `programs/vllm_replay.seq` (upstream `ref/vllm`
+`examples/multi-turn/vllm.seq` and `examples/replay/vllm_replay.seq` (upstream `ref/vllm`
 at 0c87a197; the A100 testbed runs vLLM 0.30.0, whose scheduler gives
 identical answers on the differential scenario below):
 
@@ -672,7 +671,7 @@ long-prefill threshold, encoder inputs, speculative decoding, sliding
 window, cross-session prefix sharing (out of scope), asynchronous
 scheduling (Section 8).
 
-**Admission.** The header of `admit if` in `programs/vllm.seq` is the
+**Admission.** The header of `admit if` in `examples/multi-turn/vllm.seq` is the
 prefix-cache lookup and the allocation of the first chunk, and both happen
 when the scheduler admits the request, not when it queues. `known` is
 every token the request has: the prompt, or after a preemption the tokens
@@ -717,7 +716,7 @@ request runs (`growing kv`).
 
 ## 8. vLLM on the A100 testbed
 
-`programs/vllm_replay.seq` replays the short-context trace of
+`examples/replay/vllm_replay.seq` replays the short-context trace of
 `docs/testbed-gpu.md` (Qwen3-8B, block 16, budget 512, `max_num_seqs` 64,
 128 160-token pool, prefix caching; session `i` sent at `i·spacing`, turn
 `k+1` `think` seconds after turn `k`).
@@ -822,11 +821,11 @@ the pinned run, so the comparison is conservative. One run per point.
 * A session is one sequence of statements, so it waits at one pool at a
   time. NIXL's push mode lets a proxy send the decode request while the
   prefill runs, so the decoder allocates *during* the prefill and the write
-  starts the moment it ends; `programs/llmd_pd.seq` writes the decoder's
+  starts the moment it ends; `examples/pd-disaggregation/llmd_pd.seq` writes the decoder's
   admission after the prefill, which is the pull mode and the llm-d
   sidecar's serial dispatch. A reservation a session joins now and enters
   later is the construct for it (`docs/design/pd-transfer.md`).
-* A lease's bound is one number: `programs/llmd_pd.seq` writes `inf` for
+* A lease's bound is one number: `examples/pd-disaggregation/llmd_pd.seq` writes `inf` for
   a prefiller whose lease the decoder's heartbeats renew, `30` would be
   one nobody renews; the heartbeat itself (a 5 s message that adds 20 s)
   is not a construct, and a decoder that dies mid-wait is not a session

@@ -4,7 +4,7 @@
 
 ![The lecture's disaggregated replica](../assets/lecture_pd.deployment.svg)
 
-That is `programs/lecture_pd.seq`, and it is `fig:deployment` of Lecture 1 §2
+That is `examples/pd-disaggregation/lecture_pd.seq`, and it is `fig:deployment` of Lecture 1 §2
 — generated.
 
 ## The flow is projected from the session program
@@ -51,7 +51,7 @@ over an empty cache says nothing.
 
 This follows `interp.rs::release_hold` rather than the syntax: a hold with a
 `growing` run caches in **that pool alone**, and one without caches in **all**
-of its pools. `programs/replica.seq` is the case that makes the difference
+of its pools. `examples/multi-turn/replica.seq` is the case that makes the difference
 visible — its `hold batch (1), kv (…)` has no `growing`, and the run really
 does keep about 7 units of `batch` cached.
 

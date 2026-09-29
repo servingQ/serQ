@@ -1,7 +1,7 @@
 //! The two lints, and the corpus they must not fire on.
 //!
 //! Both come from bugs this repository shipped. Both are errors rather than
-//! warnings because neither has a legitimate instance in `programs/` — a
+//! warnings because neither has a legitimate instance in `examples/` — a
 //! warning nobody acts on is worse than no check — so a false positive here
 //! is a real cost and `no_false_positives_on_the_corpus` is the test that
 //! matters most.
@@ -20,7 +20,7 @@ const ENGINE: &str = "let bs = 16;
                turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
     run { horizon 500; }";
 
-/// `programs/vllm.seq` shipped with a prefix-cache lookup bound before the
+/// `examples/multi-turn/vllm.seq` shipped with a prefix-cache lookup bound before the
 /// session queued, under a comment citing the admission-time lookup. A hold's
 /// header is read at admission; a `set` above it is not.
 #[test]
@@ -383,9 +383,7 @@ fn no_false_positives_on_the_corpus() {
         "mg1",
         "ps",
         "closed",
-        "agentic",
         "replica",
-        "pd_tandem",
         "lecture_pd",
         "routing",
         "vllm",
