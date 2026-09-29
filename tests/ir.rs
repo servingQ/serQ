@@ -506,5 +506,7 @@ fn numbers_read_as_written() {
     assert_eq!(show_num(160000.0), "160000");
     assert_eq!(show_num(1234567890123.0), "1234567890123");
     assert_eq!(show_num(f64::INFINITY), "inf");
+    assert_eq!(show_num(0.99999999999999), "0.99999999999999");
+    assert_eq!(show_num(999999999999.5), "999999999999.5");
     assert_eq!(show_num_exact(0.9100000000000001), "0.9100000000000001");
 }

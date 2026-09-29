@@ -941,7 +941,8 @@ impl Validator<'_> {
 // Anything that shows a program to a person - a figure's label, an error that
 // wants to quote the expression it is about - needs them back. The precedence
 // levels below are those of `parser.rs`, so the output re-parses to the same
-// tree (modulo the folded constants, which are numbers by then).
+// tree (modulo the folded constants, which are numbers by then, and a
+// fraction's digits past the twelfth, which `show_num` leaves off).
 // ---------------------------------------------------------------------------
 
 /// Precedence levels of `parser.rs`, lowest binding first.
@@ -1041,7 +1042,11 @@ impl DistKind {
 pub fn show_num(x: f64) -> String {
     if x.is_finite() && x != x.trunc() {
         let r: f64 = format!("{x:.11e}").parse().unwrap_or(x);
-        return show_num_exact(r);
+        // a fraction the rounding would turn whole is shown as it is:
+        // `w.p. 1` would read as certain, 999999999999.5 as an integer
+        if r != r.trunc() {
+            return show_num_exact(r);
+        }
     }
     show_num_exact(x)
 }
