@@ -99,7 +99,7 @@ Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 |---|---|---|
 | `queue(s)` `busy(s)` `work(s)` | `used(p)` `free(p)` | `budget_left(s)` |
 | `est_lambda(s)` `est_rho(s)` `est_wait(s)` | `cachedin(p)` `holders(p)` `queued(p)` | |
-| `price(s, s_hit, ds)` | | |
+| `price(s, s_hit, ds)` | `blocksize(p)` (folded) | |
 
 **Context variables**
 

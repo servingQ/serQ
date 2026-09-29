@@ -567,6 +567,11 @@ fn says(b: &[Token], w: &str) -> bool {
         .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
 }
 
+/// A function of the language: one the linker resolves or one it folds.
+fn is_function(name: &str) -> bool {
+    FUNCTIONS.contains(&name) || FOLDED.contains(&name)
+}
+
 /// Do these tokens use the definition `name`, `name(`?
 fn uses(toks: &[Token], name: &str) -> bool {
     toks.windows(2)
@@ -1321,8 +1326,7 @@ impl Parser {
         let at = self.pos;
         let name = self.ident()?;
         if KEYWORDS.contains(&name.as_str())
-            || FUNCTIONS.contains(&name.as_str())
-            || FOLDED.contains(&name.as_str())
+            || is_function(&name)
             || DISTRIBUTIONS.contains(&name.as_str())
         {
             return self.err_at(at, format!("`{name}` is a word of the language"));
@@ -1347,7 +1351,7 @@ impl Parser {
         while *self.peek() != Tok::RParen {
             let p_at = self.pos;
             let p = self.ident()?;
-            if KEYWORDS.contains(&p.as_str()) || FUNCTIONS.contains(&p.as_str()) {
+            if KEYWORDS.contains(&p.as_str()) || is_function(&p) {
                 return self.err_at(
                     p_at,
                     format!("`{p}` is a word of the language: name the parameter otherwise"),

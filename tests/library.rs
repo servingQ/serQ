@@ -193,10 +193,46 @@ fn blocksize_is_the_pools_block() {
             "blocksize(kv, kv)",
             "takes one pool",
         ),
+        (
+            "pool kv { cap 64; block 16; }",
+            "blocksize(kv + 1)",
+            "not an expression",
+        ),
+        (
+            "pool kv[2] { cap 64; block 16; }",
+            "blocksize(kv)",
+            "is an array",
+        ),
+        (
+            "pool kv[2] { cap 64; block 16; }",
+            "blocksize(kv[zzz])",
+            "unknown name `zzz`",
+        ),
+        (
+            "pool kv[2] { cap 64; block 16; }",
+            "blocksize(kv[~uniform(0, 1)])",
+            "index draws",
+        ),
     ] {
         let e = compile_source(&src(pool, e), &Overrides::default()).unwrap_err();
         assert!(e.contains(want), "{e}");
     }
+}
+
+#[test]
+fn blocksize_is_not_a_constant() {
+    let e = compile_source(
+        "pool kv { cap 64; block 16; }\nlet b = blocksize(kv);\nstage svc : delay;\nsession { end; }\n",
+        &Overrides::default(),
+    )
+    .unwrap_err();
+    assert!(e.contains("`blocksize` is not a constant"), "{e}");
+    let e = compile_source(
+        "def f(blocksize) = blocksize + 1;\nstage svc : delay;\nsession { end; }\n",
+        &Overrides::default(),
+    )
+    .unwrap_err();
+    assert!(e.contains("a word of the language"), "{e}");
 }
 
 #[test]
