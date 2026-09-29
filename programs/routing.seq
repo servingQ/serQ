@@ -77,6 +77,8 @@ session {
     branch (!first) {
       observe response = now - t0;
       observe hitrate = S == hit;
+      observe service = S;
+      observe context = K;
     }
     set first = 0;
     set K = K + n + o;
