@@ -394,7 +394,8 @@ fn a_reservation_only_hold_encloses_nothing() {
 }
 
 /// A `release` gives back the innermost hold of its pool (`interp.rs`), so
-/// after releasing a reservation the outer hold still encloses.
+/// after releasing a reservation the outer hold still encloses - which a
+/// view that left the reservation off the hold stack would get wrong.
 #[test]
 fn a_release_takes_the_innermost_hold_even_of_no_units() {
     assert_eq!(
