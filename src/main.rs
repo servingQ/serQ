@@ -1,7 +1,7 @@
 //! `seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
 //! `seq-lang check FILE [--set k=expr]...`
 //! `seq-lang ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]`
-//! `seq-lang draw FILE [--view deployment|session] [--format tikz|svg] [--out PATH] [--show-set]` (experimental)
+//! `seq-lang draw FILE [--format tikz|svg] [--out PATH]` (experimental)
 //! `seq-lang fmt [--check] FILE...`
 //!
 //! FILE is program text (`.seq`) or IR (`.json`, as written by `seq-lang ir`).
@@ -21,9 +21,7 @@ fn usage(cmd: &str) -> &'static str {
         "ir" => {
             "seq-lang ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]"
         }
-        "draw" => {
-            "seq-lang draw FILE [--set name=expr]... [--view deployment|session] [--format tikz|svg] [--out PATH] [--show-set]"
-        }
+        "draw" => "seq-lang draw FILE [--set name=expr]... [--format tikz|svg] [--out PATH]",
         "fmt" => "seq-lang fmt [--check] FILE...",
         _ => "seq-lang <run|check|ir|draw|fmt> FILE [OPTIONS]",
     }
@@ -118,10 +116,8 @@ fn main() {
     let mut json = false;
     let mut dump: Option<String> = None;
     let mut inline = false;
-    let mut view = String::from("deployment");
     let mut format = String::from("tikz");
     let mut out: Option<String> = None;
-    let mut show_set = false;
     let mut i = 2;
     while i < args.len() {
         let flag = args[i].as_str();
@@ -130,7 +126,7 @@ fn main() {
             "--seed" | "--horizon" | "--warmup" | "--arrivals" | "--trace" => &["run", "ir"],
             "--json" | "--dump" => &["run"],
             "--inline-trace" => &["ir"],
-            "--view" | "--format" | "--out" | "--show-set" => &["draw"],
+            "--format" | "--out" => &["draw"],
             _ => argument_error(
                 cmd,
                 format!("unknown option `{flag}`\nhelp: use the options in the usage below"),
@@ -199,15 +195,6 @@ fn main() {
             "--json" => json = true,
             "--dump" => dump = Some(next(&mut i)),
             "--inline-trace" => inline = true,
-            "--view" => {
-                view = next(&mut i);
-                if !matches!(view.as_str(), "deployment" | "session") {
-                    argument_error(
-                        cmd,
-                        format!("invalid --view `{view}`\nhelp: choose deployment or session"),
-                    );
-                }
-            }
             "--format" => {
                 format = next(&mut i);
                 if !matches!(format.as_str(), "tikz" | "svg") {
@@ -218,7 +205,6 @@ fn main() {
                 }
             }
             "--out" => out = Some(next(&mut i)),
-            "--show-set" => show_set = true,
             _ => unreachable!("validated option"),
         }
         i += 1;
@@ -242,11 +228,7 @@ fn main() {
         ),
         "ir" => println!("{}", prog.to_json()),
         "draw" => {
-            let figure = match view.as_str() {
-                "deployment" => seq::view::deployment::figure(&prog),
-                "session" => seq::view::session::figure(&prog, show_set),
-                v => fail(file, format!("unknown --view `{v}` (deployment, session)")),
-            };
+            let figure = seq::view::deployment::figure(&prog);
             let text = match format.as_str() {
                 "tikz" => seq::view::tikz::render(&figure),
                 "svg" => seq::view::svg::render(&figure),

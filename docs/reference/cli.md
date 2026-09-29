@@ -6,8 +6,7 @@ seq-lang run   FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set 
 seq-lang check FILE [--set name=expr]...
 seq-lang ir    FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T]
                     [--arrivals N] [--trace F] [--inline-trace]
-seq-lang draw  FILE [--view deployment|session] [--format tikz|svg] [--out PATH]
-                    [--show-set]                                  (experimental)
+seq-lang draw  FILE [--format tikz|svg] [--out PATH]              (experimental)
 seq-lang fmt   [--check] FILE...
 ```
 
@@ -36,11 +35,9 @@ seq-lang fmt   [--check] FILE...
 | `--inline-trace` | ir | turn the trace file into the sessions' turns, as `CArrival::Sessions` data |
 | `--json` | run | print the report as JSON |
 | `--dump DIR` | run | write `DIR/<name>.csv` per `observe`, columns `time,session,turn,value` |
-| `--view` | draw | `deployment` (default) or `session` |
 | `--format` | draw | `tikz` (default) or `svg` |
 | `--out PATH` | draw | write to a file instead of stdout |
 | `--check` | fmt | exit with code 1 and list files that need formatting, without writing them |
-| `--show-set` | draw | include `set` statements in the session view |
 
 ## The JSON report
 

@@ -80,7 +80,6 @@ nav:
       - Visualization:
           - visualization/index.md
           - Deployment view: visualization/deployment.md
-          - Session view: visualization/session.md
       - Case studies:
           - vLLM: case-study-vllm.md
           - "One engine, four workloads": case-study-workloads.md

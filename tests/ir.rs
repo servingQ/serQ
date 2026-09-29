@@ -272,8 +272,6 @@ fn a_draw_is_labelled_w_p() {
         !svg.contains("~bernoulli"),
         "and does not leak the desugaring"
     );
-    let svg = seq::view::svg::render(&seq::view::session::figure(&p, false));
-    assert!(svg.contains("w.p. 0.8"), "the session view labels it too");
 }
 
 /// `at admission (hit = e)` names a value the hold's header is written in

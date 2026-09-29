@@ -23,16 +23,16 @@ never interpret different programs.
 
 ```bash
 seq-lang check examples/my.seq                       # parse, resolve names, lint
-seq-lang draw  examples/my.seq --view session --format svg --out my.svg
+seq-lang draw  examples/my.seq --format svg --out my.svg
 seq-lang run   examples/my.seq
 ```
 
 `check` is what `make check` runs over every `examples/*/*.seq`, and it also
 catches the two lints (a stale header read, a draw written as a test,
-[language](language.md) §3). Draw the session view before trusting a run. It
-shows the program as the interpreter sees it, with every serving form
-rewritten to `hold` and `run`, which is where a hold that closes one
-statement too early becomes visible ([visualization](visualization/index.md)).
+[language](language.md) §3). Draw the program before trusting a run. A hold
+is drawn as its pool's enclosure around the stations it spans, so a hold that
+closes one statement too early leaves a station outside the box
+([visualization](visualization/index.md)).
 
 Keep the engine and the client apart, as the programs in `examples/` do: the
 pools, the stages and a `server` block for the deployment, and `workload` for
@@ -133,8 +133,8 @@ one comes from:
 
 ### Add a program to the repository
 
-Put it in the `examples/` directory of its workload (`single-turn/`, `multi-turn/`, `subagent/`, `pd-disaggregation/`, `replay/`); names are unique across them. `make check` then links it and draws it in both views
-and both formats. Add a row to [language](language.md) §5 saying what it
+Put it in the `examples/` directory of its workload (`single-turn/`, `multi-turn/`, `subagent/`, `pd-disaggregation/`, `replay/`); names are unique across them. `make check` then links it and draws it
+in both formats. Add a row to [language](language.md) §5 saying what it
 models and what it is checked against, and a test that checks that claim.
 A program that cites vLLM cites it as `file.py:lines`, and
 `scripts/check_citations.py` holds the citation to the pinned source.
