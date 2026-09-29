@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 /// Version of the IR format. Bump on any change to the types below.
 /// 2 added the sessions' turns; 3 renamed `route` to `session`; 4 replaced
 /// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`; 5 added
-/// `Release` and `Load`.
-pub const IR_VERSION: u32 = 5;
+/// `Release` and `Load`; 6 adds renewal arrivals and finite open runs.
+pub const IR_VERSION: u32 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -416,7 +416,7 @@ pub struct CStage {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CArrival {
     Poisson(f64),
-    /// Open renewal process with a sampled interarrival-time expression.
+    /// Open renewal process with a constant or sampled interarrival-time expression.
     Renewal(CExpr),
     Closed(usize),
     Batch(usize),
@@ -669,9 +669,6 @@ impl Program {
         }
         if let CArrival::Renewal(e) = &self.arrival {
             v.expr(e, Moment::Session)?;
-            if !draws(e) {
-                return Err("renewal arrival must sample an interarrival time".into());
-            }
             if !arrival_expr_is_pure(e) {
                 return Err(
                     "renewal arrival may use only constants and sampled distributions".into(),

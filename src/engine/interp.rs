@@ -558,13 +558,9 @@ impl<'p> Interp<'p> {
         while let Some(e) = self.heap.peek() {
             let arrivals_done = p.arrivals.is_some_and(|n| self.arrivals >= n as u64);
             if arrivals_done && self.live == 0 {
-                if !self.warm && p.warmup > self.now {
-                    self.now = p.warmup;
-                    self.handle(Ev::EndWarmup);
-                }
                 break;
             }
-            if e.time > p.horizon && !arrivals_done {
+            if e.time > p.horizon {
                 break;
             }
             let e = self.heap.pop().unwrap();
@@ -576,10 +572,26 @@ impl<'p> Interp<'p> {
                 return Err(error);
             }
         }
-        if !p
-            .arrivals
-            .is_some_and(|n| self.arrivals >= n as u64 && self.live == 0)
-        {
+        if let Some(n) = p.arrivals {
+            if self.arrivals < n as u64 {
+                return Err(format!(
+                    "run: horizon {} reached before requested arrivals: got {}, requested {n}",
+                    p.horizon, self.arrivals
+                ));
+            }
+            if self.live != 0 {
+                return Err(format!(
+                    "run: failed to drain {0} active sessions within horizon {1}",
+                    self.live, p.horizon
+                ));
+            }
+            if self.now <= p.warmup {
+                return Err(format!(
+                    "run: arrivals drained at {} before or at warmup {}; no measurement interval",
+                    self.now, p.warmup
+                ));
+            }
+        } else {
             self.now = p.horizon;
         }
         Ok(self.report())
@@ -2795,7 +2807,8 @@ impl<'p> Interp<'p> {
             })
             .collect();
         Report {
-            horizon: now,
+            horizon: p.horizon,
+            end: now,
             warmup: p.warmup,
             seed: p.seed,
             events: self.events,

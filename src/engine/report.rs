@@ -55,7 +55,10 @@ pub struct PoolReport {
 
 #[derive(Clone, Debug)]
 pub struct Report {
+    /// Configured execution deadline.
     pub horizon: f64,
+    /// Actual end of execution; rates use `end - warmup`.
+    pub end: f64,
     pub warmup: f64,
     pub seed: u64,
     pub events: u64,
@@ -105,8 +108,9 @@ impl Report {
         let mut s = String::new();
         let _ = writeln!(
             s,
-            "run: horizon {} warmup {} seed {} events {} arrivals {} ended {} turns {} mean live {:.3}",
+            "run: horizon {} end {} warmup {} seed {} events {} arrivals {} ended {} turns {} mean live {:.3}",
             self.horizon,
+            self.end,
             self.warmup,
             self.seed,
             self.events,
@@ -196,8 +200,9 @@ impl Report {
         let mut s = String::from("{");
         let _ = write!(
             s,
-            "\"horizon\":{},\"warmup\":{},\"seed\":{},\"events\":{},\"arrivals\":{},\"ended\":{},\"turns\":{},\"mean_live\":{}",
+            "\"horizon\":{},\"end\":{},\"warmup\":{},\"seed\":{},\"events\":{},\"arrivals\":{},\"ended\":{},\"turns\":{},\"mean_live\":{}",
             f(self.horizon),
+            f(self.end),
             f(self.warmup),
             self.seed,
             self.events,

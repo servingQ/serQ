@@ -126,10 +126,25 @@ serving  := enter POOL ( expr ) … block [ keep ( expr ) ] [ lease POOL ( expr 
           | tool     [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
 ```
 
-`arrive renewal(~h2(mean, cv2));` supplies sampled interarrival times instead
-of exponential gaps. `run { arrivals N; }` optionally caps an open workload at
-N arrivals and drains those sessions; `horizon` remains the safety limit while
-the arrivals are being generated.
+`arrive renewal(~h2(mean, cv2));` supplies interarrival times; `renewal(2)`
+uses a constant two-second gap. Gaps must be positive and finite. The first
+renewal arrival occurs after one gap. For compatibility, `poisson(rate)`
+starts with an arrival at time zero, then uses exponential gaps of mean
+`1 / rate`. Thus `renewal(~exp(1 / rate))` has the same subsequent arrival
+schedule for the same seed, without the initial arrival at zero.
+
+`run { arrivals N; }` requires exactly N open-workload arrivals and drains
+their sessions. `horizon` bounds both arrival generation and draining;
+failure to generate N arrivals or drain every session by that deadline is
+an error. Draining before or at `warmup` is also an error because the
+measurement interval would be empty. The CLI accepts `--arrivals N` for
+`run` and `ir`, overriding the source value.
+
+Reports keep `horizon` as the configured deadline and expose the actual
+termination time as `end` in both text and JSON. Time averages and rates
+use `end - warmup`. Without an arrival limit, `end` equals `horizon`.
+See [the design decision](design/renewal-arrivals.md) for the first-arrival
+compatibility choice.
 
 Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b` (a
 non-zero operand is true; only a `branch` guard is held to 0 or 1),

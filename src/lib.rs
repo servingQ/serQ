@@ -66,6 +66,9 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
         if let Some(s) = ov.seed {
             p.seed = s;
         }
+        if let Some(n) = ov.arrivals {
+            p.arrivals = Some(n);
+        }
         if let Some(t) = &ov.trace {
             p.trace = Some(t.clone());
         }

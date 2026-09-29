@@ -4,7 +4,7 @@ use seq::{Overrides, run_source};
 fn deterministic_renewal_arrivals_follow_the_supplied_gap() {
     let src = r#"
         stage svc : fifo;
-        workload { arrive renewal(~det(2)); }
+        workload { arrive renewal(2); }
         session {
           set t0 = now;
           run svc (~det(1));
@@ -33,7 +33,7 @@ fn hyperexponential_renewal_arrivals_have_the_configured_mean_rate() {
 }
 
 #[test]
-fn open_arrival_limit_drains_the_last_sessions_past_the_horizon() {
+fn open_arrival_limit_drains_within_the_horizon() {
     let src = r#"
         stage svc : fifo;
         workload { arrive poisson(1000); }
@@ -42,11 +42,95 @@ fn open_arrival_limit_drains_the_last_sessions_past_the_horizon() {
           observe service = 2;
           end;
         }
-        run { horizon 1; arrivals 2; warmup 0; seed 7; }
+        run { horizon 10; arrivals 2; warmup 0; seed 7; }
     "#;
     let report = run_source(src, &Overrides::default(), None).unwrap();
     assert_eq!(report.arrivals, 2);
     assert_eq!(report.ended, 2);
-    assert!(report.horizon > 1.0, "drained through {}", report.horizon);
+    // FIFO jobs take two seconds each; the first Poisson arrival is at zero.
+    assert_eq!(report.end, 4.0);
+    assert_eq!(report.horizon, 10.0);
+    assert_eq!(report.stages[0].throughput, 0.5);
+    let json: serde_json::Value = serde_json::from_str(&report.json()).unwrap();
+    assert_eq!(json["horizon"], 10.0);
+    assert_eq!(json["end"], 4.0);
     assert_eq!(report.observe("service").unwrap().samples.len(), 2);
+}
+
+#[test]
+fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
+    for (session, run, expected) in [
+        (
+            "loop { run svc (1); }",
+            "horizon 10; arrivals 3;",
+            "failed to drain",
+        ),
+        (
+            "run svc (1); end;",
+            "horizon 10; arrivals 1000;",
+            "requested arrivals",
+        ),
+        (
+            "run svc (1); end;",
+            "horizon 1000; warmup 500; arrivals 5;",
+            "before or at warmup",
+        ),
+        (
+            "run svc (1); end;",
+            "horizon 20; warmup 3; arrivals 1;",
+            "before or at warmup",
+        ),
+    ] {
+        let src = format!(
+            "stage svc : fifo; workload {{ arrive renewal(2); }} session {{ {session} }} run {{ {run} }}"
+        );
+        let error = run_source(&src, &Overrides::default(), None).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn finite_arrivals_can_finish_exactly_at_the_deadline() {
+    // Arrivals at 2, 4, 6 and one second of service finish at 3, 5, 7.
+    let src = "stage svc : fifo; workload { arrive renewal(2); } session { run svc (1); end; } run { horizon 7; arrivals 3; }";
+    let report = run_source(src, &Overrides::default(), None).unwrap();
+    assert_eq!(report.arrivals, 3);
+    assert_eq!(report.ended, 3);
+    assert_eq!(report.end, 7.0);
+}
+
+#[test]
+fn poisson_retains_its_initial_arrival_and_renewal_waits_for_a_gap() {
+    let run = |arrival: &str| {
+        run_source(
+            &format!("workload {{ arrive {arrival}; }} session {{ observe arrival = now; end; }} run {{ horizon 10; seed 1; }}"),
+            &Overrides::default(), None,
+        ).unwrap()
+    };
+    let poisson = run("poisson(2)");
+    let renewal = run("renewal(~exp(0.5))");
+    let poisson_times = &poisson.observe("arrival").unwrap().samples;
+    let renewal_times = &renewal.observe("arrival").unwrap().samples;
+    assert_eq!(poisson_times[0], 0.0);
+    assert_eq!(&poisson_times[1..], renewal_times);
+}
+
+#[test]
+fn renewal_validation_and_ir_version_prevent_ambiguous_inputs() {
+    for gap in ["now", "serial"] {
+        let src = format!("workload {{ arrive renewal({gap}); }} run {{ horizon 10; }}");
+        assert!(seq::compile_source(&src, &Overrides::default()).is_err());
+    }
+    let mut program = seq::compile_source(
+        "workload { arrive renewal(2); } run { horizon 10; arrivals 3; }",
+        &Overrides::default(),
+    )
+    .unwrap();
+    program.version = 5;
+    assert!(
+        program
+            .validate()
+            .unwrap_err()
+            .contains("this interpreter reads 6")
+    );
 }

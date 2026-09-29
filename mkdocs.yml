@@ -100,4 +100,5 @@ nav:
       - "IR v4 (RFC #41)": design/ir-v4.md
       - Subagents: design/subagents.md
       - The KV transfer: design/pd-transfer.md
+      - Renewal arrivals: design/renewal-arrivals.md
   - Publishing this site: publishing.md
