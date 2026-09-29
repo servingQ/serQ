@@ -15,6 +15,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 use crate::ast::{BinOp, Preempt, RunMode, UnOp};
+use crate::dist::Dist;
 use crate::link::*;
 use crate::report::*;
 use crate::stats::*;
@@ -2480,35 +2481,18 @@ impl<'p> Interp<'p> {
             CExpr::Sample(kind, args) => {
                 let a: Vec<f64> = args.iter().map(|x| self.eval(x, ctx, w)).collect();
                 let rng = self.rng(w);
-                let u = || -> f64 { 0.0 };
-                let _ = u;
-                match kind {
-                    DistKind::Det => a[0],
-                    DistKind::Exp => -a[0] * (1.0 - rng.random::<f64>()).ln(),
-                    DistKind::Uniform => a[0] + (a[1] - a[0]) * rng.random::<f64>(),
-                    DistKind::Erlang => {
-                        let k = a[0].max(1.0) as u32;
-                        let m = a[1] / k as f64;
-                        (0..k).map(|_| -m * (1.0 - rng.random::<f64>()).ln()).sum()
-                    }
-                    DistKind::H2 => {
-                        let (mean, cv2) = (a[0], a[1].max(1.0));
-                        let p = 0.5 * (1.0 + ((cv2 - 1.0) / (cv2 + 1.0)).sqrt());
-                        let m = if rng.random::<f64>() < p {
-                            mean / (2.0 * p)
-                        } else {
-                            mean / (2.0 * (1.0 - p))
-                        };
-                        -m * (1.0 - rng.random::<f64>()).ln()
-                    }
-                    DistKind::Bernoulli => {
-                        if rng.random::<f64>() < a[0] {
-                            1.0
-                        } else {
-                            0.0
-                        }
-                    }
-                }
+                let d = match kind {
+                    DistKind::Det => Dist::Deterministic(a[0]),
+                    DistKind::Exp => Dist::exp(a[0]),
+                    DistKind::Uniform => Dist::Uniform { lo: a[0], hi: a[1] },
+                    DistKind::Erlang => Dist::Erlang {
+                        k: a[0].max(1.0) as u32,
+                        mean: a[1],
+                    },
+                    DistKind::H2 => Dist::hyperexp_balanced(a[0], a[1].max(1.0)),
+                    DistKind::Bernoulli => Dist::bernoulli(a[0]),
+                };
+                d.sample(rng)
             }
             CExpr::Unary(op, a) => {
                 let x = self.eval(a, ctx, w);

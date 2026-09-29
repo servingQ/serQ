@@ -17,6 +17,7 @@
 pub mod ast;
 pub mod deployment;
 pub mod diagnostic;
+pub mod dist;
 pub mod draw;
 pub mod figure;
 pub mod fmt;
@@ -34,6 +35,7 @@ pub mod trace;
 
 use std::path::Path;
 
+pub use dist::Dist;
 pub use ir::Program;
 pub use link::{Linked, Overrides};
 pub use report::Report;
