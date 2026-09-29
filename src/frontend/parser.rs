@@ -373,6 +373,17 @@ pub fn parse(src: &str) -> PResult<Program> {
 /// Parse a program read from a file in `base`, next to which its `use`s
 /// read their libraries.
 pub fn parse_at(src: &str, base: Option<&Path>) -> PResult<Program> {
+    parse_with(src, base, None)
+}
+
+/// Parse the program file `path`, whose text is `src`. The file counts as
+/// read, so a library that `use`s it back is not read into it again.
+pub fn parse_file(src: &str, path: &Path) -> PResult<Program> {
+    let root = path.canonicalize().ok();
+    parse_with(src, path.parent(), root)
+}
+
+fn parse_with(src: &str, base: Option<&Path>, root: Option<PathBuf>) -> PResult<Program> {
     let toks = lex(src)?;
     let mut p = Parser {
         toks,
@@ -387,13 +398,12 @@ pub fn parse_at(src: &str, base: Option<&Path>) -> PResult<Program> {
         defs: vec![],
         expanded: vec![],
         deferred: vec![],
-        base: None,
+        base: base.map(Path::to_path_buf),
         libs: vec![],
         lib_dirs: vec![],
         lib_shown_dirs: vec![],
-        read: vec![],
+        read: root.into_iter().collect(),
     };
-    p.base = base.map(Path::to_path_buf);
     p.program()
 }
 

@@ -131,6 +131,39 @@ fn a_link_note_names_the_library() {
 }
 
 #[test]
+fn a_library_that_uses_the_program_back_does_not_read_it_again() {
+    let d = dir(
+        "root",
+        &[
+            ("lib/a.seq", "use \"../main.seq\";\ndef twice(x) = 2 * x;\n"),
+            (
+                "main.seq",
+                "use \"lib/a.seq\";\nstage svc : fifo;\nsession { run svc (twice(1)); end; }\nrun { horizon 10; }\n",
+            ),
+            // two libraries that use each other: the order of their definitions
+            // is what is wrong, and the error says so
+            ("lib/a2.seq", "use \"b2.seq\";\ndef take(n) = n;\n"),
+            ("lib/b2.seq", "use \"a2.seq\";\ndef give(n) = take(n);\n"),
+        ],
+    );
+    let main = d.join("main.seq");
+    seq::load(&main, &Overrides::default()).unwrap();
+    let lib = d.join("lib/a2.seq");
+    let e = seq::compile_file(
+        &std::fs::read_to_string(&lib).unwrap(),
+        &lib,
+        &Overrides::default(),
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("`give` uses `take`, which is defined after it"),
+        "{e}"
+    );
+    let f = seq::frontend::fmt::format_file(&std::fs::read_to_string(&main).unwrap(), &main);
+    assert!(f.is_ok(), "{f:?}");
+}
+
+#[test]
 fn a_use_needs_a_file() {
     let e = compile_source(
         "use \"lib.seq\";\nsession { end; }\n",
