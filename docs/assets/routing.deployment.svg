@@ -1,14 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="672.8" height="249" viewBox="0 0 672.8 249" role="img">
+<svg xmlns="http://www.w3.org/2000/svg" width="672.8" height="271" viewBox="0 0 672.8 271" role="img">
 <style>
   text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
   @media (prefers-color-scheme: dark) {
     text { fill: #e8e6e3; } text.dim { fill: #9aa4b2; }
     .bg { fill:#14171a }
     .solid { fill:#232a31;stroke:#b6bfcc }
-    .body { fill:#232a31;stroke:#b6bfcc }
-    .admission { fill:#232a31;stroke:#b6bfcc }
     .cached { fill:#33302a }
-    .reserve { stroke:#9aa4b2 }
     .enclosure { stroke:#9aa4b2 }
     .station { fill:#26403d;stroke:#b6bfcc }
     .cell { fill:#14171a;stroke:#b6bfcc }
@@ -16,11 +13,10 @@
     .flow { stroke:#b6bfcc }
     .back { stroke:#b6bfcc }
     .relation { stroke:#9aa4b2 }
-    .grow { stroke:#b6bfcc }
   }
 </style>
 <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="context-stroke"/></marker></defs>
-<rect class="bg" fill="#ffffff" x="0" y="0" width="672.8" height="249"/>
+<rect class="bg" fill="#ffffff" x="0" y="0" width="672.8" height="271"/>
 <circle class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" cx="204" cy="103" r="26"/>
 <text x="204" y="106.5" text-anchor="middle" font-size="10" fill="#1d2021">FIFO</text>
 <text x="204" y="69" text-anchor="middle" font-size="10" fill="#1d2021">link</text>
@@ -45,4 +41,6 @@
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M383 129 L383 199 L588 199" marker-end="url(#a)"/>
 <text x="592" y="202" text-anchor="start" font-size="8" fill="#6b7280" class="dim">ends (else)</text>
 <path class="back" fill="none" stroke="#4b5563" stroke-width="1.1" stroke-dasharray="4 3" d="M499 129 L499 221 L183 221 L183 129" marker-end="url(#a)"/>
+<text x="362" y="216" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">mv</text>
+<path class="back" fill="none" stroke="#4b5563" stroke-width="1.1" stroke-dasharray="4 3" d="M499 129 L499 243 L341 243 L341 129" marker-end="url(#a)"/>
 </svg>
