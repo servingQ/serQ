@@ -835,13 +835,19 @@ impl<'p> Interp<'p> {
                     kind: FrameKind::Loop,
                 }),
                 CStmt::Branch(pe, a, b) => {
+                    // a guard is a test: 0 or 1. A draw is written `branch
+                    // with (p)`, which the parser rewrites to a Bernoulli
+                    // sample, so the guard never sees a fraction on purpose
                     let pr = self.eval(pe, &Ctx::session(sid), Which::Session);
-                    let take = if pr >= 1.0 {
+                    let take = if pr == 1.0 {
                         true
-                    } else if pr <= 0.0 {
+                    } else if pr == 0.0 {
                         false
                     } else {
-                        self.rng_session.random::<f64>() < pr
+                        panic!(
+                            "`branch ({})`: the guard is {pr}, not 0 or 1; a draw is written `branch with (p)`",
+                            self.p.show_expr(pe)
+                        );
                     };
                     let blk = if take { *a } else { *b };
                     self.sessions[sid].frames.push(Frame {

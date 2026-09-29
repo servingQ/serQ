@@ -207,4 +207,7 @@ with expressions built from integer constants, attributes, `Now`,
 `floor(a / b)`, comparisons and conditionals. A constant expression over
 context variables with zero coefficients (the replay's cost at `a = b = 0`)
 counts as a constant. Its generator translates an IR file into Lean and
-fails on anything outside the fragment.
+fails on anything outside the fragment. The Lean `Branch` takes the first
+block when the guard is non-zero; the interpreter admits only 0 or 1
+(`docs/language.md`, Branching), so the two agree on every program that
+runs.

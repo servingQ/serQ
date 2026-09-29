@@ -120,7 +120,8 @@ serving  := enter POOL ( expr ) … block [ keep ( expr ) ] ;   -- as hold … c
           | tool     [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
 ```
 
-Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`,
+Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b` (a
+non-zero operand is true; only a `branch` guard is held to 0 or 1),
 `~exp(mean)`, `~det(x)`, `~uniform(lo,hi)`, `~erlang(k,mean)`,
 `~h2(mean,cv2)`, `~bernoulli(p)`; `min`, `max`, `abs`, `floor`, `ceil`,
 `sqrt`, `exp`, `ln`, `pow`; observables `queue(s)`, `busy(s)`, `work(s)`,
@@ -486,13 +487,16 @@ in a `server` block (§2, the two sides), where the scheduler is the one
 speaking. `admit` is also the name of the *pool option* that hands a queue
 to a stage's scheduler (`admit via S`), the scheduler's side again.
 
-**Branching.** `branch (e)` takes the first block when `e` is non-zero.
-`branch with (p)` takes it with probability `p`, and is sugar the parser
-rewrites to `branch (~bernoulli(p))` — the IR, the interpreter and the Lean
-model know only the one form. The two spellings are not interchangeable to a
-reader and were not distinguishable before: a guard strictly between 0 and 1
-has always been drawn as a probability (a guard of 0 or 1 consumes no draw, a
-fractional one exactly one, from the session's stream). Write the draw as
+**Branching.** `branch (e)` takes the first block when `e` is 1 and the
+second when it is 0; any other value (a fraction, a count, a negative
+number, NaN) is a run-time error, since a guard is a test and a test has
+two answers. `branch with (p)` takes the first block with probability `p`,
+and is sugar the parser rewrites to `branch (~bernoulli(p))` — the IR, the
+interpreter and the Lean model know only the one form, and the draw is a
+0 or a 1 by the time the guard sees it. A constant guard that is not 0 or
+1 is refused at link time (one strictly between 0 and 1 reads as a test
+and was meant as a draw); a computed one is refused when it is evaluated.
+Write the draw as
 `branch with` so that the program, and the figure, say which one it is.
 
 **Workload.** `init` runs at arrival, `turn` at every `turn` statement;
