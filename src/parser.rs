@@ -336,20 +336,22 @@ impl Parser {
     }
 
     fn ident(&mut self) -> PResult<String> {
+        let at = self.pos;
         match self.advance() {
             Tok::Ident(s) => Ok(s),
             other => {
-                self.pos -= 1;
+                self.pos = at;
                 self.err(format!("expected identifier, found {other}"))
             }
         }
     }
 
     fn string(&mut self) -> PResult<String> {
+        let at = self.pos;
         match self.advance() {
             Tok::Str(s) => Ok(s),
             other => {
-                self.pos -= 1;
+                self.pos = at;
                 self.err(format!("expected string, found {other}"))
             }
         }
@@ -1280,6 +1282,7 @@ impl Parser {
     }
 
     fn atom(&mut self) -> PResult<Expr> {
+        let at = self.pos;
         match self.advance() {
             Tok::Num(x) => Ok(Expr::Num(x)),
             Tok::LParen => {
@@ -1305,7 +1308,7 @@ impl Parser {
                 }
             }
             other => {
-                self.pos -= 1;
+                self.pos = at;
                 self.err(format!("expected an expression, found {other}"))
             }
         }
