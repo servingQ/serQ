@@ -7,9 +7,10 @@ use std::path::Path;
 use seq::{Overrides, Program, compile_source, run_ir, run_source};
 
 fn programs() -> Vec<std::path::PathBuf> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("programs");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
     let mut v: Vec<_> = std::fs::read_dir(&dir)
         .unwrap()
+        .flat_map(|g| std::fs::read_dir(g.unwrap().path()).unwrap())
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|e| e == "seq"))
         .collect();

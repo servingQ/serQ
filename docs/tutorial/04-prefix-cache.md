@@ -38,7 +38,7 @@ throws out queued sessions' short prefixes first.
 
 **`drop kv;`** before `end` discards the session's prefix. Without it the
 prefix survives the session, which is not an oversight: vLLM keeps a finished
-request's blocks in the free queue, and `programs/vllm.seq` models that by not
+request's blocks in the free queue, and `examples/multi-turn/vllm.seq` models that by not
 dropping.
 
 ## Running it

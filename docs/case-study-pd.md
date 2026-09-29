@@ -1,6 +1,6 @@
 # Case study: prefill/decode disaggregation over NIXL
 
-`programs/llmd_pd.seq` is llm-d's prefill/decode split on vLLM: the router
+`examples/pd-disaggregation/llmd_pd.seq` is llm-d's prefill/decode split on vLLM: the router
 that decides which pod prefills and which decodes, the sidecar that sends
 the prompt to one and the decode request to the other, and the two
 schedulers that hand the KV over with the NIXL connector. Every line is
@@ -38,8 +38,8 @@ to each number.
 
 ## In seQ
 
-```seq title="programs/llmd_pd.seq"
---8<-- "programs/llmd_pd.seq"
+```seq title="examples/pd-disaggregation/llmd_pd.seq"
+--8<-- "examples/pd-disaggregation/llmd_pd.seq"
 ```
 
 ### Line by line
@@ -52,7 +52,7 @@ to each number.
 | the decider: a remote prefill when the prompt's uncached suffix on the chosen decode pod is at least `nonCachedTokens`, and the prompt at least `promptTokens`; the cached part is the router's own estimate of the pod's prefix cache | `set hitD = min(cachedin(kvD[j]), hitmax); set remote = prompt >= minp && prompt - hitD >= thr;` | `prefix_based_pd_decider.go:266-303`; `disagg_profile_handler.go:353-366`. The guide runs `always-disagg-pd-decider`, which is `thr = 1` |
 | the prefill profile: pods that have the prefix (`prefix-cache-affinity-filter`), then the least loaded (`token-load-scorer`) | `choose i in NP by ((cachedin(kvP[i]) > 0 ? 0 : 1) * 1e9 + work(P[i]) + queued(reqsP[i]))` | the same values file |
 | the decode pod's sidecar sends the prompt to the prefiller with `max_tokens = 1` and `do_remote_decode`, waits for the answer, then sends the decode request to its own engine with the prefiller's block ids | the prefiller's hold, its blocks leased at its end, then the decoder's hold | `connector_nixlv2.go:69-232` (the prefill leg, `CapSingleToken` at 145), `261-379` (the decode leg) |
-| no prefill header: the request goes to the decode pod's engine as it is | the `else` branch: vLLM's engine on one device (`programs/vllm.seq`) | `dispatch.go:196-213` |
+| no prefill header: the request goes to the decode pod's engine as it is | the `else` branch: vLLM's engine on one device (`examples/multi-turn/vllm.seq`) | `dispatch.go:196-213` |
 | the two legs in parallel, so the decoder allocates while the prefiller works | not written: a session waits at one pool at a time ([The KV transfer](design/pd-transfer.md)) | `connector_nixlv2.go:60-67` (MoRI-IO write mode only); vLLM's push-mode proxy, `disagg_proxy_pushconnector_demo.py:227-270` |
 
 #### The two schedulers, against vLLM
@@ -112,7 +112,7 @@ own stage array (`link`).
 Going from 2P2D to 4P8D is the four literals and the two `let`s; the
 program does not change otherwise, which is the point of writing the router
 as `choose` over a family rather than as a branch per instance
-(`programs/routing.seq` still has the branch-per-policy shape the design
+(`examples/multi-turn/routing.seq` still has the branch-per-policy shape the design
 notes call a smell).
 
 ### The two modes
@@ -209,7 +209,7 @@ One Lambda Cloud `gpu_4x_a6000` node (four RTX A6000, 48 GB each, PCIe;
 vLLM at `0c87a197`, NIXL 1.4.1 over UCX with `cuda_ipc,cuda_copy,tcp,sm`;
 Qwen3-8B, block 16, budget 8 192, `max_num_seqs` 16 on a prefiller and 64
 on a decoder, 192 000-token KV pools) ran the deployment of
-`programs/llmd_pd_replay.seq`: one prefiller, one decoder, vLLM's own
+`examples/replay/llmd_pd_replay.seq`: one prefiller, one decoder, vLLM's own
 proxy in front (`tests/v1/kv_connector/nixl_integration/toy_proxy_server.py`
 for pull, `disagg_proxy_pushconnector_demo.py` for push), replaying the
 short-context trace of the [vLLM case study](case-study-vllm.md) — 96
@@ -303,7 +303,7 @@ showed.
 Two decode pods of 160 000 tokens each, two prefill pods, sessions of
 one to several turns (a prompt of 1 000–3 000 new tokens on a growing
 context, 200 output tokens, a 3 s tool call between turns, `p = 0.9`), the
-A100-shaped step cost of `programs/vllm.seq`, a 200 000 token/s link.
+A100-shaped step cost of `examples/multi-turn/vllm.seq`, a 200 000 token/s link.
 
 **The decider.** The guide's `always-disagg-pd-decider` sends every prompt
 to a prefiller; the `prefix-based-pd-decider` keeps a follow-up turn whose
@@ -346,7 +346,7 @@ prompts to the prefillers — they cache less, so the decider's uncached
 suffix is longer — which is the other direction of the same coupling.
 
 The decoder's shortage shows up as memory *on the prefiller*, which is the
-coupling `programs/lecture_pd.seq` gets backwards: its prefiller holds
+coupling `examples/pd-disaggregation/lecture_pd.seq` gets backwards: its prefiller holds
 through the transfer and lets go before the session queues for the decoder,
 so a decoder with no room costs the prefiller nothing.
 `tests/pd_semantics.rs` has the deterministic version: six requests, a

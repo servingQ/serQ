@@ -8,7 +8,7 @@ repository = "https://github.com/vrvrv/seQ"
 readme = "README.md"
 keywords = ["llm", "serving", "queueing", "simulation", "vllm"]
 categories = ["simulation", "science"]
-include = ["src/**", "tests/**", "programs/**", "tools/oracle/**", "Cargo.toml", "Cargo.lock", "README.md", "rust-toolchain.toml"]
+include = ["src/**", "tests/**", "examples/**", "tools/oracle/**", "Cargo.toml", "Cargo.lock", "README.md", "rust-toolchain.toml"]
 
 [lib]
 name = "seq"

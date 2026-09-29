@@ -44,7 +44,7 @@ server {
 }
 ```
 
-That is most of `programs/vllm.seq`, and it **is** vLLM v1's engine: on six
+That is most of `examples/multi-turn/vllm.seq`, and it **is** vLLM v1's engine: on six
 deterministic scenarios and on a 333-session, 3 321-request trace, it gives the
 real scheduler's answer for every request — every first-token time, every
 cached-token count.

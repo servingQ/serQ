@@ -89,7 +89,7 @@ fn node(net: &deployment::Net, p: &Program, name: &str) -> End {
 
 // --- the acceptance test ----------------------------------------------------
 
-/// `programs/lecture_pd.seq` is the program of `fig:deployment` in Lecture 1
+/// `examples/pd-disaggregation/lecture_pd.seq` is the program of `fig:deployment` in Lecture 1
 /// §2 of `serving-queue-theory`. The deployment view must have that figure's
 /// topology, which is the one place in this feature with an independently
 /// hand-drawn answer key.
@@ -453,7 +453,7 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
     assert!(pools_of(&p, &net, "s3").is_empty());
 }
 
-/// `programs/llmd_pd.seq`: the prompt's KV is in the prefiller's pool
+/// `examples/pd-disaggregation/llmd_pd.seq`: the prompt's KV is in the prefiller's pool
 /// through the transfer (leased past its scope) and in the decoder's from
 /// the transfer on, so the link station is inside both enclosures, the
 /// prefill station in the prefiller's only and the decode station in the

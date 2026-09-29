@@ -101,7 +101,7 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
     `4.8040` is not 5, and it is not supposed to be. The interval is what makes
     the claim: `±0.2377` covers 5. A run whose interval does *not* cover the
     closed form is a bug — in the program, or in seQ. That is exactly how
-    `programs/mg1.seq`, `ps.seq` and `closed.seq` are checked in CI.
+    `examples/single-turn/mg1.seq`, `ps.seq` and `closed.seq` are checked in CI.
 
 ## What to try
 

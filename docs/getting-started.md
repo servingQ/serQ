@@ -25,7 +25,7 @@ seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.
 ## Run your first program
 
 ```bash
-seq-lang run programs/mg1.seq
+seq-lang run examples/single-turn/mg1.seq
 ```
 
 ```text
@@ -86,8 +86,8 @@ their previous preemption, which a run would otherwise hide).
 Every `let` constant is an override:
 
 ```bash
-seq-lang run programs/agentic.seq --set N=32 --set C=3e5 --set maxctx=1.5e5
-seq-lang run programs/vllm.seq --seed 2 --horizon 3000
+seq-lang run examples/single-turn/agentic.seq --set N=32 --set C=3e5 --set maxctx=1.5e5
+seq-lang run examples/multi-turn/vllm.seq --seed 2 --horizon 3000
 ```
 
 `--json` prints the same report as JSON, and `--dump DIR` writes every
@@ -97,12 +97,12 @@ sample, which is what you pair against a measured run.
 ## Checking without running
 
 ```bash
-seq-lang check programs/replica.seq
+seq-lang check examples/multi-turn/replica.seq
 # OK: 3 pool(s), 2 stage(s), 19 attribute(s), 12 block(s)
 ```
 
 `check` parses, resolves every name and folds the constants. It is what
-`make check` runs over every program in `programs/`.
+`make check` runs over every program in `examples/`.
 
 ## The IR
 
@@ -110,7 +110,7 @@ A seQ program's definition is not its text — it is the **IR**, a closed
 versioned data structure ([reference](ir.md)). The text syntax is one frontend.
 
 ```bash
-seq-lang ir programs/vllm.seq > vllm.json   # compile text to IR
+seq-lang ir examples/multi-turn/vllm.seq > vllm.json   # compile text to IR
 seq-lang run vllm.json --seed 3             # run the IR directly
 ```
 

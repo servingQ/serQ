@@ -5,7 +5,7 @@ it. Four independent kinds of evidence, all run by `make check`.
 
 ## 1. Closed forms
 
-`programs/mg1.seq`, `ps.seq` and `closed.seq` are checked against the answers
+`examples/single-turn/mg1.seq`, `ps.seq` and `closed.seq` are checked against the answers
 queueing theory already knows: M/M/1 sojourn time, Pollaczek–Khinchine for four
 service laws, processor-sharing insensitivity, and mean value analysis for the
 closed network. A run whose confidence interval does not cover the closed form
@@ -105,16 +105,16 @@ Two results worth naming:
 - Cache entries are per session. Cross-session prefix sharing — a common system
   prompt, SGLang's RadixAttention — needs a content-addressed cache and is not
   written.
-- The prefill/decode program (`programs/llmd_pd.seq`) is checked against the
+- The prefill/decode program (`examples/pd-disaggregation/llmd_pd.seq`) is checked against the
   source line by line, by deterministic tests of its statements, and against
-  one A6000 run in each NIXL mode (`programs/llmd_pd_replay.seq`,
+  one A6000 run in each NIXL mode (`examples/replay/llmd_pd_replay.seq`,
   `tools/a6000/`), not yet against a scheduler oracle: that oracle would
   drive two vLLM schedulers and a fake connector ([case
   study](case-study-pd.md)).
 
 ## Against a real machine
 
-Beyond agreement with other models, `programs/vllm_replay.seq` is fitted to an
+Beyond agreement with other models, `examples/replay/vllm_replay.seq` is fitted to an
 A100 running Qwen3-8B and predicts measured runs it was not fitted on: hit
 rates within 1–6 points across eight held-out configurations, **including the
 one where the replica collapses**. The cost model comes from 3 022 engine steps

@@ -4,7 +4,7 @@
 
 A language in which an LLM serving deployment is a program: memory pools,
 stages, a workload and the policy every session runs, written once and both
-simulated and formally checked against the real system. `programs/vllm.seq`
+simulated and formally checked against the real system. `examples/multi-turn/vllm.seq`
 reproduces the upstream vLLM v1 scheduler request for request — the
 correspondence, cited `file:line` against `ref/vllm`, is
 [`docs/language.md` §7][language].
@@ -24,7 +24,7 @@ ran against it. seQ is one program instead. Its definition is an
 intermediate representation, the **IR** (`src/ir.rs`, [`docs/ir.md`][ir]) —
 a closed, versioned data structure that the interpreter runs, the Lean
 model is generated from, and tools build or edit as JSON. The text syntax
-([`programs/*.seq`][programs], [`docs/language.md`][language]) is one
+([`examples/*/*.seq`][examples], [`docs/language.md`][language]) is one
 frontend that compiles to it. The Lean formalisation lives in the
 companion research repository, `serving-queue-theory`
 (`lean/ServingQueueTheory/Seq*.lean`), where the vLLM scenarios below are
@@ -32,14 +32,14 @@ theorems.
 
 [ir]: docs/ir.md
 [language]: docs/language.md
-[programs]: programs/
+[examples]: examples/
 
 ## Quickstart
 
 ```bash
-cargo run --release -- run programs/vllm.seq --seed 2 --horizon 3000
-cargo run --release -- ir programs/vllm.seq > vllm.json      # the IR
-cargo run --release -- draw programs/vllm.seq --format svg --out vllm.svg   # experimental
+cargo run --release -- run examples/multi-turn/vllm.seq --seed 2 --horizon 3000
+cargo run --release -- ir examples/multi-turn/vllm.seq > vllm.json      # the IR
+cargo run --release -- draw examples/multi-turn/vllm.seq --format svg --out vllm.svg   # experimental
 ```
 
 As a dependency, pin a release tag:
@@ -59,7 +59,7 @@ cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-rc3 --locked --roo
 | | |
 |---|---|
 | `src/` | IR, text syntax (lexer/parser/AST), the linker, the interpreter, reporting, drawing |
-| `programs/` | example deployments — M/G/1, PS, closed, agentic replica, PD tandem, routing, the vLLM v1 engine and its A100 replay |
+| `examples/` | example deployments by workload — `single-turn/`, `multi-turn/`, `subagent/`, `pd-disaggregation/`, `replay/` (trace replays, with their `data/`), `oracle/` (the vLLM scheduler oracle's program) |
 | `tools/` | the real vLLM v1 scheduler as an oracle, its recorded scenarios, the A100 cost-model sweeps |
 | `docs/` | [the IR definition][ir], [the text syntax and vLLM correspondence][language], the design record (`docs/review.md`, `docs/design/`) |
 

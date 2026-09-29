@@ -5,11 +5,11 @@
 //! Its definition is the IR (`ir::Program`, `docs/ir.md`): `interp` runs it,
 //! the Lean model is generated from it, and tools build or edit it as data.
 //! The text syntax (`parser`, `link`; `docs/language.md`) is one frontend
-//! that compiles to it. `programs/` holds example deployments, among them
+//! that compiles to it. `examples/` holds example deployments, among them
 //! vLLM v1.
 //!
 //! ```no_run
-//! let src = std::fs::read_to_string("programs/mg1.seq").unwrap();
+//! let src = std::fs::read_to_string("examples/single-turn/mg1.seq").unwrap();
 //! let report = seq::run_source(&src, &seq::Overrides::default(), None).unwrap();
 //! println!("{}", report.text());
 //! ```
@@ -145,19 +145,23 @@ pub fn run_file(path: &Path, ov: &Overrides) -> Result<Report, String> {
     )
 }
 
-/// The path of `programs/<name>.seq` in this crate.
+/// The path of `examples/<group>/<name>.seq` in this crate. Example names
+/// are unique across groups, so the group is not part of the name.
 pub fn program_path(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("programs")
-        .join(format!("{name}.seq"))
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let file = format!("{name}.seq");
+    std::fs::read_dir(&root)
+        .unwrap_or_else(|e| panic!("{}: {e}", root.display()))
+        .flatten()
+        .map(|g| g.path().join(&file))
+        .find(|p| p.is_file())
+        .unwrap_or_else(|| panic!("no examples/*/{file}"))
 }
 
-/// Convenience for tests: run `programs/<name>.seq` with overrides given
+/// Convenience for tests: run `examples/*/<name>.seq` with overrides given
 /// as `name=expr` strings.
 pub fn run_program(name: &str, sets: &[&str], seed: Option<u64>, horizon: Option<f64>) -> Report {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("programs")
-        .join(format!("{name}.seq"));
+    let path = program_path(name);
     let mut ov = Overrides {
         seed,
         horizon,

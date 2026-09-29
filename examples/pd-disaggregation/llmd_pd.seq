@@ -104,7 +104,7 @@ server {
     choose i in NP by ((cachedin(kvP[i]) > 0 ? 0 : 1) * 1e9 + work(P[i]) + queued(reqsP[i]));
     // The prefiller's scheduler: a slot and the blocks of the first chunk,
     // room for the whole prompt (scheduler_reserve_full_isl); vLLM's engine
-    // on one device (programs/vllm.seq) with no decode. When the one token
+    // on one device (examples/multi-turn/vllm.seq) with no decode. When the one token
     // is sampled the request is finished on the prefiller: the slot goes
     // and the blocks stay leased for the decoder's read (request_finished:
     // delay_free_blocks), 30 s renewed by the decoder's heartbeats while it
@@ -145,7 +145,7 @@ server {
     } keep (prompt + o);
   } else {
     // Decode only: the decode pod prefills the prompt itself - vLLM's engine
-    // on one device (programs/vllm.seq).
+    // on one device (examples/multi-turn/vllm.seq).
     admit if reqsD[j] (1), kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known) fit
           where known = computed < prompt ? prompt : computed + 1,
                 hit = min(cachedin(kvD[j]), floor((known - 1) / bs) * bs) {

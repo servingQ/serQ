@@ -1,4 +1,4 @@
-// programs/llmd_pd.seq on the A6000 testbed: one prefiller and one decoder
+// examples/pd-disaggregation/llmd_pd.seq on the A6000 testbed: one prefiller and one decoder
 // (Qwen3-8B, block 16, budget 8192, 192 000-token pools), vLLM's toy NIXL
 // proxy in front (every prompt goes to the prefiller: max_tokens = 1, then
 // the decode request with the prefiller's block ids), replaying the

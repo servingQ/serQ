@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run programs/llmd_pd_replay.seq with the fitted constants and compare its
+"""Run examples/replay/llmd_pd_replay.seq with the fitted constants and compare its
 per-request TTFT with the testbed's rounds.jsonl, request for request."""
 import json, os, subprocess, sys, tempfile, statistics as st
 SEQ = sys.argv[1]; PROG = sys.argv[2]; ROUNDS = sys.argv[3]; SETS = sys.argv[4:]

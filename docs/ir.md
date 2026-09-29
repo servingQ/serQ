@@ -26,11 +26,11 @@ Source: `src/ir.rs`. Version: `IR_VERSION = 5` (2 added the sessions' turns;
   oracle tests run the IR. Before the IR existed, the vLLM request program
   had three hand-kept copies: the Rust test built it as a string per
   scenario, the Lean generator held a hand-written Lean version, and
-  `programs/vllm.seq` was a third variant. Now there is one file,
-  `programs/vllm_request.seq`, compiled once per scenario into
+  `examples/multi-turn/vllm.seq` was a third variant. Now there is one file,
+  `examples/oracle/vllm_request.seq`, compiled once per scenario into
   `tools/oracle/<name>.ir.json`, and both the Rust test and the Lean
   theorems read those files. The multi-turn cache scenario is the IR of
-  `programs/vllm_replay.seq` with its trace inlined
+  `examples/replay/vllm_replay.seq` with its trace inlined
   (`tools/oracle/cache_trace.ir.json`), so its Lean program is generated
   too.
 - **The workload instance is data.** Which sessions arrive with which
