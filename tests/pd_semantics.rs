@@ -247,7 +247,7 @@ fn decode_pressure_backs_into_the_prefill_pool() {
         workload { arrive batch(6); }
         session {
           run gate (serial * 0.01);
-          hold memP (10) { prefill (0.1); observe prefilled = serial; transfer (0.1); }
+          hold memP (10) { prefill (0.1); observe prefilled = serial; run link (0.1); }
           hold memD (10) { decode (10); }
           end;
         }

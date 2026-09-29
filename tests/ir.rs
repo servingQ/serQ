@@ -195,8 +195,8 @@ fn serving_forms_compile_to_the_kernel_ir() {
         "{deployment} session {{
             turn;
             loop {{
-              enter memP (T) {{ prefill (n + K); transfer (T / 100); }} keep (T);
-              enter memD (T) {{ decode (o); }}
+              enter memP (T) {{ prefill (n + K); }} keep (T) lease memP (inf);
+              enter memD (T) {{ transfer (T / 100) from memP to memD (T); decode (o); }}
               set K = T;
               branch with (0.8) {{ tool Z; turn; }} else {{ end; }}
             }}
@@ -206,8 +206,8 @@ fn serving_forms_compile_to_the_kernel_ir() {
         "{deployment} session {{
             turn;
             loop {{
-              hold memP (T) {{ run prefill (n + K); run link (T / 100); }} cache (T);
-              hold memD (T) {{ run decode (o); }}
+              hold memP (T) {{ run prefill (n + K); }} cache (T) lease memP (inf);
+              hold memD (T) {{ run link (T / 100); load memD (T); release memP; run decode (o); }}
               set K = T;
               branch with (0.8) {{ run tool (Z); turn; }} else {{ end; }}
             }}

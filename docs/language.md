@@ -119,7 +119,6 @@ serving  := enter POOL ( expr ) … block [ keep ( expr ) ] [ lease POOL ( expr 
                  [reuse ( expr )] [where NAME = expr , ... ] block [ keep ( expr ) ] ;
                                              -- the same, in a server block
           | prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
-          | transfer [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | transfer [ '[' expr ']' | on STAGE ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
           | decode   [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
@@ -188,7 +187,6 @@ unchanged.
 |---|---|
 | `enter P (c) … { body } keep (ℓ);` | `hold P (c) … { body } cache (ℓ);` (`reserve`, `reuse`, several pools: as in `hold`) |
 | `prefill W;` | `run prefill (W);`, or on a step engine `E`: `run E prefill (T);` |
-| `transfer X;` | `run link (X);` |
 | `transfer (X) from P to Q (n);` | `run link (X); load Q (n); release P;` — the KV of `n` tokens moves from the session's lease (or hold) on `P` to its hold on `Q`: the link takes the time, the tokens count as computed at `Q`, and `P` is given back (below, *A KV transfer*) |
 | `decode W;` | `run decode (W);`, or on a step engine `E`: `run E decode (T);` |
 | `tool Z;` | `run tool (Z);` |
@@ -236,13 +234,15 @@ The forms compile to the IR they compiled to before the rewrite
 **A KV transfer.** Written as two holds in a row,
 
 ```
-enter memP (T) { prefill (n + K); transfer (T / 100); } keep (T);
+enter memP (T) { prefill (n + K); run link (T / 100); } keep (T);
 enter memD (T) { decode (o); }
 ```
 
 a session holds the prefill instance's memory through the transfer and
 queues for the decode instance's afterwards: a store-and-forward link with a
-buffer nobody has. A NIXL transfer between two vLLM instances has no buffer: the decode instance
+buffer nobody has. The form `transfer` does not write this: without
+`from P to Q (n)` it is a parse error, and a link that stores and forwards is
+spelled with the kernel's `run`. A NIXL transfer between two vLLM instances has no buffer: the decode instance
 allocates the prompt's blocks *first*, the bytes are read into them, and the
 prefill instance frees its copy *after*. The prefiller's blocks outlive the
 request's scope — its slot is freed when the token is sampled, its blocks
