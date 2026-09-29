@@ -55,6 +55,48 @@ link.
 | a parked request is in no `running` list and is not preempted; nor is the prefiller's finished one | `preempt lifo` takes the last admitted *resident* of the engine | `scheduler.py:742-813` |
 | the decoder keeps the prompt's and the output's full blocks cached | `} keep (prompt + o)` | `kv_cache_manager.py:602-606` |
 
+## Writing xPyD
+
+The deployment is families: `NP` prefill instances and `ND` decode
+instances, each with its own KV pool, request-slot pool, engine and NIC.
+
+```
+pool reqsP[2] { cap max_seqsP; admit via P; }
+pool kvP[2]   { cap blocksP * bs; block bs; evict lru; preempt lifo; }
+pool reqsD[2] { cap max_seqsD; admit via D; }
+pool kvD[2]   { cap blocksD * bs; block bs; evict lru; preempt lifo; admit via D; }
+
+stage P[2] : step { budget B; cost …; memory kvP; }
+stage D[2] : step { budget B; cost …; memory kvD; }
+stage link[2] : ps(1);
+```
+
+A family of `N` written next to a family of `N` is joined member for
+member: `admit via P` on `reqsP[2]` means `reqsP[i]` is served by `P[i]`,
+and `memory kvP` on `P[2]` means `P[i]` counts `kvP[i]` as its residents'
+memory (`kvb`, `kvp`). Next to a family of one, every member gets that one;
+any other pair of counts is a link error. A family's size is a literal
+(`[2]`), so the router's `choose j in ND` and the declarations carry the
+same number twice; a mismatch shows up as an index out of range at the
+first `choose`.
+
+The router is the session's two `choose`s, and the instance it picked is
+carried by the index everywhere after: `admit if reqsP[i] (1), kvP[i]
+(…)`, `prefill on P[i] … growing kvP[i]`, `lease kvP[i]`, `transfer[j] …
+from kvP[i] to kvD[j]`, `admit if kvD[j] …`, `decode on D[j] … growing
+kvD[j]`. `release` and `load` (and so `transfer … from … to …`) name the
+pool exactly as the hold that took it did, index included; `hold kvP[i] …
+lease kvP[i]` followed by `transfer … from kvP[k]` does not link. The
+serving forms take the family index before the work: `prefill on P[i] (…)`
+for a step engine that has to be named, `transfer[j] (…)` for the role's
+own stage array (`link`).
+
+Going from 2P2D to 4P8D is the four literals and the two `let`s; the
+program does not change otherwise, which is the point of writing the router
+as `choose` over a family rather than as a branch per instance
+(`programs/routing.seq` still has the branch-per-policy shape the design
+notes call a smell).
+
 ## The two modes
 
 **Pull** (`NixlConnector`, `kv_role` producer and consumer): the decoder
@@ -77,16 +119,56 @@ sidecar the dispatch is serial for NIXL (parallel for MoRI-IO only,
 lifecycle: the same holds in the same order, the copy moved by the
 prefiller's worker instead of the decoder's, one notification more.
 
-What the program says for push mode is therefore this program with the
-transfer on the prefiller's link (`transfer on link[i]`) and its constant
-raised by the registration. What it cannot say is the concurrent dispatch:
-a session waits at one pool at a time, so the decoder's admission is
-written after the prefill. The difference is bounded: under decoder memory
-pressure both forms lease at the prefiller, since the write cannot start
-before the decoder has allocated; without it, the concurrent form takes the
-decoder's blocks a prefill earlier and saves one decoder step of latency.
-The reservation that would write it exactly is priced in
-[The KV transfer](design/pd-transfer.md).
+### The two modes in the program
+
+Pull is the program as written. The prefiller's scope ends in a lease, the
+decoder is admitted, and the decoder's NIC does the copy:
+
+```
+admit if reqsP[i] (1), kvP[i] (…) fit … { prefill on P[i] (…) growing kvP[i]; } keep (prompt) lease kvP[i] (inf);
+admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit … {
+  transfer[j] (x0 + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);   // the decoder's link[j] READs; the lease ends
+  admit if reqsD[j] (1) fit { … }
+} keep (prompt + o);
+```
+
+Push through the llm-d sidecar (serial dispatch) is the same three lines
+with two differences a reader can see: the copy is the prefiller's WRITE,
+so it runs on the prefiller's NIC, and it starts one notification after the
+decoder's admission (the registration, `nixl/push_scheduler.py:128-205`):
+
+```
+stage linkP[2] : ps(1);                                   // the prefillers' NICs
+…
+admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit … {
+  transfer on linkP[i] (x0 + x_reg + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
+  admit if reqsD[j] (1) fit { … }
+} keep (prompt + o);
+```
+
+`transfer on linkP[i] (…) from kvP[i] to kvD[j] (…)` is the same kernel
+statements — `run linkP[i]; load kvD[j]; release kvP[i]` — on the other
+side's stage. Which NIC saturates under load is what the two programs
+differ in, and a deployment with more prefillers than decoders (or the
+reverse) will show it.
+
+Push with the two legs dispatched at once (vLLM's own push proxy) is the
+form the language cannot yet write: the decoder's admission would have to
+be requested when the request arrives, while the session is still queued
+at the prefiller, so the write can start the moment the prefill ends. A
+session waits at one pool at a time, so the program above writes the
+decoder's admission after the prefill. The difference is bounded: under
+decoder memory pressure both forms lease at the prefiller, since the write
+cannot start before the decoder has allocated; without it, the concurrent
+form takes the decoder's blocks a prefill earlier and saves one decoder
+step of latency. The reservation that would write it exactly is sketched in
+[The KV transfer](design/pd-transfer.md):
+
+```
+book kvD[j] (prompt) reserve (prompt);                      // join the decoder's queue now, not written yet
+admit if reqsP[i] (1), kvP[i] (…) fit … { … } keep (prompt) lease kvP[i] (inf);
+enter kvD[j] { transfer on linkP[i] (…) from kvP[i] to kvD[j] (…); … }   // open the booking, waiting if it is not granted
+```
 
 **Not modelled**: the lease's expiry and the decoder's heartbeats (the
 lease is granted at `nixl/pull_scheduler.py:248-269`, reaped at

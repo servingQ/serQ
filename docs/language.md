@@ -396,7 +396,12 @@ A pool marked `admit via S` is not admitted at settle time: its queue is
 served by step stage `S`, at the start of an iteration, after the
 residents have taken their tokens, while the iteration has budget left, and
 not in an iteration that preempted (vLLM's waiting loop,
-`scheduler.py:868-1128`). A stage that serves several queues tries them in
+`scheduler.py:868-1128`). Families are joined member for member: `pool
+q[N] { admit via S; }` next to `stage S[N]` serves `q[i]` by `S[i]`, and
+`stage E[N] : step { memory kv; }` next to `pool kv[N]` counts `kv[i]` for
+`E[i]`; next to a family of one, every member gets that one, and any other
+pair of counts is a link error (`programs/llmd_pd.seq` is the xPyD case,
+`docs/case-study-pd.md` §Writing xPyD). A stage that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
 stops the iteration's admissions; `programs/llmd_pd.seq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
