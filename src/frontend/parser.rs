@@ -65,6 +65,7 @@ use std::fmt;
 
 use crate::frontend::ast::*;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
+use crate::frontend::link::{BUILTIN_ATTRS, CONTEXT_VARS};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -276,6 +277,10 @@ fn has_sample(e: &Expr) -> bool {
     }
 }
 
+fn is_context_var(v: &str) -> bool {
+    CONTEXT_VARS.iter().any(|(name, _)| *name == v)
+}
+
 /// Does this expression read the name `n` (an attribute, a constant, or a
 /// binding)?
 fn expr_reads(e: &Expr, n: &str) -> bool {
@@ -304,21 +309,9 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
     match s {
         Stmt::Turn | Stmt::Request | Stmt::End => false,
         Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
-        Stmt::Hold {
-            pools,
-            reuse,
-            body,
-            cache,
-            lease,
-        } => {
-            pools.iter().any(|(r, u, f)| {
-                ref_reads(r, n) || expr_reads(u, n) || f.as_ref().is_some_and(|f| expr_reads(f, n))
-            }) || reuse.as_ref().is_some_and(|e| expr_reads(e, n))
-                || block(body)
-                || cache.as_ref().is_some_and(|e| expr_reads(e, n))
-                || lease
-                    .as_ref()
-                    .is_some_and(|(r, t)| ref_reads(r, n) || expr_reads(t, n))
+        Stmt::Hold { body, .. } => {
+            // a nested hold that binds `n` itself gives its body its own `n`
+            header_reads(s, n) || (!binds_in_body(body, n) && block(body))
         }
         Stmt::Grow(r, e) | Stmt::Load(r, e) => ref_reads(r, n) || expr_reads(e, n),
         Stmt::Drop(r) | Stmt::Release(r) => ref_reads(r, n),
@@ -338,19 +331,112 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
     }
 }
 
-/// The names `set` or `choose` assigns anywhere in `stmts`.
-fn assigned(stmts: &[Stmt], out: &mut Vec<String>) {
+/// Does the header of this hold (its units, `reserve`, `reuse`, `cache`,
+/// `lease`) read `n`?
+fn header_reads(s: &Stmt, n: &str) -> bool {
+    let Stmt::Hold {
+        pools,
+        reuse,
+        cache,
+        lease,
+        ..
+    } = s
+    else {
+        return false;
+    };
+    pools.iter().any(|(r, u, f)| {
+        ref_reads(r, n) || expr_reads(u, n) || f.as_ref().is_some_and(|f| expr_reads(f, n))
+    }) || reuse.as_ref().is_some_and(|e| expr_reads(e, n))
+        || cache.as_ref().is_some_and(|e| expr_reads(e, n))
+        || lease
+            .as_ref()
+            .is_some_and(|(r, t)| ref_reads(r, n) || expr_reads(t, n))
+}
+
+/// Does this hold body begin with the `set` of a binding `n`? The parser
+/// puts a binding the body reads there, and nothing else sets its name.
+fn binds_in_body(body: &[Stmt], n: &str) -> bool {
+    body.iter()
+        .take_while(|s| matches!(s, Stmt::Set(..)))
+        .any(|s| matches!(s, Stmt::Set(v, _) if v == n))
+}
+
+/// The first of `bound` that `stmts` read outside the body of a hold that
+/// binds it; `scope` are the ones bound around `stmts`.
+fn stray_read(stmts: &[Stmt], bound: &[String], scope: &[String]) -> Option<String> {
+    let outside = |s: &Stmt, reads: &dyn Fn(&Stmt, &str) -> bool| {
+        bound
+            .iter()
+            .find(|n| !scope.contains(n) && reads(s, n))
+            .cloned()
+    };
     for s in stmts {
-        match s {
-            Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => out.push(n.clone()),
-            Stmt::Hold { body, .. } | Stmt::Loop(body) => assigned(body, out),
-            Stmt::Branch(_, a, b) => {
-                assigned(a, out);
-                assigned(b, out);
-            }
-            _ => {}
+        let found = match s {
+            Stmt::Hold { body, .. } => outside(s, &header_reads).or_else(|| {
+                let mut inner = scope.to_vec();
+                inner.extend(bound.iter().filter(|n| binds_in_body(body, n)).cloned());
+                stray_read(body, bound, &inner)
+            }),
+            Stmt::Branch(c, a, b) => outside(s, &|_, n| expr_reads(c, n))
+                .or_else(|| stray_read(a, bound, scope))
+                .or_else(|| stray_read(b, bound, scope)),
+            Stmt::Loop(b) => stray_read(b, bound, scope),
+            // the binding's own `set`, at the top of its hold's body
+            Stmt::Set(v, _) if bound.contains(v) && scope.contains(v) => None,
+            _ => outside(s, &stmt_reads),
+        };
+        if found.is_some() {
+            return found;
         }
     }
+    None
+}
+
+/// Every expression of the declarations: pools, stages, the arrivals and
+/// the run options, which a hold's binding is never in scope of.
+fn decl_exprs(prog: &Program) -> Vec<&Expr> {
+    let mut out: Vec<&Expr> = vec![];
+    for p in &prog.pools {
+        out.push(&p.cap);
+        out.extend(&p.block);
+        if let EvictOrder::By(keys) = &p.evict {
+            out.extend(keys);
+        }
+        if let QueueOrder::By(k) = &p.queue {
+            out.push(k);
+        }
+        if let Some(sp) = &p.spill {
+            out.push(&sp.work);
+            out.push(&sp.when);
+        }
+    }
+    for st in &prog.stages {
+        match &st.kind {
+            StageKind::Fifo(e) | StageKind::Ps(e) => out.push(e),
+            StageKind::Delay => {}
+            StageKind::Step(sp) => {
+                out.extend([&sp.budget, &sp.cost, &sp.chunk]);
+                if let Serve::By(keys) = &sp.serve {
+                    out.extend(keys);
+                }
+            }
+        }
+    }
+    if let Some(w) = &prog.workload {
+        match &w.arrive {
+            Arrival::Poisson(e) | Arrival::Renewal(e) | Arrival::Closed(e) | Arrival::Batch(e) => {
+                out.push(e)
+            }
+            Arrival::None => {}
+        }
+    }
+    let r = &prog.run;
+    out.extend(
+        [&r.horizon, &r.warmup, &r.seed, &r.arrivals]
+            .into_iter()
+            .flatten(),
+    );
+    out
 }
 
 /// The first thing `e` reads whose value at a hold's admission is not its
@@ -364,7 +450,7 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
     ];
     let var = |v: &str| {
         let shadowed = attrs.iter().chain(lets).any(|a| a == v);
-        (v == "cached" || (!shadowed && CONTEXT_VARS.contains(&v))).then(|| v.to_string())
+        (v == "cached" || (!shadowed && is_context_var(v))).then(|| v.to_string())
     };
     match e {
         Expr::Located(_, inner) => live_read(inner, attrs, lets),
@@ -388,26 +474,6 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
             .or_else(|| live_read(b, attrs, lets)),
     }
 }
-
-/// The context variables (`docs/api/context.md`), as the linker names them.
-const CONTEXT_VARS: [&str; 16] = [
-    "now",
-    "size",
-    "age",
-    "last",
-    "queued",
-    "n",
-    "ntok",
-    "ndec",
-    "npre",
-    "nres",
-    "kvb",
-    "kvp",
-    "attn",
-    "decoding",
-    "admission",
-    "remaining",
-];
 
 /// Replace every `request;` in `stmts`, at any depth, by the server's
 /// statements. Returns how many were replaced.
@@ -640,31 +706,88 @@ impl Parser {
         }
     }
 
-    /// A binding its hold's body reads was set at the top of the body; that
-    /// is its admission value only if it reads attributes and constants.
+    /// A binding its hold's body reads was set at the top of the body. That
+    /// is its admission value only if it reads attributes and constants, and
+    /// the `set` is the binding's alone only if nothing else has its name.
     fn check_body_bindings(&self, prog: &Program) -> PResult<()> {
         if self.body_binds.is_empty() {
             return Ok(());
         }
-        let mut attrs = vec![];
-        assigned(&prog.session, &mut attrs);
-        if let Some(w) = &prog.workload {
-            assigned(&w.init, &mut attrs);
-            assigned(&w.turn, &mut attrs);
-        }
         let lets: Vec<String> = prog.lets.iter().map(|(n, _)| n.clone()).collect();
+        // what the program's own `set` and `choose` assign (the bindings'
+        // `set`s are not recorded as definitions)
+        let assigned: Vec<String> = self
+            .definitions
+            .iter()
+            .map(|(n, _)| n.clone())
+            .filter(|n| !lets.contains(n))
+            .collect();
         for (at, name, e) in &self.body_binds {
-            if let Some(what) = live_read(e, &attrs, &lets) {
+            let clash = if BUILTIN_ATTRS.contains(&name.as_str()) {
+                Some("an attribute the scheduler sets")
+            } else if is_context_var(name) {
+                Some("a context variable")
+            } else if lets.contains(name) {
+                Some("a `let` constant")
+            } else if assigned.contains(name) {
+                Some("an attribute the program sets")
+            } else {
+                None
+            };
+            if let Some(what) = clash {
+                return self.err_at(
+                    *at,
+                    format!(
+                        "the body reads `{name}`, which is also {what}: the body would not \
+                         say which it means\nhelp: rename the binding"
+                    ),
+                );
+            }
+            if expr_reads(e, name) {
+                return self.err_at(*at, format!("the binding `{name}` reads itself"));
+            }
+            if let Some(what) = live_read(e, &assigned, &lets) {
+                let help = if what == "cached" || what.starts_with("cachedin") {
+                    "in the body read `cached`, the units the admission consumed"
+                } else {
+                    "name what the body needs with a `set` in the body"
+                };
                 return self.err_at(
                     *at,
                     format!(
                         "the body reads `{name}`, and `{name}` reads `{what}`: the body \
                          sees a binding that reads only attributes and constants\n\
-                         help: in the body read `cached` for the units the admission \
-                         consumed, or name the value with `set` in the body"
+                         help: {help}"
                     ),
                 );
             }
+        }
+        // the binding is the body's: a read anywhere else would get the value
+        // the last such hold left
+        let mut bound: Vec<String> = self.body_binds.iter().map(|(_, n, _)| n.clone()).collect();
+        bound.sort();
+        bound.dedup();
+        let mut stray = stray_read(&prog.session, &bound, &[]);
+        if let Some(w) = &prog.workload {
+            stray = stray
+                .or_else(|| stray_read(&w.init, &bound, &[]))
+                .or_else(|| stray_read(&w.turn, &bound, &[]));
+        }
+        stray = stray.or_else(|| {
+            decl_exprs(prog)
+                .into_iter()
+                .find_map(|e| bound.iter().find(|n| expr_reads(e, n)).cloned())
+        });
+        if let Some(name) = stray {
+            let (at, _, _) = self.body_binds.iter().find(|(_, n, _)| *n == name).unwrap();
+            return self.err_at(
+                *at,
+                format!(
+                    "`{name}` is read outside the body of the hold that binds it\n\
+                     help: a header's binding is the header's and its body's; \
+                     name a value the rest of the program reads with `set`"
+                ),
+            );
         }
         Ok(())
     }
@@ -1854,23 +1977,97 @@ mod tests {
     fn the_body_does_not_see_a_binding_of_live_state() {
         // at the top of the body the admission has consumed the prefix, so
         // `cachedin(kv)` there is not what the header read
-        for binding in ["hit = min(cachedin(kv), p)", "hit = cached", "hit = now"] {
+        for (binding, help) in [
+            ("hit = min(cachedin(kv), p)", "read `cached`"),
+            ("hit = cached", "read `cached`"),
+            ("hit = now", "with a `set` in the body"),
+        ] {
             let e = parse(&format!(
                 "{ENGINE} session {{ enter kv (hit) at admission ({binding}) {{ observe h = hit; }} }}"
             ))
             .unwrap_err();
             assert!(
-                e.msg.contains("the body reads `hit`"),
+                e.msg.contains("the body reads `hit`, and `hit` reads"),
                 "{binding}: {}",
                 e.msg
             );
-            assert!(e.msg.contains("read `cached`"), "{}", e.msg);
+            assert!(e.msg.contains(help), "{}", e.msg);
         }
         // `n` is a context variable unless the program assigns it
         let src = format!(
             "{ENGINE} session {{ set n = 3; enter kv (m) at admission (m = n + 1) {{ observe x = m; }} }}"
         );
         parse(&src).unwrap();
+    }
+
+    #[test]
+    fn a_binding_the_body_reads_has_a_name_of_its_own() {
+        // its `set` makes the name an attribute: one the scheduler, a `let`,
+        // the context or the program already has would be two things
+        for (pre, binding, what) in [
+            ("", "cached = 3", "an attribute the scheduler sets"),
+            ("", "computed = 50", "an attribute the scheduler sets"),
+            ("", "size = 5", "a context variable"),
+            ("", "now = 1", "a context variable"),
+            ("let bs = 4;", "bs = 2", "a `let` constant"),
+            ("", "k = 7", "an attribute the program sets"),
+        ] {
+            let assign = if what.ends_with("program sets") {
+                "set k = 5;"
+            } else {
+                ""
+            };
+            let name = binding.split(' ').next().unwrap();
+            let e = parse(&format!(
+                "{pre} {ENGINE} session {{ {assign} enter kv (1) at admission ({binding}) {{ observe a = {name}; }} }}"
+            ))
+            .unwrap_err();
+            assert!(e.msg.contains(what), "{binding}: {}", e.msg);
+        }
+        let e = parse(&format!(
+            "{ENGINE} session {{ enter kv (1) at admission (k = k + 1) {{ observe a = k; }} }}"
+        ))
+        .unwrap_err();
+        assert!(e.msg.contains("reads itself"), "{}", e.msg);
+        // an attribute the body sets itself is not the binding
+        let e = parse(&format!(
+            "{ENGINE} session {{ enter kv (hit) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }} }}"
+        ))
+        .unwrap_err();
+        assert!(e.msg.contains("an attribute the program sets"), "{}", e.msg);
+    }
+
+    #[test]
+    fn a_binding_is_read_only_in_its_hold() {
+        for after in [
+            "observe b = k;",
+            "enter kv (k) { }",
+            "branch (k > 1) { } else { }",
+        ] {
+            let e = parse(&format!(
+                "{ENGINE} session {{ enter kv (1) at admission (k = 2) {{ observe a = k; }} {after} }}"
+            ))
+            .unwrap_err();
+            assert!(e.msg.contains("outside the body"), "{after}: {}", e.msg);
+        }
+        let e = parse(
+            "pool kv { cap 100; queue by (k); } stage engine : step { cost 1; }
+             session { enter kv (1) at admission (k = 2) { observe a = k; } }",
+        )
+        .unwrap_err();
+        assert!(e.msg.contains("outside the body"), "{}", e.msg);
+        // two holds may bind one name, and a nested hold may bind it again
+        // over a live outer binding its body does not read
+        parse(&format!(
+            "{ENGINE} session {{
+                enter kv (1) at admission (k = 2) {{ observe a = k; }}
+                enter kv (1) at admission (k = 3) {{ observe b = k; }}
+                enter kv (h) at admission (h = cachedin(kv)) {{
+                    enter kv (1) at admission (h = 1) {{ observe c = h; }}
+                }}
+            }}"
+        ))
+        .unwrap();
     }
 
     #[test]

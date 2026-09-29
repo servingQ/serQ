@@ -92,6 +92,27 @@ struct Linker<'a> {
     prog: &'a Program,
 }
 
+/// The context variables by their source names (`docs/api/context.md`). A
+/// name resolves to an attribute first, then a `let`, then one of these.
+pub const CONTEXT_VARS: [(&str, CtxVar); 16] = [
+    ("now", CtxVar::Now),
+    ("size", CtxVar::Size),
+    ("age", CtxVar::Age),
+    ("last", CtxVar::Last),
+    ("queued", CtxVar::Queued),
+    ("n", CtxVar::N),
+    ("ntok", CtxVar::Ntok),
+    ("ndec", CtxVar::Ndec),
+    ("npre", CtxVar::Npre),
+    ("nres", CtxVar::Nres),
+    ("kvb", CtxVar::Kvb),
+    ("kvp", CtxVar::Kvp),
+    ("attn", CtxVar::Attn),
+    ("decoding", CtxVar::Decoding),
+    ("admission", CtxVar::Admission),
+    ("remaining", CtxVar::Remaining),
+];
+
 pub const BUILTIN_ATTRS: [&str; 9] = [
     "cached", "serial", "turn_no", "new", "out", "think", "more", "forced", "computed",
 ];
@@ -672,25 +693,12 @@ impl Linker<'_> {
                 } else if let Some(&v) = self.consts.get(n) {
                     CExpr::Num(v)
                 } else {
-                    match n.as_str() {
-                        "now" => CExpr::Ctx(CtxVar::Now),
-                        "size" => CExpr::Ctx(CtxVar::Size),
-                        "age" => CExpr::Ctx(CtxVar::Age),
-                        "last" => CExpr::Ctx(CtxVar::Last),
-                        "queued" => CExpr::Ctx(CtxVar::Queued),
-                        "n" => CExpr::Ctx(CtxVar::N),
-                        "ntok" => CExpr::Ctx(CtxVar::Ntok),
-                        "ndec" => CExpr::Ctx(CtxVar::Ndec),
-                        "npre" => CExpr::Ctx(CtxVar::Npre),
-                        "nres" => CExpr::Ctx(CtxVar::Nres),
-                        "kvb" => CExpr::Ctx(CtxVar::Kvb),
-                        "kvp" => CExpr::Ctx(CtxVar::Kvp),
-                        "attn" => CExpr::Ctx(CtxVar::Attn),
-                        "decoding" => CExpr::Ctx(CtxVar::Decoding),
-                        "admission" => CExpr::Ctx(CtxVar::Admission),
-                        "remaining" => CExpr::Ctx(CtxVar::Remaining),
-                        "inf" => CExpr::Num(f64::INFINITY),
-                        _ => return Err(self.unknown("name", n)),
+                    if let Some(&(_, v)) = CONTEXT_VARS.iter().find(|(name, _)| name == n) {
+                        CExpr::Ctx(v)
+                    } else if n == "inf" {
+                        CExpr::Num(f64::INFINITY)
+                    } else {
+                        return Err(self.unknown("name", n));
                     }
                 }
             }
