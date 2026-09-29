@@ -1,9 +1,8 @@
-//! The editor grammars and the parser say the same words.
+//! The docs lexer and the parser say the same words.
 //!
-//! `editors/seq.vim`, `editors/seq.tmLanguage.json` and
-//! `docs/hooks/seq_lexer.py` each carry a list of seQ's keywords, and the
-//! parser carries the real one. Four copies rot in a week: this is the only
-//! reason they do not.
+//! `docs/hooks/seq_lexer.py` carries a list of seQ's keywords, and the parser
+//! carries the real one. Two copies rot in a week: this is the only reason
+//! they do not.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -45,7 +44,7 @@ fn parser_keywords() -> BTreeSet<String> {
     out
 }
 
-/// Words the grammars are not expected to carry, with the reason.
+/// Words the lexer is not expected to carry, with the reason.
 fn exempt(word: &str) -> bool {
     matches!(
         word,
@@ -58,7 +57,7 @@ fn exempt(word: &str) -> bool {
 }
 
 #[test]
-fn the_editor_grammars_know_every_keyword() {
+fn the_docs_lexer_knows_every_keyword() {
     let parser = parser_keywords();
     assert!(
         parser.len() > 40,
@@ -66,35 +65,24 @@ fn the_editor_grammars_know_every_keyword() {
         parser.len()
     );
 
-    for file in [
-        "editors/seq.vim",
-        "editors/seq.tmLanguage.json",
-        "docs/hooks/seq_lexer.py",
-    ] {
-        let text = read(file);
-        let missing: Vec<&String> = parser
-            .iter()
-            .filter(|w| !exempt(w))
-            .filter(|w| {
-                !text
-                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                    .any(|t| t == w.as_str())
-            })
-            .collect();
-        assert!(missing.is_empty(), "{file} is missing {missing:?}");
-    }
+    let file = "docs/hooks/seq_lexer.py";
+    let text = read(file);
+    let missing: Vec<&String> = parser
+        .iter()
+        .filter(|w| !exempt(w))
+        .filter(|w| {
+            !text
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(|t| t == w.as_str())
+        })
+        .collect();
+    assert!(missing.is_empty(), "{file} is missing {missing:?}");
 }
 
-/// `admit` names the pool option and nothing else now, so the grammars must
+/// `admit` names the pool option and nothing else now, so the lexer must
 /// still colour it - and must not colour it as a statement.
 #[test]
 fn admit_is_an_option_not_a_statement() {
-    for file in [
-        "editors/seq.vim",
-        "editors/seq.tmLanguage.json",
-        "docs/hooks/seq_lexer.py",
-    ] {
-        let text = read(file);
-        assert!(text.contains("admit"), "{file} dropped `admit via`");
-    }
+    let file = "docs/hooks/seq_lexer.py";
+    assert!(read(file).contains("admit"), "{file} dropped `admit via`");
 }
