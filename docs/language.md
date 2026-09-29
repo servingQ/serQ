@@ -69,6 +69,8 @@ that prefills in the compute its decode step leaves (`step`).
 ```
 program  := item*
 item     := let NAME = expr ;
+          | def NAME ( NAME , ... ) = expr ;   -- a name for an expression: NAME ( arg , ... )
+          | def NAME ( NAME , ... ) block      -- a name for statements: NAME ( arg , ... ) ;
           | pool NAME [ '[' N ']' ] { poolopt* }
           | stage NAME [ '[' N ']' ] : kind ;
           | workload { wlitem* }

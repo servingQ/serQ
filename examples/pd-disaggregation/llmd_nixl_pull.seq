@@ -39,6 +39,10 @@ let Lambda = 0.6;      // sessions per second
 let p = 0.9;           // continue after a turn
 let Z = 3.0;           // tool time (s)
 
+// What a cache hit may cover of a request of x tokens: its full blocks, and
+// never the last token, which is computed for its logits.
+def reusable(x) = floor((x - 1) / bs) * bs;
+
 pool reqsP[2] { cap max_seqsP; admit via P; }
 pool kvP[2] { cap blocksP * bs; block bs; evict lru; preempt lifo; }
 // A decoder's scheduler serves its queues in this order: the requests whose
@@ -88,7 +92,7 @@ workload {
 server {
   set t0 = now;
   set prompt = K + n;
-  set hitmax = floor((prompt - 1) / bs) * bs;
+  set hitmax = reusable(prompt);
   // The router. Decode profile first: the least busy decode pod
   // (active-request-scorer). Then the decider: a remote prefill only when the
   // prompt's uncached suffix on that pod is long enough
@@ -120,7 +124,7 @@ server {
     // and a running slot free - it takes neither (the request is parked,
     // not running) - and reuses the full blocks it has of the prompt.
     admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit
-          reuse (floor((known - 1) / bs) * bs)
+          reuse (reusable(known))
           where known = computed < prompt ? prompt : computed + 1 {
       set c = cached;
       branch (!transferred) {
@@ -147,8 +151,8 @@ server {
     // on one device (examples/multi-turn/vllm.seq).
     admit if reqsD[j] (1), kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known) fit
           where known = computed < prompt ? prompt : computed + 1,
-                hit = min(cachedin(kvD[j]), floor((known - 1) / bs) * bs) {
-      set c = min(cached, floor((known - 1) / bs) * bs);
+                hit = min(cachedin(kvD[j]), reusable(known)) {
+      set c = min(cached, reusable(known));
       observe local_tokens = known - c;
       prefill on D[j] (known - c) growing kvD[j];
       branch (known == prompt) { observe ttft = now - t0; }

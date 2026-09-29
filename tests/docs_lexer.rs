@@ -14,7 +14,9 @@ fn read(rel: &str) -> String {
 
 /// Every word the parser matches as a keyword.
 fn parser_keywords() -> BTreeSet<String> {
-    let src = read("src/frontend/parser.rs");
+    let all = read("src/frontend/parser.rs");
+    // the tests quote words that are not keywords
+    let src = all[..all.find("#[cfg(test)]").unwrap_or(all.len())].to_string();
     let mut out = BTreeSet::new();
     for (pat, skip) in [("eat_kw(\"", 8), ("is_kw(\"", 7)] {
         let mut rest = src.as_str();
@@ -85,4 +87,22 @@ fn the_docs_lexer_knows_every_keyword() {
 fn admit_is_an_option_not_a_statement() {
     let file = "docs/hooks/seq_lexer.py";
     assert!(read(file).contains("admit"), "{file} dropped `admit via`");
+}
+
+/// A `def` and its parameters may not be keywords, which the parser checks
+/// against its own list: that list is every word it matches.
+#[test]
+fn the_parser_keyword_list_is_every_keyword() {
+    let listed: BTreeSet<String> = seq::frontend::parser::KEYWORDS
+        .iter()
+        .map(|w| w.to_string())
+        .collect();
+    let missing: Vec<String> = parser_keywords()
+        .into_iter()
+        .filter(|w| w.len() >= 2 && !listed.contains(w))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "parser::KEYWORDS is missing {missing:?}"
+    );
 }

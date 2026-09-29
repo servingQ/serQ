@@ -2,7 +2,7 @@
 
 ```
 program := item*
-item    := let | pool | stage | workload | session | server | run
+item    := let | def | pool | stage | workload | session | server | run
 ```
 
 Items are read in order and declarations come first: a [serving form](serving.md)
@@ -21,6 +21,38 @@ A named constant, folded at link time and overridable from the command line
 |---|---|---|
 | `NAME` | identifier | May not also be a session attribute: the linker rejects it. |
 | `expr` | `const` | May read earlier constants. |
+
+## `def`
+
+```seq
+def NAME ( PARAM, … ) = expr;
+def NAME ( PARAM, … ) { statement* }
+```
+
+A name for source the program would otherwise repeat. A use, `NAME(arg, …)`
+in an expression or `NAME(arg, …);` as a statement, is replaced by the body
+with each parameter replaced by its argument, and parsed where it stands: a
+serving form in it finds its stage at the use, and a statement body follows
+the rules of the block it is used in (`admit if` in a `server`, `enter` in a
+`session`). The AST and the IR hold the expansion, so a program with a `def`
+has the IR of the one written out.
+
+```seq
+def reusable(x) = floor((x - 1) / bs) * bs;
+set hitmax = reusable(prompt);
+```
+
+(`examples/pd-disaggregation/llmd_nixl_pull.seq`)
+
+| Argument | Type | Description |
+|---|---|---|
+| `NAME` | identifier | Not a keyword or a function, not defined twice, and not used in its own body. Defined before its first use. |
+| `PARAM` | identifier | Not a keyword. |
+| `arg` | `expr` or reference | A reference (`kv`, `kvD[j]`) is put in as written, so it may name a pool or a stage; any other argument is put in inside parentheses. An argument that draws may be passed to a parameter the body reads once. |
+
+Only the parameters are the definition's own. Every other name in the body is
+the program's: an attribute the body sets is the session's attribute, as it
+would be written out.
 
 ## `pool`
 
