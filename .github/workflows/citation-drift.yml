@@ -1,0 +1,30 @@
+name: Citation drift
+
+# Does the vLLM code the docs and programs cite still exist upstream? The
+# citations are checked against the pin by `make check`; this job asks the
+# other question, daily, against vllm-project/vllm@main, and goes red when a
+# cited range's text is gone. It gates no pull request. A red run names the
+# ranges and the places that cite them; the next step is to read upstream's
+# diff and decide whether the rule the program encodes moved.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+jobs:
+  drift:
+    name: cited ranges still present upstream
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: the vLLM source the docs cite, at the pin (sparse)
+        run: scripts/fetch_vllm_ref.sh --sparse
+      - name: the same files at upstream main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/fetch_vllm_tip.sh tip/vllm | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: every cited range's text, looked for in the tip
+        run: |
+          set -o pipefail
+          python3 scripts/check_citations.py --tip tip/vllm | tee -a "$GITHUB_STEP_SUMMARY"
