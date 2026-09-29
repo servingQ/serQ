@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "attrs": [
     "cached",
     "serial",
@@ -800,7 +800,8 @@
                 "Num": 1.0
               }
             ]
-          }
+          },
+          "lease": null
         }
       },
       {

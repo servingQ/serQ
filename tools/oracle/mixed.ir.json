@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "attrs": [
     "cached",
     "serial",
@@ -322,7 +322,8 @@
           ],
           "reuse": null,
           "body": 3,
-          "cache": null
+          "cache": null,
+          "lease": null
         }
       },
       {

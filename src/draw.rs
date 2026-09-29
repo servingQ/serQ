@@ -90,6 +90,14 @@ struct Draw<'a> {
     show_set: bool,
     /// Tails still open at the bottom of the figure, by pool.
     open_tails: Vec<(usize, f64)>,
+    /// Rows at which a `release` gave a pool back before its hold ended, by
+    /// pool, with the control depth it was written at: the hold's band for
+    /// that pool stops there when the release is on every path (written at
+    /// the hold's own depth), and only the marker says it otherwise.
+    released: Vec<(usize, f64, usize)>,
+    /// Leases still open: pool, the row the scope ended at, the label of
+    /// the cache clause; the band runs to the `release` that takes it.
+    leases: Vec<(usize, f64, Option<String>, String)>,
     /// Per hold body, the pools its `cache` clause can leave units in.
     cache_targets: std::collections::BTreeMap<usize, Vec<usize>>,
 }
@@ -97,6 +105,33 @@ struct Draw<'a> {
 impl Draw<'_> {
     fn band_box(&mut self, rect: Rect, style: BoxStyle, round: f64) {
         self.bands.push(Item::Box { rect, style, round });
+    }
+
+    /// The band of a lease, from the row its scope ended at to the row it
+    /// was taken at (or the figure's end), and the cache tail below it.
+    fn lease_band(&mut self, pool: usize, from: f64, to: f64, cache: Option<String>, note: &str) {
+        let Some(x) = self.col_x(pool) else {
+            return;
+        };
+        let label_chars = (COL_W / TextSize::Small.char_width()) as usize - 2;
+        let band = Rect::new(
+            x + BAND_INSET,
+            from,
+            COL_W - 2.0 * BAND_INSET,
+            (to - from).max(4.0),
+        );
+        self.band_box(band, BoxStyle::Reserve, 2.0);
+        self.under_note(pt(band.x + 4.0, from + 13.0), elide(note, label_chars));
+        if let Some(c) = cache {
+            let tail = Rect::new(band.x, to, band.w, CACHE_H);
+            self.band_box(tail, BoxStyle::Cached, 1.0);
+            self.under_note(
+                pt(tail.x + 4.0, to + CACHE_H + 10.0),
+                elide(&c, label_chars),
+            );
+            self.open_tails.retain(|(p, _)| *p != pool);
+            self.open_tails.push((pool, to));
+        }
     }
     fn under_note(&mut self, at: crate::figure::Point, text: String) {
         self.under.push(Item::Text {
@@ -209,6 +244,22 @@ impl<'a> Draw<'a> {
                     format!("grow {} ({})", self.p.show_pool_ref(r), self.p.show_expr(d)),
                 );
             }
+            CStmt::Load(r, n) => {
+                self.marker(
+                    "+",
+                    format!("load {} ({})", self.p.show_pool_ref(r), self.p.show_expr(n)),
+                );
+            }
+            CStmt::Release(r) => {
+                let y = self.y;
+                self.marker("]", format!("release {}", self.p.show_pool_ref(r)));
+                self.released.push((r.base, y, self.depth));
+                // a lease of this pool ends here: its band, then the cache
+                if let Some(i) = self.leases.iter().rposition(|l| l.0 == r.base) {
+                    let (pool, from, cache, note) = self.leases.remove(i);
+                    self.lease_band(pool, from, y + 12.0, cache, &note);
+                }
+            }
             CStmt::Run {
                 stage,
                 mode,
@@ -256,8 +307,10 @@ impl<'a> Draw<'a> {
                 reuse,
                 body,
                 cache,
+                lease,
             } => {
                 let top = self.y;
+                let depth = self.depth;
                 if let Some(rho) = reuse {
                     self.marker("v", format!("reuse ({})", self.p.show_expr(rho)));
                 }
@@ -277,6 +330,16 @@ impl<'a> Draw<'a> {
                     let Some(x) = self.col_x(r.base) else {
                         continue;
                     };
+                    // a `release` in the body, on every path, ended this
+                    // pool's hold early; one inside a branch is a marker only
+                    let end = self
+                        .released
+                        .iter()
+                        .rposition(|&(q, y, d)| q == r.base && d == depth && y > top && y <= bottom)
+                        .map(|i| self.released[i].1);
+                    self.released
+                        .retain(|&(q, y, _)| !(q == r.base && y > top && y <= bottom));
+                    let bottom = end.unwrap_or(bottom);
                     if let Some(fx) = reserve {
                         let fr = Rect::new(x + 3.0, top - 3.0, COL_W - 6.0, bottom - top + 6.0);
                         self.band_box(fr, BoxStyle::Reserve, 2.0);
@@ -288,6 +351,19 @@ impl<'a> Draw<'a> {
                     self.band_box(band, Self::static_style(units), 2.0);
                     let t = elide(&self.p.show_expr(units), label_chars);
                     self.under_note(pt(band.x + 4.0, top + 13.0), t);
+                    // the leased pool's band goes on past the scope, and its
+                    // cache tail waits for the `release` that takes the lease
+                    if let Some((lr, t)) = lease
+                        && lr.base == r.base
+                    {
+                        let label = cache
+                            .as_ref()
+                            .filter(|_| targets.contains(&r.base))
+                            .map(|c| format!("cache ({})", self.p.show_expr(c)));
+                        let note = format!("lease ({})", self.p.show_expr(t));
+                        self.leases.push((r.base, bottom, label, note));
+                        continue;
+                    }
                     // A hold with a `growing` run leaves units cached in that
                     // pool alone; one without leaves them in all of its pools.
                     if let Some(c) = cache
@@ -369,6 +445,8 @@ pub fn figure(p: &Program, show_set: bool) -> Figure {
         depth: 0,
         show_set,
         open_tails: vec![],
+        released: vec![],
+        leases: vec![],
         cache_targets: crate::deployment::cache_targets(p),
     };
 
@@ -401,8 +479,14 @@ pub fn figure(p: &Program, show_set: bool) -> Figure {
 
     d.walk(p.session);
 
-    // Tails that no `drop` closed run past the end of the session.
+    // Leases no `release` took run to the end of the session.
     let bottom = d.y + 8.0;
+    let leases = std::mem::take(&mut d.leases);
+    for (pool, from, cache, note) in leases {
+        d.lease_band(pool, from, bottom, cache, &note);
+    }
+
+    // Tails that no `drop` closed run past the end of the session.
     let tails = std::mem::take(&mut d.open_tails);
     for (pool, from) in tails {
         if let Some(x) = d.col_x(pool)

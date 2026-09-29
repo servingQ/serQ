@@ -11,7 +11,7 @@ use seq::figure::{BoxStyle, Figure, StationKind};
 use seq::ir::Program;
 use seq::{Overrides, compile_source, program_path};
 
-const PROGRAMS: [&str; 10] = [
+const PROGRAMS: [&str; 11] = [
     "mg1",
     "ps",
     "closed",
@@ -22,6 +22,7 @@ const PROGRAMS: [&str; 10] = [
     "routing",
     "vllm",
     "vllm_request",
+    "llmd_pd",
 ];
 
 fn program(name: &str) -> Program {
@@ -371,15 +372,74 @@ fn nested_holds_nest() {
 
 fn no_overlapping_enclosures(f: &Figure, name: &str) {
     let boxes = f.boxes(BoxStyle::Enclosure);
+    let stations = f.stations();
     for (i, a) in boxes.iter().enumerate() {
         for b in boxes.iter().skip(i + 1) {
             let nested = a.contains(b) || b.contains(a);
+            // two enclosures may cross where a station sits in both: the
+            // program holds both pools there (a KV transfer between
+            // instances holds the source until the link run is done and the
+            // destination from before it)
+            let shared = stations.iter().any(|(r, _)| a.contains(r) && b.contains(r));
             assert!(
-                !a.overlaps(b) || nested,
+                !a.overlaps(b) || nested || shared,
                 "{name}: enclosures cross: {a:?} {b:?}"
             );
         }
     }
+}
+
+/// A `release` in one arm of a branch does not reach the other, and after
+/// the branch the pool encloses a station only if both arms still hold it.
+#[test]
+fn a_release_in_one_arm_does_not_reach_the_other() {
+    let p = compile(
+        "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
+         workload { arrive batch(1); init { set c = 1; } }
+         session { hold p (1) { branch (c) { release p; run s1 (1); } else { run s2 (1); } run s3 (1); } end; }
+         run { horizon 10; }",
+    );
+    let net = deployment::project(&p);
+    assert!(pools_of(&p, &net, "s1").is_empty());
+    assert_eq!(pools_of(&p, &net, "s2"), ["p"]);
+    assert!(pools_of(&p, &net, "s3").is_empty());
+}
+
+/// A leased pool stays on the stations after its hold, until the
+/// `release` that takes it.
+#[test]
+fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
+    let p = compile(
+        "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
+         workload { arrive batch(1); }
+         session { hold p (1) { run s1 (1); } lease p (inf); run s2 (1); release p; run s3 (1); end; }
+         run { horizon 10; }",
+    );
+    let net = deployment::project(&p);
+    assert_eq!(pools_of(&p, &net, "s1"), ["p"]);
+    assert_eq!(pools_of(&p, &net, "s2"), ["p"]);
+    assert!(pools_of(&p, &net, "s3").is_empty());
+}
+
+/// `programs/llmd_pd.seq`: the prompt's KV is in the prefiller's pool
+/// through the transfer (leased past its scope) and in the decoder's from
+/// the transfer on, so the link station is inside both enclosures, the
+/// prefill station in the prefiller's only and the decode station in the
+/// decoder's only. The prefiller's request slot ends with its scope, so it
+/// encloses the prefill station alone.
+#[test]
+fn a_transfer_puts_the_link_in_both_enclosures() {
+    let p = program("llmd_pd");
+    let net = deployment::project(&p);
+    assert_eq!(pools_of(&p, &net, "P"), ["reqsP", "kvP"]);
+    assert_eq!(pools_of(&p, &net, "link"), ["kvP", "kvD", "reqsD"]);
+    assert_eq!(pools_of(&p, &net, "D"), ["kvD", "reqsD"]);
+    assert!(pools_of(&p, &net, "tool").is_empty());
+    let f = deployment::layout(&p, &net);
+    let boxes = f.boxes(BoxStyle::Enclosure);
+    let link = net.node_of(stage(&p, "link")).unwrap();
+    let (rect, _) = f.stations()[link];
+    assert_eq!(boxes.iter().filter(|b| b.contains(&rect)).count(), 3);
 }
 
 /// Every enclosure holds the stations it encloses, and enclosures either nest
@@ -544,6 +604,15 @@ fn golden_files_are_current() {
     );
     golden(
         "vllm.session.svg",
+        &seq::svg::render(&draw::figure(&p, false)),
+    );
+    let p = program("llmd_pd");
+    golden(
+        "llmd_pd.deployment.svg",
+        &seq::svg::render(&deployment::figure(&p)),
+    );
+    golden(
+        "llmd_pd.session.svg",
         &seq::svg::render(&draw::figure(&p, false)),
     );
 }

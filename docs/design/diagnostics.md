@@ -13,6 +13,11 @@ binding points to the binding's definition, not to the substituted use.
 Declaration metadata supplies notes and correction candidates. Suggestions
 require a unique nearby name in the namespace being resolved.
 
+Ownership checks for `lease`, `release`, and `load` compare references and index
+expressions without source locations. They still compare the written syntax:
+`q[i]` and `q[j]` are different targets, even if both attributes currently have
+the same value. This keeps diagnostic metadata out of ownership decisions.
+
 Locations stop at the linker. The serialized IR, its version, the interpreter,
 and oracle artifacts do not change. IR validation keeps its existing structural
 context. Manually constructed ASTs can leave reference/declaration spans absent.

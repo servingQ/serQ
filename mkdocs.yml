@@ -83,6 +83,7 @@ nav:
   - Case studies:
       - vLLM v1: case-study-vllm.md
       - "One engine, four workloads": case-study-workloads.md
+      - Prefill/decode over NIXL: case-study-pd.md
   - Reference:
       - reference/cheatsheet.md
       - reference/cli.md
@@ -98,4 +99,5 @@ nav:
       - Frontend: design/frontend.md
       - "IR v4 (RFC #41)": design/ir-v4.md
       - Subagents: design/subagents.md
+      - The KV transfer: design/pd-transfer.md
   - Publishing this site: publishing.md

@@ -6,7 +6,7 @@ if exists("b:current_syntax") | finish | endif
 
 syn keyword seqDeclaration let pool stage workload session server run
 syn keyword seqStatement    turn request set observe hold enter admit if fit where
-syn keyword seqStatement    grow drop branch with
+syn keyword seqStatement    grow drop release load lease from to branch with
 syn keyword seqStatement    loop choose end reserve reuse cache keep at admission
 syn keyword seqStatement    growing on in by else prefill transfer decode tool
 syn keyword seqOption       cap block evict lru preempt lifo none queue fifo admit

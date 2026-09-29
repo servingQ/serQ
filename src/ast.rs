@@ -45,6 +45,48 @@ pub struct Ref {
     pub index: Option<Box<Expr>>,
 }
 
+impl Ref {
+    /// Ownership checks compare the written target, not where it was written.
+    /// In particular, q[i] and q[j] remain different targets.
+    pub(crate) fn same_target(&self, other: &Self) -> bool {
+        self.name == other.name
+            && match (&self.index, &other.index) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.same_syntax(b),
+                _ => false,
+            }
+    }
+}
+
+impl Expr {
+    fn same_syntax(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Located(_, a), b) => a.same_syntax(b),
+            (a, Self::Located(_, b)) => a.same_syntax(b),
+            (Self::Unary(aop, a), Self::Unary(bop, b)) => aop == bop && a.same_syntax(b),
+            (Self::Binary(aop, a, b), Self::Binary(bop, c, d)) => {
+                aop == bop && a.same_syntax(c) && b.same_syntax(d)
+            }
+            (Self::Cond(a, b, c), Self::Cond(d, e, f)) => {
+                a.same_syntax(d) && b.same_syntax(e) && c.same_syntax(f)
+            }
+            (Self::Sample(a, xs), Self::Sample(b, ys)) => {
+                a == b && xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| x.same_syntax(y))
+            }
+            (Self::Call(a, xs), Self::Call(b, ys)) => {
+                a == b
+                    && xs.len() == ys.len()
+                    && xs.iter().zip(ys).all(|(x, y)| match (x, y) {
+                        (Arg::Expr(a), Arg::Expr(b)) => a.same_syntax(b),
+                        (Arg::Ref(a), Arg::Ref(b)) => a.same_target(b),
+                        _ => false,
+                    })
+            }
+            _ => self == other,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum EvictOrder {
     /// Least recently released first.
@@ -179,9 +221,21 @@ pub enum Stmt {
         reuse: Option<Expr>,
         body: Vec<Stmt>,
         cache: Option<Expr>,
+        /// `lease P (t)`: at the scope's end the allocation on `P` (one of
+        /// the hold's pools) stays, neither evictable nor a preemption
+        /// victim, until a `release`/`transfer … from P` of this session
+        /// takes it, `t` seconds pass, or the session ends; then `cache`
+        /// applies.
+        lease: Option<(Ref, Expr)>,
     },
     Grow(Ref, Expr),
     Drop(Ref),
+    /// `release P;`: the innermost enclosing hold gives its allocation on
+    /// `P` back now, caching per its clause.
+    Release(Ref),
+    /// `load P (n);`: the KV of `n` tokens arrived from outside the engine;
+    /// the innermost enclosing hold's computed position on `P` advances.
+    Load(Ref, Expr),
     Run {
         stage: Ref,
         mode: RunMode,
@@ -261,6 +315,7 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                     reuse,
                     body,
                     cache,
+                    lease,
                 } => {
                     for (r, e, reserve) in pools {
                         reference(r);
@@ -269,13 +324,17 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                     }
                     reuse.iter_mut().for_each(expr);
                     cache.iter_mut().for_each(expr);
+                    if let Some((r, duration)) = lease {
+                        reference(r);
+                        expr(duration);
+                    }
                     block(body);
                 }
-                Stmt::Grow(r, e) => {
+                Stmt::Grow(r, e) | Stmt::Load(r, e) => {
                     reference(r);
                     expr(e);
                 }
-                Stmt::Drop(r) => reference(r),
+                Stmt::Drop(r) | Stmt::Release(r) => reference(r),
                 Stmt::Run {
                     stage,
                     work,

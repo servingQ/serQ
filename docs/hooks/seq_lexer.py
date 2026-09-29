@@ -31,7 +31,7 @@ STRUCTURE = ("let", "pool", "stage", "workload", "session", "server", "run")
 # Statements, in the session and server blocks.
 STATEMENTS = (
     "turn", "request", "set", "observe", "hold", "enter", "admit", "if", "fit",
-    "where", "grow", "drop", "branch", "with",
+    "where", "grow", "drop", "release", "load", "lease", "from", "to", "branch", "with",
     "loop", "choose", "end", "run", "reserve", "reuse", "cache", "keep",
     "at", "admission", "growing", "on", "in", "by", "else",
     # the serving vocabulary: sugar over hold and run

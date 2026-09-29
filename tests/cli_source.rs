@@ -151,3 +151,28 @@ fn ir_errors_use_ir_context_instead_of_a_fabricated_source_location() {
     );
     assert!(!String::from_utf8_lossy(&out.stderr).contains(" | "));
 }
+
+#[test]
+fn ownership_checks_ignore_locations_but_keep_index_syntax() {
+    // The same target is written on three different lines. Comparing source
+    // spans would reject it; folding indices would incorrectly accept j too.
+    let index = "i == 0 ? min(i, 1) : -i";
+    let program = |target: &str| {
+        format!(
+            "pool q[2] {{ cap 10; }}
+         session {{
+           set i = 0; set j = 0;
+           hold q[{index}] (1) {{
+             load q[{target}] (1);
+           }} lease q[{target}] (1);
+           release q[{target}];
+           end;
+         }}
+         run {{ horizon 10; }}"
+        )
+    };
+    compile_source(&program(index), &Overrides::default()).expect("same written target");
+    let err = compile_source(&program("j == 0 ? min(j, 1) : -j"), &Overrides::default())
+        .expect_err("different written target, even though i and j are both zero");
+    assert!(err.contains("index included"), "{err}");
+}
