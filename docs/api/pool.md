@@ -1,0 +1,127 @@
+# Pool
+
+```seq
+pool NAME [ '[' N ']' ] {
+  cap expr;
+  block expr;
+  evict lru;  |  evict by (expr, …);
+  preempt none;  |  preempt lifo;
+  queue fifo;  |  queue by (expr);
+  admit via STAGE;
+  spill POOL via STAGE (expr) when (expr);
+}
+```
+
+A pool holds *units* (tokens, blocks, slots) for the sessions that
+[`hold`](statements.md#hold) it, keeps the prefixes they release as a cache, and
+queues the sessions that do not yet fit. Every option is optional.
+
+| Option | Argument types | Default | What it sets |
+|---|---|---|---|
+| [`cap`](#cap) | `const` | `inf` | capacity in units |
+| [`block`](#block) | `const` | none | allocation and caching granularity |
+| [`evict`](#evict) | `lru` \| `by (expr, …)` | `lru` | which cache entry goes first |
+| [`preempt`](#preempt) | `none` \| `lifo` | `none` | what a failed `grow` does |
+| [`queue`](#queue) | `fifo` \| `by (expr)` | `fifo` | admission order |
+| [`admit via`](#admit-via) | `stage` | none | the queue is served by a step stage |
+| [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
+
+The invariant `allocated + cached ≤ cap` holds in every reachable
+configuration. A request that can never fit is rejected (vLLM's
+`FINISHED_IGNORED`).
+
+## `cap`
+
+```seq
+cap expr;
+```
+
+Capacity in units. Cached prefixes never block an admission: they are evicted
+to make room.
+
+## `block`
+
+```seq
+block expr;
+```
+
+Allocations round up, and cache entries are kept and evicted, in blocks of this
+many units (vLLM's `block_size`). An entry is evicted from its tail, block by
+block.
+
+## `evict`
+
+```seq
+evict lru;
+evict by (k1, k2, …);
+```
+
+| Form | Order |
+|---|---|
+| `lru` | release time, then release order |
+| `by (k1, …)` | ascending keys, then release order |
+
+Keys are evaluated per cache entry at the `Evict` moment and may read `size`,
+`age`, `last` and `queued` ([context variables](context.md)), and the entry's
+session's attributes: current while the session lives, as they were at its
+last release after it has ended. The smallest key goes first.
+
+## `preempt`
+
+```seq
+preempt none;
+preempt lifo;
+```
+
+What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has no room.
+
+| Form | Behaviour |
+|---|---|
+| `none` | The session waits and resumes where it was. |
+| `lifo` | The most recently admitted holder that is a resident of the step stage this pool is the memory of is preempted (vLLM's `running[-1]`). Its job leaves the stage, its hold is released with the computed prefix cached, and it re-enters the head of the queue to execute its hold again with `computed` set. The grower can be its own victim. |
+
+## `queue`
+
+```seq
+queue fifo;
+queue by (expr);
+```
+
+Admission order. `by` evaluates one key per waiting session at the `Admit`
+moment, ascending, ties in the order the sessions joined the queue. A preempted session re-enters at the head,
+ahead of the key. Only the head is tried: the first session that does not fit
+blocks the rest.
+
+## `admit via`
+
+```seq
+admit via STAGE;
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `STAGE` | `stage` (a `step` stage) | Serves this pool's queue at the start of each iteration, after the residents have taken their tokens, while budget is left, and not in an iteration that preempted (vLLM's waiting loop). |
+
+Without it the pool is admitted at every settle. `budget_left(STAGE)` is
+meaningful in the hold's header. Arrays join member for member (`pool q[N]`
+with `stage S[N]`), a family of one is shared by every member, and any other
+pair of counts is a link error. A stage that serves several pools tries them in
+declaration order.
+
+## `spill`
+
+```seq
+spill TIER via LINK (work) when (pred);
+```
+
+| Argument | Type | Moment | Description |
+|---|---|---|---|
+| `TIER` | `pool` | | Where the evicted prefix is written. |
+| `LINK` | `stage` | | The stage the write takes time on. |
+| `work` | `expr` | `Evict` | Work the write puts on `LINK`. |
+| `pred` | `expr` | `Evict` | The prefix is spilled when this is non-zero. May read `size`. |
+
+## In the IR
+
+`CPool { name, cap, block, evict, preempt, queue, spill, admit_via }`; see
+[the IR](../ir.md).

@@ -67,38 +67,50 @@ extra_javascript:
 
 nav:
   - Home: index.md
-  - Getting started: getting-started.md
-  - Tutorial:
-      - tutorial/index.md
-      - 1. A queue: tutorial/01-a-queue.md
-      - 2. Memory is a resource: tutorial/02-memory.md
-      - 3. Sessions and turns: tutorial/03-sessions.md
-      - 4. The prefix cache: tutorial/04-prefix-cache.md
-      - 5. The engine: tutorial/05-the-engine.md
-      - 6. The cliff: tutorial/06-the-cliff.md
-  - Visualization:
-      - visualization/index.md
-      - Deployment view: visualization/deployment.md
-      - Session view: visualization/session.md
-  - Case studies:
-      - vLLM v1: case-study-vllm.md
-      - "One engine, four workloads": case-study-workloads.md
-      - Prefill/decode over NIXL: case-study-pd.md
-  - Reference:
-      - reference/cheatsheet.md
+  - User Guide:
+      - Getting started: getting-started.md
+      - Tutorial:
+          - tutorial/index.md
+          - 1. A queue: tutorial/01-a-queue.md
+          - 2. Memory is a resource: tutorial/02-memory.md
+          - 3. Sessions and turns: tutorial/03-sessions.md
+          - 4. The prefix cache: tutorial/04-prefix-cache.md
+          - 5. The engine: tutorial/05-the-engine.md
+          - 6. The cliff: tutorial/06-the-cliff.md
+      - Visualization:
+          - visualization/index.md
+          - Deployment view: visualization/deployment.md
+          - Session view: visualization/session.md
+      - Case studies:
+          - vLLM: case-study-vllm.md
+          - "One engine, four workloads": case-study-workloads.md
+          - Prefill/decode over NIXL: case-study-pd.md
+  - Developer Guide:
+      - Development guide: development.md
+      - How seQ is checked: validation.md
+      - Design:
+          - design/index.md
+          - Philosophy: design/philosophy.md
+          - Frontend: design/frontend.md
+          - Subagents: design/subagents.md
+          - The KV transfer: design/pd-transfer.md
+          - Renewal arrivals: design/renewal-arrivals.md
+  - API Reference:
+      - api/index.md
+      - Program: api/program.md
+      - Pool: api/pool.md
+      - Stage: api/stage.md
+      - Workload: api/workload.md
+      - Statements: api/statements.md
+      - Serving vocabulary: api/serving.md
+      - Functions: api/functions.md
+      - Distributions: api/distributions.md
+      - Context variables: api/context.md
+      - Attributes: api/attributes.md
+      - Specification:
+          - Cheatsheet: reference/cheatsheet.md
+          - The language: language.md
+          - The IR: ir.md
+  - CLI Reference:
       - reference/cli.md
-      - The language: language.md
-      - The IR: ir.md
       - Drawing figures: draw.md
-      - Design review: review.md
-  - How seQ is checked: validation.md
-  - Development guide: development.md
-  - Design:
-      - design/index.md
-      - Philosophy: design/philosophy.md
-      - Frontend: design/frontend.md
-      - "IR v4 (RFC #41)": design/ir-v4.md
-      - Subagents: design/subagents.md
-      - The KV transfer: design/pd-transfer.md
-      - Renewal arrivals: design/renewal-arrivals.md
-  - Publishing this site: publishing.md

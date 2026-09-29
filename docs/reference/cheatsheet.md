@@ -35,7 +35,7 @@ pool kv {
 | Kind | Meaning |
 |---|---|
 | `fifo` / `fifo(c)` | `c` servers, one job each at rate 1, arrival order |
-| `ps(φ in n)` | processor sharing: throughput `φ(n)` split equally |
+| `ps(φ)` | processor sharing: throughput `φ`, which may read `n` (jobs present), split equally |
 | `delay` | infinite servers — every job at rate 1, no waiting |
 | `step { … }` | an iterating engine (continuous batching) |
 
