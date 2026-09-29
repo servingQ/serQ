@@ -1,0 +1,81 @@
+# Workload
+
+```seq
+workload {
+  arrive poisson(rate);  |  arrive closed(n);  |  arrive batch(n);  |  arrive none;
+  trace "file.csv" [ordered];
+  init block
+  turn block
+  session block
+  hidden NAME [, NAME]*;
+}
+```
+
+How sessions arrive and what each turn brings. `init` and `turn` blocks may
+only `set` and `observe`. Random draws in the workload use their own stream.
+
+## `arrive`
+
+| Form | Argument | Sessions arrive |
+|---|---|---|
+| `poisson(rate)` | `const`, arrivals per clock unit | at exponential gaps of mean `1/rate`, forever |
+| `closed(n)` | `const`, positive integer | `n` at time 0, and a new one whenever a session ends |
+| `batch(n)` | `const`, positive integer | `n` at time 0, and no more |
+| `none` | | never (the default) |
+
+## `trace`
+
+```seq
+trace "file.csv" [ordered];
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| file | string | Path relative to the program. Columns `session,turn,new,out,think[,forced]`, one row per turn. |
+| `ordered` | flag | Session `i` replays trace session `i`. Without it, sessions draw turns from the corpus. |
+
+At every `turn;` the next turn sets `new`, `out`, `think` and `forced`, and
+sets `more` to 1 while another turn remains ([attributes](attributes.md)).
+
+## `init`
+
+```seq
+init { set x = expr; … }
+```
+
+Runs once, when the session arrives. Moment `Session`.
+
+## `turn`
+
+```seq
+turn { set x = expr; … }
+```
+
+Runs at every [`turn;`](statements.md#turn) statement of the session.
+Moment `Session`.
+
+## `session`
+
+The session's side of a [two-sided program](program.md#server). See
+[Program](program.md#session).
+
+## `hidden`
+
+```seq
+hidden o;
+hidden o, think;
+```
+
+| Argument | Type | Description |
+|---|---|---|
+| `NAME` | session attribute | The scheduler may not read it. |
+
+A hidden attribute is legal at the `Session` moment only, so it may be read in a
+session statement (`decode (o - 1)`), a run or a hold's `cache`. It is a link
+error in a hold's units, `reserve` or `reuse`, a queue or eviction key, a spill
+clause, a `ps` capacity, or a step stage's `budget`, `cost`, `chunk` or `serve`
+keys. An attribute the scheduler itself sets (`cached`, `computed`) cannot be
+hidden, and a name nothing sets is an error.
+
+The vLLM programs hide `o`: the scheduler knows `max_tokens` and learns the
+length only at EOS, so a program that reserves `prompt + o` is one vLLM cannot be.

@@ -89,7 +89,7 @@ is ordinary control flow: `branch`, `loop`, `end`.
 | learn the language from scratch | [Tutorial](tutorial/index.md) — six chapters, each a runnable program |
 | see a real system written in it | [Case study: vLLM v1](case-study-vllm.md), [Case study: prefill/decode over NIXL](case-study-pd.md) |
 | see one engine serve single-turn, chat and agent traffic | [Case study: one engine, four workloads](case-study-workloads.md) |
-| look something up | [Cheatsheet](reference/cheatsheet.md), [CLI](reference/cli.md) |
+| look something up | [API reference](api/index.md), [Cheatsheet](reference/cheatsheet.md), [CLI](reference/cli.md) |
 | know why any of this should be believed | [How seQ is checked](validation.md) |
 | use a program in the simulator or in Lean | [Development guide](development.md) |
 

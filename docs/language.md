@@ -83,7 +83,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | admit via STAGE ;                -- the queue is served by a step stage's scheduler
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
-          | ps ( expr in n )                 -- throughput phi(n) shared equally
+          | ps ( expr )                      -- throughput phi(n) shared equally; expr reads n
           | delay                            -- every job at rate 1, no waiting
           | step { budget expr ; cost expr ; [chunk expr ;]
                    [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
