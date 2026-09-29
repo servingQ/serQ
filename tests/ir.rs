@@ -174,7 +174,7 @@ fn inlined_trace_runs_like_the_corpus() {
 
 /// The serving vocabulary is sugar: a program written with `admit`,
 /// `prefill`, `transfer`, `decode` and `tool` compiles to the IR of the
-/// same program written with `hold` and `run`.
+/// same program written with `hold`, `run`, `load` and `release`.
 #[test]
 fn serving_forms_compile_to_the_kernel_ir() {
     let deployment = r#"

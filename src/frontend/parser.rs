@@ -1248,7 +1248,7 @@ impl Parser {
             return self.err_at(
                 at,
                 format!(
-                    "`transfer` without `from P to Q (n)`: a KV transfer leaves the hold on P and enters the hold on Q\n\
+                    "`transfer` without `from P to Q (n)`: a KV transfer leaves the lease (or hold) on P and enters the hold on Q\n\
                      help: write `transfer (w) from P to Q (n);`, or `run {at_stage} (w);` for a link that only takes time"
                 ),
             );
@@ -1643,6 +1643,15 @@ mod tests {
         assert!(e.msg.contains("`run link (w);`"), "{e}");
         let e = parse("stage link[2] : ps(1); session { transfer[0] X; }").unwrap_err();
         assert!(e.msg.contains("`run link[…] (w);`"), "{e}");
+        let e = parse(
+            "pool kv { cap 1; } stage nic : ps(1); session { transfer on nic X growing kv; }",
+        )
+        .unwrap_err();
+        assert!(
+            e.msg.contains("`transfer` without `from P to Q (n)`"),
+            "{e}"
+        );
+        assert!(e.msg.contains("`run nic (w);`"), "{e}");
     }
 
     #[test]

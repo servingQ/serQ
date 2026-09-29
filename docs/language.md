@@ -242,9 +242,9 @@ a session holds the prefill instance's memory through the transfer and
 queues for the decode instance's afterwards: a store-and-forward link with a
 buffer nobody has. The form `transfer` does not write this: without
 `from P to Q (n)` it is a parse error, and a link that stores and forwards is
-spelled with the kernel's `run`. A NIXL transfer between two vLLM instances has no buffer: the decode instance
-allocates the prompt's blocks *first*, the bytes are read into them, and the
-prefill instance frees its copy *after*. The prefiller's blocks outlive the
+spelled with the kernel's `run`. A NIXL transfer between two vLLM instances
+has no buffer: the decode instance allocates the prompt's blocks *first*, the
+bytes are read into them, and the prefill instance frees its copy *after*. The prefiller's blocks outlive the
 request's scope — its slot is freed when the token is sampled, its blocks
 are *leased* until the decoder has read them — which is what `lease` says:
 
