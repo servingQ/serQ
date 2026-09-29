@@ -69,5 +69,6 @@ here. This directory is the record of **applying** them.
 | [The KV transfer](pd-transfer.md) | Prefill/decode disaggregation as llm-d and the NIXL connector do it, in pull and push mode; `release`, `load`, `transfer … from … to …`; the reservation push mode still wants | IR v5, with `examples/pd-disaggregation/llmd_pd.seq` |
 
 | [Renewal arrivals](renewal-arrivals.md) | Finite open runs, execution deadlines, report times and first-arrival compatibility | IR v6, #108 |
+| [Bandwidth sharing](bandwidth-sharing.md) | A transfer holds the sender's and the receiver's link at once: `Run.also`, `share maxmin` or `min`, the flow solver | RFC #118, design before implementation |
 
 A new design document adds a row to this table.
