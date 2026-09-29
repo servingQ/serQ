@@ -82,6 +82,17 @@ impl fmt::Display for ParseError {
     }
 }
 
+impl ParseError {
+    pub fn render(&self, source: &str) -> String {
+        Span {
+            line: self.line,
+            col: self.col,
+            len: 1,
+        }
+        .render(source, &self.msg)
+    }
+}
+
 impl std::error::Error for ParseError {}
 
 impl From<LexError> for ParseError {
@@ -102,6 +113,7 @@ struct Parser {
     /// The stages declared so far, (name, is a step engine): what the
     /// serving forms resolve their stage against.
     stages: Vec<(String, bool)>,
+    definitions: Vec<(String, Span)>,
     /// Which side the statement being parsed is on.
     side: Side,
     /// The workload's `session` block and the `server` block, each with the
@@ -196,6 +208,7 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
 /// `where …`) by its expression.
 fn subst(e: &mut Expr, binds: &[(String, Expr)]) {
     match e {
+        Expr::Located(_, inner) => subst(inner, binds),
         Expr::Var(n) => {
             if let Some((_, v)) = binds.iter().find(|(name, _)| name == n) {
                 *e = v.clone();
@@ -235,6 +248,7 @@ fn subst(e: &mut Expr, binds: &[(String, Expr)]) {
 /// Does this expression draw?
 fn has_sample(e: &Expr) -> bool {
     match e {
+        Expr::Located(_, inner) => has_sample(inner),
         Expr::Sample(..) => true,
         Expr::Num(_) | Expr::Var(_) => false,
         Expr::Call(_, args) => args.iter().any(|a| match a {
@@ -275,6 +289,7 @@ fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
 /// The names an expression reads: variables and references.
 fn names(e: &Expr, vars: &mut Vec<String>, refs: &mut Vec<Ref>) {
     match e {
+        Expr::Located(_, inner) => names(inner, vars, refs),
         Expr::Num(_) => {}
         Expr::Var(n) => vars.push(n.clone()),
         Expr::Sample(_, args) => args.iter().for_each(|a| names(a, vars, refs)),
@@ -428,6 +443,7 @@ impl Parser {
             toks,
             pos: 0,
             stages: vec![],
+            definitions: vec![],
             side: Side::Session,
             wl_session: None,
             server: None,
@@ -498,6 +514,31 @@ impl Parser {
         }
     }
 
+    fn span(&self) -> Span {
+        let t = &self.toks[self.pos];
+        Span {
+            line: t.line,
+            col: t.col,
+            len: t.text.chars().count().max(1),
+        }
+    }
+
+    fn definition(&mut self) -> PResult<String> {
+        let span = self.span();
+        let name = self.ident()?;
+        self.definitions.push((name.clone(), span));
+        Ok(name)
+    }
+
+    fn bare_reference(&mut self) -> PResult<Ref> {
+        let span = Some(self.span());
+        Ok(Ref {
+            span,
+            name: self.ident()?,
+            index: None,
+        })
+    }
+
     fn ident(&mut self) -> PResult<String> {
         let at = self.pos;
         match self.advance() {
@@ -524,7 +565,7 @@ impl Parser {
         let mut prog = Program::default();
         while *self.peek() != Tok::Eof {
             if self.eat_kw("let") {
-                let name = self.ident()?;
+                let name = self.definition()?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
@@ -593,6 +634,7 @@ impl Parser {
             }
         }
         self.assemble(&mut prog)?;
+        prog.definitions = std::mem::take(&mut self.definitions);
         Ok(prog)
     }
 
@@ -722,6 +764,7 @@ impl Parser {
     /// if it is one.
     fn const_value(&self, e: &Expr) -> Option<f64> {
         Some(match e {
+            Expr::Located(_, inner) => self.const_value(inner)?,
             Expr::Num(x) => *x,
             Expr::Var(n) => self.consts.iter().rev().find(|(c, _)| c == n)?.1,
             Expr::Unary(UnOp::Neg, a) => -self.const_value(a)?,
@@ -733,10 +776,12 @@ impl Parser {
     }
 
     fn pool(&mut self) -> PResult<PoolDecl> {
+        let span = Some(self.span());
         let name = self.ident()?;
         let count = self.array_count()?;
         self.expect(&Tok::LBrace)?;
         let mut d = PoolDecl {
+            span,
             name,
             count,
             cap: Expr::Num(f64::INFINITY),
@@ -788,12 +833,12 @@ impl Parser {
                 }
                 "admit" => {
                     self.expect_kw("via")?;
-                    d.admit_via = Some(self.ident()?);
+                    d.admit_via = Some(self.bare_reference()?);
                 }
                 "spill" => {
-                    let to = self.ident()?;
+                    let to = self.bare_reference()?;
                     self.expect_kw("via")?;
-                    let via = self.ident()?;
+                    let via = self.bare_reference()?;
                     self.expect(&Tok::LParen)?;
                     let work = self.expr()?;
                     self.expect(&Tok::RParen)?;
@@ -817,11 +862,17 @@ impl Parser {
     }
 
     fn stage(&mut self) -> PResult<StageDecl> {
+        let span = Some(self.span());
         let name = self.ident()?;
         let count = self.array_count()?;
         self.expect(&Tok::Colon)?;
         let kind = self.stage_kind()?;
-        Ok(StageDecl { name, count, kind })
+        Ok(StageDecl {
+            span,
+            name,
+            count,
+            kind,
+        })
     }
 
     /// A stage's kind, `fifo`, `ps (phi)`, `delay` or `step { … }`, with its
@@ -904,7 +955,7 @@ impl Parser {
                             "`decode first;` is now `serve decode first;`: a step stage serves its residents in one way",
                         );
                     }
-                    "memory" => s.memory = Some(self.ident()?),
+                    "memory" => s.memory = Some(self.bare_reference()?),
                     other => return self.err(format!("unknown step option `{other}`")),
                 }
                 self.expect(&Tok::Semi)?;
@@ -931,6 +982,7 @@ impl Parser {
     /// stage as `NAME`, and the entries wait for their calls (`assemble`).
     /// A gateway's `route` body is the program's server.
     fn queue(&mut self, prog: &mut Program, at: usize) -> PResult<()> {
+        let span = Some(self.span());
         let name = self.ident()?;
         if Role::of(&name).is_some() || queue::ROLES.iter().any(|(r, _)| *r == name) {
             return self.err_at(
@@ -1014,15 +1066,16 @@ impl Parser {
                 }
                 let mut kind = self.stage_kind()?;
                 if let StageKind::Step(s) = &mut kind
-                    && let Some(m) = &s.memory
-                    && self.queues[qi].pools.contains(m)
+                    && let Some(m) = &mut s.memory
+                    && self.queues[qi].pools.contains(&m.name)
                 {
-                    s.memory = Some(format!("{name}.{m}"));
+                    m.name = format!("{name}.{}", m.name);
                 }
                 self.queues[qi].has_stage = true;
                 self.stages
                     .push((name.clone(), matches!(kind, StageKind::Step(_))));
                 prog.stages.push(StageDecl {
+                    span,
                     name: name.clone(),
                     count,
                     kind,
@@ -1360,6 +1413,7 @@ impl Parser {
     /// `name`, `name[i]`, `Q.p` or `Q[i].p`: a pool or stage, the last two a
     /// queue's, read from outside it.
     fn reference(&mut self) -> PResult<Ref> {
+        let span = Some(self.span());
         let name = self.ident()?;
         let index = if *self.peek() == Tok::LBracket {
             self.advance();
@@ -1375,7 +1429,7 @@ impl Parser {
         } else {
             name
         };
-        Ok(Ref { name, index })
+        Ok(Ref { span, name, index })
     }
 
     /// A pool a statement acts on (hold, grow, drop, release, load, lease): a
@@ -1402,6 +1456,7 @@ impl Parser {
     /// `Q[i].verb (args) [from S[k]] [to P (m)];`
     fn call(&mut self) -> PResult<Stmt> {
         let at = self.pos;
+        let span = Some(self.span());
         let name = self.ident()?;
         let index = if *self.peek() == Tok::LBracket {
             self.advance();
@@ -1443,7 +1498,7 @@ impl Parser {
         };
         self.expect(&Tok::Semi)?;
         Ok(Stmt::Call {
-            queue: Ref { name, index },
+            queue: Ref { span, name, index },
             verb,
             args,
             from,
@@ -1554,7 +1609,7 @@ impl Parser {
             }
             "set" => {
                 self.advance();
-                let name = self.ident()?;
+                let name = self.definition()?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
@@ -1632,6 +1687,7 @@ impl Parser {
                 let stage = if *self.peek() == Tok::LParen {
                     match self.in_queue {
                         Some(qi) if self.queues[qi].has_stage => Ref {
+                            span: Some(self.span()),
                             name: self.queues[qi].name.clone(),
                             index: None,
                         },
@@ -1695,7 +1751,7 @@ impl Parser {
             }
             "choose" => {
                 self.advance();
-                let var = self.ident()?;
+                let var = self.definition()?;
                 self.expect_kw("in")?;
                 let count = self.expr()?;
                 self.expect_kw("by")?;
@@ -1876,15 +1932,23 @@ impl Parser {
     /// a `run` on the stage that plays the role.
     fn serving(&mut self, role: Role) -> PResult<Vec<Stmt>> {
         let at = self.pos;
+        let span = Some(self.span());
         self.advance();
         let kw = role.keyword();
         let stage = if self.eat_kw("on") {
+            let ref_at = self.pos;
             let r = self.reference()?;
             if !self.stages.iter().any(|(n, _)| *n == r.name) {
+                let help = crate::diagnostic::suggestion(
+                    &r.name,
+                    self.stages.iter().map(|(name, _)| name.as_str()),
+                )
+                .map(|name| format!("did you mean stage `{name}`?"))
+                .unwrap_or_else(|| "declare the stage above this statement".into());
                 return self.err_at(
-                    at,
+                    ref_at,
                     format!(
-                        "`{kw} on {}`: no stage `{}` is declared above",
+                        "`{kw} on {}`: no stage `{}` is declared above\nhelp: {help}",
                         r.name, r.name
                     ),
                 );
@@ -1900,7 +1964,7 @@ impl Parser {
                 None
             };
             let name = self.role_stage(role, at)?;
-            Ref { name, index }
+            Ref { span, name, index }
         };
         let is_step = self
             .stages
@@ -2091,6 +2155,7 @@ impl Parser {
             }
             Tok::Tilde => {
                 self.advance();
+                let span = self.span();
                 let name = self.ident()?;
                 self.expect(&Tok::LParen)?;
                 let mut args = vec![];
@@ -2102,7 +2167,7 @@ impl Parser {
                     }
                 }
                 self.expect(&Tok::RParen)?;
-                Ok(Expr::Sample(name, args))
+                Ok(Expr::Located(span, Box::new(Expr::Sample(name, args))))
             }
             _ => self.pow(),
         }
@@ -2120,6 +2185,7 @@ impl Parser {
 
     fn atom(&mut self) -> PResult<Expr> {
         let at = self.pos;
+        let span = self.span();
         match self.advance() {
             Tok::Num(x) => Ok(Expr::Num(x)),
             Tok::LParen => {
@@ -2139,7 +2205,7 @@ impl Parser {
                         }
                     }
                     self.expect(&Tok::RParen)?;
-                    Ok(Expr::Call(name, args))
+                    Ok(Expr::Located(span, Box::new(Expr::Call(name, args))))
                 } else if *self.peek() == Tok::Dot
                     || (*self.peek() == Tok::LBracket && self.in_expr_index_dot())
                 {
@@ -2156,13 +2222,13 @@ impl Parser {
                     let field = self.ident()?;
                     let name = format!("{name}.{field}");
                     self.dotted_reads.push((at, name.clone()));
-                    Ok(Expr::Var(name))
+                    Ok(Expr::Located(span, Box::new(Expr::Var(name))))
                 } else {
                     if name == "self" && self.in_queue.is_none() {
                         self.pos -= 1;
                         return self.err("`self` is a queue entry's word: the member's own index");
                     }
-                    Ok(Expr::Var(name))
+                    Ok(Expr::Located(span, Box::new(Expr::Var(name))))
                 }
             }
             other => {
@@ -2176,11 +2242,16 @@ impl Parser {
     /// otherwise an operator is parsed as a reference; the linker decides
     /// whether it names a pool, a stage or a variable.
     fn arg(&mut self) -> PResult<Arg> {
+        let span = Some(self.span());
         if let Tok::Ident(name) = self.peek().clone() {
             match self.peek_at(1) {
                 Tok::Comma | Tok::RParen => {
                     self.advance();
-                    return Ok(Arg::Ref(Ref { name, index: None }));
+                    return Ok(Arg::Ref(Ref {
+                        span,
+                        name,
+                        index: None,
+                    }));
                 }
                 // `kv[j]`, `D[j].kv`, `D.kv`: a reference, dotted when a queue's,
                 // when nothing but `,` or `)` follows it
@@ -2254,7 +2325,10 @@ mod tests {
     "#;
 
     fn same(a: &str, b: &str) {
-        assert_eq!(parse(a).unwrap(), parse(b).unwrap());
+        assert_eq!(
+            without_locations(parse(a).unwrap()),
+            without_locations(parse(b).unwrap())
+        );
     }
 
     #[test]

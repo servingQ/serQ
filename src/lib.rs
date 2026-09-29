@@ -16,6 +16,7 @@
 
 pub mod ast;
 pub mod deployment;
+pub mod diagnostic;
 pub mod draw;
 pub mod figure;
 pub mod interp;
@@ -40,8 +41,8 @@ pub use stats::Estimate;
 
 /// Compile program text to IR (parse and link; `--set` overrides apply).
 pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
-    let prog = parser::parse(src).map_err(|e| e.to_string())?;
-    let mut p = link::link(&prog, ov).map_err(|e| e.to_string())?;
+    let prog = parser::parse(src).map_err(|e| e.render(src))?;
+    let mut p = link::link(&prog, ov).map_err(|e| e.render(src))?;
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
     }

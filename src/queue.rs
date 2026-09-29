@@ -100,9 +100,10 @@ struct Ctx<'a> {
 }
 
 impl Ctx<'_> {
-    fn own_ref(&self, name: &str) -> Ref {
+    fn own_ref(&self, r: &Ref) -> Ref {
         Ref {
-            name: format!("{}.{name}", self.q.name),
+            span: r.span,
+            name: format!("{}.{}", self.q.name, r.name),
             index: self.index.clone().map(Box::new),
         }
     }
@@ -129,7 +130,7 @@ impl Ctx<'_> {
                     ),
                 );
             }
-            return Ok(self.own_ref(&r.name));
+            return Ok(self.own_ref(r));
         }
         if r.name == self.q.name {
             if r.index.is_some() {
@@ -142,11 +143,13 @@ impl Ctx<'_> {
                 );
             }
             return Ok(Ref {
+                span: r.span,
                 name: r.name.clone(),
                 index: self.index.clone().map(Box::new),
             });
         }
         Ok(Ref {
+            span: r.span,
             name: r.name.clone(),
             index: match &r.index {
                 None => None,
@@ -179,6 +182,7 @@ impl Ctx<'_> {
 
     fn expr(&self, e: &Expr) -> Result<Expr, ExpandError> {
         Ok(match e {
+            Expr::Located(span, inner) => Expr::Located(*span, Box::new(self.expr(inner)?)),
             Expr::Num(x) => Expr::Num(*x),
             Expr::Var(n) => self.var(n)?,
             Expr::Sample(d, args) => Expr::Sample(
@@ -321,6 +325,7 @@ impl QueueDecl {
 /// Does this expression draw?
 fn has_sample(e: &Expr) -> bool {
     match e {
+        Expr::Located(_, inner) => has_sample(inner),
         Expr::Sample(..) => true,
         Expr::Num(_) | Expr::Var(_) => false,
         Expr::Call(_, args) => args.iter().any(|a| match a {
@@ -518,6 +523,7 @@ fn call(
                 }
             }
             Some(Ref {
+                span: r.span,
                 name: format!("{}.{leased}", s.name),
                 index: r.index.clone(),
             })

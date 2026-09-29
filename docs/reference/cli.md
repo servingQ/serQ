@@ -75,3 +75,11 @@ Trace CSV errors identify the actual trace path, row, and column name, followed
 by a correction hint. Paths declared in the program are relative to its directory;
 `--trace` paths are relative to the current directory. `run` and
 `ir --inline-trace` use the same trace diagnostics.
+
+Name-resolution errors in `.seq` programs show the line, character column,
+source excerpt, and a correction hint. A close, unambiguous name of the same
+kind is suggested with its declaration location; duplicate pools and stages
+identify both declarations. Locations survive `server`/`request` expansion and
+header bindings. `.json` validation errors use IR context instead of inventing
+text-source locations. Syntax errors, including unclosed `/*` comments, point
+to the offending source location.
