@@ -1,6 +1,6 @@
 # The deployment view
 
-`--view deployment`, the default: the program as a queueing network.
+The program as a queueing network.
 
 ![The lecture's disaggregated replica](../assets/lecture_pd.deployment.svg)
 

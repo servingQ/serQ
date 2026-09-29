@@ -3,12 +3,11 @@
 **Status: experimental.** The command works and every program in `examples/`
 and every IR file in `tools/oracle/` renders under `make check`, but the
 notation, the flags and the output are not stable, and `--format svg`/`tikz`
-output may change between releases. §6 lists what is not done. Design
+output may change between releases. §5 lists what is not done. Design
 discussion: [RFC #1](https://github.com/vrvrv/seQ/issues/1).
 
 ```
-seq-lang draw FILE [--view deployment|session] [--format tikz|svg]
-                   [--out PATH] [--set name=expr]... [--show-set]
+seq-lang draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]...
 ```
 
 `FILE` is program text (`.seq`) or IR (`.json`), as for `run`, `check` and
@@ -30,13 +29,13 @@ drawn by hand would be a fourth. `fig:deployment` in Lecture 1 §2 of
 that `examples/pd-disaggregation/lecture_pd.seq` already defines. `tests/draw.rs` asserts that
 the generated figure has that figure's topology.
 
-Both views are pure functions of `ir::Program`. They run no simulation, draw
+The view is a pure function of `ir::Program`. It runs no simulation, draw
 no measurements, and are deterministic: the same IR gives the same bytes.
-Neither adds a type to `src/ir.rs`, so `IR_VERSION` is unaffected.
+It adds no a type to `src/ir.rs`, so `IR_VERSION` is unaffected.
 
 ## 2. The deployment view
 
-`--view deployment`, the default: the program as a queueing network.
+The program as a queueing network.
 
 Pools and stages are declared, but the arrows are not — the flow is a property
 of the session program. `deployment::project` walks it carrying a hold stack:
@@ -96,46 +95,7 @@ independently hand-drawn answer key. Four differences are expected:
 4. **Cost labels are the real expressions** — `min(n, 16)` where the lecture
    writes `φ(m)`, since the IR holds the folded expression, not the symbol.
 
-## 3. The session view
-
-`--view session`: one session's path, every statement kept.
-
-Its subject is what a flowchart cannot show. `enter` is a *scope*, so it is
-drawn as a **band** — a region of a pool's column occupied over a span of the
-program — and the units a scope leaves cached are a **tail** that outlives the
-band. In `vllm.seq` that tail crosses the bottom of the `loop` and is consumed
-at the top of the next turn by `c = min(cachedin(kv), …)`: the loop's back
-edge and the cache tail are the same arrow, which is the feedback of Lecture 5
-and is spread over three places in the source.
-
-Vertical is position in the program, not time. **Band widths are nominal**: a
-single session's allocation against a pool of 160 000 units would be
-invisible, and magnitude is not what this view is for. What the geometry
-carries is *when* a width is decided:
-
-| Mark | Meaning |
-|---|---|
-| solid edge | the width is `CExpr::Num` after linking — the constants fix it |
-| dashed edge | the width is evaluated **at admission** (`docs/language.md` §3) |
-| widening wedge | a `growing` run enlarges the hold as it proceeds |
-| light outer outline | `reserve (r)`: what must be free for the admission, against what is allocated |
-| faded tail | `keep (ℓ)`: units that stay after the scope ends |
-| a rule across the column | `drop POOL` cuts the tail |
-
-`set` statements are computation rather than resource movement and are off by
-default; `--show-set` includes them. `observe` points are drawn, because where
-`ttft` is taken relative to the hold is the information.
-
-The session view uses one canonical vocabulary because the IR does not retain
-the source spelling. A hold is labelled `enter … keep`, even if the source says
-`hold … cache` or `admit if … fit … keep`. A run on a stage named `prefill`,
-`link`/`transfer`, `decode`, or `tool` is labelled with the corresponding
-serving verb. A step run uses `prefill` or `decode`; with multiple step stages
-the label includes `on STAGE` so its target stays clear. Other runs keep
-`run STAGE`. These labels describe the same IR operation regardless of which
-form the source used.
-
-## 4. Formats
+## 3. Formats
 
 `--format tikz` (default) writes a `tikzpicture` that needs `\usepackage{tikz}`
 and nothing else, with the colours it uses defined above it. It is the default
@@ -156,12 +116,11 @@ backend here is a divergence justified by the target artefact, not an
 imitation. What is copied from `tsncd` is the layer that makes a second writer
 cheap — one `Figure`, two writers, and geometry tested instead of bytes.
 
-## 5. Layout and tests
+## 4. Layout and tests
 
 ```
 src/view/figure.rs     the geometry a view produces and a writer consumes
 src/view/deployment.rs ir::Program -> Figure   the network projection
-src/view/session.rs    ir::Program -> Figure   the session projection
 src/view/tikz.rs       Figure -> String
 src/view/svg.rs        Figure -> String
 ```
@@ -169,10 +128,10 @@ src/view/svg.rs        Figure -> String
 `Figure` is the test surface; no writer decides a coordinate. `tests/draw.rs`
 asserts on rectangles and on the projected `Net`, with golden files
 (`tests/golden/`, `make draw-golden`) guarding the writers. `make check` draws
-every program in both views and both formats, and every IR file in
+every program in both formats, and every IR file in
 `tools/oracle/`.
 
-## 6. Not done
+## 5. Not done
 
 * **A pool held in two places gets two enclosures.** That is correct — a box
   spanning both would swallow the stations between them — but a reader may
@@ -180,8 +139,6 @@ every program in both views and both formats, and every IR file in
   the name.
 * **One station row.** A program with many stages runs off to the right
   instead of wrapping.
-* **Branch lanes in the session view are a rail, not a layout.** A program with
-  deeply nested branches gets a tall figure, `routing.seq` most of all.
 * **Long expressions are elided** with `~` rather than wrapped or footnoted.
 * **`let` names are gone**: `cap blocks * bs` prints as `160000`. The IR folds
   constants, and the folded value is what the run uses.

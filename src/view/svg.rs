@@ -27,11 +27,8 @@ fn n(x: f64) -> String {
 fn box_class(s: BoxStyle) -> &'static str {
     match s {
         BoxStyle::Solid => "solid",
-        BoxStyle::Admission => "admission",
         BoxStyle::Cached => "cached",
-        BoxStyle::Reserve => "reserve",
         BoxStyle::Enclosure => "enclosure",
-        BoxStyle::Body => "body",
     }
 }
 
@@ -40,7 +37,6 @@ fn edge_class(s: EdgeStyle) -> &'static str {
         EdgeStyle::Flow => "flow",
         EdgeStyle::Back => "back",
         EdgeStyle::Relation => "relation",
-        EdgeStyle::Grow => "grow",
     }
 }
 
@@ -73,24 +69,9 @@ const PAINTS: &[Paint] = &[
         dark: "fill:#232a31;stroke:#b6bfcc",
     },
     Paint {
-        class: "body",
-        light: "fill=\"#eef2f5\" stroke=\"#4b5563\" stroke-width=\"1.1\"",
-        dark: "fill:#232a31;stroke:#b6bfcc",
-    },
-    Paint {
-        class: "admission",
-        light: "fill=\"#eef2f5\" stroke=\"#4b5563\" stroke-width=\"1.1\" stroke-dasharray=\"5 3\"",
-        dark: "fill:#232a31;stroke:#b6bfcc",
-    },
-    Paint {
         class: "cached",
         light: "fill=\"#e6e2da\" stroke=\"none\"",
         dark: "fill:#33302a",
-    },
-    Paint {
-        class: "reserve",
-        light: "fill=\"none\" stroke=\"#6b7280\" stroke-width=\".8\" stroke-dasharray=\"2 3\"",
-        dark: "stroke:#9aa4b2",
     },
     Paint {
         class: "enclosure",
@@ -126,11 +107,6 @@ const PAINTS: &[Paint] = &[
         class: "relation",
         light: "fill=\"none\" stroke=\"#6b7280\" stroke-width=\"1\" stroke-dasharray=\"2 3\"",
         dark: "stroke:#9aa4b2",
-    },
-    Paint {
-        class: "grow",
-        light: "fill=\"none\" stroke=\"#4b5563\" stroke-width=\"1\"",
-        dark: "stroke:#b6bfcc",
     },
 ];
 
@@ -197,18 +173,6 @@ pub fn render(f: &Figure) -> String {
                     n(rect.w),
                     n(rect.h),
                     n(*round)
-                );
-            }
-            Item::Poly { pts, style } => {
-                let d: Vec<String> = pts
-                    .iter()
-                    .map(|p| format!("{},{}", n(p.x), n(p.y)))
-                    .collect();
-                let _ = writeln!(
-                    s,
-                    r#"<polygon {} points="{}"/>"#,
-                    paint(box_class(*style)),
-                    d.join(" ")
                 );
             }
             Item::Station { rect, kind, text } => {

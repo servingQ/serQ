@@ -1,7 +1,7 @@
 //! The geometry a view produces and a writer consumes.
 //!
-//! Both views (`session` for the session program, `deployment` for the queueing
-//! network) produce a `Figure`; both writers (`svg`, `tikz`) consume one.
+//! The view (`deployment`, the queueing network) produces a `Figure`; both
+//! writers (`svg`, `tikz`) consume one.
 //! Nothing in here knows about seQ, and nothing in a writer decides a
 //! coordinate: a figure is the test surface, which is why the tests assert on
 //! rectangles rather than on bytes.
@@ -68,18 +68,12 @@ impl Rect {
 /// How a box is painted, and what that says about the program.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoxStyle {
-    /// A width fixed by the program's constants.
+    /// A filled rectangle: the used part of a step engine's budget bar.
     Solid,
-    /// A width decided when the session is admitted.
-    Admission,
-    /// Units that stay cached after the scope ends.
+    /// A pool's prefix cache.
     Cached,
-    /// `reserve (r)`: what must be free for the admission.
-    Reserve,
     /// An enclosure: a pool's instance boundary.
     Enclosure,
-    /// A filled body: a run box, a station's rectangle.
-    Body,
 }
 
 /// How a connector is drawn.
@@ -91,8 +85,6 @@ pub enum EdgeStyle {
     Back,
     /// A relation that is not a path: `admit via`, `memory`.
     Relation,
-    /// A run growing a hold.
-    Grow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -151,8 +143,6 @@ pub enum Item {
         /// Corner radius in points; 0 for square corners.
         round: f64,
     },
-    /// A band that changes width: a `growing` run.
-    Poly { pts: Vec<Point>, style: BoxStyle },
     /// A queueing station.
     Station {
         rect: Rect,
@@ -264,9 +254,7 @@ impl Figure {
                 | Item::Station { rect, .. }
                 | Item::Queue { rect, .. }
                 | Item::Slots { rect, .. } => visit(pt(rect.right(), rect.bottom())),
-                Item::Poly { pts, .. } | Item::Edge { pts, .. } => {
-                    pts.iter().for_each(|p| visit(*p))
-                }
+                Item::Edge { pts, .. } => pts.iter().for_each(|p| visit(*p)),
                 Item::Text {
                     at,
                     text,

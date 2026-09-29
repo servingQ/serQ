@@ -9,18 +9,14 @@
 \begin{tikzpicture}[x=1pt, y=-1pt, line cap=round, line join=round,
   every node/.style={inner sep=0pt, outer sep=0pt, text=seqink},
   seqsolid/.style={draw=seqline, fill=seqfill, line width=.8pt},
-  seqbody/.style={draw=seqline, fill=seqfill, line width=.8pt},
-  seqadmission/.style={draw=seqline, fill=seqfill, line width=.8pt, dash pattern=on 4pt off 2.5pt},
   seqcached/.style={draw=none, fill=seqcache},
-  seqfits/.style={draw=seqdim, line width=.5pt, dash pattern=on 1.5pt off 2.5pt},
   seqenclosure/.style={draw=seqdim, line width=.7pt, dash pattern=on 4.5pt off 3pt},
   seqstation/.style={draw=seqline, fill=seqtint, line width=.9pt},
   seqcell/.style={draw=seqline, fill=white, line width=.5pt},
   seqrail/.style={draw=seqline, line width=.7pt},
   seqflow/.style={draw=seqline, line width=.9pt, ->},
   seqback/.style={draw=seqline, line width=.8pt, dash pattern=on 3pt off 2.5pt, ->},
-  seqrelation/.style={draw=seqdim, line width=.7pt, dash pattern=on 1.5pt off 2.5pt, ->},
-  seqgrow/.style={draw=seqline, line width=.7pt, ->}]
+  seqrelation/.style={draw=seqdim, line width=.7pt, dash pattern=on 1.5pt off 2.5pt, ->}]
   \draw[rounded corners=8pt, seqenclosure] (162,57) rectangle (522,169);
   \node[anchor=base west] at (182,52) {\ttfamily\footnotesize pool memP};
   \draw[seqrail] (182,92) -- (212,92);

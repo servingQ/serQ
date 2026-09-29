@@ -55,8 +55,8 @@ fn invalid_arguments_are_diagnosed_before_file_io() {
             vec!["--format", "tikz or svg"],
         ),
         (
-            vec!["draw", "missing.seq", "--view", "nope"],
-            vec!["--view", "deployment or session"],
+            vec!["draw", "missing.seq", "--view", "session"],
+            vec!["unknown option `--view`"],
         ),
         (
             vec!["check", "missing.seq", "--json"],
@@ -108,13 +108,10 @@ fn supported_options_still_work() {
         vec![
             "draw",
             "model.seq",
-            "--view",
-            "session",
             "--format",
             "svg",
             "--out",
             "figure.svg",
-            "--show-set",
         ],
     ] {
         let out = f.run(&args);

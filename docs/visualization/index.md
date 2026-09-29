@@ -7,8 +7,7 @@
     Design discussion: [RFC #1](https://github.com/vrvrv/seQ/issues/1).
 
 ```
-seq-lang draw FILE [--view deployment|session] [--format tikz|svg]
-                   [--out PATH] [--set name=expr]... [--show-set]
+seq-lang draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]...
 ```
 
 `FILE` is program text (`.seq`) or IR (`.json`), as for the other commands.
@@ -26,35 +25,17 @@ have a fourth: `fig:deployment` in Lecture 1 §2 is hand-written TikZ for a
 deployment that `examples/pd-disaggregation/lecture_pd.seq` already defines, down to the last
 station.
 
-Both views are pure functions of `ir::Program`. No simulation, no clock, no
+The view is a pure function of `ir::Program`. No simulation, no clock, no
 RNG — the same IR gives the same bytes.
 
-## The two views
+## The deployment view
 
-<div class="grid cards" markdown>
-
-- ### [Deployment](deployment.md)
-
-    The program as a queueing network: stations, memory pools with their
-    queues and prefix caches, the instance boundaries, and the flow between
-    them. The default.
-
-- ### [Session](session.md)
-
-    One session's path with every statement kept, in which `hold` is a band
-    over a pool's column and `cache` is a tail that outlives it.
-
-</div>
-
-Here is `examples/multi-turn/vllm.seq` — vLLM v1's engine — in each:
-
-**Deployment**
+The program as a queueing network: stations, memory pools with their queues
+and prefix caches, the instance boundaries, and the flow between them
+([deployment view](deployment.md)). Here is `examples/multi-turn/vllm.seq` —
+vLLM v1's engine:
 
 ![vLLM v1 as a queueing network](../assets/vllm.deployment.svg)
-
-**Session**
-
-![vLLM v1's session program](../assets/vllm.session.svg)
 
 ## Formats
 
@@ -82,7 +63,6 @@ result black.
 ```
 src/view/figure.rs     the geometry a view produces and a writer consumes
 src/view/deployment.rs ir::Program -> Figure   the network projection
-src/view/session.rs    ir::Program -> Figure   the session projection
 src/view/tikz.rs       Figure -> String
 src/view/svg.rs        Figure -> String
 ```
@@ -90,7 +70,7 @@ src/view/svg.rs        Figure -> String
 `Figure` is the test surface; no writer decides a coordinate. `tests/draw.rs`
 asserts on rectangles and on the projected network, with golden files guarding
 the writers (`make draw-golden`). `make check` draws every program in both
-views and both formats, and every IR file in `tools/oracle/`.
+formats, and every IR file in `tools/oracle/`.
 
 ## What is not done
 
@@ -99,8 +79,6 @@ views and both formats, and every IR file in `tools/oracle/`.
   the name says the two boxes are the same pool.
 * **One station row.** A program with many stages runs off to the right
   instead of wrapping.
-* **Branch lanes in the session view are a rail, not a layout.** Deeply nested
-  branches give a tall figure; `routing.seq` most of all.
 * **Long expressions are elided** with `~` rather than wrapped or footnoted.
 * **`let` names are gone.** `cap blocks * bs` prints as `160000` — the IR
   folds constants, and the folded value is what the run uses.

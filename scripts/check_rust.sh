@@ -14,19 +14,15 @@ cargo build --release --locked --quiet
 n=0
 for f in examples/*/*.seq; do
   ./target/release/seq-lang check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
-  for v in deployment session; do
-    for fmt in tikz svg; do
-      ./target/release/seq-lang draw "$f" --view "$v" --format "$fmt" >/dev/null \
-        || { echo "FAIL: $f does not draw ($v/$fmt)"; exit 1; }
-    done
+  for fmt in tikz svg; do
+    ./target/release/seq-lang draw "$f" --format "$fmt" >/dev/null \
+      || { echo "FAIL: $f does not draw ($fmt)"; exit 1; }
   done
   n=$((n + 1))
 done
 for f in tools/oracle/*.ir.json; do
-  for v in deployment session; do
-    ./target/release/seq-lang draw "$f" --view "$v" >/dev/null \
-      || { echo "FAIL: $f does not draw ($v)"; exit 1; }
-  done
+  ./target/release/seq-lang draw "$f" >/dev/null \
+    || { echo "FAIL: $f does not draw"; exit 1; }
 done
 # The tutorial's programs are included into docs/tutorial/*.md with
 # pymdownx.snippets, so `mkdocs build --strict` catches a renamed file but not
