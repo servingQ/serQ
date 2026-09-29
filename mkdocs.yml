@@ -94,6 +94,7 @@ nav:
           - Subagents: design/subagents.md
           - The KV transfer: design/pd-transfer.md
           - Renewal arrivals: design/renewal-arrivals.md
+          - Bandwidth sharing: design/bandwidth-sharing.md
   - API Reference:
       - api/index.md
       - Program: api/program.md
