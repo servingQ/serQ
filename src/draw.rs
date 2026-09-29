@@ -13,7 +13,7 @@
 //! constants fix, a dashed one for a width evaluated at admission.
 
 use crate::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, TextSize, pt};
-use crate::ir::{CExpr, CStmt, Program, RunMode};
+use crate::ir::{CExpr, CRef, CStageKind, CStmt, Program, RunMode};
 
 const ROW_H: f64 = 26.0;
 const COL_W: f64 = 168.0;
@@ -145,6 +145,43 @@ impl Draw<'_> {
 }
 
 impl<'a> Draw<'a> {
+    /// The session view uses one canonical serving dialect. The IR has no
+    /// record of whether a run was written with kernel or serving syntax.
+    fn run_label(&self, stage: &CRef, mode: RunMode) -> String {
+        let name = self.p.show_stage_ref(stage);
+        let base = self.p.stages[stage.base].name.as_str();
+        let role = match mode {
+            RunMode::Prefill => Some("prefill"),
+            RunMode::Decode => Some("decode"),
+            RunMode::Plain => match base {
+                "prefill" => Some("prefill"),
+                "link" | "transfer" => Some("transfer"),
+                "decode" => Some("decode"),
+                "tool" => Some("tool"),
+                _ => None,
+            },
+        };
+        let Some(role) = role else {
+            return format!("run {name}");
+        };
+        if mode == RunMode::Plain {
+            return stage.index.as_ref().map_or_else(
+                || role.to_string(),
+                |index| format!("{role}[{}]", self.p.show_expr(index)),
+            );
+        }
+        let step_count = self
+            .p
+            .stages
+            .iter()
+            .filter(|s| matches!(s.kind, CStageKind::Step(_)))
+            .count();
+        if step_count == 1 {
+            role.to_string()
+        } else {
+            format!("{role} on {name}")
+        }
+    }
     fn col_x(&self, pool: usize) -> Option<f64> {
         let i = self.cols.iter().position(|&c| c == pool)?;
         Some(self.spine_x + SPINE_W + COL_GAP + i as f64 * (COL_W + COL_GAP))
@@ -267,11 +304,7 @@ impl<'a> Draw<'a> {
                 growing,
             } => {
                 let y = self.row();
-                let label = match mode {
-                    RunMode::Plain => format!("run {}", self.p.show_stage_ref(stage)),
-                    RunMode::Prefill => format!("run {} prefill", self.p.show_stage_ref(stage)),
-                    RunMode::Decode => format!("run {} decode", self.p.show_stage_ref(stage)),
-                };
+                let label = self.run_label(stage, *mode);
                 let r = Rect::new(self.spine_x, y + 2.0, SPINE_W - 6.0, ROW_H - 6.0);
                 self.f.boxed(r, BoxStyle::Body, 2.0);
                 self.f.text(
@@ -320,7 +353,7 @@ impl<'a> Draw<'a> {
                         format!("{} ({})", self.p.show_pool_ref(r), self.p.show_expr(u))
                     })
                     .collect();
-                self.marker("[", format!("hold {}", names.join(", ")));
+                self.marker("[", format!("enter {}", names.join(", ")));
                 self.walk(*body);
                 let bottom = self.y;
                 self.marker("]", "release".into());
@@ -359,7 +392,7 @@ impl<'a> Draw<'a> {
                         let label = cache
                             .as_ref()
                             .filter(|_| targets.contains(&r.base))
-                            .map(|c| format!("cache ({})", self.p.show_expr(c)));
+                            .map(|c| format!("keep ({})", self.p.show_expr(c)));
                         let note = format!("lease ({})", self.p.show_expr(t));
                         self.leases.push((r.base, bottom, label, note));
                         continue;
@@ -371,7 +404,7 @@ impl<'a> Draw<'a> {
                     {
                         let tail = Rect::new(band.x, bottom, band.w, CACHE_H);
                         self.band_box(tail, BoxStyle::Cached, 1.0);
-                        let t = elide(&format!("cache ({})", self.p.show_expr(c)), label_chars);
+                        let t = elide(&format!("keep ({})", self.p.show_expr(c)), label_chars);
                         self.under_note(pt(tail.x + 4.0, bottom + CACHE_H + 10.0), t);
                         self.open_tails.retain(|(pool, _)| *pool != r.base);
                         self.open_tails.push((r.base, bottom));

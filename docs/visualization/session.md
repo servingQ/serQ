@@ -8,7 +8,7 @@
 
 The deployment view quotients the session program to its stages. This one keeps
 everything, and its subject is the thing a node-and-arrow diagram cannot show:
-`hold` is a **scope**.
+`enter` is a **scope**.
 
 So a hold is drawn as a **band** — a region of a pool's column occupied over a
 span of the program — and the units a scope leaves cached are a **tail** that
@@ -18,7 +18,7 @@ is consumed at the top of the next turn by `c = min(cachedin(kv), …)`:
 > **The loop's back edge and the cache tail are the same arrow.**
 
 That is the feedback of [chapter 6](../tutorial/06-the-cliff.md), and in the
-source it is spread over a `cache` clause, a `loop` keyword and a `cachedin`
+source it is spread over a `keep` clause, a `loop` keyword and a `cachedin`
 call forty lines apart.
 
 ## Widths are nominal; edges are not
@@ -35,7 +35,7 @@ What the geometry carries is *when a width is decided*:
 | **dashed** band edge | the width is evaluated **at admission** |
 | widening **wedge** | a `growing` run enlarges the hold as it proceeds |
 | light outer outline | `reserve (r)`: what must be free to be admitted, against what is allocated |
-| **faded** tail | `cache (ℓ)`: units that stay after the scope ends |
+| **faded** tail | `keep (ℓ)`: units that stay after the scope ends |
 | a rule across the column | `drop POOL` cuts the tail |
 
 In the figure above, `enter reqs (1), kv (min(prompt, hit + …))`
@@ -52,8 +52,8 @@ width that the constants fix is literally a number in the tree.
 |---|---|
 | `*` | `turn` |
 | `o` | `observe` |
-| `[` `]` | a hold opening and releasing |
-| a box | `run` |
+| `[` `]` | an `enter` opening and releasing |
+| a box | `prefill`, `transfer`, `decode`, `tool`, or `run STAGE` |
 | `?` `:` | `branch` and its `else` |
 | `@` | `loop`, with the rail down the left |
 | `<` | `choose` |

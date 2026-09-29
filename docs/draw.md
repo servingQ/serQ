@@ -100,7 +100,7 @@ independently hand-drawn answer key. Four differences are expected:
 
 `--view session`: one session's path, every statement kept.
 
-Its subject is what a flowchart cannot show. `hold` is a *scope*, so it is
+Its subject is what a flowchart cannot show. `enter` is a *scope*, so it is
 drawn as a **band** — a region of a pool's column occupied over a span of the
 program — and the units a scope leaves cached are a **tail** that outlives the
 band. In `vllm.seq` that tail crosses the bottom of the `loop` and is consumed
@@ -119,12 +119,21 @@ carries is *when* a width is decided:
 | dashed edge | the width is evaluated **at admission** (`docs/language.md` §3) |
 | widening wedge | a `growing` run enlarges the hold as it proceeds |
 | light outer outline | `reserve (r)`: what must be free for the admission, against what is allocated |
-| faded tail | `cache (ℓ)`: units that stay after the scope ends |
+| faded tail | `keep (ℓ)`: units that stay after the scope ends |
 | a rule across the column | `drop POOL` cuts the tail |
 
 `set` statements are computation rather than resource movement and are off by
 default; `--show-set` includes them. `observe` points are drawn, because where
 `ttft` is taken relative to the hold is the information.
+
+The session view uses one canonical vocabulary because the IR does not retain
+the source spelling. A hold is labelled `enter … keep`, even if the source says
+`hold … cache` or `admit if … fit … keep`. A run on a stage named `prefill`,
+`link`/`transfer`, `decode`, or `tool` is labelled with the corresponding
+serving verb. A step run uses `prefill` or `decode`; with multiple step stages
+the label includes `on STAGE` so its target stays clear. Other runs keep
+`run STAGE`. These labels describe the same IR operation regardless of which
+form the source used.
 
 ## 4. Formats
 
