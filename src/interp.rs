@@ -321,6 +321,9 @@ struct ObserveStat {
 
 pub struct Interp<'p> {
     p: &'p Linked,
+    /// First error raised by the running program. The event loop stops before
+    /// producing a report; internal invariant failures remain panics.
+    error: Option<String>,
     now: f64,
     warm: bool,
     heap: BinaryHeap<Entry>,
@@ -438,6 +441,7 @@ impl<'p> Interp<'p> {
             .collect();
         Interp {
             p,
+            error: None,
             now: 0.0,
             warm: p.warmup <= 0.0,
             heap: BinaryHeap::new(),
@@ -516,7 +520,7 @@ impl<'p> Interp<'p> {
     // ------------------------------------------------------- running ----
 
     /// Run to the horizon and return the report.
-    pub fn run(mut self) -> Report {
+    pub fn run(mut self) -> Result<Report, String> {
         let p = self.p;
         if p.warmup > 0.0 {
             self.at(p.warmup, Ev::EndWarmup);
@@ -537,6 +541,9 @@ impl<'p> Interp<'p> {
             CArrival::None => {}
         }
         self.settle();
+        if let Some(error) = self.error.take() {
+            return Err(error);
+        }
         while let Some(e) = self.heap.peek() {
             if e.time > p.horizon {
                 break;
@@ -546,9 +553,12 @@ impl<'p> Interp<'p> {
             self.events += 1;
             self.handle(e.ev);
             self.settle();
+            if let Some(error) = self.error.take() {
+                return Err(error);
+            }
         }
         self.now = p.horizon;
-        self.report()
+        Ok(self.report())
     }
 
     fn handle(&mut self, ev: Ev) {
@@ -590,15 +600,24 @@ impl<'p> Interp<'p> {
     }
 
     fn settle(&mut self) {
+        if self.error.is_some() {
+            return;
+        }
         loop {
             while let Some(sid) = self.ready.pop_front() {
                 if self.sessions[sid].status == Status::Ready {
                     self.exec(sid);
+                    if self.error.is_some() {
+                        return;
+                    }
                 }
             }
             for pl in 0..self.pools.len() {
                 self.retry_growers(pl);
                 self.try_admit(pl);
+                if self.error.is_some() {
+                    return;
+                }
             }
             if self.ready.is_empty() {
                 break;
@@ -615,6 +634,9 @@ impl<'p> Interp<'p> {
                     ..
                 } if (!residents.is_empty() || self.bound_waiting(s)) && !pending_now => {
                     self.start_iteration(s);
+                    if self.error.is_some() {
+                        return;
+                    }
                 }
                 Kind::Ps { dirty: true, .. } => self.ps_reschedule(s),
                 _ => {}
@@ -821,6 +843,9 @@ impl<'p> Interp<'p> {
     fn exec(&mut self, sid: usize) {
         let p = self.p;
         loop {
+            if self.error.is_some() {
+                return;
+            }
             if self.sessions[sid].status != Status::Ready {
                 return;
             }
@@ -888,10 +913,11 @@ impl<'p> Interp<'p> {
                     } else if pr == 0.0 {
                         false
                     } else {
-                        panic!(
+                        self.error = Some(format!(
                             "`branch ({})`: the guard is {pr}, not 0 or 1; a draw is written `branch with (p)`",
                             self.p.show_expr(pe)
-                        );
+                        ));
+                        return;
                     };
                     let blk = if take { *a } else { *b };
                     self.sessions[sid].frames.push(Frame {
@@ -991,11 +1017,10 @@ impl<'p> Interp<'p> {
             Some(e) => {
                 let i = self.eval(e, &Ctx::session(sid), Which::Session);
                 let i = i.max(0.0) as usize;
-                assert!(
-                    i < r.count,
-                    "pool index {i} out of range (count {})",
-                    r.count
-                );
+                if i >= r.count {
+                    self.error = Some(format!("pool index {i} out of range (count {})", r.count));
+                    return r.base;
+                }
                 r.base + i
             }
         }
@@ -1007,11 +1032,10 @@ impl<'p> Interp<'p> {
             Some(e) => {
                 let i = self.eval(e, &Ctx::session(sid), Which::Session);
                 let i = i.max(0.0) as usize;
-                assert!(
-                    i < r.count,
-                    "stage index {i} out of range (count {})",
-                    r.count
-                );
+                if i >= r.count {
+                    self.error = Some(format!("stage index {i} out of range (count {})", r.count));
+                    return r.base;
+                }
                 r.base + i
             }
         }
@@ -1499,17 +1523,19 @@ impl<'p> Interp<'p> {
             .iter()
             .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
         else {
-            panic!("`load {name}` outside a hold of `{name}`");
+            self.error = Some(format!("`load {name}` outside a hold of `{name}`"));
+            return;
         };
         let h = &mut self.sessions[sid].holds[hi];
         let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
         let alloc = h.pools[k].1;
         if h.pos[k] + n > alloc + 1e-9 {
-            panic!(
+            self.error = Some(format!(
                 "`load {name} ({n})`: the hold has {alloc} allocated and {} computed; \
                  a load must fit the allocation (grow first)",
                 h.pos[k]
-            );
+            ));
+            return;
         }
         h.pos[k] += n;
         h.grown = true;
@@ -1523,7 +1549,11 @@ impl<'p> Interp<'p> {
             .iter()
             .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
         else {
-            panic!("grow outside a hold of pool `{}`", self.p.pools[pl].name);
+            self.error = Some(format!(
+                "grow outside a hold of pool `{}`",
+                self.p.pools[pl].name
+            ));
+            return false;
         };
         let alloc_now = self.sessions[sid].holds[hi]
             .pools
@@ -1659,13 +1689,19 @@ impl<'p> Interp<'p> {
     }
 
     /// `(allocated, position)` of the innermost hold of `sid` on `pl`.
-    fn hold_alloc_pos(&self, sid: usize, pl: usize) -> (f64, f64) {
-        let h = self.sessions[sid]
+    fn hold_alloc_pos(&mut self, sid: usize, pl: usize) -> (f64, f64) {
+        let Some(h) = self.sessions[sid]
             .holds
             .iter()
             .rev()
             .find(|h| h.pools.iter().any(|&(q, _)| q == pl))
-            .unwrap_or_else(|| panic!("`growing {}` outside a hold of it", self.p.pools[pl].name));
+        else {
+            self.error = Some(format!(
+                "`growing {}` outside a hold of it",
+                self.p.pools[pl].name
+            ));
+            return (0.0, 0.0);
+        };
         let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
         (h.pools[k].1, h.pos[k])
     }
@@ -2105,6 +2141,9 @@ impl<'p> Interp<'p> {
             unreachable!()
         };
         let (pre, budget, chunk, _want) = self.pre_iteration(st, spec);
+        if self.error.is_some() {
+            return;
+        }
         let mut left = budget;
         let mut assign: Vec<(u64, f64)> = vec![];
         // Every resident is considered once per iteration, in the serving
@@ -2164,6 +2203,9 @@ impl<'p> Interp<'p> {
                     continue;
                 }
                 let (alloc, pos) = self.hold_alloc_pos(sid, pl);
+                if self.error.is_some() {
+                    return;
+                }
                 let need = pos + tokens - alloc;
                 if need > 1e-9 && !self.grow(sid, pl, need) {
                     // preempted (lifo): no longer a resident; waiting
@@ -2508,7 +2550,10 @@ impl<'p> Interp<'p> {
             None => r.base,
             Some(e) => {
                 let i = self.eval(e, ctx, w).max(0.0) as usize;
-                assert!(i < r.count, "index {i} out of range");
+                if i >= r.count {
+                    self.error = Some(format!("index {i} out of range (count {})", r.count));
+                    return r.base;
+                }
                 r.base + i
             }
         }
@@ -2619,7 +2664,8 @@ impl<'p> Interp<'p> {
                 }
                 let p = self.p;
                 let CStageKind::Step(spec) = &p.stages[s].kind else {
-                    panic!("budget_left needs a step stage");
+                    self.error = Some("budget_left needs a step stage".into());
+                    return 0.0;
                 };
                 let (_, budget, _, want) = self.pre_iteration(s, spec);
                 (budget - want).max(0.0)

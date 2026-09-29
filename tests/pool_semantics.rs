@@ -357,21 +357,36 @@ const GUARD: &str = "
     run { horizon 10; }";
 
 #[test]
-#[should_panic(expected = "the guard is 0.5, not 0 or 1")]
 fn a_computed_fraction_is_not_a_draw() {
-    run(&GUARD.replace("GUARD", "c / K"));
+    let error = run_source(
+        &GUARD.replace("GUARD", "c / K"),
+        &Overrides::default(),
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("the guard is 0.5, not 0 or 1"), "{error}");
 }
 
 #[test]
-#[should_panic(expected = "the guard is NaN, not 0 or 1")]
 fn a_nan_guard_is_an_error() {
-    run(&GUARD.replace("GUARD", "0 / 0"));
+    let error = run_source(
+        &GUARD.replace("GUARD", "0 / 0"),
+        &Overrides::default(),
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("the guard is NaN, not 0 or 1"), "{error}");
 }
 
 #[test]
-#[should_panic(expected = "the guard is -1, not 0 or 1")]
 fn a_negative_guard_is_an_error() {
-    run(&GUARD.replace("GUARD", "0 - 1"));
+    let error = run_source(
+        &GUARD.replace("GUARD", "0 - 1"),
+        &Overrides::default(),
+        None,
+    )
+    .unwrap_err();
+    assert!(error.contains("the guard is -1, not 0 or 1"), "{error}");
 }
 
 #[test]
