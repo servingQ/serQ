@@ -42,7 +42,7 @@ pool kv {
 ```seq
 stage engine : step {
   budget B;                   // tokens per iteration
-  cost <expr>;                // seconds per iteration
+  cost <expr>;                // clock time per iteration (1: the step clock)
   chunk C;                    // cap on one request's prefill chunk (0: none)
   serve by (remaining);       // admission (default) | by (keys…) | decode first | exclusive prefill
   memory kv;                  // the pool that gives kvb / kvp
@@ -66,9 +66,10 @@ run S [prefill|decode] (w) [growing P];
 
 // the serving vocabulary: the same statements, named by the request lifecycle
 enter P (u) … { … } [keep (ℓ)];    // hold … cache
-prefill S;  transfer X;  decode D;  tool Z;   // run on the stage of that name
-                                   // (a step engine plays prefill and decode)
-prefill[j] S;  prefill on P (S);   // an instance of an array; an explicit stage
+prefill W;  transfer X;  decode W;  tool Z;   // run on the stage of that name: W is
+                                   // time on a fifo/ps/delay stage (seconds)
+prefill T;  decode T;              // on a step engine: T is tokens, the budget's unit
+prefill[j] W;  prefill on P (W);   // an instance of an array; an explicit stage
 
 branch (e) { … } [else { … }]      // a test: e is 0 or 1
 branch with (p) { … } [else { … }] // a draw: with probability p
