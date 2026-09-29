@@ -29,6 +29,7 @@ stage engine : step {
 // are per session, docs/language.md §9).
 workload {
   arrive poisson(Lambda);
+  hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   init { set K = 0; }
   turn {
     set n = ~uniform(1000, 3000);

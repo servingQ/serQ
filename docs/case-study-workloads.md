@@ -12,6 +12,9 @@ The four programs below run `programs/vllm.seq`'s engine line for line: the
 constants from `B` to `c0`, `pool kv` to the end of `stage engine`, and the
 `server` block. `tests/workloads.rs` fails if one of them drifts, so the only
 thing that differs between them is what is written inside `workload`.
+Each workload also says `hidden o;`, as `vllm.seq`'s does: the scheduler is
+told `max_tokens`, not the length of the answer, so no scheduling key may read
+`o`.
 
 | | single turn | multi-turn chat | multi-turn agent | agent with subagents |
 |---|---|---|---|---|

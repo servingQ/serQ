@@ -43,6 +43,7 @@ stage delegate : delay;
 // copies is not shared across sessions (docs/language.md §9).
 workload {
   arrive poisson(Lambda * (1 + kids));
+  hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   init {
     set sub = ~bernoulli(kids / (1 + kids));
     set K = sub ? ~uniform(2000, 6000) : 0;
