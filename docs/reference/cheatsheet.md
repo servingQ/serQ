@@ -7,6 +7,8 @@ one-page version.
 
 ```seq
 let NAME = expr;                    // constants, overridable with --set
+def NAME(x, …) = expr;              // a name for an expression, expanded where it is used
+def NAME(x, …) { … }                // a name for statements: NAME(a, …);
 
 pool NAME [ '[' N ']' ] { … }       // a counted resource
 stage NAME [ '[' N ']' ] : kind;    // where time passes

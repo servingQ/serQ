@@ -113,6 +113,32 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 16] = [
     ("remaining", CtxVar::Remaining),
 ];
 
+/// The functions a call may name, as the linker resolves them below.
+pub const FUNCTIONS: [&str; 22] = [
+    "min",
+    "max",
+    "abs",
+    "floor",
+    "ceil",
+    "sqrt",
+    "exp",
+    "ln",
+    "pow",
+    "queue",
+    "busy",
+    "work",
+    "used",
+    "free",
+    "cachedin",
+    "holders",
+    "queued",
+    "price",
+    "budget_left",
+    "est_lambda",
+    "est_rho",
+    "est_wait",
+];
+
 pub const BUILTIN_ATTRS: [&str; 9] = [
     "cached", "serial", "turn_no", "new", "out", "think", "more", "forced", "computed",
 ];

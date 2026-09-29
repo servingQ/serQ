@@ -2,7 +2,7 @@
 
 ```
 program := item*
-item    := let | pool | stage | workload | session | server | run
+item    := let | def | pool | stage | workload | session | server | run
 ```
 
 Items are read in order and declarations come first: a [serving form](serving.md)
@@ -21,6 +21,45 @@ A named constant, folded at link time and overridable from the command line
 |---|---|---|
 | `NAME` | identifier | May not also be a session attribute: the linker rejects it. |
 | `expr` | `const` | May read earlier constants. |
+
+## `def`
+
+```seq
+def NAME ( PARAM, … ) = expr;
+def NAME ( PARAM, … ) { statement* }
+```
+
+A name for source the program would otherwise repeat. A use, `NAME(arg, …)`
+in an expression or `NAME(arg, …);` as a statement, is replaced by the body
+with each parameter replaced by its argument, and parsed where it stands: a
+serving form in it finds its stage at the use, and a statement body follows
+the rules of the block it is used in (`admit if` in a `server`, `enter` in a
+`session`). The AST and the IR hold the expansion, so a program with a `def`
+has the IR of the one written out.
+
+```seq
+def reusable(x) = floor((x - 1) / bs) * bs;
+set hitmax = reusable(prompt);
+```
+
+(`examples/pd-disaggregation/llmd_nixl_pull.seq`)
+
+| Argument | Type | Description |
+|---|---|---|
+| `NAME` | identifier | Not a keyword, a function, a distribution, a pool, a stage or a `let`, and not defined twice. Defined before its first use; a body uses only the definitions before it, so none reaches itself. |
+| `PARAM` | identifier | Not a keyword or a function, and not a name the body assigns or binds (`set p =`, `choose p`, `p =` in a binding). |
+| `arg` | `expr` or reference | A reference (`kv`, `kvD[j]`) is put in as written, so it may name a pool or a stage; any other argument is put in inside parentheses. An argument that draws (itself, or through a definition that draws) may be passed only to a parameter the body reads once, and an argument may not read a name the body assigns. |
+
+Only the parameters are the definition's own. Every other name in the body is
+the program's: an attribute the body sets is the session's attribute, as it
+would be written out. So that a use reads as a call, an argument that reads
+a name the body assigns is refused rather than read after the assignment:
+a `set`, `choose` or binding of the body, the attributes a hold's admission
+sets (`cached`, `computed`) when the body holds, and what a `turn;` or
+`request;` in the body assigns, directly or through a definition the body uses. For the same reason an argument of statements may not read the clock or
+live state (`now`, `used(kv)`): the body would read it after its runs. Name
+the value with `set` first and pass the name. An error in
+an expansion is reported in the body, with a note naming the use.
 
 ## `pool`
 

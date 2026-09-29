@@ -65,7 +65,7 @@ use std::fmt;
 
 use crate::frontend::ast::*;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
-use crate::frontend::link::{BUILTIN_ATTRS, CONTEXT_VARS};
+use crate::frontend::link::{BUILTIN_ATTRS, CONTEXT_VARS, FUNCTIONS};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -124,7 +124,162 @@ struct Parser {
     body_binds: Vec<(usize, String, Expr)>,
     /// The token position of each name `bindings` read, in order.
     bind_at: Vec<usize>,
+    /// The `def`s so far, in order: a use expands to its body in place.
+    defs: Vec<Def>,
+    /// The token ranges uses were expanded into, innermost last, to say
+    /// where an error inside one was used.
+    expanded: Vec<Expanded>,
+    /// Uses whose arguments read names a `turn;` or `request;` in the body
+    /// might assign, which only the whole program says: checked at its end.
+    deferred: Vec<Deferred>,
 }
+
+/// A use of a `def` whose body says `turn;` or `request;`, with the names
+/// its arguments read.
+struct Deferred {
+    name: String,
+    line: usize,
+    col: usize,
+    reads: Vec<String>,
+    turn: bool,
+    request: bool,
+}
+
+/// The tokens a use of a `def` became, and where it was used.
+struct Expanded {
+    start: usize,
+    end: usize,
+    name: String,
+    line: usize,
+    col: usize,
+}
+
+/// `def name(x, y) = e;` or `def name(x, y) { statements }`: a name for
+/// source a program would otherwise repeat. A use is replaced by the body's
+/// tokens, each parameter by its argument's, and parsed where it stands, so
+/// the AST, the IR and everything after know nothing of it.
+#[derive(Clone)]
+struct Def {
+    name: String,
+    params: Vec<String>,
+    /// An expression (`= e;`) or statements (`{ … }`).
+    stmts: bool,
+    body: Vec<Token>,
+    /// The body draws, itself or through a definition it uses.
+    draws: bool,
+    /// What the body assigns, itself or through a definition it uses: its
+    /// `set`s, `choose`s and bindings, and `cached` and `computed` if it
+    /// holds. An argument that reads one would read the body's value.
+    assigns: Vec<String>,
+    /// The names the body reads other than its parameters, and the
+    /// functions of pool or stage state it calls, itself or through a
+    /// definition it uses: what an argument that uses it reads.
+    reads: Vec<String>,
+    calls: Vec<String>,
+    /// The body says `turn;` or `request;`, itself or through a definition.
+    turn: bool,
+    request: bool,
+    /// Where the name is written.
+    line: usize,
+    col: usize,
+}
+
+/// Tokens a program may expand to. Definitions use only earlier ones, so
+/// an expansion ends; one can still double at every level.
+const MAX_TOKENS: usize = 100_000;
+
+/// The distributions of `~name(…)`, which a `def` may not be named.
+const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bernoulli"];
+
+/// Every word the grammar reads as a keyword somewhere. A `def` or a
+/// parameter may not be one: a parameter is replaced token by token, and a
+/// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
+/// keeps the list whole.
+pub const KEYWORDS: [&str; 83] = [
+    "admission",
+    "admit",
+    "arrivals",
+    "arrive",
+    "at",
+    "batch",
+    "bernoulli",
+    "block",
+    "branch",
+    "budget",
+    "by",
+    "cache",
+    "cap",
+    "choose",
+    "chunk",
+    "closed",
+    "cost",
+    "decode",
+    "def",
+    "delay",
+    "drop",
+    "else",
+    "end",
+    "enter",
+    "evict",
+    "exclusive",
+    "fifo",
+    "first",
+    "fit",
+    "fits",
+    "from",
+    "grow",
+    "growing",
+    "hidden",
+    "hold",
+    "horizon",
+    "if",
+    "in",
+    "init",
+    "keep",
+    "lease",
+    "let",
+    "lifo",
+    "link",
+    "load",
+    "loop",
+    "lru",
+    "memory",
+    "none",
+    "observe",
+    "on",
+    "ordered",
+    "poisson",
+    "pool",
+    "preempt",
+    "prefill",
+    "ps",
+    "queue",
+    "release",
+    "renewal",
+    "request",
+    "reserve",
+    "reuse",
+    "run",
+    "seed",
+    "serve",
+    "server",
+    "session",
+    "set",
+    "spill",
+    "stage",
+    "step",
+    "to",
+    "tool",
+    "trace",
+    "transfer",
+    "turn",
+    "via",
+    "warmup",
+    "when",
+    "where",
+    "with",
+    "workload",
+];
 
 /// Where a statement sits: a top-level `session`, the `session` inside
 /// `workload` (the only place `request` is a statement) or `server`.
@@ -197,6 +352,9 @@ pub fn parse(src: &str) -> PResult<Program> {
         server: None,
         body_binds: vec![],
         bind_at: vec![],
+        defs: vec![],
+        expanded: vec![],
+        deferred: vec![],
     };
     p.program()
 }
@@ -214,6 +372,9 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
         server: None,
         body_binds: vec![],
         bind_at: vec![],
+        defs: vec![],
+        expanded: vec![],
+        deferred: vec![],
     };
     let e = p.expr()?;
     p.expect(&Tok::Eof)?;
@@ -274,6 +435,113 @@ fn has_sample(e: &Expr) -> bool {
         Expr::Unary(_, a) => has_sample(a),
         Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
         Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
+    }
+}
+
+/// The names `set` or `choose` assigns anywhere in `stmts`.
+fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
+    for s in stmts {
+        match s {
+            Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => out.push(n.clone()),
+            Stmt::Hold { body, .. } | Stmt::Loop(body) => assigned_in(body, out),
+            Stmt::Branch(_, a, b) => {
+                assigned_in(a, out);
+                assigned_in(b, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// An argument of the statements `def` reads the clock or live state,
+/// which the body would read where it reads the parameter.
+fn live_message(def: &str, p: &str, what: &str) -> String {
+    let of = if p.is_empty() {
+        String::from("an argument")
+    } else {
+        format!("the argument for `{p}`")
+    };
+    format!(
+        "{of} of `{def}` reads `{what}`, which changes while statements run: the body would \
+         read it where it reads the parameter, not here\nhelp: `set` the value first \
+         (`set t = {what};`) and pass the name"
+    )
+}
+
+/// An argument of `def` reads `n`, which the body assigns before it reads
+/// the parameter `p`.
+fn capture_message(def: &str, p: &str, n: &str) -> String {
+    format!(
+        "the argument for `{p}` reads `{n}`, which `{def}` assigns: it would read the \
+         body's `{n}`, not this one\nhelp: `set` the value under another name first and \
+         pass that; a key over a `choose` of the body is written where the `choose` is"
+    )
+}
+
+/// The names a body's tokens assign: `set n =`, `choose n`, a binding
+/// `n =` (not an observation's name, which is no attribute), and `cached`
+/// and `computed` if it holds, which its admission sets.
+fn assigned_tokens(b: &[Token]) -> Vec<String> {
+    let mut out: Vec<String> = (0..b.len())
+        .filter_map(|k| {
+            let Tok::Ident(n) = &b[k].tok else {
+                return None;
+            };
+            let prev = k.checked_sub(1).map(|j| &b[j].tok);
+            let chosen = prev == Some(&Tok::Ident("choose".into()));
+            let assigned = b.get(k + 1).is_some_and(|t| t.tok == Tok::Assign)
+                && prev != Some(&Tok::Ident("observe".into()));
+            (chosen || assigned).then(|| n.clone())
+        })
+        .collect();
+    let holds = b
+        .iter()
+        .any(|t| matches!(&t.tok, Tok::Ident(k) if k == "hold" || k == "enter" || k == "admit"));
+    if holds {
+        out.extend(["cached".to_string(), "computed".to_string()]);
+    }
+    out
+}
+
+/// The functions of a value alone; the others read pool or stage state.
+const PURE: [&str; 9] = [
+    "min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow",
+];
+
+/// Do these tokens say the statement `w;`?
+fn says(b: &[Token], w: &str) -> bool {
+    b.windows(2)
+        .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
+}
+
+/// Do these tokens use the definition `name`, `name(`?
+fn uses(toks: &[Token], name: &str) -> bool {
+    toks.windows(2)
+        .any(|w| matches!(&w[0].tok, Tok::Ident(n) if n == name) && w[1].tok == Tok::LParen)
+}
+
+/// Is this argument a reference as written, `kv` or `kvD[j]`?
+fn is_reference(a: &[Token]) -> bool {
+    match a {
+        [t] => matches!(t.tok, Tok::Ident(_)),
+        [t, open, .., close] => {
+            matches!(t.tok, Tok::Ident(_))
+                && open.tok == Tok::LBracket
+                && close.tok == Tok::RBracket
+                && {
+                    // the bracket that opens is the one that closes
+                    let mut depth = 0i32;
+                    a[1..].iter().enumerate().all(|(k, t)| {
+                        match t.tok {
+                            Tok::LBracket => depth += 1,
+                            Tok::RBracket => depth -= 1,
+                            _ => {}
+                        }
+                        depth > 0 || k == a.len() - 2
+                    })
+                }
+        }
+        _ => false,
     }
 }
 
@@ -451,9 +719,6 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
 /// the program's attributes and `lets` its constants, which shadow a
 /// context variable of the same name as the linker resolves them.
 fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
-    const PURE: [&str; 9] = [
-        "min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow",
-    ];
     let var = |v: &str| {
         let shadowed = attrs.iter().chain(lets).any(|a| a == v);
         (v == "cached" || (!shadowed && is_context_var(v))).then(|| v.to_string())
@@ -522,10 +787,19 @@ impl Parser {
 
     fn err_at<T>(&self, pos: usize, msg: impl Into<String>) -> PResult<T> {
         let t = &self.toks[pos];
+        let mut msg = msg.into();
+        for e in self.expanded.iter().rev() {
+            if e.start <= pos && pos < e.end {
+                msg.push_str(&format!(
+                    "\nnote: in `{}`, used at {}:{}",
+                    e.name, e.line, e.col
+                ));
+            }
+        }
         Err(ParseError {
             line: t.line,
             col: t.col,
-            msg: msg.into(),
+            msg,
         })
     }
 
@@ -623,6 +897,8 @@ impl Parser {
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
                 prog.lets.push((name, e));
+            } else if self.eat_kw("def") {
+                self.def()?;
             } else if self.eat_kw("pool") {
                 prog.pools.push(self.pool()?);
             } else if self.eat_kw("stage") {
@@ -670,8 +946,16 @@ impl Parser {
                 return self.err(format!("unexpected {} at top level", self.peek()));
             }
         }
+        // a request runs the server, whose admissions set `cached` and
+        // `computed` too
+        let mut served: Vec<String> = vec!["cached".into(), "computed".into()];
+        if let Some((_, server)) = &self.server {
+            assigned_in(server, &mut served);
+        }
         self.assemble(&mut prog)?;
         self.check_body_bindings(&prog)?;
+        self.check_def_names(&prog)?;
+        self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
         Ok(prog)
     }
@@ -799,6 +1083,420 @@ impl Parser {
                 ),
             );
         }
+        Ok(())
+    }
+
+    /// A use whose body says `turn;` or `request;` may not pass an argument
+    /// that reads what the workload's `turn` or the server assigns.
+    fn check_deferred(&self, prog: &Program, served: &[String]) -> PResult<()> {
+        // a turn draws the workload's `turn` block, or a trace's attributes
+        let mut turned: Vec<String> = BUILTIN_ATTRS.iter().map(|a| a.to_string()).collect();
+        if let Some(w) = &prog.workload {
+            assigned_in(&w.turn, &mut turned);
+        }
+        let lets: Vec<&str> = prog.lets.iter().map(|(n, _)| n.as_str()).collect();
+        let attrs: Vec<&str> = self
+            .definitions
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .filter(|n| !lets.contains(n))
+            .collect();
+        for u in &self.deferred {
+            if let Some(v) = u.reads.iter().find(|v| {
+                is_context_var(v) && !attrs.contains(&v.as_str()) && !lets.contains(&v.as_str())
+            }) {
+                return Err(ParseError {
+                    line: u.line,
+                    col: u.col,
+                    msg: live_message(&u.name, "", v),
+                });
+            }
+            let found = u
+                .reads
+                .iter()
+                .find(|n| (u.turn && turned.contains(n)) || (u.request && served.contains(*n)));
+            if let Some(n) = found {
+                let by = if u.turn && turned.contains(n) {
+                    "`turn;`"
+                } else {
+                    "`request;`"
+                };
+                return Err(ParseError {
+                    line: u.line,
+                    col: u.col,
+                    msg: format!(
+                        "an argument of `{}` reads `{n}`, which its {by} assigns: it would \
+                         read the new `{n}`, not this one\nhelp: `set` the value under \
+                         another name first and pass that",
+                        u.name
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// A `def` named like a declaration would be one name for two things.
+    fn check_def_names(&self, prog: &Program) -> PResult<()> {
+        for d in &self.defs {
+            let what = if prog.pools.iter().any(|x| x.name == d.name) {
+                "a pool"
+            } else if prog.stages.iter().any(|x| x.name == d.name) {
+                "a stage"
+            } else if prog.lets.iter().any(|(n, _)| *n == d.name) {
+                "a `let` constant"
+            } else {
+                continue;
+            };
+            return Err(ParseError {
+                line: d.line,
+                col: d.col,
+                msg: format!("`{}` is defined, and is also {what}", d.name),
+            });
+        }
+        Ok(())
+    }
+
+    /// `def name(x, …) = e;` or `def name(x, …) { … }`, after `def`.
+    fn def(&mut self) -> PResult<()> {
+        let at = self.pos;
+        let name = self.ident()?;
+        if KEYWORDS.contains(&name.as_str())
+            || FUNCTIONS.contains(&name.as_str())
+            || DISTRIBUTIONS.contains(&name.as_str())
+        {
+            return self.err_at(at, format!("`{name}` is a word of the language"));
+        }
+        if self.defs.iter().any(|d| d.name == name) {
+            return self.err_at(at, format!("`{name}` is defined twice"));
+        }
+        // a definition uses only the ones before it, so none can reach
+        // itself: an earlier one that uses this name used something undefined
+        if let Some(d) = self.defs.iter().find(|d| uses(&d.body, &name)) {
+            return self.err_at(
+                at,
+                format!(
+                    "`{}` uses `{name}`, which is defined after it: a definition uses the \
+                     ones before it",
+                    d.name
+                ),
+            );
+        }
+        self.expect(&Tok::LParen)?;
+        let mut params: Vec<String> = vec![];
+        while *self.peek() != Tok::RParen {
+            let p_at = self.pos;
+            let p = self.ident()?;
+            if KEYWORDS.contains(&p.as_str()) || FUNCTIONS.contains(&p.as_str()) {
+                return self.err_at(
+                    p_at,
+                    format!("`{p}` is a word of the language: name the parameter otherwise"),
+                );
+            }
+            if params.contains(&p) {
+                return self.err_at(p_at, format!("`{p}` is a parameter twice"));
+            }
+            params.push(p);
+            if *self.peek() == Tok::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        self.expect(&Tok::RParen)?;
+        let stmts = match self.peek() {
+            Tok::Assign => false,
+            Tok::LBrace => true,
+            other => {
+                return self.err(format!(
+                    "expected `= expression;` or `{{ statements }}` after `def {name}(…)`, found {other}"
+                ));
+            }
+        };
+        self.advance();
+        let start = self.pos;
+        let mut depth = 0usize;
+        loop {
+            match self.peek() {
+                Tok::Eof => return self.err_at(at, format!("`def {name}` is not closed")),
+                Tok::RBrace if depth == 0 && stmts => break,
+                Tok::Semi if depth == 0 && !stmts => break,
+                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
+                Tok::RParen | Tok::RBracket | Tok::RBrace => {
+                    if depth == 0 {
+                        return self.err(format!("unmatched {}", self.peek()));
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+            self.advance();
+        }
+        let body = self.toks[start..self.pos].to_vec();
+        self.advance();
+        if body.is_empty() && !stmts {
+            return self.err_at(at, format!("`def {name}` has no expression"));
+        }
+        if uses(&body, &name) {
+            return self.err_at(at, format!("`{name}` uses itself"));
+        }
+        // a parameter where the body names what it assigns would put an
+        // argument there, which is not a name
+        for w in body.windows(2) {
+            let named = match (&w[0].tok, &w[1].tok) {
+                (Tok::Ident(kw), Tok::Ident(n)) if kw == "choose" => Some(n),
+                (Tok::Ident(n), Tok::Assign) => Some(n),
+                _ => None,
+            };
+            if let Some(n) = named
+                && params.contains(n)
+            {
+                return self.err_at(
+                    at,
+                    format!(
+                        "`{n}` is a parameter, and the body names with it what it assigns \
+                         or binds"
+                    ),
+                );
+            }
+        }
+        let draws = body.iter().any(|t| t.tok == Tok::Tilde) || self.draws_through(&body);
+        let used: Vec<&Def> = self.defs.iter().filter(|d| uses(&body, &d.name)).collect();
+        let mut assigns = assigned_tokens(&body);
+        let mut turn = says(&body, "turn");
+        let mut request = says(&body, "request");
+        let (mut reads, mut calls) = self.reads_of(&body);
+        reads.retain(|n| !params.contains(n));
+        for d in &used {
+            assigns.extend(d.assigns.iter().cloned());
+            turn |= d.turn;
+            request |= d.request;
+        }
+        assigns.sort();
+        assigns.dedup();
+        calls.sort();
+        calls.dedup();
+        self.defs.push(Def {
+            line: self.toks[at].line,
+            col: self.toks[at].col,
+            name,
+            params,
+            stmts,
+            body,
+            draws,
+            assigns,
+            reads,
+            calls,
+            turn,
+            request,
+        });
+        Ok(())
+    }
+
+    /// The names `toks` read and the functions of live state they call,
+    /// joined over the definitions they use.
+    fn reads_of(&self, toks: &[Token]) -> (Vec<String>, Vec<String>) {
+        let mut reads = vec![];
+        let mut calls = vec![];
+        for (k, t) in toks.iter().enumerate() {
+            let Tok::Ident(n) = &t.tok else { continue };
+            let called = toks.get(k + 1).is_some_and(|t| t.tok == Tok::LParen);
+            if called && FUNCTIONS.contains(&n.as_str()) {
+                if !PURE.contains(&n.as_str()) {
+                    calls.push(n.clone());
+                }
+            } else if !called && !KEYWORDS.contains(&n.as_str()) {
+                reads.push(n.clone());
+            }
+        }
+        for d in self.defs.iter().filter(|d| uses(toks, &d.name)) {
+            reads.extend(d.reads.iter().cloned());
+            calls.extend(d.calls.iter().cloned());
+        }
+        reads.sort();
+        reads.dedup();
+        (reads, calls)
+    }
+
+    /// Does one of the definitions `toks` uses draw?
+    fn draws_through(&self, toks: &[Token]) -> bool {
+        self.defs.iter().any(|d| d.draws && uses(toks, &d.name))
+    }
+
+    /// The `def` the next tokens use, `name(`.
+    fn use_of_def(&self) -> Option<usize> {
+        let Tok::Ident(n) = self.peek() else {
+            return None;
+        };
+        if *self.peek_at(1) != Tok::LParen {
+            return None;
+        }
+        self.defs.iter().position(|d| d.name == *n)
+    }
+
+    /// Replace the use of `defs[i]` at `pos` (`name(a, …)`, and its `;` for
+    /// statements) by the body, each parameter by its argument: as written
+    /// when it is a reference (`kv`, `kvD[j]`), which may stand for a pool or
+    /// a stage, and in parentheses otherwise, so that `f(a + b)` is not
+    /// `a + b * 2` inside.
+    fn expand(&mut self, i: usize) -> PResult<()> {
+        let at = self.pos;
+        let (use_line, use_col) = (self.toks[at].line, self.toks[at].col);
+        self.advance();
+        self.advance();
+        let mut args: Vec<Vec<Token>> = vec![];
+        let mut cur = vec![];
+        let mut depth = 0usize;
+        loop {
+            match self.peek() {
+                Tok::Eof => return self.err_at(at, "the use of a definition is not closed"),
+                Tok::RParen if depth == 0 => break,
+                Tok::Comma if depth == 0 => {
+                    args.push(std::mem::take(&mut cur));
+                    self.advance();
+                    continue;
+                }
+                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
+                Tok::RParen | Tok::RBracket | Tok::RBrace => {
+                    if depth == 0 {
+                        return self.err(format!("unmatched {}", self.peek()));
+                    }
+                    depth -= 1;
+                }
+                _ => {}
+            }
+            cur.push(self.toks[self.pos].clone());
+            self.advance();
+        }
+        if !cur.is_empty() || !args.is_empty() {
+            args.push(cur);
+        }
+        self.advance();
+        let d = self.defs[i].clone();
+        if args.len() != d.params.len() {
+            return self.err_at(
+                at,
+                format!(
+                    "`{}` takes {} argument(s), got {}",
+                    d.name,
+                    d.params.len(),
+                    args.len()
+                ),
+            );
+        }
+        // the names the body assigns: an argument that reads one would read
+        // the body's value, not the one at the use
+        for (p, a) in d.params.iter().zip(&args) {
+            if a.is_empty() {
+                return self.err_at(at, format!("`{}`: the argument for `{p}` is empty", d.name));
+            }
+            let (reads, _) = self.reads_of(a);
+            if let Some(n) = d.assigns.iter().find(|n| reads.contains(n)) {
+                return self.err_at(at, capture_message(&d.name, p, n));
+            }
+            let uses = d
+                .body
+                .iter()
+                .filter(|t| t.tok == Tok::Ident(p.clone()))
+                .count();
+            if uses > 1 && (a.iter().any(|t| t.tok == Tok::Tilde) || self.draws_through(a)) {
+                return self.err_at(
+                    at,
+                    format!(
+                        "the argument for `{p}` draws, and `{}` reads `{p}` {uses} times: \
+                         it would draw {uses} times\nhelp: `set` the draw first and pass the name",
+                        d.name
+                    ),
+                );
+            }
+        }
+        if d.stmts {
+            for (p, a) in d.params.iter().zip(&args) {
+                let (_, calls) = self.reads_of(a);
+                if let Some(f) = calls.first() {
+                    return self.err_at(at, live_message(&d.name, p, &format!("{f}(…)")));
+                }
+            }
+        }
+        let (turn, request) = (d.turn, d.request);
+        if d.stmts {
+            let mut reads: Vec<String> = args.iter().flat_map(|a| self.reads_of(a).0).collect();
+            reads.sort();
+            reads.dedup();
+            self.deferred.push(Deferred {
+                name: d.name.clone(),
+                line: use_line,
+                col: use_col,
+                reads,
+                turn,
+                request,
+            });
+        }
+        let mut end = self.pos;
+        if d.stmts {
+            if *self.peek() != Tok::Semi {
+                return self.err(format!(
+                    "expected `;` after `{}(…)`, found {}",
+                    d.name,
+                    self.peek()
+                ));
+            }
+            end += 1;
+        }
+        let paren = |tok: Tok, text: &str, like: &Token| Token {
+            tok,
+            line: like.line,
+            col: like.col,
+            text: text.into(),
+            leading: vec![],
+        };
+        let mut out = vec![];
+        if !d.stmts {
+            out.push(paren(Tok::LParen, "(", &self.toks[at]));
+        }
+        for t in &d.body {
+            let Tok::Ident(n) = &t.tok else {
+                out.push(t.clone());
+                continue;
+            };
+            let Some(k) = d.params.iter().position(|p| p == n) else {
+                out.push(t.clone());
+                continue;
+            };
+            let a = &args[k];
+            if is_reference(a) {
+                out.extend(a.iter().cloned());
+            } else {
+                out.push(paren(Tok::LParen, "(", &a[0]));
+                out.extend(a.iter().cloned());
+                out.push(paren(Tok::RParen, ")", &a[a.len() - 1]));
+            }
+        }
+        if !d.stmts {
+            out.push(paren(Tok::RParen, ")", &self.toks[end - 1]));
+        }
+        if self.toks.len() - (end - at) + out.len() > MAX_TOKENS {
+            return self.err_at(at, "the definitions expand to more than a program can hold");
+        }
+        // the expansions this one is inside grow by what it adds
+        let grown = out.len() as isize - (end - at) as isize;
+        for e in self.expanded.iter_mut().rev() {
+            if e.end <= at {
+                continue;
+            }
+            if e.start <= at {
+                e.end = (e.end as isize + grown) as usize;
+            }
+        }
+        self.expanded.push(Expanded {
+            start: at,
+            end: at + out.len(),
+            name: d.name.clone(),
+            line: use_line,
+            col: use_col,
+        });
+        self.toks.splice(at..end, out);
+        self.pos = at;
         Ok(())
     }
 
@@ -1098,6 +1796,15 @@ impl Parser {
     /// One statement into `out`. A serving form is parsed here because
     /// `transfer … from P to Q (n)` stands for three kernel statements.
     fn stmt_into(&mut self, out: &mut Vec<Stmt>) -> PResult<()> {
+        if let Some(i) = self.use_of_def() {
+            if !self.defs[i].stmts {
+                return self.err(format!(
+                    "`{}` is an expression (`def {0}(…) = …;`), not statements",
+                    self.defs[i].name
+                ));
+            }
+            return self.expand(i);
+        }
         if let Tok::Ident(s) = self.peek()
             && let Some(role) = Role::of(s)
         {
@@ -1769,6 +2476,15 @@ impl Parser {
     }
 
     fn atom(&mut self) -> PResult<Expr> {
+        if let Some(i) = self.use_of_def() {
+            if self.defs[i].stmts {
+                return self.err(format!(
+                    "`{}` is statements (`def {0}(…) {{ … }}`), not an expression",
+                    self.defs[i].name
+                ));
+            }
+            self.expand(i)?;
+        }
         let at = self.pos;
         let span = self.span();
         match self.advance() {
@@ -2098,6 +2814,180 @@ mod tests {
                     enter kv (1) at admission (h = 1) {{ observe c = h; }}
                 }}
             }}"
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn a_def_is_its_body_where_it_is_used() {
+        // an expression: the argument in parentheses, the body too
+        same(
+            &format!(
+                "{ENGINE} def full(x) = floor((x - 1) / bs) * bs;
+                 session {{ set h = full(a + b) * 2; set g = min(full(k), 3); }}"
+            ),
+            &format!(
+                "{ENGINE} session {{
+                    set h = (floor(((a + b) - 1) / bs) * bs) * 2;
+                    set g = min(floor((k - 1) / bs) * bs, 3);
+                 }}"
+            ),
+        );
+        // statements, with references for pools and stages; the use is
+        // parsed where it stands, so a serving form finds its stage there
+        same(
+            "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
+             def put(p, s, n) { enter p (n) { prefill on s (n) growing p; } keep (n); }
+             session { choose j in 2 by (used(kv[j])); put(kv[j], E[j], k + 1); end; }",
+            "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
+             session {
+                choose j in 2 by (used(kv[j]));
+                hold kv[j] ((k + 1)) { run E[j] prefill ((k + 1)) growing kv[j]; } cache ((k + 1));
+                end;
+             }",
+        );
+        // the side is the use's: `admit if` in a server
+        same(
+            &format!(
+                "{ENGINE} def take(n) {{ admit if kv (n) fit {{ prefill (n) growing kv; }} }}
+                 workload {{ session {{ request; end; }} }}
+                 server {{ take(4); }}"
+            ),
+            &format!(
+                "{ENGINE} workload {{ session {{ request; end; }} }}
+                 server {{ admit if kv (4) fit {{ prefill (4) growing kv; }} }}"
+            ),
+        );
+    }
+
+    #[test]
+    fn a_def_says_what_goes_wrong() {
+        let err = |src: &str| parse(&format!("{ENGINE} {src}")).unwrap_err().msg;
+        assert!(err("def f(x) = x; session { f(1); }").contains("is an expression"));
+        assert!(err("def f(x) { end; } session { set a = f(1); }").contains("is statements"));
+        assert!(
+            err("def f(x) = x; session { set a = f(1, 2); }")
+                .contains("takes 1 argument(s), got 2")
+        );
+        assert!(
+            err("def f(x) = x + x; session { set a = f(~exp(1)); }").contains("would draw 2 times")
+        );
+        assert!(err("def f(x) = f(x); session { }").contains("uses itself"));
+        assert!(err("def min(x) = x; session { }").contains("a word of the language"));
+        assert!(err("def uniform(x) = x; session { }").contains("a word of the language"));
+        assert!(err("def f(on) = on; session { }").contains("a word of the language"));
+        assert!(err("def f(min) = min(min, 1); session { }").contains("a word of the language"));
+        // a definition uses only the ones before it: no recursion
+        assert!(
+            err("def g(x) = f(x); def f(x) = g(x); session { set a = g(1); }")
+                .contains("`g` uses `f`, which is defined after it")
+        );
+        assert!(
+            err("def g(x) { f(x); } def f(x) { g(x); } session { g(1); }")
+                .contains("defined after it")
+        );
+        // a stray closer
+        assert!(err("def f(x) = x; session { set a = f(1]); }").contains("unmatched"));
+        // a definition that draws draws when it is an argument
+        assert!(
+            err("def d() = ~exp(1); def twice(x) = x + x; session { set a = twice(d()); }")
+                .contains("would draw 2 times")
+        );
+        // an argument the body would capture
+        assert!(
+            err("def f(x) { set s = 10; observe o = x; } session { f(s + 1); }")
+                .contains("which `f` assigns")
+        );
+        // an observation's name is not captured
+        parse(&format!(
+            "{ENGINE} def f(x) {{ observe s = 10; observe o = x; }} session {{ f(s + 1); }}"
+        ))
+        .unwrap();
+        assert!(err("def f(p) { set p = 1; } session { f(2); }").contains("is a parameter"));
+        assert!(
+            err("def f(h) { enter kv (h) at admission (h = 3) { observe a = h; } } session { f(2); }")
+                .contains("is a parameter")
+        );
+        // what a turn, a request or an admission assigns is captured too
+        assert!(
+            err("def next(x) { turn; observe p = x; } workload { turn { set n = 1; } } session { next(n); end; }")
+                .contains("which its `turn;` assigns")
+        );
+        assert!(
+            err("def go(x) { request; observe b = x; } workload { init { set t0 = 0; } session { go(t0); end; } } server { set t0 = now; }")
+                .contains("which its `request;` assigns")
+        );
+        assert!(
+            err("def take(x) { enter kv (4) { observe got = x; } } session { take(cached); }")
+                .contains("which `take` assigns")
+        );
+        // the clock and live state are read where the body reads them
+        assert!(
+            err("stage svc : fifo; def timed(t) { run svc (1); observe took = now - t; } session { timed(now); }")
+                .contains("reads `now`, which changes")
+        );
+        assert!(
+            err("def f(q) { observe b = q; } session { f(used(kv)); }").contains("reads `used(…)`")
+        );
+        // an expression's argument is read where the expression is
+        parse(&format!(
+            "{ENGINE} def g(x) = x + 1; session {{ set a = g(now); }}"
+        ))
+        .unwrap();
+        // `n` is an attribute when the program sets it
+        parse(&format!(
+            "{ENGINE} def f(x) {{ observe b = x; }} session {{ set n = 1; f(n); }}"
+        ))
+        .unwrap();
+        // and through an expression the argument uses
+        assert!(
+            err("stage svc : fifo; def clock() = now; def timed(t) { run svc (1); observe took = now - t; } session { timed(clock()); }")
+                .contains("reads `now`")
+        );
+        assert!(
+            err("def occ(p) = used(p); def f(q) { observe b = q; } session { f(occ(kv)); }")
+                .contains("reads `used(…)`")
+        );
+        assert!(
+            err("def plus(x) = s + x; def f(v) { set s = 10; observe o = v; } session { f(plus(1)); }")
+                .contains("which `f` assigns")
+        );
+        // and through a definition the body uses
+        assert!(
+            err("def reset() { set s = 10; } def f(x) { reset(); observe o = x; } session { f(s + 1); }")
+                .contains("which `f` assigns")
+        );
+        assert!(
+            err("def adv() { turn; } def next(x) { adv(); observe p = x; } workload { turn { set n = 1; } } session { next(n); end; }")
+                .contains("which its `turn;` assigns")
+        );
+        assert!(
+            err("def ask() { request; } def go(x) { ask(); observe b = x; } workload { session { go(cached); end; } } server { }")
+                .contains("which its `request;` assigns")
+        );
+        // a name that is a declaration's
+        assert!(err("def kv(x) = x; session { }").contains("also a pool"));
+        assert!(err("def engine(x) = x; session { }").contains("also a stage"));
+        // the name of a statement body's attribute is not a use
+        parse(&format!(
+            "{ENGINE} def c(x) {{ set c = x; }} session {{ c(1); }}"
+        ))
+        .unwrap();
+        // an error in the body says where the definition was used
+        let e = err(
+            "def take(n) { enter kv (n) { } } workload { session { request; end; } } server { take(4); }",
+        );
+        assert!(e.contains("note: in `take`, used at"), "{e}");
+        assert!(err("def f(x) = x; def f(y) = y; session { }").contains("defined twice"));
+        // an argument used once may draw
+        parse(&format!(
+            "{ENGINE} def f(x) = x + 1; session {{ set a = f(~exp(1)); }}"
+        ))
+        .unwrap();
+        // a def used before it is defined is a call of an unknown function,
+        // which the linker reports
+        parse(&format!(
+            "{ENGINE} session {{ set a = f(1); }} def f(x) = x;"
         ))
         .unwrap();
     }
