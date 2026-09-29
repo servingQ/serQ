@@ -138,7 +138,7 @@ in any run with a non-empty `also` (as its `stage` or in its `also`) is a
 *shared* stage for the whole run: every job on it, a single-stage run
 included, is a flow of the policy. Every other `ps` stage is served as
 today, `φ(n) / n` by virtual time and finish tags
-(`src/engine/interp.rs:2019-2056`), which is why every existing program
+(`ps_reschedule`, `src/engine/interp.rs:2025-2062`), which is why every existing program
 runs bit for bit as before. A single-stage flow on a shared stage is not
 owed `φ / n`: under `maxmin` it takes what the multi-stage flows through
 the same stage leave (`f3` in the second example below).
