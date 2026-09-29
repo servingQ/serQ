@@ -67,7 +67,7 @@ use std::path::{Path, PathBuf};
 use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
-use crate::frontend::link::{BUILTIN_ATTRS, CONTEXT_VARS, FUNCTIONS};
+use crate::frontend::link::{BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -1322,6 +1322,7 @@ impl Parser {
         let name = self.ident()?;
         if KEYWORDS.contains(&name.as_str())
             || FUNCTIONS.contains(&name.as_str())
+            || FOLDED.contains(&name.as_str())
             || DISTRIBUTIONS.contains(&name.as_str())
         {
             return self.err_at(at, format!("`{name}` is a word of the language"));

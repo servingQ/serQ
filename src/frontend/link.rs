@@ -119,6 +119,9 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 16] = [
     ("remaining", CtxVar::Remaining),
 ];
 
+/// Calls the linker folds to a constant from a declaration.
+pub const FOLDED: [&str; 1] = ["blocksize"];
+
 /// The functions a call may name, as the linker resolves them below.
 pub const FUNCTIONS: [&str; 22] = [
     "min",
@@ -661,6 +664,31 @@ impl Linker<'_> {
     }
 
     /// Evaluate a constant expression (no attributes, no samples).
+    /// `blocksize(p)`: the `block` of pool `p`, a constant the linker folds,
+    /// so a definition takes the pool and not its block size beside it.
+    fn blocksize(&self, args: &[Arg]) -> LResult<f64> {
+        let [Arg::Ref(r)] = args else {
+            return Err(LinkError::new(format!(
+                "`blocksize` takes one pool, got {} argument(s)",
+                args.len()
+            )));
+        };
+        let d = self
+            .prog
+            .pools
+            .iter()
+            .find(|d| d.name == r.name)
+            .ok_or_else(|| self.unknown("pool", &r.name).at(r.span))?;
+        match &d.block {
+            Some(b) => self.const_eval(b),
+            None => Err(LinkError::new(format!(
+                "`blocksize({})`: pool `{}` has no `block`",
+                r.name, r.name
+            ))
+            .at(r.span)),
+        }
+    }
+
     fn const_eval(&self, e: &Expr) -> LResult<f64> {
         Ok(match e {
             Expr::Located(span, inner) => self.const_eval(inner).map_err(|e| e.at(Some(*span)))?,
@@ -761,6 +789,7 @@ impl Linker<'_> {
                     args.iter().map(|a| self.expr(a)).collect::<LResult<_>>()?,
                 )
             }
+            Expr::Call(f, args) if f == "blocksize" => CExpr::Num(self.blocksize(args)?),
             Expr::Call(f, args) => {
                 let (fun, sig): (Fun, &[&str]) = match f.as_str() {
                     "min" => (Fun::Min, &["e", "e"]),

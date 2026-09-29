@@ -63,6 +63,15 @@ lengthens a hit service `s_hit` by `ds`, with `s_miss = s_hit + ds`:
 |---|---|
 | `budget_left(s: stage)` | tokens the next iteration leaves after its residents. Meaningful in the header of a hold in a pool with `admit via s`; elsewhere it plans the next iteration. `s` must be a `step` stage. |
 
+### Declarations
+
+| Signature | Returns |
+|---|---|
+| `blocksize(p: pool)` | the `block` of pool `p`. The linker folds it to a number, so it may appear wherever a number may, except in `const` position (a `let`, a pool's `cap` or `block`). A pool without `block` is a link error. |
+
+A definition that takes a pool reads its block size from it:
+`reusable(known, blocksize(kv))` in `lib/vllm.seq`.
+
 ## Where an observable may be read
 
 Observables read state that eviction and admission change, so a `set` that

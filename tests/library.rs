@@ -164,6 +164,42 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
 }
 
 #[test]
+fn blocksize_is_the_pools_block() {
+    let src = |pool: &str, e: &str| {
+        format!(
+            "{pool}\nstage svc : delay;\nsession {{ observe b = {e}; end; }}\nrun {{ horizon 1; }}\n"
+        )
+    };
+    let p = compile_source(
+        &src("pool kv[2] { cap 64; block 16; }", "blocksize(kv[1])"),
+        &Overrides::default(),
+    )
+    .unwrap();
+    let q = compile_source(
+        &src("pool kv[2] { cap 64; block 16; }", "16"),
+        &Overrides::default(),
+    )
+    .unwrap();
+    assert_eq!(p.to_json(), q.to_json());
+    for (pool, e, want) in [
+        ("pool kv { cap 64; }", "blocksize(kv)", "has no `block`"),
+        (
+            "pool kv { cap 64; block 16; }",
+            "blocksize(kz)",
+            "unknown pool `kz`",
+        ),
+        (
+            "pool kv { cap 64; block 16; }",
+            "blocksize(kv, kv)",
+            "takes one pool",
+        ),
+    ] {
+        let e = compile_source(&src(pool, e), &Overrides::default()).unwrap_err();
+        assert!(e.contains(want), "{e}");
+    }
+}
+
+#[test]
 fn a_use_needs_a_file() {
     let e = compile_source(
         "use \"lib.seq\";\nsession { end; }\n",
@@ -187,7 +223,7 @@ fn the_library_is_one_definition_of_the_vllm_engine() {
         let src = std::fs::read_to_string(seq::program_path(name)).unwrap();
         assert!(src.contains("use \"../../lib/vllm.seq\";"), "{name}");
         assert!(
-            src.contains("vllm_request(reqs, kv, engine, prompt, o, bs, t0);"),
+            src.contains("vllm_request(reqs, kv, engine, prompt, o, t0);"),
             "{name}"
         );
         assert!(!src.contains("admit if"), "{name} writes the admission out");
