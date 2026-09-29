@@ -28,7 +28,7 @@ seq-lang draw  FILE [--view deployment|session] [--format tikz|svg] [--out PATH]
 | `--seed N` | run, ir | RNG seed, overriding the program's `run` block |
 | `--horizon T` | run, ir | simulated seconds |
 | `--warmup T` | run, ir | seconds discarded before anything is recorded |
-| `--set name=expr` | all | override a `let` constant. **Rejected on `.json`**: an IR's constants are already folded |
+| `--set name=expr` | all | override a declared `let` constant (unknown names are errors; the last override of a name wins). **Rejected on `.json`**: an IR's constants are already folded |
 | `--trace F` | run, ir | replace the program's trace corpus |
 | `--inline-trace` | ir | turn the trace file into the sessions' turns, as `CArrival::Sessions` data |
 | `--json` | run | print the report as JSON |
