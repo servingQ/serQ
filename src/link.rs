@@ -67,6 +67,19 @@ pub const BUILTIN_ATTRS: [&str; 9] = [
 ];
 
 pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
+    for (name, _) in &ov.lets {
+        if !prog.lets.iter().any(|(declared, _)| declared == name) {
+            let names: Vec<_> = prog.lets.iter().map(|(n, _)| n.as_str()).collect();
+            return Err(LinkError(format!(
+                "unknown --set constant `{name}`\nhelp: --set overrides a declared `let`; available constants: {}",
+                if names.is_empty() {
+                    "(none)".into()
+                } else {
+                    names.join(", ")
+                }
+            )));
+        }
+    }
     let mut lk = Linker {
         consts: HashMap::new(),
         attrs: vec![],
@@ -93,12 +106,6 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             .unwrap_or(e);
         let v = lk.const_eval(e)?;
         lk.consts.insert(name.clone(), v);
-    }
-    for (name, e) in &ov.lets {
-        if !lk.consts.contains_key(name) {
-            let v = lk.const_eval(e)?;
-            lk.consts.insert(name.clone(), v);
-        }
     }
     // Names of pools and stages.
     let mut base = 0;

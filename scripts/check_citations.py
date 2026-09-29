@@ -21,7 +21,16 @@ A changed hash is not a failure of seQ. It means an upstream range moved and
 the citation has to be re-read and re-pointed, which is exactly the work the
 table exists to make possible.
 
-Usage:  scripts/check_citations.py [--bless | --paths]
+`--tip DIR` asks the other question: does the text each citation names at
+the pin still occur, anywhere, in upstream's current file? DIR holds those
+files at their repository paths (`.github/workflows/citation-drift.yml`
+fetches them daily). Line numbers are ignored -- upstream reformats and
+inserts -- and only a range whose text is gone is reported, with every place
+in this repository that cites it. That is the earliest signal that a rule
+the program encodes may have changed upstream; whether the rule changed is
+then read from the diff, not guessed from a hash.
+
+Usage:  scripts/check_citations.py [--bless | --paths | --tip DIR]
 """
 
 import hashlib
@@ -106,7 +115,65 @@ def digest(name, lo, hi, cache):
     return hashlib.sha256(body.encode()).hexdigest()[:16], None
 
 
+def drift(tip_dir):
+    """Every cited range's text at the pin, looked for in upstream's tip.
+
+    Prints three counts and the ranges whose text is gone, each with the
+    sites that cite it; returns 1 when any is gone.
+    """
+    tip_dir = pathlib.Path(tip_dir)
+    found = citations()
+    cache, tips = {}, {}
+    same, moved, gone = 0, [], {}
+    seen = set()
+    for site, name, lo, hi in found:
+        key = f"{name}:{lo}-{hi}" if hi != lo else f"{name}:{lo}"
+        rel = PATHS.get(name)
+        if rel is None:
+            continue
+        if rel not in cache:
+            f = REF / rel
+            cache[rel] = f.read_text(encoding="utf-8").splitlines() if f.exists() else None
+            t = tip_dir / rel
+            tips[rel] = t.read_text(encoding="utf-8") if t.exists() else None
+        lines, tip = cache[rel], tips[rel]
+        if lines is None or hi > len(lines):
+            continue
+        body = "\n".join(lines[lo - 1 : hi])
+        if tip is None:
+            gone.setdefault(f"{key} ({rel} is not in the tip)", []).append(site)
+            continue
+        if key in seen:
+            if key in gone:
+                gone[key].append(site)
+            continue
+        seen.add(key)
+        if "\n".join(tip.splitlines()[lo - 1 : hi]) == body:
+            same += 1
+        elif (i := f"\n{tip}\n".find(f"\n{body}\n")) >= 0:
+            # anchored at line boundaries: a one-line citation is otherwise a
+            # substring of the same statement at a deeper indentation
+            at = f"\n{tip}\n"[:i].count("\n") + 1
+            moved.append(f"{key} -> line {at}")
+        else:
+            gone[key] = [site]
+    print(f"{same} in place, {len(moved)} moved verbatim, {len(gone)} gone")
+    for m in moved:
+        print(f"  moved: {m}")
+    for k, sites in gone.items():
+        print(f"  GONE:  {k}")
+        for s in sites:
+            print(f"         cited at {s}")
+    return 1 if gone else 0
+
+
 def main():
+    if "--tip" in sys.argv:
+        at = sys.argv.index("--tip") + 1
+        if at >= len(sys.argv):
+            print("usage: scripts/check_citations.py --tip DIR", file=sys.stderr)
+            return 2
+        return drift(sys.argv[at])
     if "--paths" in sys.argv:
         # What a checkout has to contain for this script to run. The fetch
         # script reads it, so adding a citation to a new file widens the

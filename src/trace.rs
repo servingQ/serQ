@@ -32,11 +32,18 @@ impl Corpus {
             }
             let f: Vec<&str> = line.split(',').collect();
             if f.len() != 5 && f.len() != 6 {
-                return Err(format!("trace line {}: expected 5 or 6 fields", ln + 1));
+                return Err(format!(
+                    "line {}: expected 5 or 6 fields, got {}\nhelp: use session,turn,new,out,think[,forced]",
+                    ln + 1,
+                    f.len()
+                ));
             }
             let num = |i: usize| -> Result<f64, String> {
-                f[i].parse::<f64>()
-                    .map_err(|_| format!("trace line {}: bad number `{}`", ln + 1, f[i]))
+                const COLUMNS: [&str; 6] = ["session", "turn", "new", "out", "think", "forced"];
+                f[i].parse::<f64>().map_err(|_| format!(
+                    "line {}: column {} ({}): invalid number `{}`\nhelp: replace `{}` with a numeric value",
+                    ln + 1, i + 1, COLUMNS[i], f[i], COLUMNS[i]
+                ))
             };
             let sid = num(0)? as u64;
             if last != Some(sid) {
@@ -51,7 +58,10 @@ impl Corpus {
             });
         }
         if sessions.is_empty() {
-            return Err("empty trace".into());
+            return Err(
+                "empty trace\nhelp: add a data row using session,turn,new,out,think[,forced]"
+                    .into(),
+            );
         }
         Ok(Corpus { sessions })
     }

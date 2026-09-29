@@ -29,8 +29,9 @@ session {
 `loop` repeats until something inside it ends the session.
 
 There are two branches, and the difference matters. `branch (e) { … } else { … }`
-is the **conditional** — it takes the first block when `e` is non-zero, so the
-guard can depend on the session's state. `branch with (p) { … }` is a **draw**:
+is the **conditional** — it takes the first block when `e` is 1 and the second
+when it is 0 (anything else is a run-time error), so the guard can depend on
+the session's state. `branch with (p) { … }` is a **draw**:
 it takes the first block with probability `p`. Here the session continues with
 probability `p = 0.8`, so it is a draw, and writing it that way is what lets a
 reader — and the figure — tell it from a test.

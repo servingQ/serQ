@@ -133,7 +133,8 @@ serving  := enter POOL ( expr ) … block [ keep ( expr ) ] [ lease POOL ( expr 
           | tool     [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
 ```
 
-Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`,
+Expressions: arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b` (a
+non-zero operand is true; only a `branch` guard is held to 0 or 1),
 `~exp(mean)`, `~det(x)`, `~uniform(lo,hi)`, `~erlang(k,mean)`,
 `~h2(mean,cv2)`, `~bernoulli(p)`; `min`, `max`, `abs`, `floor`, `ceil`,
 `sqrt`, `exp`, `ln`, `pow`; observables `queue(s)`, `busy(s)`, `work(s)`,
@@ -173,32 +174,40 @@ unchanged.
 | Serving form | Kernel |
 |---|---|
 | `enter P (c) … { body } keep (ℓ);` | `hold P (c) … { body } cache (ℓ);` (`reserve`, `reuse`, several pools: as in `hold`) |
-| `prefill S;` | `run prefill (S);`, or on a step engine `E`: `run E prefill (S);` |
+| `prefill W;` | `run prefill (W);`, or on a step engine `E`: `run E prefill (T);` |
 | `transfer X;` | `run link (X);` |
 | `transfer (X) from P to Q (n);` | `run link (X); load Q (n); release P;` — the KV of `n` tokens moves from the session's lease (or hold) on `P` to its hold on `Q`: the link takes the time, the tokens count as computed at `Q`, and `P` is given back (below, *A KV transfer*) |
-| `decode D;` | `run decode (D);`, or on a step engine `E`: `run E decode (D);` |
+| `decode W;` | `run decode (W);`, or on a step engine `E`: `run E decode (T);` |
 | `tool Z;` | `run tool (Z);` |
-| `prefill (S) growing kv;` | `run E prefill (S) growing kv;` (`growing` passes through; a form never adds it) |
-| `prefill[j] S;` | `run prefill[j] (S);` (the index applies to the role's stage array) |
-| `prefill on P[j] (S);` | `run P[j] (S);`, or `run P[j] prefill (S);` when `P` is a step engine |
+| `prefill (T) growing kv;` | `run E prefill (T) growing kv;` (`growing` passes through; a form never adds it) |
+| `prefill[j] W;` | `run prefill[j] (W);`, or `run prefill[j] prefill (T);` when the array is step engines (the index applies to the role's stage array) |
+| `prefill on P[j] (W);` | `run P[j] (W);`, or `run P[j] prefill (T);` when `P` is a step engine |
+
+The argument is work in the unit of the stage it runs on, and the two
+metavariables say which: `W` is the time the job takes alone on a `fifo`,
+`ps` or `delay` stage (seconds, when the program's clock is seconds; a `ps`
+stage serves it at `φ(n)/n`), `T` is tokens on a step engine, the unit of
+its `budget`. The same form takes either; the Which-stage rule below
+decides.
 
 **Which stage.** A form finds its stage among the stages declared above
 it (declarations come first in every program here): the stage whose name
 is the role's, `prefill`, `link` (or `transfer`), `decode`, `tool`;
 failing that, for `prefill` and `decode`, the `step` engine, since prefill
 and decode share its iteration. Exactly one must qualify: with none
-(`stage svc : fifo;` and `prefill S;`) or several (two step engines) the
+(`stage svc : fifo;` and `prefill W;`) or several (two step engines) the
 parser stops at the form and says so. `on STAGE` names the stage
-explicitly; with several instances of a role, `choose j …; prefill[j] S;`
-serves an array and `prefill on P2 (S);` stages that are not one. On a
+explicitly; with several instances of a role, `choose j …; prefill[j] W;`
+serves an array and `prefill on P2 (W);` stages that are not one. On a
 step engine the run gets the role's mode (`run E prefill`), elsewhere it
 is plain, so the linker's rule (the mode is required on a step stage and
 forbidden elsewhere) is met by construction; `transfer` and `tool` on a
 step engine are rejected by the linker as `run E (X)` would be. A linker
-error inside a form (an unknown name in `S`, say) speaks of the kernel
+error inside a form (an unknown name in `W`, say) speaks of the kernel
 statement.
 
 The lecture's disaggregated replica (`programs/lecture_pd.seq`) then reads
+(`T`, `S` and the rest are that program's own constants):
 
 ```
 turn;
@@ -534,7 +543,11 @@ covered here has found a bug.
 **Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(n)/n`. `delay`: every job on its
 own at rate 1. `step { budget B; cost C; }`: an engine that runs
-iterations. The residents are served the way `serve` names, said once per
+iterations. A plain `run`'s work is time at rate 1, the clock's unit; a step
+engine's `prefill` and `decode` work is in the unit of `B`, tokens. The
+clock itself has no unit: a program whose costs are seconds runs in seconds,
+and `programs/vllm_request.seq` runs on the step clock with `cost 1`, so
+its times are iterations. The residents are served the way `serve` names, said once per
 stage: an order, `by (k₁, …)` (ascending keys evaluated for each resident
 with `decoding`, 1 for a decoding resident, `admission`, its admission
 sequence number, `remaining`, the tokens its run has left, and the
@@ -549,8 +562,8 @@ remaining run first is `serve by (remaining)`, the opposite `serve by
 one,
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); then the
-stage admits from the queues it serves. The iteration lasts `C` seconds, an
-expression in `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn`; its
+stage admits from the queues it serves. The iteration advances the clock by
+`C`, an expression in `ntok`, `ndec`, `npre`, `nres`, `kvb`, `kvp`, `attn`; its
 tokens are applied when it ends. A run of zero work completes at once. An
 iteration that schedules no token is not an iteration, unless it preempted:
 then it is the scheduler step that only preempted (vLLM's `schedule()`
@@ -616,13 +629,16 @@ in a `server` block (§2, the two sides), where the scheduler is the one
 speaking. `admit` is also the name of the *pool option* that hands a queue
 to a stage's scheduler (`admit via S`), the scheduler's side again.
 
-**Branching.** `branch (e)` takes the first block when `e` is non-zero.
-`branch with (p)` takes it with probability `p`, and is sugar the parser
-rewrites to `branch (~bernoulli(p))` — the IR, the interpreter and the Lean
-model know only the one form. The two spellings are not interchangeable to a
-reader and were not distinguishable before: a guard strictly between 0 and 1
-has always been drawn as a probability (a guard of 0 or 1 consumes no draw, a
-fractional one exactly one, from the session's stream). Write the draw as
+**Branching.** `branch (e)` takes the first block when `e` is 1 and the
+second when it is 0; any other value (a fraction, a count, a negative
+number, NaN) is a run-time error, since a guard is a test and a test has
+two answers. `branch with (p)` takes the first block with probability `p`,
+and is sugar the parser rewrites to `branch (~bernoulli(p))` — the IR, the
+interpreter and the Lean model know only the one form, and the draw is a
+0 or a 1 by the time the guard sees it. A constant guard that is not 0 or
+1 is refused at link time (one strictly between 0 and 1 reads as a test
+and was meant as a draw); a computed one is refused when it is evaluated.
+Write the draw as
 `branch with` so that the program, and the figure, say which one it is.
 
 **Workload.** `init` runs at arrival, `turn` at every `turn` statement;

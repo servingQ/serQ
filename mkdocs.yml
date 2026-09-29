@@ -92,6 +92,7 @@ nav:
       - Drawing figures: draw.md
       - Design review: review.md
   - How seQ is checked: validation.md
+  - Development guide: development.md
   - Design:
       - design/index.md
       - Philosophy: design/philosophy.md

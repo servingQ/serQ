@@ -499,20 +499,22 @@ impl Parser {
     }
 
     fn ident(&mut self) -> PResult<String> {
+        let at = self.pos;
         match self.advance() {
             Tok::Ident(s) => Ok(s),
             other => {
-                self.pos -= 1;
+                self.pos = at;
                 self.err(format!("expected identifier, found {other}"))
             }
         }
     }
 
     fn string(&mut self) -> PResult<String> {
+        let at = self.pos;
         match self.advance() {
             Tok::Str(s) => Ok(s),
             other => {
-                self.pos -= 1;
+                self.pos = at;
                 self.err(format!("expected string, found {other}"))
             }
         }
@@ -1668,12 +1670,10 @@ impl Parser {
             "branch" => {
                 self.advance();
                 // `branch with (p)` is a draw, and says so. It rewrites to
-                // `branch (~bernoulli(p))`, which the interpreter already
-                // treats identically to a bare `branch (p)`: the sample and
-                // the guard draw from the same stream with the same
-                // comparison, and the resulting 0/1 then short-circuits the
-                // guard without a second draw. So the sugar is free and every
-                // existing run is unmoved.
+                // `branch (~bernoulli(p))`: the sample is a 0 or a 1 by the
+                // time the guard sees it, and a bare `branch (p)` with a
+                // fractional `p` is an error, not a draw. So the sugar is
+                // free and the only way to write the draw.
                 let draw = self.eat_kw("with");
                 let e = self.paren_expr()?;
                 let guard = if draw {
@@ -2119,6 +2119,7 @@ impl Parser {
     }
 
     fn atom(&mut self) -> PResult<Expr> {
+        let at = self.pos;
         match self.advance() {
             Tok::Num(x) => Ok(Expr::Num(x)),
             Tok::LParen => {
@@ -2165,7 +2166,7 @@ impl Parser {
                 }
             }
             other => {
-                self.pos -= 1;
+                self.pos = at;
                 self.err(format!("expected an expression, found {other}"))
             }
         }
