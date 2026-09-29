@@ -14,9 +14,12 @@ the READ of a request as soon as the scheduler hands it the request and the
 handshake with that prefiller is done (`nixl/pull_worker.py:51-83`); the
 handshake is per remote engine and cached, so after the first request of a
 pair there is none. The READ is posted asynchronously and its completion is
-polled at a later step (`nixl/pull_worker.py:545-558`). There is no cap on
-the reads in flight: `num_threads` (`nixl/base_worker.py:636-647`) sizes
-UCX's progress threads, not a queue of transfers.
+polled at a later step (`nixl/pull_worker.py:545-558`). The worker has no
+cap on the reads in flight: `num_threads` (`nixl/base_worker.py:636-647`)
+sizes UCX's progress threads, not a queue of transfers. The one bound is
+the scheduler's: a read is admitted only when its blocks fit next to the
+other reads' reservations (`scheduler.py:1200-1205`), which is the
+program's `hold kvD`.
 
 **The sharing is below vLLM.** How concurrent reads divide a NIC, a PCIe
 switch or a fabric link is decided by UCX and the hardware (for RDMA,
@@ -26,9 +29,10 @@ source cannot supply it.
 
 **Both ends are shared.** Two decoders reading from one prefiller share the
 prefiller's egress; two prefillers read by one decoder share its ingress.
-Push mode (`NixlPushConnector`) moves the same bytes over the same two ends
-in the other direction: which worker posts the operation differs, which
-links carry it does not.
+Push mode moves the same bytes over the same two ends in the other
+direction, a WRITE posted by the prefiller's worker
+(`nixl/push_worker.py:714-722`): which worker posts the operation differs,
+which links carry it does not.
 
 ## Before
 
@@ -85,14 +89,15 @@ end at 3.0. The two ways the language offers today are both wrong:
 
 ```rust
 Run { stage: CRef, mode: RunMode, work: CExpr, growing: Option<CRef>,
+      #[serde(default, skip_serializing_if = "Vec::is_empty")]
       also: Vec<CRef> }   // further stages the same job holds at once
 ```
 
-`also` empty is today's run, byte for byte. With stages in `also`, the job
-is one flow over `stage` and every stage in `also`: it holds all of them
-from its start to its end, and its rate is set by the sharing policy from
-the capacities of all of them. The surface is the serving form's `on` with
-a tuple:
+`also` empty is today's run, and serialises as today's run. With stages in
+`also`, the job is one *flow* over `stage` and every stage in `also`: it
+holds all of them from its start to its end, and its rate is set by the
+sharing policy from the capacities of all of them. The surface lists the
+stages as a hold lists its pools, with commas:
 
 ```
 stage egress[2] : ps(BwP);     // a prefiller's NIC, tokens per second
@@ -100,39 +105,56 @@ stage ingress[2] : ps(BwD);    // a decoder's NIC
 share maxmin;
 ...
         run setup (x0);
-        transfer on (egress[i], ingress[j]) (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c);
+        transfer on egress[i], ingress[j] (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c);
 ```
 
-which is `run (egress[i], ingress[j]) (prompt - c); load kvD[j] (…); release kvP[i];`.
-The work is in the unit the capacities share (tokens here), so links of
-different bandwidth can carry one flow; the fixed latency stays a `delay`
-(#131), outside the sharing.
+which is `run egress[i], ingress[j] (prompt - c); load kvD[j] (…); release kvP[i];`.
+A parenthesised tuple is not used: `(k₁, k₂)` already means a lexicographic
+key in `evict by` and `serve by` (and in #140's `choose by`), and a comma
+list already means "all of these at once" in `hold a (u), b (v)`. The work
+is in the unit the capacities share (tokens here), so links of different
+bandwidth can carry one flow; the fixed latency stays a `delay` (#131),
+outside the sharing. The indices of a stage array are evaluated once, when
+the run starts, as a single-stage run's are.
 
 **The link rule.** Every stage of a run with a non-empty `also` is `ps(φ)`
 with `φ` a constant, the run is plain (no `prefill`/`decode` mode, no
 `growing`), and no stage appears twice. A `φ` that depends on `n` has no
 meaning for a flow that `n` does not describe, so it is a link error, not a
-choice.
+choice. A program with a non-empty `also` anywhere must declare `share`.
 
 **The policy is the program's.** `share P;` is one declaration for the
 deployment, because it is a property of the coupled links together, not of
-one stage. Two policies to start with:
+one stage, and it has no default: the language supplies the mechanism and
+the program names the rule. Two to start with:
 
 | `share` | rate of flow `f` | work-conserving |
 |---|---|---|
-| `maxmin` (default) | max-min fair: raise every rate together, freeze the flows of a link when it fills, repeat (progressive filling) | yes |
-| `min` | `min over f's stages s of φ_s / n_s`: its equal share at the tightest of its stages | no: a flow held back at one stage leaves its share unused at the others |
+| `maxmin` | max-min fair: raise every rate together, freeze the flows of a stage when it fills, repeat (progressive filling) | yes |
+| `bottleneck` | `min over f's stages s of φ_s / n_s`: its equal share at the tightest of its stages | no: a flow held back at one stage leaves its share unused at the others |
 
-A single-stage flow gets `φ / n` under both, which is today's `ps`.
+**Which stages are solved.** The partition is static. A stage that appears
+in any run with a non-empty `also` (as its `stage` or in its `also`) is a
+*shared* stage for the whole run: every job on it, a single-stage run
+included, is a flow of the policy. Every other `ps` stage is served as
+today, `φ(n) / n` by virtual time and finish tags
+(`src/engine/interp.rs:2019-2056`), which is why every existing program
+runs bit for bit as before. A single-stage flow on a shared stage is not
+owed `φ / n`: under `maxmin` it takes what the multi-stage flows through
+the same stage leave (`f3` in the second example below).
 
-**The simulator.** Today's PS keeps one virtual time per stage and a finish
-tag per job, which works because every job at a stage has the same rate
-(`src/engine/interp.rs:2019-2056`). Flows over different stages have
-different rates, so a multi-stage flow keeps its remaining work; at every
-start and end of such a flow the rates of its connected component are
-recomputed (water-filling, O(links × flows)) and the earliest end is
-scheduled. A stage no multi-stage flow touches keeps the virtual-time code,
-so every existing program runs bit for bit as before.
+**The simulator.** Flows on shared stages keep their remaining work; at
+every start and end of a flow the rates of its connected component are
+recomputed (water-filling for `maxmin`, a minimum per flow for
+`bottleneck`; O(stages × flows)) and the earliest end is scheduled.
+
+**What a shared stage reports.** With `n_s` the flows holding `s` and `r_f`
+their rates: `holders(s)` and the report's number in service are `n_s`;
+`work(s)` is the sum of their remaining work; utilisation is `Σ r_f / φ_s`,
+the capacity carried, so `bottleneck` shows the share it leaves unused
+where "not empty" would count the stage busy; `done` and the mean service
+time count each flow once at every stage it held, its service being its
+time from start to end. A `ps` stage has no queue, shared or not.
 
 **The view.** A multi-stage run is one station per stage, drawn stacked in
 one column and bracketed as one job: the arrows enter and leave the
@@ -145,31 +167,48 @@ Derived by hand, for the tests the implementation adds:
 1. The Before, with the sender's NIC in the run: two flows of 1 on
    `egress (1)` shared, each also on its own `ingress (1)`, both start at
    1: the egress is the bottleneck at 1/2 each, so both end at 3.0 under
-   `maxmin` and `min`.
-2. Three flows, two links, all of work 1 from t = 0: `A` of capacity 1
-   carries `f1`, `f2`; `B` of capacity 2 carries `f1`, `f3`.
+   `maxmin` and `bottleneck`.
+2. Three flows, two stages, all of work 1 from t = 0: `A` of capacity 1
+   carries `f1`, `f2`; `B` of capacity 2 carries `f1`, `f3` (`f3` a
+   single-stage run on the shared stage `B`).
    - `maxmin`: `A` fills first at 1/2 each for `f1`, `f2`; `f3` takes the
      rest of `B`, 3/2, and ends at 2/3; `f1`, `f2` stay at 1/2 and end at
      2.
-   - `min`: `f1 = min(1/2, 2/2) = 1/2`, `f2 = 1/2`, `f3 = 2/2 = 1`; `f3`
-     ends at 1, `f1` and `f2` at 2. The two policies differ in `f3` only,
-     which is the capacity `min` leaves unused.
-3. `also` empty on every example: the report and the oracle IR files are
-   unchanged.
+   - `bottleneck`: `f1 = min(1/2, 2/2) = 1/2`, `f2 = 1/2`, `f3 = 2/2 = 1`;
+     `f3` ends at 1, `f1` and `f2` at 2. The two policies differ in `f3`
+     only, which is the capacity `bottleneck` leaves unused. `B`'s
+     utilisation until t = 2/3 is 2/2 under `maxmin` and 3/4 under
+     `bottleneck`.
+3. `also` empty on every example: the reports are unchanged. The oracle IR
+   files change in their `"version"` only.
 
 ## Cost
 
 - `IR_VERSION` 6 → 7. The field is new, but an old reader that ignores it
-  runs a two-link flow on one link and is silently wrong, which is the case
-  `docs/ir.md` §Stability says bumps. #140 also plans v7; whichever lands
-  first bumps and the other rides along until the tag.
+  runs a two-stage flow on one stage and is silently wrong, which is the
+  case `docs/ir.md` §Stability says bumps. #140 also plans v7; whichever
+  lands first bumps and the other rides along until the tag. Every
+  `tools/oracle/*.ir.json` is regenerated for its version.
 - `serving-queue-theory`: `scripts/gen_seq_oracle.py` pins the version and
-  reads `Run` by field name. `SeqExec`'s fragment admits `step` and `delay`
-  stages only, so no oracle program is affected; the generator raises
-  `Fragment` on a non-empty `also` so that a future program cannot slip
-  through.
-- The linker rule above, the `share` declaration, the flow solver, the view,
-  `docs/language.md` §3, `docs/ir.md`, the API reference.
+  reads `Run` by field name, so it would ignore `also` without complaint.
+  `SeqExec`'s fragment admits `step` and `delay` stages only (a `ps` stage
+  is already refused), so no oracle program is affected; the generator
+  raises `Fragment` on a non-empty `also` as well, so that the refusal does
+  not rest on the stage kind alone.
+- The linker rule above, the `share` declaration, the flow solver, the
+  report's definitions, the view, `docs/language.md` §3, `docs/ir.md`, the
+  API reference.
+
+## Relations
+
+- **#72, the queue RFC.** Its `link` role (`transfer (n) from Q to POOL (m)`
+  in the entry of one queue) runs in its own queue only; with this change
+  the role's service is a flow over its own NIC and the other side's, which
+  the role would name as it names the pool the KV arrives in.
+- **Push mode's concurrent legs** (the `book` reservation of
+  [The KV transfer](pd-transfer.md)) are a separate change; with this one,
+  push and pull put a transfer on the same two stages and differ in who
+  posts it and one notification.
 
 ## What is not verified
 
@@ -177,12 +216,8 @@ Derived by hand, for the tests the implementation adds:
   and plausible for RDMA under congestion control; nothing in this
   repository measures it. The A6000 testbed
   (`~/dev/trace/202609-a6000-pd-nixl/`) moved its KV inside one node over
-  `cuda_ipc` and cannot tell NIC sharing policies apart: that needs two
-  nodes, concurrent reads and the per-transfer times.
-- **Push mode's concurrent legs** (the `book` reservation of
-  [The KV transfer](pd-transfer.md)) are a separate change; with this one,
-  push and pull put a transfer on the same two stages and differ in who
-  posts it and one notification.
+  `cuda_ipc` and cannot tell sharing policies apart: that needs two nodes,
+  concurrent reads and the per-transfer times.
 
 ## Self-critique
 
@@ -191,9 +226,23 @@ Derived by hand, for the tests the implementation adds:
   was the first sketch. It adds an address space (a link inside a stage)
   that `CRef`, the linker and the view would all learn; `also` reuses the
   stages a program already declares and adds one field.
-- **Not per-stage policies.** A policy on each `ps` stage would let two
-  stages of one flow disagree, and no rule of the sharing says what a flow
-  over a `maxmin` and a `min` stage gets.
+- **Not `stage: Vec<CRef>`.** Making the run's stage a list gives no stage
+  a special place, at the same version bump, but renames the field the
+  generator reads (`v["stage"]`) and makes every single-stage run a list of
+  one. `also` keeps today's runs as they are, in the IR and in the
+  generator.
+- **Not per-stage policies, and one policy per deployment.** A policy on
+  each `ps` stage would let two stages of one flow disagree, and no rule of
+  the sharing says what a flow over a `maxmin` and a `bottleneck` stage
+  gets. The price is that one deployment cannot say NVLink shares one way
+  and RDMA another; a policy per connected component of shared stages
+  would, and is the extension if a program needs it.
+- **No default policy.** `maxmin` as a default would be a rule the language
+  makes for every program that does not say otherwise (criterion 2).
+- **Only `ps` stages.** A `delay` stage has no capacity to share, and a
+  flow through one gains nothing from it. A `fifo` stage serves one job at
+  a time, so a flow waiting in its queue while holding another stage is a
+  hold-and-wait the flow semantics does not define.
 - **Not sugar.** No rewrite of the kernel states a job that holds two
   stages at once; the Before's two workarounds are the proof.
 - **`proportional` fairness is left out** of the first cut: it needs an
