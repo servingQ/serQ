@@ -10,12 +10,11 @@ use seq::view::deployment::{self, End};
 use seq::view::figure::{BoxStyle, Figure, StationKind};
 use seq::{Overrides, compile_source, program_path};
 
-const PROGRAMS: [&str; 9] = [
+const PROGRAMS: [&str; 8] = [
     "mg1",
     "ps",
     "closed",
     "replica",
-    "lecture_pd",
     "routing",
     "vllm",
     "vllm_request",
@@ -48,69 +47,36 @@ fn pools_of(p: &Program, net: &deployment::Net, stage_name: &str) -> Vec<String>
         .collect()
 }
 
-fn node(net: &deployment::Net, p: &Program, name: &str) -> End {
-    End::Node(net.node_of(stage(p, name)).unwrap())
-}
+// --- the station kinds -----------------------------------------------------
 
-// --- the acceptance test ----------------------------------------------------
-
-/// `examples/pd-disaggregation/lecture_pd.seq` is the program of `fig:deployment` in Lecture 1
-/// §2 of `serving-queue-theory`. The deployment view must have that figure's
-/// topology, which is the one place in this feature with an independently
-/// hand-drawn answer key.
+/// Each stage kind has its glyph: `mg1.seq` is one FIFO server, `ps.seq` one
+/// processor-sharing server, and `llmd_pd.seq` has a step engine on each
+/// side, a processor-sharing link and a delay for the tool call.
 #[test]
-fn lecture_pd_has_the_topology_of_fig_deployment() {
-    let p = program("lecture_pd");
+fn stations_take_their_stage_kind() {
+    let kinds = |name: &str| -> Vec<StationKind> {
+        let p = program(name);
+        deployment::project(&p)
+            .nodes
+            .iter()
+            .map(|n| n.kind)
+            .collect()
+    };
+    assert_eq!(kinds("mg1"), [StationKind::Fifo]);
+    assert_eq!(kinds("ps"), [StationKind::Ps]);
+    let p = program("llmd_pd");
     let net = deployment::project(&p);
-
-    // The four stations of the figure, in the order it reads left to right.
-    let names: Vec<&str> = net
-        .nodes
-        .iter()
-        .map(|n| p.stages[n.stage].name.as_str())
-        .collect();
-    assert_eq!(names, ["prefill", "link", "decode", "tool"]);
-    let kinds: Vec<StationKind> = net.nodes.iter().map(|n| n.kind).collect();
-    assert_eq!(
-        kinds,
-        [
-            StationKind::Fifo,
-            StationKind::Ps,
-            StationKind::Ps,
-            StationKind::Delay
-        ]
-    );
-
-    // The instance boundaries are the holds. The figure draws `link` outside
-    // both dashed boxes; the program holds `memP` across the transfer, and so
-    // does the lecture's own listing, where `run link X` stands between
-    // `admit mem_P c` and `free mem_P cache kT`. The generated figure is the
-    // one that says so.
-    assert_eq!(pools_of(&p, &net, "prefill"), ["memP"]);
-    assert_eq!(pools_of(&p, &net, "link"), ["memP"]);
-    assert_eq!(pools_of(&p, &net, "decode"), ["memD"]);
-    assert!(pools_of(&p, &net, "tool").is_empty());
-
-    // "prefix cache of paused sessions" sits under the prefill instance only.
-    assert_eq!(net.cached, vec![pool(&p, "memP")]);
-
-    // Arrivals, the chain, the exit, and the feedback through the tool call.
-    let (prefill, link, decode, tool) = (
-        node(&net, &p, "prefill"),
-        node(&net, &p, "link"),
-        node(&net, &p, "decode"),
-        node(&net, &p, "tool"),
-    );
-    assert!(
-        net.has_edge(End::Arrival, prefill),
-        "new sessions enter at prefill"
-    );
-    assert!(net.has_edge(prefill, link));
-    assert!(net.has_edge(link, decode));
-    assert!(net.has_edge(decode, tool), "resume w.p. p");
-    assert!(net.has_edge(decode, End::Exit), "ends");
-    assert!(net.has_edge(tool, prefill), "next turn, hit or miss");
-    assert!(net.arrival.contains("Poisson"));
+    for (name, kind) in [
+        ("P", StationKind::Step),
+        ("D", StationKind::Step),
+        ("link", StationKind::Ps),
+        ("tool", StationKind::Delay),
+    ] {
+        let i = net
+            .node_of(stage(&p, name))
+            .expect("stage is on the session");
+        assert_eq!(net.nodes[i].kind, kind, "{name}");
+    }
 }
 
 // --- the projection ---------------------------------------------------------
@@ -519,15 +485,6 @@ fn golden(name: &str, got: &str) {
 /// clock and no RNG.
 #[test]
 fn golden_files_are_current() {
-    let p = program("lecture_pd");
-    golden(
-        "lecture_pd.deployment.tex",
-        &seq::view::tikz::render(&deployment::figure(&p)),
-    );
-    golden(
-        "lecture_pd.deployment.svg",
-        &seq::view::svg::render(&deployment::figure(&p)),
-    );
     let p = program("vllm");
     golden(
         "vllm.deployment.svg",

@@ -2,10 +2,12 @@
 
 The program as a queueing network.
 
-![The lecture's disaggregated replica](../assets/lecture_pd.deployment.svg)
+![llm-d prefill/decode over NIXL](../assets/llmd_pd.deployment.svg)
 
-That is `examples/pd-disaggregation/lecture_pd.seq`, and it is `fig:deployment` of Lecture 1 §2
-— generated.
+That is `examples/pd-disaggregation/llmd_pd.seq`: two prefill and two decode
+instances, the KV read over NIXL. The link sits where the prefiller's `kvP`
+box and the decoder's `kvD` box cross: the prefiller's blocks stay leased
+until the read ends, and the decoder's are allocated before it starts.
 
 ## The flow is projected from the session program
 
@@ -16,7 +18,7 @@ walks the session program carrying a hold stack:
 |---|---|
 | **Nodes** | one per stage a `Run` reaches. A stage array is one node labelled `[N]` |
 | **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a back edge to the body's first station) |
-| **Enclosure** | every `Run` is tagged with the `Hold`s around it; stations sharing a hold on pool `p` sit inside `p`'s dashed box — **the lecture's "instance" boundary** |
+| **Enclosure** | every `Run` is tagged with the `Hold`s around it; stations sharing a hold on pool `p` sit inside `p`'s dashed box — an instance's boundary |
 | **Edge labels** | a `Branch` guard, printed by `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
 
@@ -62,28 +64,6 @@ does keep about 7 units of `batch` cached.
 `replica.seq` holds `live` across the whole program including the tool call, and
 `batch` and `kv` only around the engine. The boxes nest accordingly, and the
 `tool` station sits inside `live` and outside the other two.
-
-## Against the lecture's figure
-
-`tests/draw.rs::lecture_pd_has_the_topology_of_fig_deployment` asserts the
-station kinds, the enclosures, the cache strip on `memP` only, and the
-`decode → tool → prefill` feedback path. It is the one acceptance test in this
-feature with an independently hand-drawn answer key.
-
-Four differences are expected:
-
-1. **Geometry.** The lecture places the tool call below centre by hand; the
-   generated layout puts feedback edges in lanes below the station row.
-2. **`link` moves inside the prefill box.** The figure draws it outside both
-   dashed boxes; the program holds `memP` across the transfer, and so does the
-   lecture's own listing, where `run link X` stands between `admit mem_P c`
-   and `free mem_P cache κT`. The caption concedes the point: *"The figure is
-   a picture, not a definition: it does not say when a waiting request is
-   admitted, what happens to its KV memory afterwards, or who decides a
-   hit."* A figure read out of the holds says all three.
-3. **`step` needs a glyph** the lecture has none for.
-4. **Cost labels are the real expressions** — `min(n, 16)` where the lecture
-   writes `φ(m)`, since the IR holds the folded expression and not the symbol.
 
 ## A program that holds nothing
 

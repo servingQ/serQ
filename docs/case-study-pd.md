@@ -246,7 +246,7 @@ prompts to the prefillers — they cache less, so the decider's uncached
 suffix is longer — which is the other direction of the same coupling.
 
 The decoder's shortage shows up as memory *on the prefiller*, which is the
-coupling `examples/pd-disaggregation/lecture_pd.seq` gets backwards: its prefiller holds
+coupling a store-and-forward program gets backwards: its prefiller holds
 through the transfer and lets go before the session queues for the decoder,
 so a decoder with no room costs the prefiller nothing.
 `tests/pd_semantics.rs` has the deterministic version: six requests, a

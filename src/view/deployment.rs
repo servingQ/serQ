@@ -5,9 +5,7 @@
 //! stages — the statements disappear, the `Run`s become stations, and the
 //! `Hold`s become the boundaries drawn around them — and lays the result out.
 //!
-//! The picture it produces is the one of Lecture 1 §2 (`fig:deployment` of
-//! `serving-queue-theory`), for which `examples/pd-disaggregation/lecture_pd.seq` is the
-//! program. See `tests/deployment.rs`.
+//! See `tests/draw.rs`.
 
 use std::collections::BTreeMap;
 

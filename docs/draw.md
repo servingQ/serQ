@@ -24,10 +24,7 @@ the model: it is the same term in a second notation.
 
 `docs/ir.md` makes the same argument for seQ, and names the failure it fixes:
 before the IR, the vLLM request program had three hand-kept copies. A figure
-drawn by hand would be a fourth. `fig:deployment` in Lecture 1 §2 of
-`serving-queue-theory` is exactly that — hand-written TikZ for a deployment
-that `examples/pd-disaggregation/lecture_pd.seq` already defines. `tests/draw.rs` asserts that
-the generated figure has that figure's topology.
+drawn by hand would be a fourth.
 
 The view is a pure function of `ir::Program`. It runs no simulation, draw
 no measurements, and are deterministic: the same IR gives the same bytes.
@@ -44,7 +41,7 @@ of the session program. `deployment::project` walks it carrying a hold stack:
 |---|---|
 | **Nodes** | one per stage a `Run` reaches; a `CRef` with `count > 1` is one node labelled `[N]` |
 | **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a back edge to the body's first station) |
-| **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box — **the lecture's "instance" boundary**. A leased pool stays on the stations after its hold and a `Release` takes it off, so a KV transfer draws two boxes that cross at the link station (`examples/pd-disaggregation/llmd_pd.seq`) |
+| **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box — an instance's boundary. A leased pool stays on the stations after its hold and a `Release` takes it off, so a KV transfer draws two boxes that cross at the link station (`examples/pd-disaggregation/llmd_pd.seq`) |
 | **Edge labels** | a `Branch` guard, via `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
 
@@ -75,25 +72,6 @@ Which pool a `cache` clause leaves units in follows `interp.rs::release_hold`: a
 hold with a `growing` run caches in that pool alone, and one without caches in
 all of its pools. `replica.seq` is the case that makes the difference visible
 — its `hold batch (1), kv (…)` really does keep a unit of `batch` cached.
-
-### Against the lecture's figure
-
-`tests/draw.rs::lecture_pd_has_the_topology_of_fig_deployment` is the
-acceptance test, and it is the one place in this feature with an
-independently hand-drawn answer key. Four differences are expected:
-
-1. **Geometry.** The lecture places the tool call below centre by hand; the
-   generated layout puts feedback edges in lanes below the station row.
-2. **`link` moves inside the prefill box.** The figure draws it outside both
-   dashed boxes; the program — and the lecture's own `L1:ex:program` listing,
-   where `run link X` stands between `admit mem_P c` and
-   `free mem_P cache κT` — holds `memP` across the transfer. The lecture says
-   as much: *"The figure is a picture, not a definition: it does not say when
-   a waiting request is admitted, what happens to its KV memory afterwards, or
-   who decides a hit."* A figure read out of the holds says all three.
-3. **`step` needs a glyph** the lecture has none for.
-4. **Cost labels are the real expressions** — `min(n, 16)` where the lecture
-   writes `φ(m)`, since the IR holds the folded expression, not the symbol.
 
 ## 3. Formats
 
