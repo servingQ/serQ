@@ -211,7 +211,7 @@ context, 200 output tokens, a 3 s tool call between turns, `p = 0.9`), a
 below is the median over seeds 1–20 of a run of 10 000 s after 1 000 s
 of warm-up (`--seed N --horizon 10000 --warmup 1000 --set …`), with the
 range across the seeds where it says more than the median. About 1 % of
-turns reach `max_model_len` and end their session.
+turns, and so 11 % of sessions, reach `max_model_len` and end there.
 
 **The decider.** The guide's `always-disagg-pd-decider` sends every prompt
 to a prefiller; the `prefix-based-pd-decider` keeps a follow-up turn whose
@@ -228,8 +228,9 @@ second:
 Disaggregating everything costs a transfer per request, disaggregating
 nothing costs every decoder a prefill in its decode steps, and at this
 load the two cost about the same: the four settings lie within a
-millisecond, and the decider's `thr = 512` is the lowest by less than the
-spread across seeds. With the guide's decode profile (the least busy pod,
+millisecond. The decider's `thr = 512` sits below both: seed for seed it
+is 0.2–1.1 ms under always-disaggregate in all twenty, and under decode
+only in nineteen. With the guide's decode profile (the least busy pod,
 no prefix affinity) a follow-up turn often lands on the pod that does not
 have its context, and the prefiller — which does have it, through the
 affinity filter — prefills the new tokens only: 59 % of requests are
@@ -253,10 +254,10 @@ prefill pool is 160 000 tokens; a decoder is never smaller than
 
 Smaller decoders send *more* prompts to the prefillers — they cache less,
 so the decider's uncached suffix is longer — and each of those prompts
-waits longer for the decoder's room, so the prefillers hold two to three
-times the memory. At these loads that memory is still a few per cent of
-the pool and no prefiller queues; the deployment pays for the small
-decoders in TTFT, not yet in admissions.
+waits longer for the decoder's room, so the prefillers hold more memory:
+2.1–2.4 times at 0.6 sessions per second, 1.6–1.7 times at 1.2. At these
+loads that memory is under 2 % of the pool and no prefiller queues; the
+deployment pays for the small decoders in TTFT, not yet in admissions.
 
 The decoder's shortage shows up as memory *on the prefiller*, which is the
 coupling a store-and-forward program gets backwards: its prefiller holds

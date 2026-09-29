@@ -32,6 +32,7 @@
  "nixl/pull_scheduler.py:34-106": "abb30d6739c8e86e",
  "nixl/pull_scheduler.py:34-66": "7a92fbf8f42e3645",
  "nixl/pull_worker.py:392-575": "4c04394aff275fb0",
+ "nixl/pull_worker.py:545-558": "ba87334f353612b3",
  "nixl/push_scheduler.py:128-205": "989b56ffa1ee2676",
  "nixl/push_scheduler.py:207-294": "27225f0a5931cb2c",
  "nixl/push_scheduler.py:342-357": "fed1ae4e3c2f671c",
