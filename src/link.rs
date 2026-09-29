@@ -12,11 +12,40 @@ use std::fmt;
 use crate::ast::*;
 
 #[derive(Debug, Clone)]
-pub struct LinkError(pub String);
+pub struct LinkError {
+    pub message: String,
+    pub span: Option<Span>,
+}
+
+impl LinkError {
+    fn new(message: String) -> Self {
+        Self {
+            message,
+            span: None,
+        }
+    }
+
+    fn at(mut self, span: Option<Span>) -> Self {
+        if self.span.is_none() {
+            self.span = span;
+        }
+        self
+    }
+
+    pub fn render(&self, source: &str) -> String {
+        match self.span {
+            Some(span) => span.render(source, &format!("link error: {}", self.message)),
+            None => self.to_string(),
+        }
+    }
+}
 
 impl fmt::Display for LinkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "link error: {}", self.0)
+        if let Some(span) = self.span {
+            write!(f, "{}:{}: ", span.line, span.col)?;
+        }
+        write!(f, "link error: {}", self.message)
     }
 }
 
@@ -63,7 +92,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     for (name, _) in &ov.lets {
         if !prog.lets.iter().any(|(declared, _)| declared == name) {
             let names: Vec<_> = prog.lets.iter().map(|(n, _)| n.as_str()).collect();
-            return Err(LinkError(format!(
+            return Err(LinkError::new(format!(
                 "unknown --set constant `{name}`\nhelp: --set overrides a declared `let`; available constants: {}",
                 if names.is_empty() {
                     "(none)".into()
@@ -88,6 +117,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     }
     // Constants, in order; an override replaces the value of a `let`.
     for (name, e) in &prog.lets {
+        let overridden = ov.lets.iter().any(|(n, _)| n == name);
         let e = ov
             .lets
             .iter()
@@ -95,21 +125,28 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             .find(|(n, _)| n == name)
             .map(|(_, e)| e)
             .unwrap_or(e);
-        let v = lk.const_eval(e)?;
+        let v = lk.const_eval(e).map_err(|mut error| {
+            if overridden {
+                // These spans refer to the --set expression, not the program.
+                error.message = format!("--set {name}: {}", error.message);
+                error.span = None;
+            }
+            error
+        })?;
         lk.consts.insert(name.clone(), v);
     }
     // Names of pools and stages.
     let mut base = 0;
     for p in &prog.pools {
         if lk.pools.insert(p.name.clone(), (base, p.count)).is_some() {
-            return Err(LinkError(format!("duplicate pool `{}`", p.name)));
+            return Err(lk.duplicate("pool", &p.name, p.span));
         }
         base += p.count;
     }
     let mut base = 0;
     for s in &prog.stages {
         if lk.stages.insert(s.name.clone(), (base, s.count)).is_some() {
-            return Err(LinkError(format!("duplicate stage `{}`", s.name)));
+            return Err(lk.duplicate("stage", &s.name, s.span));
         }
         base += s.count;
     }
@@ -124,7 +161,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     // (a stage's cost has no session, so the constant would read as NaN).
     for (name, _) in &prog.lets {
         if lk.attr_index.contains_key(name) {
-            return Err(LinkError(format!(
+            return Err(LinkError::new(format!(
                 "`{name}` is both a `let` constant and a session attribute"
             )));
         }
@@ -137,7 +174,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         if let Some(b) = block
             && b <= 0.0
         {
-            return Err(LinkError(format!(
+            return Err(LinkError::new(format!(
                 "pool `{}`: block must be positive",
                 p.name
             )));
@@ -186,7 +223,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             StageKind::Fifo(c) => {
                 let c = lk.const_eval(c)?;
                 if c < 1.0 || c.fract() != 0.0 {
-                    return Err(LinkError(format!(
+                    return Err(LinkError::new(format!(
                         "stage `{}`: fifo servers must be a positive integer",
                         s.name
                     )));
@@ -248,7 +285,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     let horizon = match (&ov.horizon, &prog.run.horizon) {
         (Some(h), _) => *h,
         (None, Some(e)) => lk.const_eval(e)?,
-        (None, None) => return Err(LinkError("no horizon (run { horizon T; })".into())),
+        (None, None) => return Err(LinkError::new("no horizon (run { horizon T; })".into())),
     };
     let warmup = match (&ov.warmup, &prog.run.warmup) {
         (Some(w), _) => *w,
@@ -261,7 +298,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         (None, None) => 1,
     };
     if warmup >= horizon {
-        return Err(LinkError("warmup must be below the horizon".into()));
+        return Err(LinkError::new("warmup must be below the horizon".into()));
     }
     // `hidden` names session attributes the scheduler's expressions may not
     // read; `Program::validate` enforces it by moment and rejects what the
@@ -272,7 +309,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             match lk.attr_index.get(n) {
                 Some(&i) => hidden.push(i),
                 None => {
-                    return Err(LinkError(format!(
+                    return Err(LinkError::new(format!(
                         "hidden `{n}`: no `set` or `choose` makes it a session attribute"
                     )));
                 }
@@ -307,7 +344,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         warmup,
         seed,
     };
-    crate::lint::lint(&linked).map_err(LinkError)?;
+    crate::lint::lint(&linked).map_err(LinkError::new)?;
     Ok(linked)
 }
 
@@ -338,28 +375,100 @@ impl Linker<'_> {
         i
     }
 
-    fn pool_base(&self, name: &str) -> LResult<usize> {
-        self.pools
-            .get(name)
-            .map(|&(b, _)| b)
-            .ok_or_else(|| LinkError(format!("unknown pool `{name}`")))
+    fn declaration(&self, kind: &str, name: &str) -> Option<Span> {
+        match kind {
+            "pool" => self
+                .prog
+                .pools
+                .iter()
+                .find(|d| d.name == name)
+                .and_then(|d| d.span),
+            "stage" => self
+                .prog
+                .stages
+                .iter()
+                .find(|d| d.name == name)
+                .and_then(|d| d.span),
+            _ => self
+                .prog
+                .definitions
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, s)| *s),
+        }
     }
 
-    fn stage_base(&self, name: &str) -> LResult<usize> {
-        self.stages
-            .get(name)
+    fn duplicate(&self, kind: &str, name: &str, span: Option<Span>) -> LinkError {
+        let mut message = format!("duplicate {kind} `{name}`");
+        if let Some(first) = self.declaration(kind, name) {
+            message.push_str(&format!(
+                "\nnote: first declared at {}:{}",
+                first.line, first.col
+            ));
+        }
+        message.push_str("\nhelp: rename or remove the duplicate declaration");
+        LinkError::new(message).at(span)
+    }
+
+    fn unknown(&self, kind: &str, name: &str) -> LinkError {
+        let names: Vec<&str> = match kind {
+            "pool" => self.pools.keys().map(String::as_str).collect(),
+            "stage" => self.stages.keys().map(String::as_str).collect(),
+            "constant" => self.consts.keys().map(String::as_str).collect(),
+            _ => self
+                .consts
+                .keys()
+                .chain(self.attr_index.keys())
+                .map(String::as_str)
+                .collect(),
+        };
+        let mut message = if kind == "constant" {
+            format!("`{name}` is not a constant")
+        } else {
+            format!("unknown {kind} `{name}`")
+        };
+        if let Some(candidate) = crate::diagnostic::suggestion(name, names.into_iter()) {
+            message.push_str(&format!("\nhelp: did you mean {kind} `{candidate}`?"));
+            if let Some(span) = self.declaration(kind, &candidate) {
+                message.push_str(&format!(
+                    "\nnote: `{candidate}` declared at {}:{}",
+                    span.line, span.col
+                ));
+            }
+        } else if kind == "name" {
+            message.push_str(
+                "\nhelp: declare a `let` constant or assign a session attribute before using it",
+            );
+        } else {
+            message.push_str(&format!(
+                "\nhelp: declare this {kind} or use the name of an existing {kind}"
+            ));
+        }
+        LinkError::new(message)
+    }
+
+    fn pool_base(&self, r: &Ref) -> LResult<usize> {
+        self.pools
+            .get(&r.name)
             .map(|&(b, _)| b)
-            .ok_or_else(|| LinkError(format!("unknown stage `{name}`")))
+            .ok_or_else(|| self.unknown("pool", &r.name).at(r.span))
+    }
+
+    fn stage_base(&self, r: &Ref) -> LResult<usize> {
+        self.stages
+            .get(&r.name)
+            .map(|&(b, _)| b)
+            .ok_or_else(|| self.unknown("stage", &r.name).at(r.span))
     }
 
     fn cref(&self, r: &Ref, table: &HashMap<String, (usize, usize)>, what: &str) -> LResult<CRef> {
         let &(base, count) = table
             .get(&r.name)
-            .ok_or_else(|| LinkError(format!("unknown {what} `{}`", r.name)))?;
+            .ok_or_else(|| self.unknown(what, &r.name).at(r.span))?;
         let index = match &r.index {
             None => {
                 if count != 1 {
-                    return Err(LinkError(format!(
+                    return Err(LinkError::new(format!(
                         "{what} `{}` is an array; index it",
                         r.name
                     )));
@@ -382,13 +491,14 @@ impl Linker<'_> {
     /// Evaluate a constant expression (no attributes, no samples).
     fn const_eval(&self, e: &Expr) -> LResult<f64> {
         Ok(match e {
+            Expr::Located(span, inner) => self.const_eval(inner).map_err(|e| e.at(Some(*span)))?,
             Expr::Num(x) => *x,
             Expr::Var(n) => match n.as_str() {
                 "inf" => f64::INFINITY,
                 _ => *self
                     .consts
                     .get(n)
-                    .ok_or_else(|| LinkError(format!("`{n}` is not a constant")))?,
+                    .ok_or_else(|| self.unknown("constant", n))?,
             },
             Expr::Unary(UnOp::Neg, a) => -self.const_eval(a)?,
             Expr::Unary(UnOp::Not, a) => {
@@ -411,7 +521,9 @@ impl Linker<'_> {
                     .iter()
                     .map(|a| match a {
                         Arg::Expr(e) => self.const_eval(e),
-                        Arg::Ref(r) => self.const_eval(&Expr::Var(r.name.clone())),
+                        Arg::Ref(r) => self
+                            .const_eval(&Expr::Var(r.name.clone()))
+                            .map_err(|e| e.at(r.span)),
                     })
                     .collect::<LResult<_>>()?;
                 match (f.as_str(), xs.as_slice()) {
@@ -425,19 +537,20 @@ impl Linker<'_> {
                     ("ln", [a]) => a.ln(),
                     ("pow", [a, b]) => a.powf(*b),
                     _ => {
-                        return Err(LinkError(format!(
+                        return Err(LinkError::new(format!(
                             "`{f}` with {} argument(s) is not a constant function",
                             xs.len()
                         )));
                     }
                 }
             }
-            Expr::Sample(..) => return Err(LinkError("a constant cannot sample".into())),
+            Expr::Sample(..) => return Err(LinkError::new("a constant cannot sample".into())),
         })
     }
 
     fn expr(&self, e: &Expr) -> LResult<CExpr> {
         Ok(match e {
+            Expr::Located(span, inner) => self.expr(inner).map_err(|e| e.at(Some(*span)))?,
             Expr::Num(x) => CExpr::Num(*x),
             Expr::Var(n) => {
                 if let Some(&i) = self.attr_index.get(n) {
@@ -463,7 +576,7 @@ impl Linker<'_> {
                         "admission" => CExpr::Ctx(CtxVar::Admission),
                         "remaining" => CExpr::Ctx(CtxVar::Remaining),
                         "inf" => CExpr::Num(f64::INFINITY),
-                        _ => return Err(LinkError(format!("unknown name `{n}`"))),
+                        _ => return Err(self.unknown("name", n)),
                     }
                 }
             }
@@ -475,14 +588,14 @@ impl Linker<'_> {
                     "erlang" => DistKind::Erlang,
                     "h2" => DistKind::H2,
                     "bernoulli" => DistKind::Bernoulli,
-                    _ => return Err(LinkError(format!("unknown distribution `{d}`"))),
+                    _ => return Err(LinkError::new(format!("unknown distribution `{d}`"))),
                 };
                 let want = match kind {
                     DistKind::Exp | DistKind::Det | DistKind::Bernoulli => 1,
                     DistKind::Uniform | DistKind::Erlang | DistKind::H2 => 2,
                 };
                 if args.len() != want {
-                    return Err(LinkError(format!("`~{d}` takes {want} argument(s)")));
+                    return Err(LinkError::new(format!("`~{d}` takes {want} argument(s)")));
                 }
                 CExpr::Sample(
                     kind,
@@ -513,10 +626,10 @@ impl Linker<'_> {
                     "est_lambda" => (Fun::EstLambda, &["s"]),
                     "est_rho" => (Fun::EstRho, &["s"]),
                     "est_wait" => (Fun::EstWait, &["s"]),
-                    _ => return Err(LinkError(format!("unknown function `{f}`"))),
+                    _ => return Err(LinkError::new(format!("unknown function `{f}`"))),
                 };
                 if args.len() != sig.len() {
-                    return Err(LinkError(format!(
+                    return Err(LinkError::new(format!(
                         "`{f}` takes {} argument(s), got {}",
                         sig.len(),
                         args.len()
@@ -526,12 +639,17 @@ impl Linker<'_> {
                 for (a, kind) in args.iter().zip(sig) {
                     cargs.push(match (kind, a) {
                         (&"e", Arg::Expr(e)) => CArg::Expr(self.expr(e)?),
-                        (&"e", Arg::Ref(r)) => CArg::Expr(self.expr(&Expr::Var(r.name.clone()))?),
+                        (&"e", Arg::Ref(r)) => CArg::Expr(
+                            self.expr(&Expr::Var(r.name.clone()))
+                                .map_err(|e| e.at(r.span))?,
+                        ),
                         (&"p", Arg::Ref(r)) => CArg::Pool(self.pool_ref(r)?),
                         (&"s", Arg::Ref(r)) => CArg::Stage(self.stage_ref(r)?),
                         (k, _) => {
                             let what = if *k == "p" { "pool" } else { "stage" };
-                            return Err(LinkError(format!("`{f}` expects a {what} name here")));
+                            return Err(LinkError::new(format!(
+                                "`{f}` expects a {what} name here"
+                            )));
                         }
                     });
                 }
@@ -571,14 +689,14 @@ impl Linker<'_> {
                     CStmt::Observe(self.observe_slot(n), e)
                 }
                 _ if workload => {
-                    return Err(LinkError(
+                    return Err(LinkError::new(
                         "workload blocks may only `set` and `observe`".into(),
                     ));
                 }
                 Stmt::Turn => CStmt::Turn,
                 Stmt::End => CStmt::End,
                 Stmt::Request => {
-                    return Err(LinkError(
+                    return Err(LinkError::new(
                         "`request` survived parsing: the parser splices the server in its place"
                             .into(),
                     ));
@@ -628,13 +746,13 @@ impl Linker<'_> {
                         })
                     );
                     if is_step != (*mode != RunMode::Plain) {
-                        return Err(LinkError(
+                        return Err(LinkError::new(
                             "`prefill`/`decode` are required on a step stage and not allowed elsewhere"
                                 .into(),
                         ));
                     }
                     if growing.is_some() && !is_step {
-                        return Err(LinkError("`growing` needs a step stage".into()));
+                        return Err(LinkError::new("`growing` needs a step stage".into()));
                     }
                     CStmt::Run {
                         stage,
