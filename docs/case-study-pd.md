@@ -18,15 +18,33 @@ The prompt's KV is in the prefiller's pool through the transfer and in the
 decoder's from the transfer on, which is why the two enclosures cross at the
 link.
 
-## The program
+## The deployment
+
+llm-d's P/D guide (`guides/pd-disaggregation`, llm-d `8a2f37d`) deploys
+this:
+
+| Piece | Configuration | Where |
+|---|---|---|
+| model servers | 8 prefill pods (`vllm serve`, TP 1) and 2 decode pods (TP 4), gpt-oss-120b, `--block-size 128`, `--kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer" / "kv_consumer","kv_connector_extra_config":{"backends":["UCX"]}}'`, `VLLM_NIXL_SIDE_CHANNEL_HOST` the pod IP | `modelserver/gpu/vllm/base/patch-prefill.yaml`, `patch-decode.yaml` |
+| router (EPP) | `disagg-profile-handler` with `always-disagg-pd-decider` (every request is prefilled remotely); decode profile `decode-filter` → `active-request-scorer` → `max-score-picker` (the least busy decoder); prefill profile `prefill-filter` → `prefix-cache-affinity-filter` (`approx-prefix-cache-producer`, a cache-warm prefiller first) → `token-load-scorer` → `max-score-picker`; one EPP replica | `router/pd-disaggregation.values.yaml` |
+| sidecar | `llm-d-routing-sidecar` on each decode pod, connector `nixlv2`: prefill leg (`max_tokens = 1`, `do_remote_decode`), wait, decode leg with the prefiller's block ids; serial | `pkg/sidecar/proxy/connector_nixlv2.go` (router `13eebdb`) |
+| alternative decider | `prefix-based-pd-decider` with `nonCachedTokens`, `promptTokens`: remote prefill only when the uncached suffix on the chosen decoder is long enough | `docs/disaggregation.md`, `profilehandler/disagg/README.md` |
+
+The [testbed](#measured-and-predicted) below stands in one node for it:
+one or two prefillers and decoders, Qwen3-8B, block 16, and vLLM's own
+NIXL proxies in place of the sidecar (the same serial protocol for pull;
+the two legs at once for push). What differs from the guide is written next
+to each number.
+
+## In seQ
 
 ```seq title="programs/llmd_pd.seq"
 --8<-- "programs/llmd_pd.seq"
 ```
 
-## Line by line
+### Line by line
 
-### The router and the sidecar, against llm-d
+#### The router and the sidecar, against llm-d
 
 | llm-d | seQ | Where |
 |---|---|---|
@@ -37,7 +55,7 @@ link.
 | no prefill header: the request goes to the decode pod's engine as it is | the `else` branch: vLLM's engine on one device (`programs/vllm.seq`) | `dispatch.go:196-213` |
 | the two legs in parallel, so the decoder allocates while the prefiller works | not written: a session waits at one pool at a time ([The KV transfer](design/pd-transfer.md)) | `connector_nixlv2.go:60-67` (MoRI-IO write mode only); vLLM's push-mode proxy, `disagg_proxy_pushconnector_demo.py:227-270` |
 
-### The two schedulers, against vLLM
+#### The two schedulers, against vLLM
 
 | vLLM | seQ | Where |
 |---|---|---|
@@ -55,7 +73,7 @@ link.
 | a parked request is in no `running` list and is not preempted; nor is the prefiller's finished one | `preempt lifo` takes the last admitted *resident* of the engine | `scheduler.py:742-813` |
 | the decoder keeps the prompt's and the output's full blocks cached | `} keep (prompt + o)` | `kv_cache_manager.py:602-606` |
 
-## Writing xPyD
+### Writing xPyD
 
 The deployment is families: `NP` prefill instances and `ND` decode
 instances, each with its own KV pool, request-slot pool, engine and NIC.
@@ -97,7 +115,7 @@ as `choose` over a family rather than as a branch per instance
 (`programs/routing.seq` still has the branch-per-policy shape the design
 notes call a smell).
 
-## The two modes
+### The two modes
 
 **Pull** (`NixlConnector`, `kv_role` producer and consumer): the decoder
 reads. The prefiller must be done before the decoder can be told where the
@@ -119,7 +137,7 @@ sidecar the dispatch is serial for NIXL (parallel for MoRI-IO only,
 lifecycle: the same holds in the same order, the copy moved by the
 prefiller's worker instead of the decoder's, one notification more.
 
-### The two modes in the program
+#### The two modes in the program
 
 Pull is the program as written. The prefiller's scope ends in a lease, the
 decoder is admitted, and the decoder's NIC does the copy:
@@ -183,63 +201,9 @@ read; cross-session prefix sharing on either side (per session here, as in
 `vllm.seq`); the router's approximate prefix cache as a data structure of
 its own (its estimate is taken to be the pod's cache).
 
-## What the program says
+## Measured and predicted
 
-Two decode pods of 160 000 tokens each, two prefill pods, sessions of
-one to several turns (a prompt of 1 000–3 000 new tokens on a growing
-context, 200 output tokens, a 3 s tool call between turns, `p = 0.9`), the
-A100-shaped step cost of `programs/vllm.seq`, a 200 000 token/s link.
-
-**The decider.** The guide's `always-disagg-pd-decider` sends every prompt
-to a prefiller; the `prefix-based-pd-decider` keeps a follow-up turn whose
-context the decoder already has on the decoder. At 0.6 sessions per
-second:
-
-| `thr` (nonCachedTokens) | remote prefills | mean TTFT | mean response |
-|---|---|---|---|
-| 1 (always) | 100 % | 46.6 ms | 90.6 ms |
-| 512 | 65 % | 40.6 ms | 84.4 ms |
-| 2 048 | 30 % | 39.6 ms | 83.7 ms |
-| never (decode only) | 0 % | 66.0 ms | 120.1 ms |
-
-Disaggregating everything costs a transfer per request, disaggregating
-nothing costs every decoder a prefill in its decode steps, and the decider
-sits between the two. With the guide's decode profile (the least busy pod,
-no prefix affinity) a follow-up turn often lands on the pod that does not
-have its context, and the prefiller — which does have it, through the
-affinity filter — prefills the new tokens only: 65 % of requests are remote
-at `thr = 512` although every first turn is a miss.
-
-**The lease.** A finished prefill's blocks stay allocated on the prefiller
-until the decoder has read them, and the decoder reads only once its own
-scheduler has room for the whole prompt. Shrinking the decoders' memory
-lengthens the lease and fills the prefillers (Λ = 0.6, `thr = 512`; the
-prefill pool is 160 000 tokens):
-
-| decoder memory, tokens per pod | Λ, sessions/s | remote prefills | lease, mean | prefiller memory allocated, mean of 160 000 (pod 1 / pod 2) | prefiller queue, mean | mean TTFT | sessions completed |
-|---|---|---|---|---|---|---|---|
-| 160 000 | 0.6 | 65 % | 21 ms | 1 800 / 400 | 0.0 | 41 ms | 1 059 |
-| 32 000 | 0.6 | 91 % | 45 ms | 3 200 / 900 | 0.0 | 66 ms | 1 063 |
-| 160 000 | 1.2 | 78 % | 43 ms | 6 900 / 4 400 | 0.1 | 100 ms | 2 160 |
-| 32 000 | 1.2 | 95 % | 81 ms | 64 300 / 57 600 | 38.7 | 159 ms | 1 573 |
-
-At 1.2 sessions per second the prefillers have room and compute to spare
-(two of sixteen slots busy), and still their queues hold 39 requests: two
-fifths of each prefiller's memory is leased to requests parked at a decoder
-that has room for one or two of them. Smaller decoders also send *more*
-prompts to the prefillers — they cache less, so the decider's uncached
-suffix is longer — which is the other direction of the same coupling.
-
-The decoder's shortage shows up as memory *on the prefiller*, which is the
-coupling `programs/lecture_pd.seq` gets backwards: its prefiller holds
-through the transfer and lets go before the session queues for the decoder,
-so a decoder with no room costs the prefiller nothing.
-`tests/pd_semantics.rs` has the deterministic version: six requests, a
-decoder with room for one, a prefiller with room for two; the
-store-and-forward program prefills all six at once, the NIXL program stops
-after the decoder is full and the two leases have taken the prefiller.
-
-## On the A6000 testbed
+### On the A6000 testbed
 
 One Lambda Cloud `gpu_4x_a6000` node (four RTX A6000, 48 GB each, PCIe;
 vLLM at `0c87a197`, NIXL 1.4.1 over UCX with `cuda_ipc,cuda_copy,tcp,sm`;
@@ -314,11 +278,16 @@ pool allocated on average (30 %; measured 94 %): the transfers form a
 queue whose throughput is one per second against 2.2 requests per second,
 so every arrival after the first minute waits behind it, holding its blocks
 on both instances — the coupling of the lease table above, reached from the
-transfer's side. The decoder's occupancy is under-predicted because the
-program's link is a processor-sharing stage and the decoder allocates only
-when the request is taken, while the real writer serialises and the real
-decoder took every request as it came (its `waiting` was the parked ones);
-the shape is the same.
+transfer's side. The decoder's occupancy is under-predicted, and not by the
+link: with the link a one-at-a-time `fifo` stage the program gives 70 s and
+32 %. The gap is the dispatch. vLLM's push proxy sends the decode leg at
+once, so the real decoder took every request as it arrived and parked it
+with its blocks allocated while the prefiller was still queued and
+prefilling — 100 to 150 of them at a time — whereas the program's decoder
+is asked only after the prefill, the serial order a session can write. The
+collapse is in the program; the decoder's share of it is the concurrent
+dispatch the reservation of [The KV transfer](design/pd-transfer.md) would
+write, measured.
 
 Two things the runs settle about the two modes. Through a serial proxy the
 lifecycle is the one program: the same trace, the same admissions, and the
@@ -328,6 +297,62 @@ is `x0` (and, in an xPyD deployment, which NIC the transfer runs on), and
 with the measured constant the program predicts the collapse the run
 showed.
 
+
+### What the program predicts at loads the testbed did not run
+
+Two decode pods of 160 000 tokens each, two prefill pods, sessions of
+one to several turns (a prompt of 1 000–3 000 new tokens on a growing
+context, 200 output tokens, a 3 s tool call between turns, `p = 0.9`), the
+A100-shaped step cost of `programs/vllm.seq`, a 200 000 token/s link.
+
+**The decider.** The guide's `always-disagg-pd-decider` sends every prompt
+to a prefiller; the `prefix-based-pd-decider` keeps a follow-up turn whose
+context the decoder already has on the decoder. At 0.6 sessions per
+second:
+
+| `thr` (nonCachedTokens) | remote prefills | mean TTFT | mean response |
+|---|---|---|---|
+| 1 (always) | 100 % | 46.6 ms | 90.6 ms |
+| 512 | 65 % | 40.6 ms | 84.4 ms |
+| 2 048 | 30 % | 39.6 ms | 83.7 ms |
+| never (decode only) | 0 % | 66.0 ms | 120.1 ms |
+
+Disaggregating everything costs a transfer per request, disaggregating
+nothing costs every decoder a prefill in its decode steps, and the decider
+sits between the two. With the guide's decode profile (the least busy pod,
+no prefix affinity) a follow-up turn often lands on the pod that does not
+have its context, and the prefiller — which does have it, through the
+affinity filter — prefills the new tokens only: 65 % of requests are remote
+at `thr = 512` although every first turn is a miss.
+
+**The lease.** A finished prefill's blocks stay allocated on the prefiller
+until the decoder has read them, and the decoder reads only once its own
+scheduler has room for the whole prompt. Shrinking the decoders' memory
+lengthens the lease and fills the prefillers (Λ = 0.6, `thr = 512`; the
+prefill pool is 160 000 tokens):
+
+| decoder memory, tokens per pod | Λ, sessions/s | remote prefills | lease, mean | prefiller memory allocated, mean of 160 000 (pod 1 / pod 2) | prefiller queue, mean | mean TTFT | sessions completed |
+|---|---|---|---|---|---|---|---|
+| 160 000 | 0.6 | 65 % | 21 ms | 1 800 / 400 | 0.0 | 41 ms | 1 059 |
+| 32 000 | 0.6 | 91 % | 45 ms | 3 200 / 900 | 0.0 | 66 ms | 1 063 |
+| 160 000 | 1.2 | 78 % | 43 ms | 6 900 / 4 400 | 0.1 | 100 ms | 2 160 |
+| 32 000 | 1.2 | 95 % | 81 ms | 64 300 / 57 600 | 38.7 | 159 ms | 1 573 |
+
+At 1.2 sessions per second the prefillers have room and compute to spare
+(two of sixteen slots busy), and still their queues hold 39 requests: two
+fifths of each prefiller's memory is leased to requests parked at a decoder
+that has room for one or two of them. Smaller decoders also send *more*
+prompts to the prefillers — they cache less, so the decider's uncached
+suffix is longer — which is the other direction of the same coupling.
+
+The decoder's shortage shows up as memory *on the prefiller*, which is the
+coupling `programs/lecture_pd.seq` gets backwards: its prefiller holds
+through the transfer and lets go before the session queues for the decoder,
+so a decoder with no room costs the prefiller nothing.
+`tests/pd_semantics.rs` has the deterministic version: six requests, a
+decoder with room for one, a prefiller with room for two; the
+store-and-forward program prefills all six at once, the NIXL program stops
+after the decoder is full and the two leases have taken the prefiller.
 
 ## Why you should believe it
 
