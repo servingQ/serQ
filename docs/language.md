@@ -553,8 +553,9 @@ an observable such as `cachedin(kv)`, a context variable, or `cached`, which
 the admission itself sets — has another value there, so the body reading it
 is a parse error; the body reads `cached`, the units the admission consumed.
 The name of a binding the body reads is its own: not a builtin attribute, a
-context variable, a `let` or an attribute the program sets, and not read
-outside the holds that bind it.
+pool or stage, a context variable, a `let` or an attribute the program sets,
+and not read outside the holds that bind it. A binding reads only the ones
+before it in its clause.
 
 **`hidden`.** The output length `o` is drawn at `turn`, before the request,
 and nothing in the semantics stops a hold's header, a queue key or a budget

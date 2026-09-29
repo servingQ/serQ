@@ -406,9 +406,14 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
             out.push(k);
         }
         if let Some(sp) = &p.spill {
-            out.push(&sp.work);
-            out.push(&sp.when);
+            out.extend([&sp.work, &sp.when]);
+            out.extend(
+                [&sp.to, &sp.via]
+                    .into_iter()
+                    .filter_map(|r| r.index.as_deref()),
+            );
         }
+        out.extend(p.admit_via.iter().filter_map(|r| r.index.as_deref()));
     }
     for st in &prog.stages {
         match &st.kind {
@@ -416,6 +421,7 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
             StageKind::Delay => {}
             StageKind::Step(sp) => {
                 out.extend([&sp.budget, &sp.cost, &sp.chunk]);
+                out.extend(sp.memory.iter().filter_map(|r| r.index.as_deref()));
                 if let Serve::By(keys) = &sp.serve {
                     out.extend(keys);
                 }
@@ -725,8 +731,12 @@ impl Parser {
         for (at, name, e) in &self.body_binds {
             let clash = if BUILTIN_ATTRS.contains(&name.as_str()) {
                 Some("an attribute the scheduler sets")
-            } else if is_context_var(name) {
-                Some("a context variable")
+            } else if is_context_var(name) || name == "inf" {
+                Some("a name the language supplies")
+            } else if prog.pools.iter().any(|d| d.name == *name) {
+                Some("a pool")
+            } else if prog.stages.iter().any(|d| d.name == *name) {
+                Some("a stage")
             } else if lets.contains(name) {
                 Some("a `let` constant")
             } else if assigned.contains(name) {
@@ -1470,6 +1480,20 @@ impl Parser {
                 break;
             }
         }
+        // the earlier bindings are substituted, so a name of the clause still
+        // read is a later one's, which the binding cannot see
+        let at = self.bind_at.len() - binds.len();
+        for (i, (name, e)) in binds.iter().enumerate() {
+            if let Some((later, _)) = binds[i + 1..].iter().find(|(n, _)| expr_reads(e, n)) {
+                return self.err_at(
+                    self.bind_at[at + i],
+                    format!(
+                        "`{name}` reads `{later}`, which is bound after it: a binding \
+                         sees the ones before it"
+                    ),
+                );
+            }
+        }
         Ok(binds)
     }
 
@@ -2007,8 +2031,11 @@ mod tests {
         for (pre, binding, what) in [
             ("", "cached = 3", "an attribute the scheduler sets"),
             ("", "computed = 50", "an attribute the scheduler sets"),
-            ("", "size = 5", "a context variable"),
-            ("", "now = 1", "a context variable"),
+            ("", "size = 5", "a name the language supplies"),
+            ("", "now = 1", "a name the language supplies"),
+            ("", "inf = 3", "a name the language supplies"),
+            ("", "kv = 3", "a pool"),
+            ("", "engine = 3", "a stage"),
             ("let bs = 4;", "bs = 2", "a `let` constant"),
             ("", "k = 7", "an attribute the program sets"),
         ] {
@@ -2029,6 +2056,11 @@ mod tests {
         ))
         .unwrap_err();
         assert!(e.msg.contains("reads itself"), "{}", e.msg);
+        let e = parse(&format!(
+            "{ENGINE} session {{ enter kv (1) at admission (j = k, k = 5) {{ observe a = j; }} }}"
+        ))
+        .unwrap_err();
+        assert!(e.msg.contains("bound after it"), "{}", e.msg);
         // an attribute the body sets itself is not the binding
         let e = parse(&format!(
             "{ENGINE} session {{ enter kv (hit) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }} }}"
