@@ -9,8 +9,12 @@ is the spec, `docs/ir.md` the definition, `docs/review.md` the design record.
 interpreter runs, what the Lean model is generated from, and what the oracle
 tests read; `.seq` is one frontend. So:
 
-- any change to the types in `src/ir.rs` bumps `IR_VERSION`, a field rename
-  included;
+- `IR_VERSION` identifies meaning, not shape (`docs/ir.md` §Stability): a
+  removed, renamed or retyped field or variant bumps it, and so does a change
+  of meaning under the same shape, whatever the serde attributes (`turns`
+  bumped 2); an added field a reader may ignore, or a stricter check, does
+  not. The lines apply to a *tagged* version: while `IR_VERSION` has no tag,
+  nothing bumps and the change goes in the coming tag's message;
 - `serving-queue-theory`'s `scripts/gen_seq_oracle.py` pins that version and
   reads the IR by field name — it has to move in the same change;
 - a new `CExpr` or `CStmt` variant drops every oracle program that uses it

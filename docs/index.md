@@ -91,6 +91,7 @@ is ordinary control flow: `branch`, `loop`, `end`.
 | see one engine serve single-turn, chat and agent traffic | [Case study: one engine, four workloads](case-study-workloads.md) |
 | look something up | [Cheatsheet](reference/cheatsheet.md), [CLI](reference/cli.md) |
 | know why any of this should be believed | [How seQ is checked](validation.md) |
+| use a program in the simulator or in Lean | [Development guide](development.md) |
 
 !!! note "The reference documents"
     [The language](language.md), [The IR](ir.md) and the [design

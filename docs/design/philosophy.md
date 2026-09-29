@@ -85,7 +85,6 @@ not a branch in the program.
 ## What this philosophy asks for now
 
 - Close #31 with the subject rule and write it into the spec in one line.
-- Adopt the third line of #21: an IR version identifies meaning, not shape.
 - Of the four criterion-2 violations, fold `exclusive prefill` and
   `decode first` into one order clause (#19 B, [IR v4](ir-v4.md) §3); take the
   `price` builtin out into a program expression; make HOL blocking a queue

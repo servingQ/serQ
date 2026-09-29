@@ -346,3 +346,36 @@ fn a_zero_cost_preempting_step_does_not_hang() {
     assert_eq!(kv.preemptions, 2, "{}", r.text());
     assert_eq!(kv.stuck, 1, "{}", r.text());
 }
+
+/// A `branch` guard is a test, 0 or 1. A computed fraction used to be drawn
+/// as a probability without anyone asking for a draw; now it is an error
+/// when evaluated (a constant one is a link error, `tests/lints.rs`).
+const GUARD: &str = "
+    stage svc : delay;
+    workload { arrive batch(1); init { set c = 5; set K = 10; } }
+    session { branch (GUARD) { run svc (1); } end; }
+    run { horizon 10; }";
+
+#[test]
+#[should_panic(expected = "the guard is 0.5, not 0 or 1")]
+fn a_computed_fraction_is_not_a_draw() {
+    run(&GUARD.replace("GUARD", "c / K"));
+}
+
+#[test]
+#[should_panic(expected = "the guard is NaN, not 0 or 1")]
+fn a_nan_guard_is_an_error() {
+    run(&GUARD.replace("GUARD", "0 / 0"));
+}
+
+#[test]
+#[should_panic(expected = "the guard is -1, not 0 or 1")]
+fn a_negative_guard_is_an_error() {
+    run(&GUARD.replace("GUARD", "0 - 1"));
+}
+
+#[test]
+fn a_boolean_guard_and_a_declared_draw_run() {
+    run(&GUARD.replace("GUARD", "c < K"));
+    run(&GUARD.replace("branch (GUARD)", "branch with (c / K)"));
+}

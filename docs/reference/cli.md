@@ -60,3 +60,13 @@ seq-lang run programs/vllm.seq --json | jq '.pools[] | select(.name=="kv") | .pr
 | `make check` | fmt, clippy, tests, every program links and draws, the oracles agree, IR files current |
 | `make oracle-ir` | regenerate `tools/oracle/*.ir.json` |
 | `make draw-golden` | regenerate `tests/golden/` |
+
+## Input errors
+
+Commands and their supported options are checked before the program is opened.
+An unknown command or option, a missing value, or an invalid value prints the
+problem and a correction hint to stderr and exits with code 2. Options belonging
+to another command are rejected rather than ignored. `--seed` takes an unsigned
+integer, `--horizon` a finite positive number, and `--warmup` a finite nonnegative
+number. Program loading and validation errors exit with code 1. Failed commands
+do not write a report to stdout.

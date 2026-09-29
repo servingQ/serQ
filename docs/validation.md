@@ -62,6 +62,16 @@ and someone has to re-read it, which is the work the table exists to make possib
 The checkout is sparse and blobless — 4 MB, two seconds — and the paths it needs come
 from the checker itself, so a citation into a new file widens it automatically.
 
+That check is against the pin, so it cannot see upstream move. A second job,
+`.github/workflows/citation-drift.yml`, asks that question daily: it fetches the
+same files at `vllm-project/vllm@main` (`scripts/fetch_vllm_tip.sh`, nine raw files
+over the GitHub API, no clone) and looks for each cited range's pinned text anywhere
+in the current file (`scripts/check_citations.py --tip`). Line numbers are ignored;
+a range whose text is gone turns the run red and names every place that cites it.
+It gates no pull request. It says the cited code is gone, not that the scheduler
+computes something else — that is the oracle's question, and reading upstream's
+diff is the next step.
+
 ## 4. Theorems
 
 The same program is an inductive type in Lean with an operational semantics
