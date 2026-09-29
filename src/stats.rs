@@ -25,6 +25,11 @@ impl Welford {
         self.n
     }
 
+    /// Number of observations (alias retained for queueing clients).
+    pub fn n(&self) -> u64 {
+        self.n
+    }
+
     pub fn mean(&self) -> f64 {
         if self.n == 0 { f64::NAN } else { self.mean }
     }
@@ -34,6 +39,18 @@ impl Welford {
             f64::NAN
         } else {
             self.m2 / (self.n - 1) as f64
+        }
+    }
+
+    /// Population variance `E[(X - E X)^2]`.
+    ///
+    /// `variance` is the sample variance used for confidence intervals;
+    /// queueing formulas usually need this population moment instead.
+    pub fn population_variance(&self) -> f64 {
+        if self.n == 0 {
+            f64::NAN
+        } else {
+            self.m2 / self.n as f64
         }
     }
 
@@ -247,5 +264,7 @@ mod tests {
         }
         assert!((w.mean() - 2.5).abs() < 1e-12);
         assert!((w.variance() - 5.0 / 3.0).abs() < 1e-12);
+        assert_eq!(w.n(), w.count());
+        assert!((w.population_variance() - 1.25).abs() < 1e-12);
     }
 }
