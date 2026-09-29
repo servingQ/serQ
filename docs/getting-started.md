@@ -86,7 +86,6 @@ their previous preemption, which a run would otherwise hide).
 Every `let` constant is an override:
 
 ```bash
-seq-lang run examples/single-turn/agentic.seq --set N=32 --set C=3e5 --set maxctx=1.5e5
 seq-lang run examples/multi-turn/vllm.seq --seed 2 --horizon 3000
 ```
 

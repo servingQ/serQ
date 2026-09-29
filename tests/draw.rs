@@ -11,13 +11,11 @@ use seq::figure::{BoxStyle, Figure, StationKind};
 use seq::ir::Program;
 use seq::{Overrides, compile_source, program_path};
 
-const PROGRAMS: [&str; 11] = [
+const PROGRAMS: [&str; 9] = [
     "mg1",
     "ps",
     "closed",
-    "agentic",
     "replica",
-    "pd_tandem",
     "lecture_pd",
     "routing",
     "vllm",

@@ -9,7 +9,7 @@ call but a new kind of thing.
 Only the environment creates sessions. `CArrival` is `Poisson`, `Closed`,
 `Batch` or `Sessions`, and the interpreter's `spawn` is what that arrival
 process calls (`interp.rs:591`). None of the eleven statements of a session
-block creates a session or waits for one. The tool call of `agentic.seq` is
+block creates a session or waits for one. The tool call of `vllm.seq` is
 `stage tool : delay`: an exogenous delay, independent of load.
 
 A subagent is a parent agent sending requests to the same model and waiting

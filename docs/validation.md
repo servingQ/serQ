@@ -23,9 +23,8 @@ seQ programs next to them:
 
 | Program | Agreement |
 |---|---|
-| `agentic.seq` | throughput within 3 %, hit rate within 0.5 pt, response within 3 % |
 | `replica.seq` | TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; over 20 seeds, hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05) |
-| `pd_tandem.seq`, `lecture_pd.seq` | capacity formulas within 2 % |
+| `lecture_pd.seq` | capacity formulas within 2 % |
 | `routing.seq` | within 1–2 % on response and hit rate across five policies |
 
 ## 3. The real scheduler as an oracle
@@ -106,9 +105,8 @@ Two results worth naming:
   prompt, SGLang's RadixAttention — needs a content-addressed cache and is not
   written.
 - The prefill/decode program (`examples/pd-disaggregation/llmd_pd.seq`) is checked against the
-  source line by line, by deterministic tests of its statements, and against
-  one A6000 run in each NIXL mode (`examples/replay/llmd_pd_replay.seq`,
-  `tools/a6000/`), not yet against a scheduler oracle: that oracle would
+  source line by line and by deterministic tests of its statements, not yet
+  against a machine or a scheduler oracle: that oracle would
   drive two vLLM schedulers and a fake connector ([case
   study](case-study-pd.md)).
 

@@ -33,7 +33,7 @@ prefix is evictable. That gap is the *wait channel*, and chapter 6 is about
 what it does.
 
 **`evict lru`** orders eviction by release time. `evict by (k₁, …)` orders by
-whatever the program says — `agentic.seq` uses `evict by (queued, size)`, which
+whatever the program says — `replica.seq` uses `evict by (queued, size)`, which
 throws out queued sessions' short prefixes first.
 
 **`drop kv;`** before `end` discards the session's prefix. Without it the
