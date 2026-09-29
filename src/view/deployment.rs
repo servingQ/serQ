@@ -79,8 +79,9 @@ struct Walker<'a> {
     /// Ends the next station will be reached from, with the label of the path.
     frontier: Vec<(End, Option<String>)>,
     /// Pools held right now, outermost first, each with the hold that took
-    /// it (a `release` takes one off before its hold ends).
-    holds: Vec<(usize, usize)>,
+    /// it (a `release` takes one off before its hold ends) and whether it
+    /// encloses: a hold of no units only reserves, and occupies nothing.
+    holds: Vec<(usize, usize, bool)>,
     next_hold: usize,
     /// `choose`s that have not yet found the station they select, as
     /// (attribute slot, label). A `choose` names an index, so it belongs to
@@ -152,7 +153,7 @@ impl Walker<'_> {
                 let held = &self.holds;
                 self.net.nodes[i]
                     .pools
-                    .retain(|p| held.iter().any(|&(q, _)| q == *p));
+                    .retain(|p| held.iter().any(|&(q, _, e)| e && q == *p));
                 i
             }
             None => {
@@ -163,9 +164,9 @@ impl Walker<'_> {
                     kind,
                     inner,
                     note: kind_note,
-                    pools: self.holds.iter().fold(vec![], |mut v, &(q, _)| {
+                    pools: self.holds.iter().fold(vec![], |mut v, &(q, _, e)| {
                         // nested holds of one pool are one enclosure
-                        if !v.contains(&q) {
+                        if e && !v.contains(&q) {
                             v.push(q);
                         }
                         v
@@ -198,26 +199,34 @@ impl Walker<'_> {
                 } => {
                     let id = self.next_hold;
                     self.next_hold += 1;
-                    for (r, _, _) in &pools {
-                        self.holds.push((r.base, id));
+                    for (r, units, _) in &pools {
+                        let encloses = !matches!(units, CExpr::Num(x) if *x == 0.0);
+                        self.holds.push((r.base, id, encloses));
                     }
                     self.walk(body);
                     // by hold, not by depth: a `release` inside may have
                     // taken an outer hold's pool off the stack already
-                    let leased = lease
-                        .as_ref()
-                        .filter(|(r, _)| self.holds.iter().any(|&(q, h)| q == r.base && h == id));
-                    self.holds.retain(|&(_, h)| h != id);
+                    let leased = lease.as_ref().filter(|(r, _)| {
+                        self.holds.iter().any(|&(q, h, _)| q == r.base && h == id)
+                    });
+                    let taken: Vec<_> = self
+                        .holds
+                        .iter()
+                        .filter(|&&(_, h, _)| h == id)
+                        .copied()
+                        .collect();
+                    self.holds.retain(|&(_, h, _)| h != id);
                     // a leased pool stays held past the scope, until the
                     // `release` that takes it
                     if let Some((r, _)) = leased {
-                        self.holds.push((r.base, id));
+                        let encloses = taken.iter().any(|&(q, _, e)| q == r.base && e);
+                        self.holds.push((r.base, id, encloses));
                     }
                 }
                 CStmt::Release(r) => {
                     // the pool leaves the enclosure here: the stations after
                     // this one are not inside it
-                    if let Some(i) = self.holds.iter().rposition(|&(p, _)| p == r.base) {
+                    if let Some(i) = self.holds.iter().rposition(|&(p, _, _)| p == r.base) {
                         self.holds.remove(i);
                     }
                 }

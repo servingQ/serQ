@@ -18,7 +18,7 @@ walks the session program carrying a hold stack:
 |---|---|
 | **Nodes** | one per stage a `Run` reaches. A stage array is one node labelled `[N]` |
 | **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (walked twice, so the body's last stations lead back to every station a pass through it can start at, each with the guard of its arm) |
-| **Enclosure** | every `Run` is tagged with the `Hold`s around it; stations sharing a hold on pool `p` sit inside `p`'s dashed box — an instance's boundary |
+| **Enclosure** | every `Run` is tagged with the `Hold`s around it; stations sharing a hold on pool `p` sit inside `p`'s dashed box — an instance's boundary. A hold of no units only reserves, occupies nothing, and draws no box |
 | **Edge labels** | a `Branch` guard, printed by `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
 
