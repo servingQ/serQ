@@ -118,10 +118,16 @@ outside the sharing. The indices of a stage array are evaluated once, when
 the run starts, as a single-stage run's are.
 
 **The link rule.** Every stage of a run with a non-empty `also` is `ps(φ)`
-with `φ` a constant, the run is plain (no `prefill`/`decode` mode, no
-`growing`), and no stage appears twice. A `φ` that depends on `n` has no
+with `φ` a constant, and no stage array appears twice in one run: an index
+is evaluated when the run starts, so `egress[i], egress[j]` could name one
+stage twice, and the linker cannot tell. Every run on a shared stage (below),
+single-stage runs included, is plain: no `prefill`/`decode` mode and no
+`growing`, which a flow does not define. A `φ` that depends on `n` has no
 meaning for a flow that `n` does not describe, so it is a link error, not a
 choice. A program with a non-empty `also` anywhere must declare `share`.
+Every stage in the list is checked as declared, as `on S`'s one stage is
+today; the list is written only after `on` (and after `run`), since a form
+without `on` finds its one stage by its role.
 
 **The policy is the program's.** `share P;` is one declaration for the
 deployment, because it is a property of the coupled links together, not of
@@ -133,9 +139,10 @@ the program names the rule. Two to start with:
 | `maxmin` | max-min fair: raise every rate together, freeze the flows of a stage when it fills, repeat (progressive filling) | yes |
 | `bottleneck` | `min over f's stages s of φ_s / n_s`: its equal share at the tightest of its stages | no: a flow held back at one stage leaves its share unused at the others |
 
-**Which stages are solved.** The partition is static. A stage that appears
-in any run with a non-empty `also` (as its `stage` or in its `also`) is a
-*shared* stage for the whole run: every job on it, a single-stage run
+**Which stages are solved.** The partition is static, and its unit is a
+declared stage, a whole array: an index is known only when a run starts. A
+stage that appears in any run with a non-empty `also` (as its `stage` or in
+its `also`) is a *shared* stage for the whole run: every job on it, a single-stage run
 included, is a flow of the policy. Every other `ps` stage is served as
 today, `φ(n) / n` by virtual time and finish tags
 (`ps_reschedule`, `src/engine/interp.rs:2025-2062`), which is why every existing program
