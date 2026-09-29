@@ -88,7 +88,8 @@ fn a_read_inside_the_body_is_fine() {
     check(&src).expect("after admission is not stale");
 }
 
-/// A guard strictly between 0 and 1 is a probability, and reads as a test.
+/// A constant guard strictly between 0 and 1 is not a test; it was meant as
+/// a draw, and the link error names the spelling for that.
 #[test]
 fn a_constant_probability_guard_is_rejected() {
     let src = "stage tool : delay;
@@ -96,7 +97,7 @@ fn a_constant_probability_guard_is_rejected() {
         session { turn; loop { branch (0.8) { run tool (Z); turn; } else { end; } } }
         run { horizon 100; }";
     let e = check(src).expect_err("rejected");
-    assert!(e.contains("`branch (0.8)` is a draw"), "{e}");
+    assert!(e.contains("`branch (0.8)` is not a test"), "{e}");
     assert!(e.contains("branch with (0.8)"), "{e}");
 }
 

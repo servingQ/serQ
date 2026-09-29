@@ -158,7 +158,8 @@ fn stale_header_read(p: &Program, block: usize, out: &mut Vec<String>) {
     }
 }
 
-/// `branch (0.8)` is a coin flip, and reads as a test.
+/// `branch (0.8)` reads as a test and cannot be one: a guard is 0 or 1, and
+/// a constant fraction was meant as a draw, which has its own spelling.
 fn constant_probability_guard(p: &Program, block: usize, out: &mut Vec<String>) {
     let Some(stmts) = p.blocks.get(block) else {
         return;
@@ -171,8 +172,8 @@ fn constant_probability_guard(p: &Program, block: usize, out: &mut Vec<String>) 
                     && *x < 1.0
                 {
                     out.push(format!(
-                        "`branch ({})` is a draw, not a test: a guard strictly between 0 and 1 \
-                         is a probability. Write `branch with ({})`.",
+                        "`branch ({})` is not a test: a guard is 0 or 1, and a constant \
+                         strictly between them is a probability. Write `branch with ({})`.",
                         crate::ir::show_num(*x),
                         crate::ir::show_num(*x)
                     ));
