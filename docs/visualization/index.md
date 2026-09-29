@@ -80,11 +80,11 @@ result black.
 ## How it is put together
 
 ```
-src/figure.rs      the geometry a view produces and a writer consumes
-src/deployment.rs  ir::Program -> Figure   the network projection
-src/draw.rs        ir::Program -> Figure   the session projection
-src/tikz.rs        Figure -> String
-src/svg.rs         Figure -> String
+src/view/figure.rs     the geometry a view produces and a writer consumes
+src/view/deployment.rs ir::Program -> Figure   the network projection
+src/view/session.rs    ir::Program -> Figure   the session projection
+src/view/tikz.rs       Figure -> String
+src/view/svg.rs        Figure -> String
 ```
 
 `Figure` is the test surface; no writer decides a coordinate. `tests/draw.rs`

@@ -1,7 +1,7 @@
 mod common;
 
 use common::{Fixture, failure};
-use seq::fmt::format;
+use seq::frontend::fmt::format;
 use seq::{Overrides, compile_source};
 
 #[test]

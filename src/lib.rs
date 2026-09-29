@@ -2,9 +2,9 @@
 //!
 //! A seQ program describes an LLM serving deployment: memory pools and
 //! stages, a workload of sessions, and the program every session runs.
-//! Its definition is the IR (`ir::Program`, `docs/ir.md`): `interp` runs it,
+//! Its definition is the IR (`ir::Program`, `docs/ir.md`): `engine::interp` runs it,
 //! the Lean model is generated from it, and tools build or edit it as data.
-//! The text syntax (`parser`, `link`; `docs/language.md`) is one frontend
+//! The text syntax (`frontend`; `docs/language.md`) is one frontend
 //! that compiles to it. `examples/` holds example deployments, among them
 //! vLLM v1.
 //!
@@ -14,37 +14,23 @@
 //! println!("{}", report.text());
 //! ```
 
-pub mod ast;
-pub mod deployment;
-pub mod diagnostic;
-pub mod dist;
-pub mod draw;
-pub mod figure;
-pub mod fmt;
-pub mod interp;
+pub mod engine;
+pub mod frontend;
 pub mod ir;
-pub mod lexer;
-pub mod link;
-pub mod lint;
-pub mod parser;
-pub mod report;
-pub mod stats;
-pub mod svg;
-pub mod tikz;
-pub mod trace;
+pub mod view;
 
 use std::path::Path;
 
-pub use dist::Dist;
+pub use engine::dist::Dist;
+pub use engine::report::Report;
+pub use engine::stats::Estimate;
+pub use frontend::link::{Linked, Overrides};
 pub use ir::Program;
-pub use link::{Linked, Overrides};
-pub use report::Report;
-pub use stats::Estimate;
 
 /// Compile program text to IR (parse and link; `--set` overrides apply).
 pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
-    let prog = parser::parse(src).map_err(|e| e.render(src))?;
-    let mut p = link::link(&prog, ov).map_err(|e| e.render(src))?;
+    let prog = frontend::parser::parse(src).map_err(|e| e.render(src))?;
+    let mut p = frontend::link::link(&prog, ov).map_err(|e| e.render(src))?;
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
     }
@@ -95,12 +81,15 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 pub fn run_ir(p: &ir::Program, base: Option<&Path>) -> Result<Report, String> {
     p.validate()?;
     let corpus = load_trace(p, base)?;
-    interp::Interp::new(p, corpus).run()
+    engine::interp::Interp::new(p, corpus).run()
 }
 
 /// The program's trace corpus, if it names one; a relative path is resolved
 /// against `base`.
-pub fn load_trace(p: &ir::Program, base: Option<&Path>) -> Result<Option<trace::Corpus>, String> {
+pub fn load_trace(
+    p: &ir::Program,
+    base: Option<&Path>,
+) -> Result<Option<ir::trace::Corpus>, String> {
     let Some(path) = &p.trace else {
         return Ok(None);
     };
@@ -112,7 +101,7 @@ pub fn load_trace(p: &ir::Program, base: Option<&Path>) -> Result<Option<trace::
     };
     let text = std::fs::read_to_string(&full)
         .map_err(|e| format!("cannot read trace {}: {e}", full.display()))?;
-    trace::Corpus::from_csv(&text)
+    ir::trace::Corpus::from_csv(&text)
         .map(Some)
         .map_err(|e| format!("trace {}: {e}", full.display()))
 }
@@ -169,7 +158,7 @@ pub fn run_program(name: &str, sets: &[&str], seed: Option<u64>, horizon: Option
     };
     for s in sets {
         let (k, v) = s.split_once('=').expect("name=expr");
-        let e = parser::parse_expr(v).expect("override expression");
+        let e = frontend::parser::parse_expr(v).expect("override expression");
         ov.lets.push((k.trim().to_string(), e));
     }
     run_file(&path, &ov).unwrap_or_else(|e| panic!("{name}: {e}"))

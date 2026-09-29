@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 
-use crate::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, StationKind};
+use crate::view::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, StationKind};
 
 fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -257,7 +257,7 @@ pub fn render(f: &Figure) -> String {
                             n(rect.h)
                         );
                         // the budget bar: an iteration's tokens, filling left to right
-                        let bar = crate::figure::Rect::new(
+                        let bar = crate::view::figure::Rect::new(
                             rect.x + 8.0,
                             rect.bottom() - 13.0,
                             rect.w - 16.0,

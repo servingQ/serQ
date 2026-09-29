@@ -14,7 +14,7 @@ fn read(rel: &str) -> String {
 
 /// Every word the parser matches as a keyword.
 fn parser_keywords() -> BTreeSet<String> {
-    let src = read("src/parser.rs");
+    let src = read("src/frontend/parser.rs");
     let mut out = BTreeSet::new();
     for (pat, skip) in [("eat_kw(\"", 8), ("is_kw(\"", 7)] {
         let mut rest = src.as_str();

@@ -11,8 +11,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::figure::{Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt};
 use crate::ir::{CArg, CArrival, CExpr, CStageKind, CStmt, Program};
+use crate::view::figure::{
+    Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
+};
 
 // --- the projection ---------------------------------------------------------
 

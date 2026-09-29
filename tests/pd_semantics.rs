@@ -342,7 +342,10 @@ fn an_engine_serves_its_queues_in_declaration_order() {
 fn the_pd_program_survives_decoder_memory_pressure() {
     let src = std::fs::read_to_string(seq::program_path("llmd_pd")).unwrap();
     let ov = Overrides {
-        lets: vec![("blocksD".into(), seq::parser::parse_expr("1200").unwrap())],
+        lets: vec![(
+            "blocksD".into(),
+            seq::frontend::parser::parse_expr("1200").unwrap(),
+        )],
         horizon: Some(400.0),
         warmup: Some(50.0),
         ..Default::default()

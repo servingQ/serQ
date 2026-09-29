@@ -12,7 +12,8 @@
 
 use std::path::Path;
 
-use seq::{Overrides, Program, inline_trace, parser, program_path, run_ir};
+use seq::frontend::parser;
+use seq::{Overrides, Program, inline_trace, program_path, run_ir};
 
 fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
