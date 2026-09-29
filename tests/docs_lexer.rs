@@ -18,7 +18,7 @@ fn parser_keywords() -> BTreeSet<String> {
     // the tests quote words that are not keywords
     let src = all[..all.find("#[cfg(test)]").unwrap_or(all.len())].to_string();
     let mut out = BTreeSet::new();
-    for (pat, skip) in [("eat_kw(\"", 8), ("is_kw(\"", 7)] {
+    for (pat, skip) in [("eat_kw(\"", 8), ("is_kw(\"", 7), ("expect_kw(\"", 11)] {
         let mut rest = src.as_str();
         while let Some(i) = rest.find(pat) {
             rest = &rest[i + skip..];
@@ -27,19 +27,23 @@ fn parser_keywords() -> BTreeSet<String> {
             }
         }
     }
-    // statement and option heads are matched as `"word" =>`
+    // statement and option heads are matched as `"word" =>`, or as
+    // alternatives `"hold" | "enter" =>`
     for line in src.lines() {
         let t = line.trim();
-        if let Some(rest) = t.strip_prefix('"')
-            && let Some(j) = rest.find('"')
-            && rest[j..]
-                .trim_start_matches('"')
-                .trim_start()
-                .starts_with("=>")
+        let Some((arm, _)) = t.split_once("=>") else {
+            continue;
+        };
+        let words: Vec<&str> = arm.split('|').map(str::trim).collect();
+        if words
+            .iter()
+            .all(|w| w.len() > 2 && w.starts_with('"') && w.ends_with('"'))
         {
-            let w = &rest[..j];
-            if w.chars().all(|c| c.is_ascii_lowercase() || c == '_') && !w.is_empty() {
-                out.insert(w.to_string());
+            for w in words {
+                let w = &w[1..w.len() - 1];
+                if w.chars().all(|c| c.is_ascii_lowercase() || c == '_') && !w.is_empty() {
+                    out.insert(w.to_string());
+                }
             }
         }
     }
@@ -105,4 +109,26 @@ fn the_parser_keyword_list_is_every_keyword() {
         missing.is_empty(),
         "parser::KEYWORDS is missing {missing:?}"
     );
+}
+
+/// A `def` may not be named like a function: `link::FUNCTIONS` is every
+/// function the linker's call resolution names.
+#[test]
+fn the_function_list_is_every_function_the_linker_resolves() {
+    let src = read("src/frontend/link.rs");
+    let mut resolved = BTreeSet::new();
+    for line in src.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix('"')
+            && let Some((w, tail)) = rest.split_once('"')
+            && tail.trim_start().starts_with("=> (Fun::")
+        {
+            resolved.insert(w.to_string());
+        }
+    }
+    let listed: BTreeSet<String> = seq::frontend::link::FUNCTIONS
+        .iter()
+        .map(|w| w.to_string())
+        .collect();
+    assert_eq!(resolved, listed);
 }

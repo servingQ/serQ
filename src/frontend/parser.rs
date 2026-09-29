@@ -126,9 +126,18 @@ struct Parser {
     bind_at: Vec<usize>,
     /// The `def`s so far, in order: a use expands to its body in place.
     defs: Vec<Def>,
-    /// Uses expanded so far, bounded: a definition that expands into itself
-    /// through another would not stop.
-    expansions: usize,
+    /// The token ranges uses were expanded into, innermost last, to say
+    /// where an error inside one was used.
+    expanded: Vec<Expanded>,
+}
+
+/// The tokens a use of a `def` became, and where it was used.
+struct Expanded {
+    start: usize,
+    end: usize,
+    name: String,
+    line: usize,
+    col: usize,
 }
 
 /// `def name(x, y) = e;` or `def name(x, y) { statements }`: a name for
@@ -142,10 +151,19 @@ struct Def {
     /// An expression (`= e;`) or statements (`{ … }`).
     stmts: bool,
     body: Vec<Token>,
+    /// The body draws, itself or through a definition it uses.
+    draws: bool,
+    /// Where the name is written.
+    line: usize,
+    col: usize,
 }
 
-/// Uses one program may expand before the parser gives up.
-const MAX_EXPANSIONS: usize = 100_000;
+/// Tokens a program may expand to. Definitions use only earlier ones, so
+/// an expansion ends; one can still double at every level.
+const MAX_TOKENS: usize = 1_000_000;
+
+/// The distributions of `~name(…)`, which a `def` may not be named.
+const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bernoulli"];
 
 /// Every word the grammar reads as a keyword somewhere. A `def` or a
 /// parameter may not be one: a parameter is replaced token by token, and a
@@ -309,7 +327,7 @@ pub fn parse(src: &str) -> PResult<Program> {
         body_binds: vec![],
         bind_at: vec![],
         defs: vec![],
-        expansions: 0,
+        expanded: vec![],
     };
     p.program()
 }
@@ -328,7 +346,7 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
         body_binds: vec![],
         bind_at: vec![],
         defs: vec![],
-        expansions: 0,
+        expanded: vec![],
     };
     let e = p.expr()?;
     p.expect(&Tok::Eof)?;
@@ -390,6 +408,12 @@ fn has_sample(e: &Expr) -> bool {
         Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
         Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
     }
+}
+
+/// Do these tokens use the definition `name`, `name(`?
+fn uses(toks: &[Token], name: &str) -> bool {
+    toks.windows(2)
+        .any(|w| matches!(&w[0].tok, Tok::Ident(n) if n == name) && w[1].tok == Tok::LParen)
 }
 
 /// Is this argument a reference as written, `kv` or `kvD[j]`?
@@ -662,10 +686,19 @@ impl Parser {
 
     fn err_at<T>(&self, pos: usize, msg: impl Into<String>) -> PResult<T> {
         let t = &self.toks[pos];
+        let mut msg = msg.into();
+        for e in self.expanded.iter().rev() {
+            if e.start <= pos && pos < e.end {
+                msg.push_str(&format!(
+                    "\nnote: in `{}`, used at {}:{}",
+                    e.name, e.line, e.col
+                ));
+            }
+        }
         Err(ParseError {
             line: t.line,
             col: t.col,
-            msg: msg.into(),
+            msg,
         })
     }
 
@@ -814,6 +847,7 @@ impl Parser {
         }
         self.assemble(&mut prog)?;
         self.check_body_bindings(&prog)?;
+        self.check_def_names(&prog)?;
         prog.definitions = std::mem::take(&mut self.definitions);
         Ok(prog)
     }
@@ -944,25 +978,61 @@ impl Parser {
         Ok(())
     }
 
+    /// A `def` named like a declaration would be one name for two things.
+    fn check_def_names(&self, prog: &Program) -> PResult<()> {
+        for d in &self.defs {
+            let what = if prog.pools.iter().any(|x| x.name == d.name) {
+                "a pool"
+            } else if prog.stages.iter().any(|x| x.name == d.name) {
+                "a stage"
+            } else if prog.lets.iter().any(|(n, _)| *n == d.name) {
+                "a `let` constant"
+            } else {
+                continue;
+            };
+            return Err(ParseError {
+                line: d.line,
+                col: d.col,
+                msg: format!("`{}` is defined, and is also {what}", d.name),
+            });
+        }
+        Ok(())
+    }
+
     /// `def name(x, …) = e;` or `def name(x, …) { … }`, after `def`.
     fn def(&mut self) -> PResult<()> {
         let at = self.pos;
         let name = self.ident()?;
-        if KEYWORDS.contains(&name.as_str()) || FUNCTIONS.contains(&name.as_str()) {
+        if KEYWORDS.contains(&name.as_str())
+            || FUNCTIONS.contains(&name.as_str())
+            || DISTRIBUTIONS.contains(&name.as_str())
+        {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
         if self.defs.iter().any(|d| d.name == name) {
             return self.err_at(at, format!("`{name}` is defined twice"));
+        }
+        // a definition uses only the ones before it, so none can reach
+        // itself: an earlier one that uses this name used something undefined
+        if let Some(d) = self.defs.iter().find(|d| uses(&d.body, &name)) {
+            return self.err_at(
+                at,
+                format!(
+                    "`{}` uses `{name}`, which is defined after it: a definition uses the \
+                     ones before it",
+                    d.name
+                ),
+            );
         }
         self.expect(&Tok::LParen)?;
         let mut params: Vec<String> = vec![];
         while *self.peek() != Tok::RParen {
             let p_at = self.pos;
             let p = self.ident()?;
-            if KEYWORDS.contains(&p.as_str()) {
+            if KEYWORDS.contains(&p.as_str()) || FUNCTIONS.contains(&p.as_str()) {
                 return self.err_at(
                     p_at,
-                    format!("`{p}` is a keyword: name the parameter otherwise"),
+                    format!("`{p}` is a word of the language: name the parameter otherwise"),
                 );
             }
             if params.contains(&p) {
@@ -991,11 +1061,15 @@ impl Parser {
         loop {
             match self.peek() {
                 Tok::Eof => return self.err_at(at, format!("`def {name}` is not closed")),
-                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
-                Tok::RParen | Tok::RBracket => depth = depth.saturating_sub(1),
                 Tok::RBrace if depth == 0 && stmts => break,
-                Tok::RBrace => depth = depth.saturating_sub(1),
                 Tok::Semi if depth == 0 && !stmts => break,
+                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
+                Tok::RParen | Tok::RBracket | Tok::RBrace => {
+                    if depth == 0 {
+                        return self.err(format!("unmatched {}", self.peek()));
+                    }
+                    depth -= 1;
+                }
                 _ => {}
             }
             self.advance();
@@ -1005,16 +1079,38 @@ impl Parser {
         if body.is_empty() && !stmts {
             return self.err_at(at, format!("`def {name}` has no expression"));
         }
-        if body.iter().any(|t| t.tok == Tok::Ident(name.clone())) {
+        if uses(&body, &name) {
             return self.err_at(at, format!("`{name}` uses itself"));
         }
+        // a parameter where the body names what it assigns would put an
+        // argument there, which is not a name
+        for w in body.windows(2) {
+            if let (Tok::Ident(kw), Tok::Ident(n)) = (&w[0].tok, &w[1].tok)
+                && matches!(kw.as_str(), "set" | "observe" | "choose")
+                && params.contains(n)
+            {
+                return self.err_at(
+                    at,
+                    format!("`{kw} {n}`: `{n}` is a parameter, and `{kw}` names what it assigns"),
+                );
+            }
+        }
+        let draws = body.iter().any(|t| t.tok == Tok::Tilde) || self.draws_through(&body);
         self.defs.push(Def {
+            line: self.toks[at].line,
+            col: self.toks[at].col,
             name,
             params,
             stmts,
             body,
+            draws,
         });
         Ok(())
+    }
+
+    /// Does one of the definitions `toks` uses draw?
+    fn draws_through(&self, toks: &[Token]) -> bool {
+        self.defs.iter().any(|d| d.draws && uses(toks, &d.name))
     }
 
     /// The `def` the next tokens use, `name(`.
@@ -1035,13 +1131,7 @@ impl Parser {
     /// `a + b * 2` inside.
     fn expand(&mut self, i: usize) -> PResult<()> {
         let at = self.pos;
-        self.expansions += 1;
-        if self.expansions > MAX_EXPANSIONS {
-            return self.err_at(
-                at,
-                "the definitions expand without end: one uses another that uses it",
-            );
-        }
+        let (use_line, use_col) = (self.toks[at].line, self.toks[at].col);
         self.advance();
         self.advance();
         let mut args: Vec<Vec<Token>> = vec![];
@@ -1057,7 +1147,12 @@ impl Parser {
                     continue;
                 }
                 Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
-                Tok::RParen | Tok::RBracket | Tok::RBrace => depth -= 1,
+                Tok::RParen | Tok::RBracket | Tok::RBrace => {
+                    if depth == 0 {
+                        return self.err(format!("unmatched {}", self.peek()));
+                    }
+                    depth -= 1;
+                }
                 _ => {}
             }
             cur.push(self.toks[self.pos].clone());
@@ -1079,16 +1174,51 @@ impl Parser {
                 ),
             );
         }
+        // the names the body assigns: an argument that reads one would read
+        // the body's value, not the one at the use
+        let assigned: Vec<&str> = if d.stmts {
+            let b = &d.body;
+            (0..b.len())
+                .filter_map(|k| {
+                    let Tok::Ident(n) = &b[k].tok else {
+                        return None;
+                    };
+                    let prev = k.checked_sub(1).map(|j| &b[j].tok);
+                    let chosen = prev == Some(&Tok::Ident("choose".into()));
+                    // `set n =`, a binding `n =`; an observation's name is not
+                    // an attribute
+                    let assigned = b.get(k + 1).is_some_and(|t| t.tok == Tok::Assign)
+                        && prev != Some(&Tok::Ident("observe".into()));
+                    (chosen || assigned).then_some(n.as_str())
+                })
+                .collect()
+        } else {
+            vec![]
+        };
         for (p, a) in d.params.iter().zip(&args) {
             if a.is_empty() {
                 return self.err_at(at, format!("`{}`: the argument for `{p}` is empty", d.name));
+            }
+            if let Some(n) = assigned
+                .iter()
+                .find(|n| a.iter().any(|t| t.tok == Tok::Ident(n.to_string())))
+            {
+                return self.err_at(
+                    at,
+                    format!(
+                        "the argument for `{p}` reads `{n}`, which `{}` assigns: it would read \
+                         the body's `{n}`, not this one\nhelp: `set` the value under another \
+                         name first and pass that",
+                        d.name
+                    ),
+                );
             }
             let uses = d
                 .body
                 .iter()
                 .filter(|t| t.tok == Tok::Ident(p.clone()))
                 .count();
-            if uses > 1 && a.iter().any(|t| t.tok == Tok::Tilde) {
+            if uses > 1 && (a.iter().any(|t| t.tok == Tok::Tilde) || self.draws_through(a)) {
                 return self.err_at(
                     at,
                     format!(
@@ -1142,6 +1272,23 @@ impl Parser {
         if !d.stmts {
             out.push(paren(Tok::RParen, ")", &self.toks[end - 1]));
         }
+        if self.toks.len() - (end - at) + out.len() > MAX_TOKENS {
+            return self.err_at(at, "the definitions expand to more than a program can hold");
+        }
+        // the expansions this one is inside grow by what it adds
+        let grown = out.len() as isize - (end - at) as isize;
+        for e in &mut self.expanded {
+            if e.start <= at && at < e.end {
+                e.end = (e.end as isize + grown) as usize;
+            }
+        }
+        self.expanded.push(Expanded {
+            start: at,
+            end: at + out.len(),
+            name: d.name.clone(),
+            line: use_line,
+            col: use_col,
+        });
         self.toks.splice(at..end, out);
         self.pos = at;
         Ok(())
@@ -2521,7 +2668,49 @@ mod tests {
         );
         assert!(err("def f(x) = f(x); session { }").contains("uses itself"));
         assert!(err("def min(x) = x; session { }").contains("a word of the language"));
-        assert!(err("def f(on) = on; session { }").contains("is a keyword"));
+        assert!(err("def uniform(x) = x; session { }").contains("a word of the language"));
+        assert!(err("def f(on) = on; session { }").contains("a word of the language"));
+        assert!(err("def f(min) = min(min, 1); session { }").contains("a word of the language"));
+        // a definition uses only the ones before it: no recursion
+        assert!(
+            err("def g(x) = f(x); def f(x) = g(x); session { set a = g(1); }")
+                .contains("`g` uses `f`, which is defined after it")
+        );
+        assert!(
+            err("def g(x) { f(x); } def f(x) { g(x); } session { g(1); }")
+                .contains("defined after it")
+        );
+        // a stray closer
+        assert!(err("def f(x) = x; session { set a = f(1]); }").contains("unmatched"));
+        // a definition that draws draws when it is an argument
+        assert!(
+            err("def d() = ~exp(1); def twice(x) = x + x; session { set a = twice(d()); }")
+                .contains("would draw 2 times")
+        );
+        // an argument the body would capture
+        assert!(
+            err("def f(x) { set s = 10; observe o = x; } session { f(s + 1); }")
+                .contains("which `f` assigns")
+        );
+        // an observation's name is not captured
+        parse(&format!(
+            "{ENGINE} def f(x) {{ observe s = 10; observe o = x; }} session {{ f(s + 1); }}"
+        ))
+        .unwrap();
+        assert!(err("def f(p) { set p = 1; } session { f(2); }").contains("is a parameter"));
+        // a name that is a declaration's
+        assert!(err("def kv(x) = x; session { }").contains("also a pool"));
+        assert!(err("def engine(x) = x; session { }").contains("also a stage"));
+        // the name of a statement body's attribute is not a use
+        parse(&format!(
+            "{ENGINE} def c(x) {{ set c = x; }} session {{ c(1); }}"
+        ))
+        .unwrap();
+        // an error in the body says where the definition was used
+        let e = err(
+            "def take(n) { enter kv (n) { } } workload { session { request; end; } } server { take(4); }",
+        );
+        assert!(e.contains("note: in `take`, used at"), "{e}");
         assert!(err("def f(x) = x; def f(y) = y; session { }").contains("defined twice"));
         // an argument used once may draw
         parse(&format!(
