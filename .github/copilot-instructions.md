@@ -6,7 +6,7 @@ seQ is a language in which an LLM serving deployment is a program. `docs/languag
 
 **The IR is the definition of a program, not the text.** `src/ir.rs` is what the interpreter runs, what the Lean model is generated from, and what the oracle tests read.
 
-- Any change to the types in `src/ir.rs` — a field rename included — must bump `IR_VERSION`. Flag a diff that touches those types and leaves the version alone.
+- `IR_VERSION` identifies meaning, not shape (`docs/ir.md` §Stability). A removed, renamed or retyped field must bump it, and so must a change of meaning under the same shape — flag a diff that changes what an existing IR field or node means and leaves the version alone. An added field or a stricter check does not bump it; while the version at `IR_VERSION` has no tag, changes accumulate under it.
 - An IR version bump has a counterpart in `serving-queue-theory` (`scripts/gen_seq_oracle.py` pins the version and reads fields by name). Ask for the linked change if the PR does not mention it.
 - A new `CExpr` or `CStmt` variant drops out of the Lean fragment every oracle program that uses it, until the generator learns it (`gen_seq_oracle.py` raises `Fragment` on a construct it does not know). Say so when you see one.
 
