@@ -101,7 +101,6 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         session {
           hold reqs (1), kv (min(known, 1000)) reserve (known)
                at admission (known = computed < prompt ? prompt : computed + 1) {
-            set known = computed < prompt ? prompt : computed + 1;
             observe known = known;
             run engine prefill (known) growing kv;
             branch (known == prompt) { observe first = now; }

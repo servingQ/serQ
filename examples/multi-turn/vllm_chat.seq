@@ -63,7 +63,6 @@ server {
   admit if reqs (1), kv (min(known, hit + budget_left(engine))) fit
         where known = computed < prompt ? prompt : computed + 1,
               hit = min(cachedin(kv), floor((known - 1) / bs) * bs) {
-    set known = computed < prompt ? prompt : computed + 1;
     set c = min(cached, floor((known - 1) / bs) * bs);
     observe hit = c > 0;
     observe prefill_tokens = known - c;

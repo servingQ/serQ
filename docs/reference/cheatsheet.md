@@ -57,7 +57,7 @@ set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
 
 hold P (u) [reserve (r)] [, Q (v)]* [reuse (ρ)]
-     [at admission (name = e, …)]      // names for the header, read at admission
+     [at admission (name = e, …)]      // names for the header, read at admission; the body sees them
      { … } [cache (ℓ)] [lease P (t)];   // lease: P's units outlive the scope until released, t seconds, or the end
 grow P (d);                        // enlarge the innermost hold
 drop P;                            // discard the own cached prefix

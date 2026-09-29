@@ -65,6 +65,7 @@ use std::fmt;
 
 use crate::frontend::ast::*;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
+use crate::frontend::link::{BUILTIN_ATTRS, CONTEXT_VARS};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -117,6 +118,12 @@ struct Parser {
     /// position of its keyword, until `assemble` puts them together.
     wl_session: Option<(usize, Vec<Stmt>)>,
     server: Option<(usize, Vec<Stmt>)>,
+    /// Header bindings the body of their hold reads, with the position of
+    /// the name: `set` at the top of the body, checked once the program's
+    /// attributes are known (`check_body_bindings`).
+    body_binds: Vec<(usize, String, Expr)>,
+    /// The token position of each name `bindings` read, in order.
+    bind_at: Vec<usize>,
 }
 
 /// Where a statement sits: a top-level `session`, the `session` inside
@@ -188,6 +195,8 @@ pub fn parse(src: &str) -> PResult<Program> {
         side: Side::Session,
         wl_session: None,
         server: None,
+        body_binds: vec![],
+        bind_at: vec![],
     };
     p.program()
 }
@@ -203,6 +212,8 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
         side: Side::Session,
         wl_session: None,
         server: None,
+        body_binds: vec![],
+        bind_at: vec![],
     };
     let e = p.expr()?;
     p.expect(&Tok::Eof)?;
@@ -263,6 +274,210 @@ fn has_sample(e: &Expr) -> bool {
         Expr::Unary(_, a) => has_sample(a),
         Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
         Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
+    }
+}
+
+fn is_context_var(v: &str) -> bool {
+    CONTEXT_VARS.iter().any(|(name, _)| *name == v)
+}
+
+/// Does this expression read the name `n` (an attribute, a constant, or a
+/// binding)?
+fn expr_reads(e: &Expr, n: &str) -> bool {
+    match e {
+        Expr::Located(_, inner) => expr_reads(inner, n),
+        Expr::Var(v) => v == n,
+        Expr::Num(_) => false,
+        Expr::Sample(_, args) => args.iter().any(|a| expr_reads(a, n)),
+        Expr::Call(_, args) => args.iter().any(|a| match a {
+            Arg::Expr(x) => expr_reads(x, n),
+            Arg::Ref(r) => ref_reads(r, n) || (r.index.is_none() && r.name == n),
+        }),
+        Expr::Unary(_, a) => expr_reads(a, n),
+        Expr::Binary(_, a, b) => expr_reads(a, n) || expr_reads(b, n),
+        Expr::Cond(c, a, b) => expr_reads(c, n) || expr_reads(a, n) || expr_reads(b, n),
+    }
+}
+
+fn ref_reads(r: &Ref, n: &str) -> bool {
+    r.index.as_ref().is_some_and(|i| expr_reads(i, n))
+}
+
+/// Does this statement read the name `n` anywhere, its blocks included?
+fn stmt_reads(s: &Stmt, n: &str) -> bool {
+    let block = |b: &[Stmt]| b.iter().any(|s| stmt_reads(s, n));
+    match s {
+        Stmt::Turn | Stmt::Request | Stmt::End => false,
+        Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
+        Stmt::Hold { body, .. } => {
+            // a nested hold that binds `n` itself gives its body its own `n`
+            header_reads(s, n) || (!binds_in_body(body, n) && block(body))
+        }
+        Stmt::Grow(r, e) | Stmt::Load(r, e) => ref_reads(r, n) || expr_reads(e, n),
+        Stmt::Drop(r) | Stmt::Release(r) => ref_reads(r, n),
+        Stmt::Run {
+            stage,
+            work,
+            growing,
+            ..
+        } => {
+            ref_reads(stage, n)
+                || expr_reads(work, n)
+                || growing.as_ref().is_some_and(|g| ref_reads(g, n))
+        }
+        Stmt::Branch(c, a, b) => expr_reads(c, n) || block(a) || block(b),
+        Stmt::Loop(b) => block(b),
+        Stmt::Choose { count, key, .. } => expr_reads(count, n) || expr_reads(key, n),
+    }
+}
+
+/// Does the header of this hold (its units, `reserve`, `reuse`, `cache`,
+/// `lease`) read `n`?
+fn header_reads(s: &Stmt, n: &str) -> bool {
+    let Stmt::Hold {
+        pools,
+        reuse,
+        cache,
+        lease,
+        ..
+    } = s
+    else {
+        return false;
+    };
+    pools.iter().any(|(r, u, f)| {
+        ref_reads(r, n) || expr_reads(u, n) || f.as_ref().is_some_and(|f| expr_reads(f, n))
+    }) || reuse.as_ref().is_some_and(|e| expr_reads(e, n))
+        || cache.as_ref().is_some_and(|e| expr_reads(e, n))
+        || lease
+            .as_ref()
+            .is_some_and(|(r, t)| ref_reads(r, n) || expr_reads(t, n))
+}
+
+/// Does this hold body begin with the `set` of a binding `n`? The parser
+/// puts a binding the body reads there, and nothing else sets its name.
+fn binds_in_body(body: &[Stmt], n: &str) -> bool {
+    body.iter()
+        .take_while(|s| matches!(s, Stmt::Set(..)))
+        .any(|s| matches!(s, Stmt::Set(v, _) if v == n))
+}
+
+/// The first of `bound` that `stmts` read outside the body of a hold that
+/// binds it; `scope` are the ones bound around `stmts`.
+fn stray_read(stmts: &[Stmt], bound: &[String], scope: &[String]) -> Option<String> {
+    let outside = |s: &Stmt, reads: &dyn Fn(&Stmt, &str) -> bool| {
+        bound
+            .iter()
+            .find(|n| !scope.contains(n) && reads(s, n))
+            .cloned()
+    };
+    for s in stmts {
+        let found = match s {
+            Stmt::Hold { body, .. } => outside(s, &header_reads).or_else(|| {
+                let mut inner = scope.to_vec();
+                inner.extend(bound.iter().filter(|n| binds_in_body(body, n)).cloned());
+                stray_read(body, bound, &inner)
+            }),
+            Stmt::Branch(c, a, b) => outside(s, &|_, n| expr_reads(c, n))
+                .or_else(|| stray_read(a, bound, scope))
+                .or_else(|| stray_read(b, bound, scope)),
+            Stmt::Loop(b) => stray_read(b, bound, scope),
+            // the binding's own `set`, at the top of its hold's body
+            Stmt::Set(v, _) if bound.contains(v) && scope.contains(v) => None,
+            _ => outside(s, &stmt_reads),
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+/// Every expression of the declarations: pools, stages, the arrivals and
+/// the run options, which a hold's binding is never in scope of.
+fn decl_exprs(prog: &Program) -> Vec<&Expr> {
+    let mut out: Vec<&Expr> = vec![];
+    for p in &prog.pools {
+        out.push(&p.cap);
+        out.extend(&p.block);
+        if let EvictOrder::By(keys) = &p.evict {
+            out.extend(keys);
+        }
+        if let QueueOrder::By(k) = &p.queue {
+            out.push(k);
+        }
+        if let Some(sp) = &p.spill {
+            out.extend([&sp.work, &sp.when]);
+            out.extend(
+                [&sp.to, &sp.via]
+                    .into_iter()
+                    .filter_map(|r| r.index.as_deref()),
+            );
+        }
+        out.extend(p.admit_via.iter().filter_map(|r| r.index.as_deref()));
+    }
+    for st in &prog.stages {
+        match &st.kind {
+            StageKind::Fifo(e) | StageKind::Ps(e) => out.push(e),
+            StageKind::Delay => {}
+            StageKind::Step(sp) => {
+                out.extend([&sp.budget, &sp.cost, &sp.chunk]);
+                out.extend(sp.memory.iter().filter_map(|r| r.index.as_deref()));
+                if let Serve::By(keys) = &sp.serve {
+                    out.extend(keys);
+                }
+            }
+        }
+    }
+    if let Some(w) = &prog.workload {
+        match &w.arrive {
+            Arrival::Poisson(e) | Arrival::Renewal(e) | Arrival::Closed(e) | Arrival::Batch(e) => {
+                out.push(e)
+            }
+            Arrival::None => {}
+        }
+    }
+    let r = &prog.run;
+    out.extend(
+        [&r.horizon, &r.warmup, &r.seed, &r.arrivals]
+            .into_iter()
+            .flatten(),
+    );
+    out
+}
+
+/// The first thing `e` reads whose value at a hold's admission is not its
+/// value in the hold's body: an observable of pool or stage state, a
+/// context variable, or `cached`, which the admission sets. `attrs` are
+/// the program's attributes and `lets` its constants, which shadow a
+/// context variable of the same name as the linker resolves them.
+fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
+    const PURE: [&str; 9] = [
+        "min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow",
+    ];
+    let var = |v: &str| {
+        let shadowed = attrs.iter().chain(lets).any(|a| a == v);
+        (v == "cached" || (!shadowed && is_context_var(v))).then(|| v.to_string())
+    };
+    match e {
+        Expr::Located(_, inner) => live_read(inner, attrs, lets),
+        Expr::Num(_) => None,
+        Expr::Var(v) => var(v),
+        Expr::Sample(_, args) => args.iter().find_map(|a| live_read(a, attrs, lets)),
+        Expr::Call(f, args) => {
+            if !PURE.contains(&f.as_str()) {
+                return Some(format!("{f}(…)"));
+            }
+            args.iter().find_map(|a| match a {
+                Arg::Expr(x) => live_read(x, attrs, lets),
+                Arg::Ref(r) if r.index.is_none() => var(&r.name),
+                Arg::Ref(_) => None,
+            })
+        }
+        Expr::Unary(_, a) => live_read(a, attrs, lets),
+        Expr::Binary(_, a, b) => live_read(a, attrs, lets).or_else(|| live_read(b, attrs, lets)),
+        Expr::Cond(c, a, b) => live_read(c, attrs, lets)
+            .or_else(|| live_read(a, attrs, lets))
+            .or_else(|| live_read(b, attrs, lets)),
     }
 }
 
@@ -456,6 +671,7 @@ impl Parser {
             }
         }
         self.assemble(&mut prog)?;
+        self.check_body_bindings(&prog)?;
         prog.definitions = std::mem::take(&mut self.definitions);
         Ok(prog)
     }
@@ -494,6 +710,96 @@ impl Parser {
                 Ok(())
             }
         }
+    }
+
+    /// A binding its hold's body reads was set at the top of the body. That
+    /// is its admission value only if it reads attributes and constants, and
+    /// the `set` is the binding's alone only if nothing else has its name.
+    fn check_body_bindings(&self, prog: &Program) -> PResult<()> {
+        if self.body_binds.is_empty() {
+            return Ok(());
+        }
+        let lets: Vec<String> = prog.lets.iter().map(|(n, _)| n.clone()).collect();
+        // what the program's own `set` and `choose` assign (the bindings'
+        // `set`s are not recorded as definitions)
+        let assigned: Vec<String> = self
+            .definitions
+            .iter()
+            .map(|(n, _)| n.clone())
+            .filter(|n| !lets.contains(n))
+            .collect();
+        for (at, name, e) in &self.body_binds {
+            let clash = if BUILTIN_ATTRS.contains(&name.as_str()) {
+                Some("an attribute the scheduler sets")
+            } else if is_context_var(name) || name == "inf" {
+                Some("a name the language supplies")
+            } else if prog.pools.iter().any(|d| d.name == *name) {
+                Some("a pool")
+            } else if prog.stages.iter().any(|d| d.name == *name) {
+                Some("a stage")
+            } else if lets.contains(name) {
+                Some("a `let` constant")
+            } else if assigned.contains(name) {
+                Some("an attribute the program sets")
+            } else {
+                None
+            };
+            if let Some(what) = clash {
+                return self.err_at(
+                    *at,
+                    format!(
+                        "the body reads `{name}`, which is also {what}: the body would not \
+                         say which it means\nhelp: rename the binding"
+                    ),
+                );
+            }
+            if expr_reads(e, name) {
+                return self.err_at(*at, format!("the binding `{name}` reads itself"));
+            }
+            if let Some(what) = live_read(e, &assigned, &lets) {
+                let help = if what == "cached" || what.starts_with("cachedin") {
+                    "in the body read `cached`, the units the admission consumed"
+                } else {
+                    "name what the body needs with a `set` in the body"
+                };
+                return self.err_at(
+                    *at,
+                    format!(
+                        "the body reads `{name}`, and `{name}` reads `{what}`: the body \
+                         sees a binding that reads only attributes and constants\n\
+                         help: {help}"
+                    ),
+                );
+            }
+        }
+        // the binding is the body's: a read anywhere else would get the value
+        // the last such hold left
+        let mut bound: Vec<String> = self.body_binds.iter().map(|(_, n, _)| n.clone()).collect();
+        bound.sort();
+        bound.dedup();
+        let mut stray = stray_read(&prog.session, &bound, &[]);
+        if let Some(w) = &prog.workload {
+            stray = stray
+                .or_else(|| stray_read(&w.init, &bound, &[]))
+                .or_else(|| stray_read(&w.turn, &bound, &[]));
+        }
+        stray = stray.or_else(|| {
+            decl_exprs(prog)
+                .into_iter()
+                .find_map(|e| bound.iter().find(|n| expr_reads(e, n)).cloned())
+        });
+        if let Some(name) = stray {
+            let (at, _, _) = self.body_binds.iter().find(|(_, n, _)| *n == name).unwrap();
+            return self.err_at(
+                *at,
+                format!(
+                    "`{name}` is read outside the body of the hold that binds it\n\
+                     help: a header's binding is the header's and its body's; \
+                     name a value the rest of the program reads with `set`"
+                ),
+            );
+        }
+        Ok(())
     }
 
     fn array_count(&mut self) -> PResult<usize> {
@@ -1051,6 +1357,7 @@ impl Parser {
         // above the hold is not, and looks the same. The bindings are
         // substituted into the header's expressions here, so the AST, the
         // IR and the interpreter never see them.
+        self.bind_at.clear();
         let binds = if admit {
             if self.is_kw("at") {
                 return self
@@ -1081,7 +1388,24 @@ impl Parser {
                 subst(r, &binds);
             }
         }
-        let body = self.block()?;
+        let bind_at = std::mem::take(&mut self.bind_at);
+        let mut body = self.block()?;
+        // A binding the body reads is set at the top of the body, to the
+        // value it had at the admission: the body runs at the admission's
+        // instant, so an expression of attributes and constants reads the
+        // same there. One that reads live state does not, and is refused
+        // once the program's attributes are known.
+        let mut sets = vec![];
+        for ((name, e), &at) in binds.iter().zip(&bind_at) {
+            if body.iter().any(|s| stmt_reads(s, name)) {
+                sets.push(Stmt::Set(name.clone(), e.clone()));
+                self.body_binds.push((at, name.clone(), e.clone()));
+            }
+        }
+        if !sets.is_empty() {
+            sets.append(&mut body);
+            body = sets;
+        }
         let mut cache = if self.eat_kw("cache") || self.eat_kw("keep") {
             Some(self.paren_expr()?)
         } else {
@@ -1135,6 +1459,7 @@ impl Parser {
     fn bindings(&mut self, clause: &str) -> PResult<Vec<(String, Expr)>> {
         let mut binds: Vec<(String, Expr)> = vec![];
         loop {
+            self.bind_at.push(self.pos);
             let name = self.ident()?;
             if binds.iter().any(|(n, _)| *n == name) {
                 return self.err(format!("`{name}` is bound twice in one `{clause}`"));
@@ -1153,6 +1478,20 @@ impl Parser {
                 self.advance();
             } else {
                 break;
+            }
+        }
+        // the earlier bindings are substituted, so a name of the clause still
+        // read is a later one's, which the binding cannot see
+        let at = self.bind_at.len() - binds.len();
+        for (i, (name, e)) in binds.iter().enumerate() {
+            if let Some((later, _)) = binds[i + 1..].iter().find(|(n, _)| expr_reads(e, n)) {
+                return self.err_at(
+                    self.bind_at[at + i],
+                    format!(
+                        "`{name}` reads `{later}`, which is bound after it: a binding \
+                         sees the ones before it"
+                    ),
+                );
             }
         }
         Ok(binds)
@@ -1626,6 +1965,141 @@ mod tests {
             "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
              session { hold b (1) { hold a (1) { run transfer (X); load b (1); release a; } } }",
         );
+    }
+
+    #[test]
+    fn a_binding_the_body_reads_is_set_at_the_top_of_the_body() {
+        // the body sees `known` at its admission value, which for attributes
+        // and constants is the value it has at the top of the body
+        same(
+            &format!(
+                "{ENGINE} session {{
+                    enter kv (known) at admission (known = computed < p ? p : computed + 1) {{
+                        prefill (known - cached) growing kv;
+                    }}
+                    end;
+                }}"
+            ),
+            &format!(
+                "{ENGINE} session {{
+                    hold kv (computed < p ? p : computed + 1) {{
+                        set known = computed < p ? p : computed + 1;
+                        run engine prefill (known - cached) growing kv;
+                    }}
+                    end;
+                }}"
+            ),
+        );
+        // a binding the body does not read stays in the header
+        same(
+            &format!("{ENGINE} session {{ enter kv (h) at admission (h = 1) {{ }} }}"),
+            &format!("{ENGINE} session {{ hold kv (1) {{ }} }}"),
+        );
+    }
+
+    #[test]
+    fn the_body_does_not_see_a_binding_of_live_state() {
+        // at the top of the body the admission has consumed the prefix, so
+        // `cachedin(kv)` there is not what the header read
+        for (binding, help) in [
+            ("hit = min(cachedin(kv), p)", "read `cached`"),
+            ("hit = cached", "read `cached`"),
+            ("hit = now", "with a `set` in the body"),
+        ] {
+            let e = parse(&format!(
+                "{ENGINE} session {{ enter kv (hit) at admission ({binding}) {{ observe h = hit; }} }}"
+            ))
+            .unwrap_err();
+            assert!(
+                e.msg.contains("the body reads `hit`, and `hit` reads"),
+                "{binding}: {}",
+                e.msg
+            );
+            assert!(e.msg.contains(help), "{}", e.msg);
+        }
+        // `n` is a context variable unless the program assigns it
+        let src = format!(
+            "{ENGINE} session {{ set n = 3; enter kv (m) at admission (m = n + 1) {{ observe x = m; }} }}"
+        );
+        parse(&src).unwrap();
+    }
+
+    #[test]
+    fn a_binding_the_body_reads_has_a_name_of_its_own() {
+        // its `set` makes the name an attribute: one the scheduler, a `let`,
+        // the context or the program already has would be two things
+        for (pre, binding, what) in [
+            ("", "cached = 3", "an attribute the scheduler sets"),
+            ("", "computed = 50", "an attribute the scheduler sets"),
+            ("", "size = 5", "a name the language supplies"),
+            ("", "now = 1", "a name the language supplies"),
+            ("", "inf = 3", "a name the language supplies"),
+            ("", "kv = 3", "a pool"),
+            ("", "engine = 3", "a stage"),
+            ("let bs = 4;", "bs = 2", "a `let` constant"),
+            ("", "k = 7", "an attribute the program sets"),
+        ] {
+            let assign = if what.ends_with("program sets") {
+                "set k = 5;"
+            } else {
+                ""
+            };
+            let name = binding.split(' ').next().unwrap();
+            let e = parse(&format!(
+                "{pre} {ENGINE} session {{ {assign} enter kv (1) at admission ({binding}) {{ observe a = {name}; }} }}"
+            ))
+            .unwrap_err();
+            assert!(e.msg.contains(what), "{binding}: {}", e.msg);
+        }
+        let e = parse(&format!(
+            "{ENGINE} session {{ enter kv (1) at admission (k = k + 1) {{ observe a = k; }} }}"
+        ))
+        .unwrap_err();
+        assert!(e.msg.contains("reads itself"), "{}", e.msg);
+        let e = parse(&format!(
+            "{ENGINE} session {{ enter kv (1) at admission (j = k, k = 5) {{ observe a = j; }} }}"
+        ))
+        .unwrap_err();
+        assert!(e.msg.contains("bound after it"), "{}", e.msg);
+        // an attribute the body sets itself is not the binding
+        let e = parse(&format!(
+            "{ENGINE} session {{ enter kv (hit) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }} }}"
+        ))
+        .unwrap_err();
+        assert!(e.msg.contains("an attribute the program sets"), "{}", e.msg);
+    }
+
+    #[test]
+    fn a_binding_is_read_only_in_its_hold() {
+        for after in [
+            "observe b = k;",
+            "enter kv (k) { }",
+            "branch (k > 1) { } else { }",
+        ] {
+            let e = parse(&format!(
+                "{ENGINE} session {{ enter kv (1) at admission (k = 2) {{ observe a = k; }} {after} }}"
+            ))
+            .unwrap_err();
+            assert!(e.msg.contains("outside the body"), "{after}: {}", e.msg);
+        }
+        let e = parse(
+            "pool kv { cap 100; queue by (k); } stage engine : step { cost 1; }
+             session { enter kv (1) at admission (k = 2) { observe a = k; } }",
+        )
+        .unwrap_err();
+        assert!(e.msg.contains("outside the body"), "{}", e.msg);
+        // two holds may bind one name, and a nested hold may bind it again
+        // over a live outer binding its body does not read
+        parse(&format!(
+            "{ENGINE} session {{
+                enter kv (1) at admission (k = 2) {{ observe a = k; }}
+                enter kv (1) at admission (k = 3) {{ observe b = k; }}
+                enter kv (h) at admission (h = cachedin(kv)) {{
+                    enter kv (1) at admission (h = 1) {{ observe c = h; }}
+                }}
+            }}"
+        ))
+        .unwrap();
     }
 
     #[test]
