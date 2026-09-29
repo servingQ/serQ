@@ -34,7 +34,7 @@ let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
 let c0 = 0;            // fixed cost per iteration (s)
 let Bw = 2e5;          // NIXL read bandwidth into a decoder, tokens/s (128 KB per token at 25 GB/s)
-let x0 = 0.002;        // per-transfer overhead: handshake, notification (s)
+let x0 = 0.002;        // per-read latency: posting the READ and the step that polls its completion (s)
 let thr = 512;         // prefix-based-pd-decider nonCachedTokens (1: the guide's always-disagg-pd-decider)
 let minp = 0;          // prefix-based-pd-decider promptTokens
 let Lambda = 0.6;      // sessions per second
@@ -61,6 +61,7 @@ stage D[2] : step {
   memory kvD;
 }
 stage link[2] : ps(1);     // a decoder's NIC: its reads share the bandwidth
+stage setup : delay;       // a read's fixed latency: a wait, not bandwidth
 stage tool : delay;
 
 // The client: sessions arrive, each turn brings a prompt of n new tokens on
@@ -130,7 +131,8 @@ server {
         // from the prefiller over NIXL; the read done, the prefiller's lease
         // ends. The last prompt token is recomputed for its logits.
         observe remote_tokens = prompt - c;
-        transfer[j] (x0 + (prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
+        run setup (x0);
+        transfer[j] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
         observe lease = now - t1;      // how long the prefiller's blocks stayed leased
         set transferred = 1;
         set c = prompt - 1;
