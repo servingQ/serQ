@@ -251,7 +251,7 @@ still blocks the queue. The current interpreter rejects older IR versions;
 regenerate JSON from source. The latest tag `v0.1.0-rc6` carries 8, so this
 meaning/shape change opens 9 and belongs in its release note.
 
-The companion `serving-queue-theory/scripts/gen_seq_oracle.py` reads version 9
+The companion `serving-queue-theory/scripts/gen_serq_oracle.py` reads version 9
 for its FIFO fragment and rejects non-FIFO queues. It also retains support
 for its pinned version 7 and version 8 FIFO programs. No waiting-selection
 proof is claimed. Oracle JSON files move to version 9; their schedules and
