@@ -759,13 +759,42 @@ fn an_arrow_past_stations_goes_below_the_row() {
         _ => false,
     });
     assert!(!through, "no straight arrow from P to D along the row");
+    // leaving P's bottom at 0.625 and entering D's at 0.5, in a solid line:
+    // no other edge of the figure has those ends
     let below = f.items.iter().any(|it| match it {
-        seq::view::figure::Item::Edge { pts, .. } => {
-            pts.len() == 4
+        seq::view::figure::Item::Edge { pts, style, .. } => {
+            *style == seq::view::figure::EdgeStyle::Flow
+                && pts.len() == 4
+                && (pts[0].x - (rp.x + rp.w * 0.625)).abs() < 1e-9
                 && pts[1].y > row_bottom
-                && (pts[3].x - (rd.x + rd.w * 0.25)).abs() < 1e-9
+                && (pts[3].x - (rd.x + rd.w * 0.5)).abs() < 1e-9
         }
         _ => false,
     });
     assert!(below, "P -> D in a lane below");
+}
+
+/// The order a flow imposes decides which way an arrow points: `v -> u`
+/// is forward in session order, `u -> v` a return; with `u` pulled next to
+/// `a` (the flow `a, u`), `u` stands before `v`, and so `u -> v` is drawn
+/// forward and `v -> u` as the return.
+#[test]
+fn a_reordered_arrow_is_drawn_the_way_it_points() {
+    let src = "stage a : ps(1); stage v : delay; stage u : ps(1);
+               share maxmin;
+               workload { arrive batch(1); }
+               session { run a (1); run v (1); run u (1); run v (1); run a, u (1); end; }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
+    let (u, v) = (at("u"), at("v"));
+    let find = |from, to| {
+        net.edges
+            .iter()
+            .find(|e| e.from == from && e.to == to)
+            .unwrap()
+    };
+    assert!(!find(u, v).back, "u stands before v now");
+    assert!(find(v, u).back);
 }

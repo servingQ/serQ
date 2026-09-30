@@ -423,8 +423,10 @@ pub fn project(p: &Program) -> Net {
 
 /// Put the stations of each run over several stages side by side, in the
 /// run's order, where the first of them stands in the row, so that the
-/// bracket around them takes in no other station. An edge the new order
-/// turns leftwards is drawn as a return.
+/// bracket around them takes in no other station. An edge is then drawn by
+/// the way it points in the new order. Two flows that share a station are
+/// placed one after the other, so the second's bracket may still take in a
+/// station of the first.
 fn adjacent_flows(net: &mut Net) {
     if net.flows.is_empty() {
         return;
@@ -470,10 +472,10 @@ fn adjacent_flows(net: &mut Net) {
     for e in &mut net.edges {
         e.from = at(e.from);
         e.to = at(e.to);
-        if let (End::Node(a), End::Node(b)) = (e.from, e.to)
-            && a >= b
-        {
-            e.back = true;
+        // the new order decides which way an arrow points, and so how it
+        // is drawn: a return that now points right is drawn forward
+        if let (End::Node(a), End::Node(b)) = (e.from, e.to) {
+            e.back = a >= b;
         }
     }
     for g in &mut net.flows {
@@ -909,7 +911,9 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 // through them, so it takes a lane below.
                 let (ra, rb) = (rects[a], rects[b]);
                 let y = lane(&mut lanes);
-                let (ax, bx) = (ra.x + ra.w * 0.75, rb.x + rb.w * 0.25);
+                // clear of the 0.25 a return leaves and enters by and the
+                // 0.75 an early exit leaves by
+                let (ax, bx) = (ra.x + ra.w * 0.625, rb.x + rb.w * 0.5);
                 f.push(Item::Edge {
                     pts: vec![
                         pt(ax, ra.bottom()),
