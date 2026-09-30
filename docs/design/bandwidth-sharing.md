@@ -119,7 +119,7 @@ outside the sharing. The indices of a stage array are evaluated once, when
 the run starts, as a single-stage run's are.
 
 **The link rule.** Every stage of a run with a non-empty `also` is `ps(φ)`
-with `φ` a constant, and no stage array appears twice in one run: an index
+with `φ` a constant above 0 (a flow at rate 0 would wait for ever), and no stage array appears twice in one run: an index
 is evaluated when the run starts, so `egress[i], egress[j]` could name one
 stage twice, and the linker cannot tell. Every run on a shared stage (below),
 single-stage runs included, is plain: no `prefill`/`decode` mode and no
@@ -174,7 +174,9 @@ other in the station row and bracketed as one job (`BoxStyle::Flow`, drawn
 as a rail so the other figures' bytes do not move): the session comes in at
 the first station and leaves from the last, and no arrow runs between
 them. Stacking them in one column would say "at once" better, and needs
-edge routing the one-row layout does not have.
+edge routing the one-row layout does not have; so does a bracket around
+stations the row does not put side by side, which today also takes in the
+stations between them.
 
 ## Expected values
 

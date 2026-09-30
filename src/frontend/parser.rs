@@ -129,6 +129,8 @@ struct Parser {
     /// position of its keyword, until `assemble` puts them together.
     wl_session: Option<(usize, Vec<Stmt>)>,
     server: Option<(usize, Vec<Stmt>)>,
+    /// Where `share` was given, for the error that it is given twice.
+    share_at: Option<usize>,
     /// Header bindings the body of their hold reads, with the position of
     /// the name: `set` at the top of the body, checked once the program's
     /// attributes are known (`check_body_bindings`).
@@ -390,6 +392,7 @@ fn parse_with(src: &str, base: Option<&Path>, root: Option<PathBuf>) -> PResult<
         side: Side::Session,
         wl_session: None,
         server: None,
+        share_at: None,
         body_binds: vec![],
         bind_at: vec![],
         defs: vec![],
@@ -415,6 +418,7 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
         side: Side::Session,
         wl_session: None,
         server: None,
+        share_at: None,
         body_binds: vec![],
         bind_at: vec![],
         defs: vec![],
@@ -1052,10 +1056,17 @@ impl Parser {
                 let body = self.block()?;
                 self.side = Side::Session;
                 self.server = Some((at, body));
-            } else if self.eat_kw("share") {
-                if prog.share.is_some() {
-                    return self.err("duplicate share");
+            } else if self.is_kw("share") {
+                let at = self.pos;
+                self.advance();
+                if let Some(first) = self.share_at {
+                    let line = self.toks[first].line;
+                    return self.err_at(
+                        at,
+                        format!("`share` is given twice: the first is on line {line}"),
+                    );
                 }
+                self.share_at = Some(at);
                 prog.share = Some(if self.eat_kw("maxmin") {
                     crate::ir::Share::MaxMin
                 } else if self.eat_kw("bottleneck") {

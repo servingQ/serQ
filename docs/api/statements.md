@@ -154,7 +154,7 @@ Blocks the session until the work is done.
 With several stages the run is one job, a *flow*, that holds all of them
 from its start to its end; its work goes down at one rate everywhere, which
 the program's [`share`](program.md#share) sets from the stages'
-capacities. Every stage is `ps(φ)` with a constant `φ`, a run names each
+capacities. Every stage is `ps(φ)` with a constant `φ` above 0, a run names each
 stage array once, and the work is in the unit the capacities share (tokens
 at tokens per second, say). A stage array some run holds with another is
 *shared* for the whole run: every job on it, a single-stage run included,

@@ -738,8 +738,11 @@ impl<'p> Interp<'p> {
                 // the capacity the flows carry, not whether any is there: a
                 // `bottleneck` flow leaves the rest of its other stages unused
                 Kind::Shared { cap } => {
-                    st.jobs
-                        .keys()
+                    // summed in job order: a HashMap's order is not the
+                    // seed's, and a float sum depends on it
+                    let mut ids: Vec<u64> = st.jobs.keys().copied().collect();
+                    ids.sort_unstable();
+                    ids.iter()
                         .map(|id| flows.get(id).map_or(0.0, |f| f.rate))
                         .sum::<f64>()
                         / cap
@@ -2903,8 +2906,9 @@ impl<'p> Interp<'p> {
                         .sum(),
                     Kind::Shared { .. } => {
                         let dt = now - self.flows_last;
-                        st.jobs
-                            .keys()
+                        let mut ids: Vec<u64> = st.jobs.keys().copied().collect();
+                        ids.sort_unstable();
+                        ids.iter()
                             .filter_map(|id| self.flows.get(id))
                             .map(|f| (f.remaining - f.rate * dt).max(0.0))
                             .sum()

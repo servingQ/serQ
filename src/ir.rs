@@ -559,9 +559,9 @@ impl Program {
             _ => {}
         }
         for (k, on) in shared.iter().enumerate() {
-            if *on && !matches!(self.stages[k].kind, CStageKind::Ps(CExpr::Num(_))) {
+            if *on && !matches!(self.stages[k].kind, CStageKind::Ps(CExpr::Num(c)) if c > 0.0) {
                 return Err(format!(
-                    "stage `{}` is held with another stage by one run, so its capacity is shared: it must be `ps(φ)` with a constant φ",
+                    "stage `{}` is held with another stage by one run, so its capacity is shared: it must be `ps(φ)` with a constant φ above 0",
                     self.stages[k].name
                 ));
             }

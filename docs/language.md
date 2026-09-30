@@ -492,7 +492,7 @@ is max-min fair: every flow's rate rises together until a stage fills,
 the flows through it stop there, and the others go on. `share bottleneck`
 gives each flow its equal share at the tightest of its stages,
 `min over s of φ_s / n_s`, and leaves what that does not use at the other
-stages unused. Every stage of such a run is `ps(φ)` with a constant `φ`
+stages unused. Every stage of such a run is `ps(φ)` with a constant `φ` above 0
 (a flow is not described by the `present` a capacity could read), a run
 names each stage array once (an index is known only when the run starts),
 and a program with one declares its `share`, which has no default. A

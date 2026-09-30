@@ -181,3 +181,54 @@ fn transfer_on_several_stages_is_sugar() {
         ir("run a, b (1); load q (1); release p;")
     );
 }
+
+/// A flow counts once at every stage it held: `A` saw f1 and f2 end, `B`
+/// saw f1 and f3.
+#[test]
+fn a_flow_is_counted_at_each_of_its_stages() {
+    let r = three("maxmin", 5.0);
+    assert_eq!(r.stage("A").unwrap().completed, 2);
+    assert_eq!(r.stage("B").unwrap().completed, 2);
+}
+
+/// The same seed gives the same report, digit for digit: nothing a shared
+/// stage reports may depend on the order a hash map keeps its flows in.
+#[test]
+fn a_seed_reproduces_a_run_with_flows() {
+    let src = "stage E[3] : ps(1); stage F : ps(2); stage I[4] : ps(1);
+               share maxmin;
+               workload { arrive poisson(6.5); }
+               session {
+                 choose i in 3 by (~uniform(0, 1));
+                 choose j in 4 by (~uniform(0, 1));
+                 run E[i], F, I[j] (~exp(0.3));
+                 observe left = work(F);
+                 end;
+               }
+               run { horizon 200; warmup 20; seed 3; }";
+    let a = run(src).json();
+    for _ in 0..4 {
+        assert_eq!(run(src).json(), a);
+    }
+}
+
+#[test]
+fn a_shared_stage_has_a_capacity_above_zero() {
+    let e = err("stage A : ps(1); stage Z : ps(0); share maxmin;
+         workload { arrive batch(1); }
+         session { run A, Z (1); end; } run { horizon 1; }");
+    assert!(e.contains("above 0"), "{e}");
+}
+
+#[test]
+fn share_is_given_once() {
+    let e = err("stage A : ps(1); stage B : ps(1);
+         share maxmin;
+         share bottleneck;
+         workload { arrive batch(1); }
+         session { run A, B (1); end; } run { horizon 1; }");
+    assert!(
+        e.contains("`share` is given twice: the first is on line 2"),
+        "{e}"
+    );
+}
