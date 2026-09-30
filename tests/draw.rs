@@ -858,3 +858,53 @@ fn a_reordered_arrow_is_drawn_the_way_it_points() {
     assert!(!find(u, v).back, "u stands before v now");
     assert!(find(v, u).back);
 }
+
+/// No two labels of a figure share ink: a station's name or note wider
+/// than the station, or a pool's options wider than its glyphs, gets the
+/// room it needs (`replica.sq`'s budget ran into its `kv` options).
+#[test]
+fn labels_do_not_overlap() {
+    use serq::view::figure::{Anchor, Item, TextSize};
+    for name in PROGRAMS {
+        let p = program(name);
+        let f = deployment::figure(&p);
+        let boxes: Vec<(f64, f64, f64, &str)> = f
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Text {
+                    at,
+                    text,
+                    anchor,
+                    size,
+                    ..
+                } => {
+                    let w = size.width_of(text);
+                    let x0 = match anchor {
+                        Anchor::Start => at.x,
+                        Anchor::Middle => at.x - w / 2.0,
+                        Anchor::End => at.x - w,
+                    };
+                    let h = match size {
+                        TextSize::Small => 9.0,
+                        _ => 11.0,
+                    };
+                    Some((x0, x0 + w, at.y - h / 2.0, text.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        for (i, a) in boxes.iter().enumerate() {
+            for b in &boxes[i + 1..] {
+                let same_line = (a.2 - b.2).abs() < 8.0;
+                let apart = a.1 <= b.0 || b.1 <= a.0;
+                assert!(
+                    !same_line || apart,
+                    "{name}: `{}` and `{}` overlap",
+                    a.3,
+                    b.3
+                );
+            }
+        }
+    }
+}

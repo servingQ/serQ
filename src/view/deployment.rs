@@ -715,10 +715,34 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             let d = DEPTH_PAD * (max_depth - gs[k].depth) as f64;
             gs[k].left = x;
             gs[k].glyph_x = x + PAD + d;
-            x += PAD + d + GLYPH_W;
+            // the options stacked under the glyphs are as wide as their
+            // longest line, and the column is as wide as they are
+            let notes = pool_notes(p, gs[k].pool, cached_here(&gs[k]))
+                .iter()
+                .map(|l| TextSize::Small.width_of(l) + 8.0)
+                .fold(GLYPH_W, f64::max);
+            x += PAD + d + notes;
         }
-        rects.push(Rect::new(x, row_y, STATION_W, STATION_H));
-        x += STATION_W;
+        // A station's name above it and its note below it are centred on
+        // it: one wider than the station gets the room, or it runs over
+        // the pool options at its left and the station at its right.
+        let n = &net.nodes[i];
+        let slot = [
+            STATION_W,
+            TextSize::Normal.width_of(&n.label) + 8.0,
+            n.note
+                .as_deref()
+                .map_or(0.0, |t| TextSize::Small.width_of(t) + 8.0),
+        ]
+        .into_iter()
+        .fold(0.0, f64::max);
+        rects.push(Rect::new(
+            x + (slot - STATION_W) / 2.0,
+            row_y,
+            STATION_W,
+            STATION_H,
+        ));
+        x += slot;
         let mut closing: Vec<usize> = (0..gs.len()).filter(|&k| gs[k].last == i).collect();
         closing.sort_by_key(|&k| std::cmp::Reverse(gs[k].depth));
         for k in closing {
