@@ -12,7 +12,6 @@ The examples run on the current IR v8. They are reduced specifications, not vend
 | vllm-ascend | `v0.27.1rc1` (RC) | `v0.27.1` | [Release](https://github.com/vllm-project/vllm-ascend/releases/tag/v0.27.1rc1) |
 | vllm-rbln | `v0.11.3a21` (alpha) | `0.26.0+cpu` | [Dependency](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/pyproject.toml#L41) |
 | tpu-inference | `v0.29.0` | Upstream selected by build argument or CI LKG | [Dockerfile](https://github.com/vllm-project/tpu-inference/blob/v0.29.0/docker/Dockerfile#L55), [LKG](https://github.com/vllm-project/tpu-inference/blob/v0.29.0/.buildkite/vllm_lkg.version) |
-| vllm-musa | `v0.24.0` | `v0.24.0` | [PINS](https://github.com/MooreThreads/vllm-musa/blob/v0.24.0/third_party/PINS#L9) |
 | vLLM-metax | `v0.26.0` | `v0.26.0` | [README](https://github.com/MetaX-MACA/vLLM-metax/blob/v0.26.0/README.md#L27) |
 
 For tpu-inference, the plugin tag does not establish the installed upstream version: the Docker build argument and CI LKG select it separately. Each source link below uses the selected tag.
@@ -25,10 +24,9 @@ For tpu-inference, the plugin tag does not establish the installed upstream vers
 | [vllm-ascend](ascend.md) | Short-request classes and aging, job predictors, offload/recompute routing | Static short-before-long admission | Shared policy history, dynamic waiting selection, connector failure |
 | [vllm-rbln](rbln.md) | Native phase isolation, PP decode caps, sub-block prefix copy | Resident prefill isolation and full-sequence admission gate | Waiting-first batch replacement, copy references, lookup/allocation units |
 | [tpu-inference](tpu.md) | Rank schedulers, cache-aware routing, contiguous-first allocation, P/D pipeline | Sequential P/D with a source lease and destination allocation | DP padding/barrier, block placement, cancellation and backlog |
-| [vllm-musa](musa.md) | Pinned upstream scheduler, backend-selected 64-token blocks | Block rounding and synchronous capacity/cost | Shared prefix objects and asynchronous device lifetime |
 | [vLLM-metax](metax.md) | Runner query-length buckets, DBO patch, block copy | Synchronous non-speculative capacity/cost | Accepted-token progress, bucket shapes and compute/communication dependencies |
 
-MUSA and MetaX are upstream integrations in the paths examined; an OOT repository does not necessarily introduce an independent full-attention scheduler.
+MetaX integrates upstream in the paths examined; an OOT repository does not necessarily introduce an independent full-attention scheduler.
 
 ## Run an example
 
@@ -39,7 +37,7 @@ cargo run --release -- check examples/vendors/rbln.seq
 cargo run --release -- run examples/vendors/rbln.seq --json
 ```
 
-Replace `rbln` with `ascend`, `tpu`, `musa` or `metax`. All five use a finite batch of six requests and observe completed responses. The pages include these files directly, and the regular check gate links and draws them.
+Replace `rbln` with `ascend`, `tpu` or `metax`. All four use a finite batch of six requests and observe completed responses. The pages include these files directly, and the regular check gate links and draws them.
 
 ## What has been verified
 

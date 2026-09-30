@@ -86,7 +86,6 @@ nav:
           - vllm-ascend: use-cases/ascend.md
           - vllm-rbln: use-cases/rbln.md
           - tpu-inference: use-cases/tpu.md
-          - vllm-musa: use-cases/musa.md
           - vLLM-metax: use-cases/metax.md
       - Case studies:
           - "One engine, four workloads": case-study-workloads.md
