@@ -26,14 +26,14 @@ def reusable(x, bs) = floor((x - 1) / bs) * bs;
 // `prefill_tokens` (the tokens prefilled) and `ttft` (time to first token,
 // from `t0`).
 def vllm_request(reqs, kv, engine, prompt, o, t0) {
-  admit if reqs (1), kv (min(known, hit + budget_left(engine))) fit
-        where known = computed < prompt ? prompt : computed + 1,
-              hit = min(cachedin(kv), reusable(known, blocksize(kv))) {
+  hold reqs (1), kv (min(known, hit + budget_left(engine)))
+       at admission (known = computed < prompt ? prompt : computed + 1,
+                     hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
     set c = min(cached, reusable(known, blocksize(kv)));
     observe hit = c > 0;
     observe prefill_tokens = known - c;
     prefill on engine (known - c) growing kv;
     branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
     decode on engine (o - 1 - (known - prompt)) growing kv;
-  } keep (prompt + o);
+  } cache (prompt + o);
 }

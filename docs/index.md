@@ -35,12 +35,12 @@ workload {
 server {
   set prompt = K + n;
   set hitmax = floor((prompt - 1) / bs) * bs;
-  admit if reqs (1), kv (min(prompt, hit + budget_left(engine))) fit
-        where hit = min(cachedin(kv), hitmax) {
+  hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+        at admission (hit = min(cachedin(kv), hitmax)) {
     prefill (prompt - c) growing kv;
     observe ttft = now - t0;
     decode (o - 1) growing kv;
-  } keep (prompt + o);
+  } cache (prompt + o);
 }
 ```
 

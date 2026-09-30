@@ -118,19 +118,19 @@ server {
     // and the blocks stay leased for the decoder's read (request_finished:
     // delay_free_blocks), 30 s renewed by the decoder's heartbeats while it
     // waits, so in effect until the read.
-    admit if reqsP[i] (1), kvP[i] (min(prompt, hit + budget_left(P[i]))) reserve (prompt) fit
-          where hit = min(cachedin(kvP[i]), hitmax) {
+    hold reqsP[i] (1), kvP[i] (min(prompt, hit + budget_left(P[i]))) reserve (prompt)
+         at admission (hit = min(cachedin(kvP[i]), hitmax)) {
       set c = cached;
       prefill on P[i] (prompt - c) growing kvP[i];      // chunked; one token is sampled and discarded
-    } keep (prompt) lease kvP[i] (inf);
+    } cache (prompt) lease kvP[i] (inf);
     set t1 = now;
     // The sidecar sends the decode request. The decoder's scheduler takes
     // it when the whole prompt fits its blocks, at a step with budget left
     // and a running slot free - it takes neither (the request is parked,
     // not running) - and reuses the full blocks it has of the prompt.
-    admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit
-          reuse (reusable(known, bs))
-          where known = computed < prompt ? prompt : computed + 1 {
+    hold kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1)
+         reuse (reusable(known, bs))
+         at admission (known = computed < prompt ? prompt : computed + 1) {
       set c = cached;
       branch (!transferred) {
         // WAITING_FOR_REMOTE_KVS: every block past the local hit is read
@@ -146,24 +146,24 @@ server {
       // Back in the waiting queue: a running slot and a token of budget.
       // A request preempted on the decoder afterwards recomputes what it
       // lost here, as any local prefill would (do_remote_prefill is spent).
-      admit if reqsD[j] (1) fit {
+      hold reqsD[j] (1) {
         prefill on D[j] (known - c) growing kvD[j];
         branch (known == prompt) { observe ttft = now - t0; }
         decode on D[j] (o - 1 - (known - prompt)) growing kvD[j];
       }
-    } keep (prompt + o);
+    } cache (prompt + o);
   } else {
     // Decode only: the decode pod prefills the prompt itself - vLLM's engine
     // on one device (examples/multi-turn/vllm.seq).
-    admit if kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known), reqsD[j] (1) fit
-          where known = computed < prompt ? prompt : computed + 1,
-                hit = min(cachedin(kvD[j]), reusable(known, bs)) {
+    hold kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known), reqsD[j] (1)
+         at admission (known = computed < prompt ? prompt : computed + 1,
+                       hit = min(cachedin(kvD[j]), reusable(known, bs))) {
       set c = min(cached, reusable(known, bs));
       observe local_tokens = known - c;
       prefill on D[j] (known - c) growing kvD[j];
       branch (known == prompt) { observe ttft = now - t0; }
       decode on D[j] (o - 1 - (known - prompt)) growing kvD[j];
-    } keep (prompt + o);
+    } cache (prompt + o);
   }
   observe remote = remote;
   observe response = now - t0;

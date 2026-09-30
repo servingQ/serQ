@@ -57,19 +57,19 @@ and block 16. What differs from the guide is written next to each number.
 | vLLM | seQ | Where |
 |---|---|---|
 | a prompt of `max_model_len` tokens or more is refused before it is scheduled; a generation stops at `max_model_len` tokens; no KV cache smaller than one request of `max_model_len` is started | `branch (K + n >= max_model_len) { end; }` before the request; `set o = min(o, max_model_len - prompt)`; `max_model_len = 16384` below every pool | `input_processor.py:512-536`; `sched/utils.py:114-120`; `kv_cache_utils.py:965` |
-| the prefiller admits like any vLLM engine: a slot, the blocks of the first chunk, room for the whole prompt, the prefix hit looked up when the scheduler takes the request | `admit if reqsP[i] (1), kvP[i] (min(prompt, hit + budget_left(P[i]))) reserve (prompt) fit where hit = …` | the waiting loop, `scheduler.py:868-1128`; [the vLLM case study](case-study-vllm.md) |
+| the prefiller admits like any vLLM engine: a slot, the blocks of the first chunk, room for the whole prompt, the prefix hit looked up when the scheduler takes the request | `hold reqsP[i] (1), kvP[i] (min(prompt, hit + budget_left(P[i]))) reserve (prompt) at admission (hit = …)` | the waiting loop, `scheduler.py:868-1128`; [the vLLM case study](case-study-vllm.md) |
 | the prefiller computes the prompt in chunks and samples one token, which the sidecar discards | `prefill on P[i] (prompt - c) growing kvP[i]` | `scheduler.py:624-823`; the truncation for Mamba and MTP only, `nixl/base_scheduler.py:409-436` |
-| the request finishes on the prefiller: its slot is freed, its blocks are not — `request_finished` returns `delay_free_blocks` and a lease of `kv_lease_duration` (30 s), renewed by the decoder's heartbeats while the request waits | `} keep (prompt) lease kvP[i] (inf);` — the scope ends, the slot goes, the blocks stay the session's | `nixl/pull_scheduler.py:191-292`; `_free_request`, `scheduler.py:2628-2657`; the renewal, `nixl/base_scheduler.py:199-238`, `nixl/base_worker.py:3010-3030` |
-| the prefiller keeps every computed full block of the prompt cached once the lease ends | `keep (prompt)` on that hold, applied when the lease ends | `_connector_finished`, `scheduler.py:2929-2982`; `kv_cache_manager.py:610-619` |
+| the request finishes on the prefiller: its slot is freed, its blocks are not — `request_finished` returns `delay_free_blocks` and a lease of `kv_lease_duration` (30 s), renewed by the decoder's heartbeats while the request waits | `} cache (prompt) lease kvP[i] (inf);` — the scope ends, the slot goes, the blocks stay the session's | `nixl/pull_scheduler.py:191-292`; `_free_request`, `scheduler.py:2628-2657`; the renewal, `nixl/base_scheduler.py:199-238`, `nixl/base_worker.py:3010-3030` |
+| the prefiller keeps every computed full block of the prompt cached once the lease ends | `cache (prompt)` on that hold, applied when the lease ends | `_connector_finished`, `scheduler.py:2929-2982`; `kv_cache_manager.py:610-619` |
 | the decoder's scheduler looks at its waiting queue only at a step with budget left and a running slot free | `admit via D` on both of the decoder's pools; `reqsD[j] (0) reserve (1)` — a slot must be free, none is taken | `scheduler.py:872-879` |
 | the decoder's local prefix hit, then the connector: for a remote prefill every prompt token beyond the local hit is external and loaded asynchronously | `kvD[j] (known) reserve (known)` with `reuse (floor((known - 1) / bs) * bs)`; `c = cached` is the local hit | `scheduler.py:932-954`; `nixl/pull_scheduler.py:34-66` |
 | blocks are allocated for the whole prompt, and the request is parked, `WAITING_FOR_REMOTE_KVS`, holding them and no slot; one transfer per request | the hold on `kvD[j]`; `transferred` is `do_remote_prefill`, spent | `scheduler.py:1199-1226, 1264-1294`; `nixl/pull_scheduler.py:108-189` |
 | the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `run setup (x0); transfer[j] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c)`: a fixed wait, then the bytes on the decoder's link | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
-| the read done, the blocks are cached, the last prompt token is marked uncomputed (its logits are needed), and the request is back in the waiting queue, served before new arrivals | `load kvD[j] (prompt - 1 - c)` inside the transfer; `admit if reqsD[j] (1) fit`, with `reqsD` declared before `kvD` | `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; `_try_promote_blocked_waiting_request`, `scheduler.py:3079-3092`; `scheduler.py:2383-2385` |
+| the read done, the blocks are cached, the last prompt token is marked uncomputed (its logits are needed), and the request is back in the waiting queue, served before new arrivals | `load kvD[j] (prompt - 1 - c)` inside the transfer; `hold reqsD[j] (1)`, with `reqsD` declared before `kvD` | `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; `_try_promote_blocked_waiting_request`, `scheduler.py:3079-3092`; `scheduler.py:2383-2385` |
 | the prefiller frees the leased blocks when the read completes | `release kvP[i]` inside the transfer takes the lease | `_update_from_kv_xfer_finished`, `scheduler.py:3113-3138` |
 | the decoder recomputes the last prompt token and decodes; a request preempted afterwards is rescheduled without a second transfer, prefilling locally what it lost | `prefill on D[j] (known - c) growing kvD[j]; decode on D[j] (o - 1 - (known - prompt)) growing kvD[j];` with `known` from `computed` | `scheduler.py:1560-1561`; `nixl/pull_scheduler.py:187-189` |
 | a parked request is in no `running` list and is not preempted; nor is the prefiller's finished one | `preempt lifo` takes the last admitted *resident* of the engine | `scheduler.py:742-813` |
-| the decoder keeps the prompt's and the output's full blocks cached | `} keep (prompt + o)` | `kv_cache_manager.py:602-606` |
+| the decoder keeps the prompt's and the output's full blocks cached | `} cache (prompt + o)` | `kv_cache_manager.py:602-606` |
 
 ### Writing xPyD
 
@@ -97,9 +97,9 @@ same number twice; a mismatch shows up as an index out of range at the
 first `choose`.
 
 The router is the session's two `choose`s, and the instance it picked is
-carried by the index everywhere after: `admit if reqsP[i] (1), kvP[i]
+carried by the index everywhere after: `hold reqsP[i] (1), kvP[i]
 (…)`, `prefill on P[i] … growing kvP[i]`, `lease kvP[i]`, `transfer[j] …
-from kvP[i] to kvD[j]`, `admit if kvD[j] …`, `decode on D[j] … growing
+from kvP[i] to kvD[j]`, `hold kvD[j] …`, `decode on D[j] … growing
 kvD[j]`. `release` and `load` (and so `transfer … from … to …`) name the
 pool exactly as the hold that took it did, index included; `hold kvP[i] …
 lease kvP[i]` followed by `transfer … from kvP[k]` does not link. The
@@ -141,12 +141,12 @@ Pull is the program as written. The prefiller's scope ends in a lease, the
 decoder is admitted, and the decoder's NIC does the copy:
 
 ```
-admit if reqsP[i] (1), kvP[i] (…) fit … { prefill on P[i] (…) growing kvP[i]; } keep (prompt) lease kvP[i] (inf);
-admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit … {
+hold reqsP[i] (1), kvP[i] (…) … { prefill on P[i] (…) growing kvP[i]; } cache (prompt) lease kvP[i] (inf);
+hold kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) … {
   run setup (x0);
   transfer[j] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);   // the decoder's link[j] READs; the lease ends
-  admit if reqsD[j] (1) fit { … }
-} keep (prompt + o);
+  hold reqsD[j] (1) { … }
+} cache (prompt + o);
 ```
 
 Push through the llm-d sidecar (serial dispatch) is the same three lines
@@ -157,11 +157,11 @@ decoder's admission (the registration, `nixl/push_scheduler.py:128-205`):
 ```
 stage linkP[2] : ps(1);                                   // the prefillers' NICs
 …
-admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit … {
+hold kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) … {
   run setup (x0 + x_reg);
   transfer on linkP[i] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
-  admit if reqsD[j] (1) fit { … }
-} keep (prompt + o);
+  hold reqsD[j] (1) { … }
+} cache (prompt + o);
 ```
 
 `transfer on linkP[i] (…) from kvP[i] to kvD[j] (…)` is the same kernel
@@ -184,8 +184,8 @@ step of latency. The reservation that would write it exactly is sketched in
 
 ```
 book kvD[j] (prompt) reserve (prompt);                      // join the decoder's queue now, not written yet
-admit if reqsP[i] (1), kvP[i] (…) fit … { … } keep (prompt) lease kvP[i] (inf);
-enter kvD[j] { transfer on linkP[i] (…) from kvP[i] to kvD[j] (…); … }   // open the booking, waiting if it is not granted
+hold reqsP[i] (1), kvP[i] (…) … { … } cache (prompt) lease kvP[i] (inf);
+hold kvD[j] { transfer on linkP[i] (…) from kvP[i] to kvD[j] (…); … }   // open the booking, waiting if it is not granted
 ```
 
 **Not modelled**: the lease's expiry and the decoder's heartbeats (the

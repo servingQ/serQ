@@ -90,3 +90,7 @@ not a branch in the program.
   `price` builtin out into a program expression; make HOL blocking a queue
   option.
 - Write the "moment" principle into spec §3 as one paragraph.
+
+*The one-subject-per-block rule chose `enter` and `admit if` for one construct;
+[One admission](one-admission.md) retired both for the kernel's `hold`, and says
+why in its self-critique.*

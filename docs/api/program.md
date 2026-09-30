@@ -33,8 +33,8 @@ A name for source the program would otherwise repeat. A use, `NAME(arg, …)`
 in an expression or `NAME(arg, …);` as a statement, is replaced by the body
 with each parameter replaced by its argument, and parsed where it stands: a
 serving form in it finds its stage at the use, and a statement body follows
-the rules of the block it is used in (`admit if` in a `server`, `enter` in a
-`session`). The AST and the IR hold the expansion, so a program with a `def`
+the rules of the block it is used in (no `turn`, `end` or `request` in a
+`server`). The AST and the IR hold the expansion, so a program with a `def`
 has the IR of the one written out.
 
 ```seq
@@ -127,7 +127,7 @@ session block
 ```
 
 What every session does, written as one block: the client's side (`turn`,
-`end`) next to the deployment's (`enter`, `prefill`, …). At top level it is the
+`end`) next to the deployment's (`hold`, `prefill`, …). At top level it is the
 kernel form; inside a `workload` it is the session's side of a
 [two-sided program](../language.md#the-two-sides) and says `request;` where the
 server runs.
@@ -150,7 +150,7 @@ that of the one-block `session`.
 | | |
 |---|---|
 | Refused in a `server` | `turn`, `end`, `request` |
-| Admission is written | `admit if … fit where …` |
+| Admission is written | `hold … at admission (…)` |
 
 A workload `session` without a `server`, a `server` that is never requested,
 and a `server` next to a top-level `session` are errors.

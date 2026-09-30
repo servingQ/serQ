@@ -94,8 +94,10 @@ fn format_with(
 
     let mut out = String::new();
     let mut depth = 0usize;
-    let mut admit_base: Option<usize> = None;
-    let mut where_started = false;
+    // a `hold` header over several lines: its clauses under the pools, and
+    // the bindings of `at admission (` under the first
+    let mut hold_base: Option<usize> = None;
+    let mut at_started = false;
     let mut previous_comma = false;
     let mut continuation = false;
     for (i, raw) in lines.iter().enumerate() {
@@ -109,24 +111,24 @@ fn format_with(
         let closing = row.first().is_some_and(|t| t.tok == Tok::RBrace);
         let base = depth.saturating_sub(usize::from(closing)) * 2;
         let first = row.first().map(|t| t.text.as_str()).unwrap_or("");
-        if first == "admit" {
-            admit_base = Some(base);
-            where_started = false;
+        if first == "hold" {
+            hold_base = Some(base);
+            at_started = false;
         }
         let original_indent = raw.chars().take_while(|c| c.is_whitespace()).count();
         let indent = if row.is_empty() && commented[line] && original_indent > base {
             // An aligned continuation of a trailing comment (for example a
             // wrapped explanation under a `let`) belongs to that comment.
             original_indent
-        } else if let Some(admit) = admit_base {
-            if matches!(first, "where" | "reuse" | "reserve") {
-                if first == "where" {
-                    where_started = true;
+        } else if let Some(hold) = hold_base {
+            if matches!(first, "at" | "reuse" | "reserve") {
+                if first == "at" {
+                    at_started = true;
                 }
-                admit + 6
-            } else if where_started && previous_comma && !closing {
-                admit + 12
-            } else if continuation && !closing && first != "admit" {
+                hold + 5
+            } else if at_started && previous_comma && !closing {
+                hold + 19
+            } else if continuation && !closing && first != "hold" {
                 original_indent.max(base)
             } else {
                 base
@@ -152,8 +154,8 @@ fn format_with(
             }
         }
         if row.iter().any(|t| t.tok == Tok::LBrace) {
-            admit_base = None;
-            where_started = false;
+            hold_base = None;
+            at_started = false;
         }
         if let Some(last) = row.last() {
             previous_comma = last.tok == Tok::Comma;

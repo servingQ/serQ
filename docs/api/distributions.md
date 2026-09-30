@@ -5,7 +5,7 @@
 ```
 
 A draw: an expression that samples a distribution each time it is evaluated. A
-`const`, a `serve` key and an `at admission` (or `where`) binding may not draw. The result is a number, so `branch with (p)` is
+`const`, a `serve` key and an `at admission` binding may not draw. The result is a number, so `branch with (p)` is
 `branch (~bernoulli(p))`.
 
 | Signature | Parameters | Mean | Notes |

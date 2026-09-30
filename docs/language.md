@@ -116,12 +116,8 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | loop block
           | choose NAME in expr by ( expr ) ; -- NAME := argmin over 0..n
           | end ;
-          | serving                          -- the serving vocabulary, sugar for hold and run
-serving  := enter POOL ( expr ) … block [ keep ( expr ) ] [ lease POOL ( expr ) ] ;   -- as hold … cache
-          | admit if POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]* fit
-                 [reuse ( expr )] [where NAME = expr , ... ] block [ keep ( expr ) ] ;
-                                             -- the same, in a server block
-          | prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
+          | serving                          -- the serving vocabulary, sugar for run
+serving  := prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | transfer [ '[' expr ']' | on STAGE ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
           | decode   [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
@@ -189,7 +185,6 @@ unchanged.
 
 | Serving form | Kernel |
 |---|---|
-| `enter P (c) … { body } keep (ℓ);` | `hold P (c) … { body } cache (ℓ);` (`reserve`, `reuse`, several pools: as in `hold`) |
 | `prefill W;` | `run prefill (W);`, or on a step engine `E`: `run E prefill (T);` |
 | `transfer (X) from P to Q (n);` | `run link (X); load Q (n); release P;` — the KV of `n` tokens moves from the session's lease (or hold) on `P` to its hold on `Q`: the link takes the time, the tokens count as computed at `Q`, and `P` is given back (below, *A KV transfer*) |
 | `decode W;` | `run decode (W);`, or on a step engine `E`: `run E decode (T);` |
@@ -221,15 +216,14 @@ step engine are rejected by the linker as `run E (X)` would be. A linker
 error inside a form (an unknown name in `W`, say) speaks of the kernel
 statement.
 
-vLLM's engine (`lib/vllm.seq`'s `vllm_request`, which spells the same hold
-from the scheduler's side, below) then reads
+vLLM's engine (`lib/vllm.seq`'s `vllm_request`, below) then reads
 
 ```
-enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
+hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
                     at admission (hit = min(cachedin(kv), hitmax)) {
   prefill (prompt - c) growing kv;
   decode (o - 1) growing kv;
-} keep (prompt + o);
+} cache (prompt + o);
 ```
 
 The forms compile to the IR they compiled to before the rewrite
@@ -238,8 +232,8 @@ The forms compile to the IR they compiled to before the rewrite
 **A KV transfer.** Written as two holds in a row,
 
 ```
-enter memP (T) { prefill (n + K); run link (T / 100); } keep (T);
-enter memD (T) { decode (o); }
+hold memP (T) { prefill (n + K); run link (T / 100); } cache (T);
+hold memD (T) { decode (o); }
 ```
 
 a session holds the prefill instance's memory through the transfer and
@@ -253,28 +247,28 @@ request's scope — its slot is freed when the token is sampled, its blocks
 are *leased* until the decoder has read them — which is what `lease` says:
 
 ```
-admit if reqsP (1), kvP (…) fit … {
+hold reqsP (1), kvP (…) … {
   prefill on P (prompt - c) growing kvP;
-} keep (prompt) lease kvP (inf);       // finished on P: the slot goes, the blocks wait for the decoder's read
-admit if kvD (prompt) reserve (prompt), reqsD (0) reserve (1) fit … {
+} cache (prompt) lease kvP (inf);       // finished on P: the slot goes, the blocks wait for the decoder's read
+hold kvD (prompt) reserve (prompt), reqsD (0) reserve (1) … {
   run setup (x0);
   transfer ((prompt - c) / Bw) from kvP to kvD (prompt - 1 - c);   // takes the lease
-  admit if reqsD (1) fit { prefill on D (1) growing kvD; decode on D (o - 1) growing kvD; }
-} keep (prompt + o);
+  hold reqsD (1) { prefill on D (1) growing kvD; decode on D (o - 1) growing kvD; }
+} cache (prompt + o);
 ```
 
 `lease P (t)` names one of the hold's pools whose allocation stays the
 session's after the scope's end, neither evictable nor a preemption
 victim, until the session's `release P` (a `transfer … from P` contains
-one), `t` seconds, or the session's end, and then `keep` applies. vLLM's
+one), `t` seconds, or the session's end, and then `cache` applies. vLLM's
 prefiller leases for 30 s and the decoder's heartbeats renew it while the
 request waits, so `inf` is the served behaviour and `30` a prefiller
 nobody heartbeats. `release P` with a hold on `P` gives the innermost
-enclosing hold's allocation there back now, caching per that hold's `keep`,
+enclosing hold's allocation there back now, caching per that hold's `cache`,
 and the scope's end then has nothing left there. `load Q (n)` says the KV
 of `n` tokens arrived from outside the engine: the enclosing hold's
 computed position on `Q` advances by `n` (within its allocation), as a
-`growing` run's would token by token, so `keep` and `cached` count them.
+`growing` run's would token by token, so `cache` and `cached` count them.
 `transfer (X) from P to Q (n)` is the two around the link run.
 `examples/pd-disaggregation/llmd_nixl_pull.seq` is the whole path, and `docs/case-study-pd.md` its
 line-by-line correspondence with llm-d and the NIXL connector.
@@ -284,11 +278,11 @@ scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
 
 | Form | In the lifecycle | vLLM |
 |---|---|---|
-| `admit if reqs (1), kv (hit + …) fit where hit = … { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
+| `hold reqs (1), kv (hit + …) at admission (hit = …) { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
 | `prefill (n) growing kv` | prefill in chunks of the budget, a block allocated as the request advances; a missing block preempts `running[-1]` | the running loop, `scheduler.py:624-823`; `allocate_slots` at `scheduler.py:743`; `_preempt_request`, `scheduler.py:1539-1582` (`preempt lifo`) |
 | `decode (o) growing kv` | one token per iteration, a block every `block_size` tokens | the same loop and `allocate_slots` with one new token |
-| `} keep (prompt) lease kvP (inf)` on the prefiller's hold, then `transfer (X) from kvP to kvD (n)` inside the decoder's | the KV of a prefilled request moves to the decode instance: the prefiller's blocks wait, the decoder allocates and reads, the prefiller frees | the KV connector, `examples/pd-disaggregation/llmd_nixl_pull.seq`: the decoder parks the request at `scheduler.py:1264-1294` (`WAITING_FOR_REMOTE_KVS`), its blocks allocated for the whole prompt; the read done, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; the prefiller keeps its blocks leased at `_connector_finished`, `scheduler.py:2929-2982`, and frees them at `scheduler.py:3135-3138` |
-| `} keep (prompt + o)` | release: the blocks go to the free queue, the full ones stay cached | `_free_request`, `scheduler.py:2628`; `free`, `kv_cache_manager.py:610-619`; `cache_blocks`, `kv_cache_manager.py:802-812` |
+| `} cache (prompt) lease kvP (inf)` on the prefiller's hold, then `transfer (X) from kvP to kvD (n)` inside the decoder's | the KV of a prefilled request moves to the decode instance: the prefiller's blocks wait, the decoder allocates and reads, the prefiller frees | the KV connector, `examples/pd-disaggregation/llmd_nixl_pull.seq`: the decoder parks the request at `scheduler.py:1264-1294` (`WAITING_FOR_REMOTE_KVS`), its blocks allocated for the whole prompt; the read done, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; the prefiller keeps its blocks leased at `_connector_finished`, `scheduler.py:2929-2982`, and frees them at `scheduler.py:3135-3138` |
+| `} cache (prompt + o)` | release: the blocks go to the free queue, the full ones stay cached | `_free_request`, `scheduler.py:2628`; `free`, `kv_cache_manager.py:610-619`; `cache_blocks`, `kv_cache_manager.py:802-812` |
 | `tool Z; turn;` | the session thinks and comes back with a longer prompt | outside the engine: the session's next request, `add_request`, `scheduler.py:2536` |
 | `end` | the session leaves; its blocks stay in the free queue | `finish_requests`, `scheduler.py:2564` |
 
@@ -321,11 +315,11 @@ workload {
 server {
   set prompt = K + n;
   set hitmax = floor((prompt - 1) / bs) * bs;
-  admit if reqs (1), kv (min(prompt, hit + budget_left(engine))) fit
-        where hit = min(cachedin(kv), hitmax) {
+  hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+        at admission (hit = min(cachedin(kv), hitmax)) {
     prefill (prompt - c) growing kv;
     decode (o - 1) growing kv;
-  } keep (prompt + o);
+  } cache (prompt + o);
 }
 ```
 
@@ -344,21 +338,20 @@ a decision written on both sides would be two constructs for one meaning:
 |---|---|---|
 | the next turn, the exit | `turn;`, `end;` | refused: a server is done with a request when its block is |
 | the request | `request;` | refused: a server does not request itself |
-| admission | `enter P (u), … at admission (x = e) { … } keep (ℓ)` | `admit if P (u), … fit where x = e { … } keep (ℓ)` |
-| the kernel | `hold` | `hold` |
+| admission | `hold P (u), … at admission (x = e) { … } cache (ℓ)` | the same |
 
-`admit if … fit` is the hold `enter … at admission` is, spelled by the
-scheduler: the pools listed are the ones that must have room (`used + r ≤
-cap`, §3), the units are what the admission takes, and `fit` is the whole
-condition. The condition is not an expression on purpose. A free predicate
-would part the test from the allocation (a program could admit on 10 units
-and take 20, and nothing could check it), would have to be re-evaluated at
-every event rather than when a pool changes, and would leave the Lean
-fragment; where the test does differ from the allocation, `reserve` says
-so by name (vLLM's `scheduler_reserve_full_isl`). The binding clause is
-`where` rather than `at admission` because in a server the header *is* the
-admission and has no other moment to name; in a `session` the clause still
-has to say when.
+An admission is written one way on both sides. The pools of a `hold` are
+the ones that must have room (`used + r ≤ cap`, §3), the units are what
+the admission takes, and the pools are the whole condition. The condition
+is not an expression on purpose. A free predicate would part the test from
+the allocation (a program could admit on 10 units and take 20, and nothing
+could check it), would have to be re-evaluated at every event rather than
+when a pool changes, and would leave the Lean fragment; where the test does
+differ from the allocation, `reserve` says so by name (vLLM's
+`scheduler_reserve_full_isl`). The side-specific spellings `enter … keep`
+and `admit if … fit where …` were two more names for this one statement,
+and #136 took them out: a serving program names its admission with a
+[`def`](api/program.md#def), as `lib/vllm.seq`'s `vllm_request` does.
 
 A `session` at top level stays the kernel form and the one the tutorial
 teaches. The two forms are exclusive in one program; a workload's `session`
@@ -543,7 +536,7 @@ queued rather than the moment the scheduler took it. `at admission (hit = e)`
 gives the header a place to name what it is written in terms of:
 
 ```
-enter reqs (1), kv (min(prompt, hit + budget_left(engine)))
+hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
       at admission (hit = min(cachedin(kv), hitmax)) { … }
 ```
 
@@ -574,8 +567,7 @@ scheduler.py:2426). `hidden o;`
 in the workload says so, and the check is the same per-position table that
 places the context variables: a hidden attribute may be read in a session
 statement (`decode (o - 1)`), a run or a hold's `cache`, and is a link
-error in a hold's units, `reserve` or `reuse` (read at admission, whether
-written `enter … at admission` or `admit if … where`), a queue or eviction
+error in a hold's units, `reserve` or `reuse` (read at admission), a queue or eviction
 key, a spill clause, a `ps` stage's capacity, or a step stage's budget,
 cost, chunk or serve keys. An attribute the scheduler itself sets
 (`cached`, `computed`) cannot be hidden.
@@ -583,12 +575,9 @@ The three vLLM programs hide `o` (`out` in the replay); a bound the
 scheduler may know (`max_tokens`) would be a second, unhidden attribute, as
 in the IR v4 design record.
 
-**`enter`, `admit if` and `admit via`.** The scheduler admits; the session
-enters. The statement is named from the side it is written on: `enter` in
-a `session` block, like every other statement there, and `admit if … fit`
-in a `server` block (§2, the two sides), where the scheduler is the one
-speaking. `admit` is also the name of the *pool option* that hands a queue
-to a stage's scheduler (`admit via S`), the scheduler's side again.
+**`hold` and `admit via`.** An admission is the `hold` statement on
+either side (§2, the two sides). `admit` is the name of the *pool option*
+that hands a queue to a stage's scheduler (`admit via S`).
 
 **Branching.** `branch (e)` takes the first block when `e` is 1 and the
 second when it is 0; any other value (a fraction, a count, a negative
@@ -702,7 +691,7 @@ long-prefill threshold, encoder inputs, speculative decoding, sliding
 window, cross-session prefix sharing (out of scope), asynchronous
 scheduling (Section 8).
 
-**Admission.** The header of `admit if` in `lib/vllm.seq`'s `vllm_request` is the
+**Admission.** The header of the `hold` in `lib/vllm.seq`'s `vllm_request` is the
 prefix-cache lookup and the allocation of the first chunk, and both happen
 when the scheduler admits the request, not when it queues. `known` is
 every token the request has: the prompt, or after a preemption the tokens

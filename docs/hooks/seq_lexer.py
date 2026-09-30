@@ -1,7 +1,7 @@
 """Register a Pygments lexer for seQ, so ```seq fences highlight.
 
 Four roles, four colours. A program's shape is `pool`/`stage`/`session`; what
-a session *does* is `enter`, `prefill`, `observe`; the knobs are `cap`,
+a session *does* is `hold`, `prefill`, `observe`; the knobs are `cap`,
 `evict`, `budget`; and what it *reads* is `cachedin`, `budget_left`, `now`.
 A reader should be able to tell those apart before reading a word, so each
 lands in a different colour group, and `~` gets its own because that is where
@@ -9,7 +9,7 @@ the randomness enters. Arithmetic stays plain: it is how a program computes,
 not what it means.
 
 The pages fenced 25 blocks as ```rust, which is close enough to look right
-and wrong in the places that matter: `hold`, `enter`, `observe` and `~exp`
+and wrong in the places that matter: `hold`, `observe` and `~exp`
 are not Rust, and the words that carry a seQ program's meaning were the ones
 left uncoloured.
 
@@ -30,9 +30,8 @@ STRUCTURE = ("let", "def", "use", "pool", "stage", "workload", "session", "serve
 
 # Statements, in the session and server blocks.
 STATEMENTS = (
-    "turn", "request", "set", "observe", "hold", "enter", "admit", "if", "fit",
-    "where", "grow", "drop", "release", "load", "lease", "from", "to", "branch", "with",
-    "loop", "choose", "end", "run", "reserve", "reuse", "cache", "keep",
+    "turn", "request", "set", "observe", "hold", "admit", "grow", "drop", "release", "load", "lease", "from", "to", "branch", "with",
+    "loop", "choose", "end", "run", "reserve", "reuse", "cache",
     "at", "admission", "growing", "on", "in", "by", "else",
     # the serving vocabulary: sugar over hold and run
     "prefill", "transfer", "decode", "tool",

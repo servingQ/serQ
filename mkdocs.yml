@@ -95,6 +95,7 @@ nav:
           - The KV transfer: design/pd-transfer.md
           - Renewal arrivals: design/renewal-arrivals.md
           - Bandwidth sharing: design/bandwidth-sharing.md
+          - One admission: design/one-admission.md
   - API Reference:
       - api/index.md
       - Program: api/program.md

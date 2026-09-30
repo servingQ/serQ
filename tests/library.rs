@@ -35,7 +35,7 @@ fn a_program_uses_the_definitions_of_a_library() {
         &[
             (
                 "lib/a.seq",
-                "use \"b.seq\";\ndef take(n) { admit if kv (n) fit { prefill on engine (n) growing kv; } }\n",
+                "use \"b.seq\";\ndef take(n) { hold kv (n) { prefill on engine (n) growing kv; } }\n",
             ),
             ("lib/b.seq", "def twice(x) = 2 * x;\n"),
             (
@@ -49,7 +49,7 @@ fn a_program_uses_the_definitions_of_a_library() {
     let written = compile_source(
         &PROGRAM.replace(
             "server { take(twice(k)); }",
-            "server { admit if kv (2 * k) fit { prefill on engine (2 * k) growing kv; } }",
+            "server { hold kv (2 * k) { prefill on engine (2 * k) growing kv; } }",
         ),
         &Overrides::default(),
     )
@@ -62,7 +62,7 @@ fn an_error_in_a_library_is_shown_in_the_library() {
     let d = dir(
         "error",
         &[
-            ("lib.seq", "def take(n) {\n  enter kv (n) { }\n}\n"),
+            ("lib.seq", "def take(n) {\n  turn;\n}\n"),
             (
                 "main.seq",
                 &format!("use \"lib.seq\";\n{PROGRAM}").replace("take(twice(k))", "take(1)"),
@@ -71,7 +71,7 @@ fn an_error_in_a_library_is_shown_in_the_library() {
     );
     let e = compile(&d, "main.seq").unwrap_err();
     assert!(e.contains("lib.seq:2:3:"), "{e}");
-    assert!(e.contains("  enter kv (n) { }"), "the library's line: {e}");
+    assert!(e.contains("  turn;"), "the library's line: {e}");
     assert!(e.contains("note: in `take`, used at 5:10"), "{e}");
 }
 
@@ -262,6 +262,9 @@ fn the_library_is_one_definition_of_the_vllm_engine() {
             src.contains("vllm_request(reqs, kv, engine, prompt, o, t0);"),
             "{name}"
         );
-        assert!(!src.contains("admit if"), "{name} writes the admission out");
+        assert!(
+            !src.contains("at admission ("),
+            "{name} writes the admission out"
+        );
     }
 }
