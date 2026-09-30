@@ -180,30 +180,63 @@ fn ownership_checks_ignore_locations_but_keep_index_syntax() {
 
 #[test]
 fn a_constant_that_is_nan_is_refused_and_an_infinity_is_not() {
-    let src = "let x = 1;\nstage s : fifo;\nworkload { arrive poisson(1); }\nsession { run s (x); end; }\nrun { horizon 10; }";
-    for e in ["0/0", "inf - inf"] {
-        let own = compile_source(
-            &src.replace("let x = 1", &format!("let x = {e}")),
-            &Overrides::default(),
-        )
-        .expect_err("a NaN let");
+    let src = "let x = 1;\npool kv { cap 100; block 16; }\nstage s : fifo(1);\n\
+               workload { arrive poisson(1); }\nsession { run s (x); end; }\n\
+               run { horizon 10; seed 1; }";
+    let refused = |src: &str, ov: &Overrides, what: &str| {
+        let err = compile_source(src, ov).expect_err(what);
         assert!(
-            own.contains("`let x` is NaN") && own.contains("help:"),
-            "{own}"
+            err.contains(&format!("{what} is NaN")) && err.contains("help:"),
+            "{err}"
+        );
+    };
+    for e in ["0/0", "inf - inf"] {
+        let none = Overrides::default();
+        refused(
+            &src.replace("let x = 1", &format!("let x = {e}")),
+            &none,
+            "`let x`",
+        );
+        refused(
+            &src.replace("cap 100", &format!("cap {e}")),
+            &none,
+            "pool `kv`: cap",
+        );
+        refused(
+            &src.replace("block 16", &format!("block {e}")),
+            &none,
+            "pool `kv`: block",
+        );
+        refused(
+            &src.replace("fifo(1)", &format!("fifo({e})")),
+            &none,
+            "stage `s`: fifo servers",
+        );
+        refused(
+            &src.replace("poisson(1)", &format!("poisson({e})")),
+            &none,
+            "the poisson rate",
+        );
+        refused(
+            &src.replace("seed 1", &format!("seed {e}")),
+            &none,
+            "the seed",
+        );
+        refused(
+            &src.replace("horizon 10", &format!("horizon {e}")),
+            &none,
+            "the horizon",
         );
         let mut ov = Overrides::default();
         ov.set("x", e).unwrap();
-        let set = compile_source(src, &ov).expect_err("a NaN --set");
-        assert!(set.contains("--set x is NaN"), "{set}");
+        refused(src, &ov, "--set x: the value");
     }
     let mut ov = Overrides::default();
     ov.set_num("x", f64::NAN).unwrap();
-    assert!(
-        compile_source(src, &ov)
-            .unwrap_err()
-            .contains("--set x is NaN")
-    );
+    refused(src, &ov, "--set x: the value");
     let mut ov = Overrides::default();
     ov.set_num("x", f64::INFINITY).unwrap();
     compile_source(src, &ov).expect("an infinity is `inf`");
+    compile_source(&src.replace("cap 100", "cap inf"), &Overrides::default())
+        .expect("an infinite cap");
 }

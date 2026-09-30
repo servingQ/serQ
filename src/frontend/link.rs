@@ -243,7 +243,12 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             .find(|(n, _)| n == name)
             .map(|(_, e)| e)
             .unwrap_or(e);
-        let v = lk.const_eval(e).map_err(|mut error| {
+        let what = if overridden {
+            "the value".to_string()
+        } else {
+            format!("`let {name}`")
+        };
+        let v = lk.const_eval(e, &what).map_err(|mut error| {
             if overridden {
                 // These spans refer to the --set expression, not the program.
                 error.message = format!("--set {name}: {}", error.message);
@@ -251,18 +256,6 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             }
             error
         })?;
-        // No run means anything with a NaN constant, and the IR has no
-        // spelling for one.
-        if v.is_nan() {
-            let what = if overridden {
-                format!("--set {name}")
-            } else {
-                format!("`let {name}`")
-            };
-            return Err(LinkError::new(format!(
-                "{what} is NaN\nhelp: a constant is a number or `inf`; `0/0` and `inf - inf` are not"
-            )));
-        }
         lk.consts.insert(name.clone(), v);
     }
     // Names of pools and stages.
@@ -300,8 +293,12 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     // Pools.
     let mut pools = vec![];
     for p in &prog.pools {
-        let cap = lk.const_eval(&p.cap)?;
-        let block = p.block.as_ref().map(|b| lk.const_eval(b)).transpose()?;
+        let cap = lk.const_eval(&p.cap, &format!("pool `{}`: cap", p.name))?;
+        let block = p
+            .block
+            .as_ref()
+            .map(|b| lk.const_eval(b, &format!("pool `{}`: block", p.name)))
+            .transpose()?;
         if let Some(b) = block
             && b <= 0.0
         {
@@ -357,7 +354,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     for s in &prog.stages {
         let kind = match &s.kind {
             StageKind::Fifo(c) => {
-                let c = lk.const_eval(c)?;
+                let c = lk.const_eval(c, &format!("stage `{}`: fifo servers", s.name))?;
                 if c < 1.0 || c.fract() != 0.0 {
                     return Err(LinkError::new(format!(
                         "stage `{}`: fifo servers must be a positive integer",
@@ -411,10 +408,12 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         None => (CArrival::None, None, false, vec![], vec![]),
         Some(w) => {
             let a = match &w.arrive {
-                Arrival::Poisson(e) => CArrival::Poisson(lk.const_eval(e)?),
+                Arrival::Poisson(e) => CArrival::Poisson(lk.const_eval(e, "the poisson rate")?),
                 Arrival::Renewal(e) => CArrival::Renewal(lk.expr(e)?),
-                Arrival::Closed(e) => CArrival::Closed(lk.const_eval(e)? as usize),
-                Arrival::Batch(e) => CArrival::Batch(lk.const_eval(e)? as usize),
+                Arrival::Closed(e) => {
+                    CArrival::Closed(lk.const_eval(e, "the closed population")? as usize)
+                }
+                Arrival::Batch(e) => CArrival::Batch(lk.const_eval(e, "the batch size")? as usize),
                 Arrival::None => CArrival::None,
             };
             (
@@ -431,22 +430,22 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     let session = lk.block(&prog.session, false)?;
     let horizon = match (&ov.horizon, &prog.run.horizon) {
         (Some(h), _) => *h,
-        (None, Some(e)) => lk.const_eval(e)?,
+        (None, Some(e)) => lk.const_eval(e, "the horizon")?,
         (None, None) => return Err(LinkError::new("no horizon (run { horizon T; })".into())),
     };
     let warmup = match (&ov.warmup, &prog.run.warmup) {
         (Some(w), _) => *w,
-        (None, Some(e)) => lk.const_eval(e)?,
+        (None, Some(e)) => lk.const_eval(e, "the warmup")?,
         (None, None) => 0.0,
     };
     let seed = match (&ov.seed, &prog.run.seed) {
         (Some(s), _) => *s,
-        (None, Some(e)) => lk.const_eval(e)? as u64,
+        (None, Some(e)) => lk.const_eval(e, "the seed")? as u64,
         (None, None) => 1,
     };
     let arrivals = match (ov.arrivals, &prog.run.arrivals) {
         (Some(n), _) => Some(n),
-        (None, Some(e)) => Some(lk.const_eval(e)? as usize),
+        (None, Some(e)) => Some(lk.const_eval(e, "arrivals")? as usize),
         (None, None) => None,
     };
     if warmup >= horizon {
@@ -761,7 +760,7 @@ impl Linker<'_> {
             .find(|d| d.name == r.name)
             .ok_or_else(|| self.unknown("pool", &r.name).at(r.span))?;
         match &d.block {
-            Some(b) => self.const_eval(b),
+            Some(b) => self.const_eval(b, &format!("`blocksize({})`", r.name)),
             None => Err(LinkError::new(format!(
                 "`blocksize({})`: pool `{}` has no `block`",
                 r.name, r.name
@@ -770,10 +769,23 @@ impl Linker<'_> {
         }
     }
 
+    /// The constant `what` (`pool \`kv\` cap`, `horizon`, ...): a number or
+    /// an infinity. No run means anything with a NaN constant, and the IR
+    /// has no spelling for one.
+    fn const_eval(&self, e: &Expr, what: &str) -> LResult<f64> {
+        let v = self.eval_const(e)?;
+        if v.is_nan() {
+            return Err(LinkError::new(format!(
+                "{what} is NaN\nhelp: a constant is a number or `inf`; `0/0` and `inf - inf` are not"
+            )));
+        }
+        Ok(v)
+    }
+
     /// Evaluate a constant expression (no attributes, no samples).
-    fn const_eval(&self, e: &Expr) -> LResult<f64> {
+    fn eval_const(&self, e: &Expr) -> LResult<f64> {
         Ok(match e {
-            Expr::Located(span, inner) => self.const_eval(inner).map_err(|e| e.at(Some(*span)))?,
+            Expr::Located(span, inner) => self.eval_const(inner).map_err(|e| e.at(Some(*span)))?,
             Expr::Num(x) => *x,
             Expr::Var(n) => match n.as_str() {
                 "inf" => f64::INFINITY,
@@ -782,20 +794,20 @@ impl Linker<'_> {
                     .get(n)
                     .ok_or_else(|| self.unknown("constant", n))?,
             },
-            Expr::Unary(UnOp::Neg, a) => -self.const_eval(a)?,
+            Expr::Unary(UnOp::Neg, a) => -self.eval_const(a)?,
             Expr::Unary(UnOp::Not, a) => {
-                if self.const_eval(a)? != 0.0 {
+                if self.eval_const(a)? != 0.0 {
                     0.0
                 } else {
                     1.0
                 }
             }
-            Expr::Binary(op, a, b) => binop(*op, self.const_eval(a)?, self.const_eval(b)?),
+            Expr::Binary(op, a, b) => binop(*op, self.eval_const(a)?, self.eval_const(b)?),
             Expr::Cond(c, a, b) => {
-                if self.const_eval(c)? != 0.0 {
-                    self.const_eval(a)?
+                if self.eval_const(c)? != 0.0 {
+                    self.eval_const(a)?
                 } else {
-                    self.const_eval(b)?
+                    self.eval_const(b)?
                 }
             }
             Expr::Call(f, _) if f == "blocksize" => {
@@ -810,9 +822,9 @@ impl Linker<'_> {
                 let xs: Vec<f64> = args
                     .iter()
                     .map(|a| match a {
-                        Arg::Expr(e) => self.const_eval(e),
+                        Arg::Expr(e) => self.eval_const(e),
                         Arg::Ref(r) => self
-                            .const_eval(&Expr::Var(r.name.clone()))
+                            .eval_const(&Expr::Var(r.name.clone()))
                             .map_err(|e| e.at(r.span)),
                     })
                     .collect::<LResult<_>>()?;
