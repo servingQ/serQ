@@ -6,7 +6,7 @@ default-members = ["."]
 
 [workspace.package]
 version = "0.1.0"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 
 # one pyo3 for serq's `python` feature and pyserq (pyo3-ffi links python once)
 [workspace.dependencies]
@@ -25,7 +25,7 @@ repository = "https://github.com/vrvrv/serQ"
 readme = "README.md"
 keywords = ["llm", "serving", "queueing", "simulation", "vllm"]
 categories = ["simulation", "science"]
-include = ["src/**", "tests/**", "examples/**", "lib/**", "tools/oracle/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "rust-toolchain.toml"]
+include = ["src/**", "tests/**", "examples/**", "lib/**", "tools/oracle/**", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "rust-toolchain.toml"]
 
 [lib]
 name = "serq"

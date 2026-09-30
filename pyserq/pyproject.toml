@@ -9,7 +9,7 @@ name = "pyserq"
 dynamic = ["version"]
 description = "serQ in Python: compile a program to its IR and run it, in process"
 readme = "README.md"
-license = "MIT OR Apache-2.0"
+license = "Apache-2.0"
 requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Rust",
