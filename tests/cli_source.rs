@@ -239,4 +239,11 @@ fn a_constant_that_is_nan_is_refused_and_an_infinity_is_not() {
     compile_source(src, &ov).expect("an infinity is `inf`");
     compile_source(&src.replace("cap 100", "cap inf"), &Overrides::default())
         .expect("an infinite cap");
+    // a constant with a place (a call) keeps it in the error
+    let err = compile_source(
+        &src.replace("cap 100", "cap sqrt(-1)"),
+        &Overrides::default(),
+    )
+    .expect_err("a NaN call");
+    assert!(err.contains("2:15:") && err.contains("cap is NaN"), "{err}");
 }
