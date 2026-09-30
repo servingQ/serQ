@@ -1,5 +1,12 @@
 # Input shapes and padding
 
+**Decision (2026-09-30): padding/shape extensions to the IR are deferred.**
+The investigation below records vendor behavior; it does not establish that
+padding must be part of the language. Existing cost expressions and external
+calibration remain available. Reconsider an IR extension only if a concrete
+modeling or verification need justifies it. This does not defer logical
+prefill/decode batch isolation.
+
 A second pass over the same [latest tags](index.md) follows full-attention
 requests from scheduler selection into the runner. A valid logical batch is
 not necessarily a valid compiled input. Only the native RBLN path is included.
@@ -65,7 +72,7 @@ not automatically require live request KV blocks; static KV head padding is
 a different capacity calculation. Dummy metadata and workspace need their
 own accounting if they affect observable resource pressure.
 
-## Remaining IR requirements
+## Deferred IR questions
 
 The current step cost sees aggregate logical `tokens`, `prefilled`,
 `decoders` and context, not a selected per-request layout or synchronized DP
@@ -73,7 +80,7 @@ shape. A closed cost expression can approximate rounding; it cannot check
 whether request query lengths are uniform, identify graph eligibility, or
 synchronize several rank schedules.
 
-A future refinement should expose:
+If this work is resumed, one candidate refinement is:
 
 ```text
 selected real requests + token intervals
@@ -87,8 +94,8 @@ Keep shape selection and progress separate. Check that every real interval
 fits the padded extent, dummy rows do not write request KV, and unsupported
 shapes explicitly fall back or fail according to the tagged path. Graph
 capture/replay and rank maxima must not become hidden vendor-name semantics.
-This is a requirement sketch, not new syntax or implemented shape IR.
+This is a deferred candidate sketch, not a required extension, new syntax or implemented shape IR.
 
-The [IR requirements](../design/vendor-ir.md) should be refined around these
-contracts before introducing a general batch-layout node. Phase isolation is
-one requirement; padding/shape validation is another.
+The [IR investigation](../design/vendor-ir.md) preserves these questions for
+future consideration. Whether padding needs an IR representation remains
+undecided; logical phase isolation proceeds separately.

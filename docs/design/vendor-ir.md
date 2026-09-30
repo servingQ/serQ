@@ -1,5 +1,10 @@
 # Vendor requirements for the IR
 
+**Decision (2026-09-30): padding/shape IR extensions are deferred.** The
+source findings remain as research, not an adoption requirement. Existing
+cost expressions or external calibration may suffice. Logical batch phase
+isolation, cache identity and resource lifetime are separate questions.
+
 Requirements from the [latest-tag full-attention investigation](../use-cases/index.md), checked on 2026-09-30 against the current **IR v8**. This is a design proposal, not an implemented extension or new syntax. The executable examples live under `examples/vendors/`.
 
 ## What the current IR already supplies
@@ -36,7 +41,7 @@ selection/shape contract.
 **After — semantic sketch, not executable syntax:**
 
 ```text
-snapshot → select candidates → validate resources/shape → commit batch
+snapshot → select candidates → validate resources → commit batch
                                                        → execute → complete
 ```
 
@@ -81,15 +86,15 @@ Copying need not move ownership: both pools may retain copies. Existing leases s
 
 **Checks:** no read before ready; cancellation returns every reference; in-flight objects cannot be selected as free victims; event order is deterministic.
 
-## 4. Preserve batch shape and speculative progress
+## 4. Preserve speculative progress; defer physical shapes
 
-MetaX's runner regions and TPU's rank padding require more than aggregate `tokens`, `prefilled` and `decoders`. Selected per-request phase/extent must support closed reductions for buckets and rank maxima. Admission selection and runner permutation are separate observations.
+MetaX's runner regions and TPU's rank padding require more than aggregate `tokens`, `prefilled` and `decoders`. Per-request phase/extent and closed reductions are possible future approaches, but whether the IR needs to carry padded shapes is deferred. Admission selection and runner permutation are separate observations.
 
 Local decode recovery is already modeled with `computed` and the request library. Speculative proposal, scheduled work, verification and acceptance remain distinct states; a scalar known position does not describe rejection. Multi-stage runs express shared link resources, but do not alone describe arbitrary compute/communication dependencies.
 
 **Checks:** committed progress is monotone; rejection discards only tentative progress; layout preserves request/token identity; cost reductions do not introduce arbitrary host callbacks that evade the IR and Lean fragment.
 
-## Device shapes are not additional request tokens
+## Deferred: device shapes and padding
 
 The [runner input audit](../use-cases/input-shapes.md) adds concrete contracts:
 RBLN fixed-width prefills and compiled decode buckets; Ascend SP alignment,
@@ -98,13 +103,14 @@ and static head padding; MetaX full-attention block/head constraints and
 uniform query padding checks.
 
 A single-rank cost can express finite rounding with existing `def`/conditionals.
-It cannot validate a per-request padded layout or combine rank maxima. Any
-new shape representation must separate selected logical token intervals,
+It cannot validate a per-request padded layout or combine rank maxima. If this proposal is resumed, a candidate
+shape representation would separate selected logical token intervals,
 physical dimensions, validity masks and execution mode. Dummy input padding
 must not advance a request or publish KV; static head padding instead changes
 actual bytes per logical KV token and therefore the configured capacity.
-Use the smallest closed refinement that can check those contracts, rather
-than adding one opaque policy per accelerator.
+Do not introduce a shape representation at this stage. First demonstrate
+why a concrete use case cannot be handled by existing cost expressions or
+external calibration.
 
 ## Usability and adoption
 
@@ -115,7 +121,10 @@ A serving engineer should write request lifetime, scheduling constraints and cac
 | Batch selection | Waiting prefill supersedes resident decodes | Native RBLN per-step selected batch and allocation trace |
 | Cache identity/units | Two requests share a prefix; sub-block copy pins its source | Cache object capacity/reference invariants and CPU cache oracle |
 | Connector completion | Cancel transfer; offload fails; source release follows destination readiness | Fake connector outcomes with readiness/release traces |
-| Batch shape and shared policy state | Unbalanced DP padding; MetaX regions; Ascend aging/prediction | Separate scheduler/runner traces and closed reduction/state semantics |
+| Shared policy state | Ascend aging/prediction | Scheduler traces and closed state-update semantics |
+
+Physical padding, DP padded shapes and runner-region representation are
+outside this adoption sequence while the IR extension is deferred.
 
 Any adopted semantic change follows the repository's version policy and moves the interpreter, oracle artifacts and `serving-queue-theory` generator together where required. Existing `lease`/`load` paths are outside the Lean fragment; runnable examples are not proofs. Compare each step's selection, allocation/reuse, readiness, committed progress and release, rather than throughput alone.
 

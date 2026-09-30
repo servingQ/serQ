@@ -34,7 +34,8 @@ MetaX integrates upstream in the paths examined; an OOT repository does not nece
 runner inputs: compiled buckets, token/request padding, uniform query
 lengths, dummy metadata and backend/head/block compatibility. Each vendor
 page now includes the specific tagged path. Real progress and padded device
-work must be represented separately.
+work must not be conflated. **Padding/shape IR extensions are deferred**;
+the audit is retained as source research, not an implementation commitment.
 
 ## Run an example
 
