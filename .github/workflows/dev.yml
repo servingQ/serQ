@@ -46,6 +46,7 @@ jobs:
     runs-on: ubuntu-22.04
     environment: pypi
     permissions:
+      contents: read  # a job's permissions replace the workflow's; checkout needs this
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -58,3 +59,5 @@ jobs:
           merge-multiple: true
       - run: python3 scripts/version.py wheels dist "${{ needs.version.outputs.dev }}"
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true  # a re-run of the same commit
