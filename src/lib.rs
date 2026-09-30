@@ -124,11 +124,14 @@ pub fn load_trace(
     } else {
         base.map_or_else(|| f.to_path_buf(), |b| b.join(f))
     };
-    let text = std::fs::read_to_string(&full)
-        .map_err(|e| format!("cannot read trace {}: {e}", full.display()))?;
-    ir::trace::Corpus::from_csv(&text)
-        .map(Some)
-        .map_err(|e| format!("trace {}: {e}", full.display()))
+    read_trace(&full).map(Some)
+}
+
+/// The trace file at `path`: the corpus a replay draws its sessions from.
+pub fn read_trace(path: &Path) -> Result<ir::trace::Corpus, String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read trace {}: {e}", path.display()))?;
+    ir::trace::Corpus::from_csv(&text).map_err(|e| format!("trace {}: {e}", path.display()))
 }
 
 /// Replace the program's trace file by its sessions, as explicit sessions

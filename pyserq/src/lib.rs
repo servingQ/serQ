@@ -8,7 +8,7 @@
 //! r = pyserq.run(p)            # the GIL is released while it runs
 //! r.json()                     # what `serq run --json` prints
 //! values, times, sessions, turns = r.observe("sojourn")   # what `--dump` writes
-//! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay runs
+//! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 //! ```
 
 use std::collections::HashMap;
@@ -133,14 +133,13 @@ fn run(py: Python<'_>, program: &Program) -> PyResult<Report> {
 }
 
 /// `read_trace(path)`: a trace's sessions, each a list of its turns
-/// `(new, out, think, forced)`, read by the parser a replay uses.
+/// `(new, out, think, forced)`: the corpus a replay draws its sessions
+/// from, read as a replay reads it. A relative path is read from the
+/// current directory.
 #[pyfunction]
 #[allow(clippy::type_complexity)]
 fn read_trace(path: PathBuf) -> PyResult<Vec<Vec<(f64, f64, f64, f64)>>> {
-    let text = std::fs::read_to_string(&path)
-        .map_err(|e| PyValueError::new_err(format!("cannot read trace {}: {e}", path.display())))?;
-    let corpus = serq::ir::trace::Corpus::from_csv(&text)
-        .map_err(|e| PyValueError::new_err(format!("trace {}: {e}", path.display())))?;
+    let corpus = serq::read_trace(&path).map_err(PyValueError::new_err)?;
     Ok(corpus
         .sessions
         .iter()
