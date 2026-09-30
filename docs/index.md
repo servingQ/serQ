@@ -44,7 +44,7 @@ server {
 }
 ```
 
-That is most of `examples/multi-turn/vllm.serq`, and it **is** vLLM v1's engine: on six
+That is most of `examples/multi-turn/vllm.sq`, and it **is** vLLM v1's engine: on six
 deterministic scenarios and on a 333-session, 3 321-request trace, it gives the
 real scheduler's answer for every request — every first-token time, every
 cached-token count.
@@ -67,7 +67,7 @@ is ordinary control flow: `branch`, `loop`, `end`.
 
 <div class="grid cards" markdown>
 
-- **Simulation** — `serq run prog.serq` executes the program as a
+- **Simulation** — `serq run prog.sq` executes the program as a
   discrete-event simulation and reports time averages, per-observation
   statistics and per-turn records.
 

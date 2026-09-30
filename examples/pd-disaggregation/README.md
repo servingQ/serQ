@@ -1,8 +1,8 @@
 # Prefill/decode examples
 
-`llmd_nixl_pull.serq` describes a serving deployment.
+`llmd_nixl_pull.sq` describes a serving deployment.
 
-`pd_open.serq` and `pd_tandem.serq` are research comparison fixtures for
+`pd_open.sq` and `pd_tandem.sq` are research comparison fixtures for
 serving-queue-theory's queueing models. The open model uses Poisson arrivals;
 the saturated model circulates a closed population. They remain packaged
 here so the downstream Rust adapter can load the exact program belonging

@@ -300,7 +300,7 @@ fn a_re_executed_hold_releases_nothing_twice() {
 
 /// A step stage that serves several queues tries them in the order their
 /// pools are declared, and the first head that does not fit stops the
-/// step's admissions. `examples/pd-disaggregation/llmd_nixl_pull.serq` relies on it: the decoder's
+/// step's admissions. `examples/pd-disaggregation/llmd_nixl_pull.sq` relies on it: the decoder's
 /// requests whose KV has arrived (its `reqsD` queue) are declared before
 /// the new ones (`kvD`), as vLLM serves `skipped_waiting` before `waiting`.
 #[test]

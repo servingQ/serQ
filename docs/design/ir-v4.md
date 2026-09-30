@@ -254,7 +254,7 @@ prefill and wrong during decode. The Lean model has the same rule.
 **No oracle has exercised this path.** The preemption counts of
 `tools/oracle/*.out.json`: `chunked` 0, `hol` 0, `longchunk` 0, `mixed` 0,
 `seqcap` 0, `preempt` 1. That one is a self-preemption during prefill on
-10 usable blocks, before a token was produced. `examples/replay/vllm_replay.serq`
+10 usable blocks, before a token was produced. `examples/replay/vllm_replay.sq`
 run at spacings of 3.5 s and 2.5 s reports `preempt 0` in the `kv` row of
 both, with KV use of 793 and 1 865 of 128 160 tokens. The collapse at 2.5 s
 is the `reqs` queue waiting 35.8 s, not memory pressure. The 3 321-request

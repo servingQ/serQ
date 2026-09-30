@@ -2,7 +2,7 @@
 """Check the `file.py:lines` citations of upstream vLLM against `ref/vllm`.
 
 `docs/language.md` §7 asserts a correspondence between vLLM's scheduler and
-`examples/multi-turn/vllm.serq`, and the evidence for each row is a citation into upstream
+`examples/multi-turn/vllm.sq`, and the evidence for each row is a citation into upstream
 source. Nothing checked them, so a citation could name a range that had moved,
 or a file that no longer existed, and the table would still read as proof.
 
@@ -69,7 +69,7 @@ PATHS = {
     "disagg_proxy_pushconnector_demo.py": "examples/disaggregated/disaggregated_serving/disagg_proxy_pushconnector_demo.py",
 }
 
-SOURCES = ["docs/**/*.md", "src/**/*.rs", "tests/**/*.rs", "examples/*/*.serq", "lib/*.serq", "README.md"]
+SOURCES = ["docs/**/*.md", "src/**/*.rs", "tests/**/*.rs", "examples/*/*.sq", "lib/*.sq", "README.md"]
 
 # `scheduler.py:742-813, 869, 1539-1582` -- one file, then a list of ranges.
 CITE = re.compile(r"\b((?:[\w.]+/)?[\w.]+\.py):((?:\s*\d+(?:-\d+)?\s*,)*\s*\d+(?:-\d+)?)")

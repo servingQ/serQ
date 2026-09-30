@@ -123,7 +123,7 @@ fn header_using(p: &Program, block: usize, from: usize, slot: usize) -> Option<S
 ///
 /// A hold's header is evaluated when the session is admitted; a `set` above
 /// it runs when the session reaches that statement, which for a session that
-/// then queues is *before* it waits. `examples/multi-turn/vllm.serq` shipped with exactly
+/// then queues is *before* it waits. `examples/multi-turn/vllm.sq` shipped with exactly
 /// this: a prefix-cache lookup bound before the queue, under a comment citing
 /// the admission-time lookup. `at admission (name = e)` is the clause for it.
 fn stale_header_read(p: &Program, block: usize, out: &mut Vec<String>) {

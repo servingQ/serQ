@@ -42,10 +42,10 @@ zero. Retaining the two variants pays an IR cost for compatibility.
 
 ## PD comparison programs
 
-Keep `pd_open.serq` and `pd_tandem.serq` packaged under `examples/` as research
+Keep `pd_open.sq` and `pd_tandem.sq` packaged under `examples/` as research
 comparison fixtures used by serving-queue-theory. They are queueing models,
 not descriptions of an actual serving deployment. Their `mode` switch is
 part of the paired experiment: both variants draw the same work demands.
 A deployment drawing includes both topologies and should not be presented
 as the active topology for one mode. The directory README makes this scope
-explicit; a real deployment is illustrated by `llmd_pd.serq`.
+explicit; a real deployment is illustrated by `llmd_pd.sq`.

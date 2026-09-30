@@ -1,4 +1,4 @@
-//! Deterministic scenarios on the vLLM v1 engine (`examples/multi-turn/vllm.serq`
+//! Deterministic scenarios on the vLLM v1 engine (`examples/multi-turn/vllm.sq`
 //! and inline variants), each mirroring a behaviour of
 //! `ref/vllm/vllm/v1/core/sched/scheduler.py` (line numbers at commit
 //! 0c87a197). Iteration cost is 1, so times are scheduler steps.

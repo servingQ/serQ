@@ -70,7 +70,7 @@ BUILTINS = (
 class SerqLexer(RegexLexer):
     name = "serQ"
     aliases = ["serq", "seq"]
-    filenames = ["*.serq"]
+    filenames = ["*.sq"]
 
     tokens = {
         "root": [
@@ -107,16 +107,16 @@ class SerqLexer(RegexLexer):
 
 def on_config(config, **_):
     """Make `serq` a language Pygments knows, before any page is rendered."""
-    module = types.ModuleType("pygments.lexers.serq")
+    module = types.ModuleType("pygments.lexers.sq")
     module.SerqLexer = SerqLexer
     # `get_lexer_by_name` imports the module and reads `__all__` off it
     module.__all__ = ["SerqLexer"]
-    sys.modules["pygments.lexers.serq"] = module
+    sys.modules["pygments.lexers.sq"] = module
     _mapping.LEXERS["SerqLexer"] = (
-        "pygments.lexers.serq",
+        "pygments.lexers.sq",
         "serQ",
         ("serq", "seq"),
-        ("*.serq",),
+        ("*.sq",),
         (),
     )
     return config

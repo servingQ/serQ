@@ -4,7 +4,7 @@ The IR is the definition of a serQ program. Everything else is built around
 it:
 
 ```
-  program text (.serq)  ──parse + link──▶  IR (ir::Program, JSON)  ──▶  interpreter (interp)
+  program text (.sq)  ──parse + link──▶  IR (ir::Program, JSON)  ──▶  interpreter (interp)
   tools (Rust / JSON) ──────build/edit──▶                          ──▶  Lean model (generated)
                                                                    ──▶  checks, diffs, archives
 ```
@@ -29,11 +29,11 @@ once, `also`, under the program's `share`).
   oracle tests run the IR. Before the IR existed, the vLLM request program
   had three hand-kept copies: the Rust test built it as a string per
   scenario, the Lean generator held a hand-written Lean version, and
-  `examples/multi-turn/vllm.serq` was a third variant. Now there is one file,
-  `examples/oracle/vllm_request.serq`, compiled once per scenario into
+  `examples/multi-turn/vllm.sq` was a third variant. Now there is one file,
+  `examples/oracle/vllm_request.sq`, compiled once per scenario into
   `tools/oracle/<name>.ir.json`, and both the Rust test and the Lean
   theorems read those files. The multi-turn cache scenario is the IR of
-  `examples/replay/vllm_replay.serq` with its trace inlined
+  `examples/replay/vllm_replay.sq` with its trace inlined
   (`tools/oracle/cache_trace.ir.json`), so its Lean program is generated
   too.
 - **The workload instance is data.** Which sessions arrive with which

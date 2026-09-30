@@ -13,7 +13,7 @@
 // preempted (its blocks freed to the cache, it re-enters the waiting queue
 // at the head and recomputes what was lost). See docs/language.md
 // §"vLLM" for the line-by-line correspondence.
-use "../../lib/vllm.serq";
+use "../../lib/vllm.sq";
 
 let B = 8192;          // max_num_batched_tokens
 let max_seqs = 16;     // max_num_seqs

@@ -61,7 +61,7 @@ is `run egress[i], ingress[j] (X); load Q (n); release P;`.
 
 ### Example
 
-From `examples/pd-disaggregation/llmd_nixl_pull.serq`, the decoder's read of
+From `examples/pd-disaggregation/llmd_nixl_pull.sq`, the decoder's read of
 the prefiller's leased blocks, over the prefiller's NIC and its own:
 
 ```serq

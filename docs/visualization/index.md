@@ -10,7 +10,7 @@
 serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]...
 ```
 
-`FILE` is program text (`.serq`) or IR (`.json`), as for the other commands.
+`FILE` is program text (`.sq`) or IR (`.json`), as for the other commands.
 
 ## Why the figure is generated rather than drawn
 
@@ -30,7 +30,7 @@ RNG — the same IR gives the same bytes.
 
 The program as a queueing network: stations, memory pools with their queues
 and prefix caches, the instance boundaries, and the flow between them
-([deployment view](deployment.md)). Here is `examples/multi-turn/vllm.serq` —
+([deployment view](deployment.md)). Here is `examples/multi-turn/vllm.sq` —
 vLLM v1's engine:
 
 ![vLLM v1 as a queueing network](../assets/vllm.deployment.svg)

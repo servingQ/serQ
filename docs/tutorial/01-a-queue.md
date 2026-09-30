@@ -6,8 +6,8 @@ long.
 
 ## The program
 
-```serq title="docs/tutorial/programs/01-queue.serq"
---8<-- "docs/tutorial/programs/01-queue.serq"
+```serq title="docs/tutorial/programs/01-queue.sq"
+--8<-- "docs/tutorial/programs/01-queue.sq"
 ```
 
 Four blocks, and every serQ program has the same four.
@@ -67,7 +67,7 @@ How long to simulate, how much to throw away first, and the seed.
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/01-queue.serq
+serq run docs/tutorial/programs/01-queue.sq
 ```
 
 ```text
@@ -105,7 +105,7 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
     `4.8040` is not 5, and it is not supposed to be. The interval is what makes
     the claim: `±0.2377` covers 5. A run whose interval does *not* cover the
     closed form is a bug — in the program, or in serQ. That is exactly how
-    `examples/single-turn/mg1.serq`, `ps.serq` and `closed.serq` are checked in CI.
+    `examples/single-turn/mg1.sq`, `ps.sq` and `closed.sq` are checked in CI.
 
 ## What to try
 
@@ -113,7 +113,7 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
 
 ```bash
 for L in 0.5 0.8 0.9 0.95 0.99; do
-  serq run docs/tutorial/programs/01-queue.serq --set Lambda=$L --json
+  serq run docs/tutorial/programs/01-queue.sq --set Lambda=$L --json
 done
 ```
 

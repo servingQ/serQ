@@ -42,7 +42,7 @@ consult `docs/review.md` and relevant `docs/design/` records when intent matters
   than claiming it is compatible or broken without evidence.
 - **Semantics must survive the whole pipeline.** Follow relevant changes from
   lexer/parser through linking, IR validation, and interpretation. Check both
-  `.serq` input and direct JSON IR loading where applicable. Keep reports and
+  `.sq` input and direct JSON IR loading where applicable. Keep reports and
   diagrams consistent with the meaning of the program.
 - **Scheduling and memory accounting are observable.** For affected paths,
   examine admission guards, token budgets, allocation/growth/release, cache

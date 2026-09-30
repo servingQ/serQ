@@ -40,7 +40,7 @@ ps ( expr )
 stage svc : ps(1);
 ```
 
-(`examples/single-turn/ps.serq`, M/G/1-PS.) A `ps` stage some run holds
+(`examples/single-turn/ps.sq`, M/G/1-PS.) A `ps` stage some run holds
 together with another is served by the program's
 [`share`](program.md#share) instead: its jobs are flows, not an equal
 split.
@@ -96,7 +96,7 @@ shortest-remaining-first; `serve by (-remaining)` is the opposite.
 
 ### Example
 
-From `examples/multi-turn/vllm.serq`:
+From `examples/multi-turn/vllm.sq`:
 
 ```serq
 stage engine : step {

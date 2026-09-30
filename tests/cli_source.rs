@@ -7,14 +7,14 @@ use serq::{Overrides, compile_source};
 fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
     let f = Fixture::new();
     f.write(
-        "model.serq",
+        "model.sq",
         &PROGRAM.replace("run svc (rate)", "run svcc (rate)"),
     );
     failure(
-        &f.run(&["check", "model.serq"]),
+        &f.run(&["check", "model.sq"]),
         1,
         &[
-            "model.serq: 4:15:",
+            "model.sq: 4:15:",
             "unknown stage `svcc`",
             "4 | session { run svcc (rate); end; }",
             "^^^^",
@@ -25,9 +25,9 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
     // The first spelling is a valid stage, but the second is an unknown pool.
     // Searching the token stream for the first matching name would misdiagnose it.
     let src = "stage kvv : fifo;\npool kv { cap 10; }\nsession { hold kvv (1) { end; } }\nrun { horizon 10; }";
-    f.write("model.serq", src);
+    f.write("model.sq", src);
     failure(
-        &f.run(&["check", "model.serq"]),
+        &f.run(&["check", "model.sq"]),
         1,
         &[
             "3:16:",

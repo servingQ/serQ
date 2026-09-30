@@ -23,6 +23,6 @@ Every number quoted in these pages came from running them.
 !!! tip "Run as you read"
     ```bash
     cargo build --release
-    ./target/release/serq run docs/tutorial/programs/01-queue.serq
+    ./target/release/serq run docs/tutorial/programs/01-queue.sq
     ```
     Every chapter ends with a sweep you can reproduce with `--set`.

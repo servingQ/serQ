@@ -4,7 +4,7 @@
 
 A language in which an LLM serving deployment is a program: memory pools,
 stages, a workload and the policy every session runs, written once and both
-simulated and formally checked against the real system. `examples/multi-turn/vllm.serq`
+simulated and formally checked against the real system. `examples/multi-turn/vllm.sq`
 reproduces the upstream vLLM v1 scheduler request for request — the
 correspondence, cited `file:line` against `ref/vllm`, is
 [`docs/language.md` §7][language].
@@ -24,7 +24,7 @@ ran against it. serQ is one program instead. Its definition is an
 intermediate representation, the **IR** (`src/ir.rs`, [`docs/ir.md`][ir]) —
 a closed, versioned data structure that the interpreter runs, the Lean
 model is generated from, and tools build or edit as JSON. The text syntax
-([`examples/*/*.serq`][examples], [`docs/language.md`][language]) is one
+([`examples/*/*.sq`][examples], [`docs/language.md`][language]) is one
 frontend that compiles to it. The Lean formalisation lives in the
 companion research repository, `serving-queue-theory`
 (`lean/ServingQueueTheory/Seq*.lean`), where the vLLM scenarios below are
@@ -37,9 +37,9 @@ theorems.
 ## Quickstart
 
 ```bash
-cargo run --release -- run examples/multi-turn/vllm.serq --seed 2 --horizon 3000
-cargo run --release -- ir examples/multi-turn/vllm.serq > vllm.json      # the IR
-cargo run --release -- draw examples/multi-turn/vllm.serq --format svg --out vllm.svg   # experimental
+cargo run --release -- run examples/multi-turn/vllm.sq --seed 2 --horizon 3000
+cargo run --release -- ir examples/multi-turn/vllm.sq > vllm.json      # the IR
+cargo run --release -- draw examples/multi-turn/vllm.sq --format svg --out vllm.svg   # experimental
 ```
 
 As a dependency, pin a release tag:

@@ -7,8 +7,8 @@ where all the interesting behaviour lives.
 
 ## The program
 
-```serq title="docs/tutorial/programs/03-sessions.serq"
---8<-- "docs/tutorial/programs/03-sessions.serq"
+```serq title="docs/tutorial/programs/03-sessions.sq"
+--8<-- "docs/tutorial/programs/03-sessions.sq"
 ```
 
 ## What is new
@@ -62,7 +62,7 @@ tool call, a human reading, a downstream API.
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/03-sessions.serq
+serq run docs/tutorial/programs/03-sessions.sq
 ```
 
 ```text
@@ -100,7 +100,7 @@ Turn the thinking time down and watch the sessions pile back in:
 
 ```bash
 for Z in 0.5 1 3 10; do
-  serq run docs/tutorial/programs/03-sessions.serq --set Z=$Z
+  serq run docs/tutorial/programs/03-sessions.sq --set Z=$Z
 done
 ```
 

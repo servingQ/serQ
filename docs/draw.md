@@ -10,7 +10,7 @@ discussion: [RFC #1](https://github.com/vrvrv/serQ/issues/1).
 serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]...
 ```
 
-`FILE` is program text (`.serq`) or IR (`.json`), as for `run`, `check` and
+`FILE` is program text (`.sq`) or IR (`.json`), as for `run`, `check` and
 `ir`. Output goes to stdout unless `--out` names a file. `--set` applies to
 program text and is rejected on `.json`, where the constants are already
 folded.
@@ -46,7 +46,7 @@ of the session program. `deployment::project` walks it carrying a hold stack:
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
 
 Two runs at the same stage in a row are two visits, not a flow, and are not
-drawn. A chain of guards that moves nobody (`routing.serq` has five sibling
+drawn. A chain of guards that moves nobody (`routing.sq` has five sibling
 `branch (policy == k)` blocks) collapses to one edge rather than multiplying
 out. A `choose` annotates the station whose reference reads the attribute it
 names — `rep[j]`, not whatever station happens to come next.
@@ -70,7 +70,7 @@ order over an empty cache says nothing.
 
 Which pool a `cache` clause leaves units in follows `interp.rs::release_hold`: a
 hold with a `growing` run caches in that pool alone, and one without caches in
-all of its pools. `replica.serq` is the case that makes the difference visible
+all of its pools. `replica.sq` is the case that makes the difference visible
 — its `hold batch (1), kv (…)` really does keep a unit of `batch` cached.
 
 ## 3. Formats

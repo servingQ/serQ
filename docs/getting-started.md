@@ -25,7 +25,7 @@ serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.0-rc5" }
 ## Run your first program
 
 ```bash
-serq run examples/single-turn/mg1.serq
+serq run examples/single-turn/mg1.sq
 ```
 
 ```text
@@ -60,7 +60,7 @@ run: horizon 250000 end 250000 warmup 25000 seed 1 events 397859 arrivals 198931
 `horizon` is simulated seconds, `warmup` the seconds discarded before anything
 is recorded, `seed` the RNG seed. `events` is how much work the interpreter
 did; `arrivals`, `ended` and `turns` count sessions and turns after warm-up
-(`turns 0` above because `mg1.serq` has no `turn` statement — one request per
+(`turns 0` above because `mg1.sq` has no `turn` statement — one request per
 session).
 
 ### `observe`
@@ -90,7 +90,7 @@ their previous preemption, which a run would otherwise hide).
 Every `let` constant is an override:
 
 ```bash
-serq run examples/multi-turn/vllm.serq --seed 2 --horizon 3000
+serq run examples/multi-turn/vllm.sq --seed 2 --horizon 3000
 ```
 
 `--json` prints the same report as JSON, and `--dump DIR` writes every
@@ -100,7 +100,7 @@ sample, which is what you pair against a measured run.
 ## Checking without running
 
 ```bash
-serq check examples/multi-turn/replica.serq
+serq check examples/multi-turn/replica.sq
 # OK: 3 pool(s), 2 stage(s), 19 attribute(s), 12 block(s)
 ```
 
@@ -113,7 +113,7 @@ A serQ program's definition is not its text — it is the **IR**, a closed
 versioned data structure ([reference](ir.md)). The text syntax is one frontend.
 
 ```bash
-serq ir examples/multi-turn/vllm.serq > vllm.json   # compile text to IR
+serq ir examples/multi-turn/vllm.sq > vllm.json   # compile text to IR
 serq run vllm.json --seed 3             # run the IR directly
 ```
 

@@ -4,7 +4,7 @@
 //! `serq draw FILE [--format tikz|svg] [--out PATH]` (experimental)
 //! `serq fmt [--check] FILE...`
 //!
-//! FILE is program text (`.serq`) or IR (`.json`, as written by `serq ir`).
+//! FILE is program text (`.sq`) or IR (`.json`, as written by `serq ir`).
 
 use std::path::Path;
 use std::process::exit;
@@ -64,13 +64,13 @@ fn format_files(args: &[String]) {
         }
     }
     if files.is_empty() {
-        argument_error("fmt", "missing FILE\nhelp: supply one or more .serq files");
+        argument_error("fmt", "missing FILE\nhelp: supply one or more .sq files");
     }
     // Read and validate the whole batch before writing any file.
     let mut changes = Vec::new();
     for file in files {
-        if file.extension().is_none_or(|ext| ext != "serq") {
-            fail(file, "fmt expects a .serq file");
+        if file.extension().is_none_or(|ext| ext != "sq") {
+            fail(file, "fmt expects a .sq file");
         }
         let source = std::fs::read_to_string(file).unwrap_or_else(|e| fail(file, e));
         let formatted =
@@ -109,7 +109,7 @@ fn main() {
     if args.get(1).is_none_or(|s| s.starts_with("--")) {
         argument_error(
             cmd,
-            "missing FILE\nhelp: supply a .serq program or .json IR file",
+            "missing FILE\nhelp: supply a .sq program or .json IR file",
         );
     }
     let file = Path::new(&args[1]);

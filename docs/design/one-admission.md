@@ -11,7 +11,7 @@ hold reqs (1), kv (min(known, hit + budget_left(engine)))
 } cache (prompt + o);
 ```
 
-(`lib/vllm.serq`.) There were three spellings of this one `CStmt::Hold`:
+(`lib/vllm.sq`.) There were three spellings of this one `CStmt::Hold`:
 `hold … at admission (…) … cache`, `enter … at admission (…) … keep` in a
 session, and `admit if … fit where … keep` in a server. #136 kept the
 first. The IR did not move: every program's IR is the one it had.

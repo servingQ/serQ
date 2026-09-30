@@ -1,6 +1,6 @@
 # Case study: prefill/decode disaggregation over NIXL
 
-`examples/pd-disaggregation/llmd_nixl_pull.serq` is llm-d's prefill/decode split on vLLM: the router
+`examples/pd-disaggregation/llmd_nixl_pull.sq` is llm-d's prefill/decode split on vLLM: the router
 that decides which pod prefills and which decodes, the sidecar that sends
 the prompt to one and the decode request to the other, and the two
 schedulers that hand the KV over with the NIXL connector. Every line is
@@ -36,8 +36,8 @@ and block 16. What differs from the guide is written next to each number.
 
 ## In serQ
 
-```serq title="examples/pd-disaggregation/llmd_nixl_pull.serq"
---8<-- "examples/pd-disaggregation/llmd_nixl_pull.serq"
+```serq title="examples/pd-disaggregation/llmd_nixl_pull.sq"
+--8<-- "examples/pd-disaggregation/llmd_nixl_pull.sq"
 ```
 
 ### Line by line
@@ -50,7 +50,7 @@ and block 16. What differs from the guide is written next to each number.
 | the decider: a remote prefill when the prompt's uncached suffix on the chosen decode pod is at least `nonCachedTokens`, and the prompt at least `promptTokens`; the cached part is the router's own estimate of the pod's prefix cache | `set hitD = min(cachedin(kvD[j]), hitmax); set remote = prompt >= minp && prompt - hitD >= thr;` | `prefix_based_pd_decider.go:266-303`; `disagg_profile_handler.go:353-366`. The guide runs `always-disagg-pd-decider`, which is `thr = 1` |
 | the prefill profile: pods that have the prefix (`prefix-cache-affinity-filter`), then the least loaded (`token-load-scorer`) | `choose i in NP by (cachedin(kvP[i]) > 0 ? 0 : 1, work(P[i]) + queued(reqsP[i]))` | the same values file |
 | the decode pod's sidecar sends the prompt to the prefiller with `max_tokens = 1` and `do_remote_decode`, waits for the answer, then sends the decode request to its own engine with the prefiller's block ids | the prefiller's hold, its blocks leased at its end, then the decoder's hold | `connector_nixlv2.go:69-232` (the prefill leg, `CapSingleToken` at 145), `261-379` (the decode leg) |
-| no prefill header: the request goes to the decode pod's engine as it is | the `else` branch: vLLM's engine on one device (`examples/multi-turn/vllm.serq`) | `dispatch.go:196-213` |
+| no prefill header: the request goes to the decode pod's engine as it is | the `else` branch: vLLM's engine on one device (`examples/multi-turn/vllm.sq`) | `dispatch.go:196-213` |
 | the two legs in parallel, so the decoder allocates while the prefiller works | not written: a session waits at one pool at a time ([The KV transfer](design/pd-transfer.md)) | `connector_nixlv2.go:60-67` (MoRI-IO write mode only); vLLM's push-mode proxy, `disagg_proxy_pushconnector_demo.py:227-270` |
 
 #### The two schedulers, against vLLM
@@ -112,7 +112,7 @@ for a step engine that has to be named, `transfer on egress[i], ingress[j]
 Going from 2P2D to 4P8D is the four literals and the two `let`s; the
 program does not change otherwise, which is the point of writing the router
 as `choose` over a family rather than as a branch per instance
-(`examples/multi-turn/routing.serq` still has the branch-per-policy shape the design
+(`examples/multi-turn/routing.sq` still has the branch-per-policy shape the design
 notes call a smell).
 
 ### The two modes
@@ -198,7 +198,7 @@ bidirectional transfer for multi-turn (`bidirectional_kv_xfer`, the
 decoder's blocks read back by the prefiller); the host buffer on
 accelerators NIXL cannot read directly; tensor-parallel fan-out of the
 read; cross-session prefix sharing on either side (per session here, as in
-`vllm.serq`); the router's approximate prefix cache as a data structure of
+`vllm.sq`); the router's approximate prefix cache as a data structure of
 its own (its estimate is taken to be the pod's cache).
 
 ## What the program predicts
@@ -207,7 +207,7 @@ Two decode pods of 160 000 tokens each, two prefill pods, sessions of
 one to several turns (a prompt of 1 000–3 000 new tokens on a growing
 context, 200 output tokens, a 3 s tool call between turns, `p = 0.9`), a
 `max_model_len` of 16 384 tokens, the A100-shaped step cost of
-`examples/multi-turn/vllm.serq`, a 200 000 token/s NIC on every pod. Every number
+`examples/multi-turn/vllm.sq`, a 200 000 token/s NIC on every pod. Every number
 below is the median over seeds 1–20 of a run of 10 000 s after 1 000 s
 of warm-up (`--seed N --horizon 10000 --warmup 1000 --set …`), with the
 range across the seeds where it says more than the median. About 1 % of

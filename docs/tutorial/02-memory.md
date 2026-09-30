@@ -10,8 +10,8 @@ is a counted resource with a capacity, a queue and, later, a cache.
 
 ## The program
 
-```serq title="docs/tutorial/programs/02-memory.serq"
---8<-- "docs/tutorial/programs/02-memory.serq"
+```serq title="docs/tutorial/programs/02-memory.sq"
+--8<-- "docs/tutorial/programs/02-memory.sq"
 ```
 
 Four servers now, so compute is not the constraint. Ten memory units are.
@@ -48,7 +48,7 @@ reasons:
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/02-memory.serq
+serq run docs/tutorial/programs/02-memory.sq
 ```
 
 ```text
@@ -75,7 +75,7 @@ has moved to the pool.
 
 ```bash
 for C in 4 6 10 20; do
-  serq run docs/tutorial/programs/02-memory.serq --set C=$C
+  serq run docs/tutorial/programs/02-memory.sq --set C=$C
 done
 ```
 

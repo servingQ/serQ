@@ -8,13 +8,13 @@ semantics and states, as theorems checked by the kernel, what it does. This
 page covers how to use each one and what each one needs from a program.
 
 ```
-program.serq ──serq ir──▶ IR (JSON) ──serq run──▶ report, samples     (simulator)
+program.sq ──serq ir──▶ IR (JSON) ──serq run──▶ report, samples     (simulator)
                               │
                               └──gen_serq_oracle.py──▶ SerqOracle.lean ──lake build──▶ theorems  (Lean)
 ```
 
 The IR sits in the middle, not the text. The simulator reads it too
-(`serq run` accepts a `.json` as well as a `.serq`), so the two consumers
+(`serq run` accepts a `.json` as well as a `.sq`), so the two consumers
 never interpret different programs.
 
 ## In the simulator
@@ -22,12 +22,12 @@ never interpret different programs.
 ### Write, check, look
 
 ```bash
-serq check examples/my.serq                       # parse, resolve names, lint
-serq draw  examples/my.serq --format svg --out my.svg
-serq run   examples/my.serq
+serq check examples/my.sq                       # parse, resolve names, lint
+serq draw  examples/my.sq --format svg --out my.svg
+serq run   examples/my.sq
 ```
 
-`check` is what `make check` runs over every `examples/*/*.serq`, and it also
+`check` is what `make check` runs over every `examples/*/*.sq`, and it also
 catches the two lints (a stale header read, a draw written as a test,
 [language](language.md) §3). Draw the program before trusting a run. A hold
 is drawn as its pool's enclosure around the stations it spans, so a hold that
@@ -46,7 +46,7 @@ A run prints its run line and then three tables: the `observe`s, the stages
 and the pools, each column as wide as its widest entry:
 
 ```
-$ serq run examples/multi-turn/vllm.serq --horizon 300 --warmup 30
+$ serq run examples/multi-turn/vllm.sq --horizon 300 --warmup 30
 run: horizon 300 end 300 warmup 30 seed 1 events 166040 arrivals 95 ended 82 turns 821 mean live 8.390
 
 observe         count      mean    95% CI    cv2        p99
@@ -87,7 +87,7 @@ over `--set`, with a few seeds per point:
 ```bash
 for lam in 0.3 0.6 0.9; do
   for seed in 1 2 3; do
-    serq run examples/multi-turn/vllm.serq --set Lambda=$lam --seed $seed --json \
+    serq run examples/multi-turn/vllm.sq --set Lambda=$lam --seed $seed --json \
       | jq -r --arg l $lam --arg s $seed \
           '[$l, $s, .observes.ttft.mean, (.pools[] | select(.name=="kv") | .preemptions)] | @tsv'
   done
@@ -126,14 +126,14 @@ The parameters of a program are measurements, and the program says where each
 one comes from:
 
 - **An engine cost model.** Fit `cost` to measured iterations, as
-  `examples/replay/vllm_replay.serq` does for the A100: an expression in `tokens`,
+  `examples/replay/vllm_replay.sq` does for the A100: an expression in `tokens`,
   `decoders`, `prefilled`, `kv_decode`, `kv_prefill`, `attention`.
 - **Traffic from a trace.** `trace "file.csv"` in the `workload` replays
   sessions turn by turn. The columns are `session,turn,new,out,think,forced`
   (`examples/replay/data/`), and `--trace F` swaps the file without editing the
   program.
 - **A quantity the program cannot compute itself.** For example, the subagent
-  wait `W` of `examples/subagent/vllm_subagents.serq` is taken from the program's own
+  wait `W` of `examples/subagent/vllm_subagents.sq` is taken from the program's own
   output. Run the program, compute the statistic from `--dump`, set it with
   `--set`, and repeat until it stops moving. Write the fixed point into the
   `let` with a comment that says how it was obtained.
@@ -156,7 +156,7 @@ There are three kinds of result, and a program meets them differently:
 |---|---|---|
 | properties of the semantics | the model, not one program | `Seq.lean`: `SerqLang.Step.invariant` (every command of the pool model keeps `allocated + cached ≤ cap`); `SerqServe.lean`: `SerqLang.Serve.serve_eq_decode_first` (without a per-request chunk cap, serving in admission order is serving decode-first) |
 | a program's outcome on a scenario | one IR file and one workload | `SerqOracle.lean`, generated: one theorem per scenario, proved by `decide +kernel` |
-| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`examples/multi-turn/replica.serq`), `disaggregatedReplica` (the lecture notes' store-and-forward replica, in `serving-queue-theory`; no serQ program), with their well-formedness |
+| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`examples/multi-turn/replica.sq`), `disaggregatedReplica` (the lecture notes' store-and-forward replica, in `serving-queue-theory`; no serQ program), with their well-formedness |
 
 The first kind needs nothing from a program. It is about the pool model and
 the serving order, and it is not yet connected to the executable semantics
@@ -189,7 +189,7 @@ The steps:
 
 1. **serQ:** compile the program to IR once per scenario. For the request
    scenarios, `tests/vllm_oracle.rs` does this: it compiles
-   `examples/oracle/vllm_request.serq` with each scenario's engine as `let`
+   `examples/oracle/vllm_request.sq` with each scenario's engine as `let`
    overrides and its requests as explicit sessions. `make oracle-ir` writes
    `tools/oracle/<name>.ir.json`, and `make check` fails if a committed file
    is stale.
@@ -252,7 +252,7 @@ fragment). In practice, a program is in it when:
   comparisons and `?:`.
 
 This is why the Lean side has request-level programs such as
-`vllm_request.serq`, and not `vllm.serq`: a stochastic workload is outside the
+`vllm_request.sq`, and not `vllm.sq`: a stochastic workload is outside the
 fragment by construction. A program outside it does not get skipped. The
 generator stops with `FAIL: outside the Lean fragment: <what>` and writes
 nothing, so a new construct that one oracle program uses stops every

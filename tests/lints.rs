@@ -20,7 +20,7 @@ const ENGINE: &str = "let bs = 16;
                turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
     run { horizon 500; }";
 
-/// `examples/multi-turn/vllm.serq` shipped with a prefix-cache lookup bound before the
+/// `examples/multi-turn/vllm.sq` shipped with a prefix-cache lookup bound before the
 /// session queued, under a comment citing the admission-time lookup. A hold's
 /// header is read at admission; a `set` above it is not.
 #[test]

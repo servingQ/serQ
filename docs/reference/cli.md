@@ -10,7 +10,7 @@ serq draw  FILE [--format tikz|svg] [--out PATH]              (experimental)
 serq fmt   [--check] FILE...
 ```
 
-`FILE` is program text (`.serq`) or IR (`.json`, as written by `serq ir`).
+`FILE` is program text (`.sq`) or IR (`.json`, as written by `serq ir`).
 
 ## Commands
 
@@ -20,7 +20,7 @@ serq fmt   [--check] FILE...
 | `check` | parse, resolve every name and fold the constants; print a summary. This is what `make check` runs over every program |
 | `ir` | print the program's [IR](../ir.md) as JSON |
 | `draw` | render the program as a figure ([visualization](../visualization/index.md)) |
-| `fmt` | format one or more `.serq` files in place; comments, blank lines, number spellings, and aligned trailing comments are preserved |
+| `fmt` | format one or more `.sq` files in place; comments, blank lines, number spellings, and aligned trailing comments are preserved |
 
 ## Options
 
@@ -44,8 +44,8 @@ serq fmt   [--check] FILE...
 `observes` is an object keyed by name; `stages` and `pools` are arrays.
 
 ```bash
-serq run examples/multi-turn/vllm.serq --json | jq '.observes.ttft.mean'
-serq run examples/multi-turn/vllm.serq --json | jq '.pools[] | select(.name=="kv") | .preemptions'
+serq run examples/multi-turn/vllm.sq --json | jq '.observes.ttft.mean'
+serq run examples/multi-turn/vllm.sq --json | jq '.pools[] | select(.name=="kv") | .preemptions'
 ```
 
 | Path | |
@@ -82,7 +82,7 @@ by a correction hint. Paths declared in the program are relative to its director
 `--trace` paths are relative to the current directory. `run` and
 `ir --inline-trace` use the same trace diagnostics.
 
-Name-resolution errors in `.serq` programs show the line, character column,
+Name-resolution errors in `.sq` programs show the line, character column,
 source excerpt, and a correction hint. A close, unambiguous name of the same
 kind is suggested with its declaration location; duplicate pools and stages
 identify both declarations. Locations survive `server`/`request` expansion and

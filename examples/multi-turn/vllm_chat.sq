@@ -1,8 +1,8 @@
-// vLLM v1 serving single-turn requests: a session is one request — a
-// prompt, an answer, gone. The engine (the constants down to `c0`, the
-// pools, the stage and the `server` block) is `examples/multi-turn/vllm.serq`'s line
-// for line; only the workload differs (docs/case-study-workloads.md).
-use "../../lib/vllm.serq";
+// vLLM v1 serving a multi-turn chat: a person reads the answer, types a
+// short follow-up, and sends the whole conversation back. The engine is
+// `examples/multi-turn/vllm.sq`'s line for line; only the workload differs
+// (docs/case-study-workloads.md).
+use "../../lib/vllm.sq";
 
 let B = 8192;          // max_num_batched_tokens
 let max_seqs = 16;     // max_num_seqs
@@ -13,7 +13,9 @@ let a = 2e-5;          // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
 let c0 = 0;            // fixed cost per iteration (s)
-let Lambda = 3.0;      // requests per second
+let Lambda = 0.3;      // conversations per second
+let p = 0.8;           // the person asks again
+let Z = 20.0;          // reading and typing time (s)
 
 pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
 pool reqs { cap max_seqs; }
@@ -24,20 +26,28 @@ stage engine : step {
   cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
   memory kv;
 }
+stage user : delay;
 
 // --8<-- [start:workload]
-// A request arrives, is served, and its session ends: no context carries
-// over, so `K` stays 0 and the prefix cache is never read back (entries
-// are per session, docs/language.md §9).
+// Each turn resends the conversation so far (`K`) with a short message;
+// the gap between turns is a person, not a tool.
 workload {
   arrive poisson(Lambda);
   hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   init { set K = 0; }
   turn {
-    set n = ~uniform(1000, 3000);
-    set o = ~exp(200) + 1;
+    set n = K == 0 ? ~uniform(200, 1000) : ~exp(100);
+    set o = ~exp(300) + 1;
+    set more = ~bernoulli(p);
   }
-  session { turn; request; end; }
+  session {
+    turn;
+    loop {
+      request;
+      set K = prompt + o;
+      branch (more) { run user (~exp(Z)); turn; } else { end; }
+    }
+  }
 }
 // --8<-- [end:workload]
 

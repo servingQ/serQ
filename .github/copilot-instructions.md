@@ -19,7 +19,7 @@ serQ is a language in which an LLM serving deployment is a program. `docs/langua
 In the order they bite:
 
 0. **Unambiguity.** One construct, one meaning.
-1. **Intention-revealing.** A program says what it means, not how it computes it; `examples/multi-turn/vllm.serq` should read as vLLM to a serving engineer who does not know serQ.
+1. **Intention-revealing.** A program says what it means, not how it computes it; `examples/multi-turn/vllm.sq` should read as vLLM to a serving engineer who does not know serQ.
 2. **Policy is written in the program, not in the language.** For each construct: can a program state the opposite? The language supplies mechanisms a program selects and parameterises, not rules.
 3. **Checkability.** A claim the program makes should be mechanically checkable. This is what earns an IR change.
 
@@ -29,7 +29,7 @@ Sugar that rewrites to the kernel at parse time is cheap; a new IR node costs ev
 
 Ask them in this order and write down the answer to each, including "no finding"; a review that skips one is incomplete. Every finding names a file and line and says what a reader would see there.
 
-1. **Purpose kept.** After the change, is a program still a specification a serving engineer reads, and do the three consumers still agree: does `make check` pass, are the oracle scenarios and the trace unchanged or changed for a stated reason, does the §7 correspondence table of `docs/language.md` still hold line by line against `ref/vllm`? A change that makes `examples/multi-turn/vllm.serq` read less like vLLM fails here even if every test passes.
+1. **Purpose kept.** After the change, is a program still a specification a serving engineer reads, and do the three consumers still agree: does `make check` pass, are the oracle scenarios and the trace unchanged or changed for a stated reason, does the §7 correspondence table of `docs/language.md` still hold line by line against `ref/vllm`? A change that makes `examples/multi-turn/vllm.sq` read less like vLLM fails here even if every test passes.
 2. **Simpler is possible.** Could the change be sugar instead of an IR node? Could an existing form be narrowed instead of a new one added? Does one meaning now have two spellings, or one thing two mechanisms (criterion 0)? If a construct was added, name the construct that could have carried it.
 3. **Complexity did not grow.** Count what a reader must now know: the rules of `docs/language.md` §2 and §3, the fields and variants of `src/ir.rs`. A change that adds a rule must remove one or say which rule it replaces. A new IR field or variant is in the Lean fragment, or the change says it is outside it and why.
 4. **Intention could be plainer.** Every new name is read from the side it is written on (the session's side in a `session` block, the scheduler's in a `server` block or a pool option); an upstream name is used where the mechanism is upstream's and not otherwise; an error message says what was read, where, and where it exists. Propose the plainer spelling, not the observation that one might exist.
@@ -38,4 +38,4 @@ Ask them in this order and write down the answer to each, including "no finding"
 
 ## Not worth a comment
 
-Formatting and lint — `make check` runs `cargo fmt`, `clippy`, and `serq fmt --check` on the `.serq` examples in CI.
+Formatting and lint — `make check` runs `cargo fmt`, `clippy`, and `serq fmt --check` on the `.sq` examples in CI.

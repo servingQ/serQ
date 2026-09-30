@@ -7,7 +7,7 @@ is the spec, `docs/ir.md` the definition, `docs/review.md` the design record.
 
 **The IR is the definition of a program, not the text.** `src/ir.rs` is what the
 interpreter runs, what the Lean model is generated from, and what the oracle
-tests read; `.serq` is one frontend. So:
+tests read; `.sq` is one frontend. So:
 
 - `IR_VERSION` identifies meaning, not shape (`docs/ir.md` §Stability): a
   removed, renamed or retyped field or variant bumps it, and so does a change
@@ -44,7 +44,7 @@ product. Argued in #8, in the order they bite:
    where being wrong produces a wrong *answer* rather than a slow reader.
 1. **Intention-revealing.** The program should say what it means, not how it
    computes it. A serving engineer who does not know serQ should be able to read
-   `examples/multi-turn/vllm.serq` as vLLM.
+   `examples/multi-turn/vllm.sq` as vLLM.
 2. **Policy is written in the program, not in the language.** The test: for every
    construct, can a program state the opposite? The language may supply a
    *mechanism* a program selects and parameterises, not a *rule* it would

@@ -46,7 +46,7 @@ not the whole away from the fragment.
 **From simulation to analysis.** A program is today the simulator's input and
 the closed forms are checked outside. Pushed to the end, checkability means
 the program states a claim and the tool turns it into a theorem or a
-statistical test. That `mg1.serq` is an M/G/1 is decidable from its
+statistical test. That `mg1.sq` is an M/G/1 is decidable from its
 structure. Expensive, but the best kind of answer to "why change the IR".
 
 ## Language: a fixed subject, definitional extension, polysemy by position only
@@ -78,7 +78,7 @@ subject. The order is: grammatical subject, upstream name, invented name.
 **Process imperative, policy declarative.** The session block is sequential
 and should be; a request's life is a sequence. Policies are expressions
 (`evict by`, `budget`, `cost`, `choose by`). Crossing that line is a smell:
-the five-way policy switch of `routing.serq` is one program carrying five
+the five-way policy switch of `routing.sq` is one program carrying five
 deployments, and by the principle that the IR is data, a sweep is an IR edit,
 not a branch in the program.
 

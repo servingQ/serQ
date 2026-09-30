@@ -1,6 +1,6 @@
 # Case study: vLLM in 50 lines
 
-`examples/multi-turn/vllm.serq` is vLLM v1's engine. Not "a model of" it: on six
+`examples/multi-turn/vllm.sq` is vLLM v1's engine. Not "a model of" it: on six
 deterministic scenarios and on a 333-session, 3 321-request trace it gives the
 real scheduler's answer for **every request** — every send time, every
 first-token time, every cached-token count. 3 321 of 3 321.
@@ -9,15 +9,15 @@ first-token time, every cached-token count. 3 321 of 3 321.
 
 ## The program
 
-```serq title="examples/multi-turn/vllm.serq"
---8<-- "examples/multi-turn/vllm.serq"
+```serq title="examples/multi-turn/vllm.sq"
+--8<-- "examples/multi-turn/vllm.sq"
 ```
 
 What the server does with one request is `vllm_request`, which the program
 reads from the library it shares with the other vLLM programs:
 
-```serq title="lib/vllm.serq"
---8<-- "lib/vllm.serq"
+```serq title="lib/vllm.sq"
+--8<-- "lib/vllm.sq"
 ```
 
 ## Line by line against the scheduler
@@ -71,7 +71,7 @@ were found ([design review](review.md) §3).
 
 ## It predicted a fix before the fix was run
 
-`examples/replay/vllm_replay.serq` is this program with a cost model measured on an
+`examples/replay/vllm_replay.sq` is this program with a cost model measured on an
 A100 (3 022 steps stepped by hand; MAPE 2.7 % decode, 5.6 % prefill). The
 measured replica collapses between a 3.0 s and a 2.5 s session spacing.
 

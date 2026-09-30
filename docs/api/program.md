@@ -42,7 +42,7 @@ def reusable(x) = floor((x - 1) / bs) * bs;
 set hitmax = reusable(prompt);
 ```
 
-(`examples/pd-disaggregation/llmd_nixl_pull.serq`)
+(`examples/pd-disaggregation/llmd_nixl_pull.sq`)
 
 | Argument | Type | Description |
 |---|---|---|
@@ -73,7 +73,7 @@ from here on. A library read once is not read again. An error in a library
 is reported in the library, with the uses it was expanded from.
 
 ```serq
-use "../../lib/vllm.serq";
+use "../../lib/vllm.sq";
 …
 server {
   set t0 = now;
@@ -83,7 +83,7 @@ server {
 }
 ```
 
-(`examples/multi-turn/vllm.serq`; the library is `lib/vllm.serq`.) A program
+(`examples/multi-turn/vllm.sq`; the library is `lib/vllm.sq`.) A program
 given as text rather than read from a file cannot `use`. The library's names
 are the program's, as for any [`def`](#def): what a statement definition
 sets is the session's attribute, and what it observes is the program's

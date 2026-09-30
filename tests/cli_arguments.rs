@@ -6,72 +6,72 @@ fn invalid_arguments_are_diagnosed_before_file_io() {
     let f = Fixture::new();
     for (args, fragments) in [
         (
-            vec!["rn", "missing.serq"],
+            vec!["rn", "missing.sq"],
             vec!["unknown command `rn`", "run"],
         ),
         (vec!["run"], vec!["missing FILE"]),
         (
-            vec!["run", "missing.serq", "--seed", "abc"],
+            vec!["run", "missing.sq", "--seed", "abc"],
             vec!["--seed", "`abc`", "unsigned integer"],
         ),
         (
-            vec!["run", "missing.serq", "--seed"],
+            vec!["run", "missing.sq", "--seed"],
             vec!["missing value for --seed"],
         ),
         (
-            vec!["run", "missing.serq", "--seed", "--json"],
+            vec!["run", "missing.sq", "--seed", "--json"],
             vec!["missing value for --seed"],
         ),
         (
-            vec!["run", "missing.serq", "--seed", "-1"],
+            vec!["run", "missing.sq", "--seed", "-1"],
             vec!["--seed", "unsigned integer"],
         ),
         (
-            vec!["run", "missing.serq", "--horizon", "NaN"],
+            vec!["run", "missing.sq", "--horizon", "NaN"],
             vec!["--horizon", "finite positive"],
         ),
         (
-            vec!["run", "missing.serq", "--warmup", "-1"],
+            vec!["run", "missing.sq", "--warmup", "-1"],
             vec!["--warmup", "nonnegative"],
         ),
         (
-            vec!["run", "missing.serq", "--bogus"],
+            vec!["run", "missing.sq", "--bogus"],
             vec!["unknown option `--bogus`"],
         ),
         (
-            vec!["run", "missing.serq", "--set", "rate"],
+            vec!["run", "missing.sq", "--set", "rate"],
             vec!["--set", "name=expr"],
         ),
         (
-            vec!["run", "missing.serq", "--set", "=1"],
+            vec!["run", "missing.sq", "--set", "=1"],
             vec!["--set", "identifier"],
         ),
         (
-            vec!["run", "missing.serq", "--set", "rate="],
+            vec!["run", "missing.sq", "--set", "rate="],
             vec!["--set", "expression"],
         ),
         (
-            vec!["draw", "missing.serq", "--format", "png"],
+            vec!["draw", "missing.sq", "--format", "png"],
             vec!["--format", "tikz or svg"],
         ),
         (
-            vec!["draw", "missing.serq", "--view", "session"],
+            vec!["draw", "missing.sq", "--view", "session"],
             vec!["unknown option `--view`"],
         ),
         (
-            vec!["check", "missing.serq", "--json"],
+            vec!["check", "missing.sq", "--json"],
             vec!["--json", "not supported", "run"],
         ),
         (
-            vec!["run", "missing.serq", "--inline-trace"],
+            vec!["run", "missing.sq", "--inline-trace"],
             vec!["--inline-trace", "not supported", "ir"],
         ),
         (
-            vec!["ir", "missing.serq", "--dump", "data"],
+            vec!["ir", "missing.sq", "--dump", "data"],
             vec!["--dump", "not supported", "run"],
         ),
         (
-            vec!["run", "missing.serq", "--out", "figure.svg"],
+            vec!["run", "missing.sq", "--out", "figure.svg"],
             vec!["--out", "not supported", "draw"],
         ),
     ] {
@@ -88,11 +88,11 @@ fn invalid_arguments_are_diagnosed_before_file_io() {
 #[test]
 fn supported_options_still_work() {
     let f = Fixture::new();
-    f.write("model.serq", PROGRAM);
+    f.write("model.sq", PROGRAM);
     for args in [
         vec![
             "run",
-            "model.serq",
+            "model.sq",
             "--seed",
             "2",
             "--horizon",
@@ -103,16 +103,9 @@ fn supported_options_still_work() {
             "--dump",
             "data",
         ],
-        vec!["check", "model.serq", "--set", "rate=2"],
-        vec!["ir", "model.serq", "--seed", "2"],
-        vec![
-            "draw",
-            "model.serq",
-            "--format",
-            "svg",
-            "--out",
-            "figure.svg",
-        ],
+        vec!["check", "model.sq", "--set", "rate=2"],
+        vec!["ir", "model.sq", "--seed", "2"],
+        vec!["draw", "model.sq", "--format", "svg", "--out", "figure.svg"],
     ] {
         let out = f.run(&args);
         assert!(

@@ -51,8 +51,8 @@ fn pools_of(p: &Program, net: &deployment::Net, stage_name: &str) -> Vec<String>
 
 // --- the station kinds -----------------------------------------------------
 
-/// Each stage kind has its glyph: `mg1.serq` is one FIFO server, `ps.serq` one
-/// processor-sharing server, and `llmd_nixl_pull.serq` has a step engine on each
+/// Each stage kind has its glyph: `mg1.sq` is one FIFO server, `ps.sq` one
+/// processor-sharing server, and `llmd_nixl_pull.sq` has a step engine on each
 /// side, a processor-sharing NIC on each and a delay for the tool call.
 #[test]
 fn stations_take_their_stage_kind() {
@@ -85,7 +85,7 @@ fn stations_take_their_stage_kind() {
 // --- the projection ---------------------------------------------------------
 
 /// Two runs at the same stage in a row are two visits, not a flow between
-/// stations: `vllm.serq` prefills and decodes at one engine.
+/// stations: `vllm.sq` prefills and decodes at one engine.
 #[test]
 fn no_self_edges() {
     for name in PROGRAMS {
@@ -98,7 +98,7 @@ fn no_self_edges() {
 }
 
 /// A chain of guards that moves nobody must not multiply the paths out.
-/// `routing.serq` has five sibling `branch (policy == k)` blocks.
+/// `routing.sq` has five sibling `branch (policy == k)` blocks.
 #[test]
 fn guard_chains_do_not_multiply_edges() {
     let p = program("routing");
@@ -273,7 +273,7 @@ fn negative_constants_reparse() {
 
 /// `release_hold` caches the growing run's position when a hold grew, and the
 /// allocation otherwise, so a hold with `growing` caches in that pool alone.
-/// `replica.serq` has no `growing` and really does keep a unit of `batch`.
+/// `replica.sq` has no `growing` and really does keep a unit of `batch`.
 #[test]
 fn cache_targets_follow_the_release_rule() {
     let p = program("vllm");
@@ -355,7 +355,7 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
     assert!(pools_of(&p, &net, "s3").is_empty());
 }
 
-/// `examples/pd-disaggregation/llmd_nixl_pull.serq`: the prompt's KV is in the prefiller's pool
+/// `examples/pd-disaggregation/llmd_nixl_pull.sq`: the prompt's KV is in the prefiller's pool
 /// through the transfer (leased past its scope) and in the decoder's from
 /// the transfer on, so the read's two stations (the prefiller's NIC and the
 /// decoder's, held at once) are inside both enclosures, the prefill station
@@ -420,7 +420,7 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
     );
 }
 
-/// `examples/pd-disaggregation/llmd_nixl_pull.serq`'s router sends a request either
+/// `examples/pd-disaggregation/llmd_nixl_pull.sq`'s router sends a request either
 /// to a prefiller and over the two NICs (remote), after the read's fixed
 /// wait (`setup`), or straight to the decoder (local); a request whose KV
 /// is already there skips both. Every turn
@@ -714,8 +714,8 @@ fn docs_assets_are_current() {
     assert!(seen > 0, "no figures under docs/assets");
 }
 
-/// `routing.serq`'s next turn migrates or stays: back to the link, and
-/// straight back to a replica. `pd_tandem.serq`'s job re-enters down both
+/// `routing.sq`'s next turn migrates or stays: back to the link, and
+/// straight back to a replica. `pd_tandem.sq`'s job re-enters down both
 /// arms of its `mode` branch; the projection is structural, so it draws
 /// both although `mode` is one constant in a run.
 #[test]

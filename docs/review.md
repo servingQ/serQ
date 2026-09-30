@@ -133,12 +133,12 @@ Each item was found by a check, not by reading.
 | Found by | Defect | Fix |
 |---|---|---|
 | PS insensitivity (M/G/1-PS mean number) | the virtual clock was not advanced at a departure, so service was double counted | advance `v` to `now` before removing the job |
-| `replica.serq` vs `TwoStage` | `cached` was read from the first pool of the hold (`batch` slots), so every turn missed | `cached` = the largest consumed prefix among the hold's pools |
+| `replica.sq` vs `TwoStage` | `cached` was read from the first pool of the hold (`batch` slots), so every turn missed | `cached` = the largest consumed prefix among the hold's pools |
 | same | ended sessions' prefixes stayed cached and, being the largest, survived shortest-first eviction while live small ones went | `end` removes the session's prefixes (they can never be hit) |
 | GPU replay stalled at 382 s | a run of zero work (`decode(out − 1)` with `out = 1`) stayed resident forever holding its blocks and slot | a zero-work run completes at once |
 | vLLM oracle `longchunk` | an iteration started between two arrivals at the same instant, so the second request lost a step | iterations start only when no event is pending at the current time |
 | vLLM oracle `preempt` | admitting with the first full chunk reserved too many blocks; vLLM reserves the chunk the budget leaves | `budget_left(stage)` |
-| `replica.serq` at the paper's cap of 24 | the scenario is bistable (thrash edge); seeds of the two engines land on different branches | compare at 20 and without a limit; documented |
+| `replica.sq` at the paper's cap of 24 | the scenario is bistable (thrash edge); seeds of the two engines land on different branches | compare at 20 and without a limit; documented |
 
 Second pass (the same day), found by replaying the trace through the real
 vLLM scheduler on serQ's clock and searching for the first differing step

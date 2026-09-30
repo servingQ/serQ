@@ -19,20 +19,20 @@ fn unterminated_comments_point_to_the_opening_delimiter() {
 #[test]
 fn every_command_rejects_incomplete_comments_without_an_artifact() {
     let f = Fixture::new();
-    f.write("bad.serq", &format!("{PROGRAM}/* unfinished\nignored\n"));
+    f.write("bad.sq", &format!("{PROGRAM}/* unfinished\nignored\n"));
     for cmd in ["check", "run", "ir", "draw"] {
         failure(
-            &f.run(&[cmd, "bad.serq"]),
+            &f.run(&[cmd, "bad.sq"]),
             1,
-            &["bad.serq", "6:1", "unterminated block comment", "`*/`"],
+            &["bad.sq", "6:1", "unterminated block comment", "`*/`"],
         );
     }
     failure(
-        &f.run(&["draw", "bad.serq", "--out", "figure.svg"]),
+        &f.run(&["draw", "bad.sq", "--out", "figure.svg"]),
         1,
         &["unterminated block comment"],
     );
     assert!(!f.0.join("figure.svg").exists());
-    f.write("good.serq", &format!("{PROGRAM}/* finished\nignored\n*/"));
-    assert!(f.run(&["check", "good.serq"]).status.success());
+    f.write("good.sq", &format!("{PROGRAM}/* finished\nignored\n*/"));
+    assert!(f.run(&["check", "good.sq"]).status.success());
 }

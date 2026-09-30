@@ -187,7 +187,7 @@ surface syntax and the spec.
 
 Move the twelve programs to the new syntax and count three numbers: lines
 and comment lines per program, paragraphs that disappear from spec §2 and
-§3, and whether `vllm.serq` and `vllm_replay.serq` become two instances of one
+§3, and whether `vllm.sq` and `vllm_replay.sq` become two instances of one
 model. The last is even odds: replay's `front` stage is a structural
 difference, so it has to sit in the model with a zero cost in one instance,
 and if that is awkward the split is not finished.

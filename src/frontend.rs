@@ -1,4 +1,4 @@
-//! The text frontend: `.serq` source to IR. Nothing here is part of the
+//! The text frontend: `.sq` source to IR. Nothing here is part of the
 //! definition of a program (`crate::ir` is); it is one way to write one.
 
 pub mod ast;

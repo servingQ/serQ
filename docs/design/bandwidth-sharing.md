@@ -37,7 +37,7 @@ which links carry it does not.
 
 ## Before
 
-`examples/pd-disaggregation/llmd_nixl_pull.serq` puts a read on the
+`examples/pd-disaggregation/llmd_nixl_pull.sq` puts a read on the
 decoder's link alone:
 
 ```
@@ -70,7 +70,7 @@ session {
 run { horizon 10; }
 ```
 ```
-$ serq run egress.serq
+$ serq run egress.sq
 transferred      2  2.0000    ±inf  0.000  2.0000
 ```
 

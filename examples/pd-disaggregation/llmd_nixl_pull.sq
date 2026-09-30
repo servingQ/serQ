@@ -19,7 +19,7 @@
 // stay cached), and the decoder's request queues once more for a running slot
 // and a token of budget, recomputes the last prompt token for its logits,
 // and decodes. docs/case-study-pd.md has the line-by-line correspondence.
-use "../../lib/vllm.serq";
+use "../../lib/vllm.sq";
 
 let NP = 2;            // prefill instances
 let ND = 2;            // decode instances
@@ -119,7 +119,7 @@ server {
     choose i in NP by (cachedin(kvP[i]) > 0 ? 0 : 1, work(P[i]) + queued(reqsP[i]));
     // The prefiller's scheduler: a slot and the blocks of the first chunk,
     // room for the whole prompt (scheduler_reserve_full_isl); vLLM's engine
-    // on one device (examples/multi-turn/vllm.serq) with no decode. When the one token
+    // on one device (examples/multi-turn/vllm.sq) with no decode. When the one token
     // is sampled the request is finished on the prefiller: the slot goes
     // and the blocks stay leased for the decoder's read (request_finished:
     // delay_free_blocks), 30 s renewed by the decoder's heartbeats while it
@@ -160,7 +160,7 @@ server {
     } cache (prompt + o);
   } else {
     // Decode only: the decode pod prefills the prompt itself - vLLM's engine
-    // on one device (examples/multi-turn/vllm.serq).
+    // on one device (examples/multi-turn/vllm.sq).
     hold kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known), reqsD[j] (1)
          at admission (known = computed < prompt ? prompt : computed + 1,
                        hit = min(cachedin(kvD[j]), reusable(known, bs))) {

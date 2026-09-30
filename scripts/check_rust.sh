@@ -11,9 +11,9 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --release --locked
 cargo build --release --locked --quiet
-./target/release/serq fmt --check examples/*/*.serq lib/*.serq docs/tutorial/programs/*.serq
+./target/release/serq fmt --check examples/*/*.sq lib/*.sq docs/tutorial/programs/*.sq
 n=0
-for f in examples/*/*.serq; do
+for f in examples/*/*.sq; do
   ./target/release/serq check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
   for fmt in tikz svg; do
     ./target/release/serq draw "$f" --format "$fmt" >/dev/null \
@@ -29,7 +29,7 @@ done
 # pymdownx.snippets, so `mkdocs build --strict` catches a renamed file but not
 # one that has stopped linking after a change to the language.
 t=0
-for f in docs/tutorial/programs/*.serq; do
+for f in docs/tutorial/programs/*.sq; do
   ./target/release/serq check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
   t=$((t + 1))
 done

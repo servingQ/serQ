@@ -13,8 +13,8 @@ language could not express.
 
 ## The program
 
-```serq title="docs/tutorial/programs/05-engine.serq"
---8<-- "docs/tutorial/programs/05-engine.serq"
+```serq title="docs/tutorial/programs/05-engine.sq"
+--8<-- "docs/tutorial/programs/05-engine.sq"
 ```
 
 Its deployment, drawn by [`serq draw`](../visualization/index.md):
@@ -94,14 +94,14 @@ The units then read `min(prompt, hit + budget)` — the whole prompt, or as far
 as the hit and the budget reach, whichever is less.
 
 **`admit via engine`** on a pool (`reqs` in the program above, and in
-`examples/replay/vllm_replay.serq`) hands the pool's queue to the engine's
+`examples/replay/vllm_replay.sq`) hands the pool's queue to the engine's
 scheduler: waiting requests are admitted at the start of an iteration, with
 the budget left, and never in an iteration that preempted.
 
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/05-engine.serq
+serq run docs/tutorial/programs/05-engine.sq
 ```
 
 ```text

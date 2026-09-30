@@ -10,17 +10,17 @@ time a session spends outside the engine. [The vLLM case study](case-study-vllm.
 workload fixed and checked the engine against the real scheduler. This page
 holds the engine fixed and changes the client.
 
-The four programs below run `examples/multi-turn/vllm.serq`'s engine line for line: the
+The four programs below run `examples/multi-turn/vllm.sq`'s engine line for line: the
 constants from `B` to `c0`, `pool kv` to the end of `stage engine`, and the
 `server` block. `tests/workloads.rs` fails if one of them drifts, so the only
 thing that differs between them is what is written inside `workload`.
-Each workload also says `hidden o;`, as `vllm.serq`'s does: the scheduler is
+Each workload also says `hidden o;`, as `vllm.sq`'s does: the scheduler is
 told `max_tokens`, not the length of the answer, so no scheduling key may read
 `o`.
 
 | | single turn | multi-turn chat | multi-turn agent | agent with subagents |
 |---|---|---|---|---|
-| program | `vllm_single_turn.serq` | `vllm_chat.serq` | `vllm.serq` | `vllm_subagents.serq` |
+| program | `vllm_single_turn.sq` | `vllm_chat.sq` | `vllm.sq` | `vllm_subagents.sq` |
 | a session is | one request | a conversation | a task | a task and the subtasks it hands out |
 | carried to the next turn | nothing | the conversation, `K = prompt + o` | the same | the same |
 | between turns | — | a person, `run user (~exp(Z))` | a tool, `tool (~exp(Z))` | a tool, or waiting for the subagents |
@@ -29,8 +29,8 @@ told `max_tokens`, not the length of the answer, so no scheduling key may read
 
 ## Single turn
 
-```serq title="examples/single-turn/vllm_single_turn.serq"
---8<-- "examples/single-turn/vllm_single_turn.serq:workload"
+```serq title="examples/single-turn/vllm_single_turn.sq"
+--8<-- "examples/single-turn/vllm_single_turn.sq:workload"
 ```
 
 `session { turn; request; end; }` is the whole client: one request, then the
@@ -51,8 +51,8 @@ prefix cannot be written yet.
 
 ## Multi-turn chat
 
-```serq title="examples/multi-turn/vllm_chat.serq"
---8<-- "examples/multi-turn/vllm_chat.serq:workload"
+```serq title="examples/multi-turn/vllm_chat.sq"
+--8<-- "examples/multi-turn/vllm_chat.sq:workload"
 ```
 
 Turns are what make the cache matter. Each turn sends back the whole
@@ -65,11 +65,11 @@ say it was.
 
 ## Multi-turn agent
 
-```serq title="examples/multi-turn/vllm.serq"
---8<-- "examples/multi-turn/vllm.serq:workload"
+```serq title="examples/multi-turn/vllm.sq"
+--8<-- "examples/multi-turn/vllm.sq:workload"
 ```
 
-This is `examples/multi-turn/vllm.serq`, the program the vLLM case study checks. Its
+This is `examples/multi-turn/vllm.sq`, the program the vLLM case study checks. Its
 shape is the same as the chat's. The differences are only in the numbers: the
 gap is a tool call (3 s rather than 20 s), each turn brings back a tool's
 output (`~exp(500)` new tokens rather than `~exp(100)`), and the first prompt
@@ -87,8 +87,8 @@ the IR](design/subagents.md) explains why that needs two new statements,
 `spawn` and `join`. Until those exist, the program below approximates
 subagents, and it is useful to see exactly what the approximation gives up.
 
-```serq title="examples/subagent/vllm_subagents.serq"
---8<-- "examples/subagent/vllm_subagents.serq:workload"
+```serq title="examples/subagent/vllm_subagents.sq"
+--8<-- "examples/subagent/vllm_subagents.sq:workload"
 ```
 
 The approximation has three parts:
@@ -102,7 +102,7 @@ The approximation has three parts:
 - **The parent waits a constant.** A delegating turn runs
   `run delegate (W)` on a `delay` stage. `W` comes from a previous run: the
   mean of the slowest of `k` `subagent` samples. For this program,
-  `serq run examples/subagent/vllm_subagents.serq --dump out` followed by that
+  `serq run examples/subagent/vllm_subagents.sq --dump out` followed by that
   statistic over `out/subagent.csv` returns 14.7 s when `W = 14.7`, which is
   the fixed point.
 - **A subagent's context is its own.** It starts from `K ~ uniform(2000,

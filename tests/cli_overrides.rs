@@ -6,16 +6,16 @@ use serq::{Overrides, compile_source};
 #[test]
 fn misspelled_and_empty_override_names_do_not_produce_ir() {
     let f = Fixture::new();
-    f.write("model.serq", PROGRAM);
+    f.write("model.sq", PROGRAM);
     for name in ["raet", "Rate", ""] {
         failure(
-            &f.run(&["ir", "model.serq", "--set", &format!("{name}=2")]),
+            &f.run(&["ir", "model.sq", "--set", &format!("{name}=2")]),
             if name.is_empty() { 2 } else { 1 },
             &["--set"],
         );
     }
     failure(
-        &f.run(&["ir", "model.serq", "--set", "raet=2"]),
+        &f.run(&["ir", "model.sq", "--set", "raet=2"]),
         1,
         &["unknown --set constant `raet`", "available constants: rate"],
     );
@@ -34,8 +34,8 @@ fn overrides_keep_last_value_and_declaration_order() {
     let p = compile_source(src, &ov).unwrap();
     assert_eq!(p.arrival, serq::ir::CArrival::Poisson(6.0));
     let f = Fixture::new();
-    f.write("model.serq", src);
-    let out = f.run(&["ir", "model.serq", "--set", "rate=2", "--set", "rate=3"]);
+    f.write("model.sq", src);
+    let out = f.run(&["ir", "model.sq", "--set", "rate=2", "--set", "rate=3"]);
     assert!(out.status.success());
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(json["arrival"]["Poisson"], 6.0);
@@ -56,11 +56,11 @@ fn sdk_cannot_inject_an_undeclared_constant() {
 fn arrival_override_applies_to_run_and_ir() {
     let f = Fixture::new();
     f.write(
-        "model.serq",
+        "model.sq",
         "workload { arrive renewal(2); } session { end; } run { horizon 10; arrivals 1; }",
     );
     for command in ["run", "ir"] {
-        let mut args = vec![command, "model.serq", "--arrivals", "3"];
+        let mut args = vec![command, "model.sq", "--arrivals", "3"];
         if command == "run" {
             args.push("--json");
         }
@@ -74,7 +74,7 @@ fn arrival_override_applies_to_run_and_ir() {
         assert_eq!(json["arrivals"], 3);
         for bad in ["0", "-1", "1.5", "abc"] {
             failure(
-                &f.run(&[command, "model.serq", "--arrivals", bad]),
+                &f.run(&[command, "model.sq", "--arrivals", bad]),
                 2,
                 &["--arrivals", "positive integer"],
             );
