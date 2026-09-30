@@ -22,6 +22,12 @@ let Z = 2.0;
 let bw = 2e6;        // migration link, tokens/s
 let dv = 0.0;        // decode KV-read cost, seconds/token^2
 
+// the laws, by name (`--def new_tokens='~erlang(2, 500)'`)
+def initial_tokens() = ~uniform(5000, 15000);
+def new_tokens() = ~exp(500);
+def output_tokens() = ~exp(200);
+def tool_time() = ~exp(Z);
+
 stage rep[4] : fifo;
 stage link : fifo;
 stage tool : delay;
@@ -34,8 +40,8 @@ workload {
     set first = 1;
   }
   turn {
-    set n = first ? ~uniform(5000, 15000) : ~exp(500);
-    set o = ~exp(200);
+    set n = first ? initial_tokens() : new_tokens();
+    set o = output_tokens();
   }
 }
 
@@ -83,7 +89,7 @@ session {
     observe service = S;
     set first = 0;
     set K = K + n + o;
-    branch with (p) { run tool (~exp(Z)); } else { end; }
+    branch with (p) { run tool (tool_time()); } else { end; }
   }
 }
 
