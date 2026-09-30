@@ -7,6 +7,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
+# one version, X.Y.Z, for serq and pyserq (a dev version is CI's, not committed)
+python3 scripts/version.py check
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo clippy -p pyserq --locked -- -D warnings

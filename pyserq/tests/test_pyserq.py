@@ -5,6 +5,7 @@ overrides and seed, and the samples `--dump` writes.
 """
 
 import csv
+import importlib.metadata
 import json
 import math
 import os
@@ -190,6 +191,18 @@ def test_runs_in_threads_are_the_runs_alone():
     parallel = time.time() - t0
     assert threaded == alone
     print(f"  4 runs: {serial:.2f}s one after another, {parallel:.2f}s in 4 threads")
+
+
+def test_one_version():
+    # the wheel's version is the crate's (scripts/version.py), as pip writes it
+    assert importlib.metadata.version("pyserq") == pyserq.__version__.replace("-dev.", ".dev")
+
+
+def test_the_wheel_carries_its_license():
+    # pyserq/LICENSE is a link to the repository's; maturin reads LICEN[CS]E*
+    meta = importlib.metadata.metadata("pyserq")
+    assert meta["License-Expression"] == "Apache-2.0"
+    assert any(f.name == "LICENSE" for f in importlib.metadata.files("pyserq"))
 
 
 if __name__ == "__main__":
