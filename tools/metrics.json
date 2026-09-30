@@ -1,15 +1,15 @@
 {
-  "IR_VERSION": 8,
+  "IR_VERSION": 9,
   "ir": {
     "CStmt": 13,
     "CExpr": 8,
     "Fun": 22,
-    "CtxVar": 16
+    "CtxVar": 17
   },
   "surface": {
     "keywords": 82,
     "functions": 23,
-    "context_variables": 16
+    "context_variables": 17
   },
   "clones": [
     "at admission (known = computed < prompt ? prompt : computed + 1,",

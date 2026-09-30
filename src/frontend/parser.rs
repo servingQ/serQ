@@ -12,7 +12,7 @@
 //! poolopt  := 'cap' expr ';' | 'block' expr ';'
 //!           | 'evict' ('lru' | 'by' '(' expr (',' expr)* ')') ';'
 //!           | 'preempt' ('lifo' | 'none') ';'
-//!           | 'queue' ('fifo' | 'by' '(' expr ')') ';'
+//!           | 'queue' ('fifo' | 'by' '(' expr (',' expr)* ')') ';'
 //!           | 'spill' IDENT 'via' IDENT '(' expr ')' 'when' '(' expr ')' ';'
 //! kind     := 'fifo' ('(' expr ')')? | 'ps' '(' expr ')' | 'delay'
 //!           | 'step' '{' stepopt* '}'
@@ -760,8 +760,8 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
         if let EvictOrder::By(keys) = &p.evict {
             out.extend(keys);
         }
-        if let QueueOrder::By(k) = &p.queue {
-            out.push(k);
+        if let QueueOrder::By(keys) = &p.queue {
+            out.extend(keys);
         }
         if let Some(sp) = &p.spill {
             out.extend([&sp.work, &sp.when]);
@@ -1812,9 +1812,13 @@ impl Parser {
                     } else {
                         self.expect_kw("by")?;
                         self.expect(&Tok::LParen)?;
-                        let e = self.expr()?;
+                        let mut keys = vec![self.expr()?];
+                        while *self.peek() == Tok::Comma {
+                            self.advance();
+                            keys.push(self.expr()?);
+                        }
                         self.expect(&Tok::RParen)?;
-                        QueueOrder::By(e)
+                        QueueOrder::By(keys)
                     }
                 }
                 "admit" => {

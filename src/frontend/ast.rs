@@ -98,7 +98,7 @@ pub enum EvictOrder {
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueueOrder {
     Fifo,
-    By(Expr),
+    By(Vec<Expr>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -382,8 +382,8 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
         if let EvictOrder::By(keys) = &mut d.evict {
             keys.iter_mut().for_each(expr);
         }
-        if let QueueOrder::By(e) = &mut d.queue {
-            expr(e);
+        if let QueueOrder::By(keys) = &mut d.queue {
+            keys.iter_mut().for_each(expr);
         }
         if let Some(s) = &mut d.spill {
             reference(&mut s.to);

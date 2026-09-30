@@ -181,6 +181,12 @@ struct CacheEntry {
     snap: Vec<f64>,
 }
 
+#[derive(Clone, Copy)]
+struct WaitingHold {
+    sid: usize,
+    resumed: bool,
+}
+
 struct PoolState {
     cap: f64,
     block: Option<f64>,
@@ -189,8 +195,8 @@ struct PoolState {
     holders: Vec<usize>,
     /// Cached prefixes by session serial (a session may have ended).
     entries: HashMap<u64, CacheEntry>,
-    /// Waiting sessions with their queue key (FIFO: arrival order).
-    queue: VecDeque<(f64, usize)>,
+    /// Waiting holds in enqueue order; policy keys are never cached.
+    queue: VecDeque<WaitingHold>,
     growers: VecDeque<usize>,
     // statistics
     used_avg: TimeAverage,
@@ -304,6 +310,7 @@ struct Ctx {
     snap: Option<Vec<f64>>,
     size: f64,
     age: f64,
+    waited: f64,
     last: f64,
     queued: f64,
     n: f64,
@@ -931,7 +938,7 @@ impl<'p> Interp<'p> {
     fn detach(&mut self, sid: usize) {
         match self.sessions[sid].status.clone() {
             Status::Queued(pl) => {
-                self.pools[pl].queue.retain(|&(_, s)| s != sid);
+                self.pools[pl].queue.retain(|entry| entry.sid != sid);
                 self.sessions[sid].pending = None;
             }
             Status::InStage(st, job) => self.remove_job(st, job),
@@ -1198,22 +1205,16 @@ impl<'p> Interp<'p> {
             }
         }
         let pl = first_pool(&pending);
-        let p = self.p;
-        let key = match &p.pools[pl].queue {
-            None => self.sessions[sid].serial as f64,
-            Some(e) => self.eval(e, &Ctx::session(sid), Which::Session),
-        };
         self.sessions[sid].pending = Some(pending);
         self.sessions[sid].status = Status::Queued(pl);
-        let q = &mut self.pools[pl].queue;
+        let entry = WaitingHold {
+            sid,
+            resumed: front,
+        };
         if front {
-            q.push_front((key, sid));
-        } else if self.p.pools[pl].queue.is_none() {
-            q.push_back((key, sid));
+            self.pools[pl].queue.push_front(entry);
         } else {
-            // priority: ascending key, FIFO among equal keys
-            let pos = q.iter().position(|&(k, _)| k > key).unwrap_or(q.len());
-            q.insert(pos, (key, sid));
+            self.pools[pl].queue.push_back(entry);
         }
         true
     }
@@ -1223,6 +1224,34 @@ impl<'p> Interp<'p> {
             self.retry_growers(pl);
             self.try_admit(pl);
         }
+    }
+
+    /// Select again after every admission: elapsed wait and scheduler state
+    /// can change even while no new request enters the queue. Resumed holds
+    /// keep vLLM's prepend priority; policy ties keep original queue order.
+    fn next_waiter(&mut self, pl: usize) -> Option<(usize, usize)> {
+        let queue = &self.pools[pl].queue;
+        if let Some(entry) = queue.front()
+            && (entry.resumed || self.p.pools[pl].queue.is_none())
+        {
+            return Some((0, entry.sid));
+        }
+        let keys = self.p.pools[pl].queue.as_ref()?;
+        let candidates: Vec<_> = queue.iter().map(|entry| entry.sid).collect();
+        let mut best: Option<(KeyOrd, usize, usize)> = None;
+        for (index, sid) in candidates.into_iter().enumerate() {
+            let mut ctx = Ctx::session(sid);
+            ctx.waited = self.now - self.sessions[sid].pending.as_ref().unwrap().queued_at;
+            let key = KeyOrd(
+                keys.iter()
+                    .map(|k| self.eval(k, &ctx, Which::Session))
+                    .collect(),
+            );
+            if best.as_ref().is_none_or(|(old, _, _)| key < *old) {
+                best = Some((key, index, sid));
+            }
+        }
+        best.map(|(_, index, sid)| (index, sid))
     }
 
     /// The hold request of a queued session with its units evaluated now.
@@ -1243,14 +1272,14 @@ impl<'p> Interp<'p> {
         pending
     }
 
-    /// Admit the head of the pool's queue while every pool of its hold
-    /// has room; the first that does not fit blocks the rest. A pool whose
+    /// Admit the selected waiting hold while every pool of its hold
+    /// has room; a selection that does not fit blocks the rest. A pool whose
     /// queue is served by a stage (`admit via`) is admitted from there.
     fn try_admit(&mut self, pl: usize) {
         if self.p.pools[pl].admit_via.is_some() {
             return;
         }
-        while let Some(&(_, sid)) = self.pools[pl].queue.front() {
+        while let Some((index, sid)) = self.next_waiter(pl) {
             let pending = self.pending_now(sid);
             // The guard counts only allocated units: cached prefixes never
             // block an admission (they are evicted as needed).
@@ -1264,7 +1293,7 @@ impl<'p> Interp<'p> {
             if !reserve {
                 break;
             }
-            self.pools[pl].queue.pop_front();
+            self.pools[pl].queue.remove(index);
             self.admit(sid, pending);
         }
     }
@@ -2699,7 +2728,7 @@ impl<'p> Interp<'p> {
             .any(|(cp, pl)| cp.admit_via == Some(st) && !pl.queue.is_empty())
     }
 
-    /// The stage's scheduler admits the head of a queue it serves, with
+    /// The stage's scheduler admits the selected waiting hold, with
     /// `left` tokens of this iteration's budget left (vLLM's waiting loop,
     /// scheduler.py:868-1128): the units are evaluated now, with
     /// `budget_left(stage) = left`; the first that does not fit stops it.
@@ -2709,10 +2738,11 @@ impl<'p> Interp<'p> {
             if self.p.pools[pl].admit_via != Some(st) {
                 continue;
             }
-            let Some(&(_, sid)) = self.pools[pl].queue.front() else {
+            self.admit_budget = Some((st, left));
+            let Some((index, sid)) = self.next_waiter(pl) else {
+                self.admit_budget = None;
                 continue;
             };
-            self.admit_budget = Some((st, left));
             let pending = self.pending_now(sid);
             self.admit_budget = None;
             let reserve = pending
@@ -2725,7 +2755,7 @@ impl<'p> Interp<'p> {
             if !reserve {
                 return false;
             }
-            self.pools[pl].queue.pop_front();
+            self.pools[pl].queue.remove(index);
             self.admit(sid, pending);
             // run the admitted session's commands (zero time) until it
             // joins the stage or blocks
@@ -2834,6 +2864,7 @@ impl<'p> Interp<'p> {
             },
             CExpr::Ctx(v) => match v {
                 CtxVar::Now => self.now,
+                CtxVar::Waited => ctx.waited,
                 CtxVar::Size => ctx.size,
                 CtxVar::Age => ctx.age,
                 CtxVar::Last => ctx.last,

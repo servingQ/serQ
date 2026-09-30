@@ -62,7 +62,7 @@ BUILTINS = (
     "busy", "work", "used", "free", "cachedin", "holders", "queued",
     "price", "budget_left", "est_lambda", "est_rho", "est_wait",
     "now", "kv_decode", "kv_prefill",
-    "decoding", "admission", "remaining",
+    "decoding", "admission", "remaining", "waited",
     "cached", "serial", "turn_no", "think", "more", "forced", "computed",
 )
 

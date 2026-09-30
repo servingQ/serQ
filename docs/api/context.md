@@ -9,7 +9,8 @@ than a 0: `set x = tokens;` in a session, or `evict by (tokens)`, does not link.
 | Moment | Where an expression is evaluated | Evaluated |
 |---|---|---|
 | `Session` | a statement of `init`, `turn`, `session`, `server`; a run's work; a hold's `cache` | by the session, when it gets there |
-| `Admit` | a hold's units, `reserve`, `reuse`, `at admission`; a pool's `queue by` | for one session, when the scheduler admits or orders it |
+| `Admit` | a hold's units, `reserve`, `reuse`, `at admission` | for one session at admission |
+| `Select` | a pool's `queue by` keys | for every waiting hold before each selection |
 | `Evict` | an eviction key; a `spill` clause | for one cache entry |
 | `Ps` | a `ps` stage's capacity | for the stage's jobs |
 | `Budget` | a step stage's `budget` and `chunk` | before the iteration, from the residents |
@@ -21,6 +22,7 @@ than a 0: `set x = tokens;` in a session, or `evict by (tokens)`, does not link.
 | Name | Type | Moments | Meaning |
 |---|---|---|---|
 | `now` | number | all | simulation clock |
+| `waited` | number | `Select` | seconds since this hold entered the queue; reset on re-entry |
 | `size` | number | `Evict` | units of the entry |
 | `age` | number | `Evict` | `now − last` |
 | `last` | number | `Evict` | time the entry was released |

@@ -8,6 +8,7 @@
 //! r = pyserq.run(p)            # the GIL is released while it runs
 //! r.json()                     # what `serq run --json` prints
 //! values, times, sessions, turns = r.observe("sojourn")   # what `--dump` writes
+//! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 //! ```
 
 use std::collections::HashMap;
@@ -131,12 +132,33 @@ fn run(py: Python<'_>, program: &Program) -> PyResult<Report> {
         .map_err(PyValueError::new_err)
 }
 
+/// `read_trace(path)`: a trace's sessions, each a list of its turns
+/// `(new, out, think, forced)`: the corpus a replay draws its sessions
+/// from, read as a replay reads it. A relative path is read from the
+/// current directory.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn read_trace(path: PathBuf) -> PyResult<Vec<Vec<(f64, f64, f64, f64)>>> {
+    let corpus = serq::read_trace(&path).map_err(PyValueError::new_err)?;
+    Ok(corpus
+        .sessions
+        .iter()
+        .map(|s| {
+            s.turns
+                .iter()
+                .map(|t| (t.new, t.out, t.think, t.forced))
+                .collect()
+        })
+        .collect())
+}
+
 #[pymodule]
 fn pyserq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Program>()?;
     m.add_class::<Report>()?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;
+    m.add_function(wrap_pyfunction!(read_trace, m)?)?;
     m.add("IR_VERSION", serq::ir::IR_VERSION)?;
     m.add("REPORT_VERSION", serq::engine::report::REPORT_VERSION)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
