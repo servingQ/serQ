@@ -88,6 +88,10 @@ impl fmt::Display for ParseError {
 
 impl ParseError {
     pub fn render(&self, source: &str) -> String {
+        // an error about the command line (`--def`) has no place in the text
+        if self.line == 0 {
+            return self.msg.clone();
+        }
         let span = Span {
             line: self.line,
             col: self.col,
@@ -155,6 +159,9 @@ struct Parser {
     /// Each library's directory as the program named it, for display.
     lib_shown_dirs: Vec<PathBuf>,
     read: Vec<PathBuf>,
+    /// `--def name=expr`: the body an expression definition has instead of
+    /// its own, and whether the program defined it.
+    def_overrides: Vec<(String, String, bool)>,
 }
 
 /// A use of a `def` whose body says `turn;` or `request;`, with the names
@@ -372,17 +379,36 @@ pub fn parse(src: &str) -> PResult<Program> {
 /// Parse a program read from a file in `base`, next to which its `use`s
 /// read their libraries.
 pub fn parse_at(src: &str, base: Option<&Path>) -> PResult<Program> {
-    parse_with(src, base, None)
+    parse_with(src, base, None, &[])
+}
+
+/// `parse_at`, with the bodies `--def` gives expression definitions.
+pub fn parse_at_with(
+    src: &str,
+    base: Option<&Path>,
+    defs: &[(String, String)],
+) -> PResult<Program> {
+    parse_with(src, base, None, defs)
 }
 
 /// Parse the program file `path`, whose text is `src`. The file counts as
 /// read, so a library that `use`s it back is not read into it again.
 pub fn parse_file(src: &str, path: &Path) -> PResult<Program> {
-    let root = path.canonicalize().ok();
-    parse_with(src, path.parent(), root)
+    parse_file_with(src, path, &[])
 }
 
-fn parse_with(src: &str, base: Option<&Path>, root: Option<PathBuf>) -> PResult<Program> {
+/// `parse_file`, with the bodies `--def` gives expression definitions.
+pub fn parse_file_with(src: &str, path: &Path, defs: &[(String, String)]) -> PResult<Program> {
+    let root = path.canonicalize().ok();
+    parse_with(src, path.parent(), root, defs)
+}
+
+fn parse_with(
+    src: &str,
+    base: Option<&Path>,
+    root: Option<PathBuf>,
+    defs: &[(String, String)],
+) -> PResult<Program> {
     let toks = lex(src)?;
     let mut p = Parser {
         toks,
@@ -403,8 +429,42 @@ fn parse_with(src: &str, base: Option<&Path>, root: Option<PathBuf>) -> PResult<
         lib_dirs: vec![],
         lib_shown_dirs: vec![],
         read: root.into_iter().collect(),
+        def_overrides: defs
+            .iter()
+            .map(|(n, e)| (n.clone(), e.clone(), false))
+            .collect(),
     };
-    p.program()
+    let prog = p.program()?;
+    let unknown: Vec<&str> = p
+        .def_overrides
+        .iter()
+        .filter(|d| !d.2)
+        .map(|d| d.0.as_str())
+        .collect();
+    if let Some(name) = unknown.first() {
+        let mut known: Vec<&str> = p
+            .defs
+            .iter()
+            .filter(|d| !d.stmts)
+            .map(|d| d.name.as_str())
+            .collect();
+        known.sort();
+        return Err(ParseError {
+            line: 0,
+            col: 0,
+            msg: format!(
+                "unknown --def `{name}`\nhelp: --def replaces the body of a declared `def NAME(...) = expr;`; \
+                 the program declares: {}",
+                if known.is_empty() {
+                    "none".to_string()
+                } else {
+                    known.join(", ")
+                }
+            ),
+            origin: None,
+        });
+    }
+    Ok(prog)
 }
 
 /// Parse a standalone expression (used by `--set name=expr` on the CLI).
@@ -429,6 +489,7 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
         lib_dirs: vec![],
         lib_shown_dirs: vec![],
         read: vec![],
+        def_overrides: vec![],
     };
     let e = p.expr()?;
     p.expect(&Tok::Eof)?;
@@ -1468,8 +1529,39 @@ impl Parser {
             }
             self.advance();
         }
-        let body = self.toks[start..self.pos].to_vec();
+        let mut body = self.toks[start..self.pos].to_vec();
         self.advance();
+        if let Some(i) = self.def_overrides.iter().position(|d| d.0 == name) {
+            if stmts {
+                return self.err_at(
+                    at,
+                    format!(
+                        "--def {name}: `def {name}` is statements; --def replaces the body of an \
+                         expression definition"
+                    ),
+                );
+            }
+            self.def_overrides[i].2 = true;
+            let text = self.def_overrides[i].1.clone();
+            let place = &self.toks[at];
+            let (line, col, file) = (place.line, place.col, place.file);
+            body = lex(&text)
+                .map_err(|e| ParseError {
+                    line,
+                    col,
+                    msg: format!("--def {name}: {}", e.msg),
+                    origin: None,
+                })?
+                .into_iter()
+                .filter(|t| t.tok != Tok::Eof)
+                .map(|t| Token {
+                    line,
+                    col,
+                    file,
+                    ..t
+                })
+                .collect();
+        }
         if body.is_empty() && !stmts {
             return self.err_at(at, format!("`def {name}` has no expression"));
         }

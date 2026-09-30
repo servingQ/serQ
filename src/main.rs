@@ -15,13 +15,15 @@ use serq::frontend::parser;
 fn usage(cmd: &str) -> &'static str {
     match cmd {
         "run" => {
-            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set name=expr]... [--trace F] [--json] [--dump DIR]"
+            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set name=expr]... [--def name=expr]... [--trace F] [--json] [--dump DIR]"
         }
-        "check" => "serq check FILE [--set name=expr]...",
+        "check" => "serq check FILE [--set name=expr]... [--def name=expr]...",
         "ir" => {
-            "serq ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]"
+            "serq ir FILE [--set name=expr]... [--def name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]"
         }
-        "draw" => "serq draw FILE [--set name=expr]... [--format tikz|svg] [--out PATH]",
+        "draw" => {
+            "serq draw FILE [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH]"
+        }
         "fmt" => "serq fmt [--check] FILE...",
         _ => "serq <run|check|ir|draw|fmt> FILE [OPTIONS]",
     }
@@ -123,7 +125,7 @@ fn main() {
     while i < args.len() {
         let flag = args[i].as_str();
         let allowed: &[&str] = match flag {
-            "--set" => &["run", "check", "ir", "draw"],
+            "--set" | "--def" => &["run", "check", "ir", "draw"],
             "--seed" | "--horizon" | "--warmup" | "--arrivals" | "--trace" => &["run", "ir"],
             "--json" | "--dump" => &["run"],
             "--inline-trace" => &["ir"],
@@ -192,6 +194,23 @@ fn main() {
                 let e = parser::parse_expr(v).unwrap_or_else(|e| argument_error(cmd,
                     format!("invalid expression in --set `{kv}`: {e}\nhelp: use --set name=expr, for example --set rate=2")));
                 ov.lets.push((name.to_string(), e));
+            }
+            "--def" => {
+                let kv = next(&mut i);
+                let (k, v) = kv.split_once('=').unwrap_or_else(|| {
+                    argument_error(
+                        cmd,
+                        format!("invalid --def `{kv}`; expected name=expr\nhelp: use --def service=~exp(1)"),
+                    )
+                });
+                ov.define(k.trim(), v).unwrap_or_else(|e| {
+                    argument_error(
+                        cmd,
+                        format!(
+                            "{e}\nhelp: use --def name=expr with a declared `def name(...) = expr;`"
+                        ),
+                    )
+                });
             }
             "--json" => json = true,
             "--dump" => dump = Some(next(&mut i)),

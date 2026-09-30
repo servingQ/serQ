@@ -247,3 +247,48 @@ fn a_constant_that_is_nan_is_refused_and_an_infinity_is_not() {
     .expect_err("a NaN call");
     assert!(err.contains("2:15:") && err.contains("cap is NaN"), "{err}");
 }
+
+#[test]
+fn a_def_given_from_outside_is_the_program_written_with_that_body() {
+    let src = |service: &str, key: &str| {
+        format!(
+            "let lam = 0.5;\ndef service() = {service};\ndef key(x) = {key};\n\
+             def twice(x) {{ set y = x * 2; }}\nstage svc : fifo;\n\
+             workload {{ arrive poisson(lam); }}\n\
+             session {{ set c = 1; run svc (service()); observe k = key(c); end; }}\n\
+             run {{ horizon 100; seed 3; }}"
+        )
+    };
+    let base = src("~exp(1)", "x");
+    let mut ov = Overrides::default();
+    ov.define("service", "c == 1 ? ~erlang(4, 1) : ~det(1)")
+        .unwrap();
+    ov.define("key", "x + 1").unwrap();
+    let given = compile_source(&base, &ov).unwrap();
+    let written = compile_source(
+        &src("c == 1 ? ~erlang(4, 1) : ~det(1)", "x + 1"),
+        &Overrides::default(),
+    )
+    .unwrap();
+    assert_eq!(given.to_json(), written.to_json());
+    assert_ne!(
+        given.to_json(),
+        compile_source(&base, &Overrides::default())
+            .unwrap()
+            .to_json()
+    );
+
+    let refused = |name: &str, body: &str, want: &str| {
+        let mut ov = Overrides::default();
+        let err = match ov.define(name, body) {
+            Err(e) => e,
+            Ok(()) => compile_source(&base, &ov).expect_err(want),
+        };
+        assert!(err.contains(want), "{err}");
+    };
+    refused("nope", "1", "unknown --def `nope`");
+    refused("twice", "1", "`def twice` is statements");
+    refused("service", "~exp(", "invalid expression in --def");
+    refused("service", "zz", "unknown name `zz`");
+    refused("not a name", "1", "");
+}

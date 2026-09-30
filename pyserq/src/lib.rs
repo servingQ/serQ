@@ -204,16 +204,18 @@ enum SetValue {
     Expr(String),
 }
 
-/// `compile(path=None, *, source=None, sets={}, seed=None, horizon=None,
-/// warmup=None, arrivals=None, trace=None)`: a program file or program text
-/// to its IR, with the overrides of `serq run`.
+/// `compile(path=None, *, source=None, sets={}, defs={}, seed=None,
+/// horizon=None, warmup=None, arrivals=None, trace=None)`: a program file or
+/// program text to its IR, with the overrides of `serq run` (`defs` is
+/// `--def`: the body of an expression definition, by name).
 #[pyfunction]
-#[pyo3(signature = (path=None, *, source=None, sets=HashMap::new(), seed=None, horizon=None, warmup=None, arrivals=None, trace=None))]
+#[pyo3(signature = (path=None, *, source=None, sets=HashMap::new(), defs=HashMap::new(), seed=None, horizon=None, warmup=None, arrivals=None, trace=None))]
 #[allow(clippy::too_many_arguments)]
 fn compile(
     path: Option<PathBuf>,
     source: Option<&str>,
     sets: HashMap<String, SetValue>,
+    defs: HashMap<String, String>,
     seed: Option<u64>,
     horizon: Option<f64>,
     warmup: Option<f64>,
@@ -233,6 +235,9 @@ fn compile(
             SetValue::Num(x) => ov.set_num(&name, x).map_err(PyValueError::new_err)?,
             SetValue::Expr(e) => ov.set(&name, &e).map_err(PyValueError::new_err)?,
         }
+    }
+    for (name, body) in defs {
+        ov.define(&name, &body).map_err(PyValueError::new_err)?;
     }
     let (ir, base) = match (&path, source) {
         (Some(p), None) => (serq::load(p, &ov), p.parent().map(Path::to_path_buf)),

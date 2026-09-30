@@ -71,6 +71,10 @@ pub type Linked = crate::ir::Program;
 #[derive(Clone, Debug, Default)]
 pub struct Overrides {
     pub lets: Vec<(String, Expr)>,
+    /// `--def name=expr`: the body of the expression definition `name`,
+    /// in place of the program's (a definition expands where it is used,
+    /// so this is the program as if written with that body).
+    pub defs: Vec<(String, String)>,
     pub horizon: Option<f64>,
     pub warmup: Option<f64>,
     pub seed: Option<u64>,
@@ -87,6 +91,18 @@ impl Overrides {
         let e = crate::frontend::parser::parse_expr(expr)
             .map_err(|e| format!("invalid expression in set `{name} = {expr}`: {e}"))?;
         self.lets.push((name.to_string(), e));
+        Ok(())
+    }
+
+    /// `--def name=expr`: the expression definition `name` has the body
+    /// `expr`, which may draw, read attributes and use the definitions
+    /// before it, as the program's own body could.
+    pub fn define(&mut self, name: &str, expr: &str) -> Result<(), String> {
+        check_set_name(name)?;
+        crate::frontend::parser::parse_expr(expr)
+            .map_err(|e| format!("invalid expression in --def `{name} = {expr}`: {e}"))?;
+        self.defs.retain(|(n, _)| n != name);
+        self.defs.push((name.to_string(), expr.to_string()));
         Ok(())
     }
 
