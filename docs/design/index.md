@@ -72,4 +72,6 @@ here. This directory is the record of **applying** them.
 | [One admission](one-admission.md) | One spelling for one admission: `hold … at admission (…) … cache`; `enter`, `admit if … fit where` and `keep` retired, the serving name moved into a `def` | #136 |
 | [Separate prefill/decode batches](exclusive-prefill.md) | Whole-batch isolation and waiting-prefill takeover using the existing serve policy | untagged IR v8 semantics |
 
+| [Waiting selection](waiting-selection.md) | Selection-time queue keys, elapsed wait and Ascend-style FCFS aging | IR v9 |
+
 A new design document adds a row to this table.

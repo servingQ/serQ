@@ -16,8 +16,9 @@ use serde::{Deserialize, Serialize};
 /// `Release` and `Load`; 6 added renewal arrivals and finite open runs; 7
 /// makes `Choose.key` a list of keys, compared in order; 8 lets a `Run`
 /// hold several stages at once (`also`) under the program's `share` and
-/// makes `ExclusivePrefill` isolate the whole batch, including admissions.
-pub const IR_VERSION: u32 = 8;
+/// makes `ExclusivePrefill` isolate the whole batch, including admissions;
+/// 9 reevaluates lexicographic queue keys at selection and supplies `Waited`.
+pub const IR_VERSION: u32 = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -69,9 +70,10 @@ pub enum Moment {
     /// A statement of the `init`, `turn` or `session` block, a run's work,
     /// a hold's `cache`: evaluated by the session when it gets there.
     Session,
-    /// A hold's units, `reserve` and `reuse`, and a pool's queue key:
-    /// evaluated for one session when the scheduler admits or orders it.
+    /// A hold's units, `reserve` and `reuse`: evaluated at admission.
     Admit,
+    /// Queue keys, reevaluated for each waiting session before selection.
+    Select,
     /// An eviction key or a spill clause: evaluated for one cache entry.
     Evict,
     /// A `ps` stage's capacity: evaluated for the stage's jobs.
@@ -90,7 +92,8 @@ impl std::fmt::Display for Moment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Moment::Session => "a session statement, a run or a hold's cache",
-            Moment::Admit => "a hold's header or a queue key, read at admission",
+            Moment::Admit => "a hold's header, read at admission",
+            Moment::Select => "a pool's queue keys, read before selecting a waiting session",
             Moment::Evict => "an eviction key or spill clause",
             Moment::Ps => "a ps stage's capacity",
             Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
@@ -105,6 +108,8 @@ impl std::fmt::Display for Moment {
 pub enum CtxVar {
     /// Simulation clock.
     Now,
+    /// Queue selection: seconds since this hold entered the queue.
+    Waited,
     /// Eviction keys and spill predicates: units of the entry.
     Size,
     /// Eviction keys: `now - last`.
@@ -144,6 +149,7 @@ impl CtxVar {
     fn name(self) -> &'static str {
         match self {
             CtxVar::Now => "now",
+            CtxVar::Waited => "waited",
             CtxVar::Size => "size",
             CtxVar::Age => "age",
             CtxVar::Last => "last",
@@ -167,6 +173,7 @@ impl CtxVar {
     pub fn moments(self) -> &'static [Moment] {
         match self {
             CtxVar::Now => &[],
+            CtxVar::Waited => &[Moment::Select],
             CtxVar::Size | CtxVar::Age | CtxVar::Last | CtxVar::Queued => &[Moment::Evict],
             CtxVar::N => &[Moment::Ps],
             // the residents are known before the iteration; the tokens
@@ -363,7 +370,9 @@ pub struct CPool {
     pub block: Option<f64>,
     pub evict: CEvict,
     pub preempt: Preempt,
-    pub queue: Option<CExpr>,
+    /// Ascending lexicographic keys, reevaluated before every selection;
+    /// None is FIFO. Equal keys retain queue order; resumed holds go first.
+    pub queue: Option<Vec<CExpr>>,
     pub spill: Option<CSpill>,
     pub admit_via: Option<usize>,
 }
@@ -749,8 +758,18 @@ impl Program {
         self.validate_flows()?;
         for p in &self.pools {
             let at = |e| format!("pool `{}`: {e}", p.name);
-            if let Some(e) = &p.queue {
-                v.expr(e, Moment::Admit).map_err(at)?;
+            if let Some(keys) = &p.queue {
+                if keys.is_empty() {
+                    return Err(at("queue by needs at least one key".to_string()));
+                }
+                for key in keys {
+                    v.expr(key, Moment::Select).map_err(at)?;
+                    if draws(key) {
+                        return Err(at(
+                            "a queue key may not draw; sample into an attribute first".to_string(),
+                        ));
+                    }
+                }
             }
             if let CEvict::By(keys) = &p.evict {
                 for e in keys {

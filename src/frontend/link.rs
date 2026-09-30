@@ -139,8 +139,9 @@ struct Linker<'a> {
 
 /// The context variables by their source names (`docs/api/context.md`). A
 /// name resolves to an attribute first, then a `let`, then one of these.
-pub const CONTEXT_VARS: [(&str, CtxVar); 16] = [
+pub const CONTEXT_VARS: [(&str, CtxVar); 17] = [
     ("now", CtxVar::Now),
+    ("waited", CtxVar::Waited),
     ("size", CtxVar::Size),
     ("age", CtxVar::Age),
     ("last", CtxVar::Last),
@@ -307,7 +308,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         };
         let queue = match &p.queue {
             QueueOrder::Fifo => None,
-            QueueOrder::By(e) => Some(lk.expr(e)?),
+            QueueOrder::By(keys) => Some(keys.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?),
         };
         let spill = match &p.spill {
             None => None,

@@ -6,7 +6,7 @@ pool NAME [ '[' N ']' ] {
   block expr;
   evict lru;  |  evict by (expr, …);
   preempt none;  |  preempt lifo;
-  queue fifo;  |  queue by (expr);
+  queue fifo;  |  queue by (key, …);
   admit via STAGE;
   spill POOL via STAGE (expr) when (expr);
 }
@@ -87,13 +87,32 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 
 ```serq
 queue fifo;
-queue by (expr);
+queue by (key, …);
 ```
 
-Admission order. `by` evaluates one key per waiting session at the `Admit`
-moment, ascending, ties in the order the sessions joined the queue. A preempted session re-enters at the head,
-ahead of the key. Only the head is tried: the first session that does not fit
-blocks the rest.
+`by` reevaluates keys for every waiting hold before each admission attempt,
+compares them lexicographically, and breaks ties by enqueue order. One key is
+a list of one. `waited` supplies seconds since the current hold entered the
+queue; it resets on re-entry. Keys may read visible session attributes,
+`now` and pool/stage queries, and may not draw.
+
+A preempted hold re-enters at the head, ahead of policy keys. Only the selected
+hold is tried: failure to fit blocks the rest. FIFO keeps enqueue order.
+Selection occurs at admission attempts; there is no implicit aging timer.
+For a stage-bound pool, `budget_left(stage)` reads the budget remaining for
+that admission, and the policy is evaluated again after every admission.
+
+For Ascend-style FCFS lanes with a three-second aging threshold:
+
+```serq
+queue by (immediate ? 0 : prompt > 128 && waited >= 3 ? 1 : prompt <= 128 ? 2 : 3,
+          serial);
+```
+
+This admits immediate requests, then aged long requests, then short requests,
+then other long requests. `serial` orders requests within a lane in this
+single-hold workload. [Waiting selection](../design/waiting-selection.md)
+records the exact scope and regression cases.
 
 ## `admit via`
 

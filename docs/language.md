@@ -83,7 +83,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
           | preempt none ; | preempt lifo ;  -- what a failed growth does
-          | queue fifo ; | queue by ( expr ) ;        -- admission order
+          | queue fifo ; | queue by ( expr (, expr)* ) ; -- waiting selection
           | admit via STAGE ;                -- the queue is served by a step stage's scheduler
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
@@ -474,11 +474,23 @@ and diverges from the interpreter; no oracle scenario takes that path, and
 the recorded scenario that will is the change that teaches the Lean model
 the attribute.
 
+**Waiting selection.** `queue by (k1, …)` reevaluates pure keys for every
+waiting hold before each admission attempt. `waited` is elapsed simulation
+seconds since that hold entered the queue, reset on re-entry. With `admit via`,
+`budget_left(stage)` reads that attempt's remaining token budget; keys are
+reevaluated after each successful admission. FIFO has no keys. Selection
+tries only the chosen request: a request that cannot fit blocks the rest.
+Preempted holds retain prepend priority. Selection creates no timer events;
+it runs when the scheduler attempts admission. A key may not draw; sample a
+prediction into a visible session attribute first. Hidden attributes remain
+unreadable. This replaces enqueue-time key caching in IR v8.
+
 **Ties.** Every order in the semantics is a declared key followed by a
 declared number, the sequence number of a named event (for `choose`, the
 index), so that two items with equal keys never fall to the order a data
 structure happens to hold them in. A pool's queue:
-the key (`queue by`), then the order the sessions joined the queue (`fifo`
+the keys (`queue by`), compared in order and reevaluated before every
+selection, then the order the sessions joined the queue (`fifo`
 is that order alone); a preempted session re-enters at the head, ahead of
 the key. Eviction: the keys (`evict by`) or the release time (`lru`), then
 the order the entries were released. A step stage's residents: the
