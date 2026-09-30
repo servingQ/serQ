@@ -15,12 +15,13 @@ the program. A tool that knows what it wants to run (a scenario from JSON,
 a parameter sweep, a trace replay) builds or edits the IR as data instead
 of generating text.
 
-Source: `src/ir.rs`. Version: `IR_VERSION = 8` (2 added the sessions' turns;
+Source: `src/ir.rs`. Version: `IR_VERSION = 9` (2 added the sessions' turns;
 3 renamed the `route` field to `session`; 4 replaced `CStep`'s two booleans
 `exclusive_prefill` and `decode_first` by the one order `serve`;
 5 added KV transfer and leases; 6 added renewal arrivals and finite open runs;
 7 makes `Choose.key` a list of keys; 8 lets a `Run` hold several stages at
-once, `also`, under the program's `share`).
+once, `also`, under the program's `share`; 9 makes queue keys a list,
+reevaluates them at selection and supplies `Waited`).
 
 ## Why an IR first
 
@@ -63,7 +64,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `version` | `IR_VERSION`; a different version is rejected |
 | `attrs` | attribute names; an attribute is referenced by its index (slot) |
 | `observes` | observation names, by index |
-| `pools` | `CPool`: `name`, `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, `Lifo`), `queue` (order key), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
+| `pools` | `CPool`: `name`, `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, `Lifo`), `queue` (`null` for FIFO, otherwise a nonempty list of pure selection keys), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
 | `stages` | `CStage`: `name`, `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `memory` (pool index) |
 | `arrival` | `Poisson(rate)`, `Renewal(gap expression)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
@@ -99,7 +100,7 @@ runs identically (`tests/ir.rs`).
 
 ### Expressions (`CExpr`)
 
-`Num`, `Attr(slot)`, `Ctx(var)` (`Now`, `Size`, `Age`, `Last`, `Queued`,
+`Num`, `Attr(slot)`, `Ctx(var)` (`Now`, `Waited`, `Size`, `Age`, `Last`, `Queued`,
 `N`, `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`: each exists at
 one *moment*, below, and `Now` at every one), `Sample(dist, args)`,
 `Call(fun, args)` (arithmetic functions, pool and stage queries such as
@@ -125,7 +126,8 @@ its position in the IR, and a context variable exists at one of them:
 | Moment (`ir::Moment`) | Positions | Context variables |
 |---|---|---|
 | `Session` | statements of `init`, `turn`, `session`; a run's work; a hold's `cache` (read when the session releases); `Grow`, `Load`, `Branch`, `Choose` | `Now` |
-| `Admit` | a hold's units, `reserve`, `reuse`; a pool's queue key (read when the scheduler admits or orders the session, not when it reaches the statement) | `Now` |
+| `Admit` | a hold's units, `reserve`, `reuse`, admission bindings | `Now` |
+| `Select` | a pool's queue keys, reevaluated for each waiting hold before every admission attempt | `Waited`, `Now` |
 | `Evict` | eviction keys, a spill's `work` and `when` | `Size`, `Age`, `Last`, `Queued`, `Now` |
 | `Ps` | a `ps` stage's capacity | `N`, `Now` |
 | `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
@@ -237,6 +239,23 @@ number stayed 8 under the policy above, and it is in `v0.1.0-rc6`'s release
 note; `v0.1.0-rc6` carries 8, so the next change to the IR opens 9. JSON shape and the ordinary serving
 order are unchanged. `ExclusivePrefill` is outside the Lean fragment;
 this change neither extends it nor changes the oracle IR files.
+
+Version 9 replaces cached enqueue keys with selection-time evaluation and
+changes `CPool.queue` from `Option<CExpr>` to `Option<Vec<CExpr>>`. `None`
+remains FIFO; a nonempty list is compared lexicographically with enqueue-order
+ties. `CtxVar::Waited` exists at the new `Select` moment. Keys may not draw,
+and scheduler-hidden attributes remain rejected. Existing time-dependent
+queue policies change meaning; static one-key policies keep their order.
+Resumed holds keep prepend priority and the selected non-fitting request
+still blocks the queue. The current interpreter rejects older IR versions;
+regenerate JSON from source. The latest tag `v0.1.0-rc6` carries 8, so this
+meaning/shape change opens 9 and belongs in its release note.
+
+The companion `serving-queue-theory/scripts/gen_seq_oracle.py` reads version 9
+for its FIFO fragment and rejects non-FIFO queues. It also retains support
+for its pinned version 7 and version 8 FIFO programs. No waiting-selection
+proof is claimed. Oracle JSON files move to version 9; their schedules and
+generated Lean programs remain unchanged.
 
 ## The Lean fragment
 
