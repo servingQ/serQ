@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
+from itertools import groupby
 from pathlib import Path
 
 import pyserq
@@ -59,6 +60,15 @@ def test_a_trace_given_as_a_path():
     assert pyserq.REPORT_VERSION >= 1
 
 
+def test_a_trace_read_as_a_replay_reads_it():
+    # short_m10 has forced turns (a sixth column of 1s)
+    path = REPLAY.parent / "data" / "short_m10.csv"
+    rows = [r for r in csv.reader(open(path)) if r and not r[0].startswith(("#", "session"))]
+    want = [[tuple(map(float, r[2:6])) for r in g] for _, g in groupby(rows, key=lambda r: r[0])]
+    assert any(t[3] == 1.0 for s in want for t in s)
+    assert pyserq.read_trace(path) == want
+
+
 def test_the_ir_round_trips():
     p = pyserq.compile(MG1)
     ir = json.loads(p.to_json())
@@ -77,6 +87,8 @@ def test_errors_are_value_errors():
         lambda: pyserq.compile(MG1, sets={"lam": float("nan")}),
         lambda: pyserq.compile(MG1, sets={"not a name": 1}),
         lambda: pyserq.compile(),
+        lambda: pyserq.read_trace(ROOT / "nowhere.csv"),
+        lambda: pyserq.read_trace(MG1),
     ]:
         try:
             call()

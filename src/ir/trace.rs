@@ -1,5 +1,5 @@
-//! Replayed sessions: the `session,turn,new,out,think` CSV of
-//! `libqueuingsim/data/*.csv` (see `libqueuingsim::workload`).
+//! Replayed sessions: the `session,turn,new,out,think[,forced]` CSV a
+//! program's `trace` names (`examples/replay/data/*.csv`).
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Turn {
