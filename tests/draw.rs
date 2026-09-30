@@ -858,3 +858,76 @@ fn a_reordered_arrow_is_drawn_the_way_it_points() {
     assert!(!find(u, v).back, "u stands before v now");
     assert!(find(v, u).back);
 }
+
+/// No two labels of a figure share ink: a station's name or note wider
+/// than the station, or a pool's options wider than its glyphs, gets the
+/// room it needs (`replica.sq`'s budget ran into its `kv` options).
+#[test]
+fn labels_do_not_overlap() {
+    use serq::view::figure::{Anchor, Item, TextSize};
+    // every program the repository ships, not only the ones drawn above
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files: Vec<std::path::PathBuf> = vec![];
+    for dir in std::fs::read_dir(root.join("examples")).unwrap().flatten() {
+        for f in std::fs::read_dir(dir.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            files.push(f.path());
+        }
+    }
+    for f in std::fs::read_dir(root.join("docs/tutorial/programs"))
+        .unwrap()
+        .flatten()
+    {
+        files.push(f.path());
+    }
+    files.retain(|f| f.extension().is_some_and(|e| e == "sq"));
+    files.sort();
+    assert!(files.len() > PROGRAMS.len());
+    for path in &files {
+        let name = path.strip_prefix(root).unwrap().display().to_string();
+        let src = std::fs::read_to_string(path).unwrap();
+        let p = serq::compile_file(&src, path, &Overrides::default()).unwrap();
+        let f = deployment::figure(&p);
+        let boxes: Vec<(f64, f64, f64, &str)> = f
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::Text {
+                    at,
+                    text,
+                    anchor,
+                    size,
+                    ..
+                } => {
+                    let w = size.width_of(text);
+                    let x0 = match anchor {
+                        Anchor::Start => at.x,
+                        Anchor::Middle => at.x - w / 2.0,
+                        Anchor::End => at.x - w,
+                    };
+                    let h = match size {
+                        TextSize::Small => 9.0,
+                        _ => 11.0,
+                    };
+                    Some((x0, x0 + w, at.y - h / 2.0, text.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        for (i, a) in boxes.iter().enumerate() {
+            for b in &boxes[i + 1..] {
+                let same_line = (a.2 - b.2).abs() < 8.0;
+                let apart = a.1 <= b.0 || b.1 <= a.0;
+                assert!(
+                    !same_line || apart,
+                    "{name}: `{}` and `{}` overlap",
+                    a.3,
+                    b.3
+                );
+            }
+        }
+    }
+}
