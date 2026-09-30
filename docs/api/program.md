@@ -44,11 +44,11 @@ distribution or a key the program leaves open is a parameter of the run
 (`def service() = ~exp(1);`, run with `--def service='~erlang(4, 1)'`).
 
 ```serq
-def reusable(x) = floor((x - 1) / bs) * bs;
-set hitmax = reusable(prompt);
+def reusable(x, bs) = floor((x - 1) / bs) * bs;
+set hitD = min(cachedin(D[j].kv), reusable(prompt, bs));
 ```
 
-(`examples/pd-disaggregation/llmd_nixl_pull.sq`)
+(`lib/vllm.sq`, and its use in `examples/pd-disaggregation/llmd_nixl_pull.sq`)
 
 | Argument | Type | Description |
 |---|---|---|

@@ -255,6 +255,19 @@ pub enum Stmt {
         key: Vec<Expr>,
     },
     End,
+    /// `Q[i].verb (args) [from S[k]] [to P (m)];`: a queue's entry. Parse-time
+    /// only: `assemble` puts the entry's body in its place (`crate::frontend::queue`),
+    /// so the linker never sees one.
+    Call {
+        queue: Ref,
+        verb: String,
+        args: Vec<Expr>,
+        from: Option<Ref>,
+        to: Option<(Ref, Expr)>,
+    },
+    /// `mark x;` inside a queue's entry: the moment, as the attribute `Q.x`
+    /// the caller reads. Parse-time only, as `Call`.
+    Mark(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]

@@ -301,8 +301,8 @@ fn a_re_executed_hold_releases_nothing_twice() {
 /// A step stage that serves several queues tries them in the order their
 /// pools are declared, and the first head that does not fit stops the
 /// step's admissions. `examples/pd-disaggregation/llmd_nixl_pull.sq` relies on it: the decoder's
-/// requests whose KV has arrived (its `reqsD` queue) are declared before
-/// the new ones (`kvD`), as vLLM serves `skipped_waiting` before `waiting`.
+/// requests whose KV has arrived (its `D.reqs` queue) are declared before
+/// the new ones (`D.kv`), as vLLM serves `skipped_waiting` before `waiting`.
 #[test]
 fn an_engine_serves_its_queues_in_declaration_order() {
     let program = |first: &str, second: &str| {
@@ -360,7 +360,7 @@ fn the_pd_program_survives_decoder_memory_pressure() {
     };
     let path = serq::program_path("llmd_nixl_pull");
     let r = run_source(&src, &ov, path.parent()).unwrap();
-    assert!(r.pool("kvD").unwrap().preemptions > 0, "{}", r.text());
+    assert!(r.pool("D.kv").unwrap().preemptions > 0, "{}", r.text());
     assert!(
         r.observe("lease").unwrap().samples.len() > 100,
         "{}",

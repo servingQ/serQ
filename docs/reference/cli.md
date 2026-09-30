@@ -30,7 +30,7 @@ serq fmt   [--check] FILE...
 | `--horizon T` | run, ir | simulated seconds |
 | `--warmup T` | run, ir | seconds discarded before anything is recorded |
 | `--arrivals N` | run, ir | stop after `N` arrivals and drain their sessions, overriding the `run` block's `arrivals` ([a finite run](../api/program.md#a-finite-run)); open workloads only |
-| `--set name=expr` | all | override a declared `let` constant (unknown names are errors; the last override of a name wins). **Rejected on `.json`**: an IR's constants are already folded |
+| `--set name=expr` | all | override a declared `let` constant (unknown names are errors; the last override of a name wins). Rejected if the constant, directly or through another `let`, sets a queue family's size. **Rejected on `.json`**: an IR's constants are already folded |
 | `--def name=expr` | all | replace the body of a declared expression [`def`](../api/program.md#def), which then expands at each use as if written so: a distribution, a policy key or a law per class passed in as a parameter (`--def service='~erlang(4, 1)'`). The body may draw and read what the program's body could; the definition keeps its parameters. Unknown names and statement definitions are errors; the last override of a name wins. **Rejected on `.json`**: an IR's definitions are already expanded |
 | `--trace F` | run, ir | replace the program's trace corpus |
 | `--inline-trace` | ir | turn the trace file into the sessions' turns, as `CArrival::Sessions` data |

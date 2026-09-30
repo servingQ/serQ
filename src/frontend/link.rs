@@ -1017,6 +1017,12 @@ impl Linker<'_> {
                             .into(),
                     ));
                 }
+                Stmt::Call { .. } | Stmt::Mark(_) => {
+                    return Err(LinkError::new(
+                        "a queue's entry call survived parsing: the parser expands it in place"
+                            .into(),
+                    ));
+                }
                 Stmt::Hold {
                     pools,
                     reuse,

@@ -106,6 +106,8 @@ nav:
           - One admission: design/one-admission.md
           - Separate prefill/decode batches: design/exclusive-prefill.md
           - Waiting selection: design/waiting-selection.md
+          - Queues: design/queue.md
+          - Explicit gateways: design/explicit-gateways.md
   - API Reference:
       - api/index.md
       - Program: api/program.md

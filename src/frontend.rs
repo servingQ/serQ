@@ -8,3 +8,4 @@ pub mod lexer;
 pub mod link;
 pub mod lint;
 pub mod parser;
+pub mod queue;

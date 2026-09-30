@@ -19,7 +19,7 @@
 <rect class="bg" fill="#ffffff" x="0" y="0" width="1726.8" height="364"/>
 <rect class="rail" fill="none" stroke="#4b5563" stroke-width="1" x="816" y="86" width="254" height="64" rx="4"/>
 <rect class="enclosure" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="6 4" x="275" y="72" width="202" height="92" rx="8"/>
-<text x="295" y="67" text-anchor="start" font-size="10" fill="#1d2021">pool reqsP</text>
+<text x="295" y="67" text-anchor="start" font-size="10" fill="#1d2021">pool P.reqs</text>
 <path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M295 107 L325 107 M295 129 L325 129"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="297.14" y="109" width="6" height="18"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="305.71" y="109" width="6" height="18"/>
@@ -45,7 +45,7 @@
 <path class="relation" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="2 3" d="M310 105 L415 86" marker-end="url(#a)"/>
 <text x="313" y="98" text-anchor="start" font-size="8" fill="#6b7280" class="dim">admit via</text>
 <rect class="enclosure" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="6 4" x="162" y="57" width="937" height="164" rx="8"/>
-<text x="197" y="52" text-anchor="start" font-size="10" fill="#1d2021">pool kvP</text>
+<text x="197" y="52" text-anchor="start" font-size="10" fill="#1d2021">pool P.kv</text>
 <path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M197 107 L227 107 M197 129 L227 129"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="199.14" y="109" width="6" height="18"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="207.71" y="109" width="6" height="18"/>
@@ -65,7 +65,7 @@
 <rect class="cached" fill="#e6e2da" stroke="none" x="197" y="206" width="892" height="11" rx="2"/>
 <text x="643" y="214.5" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">prefix cache</text>
 <rect class="enclosure" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="6 4" x="1173" y="72" width="202" height="92" rx="8"/>
-<text x="1193" y="67" text-anchor="start" font-size="10" fill="#1d2021">pool reqsD</text>
+<text x="1193" y="67" text-anchor="start" font-size="10" fill="#1d2021">pool D.reqs</text>
 <path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M1193 107 L1223 107 M1193 129 L1223 129"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="1195.14" y="109" width="6" height="18"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="1203.71" y="109" width="6" height="18"/>
@@ -83,7 +83,7 @@
 <path class="relation" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="2 3" d="M1208 105 L1313 86" marker-end="url(#a)"/>
 <text x="1211" y="98" text-anchor="start" font-size="8" fill="#6b7280" class="dim">admit via</text>
 <rect class="enclosure" fill="none" stroke="#6b7280" stroke-width="1" stroke-dasharray="6 4" x="551" y="57" width="859" height="175" rx="8"/>
-<text x="586" y="52" text-anchor="start" font-size="10" fill="#1d2021">pool kvD</text>
+<text x="586" y="52" text-anchor="start" font-size="10" fill="#1d2021">pool D.kv</text>
 <path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M586 107 L616 107 M586 129 L616 129"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="588.14" y="109" width="6" height="18"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="596.71" y="109" width="6" height="18"/>
@@ -144,7 +144,7 @@
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M28 118 L373 118" marker-end="url(#a)"/>
 <text x="28" y="108" text-anchor="start" font-size="8" fill="#6b7280" class="dim">new sessions: Poisson 0.6</text>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M457 118 L664 118" marker-end="url(#a)"/>
-<text x="560.5" y="110" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">!transferred</text>
+<text x="560.5" y="110" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">!D.transferred</text>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M748 118 L822 118" marker-end="url(#a)"/>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M1064 118 L1271 118" marker-end="url(#a)"/>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M425.5 144 L425.5 245 L1313 245 L1313 144" marker-end="url(#a)"/>
