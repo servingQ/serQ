@@ -1,0 +1,27 @@
+// Executable approximation: one prefill or a decode-only batch.
+// PP caps, remote-KV admission and sub-block copying are not modeled.
+pool kv { cap 8192; block 16; evict lru; }
+pool reqs { cap 4; admit via engine; }
+stage engine : step {
+  budget 256;
+  chunk 128;
+  serve exclusive prefill;
+  cost 0.002 + 0.00001 * tokens;
+  memory kv;
+}
+workload {
+  arrive batch(6);
+  init { set prompt = 256; set out = 16; }
+}
+session {
+  set t0 = now;
+  hold reqs (1), kv (min(prompt, min(128, left))) reserve (prompt)
+       at admission (left = budget_left(engine)) {
+    prefill prompt growing kv;
+    observe ttft = now - t0;
+    decode out growing kv;
+  }
+  observe response = now - t0;
+  end;
+}
+run { horizon 2; warmup 0; seed 1; }
