@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// 2 added the sessions' turns; 3 renamed `route` to `session`; 4 replaced
 /// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`; 5 added
 /// `Release` and `Load`; 6 adds renewal arrivals and finite open runs.
-pub const IR_VERSION: u32 = 6;
+pub const IR_VERSION: u32 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -332,7 +332,7 @@ pub enum CStmt {
     Choose {
         var: usize,
         count: CExpr,
-        key: CExpr,
+        key: Vec<CExpr>,
     },
     End,
 }
@@ -926,7 +926,7 @@ impl Validator<'_> {
             CStmt::Choose { var, count, key } => {
                 self.attr(*var)?;
                 self.expr(count, m)?;
-                self.expr(key, m)
+                key.iter().try_for_each(|k| self.expr(k, m))
             }
         }
     }

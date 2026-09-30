@@ -250,7 +250,7 @@ pub enum Stmt {
     Choose {
         var: String,
         count: Expr,
-        key: Expr,
+        key: Vec<Expr>,
     },
     End,
 }
@@ -359,7 +359,7 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                 Stmt::Loop(b) => block(b),
                 Stmt::Choose { count, key, .. } => {
                     expr(count);
-                    expr(key);
+                    key.iter_mut().for_each(expr);
                 }
                 _ => {}
             }

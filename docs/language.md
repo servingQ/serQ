@@ -114,7 +114,7 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | branch ( expr ) block [ else block ]          -- a test
           | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
           | loop block
-          | choose NAME in expr by ( expr ) ; -- NAME := argmin over 0..n
+          | choose NAME in expr by ( expr , ... ) ; -- NAME := argmin over 0..n, keys in order
           | end ;
           | serving                          -- the serving vocabulary, sugar for run
 serving  := prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;

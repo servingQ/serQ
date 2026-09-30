@@ -177,16 +177,16 @@ Repeats the block until an `end`.
 ## `choose`
 
 ```seq
-choose NAME in n by (key);
+choose NAME in n by (key, …);
 ```
 
 | Argument | Type | Description |
 |---|---|---|
 | `NAME` | identifier | Becomes a session attribute. |
 | `n` | `expr` | Number of candidates, `0 … n-1` (rounded down; 0 or less leaves `NAME` at 0). |
-| `key` | `expr` | Evaluated with `NAME` bound to each candidate. |
+| `key, …` | `expr`, one or more | Evaluated with `NAME` bound to each candidate. Several keys compare in order: the second decides among the first's ties, and so on. |
 
-`NAME` is set to the index with the smallest key, ties to the smallest index.
+`NAME` is set to the index with the smallest key (tuple), ties to the smallest index.
 Used with an array of stages: `choose j in 2 by (work(prefill[j]));`.
 
 ## `end`

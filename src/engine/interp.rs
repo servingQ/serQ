@@ -982,11 +982,18 @@ impl<'p> Interp<'p> {
                     let n = self
                         .eval(count, &Ctx::session(sid), Which::Session)
                         .max(0.0) as usize;
-                    let mut best: Option<(f64, usize)> = None;
+                    // ascending keys, lexicographic, ties to the smallest index
+                    let mut best: Option<(Vec<f64>, usize)> = None;
                     for j in 0..n {
                         self.sessions[sid].attrs[*var] = j as f64;
-                        let k = self.eval(key, &Ctx::session(sid), Which::Session);
-                        if best.is_none_or(|b| k < b.0) {
+                        let k: Vec<f64> = key
+                            .iter()
+                            .map(|e| self.eval(e, &Ctx::session(sid), Which::Session))
+                            .collect();
+                        if best
+                            .as_ref()
+                            .is_none_or(|b| k.partial_cmp(&b.0) == Some(std::cmp::Ordering::Less))
+                        {
                             best = Some((k, j));
                         }
                     }

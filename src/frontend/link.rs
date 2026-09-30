@@ -1030,7 +1030,7 @@ impl Linker<'_> {
                 Stmt::Choose { var, count, key } => CStmt::Choose {
                     var: self.attr_index[var],
                     count: self.expr(count)?,
-                    key: self.expr(key)?,
+                    key: key.iter().map(|k| self.expr(k)).collect::<LResult<_>>()?,
                 },
             };
             out.push(cs);

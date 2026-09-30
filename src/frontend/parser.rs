@@ -674,7 +674,9 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
         }
         Stmt::Branch(c, a, b) => expr_reads(c, n) || block(a) || block(b),
         Stmt::Loop(b) => block(b),
-        Stmt::Choose { count, key, .. } => expr_reads(count, n) || expr_reads(key, n),
+        Stmt::Choose { count, key, .. } => {
+            expr_reads(count, n) || key.iter().any(|k| expr_reads(k, n))
+        }
     }
 }
 
@@ -2192,7 +2194,13 @@ impl Parser {
                 self.expect_kw("in")?;
                 let count = self.expr()?;
                 self.expect_kw("by")?;
-                let key = self.paren_expr()?;
+                self.expect(&Tok::LParen)?;
+                let mut key = vec![self.expr()?];
+                while *self.peek() == Tok::Comma {
+                    self.advance();
+                    key.push(self.expr()?);
+                }
+                self.expect(&Tok::RParen)?;
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Choose { var, count, key })
             }

@@ -131,6 +131,6 @@ fn renewal_validation_and_ir_version_prevent_ambiguous_inputs() {
         program
             .validate()
             .unwrap_err()
-            .contains("this interpreter reads 6")
+            .contains(&format!("this interpreter reads {}", seq::ir::IR_VERSION))
     );
 }

@@ -79,7 +79,7 @@ prefill[j] W;  prefill on P (W);   // an instance of an array; an explicit stage
 branch (e) { … } [else { … }]      // a test: e is 0 or 1
 branch with (p) { … } [else { … }] // a draw: with probability p
 loop { … }
-choose j in n by (expr);           // j := argmin over 0..n
+choose j in n by (k1, …);          // j := argmin over 0..n, keys in order
 end;
 ```
 

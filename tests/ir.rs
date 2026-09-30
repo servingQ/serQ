@@ -508,3 +508,28 @@ fn numbers_read_as_written() {
     assert_eq!(show_num(999999999999.5), "999999999999.5");
     assert_eq!(show_num_exact(0.9100000000000001), "0.9100000000000001");
 }
+
+/// `choose j in n by (k1, k2, …)` takes the smallest key tuple, compared
+/// in order (#140): the second key decides only among the first key's ties,
+/// and a tie on every key goes to the smallest index.
+#[test]
+fn choose_compares_its_keys_in_order() {
+    let pick = |by: &str| {
+        let src = format!(
+            "stage s : delay;
+             workload {{ arrive batch(1); }}
+             session {{ choose j in 4 by ({by}); observe j = j; end; }}
+             run {{ horizon 1; }}"
+        );
+        let r = run_source(&src, &Overrides::default(), None).unwrap();
+        r.observe("j").unwrap().samples[0]
+    };
+    // the first key ties 1 and 3; the second picks 3
+    assert_eq!(pick("j == 1 || j == 3 ? 0 : 1, j == 3 ? 0 : 1"), 3.0);
+    // what `* 1e9` encoded, without the bound on the second key
+    assert_eq!(pick("j == 2 ? 0 : 1, -1e12 * j"), 2.0);
+    // a tie everywhere goes to the smallest index
+    assert_eq!(pick("0, 0"), 0.0);
+    // one key is the form it was
+    assert_eq!(pick("-j"), 3.0);
+}
