@@ -865,8 +865,31 @@ fn a_reordered_arrow_is_drawn_the_way_it_points() {
 #[test]
 fn labels_do_not_overlap() {
     use serq::view::figure::{Anchor, Item, TextSize};
-    for name in PROGRAMS {
-        let p = program(name);
+    // every program the repository ships, not only the ones drawn above
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files: Vec<std::path::PathBuf> = vec![];
+    for dir in std::fs::read_dir(root.join("examples")).unwrap().flatten() {
+        for f in std::fs::read_dir(dir.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            files.push(f.path());
+        }
+    }
+    for f in std::fs::read_dir(root.join("docs/tutorial/programs"))
+        .unwrap()
+        .flatten()
+    {
+        files.push(f.path());
+    }
+    files.retain(|f| f.extension().is_some_and(|e| e == "sq"));
+    files.sort();
+    assert!(files.len() > PROGRAMS.len());
+    for path in &files {
+        let name = path.strip_prefix(root).unwrap().display().to_string();
+        let src = std::fs::read_to_string(path).unwrap();
+        let p = serq::compile_file(&src, path, &Overrides::default()).unwrap();
         let f = deployment::figure(&p);
         let boxes: Vec<(f64, f64, f64, &str)> = f
             .items
