@@ -415,7 +415,15 @@ from the tail of the entry when the pool has `block b`; `evict lru` orders
 by release time and then release order, `evict by (k₁, …)` by the keys and
 then release order. A request that can never fit — its units, or its
 `reserve` when that is larger, above the cap, as they evaluate when the
-session joins the queue — is rejected (vLLM `FINISHED_IGNORED`).
+session joins the queue — is rejected: the session ends. vLLM never
+schedules a request it could never hold either, by another measure: it
+refuses a prompt longer than `max_model_len` (and, for generation, one of
+exactly that length) before scheduling (`input_processor.py:512-536`), and
+does not start a KV cache that cannot hold one request of `max_model_len`
+(`kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742`), so a request it admits
+fits its pool. serQ judges the pool's cap directly.
+(`RequestStatus.FINISHED_IGNORED` exists at the pinned revision,
+`request.py:384`, and nothing sets it.)
 
 A pool marked `admit via S` is not admitted at settle time: its queue is
 served by step stage `S`, at the start of an iteration, after the
@@ -534,7 +542,7 @@ dropped that step, against the Lean model, and with the victim queued and
 no event left the run ended with a session in the queue. A hold whose body
 can never fit then preempts itself forever; vLLM never runs that program,
 since it refuses at start-up a KV cache that cannot hold one request of
-`max_model_len` (`kv_cache_utils.py:965`), a check serQ does not have, which
+`max_model_len` (`kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742`), a check serQ does not have, which
 is what the `stuck` counter below is for. A hold that reserves what it
 will need (`reserve (known)` after a preemption) is rejected instead, once
 the reservation is above the cap.
