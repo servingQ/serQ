@@ -6,7 +6,7 @@ serq run   FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set name
 serq check FILE [--set name=expr]... [--def name=expr]...
 serq ir    FILE [--set name=expr]... [--def name=expr]... [--seed N] [--horizon T] [--warmup T]
                     [--arrivals N] [--trace F] [--inline-trace]
-serq draw  FILE [--format tikz|svg] [--out PATH]              (experimental)
+serq draw  FILE [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH]   (experimental)
 serq fmt   [--check] FILE...
 ```
 

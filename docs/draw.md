@@ -7,13 +7,13 @@ output may change between releases. §5 lists what is not done. Design
 discussion: [RFC #1](https://github.com/vrvrv/serQ/issues/1).
 
 ```
-serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]...
+serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]... [--def name=expr]...
 ```
 
 `FILE` is program text (`.sq`) or IR (`.json`), as for `run`, `check` and
-`ir`. Output goes to stdout unless `--out` names a file. `--set` applies to
-program text and is rejected on `.json`, where the constants are already
-folded.
+`ir`. Output goes to stdout unless `--out` names a file. `--set` and `--def` apply to
+program text and are rejected on `.json`, where the constants are already
+folded and the definitions expanded.
 
 ## 1. Why the figure is generated
 
