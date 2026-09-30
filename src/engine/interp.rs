@@ -1272,8 +1272,8 @@ impl<'p> Interp<'p> {
         pending
     }
 
-    /// Admit the head of the pool's queue while every pool of its hold
-    /// has room; the first that does not fit blocks the rest. A pool whose
+    /// Admit the selected waiting hold while every pool of its hold
+    /// has room; a selection that does not fit blocks the rest. A pool whose
     /// queue is served by a stage (`admit via`) is admitted from there.
     fn try_admit(&mut self, pl: usize) {
         if self.p.pools[pl].admit_via.is_some() {
@@ -2728,7 +2728,7 @@ impl<'p> Interp<'p> {
             .any(|(cp, pl)| cp.admit_via == Some(st) && !pl.queue.is_empty())
     }
 
-    /// The stage's scheduler admits the head of a queue it serves, with
+    /// The stage's scheduler admits the selected waiting hold, with
     /// `left` tokens of this iteration's budget left (vLLM's waiting loop,
     /// scheduler.py:868-1128): the units are evaluated now, with
     /// `budget_left(stage) = left`; the first that does not fit stops it.
