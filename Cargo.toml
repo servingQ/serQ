@@ -10,6 +10,8 @@ version = "0.1.0-rc7"
 # one pyo3 for serq's `python` feature and pyserq (pyo3-ffi links python once)
 [workspace.dependencies]
 pyo3 = "0.25"
+# one rand for the engine's streams and pyserq's `Rng`
+rand = "0.9"
 
 [package]
 name = "serq"
@@ -32,7 +34,7 @@ name = "serq"
 path = "src/main.rs"
 
 [dependencies]
-rand = "0.9"
+rand = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 # `python`: a report's stage and pool rows are Python classes (pyserq)

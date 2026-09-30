@@ -19,6 +19,8 @@ use std::sync::Arc;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use rand::rngs::StdRng;
+use rand::{Rng as _, RngCore, SeedableRng};
 
 /// A compiled program: its IR, and the directory a relative trace is read
 /// against (the program file's, as `serq run` does; none for text).
@@ -278,9 +280,60 @@ fn read_trace(path: PathBuf) -> PyResult<Vec<Vec<(f64, f64, f64, f64)>>> {
         .collect())
 }
 
+/// The generator a run draws from: rand 0.9's `StdRng` (ChaCha12). A run
+/// seeded `s` draws its arrivals from `Rng(s)` and its workload from
+/// `Rng(s ^ 0x9e3779b97f4a7c15)`; a Python check that reproduces a run's
+/// draws, or needs rand's stream, uses this one rather than a port of it.
+#[pyclass(module = "pyserq")]
+struct Rng(StdRng);
+
+#[pymethods]
+impl Rng {
+    /// `StdRng::seed_from_u64(seed)`.
+    #[new]
+    fn new(seed: u64) -> Self {
+        Rng(StdRng::seed_from_u64(seed))
+    }
+    fn next_u32(&mut self) -> u32 {
+        self.0.next_u32()
+    }
+    fn next_u64(&mut self) -> u64 {
+        self.0.next_u64()
+    }
+    /// `random::<f64>()`: in [0, 1).
+    fn random_f64(&mut self) -> f64 {
+        self.0.random()
+    }
+    /// `random_range(low..=high)` over `u64`.
+    fn range_u64(&mut self, low: u64, high: u64) -> PyResult<u64> {
+        check_range(low <= high)?;
+        Ok(self.0.random_range(low..=high))
+    }
+    /// `random_range(low..=high)` over `u32` (and over `usize` below 2^32,
+    /// which rand samples as `u32`).
+    fn range_u32(&mut self, low: u32, high: u32) -> PyResult<u32> {
+        check_range(low <= high)?;
+        Ok(self.0.random_range(low..=high))
+    }
+    /// `random_range(low..=high)` over `f64`.
+    fn range_f64(&mut self, low: f64, high: f64) -> PyResult<f64> {
+        check_range(low <= high && (high - low).is_finite())?;
+        Ok(self.0.random_range(low..=high))
+    }
+}
+
+fn check_range(ok: bool) -> PyResult<()> {
+    if ok {
+        Ok(())
+    } else {
+        Err(PyValueError::new_err("an empty or unbounded range"))
+    }
+}
+
 #[pymodule]
 fn pyserq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Program>()?;
+    m.add_class::<Rng>()?;
     m.add_class::<Report>()?;
     m.add_class::<Observe>()?;
     m.add_class::<serq::engine::report::StageReport>()?;

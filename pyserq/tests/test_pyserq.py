@@ -124,6 +124,24 @@ def test_an_infinity_is_inf():
         assert pyserq.compile(MG1, sets={"cv2": x}).to_json() == pyserq.compile(MG1, sets={"cv2": e}).to_json()
 
 
+def test_rng_is_the_stream_a_run_draws_from():
+    # the arrivals of a run seeded 11 are the gaps Rng(11) draws, exactly
+    src = ("let lam = 0.5;\nworkload { arrive poisson(lam); }\n"
+           "session { observe t = now; end; }\nrun { horizon 100; warmup 0; seed 11; }\n")
+    got = pyserq.run(pyserq.compile(source=src)).observe("t").samples
+    rng, t, want = pyserq.Rng(11), 0.0, []
+    while t < 100:
+        want.append(t)
+        t += -math.log(1.0 - rng.random_f64()) / 0.5
+    assert len(got) > 20 and got == want[: len(got)]
+    # rand 0.9's StdRng: seed_from_u64(7), as serving-queue-theory's port draws it
+    r = pyserq.Rng(7)
+    assert (r.next_u64(), r.random_f64(), r.range_u32(1, 6)) == (559256596868823998, 0.3070862833742408, 1)
+    a, b = pyserq.Rng(3), pyserq.Rng(3)
+    assert [a.range_f64(-1.0, 1.0) for _ in range(5)] == [b.range_f64(-1.0, 1.0) for _ in range(5)]
+    assert all(2 <= pyserq.Rng(s).range_u64(2, 9) <= 9 for s in range(50))
+
+
 def test_errors_are_value_errors():
     for call in [
         lambda: pyserq.compile(ROOT / "nowhere.sq"),
@@ -135,6 +153,8 @@ def test_errors_are_value_errors():
         lambda: pyserq.compile(),
         lambda: pyserq.read_trace(ROOT / "nowhere.csv"),
         lambda: pyserq.read_trace(MG1),
+        lambda: pyserq.Rng(1).range_u64(5, 4),
+        lambda: pyserq.Rng(1).range_f64(0.0, math.inf),
     ]:
         try:
             call()
