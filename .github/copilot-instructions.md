@@ -10,7 +10,7 @@ seQ is a language in which an LLM serving deployment is a program. `docs/languag
 - An IR version bump has a counterpart in `serving-queue-theory` (`scripts/gen_seq_oracle.py` pins the version and reads fields by name). Ask for the linked change if the PR does not mention it.
 - A new `CExpr` or `CStmt` variant drops out of the Lean fragment every oracle program that uses it, until the generator learns it (`gen_seq_oracle.py` raises `Fragment` on a construct it does not know). Say so when you see one.
 
-**Generated files move with their source.** `tools/oracle/*.ir.json` (`make oracle-ir`) and `tests/golden/` (`make draw-golden`) are committed. A change that alters one of them — the IR of an oracle program, or a figure that `tests/draw.rs` pins (`vllm`, `llmd_nixl_pull`) — is incomplete without the regenerated file. Do not ask for regeneration a change does not affect.
+**Generated files move with their source.** `tools/oracle/*.ir.json` (`make oracle-ir`), `tests/golden/` and `docs/assets/*.deployment.svg` (`make draw-golden`) are committed. A change that alters one of them — the IR of an oracle program, a figure that `tests/draw.rs` pins (`vllm`, `llmd_nixl_pull`), or a figure the site shows — is incomplete without the regenerated file. Do not ask for regeneration a change does not affect.
 
 **Claims about vLLM cite the source.** Statements about what vLLM does are checked against `ref/vllm` (pinned by `scripts/fetch_vllm_ref.sh`) and cited as `file:line`, which `scripts/check_citations.py` verifies. Flag an uncited claim, or one that paraphrases the paper or docs instead of the code.
 

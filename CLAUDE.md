@@ -28,11 +28,12 @@ Price an IR version at a cross-repository handshake, not a line of code.
 ```
 make check        # fmt, clippy, tests, every program links and draws, oracles agree
 make oracle-ir    # regenerate tools/oracle/*.ir.json
-make draw-golden  # regenerate tests/golden/
+make draw-golden  # regenerate tests/golden/ and docs/assets/*.deployment.svg
 ```
 
 `make check` is the gate. Generated files (`tools/oracle/*.ir.json`,
-`tests/golden/`) are committed, so regenerate them in the change that moves them.
+`tests/golden/`, `docs/assets/*.deployment.svg`) are committed, so regenerate
+them in the change that moves them.
 
 ## Design criteria
 
