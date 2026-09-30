@@ -2124,7 +2124,9 @@ impl<'p> Interp<'p> {
         // Only the flows that share a stage, however indirectly, with one
         // that started or ended can change rate: the connected component of
         // the touched stages. The others keep theirs, which a recomputation
-        // would give them again bit for bit, since no stage of theirs moved.
+        // would give them again bit for bit: a component no touched stage
+        // reaches has had the same flows since it was last computed, and
+        // components share no state.
         let touched = std::mem::take(&mut self.flows_touched);
         let mut in_comp = vec![false; self.stages.len()];
         let mut stack: Vec<usize> = vec![];
