@@ -799,7 +799,7 @@ fn a_flows_stations_are_neighbours_in_the_row() {
 }
 
 /// An arrow forward past other stations goes below the row, not through
-/// them: `llmd_nixl_pull.seq`'s `P -> D`, for a request whose KV is already
+/// them: `llmd_nixl_pull.sq`'s `P -> D`, for a request whose KV is already
 /// on the decoder, passes `setup` and the two NICs.
 #[test]
 fn an_arrow_past_stations_goes_below_the_row() {
@@ -813,7 +813,7 @@ fn an_arrow_past_stations_goes_below_the_row() {
     let (rp, rd) = (f.stations()[pf].0, f.stations()[d].0);
     let row_bottom = rp.bottom();
     let through = f.items.iter().any(|it| match it {
-        seq::view::figure::Item::Edge { pts, .. } => {
+        serq::view::figure::Item::Edge { pts, .. } => {
             pts.len() == 2 && (pts[0].x - rp.right()).abs() < 1e-9 && (pts[1].x - rd.x).abs() < 1e-9
         }
         _ => false,
@@ -822,8 +822,8 @@ fn an_arrow_past_stations_goes_below_the_row() {
     // leaving P's bottom at 0.625 and entering D's at 0.5, in a solid line:
     // no other edge of the figure has those ends
     let below = f.items.iter().any(|it| match it {
-        seq::view::figure::Item::Edge { pts, style, .. } => {
-            *style == seq::view::figure::EdgeStyle::Flow
+        serq::view::figure::Item::Edge { pts, style, .. } => {
+            *style == serq::view::figure::EdgeStyle::Flow
                 && pts.len() == 4
                 && (pts[0].x - (rp.x + rp.w * 0.625)).abs() < 1e-9
                 && pts[1].y > row_bottom
