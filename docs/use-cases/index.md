@@ -2,7 +2,7 @@
 
 How far can serQ describe vendor vLLM scheduling and KV-cache behavior? These pages examine the latest version tags checked on **2026-09-30**, including release candidates and alpha tags. They cover **full attention only** and distinguish the plugin version from its upstream vLLM dependency. Features from development branches or older schedulers are not mixed into the comparison.
 
-The examples were verified with IR v8. They are reduced specifications, not vendor scheduler oracles. Their capacities and cost constants are illustrative, not hardware measurements.
+The examples were verified with IR v9. They are reduced specifications, not vendor scheduler oracles. Their capacities and cost constants are illustrative, not hardware measurements.
 
 ## Version basis
 
@@ -21,7 +21,7 @@ For tpu-inference, the plugin tag does not establish the installed upstream vers
 | Repository | Tagged implementation features | Executable serQ model | Remaining refinement |
 |---|---|---|---|
 | [vLLM](../case-study-vllm.md) | Token budget, prefix lookup, priority/FCFS preemption, deferred free | Existing synchronous engine and request library | Content-key sharing, priority victims, asynchronous scheduling |
-| [vllm-ascend](ascend.md) | Short-request classes and aging, job predictors, offload/recompute routing | Static short-before-long admission | Shared policy history, dynamic waiting selection, connector failure |
+| [vllm-ascend](ascend.md) | Short-request classes and aging, job predictors, offload/recompute routing | FCFS classes with selection-time aging | Shared policy history, priority lanes, connector failure |
 | [vllm-rbln](rbln.md) | Native phase isolation, PP decode caps, sub-block prefix copy | Whole-batch phase isolation and full-sequence admission gate | PP/remote-KV guards, copy references and cache units |
 | [tpu-inference](tpu.md) | Rank schedulers, cache-aware routing, contiguous-first allocation, P/D pipeline | Sequential P/D with a source lease and destination allocation | DP padding/barrier, block placement, cancellation and backlog |
 | [vLLM-metax](metax.md) | Runner query-length buckets, DBO patch, block copy | Synchronous non-speculative capacity/cost | Accepted-token progress, bucket shapes and compute/communication dependencies |
@@ -53,6 +53,6 @@ Replace `rbln` with `ascend`, `tpu` or `metax`. All four use a finite batch of s
 The pages separate tagged-source findings, executable approximations, remaining gaps and proposed oracle scenarios. The examples have been checked and run. Vendor SDKs and hardware were not exercised, and no vendor differential tests were run. The existing [validation corpus](../validation.md) does not validate these vendor tags.
 
 Each vendor page records the limitations of its executable example.
-The [Ascend waiting-selection change](https://github.com/vrvrv/serQ/pull/178)
-implements FCFS lane precedence and aging in IR v9; that separate PR is
-pending merge. This documentation PR changes no language semantics.
+The [waiting-selection design](../design/waiting-selection.md) describes the
+implemented FCFS class precedence and aging in IR v9. The vendor documentation
+adds no language semantics.

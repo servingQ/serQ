@@ -52,7 +52,7 @@ This synchronous, non-speculative model uses different cost terms for prefill an
 | DBO overlap | Compute/communication resource dependencies and completion |
 | KV copy | Source/destination objects pinned until completion |
 
-IR v8 can hold several stages for one flow, so shared link capacity need not be approximated by a faster constant. That does not establish a DBO compute/communication execution graph. Two batches with the same total tokens can have different query-length distributions and acceptance results.
+The current IR can hold several stages for one flow, so shared link capacity need not be approximated by a faster constant. That does not establish a DBO compute/communication execution graph. Two batches with the same total tokens can have different query-length distributions and acceptance results.
 
 ## Oracle scenarios
 

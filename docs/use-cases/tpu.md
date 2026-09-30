@@ -44,7 +44,7 @@ padding and states what the IR cannot currently describe.
 --8<-- "examples/vendors/tpu.sq"
 ```
 
-IR v8 can express overlapping memory lifetimes directly: P is acquired for prefill and leased when that scope ends; D is acquired afterwards; transfer completion loads D and releases P; D remains held through decode. This avoids reserving D before prefill merely to nest the scopes.
+The current IR can express overlapping memory lifetimes directly: P is acquired for prefill and leased when that scope ends; D is acquired afterwards; transfer completion loads D and releases P; D remains held through decode. This avoids reserving D before prefill merely to nest the scopes.
 
 The compute/link work is in seconds. `decode : ps(present)` gives each concurrent request a fixed rate; it is a fluid approximation, not TPU token iterations or DP execution. The example does not claim TPU first-token latency. It has no queue protocol, cancellation or concurrent P/D dispatch.
 

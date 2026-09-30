@@ -41,25 +41,23 @@ or padded device buffers. See [input shapes](input-shapes.md).
 --8<-- "examples/vendors/ascend.sq"
 ```
 
-This IR v8 example gives short requests precedence and preserves serial order inside each class. The class offset is safe for this six-request workload. Request slots, KV capacity, token budget and chunk size are explicit; prompt and output capacity is allocated upfront to avoid recovery in this example.
+This IR v9 example reevaluates immediate/aged-long/short/long precedence before each admission selection, using `waited` for elapsed queue time and FIFO ties. Its six requests are selected in order `0, 4, 1, 5, 2, 3`; disabling aging with `max_wait = 0` produces `0, 4, 2, 3, 1, 5`. Request slots, KV capacity, token budget and chunk size are explicit; prompt and output capacity is allocated upfront to avoid recovery in this example.
 
 ## Remaining gaps
 
 | Requirement | Current mechanism | Remaining gap |
 |---|---|---|
-| Long-request aging | `queue by` at enqueue; `serve by` for residents | Reevaluate waiting classes and select from multiple queues |
+| Waiting-lane selection | Selection-time `queue by` and `waited` model FCFS class precedence and aging | Priority-lane configuration and lane-specific prepend behavior |
 | Job prediction and cold start | Session attributes | Shared job history and completion-driven predictor updates |
 | Remote KV arrival | `lease`, `load`, `release`, explicit transfer | Connector success/failure, cancellation and readiness protocol |
 | Offload or remote recompute | `preempt lifo`, `computed`-aware local recovery | Choose a recovery target and finish/forward to another engine |
 
-[PR #178](https://github.com/vrvrv/serQ/pull/178) implements selection-time
-`queue by` keys and `waited` in IR v9. Its separate full-attention example
-models immediate/aged-long/short/long precedence with FIFO ties. The PR is
-pending merge; the example included here remains the IR v8 static
-approximation. Shared job history and connector behavior are still outside
-that improvement.
+The [waiting-selection design](../design/waiting-selection.md) documents the
+implemented IR v9 semantics and their limits. Aging changes selection at an
+admission attempt; it does not schedule an independent wakeup timer. Shared
+job history and connector behavior remain outside this example.
 
-IR v8 can retain source memory through a transfer and preserve a local request's known progress on re-admission. Those mechanisms do not by themselves implement Ascend's connector or routing policy.
+The current IR can retain source memory through a transfer and preserve a local request's known progress on re-admission. Those mechanisms do not by themselves implement Ascend's connector or routing policy.
 
 ## Oracle scenarios
 

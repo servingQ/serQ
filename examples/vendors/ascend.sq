@@ -1,21 +1,30 @@
-// Executable approximation: static short-before-long admission, no aging,
-// remote KV, recompute routing, or adaptive chunking. Not a vendor oracle.
-let bs = 16;
-pool kv { cap 8192; block bs; evict lru; }
-pool reqs { cap 4; queue by (prompt <= 128 ? serial : 1000 + serial); admit via engine; }
-stage engine : step { budget 256; chunk 128; cost 0.001 + 0.00001 * tokens; memory kv; }
-workload {
-  arrive batch(6);
-  init { set prompt = serial - 2 * floor(serial / 2) == 0 ? 256 : 64; set out = 16; }
+// FCFS lanes from vllm-ascend v0.27.1rc1: immediate, aged long, short, long.
+// This full-attention example models local admission, not job prediction or remote KV.
+let short_tokens = 128;
+let max_wait = 0.003;
+def waiting_class(urgent, prompt, elapsed) =
+  urgent ? 0 : prompt > short_tokens && max_wait > 0 && elapsed >= max_wait ? 1 : prompt <= short_tokens ? 2 : 3;
+pool reqs {
+  cap 1;
+  queue by (waiting_class(immediate, prompt, waited));
+  admit via engine;
 }
+pool kv { cap 4096; block 16; }
+stage engine : step { budget 128; chunk 128; cost 0.001; memory kv; }
+stage delay : delay;
+workload { arrive batch(6); }
 session {
-  set t0 = now;
+  set prompt = serial == 1 || serial == 5 ? 256 : 64;
+  set immediate = serial == 4;
+  set out = serial == 0 ? 4 : 1;
+  run delay (serial == 2 ? 0.001 : serial == 3 ? 0.002 : serial >= 4 ? 0.003 : 0);
   hold reqs (1), kv (prompt + out) {
+    observe selected = serial;
+    observe admitted = now;
     prefill prompt;
-    observe ttft = now - t0;
     decode out;
   }
-  observe response = now - t0;
+  observe response = now;
   end;
 }
-run { horizon 2; warmup 0; seed 1; }
+run { horizon 1; }
