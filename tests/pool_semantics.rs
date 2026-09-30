@@ -262,7 +262,8 @@ fn priority_queue_orders_admissions() {
     );
 }
 
-/// A hold that can never fit ends the session (vLLM: FINISHED_IGNORED).
+/// A hold that can never fit ends the session (vLLM refuses a prompt
+/// longer than max_model_len before scheduling it, input_processor.py:512-536).
 #[test]
 fn oversized_requests_are_rejected() {
     let src = r#"

@@ -28,8 +28,10 @@ queues the sessions that do not yet fit. Every option is optional.
 
 The invariant `allocated + cached ≤ cap` holds in every reachable
 configuration. A request that can never fit — its units, or its `reserve`
-when that is larger, above the cap — is rejected (vLLM's
-`FINISHED_IGNORED`).
+when that is larger, above the cap — is rejected and its session ends. vLLM
+judges `max_model_len` instead: it refuses a longer prompt before
+scheduling it, and refuses to start a KV cache smaller than one request of
+that length, which is what makes every request it admits fit.
 
 ## `cap`
 

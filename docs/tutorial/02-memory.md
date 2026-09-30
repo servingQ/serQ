@@ -90,8 +90,10 @@ Two things are worth stopping on.
 
 **`cap 4` waits *less* than `cap 6`.** It is not better — it is refusing work.
 A request drawing `c = 5` can never fit in a pool of 4, so it is rejected
-outright and never waits. 19 925 of them. serQ counts that in the `rej` column,
-and vLLM does the same thing under the name `FINISHED_IGNORED`.
+outright and never waits. 19 925 of them. serQ counts that in the `rej` column.
+vLLM would not even start this way: it refuses an engine whose memory cannot
+hold one request of its `max_model_len`, and refuses a longer prompt at the
+API, so a request that can never fit never reaches its scheduler.
 
 **The knee is sharp.** Between `cap 6` and `cap 10` the wait falls by a factor
 of 16. Capacity planning for memory is not a smooth trade-off; you are either
