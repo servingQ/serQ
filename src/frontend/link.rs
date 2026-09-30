@@ -91,11 +91,11 @@ impl Overrides {
     }
 
     /// The constant `name` is the number `x`, exactly (no text round trip).
-    /// A number that is not finite is refused: a run on it need not end.
+    /// NaN is refused; an infinity is `inf`, as `--set name=inf` writes it.
     pub fn set_num(&mut self, name: &str, x: f64) -> Result<(), String> {
         check_set_name(name)?;
-        if !x.is_finite() {
-            return Err(format!("set `{name} = {x}`: the number is not finite"));
+        if x.is_nan() {
+            return Err(format!("set `{name}`: the number is NaN"));
         }
         self.lets.push((name.to_string(), Expr::Num(x)));
         Ok(())

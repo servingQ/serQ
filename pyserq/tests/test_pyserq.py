@@ -6,6 +6,7 @@ overrides and seed, and the samples `--dump` writes.
 
 import csv
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -75,6 +76,11 @@ def test_the_ir_round_trips():
     assert ir["version"] == pyserq.IR_VERSION
     q = pyserq.Program.from_json(p.to_json())
     assert pyserq.run(q).json() == pyserq.run(p).json()
+
+
+def test_an_infinity_is_inf():
+    for x, e in [(math.inf, "inf"), (-math.inf, "-inf")]:
+        assert pyserq.compile(MG1, sets={"cv2": x}).to_json() == pyserq.compile(MG1, sets={"cv2": e}).to_json()
 
 
 def test_errors_are_value_errors():
