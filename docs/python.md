@@ -16,7 +16,7 @@ pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a repla
 
 | | |
 |---|---|
-| `compile(path=None, *, source=None, sets={}, seed, horizon, warmup, arrivals, trace)` | A program file or text to its IR, with the overrides of `serq run`. A number in `sets` is that number (finite); a string is an expression. A relative trace is read next to the program file for `compile(path)`, and from the current directory with `trace=`, `source=` or `Program.from_json`, as `serq run` does. |
+| `compile(path=None, *, source=None, sets={}, seed, horizon, warmup, arrivals, trace)` | A program file or text to its IR, with the overrides of `serq run`. A number in `sets` is that number (an infinity is `inf`; NaN is refused); a string is an expression. A relative trace is read next to the program file for `compile(path)`, and from the current directory with `trace=`, `source=` or `Program.from_json`, as `serq run` does. |
 | `Program.to_json()`, `Program.from_json(s)` | The IR as JSON (`serq ir`), and back. |
 | `run(program)` | A run. Runs in threads proceed in parallel. |
 | `Report.json()` | The summary `serq run --json` prints. |
