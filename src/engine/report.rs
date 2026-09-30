@@ -54,6 +54,12 @@ pub struct PoolReport {
     pub stuck: u64,
 }
 
+/// Version of `Report::json`'s shape: the names of its fields, which
+/// consumers read by name (serving-queue-theory, pyserq). Bump it on a
+/// renamed, removed or retyped field, by the rules of `docs/ir.md`
+/// (Stability); `tests/report.rs` holds the shape.
+pub const REPORT_VERSION: u32 = 1;
+
 #[derive(Clone, Debug)]
 pub struct Report {
     /// Configured execution deadline.

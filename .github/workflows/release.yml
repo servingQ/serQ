@@ -3,7 +3,8 @@ name: Release
 # Push an annotated tag vX.Y.Z matching Cargo.toml's version:
 #   git tag -a v0.1.0-rc0 && git push origin v0.1.0-rc0   (a tag with "-" is a prerelease)
 # The full CI runs first; the release carries the packaged crate and the
-# Linux CLI. Its notes are the tag message's body (what the release is,
+# Linux CLI, and the Python binding pyserq as wheels (linux x86_64, macOS
+# arm64). Its notes are the tag message's body (what the release is,
 # written by hand) followed by GitHub's generated list of the pull requests
 # since the previous release. Consumers pin the tag (Cargo `git` + `tag`).
 
@@ -23,8 +24,38 @@ jobs:
   check:
     uses: ./.github/workflows/ci.yml
 
-  release:
+  wheels:
+    # pyserq, the Python binding: one abi3 wheel per platform, built with
+    # the toolchain rust-toolchain.toml pins (rustup reads it in the
+    # manylinux container too)
     needs: check
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64
+            manylinux: auto
+          - os: macos-14
+            target: aarch64
+            manylinux: "off"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref_name }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --locked -m pyserq/Cargo.toml -o dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: dist/*.whl
+
+  release:
+    needs: [check, wheels]
     runs-on: ubuntu-22.04
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
@@ -50,7 +81,15 @@ jobs:
           mkdir -p dist
           cp target/package/serq-*.crate dist/
           tar -C target/release -czf "dist/serq-$TAG-x86_64-unknown-linux-gnu.tar.gz" serq
-          (cd dist && sha256sum * > SHA256SUMS)
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        # once, over everything the release carries (a SHA256SUMS already in
+        # dist would list itself)
+        run: (cd dist && sha256sum *.crate *.tar.gz *.whl > SHA256SUMS && cat SHA256SUMS)
       - name: Release notes
         # the tag message's body, then the generated pull request list
         env:
