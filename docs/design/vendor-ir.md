@@ -26,7 +26,12 @@ pub struct CStep {
 }
 ```
 
-This orders residents, then admits waiting requests. A different resident key does not turn that into RBLN's waiting-first replacement.
+This orders residents, then admits waiting requests. A different resident key
+does not turn that into RBLN's waiting-first replacement. [PR #171](https://github.com/vrvrv/serQ/pull/171)
+strengthens the existing `ExclusivePrefill` meaning to provide lone local
+prefill selection and takeover without adding an IR node. Its regression
+checks do not establish the native PP/remote-KV rules or a general batch
+selection/shape contract.
 
 **After — semantic sketch, not executable syntax:**
 
@@ -83,6 +88,23 @@ MetaX's runner regions and TPU's rank padding require more than aggregate `token
 Local decode recovery is already modeled with `computed` and the request library. Speculative proposal, scheduled work, verification and acceptance remain distinct states; a scalar known position does not describe rejection. Multi-stage runs express shared link resources, but do not alone describe arbitrary compute/communication dependencies.
 
 **Checks:** committed progress is monotone; rejection discards only tentative progress; layout preserves request/token identity; cost reductions do not introduce arbitrary host callbacks that evade the IR and Lean fragment.
+
+## Device shapes are not additional request tokens
+
+The [runner input audit](../use-cases/input-shapes.md) adds concrete contracts:
+RBLN fixed-width prefills and compiled decode buckets; Ascend SP alignment,
+DP graph agreement and FIA metadata; TPU independent request/token buckets
+and static head padding; MetaX full-attention block/head constraints and
+uniform query padding checks.
+
+A single-rank cost can express finite rounding with existing `def`/conditionals.
+It cannot validate a per-request padded layout or combine rank maxima. Any
+new shape representation must separate selected logical token intervals,
+physical dimensions, validity masks and execution mode. Dummy input padding
+must not advance a request or publish KV; static head padding instead changes
+actual bytes per logical KV token and therefore the configured capacity.
+Use the smallest closed refinement that can check those contracts, rather
+than adding one opaque policy per accelerator.
 
 ## Usability and adoption
 

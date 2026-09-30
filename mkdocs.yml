@@ -87,6 +87,7 @@ nav:
           - vllm-rbln: use-cases/rbln.md
           - tpu-inference: use-cases/tpu.md
           - vLLM-metax: use-cases/metax.md
+          - Input shapes and padding: use-cases/input-shapes.md
       - Case studies:
           - "One engine, four workloads": case-study-workloads.md
           - Prefill/decode over NIXL: case-study-pd.md

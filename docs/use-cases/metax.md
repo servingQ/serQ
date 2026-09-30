@@ -10,6 +10,30 @@ The `dbo.py` patch permits CUDA-like platforms in SM control. Its presence does 
 
 The platform supplies device block-copy and host swap-out methods. Their actual full-attention scheduler/cache use depends on upstream and the complete applied patch set. [Platform][platform]
 
+## Backend input constraints and padding
+
+The tagged full-attention `FlashAttentionBackend` advertises kernel block
+sizes **16, 32, 64, 128, 256**. Its KV-shape constructor rejects block sizes
+that are not multiples of 16. Positive head sizes must be multiples of 8 and
+no greater than 512 in the examined path. These are backend selection and
+layout constraints, not a new scheduling policy or a requirement shared by
+all MetaX backends.
+[Block support](https://github.com/MetaX-MACA/vLLM-metax/blob/v0.26.0/vllm_metax/v1/attention/backends/flash_attn.py#L102),
+[KV shape and head support](https://github.com/MetaX-MACA/vLLM-metax/blob/v0.26.0/vllm_metax/v1/attention/backends/flash_attn.py#L161)
+
+The metadata builder advertises uniform-batch graph support. Decode
+query-length bucketing excludes zero-length padding rows and rejects the
+inconsistent-token-count padding path unless query lengths are zero or a
+single uniform padded length. Equal total token counts do not establish an
+identical valid layout.
+[Decode bucket validation](https://github.com/MetaX-MACA/vLLM-metax/blob/v0.26.0/vllm_metax/v1/attention/backends/flash_attn.py#L359),
+[graph support](https://github.com/MetaX-MACA/vLLM-metax/blob/v0.26.0/vllm_metax/v1/attention/backends/flash_attn.py#L438)
+
+The platform uses the upstream graph wrapper; this audit does not establish
+a separate fixed NPU compile-bucket policy for MetaX. The example below is
+non-speculative and does not validate graph layouts. See
+[input shapes](input-shapes.md) for the common modeling boundary.
+
 ## Executable seQ approximation
 
 ```seq title="examples/vendors/metax.seq"

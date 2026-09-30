@@ -10,15 +10,54 @@ The waiting path calls `allocate_slots` with `full_sequence_must_fit=True`: admi
 
 Sub-block caching finds a prefix inside a larger physical block and creates copy operations into another block. `apply_sub_block_match` transfers source references to the copy operations; `release_copy_ops` releases them. Lookup granularity, allocation granularity and copy lifetime must remain separate. [Cache manager][subblock]
 
+## Compiled inputs and padding
+
+The native runner compiles decode shapes up to the PP-stage ceiling
+`max_num_seqs // pipeline_parallel_size`, then rounds active decode requests
+up to the smallest configured bucket. Buckets may be linear, exponential or
+manual; a missing covering bucket is an error, not an arbitrary new shape.
+[Runner bucket configuration](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/worker/rbln_model_runner.py#L479),
+[bucket lookup](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/worker/bucketing/bucketing_manager.py#L63)
+
+For text inputs the runner stages a lone prefill with query dimension
+`max_num_tokens`, even when its actual chunk is shorter. Decode uses padded
+request rows and the step's uniform query length. `InputStager` fills dummy
+rows/positions and copies only the actual rectangle. Padding changes device
+work and buffers; it must not become extra generated/computed request tokens.
+[Input layout](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/worker/rbln_model_runner.py#L1297),
+[staging](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/worker/input_stager.py#L71)
+
+`determine_batch_execution_and_padding` requires a uniform query length
+(`num_tokens % num_reqs == 0`). Its specialized DP path can force decoding
+peers to the top bucket and prefill token dimension when another rank
+prefills. This applies even with ordinary one-token full-attention decode;
+local phase isolation does not remove cross-rank shape coordination.
+[Shape routes](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/worker/dp_utils.py#L135)
+
+For a local non-speculative model, a cost expression can charge fixed
+prefill width or bucketed `decoders` while the logical work stays unchanged.
+The current example uses illustrative costs and does not emulate these
+compiled shapes. See [input shapes](input-shapes.md) for executable cost
+expressions and the remaining IR requirements.
+
 ## Executable seQ approximation
 
 ```seq title="examples/vendors/rbln.seq"
 --8<-- "examples/vendors/rbln.seq"
 ```
 
-`serve exclusive prefill` isolates the first resident prefill while decodes stall. `reserve (prompt)` tests the whole prompt's capacity, while the hold allocates only the initial chunk and `growing kv` extends it as computation advances. The live token budget is bound at admission, rather than captured before queuing. There are no prefix hits in this workload.
+`serve exclusive prefill` is the phase-isolation policy. At this PR's base,
+it only isolates prefills already resident: admitting a waiting prefill after
+selected decodes can still produce a mixed batch. [PR #171](https://github.com/vrvrv/serQ/pull/171)
+corrects the existing IR policy to select a lone prefill, cancel displaced
+decode work, use the full prefill budget and commit only selected progress.
+The correction includes actual iteration-trace regression tests and remains
+separate from this documentation PR. `reserve (prompt)` tests the whole prompt's capacity, while the hold allocates only the initial chunk and `growing kv` extends it as computation advances. The live token budget is bound at admission, rather than captured before queuing. There are no prefix hits in this workload.
 
-This is not the full native scheduler: seQ serves residents before admitting waiting requests. Its resident-prefill rule cannot replace a decode batch with a newly admitted prefill.
+This is not the full native scheduler, even with the correction. PP caps,
+remote-KV decode-ready admission guards and sub-block copy semantics remain
+outside the example. Until PR #171 lands, the example also does not guarantee
+whole-batch isolation on the base interpreter.
 
 ## Remaining gaps
 

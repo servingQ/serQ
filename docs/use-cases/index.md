@@ -22,11 +22,19 @@ For tpu-inference, the plugin tag does not establish the installed upstream vers
 |---|---|---|---|
 | [vLLM](../case-study-vllm.md) | Token budget, prefix lookup, priority/FCFS preemption, deferred free | Existing synchronous engine and request library | Content-key sharing, priority victims, asynchronous scheduling |
 | [vllm-ascend](ascend.md) | Short-request classes and aging, job predictors, offload/recompute routing | Static short-before-long admission | Shared policy history, dynamic waiting selection, connector failure |
-| [vllm-rbln](rbln.md) | Native phase isolation, PP decode caps, sub-block prefix copy | Resident prefill isolation and full-sequence admission gate | Waiting-first batch replacement, copy references, lookup/allocation units |
+| [vllm-rbln](rbln.md) | Native phase isolation, PP decode caps, sub-block prefix copy | Prefill-isolation policy and full-sequence admission gate | Whole-batch isolation correction in [PR #171](https://github.com/vrvrv/serQ/pull/171), PP/remote-KV guards, copy references and cache units |
 | [tpu-inference](tpu.md) | Rank schedulers, cache-aware routing, contiguous-first allocation, P/D pipeline | Sequential P/D with a source lease and destination allocation | DP padding/barrier, block placement, cancellation and backlog |
 | [vLLM-metax](metax.md) | Runner query-length buckets, DBO patch, block copy | Synchronous non-speculative capacity/cost | Accepted-token progress, bucket shapes and compute/communication dependencies |
 
 MetaX integrates upstream in the paths examined; an OOT repository does not necessarily introduce an independent full-attention scheduler.
+
+## Device input constraints
+
+[Input shapes and padding](input-shapes.md) follows scheduler output into
+runner inputs: compiled buckets, token/request padding, uniform query
+lengths, dummy metadata and backend/head/block compatibility. Each vendor
+page now includes the specific tagged path. Real progress and padded device
+work must be represented separately.
 
 ## Run an example
 

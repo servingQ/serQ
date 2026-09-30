@@ -10,6 +10,31 @@ The latest tag checked on 2026-09-30 is [v0.27.1rc1](https://github.com/vllm-pro
 
 In the relevant preemption path, `RecomputeScheduler.schedule` asks the connector to offload. Success proceeds to normal preemption; failure finishes the local request through `_finish_recomputed_request` and returns `stop_reason="recomputed"`. `DyntraLBPolicyMixin` also prefetches remote KV and waits in `WAITING_FOR_REMOTE_KVS`. [Recovery][recompute], [prefetch][dyntra]
 
+## Device inputs and padding
+
+`_pad_for_sequence_parallelism` rounds scheduled tokens to a TP-size multiple
+when the relevant SP path is enabled. `_determine_batch_execution_and_padding`
+then selects a graph descriptor and checks uniform decode from per-request
+scheduled lengths and computed state. With DP, metadata synchronization can
+pad ranks to a common maximum and redispatch the graph mode. Explicit eager
+execution returns a non-graph descriptor; graph eligibility is separate from
+logical admission. These are conditional paths, not a universal NPU rule.
+[SP and graph selection](https://github.com/vllm-project/vllm-ascend/blob/v0.27.1rc1/vllm_ascend/worker/model_runner_v1.py#L3069),
+[DP coordination](https://github.com/vllm-project/vllm-ascend/blob/v0.27.1rc1/vllm_ascend/worker/model_runner_v1.py#L724)
+
+The FIA TND input requires the final query-length boundary to equal the
+hidden-state token dimension. Padding can therefore insert a dummy request,
+not merely extend a flat tensor. The full-attention builder also pads sequence
+length and block-table metadata to that dummy row; dummy outputs are trimmed
+and KV writes use only actual tokens.
+[Query boundaries](https://github.com/vllm-project/vllm-ascend/blob/v0.27.1rc1/vllm_ascend/worker/model_runner_v1.py#L914),
+[metadata consistency](https://github.com/vllm-project/vllm-ascend/blob/v0.27.1rc1/vllm_ascend/attention/attention_v1.py#L348)
+
+A single-rank cost can round `tokens` without changing request progress.
+Cross-rank graph agreement and per-request boundary validation require more
+than aggregate cost terms. The current example does not model graph capture
+or padded device buffers. See [input shapes](input-shapes.md).
+
 ## Executable seQ approximation
 
 ```seq title="examples/vendors/ascend.seq"

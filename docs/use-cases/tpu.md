@@ -10,6 +10,34 @@ The latest tag checked on 2026-09-30 is [v0.29.0](https://github.com/vllm-projec
 
 `_DisaggOrchestrator` runs prefill, transfer and decode using separate threads and a transfer backlog. Source release and destination readiness are part of the pipeline, not just a scalar network delay. [Orchestrator][orchestrator]
 
+## Static inputs and padding
+
+The runner keeps separate request-count and token-count bucket lists.
+`get_token_paddings` grows exponentially, or switches to a configured gap;
+`get_padded_token_len` picks the first covering bucket and asserts if none
+exists. Attention request buckets can be configured separately. Buckets are
+not fixed powers of two for every configuration.
+[Bucket helpers](https://github.com/vllm-project/tpu-inference/blob/v0.29.0/tpu_inference/runner/utils.py#L144),
+[runner configuration](https://github.com/vllm-project/tpu-inference/blob/v0.29.0/tpu_inference/runner/tpu_runner.py#L1060)
+
+`_prepare_input_metadata` takes the maximum active requests and scheduled
+tokens across DP ranks, rounds each using its own buckets, then multiplies
+per-rank padded extents by DP size. The continuous-decode fast path instead
+uses the padded request count for its token dimension. Rank counts, shape and
+execution path matter, not only the sum of real tokens.
+[Runtime shape selection](https://github.com/vllm-project/tpu-inference/blob/v0.29.0/tpu_inference/runner/tpu_runner.py#L2425)
+
+For regular full attention, head dimension 64 has a special path; other head
+dimensions round up to a multiple of 128. KV head counts must be compatible
+with sharding and may be padded when fewer than shards. These affect actual
+KV capacity/bytes per token before scheduling begins.
+[Dimension and head helpers](https://github.com/vllm-project/tpu-inference/blob/v0.29.0/tpu_inference/utils.py#L231),
+[regular KV allocation](https://github.com/vllm-project/tpu-inference/blob/v0.29.0/tpu_inference/runner/kv_cache_manager.py#L537)
+
+The P/D fluid example below does not represent these DP bucketed inputs.
+[input shapes](input-shapes.md) separates static KV sizing from per-step
+padding and states what the IR cannot currently describe.
+
 ## Executable seQ approximation
 
 ```seq title="examples/vendors/tpu.seq"
