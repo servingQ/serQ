@@ -30,6 +30,12 @@ def cli(path, *args):
     return json.loads(out.stdout), Path(d)
 
 
+def cli_source(src, *args):
+    f = Path(tempfile.mkdtemp(prefix="pyserq-")) / "program.sq"
+    f.write_text(src)
+    return cli(f, *args)
+
+
 def test_a_file_with_numbers_and_a_seed():
     r = pyserq.run(pyserq.compile(MG1, sets={"lam": 0.8, "law": 1}, seed=10))
     want, dump = cli(MG1, "--set", "lam=0.8", "--set", "law=1", "--seed", "10")
@@ -124,6 +130,16 @@ def test_an_infinity_is_inf():
         assert pyserq.compile(MG1, sets={"cv2": x}).to_json() == pyserq.compile(MG1, sets={"cv2": e}).to_json()
 
 
+def test_defs_is_the_program_written_with_that_body():
+    src = ("def service() = ~exp(1);\nstage svc : fifo;\nworkload { arrive poisson(0.5); }\n"
+           "session { run svc (service()); observe s = now; end; }\nrun { horizon 1000; seed 2; }\n")
+    given = pyserq.compile(source=src, defs={"service": "~erlang(4, 1)"})
+    written = pyserq.compile(source=src.replace("~exp(1)", "~erlang(4, 1)"))
+    assert given.to_json() == written.to_json() != pyserq.compile(source=src).to_json()
+    want, _ = cli_source(src, "--def", "service=~erlang(4, 1)")
+    assert json.loads(pyserq.run(given).json()) == want
+
+
 def test_rng_is_the_stream_a_run_draws_from():
     # the arrivals of a run seeded 11 are the gaps Rng(11) draws, exactly
     src = ("let lam = 0.5;\nworkload { arrive poisson(lam); }\n"
@@ -155,6 +171,7 @@ def test_errors_are_value_errors():
         lambda: pyserq.read_trace(MG1),
         lambda: pyserq.Rng(1).range_u64(5, 4),
         lambda: pyserq.Rng(1).range_f64(0.0, math.inf),
+        lambda: pyserq.compile(MG1, defs={"nope": "1"}),
     ]:
         try:
             call()
