@@ -173,10 +173,11 @@ time from start to end, and so does the stage's price estimator.
 other in the station row and bracketed as one job (`BoxStyle::Flow`, drawn
 as a rail so the other figures' bytes do not move): the session comes in at
 the first station and leaves from the last, and no arrow runs between
-them. Stacking them in one column would say "at once" better, and needs
-edge routing the one-row layout does not have; so does a bracket around
-stations the row does not put side by side, which today also takes in the
-stations between them.
+them. The flow's stations are put side by side in the row, in the run's
+order, where the first of them would stand (`adjacent_flows`), so the
+bracket takes in no other station; an arrow the new order turns leftwards
+is drawn as a return. Stacking them in one column would say "at once"
+better, and needs edge routing the one-row layout does not have.
 
 ## Expected values
 
