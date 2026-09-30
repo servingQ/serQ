@@ -91,12 +91,10 @@ impl Overrides {
     }
 
     /// The constant `name` is the number `x`, exactly (no text round trip).
-    /// NaN is refused; an infinity is `inf`, as `--set name=inf` writes it.
+    /// An infinity is `inf`, as `--set name=inf` writes it; NaN is refused
+    /// when the program is linked, as any constant that is NaN.
     pub fn set_num(&mut self, name: &str, x: f64) -> Result<(), String> {
         check_set_name(name)?;
-        if x.is_nan() {
-            return Err(format!("set `{name}`: the number is NaN"));
-        }
         self.lets.push((name.to_string(), Expr::Num(x)));
         Ok(())
     }
@@ -253,6 +251,18 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             }
             error
         })?;
+        // No run means anything with a NaN constant, and the IR has no
+        // spelling for one.
+        if v.is_nan() {
+            let what = if overridden {
+                format!("--set {name}")
+            } else {
+                format!("`let {name}`")
+            };
+            return Err(LinkError::new(format!(
+                "{what} is NaN\nhelp: a constant is a number or `inf`; `0/0` and `inf - inf` are not"
+            )));
+        }
         lk.consts.insert(name.clone(), v);
     }
     // Names of pools and stages.
