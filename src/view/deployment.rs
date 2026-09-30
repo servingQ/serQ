@@ -416,7 +416,73 @@ pub fn project(p: &Program) -> Net {
         }
     }
     w.net.cached = cached;
-    w.net
+    let mut net = w.net;
+    adjacent_flows(&mut net);
+    net
+}
+
+/// Put the stations of each run over several stages side by side, in the
+/// run's order, where the first of them stands in the row, so that the
+/// bracket around them takes in no other station. An edge is then drawn by
+/// the way it points in the new order. Two flows that share a station are
+/// placed one after the other, so the second's bracket may still take in a
+/// station of the first.
+fn adjacent_flows(net: &mut Net) {
+    if net.flows.is_empty() {
+        return;
+    }
+    let n = net.nodes.len();
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    let mut placed = vec![false; n];
+    for i in 0..n {
+        if placed[i] {
+            continue;
+        }
+        match net.flows.iter().find(|g| g.contains(&i)) {
+            Some(g) => {
+                for &k in g {
+                    if !placed[k] {
+                        placed[k] = true;
+                        order.push(k);
+                    }
+                }
+            }
+            None => {
+                placed[i] = true;
+                order.push(i);
+            }
+        }
+    }
+    if order.iter().enumerate().all(|(pos, &i)| pos == i) {
+        return;
+    }
+    let mut pos = vec![0; n];
+    for (k, &i) in order.iter().enumerate() {
+        pos[i] = k;
+    }
+    let mut nodes: Vec<Option<Node>> = std::mem::take(&mut net.nodes)
+        .into_iter()
+        .map(Some)
+        .collect();
+    net.nodes = order.iter().map(|&i| nodes[i].take().unwrap()).collect();
+    let at = |e: End| match e {
+        End::Node(i) => End::Node(pos[i]),
+        other => other,
+    };
+    for e in &mut net.edges {
+        e.from = at(e.from);
+        e.to = at(e.to);
+        // the new order decides which way an arrow points, and so how it
+        // is drawn: a return that now points right is drawn forward
+        if let (End::Node(a), End::Node(b)) = (e.from, e.to) {
+            e.back = a >= b;
+        }
+    }
+    for g in &mut net.flows {
+        for k in g.iter_mut() {
+            *k = pos[*k];
+        }
+    }
 }
 
 /// For every `hold` with a `cache` clause, the pools that clause can leave
@@ -785,15 +851,19 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let r = rects[i];
                 let y = r.centre().y;
                 arrivals += 1;
-                if arrivals == 1 {
+                if arrivals == 1 && i == 0 {
                     // The arrow starts at the margin and the label rides above
                     // it, clear of the pool glyphs it passes.
                     f.edge(vec![pt(MARGIN, y), pt(r.x, y)], EdgeStyle::Flow);
                     f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
                 } else {
                     // A session that opens with a branch has more than one entry
-                    // station. A second arrow along the row would run straight
-                    // through the first one, so it takes a lane of its own.
+                    // station, and one may enter past the first station. An
+                    // arrow along the row would run straight through the
+                    // stations before it, so it takes a lane of its own.
+                    if arrivals == 1 {
+                        f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
+                    }
                     let ly = lane(&mut lanes);
                     let x = r.x + r.w * 0.25;
                     f.push(Item::Edge {
@@ -834,6 +904,32 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                         arrow: true,
                     });
                     f.note(pt(row_right + 30.0, y + 3.0), text, Anchor::Start);
+                }
+            }
+            (End::Node(a), End::Node(b)) if !e.back && b > a + 1 => {
+                // Forward past the stations between: along the row it would run
+                // through them, so it takes a lane below.
+                let (ra, rb) = (rects[a], rects[b]);
+                let y = lane(&mut lanes);
+                // clear of the 0.25 a return leaves and enters by and the
+                // 0.75 an early exit leaves by
+                let (ax, bx) = (ra.x + ra.w * 0.625, rb.x + rb.w * 0.5);
+                f.push(Item::Edge {
+                    pts: vec![
+                        pt(ax, ra.bottom()),
+                        pt(ax, y),
+                        pt(bx, y),
+                        pt(bx, rb.bottom()),
+                    ],
+                    style: EdgeStyle::Flow,
+                    arrow: true,
+                });
+                if let Some(l) = label {
+                    f.note(
+                        pt((ra.centre().x + rb.centre().x) / 2.0, y - 5.0),
+                        l,
+                        Anchor::Middle,
+                    );
                 }
             }
             (End::Node(a), End::Node(b)) if !e.back => {

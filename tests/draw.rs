@@ -706,3 +706,95 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
         assert!(brackets[0].contains(&f.stations()[i].0));
     }
 }
+
+/// A flow's stations stand side by side even when one of them was reached
+/// alone before, so the bracket takes in no other station: `ingress` is
+/// used alone first, then with `egress`, with `D` between.
+#[test]
+fn a_flows_stations_are_neighbours_in_the_row() {
+    let src = "stage ingress : ps(1); stage D : delay; stage egress : ps(1);
+               share maxmin;
+               workload { arrive batch(1); }
+               session { run ingress (1); run D (1); run egress, ingress (1); end; }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
+    let (eg, ing, d) = (at("egress"), at("ingress"), at("D"));
+    assert_eq!(net.flows, vec![vec![eg, ing]]);
+    assert_eq!(ing, eg + 1, "side by side, in the run's order");
+    let f = deployment::layout(&p, &net);
+    let bracket = f.boxes(BoxStyle::Flow)[0];
+    assert!(
+        !bracket.contains(&f.stations()[d].0),
+        "D is outside the bracket"
+    );
+    // `D -> egress` now points left: it is drawn as a return
+    let e = net
+        .edges
+        .iter()
+        .find(|e| e.from == End::Node(d) && e.to == End::Node(eg))
+        .unwrap();
+    assert!(e.back);
+}
+
+/// An arrow forward past other stations goes below the row, not through
+/// them: `llmd_nixl_pull.seq`'s `P -> D`, for a request whose KV is already
+/// on the decoder, passes `setup` and the two NICs.
+#[test]
+fn an_arrow_past_stations_goes_below_the_row() {
+    let p = program("llmd_nixl_pull");
+    let net = deployment::project(&p);
+    let f = deployment::layout(&p, &net);
+    let (pf, d) = (
+        net.node_of(stage(&p, "P")).unwrap(),
+        net.node_of(stage(&p, "D")).unwrap(),
+    );
+    let (rp, rd) = (f.stations()[pf].0, f.stations()[d].0);
+    let row_bottom = rp.bottom();
+    let through = f.items.iter().any(|it| match it {
+        seq::view::figure::Item::Edge { pts, .. } => {
+            pts.len() == 2 && (pts[0].x - rp.right()).abs() < 1e-9 && (pts[1].x - rd.x).abs() < 1e-9
+        }
+        _ => false,
+    });
+    assert!(!through, "no straight arrow from P to D along the row");
+    // leaving P's bottom at 0.625 and entering D's at 0.5, in a solid line:
+    // no other edge of the figure has those ends
+    let below = f.items.iter().any(|it| match it {
+        seq::view::figure::Item::Edge { pts, style, .. } => {
+            *style == seq::view::figure::EdgeStyle::Flow
+                && pts.len() == 4
+                && (pts[0].x - (rp.x + rp.w * 0.625)).abs() < 1e-9
+                && pts[1].y > row_bottom
+                && (pts[3].x - (rd.x + rd.w * 0.5)).abs() < 1e-9
+        }
+        _ => false,
+    });
+    assert!(below, "P -> D in a lane below");
+}
+
+/// The order a flow imposes decides which way an arrow points: `v -> u`
+/// is forward in session order, `u -> v` a return; with `u` pulled next to
+/// `a` (the flow `a, u`), `u` stands before `v`, and so `u -> v` is drawn
+/// forward and `v -> u` as the return.
+#[test]
+fn a_reordered_arrow_is_drawn_the_way_it_points() {
+    let src = "stage a : ps(1); stage v : delay; stage u : ps(1);
+               share maxmin;
+               workload { arrive batch(1); }
+               session { run a (1); run v (1); run u (1); run v (1); run a, u (1); end; }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
+    let (u, v) = (at("u"), at("v"));
+    let find = |from, to| {
+        net.edges
+            .iter()
+            .find(|e| e.from == from && e.to == to)
+            .unwrap()
+    };
+    assert!(!find(u, v).back, "u stands before v now");
+    assert!(find(v, u).back);
+}
