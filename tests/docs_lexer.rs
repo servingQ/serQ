@@ -28,7 +28,7 @@ fn parser_keywords() -> BTreeSet<String> {
         }
     }
     // statement and option heads are matched as `"word" =>`, or as
-    // alternatives `"hold" | "enter" =>`
+    // alternatives `"a" | "b" =>`
     for line in src.lines() {
         let t = line.trim();
         let Some((arm, _)) = t.split_once("=>") else {

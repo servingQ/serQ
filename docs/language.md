@@ -216,8 +216,7 @@ step engine are rejected by the linker as `run E (X)` would be. A linker
 error inside a form (an unknown name in `W`, say) speaks of the kernel
 statement.
 
-vLLM's engine (`lib/vllm.seq`'s `vllm_request`, which spells the same hold
-from the scheduler's side, below) then reads
+vLLM's engine (`lib/vllm.seq`'s `vllm_request`, below) then reads
 
 ```
 hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
@@ -261,15 +260,15 @@ hold kvD (prompt) reserve (prompt), reqsD (0) reserve (1) … {
 `lease P (t)` names one of the hold's pools whose allocation stays the
 session's after the scope's end, neither evictable nor a preemption
 victim, until the session's `release P` (a `transfer … from P` contains
-one), `t` seconds, or the session's end, and then `keep` applies. vLLM's
+one), `t` seconds, or the session's end, and then `cache` applies. vLLM's
 prefiller leases for 30 s and the decoder's heartbeats renew it while the
 request waits, so `inf` is the served behaviour and `30` a prefiller
 nobody heartbeats. `release P` with a hold on `P` gives the innermost
-enclosing hold's allocation there back now, caching per that hold's `keep`,
+enclosing hold's allocation there back now, caching per that hold's `cache`,
 and the scope's end then has nothing left there. `load Q (n)` says the KV
 of `n` tokens arrived from outside the engine: the enclosing hold's
 computed position on `Q` advances by `n` (within its allocation), as a
-`growing` run's would token by token, so `keep` and `cached` count them.
+`growing` run's would token by token, so `cache` and `cached` count them.
 `transfer (X) from P to Q (n)` is the two around the link run.
 `examples/pd-disaggregation/llmd_nixl_pull.seq` is the whole path, and `docs/case-study-pd.md` its
 line-by-line correspondence with llm-d and the NIXL connector.

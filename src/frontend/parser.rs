@@ -947,7 +947,7 @@ impl Parser {
 
     fn definition(&mut self) -> PResult<String> {
         let span = self.span();
-        let name = self.ident()?;
+        let name = self.name()?;
         self.definitions.push((name.clone(), span));
         Ok(name)
     }
@@ -970,6 +970,18 @@ impl Parser {
                 self.err(format!("expected identifier, found {other}"))
             }
         }
+    }
+
+    /// An identifier a program names something with: not a word #136
+    /// retired, so that one name never means the old statement in one place
+    /// and the program's thing in another.
+    fn name(&mut self) -> PResult<String> {
+        if let Tok::Ident(w) = self.peek()
+            && let Some(now) = retired(w)
+        {
+            return self.err(format!("`{w}` is a retired word and names nothing: {now}"));
+        }
+        self.ident()
     }
 
     fn string(&mut self) -> PResult<String> {
@@ -1352,6 +1364,12 @@ impl Parser {
         {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
+        if let Some(now) = retired(&name) {
+            return self.err_at(
+                at,
+                format!("`{name}` is a retired word and names nothing: {now}"),
+            );
+        }
         if self.defs.iter().any(|d| d.name == name) {
             return self.err_at(at, format!("`{name}` is defined twice"));
         }
@@ -1371,7 +1389,7 @@ impl Parser {
         let mut params: Vec<String> = vec![];
         while *self.peek() != Tok::RParen {
             let p_at = self.pos;
-            let p = self.ident()?;
+            let p = self.name()?;
             if KEYWORDS.contains(&p.as_str()) || is_function(&p) {
                 return self.err_at(
                     p_at,
@@ -2088,7 +2106,6 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Observe(name, e))
             }
-            // `enter ... keep (l)` is `hold ... cache (l)`
             "hold" => {
                 self.advance();
                 self.hold()
@@ -2317,7 +2334,7 @@ impl Parser {
         let mut binds: Vec<(String, Expr)> = vec![];
         loop {
             self.bind_at.push(self.pos);
-            let name = self.ident()?;
+            let name = self.name()?;
             if binds.iter().any(|(n, _)| *n == name) {
                 return self.err(format!("`{name}` is bound twice in one `{clause}`"));
             }
@@ -3308,6 +3325,15 @@ mod tests {
             ("session { hold kv (1) fit { } }", "`fit` is gone"),
         ] {
             refused(&format!("pool kv {{ cap 1; }} {src}"), now);
+        }
+        // and none of them names anything, so a name never means two things
+        for src in [
+            "def keep(n) { observe k = n; } session { end; }",
+            "def f(where) = where; session { end; }",
+            "session { set fit = 1; end; }",
+            "session { hold kv (1) at admission (enter = 1) { observe e = enter; } end; }",
+        ] {
+            refused(&format!("pool kv {{ cap 1; }} {src}"), "is a retired word");
         }
         // `hold` is written on either side, with its bindings
         parse(&format!(

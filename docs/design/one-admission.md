@@ -23,8 +23,10 @@ the mechanism (`hold`, `at admission`, `reserve`, `reuse`, `cache`,
 `lease`) and the program the policy (criterion 2).
 
 The words `enter`, `keep`, `fit`, `where` and `admit` as a statement are
-refused with the spelling that replaced them; `admit via` is the pool
-option and is unchanged.
+refused with the spelling that replaced them, and none of them may name a
+definition, a parameter, an attribute or a binding, so that no name means
+the old statement in one place and the program's thing in another. `admit
+via` is the pool option and is unchanged.
 
 ## Self-critique
 
