@@ -37,6 +37,12 @@ the rules of the block it is used in (no `turn`, `end` or `request` in a
 `server`). The AST and the IR hold the expansion, so a program with a `def`
 has the IR of the one written out.
 
+An expression definition's body can be given from outside, as a `let`'s
+value can: `--def NAME=expr` on the command line, `defs={"NAME": "expr"}` in
+pyserq. The program is then the one written with that body, so a
+distribution or a key the program leaves open is a parameter of the run
+(`def service() = ~exp(1);`, run with `--def service='~erlang(4, 1)'`).
+
 ```serq
 def reusable(x) = floor((x - 1) / bs) * bs;
 set hitmax = reusable(prompt);
