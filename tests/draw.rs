@@ -656,8 +656,8 @@ fn golden_files_are_current() {
 }
 
 /// The figures the site shows are the program's figure, not a copy that
-/// once was: every `docs/assets/NAME.deployment.svg` is what `seq-lang draw`
-/// makes of `examples/*/NAME.seq` or `docs/tutorial/programs/NAME.seq`
+/// once was: every `docs/assets/NAME.deployment.svg` is what `serq draw`
+/// makes of `examples/*/NAME.sq` or `docs/tutorial/programs/NAME.sq`
 /// now, and `make draw-golden` rewrites them with the goldens. A figure
 /// without its program is an error, not a keepsake.
 fn docs_assets_are_current() {
@@ -676,11 +676,11 @@ fn docs_assets_are_current() {
         };
         let tutorial = root
             .join("docs/tutorial/programs")
-            .join(format!("{stem}.seq"));
+            .join(format!("{stem}.sq"));
         let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(root.join("examples"))
             .unwrap()
             .flatten()
-            .map(|g| g.path().join(format!("{stem}.seq")))
+            .map(|g| g.path().join(format!("{stem}.sq")))
             .filter(|p| p.is_file())
             .collect();
         if tutorial.is_file() {
@@ -690,16 +690,16 @@ fn docs_assets_are_current() {
         // the order the directories are read in
         assert!(
             found.len() <= 1,
-            "docs/assets/{name}: several programs are {stem}.seq: {found:?}"
+            "docs/assets/{name}: several programs are {stem}.sq: {found:?}"
         );
         let src_path = found
             .pop()
-            .unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.seq"));
+            .unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.sq"));
         let src = std::fs::read_to_string(&src_path).unwrap();
-        let p = seq::compile_file(&src, &src_path, &Overrides::default())
+        let p = serq::compile_file(&src, &src_path, &Overrides::default())
             .unwrap_or_else(|e| panic!("{}: {e}", src_path.display()));
-        let got = seq::view::svg::render(&deployment::figure(&p));
-        if std::env::var("SEQ_BLESS").is_ok() {
+        let got = serq::view::svg::render(&deployment::figure(&p));
+        if std::env::var("SERQ_BLESS").is_ok() {
             std::fs::write(&path, &got).unwrap();
         } else {
             let want = std::fs::read_to_string(&path).unwrap();
