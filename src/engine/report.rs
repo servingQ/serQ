@@ -11,7 +11,7 @@ pub struct ObserveReport {
     pub count: u64,
     pub mean: f64,
     pub cv2: f64,
-    /// Batch-means 95 % CI (NaN below 40 samples).
+    /// Batch-means 95 % CI (below 40 samples, mean NaN and half-width +inf).
     pub ci: Estimate,
     pub p99: f64,
     pub samples: Vec<f64>,

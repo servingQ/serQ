@@ -7,8 +7,8 @@
 //! p = pyserq.compile("examples/single-turn/mg1.sq", sets={"lam": 0.8}, seed=10)
 //! r = pyserq.run(p)            # the GIL is released while it runs
 //! r.json()                     # what `serq run --json` prints
-//! o = r.observes["sojourn"]   # o.mean, o.ci, ...; o.values, o.times: what `--dump` writes
-//! r.stages[0].utilization, r.pools[0].preemptions
+//! o = r.observe("sojourn")    # o.mean, o.ci, ...; o.samples, o.times: what `--dump` writes
+//! r.stage("svc").utilization; r.observes, r.stages, r.pools: all of them
 //! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 //! ```
 
@@ -22,7 +22,7 @@ use pyo3::types::PyDict;
 
 /// A compiled program: its IR, and the directory a relative trace is read
 /// against (the program file's, as `serq run` does; none for text).
-#[pyclass(frozen)]
+#[pyclass(frozen, module = "pyserq")]
 struct Program {
     ir: serq::Program,
     base: Option<PathBuf>,
@@ -46,7 +46,7 @@ impl Program {
 
 /// What a run reports: the fields of `serq run --json`, by the same names
 /// (`REPORT_VERSION`), with each observation's samples.
-#[pyclass(frozen)]
+#[pyclass(frozen, module = "pyserq")]
 struct Report(Arc<serq::Report>);
 
 #[pymethods]
@@ -114,11 +114,34 @@ impl Report {
     fn pools(&self) -> Vec<serq::engine::report::PoolReport> {
         self.0.pools.clone()
     }
+
+    /// The observation `name`, or `None` (`serq::Report::observe`).
+    fn observe(&self, name: &str) -> Option<Observe> {
+        let i = self.0.observes.iter().position(|o| o.name == name)?;
+        Some(Observe(self.0.clone(), i))
+    }
+
+    /// The first stage named `name`, or `None`.
+    fn stage(&self, name: &str) -> Option<serq::engine::report::StageReport> {
+        self.0.stage(name).cloned()
+    }
+
+    /// Every row of the stage `name`: a replicated stage's members, in
+    /// index order.
+    fn stages_named(&self, name: &str) -> Vec<serq::engine::report::StageReport> {
+        self.0.stages_named(name).into_iter().cloned().collect()
+    }
+
+    /// The pool `name`, or `None`.
+    fn pool(&self, name: &str) -> Option<serq::engine::report::PoolReport> {
+        self.0.pool(name).cloned()
+    }
 }
 
 /// One observation: its statistics as `serq run --json` prints them, and
-/// its samples as `serq run --dump` writes them.
-#[pyclass(frozen)]
+/// its samples as `serq run --dump` writes them. Each access to `samples`,
+/// `times`, `sessions` or `turns` makes a new list: bind it once.
+#[pyclass(frozen, module = "pyserq")]
 struct Observe(Arc<serq::Report>, usize);
 
 impl Observe {
@@ -141,7 +164,7 @@ impl Observe {
     fn mean(&self) -> f64 {
         self.get().mean
     }
-    /// Batch-means 95 % half-width (NaN below 40 samples).
+    /// Batch-means 95 % half-width (+inf below 40 samples).
     #[getter]
     fn ci(&self) -> f64 {
         self.get().ci.half_width
@@ -155,7 +178,7 @@ impl Observe {
         self.get().p99
     }
     #[getter]
-    fn values(&self) -> Vec<f64> {
+    fn samples(&self) -> Vec<f64> {
         self.get().samples.clone()
     }
     #[getter]
