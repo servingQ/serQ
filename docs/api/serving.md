@@ -47,7 +47,7 @@ transfer [ '[' j ']' | on STAGE [, STAGE]* ] (X) from P to Q (n);
 
 | Argument | Type | Description |
 |---|---|---|
-| `X` | `expr` | Time the link takes. |
+| `X` | `expr` | The link's work, in its stages' unit: time at a `ps(1)`, tokens at a `ps` of tokens per second. |
 | `P` | `pool` | The session's lease (or hold) the KV comes from. Given back at the end. |
 | `Q` | `pool` | The session's hold the KV arrives in. |
 | `n` | `expr` | Tokens counted as computed at `Q`. |
@@ -61,13 +61,13 @@ is `run egress[i], ingress[j] (X); load Q (n); release P;`.
 
 ### Example
 
-From `examples/pd-disaggregation/llmd_nixl_pull.seq`, the prefiller's lease and the
-decoder's read:
+From `examples/pd-disaggregation/llmd_nixl_pull.seq`, the decoder's read of
+the prefiller's leased blocks, over the prefiller's NIC and its own:
 
 ```seq
-hold kvD (prompt) reserve (prompt), reqsD (0) reserve (1) … {
+hold kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) … {
   run setup (x0);
-  transfer ((prompt - c) / Bw) from kvP to kvD (prompt - 1 - c);
+  transfer on egress[i], ingress[j] (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c);
   …
 } cache (prompt + o);
 ```

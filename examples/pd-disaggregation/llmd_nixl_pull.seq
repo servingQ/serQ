@@ -34,7 +34,8 @@ let a = 2e-5;          // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
 let c0 = 0;            // fixed cost per iteration (s)
-let Bw = 2e5;          // NIXL read bandwidth into a decoder, tokens/s (128 KB per token at 25 GB/s)
+let BwP = 2e5;         // NIXL bandwidth out of a prefiller, tokens/s (128 KB per token at 25 GB/s)
+let BwD = 2e5;         // and into a decoder (one NIC each: the tensor-parallel fan-out of the read is not modelled)
 let x0 = 0.002;        // per-read latency: posting the READ and the step that polls its completion (s; nixl/pull_worker.py:545-558)
 let thr = 512;         // prefix-based-pd-decider nonCachedTokens (1: the guide's always-disagg-pd-decider)
 let minp = 0;          // prefix-based-pd-decider promptTokens
@@ -61,9 +62,14 @@ stage D[2] : step {
   cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
   memory kvD;
 }
-stage link[2] : ps(1);     // a decoder's NIC: its reads share the bandwidth
+stage egress[2] : ps(BwP);   // a prefiller's NIC: the reads out of it share it
+stage ingress[2] : ps(BwD);  // a decoder's NIC: the reads into it share it
 stage setup : delay;       // a read's fixed latency: a wait, not bandwidth
 stage tool : delay;
+// How concurrent reads divide the two NICs is UCX's and the fabric's, not
+// vLLM's; max-min fairness is the model, not a measurement
+// (docs/design/bandwidth-sharing.md).
+share maxmin;
 
 // The client: sessions arrive, each turn brings a prompt of n new tokens on
 // a context of K and wants o tokens back, and after a turn the session calls
@@ -138,7 +144,7 @@ server {
         // ends. The last prompt token is recomputed for its logits.
         observe remote_tokens = prompt - c;
         run setup (x0);
-        transfer[j] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
+        transfer on egress[i], ingress[j] (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c);
         observe lease = now - t1;      // how long the prefiller's blocks stayed leased
         set transferred = 1;
         set c = prompt - 1;
