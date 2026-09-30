@@ -35,11 +35,11 @@ A program that does not compile or run raises `ValueError` with serQ's message; 
 ## Install
 
 A release carries one wheel per platform (linux x86_64, macOS arm64), with
-the version of its tag (`v0.1.0-rc7` is `pyserq 0.1.0rc7`). The repository is
+the version of its tag (`v0.1.0-rc8` is `pyserq 0.1.0rc8`). The repository is
 private, so download the wheel with `gh release download` and install it:
 
 ```bash
-gh release download v0.1.0-rc7 -R vrvrv/serQ -p 'pyserq-*.whl' -D wheels
+gh release download v0.1.0-rc8 -R vrvrv/serQ -p 'pyserq-*.whl' -D wheels
 pip install wheels/pyserq-*manylinux*.whl      # or the macosx one
 ```
 
