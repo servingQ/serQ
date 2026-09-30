@@ -1,6 +1,6 @@
-//! The seQ intermediate representation (IR).
+//! The serQ intermediate representation (IR).
 //!
-//! The IR is the definition of a seQ program: the interpreter (`engine::interp`) runs
+//! The IR is the definition of a serQ program: the interpreter (`engine::interp`) runs
 //! it, the Lean model is generated from it, and tools build or edit it as
 //! data. The text syntax (`frontend`) is one frontend that compiles
 //! to it. The format is serialised as JSON (`Program::to_json`), carries a
@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 /// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`; 5 added
 /// `Release` and `Load`; 6 added renewal arrivals and finite open runs; 7
 /// makes `Choose.key` a list of keys, compared in order; 8 lets a `Run`
-/// hold several stages at once (`also`) under the program's `share`.
+/// hold several stages at once (`also`) under the program's `share` and
+/// makes `ExclusivePrefill` isolate the whole batch, including admissions.
 pub const IR_VERSION: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -384,11 +385,12 @@ pub struct CStep {
     pub memory: Option<usize>,
 }
 
-/// How a step stage serves its residents, said once: an order (`Admission`,
-/// or `By(keys)` over the residents) or the rule that a prefill runs alone
-/// (`ExclusivePrefill`, which keeps admission order and stalls the decodes;
-/// it is not an order, and the one field means a program cannot combine it
-/// with another order). Two booleans described this before
+/// A step stage's serving policy: resident order (`By(keys)`) or the rule
+/// that a prefill runs alone
+/// (`ExclusivePrefill`, which selects one prefill alone, including a waiting
+/// prefill that displaces tentative resident decodes; it is not an order,
+/// and one field means a program cannot combine it with another order).
+/// Two booleans described this before
 /// (`exclusive_prefill`, `decode_first`) and could both be set; the Lean
 /// fragment reads only `By([])`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -400,7 +402,12 @@ pub enum CServe {
     /// `decode first` is `By([decoding ? 0 : 1])`. A key may not draw: it is
     /// read for every resident at every iteration.
     By(Vec<CExpr>),
-    /// Only the first prefilling resident while one exists; decodes stall.
+    /// A prefill runs alone; resident prefills take precedence. With only
+    /// decodes selected, a waiting prefill that fits replaces them and gets
+    /// the full token budget. No further waiting admission follows a selected
+    /// prefill. Only final selections advance computed KV; allocations for
+    /// displaced decodes remain held. Ordinary capacity/budget/preemption
+    /// gates still apply; this is not a PP/remote-KV scheduler preset.
     ExclusivePrefill,
 }
 
@@ -433,7 +440,7 @@ pub enum CArrival {
     None,
 }
 
-/// A seQ program in IR form: the deployment (pools, stages), the workload
+/// A serQ program in IR form: the deployment (pools, stages), the workload
 /// (arrival, `init`/`turn` blocks, trace, or explicit sessions), the session
 /// (statement blocks) and the run parameters. Every name is resolved to an
 /// index and every constant is folded; the tables `attrs` and `observes`

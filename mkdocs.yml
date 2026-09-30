@@ -1,10 +1,10 @@
-site_name: seQ
+site_name: serQ
 site_description: A language for the formal verification and simulation of LLM serving systems
-site_url: https://vrvrv.github.io/seQ/
-repo_url: https://github.com/vrvrv/seQ
-repo_name: vrvrv/seQ
+site_url: https://vrvrv.github.io/serQ/
+repo_url: https://github.com/vrvrv/serQ
+repo_name: vrvrv/serQ
 edit_uri: edit/main/docs/
-copyright: seQ — a serving deployment is a program
+copyright: serQ — a serving deployment is a program
 
 theme:
   name: material
@@ -36,7 +36,7 @@ theme:
         name: Light mode
 
 hooks:
-  - docs/hooks/seq_lexer.py
+  - docs/hooks/serq_lexer.py
 
 markdown_extensions:
   - admonition
@@ -59,7 +59,7 @@ markdown_extensions:
       generic: true
 
 extra_css:
-  - stylesheets/seq.css
+  - stylesheets/serq.css
 
 extra_javascript:
   - javascripts/mathjax.js
@@ -69,6 +69,7 @@ nav:
   - Home: index.md
   - User Guide:
       - Getting started: getting-started.md
+      - Python (pyserq): python.md
       - Tutorial:
           - tutorial/index.md
           - 1. A queue: tutorial/01-a-queue.md
@@ -93,7 +94,7 @@ nav:
           - Prefill/decode over NIXL: case-study-pd.md
   - Developer Guide:
       - Development guide: development.md
-      - How seQ is checked: validation.md
+      - How serQ is checked: validation.md
       - Design:
           - design/index.md
           - Philosophy: design/philosophy.md
@@ -104,6 +105,7 @@ nav:
           - Bandwidth sharing: design/bandwidth-sharing.md
           - One admission: design/one-admission.md
           - Vendor IR requirements: design/vendor-ir.md
+          - Separate prefill/decode batches: design/exclusive-prefill.md
   - API Reference:
       - api/index.md
       - Program: api/program.md

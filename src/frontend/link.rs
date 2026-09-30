@@ -80,6 +80,45 @@ pub struct Overrides {
     pub trace: Option<String>,
 }
 
+impl Overrides {
+    /// `--set name=expr`: the constant `name` is the expression `expr`.
+    pub fn set(&mut self, name: &str, expr: &str) -> Result<(), String> {
+        check_set_name(name)?;
+        let e = crate::frontend::parser::parse_expr(expr)
+            .map_err(|e| format!("invalid expression in set `{name} = {expr}`: {e}"))?;
+        self.lets.push((name.to_string(), e));
+        Ok(())
+    }
+
+    /// The constant `name` is the number `x`, exactly (no text round trip).
+    /// A number that is not finite is refused: a run on it need not end.
+    pub fn set_num(&mut self, name: &str, x: f64) -> Result<(), String> {
+        check_set_name(name)?;
+        if !x.is_finite() {
+            return Err(format!("set `{name} = {x}`: the number is not finite"));
+        }
+        self.lets.push((name.to_string(), Expr::Num(x)));
+        Ok(())
+    }
+}
+
+fn check_set_name(name: &str) -> Result<(), String> {
+    let ok = !name.is_empty()
+        && name.chars().enumerate().all(|(i, c)| {
+            c == '_'
+                || if i == 0 {
+                    c.is_alphabetic()
+                } else {
+                    c.is_alphanumeric()
+                }
+        });
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("invalid set name `{name}`; expected an identifier"))
+    }
+}
+
 struct Linker<'a> {
     consts: HashMap<String, f64>,
     attrs: Vec<String>,

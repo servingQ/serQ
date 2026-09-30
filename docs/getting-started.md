@@ -2,30 +2,30 @@
 
 ## Build
 
-seQ is one Rust crate, `seq-lang`: a library (`seq`) and a CLI (`seq-lang`).
+serQ is one Rust crate, `serq`: a library (`serq`) and a CLI (`serq`).
 
 ```bash
-git clone https://github.com/vrvrv/seQ && cd seQ
+git clone https://github.com/vrvrv/serQ && cd serQ
 cargo build --release
-./target/release/seq-lang --help
+./target/release/serq --help
 ```
 
 Or install the CLI straight from a release tag:
 
 ```bash
-cargo install --git https://github.com/vrvrv/seQ --tag v0.1.0-rc5 --locked --root ~/.local
+cargo install --git https://github.com/vrvrv/serQ --tag v0.1.0-rc6 --locked --root ~/.local
 ```
 
 As a dependency, pin a tag:
 
 ```toml
-seq = { package = "seq-lang", git = "https://github.com/vrvrv/seQ", tag = "v0.1.0-rc5" }
+serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.0-rc6" }
 ```
 
 ## Run your first program
 
 ```bash
-seq-lang run examples/single-turn/mg1.seq
+serq run examples/single-turn/mg1.sq
 ```
 
 ```text
@@ -60,7 +60,7 @@ run: horizon 250000 end 250000 warmup 25000 seed 1 events 397859 arrivals 198931
 `horizon` is simulated seconds, `warmup` the seconds discarded before anything
 is recorded, `seed` the RNG seed. `events` is how much work the interpreter
 did; `arrivals`, `ended` and `turns` count sessions and turns after warm-up
-(`turns 0` above because `mg1.seq` has no `turn` statement — one request per
+(`turns 0` above because `mg1.sq` has no `turn` statement — one request per
 session).
 
 ### `observe`
@@ -90,7 +90,7 @@ their previous preemption, which a run would otherwise hide).
 Every `let` constant is an override:
 
 ```bash
-seq-lang run examples/multi-turn/vllm.seq --seed 2 --horizon 3000
+serq run examples/multi-turn/vllm.sq --seed 2 --horizon 3000
 ```
 
 `--json` prints the same report as JSON, and `--dump DIR` writes every
@@ -100,7 +100,7 @@ sample, which is what you pair against a measured run.
 ## Checking without running
 
 ```bash
-seq-lang check examples/multi-turn/replica.seq
+serq check examples/multi-turn/replica.sq
 # OK: 3 pool(s), 2 stage(s), 19 attribute(s), 12 block(s)
 ```
 
@@ -109,12 +109,12 @@ seq-lang check examples/multi-turn/replica.seq
 
 ## The IR
 
-A seQ program's definition is not its text — it is the **IR**, a closed
+A serQ program's definition is not its text — it is the **IR**, a closed
 versioned data structure ([reference](ir.md)). The text syntax is one frontend.
 
 ```bash
-seq-lang ir examples/multi-turn/vllm.seq > vllm.json   # compile text to IR
-seq-lang run vllm.json --seed 3             # run the IR directly
+serq ir examples/multi-turn/vllm.sq > vllm.json   # compile text to IR
+serq run vllm.json --seed 3             # run the IR directly
 ```
 
 This matters more than it looks: the Lean model is generated from the IR, the

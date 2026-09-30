@@ -1,6 +1,6 @@
 # Pool
 
-```seq
+```serq
 pool NAME [ '[' N ']' ] {
   cap expr;
   block expr;
@@ -28,12 +28,14 @@ queues the sessions that do not yet fit. Every option is optional.
 
 The invariant `allocated + cached ≤ cap` holds in every reachable
 configuration. A request that can never fit — its units, or its `reserve`
-when that is larger, above the cap — is rejected (vLLM's
-`FINISHED_IGNORED`).
+when that is larger, above the cap — is rejected and its session ends. vLLM
+judges `max_model_len` instead: it refuses a longer prompt before
+scheduling it, and refuses to start a KV cache smaller than one request of
+that length, which is what makes every request it admits fit.
 
 ## `cap`
 
-```seq
+```serq
 cap expr;
 ```
 
@@ -42,7 +44,7 @@ to make room.
 
 ## `block`
 
-```seq
+```serq
 block expr;
 ```
 
@@ -52,7 +54,7 @@ block.
 
 ## `evict`
 
-```seq
+```serq
 evict lru;
 evict by (k1, k2, …);
 ```
@@ -69,7 +71,7 @@ last release after it has ended. The smallest key goes first.
 
 ## `preempt`
 
-```seq
+```serq
 preempt none;
 preempt lifo;
 ```
@@ -83,7 +85,7 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 
 ## `queue`
 
-```seq
+```serq
 queue fifo;
 queue by (expr);
 ```
@@ -95,7 +97,7 @@ blocks the rest.
 
 ## `admit via`
 
-```seq
+```serq
 admit via STAGE;
 ```
 
@@ -109,9 +111,14 @@ with `stage S[N]`), a family of one is shared by every member, and any other
 pair of counts is a link error. A stage that serves several pools tries them in
 declaration order.
 
+With `serve exclusive prefill`, selected prefills stop further admission;
+a fitting waiting prefill can displace tentative resident decodes. Its
+header sees the full token budget, since the cancelled decodes consume none.
+The usual fit, budget-exhaustion and preemption gates still apply.
+
 ## `spill`
 
-```seq
+```serq
 spill TIER via LINK (work) when (pred);
 ```
 

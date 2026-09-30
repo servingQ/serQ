@@ -1,6 +1,6 @@
 # Use cases
 
-How far can seQ describe vendor vLLM scheduling and KV-cache behavior? These pages examine the latest version tags checked on **2026-09-30**, including release candidates and alpha tags. They cover **full attention only** and distinguish the plugin version from its upstream vLLM dependency. Features from development branches or older schedulers are not mixed into the comparison.
+How far can serQ describe vendor vLLM scheduling and KV-cache behavior? These pages examine the latest version tags checked on **2026-09-30**, including release candidates and alpha tags. They cover **full attention only** and distinguish the plugin version from its upstream vLLM dependency. Features from development branches or older schedulers are not mixed into the comparison.
 
 The examples run on the current IR v8. They are reduced specifications, not vendor scheduler oracles. Their capacities and cost constants are illustrative, not hardware measurements.
 
@@ -18,11 +18,11 @@ For tpu-inference, the plugin tag does not establish the installed upstream vers
 
 ## Vendor models
 
-| Repository | Tagged implementation features | Executable seQ model | Remaining refinement |
+| Repository | Tagged implementation features | Executable serQ model | Remaining refinement |
 |---|---|---|---|
 | [vLLM](../case-study-vllm.md) | Token budget, prefix lookup, priority/FCFS preemption, deferred free | Existing synchronous engine and request library | Content-key sharing, priority victims, asynchronous scheduling |
 | [vllm-ascend](ascend.md) | Short-request classes and aging, job predictors, offload/recompute routing | Static short-before-long admission | Shared policy history, dynamic waiting selection, connector failure |
-| [vllm-rbln](rbln.md) | Native phase isolation, PP decode caps, sub-block prefix copy | Prefill-isolation policy and full-sequence admission gate | Whole-batch isolation correction in [PR #171](https://github.com/vrvrv/serQ/pull/171), PP/remote-KV guards, copy references and cache units |
+| [vllm-rbln](rbln.md) | Native phase isolation, PP decode caps, sub-block prefix copy | Whole-batch phase isolation and full-sequence admission gate | PP/remote-KV guards, copy references and cache units |
 | [tpu-inference](tpu.md) | Rank schedulers, cache-aware routing, contiguous-first allocation, P/D pipeline | Sequential P/D with a source lease and destination allocation | DP padding/barrier, block placement, cancellation and backlog |
 | [vLLM-metax](metax.md) | Runner query-length buckets, DBO patch, block copy | Synchronous non-speculative capacity/cost | Accepted-token progress, bucket shapes and compute/communication dependencies |
 
@@ -42,8 +42,8 @@ the audit is retained as source research, not an implementation commitment.
 From the repository root:
 
 ```bash
-cargo run --release -- check examples/vendors/rbln.seq
-cargo run --release -- run examples/vendors/rbln.seq --json
+cargo run --release -- check examples/vendors/rbln.sq
+cargo run --release -- run examples/vendors/rbln.sq --json
 ```
 
 Replace `rbln` with `ascend`, `tpu` or `metax`. All four use a finite batch of six requests and observe completed responses. The pages include these files directly, and the regular check gate links and draws them.

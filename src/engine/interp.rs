@@ -1,4 +1,4 @@
-//! The seQ interpreter: a discrete-event simulator whose state is the
+//! The serQ interpreter: a discrete-event simulator whose state is the
 //! configuration of `docs/language.md`.
 //!
 //! Commands (the statements of a session) take no time and run whenever a
@@ -355,6 +355,8 @@ pub struct Interp<'p> {
     /// Bumped at every recomputation: a finish scheduled before is stale.
     flow_epoch: u64,
     flows_dirty: bool,
+    /// Stages whose flows changed since the last recomputation.
+    flows_touched: Vec<usize>,
     pools: Vec<PoolState>,
     stages: Vec<StageState>,
     ready: VecDeque<usize>,
@@ -369,7 +371,7 @@ pub struct Interp<'p> {
     /// evicted (no pool or stage queries, no sampling), so `make_room` can
     /// key every entry once.
     evict_static: Vec<bool>,
-    /// Debug switches (`SEQ_TRACE_EVICT`, `SEQ_TRACE_ITER`), read once.
+    /// Debug switches (`SERQ_TRACE_EVICT`, `SERQ_TRACE_ITER`), read once.
     trace_evict: bool,
     trace_iter: bool,
     live: usize,
@@ -480,6 +482,7 @@ impl<'p> Interp<'p> {
             flows_last: 0.0,
             flow_epoch: 0,
             flows_dirty: false,
+            flows_touched: vec![],
             pools,
             stages,
             ready: VecDeque::new(),
@@ -497,8 +500,8 @@ impl<'p> Interp<'p> {
                     CEvict::By(keys) => keys.iter().all(static_key),
                 })
                 .collect(),
-            trace_evict: std::env::var_os("SEQ_TRACE_EVICT").is_some(),
-            trace_iter: std::env::var_os("SEQ_TRACE_ITER").is_some(),
+            trace_evict: std::env::var_os("SERQ_TRACE_EVICT").is_some(),
+            trace_iter: std::env::var_os("SERQ_TRACE_ITER").is_some(),
             observes: p
                 .observes
                 .iter()
@@ -2086,6 +2089,7 @@ impl<'p> Interp<'p> {
                 },
             );
         }
+        self.flows_touched.extend(&stages);
         self.flows.insert(
             id,
             Flow {
@@ -2117,8 +2121,37 @@ impl<'p> Interp<'p> {
             Kind::Shared { cap } => cap,
             _ => unreachable!("a flow holds shared stages only"),
         };
-        let mut ids: Vec<u64> = self.flows.keys().copied().collect();
+        // Only the flows that share a stage, however indirectly, with one
+        // that started or ended can change rate: the connected component of
+        // the touched stages. The others keep theirs, which a recomputation
+        // would give them again bit for bit: a component no touched stage
+        // reaches has had the same flows since it was last computed, and
+        // components share no state.
+        let touched = std::mem::take(&mut self.flows_touched);
+        let mut in_comp = vec![false; self.stages.len()];
+        let mut stack: Vec<usize> = vec![];
+        for s in touched {
+            if !in_comp[s] {
+                in_comp[s] = true;
+                stack.push(s);
+            }
+        }
+        let mut comp_stages: Vec<usize> = vec![];
+        let mut ids: Vec<u64> = vec![];
+        while let Some(s) = stack.pop() {
+            comp_stages.push(s);
+            for id in self.stages[s].jobs.keys() {
+                ids.push(*id);
+                for &t in &self.flows[id].stages {
+                    if !in_comp[t] {
+                        in_comp[t] = true;
+                        stack.push(t);
+                    }
+                }
+            }
+        }
         ids.sort_unstable();
+        ids.dedup();
         match self.p.share.expect("a program with flows has a share") {
             crate::ir::Share::Bottleneck => {
                 // each flow's equal share at the tightest of its stages
@@ -2134,45 +2167,56 @@ impl<'p> Interp<'p> {
             crate::ir::Share::MaxMin => {
                 // progressive filling: the stage whose free capacity, split
                 // among its flows still rising, is least fills first; its
-                // flows stop there
-                let mut left: HashMap<usize, f64> = HashMap::new();
-                let mut rising: HashMap<usize, usize> = HashMap::new();
-                for &id in &ids {
-                    for &s in &self.flows[&id].stages {
-                        left.entry(s).or_insert_with(|| cap(&self.stages[s]));
-                        *rising.entry(s).or_insert(0) += 1;
+                // flows stop there. Each stage lists its flows in id order,
+                // so a flow is frozen once and the subtractions from a
+                // stage's capacity come in the same order as a pass over
+                // all flows would make them.
+                let n = self.stages.len();
+                let mut left = vec![0.0f64; n];
+                let mut rising = vec![0usize; n];
+                let mut on: Vec<Vec<usize>> = vec![vec![]; n];
+                let mut frozen = vec![false; ids.len()];
+                for &s in &comp_stages {
+                    left[s] = cap(&self.stages[s]);
+                }
+                for (k, id) in ids.iter().enumerate() {
+                    for &s in &self.flows[id].stages {
+                        rising[s] += 1;
+                        on[s].push(k);
                     }
                 }
-                let mut open: Vec<u64> = ids.clone();
-                while !open.is_empty() {
-                    let (s_min, share) = rising
+                let mut open = ids.len();
+                while open > 0 {
+                    let (s_min, share) = comp_stages
                         .iter()
-                        .filter(|&(_, &n)| n > 0)
-                        .map(|(&s, &n)| (s, left[&s] / n as f64))
+                        .filter(|&&s| rising[s] > 0)
+                        .map(|&s| (s, left[s] / rising[s] as f64))
                         .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
                         .expect("an open flow holds a stage");
                     let share = share.max(0.0);
-                    let (fill, keep): (Vec<u64>, Vec<u64>) = open
-                        .into_iter()
-                        .partition(|id| self.flows[id].stages.contains(&s_min));
-                    for id in fill {
-                        let f = self.flows.get_mut(&id).unwrap();
+                    for &k in &on[s_min] {
+                        if frozen[k] {
+                            continue;
+                        }
+                        frozen[k] = true;
+                        open -= 1;
+                        let f = self.flows.get_mut(&ids[k]).unwrap();
                         f.rate = share;
                         for &s in &f.stages {
-                            *left.get_mut(&s).unwrap() -= share;
-                            *rising.get_mut(&s).unwrap() -= 1;
+                            left[s] -= share;
+                            rising[s] -= 1;
                         }
                     }
-                    open = keep;
                 }
             }
         }
         self.flow_epoch += 1;
         let now = self.now;
-        let next = ids
+        let next = self
+            .flows
             .iter()
-            .filter(|id| self.flows[id].rate > 0.0)
-            .map(|id| (now + self.flows[id].remaining / self.flows[id].rate, *id))
+            .filter(|(_, f)| f.rate > 0.0)
+            .map(|(id, f)| (now + f.remaining / f.rate, *id))
             .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         if let Some((t, id)) = next {
             self.at(
@@ -2192,6 +2236,7 @@ impl<'p> Interp<'p> {
         let Some(f) = self.flows.remove(&id) else {
             return;
         };
+        self.flows_touched.extend(&f.stages);
         for s in f.stages {
             if let Some(job) = self.stages[s].jobs.remove(&id) {
                 self.job_done(s, job);
@@ -2287,6 +2332,7 @@ impl<'p> Interp<'p> {
             // a flow leaves every stage it holds, and the rest re-share
             self.flows_advance();
             if let Some(f) = self.flows.remove(&id) {
+                self.flows_touched.extend(&f.stages);
                 for s in f.stages {
                     self.stages[s].jobs.remove(&id);
                 }
@@ -2451,9 +2497,8 @@ impl<'p> Interp<'p> {
         // sort ahead of residents already served: the set of the served, not
         // an index into the list, is what says who is next.
         let mut served: BTreeSet<u64> = BTreeSet::new();
-        let mut prefill_taken = false;
         let exclusive = matches!(spec.serve, CServe::ExclusivePrefill);
-        let any_prefill = self
+        let resident_prefill = self
             .residents(st)
             .iter()
             .any(|&j| self.stages[st].jobs[&j].mode == RunMode::Prefill);
@@ -2466,7 +2511,11 @@ impl<'p> Interp<'p> {
                 // the budget left, unless this iteration preempted
                 // (scheduler.py:869, `if not preempted_reqs`)
                 let preempted = self.pools.iter().map(|p| p.preemptions).sum::<u64>() > preempt0;
-                if left > 0.0 && !preempted && self.admit_bound(st, left) {
+                // A local prefill admitted after tentative decodes replaces
+                // them and uses the whole budget (RBLN guard D). Its hold
+                // must therefore see that budget, not the decode remainder.
+                let admit_left = if exclusive { budget } else { left };
+                if left > 0.0 && !preempted && self.admit_bound(st, admit_left) {
                     continue;
                 }
                 break;
@@ -2487,8 +2536,13 @@ impl<'p> Interp<'p> {
                 }
                 RunMode::Plain => unreachable!(),
             };
-            let blocked = exclusive && any_prefill && (mode == RunMode::Decode || prefill_taken);
-            let tokens = if blocked { 0.0 } else { want.min(left) };
+            let blocked = exclusive && resident_prefill && mode == RunMode::Decode;
+            let available = if exclusive && mode == RunMode::Prefill {
+                budget
+            } else {
+                left
+            };
+            let tokens = if blocked { 0.0 } else { want.min(available) };
             if tokens <= 0.0 {
                 continue;
             }
@@ -2513,17 +2567,38 @@ impl<'p> Interp<'p> {
                 if mode == RunMode::Prefill {
                     attn += tokens * (pos + tokens / 2.0);
                 }
-                self.advance_pos(sid, pl, tokens);
+                // Exclusive-prefill decodes are candidates until waiting
+                // admission has finished: replacing them must not publish
+                // computed KV for work that will never run.
+                if !exclusive {
+                    self.advance_pos(sid, pl, tokens);
+                }
             } else if mode == RunMode::Prefill {
                 attn += tokens * tokens / 2.0;
             }
+            if exclusive && mode == RunMode::Prefill {
+                // Keep any allocation made for displaced decodes, as RBLN
+                // keeps pending runner block deltas; cancel only their work.
+                assign.clear();
+                left = budget;
+            }
             assign.push((id, tokens));
             left -= tokens;
-            if mode == RunMode::Prefill {
-                prefill_taken = true;
-            }
-            if left <= 0.0 {
+            if left <= 0.0 || (exclusive && mode == RunMode::Prefill) {
+                // A selected prefill is a lone batch. In particular do not
+                // admit another waiting request with its leftover budget.
                 break;
+            }
+        }
+        if exclusive {
+            // Growth can preempt an earlier candidate. Only surviving,
+            // selected jobs advance their holds' computed positions.
+            assign.retain(|(id, _)| self.stages[st].jobs.contains_key(id));
+            for &(id, tokens) in &assign {
+                let j = &self.stages[st].jobs[&id];
+                if let (Some(pl), Some(sid)) = (j.growing, j.owner) {
+                    self.advance_pos(sid, pl, tokens);
+                }
             }
         }
         // An iteration that scheduled nothing is no iteration, unless it
@@ -3001,7 +3076,7 @@ impl<'p> Interp<'p> {
     }
 
     fn report(&mut self) -> Report {
-        if std::env::var_os("SEQ_DUMP_POOLS").is_some() {
+        if std::env::var_os("SERQ_DUMP_POOLS").is_some() {
             self.debug_pools();
         }
         let now = self.now;

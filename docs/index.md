@@ -1,13 +1,13 @@
-# seQ
+# serQ
 
 **A serving deployment is a program.**
 
-seQ is a small language in which an LLM serving system — its memory pools, its
+serQ is a small language in which an LLM serving system — its memory pools, its
 engine, the path a session takes through them — is written down once, as a
 program. That one program is then simulated, checked against the real system,
 and reasoned about formally.
 
-```seq
+```serq
 pool kv    { cap blocks * bs; block bs; evict lru; preempt lifo; }
 pool reqs { cap max_seqs; admit via engine; }
 
@@ -44,7 +44,7 @@ server {
 }
 ```
 
-That is most of `examples/multi-turn/vllm.seq`, and it **is** vLLM v1's engine: on six
+That is most of `examples/multi-turn/vllm.sq`, and it **is** vLLM v1's engine: on six
 deterministic scenarios and on a 333-session, 3 321-request trace, it gives the
 real scheduler's answer for every request — every first-token time, every
 cached-token count.
@@ -58,7 +58,7 @@ A serving deployment does four things to a request:
 3. **frees** the resource, possibly keeping a prefix cached,
 4. **sends it somewhere next**.
 
-seQ makes the first three one scoped statement — `hold p (u) { … } cache (ℓ)`
+serQ makes the first three one scoped statement — `hold p (u) { … } cache (ℓ)`
 — and generalises "resource" so that KV memory, request slots, live-session
 caps and offload tiers are all the same kind of object: a **pool**. The fourth
 is ordinary control flow: `branch`, `loop`, `end`.
@@ -67,7 +67,7 @@ is ordinary control flow: `branch`, `loop`, `end`.
 
 <div class="grid cards" markdown>
 
-- **Simulation** — `seq-lang run prog.seq` executes the program as a
+- **Simulation** — `serq run prog.sq` executes the program as a
   discrete-event simulation and reports time averages, per-observation
   statistics and per-turn records.
 
@@ -90,7 +90,7 @@ is ordinary control flow: `branch`, `loop`, `end`.
 | see a real system written in it | [vLLM](case-study-vllm.md), [vendor use cases](use-cases/index.md), [Case study: prefill/decode over NIXL](case-study-pd.md) |
 | see one engine serve single-turn, chat and agent traffic | [Case study: one engine, four workloads](case-study-workloads.md) |
 | look something up | [API reference](api/index.md), [Cheatsheet](reference/cheatsheet.md), [CLI](reference/cli.md) |
-| know why any of this should be believed | [How seQ is checked](validation.md) |
+| know why any of this should be believed | [How serQ is checked](validation.md) |
 | use a program in the simulator or in Lean | [Development guide](development.md) |
 
 !!! note "The reference documents"

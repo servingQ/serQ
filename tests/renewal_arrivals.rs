@@ -1,4 +1,4 @@
-use seq::{Overrides, run_source};
+use serq::{Overrides, run_source};
 
 #[test]
 fn deterministic_renewal_arrivals_follow_the_supplied_gap() {
@@ -119,9 +119,9 @@ fn poisson_retains_its_initial_arrival_and_renewal_waits_for_a_gap() {
 fn renewal_validation_and_ir_version_prevent_ambiguous_inputs() {
     for gap in ["now", "serial"] {
         let src = format!("workload {{ arrive renewal({gap}); }} run {{ horizon 10; }}");
-        assert!(seq::compile_source(&src, &Overrides::default()).is_err());
+        assert!(serq::compile_source(&src, &Overrides::default()).is_err());
     }
-    let mut program = seq::compile_source(
+    let mut program = serq::compile_source(
         "workload { arrive renewal(2); } run { horizon 10; arrivals 3; }",
         &Overrides::default(),
     )
@@ -131,6 +131,6 @@ fn renewal_validation_and_ir_version_prevent_ambiguous_inputs() {
         program
             .validate()
             .unwrap_err()
-            .contains(&format!("this interpreter reads {}", seq::ir::IR_VERSION))
+            .contains(&format!("this interpreter reads {}", serq::ir::IR_VERSION))
     );
 }

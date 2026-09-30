@@ -4,21 +4,21 @@ In chapter 1 a request waited for a *server*. In an LLM system it mostly waits
 for **memory**: the KV cache is finite, and a request that has nowhere to put
 its keys and values cannot start, however idle the GPU is.
 
-seQ has one abstraction for this — a **pool** — and it covers KV bytes, request
+serQ has one abstraction for this — a **pool** — and it covers KV bytes, request
 slots (`max_num_seqs`), a cap on live sessions and offload tiers alike. A pool
 is a counted resource with a capacity, a queue and, later, a cache.
 
 ## The program
 
-```seq title="docs/tutorial/programs/02-memory.seq"
---8<-- "docs/tutorial/programs/02-memory.seq"
+```serq title="docs/tutorial/programs/02-memory.sq"
+--8<-- "docs/tutorial/programs/02-memory.sq"
 ```
 
 Four servers now, so compute is not the constraint. Ten memory units are.
 
 ## `hold` is the whole idea
 
-```seq
+```serq
 hold mem (c) {
   observe admit_wait = now - t0;
   run server (s);
@@ -28,13 +28,13 @@ hold mem (c) {
 `hold` is a **scope**. Entering it means: join the pool's queue, wait until
 `c` units are free, take them. Leaving it means: give them back. The lecture's
 language had `admit` and `free` as separate statements; making them one scoped
-statement is the single most important design decision in seQ, for three
+statement is the single most important design decision in serQ, for three
 reasons:
 
 - **Balance is syntactic.** You cannot forget to free.
 - **The memory invariant becomes a lemma about one statement.**
   `allocated + cached ≤ cap` holds in every reachable configuration, and that
-  is a theorem in Lean (`SeqLang.Step.invariant`).
+  is a theorem in Lean (`SerqLang.Step.invariant`).
 - **Preemption is "abort the scope and re-run the statement"** — which,
   it turns out, is exactly what vLLM's `_preempt_request` does
   ([chapter 5](05-the-engine.md)).
@@ -48,7 +48,7 @@ reasons:
 ## Running it
 
 ```bash
-seq-lang run docs/tutorial/programs/02-memory.seq
+serq run docs/tutorial/programs/02-memory.sq
 ```
 
 ```text
@@ -75,7 +75,7 @@ has moved to the pool.
 
 ```bash
 for C in 4 6 10 20; do
-  seq-lang run docs/tutorial/programs/02-memory.seq --set C=$C
+  serq run docs/tutorial/programs/02-memory.sq --set C=$C
 done
 ```
 
@@ -90,8 +90,10 @@ Two things are worth stopping on.
 
 **`cap 4` waits *less* than `cap 6`.** It is not better — it is refusing work.
 A request drawing `c = 5` can never fit in a pool of 4, so it is rejected
-outright and never waits. 19 925 of them. seQ counts that in the `rej` column,
-and vLLM does the same thing under the name `FINISHED_IGNORED`.
+outright and never waits. 19 925 of them. serQ counts that in the `rej` column.
+vLLM would not even start this way: it refuses an engine whose memory cannot
+hold one request of its `max_model_len`, and refuses a longer prompt at the
+API, so a request that can never fit never reaches its scheduler.
 
 **The knee is sharp.** Between `cap 6` and `cap 10` the wait falls by a factor
 of 16. Capacity planning for memory is not a smooth trade-off; you are either

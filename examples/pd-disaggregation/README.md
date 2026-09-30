@@ -1,12 +1,12 @@
 # Prefill/decode examples
 
-`llmd_nixl_pull.seq` describes a serving deployment.
+`llmd_nixl_pull.sq` describes a serving deployment.
 
-`pd_open.seq` and `pd_tandem.seq` are research comparison fixtures for
+`pd_open.sq` and `pd_tandem.sq` are research comparison fixtures for
 serving-queue-theory's queueing models. The open model uses Poisson arrivals;
 the saturated model circulates a closed population. They remain packaged
 here so the downstream Rust adapter can load the exact program belonging
-to its pinned seQ revision.
+to its pinned serQ revision.
 
 `mode = 0` selects the aggregate queue; `mode = 1` selects the prefill,
 link and decode tandem. Both modes use the same work draws. A deployment

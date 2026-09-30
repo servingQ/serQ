@@ -34,10 +34,10 @@ a separate fixed NPU compile-bucket policy for MetaX. The example below is
 non-speculative and does not validate graph layouts. See
 [input shapes](input-shapes.md) for the common modeling boundary.
 
-## Executable seQ approximation
+## Executable serQ approximation
 
-```seq title="examples/vendors/metax.seq"
---8<-- "examples/vendors/metax.seq"
+```serq title="examples/vendors/metax.sq"
+--8<-- "examples/vendors/metax.sq"
 ```
 
 This synchronous, non-speculative model uses different cost terms for prefill and decode. Constants are illustrative. Predicting hardware response times requires measured step traces and calibration.

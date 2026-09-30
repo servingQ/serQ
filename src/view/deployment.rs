@@ -1,4 +1,4 @@
-//! The deployment view: a seQ program as a queueing network.
+//! The deployment view: a serQ program as a queueing network.
 //!
 //! Pools and stages are declared, but the arrows between them are not: the
 //! flow is a property of the session program. This module projects it onto the
@@ -127,7 +127,7 @@ impl Walker<'_> {
     }
 
     /// Add an edge unless the same one is already there. Programs written as
-    /// a chain of guards (`routing.seq`'s five policies) reach the same
+    /// a chain of guards (`routing.sq`'s five policies) reach the same
     /// station down many paths; the picture wants one arrow.
     fn push_edge(&mut self, e: Edge) {
         if let Some(existing) = self
@@ -416,7 +416,73 @@ pub fn project(p: &Program) -> Net {
         }
     }
     w.net.cached = cached;
-    w.net
+    let mut net = w.net;
+    adjacent_flows(&mut net);
+    net
+}
+
+/// Put the stations of each run over several stages side by side, in the
+/// run's order, where the first of them stands in the row, so that the
+/// bracket around them takes in no other station. An edge is then drawn by
+/// the way it points in the new order. Two flows that share a station are
+/// placed one after the other, so the second's bracket may still take in a
+/// station of the first.
+fn adjacent_flows(net: &mut Net) {
+    if net.flows.is_empty() {
+        return;
+    }
+    let n = net.nodes.len();
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    let mut placed = vec![false; n];
+    for i in 0..n {
+        if placed[i] {
+            continue;
+        }
+        match net.flows.iter().find(|g| g.contains(&i)) {
+            Some(g) => {
+                for &k in g {
+                    if !placed[k] {
+                        placed[k] = true;
+                        order.push(k);
+                    }
+                }
+            }
+            None => {
+                placed[i] = true;
+                order.push(i);
+            }
+        }
+    }
+    if order.iter().enumerate().all(|(pos, &i)| pos == i) {
+        return;
+    }
+    let mut pos = vec![0; n];
+    for (k, &i) in order.iter().enumerate() {
+        pos[i] = k;
+    }
+    let mut nodes: Vec<Option<Node>> = std::mem::take(&mut net.nodes)
+        .into_iter()
+        .map(Some)
+        .collect();
+    net.nodes = order.iter().map(|&i| nodes[i].take().unwrap()).collect();
+    let at = |e: End| match e {
+        End::Node(i) => End::Node(pos[i]),
+        other => other,
+    };
+    for e in &mut net.edges {
+        e.from = at(e.from);
+        e.to = at(e.to);
+        // the new order decides which way an arrow points, and so how it
+        // is drawn: a return that now points right is drawn forward
+        if let (End::Node(a), End::Node(b)) = (e.from, e.to) {
+            e.back = a >= b;
+        }
+    }
+    for g in &mut net.flows {
+        for k in g.iter_mut() {
+            *k = pos[*k];
+        }
+    }
 }
 
 /// For every `hold` with a `cache` clause, the pools that clause can leave
@@ -427,7 +493,7 @@ pub fn project(p: &Program) -> Net {
 /// position the growing run reached, which only a grown pool has. `grow`
 /// advances the *innermost* hold holding that pool, so a `growing` run deep
 /// inside nested holds can belong to an outer one, and a hold may be grown in
-/// more than one pool. `examples/multi-turn/replica.seq` is the case that makes this
+/// more than one pool. `examples/multi-turn/replica.sq` is the case that makes this
 /// visible: its `hold batch (1), kv (...)` has no `growing` at all and really
 /// does keep a unit of `batch` cached.
 pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
@@ -649,10 +715,34 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             let d = DEPTH_PAD * (max_depth - gs[k].depth) as f64;
             gs[k].left = x;
             gs[k].glyph_x = x + PAD + d;
-            x += PAD + d + GLYPH_W;
+            // the options stacked under the glyphs are as wide as their
+            // longest line, and the column is as wide as they are
+            let notes = pool_notes(p, gs[k].pool, cached_here(&gs[k]))
+                .iter()
+                .map(|l| TextSize::Small.width_of(l) + 8.0)
+                .fold(GLYPH_W, f64::max);
+            x += PAD + d + notes;
         }
-        rects.push(Rect::new(x, row_y, STATION_W, STATION_H));
-        x += STATION_W;
+        // A station's name above it and its note below it are centred on
+        // it: one wider than the station gets the room, or it runs over
+        // the pool options at its left and the station at its right.
+        let n = &net.nodes[i];
+        let slot = [
+            STATION_W,
+            TextSize::Normal.width_of(&n.label) + 8.0,
+            n.note
+                .as_deref()
+                .map_or(0.0, |t| TextSize::Small.width_of(t) + 8.0),
+        ]
+        .into_iter()
+        .fold(0.0, f64::max);
+        rects.push(Rect::new(
+            x + (slot - STATION_W) / 2.0,
+            row_y,
+            STATION_W,
+            STATION_H,
+        ));
+        x += slot;
         let mut closing: Vec<usize> = (0..gs.len()).filter(|&k| gs[k].last == i).collect();
         closing.sort_by_key(|&k| std::cmp::Reverse(gs[k].depth));
         for k in closing {
@@ -785,15 +875,19 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let r = rects[i];
                 let y = r.centre().y;
                 arrivals += 1;
-                if arrivals == 1 {
+                if arrivals == 1 && i == 0 {
                     // The arrow starts at the margin and the label rides above
                     // it, clear of the pool glyphs it passes.
                     f.edge(vec![pt(MARGIN, y), pt(r.x, y)], EdgeStyle::Flow);
                     f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
                 } else {
                     // A session that opens with a branch has more than one entry
-                    // station. A second arrow along the row would run straight
-                    // through the first one, so it takes a lane of its own.
+                    // station, and one may enter past the first station. An
+                    // arrow along the row would run straight through the
+                    // stations before it, so it takes a lane of its own.
+                    if arrivals == 1 {
+                        f.note(pt(MARGIN, y - 10.0), arrival_text.clone(), Anchor::Start);
+                    }
                     let ly = lane(&mut lanes);
                     let x = r.x + r.w * 0.25;
                     f.push(Item::Edge {
@@ -834,6 +928,32 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                         arrow: true,
                     });
                     f.note(pt(row_right + 30.0, y + 3.0), text, Anchor::Start);
+                }
+            }
+            (End::Node(a), End::Node(b)) if !e.back && b > a + 1 => {
+                // Forward past the stations between: along the row it would run
+                // through them, so it takes a lane below.
+                let (ra, rb) = (rects[a], rects[b]);
+                let y = lane(&mut lanes);
+                // clear of the 0.25 a return leaves and enters by and the
+                // 0.75 an early exit leaves by
+                let (ax, bx) = (ra.x + ra.w * 0.625, rb.x + rb.w * 0.5);
+                f.push(Item::Edge {
+                    pts: vec![
+                        pt(ax, ra.bottom()),
+                        pt(ax, y),
+                        pt(bx, y),
+                        pt(bx, rb.bottom()),
+                    ],
+                    style: EdgeStyle::Flow,
+                    arrow: true,
+                });
+                if let Some(l) = label {
+                    f.note(
+                        pt((ra.centre().x + rb.centre().x) / 2.0, y - 5.0),
+                        l,
+                        Anchor::Middle,
+                    );
                 }
             }
             (End::Node(a), End::Node(b)) if !e.back => {

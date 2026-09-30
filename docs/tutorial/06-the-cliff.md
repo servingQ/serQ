@@ -7,7 +7,7 @@ chapter 5 and it does not.
 
 ```bash
 for L in 1.5 1.7 1.8 1.9 2.0; do
-  seq-lang run docs/tutorial/programs/05-engine.seq --set Lambda=$L --json
+  serq run docs/tutorial/programs/05-engine.sq --set Lambda=$L --json
 done
 ```
 
@@ -30,8 +30,8 @@ did, but that is the symptom. Run the same loads with ten times the KV pool
 and nothing else changed:
 
 ```bash
-seq-lang run docs/tutorial/programs/05-engine.seq --set Lambda=2.0 --set blocks=40000
-seq-lang run docs/tutorial/programs/05-engine.seq --set Lambda=3.0 --set blocks=40000
+serq run docs/tutorial/programs/05-engine.sq --set Lambda=2.0 --set blocks=40000
+serq run docs/tutorial/programs/05-engine.sq --set Lambda=3.0 --set blocks=40000
 ```
 
 | sessions/s | KV blocks | hit rate | TTFT | preemptions | utilisation |
@@ -80,7 +80,7 @@ they come back.
 
 ## This is not an artefact of the model
 
-`examples/replay/vllm_replay.seq` is this same structure fitted to an A100 running
+`examples/replay/vllm_replay.sq` is this same structure fitted to an A100 running
 Qwen3-8B, replaying a measured 333-session trace. The measured replica
 collapsed between a 3.0 s and a 2.5 s session spacing; the program predicted a
 mean TTFT of 39.1 s against 34.6 s measured, and a full-hit rate of 0.192
@@ -102,11 +102,11 @@ The interesting question is not where the cliff is but what moves it:
 
 ```bash
 # more memory
-seq-lang run docs/tutorial/programs/05-engine.seq --set Lambda=1.8 --set blocks=8000
+serq run docs/tutorial/programs/05-engine.sq --set Lambda=1.8 --set blocks=8000
 # fewer concurrent requests, so each one holds memory for less time
-seq-lang run docs/tutorial/programs/05-engine.seq --set Lambda=1.8 --set max_seqs=8
+serq run docs/tutorial/programs/05-engine.sq --set Lambda=1.8 --set max_seqs=8
 # shorter thinking time, so prefixes are reused before they are evicted
-seq-lang run docs/tutorial/programs/05-engine.seq --set Lambda=1.8 --set Z=1
+serq run docs/tutorial/programs/05-engine.sq --set Lambda=1.8 --set Z=1
 ```
 
 ---

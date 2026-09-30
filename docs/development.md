@@ -1,20 +1,20 @@
 # Development guide
 
-A seQ program has two consumers besides its reader. The **simulator**
-(`seq-lang run`) executes it as a discrete-event system and reports what a
+A serQ program has two consumers besides its reader. The **simulator**
+(`serq run`) executes it as a discrete-event system and reports what a
 deployment under that traffic does. **Lean** (the `serving-queue-theory`
 repository) executes the same program's [IR](ir.md) in an executable
 semantics and states, as theorems checked by the kernel, what it does. This
 page covers how to use each one and what each one needs from a program.
 
 ```
-program.seq ──seq-lang ir──▶ IR (JSON) ──seq-lang run──▶ report, samples     (simulator)
+program.sq ──serq ir──▶ IR (JSON) ──serq run──▶ report, samples     (simulator)
                               │
-                              └──gen_seq_oracle.py──▶ SeqOracle.lean ──lake build──▶ theorems  (Lean)
+                              └──gen_serq_oracle.py──▶ SerqOracle.lean ──lake build──▶ theorems  (Lean)
 ```
 
 The IR sits in the middle, not the text. The simulator reads it too
-(`seq-lang run` accepts a `.json` as well as a `.seq`), so the two consumers
+(`serq run` accepts a `.json` as well as a `.sq`), so the two consumers
 never interpret different programs.
 
 ## In the simulator
@@ -22,12 +22,12 @@ never interpret different programs.
 ### Write, check, look
 
 ```bash
-seq-lang check examples/my.seq                       # parse, resolve names, lint
-seq-lang draw  examples/my.seq --format svg --out my.svg
-seq-lang run   examples/my.seq
+serq check examples/my.sq                       # parse, resolve names, lint
+serq draw  examples/my.sq --format svg --out my.svg
+serq run   examples/my.sq
 ```
 
-`check` is what `make check` runs over every `examples/*/*.seq`, and it also
+`check` is what `make check` runs over every `examples/*/*.sq`, and it also
 catches the two lints (a stale header read, a draw written as a test,
 [language](language.md) §3). Draw the program before trusting a run. A hold
 is drawn as its pool's enclosure around the stations it spans, so a hold that
@@ -46,7 +46,7 @@ A run prints its run line and then three tables: the `observe`s, the stages
 and the pools, each column as wide as its widest entry:
 
 ```
-$ seq-lang run examples/multi-turn/vllm.seq --horizon 300 --warmup 30
+$ serq run examples/multi-turn/vllm.sq --horizon 300 --warmup 30
 run: horizon 300 end 300 warmup 30 seed 1 events 166040 arrivals 95 ended 82 turns 821 mean live 8.390
 
 observe         count      mean    95% CI    cv2        p99
@@ -87,7 +87,7 @@ over `--set`, with a few seeds per point:
 ```bash
 for lam in 0.3 0.6 0.9; do
   for seed in 1 2 3; do
-    seq-lang run examples/multi-turn/vllm.seq --set Lambda=$lam --seed $seed --json \
+    serq run examples/multi-turn/vllm.sq --set Lambda=$lam --seed $seed --json \
       | jq -r --arg l $lam --arg s $seed \
           '[$l, $s, .observes.ttft.mean, (.pools[] | select(.name=="kv") | .preemptions)] | @tsv'
   done
@@ -126,14 +126,14 @@ The parameters of a program are measurements, and the program says where each
 one comes from:
 
 - **An engine cost model.** Fit `cost` to measured iterations, as
-  `examples/replay/vllm_replay.seq` does for the A100: an expression in `tokens`,
+  `examples/replay/vllm_replay.sq` does for the A100: an expression in `tokens`,
   `decoders`, `prefilled`, `kv_decode`, `kv_prefill`, `attention`.
 - **Traffic from a trace.** `trace "file.csv"` in the `workload` replays
   sessions turn by turn. The columns are `session,turn,new,out,think,forced`
   (`examples/replay/data/`), and `--trace F` swaps the file without editing the
   program.
 - **A quantity the program cannot compute itself.** For example, the subagent
-  wait `W` of `examples/subagent/vllm_subagents.seq` is taken from the program's own
+  wait `W` of `examples/subagent/vllm_subagents.sq` is taken from the program's own
   output. Run the program, compute the statistic from `--dump`, set it with
   `--set`, and repeat until it stops moving. Write the fixed point into the
   `let` with a comment that says how it was obtained.
@@ -154,9 +154,9 @@ There are three kinds of result, and a program meets them differently:
 
 | | holds for | where |
 |---|---|---|
-| properties of the semantics | the model, not one program | `Seq.lean`: `SeqLang.Step.invariant` (every command of the pool model keeps `allocated + cached ≤ cap`); `SeqServe.lean`: `SeqLang.Serve.serve_eq_decode_first` (without a per-request chunk cap, serving in admission order is serving decode-first) |
-| a program's outcome on a scenario | one IR file and one workload | `SeqOracle.lean`, generated: one theorem per scenario, proved by `decide +kernel` |
-| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`examples/multi-turn/replica.seq`), `disaggregatedReplica` (the lecture notes' store-and-forward replica, in `serving-queue-theory`; no seQ program), with their well-formedness |
+| properties of the semantics | the model, not one program | `Serq.lean`: `SerqLang.Step.invariant` (every command of the pool model keeps `allocated + cached ≤ cap`); `SerqServe.lean`: `SerqLang.Serve.serve_eq_decode_first` (without a per-request chunk cap, serving in admission order is serving decode-first) |
+| a program's outcome on a scenario | one IR file and one workload | `SerqOracle.lean`, generated: one theorem per scenario, proved by `decide +kernel` |
+| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`examples/multi-turn/replica.sq`), `disaggregatedReplica` (the lecture notes' store-and-forward replica, in `serving-queue-theory`; no serQ program), with their well-formedness |
 
 The first kind needs nothing from a program. It is about the pool model and
 the serving order, and it is not yet connected to the executable semantics
@@ -168,7 +168,7 @@ repeated there.
 ### From a program to a theorem
 
 A generated theorem says: the executable semantics (`Exec.runW`, in
-`SeqExec.lean`) runs this program on this deployment and these sessions, and
+`SerqExec.lean`) runs this program on this deployment and these sessions, and
 gives these observations. For example, for `tools/oracle/hol.ir.json`:
 
 ```lean
@@ -179,7 +179,7 @@ theorem vllm_hol :
   decide +kernel
 ```
 
-The right-hand side is not what seQ computed but what the real vLLM scheduler
+The right-hand side is not what serQ computed but what the real vLLM scheduler
 did on the same scenario (`tools/oracle/hol.out.json`). So the theorem ties
 three things together: the program, the Lean semantics, and vLLM. The Rust
 interpreter is held to the same answers by `tests/vllm_oracle.rs`, from the
@@ -187,28 +187,28 @@ same IR file.
 
 The steps:
 
-1. **seQ:** compile the program to IR once per scenario. For the request
+1. **serQ:** compile the program to IR once per scenario. For the request
    scenarios, `tests/vllm_oracle.rs` does this: it compiles
-   `examples/oracle/vllm_request.seq` with each scenario's engine as `let`
+   `examples/oracle/vllm_request.sq` with each scenario's engine as `let`
    overrides and its requests as explicit sessions. `make oracle-ir` writes
    `tools/oracle/<name>.ir.json`, and `make check` fails if a committed file
    is stale.
-2. **serving-queue-theory:** `scripts/gen_seq_oracle.py` reads
+2. **serving-queue-theory:** `scripts/gen_serq_oracle.py` reads
    `tools/oracle/*.ir.json` with the matching `*.json` and `*.out.json` from
-   a seQ checkout, and writes `lean/ServingQueueTheory/SeqOracle.lean`. By
-   default it reads the seQ release that repository pins (`make seq`
-   checks it out into `.seq/src`). To try a local seQ, point it there:
+   a serQ checkout, and writes `lean/ServingQueueTheory/SerqOracle.lean`. By
+   default it reads the serQ release that repository pins (`make serq`
+   checks it out into `.serq/src`). To try a local serQ, point it there:
 
     ```bash
-    SEQ_SRC=~/dev/seQ python3 scripts/gen_seq_oracle.py          # write
-    SEQ_SRC=~/dev/seQ python3 scripts/gen_seq_oracle.py --check  # or compare
+    SERQ_SRC=~/dev/serQ python3 scripts/gen_serq_oracle.py          # write
+    SERQ_SRC=~/dev/serQ python3 scripts/gen_serq_oracle.py --check  # or compare
     ```
 
 3. **Lean:** `make lean` builds the project, which checks every theorem
    by evaluation in the kernel. It also fails on a `sorry` or on any axiom
    beyond `propext`, `Classical.choice` and `Quot.sound`, and checks that
-   `SeqOracle.lean` is what the generator produces from the **pinned** seQ.
-   A file written from a local seQ with `SEQ_SRC` therefore builds, but
+   `SerqOracle.lean` is what the generator produces from the **pinned** serQ.
+   A file written from a local serQ with `SERQ_SRC` therefore builds, but
    `make lean` reports it `STALE` until the pin moves to a release that
    contains the change. To try a local change, run `lake build` in `lean/`
    instead.
@@ -222,14 +222,14 @@ The steps:
    and save its output as `tools/oracle/<name>.out.json`. This is the answer
    the theorem will state. The script drives the real scheduler: it needs a
    Python environment with vLLM installed and a full vLLM checkout at the
-   pinned revision beside the seQ checkout (`../ref/vllm`, which it imports
+   pinned revision beside the serQ checkout (`../ref/vllm`, which it imports
    `tests.v1.core.utils` from). The sparse `ref/vllm` that
    `scripts/fetch_vllm_ref.sh --sparse` makes for the citation check is not
    enough.
 3. Add the name to the list in `tests/vllm_oracle.rs::scenarios`, run
    `make oracle-ir`, then `make check`. The interpreter now has to agree.
-4. In serving-queue-theory, after the pin moves to a seQ release that has
-   the scenario, run `scripts/gen_seq_oracle.py` and `make lean`. The
+4. In serving-queue-theory, after the pin moves to a serQ release that has
+   the scenario, run `scripts/gen_serq_oracle.py` and `make lean`. The
    generator finds the scenarios by listing the directory, so it needs no
    list of its own.
 
@@ -245,14 +245,14 @@ fragment). In practice, a program is in it when:
   memory with `preempt lifo`, with no queue key and no spill;
 - nothing is drawn: no `~`, no `poisson` arrivals; the sessions are
   explicit, with preset attributes, and the workload has no `turn` block (a
-  trace is inlined with `seq-lang ir --inline-trace`);
+  trace is inlined with `serq ir --inline-trace`);
 - the statements are `turn`, `hold`, `run`, `set`, `observe`, `branch`,
   `loop` and `end`, and the expressions are naturals, attributes, `now`,
   `cachedin`, `budget_left`, `min`, `max`, `+`, `-`, `*`, `floor(a / b)`,
   comparisons and `?:`.
 
 This is why the Lean side has request-level programs such as
-`vllm_request.seq`, and not `vllm.seq`: a stochastic workload is outside the
+`vllm_request.sq`, and not `vllm.sq`: a stochastic workload is outside the
 fragment by construction. A program outside it does not get skipped. The
 generator stops with `FAIL: outside the Lean fragment: <what>` and writes
 nothing, so a new construct that one oracle program uses stops every
@@ -277,9 +277,9 @@ or variant removed, renamed or retyped, or a change of meaning under the same
 shape, bumps it once the version is tagged. The generator pins the version it
 reads and refuses any other
 (`IR version N (this generator reads M)`). So an IR change is two changes in
-two repositories: seQ bumps the version and regenerates `tools/oracle/`, and
+two repositories: serQ bumps the version and regenerates `tools/oracle/`, and
 serving-queue-theory moves the generator's pin, teaches it the new node if a
-committed program uses one, and regenerates `SeqOracle.lean` against the
-new release. Until both have landed, the Lean check fails on the new seQ,
+committed program uses one, and regenerates `SerqOracle.lean` against the
+new release. Until both have landed, the Lean check fails on the new serQ,
 and that is intended. Plan an IR change as that handshake, not as a
 one-repository edit ([IR](ir.md), Stability).

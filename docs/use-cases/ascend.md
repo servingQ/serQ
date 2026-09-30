@@ -35,10 +35,10 @@ Cross-rank graph agreement and per-request boundary validation require more
 than aggregate cost terms. The current example does not model graph capture
 or padded device buffers. See [input shapes](input-shapes.md).
 
-## Executable seQ approximation
+## Executable serQ approximation
 
-```seq title="examples/vendors/ascend.seq"
---8<-- "examples/vendors/ascend.seq"
+```serq title="examples/vendors/ascend.sq"
+--8<-- "examples/vendors/ascend.sq"
 ```
 
 The queue key gives short requests precedence and preserves serial order inside each class. The class offset is safe for this six-request workload. Request slots, KV capacity, token budget and chunk size are explicit; prompt and output capacity is allocated upfront to avoid recovery in this example.

@@ -47,7 +47,7 @@ def metrics():
     lang = read("docs/language.md")
     programs = sorted(
         str(p.relative_to(ROOT))
-        for p in list((ROOT / "examples").glob("*/*.seq")) + list((ROOT / "lib").glob("*.seq"))
+        for p in list((ROOT / "examples").glob("*/*.sq")) + list((ROOT / "lib").glob("*.sq"))
     )
     code = {}
     lines_of = {}

@@ -1,16 +1,16 @@
-# `seq-lang draw`: a program as a figure
+# `serq draw`: a program as a figure
 
 **Status: experimental.** The command works and every program in `examples/`
 and every IR file in `tools/oracle/` renders under `make check`, but the
 notation, the flags and the output are not stable, and `--format svg`/`tikz`
 output may change between releases. §5 lists what is not done. Design
-discussion: [RFC #1](https://github.com/vrvrv/seQ/issues/1).
+discussion: [RFC #1](https://github.com/vrvrv/serQ/issues/1).
 
 ```
-seq-lang draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]...
+serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]...
 ```
 
-`FILE` is program text (`.seq`) or IR (`.json`), as for `run`, `check` and
+`FILE` is program text (`.sq`) or IR (`.json`), as for `run`, `check` and
 `ir`. Output goes to stdout unless `--out` names a file. `--set` applies to
 program text and is rejected on `.json`, where the constants are already
 folded.
@@ -22,7 +22,7 @@ and derives the PyTorch code, the backward pass and the diagram from it. The
 diagram cannot drift from the model, because it is not a second description of
 the model: it is the same term in a second notation.
 
-`docs/ir.md` makes the same argument for seQ, and names the failure it fixes:
+`docs/ir.md` makes the same argument for serQ, and names the failure it fixes:
 before the IR, the vLLM request program had three hand-kept copies. A figure
 drawn by hand would be a fourth.
 
@@ -40,13 +40,13 @@ of the session program. `deployment::project` walks it carrying a hold stack:
 | | |
 |---|---|
 | **Nodes** | one per stage a `Run` reaches; a `CRef` with `count > 1` is one node labelled `[N]` |
-| **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (walked twice, so the body's last stations lead back to every station a pass through it can start at, each with the guard of its arm) |
-| **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box — an instance's boundary. A leased pool stays on the stations after its hold and a `Release` takes it off, so a KV transfer draws two boxes that cross at the link station (`examples/pd-disaggregation/llmd_nixl_pull.seq`). A hold whose units are the constant 0 only reserves (`reqsD[j] (0) reserve (1)`, a request parked without a running slot), occupies nothing, and draws no box |
+| **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (walked twice, so the body's last stations lead back to every station a pass through it can start at, each with the guard of its arm). An arrow forward past other stations, and an entry past the first, run in a lane below the row rather than through them |
+| **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box — an instance's boundary. A leased pool stays on the stations after its hold and a `Release` takes it off, so a KV transfer draws two boxes that cross at the read's stations (`examples/pd-disaggregation/llmd_nixl_pull.sq`). A hold whose units are the constant 0 only reserves (`reqsD[j] (0) reserve (1)`, a request parked without a running slot), occupies nothing, and draws no box |
 | **Edge labels** | a `Branch` guard, via `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
 
 Two runs at the same stage in a row are two visits, not a flow, and are not
-drawn. A chain of guards that moves nobody (`routing.seq` has five sibling
+drawn. A chain of guards that moves nobody (`routing.sq` has five sibling
 `branch (policy == k)` blocks) collapses to one edge rather than multiplying
 out. A `choose` annotates the station whose reference reads the attribute it
 names — `rep[j]`, not whatever station happens to come next.
@@ -70,7 +70,7 @@ order over an empty cache says nothing.
 
 Which pool a `cache` clause leaves units in follows `interp.rs::release_hold`: a
 hold with a `growing` run caches in that pool alone, and one without caches in
-all of its pools. `replica.seq` is the case that makes the difference visible
+all of its pools. `replica.sq` is the case that makes the difference visible
 — its `hold batch (1), kv (…)` really does keep a unit of `batch` cached.
 
 ## 3. Formats
@@ -104,7 +104,10 @@ src/view/svg.rs        Figure -> String
 
 `Figure` is the test surface; no writer decides a coordinate. `tests/draw.rs`
 asserts on rectangles and on the projected `Net`, with golden files
-(`tests/golden/`, `make draw-golden`) guarding the writers. `make check` draws
+(`tests/golden/`, `make draw-golden`) guarding the writers; the figures the
+site shows (`docs/assets/NAME.deployment.svg`) must be what their program
+(the one `NAME.sq` under `examples/*/` or `docs/tutorial/programs/`) draws now, and
+`make draw-golden` rewrites them too. `make check` draws
 every program in both formats, and every IR file in
 `tools/oracle/`.
 

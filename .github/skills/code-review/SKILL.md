@@ -1,9 +1,9 @@
 ---
 name: code-review
-description: Review seQ pull requests for actionable correctness bugs, semantic regressions, and compatibility breaks. Use when performing Copilot code review of a pull request or requested diff.
+description: Review serQ pull requests for actionable correctness bugs, semantic regressions, and compatibility breaks. Use when performing Copilot code review of a pull request or requested diff.
 ---
 
-# seQ code review
+# serQ code review
 
 Review the requested change and report defects the author can act on. Read
 `CLAUDE.md`, `.github/copilot-instructions.md`, and applicable repository
@@ -36,13 +36,13 @@ consult `docs/review.md` and relevant `docs/design/` records when intent matters
   between tagged and untagged versions. Check meaning as well as shape;
   do not request a bump for every type edit. Check serialization, validation,
   interpreter consumers, and committed oracle IR together. The external
-  `serving-queue-theory/scripts/gen_seq_oracle.py` consumer pins the version and
+  `serving-queue-theory/scripts/gen_serq_oracle.py` consumer pins the version and
   reads fields by name; new `CExpr` or `CStmt` variants require generator support.
   If that repository is unavailable, identify the unverified dependency rather
   than claiming it is compatible or broken without evidence.
 - **Semantics must survive the whole pipeline.** Follow relevant changes from
   lexer/parser through linking, IR validation, and interpretation. Check both
-  `.seq` input and direct JSON IR loading where applicable. Keep reports and
+  `.sq` input and direct JSON IR loading where applicable. Keep reports and
   diagrams consistent with the meaning of the program.
 - **Scheduling and memory accounting are observable.** For affected paths,
   examine admission guards, token budgets, allocation/growth/release, cache
@@ -72,7 +72,7 @@ suites include `tests/ir.rs`, `tests/pool_semantics.rs`,
 `make check` is the repository gate: formatting, clippy, tests, program linking
 and drawing, oracle agreement, and citation checks. Run it when the review
 environment permits and broader verification is warranted. Never claim a
-check passed unless its result is available. Do not use `SEQ_BLESS=1`,
+check passed unless its result is available. Do not use `SERQ_BLESS=1`,
 `make oracle-ir`, `make draw-golden`, or `make citations` to make a review pass;
 these update the evidence being checked.
 

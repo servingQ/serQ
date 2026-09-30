@@ -2,11 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use seq::{Overrides, compile_source, compile_source_at};
+use serq::{Overrides, compile_source, compile_source_at};
 
 /// A fresh directory with these files in it.
 fn dir(name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("seq-library-{name}-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("serq-library-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     for (f, text) in files {
         let p = d.join(f);
@@ -16,7 +16,7 @@ fn dir(name: &str, files: &[(&str, &str)]) -> PathBuf {
     d
 }
 
-fn compile(d: &Path, main: &str) -> Result<seq::Program, String> {
+fn compile(d: &Path, main: &str) -> Result<serq::Program, String> {
     let src = std::fs::read_to_string(d.join(main)).unwrap();
     compile_source_at(&src, Some(d), &Overrides::default())
 }
@@ -34,18 +34,18 @@ fn a_program_uses_the_definitions_of_a_library() {
         "uses",
         &[
             (
-                "lib/a.seq",
-                "use \"b.seq\";\ndef take(n) { hold kv (n) { prefill on engine (n) growing kv; } }\n",
+                "lib/a.sq",
+                "use \"b.sq\";\ndef take(n) { hold kv (n) { prefill on engine (n) growing kv; } }\n",
             ),
-            ("lib/b.seq", "def twice(x) = 2 * x;\n"),
+            ("lib/b.sq", "def twice(x) = 2 * x;\n"),
             (
-                "main.seq",
-                &format!("use \"lib/a.seq\";\nuse \"lib/b.seq\";\n{PROGRAM}"),
+                "main.sq",
+                &format!("use \"lib/a.sq\";\nuse \"lib/b.sq\";\n{PROGRAM}"),
             ),
         ],
     );
     // a library `use`s the files next to it, and one read twice is read once
-    let used = compile(&d, "main.seq").unwrap();
+    let used = compile(&d, "main.sq").unwrap();
     let written = compile_source(
         &PROGRAM.replace(
             "server { take(twice(k)); }",
@@ -62,15 +62,15 @@ fn an_error_in_a_library_is_shown_in_the_library() {
     let d = dir(
         "error",
         &[
-            ("lib.seq", "def take(n) {\n  turn;\n}\n"),
+            ("lib.sq", "def take(n) {\n  turn;\n}\n"),
             (
-                "main.seq",
-                &format!("use \"lib.seq\";\n{PROGRAM}").replace("take(twice(k))", "take(1)"),
+                "main.sq",
+                &format!("use \"lib.sq\";\n{PROGRAM}").replace("take(twice(k))", "take(1)"),
             ),
         ],
     );
-    let e = compile(&d, "main.seq").unwrap_err();
-    assert!(e.contains("lib.seq:2:3:"), "{e}");
+    let e = compile(&d, "main.sq").unwrap_err();
+    assert!(e.contains("lib.sq:2:3:"), "{e}");
     assert!(e.contains("  turn;"), "the library's line: {e}");
     assert!(e.contains("note: in `take`, used at 5:10"), "{e}");
 }
@@ -80,13 +80,13 @@ fn a_library_holds_definitions() {
     let d = dir(
         "only-defs",
         &[
-            ("lib.seq", "def f(x) = x;\nlet k = 3;\n"),
-            ("main.seq", "use \"lib.seq\";\nsession { end; }\n"),
+            ("lib.sq", "def f(x) = x;\nlet k = 3;\n"),
+            ("main.sq", "use \"lib.sq\";\nsession { end; }\n"),
         ],
     );
-    let e = compile(&d, "main.seq").unwrap_err();
+    let e = compile(&d, "main.sq").unwrap_err();
     assert!(e.contains("a library holds definitions"), "{e}");
-    assert!(e.contains("lib.seq:2:1:"), "{e}");
+    assert!(e.contains("lib.sq:2:1:"), "{e}");
 }
 
 #[test]
@@ -99,14 +99,14 @@ fn a_library_definition_is_whole() {
         let d = dir(
             "whole",
             &[
-                ("lib.seq", lib),
+                ("lib.sq", lib),
                 (
-                    "main.seq",
-                    &format!("use \"lib.seq\";\n{main}session {{ end; }}\n"),
+                    "main.sq",
+                    &format!("use \"lib.sq\";\n{main}session {{ end; }}\n"),
                 ),
             ],
         );
-        let e = compile(&d, "main.seq").unwrap_err();
+        let e = compile(&d, "main.sq").unwrap_err();
         assert!(
             e.contains("does not end in the file it starts in"),
             "{lib}: {e}"
@@ -119,15 +119,15 @@ fn a_link_note_names_the_library() {
     let d = dir(
         "note",
         &[
-            ("lib.seq", "def take(n) {\n  set admitted = n;\n}\n"),
+            ("lib.sq", "def take(n) {\n  set admitted = n;\n}\n"),
             (
-                "main.seq",
-                "use \"lib.seq\";\nsession { take(1); observe x = admittedd; end; }\n",
+                "main.sq",
+                "use \"lib.sq\";\nsession { take(1); observe x = admittedd; end; }\n",
             ),
         ],
     );
-    let e = compile(&d, "main.seq").unwrap_err();
-    assert!(e.contains("lib.seq:2:7"), "{e}");
+    let e = compile(&d, "main.sq").unwrap_err();
+    assert!(e.contains("lib.sq:2:7"), "{e}");
 }
 
 #[test]
@@ -135,21 +135,21 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
     let d = dir(
         "root",
         &[
-            ("lib/a.seq", "use \"../main.seq\";\ndef twice(x) = 2 * x;\n"),
+            ("lib/a.sq", "use \"../main.sq\";\ndef twice(x) = 2 * x;\n"),
             (
-                "main.seq",
-                "use \"lib/a.seq\";\nstage svc : fifo;\nsession { run svc (twice(1)); end; }\nrun { horizon 10; }\n",
+                "main.sq",
+                "use \"lib/a.sq\";\nstage svc : fifo;\nsession { run svc (twice(1)); end; }\nrun { horizon 10; }\n",
             ),
             // two libraries that use each other: the order of their definitions
             // is what is wrong, and the error says so
-            ("lib/a2.seq", "use \"b2.seq\";\ndef take(n) = n;\n"),
-            ("lib/b2.seq", "use \"a2.seq\";\ndef give(n) = take(n);\n"),
+            ("lib/a2.sq", "use \"b2.sq\";\ndef take(n) = n;\n"),
+            ("lib/b2.sq", "use \"a2.sq\";\ndef give(n) = take(n);\n"),
         ],
     );
-    let main = d.join("main.seq");
-    seq::load(&main, &Overrides::default()).unwrap();
-    let lib = d.join("lib/a2.seq");
-    let e = seq::compile_file(
+    let main = d.join("main.sq");
+    serq::load(&main, &Overrides::default()).unwrap();
+    let lib = d.join("lib/a2.sq");
+    let e = serq::compile_file(
         &std::fs::read_to_string(&lib).unwrap(),
         &lib,
         &Overrides::default(),
@@ -159,7 +159,7 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
         e.contains("`give` uses `take`, which is defined after it"),
         "{e}"
     );
-    let f = seq::frontend::fmt::format_file(&std::fs::read_to_string(&main).unwrap(), &main);
+    let f = serq::frontend::fmt::format_file(&std::fs::read_to_string(&main).unwrap(), &main);
     assert!(f.is_ok(), "{f:?}");
 }
 
@@ -237,27 +237,24 @@ fn blocksize_is_not_a_constant() {
 
 #[test]
 fn a_use_needs_a_file() {
-    let e = compile_source(
-        "use \"lib.seq\";\nsession { end; }\n",
-        &Overrides::default(),
-    )
-    .unwrap_err();
+    let e =
+        compile_source("use \"lib.sq\";\nsession { end; }\n", &Overrides::default()).unwrap_err();
     assert!(e.contains("given as text"), "{e}");
     let d = dir(
         "missing",
-        &[("main.seq", "use \"nowhere.seq\";\nsession { end; }\n")],
+        &[("main.sq", "use \"nowhere.sq\";\nsession { end; }\n")],
     );
-    let e = compile(&d, "main.seq").unwrap_err();
-    assert!(e.contains("cannot read `nowhere.seq`"), "{e}");
+    let e = compile(&d, "main.sq").unwrap_err();
+    assert!(e.contains("cannot read `nowhere.sq`"), "{e}");
 }
 
 #[test]
 fn the_library_is_one_definition_of_the_vllm_engine() {
-    // the four workload programs read their engine from `lib/vllm.seq`, and
+    // the four workload programs read their engine from `lib/vllm.sq`, and
     // none of them writes it out
     for name in ["vllm", "vllm_chat", "vllm_single_turn", "vllm_subagents"] {
-        let src = std::fs::read_to_string(seq::program_path(name)).unwrap();
-        assert!(src.contains("use \"../../lib/vllm.seq\";"), "{name}");
+        let src = std::fs::read_to_string(serq::program_path(name)).unwrap();
+        assert!(src.contains("use \"../../lib/vllm.sq\";"), "{name}");
         assert!(
             src.contains("vllm_request(reqs, kv, engine, prompt, o, t0);"),
             "{name}"

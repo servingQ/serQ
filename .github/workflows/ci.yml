@@ -9,7 +9,7 @@ on:
 
 jobs:
   rust:
-    name: seQ interpreter (seq-lang)
+    name: serQ interpreter (serq)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -21,3 +21,23 @@ jobs:
       - name: fmt, clippy, tests, programs link, oracles agree, citations resolve
         run: scripts/check_rust.sh
 
+
+  python:
+    name: pyserq (the Python binding agrees with the CLI)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the CLI and the wheel, install the wheel
+        run: |
+          cargo build --release --locked
+          python -m pip install --quiet "maturin>=1.7,<2"
+          maturin build --release --locked -m pyserq/Cargo.toml -o dist
+          python -m pip install --quiet dist/pyserq-*.whl
+      - name: pyserq gives what the CLI gives
+        run: python pyserq/tests/test_pyserq.py

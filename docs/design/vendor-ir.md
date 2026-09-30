@@ -9,7 +9,7 @@ Requirements from the [latest-tag full-attention investigation](../use-cases/ind
 
 ## What the current IR already supplies
 
-Do not propose mechanisms that already exist. IR v8 has per-iteration resident ordering (`CServe::By`), exclusive resident prefill, admission-time bindings, recovery progress (`computed`), source leases, explicit release/load and runs that hold several stages simultaneously. [One admission](one-admission.md), [the KV transfer](pd-transfer.md) and [bandwidth sharing](bandwidth-sharing.md) record the relevant decisions. `lib/vllm.seq` uses known progress to re-prefill after local preemption without requesting all outputs again.
+Do not propose mechanisms that already exist. IR v8 has per-iteration resident ordering (`CServe::By`), whole-batch exclusive prefill, admission-time bindings, recovery progress (`computed`), source leases, explicit release/load and runs that hold several stages simultaneously. [One admission](one-admission.md), [the KV transfer](pd-transfer.md) and [bandwidth sharing](bandwidth-sharing.md) record the relevant decisions. `lib/vllm.sq` uses known progress to re-prefill after local preemption without requesting all outputs again.
 
 The remaining goal is to reproduce selected requests and full-attention KV state transitions on the same clock. Kernel numerical computation and tensor layout are outside that goal unless layout affects admission, lifetime or observable cost.
 
@@ -31,12 +31,15 @@ pub struct CStep {
 }
 ```
 
-This orders residents, then admits waiting requests. A different resident key
-does not turn that into RBLN's waiting-first replacement. [PR #171](https://github.com/vrvrv/serQ/pull/171)
-strengthens the existing `ExclusivePrefill` meaning to provide lone local
-prefill selection and takeover without adding an IR node. Its regression
-checks do not establish the native PP/remote-KV rules or a general batch
-selection/shape contract.
+`CServe::By` orders residents, then admits waiting requests. The existing
+`ExclusivePrefill` policy already selects a lone local prefill, including a
+waiting prefill that replaces tentative decodes. [PR #171](https://github.com/vrvrv/serQ/pull/171)
+implemented this without adding an IR node. Its hand-derived regressions cover
+local takeover, budget exhaustion and preemption/re-admission; they do not
+establish native PP/remote-KV rules or a general batch-selection contract.
+See [separate prefill/decode batches](exclusive-prefill.md) for the implemented
+contract. Further batch-selection changes need a counterexample beyond that
+existing mechanism.
 
 **After — semantic sketch, not executable syntax:**
 
@@ -118,7 +121,7 @@ A serving engineer should write request lifetime, scheduling constraints and cac
 
 | Priority | Counterexample to reproduce | Required evidence |
 |---|---|---|
-| Batch selection | Waiting prefill supersedes resident decodes | Native RBLN per-step selected batch and allocation trace |
+| Batch selection | PP hard/soft caps and remote-KV decode-ready admission beyond local phase isolation | Native RBLN per-step selected batch and allocation trace |
 | Cache identity/units | Two requests share a prefix; sub-block copy pins its source | Cache object capacity/reference invariants and CPU cache oracle |
 | Connector completion | Cancel transfer; offload fails; source release follows destination readiness | Fake connector outcomes with readiness/release traces |
 | Shared policy state | Ascend aging/prediction | Scheduler traces and closed state-update semantics |

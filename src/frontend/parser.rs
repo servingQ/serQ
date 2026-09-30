@@ -1,4 +1,4 @@
-//! Recursive-descent parser for seQ programs.
+//! Recursive-descent parser for serQ programs.
 //!
 //! ```text
 //! program  := item*

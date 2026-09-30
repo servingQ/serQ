@@ -40,7 +40,7 @@ jobs:
           cache: pip
           cache-dependency-path: docs/requirements.txt
       - run: pip install -r docs/requirements.txt
-      # The pages include programs/*.seq and docs/tutorial/programs/*.seq with
+      # The pages include programs/*.sq and docs/tutorial/programs/*.sq with
       # pymdownx.snippets, so --strict fails if one is renamed or removed.
       - run: mkdocs build --strict
       # A reviewer of a docs pull request can download this and open it.

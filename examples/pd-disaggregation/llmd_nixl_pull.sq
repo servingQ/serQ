@@ -19,7 +19,7 @@
 // stay cached), and the decoder's request queues once more for a running slot
 // and a token of budget, recomputes the last prompt token for its logits,
 // and decodes. docs/case-study-pd.md has the line-by-line correspondence.
-use "../../lib/vllm.seq";
+use "../../lib/vllm.sq";
 
 let NP = 2;            // prefill instances
 let ND = 2;            // decode instances
@@ -29,12 +29,13 @@ let max_seqsD = 64;    // max_num_seqs on a decoder
 let blocksP = 10000;   // num_gpu_blocks on a prefiller
 let blocksD = 10000;   // num_gpu_blocks on a decoder
 let bs = 16;           // block_size
-let max_model_len = 16384;  // every KV pool holds one request of it: vLLM refuses to start otherwise (kv_cache_utils.py:965)
+let max_model_len = 16384;  // every KV pool holds one request of it: vLLM refuses to start otherwise (kv_cache_utils.py:864-900, called at kv_cache_utils.py:2742)
 let a = 2e-5;          // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
 let c0 = 0;            // fixed cost per iteration (s)
-let Bw = 2e5;          // NIXL read bandwidth into a decoder, tokens/s (128 KB per token at 25 GB/s)
+let BwP = 2e5;         // NIXL bandwidth out of a prefiller, tokens/s (128 KB per token at 25 GB/s)
+let BwD = 2e5;         // and into a decoder (one NIC each: the tensor-parallel fan-out of the read is not modelled)
 let x0 = 0.002;        // per-read latency: posting the READ and the step that polls its completion (s; nixl/pull_worker.py:545-558)
 let thr = 512;         // prefix-based-pd-decider nonCachedTokens (1: the guide's always-disagg-pd-decider)
 let minp = 0;          // prefix-based-pd-decider promptTokens
@@ -61,9 +62,14 @@ stage D[2] : step {
   cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
   memory kvD;
 }
-stage link[2] : ps(1);     // a decoder's NIC: its reads share the bandwidth
+stage egress[2] : ps(BwP);   // a prefiller's NIC: the reads out of it share it
+stage ingress[2] : ps(BwD);  // a decoder's NIC: the reads into it share it
 stage setup : delay;       // a read's fixed latency: a wait, not bandwidth
 stage tool : delay;
+// How concurrent reads divide the two NICs is UCX's and the fabric's, not
+// vLLM's; max-min fairness is the model, not a measurement
+// (docs/design/bandwidth-sharing.md).
+share maxmin;
 
 // The client: sessions arrive, each turn brings a prompt of n new tokens on
 // a context of K and wants o tokens back, and after a turn the session calls
@@ -113,7 +119,7 @@ server {
     choose i in NP by (cachedin(kvP[i]) > 0 ? 0 : 1, work(P[i]) + queued(reqsP[i]));
     // The prefiller's scheduler: a slot and the blocks of the first chunk,
     // room for the whole prompt (scheduler_reserve_full_isl); vLLM's engine
-    // on one device (examples/multi-turn/vllm.seq) with no decode. When the one token
+    // on one device (examples/multi-turn/vllm.sq) with no decode. When the one token
     // is sampled the request is finished on the prefiller: the slot goes
     // and the blocks stay leased for the decoder's read (request_finished:
     // delay_free_blocks), 30 s renewed by the decoder's heartbeats while it
@@ -138,7 +144,7 @@ server {
         // ends. The last prompt token is recomputed for its logits.
         observe remote_tokens = prompt - c;
         run setup (x0);
-        transfer[j] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
+        transfer on egress[i], ingress[j] (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c);
         observe lease = now - t1;      // how long the prefiller's blocks stayed leased
         set transferred = 1;
         set c = prompt - 1;
@@ -154,7 +160,7 @@ server {
     } cache (prompt + o);
   } else {
     // Decode only: the decode pod prefills the prompt itself - vLLM's engine
-    // on one device (examples/multi-turn/vllm.seq).
+    // on one device (examples/multi-turn/vllm.sq).
     hold kvD[j] (min(known, hit + budget_left(D[j]))) reserve (known), reqsD[j] (1)
          at admission (known = computed < prompt ? prompt : computed + 1,
                        hit = min(cachedin(kvD[j]), reusable(known, bs))) {

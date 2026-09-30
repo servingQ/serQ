@@ -38,10 +38,10 @@ The P/D fluid example below does not represent these DP bucketed inputs.
 [input shapes](input-shapes.md) separates static KV sizing from per-step
 padding and states what the IR cannot currently describe.
 
-## Executable seQ approximation
+## Executable serQ approximation
 
-```seq title="examples/vendors/tpu.seq"
---8<-- "examples/vendors/tpu.seq"
+```serq title="examples/vendors/tpu.sq"
+--8<-- "examples/vendors/tpu.sq"
 ```
 
 IR v8 can express overlapping memory lifetimes directly: P is acquired for prefill and leased when that scope ends; D is acquired afterwards; transfer completion loads D and releases P; D remains held through decode. This avoids reserving D before prefill merely to nest the scopes.

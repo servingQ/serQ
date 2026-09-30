@@ -1,10 +1,10 @@
-# The seQ IR
+# The serQ IR
 
-The IR is the definition of a seQ program. Everything else is built around
+The IR is the definition of a serQ program. Everything else is built around
 it:
 
 ```
-  program text (.seq)  ──parse + link──▶  IR (ir::Program, JSON)  ──▶  interpreter (interp)
+  program text (.sq)  ──parse + link──▶  IR (ir::Program, JSON)  ──▶  interpreter (interp)
   tools (Rust / JSON) ──────build/edit──▶                          ──▶  Lean model (generated)
                                                                    ──▶  checks, diffs, archives
 ```
@@ -29,18 +29,18 @@ once, `also`, under the program's `share`).
   oracle tests run the IR. Before the IR existed, the vLLM request program
   had three hand-kept copies: the Rust test built it as a string per
   scenario, the Lean generator held a hand-written Lean version, and
-  `examples/multi-turn/vllm.seq` was a third variant. Now there is one file,
-  `examples/oracle/vllm_request.seq`, compiled once per scenario into
+  `examples/multi-turn/vllm.sq` was a third variant. Now there is one file,
+  `examples/oracle/vllm_request.sq`, compiled once per scenario into
   `tools/oracle/<name>.ir.json`, and both the Rust test and the Lean
   theorems read those files. The multi-turn cache scenario is the IR of
-  `examples/replay/vllm_replay.seq` with its trace inlined
+  `examples/replay/vllm_replay.sq` with its trace inlined
   (`tools/oracle/cache_trace.ir.json`), so its Lean program is generated
   too.
 - **The workload instance is data.** Which sessions arrive with which
   attributes, and which turns each one replays, is part of the IR
   (`CArrival::Sessions`), not of the program text or a separate trace
   file. A scenario's requests are no longer encoded as nested conditionals
-  on `serial`, and `seq-lang ir --inline-trace` turns a trace file into
+  on `serial`, and `serq ir --inline-trace` turns a trace file into
   the sessions' turns.
 - **Closed and checkable.** The IR has no closures and no host-language
   code: every expression is a tree over a fixed set of operators, context
@@ -53,8 +53,8 @@ JSON (`serde`): structs are objects with the field names below, enums are
 externally tagged (`{"Num": 3.0}`, `{"Binary": ["Add", a, b]}`, unit
 variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 (`inf` in a program, a pool without `cap`) is the string `"inf"` or
-`"-inf"`, and a reader of `Num` or `cap` takes a number or that string. `seq-lang ir FILE` prints it;
-`seq-lang run/check FILE.json` reads it.
+`"-inf"`, and a reader of `Num` or `cap` takes a number or that string. `serq ir FILE` prints it;
+`serq run/check FILE.json` reads it.
 
 ### `Program`
 
@@ -80,7 +80,7 @@ its preset `attrs` overwrite what `init` set. A session may carry `turns`
 order instead of the trace corpus, with the corpus's rule (`turn_no` counts
 turns, the turn's values are set, `more` is 1 while another turn remains
 and 0 after the last). `Program::with_sessions` builds sessions from
-attribute names; `Program::inline_trace` (CLI `seq-lang ir
+attribute names; `Program::inline_trace` (CLI `serq ir
 --inline-trace`) replaces an ordered trace by its sessions' turns, which
 runs identically (`tests/ir.rs`).
 
@@ -156,13 +156,13 @@ and now fails was reading a value the semantics never supplied.
 The IR carries no field for what breaks a tie: every ordered collection
 has one rule, stated in `docs/language.md` §3 (Ties), so a `tie` field
 (the IR v4 RFC's `COrder`) would carry no information. A Lean model of a
-collection uses the same event number (`SeqExec.lean`'s `lru`: release
+collection uses the same event number (`SerqExec.lean`'s `lru`: release
 order).
 
 ## Stability
 
 `IR_VERSION` identifies what a reader must understand, not the shape of the
-file. `serving-queue-theory`'s `scripts/gen_seq_oracle.py` pins it and reads
+file. `serving-queue-theory`'s `scripts/gen_serq_oracle.py` pins it and reads
 the IR by field name, so a bump is a handshake between the two repositories,
 priced as such. What a change to `src/ir.rs` does to the version:
 
@@ -200,7 +200,8 @@ priced as such. What a change to `src/ir.rs` does to the version:
 
 A version is a release, and the lines above decide one thing: whether a
 change to a *tagged* version opens the next number. While the version at
-`IR_VERSION` has no tag (7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`, 5 in `v0.1.0-rc1`;
+`IR_VERSION` has no tag (8 in `v0.1.0-rc6`, 7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`,
+5 in `v0.1.0-rc1`;
 `v0.1.0-rc0` is 3), no line bumps; the
 change is listed in the coming tag's message, which is the release note,
 and the handshake happens once, at the tag. A reader on an untagged version
@@ -228,15 +229,24 @@ loaded one says so, where version 6 packed the two into one number
 One key is a list of one. `Choose` is outside the Lean fragment, so the
 matching generator only moves its pin to 7.
 
+Version 8 also strengthens `CServe::ExclusivePrefill` from resident-only
+isolation to a whole-batch constraint: a prefill runs alone, including a
+waiting prefill that displaces tentative resident decodes. Cancelled work
+does not advance computed KV. This landed while 8 was untagged, so the
+number stayed 8 under the policy above, and it is in `v0.1.0-rc6`'s release
+note; `v0.1.0-rc6` carries 8, so the next change to the IR opens 9. JSON shape and the ordinary serving
+order are unchanged. `ExclusivePrefill` is outside the Lean fragment;
+this change neither extends it nor changes the oracle IR files.
+
 ## The Lean fragment
 
-The Lean model (serving-queue-theory, `SeqExec.lean`) runs a fragment of
+The Lean model (serving-queue-theory, `SerqExec.lean`) runs a fragment of
 the IR on a step clock over natural numbers: pools with LRU eviction and
 LIFO preemption, one step engine (stage 0) with unit iteration cost, delay
 stages, explicit sessions with preset attributes and turns, and the
 statements `Turn`, `Hold`, `Run`, `Set`, `Observe`, `Branch`, `Loop`, `End`
 (not `Release`, `Load` or a hold with a `lease`: a program with a KV
-transfer is outside the fragment until `SeqExec.lean` gives a hold's pool
+transfer is outside the fragment until `SerqExec.lean` gives a hold's pool
 its own release)
 with expressions built from integer constants, attributes, `Now`,
 `CachedIn`, `BudgetLeft`, `min`, `max`, `+`, `-` (truncated at 0), `*`,

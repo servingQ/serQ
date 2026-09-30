@@ -1,5 +1,5 @@
-// Executable approximation: isolate resident prefills from decodes.
-// It does not implement native RBLN batch selection or sub-block copying.
+// Executable approximation: one prefill or a decode-only batch.
+// PP caps, remote-KV admission and sub-block copying are not modeled.
 pool kv { cap 8192; block 16; evict lru; }
 pool reqs { cap 4; admit via engine; }
 stage engine : step {

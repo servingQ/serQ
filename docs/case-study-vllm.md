@@ -10,18 +10,18 @@ The latest version tag checked on 2026-09-30 is [v0.31.0rc2](https://github.com/
 
 The scheduler guards whether victim blocks can actually be freed and manages deferred free. `AsyncScheduler` tracks output placeholders and in-flight results. Releasing or publishing KV before completion can create invalid reuse. [Victim/free guard](https://github.com/vllm-project/vllm/blob/v0.31.0rc2/vllm/v1/core/sched/scheduler.py#L773), [async scheduler](https://github.com/vllm-project/vllm/blob/v0.31.0rc2/vllm/v1/core/sched/async_scheduler.py#L14)
 
-## Executable seQ model
+## Executable serQ model
 
-![vLLM deployment in seQ](assets/vllm.deployment.svg)
+![vLLM deployment in serQ](assets/vllm.deployment.svg)
 
-```seq title="examples/multi-turn/vllm.seq"
---8<-- "examples/multi-turn/vllm.seq"
+```serq title="examples/multi-turn/vllm.sq"
+--8<-- "examples/multi-turn/vllm.sq"
 ```
 
 The program shares its request definition with the other existing workloads:
 
-```seq title="lib/vllm.seq"
---8<-- "lib/vllm.seq"
+```serq title="lib/vllm.sq"
+--8<-- "lib/vllm.sq"
 ```
 
 | Requirement | Current expression | Limit of the model |
@@ -35,7 +35,7 @@ The program shares its request definition with the other existing workloads:
 
 ## Validation and next scenarios
 
-[How seQ is checked](validation.md) records the existing scheduler scenarios and trace. Those checks apply to their stated reference and paths, not to every feature of v0.31.0rc2. Current local recovery already accounts for known generated progress; the older [IR v4 discussion](design/ir-v4.md) is a historical design record, not a list of current missing features.
+[How serQ is checked](validation.md) records the existing scheduler scenarios and trace. Those checks apply to their stated reference and paths, not to every feature of v0.31.0rc2. Current local recovery already accounts for known generated progress; the older [IR v4 discussion](design/ir-v4.md) is a historical design record, not a list of current missing features.
 
 For the latest tag, compare priority victims, output-preserving decode preemption, cross-request prefix sharing and deferred free of in-flight blocks. Observe per-step selection, physical allocation/reuse, committed tokens and release times.
 

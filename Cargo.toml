@@ -1,21 +1,30 @@
+[workspace]
+members = [".", "pyserq"]
+# `cargo build`, `test` and `clippy` at the root mean the language; the
+# Python binding builds with `-p pyserq` or maturin (pyserq/)
+default-members = ["."]
+
+[workspace.package]
+version = "0.1.0-rc6"
+
 [package]
-name = "seq-lang"
-version = "0.1.0-rc5"
+name = "serq"
+version.workspace = true
 edition = "2024"
 rust-version = "1.85"
-description = "seQ: seQ, a language for formal verification and simulation of LLM serving systems (interpreter and CLI)"
-repository = "https://github.com/vrvrv/seQ"
+description = "serQ: serQ, a language for formal verification and simulation of LLM serving systems (interpreter and CLI)"
+repository = "https://github.com/vrvrv/serQ"
 readme = "README.md"
 keywords = ["llm", "serving", "queueing", "simulation", "vllm"]
 categories = ["simulation", "science"]
 include = ["src/**", "tests/**", "examples/**", "lib/**", "tools/oracle/**", "Cargo.toml", "Cargo.lock", "README.md", "rust-toolchain.toml"]
 
 [lib]
-name = "seq"
+name = "serq"
 path = "src/lib.rs"
 
 [[bin]]
-name = "seq-lang"
+name = "serq"
 path = "src/main.rs"
 
 [dependencies]

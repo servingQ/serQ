@@ -13,7 +13,7 @@ not necessarily a valid compiled input. Only the native RBLN path is included.
 
 ## Four distinct contracts
 
-| Contract | Examples | Consequence for seQ |
+| Contract | Examples | Consequence for serQ |
 |---|---|---|
 | Logical selection | RBLN lone prefill versus decodes; PP decode cap | Determine which real requests/tokens execute |
 | Input shape | RBLN compiled request buckets; Ascend SP/graph shapes; TPU request/token buckets | Derive padded dimensions separately from selected tokens |
@@ -46,12 +46,12 @@ with minimal helper inputs; no vendor SDK, runner or hardware execution was
 performed. Graph replay, attention masks and per-request metadata have not
 been validated end to end.
 
-## What current seQ can express
+## What current serQ can express
 
 For a **single rank**, a finite bucket map can be a source definition used
 only in cost. This requires no new IR node:
 
-```seq
+```serq
 // Selected configuration: three slots, decode buckets [1, 2, 4].
 def decode_rows(n) = n <= 1 ? 1 : n <= 2 ? 2 : 4;
 // Integer token alignment for a TP4 cost approximation.
@@ -98,4 +98,5 @@ This is a deferred candidate sketch, not a required extension, new syntax or imp
 
 The [IR investigation](../design/vendor-ir.md) preserves these questions for
 future consideration. Whether padding needs an IR representation remains
-undecided; logical phase isolation proceeds separately.
+undecided. Local logical phase isolation is already implemented; see the
+[RBLN model](rbln.md).
