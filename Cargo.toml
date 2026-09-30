@@ -5,7 +5,7 @@ members = [".", "pyserq"]
 default-members = ["."]
 
 [workspace.package]
-version = "0.1.0-rc5"
+version = "0.1.0-rc6"
 
 [package]
 name = "serq"

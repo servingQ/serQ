@@ -200,7 +200,8 @@ priced as such. What a change to `src/ir.rs` does to the version:
 
 A version is a release, and the lines above decide one thing: whether a
 change to a *tagged* version opens the next number. While the version at
-`IR_VERSION` has no tag (7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`, 5 in `v0.1.0-rc1`;
+`IR_VERSION` has no tag (8 in `v0.1.0-rc6`, 7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`,
+5 in `v0.1.0-rc1`;
 `v0.1.0-rc0` is 3), no line bumps; the
 change is listed in the coming tag's message, which is the release note,
 and the handshake happens once, at the tag. A reader on an untagged version
@@ -231,9 +232,9 @@ matching generator only moves its pin to 7.
 Version 8 also strengthens `CServe::ExclusivePrefill` from resident-only
 isolation to a whole-batch constraint: a prefill runs alone, including a
 waiting prefill that displaces tentative resident decodes. Cancelled work
-does not advance computed KV. Version 8 is still untagged (the latest tag,
-`v0.1.0-rc5`, carries 7), so the number remains 8 under the policy above;
-the change belongs in its release note. JSON shape and the ordinary serving
+does not advance computed KV. This landed while 8 was untagged, so the
+number stayed 8 under the policy above, and it is in `v0.1.0-rc6`'s release
+note; `v0.1.0-rc6` carries 8, so the next change to the IR opens 9. JSON shape and the ordinary serving
 order are unchanged. `ExclusivePrefill` is outside the Lean fragment;
 this change neither extends it nor changes the oracle IR files.
 
