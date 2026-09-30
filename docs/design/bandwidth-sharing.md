@@ -37,7 +37,7 @@ which links carry it does not.
 
 ## Before
 
-`examples/pd-disaggregation/llmd_nixl_pull.seq` puts a read on the
+`examples/pd-disaggregation/llmd_nixl_pull.sq` puts a read on the
 decoder's link alone:
 
 ```
@@ -70,7 +70,7 @@ session {
 run { horizon 10; }
 ```
 ```
-$ seq-lang run egress.seq
+$ serq run egress.sq
 transferred      2  2.0000    ±inf  0.000  2.0000
 ```
 
@@ -173,10 +173,11 @@ time from start to end, and so does the stage's price estimator.
 other in the station row and bracketed as one job (`BoxStyle::Flow`, drawn
 as a rail so the other figures' bytes do not move): the session comes in at
 the first station and leaves from the last, and no arrow runs between
-them. Stacking them in one column would say "at once" better, and needs
-edge routing the one-row layout does not have; so does a bracket around
-stations the row does not put side by side, which today also takes in the
-stations between them.
+them. The flow's stations are put side by side in the row, in the run's
+order, where the first of them would stand (`adjacent_flows`), so the
+bracket takes in no other station; an arrow the new order turns leftwards
+is drawn as a return. Stacking them in one column would say "at once"
+better, and needs edge routing the one-row layout does not have.
 
 ## Expected values
 
@@ -207,9 +208,9 @@ Derived by hand, and checked by `tests/shared_stages.rs`:
   runs a two-stage flow on one stage and is silently wrong, which is the
   case `docs/ir.md` §Stability says bumps. Every `tools/oracle/*.ir.json`
   is regenerated and differs in its `"version"` line only.
-- `serving-queue-theory`: `scripts/gen_seq_oracle.py` pins the version and
+- `serving-queue-theory`: `scripts/gen_serq_oracle.py` pins the version and
   reads `Run` by field name, so it would ignore `also` without complaint.
-  `SeqExec`'s fragment admits `step` and `delay` stages only (a `ps` stage
+  `SerqExec`'s fragment admits `step` and `delay` stages only (a `ps` stage
   is already refused), so no oracle program is affected. The companion
   change pins 8 and raises `Fragment` on a non-empty `also` as well, so
   that the refusal does not rest on the stage kind alone; it lands when

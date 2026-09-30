@@ -1,19 +1,19 @@
 //! The multi-turn prefix-cache scenario (`tools/oracle/cache_trace.*`).
 //!
 //! Its IR, `tools/oracle/cache_trace.ir.json`, is the vLLM replay program
-//! (`examples/replay/vllm_replay.seq`) on a unit step clock with the scenario's
+//! (`examples/replay/vllm_replay.sq`) on a unit step clock with the scenario's
 //! engine, and the trace `cache_trace.csv` inlined as explicit sessions
 //! with turns: the IR carries its whole workload. Run, it gives for every
 //! turn the first-token step, the last-token step and the cached tokens
 //! that the real scheduler gives (`cache_trace.out.csv`, from
 //! `tools/vllm_replay_oracle.py`). The Lean theorem `vllm_cache_trace`
 //! of serving-queue-theory is generated from the same IR file.
-//! `SEQ_BLESS=1` rewrites the IR file (`make oracle-ir`).
+//! `SERQ_BLESS=1` rewrites the IR file (`make oracle-ir`).
 
 use std::path::Path;
 
-use seq::frontend::parser;
-use seq::{Overrides, Program, inline_trace, program_path, run_ir};
+use serq::frontend::parser;
+use serq::{Overrides, Program, inline_trace, program_path, run_ir};
 
 fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
@@ -43,7 +43,7 @@ fn cache_ir() -> Program {
             .push((k.to_string(), parser::parse_expr(v).unwrap()));
     }
     let src = std::fs::read_to_string(program_path("vllm_replay")).unwrap();
-    let p = seq::compile_source(&src, &ov).unwrap();
+    let p = serq::compile_source(&src, &ov).unwrap();
     inline_trace(p, None).unwrap()
 }
 
@@ -51,7 +51,7 @@ fn cache_ir() -> Program {
 fn cache_ir_file_is_current() {
     let path = dir().join("cache_trace.ir.json");
     let want = cache_ir().to_json() + "\n";
-    if std::env::var_os("SEQ_BLESS").is_some() {
+    if std::env::var_os("SERQ_BLESS").is_some() {
         std::fs::write(&path, &want).unwrap();
     } else {
         let have = std::fs::read_to_string(&path).unwrap_or_default();

@@ -1,29 +1,29 @@
-//! `seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
-//! `seq-lang check FILE [--set k=expr]...`
-//! `seq-lang ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]`
-//! `seq-lang draw FILE [--format tikz|svg] [--out PATH]` (experimental)
-//! `seq-lang fmt [--check] FILE...`
+//! `serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
+//! `serq check FILE [--set k=expr]...`
+//! `serq ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]`
+//! `serq draw FILE [--format tikz|svg] [--out PATH]` (experimental)
+//! `serq fmt [--check] FILE...`
 //!
-//! FILE is program text (`.seq`) or IR (`.json`, as written by `seq-lang ir`).
+//! FILE is program text (`.sq`) or IR (`.json`, as written by `serq ir`).
 
 use std::path::Path;
 use std::process::exit;
 
-use seq::Overrides;
-use seq::frontend::parser;
+use serq::Overrides;
+use serq::frontend::parser;
 
 fn usage(cmd: &str) -> &'static str {
     match cmd {
         "run" => {
-            "seq-lang run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set name=expr]... [--trace F] [--json] [--dump DIR]"
+            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set name=expr]... [--trace F] [--json] [--dump DIR]"
         }
-        "check" => "seq-lang check FILE [--set name=expr]...",
+        "check" => "serq check FILE [--set name=expr]...",
         "ir" => {
-            "seq-lang ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]"
+            "serq ir FILE [--set name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]"
         }
-        "draw" => "seq-lang draw FILE [--set name=expr]... [--format tikz|svg] [--out PATH]",
-        "fmt" => "seq-lang fmt [--check] FILE...",
-        _ => "seq-lang <run|check|ir|draw|fmt> FILE [OPTIONS]",
+        "draw" => "serq draw FILE [--set name=expr]... [--format tikz|svg] [--out PATH]",
+        "fmt" => "serq fmt [--check] FILE...",
+        _ => "serq <run|check|ir|draw|fmt> FILE [OPTIONS]",
     }
 }
 
@@ -64,17 +64,17 @@ fn format_files(args: &[String]) {
         }
     }
     if files.is_empty() {
-        argument_error("fmt", "missing FILE\nhelp: supply one or more .seq files");
+        argument_error("fmt", "missing FILE\nhelp: supply one or more .sq files");
     }
     // Read and validate the whole batch before writing any file.
     let mut changes = Vec::new();
     for file in files {
-        if file.extension().is_none_or(|ext| ext != "seq") {
-            fail(file, "fmt expects a .seq file");
+        if file.extension().is_none_or(|ext| ext != "sq") {
+            fail(file, "fmt expects a .sq file");
         }
         let source = std::fs::read_to_string(file).unwrap_or_else(|e| fail(file, e));
         let formatted =
-            seq::frontend::fmt::format_file(&source, file).unwrap_or_else(|e| fail(file, e));
+            serq::frontend::fmt::format_file(&source, file).unwrap_or_else(|e| fail(file, e));
         if source != formatted {
             changes.push((file, formatted));
         }
@@ -109,7 +109,7 @@ fn main() {
     if args.get(1).is_none_or(|s| s.starts_with("--")) {
         argument_error(
             cmd,
-            "missing FILE\nhelp: supply a .seq program or .json IR file",
+            "missing FILE\nhelp: supply a .sq program or .json IR file",
         );
     }
     let file = Path::new(&args[1]);
@@ -215,9 +215,9 @@ fn main() {
     } else {
         file.parent()
     };
-    let mut prog = seq::load(file, &ov).unwrap_or_else(|e| fail(file, e));
+    let mut prog = serq::load(file, &ov).unwrap_or_else(|e| fail(file, e));
     if inline {
-        prog = seq::inline_trace(prog, base).unwrap_or_else(|e| fail(file, e));
+        prog = serq::inline_trace(prog, base).unwrap_or_else(|e| fail(file, e));
     }
     match cmd {
         "check" => println!(
@@ -229,10 +229,10 @@ fn main() {
         ),
         "ir" => println!("{}", prog.to_json()),
         "draw" => {
-            let figure = seq::view::deployment::figure(&prog);
+            let figure = serq::view::deployment::figure(&prog);
             let text = match format.as_str() {
-                "tikz" => seq::view::tikz::render(&figure),
-                "svg" => seq::view::svg::render(&figure),
+                "tikz" => serq::view::tikz::render(&figure),
+                "svg" => serq::view::svg::render(&figure),
                 f => fail(file, format!("unknown --format `{f}` (tikz, svg)")),
             };
             match &out {
@@ -246,7 +246,7 @@ fn main() {
             }
         }
         "run" => {
-            let r = seq::run_ir(&prog, base).unwrap_or_else(|e| fail(file, e));
+            let r = serq::run_ir(&prog, base).unwrap_or_else(|e| fail(file, e));
             if let Some(d) = &dump
                 && let Err(e) = r.dump(Path::new(d))
             {

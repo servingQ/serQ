@@ -1,6 +1,6 @@
 # Pool
 
-```seq
+```serq
 pool NAME [ '[' N ']' ] {
   cap expr;
   block expr;
@@ -33,7 +33,7 @@ when that is larger, above the cap — is rejected (vLLM's
 
 ## `cap`
 
-```seq
+```serq
 cap expr;
 ```
 
@@ -42,7 +42,7 @@ to make room.
 
 ## `block`
 
-```seq
+```serq
 block expr;
 ```
 
@@ -52,7 +52,7 @@ block.
 
 ## `evict`
 
-```seq
+```serq
 evict lru;
 evict by (k1, k2, …);
 ```
@@ -69,7 +69,7 @@ last release after it has ended. The smallest key goes first.
 
 ## `preempt`
 
-```seq
+```serq
 preempt none;
 preempt lifo;
 ```
@@ -83,7 +83,7 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 
 ## `queue`
 
-```seq
+```serq
 queue fifo;
 queue by (expr);
 ```
@@ -95,7 +95,7 @@ blocks the rest.
 
 ## `admit via`
 
-```seq
+```serq
 admit via STAGE;
 ```
 
@@ -116,7 +116,7 @@ The usual fit, budget-exhaustion and preemption gates still apply.
 
 ## `spill`
 
-```seq
+```serq
 spill TIER via LINK (work) when (pred);
 ```
 

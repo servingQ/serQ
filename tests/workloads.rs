@@ -1,13 +1,13 @@
 //! One engine, four workloads (`docs/case-study-workloads.md`).
 //!
 //! The case study's claim is that the single-turn, chat and subagent programs
-//! run `examples/multi-turn/vllm.seq`'s engine and differ from it only in the client.
+//! run `examples/multi-turn/vllm.sq`'s engine and differ from it only in the client.
 //! The engine is the text a reader would compare: the constants from `B` to
 //! `c0`, the declarations from `pool kv` to the end of `stage engine`, and the
 //! `server` block. Held to the text, not the IR, because the server is spliced
 //! into the session and the IR has no engine to compare.
 
-use seq::program_path;
+use serq::program_path;
 
 fn engine(name: &str) -> Vec<String> {
     let src = std::fs::read_to_string(program_path(name)).unwrap();
@@ -30,6 +30,6 @@ fn engine(name: &str) -> Vec<String> {
 fn every_workload_runs_the_vllm_engine() {
     let vllm = engine("vllm");
     for name in ["vllm_single_turn", "vllm_chat", "vllm_subagents"] {
-        assert_eq!(engine(name), vllm, "{name}'s engine is not vllm.seq's");
+        assert_eq!(engine(name), vllm, "{name}'s engine is not vllm.sq's");
     }
 }

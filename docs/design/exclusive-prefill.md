@@ -19,7 +19,7 @@ are the source basis. Only full attention is considered.
 This mechanism covers phase isolation and takeover for fresh local prefills.
 It is not the entire native scheduler: PP hard/soft caps, remote-KV promotion,
 the guard after admitting decode-ready waiting requests, asynchronous output
-and sub-block copies are not modeled here. In particular, ordinary seQ holds
+and sub-block copies are not modeled here. In particular, ordinary serQ holds
 can execute arbitrary commands before joining a stage: admitting a hold and
 selecting its engine work are distinct observations.
 
@@ -49,8 +49,8 @@ known whether the work would survive a waiting-prefill takeover.
 
 ## After: an executable counterexample
 
-```seq title="examples/single-turn/separate_phases.seq"
---8<-- "examples/single-turn/separate_phases.seq"
+```serq title="examples/single-turn/separate_phases.sq"
+--8<-- "examples/single-turn/separate_phases.sq"
 ```
 
 The same IR selection is now interpreted as a whole-batch policy. A resident

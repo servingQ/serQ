@@ -129,7 +129,7 @@ claims a100_short {
 
 An LTS with two kinds of transition: instantaneous (handling an effect) and
 timed (a stage advancing work). Time does not pass while an instantaneous
-transition is enabled (seQ's settle; maximal progress of timed automata).
+transition is enabled (serQ's settle; maximal progress of timed automata).
 Randomness is a per-stream effect, so a program is a deterministic function
 of its seeds.
 
@@ -187,7 +187,7 @@ surface syntax and the spec.
 
 Move the twelve programs to the new syntax and count three numbers: lines
 and comment lines per program, paragraphs that disappear from spec §2 and
-§3, and whether `vllm.seq` and `vllm_replay.seq` become two instances of one
+§3, and whether `vllm.sq` and `vllm_replay.sq` become two instances of one
 model. The last is even odds: replay's `front` stage is a structural
 difference, so it has to sit in the model with a zero cost in one instance,
 and if that is awkward the split is not finished.

@@ -1,9 +1,9 @@
-//! Deterministic scenarios on the vLLM v1 engine (`examples/multi-turn/vllm.seq`
+//! Deterministic scenarios on the vLLM v1 engine (`examples/multi-turn/vllm.sq`
 //! and inline variants), each mirroring a behaviour of
 //! `ref/vllm/vllm/v1/core/sched/scheduler.py` (line numbers at commit
 //! 0c87a197). Iteration cost is 1, so times are scheduler steps.
 
-use seq::{Overrides, run_source};
+use serq::{Overrides, run_source};
 
 /// `n` requests present at t = 0 (closed population, one turn each), with
 /// prompt `prompt` and `out` output tokens, on a device of `blocks` blocks
@@ -44,7 +44,7 @@ fn engine(
     )
 }
 
-fn run(src: &str) -> seq::Report {
+fn run(src: &str) -> serq::Report {
     run_source(src, &Overrides::default(), None).unwrap()
 }
 
@@ -232,7 +232,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
     assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
     // `decode first` and its expansion are the same program
     let ir = |s: &str| {
-        seq::compile_source(&prog(s), &Overrides::default())
+        serq::compile_source(&prog(s), &Overrides::default())
             .unwrap()
             .to_json()
     };
@@ -241,7 +241,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
         ir("serve by (decoding ? 0 : 1);")
     );
     // a serve key is read at its own moment only
-    let e = seq::compile_source(&prog("serve by (tokens);"), &Overrides::default()).unwrap_err();
+    let e = serq::compile_source(&prog("serve by (tokens);"), &Overrides::default()).unwrap_err();
     assert!(
         e.contains("`tokens` is read in a step stage's serve keys"),
         "{e}"
@@ -327,7 +327,7 @@ fn chunked_prefill_takes_ceil_prompt_over_budget_steps() {
 fn long_prefill_threshold_applies_only_with_company() {
     let alone = run(&engine(1, "3000", "1", 1000, 16, 4096, 16, "chunk 1000;"));
     assert_eq!(alone.observe("ttft").unwrap().samples[0], 3.0);
-    // seQ applies `chunk` unconditionally: the "alone" exception of vLLM
+    // serQ applies `chunk` unconditionally: the "alone" exception of vLLM
     // (num_eligible_reqs > 1) is not modelled; document it.
 }
 
@@ -415,7 +415,7 @@ fn lru_eviction_drops_tail_blocks_first() {
 /// stalls every decode for its chunks.
 #[test]
 fn exclusive_prefill_stalls_decodes() {
-    let done_of = |r: &seq::Report, who: f64| -> f64 {
+    let done_of = |r: &serq::Report, who: f64| -> f64 {
         let order = &r.observe("order").unwrap().samples;
         let done = &r.observe("done").unwrap().samples;
         done[order.iter().position(|&s| s == who).unwrap()]

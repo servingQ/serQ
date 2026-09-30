@@ -3,13 +3,13 @@
 //! a prefill/decode program state: the decoder's queue backs up into the
 //! prefiller's memory.
 
-use seq::{Overrides, check_source, run_source};
+use serq::{Overrides, check_source, run_source};
 
-fn run(src: &str) -> seq::Report {
+fn run(src: &str) -> serq::Report {
     run_source(src, &Overrides::default(), None).unwrap()
 }
 
-fn samples(r: &seq::Report, name: &str) -> Vec<f64> {
+fn samples(r: &serq::Report, name: &str) -> Vec<f64> {
     r.observe(name).unwrap().samples.clone()
 }
 
@@ -204,7 +204,7 @@ fn transfer_from_to_is_sugar_for_three_statements() {
              session { hold memP (10) { hold memD (10) { run link (1); load memD (9); release memP; } } end; }
              run { horizon 10; }";
     let ir = |s: &str| {
-        seq::compile_source(s, &Overrides::default())
+        serq::compile_source(s, &Overrides::default())
             .unwrap()
             .to_json()
     };
@@ -300,7 +300,7 @@ fn a_re_executed_hold_releases_nothing_twice() {
 
 /// A step stage that serves several queues tries them in the order their
 /// pools are declared, and the first head that does not fit stops the
-/// step's admissions. `examples/pd-disaggregation/llmd_nixl_pull.seq` relies on it: the decoder's
+/// step's admissions. `examples/pd-disaggregation/llmd_nixl_pull.sq` relies on it: the decoder's
 /// requests whose KV has arrived (its `reqsD` queue) are declared before
 /// the new ones (`kvD`), as vLLM serves `skipped_waiting` before `waiting`.
 #[test]
@@ -340,25 +340,25 @@ fn an_engine_serves_its_queues_in_declaration_order() {
 /// same step, and the step then looked up a job it had removed.
 #[test]
 fn the_pd_program_survives_decoder_memory_pressure() {
-    let src = std::fs::read_to_string(seq::program_path("llmd_nixl_pull")).unwrap();
+    let src = std::fs::read_to_string(serq::program_path("llmd_nixl_pull")).unwrap();
     let ov = Overrides {
         // decoders of 19 200 tokens at twice the default load: with requests
         // bounded by max_model_len, the pressure that makes both preempt
         lets: vec![
             (
                 "blocksD".into(),
-                seq::frontend::parser::parse_expr("1200").unwrap(),
+                serq::frontend::parser::parse_expr("1200").unwrap(),
             ),
             (
                 "Lambda".into(),
-                seq::frontend::parser::parse_expr("1.2").unwrap(),
+                serq::frontend::parser::parse_expr("1.2").unwrap(),
             ),
         ],
         horizon: Some(400.0),
         warmup: Some(50.0),
         ..Default::default()
     };
-    let path = seq::program_path("llmd_nixl_pull");
+    let path = serq::program_path("llmd_nixl_pull");
     let r = run_source(&src, &ov, path.parent()).unwrap();
     assert!(r.pool("kvD").unwrap().preemptions > 0, "{}", r.text());
     assert!(
@@ -379,12 +379,12 @@ fn the_pd_program_survives_decoder_memory_pressure() {
 /// queued at the blocks, 430 have ended and 15 are live.
 #[test]
 fn a_local_prefill_does_not_block_an_arrived_transfer() {
-    let path = seq::program_path("llmd_nixl_pull");
+    let path = serq::program_path("llmd_nixl_pull");
     let src = std::fs::read_to_string(&path).unwrap();
     let ov = Overrides {
         lets: vec![(
             "blocksD".into(),
-            seq::frontend::parser::parse_expr("1100").unwrap(),
+            serq::frontend::parser::parse_expr("1100").unwrap(),
         )],
         horizon: Some(800.0),
         warmup: Some(50.0),

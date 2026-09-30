@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The seQ interpreter and CLI (crate seq-lang): fmt + clippy + tests (pool
+# The serQ interpreter and CLI (crate serq): fmt + clippy + tests (pool
 # semantics, the vLLM scheduler scenarios against the upstream oracle in
 # tools/oracle), a static check of every program in examples/, the
 # agreement of the CPU vLLM oracle with the A100 engine, and the language's
@@ -11,26 +11,26 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --release --locked
 cargo build --release --locked --quiet
-./target/release/seq-lang fmt --check examples/*/*.seq lib/*.seq docs/tutorial/programs/*.seq
+./target/release/serq fmt --check examples/*/*.sq lib/*.sq docs/tutorial/programs/*.sq
 n=0
-for f in examples/*/*.seq; do
-  ./target/release/seq-lang check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
+for f in examples/*/*.sq; do
+  ./target/release/serq check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
   for fmt in tikz svg; do
-    ./target/release/seq-lang draw "$f" --format "$fmt" >/dev/null \
+    ./target/release/serq draw "$f" --format "$fmt" >/dev/null \
       || { echo "FAIL: $f does not draw ($fmt)"; exit 1; }
   done
   n=$((n + 1))
 done
 for f in tools/oracle/*.ir.json; do
-  ./target/release/seq-lang draw "$f" >/dev/null \
+  ./target/release/serq draw "$f" >/dev/null \
     || { echo "FAIL: $f does not draw"; exit 1; }
 done
 # The tutorial's programs are included into docs/tutorial/*.md with
 # pymdownx.snippets, so `mkdocs build --strict` catches a renamed file but not
 # one that has stopped linking after a change to the language.
 t=0
-for f in docs/tutorial/programs/*.seq; do
-  ./target/release/seq-lang check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
+for f in docs/tutorial/programs/*.sq; do
+  ./target/release/serq check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
   t=$((t + 1))
 done
 python3 scripts/check_oracle_gpu.py
@@ -41,4 +41,4 @@ python3 scripts/check_citations.py
 # variants and the lines three programs repeat. A change that moves them
 # regenerates tools/metrics.json (`make metrics`) and says why in its PR.
 python3 scripts/metrics.py --check
-echo "OK: seq-lang, $n programs link and draw, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 1 prefix-cache trace (CPU oracle = A100 engine = seQ)"
+echo "OK: serq, $n programs link and draw, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 1 prefix-cache trace (CPU oracle = A100 engine = serQ)"

@@ -48,8 +48,8 @@ jobs:
           cargo build --release --locked
           cargo package --locked --allow-dirty
           mkdir -p dist
-          cp target/package/seq-lang-*.crate dist/
-          tar -C target/release -czf "dist/seq-lang-$TAG-x86_64-unknown-linux-gnu.tar.gz" seq-lang
+          cp target/package/serq-*.crate dist/
+          tar -C target/release -czf "dist/serq-$TAG-x86_64-unknown-linux-gnu.tar.gz" serq
           (cd dist && sha256sum * > SHA256SUMS)
       - name: Release notes
         # the tag message's body, then the generated pull request list
@@ -72,7 +72,7 @@ jobs:
             gh release upload "$TAG" dist/* --clobber
           else
             pre=""; case "$TAG" in *-*) pre="--prerelease";; esac   # v0.1.0-rc0 etc.
-            gh release create "$TAG" dist/* --title "seQ $TAG" --notes-file notes.md --verify-tag $pre
+            gh release create "$TAG" dist/* --title "serQ $TAG" --notes-file notes.md --verify-tag $pre
           fi
 
   crates-io:

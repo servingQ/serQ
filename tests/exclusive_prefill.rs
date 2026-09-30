@@ -1,9 +1,9 @@
 //! Full-attention batch isolation, derived from the four guards in native
 //! vllm-rbln v0.11.3a21's RBLNScheduler.schedule (lines 196-207, 252-259,
-//! 440-451, 651-663, 863-890). We exercise the seQ mechanism, not the vendor
+//! 440-451, 651-663, 863-890). We exercise the serQ mechanism, not the vendor
 //! runtime or PP/remote-KV policies. Unit step costs make the schedule explicit.
 
-use seq::{Overrides, Program, compile_source, run_ir, run_source};
+use serq::{Overrides, Program, compile_source, run_ir, run_source};
 use std::path::Path;
 use std::process::Command;
 
@@ -38,9 +38,9 @@ fn source(policy: &str, slot_cap: usize, kv_cap: usize) -> String {
 fn trace(name: &str, src: &str) -> Vec<String> {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("exclusive-prefill");
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(format!("{name}.seq"));
+    let path = dir.join(format!("{name}.sq"));
     std::fs::write(&path, src).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_seq-lang"))
+    let out = Command::new(env!("CARGO_BIN_EXE_serq"))
         .env("SEQ_TRACE_ITER", "1")
         .args(["run", path.to_str().unwrap(), "--json"])
         .output()

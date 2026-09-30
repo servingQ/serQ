@@ -1,6 +1,6 @@
 mod common;
 use common::{Fixture, PROGRAM, failure};
-use seq::frontend::lexer::{lex, unlex};
+use serq::frontend::lexer::{lex, unlex};
 
 #[test]
 fn unterminated_comments_point_to_the_opening_delimiter() {
@@ -19,20 +19,20 @@ fn unterminated_comments_point_to_the_opening_delimiter() {
 #[test]
 fn every_command_rejects_incomplete_comments_without_an_artifact() {
     let f = Fixture::new();
-    f.write("bad.seq", &format!("{PROGRAM}/* unfinished\nignored\n"));
+    f.write("bad.sq", &format!("{PROGRAM}/* unfinished\nignored\n"));
     for cmd in ["check", "run", "ir", "draw"] {
         failure(
-            &f.run(&[cmd, "bad.seq"]),
+            &f.run(&[cmd, "bad.sq"]),
             1,
-            &["bad.seq", "6:1", "unterminated block comment", "`*/`"],
+            &["bad.sq", "6:1", "unterminated block comment", "`*/`"],
         );
     }
     failure(
-        &f.run(&["draw", "bad.seq", "--out", "figure.svg"]),
+        &f.run(&["draw", "bad.sq", "--out", "figure.svg"]),
         1,
         &["unterminated block comment"],
     );
     assert!(!f.0.join("figure.svg").exists());
-    f.write("good.seq", &format!("{PROGRAM}/* finished\nignored\n*/"));
-    assert!(f.run(&["check", "good.seq"]).status.success());
+    f.write("good.sq", &format!("{PROGRAM}/* finished\nignored\n*/"));
+    assert!(f.run(&["check", "good.sq"]).status.success());
 }

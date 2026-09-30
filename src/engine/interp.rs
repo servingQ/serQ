@@ -1,4 +1,4 @@
-//! The seQ interpreter: a discrete-event simulator whose state is the
+//! The serQ interpreter: a discrete-event simulator whose state is the
 //! configuration of `docs/language.md`.
 //!
 //! Commands (the statements of a session) take no time and run whenever a
@@ -371,7 +371,7 @@ pub struct Interp<'p> {
     /// evicted (no pool or stage queries, no sampling), so `make_room` can
     /// key every entry once.
     evict_static: Vec<bool>,
-    /// Debug switches (`SEQ_TRACE_EVICT`, `SEQ_TRACE_ITER`), read once.
+    /// Debug switches (`SERQ_TRACE_EVICT`, `SERQ_TRACE_ITER`), read once.
     trace_evict: bool,
     trace_iter: bool,
     live: usize,
@@ -500,8 +500,8 @@ impl<'p> Interp<'p> {
                     CEvict::By(keys) => keys.iter().all(static_key),
                 })
                 .collect(),
-            trace_evict: std::env::var_os("SEQ_TRACE_EVICT").is_some(),
-            trace_iter: std::env::var_os("SEQ_TRACE_ITER").is_some(),
+            trace_evict: std::env::var_os("SERQ_TRACE_EVICT").is_some(),
+            trace_iter: std::env::var_os("SERQ_TRACE_ITER").is_some(),
             observes: p
                 .observes
                 .iter()
@@ -3076,7 +3076,7 @@ impl<'p> Interp<'p> {
     }
 
     fn report(&mut self) -> Report {
-        if std::env::var_os("SEQ_DUMP_POOLS").is_some() {
+        if std::env::var_os("SERQ_DUMP_POOLS").is_some() {
             self.debug_pools();
         }
         let now = self.now;

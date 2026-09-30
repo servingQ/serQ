@@ -1,6 +1,6 @@
 # Case study: vLLM in 50 lines
 
-`examples/multi-turn/vllm.seq` is vLLM v1's engine. Not "a model of" it: on six
+`examples/multi-turn/vllm.sq` is vLLM v1's engine. Not "a model of" it: on six
 deterministic scenarios and on a 333-session, 3 321-request trace it gives the
 real scheduler's answer for **every request** — every send time, every
 first-token time, every cached-token count. 3 321 of 3 321.
@@ -9,15 +9,15 @@ first-token time, every cached-token count. 3 321 of 3 321.
 
 ## The program
 
-```seq title="examples/multi-turn/vllm.seq"
---8<-- "examples/multi-turn/vllm.seq"
+```serq title="examples/multi-turn/vllm.sq"
+--8<-- "examples/multi-turn/vllm.sq"
 ```
 
 What the server does with one request is `vllm_request`, which the program
 reads from the library it shares with the other vLLM programs:
 
-```seq title="lib/vllm.seq"
---8<-- "lib/vllm.seq"
+```serq title="lib/vllm.sq"
+--8<-- "lib/vllm.sq"
 ```
 
 ## Line by line against the scheduler
@@ -25,7 +25,7 @@ reads from the library it shares with the other vLLM programs:
 Upstream is `ref/vllm` at `0c87a197` (`scripts/fetch_vllm_ref.sh` checks it
 out).
 
-| vLLM | seQ | Where |
+| vLLM | serQ | Where |
 |---|---|---|
 | a token budget per step: running requests first in `running` order, then waiting requests with what is left | `step { budget B }`, residents in admission order | `scheduler.py:577, 624-823, 868-1128` |
 | `max_num_seqs` | `pool reqs { cap max_seqs }` in the hold | `scheduler.py:877-879` |
@@ -55,11 +55,11 @@ count for every request:
 
 - the real scheduler driven by a fake model runner (`tools/vllm_oracle.py`),
 - the real A100 engine with Qwen3-8B stepped by hand,
-- the seQ program (`tests/vllm_oracle.rs`),
-- the Lean executable semantics (`SeqOracle.lean`, one theorem per scenario).
+- the serQ program (`tests/vllm_oracle.rs`),
+- the Lean executable semantics (`SerqOracle.lean`, one theorem per scenario).
 
 **2. The full trace.** The real scheduler and KV-cache manager replay a
-333-session agent trace with the trace's token ids, on the same clock as seQ.
+333-session agent trace with the trace's token ids, on the same clock as serQ.
 Every request's send time, first-token time and cached-token count agrees:
 3 321 of 3 321, for a constant step cost and for the A100 cost model, on the
 base and forced-miss traces, and on 40-session runs at 1 000, 1 500 and 3 000
@@ -71,7 +71,7 @@ were found ([design review](review.md) §3).
 
 ## It predicted a fix before the fix was run
 
-`examples/replay/vllm_replay.seq` is this program with a cost model measured on an
+`examples/replay/vllm_replay.sq` is this program with a cost model measured on an
 A100 (3 022 steps stepped by hand; MAPE 2.7 % decode, 5.6 % prefill). The
 measured replica collapses between a 3.0 s and a 2.5 s session spacing.
 
@@ -94,4 +94,4 @@ you touch the cluster.
 
 ---
 
-See also: [How seQ is checked](validation.md).
+See also: [How serQ is checked](validation.md).

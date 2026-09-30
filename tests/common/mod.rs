@@ -12,7 +12,7 @@ impl Fixture {
     pub fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "seq-cli-{}-{}",
+            "serq-cli-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -27,7 +27,7 @@ impl Fixture {
     }
 
     pub fn run(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_seq-lang"))
+        Command::new(env!("CARGO_BIN_EXE_serq"))
             .current_dir(&self.0)
             .args(args)
             .output()

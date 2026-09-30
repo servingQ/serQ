@@ -1,52 +1,52 @@
-# seQ: the text syntax, the semantics, and the vLLM correspondence
+# serQ: the text syntax, the semantics, and the vLLM correspondence
 
-The definition of a seQ program is its IR (`docs/ir.md`, `src/ir.rs`).
+The definition of a serQ program is its IR (`docs/ir.md`, `src/ir.rs`).
 This document describes the text syntax, which compiles to the IR, and the
 semantics of the IR's constructs, written in terms of that syntax. Tools
 that know what they want to run build the IR directly (for example the
 vLLM oracle scenarios, `tools/oracle/*.ir.json`).
 
-Status: 2026-09-27 (moved into seQ from the research repository
+Status: 2026-09-27 (moved into serQ from the research repository
 `serving-queue-theory` the same day). Reference implementation: the crate
-`seq-lang` at the repository root (Rust: parser, interpreter, CLI
-`seq-lang`: `run`, `check`, and `ir` to print a program's IR). Programs:
-`examples/*/*.seq`. Checks: `make check`. The review
+`serq` at the repository root (Rust: parser, interpreter, CLI
+`serq`: `run`, `check`, and `ir` to print a program's IR). Programs:
+`examples/*/*.sq`. Checks: `make check`. The review
 of the first version against vLLM, the design decisions and the tooling
 survey are in `docs/review.md`.
 
 The formal model is in `serving-queue-theory`, which uses a pinned
-release of seQ: `lean/ServingQueueTheory/Seq.lean` (syntax `Route Env V`
+release of serQ: `lean/ServingQueueTheory/Serq.lean` (syntax `Route Env V`
 of the `session` block, pool semantics, memory invariant, surface syntax),
-`SeqExec.lean` (an executable semantics of the pool and step-engine
-fragment), `SeqOracle.lean` (the vLLM scheduler scenarios of
-`tools/oracle/` as theorems, generated), `SeqServe.lean` (serving order
+`SerqExec.lean` (an executable semantics of the pool and step-engine
+fragment), `SerqOracle.lean` (the vLLM scheduler scenarios of
+`tools/oracle/` as theorems, generated), `SerqServe.lean` (serving order
 of a step engine) and `Deployments.lean` (the paper's two replicas as
 programs). Other paths under `libqueuingsim/`, `scripts/exp/`,
 `data/exp/`, `paper/` and `lectures/` also refer to that repository: its
-simulator cross-checks seQ programs against hand-written models
+simulator cross-checks serQ programs against hand-written models
 (`libqueuingsim/tests/seq_*.rs`), and its testbed scripts produced the
 A100 measurements of Section 8.
 
-## 1. What seQ is for
+## 1. What serQ is for
 
 A serving deployment is a program. The program names the resources of the
 deployment (memory pools, stages), says how sessions arrive and how a
 session's turns evolve (the workload), and gives the path every session
 runs as a session. One program has three uses:
 
-1. **Simulation.** `seq-lang run prog.seq` executes it as a discrete-event
+1. **Simulation.** `serq run prog.sq` executes it as a discrete-event
    simulation and reports time averages, per-observation statistics and
-   per-turn records. `libqueuingsim` now runs seQ programs next to its
+   per-turn records. `libqueuingsim` now runs serQ programs next to its
    hand-written models (Section 6).
 2. **Formal verification.** The same syntax is an inductive type in Lean
    with an operational semantics; properties of the language (the memory
    invariant of every pool, the shares of a processor-sharing stage) and
    of particular programs (well-formedness of the paper's replica) are
-   theorems. Programs can be written in seQ's own syntax inside Lean
+   theorems. Programs can be written in serQ's own syntax inside Lean
    (`[route| ... ]`; the Lean type and its quotation still carry the block's
    former name, `route`, until the companion change lands there).
 3. **Specification of production systems.** vLLM v1's engine is a
-   50-line program (`examples/multi-turn/vllm.seq`, `vllm_replay.seq`). It
+   50-line program (`examples/multi-turn/vllm.sq`, `vllm_replay.sq`). It
    reproduces the real scheduler request for request: on six
    deterministic scenarios (also on the real A100 engine, and as Lean
    theorems) and on the full 333-session agent trace (3 321 requests,
@@ -69,7 +69,7 @@ that prefills in the compute its decode step leaves (`step`).
 ```
 program  := item*
 item     := let NAME = expr ;
-          | use "file.seq" ;                  -- the definitions of a library, next to this file
+          | use "file.sq" ;                  -- the definitions of a library, next to this file
           | def NAME ( NAME , ... ) = expr ;   -- a name for an expression: NAME ( arg , ... )
           | def NAME ( NAME , ... ) block      -- a name for statements: NAME ( arg , ... ) ;
           | pool NAME [ '[' N ']' ] { poolopt* }
@@ -181,7 +181,7 @@ expects the request lifecycle (admission, prefill, KV transfer, decode,
 release, tool call, next turn) and had to reconstruct it from which stage
 a `run` names. The serving forms name it. They are sugar: the parser
 rewrites each to the kernel statement it stands for, so the AST, the IR
-(`seq-lang ir` prints the kernel), the interpreter and the Lean model know
+(`serq ir` prints the kernel), the interpreter and the Lean model know
 nothing of them, and every program written with `hold` and `run` is
 unchanged.
 
@@ -219,7 +219,7 @@ step engine are rejected by the linker as `run E (X)` would be. A linker
 error inside a form (an unknown name in `W`, say) speaks of the kernel
 statement.
 
-vLLM's engine (`lib/vllm.seq`'s `vllm_request`, below) then reads
+vLLM's engine (`lib/vllm.sq`'s `vllm_request`, below) then reads
 
 ```
 hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
@@ -273,7 +273,7 @@ of `n` tokens arrived from outside the engine: the enclosing hold's
 computed position on `Q` advances by `n` (within its allocation), as a
 `growing` run's would token by token, so `cache` and `cached` count them.
 `transfer (X) from P to Q (n)` is the two around the link run.
-`examples/pd-disaggregation/llmd_nixl_pull.seq` is the whole path, and `docs/case-study-pd.md` its
+`examples/pd-disaggregation/llmd_nixl_pull.sq` is the whole path, and `docs/case-study-pd.md` its
 line-by-line correspondence with llm-d and the NIXL connector.
 
 **Against vLLM.** Each form is one part of a request's life in the v1
@@ -284,7 +284,7 @@ scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
 | `hold reqs (1), kv (hit + …) at admission (hit = …) { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
 | `prefill (n) growing kv` | prefill in chunks of the budget, a block allocated as the request advances; a missing block preempts `running[-1]` | the running loop, `scheduler.py:624-823`; `allocate_slots` at `scheduler.py:743`; `_preempt_request`, `scheduler.py:1539-1582` (`preempt lifo`) |
 | `decode (o) growing kv` | one token per iteration, a block every `block_size` tokens | the same loop and `allocate_slots` with one new token |
-| `} cache (prompt) lease kvP (inf)` on the prefiller's hold, then `transfer (X) from kvP to kvD (n)` inside the decoder's | the KV of a prefilled request moves to the decode instance: the prefiller's blocks wait, the decoder allocates and reads, the prefiller frees | the KV connector, `examples/pd-disaggregation/llmd_nixl_pull.seq`: the decoder parks the request at `scheduler.py:1264-1294` (`WAITING_FOR_REMOTE_KVS`), its blocks allocated for the whole prompt; the read done, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; the prefiller keeps its blocks leased at `_connector_finished`, `scheduler.py:2929-2982`, and frees them at `scheduler.py:3135-3138` |
+| `} cache (prompt) lease kvP (inf)` on the prefiller's hold, then `transfer (X) from kvP to kvD (n)` inside the decoder's | the KV of a prefilled request moves to the decode instance: the prefiller's blocks wait, the decoder allocates and reads, the prefiller frees | the KV connector, `examples/pd-disaggregation/llmd_nixl_pull.sq`: the decoder parks the request at `scheduler.py:1264-1294` (`WAITING_FOR_REMOTE_KVS`), its blocks allocated for the whole prompt; the read done, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; the prefiller keeps its blocks leased at `_connector_finished`, `scheduler.py:2929-2982`, and frees them at `scheduler.py:3135-3138` |
 | `} cache (prompt + o)` | release: the blocks go to the free queue, the full ones stay cached | `_free_request`, `scheduler.py:2628`; `free`, `kv_cache_manager.py:610-619`; `cache_blocks`, `kv_cache_manager.py:802-812` |
 | `tool Z; turn;` | the session thinks and comes back with a longer prompt | outside the engine: the session's next request, `add_request`, `scheduler.py:2536` |
 | `end` | the session leaves; its blocks stay in the free queue | `finish_requests`, `scheduler.py:2564` |
@@ -293,7 +293,7 @@ scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
 
 A `session` block writes a session's whole life in one place: what the
 client does (arrive, think, decide whether to go on) next to what the
-deployment does with each request. `examples/multi-turn/vllm.seq` is headed "vLLM v1
+deployment does with each request. `examples/multi-turn/vllm.sq` is headed "vLLM v1
 on one device", and its session block held three statements vLLM does not
 execute — the tool call, the next turn, the exit — and one variable, the
 context length `K`, that belongs to the conversation rather than to the
@@ -354,7 +354,7 @@ differ from the allocation, `reserve` says so by name (vLLM's
 `scheduler_reserve_full_isl`). The side-specific spellings `enter … keep`
 and `admit if … fit where …` were two more names for this one statement,
 and #136 took them out: a serving program names its admission with a
-[`def`](api/program.md#def), as `lib/vllm.seq`'s `vllm_request` does.
+[`def`](api/program.md#def), as `lib/vllm.sq`'s `vllm_request` does.
 
 A `session` at top level stays the kernel form and the one the tutorial
 teaches. The two forms are exclusive in one program; a workload's `session`
@@ -407,7 +407,7 @@ again). `load m (n)` advances the innermost
 enclosing hold's position on `m` by `n` tokens, which its allocation must
 cover; the KV of a transfer counts as computed from then on. The invariant
 `allocated + cached ≤ cap` holds in every reachable configuration
-(`SeqLang.Step.invariant`). `end` releases every hold but *keeps* the
+(`SerqLang.Step.invariant`). `end` releases every hold but *keeps* the
 session's cached prefixes: the cache does not know that a session has left
 (lecture `[End]`; vLLM keeps the blocks). A program that models dropping
 them writes `drop POOL;` before `end;`. Eviction is per entry, or per block
@@ -425,10 +425,10 @@ not in an iteration that preempted (vLLM's waiting loop,
 q[N] { admit via S; }` next to `stage S[N]` serves `q[i]` by `S[i]`, and
 `stage E[N] : step { memory kv; }` next to `pool kv[N]` counts `kv[i]` for
 `E[i]`; next to a family of one, every member gets that one, and any other
-pair of counts is a link error (`examples/pd-disaggregation/llmd_nixl_pull.seq` is the xPyD case,
+pair of counts is a link error (`examples/pd-disaggregation/llmd_nixl_pull.sq` is the xPyD case,
 `docs/case-study-pd.md` §Writing xPyD). A stage that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
-stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.seq` declares the
+stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.sq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
 ones, as vLLM serves `skipped_waiting` before `waiting`
 (`scheduler.py:2383-2385`). `budget_left(S)` then evaluates to the budget
@@ -460,7 +460,7 @@ programs write `known = computed < prompt ? prompt : computed + 1` (the token
 sampled at `computed` is the request's too), `prefill (known - c)` and
 `decode (o - 1 - (known - prompt))`. A program that recomputes from the
 prompt alone says so by not reading `computed`. The Lean fragment does not
-set `computed` on a preemption yet (`SeqExec.lean`'s `preemptLast` touches
+set `computed` on a preemption yet (`SerqExec.lean`'s `preemptLast` touches
 no attribute), so on the decode-preemption path it restarts from the prompt
 and diverges from the interpreter; no oracle scenario takes that path, and
 the recorded scenario that will is the change that teaches the Lean model
@@ -505,7 +505,7 @@ other `ps` stage serves as above. See `docs/design/bandwidth-sharing.md`. `step 
 iterations. A plain `run`'s work is time at rate 1, the clock's unit; a step
 engine's `prefill` and `decode` work is in the unit of `B`, tokens. The
 clock itself has no unit: a program whose costs are seconds runs in seconds,
-and `examples/oracle/vllm_request.seq` runs on the step clock with `cost 1`, so
+and `examples/oracle/vllm_request.sq` runs on the step clock with `cost 1`, so
 its times are iterations. The residents are served the way `serve` names, said once per
 stage: an order, `by (k₁, …)` (ascending keys evaluated for each resident
 with `decoding`, 1 for a decoding resident, `admission`, its admission
@@ -536,7 +536,7 @@ dropped that step, against the Lean model, and with the victim queued and
 no event left the run ended with a session in the queue. A hold whose body
 can never fit then preempts itself forever; vLLM never runs that program,
 since it refuses at start-up a KV cache that cannot hold one request of
-`max_model_len` (`kv_cache_utils.py:965`), a check seQ does not have, which
+`max_model_len` (`kv_cache_utils.py:965`), a check serQ does not have, which
 is what the `stuck` counter below is for. A hold that reserves what it
 will need (`reserve (known)` after a preemption) is rejected instead, once
 the reservation is above the cap.
@@ -550,15 +550,15 @@ advance computed KV. Ordinary fit and no-admission-after-preemption gates
 remain; this mechanism does not implement PP decode caps or remote-KV waiting
 policy. [The batch isolation design](design/exclusive-prefill.md) states the
 counterexample and validation. Without a per-request chunk cap, serving in
-admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`;
+admission order *is* serving decode-first (`SerqLang.Serve.serve_eq_decode_first`;
 a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 "prefill from the budget decode leaves" describes vLLM too.
 
 **`at admission`.** Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the
-hold is not (`cache` is read when the session releases, `SeqExec.lean`'s
+hold is not (`cache` is read when the session releases, `SerqExec.lean`'s
 `release` and the interpreter agree). The two look the same, which is how
-`examples/multi-turn/vllm.seq` came to read its prefix cache at the moment the session
+`examples/multi-turn/vllm.sq` came to read its prefix cache at the moment the session
 queued rather than the moment the scheduler took it. `at admission (hit = e)`
 gives the header a place to name what it is written in terms of:
 
@@ -646,7 +646,7 @@ under `preempt lifo`) preempts itself and re-executes forever; the run would
 otherwise end at the horizon with nothing but a preemption count, and the
 report now names the livelock.
 
-**Executable semantics in Lean.** `SeqExec.lean` defines the same rules
+**Executable semantics in Lean.** `SerqExec.lean` defines the same rules
 for the fragment of pools and one step engine on the step clock (values in
 ℕ): `Exec.run` interprets a `Route Env ℕ` program for `n` sessions (the Lean
 type keeps the block's former name for now). It is
@@ -667,36 +667,36 @@ the semantics the oracle theorems are about.
 | no measurement | `observe`, `--dump` | TTFT and the price are defined in the program |
 | no routing | stage arrays and `choose` | §3.2 |
 
-The paper's colocated two-resource replica is `examples/multi-turn/replica.seq`
+The paper's colocated two-resource replica is `examples/multi-turn/replica.sq`
 and, in Lean, `Deployments.colocatedReplica`.
 
 ## 5. Programs
 
 | Program | Deployment | Checked against |
 |---|---|---|
-| `mg1.seq`, `ps.seq`, `closed.seq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | closed forms (`seq_closed_forms.rs`): M/M/1 sojourn, PK for four laws, PS insensitivity, MVA |
-| `replica.seq` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`serve decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/seq/replica_seeds.csv`, `seq_replica_and_pd.rs`) |
-| `routing.seq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
-| `llmd_nixl_pull.seq` | llm-d's prefill/decode disaggregation on vLLM with the NIXL connector: the router, the sidecar, two prefill and two decode instances (`docs/case-study-pd.md`) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle yet |
-| `vllm.seq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
-| `vllm_single_turn.seq`, `vllm_chat.seq`, `vllm_subagents.seq` | `vllm.seq`'s engine under a single-turn, a chat and an approximated subagent workload ([case study](case-study-workloads.md)) | the engine is `vllm.seq`'s text (`tests/workloads.rs`) |
-| `vllm_request.seq` | one vLLM v1 request on the step clock; compiled per scenario to `tools/oracle/*.ir.json` | the six upstream oracle scenarios (`tests/vllm_oracle.rs`), the Lean theorems generated from the same IR |
-| `vllm_replay.seq` | vLLM v1 on the A100 testbed replaying the short-context trace | ten measured runs (Section 8) |
+| `mg1.sq`, `ps.sq`, `closed.sq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | closed forms (`seq_closed_forms.rs`): M/M/1 sojourn, PK for four laws, PS insensitivity, MVA |
+| `replica.sq` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`serve decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/seq/replica_seeds.csv`, `seq_replica_and_pd.rs`) |
+| `routing.sq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
+| `llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation on vLLM with the NIXL connector: the router, the sidecar, two prefill and two decode instances (`docs/case-study-pd.md`) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle yet |
+| `vllm.sq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
+| `vllm_single_turn.sq`, `vllm_chat.sq`, `vllm_subagents.sq` | `vllm.sq`'s engine under a single-turn, a chat and an approximated subagent workload ([case study](case-study-workloads.md)) | the engine is `vllm.sq`'s text (`tests/workloads.rs`) |
+| `vllm_request.sq` | one vLLM v1 request on the step clock; compiled per scenario to `tools/oracle/*.ir.json` | the six upstream oracle scenarios (`tests/vllm_oracle.rs`), the Lean theorems generated from the same IR |
+| `vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace | ten measured runs (Section 8) |
 
-## 6. The simulator uses seQ
+## 6. The simulator uses serQ
 
-`libqueuingsim` depends on `seq-lang`; `libqueuingsim/tests/seq_*.rs`
+`libqueuingsim` depends on `serq`; `libqueuingsim/tests/seq_*.rs`
 run the programs above under `make sim` next to the hand-written models.
 The hand-written models stay as the second implementation the programs
 are checked against; new scenarios should be written as programs.
 
-## 7. vLLM v1 as a seQ program
+## 7. vLLM v1 as a serQ program
 
-`examples/multi-turn/vllm.seq`, whose engine is `vllm_request` in `lib/vllm.seq`, and `examples/replay/vllm_replay.seq` (upstream `ref/vllm`
+`examples/multi-turn/vllm.sq`, whose engine is `vllm_request` in `lib/vllm.sq`, and `examples/replay/vllm_replay.sq` (upstream `ref/vllm`
 at 0c87a197; the A100 testbed runs vLLM 0.30.0, whose scheduler gives
 identical answers on the differential scenario below):
 
-| vLLM | seQ | Where |
+| vLLM | serQ | Where |
 |---|---|---|
 | a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `step { budget B }`, residents in admission order; `pool reqs { admit via engine; }` | `scheduler.py:577, 624-823, 868-1128` |
 | `max_num_seqs` | `pool reqs { cap max_seqs }` in the hold | `scheduler.py:877-879` |
@@ -718,7 +718,7 @@ long-prefill threshold, encoder inputs, speculative decoding, sliding
 window, cross-session prefix sharing (out of scope), asynchronous
 scheduling (Section 8).
 
-**Admission.** The header of the `hold` in `lib/vllm.seq`'s `vllm_request` is the
+**Admission.** The header of the `hold` in `lib/vllm.sq`'s `vllm_request` is the
 prefix-cache lookup and the allocation of the first chunk, and both happen
 when the scheduler admits the request, not when it queues. `known` is
 every token the request has: the prompt, or after a preemption the tokens
@@ -741,9 +741,9 @@ request runs (`growing kv`).
 1. *Deterministic scenarios* (`tools/oracle/*.json`): the real
    scheduler driven by a fake model runner (`vllm_oracle.py`), the real
    A100 engine with Qwen3-8B stepped by hand (`a100_engine.json`,
-   `scripts/exp/lambda/seq_cases.py`), the seQ program
+   `scripts/exp/lambda/seq_cases.py`), the serQ program
    (`tests/vllm_oracle.rs`) and the Lean executable semantics
-   (`SeqOracle.lean`, one theorem per scenario, `decide +kernel`) give
+   (`SerqOracle.lean`, one theorem per scenario, `decide +kernel`) give
    the same first-token step, last-token step and preemption count for every
    request (6 scenarios: self-preemption, chunked prefill sharing the
    budget, the request cap, head-of-line blocking, the chunk cap, six mixed
@@ -751,7 +751,7 @@ request runs (`growing kv`).
 2. *The trace at full scale* (`vllm_replay_oracle.py`,
    `scripts/exp/diff_seq_vllm.sh`): the real scheduler and KV-cache
    manager replay the 333-session short-context trace with the trace's
-   token ids, on the same clock as seQ. seQ and the scheduler agree on
+   token ids, on the same clock as serQ. serQ and the scheduler agree on
    every request's send time, first-token time and cached tokens: 3 321 of
    3 321, for a constant step cost and for the A100 cost model, on the
    base and the forced-miss traces, and on 40-session runs with 1 000,
@@ -763,7 +763,7 @@ request runs (`growing kv`).
 
 ## 8. vLLM on the A100 testbed
 
-`examples/replay/vllm_replay.seq` replays the short-context trace of
+`examples/replay/vllm_replay.sq` replays the short-context trace of
 `docs/testbed-gpu.md` (Qwen3-8B, block 16, budget 512, `max_num_seqs` 64,
 128 160-token pool, prefix caching; session `i` sent at `i·spacing`, turn
 `k+1` `think` seconds after turn `k`).
@@ -778,7 +778,7 @@ explain the light-load one-chunk TTFTs of the served runs (slope 74 µs per
 new token ≈ a + b·K̄).
 
 **Why the first version under-predicted misses.** Not timing: the real
-scheduler replayed on seQ's clock loses *more* prefixes than the
+scheduler replayed on serQ's clock loses *more* prefixes than the
 testbed. The first program pinned waiting requests' prefixes, cached only
 prompts, dropped finished sessions' blocks and differed in three smaller
 rules (§7, `docs/review.md` §3). With those fixed, the program and
@@ -819,7 +819,7 @@ cost, as the feedback of Lecture 5 predicts at the edge.
 cached prefix at arrival (`scripts/exp/lambda/steptrace/pinpatch.py`,
 released once the scheduler admits it) and replaying the trace at 3.0 s
 through the real scheduler on the A100 cost clock: full-hit 0.43 → 0.80,
-mean TTFT 20 s → 0.72 s (`--pin` of `vllm_replay_oracle.py`). seQ
+mean TTFT 20 s → 0.72 s (`--pin` of `vllm_replay_oracle.py`). serQ
 predicted the same with a one-line change of the program (no `admit via`):
 0.80.
 
@@ -849,7 +849,7 @@ program without `admit via engine`):
 
 **H-pin holds on the served A100 engine.** With the waiting request's
 prefix pinned the 2.5 s replay does not collapse: mean TTFT 34.6 s → 0.88 s,
-full-hit 0.22 → 0.78; seQ predicted 0.89 s / 0.75 before the run. At
+full-hit 0.22 → 0.78; serQ predicted 0.89 s / 0.75 before the run. At
 3.0 s, where the vLLM rule does not collapse under the light tracer,
 pinning changes little (0.441 → 0.413 s, 0.832 → 0.838), as predicted
 (0.605 → 0.483 s). Caveat: the unpinned 2.5 s run is from 2026-09-26
@@ -868,11 +868,11 @@ the pinned run, so the comparison is conservative. One run per point.
 * A session is one sequence of statements, so it waits at one pool at a
   time. NIXL's push mode lets a proxy send the decode request while the
   prefill runs, so the decoder allocates *during* the prefill and the write
-  starts the moment it ends; `examples/pd-disaggregation/llmd_nixl_pull.seq` writes the decoder's
+  starts the moment it ends; `examples/pd-disaggregation/llmd_nixl_pull.sq` writes the decoder's
   admission after the prefill, which is the pull mode and the llm-d
   sidecar's serial dispatch. A reservation a session joins now and enters
   later is the construct for it (`docs/design/pd-transfer.md`).
-* A lease's bound is one number: `examples/pd-disaggregation/llmd_nixl_pull.seq` writes `inf` for
+* A lease's bound is one number: `examples/pd-disaggregation/llmd_nixl_pull.sq` writes `inf` for
   a prefiller whose lease the decoder's heartbeats renew, `30` would be
   one nobody renews; the heartbeat itself (a 5 s message that adds 20 s)
   is not a construct, and a decoder that dies mid-wait is not a session

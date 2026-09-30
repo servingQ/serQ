@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay seQ's trace CSV (session,turn,new,out,think,forced) against an
+"""Replay serQ's trace CSV (session,turn,new,out,think,forced) against an
 OpenAI-compatible endpoint (a vLLM instance or a P/D proxy) with token-id
 prompts of exactly the trace's lengths.
 

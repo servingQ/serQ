@@ -1,5 +1,5 @@
 // vLLM v1 on one device (ref/vllm at 0c87a197, `vllm/v1/core/sched/
-// scheduler.py`, `kv_cache_manager.py`, `block_pool.py`), as a seQ
+// scheduler.py`, `kv_cache_manager.py`, `block_pool.py`), as a serQ
 // program. Continuous batching with chunked prefill: every iteration hands
 // a token budget to the running requests in admission order (one token per
 // decoding request, up to `chunk` per prefilling one), then admits waiting
@@ -13,7 +13,7 @@
 // preempted (its blocks freed to the cache, it re-enters the waiting queue
 // at the head and recomputes what was lost). See docs/language.md
 // §"vLLM" for the line-by-line correspondence.
-use "../../lib/vllm.seq";
+use "../../lib/vllm.sq";
 
 let B = 8192;          // max_num_batched_tokens
 let max_seqs = 16;     // max_num_seqs
