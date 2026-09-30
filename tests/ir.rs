@@ -508,3 +508,66 @@ fn numbers_read_as_written() {
     assert_eq!(show_num(999999999999.5), "999999999999.5");
     assert_eq!(show_num_exact(0.9100000000000001), "0.9100000000000001");
 }
+
+/// `choose j in n by (k1, k2, …)` takes the smallest key tuple, compared
+/// in order (#140): the second key decides only among the first key's ties,
+/// and a tie on every key goes to the smallest index.
+#[test]
+fn choose_compares_its_keys_in_order() {
+    let pick = |by: &str| {
+        let src = format!(
+            "stage s : delay;
+             workload {{ arrive batch(1); }}
+             session {{ choose j in 4 by ({by}); observe j = j; end; }}
+             run {{ horizon 1; }}"
+        );
+        let r = run_source(&src, &Overrides::default(), None).unwrap();
+        r.observe("j").unwrap().samples[0]
+    };
+    // the first key ties 1 and 3; the second picks 3
+    assert_eq!(pick("j == 1 || j == 3 ? 0 : 1, j == 3 ? 0 : 1"), 3.0);
+    // what `* 1e9` encoded, without the bound on the second key
+    assert_eq!(pick("j == 2 ? 0 : 1, -1e12 * j"), 2.0);
+    // a tie everywhere goes to the smallest index
+    assert_eq!(pick("0, 0"), 0.0);
+    // one key is the form it was
+    assert_eq!(pick("-j"), 3.0);
+}
+
+/// A v6 IR with a `choose` has a scalar `key`: it is refused by its version,
+/// not by the shape of the field that changed, and an empty key list, which
+/// no text can write, is refused too.
+#[test]
+fn an_old_or_keyless_choose_is_refused_plainly() {
+    let src = "stage s : delay; workload { arrive batch(1); }
+        session { choose j in 2 by (-j); end; } run { horizon 1; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let json = p.to_json();
+    let old = json
+        .replacen(
+            &format!("\"version\": {}", seq::ir::IR_VERSION),
+            "\"version\": 6",
+            1,
+        )
+        .replace("\"key\": [", "\"key\": ")
+        .replace("]\n        }\n      }", "\n        }\n      }");
+    let e = Program::from_json(&old).unwrap_err();
+    assert!(e.contains("IR version 6"), "{e}");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let mut v = v;
+    fn clear(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if let Some(k) = m.get_mut("key") {
+                    *k = serde_json::Value::Array(vec![]);
+                }
+                m.values_mut().for_each(clear);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(clear),
+            _ => {}
+        }
+    }
+    clear(&mut v);
+    let e = Program::from_json(&v.to_string()).unwrap_err();
+    assert!(e.contains("no key"), "{e}");
+}

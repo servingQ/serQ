@@ -110,7 +110,7 @@ server {
   branch (remote) {
     // Prefill profile: a pod that has the prefix (prefix-cache-affinity-filter),
     // then the least loaded (token-load-scorer).
-    choose i in NP by ((cachedin(kvP[i]) > 0 ? 0 : 1) * 1e9 + work(P[i]) + queued(reqsP[i]));
+    choose i in NP by (cachedin(kvP[i]) > 0 ? 0 : 1, work(P[i]) + queued(reqsP[i]));
     // The prefiller's scheduler: a slot and the blocks of the first chunk,
     // room for the whole prompt (scheduler_reserve_full_isl); vLLM's engine
     // on one device (examples/multi-turn/vllm.seq) with no decode. When the one token

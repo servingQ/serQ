@@ -26,17 +26,17 @@
 //!           | 'hidden' IDENT (',' IDENT)* ';'
 //! block    := '{' stmt* '}'
 //! stmt     := 'turn' ';' | 'request' ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
-//!           | ('hold' | 'enter') ref '(' expr ')' (',' ref '(' expr ')')* block ('cache' '(' expr ')')? ';'?
-//!           | 'admit' 'if' ref '(' expr ')' (',' ref '(' expr ')')* 'fit'
-//!                 ('where' IDENT '=' expr (',' IDENT '=' expr)*)? block ('keep' '(' expr ')')? ';'?
+//!           | 'hold' ref '(' expr ')' ('reserve' '(' expr ')')?
+//!                 (',' ref '(' expr ')' ('reserve' '(' expr ')')?)* ('reuse' '(' expr ')')?
+//!                 ('at' 'admission' '(' IDENT '=' expr (',' IDENT '=' expr)* ')')?
+//!                 block ('cache' '(' expr ')')? ('lease' ref '(' expr ')')? ';'?
 //!           | 'grow' ref '(' expr ')' ';' | 'drop' ref ';'
 //!           | 'run' ref ('prefill' | 'decode')? '(' expr ')' ('growing' ref)? ';'
 //!           | 'branch' ('with')? '(' expr ')' block ('else' block)?
 //!           | 'loop' block | 'end' ';'
-//!           | 'choose' IDENT 'in' expr 'by' '(' expr ')' ';'
+//!           | 'choose' IDENT 'in' expr 'by' '(' expr (',' expr)* ')' ';'
 //!           | serving
-//! serving  := 'enter' ... 'keep' ...            -- as 'hold' ... 'cache' ...
-//!           | role ('[' expr ']' | 'on' ref)? expr ('growing' ref)? ';'
+//! serving  := role ('[' expr ']' | 'on' ref)? expr ('growing' ref)? ';'
 //!           | 'transfer' ('[' expr ']' | 'on' ref)? expr 'from' ref 'to' ref '(' expr ')' ';'
 //! role     := 'prefill' | 'decode' | 'tool'
 //! ref      := IDENT ('[' expr ']')?
@@ -674,7 +674,9 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
         }
         Stmt::Branch(c, a, b) => expr_reads(c, n) || block(a) || block(b),
         Stmt::Loop(b) => block(b),
-        Stmt::Choose { count, key, .. } => expr_reads(count, n) || expr_reads(key, n),
+        Stmt::Choose { count, key, .. } => {
+            expr_reads(count, n) || key.iter().any(|k| expr_reads(k, n))
+        }
     }
 }
 
@@ -2192,7 +2194,13 @@ impl Parser {
                 self.expect_kw("in")?;
                 let count = self.expr()?;
                 self.expect_kw("by")?;
-                let key = self.paren_expr()?;
+                self.expect(&Tok::LParen)?;
+                let mut key = vec![self.expr()?];
+                while *self.peek() == Tok::Comma {
+                    self.advance();
+                    key.push(self.expr()?);
+                }
+                self.expect(&Tok::RParen)?;
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::Choose { var, count, key })
             }

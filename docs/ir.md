@@ -15,10 +15,11 @@ the program. A tool that knows what it wants to run (a scenario from JSON,
 a parameter sweep, a trace replay) builds or edits the IR as data instead
 of generating text.
 
-Source: `src/ir.rs`. Version: `IR_VERSION = 6` (2 added the sessions' turns;
+Source: `src/ir.rs`. Version: `IR_VERSION = 7` (2 added the sessions' turns;
 3 renamed the `route` field to `session`; 4 replaced `CStep`'s two booleans
 `exclusive_prefill` and `decode_first` by the one order `serve`;
-5 added KV transfer and leases; 6 adds renewal arrivals and finite open runs).
+5 added KV transfer and leases; 6 added renewal arrivals and finite open runs;
+7 makes `Choose.key` a list of keys).
 
 ## Why an IR first
 
@@ -92,7 +93,7 @@ runs identically (`tests/ir.rs`).
 | `Release(pool)` | give the innermost enclosing hold's allocation on the pool back now, or end the session's lease of it, caching per the hold's `cache`; nothing held or leased there is a no-op. A KV transfer between instances is `Run` (the link), `Load` (the destination) and `Release` (the source's lease) |
 | `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
 | `Run {stage, mode, work, growing?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed |
-| `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}`, `End` | control; `End` ends the session |
+| `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}` (`key` a list, compared in order), `End` | control; `End` ends the session |
 
 ### Expressions (`CExpr`)
 
@@ -212,6 +213,13 @@ at zero. Finite runs must generate the requested arrivals and drain by the
 horizon; completion before or at warmup is an error. Both additions are
 outside the Lean fragment (which accepts explicit sessions); the matching
 generator pins 6 and rejects an arrival limit instead of ignoring it.
+
+Version 7 makes `Choose.key` a list, compared in order, ties to the smallest
+index (#140): a router that prefers a cache-warm pod and then the least
+loaded one says so, where version 6 packed the two into one number
+(`warm * 1e9 + load`), which is wrong once the load exceeds the multiplier.
+One key is a list of one. `Choose` is outside the Lean fragment, so the
+matching generator only moves its pin to 7.
 
 ## The Lean fragment
 

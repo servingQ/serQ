@@ -246,11 +246,11 @@ pub enum Stmt {
     },
     Branch(Expr, Vec<Stmt>, Vec<Stmt>),
     Loop(Vec<Stmt>),
-    /// `choose j in 0..n by (expr)`: `j := argmin`.
+    /// `choose j in 0..n by (k1, …)`: `j := argmin`, keys in order.
     Choose {
         var: String,
         count: Expr,
-        key: Expr,
+        key: Vec<Expr>,
     },
     End,
 }
@@ -359,7 +359,7 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                 Stmt::Loop(b) => block(b),
                 Stmt::Choose { count, key, .. } => {
                     expr(count);
-                    expr(key);
+                    key.iter_mut().for_each(expr);
                 }
                 _ => {}
             }
