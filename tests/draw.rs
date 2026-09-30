@@ -652,6 +652,58 @@ fn golden_files_are_current() {
         "llmd_nixl_pull.deployment.svg",
         &seq::view::svg::render(&deployment::figure(&p)),
     );
+    docs_assets_are_current();
+}
+
+/// The figures the site shows are the program's figure, not a copy that
+/// once was: every `docs/assets/NAME.deployment.svg` is what `seq-lang draw`
+/// makes of `examples/*/NAME.seq` or `docs/tutorial/programs/NAME.seq`
+/// now, and `make draw-golden` rewrites them with the goldens. A figure
+/// without its program is an error, not a keepsake.
+fn docs_assets_are_current() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut seen = 0;
+    for entry in std::fs::read_dir(root.join("docs/assets"))
+        .unwrap()
+        .flatten()
+    {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(stem) = name.strip_suffix(".deployment.svg") else {
+            continue;
+        };
+        let tutorial = root
+            .join("docs/tutorial/programs")
+            .join(format!("{stem}.seq"));
+        let src_path = if tutorial.is_file() {
+            tutorial
+        } else {
+            let found = std::fs::read_dir(root.join("examples"))
+                .unwrap()
+                .flatten()
+                .map(|g| g.path().join(format!("{stem}.seq")))
+                .find(|p| p.is_file());
+            found.unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.seq"))
+        };
+        let src = std::fs::read_to_string(&src_path).unwrap();
+        let p = seq::compile_file(&src, &src_path, &Overrides::default())
+            .unwrap_or_else(|e| panic!("{}: {e}", src_path.display()));
+        let got = seq::view::svg::render(&deployment::figure(&p));
+        if std::env::var("SEQ_BLESS").is_ok() {
+            std::fs::write(&path, &got).unwrap();
+        } else {
+            let want = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                want == got,
+                "docs/assets/{name} is not {}'s figure; run `make draw-golden`",
+                src_path.strip_prefix(root).unwrap_or(&src_path).display()
+            );
+        }
+        seen += 1;
+    }
+    assert!(seen > 0, "no figures under docs/assets");
 }
 
 /// `routing.seq`'s next turn migrates or stays: back to the link, and

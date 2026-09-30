@@ -104,7 +104,10 @@ src/view/svg.rs        Figure -> String
 
 `Figure` is the test surface; no writer decides a coordinate. `tests/draw.rs`
 asserts on rectangles and on the projected `Net`, with golden files
-(`tests/golden/`, `make draw-golden`) guarding the writers. `make check` draws
+(`tests/golden/`, `make draw-golden`) guarding the writers; the figures the
+site shows (`docs/assets/NAME.deployment.svg`) must be what their program
+(`examples/*/NAME.seq` or `docs/tutorial/programs/NAME.seq`) draws now, and
+`make draw-golden` rewrites them too. `make check` draws
 every program in both formats, and every IR file in
 `tools/oracle/`.
 
