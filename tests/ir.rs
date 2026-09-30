@@ -533,3 +533,41 @@ fn choose_compares_its_keys_in_order() {
     // one key is the form it was
     assert_eq!(pick("-j"), 3.0);
 }
+
+/// A v6 IR with a `choose` has a scalar `key`: it is refused by its version,
+/// not by the shape of the field that changed, and an empty key list, which
+/// no text can write, is refused too.
+#[test]
+fn an_old_or_keyless_choose_is_refused_plainly() {
+    let src = "stage s : delay; workload { arrive batch(1); }
+        session { choose j in 2 by (-j); end; } run { horizon 1; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let json = p.to_json();
+    let old = json
+        .replacen(
+            &format!("\"version\": {}", seq::ir::IR_VERSION),
+            "\"version\": 6",
+            1,
+        )
+        .replace("\"key\": [", "\"key\": ")
+        .replace("]\n        }\n      }", "\n        }\n      }");
+    let e = Program::from_json(&old).unwrap_err();
+    assert!(e.contains("IR version 6"), "{e}");
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let mut v = v;
+    fn clear(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if let Some(k) = m.get_mut("key") {
+                    *k = serde_json::Value::Array(vec![]);
+                }
+                m.values_mut().for_each(clear);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(clear),
+            _ => {}
+        }
+    }
+    clear(&mut v);
+    let e = Program::from_json(&v.to_string()).unwrap_err();
+    assert!(e.contains("no key"), "{e}");
+}

@@ -246,7 +246,7 @@ pub enum Stmt {
     },
     Branch(Expr, Vec<Stmt>, Vec<Stmt>),
     Loop(Vec<Stmt>),
-    /// `choose j in 0..n by (expr)`: `j := argmin`.
+    /// `choose j in 0..n by (k1, …)`: `j := argmin`, keys in order.
     Choose {
         var: String,
         count: Expr,

@@ -470,7 +470,7 @@ is that order alone); a preempted session re-enters at the head, ahead of
 the key. Eviction: the keys (`evict by`) or the release time (`lru`), then
 the order the entries were released. A step stage's residents: the
 `serve by` keys, then admission order. The preemption victim: the most
-recently admitted holder. `choose`: the smallest key, then the smallest
+recently admitted holder. `choose`: the keys, in order, then the smallest
 index. A pool's growers: the order they stalled, the head blocking the
 rest. Events at one instant: the order they were scheduled; sessions run
 in the order they became ready; jobs of a `ps` stage with equal finish

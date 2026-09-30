@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 /// Version of the IR format. Bump on any change to the types below.
 /// 2 added the sessions' turns; 3 renamed `route` to `session`; 4 replaced
 /// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`; 5 added
-/// `Release` and `Load`; 6 adds renewal arrivals and finite open runs.
+/// `Release` and `Load`; 6 added renewal arrivals and finite open runs; 7
+/// makes `Choose.key` a list of keys, compared in order.
 pub const IR_VERSION: u32 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -501,6 +502,21 @@ impl Program {
 
     /// Read and validate an IR from JSON.
     pub fn from_json(s: &str) -> Result<Program, String> {
+        // the version first: a field can keep its name across versions and
+        // change its type (`Choose.key` in 7), and the shape's error would
+        // hide the version's
+        #[derive(Deserialize)]
+        struct Version {
+            version: u32,
+        }
+        if let Ok(v) = serde_json::from_str::<Version>(s)
+            && v.version != IR_VERSION
+        {
+            return Err(format!(
+                "IR version {} (this interpreter reads {IR_VERSION})",
+                v.version
+            ));
+        }
         let p: Program = serde_json::from_str(s).map_err(|e| format!("IR: {e}"))?;
         p.validate()?;
         Ok(p)
@@ -926,6 +942,9 @@ impl Validator<'_> {
             CStmt::Choose { var, count, key } => {
                 self.attr(*var)?;
                 self.expr(count, m)?;
+                if key.is_empty() {
+                    return Err("a `choose` has no key".into());
+                }
                 key.iter().try_for_each(|k| self.expr(k, m))
             }
         }
