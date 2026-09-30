@@ -210,7 +210,7 @@ fn a_constant_that_is_nan_is_refused_and_an_infinity_is_not() {
         refused(
             &src.replace("fifo(1)", &format!("fifo({e})")),
             &none,
-            "stage `s`: fifo servers",
+            "stage `s`: fifo server count",
         );
         refused(
             &src.replace("poisson(1)", &format!("poisson({e})")),

@@ -354,7 +354,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     for s in &prog.stages {
         let kind = match &s.kind {
             StageKind::Fifo(c) => {
-                let c = lk.const_eval(c, &format!("stage `{}`: fifo servers", s.name))?;
+                let c = lk.const_eval(c, &format!("stage `{}`: fifo server count", s.name))?;
                 if c < 1.0 || c.fract() != 0.0 {
                     return Err(LinkError::new(format!(
                         "stage `{}`: fifo servers must be a positive integer",
@@ -769,7 +769,7 @@ impl Linker<'_> {
         }
     }
 
-    /// The constant `what` (`pool \`kv\` cap`, `horizon`, ...): a number or
+    /// The constant `what` (`pool \`kv\`: cap`, `the horizon`, ...): a number or
     /// an infinity. No run means anything with a NaN constant, and the IR
     /// has no spelling for one.
     fn const_eval(&self, e: &Expr, what: &str) -> LResult<f64> {
