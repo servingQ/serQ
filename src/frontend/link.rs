@@ -775,9 +775,15 @@ impl Linker<'_> {
     fn const_eval(&self, e: &Expr, what: &str) -> LResult<f64> {
         let v = self.eval_const(e)?;
         if v.is_nan() {
+            // where the expression has a place (a call, a name), the error has it
+            let span = match e {
+                Expr::Located(span, _) => Some(*span),
+                _ => None,
+            };
             return Err(LinkError::new(format!(
                 "{what} is NaN\nhelp: a constant is a number or `inf`; `0/0` and `inf - inf` are not"
-            )));
+            ))
+            .at(span));
         }
         Ok(v)
     }
