@@ -355,6 +355,8 @@ pub struct Interp<'p> {
     /// Bumped at every recomputation: a finish scheduled before is stale.
     flow_epoch: u64,
     flows_dirty: bool,
+    /// Stages whose flows changed since the last recomputation.
+    flows_touched: Vec<usize>,
     pools: Vec<PoolState>,
     stages: Vec<StageState>,
     ready: VecDeque<usize>,
@@ -480,6 +482,7 @@ impl<'p> Interp<'p> {
             flows_last: 0.0,
             flow_epoch: 0,
             flows_dirty: false,
+            flows_touched: vec![],
             pools,
             stages,
             ready: VecDeque::new(),
@@ -2086,6 +2089,7 @@ impl<'p> Interp<'p> {
                 },
             );
         }
+        self.flows_touched.extend(&stages);
         self.flows.insert(
             id,
             Flow {
@@ -2117,8 +2121,35 @@ impl<'p> Interp<'p> {
             Kind::Shared { cap } => cap,
             _ => unreachable!("a flow holds shared stages only"),
         };
-        let mut ids: Vec<u64> = self.flows.keys().copied().collect();
+        // Only the flows that share a stage, however indirectly, with one
+        // that started or ended can change rate: the connected component of
+        // the touched stages. The others keep theirs, which a recomputation
+        // would give them again bit for bit, since no stage of theirs moved.
+        let touched = std::mem::take(&mut self.flows_touched);
+        let mut in_comp = vec![false; self.stages.len()];
+        let mut stack: Vec<usize> = vec![];
+        for s in touched {
+            if !in_comp[s] {
+                in_comp[s] = true;
+                stack.push(s);
+            }
+        }
+        let mut comp_stages: Vec<usize> = vec![];
+        let mut ids: Vec<u64> = vec![];
+        while let Some(s) = stack.pop() {
+            comp_stages.push(s);
+            for id in self.stages[s].jobs.keys() {
+                ids.push(*id);
+                for &t in &self.flows[id].stages {
+                    if !in_comp[t] {
+                        in_comp[t] = true;
+                        stack.push(t);
+                    }
+                }
+            }
+        }
         ids.sort_unstable();
+        ids.dedup();
         match self.p.share.expect("a program with flows has a share") {
             crate::ir::Share::Bottleneck => {
                 // each flow's equal share at the tightest of its stages
@@ -2134,45 +2165,56 @@ impl<'p> Interp<'p> {
             crate::ir::Share::MaxMin => {
                 // progressive filling: the stage whose free capacity, split
                 // among its flows still rising, is least fills first; its
-                // flows stop there
-                let mut left: HashMap<usize, f64> = HashMap::new();
-                let mut rising: HashMap<usize, usize> = HashMap::new();
-                for &id in &ids {
-                    for &s in &self.flows[&id].stages {
-                        left.entry(s).or_insert_with(|| cap(&self.stages[s]));
-                        *rising.entry(s).or_insert(0) += 1;
+                // flows stop there. Each stage lists its flows in id order,
+                // so a flow is frozen once and the subtractions from a
+                // stage's capacity come in the same order as a pass over
+                // all flows would make them.
+                let n = self.stages.len();
+                let mut left = vec![0.0f64; n];
+                let mut rising = vec![0usize; n];
+                let mut on: Vec<Vec<usize>> = vec![vec![]; n];
+                let mut frozen = vec![false; ids.len()];
+                for &s in &comp_stages {
+                    left[s] = cap(&self.stages[s]);
+                }
+                for (k, id) in ids.iter().enumerate() {
+                    for &s in &self.flows[id].stages {
+                        rising[s] += 1;
+                        on[s].push(k);
                     }
                 }
-                let mut open: Vec<u64> = ids.clone();
-                while !open.is_empty() {
-                    let (s_min, share) = rising
+                let mut open = ids.len();
+                while open > 0 {
+                    let (s_min, share) = comp_stages
                         .iter()
-                        .filter(|&(_, &n)| n > 0)
-                        .map(|(&s, &n)| (s, left[&s] / n as f64))
+                        .filter(|&&s| rising[s] > 0)
+                        .map(|&s| (s, left[s] / rising[s] as f64))
                         .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
                         .expect("an open flow holds a stage");
                     let share = share.max(0.0);
-                    let (fill, keep): (Vec<u64>, Vec<u64>) = open
-                        .into_iter()
-                        .partition(|id| self.flows[id].stages.contains(&s_min));
-                    for id in fill {
-                        let f = self.flows.get_mut(&id).unwrap();
+                    for &k in &on[s_min] {
+                        if frozen[k] {
+                            continue;
+                        }
+                        frozen[k] = true;
+                        open -= 1;
+                        let f = self.flows.get_mut(&ids[k]).unwrap();
                         f.rate = share;
                         for &s in &f.stages {
-                            *left.get_mut(&s).unwrap() -= share;
-                            *rising.get_mut(&s).unwrap() -= 1;
+                            left[s] -= share;
+                            rising[s] -= 1;
                         }
                     }
-                    open = keep;
                 }
             }
         }
         self.flow_epoch += 1;
         let now = self.now;
-        let next = ids
+        let next = self
+            .flows
             .iter()
-            .filter(|id| self.flows[id].rate > 0.0)
-            .map(|id| (now + self.flows[id].remaining / self.flows[id].rate, *id))
+            .filter(|(_, f)| f.rate > 0.0)
+            .map(|(id, f)| (now + f.remaining / f.rate, *id))
             .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
         if let Some((t, id)) = next {
             self.at(
@@ -2192,6 +2234,7 @@ impl<'p> Interp<'p> {
         let Some(f) = self.flows.remove(&id) else {
             return;
         };
+        self.flows_touched.extend(&f.stages);
         for s in f.stages {
             if let Some(job) = self.stages[s].jobs.remove(&id) {
                 self.job_done(s, job);
@@ -2287,6 +2330,7 @@ impl<'p> Interp<'p> {
             // a flow leaves every stage it holds, and the rest re-share
             self.flows_advance();
             if let Some(f) = self.flows.remove(&id) {
+                self.flows_touched.extend(&f.stages);
                 for s in f.stages {
                     self.stages[s].jobs.remove(&id);
                 }
