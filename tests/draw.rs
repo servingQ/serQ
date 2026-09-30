@@ -677,16 +677,24 @@ fn docs_assets_are_current() {
         let tutorial = root
             .join("docs/tutorial/programs")
             .join(format!("{stem}.seq"));
-        let src_path = if tutorial.is_file() {
-            tutorial
-        } else {
-            let found = std::fs::read_dir(root.join("examples"))
-                .unwrap()
-                .flatten()
-                .map(|g| g.path().join(format!("{stem}.seq")))
-                .find(|p| p.is_file());
-            found.unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.seq"))
-        };
+        let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(root.join("examples"))
+            .unwrap()
+            .flatten()
+            .map(|g| g.path().join(format!("{stem}.seq")))
+            .filter(|p| p.is_file())
+            .collect();
+        if tutorial.is_file() {
+            found.push(tutorial);
+        }
+        // one name, one program: two would leave the figure's source to
+        // the order the directories are read in
+        assert!(
+            found.len() <= 1,
+            "docs/assets/{name}: several programs are {stem}.seq: {found:?}"
+        );
+        let src_path = found
+            .pop()
+            .unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.seq"));
         let src = std::fs::read_to_string(&src_path).unwrap();
         let p = seq::compile_file(&src, &src_path, &Overrides::default())
             .unwrap_or_else(|e| panic!("{}: {e}", src_path.display()));

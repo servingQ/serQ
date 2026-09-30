@@ -106,7 +106,7 @@ src/view/svg.rs        Figure -> String
 asserts on rectangles and on the projected `Net`, with golden files
 (`tests/golden/`, `make draw-golden`) guarding the writers; the figures the
 site shows (`docs/assets/NAME.deployment.svg`) must be what their program
-(`examples/*/NAME.seq` or `docs/tutorial/programs/NAME.seq`) draws now, and
+(the one `NAME.seq` under `examples/*/` or `docs/tutorial/programs/`) draws now, and
 `make draw-golden` rewrites them too. `make check` draws
 every program in both formats, and every IR file in
 `tools/oracle/`.
