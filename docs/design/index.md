@@ -70,5 +70,6 @@ here. This directory is the record of **applying** them.
 | [Renewal arrivals](renewal-arrivals.md) | Finite open runs, execution deadlines, report times and first-arrival compatibility | IR v6, #108 |
 | [Bandwidth sharing](bandwidth-sharing.md) | A transfer holds the sender's and the receiver's link at once: `Run.also`, `share maxmin` or `bottleneck`, the flow solver | RFC #118, design before implementation |
 | [One admission](one-admission.md) | One spelling for one admission: `hold … at admission (…) … cache`; `enter`, `admit if … fit where` and `keep` retired, the serving name moved into a `def` | #136 |
+| [Vendor IR requirements](vendor-ir.md) | Latest-tag full-attention scheduling/cache comparison, current IR v8 mechanisms and remaining refinements | investigation, no IR change |
 
 A new design document adds a row to this table.

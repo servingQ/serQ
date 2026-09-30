@@ -1,0 +1,25 @@
+// Sequential full-attention P/D capacity model, not a TPU scheduler oracle.
+// Source allocation outlives prefill; destination is acquired after prefill.
+// No DP barrier, physical block placement, backlog protocol or cancellation.
+pool p_kv { cap 8192; block 16; }
+pool d_kv { cap 8192; block 16; }
+stage prefill : fifo;
+stage link : fifo;
+stage decode : ps(present);
+workload {
+  arrive batch(6);
+  init { set prompt = 256; set out = 16; }
+}
+session {
+  set t0 = now;
+  hold p_kv (prompt) {
+    prefill (prompt * 0.00001);
+  } lease p_kv (inf);
+  hold d_kv (prompt + out) {
+    transfer (prompt * 0.000002) from p_kv to d_kv (prompt);
+    decode (out * 0.001);
+    observe response = now - t0;
+  }
+  end;
+}
+run { horizon 2; warmup 0; seed 1; }

@@ -1,0 +1,21 @@
+// Executable approximation: static short-before-long admission, no aging,
+// remote KV, recompute routing, or adaptive chunking. Not a vendor oracle.
+let bs = 16;
+pool kv { cap 8192; block bs; evict lru; }
+pool reqs { cap 4; queue by (prompt <= 128 ? serial : 1000 + serial); admit via engine; }
+stage engine : step { budget 256; chunk 128; cost 0.001 + 0.00001 * tokens; memory kv; }
+workload {
+  arrive batch(6);
+  init { set prompt = serial - 2 * floor(serial / 2) == 0 ? 256 : 64; set out = 16; }
+}
+session {
+  set t0 = now;
+  hold reqs (1), kv (prompt + out) {
+    prefill prompt;
+    observe ttft = now - t0;
+    decode out;
+  }
+  observe response = now - t0;
+  end;
+}
+run { horizon 2; warmup 0; seed 1; }
