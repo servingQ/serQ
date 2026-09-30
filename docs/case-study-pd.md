@@ -16,7 +16,8 @@ and what it still cannot say, is in [The KV transfer](design/pd-transfer.md).
 
 The prompt's KV is in the prefiller's pool through the transfer and in the
 decoder's from the transfer on, which is why the two enclosures cross at the
-link.
+read, and the read holds the prefiller's NIC and the decoder's at once, which
+is the bracket around `egress[i]` and `ingress[j]`.
 
 ## The deployment
 
@@ -64,7 +65,7 @@ and block 16. What differs from the guide is written next to each number.
 | the decoder's scheduler looks at its waiting queue only at a step with budget left and a running slot free | `admit via D` on both of the decoder's pools; `reqsD[j] (0) reserve (1)` — a slot must be free, none is taken | `scheduler.py:872-879` |
 | the decoder's local prefix hit, then the connector: for a remote prefill every prompt token beyond the local hit is external and loaded asynchronously | `kvD[j] (known) reserve (known)` with `reuse (floor((known - 1) / bs) * bs)`; `c = cached` is the local hit | `scheduler.py:932-954`; `nixl/pull_scheduler.py:34-66` |
 | blocks are allocated for the whole prompt, and the request is parked, `WAITING_FOR_REMOTE_KVS`, holding them and no slot; one transfer per request | the hold on `kvD[j]`; `transferred` is `do_remote_prefill`, spent | `scheduler.py:1199-1226, 1264-1294`; `nixl/pull_scheduler.py:108-189` |
-| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `run setup (x0); transfer[j] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c)`: a fixed wait, then the bytes on the decoder's link | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
+| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `run setup (x0); transfer on egress[i], ingress[j] (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c)`: a fixed wait, then the bytes out of the prefiller's NIC and into the decoder's at once, the two shared max-min fairly (`share maxmin`, a model, not a measurement: [Bandwidth sharing](design/bandwidth-sharing.md)) | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
 | the read done, the blocks are cached, the last prompt token is marked uncomputed (its logits are needed), and the request is back in the waiting queue, served before new arrivals | `load kvD[j] (prompt - 1 - c)` inside the transfer; `hold reqsD[j] (1)`, with `reqsD` declared before `kvD` | `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; `_try_promote_blocked_waiting_request`, `scheduler.py:3079-3092`; `scheduler.py:2383-2385` |
 | the prefiller frees the leased blocks when the read completes | `release kvP[i]` inside the transfer takes the lease | `_update_from_kv_xfer_finished`, `scheduler.py:3113-3138` |
 | the decoder recomputes the last prompt token and decodes; a request preempted afterwards is rescheduled without a second transfer, prefilling locally what it lost | `prefill on D[j] (known - c) growing kvD[j]; decode on D[j] (o - 1 - (known - prompt)) growing kvD[j];` with `known` from `computed` | `scheduler.py:1560-1561`; `nixl/pull_scheduler.py:187-189` |
@@ -84,7 +85,8 @@ pool kvD[2]   { cap blocksD * bs; block bs; evict lru; preempt lifo; admit via D
 
 stage P[2] : step { budget B; cost …; memory kvP; }
 stage D[2] : step { budget B; cost …; memory kvD; }
-stage link[2] : ps(1);
+stage egress[2] : ps(BwP);
+stage ingress[2] : ps(BwD);
 ```
 
 A family of `N` written next to a family of `N` is joined member for
@@ -104,8 +106,8 @@ kvD[j]`. `release` and `load` (and so `transfer … from … to …`) name the
 pool exactly as the hold that took it did, index included; `hold kvP[i] …
 lease kvP[i]` followed by `transfer … from kvP[k]` does not link. The
 serving forms take the family index before the work: `prefill on P[i] (…)`
-for a step engine that has to be named, `transfer[j] (…)` for the role's
-own stage array (`link`).
+for a step engine that has to be named, `transfer on egress[i], ingress[j]
+(…)` for the two NICs one read holds.
 
 Going from 2P2D to 4P8D is the four literals and the two `let`s; the
 program does not change otherwise, which is the point of writing the router
@@ -138,37 +140,35 @@ prefiller's worker instead of the decoder's, one notification more.
 #### The two modes in the program
 
 Pull is the program as written. The prefiller's scope ends in a lease, the
-decoder is admitted, and the decoder's NIC does the copy:
+decoder is admitted, and the decoder's worker reads over both NICs:
 
 ```
 hold reqsP[i] (1), kvP[i] (…) … { prefill on P[i] (…) growing kvP[i]; } cache (prompt) lease kvP[i] (inf);
 hold kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) … {
   run setup (x0);
-  transfer[j] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);   // the decoder's link[j] READs; the lease ends
+  transfer on egress[i], ingress[j] (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c);   // D READs; the lease ends
   hold reqsD[j] (1) { … }
 } cache (prompt + o);
 ```
 
 Push through the llm-d sidecar (serial dispatch) is the same three lines
-with two differences a reader can see: the copy is the prefiller's WRITE,
-so it runs on the prefiller's NIC, and it starts one notification after the
-decoder's admission (the registration, `nixl/push_scheduler.py:128-205`):
+with one difference a reader can see: the copy is the prefiller's WRITE
+(`nixl/push_worker.py:714-722`), which crosses the same two NICs, and it
+starts one notification after the decoder's admission (the registration,
+`nixl/push_scheduler.py:128-205`):
 
 ```
-stage linkP[2] : ps(1);                                   // the prefillers' NICs
-…
 hold kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) … {
   run setup (x0 + x_reg);
-  transfer on linkP[i] ((prompt - c) / Bw) from kvP[i] to kvD[j] (prompt - 1 - c);
+  transfer on egress[i], ingress[j] (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c);
   hold reqsD[j] (1) { … }
 } cache (prompt + o);
 ```
 
-`transfer on linkP[i] (…) from kvP[i] to kvD[j] (…)` is the same kernel
-statements — `run linkP[i]; load kvD[j]; release kvP[i]` — on the other
-side's stage. Which NIC saturates under load is what the two programs
-differ in, and a deployment with more prefillers than decoders (or the
-reverse) will show it.
+Which NIC saturates is not the mode's: it is the ratio of prefillers to
+decoders, where the router sends the reads (the prefill profile prefers the
+pod that has the prefix, so one prefiller's egress carries most of them),
+and the sharing policy.
 
 Push with the two legs dispatched at once (vLLM's own push proxy) is the
 form the language cannot yet write: the decoder's admission would have to
@@ -207,7 +207,7 @@ Two decode pods of 160 000 tokens each, two prefill pods, sessions of
 one to several turns (a prompt of 1 000–3 000 new tokens on a growing
 context, 200 output tokens, a 3 s tool call between turns, `p = 0.9`), a
 `max_model_len` of 16 384 tokens, the A100-shaped step cost of
-`examples/multi-turn/vllm.seq`, a 200 000 token/s link. Every number
+`examples/multi-turn/vllm.seq`, a 200 000 token/s NIC on every pod. Every number
 below is the median over seeds 1–20 of a run of 10 000 s after 1 000 s
 of warm-up (`--seed N --horizon 10000 --warmup 1000 --set …`), with the
 range across the seeds where it says more than the median. About 1 % of
@@ -220,17 +220,17 @@ second:
 
 | `thr` (nonCachedTokens) | remote prefills | mean TTFT, median (range) | mean response |
 |---|---|---|---|
-| 1 (always) | 100 % | 29.2 ms (28.8–29.7) | 71.9 ms |
-| 512 | 59 % | 28.6 ms (28.0–29.0) | 71.2 ms |
-| 2 048 | 22 % | 29.1 ms (28.4–29.6) | 72.0 ms |
+| 1 (always) | 100 % | 29.5 ms (28.3–30.5) | 72.1 ms |
+| 512 | 59 % | 28.7 ms (28.0–29.1) | 71.3 ms |
+| 2 048 | 22 % | 29.0 ms (28.5–29.6) | 71.8 ms |
 | never (decode only) | 0 % | 29.4 ms (28.2–30.4) | 73.8 ms |
 
 Disaggregating everything costs a transfer per request, disaggregating
 nothing costs every decoder a prefill in its decode steps, and at this
 load the two cost about the same: the four settings lie within a
 millisecond. The decider's `thr = 512` sits below both: seed for seed it
-is 0.2–1.1 ms under always-disaggregate in all twenty, and under decode
-only in nineteen. With the guide's decode profile (the least busy pod,
+is 0.3–1.4 ms under always-disaggregate and 0.2–1.6 ms under decode only,
+in all twenty. With the guide's decode profile (the least busy pod,
 no prefix affinity) a follow-up turn often lands on the pod that does not
 have its context, and the prefiller — which does have it, through the
 affinity filter — prefills the new tokens only: 59 % of requests are
@@ -245,17 +245,21 @@ prefill pool is 160 000 tokens; a decoder is never smaller than
 
 | decoder memory, tokens per pod | Λ, sessions/s | remote prefills | lease, mean | prefiller memory allocated, mean per pod | prefiller queue, mean | mean TTFT |
 |---|---|---|---|---|---|---|
-| 160 000 | 0.6 | 59 % | 13 ms | 430 | 0.01 | 28.6 ms |
-| 32 000 | 0.6 | 86 % | 32 ms | 905 | 0.01 | 47.2 ms |
-| 17 600 | 0.6 | 92 % | 35 ms | 1 031 | 0.01 | 52.6 ms |
-| 160 000 | 1.2 | 72 % | 24 ms | 1 606 | 0.03 | 46.9 ms |
-| 32 000 | 1.2 | 93 % | 38 ms | 2 532 | 0.04 | 66.5 ms |
-| 17 600 | 1.2 | 96 % | 43 ms | 2 804 | 0.04 | 73.2 ms |
+| 160 000 | 0.6 | 59 % | 13 ms | 435 | 0.01 | 28.7 ms |
+| 32 000 | 0.6 | 86 % | 33 ms | 944 | 0.01 | 49.1 ms |
+| 17 600 | 0.6 | 92 % | 37 ms | 1 079 | 0.01 | 54.7 ms |
+| 160 000 | 1.2 | 72 % | 25 ms | 1 650 | 0.03 | 47.8 ms |
+| 32 000 | 1.2 | 93 % | 42 ms | 2 728 | 0.04 | 70.7 ms |
+| 17 600 | 1.2 | 96 % | 49 ms | 3 046 | 0.04 | 78.4 ms |
 
 Smaller decoders send *more* prompts to the prefillers — they cache less,
 so the decider's uncached suffix is longer — and each of those prompts
 waits longer for the decoder's room, so the prefillers hold more memory:
-2.1–2.4 times at 0.6 sessions per second, 1.6–1.7 times at 1.2. At these
+2.2–2.5 times at 0.6 sessions per second, 1.7–1.8 times at 1.2. The reads
+now share the prefillers' NICs too, and the prefill profile sends most of
+them to one prefiller, the one that has the prefix: at 1.2 sessions per
+second with the smallest decoders that costs 5 ms of TTFT and 6 ms of lease
+over a model that shares the decoders' NICs only. At these
 loads that memory is under 2 % of the pool and no prefiller queues; the
 deployment pays for the small decoders in TTFT, not yet in admissions.
 

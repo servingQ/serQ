@@ -37,10 +37,13 @@ ps ( expr )
 | `expr` | `expr` | `Ps` | Total throughput `φ(present)`, shared equally by the jobs present. The [context variable](context.md) `present` is the number of jobs. |
 
 ```seq
-stage link[2] : ps(1);     // a decoder's NIC: its reads share the bandwidth
+stage svc : ps(1);
 ```
 
-(`examples/pd-disaggregation/llmd_nixl_pull.seq`)
+(`examples/single-turn/ps.seq`, M/G/1-PS.) A `ps` stage some run holds
+together with another is served by the program's
+[`share`](program.md#share) instead: its jobs are flows, not an equal
+split.
 
 ## `delay`
 

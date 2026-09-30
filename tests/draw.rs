@@ -53,7 +53,7 @@ fn pools_of(p: &Program, net: &deployment::Net, stage_name: &str) -> Vec<String>
 
 /// Each stage kind has its glyph: `mg1.seq` is one FIFO server, `ps.seq` one
 /// processor-sharing server, and `llmd_nixl_pull.seq` has a step engine on each
-/// side, a processor-sharing link and a delay for the tool call.
+/// side, a processor-sharing NIC on each and a delay for the tool call.
 #[test]
 fn stations_take_their_stage_kind() {
     let kinds = |name: &str| -> Vec<StationKind> {
@@ -71,7 +71,8 @@ fn stations_take_their_stage_kind() {
     for (name, kind) in [
         ("P", StationKind::Step),
         ("D", StationKind::Step),
-        ("link", StationKind::Ps),
+        ("egress", StationKind::Ps),
+        ("ingress", StationKind::Ps),
         ("tool", StationKind::Delay),
     ] {
         let i = net
@@ -356,26 +357,39 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
 
 /// `examples/pd-disaggregation/llmd_nixl_pull.seq`: the prompt's KV is in the prefiller's pool
 /// through the transfer (leased past its scope) and in the decoder's from
-/// the transfer on, so the link station is inside both enclosures, the
-/// prefill station in the prefiller's only and the decode station in the
-/// decoder's only. The prefiller's request slot ends with its scope, so it
-/// encloses the prefill station alone. The decoder's slot is only reserved
-/// during the transfer (`reqsD[j] (0) reserve (1)`: the request is parked,
-/// not running, `scheduler.py:1264-1268`), so it encloses the decode
-/// station and not the link.
+/// the transfer on, so the read's two stations (the prefiller's NIC and the
+/// decoder's, held at once) are inside both enclosures, the prefill station
+/// in the prefiller's only and the decode station in the decoder's only.
+/// The prefiller's request slot ends with its scope, so it encloses the
+/// prefill station alone. The decoder's slot is only reserved during the
+/// transfer (`reqsD[j] (0) reserve (1)`: the request is parked, not
+/// running, `scheduler.py:1264-1268`), so it encloses the decode station
+/// and not the read.
 #[test]
-fn a_transfer_puts_the_link_in_both_enclosures() {
+fn a_transfer_puts_the_read_in_both_enclosures() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "P"), ["reqsP", "kvP"]);
-    assert_eq!(pools_of(&p, &net, "link"), ["kvP", "kvD"]);
+    for nic in ["egress", "ingress"] {
+        assert_eq!(pools_of(&p, &net, nic), ["kvP", "kvD"], "{nic}");
+    }
     assert_eq!(pools_of(&p, &net, "D"), ["kvD", "reqsD"]);
     assert!(pools_of(&p, &net, "tool").is_empty());
     let f = deployment::layout(&p, &net);
     let boxes = f.boxes(BoxStyle::Enclosure);
-    let link = net.node_of(stage(&p, "link")).unwrap();
-    let (rect, _) = f.stations()[link];
-    assert_eq!(boxes.iter().filter(|b| b.contains(&rect)).count(), 2);
+    for nic in ["egress", "ingress"] {
+        let (rect, _) = f.stations()[net.node_of(stage(&p, nic)).unwrap()];
+        assert_eq!(
+            boxes.iter().filter(|b| b.contains(&rect)).count(),
+            2,
+            "{nic}"
+        );
+    }
+    let (eg, ing) = (
+        net.node_of(stage(&p, "egress")).unwrap(),
+        net.node_of(stage(&p, "ingress")).unwrap(),
+    );
+    assert_eq!(net.flows, vec![vec![eg, ing]]);
 }
 
 fn pools_at(src: &str, stage_name: &str) -> Vec<String> {
@@ -407,21 +421,29 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
 }
 
 /// `examples/pd-disaggregation/llmd_nixl_pull.seq`'s router sends a request either
-/// to a prefiller and over the link (remote), after the read's fixed wait
-/// (`setup`), or straight to the decoder (local); a request whose KV is
-/// already there skips both. Every turn
+/// to a prefiller and over the two NICs (remote), after the read's fixed
+/// wait (`setup`), or straight to the decoder (local); a request whose KV
+/// is already there skips both. Every turn
 /// ends at the decoder, which the session leaves or resumes after a tool call.
 #[test]
 fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
-    let (pf, setup, link, d, tool) = (at("P"), at("setup"), at("link"), at("D"), at("tool"));
+    let (pf, setup, eg, ing, d, tool) = (
+        at("P"),
+        at("setup"),
+        at("egress"),
+        at("ingress"),
+        at("D"),
+        at("tool"),
+    );
     assert!(net.has_edge(End::Arrival, pf), "remote");
     assert!(net.has_edge(End::Arrival, d), "local");
     assert!(net.has_edge(pf, setup));
-    assert!(net.has_edge(setup, link));
-    assert!(net.has_edge(link, d));
+    assert!(net.has_edge(setup, eg));
+    assert!(net.has_edge(ing, d));
+    assert!(!net.has_edge(eg, ing), "held at once, not passed in turn");
     assert!(net.has_edge(pf, d), "the KV is already on the decoder");
     assert!(net.has_edge(d, tool), "more");
     assert!(net.has_edge(d, End::Exit));

@@ -61,13 +61,13 @@ is `run egress[i], ingress[j] (X); load Q (n); release P;`.
 
 ### Example
 
-From `examples/pd-disaggregation/llmd_nixl_pull.seq`, the prefiller's lease and the
-decoder's read:
+From `examples/pd-disaggregation/llmd_nixl_pull.seq`, the decoder's read of
+the prefiller's leased blocks, over the prefiller's NIC and its own:
 
 ```seq
-hold kvD (prompt) reserve (prompt), reqsD (0) reserve (1) … {
+hold kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) … {
   run setup (x0);
-  transfer ((prompt - c) / Bw) from kvP to kvD (prompt - 1 - c);
+  transfer on egress[i], ingress[j] (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c);
   …
 } cache (prompt + o);
 ```
