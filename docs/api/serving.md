@@ -1,16 +1,18 @@
 # Serving vocabulary
 
-Names for the parts of a request's life. Each form is sugar: the parser rewrites
-it to the [kernel statement](statements.md) it stands for, so the AST, the IR
-and the interpreter know nothing of it. An admission has one spelling on both
-sides, the kernel's [`hold … at admission (…) { … } cache (…)`](statements.md#hold).
+Names for the parts of a request's life. An admission is the kernel's
+[`hold … at admission (…) { … } cache (…)`](statements.md#hold); these name what
+the request does once it is in.
 
-| Form | Kernel |
-|---|---|
-| [`prefill W;`](#prefill-decode-tool) | `run prefill (W);` or `run E prefill (T);` |
-| [`decode W;`](#prefill-decode-tool) | `run decode (W);` or `run E decode (T);` |
-| [`tool Z;`](#prefill-decode-tool) | `run tool (Z);` |
-| [`transfer (X) from P to Q (n);`](#transfer-from-to) | `run link (X); load Q (n); release P;` |
+| Form | The request… | Kernel |
+|---|---|---|
+| [`prefill W;`](#prefill-decode-tool) | computes its prompt's KV | `run prefill (W);` or `run E prefill (T);` |
+| [`decode W;`](#prefill-decode-tool) | generates its output, a token per iteration | `run decode (W);` or `run E decode (T);` |
+| [`tool Z;`](#prefill-decode-tool) | waits outside the engine (a tool call, a person reading) | `run tool (Z);` |
+| [`transfer (X) from P to Q (n);`](#transfer-from-to) | has its KV moved to another instance | `run link (X); load Q (n); release P;` |
+
+Each form is sugar: the parser rewrites it to the [kernel statement](statements.md)
+in the last column, so the AST, the IR and the interpreter know nothing of it.
 
 ## `prefill`, `decode`, `tool`
 

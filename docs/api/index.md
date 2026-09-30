@@ -13,16 +13,20 @@ constructs that say it and a program that uses them.
 | To model… | Read | In a program |
 |---|---|---|
 | a request queue and a server | [`stage`](stage.md) (`fifo`, `ps`, `delay`), [`run`](statements.md#run) | `examples/single-turn/mg1.seq`; [tutorial 1](../tutorial/01-a-queue.md) |
-| arrivals, turns and think time | [`arrive`](workload.md#arrive), [`turn`](workload.md#turn), [`session`](program.md#session) | [the workloads case study](../case-study-workloads.md) |
+| arrivals, turns and think time | [`arrive`](workload.md#arrive), [`turn`](workload.md#turn), [`session`](program.md#session); think time as a [`delay`](stage.md#delay) stage, [`tool`](serving.md#prefill-decode-tool) | [the workloads case study](../case-study-workloads.md) |
+| replaying a production trace | [`trace`](workload.md#trace) | `examples/replay/vllm_replay.seq`; [tutorial 6](../tutorial/06-the-cliff.md) |
 | memory a request holds while it runs | [`pool`](pool.md), [`hold`](statements.md#hold) | [tutorial 2](../tutorial/02-memory.md) |
 | what the scheduler reads at admission | [`at admission`](statements.md#hold), [moments](context.md) | `lib/vllm.seq` (`known`, `hit`) |
-| a prefix cache across turns | [`cache`](statements.md#hold), [`evict`](pool.md#evict), [`cachedin`](functions.md#pool) | [tutorial 4](../tutorial/04-prefix-cache.md) |
-| continuous batching and chunked prefill | [`step`](stage.md#step), [`prefill`, `decode`](serving.md#prefill-decode-tool), `growing` | [the vLLM case study](../case-study-vllm.md); [tutorial 5](../tutorial/05-the-engine.md) |
+| a prefix cache across turns | [`cache`](statements.md#hold), [`evict`](pool.md#evict), `cached` ([attributes](attributes.md)), [`drop`](statements.md#drop); [`cachedin`](functions.md#pool) for the lookup at admission | [tutorial 4](../tutorial/04-prefix-cache.md); `lib/vllm.seq` for `cachedin` |
+| an offload tier for evicted prefixes | [`spill`](pool.md#spill) | no example program yet (`tests/pool_semantics.rs`) |
+| continuous batching and chunked prefill | [`step`](stage.md#step) (`budget`, `chunk`, `cost`), [`prefill`, `decode`](serving.md#prefill-decode-tool), [`growing`](statements.md#run) | [the vLLM case study](../case-study-vllm.md); [tutorial 5](../tutorial/05-the-engine.md) |
+| the order requests are admitted and served in | [`queue by`](pool.md#queue), [`serve`](stage.md#serve) (`serve decode first`, `serve by (…)`) | `examples/multi-turn/replica.seq` (`serve decode first`); `queue by` in no example yet (`tests/pool_semantics.rs`) |
 | preemption and recompute | [`preempt lifo`](pool.md#preempt), `computed` ([attributes](attributes.md)) | `lib/vllm.seq` (`known = computed …`) |
-| the scheduler's waiting loop and its budget | [`admit via`](pool.md#admit-via), [`budget_left`](functions.md#step-stage) | `lib/vllm.seq` |
+| the scheduler's waiting loop and its budget | [`admit via`](pool.md#admit-via), [`budget_left`](functions.md#step-stage) | `examples/replay/vllm_replay.seq` (`admit via engine`), [tutorial 5](../tutorial/05-the-engine.md); `lib/vllm.seq` (`budget_left`) |
+| what the scheduler may not read | [`hidden`](workload.md#hidden) | every vLLM program hides the output length `o` |
 | prefill/decode disaggregation | [`lease`](statements.md#hold), [`release`](statements.md#release), [`load`](statements.md#load), [`transfer … from … to`](serving.md#transfer-from-to) | [the P/D case study](../case-study-pd.md) |
 | a routing policy | [`choose`](statements.md#choose), [observables](functions.md#observables) | `examples/multi-turn/routing.seq` |
-| an engine shared by several programs | [`def`](program.md#def), [`use`](program.md#use) | `lib/vllm.seq` and the four vLLM programs |
+| an engine shared by several programs | [`def`](program.md#def), [`use`](program.md#use) | `lib/vllm.seq` and the programs that `use` it |
 | what to measure | [`observe`](statements.md#observe) | every program; `seq-lang run` reports it |
 
 ## By construct
