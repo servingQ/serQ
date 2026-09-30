@@ -45,13 +45,13 @@ cargo run --release -- draw examples/multi-turn/vllm.sq --format svg --out vllm.
 As a dependency, pin a release tag:
 
 ```toml
-serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.0-rc6" }
+serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.0-rc7" }
 ```
 
 Or install the CLI directly:
 
 ```bash
-cargo install --git https://github.com/vrvrv/serQ --tag v0.1.0-rc6 --locked --root <dir>
+cargo install --git https://github.com/vrvrv/serQ --tag v0.1.0-rc7 --locked --root <dir>
 ```
 
 ## Layout

@@ -202,7 +202,7 @@ priced as such. What a change to `src/ir.rs` does to the version:
 
 A version is a release, and the lines above decide one thing: whether a
 change to a *tagged* version opens the next number. While the version at
-`IR_VERSION` has no tag (8 in `v0.1.0-rc6`, 7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`,
+`IR_VERSION` has no tag (9 in `v0.1.0-rc7`, 8 in `v0.1.0-rc6`, 7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`,
 5 in `v0.1.0-rc1`;
 `v0.1.0-rc0` is 3), no line bumps; the
 change is listed in the coming tag's message, which is the release note,
@@ -248,8 +248,9 @@ and scheduler-hidden attributes remain rejected. Existing time-dependent
 queue policies change meaning; static one-key policies keep their order.
 Resumed holds keep prepend priority and the selected non-fitting request
 still blocks the queue. The current interpreter rejects older IR versions;
-regenerate JSON from source. The latest tag `v0.1.0-rc6` carries 8, so this
-meaning/shape change opens 9 and belongs in its release note.
+regenerate JSON from source. `v0.1.0-rc6` carried 8, so this
+meaning/shape change opened 9, and it is in `v0.1.0-rc7`'s release note;
+`v0.1.0-rc7` carries 9, so the next change to the IR opens 10.
 
 The companion `serving-queue-theory/scripts/gen_serq_oracle.py` reads version 9
 for its FIFO fragment and rejects non-FIFO queues. It also retains support
