@@ -26,7 +26,8 @@
 //!           | 'hidden' IDENT (',' IDENT)* ';'
 //! block    := '{' stmt* '}'
 //! stmt     := 'turn' ';' | 'request' ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
-//!           | 'hold' ref '(' expr ')' (',' ref '(' expr ')')* ('reuse' '(' expr ')')?
+//!           | 'hold' ref '(' expr ')' ('reserve' '(' expr ')')?
+//!                 (',' ref '(' expr ')' ('reserve' '(' expr ')')?)* ('reuse' '(' expr ')')?
 //!                 ('at' 'admission' '(' IDENT '=' expr (',' IDENT '=' expr)* ')')?
 //!                 block ('cache' '(' expr ')')? ('lease' ref '(' expr ')')? ';'?
 //!           | 'grow' ref '(' expr ')' ';' | 'drop' ref ';'
