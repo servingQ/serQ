@@ -10,18 +10,16 @@ cargo build --release
 ./target/release/serq --help
 ```
 
-The last tag, `v0.1.0-rc5`, predates the rename: it is the crate `seq-lang` (library `seq`, CLI `seq-lang`). The first release under the name `serq` is `v0.1.0-rc6`.
-
 Or install the CLI straight from a release tag:
 
 ```bash
-cargo install --git https://github.com/vrvrv/serQ --tag v0.1.0-rc5 --locked --root ~/.local
+cargo install --git https://github.com/vrvrv/serQ --tag v0.1.0-rc6 --locked --root ~/.local
 ```
 
 As a dependency, pin a tag:
 
 ```toml
-seq = { package = "seq-lang", git = "https://github.com/vrvrv/serQ", tag = "v0.1.0-rc5" }
+serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.0-rc6" }
 ```
 
 ## Run your first program
