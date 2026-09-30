@@ -1,6 +1,6 @@
 # Workload
 
-```seq
+```serq
 workload {
   arrive poisson(rate);  |  arrive renewal(gap);  |  arrive closed(n);  |  arrive batch(n);  |  arrive none;
   trace "file.csv" [ordered];
@@ -29,7 +29,7 @@ only `set` and `observe`. Random draws in the workload use their own stream.
 
 ### `renewal`
 
-```seq
+```serq
 arrive renewal(~h2(2, 4));     // interarrival times of mean 2, CV² 4
 arrive renewal(2);             // one every 2 clock units
 ```
@@ -45,7 +45,7 @@ the same seed, `renewal(~exp(1 / rate))` arrives at the same times as
 
 ## `trace`
 
-```seq
+```serq
 trace "file.csv" [ordered];
 ```
 
@@ -59,7 +59,7 @@ sets `more` to 1 while another turn remains ([attributes](attributes.md)).
 
 ## `init`
 
-```seq
+```serq
 init { set x = expr; … }
 ```
 
@@ -67,7 +67,7 @@ Runs once, when the session arrives. Moment `Session`.
 
 ## `turn`
 
-```seq
+```serq
 turn { set x = expr; … }
 ```
 
@@ -81,7 +81,7 @@ The session's side of a [two-sided program](program.md#server). See
 
 ## `hidden`
 
-```seq
+```serq
 hidden o;
 hidden o, think;
 ```

@@ -2,7 +2,7 @@
 //!
 //! The view (`deployment`, the queueing network) produces a `Figure`; both
 //! writers (`svg`, `tikz`) consume one.
-//! Nothing in here knows about seQ, and nothing in a writer decides a
+//! Nothing in here knows about serQ, and nothing in a writer decides a
 //! coordinate: a figure is the test surface, which is why the tests assert on
 //! rectangles rather than on bytes.
 //!

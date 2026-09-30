@@ -25,7 +25,7 @@ The [serving vocabulary](serving.md) is sugar the parser rewrites to these.
 
 ## `set`
 
-```seq
+```serq
 set NAME = expr;
 ```
 
@@ -34,7 +34,7 @@ is an attribute of every session.
 
 ## `observe`
 
-```seq
+```serq
 observe NAME = expr;
 ```
 
@@ -43,7 +43,7 @@ Records a sample of `expr` after warm-up, with the time, session and turn.
 
 ## `turn`
 
-```seq
+```serq
 turn;
 ```
 
@@ -52,7 +52,7 @@ attributes and sets `more`.
 
 ## `hold`
 
-```seq
+```serq
 hold POOL (units) [reserve (r)] [, POOL (units) [reserve (r)]]*
      [reuse (ρ)]
      [at admission (NAME = expr, …)]
@@ -88,7 +88,7 @@ reached.
 
 ## `grow`
 
-```seq
+```serq
 grow POOL (d);
 ```
 
@@ -101,7 +101,7 @@ If it does not fit, the pool's [`preempt`](pool.md#preempt) applies.
 
 ## `drop`
 
-```seq
+```serq
 drop POOL;
 ```
 
@@ -111,7 +111,7 @@ models dropping them writes this before `end`.
 
 ## `release`
 
-```seq
+```serq
 release POOL;
 ```
 
@@ -122,7 +122,7 @@ nothing.
 
 ## `load`
 
-```seq
+```serq
 load POOL (n);
 ```
 
@@ -137,7 +137,7 @@ and `cached` count them.
 
 ## `run`
 
-```seq
+```serq
 run STAGE [prefill | decode] (work) [growing POOL];
 run STAGE, STAGE [, STAGE]* (work);
 ```
@@ -160,7 +160,7 @@ at tokens per second, say). A stage array some run holds with another is
 *shared* for the whole run: every job on it, a single-stage run included,
 is a flow, and the report's utilisation is the capacity its flows carry.
 
-```seq
+```serq
 stage egress[2] : ps(BwP);     // a prefiller's NIC, tokens per second
 stage ingress[2] : ps(BwD);    // a decoder's NIC
 share maxmin;
@@ -170,7 +170,7 @@ run egress[i], ingress[j] (tokens);
 
 ## `branch`
 
-```seq
+```serq
 branch (test) block [else block]
 branch with (p) block [else block]
 ```
@@ -186,7 +186,7 @@ draw written as a test.
 
 ## `loop`
 
-```seq
+```serq
 loop block
 ```
 
@@ -194,7 +194,7 @@ Repeats the block until an `end`.
 
 ## `choose`
 
-```seq
+```serq
 choose NAME in n by (key, …);
 ```
 
@@ -209,7 +209,7 @@ Used with an array of stages: `choose j in 2 by (work(prefill[j]));`.
 
 ## `end`
 
-```seq
+```serq
 end;
 ```
 

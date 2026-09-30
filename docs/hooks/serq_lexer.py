@@ -1,4 +1,4 @@
-"""Register a Pygments lexer for seQ, so ```seq fences highlight.
+"""Register a Pygments lexer for serQ, so ```serq fences highlight.
 
 Four roles, four colours. A program's shape is `pool`/`stage`/`session`; what
 a session *does* is `hold`, `prefill`, `observe`; the knobs are `cap`,
@@ -10,7 +10,7 @@ not what it means.
 
 The pages fenced 25 blocks as ```rust, which is close enough to look right
 and wrong in the places that matter: `hold`, `observe` and `~exp`
-are not Rust, and the words that carry a seQ program's meaning were the ones
+are not Rust, and the words that carry a serQ program's meaning were the ones
 left uncoloured.
 
 mkdocs loads this through `hooks:`. Pygments finds a lexer through its
@@ -67,10 +67,10 @@ BUILTINS = (
 )
 
 
-class SeqLexer(RegexLexer):
-    name = "seQ"
-    aliases = ["seq"]
-    filenames = ["*.seq"]
+class SerqLexer(RegexLexer):
+    name = "serQ"
+    aliases = ["serq", "seq"]
+    filenames = ["*.serq"]
 
     tokens = {
         "root": [
@@ -106,17 +106,17 @@ class SeqLexer(RegexLexer):
 
 
 def on_config(config, **_):
-    """Make `seq` a language Pygments knows, before any page is rendered."""
-    module = types.ModuleType("pygments.lexers.seq")
-    module.SeqLexer = SeqLexer
+    """Make `serq` a language Pygments knows, before any page is rendered."""
+    module = types.ModuleType("pygments.lexers.serq")
+    module.SerqLexer = SerqLexer
     # `get_lexer_by_name` imports the module and reads `__all__` off it
-    module.__all__ = ["SeqLexer"]
-    sys.modules["pygments.lexers.seq"] = module
-    _mapping.LEXERS["SeqLexer"] = (
-        "pygments.lexers.seq",
-        "seQ",
-        ("seq",),
-        ("*.seq",),
+    module.__all__ = ["SerqLexer"]
+    sys.modules["pygments.lexers.serq"] = module
+    _mapping.LEXERS["SerqLexer"] = (
+        "pygments.lexers.serq",
+        "serQ",
+        ("serq", "seq"),
+        ("*.serq",),
         (),
     )
     return config

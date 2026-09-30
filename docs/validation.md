@@ -1,11 +1,11 @@
-# How seQ is checked
+# How serQ is checked
 
 A language whose claim is "this program *is* your serving system" has to earn
 it. Four independent kinds of evidence, all run by `make check`.
 
 ## 1. Closed forms
 
-`examples/single-turn/mg1.seq`, `ps.seq` and `closed.seq` are checked against the answers
+`examples/single-turn/mg1.serq`, `ps.serq` and `closed.serq` are checked against the answers
 queueing theory already knows: M/M/1 sojourn time, Pollaczek–Khinchine for four
 service laws, processor-sharing insensitivity, and mean value analysis for the
 closed network. A run whose confidence interval does not cover the closed form
@@ -19,12 +19,12 @@ everything else.
 
 `libqueuingsim` (in the research repository) has hand-written models of the
 same deployments, built independently. `libqueuingsim/tests/seq_*.rs` runs the
-seQ programs next to them:
+serQ programs next to them:
 
 | Program | Agreement |
 |---|---|
-| `replica.seq` | TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; over 20 seeds, hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05) |
-| `routing.seq` | within 1–2 % on response and hit rate across five policies |
+| `replica.serq` | TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; over 20 seeds, hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05) |
+| `routing.serq` | within 1–2 % on response and hit rate across five policies |
 
 ## 3. The real scheduler as an oracle
 
@@ -34,7 +34,7 @@ agreeing on six deterministic scenarios, and request-for-request agreement on a
 
 The important part is the method rather than the result:
 `scripts/exp/diff_seq_vllm.sh` and `first_divergence.sh` do not check that the
-aggregates match — they find the **first step** at which seQ and the real
+aggregates match — they find the **first step** at which serQ and the real
 scheduler disagree. That is what found the six semantic differences the first
 version of the program had. An aggregate that matches can still be wrong for
 compensating reasons; a first-divergence search cannot be fooled that way.
@@ -49,7 +49,7 @@ while nothing real trips them.
 
 ### The citations themselves
 
-§7's table is eleven rows of "vLLM does X, here is the seQ construct, here is the
+§7's table is eleven rows of "vLLM does X, here is the serQ construct, here is the
 upstream line range". `make check` now resolves all 42 of those ranges against the
 pinned `ref/vllm` and hashes their text (`scripts/check_citations.py`,
 `tools/citations.json`). A range that has moved, a file that no longer exists, or a
@@ -79,15 +79,15 @@ program is **generated from the IR** — not hand-written alongside it.
 | | |
 |---|---|
 | `Seq.lean` | the syntax, the pool semantics, the memory invariant |
-| `SeqExec.lean` | an executable semantics of the pool and step-engine fragment |
-| `SeqOracle.lean` | the vLLM scenarios as theorems, one per scenario, generated |
-| `SeqServe.lean` | serving order of a step engine |
+| `SerqExec.lean` | an executable semantics of the pool and step-engine fragment |
+| `SerqOracle.lean` | the vLLM scenarios as theorems, one per scenario, generated |
+| `SerqServe.lean` | serving order of a step engine |
 
 Two results worth naming:
 
-- **`SeqLang.Step.invariant`** — `allocated + cached ≤ cap` in every reachable
+- **`SerqLang.Step.invariant`** — `allocated + cached ≤ cap` in every reachable
   configuration of every pool, for every program.
-- **`SeqLang.Serve.serve_eq_decode_first`** — without a per-request chunk cap,
+- **`SerqLang.Serve.serve_eq_decode_first`** — without a per-request chunk cap,
   serving in admission order *is* serving decode-first (and
   `chunk_cap_breaks_shape` shows a cap breaks it). This is why the paper's
   "prefill from the budget decode leaves" describes vLLM too, and it is a
@@ -103,7 +103,7 @@ Two results worth naming:
 - Cache entries are per session. Cross-session prefix sharing — a common system
   prompt, SGLang's RadixAttention — needs a content-addressed cache and is not
   written.
-- The prefill/decode program (`examples/pd-disaggregation/llmd_nixl_pull.seq`) is checked against the
+- The prefill/decode program (`examples/pd-disaggregation/llmd_nixl_pull.serq`) is checked against the
   source line by line and by deterministic tests of its statements, not yet
   against a machine or a scheduler oracle: that oracle would
   drive two vLLM schedulers and a fake connector ([case
@@ -111,7 +111,7 @@ Two results worth naming:
 
 ## Against a real machine
 
-Beyond agreement with other models, `examples/replay/vllm_replay.seq` is fitted to an
+Beyond agreement with other models, `examples/replay/vllm_replay.serq` is fitted to an
 A100 running Qwen3-8B and predicts measured runs it was not fitted on: hit
 rates within 1–6 points across eight held-out configurations, **including the
 one where the replica collapses**. The cost model comes from 3 022 engine steps

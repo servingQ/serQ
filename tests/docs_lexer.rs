@@ -1,6 +1,6 @@
 //! The docs lexer and the parser say the same words.
 //!
-//! `docs/hooks/seq_lexer.py` carries a list of seQ's keywords, and the parser
+//! `docs/hooks/serq_lexer.py` carries a list of serQ's keywords, and the parser
 //! carries the real one. Two copies rot in a week: this is the only reason
 //! they do not.
 
@@ -71,7 +71,7 @@ fn the_docs_lexer_knows_every_keyword() {
         parser.len()
     );
 
-    let file = "docs/hooks/seq_lexer.py";
+    let file = "docs/hooks/serq_lexer.py";
     let text = read(file);
     let missing: Vec<&String> = parser
         .iter()
@@ -89,7 +89,7 @@ fn the_docs_lexer_knows_every_keyword() {
 /// still colour it - and must not colour it as a statement.
 #[test]
 fn admit_is_an_option_not_a_statement() {
-    let file = "docs/hooks/seq_lexer.py";
+    let file = "docs/hooks/serq_lexer.py";
     assert!(read(file).contains("admit"), "{file} dropped `admit via`");
 }
 
@@ -97,7 +97,7 @@ fn admit_is_an_option_not_a_statement() {
 /// against its own list: that list is every word it matches.
 #[test]
 fn the_parser_keyword_list_is_every_keyword() {
-    let listed: BTreeSet<String> = seq::frontend::parser::KEYWORDS
+    let listed: BTreeSet<String> = serq::frontend::parser::KEYWORDS
         .iter()
         .map(|w| w.to_string())
         .collect();
@@ -126,7 +126,7 @@ fn the_function_list_is_every_function_the_linker_resolves() {
             resolved.insert(w.to_string());
         }
     }
-    let listed: BTreeSet<String> = seq::frontend::link::FUNCTIONS
+    let listed: BTreeSet<String> = serq::frontend::link::FUNCTIONS
         .iter()
         .map(|w| w.to_string())
         .collect();

@@ -3,7 +3,7 @@
 The prefill/decode split of llm-d over vLLM's NIXL connector, checked
 against the source (llm-d `8a2f37d`, the router `13eebdb`, vLLM `0c87a197`),
 and what the language had to gain to state it. Before is the repository as
-it was; After runs (`examples/pd-disaggregation/llmd_pd.seq`, `tests/pd_semantics.rs`,
+it was; After runs (`examples/pd-disaggregation/llmd_pd.serq`, `tests/pd_semantics.rs`,
 `docs/case-study-pd.md`). IR version 5.
 
 ## What the systems do
@@ -53,7 +53,7 @@ buffer on the link.
 
 ## Before
 
-`examples/pd-disaggregation/lecture_pd.seq` holds the prefill instance's memory through the
+`examples/pd-disaggregation/lecture_pd.serq` holds the prefill instance's memory through the
 transfer and queues for the decode instance's afterwards:
 
 ```
@@ -87,7 +87,7 @@ load Q (n);          // the KV of n tokens arrived: the enclosing hold's compute
 transfer (w) from P to Q (n);   // = run link (w); load Q (n); release P;
 ```
 
-The transfer of `examples/pd-disaggregation/llmd_pd.seq`, from the server's side:
+The transfer of `examples/pd-disaggregation/llmd_pd.serq`, from the server's side:
 
 ```
 admit if reqsP[i] (1), kvP[i] (min(prompt, hit + budget_left(P[i]))) reserve (prompt) fit
@@ -235,7 +235,7 @@ choose between them.
 
 - **`lease`, `load` and Lean.** None of the three is in the Lean
   fragment. A lease is the `[Free]` transition deferred to a later event,
-  and `load` moves the position `SeqExec.lean` does not keep per pool yet.
+  and `load` moves the position `SerqExec.lean` does not keep per pool yet.
   The generator fails on all of them, so no oracle program is affected.
 
 - **The figure.** Two enclosures that cross at the link station is the
@@ -248,6 +248,6 @@ choose between them.
 | Consumer | Gains | Pays |
 |---|---|---|
 | interpreter | the lease coupling, xPyD families, the decoder's two admissions | leases on the session with an expiry event; one release path shared with the scope's end; the victim rule; the queue order made explicit |
-| Lean | nothing yet; the fragment refuses the clause and both statements | the generator's pin moves to 5 (one line in `gen_seq_oracle.py`) |
+| Lean | nothing yet; the fragment refuses the clause and both statements | the generator's pin moves to 5 (one line in `gen_serq_oracle.py`) |
 | oracle | nothing; the seven IR files change only in `version` and a `null` lease | regeneration (`make oracle-ir`) |
 | reader | `lease`, `release`, `load`, `transfer … from … to …`; the two-line rule for the victim and the queue order | one clause, two statements and one form to learn |

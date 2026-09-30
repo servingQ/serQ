@@ -10,7 +10,7 @@ finds its stage among the stages declared above it.
 
 ## `let`
 
-```seq
+```serq
 let NAME = expr;
 ```
 
@@ -24,7 +24,7 @@ A named constant, folded at link time and overridable from the command line
 
 ## `def`
 
-```seq
+```serq
 def NAME ( PARAM, … ) = expr;
 def NAME ( PARAM, … ) { statement* }
 ```
@@ -37,12 +37,12 @@ the rules of the block it is used in (no `turn`, `end` or `request` in a
 `server`). The AST and the IR hold the expansion, so a program with a `def`
 has the IR of the one written out.
 
-```seq
+```serq
 def reusable(x) = floor((x - 1) / bs) * bs;
 set hitmax = reusable(prompt);
 ```
 
-(`examples/pd-disaggregation/llmd_nixl_pull.seq`)
+(`examples/pd-disaggregation/llmd_nixl_pull.serq`)
 
 | Argument | Type | Description |
 |---|---|---|
@@ -63,7 +63,7 @@ an expansion is reported in the body, with a note naming the use.
 
 ## `use`
 
-```seq
+```serq
 use "path";
 ```
 
@@ -72,8 +72,8 @@ relative to the file the `use` is in, and its definitions are the program's
 from here on. A library read once is not read again. An error in a library
 is reported in the library, with the uses it was expanded from.
 
-```seq
-use "../../lib/vllm.seq";
+```serq
+use "../../lib/vllm.serq";
 …
 server {
   set t0 = now;
@@ -83,7 +83,7 @@ server {
 }
 ```
 
-(`examples/multi-turn/vllm.seq`; the library is `lib/vllm.seq`.) A program
+(`examples/multi-turn/vllm.serq`; the library is `lib/vllm.serq`.) A program
 given as text rather than read from a file cannot `use`. The library's names
 are the program's, as for any [`def`](#def): what a statement definition
 sets is the session's attribute, and what it observes is the program's
@@ -91,7 +91,7 @@ observation, so a library says in its comments which names it takes.
 
 ## `pool`
 
-```seq
+```serq
 pool NAME [ '[' N ']' ] { option* }
 ```
 
@@ -104,7 +104,7 @@ A counted resource: KV memory, request slots, an offload tier. See [Pool](pool.m
 
 ## `stage`
 
-```seq
+```serq
 stage NAME [ '[' N ']' ] : kind;
 ```
 
@@ -113,7 +113,7 @@ see [Stage](stage.md). `N` declares an array, as for `pool`.
 
 ## `workload`
 
-```seq
+```serq
 workload { item* }
 ```
 
@@ -122,7 +122,7 @@ At most one per program (a second is `duplicate workload`).
 
 ## `session`
 
-```seq
+```serq
 session block
 ```
 
@@ -139,7 +139,7 @@ server runs.
 
 ## `server`
 
-```seq
+```serq
 server block
 ```
 
@@ -157,7 +157,7 @@ and a `server` next to a top-level `session` are errors.
 
 ## `share`
 
-```seq
+```serq
 share maxmin;
 share bottleneck;
 ```
@@ -173,7 +173,7 @@ otherwise; there is no default.
 
 ## `run`
 
-```seq
+```serq
 run { horizon expr; warmup expr; seed expr; arrivals expr; }
 ```
 
@@ -195,7 +195,7 @@ arrivals or with a session still live, and if the run drains at or before
 `warmup`, which would leave nothing to measure. The report gives the time the
 run ended as `end`, and its rates and time averages are over `end − warmup`.
 
-```seq
+```serq
 workload { arrive renewal(~h2(2, 4)); … }
 run { horizon 1e5; warmup 0; arrivals 1000; }
 ```

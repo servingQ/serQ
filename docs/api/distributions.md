@@ -1,6 +1,6 @@
 # Distributions
 
-```seq
+```serq
 ~name(args…)
 ```
 

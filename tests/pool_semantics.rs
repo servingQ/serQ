@@ -2,9 +2,9 @@
 //! eviction orders, block-level caches, spilling to a tier, growth with
 //! and without preemption, priority queues.
 
-use seq::{Overrides, run_source};
+use serq::{Overrides, run_source};
 
-fn run(src: &str) -> seq::Report {
+fn run(src: &str) -> serq::Report {
     run_source(src, &Overrides::default(), None).unwrap()
 }
 

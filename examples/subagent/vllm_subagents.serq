@@ -1,11 +1,11 @@
-// vLLM v1 serving agents that delegate to subagents, approximated: seQ has
+// vLLM v1 serving agents that delegate to subagents, approximated: serQ has
 // no statement that creates a session (docs/design/subagents.md), so the
 // subagents arrive as sessions of their own in the same Poisson stream,
 // and a parent waits for them at a delay stage for `W`, the time the
 // slowest of its subagents took in a previous run. The engine is
-// `examples/multi-turn/vllm.seq`'s line for line (docs/case-study-workloads.md).
+// `examples/multi-turn/vllm.serq`'s line for line (docs/case-study-workloads.md).
 // `--set q=0` is the same agents without subagents.
-use "../../lib/vllm.seq";
+use "../../lib/vllm.serq";
 
 let B = 8192;          // max_num_batched_tokens
 let max_seqs = 16;     // max_num_seqs

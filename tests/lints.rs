@@ -6,7 +6,7 @@
 //! is a real cost and `no_false_positives_on_the_corpus` is the test that
 //! matters most.
 
-use seq::{Overrides, compile_source, program_path};
+use serq::{Overrides, compile_source, program_path};
 
 fn check(src: &str) -> Result<(), String> {
     compile_source(src, &Overrides::default()).map(|_| ())
@@ -20,7 +20,7 @@ const ENGINE: &str = "let bs = 16;
                turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
     run { horizon 500; }";
 
-/// `examples/multi-turn/vllm.seq` shipped with a prefix-cache lookup bound before the
+/// `examples/multi-turn/vllm.serq` shipped with a prefix-cache lookup bound before the
 /// session queued, under a comment citing the admission-time lookup. A hold's
 /// header is read at admission; a `set` above it is not.
 #[test]
@@ -283,7 +283,7 @@ fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
         )
     };
     let ir = |s: &str| {
-        seq::compile_source(&step(s), &Overrides::default())
+        serq::compile_source(&step(s), &Overrides::default())
             .unwrap()
             .to_json()
     };
@@ -391,7 +391,7 @@ fn no_false_positives_on_the_corpus() {
     ] {
         let path = program_path(name);
         let src = std::fs::read_to_string(&path).unwrap();
-        seq::compile_source_at(&src, path.parent(), &Overrides::default())
+        serq::compile_source_at(&src, path.parent(), &Overrides::default())
             .unwrap_or_else(|e| panic!("{name} is a real program and must link: {e}"));
     }
 }

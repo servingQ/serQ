@@ -1,6 +1,6 @@
 # Stage
 
-```seq
+```serq
 stage NAME [ '[' N ']' ] : kind;
 ```
 
@@ -18,7 +18,7 @@ The clock has no unit of its own: costs in seconds run in seconds, and
 
 ## `fifo`
 
-```seq
+```serq
 fifo [ ( c ) ]
 ```
 
@@ -28,7 +28,7 @@ fifo [ ( c ) ]
 
 ## `ps`
 
-```seq
+```serq
 ps ( expr )
 ```
 
@@ -36,18 +36,18 @@ ps ( expr )
 |---|---|---|---|
 | `expr` | `expr` | `Ps` | Total throughput `φ(present)`, shared equally by the jobs present. The [context variable](context.md) `present` is the number of jobs. |
 
-```seq
+```serq
 stage svc : ps(1);
 ```
 
-(`examples/single-turn/ps.seq`, M/G/1-PS.) A `ps` stage some run holds
+(`examples/single-turn/ps.serq`, M/G/1-PS.) A `ps` stage some run holds
 together with another is served by the program's
 [`share`](program.md#share) instead: its jobs are flows, not an equal
 split.
 
 ## `delay`
 
-```seq
+```serq
 delay
 ```
 
@@ -55,7 +55,7 @@ Every job proceeds at rate 1 with no waiting.
 
 ## `step`
 
-```seq
+```serq
 step {
   budget expr;
   cost expr;
@@ -96,9 +96,9 @@ shortest-remaining-first; `serve by (-remaining)` is the opposite.
 
 ### Example
 
-From `examples/multi-turn/vllm.seq`:
+From `examples/multi-turn/vllm.serq`:
 
-```seq
+```serq
 stage engine : step {
   budget B;
   chunk chunk_cap;

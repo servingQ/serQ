@@ -1,6 +1,6 @@
 # Design
 
-The design record of seQ. `docs/language.md` describes the language as it
+The design record of serQ. `docs/language.md` describes the language as it
 is and `docs/ir.md` the IR as it is; this directory records **why they have
 the shape they have, what is pushing them to change, and what the next shape
 is**.
@@ -62,11 +62,11 @@ here. This directory is the record of **applying** them.
 
 | Document | What | Status |
 |---|---|---|
-| [Philosophy](philosophy.md) | What seQ is mathematically, and the principles by which its vocabulary grows | discussion of 2026-09-28 |
+| [Philosophy](philosophy.md) | What serQ is mathematically, and the principles by which its vocabulary grows | discussion of 2026-09-28 |
 | [Frontend](frontend.md) | Model / instance split, effects and handlers, the admission block, trait vocabulary, units. With two self-critiques and a verdict table | sketch, before issues |
 | [IR v4](ir-v4.md) | Making the implicit static: moments, ownership, declared orders, integer ticks, the session automaton, step coalescing, progress checks | RFC #41 |
 | [Subagents](subagents.md) | A session that spawns sessions is not a tool call: endogenous arrivals, hold-and-wait, cross-session cache, `Spawn`/`Join` | review, for v4b |
-| [The KV transfer](pd-transfer.md) | Prefill/decode disaggregation as llm-d and the NIXL connector do it, in pull and push mode; `release`, `load`, `transfer … from … to …`; the reservation push mode still wants | IR v5, with `examples/pd-disaggregation/llmd_pd.seq` |
+| [The KV transfer](pd-transfer.md) | Prefill/decode disaggregation as llm-d and the NIXL connector do it, in pull and push mode; `release`, `load`, `transfer … from … to …`; the reservation push mode still wants | IR v5, with `examples/pd-disaggregation/llmd_pd.serq` |
 | [Renewal arrivals](renewal-arrivals.md) | Finite open runs, execution deadlines, report times and first-arrival compatibility | IR v6, #108 |
 | [Bandwidth sharing](bandwidth-sharing.md) | A transfer holds the sender's and the receiver's link at once: `Run.also`, `share maxmin` or `bottleneck`, the flow solver | RFC #118, design before implementation |
 | [One admission](one-admission.md) | One spelling for one admission: `hold … at admission (…) … cache`; `enter`, `admit if … fit where` and `keep` retired, the serving name moved into a `def` | #136 |

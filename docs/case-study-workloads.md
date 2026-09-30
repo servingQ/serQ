@@ -10,17 +10,17 @@ time a session spends outside the engine. [The vLLM case study](case-study-vllm.
 workload fixed and checked the engine against the real scheduler. This page
 holds the engine fixed and changes the client.
 
-The four programs below run `examples/multi-turn/vllm.seq`'s engine line for line: the
+The four programs below run `examples/multi-turn/vllm.serq`'s engine line for line: the
 constants from `B` to `c0`, `pool kv` to the end of `stage engine`, and the
 `server` block. `tests/workloads.rs` fails if one of them drifts, so the only
 thing that differs between them is what is written inside `workload`.
-Each workload also says `hidden o;`, as `vllm.seq`'s does: the scheduler is
+Each workload also says `hidden o;`, as `vllm.serq`'s does: the scheduler is
 told `max_tokens`, not the length of the answer, so no scheduling key may read
 `o`.
 
 | | single turn | multi-turn chat | multi-turn agent | agent with subagents |
 |---|---|---|---|---|
-| program | `vllm_single_turn.seq` | `vllm_chat.seq` | `vllm.seq` | `vllm_subagents.seq` |
+| program | `vllm_single_turn.serq` | `vllm_chat.serq` | `vllm.serq` | `vllm_subagents.serq` |
 | a session is | one request | a conversation | a task | a task and the subtasks it hands out |
 | carried to the next turn | nothing | the conversation, `K = prompt + o` | the same | the same |
 | between turns | — | a person, `run user (~exp(Z))` | a tool, `tool (~exp(Z))` | a tool, or waiting for the subagents |
@@ -29,8 +29,8 @@ told `max_tokens`, not the length of the answer, so no scheduling key may read
 
 ## Single turn
 
-```seq title="examples/single-turn/vllm_single_turn.seq"
---8<-- "examples/single-turn/vllm_single_turn.seq:workload"
+```serq title="examples/single-turn/vllm_single_turn.serq"
+--8<-- "examples/single-turn/vllm_single_turn.serq:workload"
 ```
 
 `session { turn; request; end; }` is the whole client: one request, then the
@@ -45,14 +45,14 @@ system prompt, and vLLM's cache is content-addressed: a block's hash is its
 parent's hash, its token ids and extra keys (LoRA, multimodal inputs,
 `cache_salt`), with no request id (`kv_cache_utils.py:650-680`), and a lookup
 finds any cached block with that hash (`block_pool.py:197-223`). So they hit
-on it. seQ
+on it. serQ
 keeps one cache entry per session ([language](language.md) §9), so a shared
 prefix cannot be written yet.
 
 ## Multi-turn chat
 
-```seq title="examples/multi-turn/vllm_chat.seq"
---8<-- "examples/multi-turn/vllm_chat.seq:workload"
+```serq title="examples/multi-turn/vllm_chat.serq"
+--8<-- "examples/multi-turn/vllm_chat.serq:workload"
 ```
 
 Turns are what make the cache matter. Each turn sends back the whole
@@ -65,15 +65,15 @@ say it was.
 
 ## Multi-turn agent
 
-```seq title="examples/multi-turn/vllm.seq"
---8<-- "examples/multi-turn/vllm.seq:workload"
+```serq title="examples/multi-turn/vllm.serq"
+--8<-- "examples/multi-turn/vllm.serq:workload"
 ```
 
-This is `examples/multi-turn/vllm.seq`, the program the vLLM case study checks. Its
+This is `examples/multi-turn/vllm.serq`, the program the vLLM case study checks. Its
 shape is the same as the chat's. The differences are only in the numbers: the
 gap is a tool call (3 s rather than 20 s), each turn brings back a tool's
 output (`~exp(500)` new tokens rather than `~exp(100)`), and the first prompt
-is a long task description. seQ has no separate construct for "agent" versus
+is a long task description. serQ has no separate construct for "agent" versus
 "chat", and it should not: the difference is policy in the workload, which a
 program states and the language does not.
 
@@ -87,8 +87,8 @@ the IR](design/subagents.md) explains why that needs two new statements,
 `spawn` and `join`. Until those exist, the program below approximates
 subagents, and it is useful to see exactly what the approximation gives up.
 
-```seq title="examples/subagent/vllm_subagents.seq"
---8<-- "examples/subagent/vllm_subagents.seq:workload"
+```serq title="examples/subagent/vllm_subagents.serq"
+--8<-- "examples/subagent/vllm_subagents.serq:workload"
 ```
 
 The approximation has three parts:
@@ -102,7 +102,7 @@ The approximation has three parts:
 - **The parent waits a constant.** A delegating turn runs
   `run delegate (W)` on a `delay` stage. `W` comes from a previous run: the
   mean of the slowest of `k` `subagent` samples. For this program,
-  `seq-lang run examples/subagent/vllm_subagents.seq --dump out` followed by that
+  `serq run examples/subagent/vllm_subagents.serq --dump out` followed by that
   statistic over `out/subagent.csv` returns 14.7 s when `W = 14.7`, which is
   the fixed point.
 - **A subagent's context is its own.** It starts from `K ~ uniform(2000,
@@ -126,7 +126,7 @@ Each first request of a subagent is a full miss on the context it copied, so
 the mean prefill triples and TTFT rises from 14 ms to 53 ms. The prefill row
 is an upper bound: the real vLLM would hit on the shared prefix, since its
 cache is content-addressed (`kv_cache_utils.py:650-680`,
-`block_pool.py:197-223`), and this seQ program cannot.
+`block_pool.py:197-223`), and this serQ program cannot.
 
 What the approximation cannot show, in the order of
 [the subagent design](design/subagents.md):

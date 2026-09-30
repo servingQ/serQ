@@ -1,20 +1,20 @@
 # Visualization
 
 !!! warning "Experimental"
-    `seq-lang draw` works and is covered by `make check`, but the notation, the
+    `serq draw` works and is covered by `make check`, but the notation, the
     flags and the output are **not stable** and may change between releases.
     [What is not done](#what-is-not-done) is at the bottom of this page.
-    Design discussion: [RFC #1](https://github.com/vrvrv/seQ/issues/1).
+    Design discussion: [RFC #1](https://github.com/vrvrv/serQ/issues/1).
 
 ```
-seq-lang draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]...
+serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]...
 ```
 
-`FILE` is program text (`.seq`) or IR (`.json`), as for the other commands.
+`FILE` is program text (`.serq`) or IR (`.json`), as for the other commands.
 
 ## Why the figure is generated rather than drawn
 
-The [IR](../ir.md) is the definition of a seQ program, and the interpreter, the
+The [IR](../ir.md) is the definition of a serQ program, and the interpreter, the
 generated Lean model and the oracle tests are already its consumers. A figure
 is a fourth, and the cheapest of them: it needs no clock, no oracle and no
 proof.
@@ -30,7 +30,7 @@ RNG — the same IR gives the same bytes.
 
 The program as a queueing network: stations, memory pools with their queues
 and prefix caches, the instance boundaries, and the flow between them
-([deployment view](deployment.md)). Here is `examples/multi-turn/vllm.seq` —
+([deployment view](deployment.md)). Here is `examples/multi-turn/vllm.serq` —
 vLLM v1's engine:
 
 ![vLLM v1 as a queueing network](../assets/vllm.deployment.svg)

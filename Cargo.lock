@@ -101,15 +101,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "seq-lang"
-version = "0.1.0-rc5"
-dependencies = [
- "rand",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -150,6 +141,15 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serq"
+version = "0.1.0-rc5"
+dependencies = [
+ "rand",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

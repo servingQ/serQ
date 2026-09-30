@@ -1,8 +1,8 @@
-/* seQ code blocks: four roles, four colours.
+/* serQ code blocks: four roles, four colours.
  *
  * Material gives a highlight palette of eight slots, and `Keyword`,
  * `Keyword.Declaration` and `Keyword.Pseudo` all land in one of them. The
- * lexer puts seQ's four roles in four different slots (docs/hooks/seq_lexer.py);
+ * lexer puts serQ's four roles in four different slots (docs/hooks/serq_lexer.py);
  * this fills the one slot that is otherwise grey, so that what a program
  * *reads* is not the colour of a comment.
  *

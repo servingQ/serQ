@@ -8,13 +8,13 @@ property of the traffic.
 
 ## The program
 
-```seq title="docs/tutorial/programs/04-cache.seq"
---8<-- "docs/tutorial/programs/04-cache.seq"
+```serq title="docs/tutorial/programs/04-cache.serq"
+--8<-- "docs/tutorial/programs/04-cache.serq"
 ```
 
 ## `cache`, `cached`, `evict`, `drop`
 
-```seq
+```serq
 hold kv (K + n + o) {
   set hit = cached >= K;
   run engine ((hit ? a * n : a * (K + n)) + d * o);
@@ -33,18 +33,18 @@ prefix is evictable. That gap is the *wait channel*, and chapter 6 is about
 what it does.
 
 **`evict lru`** orders eviction by release time. `evict by (k₁, …)` orders by
-whatever the program says — `replica.seq` uses `evict by (waiting, size)`, which
+whatever the program says — `replica.serq` uses `evict by (waiting, size)`, which
 throws out queued sessions' short prefixes first.
 
 **`drop kv;`** before `end` discards the session's prefix. Without it the
 prefix survives the session, which is not an oversight: vLLM keeps a finished
-request's blocks in the free queue, and `examples/multi-turn/vllm.seq` models that by not
+request's blocks in the free queue, and `examples/multi-turn/vllm.serq` models that by not
 dropping.
 
 ## Running it
 
 ```bash
-seq-lang run docs/tutorial/programs/04-cache.seq
+serq run docs/tutorial/programs/04-cache.serq
 ```
 
 ```text
@@ -74,7 +74,7 @@ evicted.
 
 ```bash
 for C in 2e5 6e4 4e4 3e4 2e4 1.5e4 1e4; do
-  seq-lang run docs/tutorial/programs/04-cache.seq --set C=$C --json
+  serq run docs/tutorial/programs/04-cache.serq --set C=$C --json
 done
 ```
 

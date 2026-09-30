@@ -8,22 +8,22 @@ requests with whatever budget is left. Prefill and decode are not phases. They
 are the same iteration.
 
 vLLM's scheduler puts it plainly: there is *"no decoding phase nor prefill
-phase"*. seQ has one stage kind for this, and it is the one the lecture's
+phase"*. serQ has one stage kind for this, and it is the one the lecture's
 language could not express.
 
 ## The program
 
-```seq title="docs/tutorial/programs/05-engine.seq"
---8<-- "docs/tutorial/programs/05-engine.seq"
+```serq title="docs/tutorial/programs/05-engine.serq"
+--8<-- "docs/tutorial/programs/05-engine.serq"
 ```
 
-Its deployment, drawn by [`seq-lang draw`](../visualization/index.md):
+Its deployment, drawn by [`serq draw`](../visualization/index.md):
 
 ![The engine as a queueing network](../assets/05-engine.deployment.svg)
 
 ## The `step` stage
 
-```seq
+```serq
 stage engine : step {
   budget B;
   cost max(omega + beta * (kv_decode + kv_prefill), tokens * alpha);
@@ -60,7 +60,7 @@ chunk runs alone and stalls every decode, the RBLN stack).
 
 ## Three new pieces of the session program
 
-```seq
+```serq
 set hitmax = floor((prompt - 1) / bs) * bs;
 hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
      at admission (hit = min(cachedin(kv), hitmax)) {
@@ -74,7 +74,7 @@ admitted with the blocks for the chunk it can run now, and grows block by
 block as it decodes. When growth finds no free block, `preempt lifo` throws
 out the most recently admitted request: its blocks are freed *to the cache*, it
 goes back to the head of the queue, and it recomputes what it lost. That is
-vLLM's `_preempt_request`, and in seQ it is just "abort the scope and re-run
+vLLM's `_preempt_request`, and in serQ it is just "abort the scope and re-run
 the statement" — which is what made `hold` a scope in chapter 2.
 
 **`budget_left(engine)`** — how many tokens the next iteration leaves after
@@ -94,14 +94,14 @@ The units then read `min(prompt, hit + budget)` — the whole prompt, or as far
 as the hit and the budget reach, whichever is less.
 
 **`admit via engine`** on a pool (`reqs` in the program above, and in
-`examples/replay/vllm_replay.seq`) hands the pool's queue to the engine's
+`examples/replay/vllm_replay.serq`) hands the pool's queue to the engine's
 scheduler: waiting requests are admitted at the start of an iteration, with
 the budget left, and never in an iteration that preempted.
 
 ## Running it
 
 ```bash
-seq-lang run docs/tutorial/programs/05-engine.seq
+serq run docs/tutorial/programs/05-engine.serq
 ```
 
 ```text
@@ -126,7 +126,7 @@ reqs    0.2      0.0  0.002    0.153  0.0007   48810         0         0        
 
 **9 164 050 iterations.** That is what `step` costs you: the engine is
 simulated iteration by iteration, and at ~2 ms each a 20 000-second horizon is
-nine million of them. Nothing else in seQ is this expensive.
+nine million of them. Nothing else in serQ is this expensive.
 
 `done 87894` at the engine against 43 947 turns — two runs per turn, prefill
 and decode.

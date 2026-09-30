@@ -1,8 +1,8 @@
 mod common;
 
 use common::{Fixture, failure};
-use seq::frontend::fmt::format;
-use seq::{Overrides, compile_source};
+use serq::frontend::fmt::format;
+use serq::{Overrides, compile_source};
 
 #[test]
 fn formatting_preserves_program_and_comments_and_is_idempotent() {
@@ -43,25 +43,25 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
 fn cli_check_and_write_are_consistent() {
     let fixture = Fixture::new();
     fixture.write(
-        "model.seq",
+        "model.serq",
         "stage svc : delay;\nsession {run svc (1); end;}\nrun {horizon 1;}\n",
     );
     failure(
-        &fixture.run(&["fmt", "--check", "model.seq"]),
+        &fixture.run(&["fmt", "--check", "model.serq"]),
         1,
-        &["would reformat model.seq"],
+        &["would reformat model.serq"],
     );
-    assert!(fixture.run(&["fmt", "model.seq"]).status.success());
+    assert!(fixture.run(&["fmt", "model.serq"]).status.success());
     assert!(
         fixture
-            .run(&["fmt", "--check", "model.seq"])
+            .run(&["fmt", "--check", "model.serq"])
             .status
             .success()
     );
-    let once = std::fs::read_to_string(fixture.0.join("model.seq")).unwrap();
-    assert!(fixture.run(&["fmt", "model.seq"]).status.success());
+    let once = std::fs::read_to_string(fixture.0.join("model.serq")).unwrap();
+    assert!(fixture.run(&["fmt", "model.serq"]).status.success());
     assert_eq!(
-        std::fs::read_to_string(fixture.0.join("model.seq")).unwrap(),
+        std::fs::read_to_string(fixture.0.join("model.serq")).unwrap(),
         once
     );
 }
@@ -70,15 +70,15 @@ fn cli_check_and_write_are_consistent() {
 fn invalid_batch_leaves_every_file_untouched() {
     let fixture = Fixture::new();
     let original = "stage svc : delay;\nsession {run svc (1); end;}\nrun {horizon 1;}\n";
-    fixture.write("good.seq", original);
-    fixture.write("bad.seq", "stage broken : delay; /* open");
+    fixture.write("good.serq", original);
+    fixture.write("bad.serq", "stage broken : delay; /* open");
     failure(
-        &fixture.run(&["fmt", "good.seq", "bad.seq"]),
+        &fixture.run(&["fmt", "good.serq", "bad.serq"]),
         1,
-        &["bad.seq", "unterminated block comment"],
+        &["bad.serq", "unterminated block comment"],
     );
     assert_eq!(
-        std::fs::read_to_string(fixture.0.join("good.seq")).unwrap(),
+        std::fs::read_to_string(fixture.0.join("good.serq")).unwrap(),
         original
     );
 }

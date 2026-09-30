@@ -5,11 +5,11 @@ one-page version.
 
 ## Shape of a program
 
-```seq
+```serq
 let NAME = expr;                    // constants, overridable with --set
 def NAME(x, …) = expr;              // a name for an expression, expanded where it is used
 def NAME(x, …) { … }                // a name for statements: NAME(a, …);
-use "file.seq";                     // the defs of a library, relative to this file
+use "file.serq";                     // the defs of a library, relative to this file
 
 pool NAME [ '[' N ']' ] { … }       // a counted resource
 stage NAME [ '[' N ']' ] : kind;    // where time passes
@@ -22,7 +22,7 @@ run { horizon …; warmup …; seed …; arrivals …; }
 
 ## Pools
 
-```seq
+```serq
 pool kv {
   cap 160000;                 // capacity in units (default: inf)
   block 16;                   // allocate and cache in blocks
@@ -43,7 +43,7 @@ pool kv {
 | `delay` | infinite servers — every job at rate 1, no waiting |
 | `step { … }` | an iterating engine (continuous batching) |
 
-```seq
+```serq
 stage engine : step {
   budget B;                   // tokens per iteration
   cost <expr>;                // clock time per iteration (1: the step clock)
@@ -55,7 +55,7 @@ stage engine : step {
 
 ## Statements
 
-```seq
+```serq
 turn;                              // draw the next turn's attributes
 set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
@@ -120,7 +120,7 @@ preempted hold had computed; 0 otherwise), and with a trace `new` `out`
 
 ## Workload
 
-```seq
+```serq
 workload {
   arrive poisson(λ);        // renewal(~h2(mean, cv2)), closed(n), batch(n), none
   trace "file.csv" [ordered];

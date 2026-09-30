@@ -70,7 +70,7 @@ lengthens a hit service `s_hit` by `ds`, with `s_miss = s_hit + ds`:
 | `blocksize(p: pool)` | the `block` of pool `p`. The linker folds it to a number, so it may appear in any expression that is not in `const` position (a `let`, a pool's `cap` or `block`, an array size, `horizon`, a rate). A pool without `block` is a link error; an array is indexed as for any pool function. |
 
 A definition that takes a pool reads its block size from it:
-`reusable(known, blocksize(kv))` in `lib/vllm.seq`.
+`reusable(known, blocksize(kv))` in `lib/vllm.serq`.
 
 ## Where an observable may be read
 

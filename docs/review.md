@@ -1,4 +1,4 @@
-# seQ: review of the lecture's language against vLLM, the v2 design, and the tooling survey
+# serQ: review of the lecture's language against vLLM, the v2 design, and the tooling survey
 
 Date: 2026-09-27. Companion of `docs/language.md` (the language
 as built). Sections: §1 what the lecture's language (Lecture 1,
@@ -7,7 +7,7 @@ v1; §2 the design decisions of v2; §3 what the validation found and
 fixed (the self-review); §4 the survey of verification frameworks the
 user asked for and the recommendation.
 
-## 1. The lecture's seQ against vLLM v1 (`ref/vllm` at 0c87a197)
+## 1. The lecture's serQ against vLLM v1 (`ref/vllm` at 0c87a197)
 
 Read: `vllm/v1/core/sched/scheduler.py` (`schedule`, `_preempt_request`,
 `update_from_output`, `add_request`, `_free_request`),
@@ -57,7 +57,7 @@ What it misses or gets wrong:
    (kv_cache_manager.py:533-590). A request whose growth finds no block
    preempts the last admitted one. The lecture has no growth and no
    preemption ("a running decode that needs a block when none is free is
-   preempted and later recomputed, which seQ has no instruction for",
+   preempted and later recomputed, which serQ has no instruction for",
    §L1:sec:implies).
 8. **Whole-prefix cache entries.** vLLM's cache is per block, evicted
    tail first (blocks are freed in reverse order,
@@ -133,33 +133,33 @@ Each item was found by a check, not by reading.
 | Found by | Defect | Fix |
 |---|---|---|
 | PS insensitivity (M/G/1-PS mean number) | the virtual clock was not advanced at a departure, so service was double counted | advance `v` to `now` before removing the job |
-| `replica.seq` vs `TwoStage` | `cached` was read from the first pool of the hold (`batch` slots), so every turn missed | `cached` = the largest consumed prefix among the hold's pools |
+| `replica.serq` vs `TwoStage` | `cached` was read from the first pool of the hold (`batch` slots), so every turn missed | `cached` = the largest consumed prefix among the hold's pools |
 | same | ended sessions' prefixes stayed cached and, being the largest, survived shortest-first eviction while live small ones went | `end` removes the session's prefixes (they can never be hit) |
 | GPU replay stalled at 382 s | a run of zero work (`decode(out − 1)` with `out = 1`) stayed resident forever holding its blocks and slot | a zero-work run completes at once |
 | vLLM oracle `longchunk` | an iteration started between two arrivals at the same instant, so the second request lost a step | iterations start only when no event is pending at the current time |
 | vLLM oracle `preempt` | admitting with the first full chunk reserved too many blocks; vLLM reserves the chunk the budget leaves | `budget_left(stage)` |
-| `replica.seq` at the paper's cap of 24 | the scenario is bistable (thrash edge); seeds of the two engines land on different branches | compare at 20 and without a limit; documented |
+| `replica.serq` at the paper's cap of 24 | the scenario is bistable (thrash edge); seeds of the two engines land on different branches | compare at 20 and without a limit; documented |
 
 Second pass (the same day), found by replaying the trace through the real
-vLLM scheduler on seQ's clock and searching for the first differing step
+vLLM scheduler on serQ's clock and searching for the first differing step
 (`scripts/exp/first_divergence.sh`):
 
 | Found by | Defect | Fix |
 |---|---|---|
-| step 19.2 s of the 40-session diff: seQ holds 720 blocks vLLM has free | a waiting request was admitted with a zero budget, which pinned its prefix; vLLM admits only at a step with budget left | `admit via engine`; unit expressions evaluated at admission |
+| step 19.2 s of the 40-session diff: serQ holds 720 blocks vLLM has free | a waiting request was admitted with a zero budget, which pinned its prefix; vLLM admits only at a step with budget left | `admit via engine`; unit expressions evaluated at admission |
 | accounting differs by one block after a turn of prompt 2845 + 4 tokens | vLLM caches every computed full block, generated tokens included; the program cached the prompt only | `cache (prompt + out − 1)` with `reuse (common prefix)`; the rest is a dead entry |
-| 520 blocks cached in vLLM, 0 in seQ, after a session's last turn | `end` dropped the session's prefixes; vLLM keeps them | `end` keeps the cache (the lecture's `[End]`); `drop` is explicit |
+| 520 blocks cached in vLLM, 0 in serQ, after a session's last turn | `end` dropped the session's prefixes; vLLM keeps them | `end` keeps the cache (the lecture's `[End]`); `drop` is explicit |
 | two requests finishing a prefill in one step swap places | the "keep your place" rule | residents in admission order |
-| a request admitted with budget left by seQ, not by vLLM | `scheduler_reserve_full_isl`: the whole prompt must fit | `reserve (prompt)` |
+| a request admitted with budget left by serQ, not by vLLM | `scheduler_reserve_full_isl`: the whole prompt must fit | `reserve (prompt)` |
 | two sessions released in the same step evicted in the wrong order | LRU ties broken by session number | ties by release order |
 | the forced-miss replay diverges from the first forced turn | the oracle added a second nonce; `drop` removed blocks vLLM keeps | the trace's ids as they are; `reuse (0)` |
 | the cost model reads 0 | a `let` named like a session attribute is shadowed by it | the linker rejects the clash |
 | "bistable at 24 sessions" (first pass) | not supported by 20 seeds | withdrawn; the engines differ by 10 % throughput at 24 |
 
-After these, seQ and the real scheduler agree on every request of the
+After these, serQ and the real scheduler agree on every request of the
 full trace (`docs/language.md` §7). The A100 comparison is in §8.
 
-## 4. Tooling survey: build seQ on an existing verification framework?
+## 4. Tooling survey: build serQ on an existing verification framework?
 
 The user asked whether the language should reuse frameworks from OS /
 systems formal verification instead of a hand-written lexer, parser and
@@ -221,7 +221,7 @@ programs):
   [Aeneas/Rust/Lean report, Sept 2026](https://arxiv.org/html/2609.15648),
   [Rust-to-Lean pipeline experience report](https://arxiv.org/html/2605.30106)).
   Fit: the most direct way to connect the Rust pool code to
-  `SeqLang.Step`: translate `interp.rs`'s pool functions (they are safe
+  `SerqLang.Step`: translate `interp.rs`'s pool functions (they are safe
   Rust over `Vec`/`HashMap`) and prove them refinements of the Lean
   relation. Against: `HashMap`/`BinaryHeap`/`f64` and the borrow
   patterns of the event loop would need restructuring into a pure core
@@ -244,7 +244,7 @@ programs):
   ([overview, 2022](https://arxiv.org/pdf/2203.09881),
   [modes](https://link.springer.com/article/10.1007/s10009-020-00563-2)).
   Fit: the closest existing tool to "one model, simulated and checked":
-  a seQ program with finitely many sessions is a stochastic timed
+  a serQ program with finitely many sessions is a stochastic timed
   automaton. Against: no memory-pool/cache primitives (everything is
   variables and guards), no Lean connection, and the model would be
   written a second time.
@@ -274,10 +274,10 @@ gives for free:
 2. *Aeneas for the pool core.* Factor `interp.rs`'s pool operations into a
    pure module (`Vec`-based, no `f64` in the invariant-carrying part:
    units as `u64` tokens) and translate it with Aeneas; prove the
-   translation refines `SeqLang.Step`. Until then, *Kani* harnesses on
+   translation refines `SerqLang.Step`. Until then, *Kani* harnesses on
    that module give bounded proofs cheaply.
 3. *P or Modest for scheduling designs*, not for the language: when a
-   new scheduler policy is written as a seQ program, a P model of the
+   new scheduler policy is written as a serQ program, a P model of the
    same state machines checks its interleavings; Modest/PRISM give exact
    numbers for the Markovian cases. Neither replaces the Lean model or
    the Rust simulator.

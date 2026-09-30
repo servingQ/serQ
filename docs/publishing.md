@@ -1,10 +1,10 @@
 # Publishing this site
 
-This site is **public**, at <https://vrvrv.github.io/seQ/>, published from a
+This site is **public**, at <https://vrvrv.github.io/serQ/>, published from a
 private repository by `.github/workflows/docs.yml`.
 
 Anyone can read it, and search engines index it. That includes the pages that
-quote unpublished work: [How seQ is checked](validation.md) and the [case
+quote unpublished work: [How serQ is checked](validation.md) and the [case
 study](case-study-vllm.md) carry the A100 measurements, the pre-registered
 predictions of `data/exp/seq/prereg/` and the paper's replica. Treat anything
 you add here as published.
@@ -37,7 +37,7 @@ by an **organization**:
 > To publish a GitHub Pages site privately, your organization must use GitHub
 > Enterprise Cloud.
 
-`vrvrv/seQ` is a personal repository, so the option does not apply to it at
+`vrvrv/serQ` is a personal repository, so the option does not apply to it at
 any tier — the API answers `422 Current plan does not support private GitHub
 Pages`. Making it private would mean transferring the repository to an
 organization on Enterprise Cloud, which is a decision about where the project
@@ -53,7 +53,7 @@ Note the two capabilities are separate, and the first already works here:
 ## Unpublishing
 
 ```bash
-gh api -X DELETE repos/vrvrv/seQ/pages
+gh api -X DELETE repos/vrvrv/serQ/pages
 ```
 
 The site stops being served. Anything already indexed stays in caches and

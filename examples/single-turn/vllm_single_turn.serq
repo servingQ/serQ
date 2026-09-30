@@ -1,8 +1,8 @@
 // vLLM v1 serving single-turn requests: a session is one request — a
 // prompt, an answer, gone. The engine (the constants down to `c0`, the
-// pools, the stage and the `server` block) is `examples/multi-turn/vllm.seq`'s line
+// pools, the stage and the `server` block) is `examples/multi-turn/vllm.serq`'s line
 // for line; only the workload differs (docs/case-study-workloads.md).
-use "../../lib/vllm.seq";
+use "../../lib/vllm.serq";
 
 let B = 8192;          // max_num_batched_tokens
 let max_seqs = 16;     // max_num_seqs

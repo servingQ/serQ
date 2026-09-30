@@ -1,4 +1,4 @@
-//! The deployment view: a seQ program as a queueing network.
+//! The deployment view: a serQ program as a queueing network.
 //!
 //! Pools and stages are declared, but the arrows between them are not: the
 //! flow is a property of the session program. This module projects it onto the
@@ -127,7 +127,7 @@ impl Walker<'_> {
     }
 
     /// Add an edge unless the same one is already there. Programs written as
-    /// a chain of guards (`routing.seq`'s five policies) reach the same
+    /// a chain of guards (`routing.serq`'s five policies) reach the same
     /// station down many paths; the picture wants one arrow.
     fn push_edge(&mut self, e: Edge) {
         if let Some(existing) = self
@@ -493,7 +493,7 @@ fn adjacent_flows(net: &mut Net) {
 /// position the growing run reached, which only a grown pool has. `grow`
 /// advances the *innermost* hold holding that pool, so a `growing` run deep
 /// inside nested holds can belong to an outer one, and a hold may be grown in
-/// more than one pool. `examples/multi-turn/replica.seq` is the case that makes this
+/// more than one pool. `examples/multi-turn/replica.serq` is the case that makes this
 /// visible: its `hold batch (1), kv (...)` has no `growing` at all and really
 /// does keep a unit of `batch` cached.
 pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {

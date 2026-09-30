@@ -6,72 +6,72 @@ fn invalid_arguments_are_diagnosed_before_file_io() {
     let f = Fixture::new();
     for (args, fragments) in [
         (
-            vec!["rn", "missing.seq"],
+            vec!["rn", "missing.serq"],
             vec!["unknown command `rn`", "run"],
         ),
         (vec!["run"], vec!["missing FILE"]),
         (
-            vec!["run", "missing.seq", "--seed", "abc"],
+            vec!["run", "missing.serq", "--seed", "abc"],
             vec!["--seed", "`abc`", "unsigned integer"],
         ),
         (
-            vec!["run", "missing.seq", "--seed"],
+            vec!["run", "missing.serq", "--seed"],
             vec!["missing value for --seed"],
         ),
         (
-            vec!["run", "missing.seq", "--seed", "--json"],
+            vec!["run", "missing.serq", "--seed", "--json"],
             vec!["missing value for --seed"],
         ),
         (
-            vec!["run", "missing.seq", "--seed", "-1"],
+            vec!["run", "missing.serq", "--seed", "-1"],
             vec!["--seed", "unsigned integer"],
         ),
         (
-            vec!["run", "missing.seq", "--horizon", "NaN"],
+            vec!["run", "missing.serq", "--horizon", "NaN"],
             vec!["--horizon", "finite positive"],
         ),
         (
-            vec!["run", "missing.seq", "--warmup", "-1"],
+            vec!["run", "missing.serq", "--warmup", "-1"],
             vec!["--warmup", "nonnegative"],
         ),
         (
-            vec!["run", "missing.seq", "--bogus"],
+            vec!["run", "missing.serq", "--bogus"],
             vec!["unknown option `--bogus`"],
         ),
         (
-            vec!["run", "missing.seq", "--set", "rate"],
+            vec!["run", "missing.serq", "--set", "rate"],
             vec!["--set", "name=expr"],
         ),
         (
-            vec!["run", "missing.seq", "--set", "=1"],
+            vec!["run", "missing.serq", "--set", "=1"],
             vec!["--set", "identifier"],
         ),
         (
-            vec!["run", "missing.seq", "--set", "rate="],
+            vec!["run", "missing.serq", "--set", "rate="],
             vec!["--set", "expression"],
         ),
         (
-            vec!["draw", "missing.seq", "--format", "png"],
+            vec!["draw", "missing.serq", "--format", "png"],
             vec!["--format", "tikz or svg"],
         ),
         (
-            vec!["draw", "missing.seq", "--view", "session"],
+            vec!["draw", "missing.serq", "--view", "session"],
             vec!["unknown option `--view`"],
         ),
         (
-            vec!["check", "missing.seq", "--json"],
+            vec!["check", "missing.serq", "--json"],
             vec!["--json", "not supported", "run"],
         ),
         (
-            vec!["run", "missing.seq", "--inline-trace"],
+            vec!["run", "missing.serq", "--inline-trace"],
             vec!["--inline-trace", "not supported", "ir"],
         ),
         (
-            vec!["ir", "missing.seq", "--dump", "data"],
+            vec!["ir", "missing.serq", "--dump", "data"],
             vec!["--dump", "not supported", "run"],
         ),
         (
-            vec!["run", "missing.seq", "--out", "figure.svg"],
+            vec!["run", "missing.serq", "--out", "figure.svg"],
             vec!["--out", "not supported", "draw"],
         ),
     ] {
@@ -88,11 +88,11 @@ fn invalid_arguments_are_diagnosed_before_file_io() {
 #[test]
 fn supported_options_still_work() {
     let f = Fixture::new();
-    f.write("model.seq", PROGRAM);
+    f.write("model.serq", PROGRAM);
     for args in [
         vec![
             "run",
-            "model.seq",
+            "model.serq",
             "--seed",
             "2",
             "--horizon",
@@ -103,11 +103,11 @@ fn supported_options_still_work() {
             "--dump",
             "data",
         ],
-        vec!["check", "model.seq", "--set", "rate=2"],
-        vec!["ir", "model.seq", "--seed", "2"],
+        vec!["check", "model.serq", "--set", "rate=2"],
+        vec!["ir", "model.serq", "--seed", "2"],
         vec![
             "draw",
-            "model.seq",
+            "model.serq",
             "--format",
             "svg",
             "--out",

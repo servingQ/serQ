@@ -2,7 +2,7 @@
 //!
 //! The language's `~exp`, `~erlang`, `~h2`, `~uniform`, and
 //! `~bernoulli` expressions use these same sampling laws. Exact moments make
-//! the laws useful to queueing analyses as well as to seQ programs.
+//! the laws useful to queueing analyses as well as to serQ programs.
 
 use rand::Rng;
 

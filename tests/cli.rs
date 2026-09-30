@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn seq_lang() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_seq-lang"))
+    Command::new(env!("CARGO_BIN_EXE_serq"))
 }
 
 /// The program of `tests/pool_semantics.rs::a_hold_that_can_never_fit_is_reported_stuck`:
@@ -31,7 +31,7 @@ const STUCK: &str = r#"
 fn a_stuck_run_prints_its_report_and_exits_0() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-stuck");
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("stuck.seq");
+    let file = dir.join("stuck.serq");
     std::fs::write(&file, STUCK).unwrap();
     let out = seq_lang().arg("run").arg(&file).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
@@ -52,7 +52,7 @@ fn a_stuck_run_prints_its_report_and_exits_0() {
 fn a_program_that_does_not_load_exits_1() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-bad");
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("bad.seq");
+    let file = dir.join("bad.serq");
     std::fs::write(
         &file,
         "stage svc : delay;\nsession { run nowhere (1); end; }\nrun { horizon 1; }\n",
@@ -67,7 +67,7 @@ fn a_program_that_does_not_load_exits_1() {
 fn a_runtime_guard_error_exits_1_without_a_panic() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-runtime-guard");
     std::fs::create_dir_all(&dir).unwrap();
-    let file = dir.join("guard.seq");
+    let file = dir.join("guard.serq");
     std::fs::write(
         &file,
         "stage svc : delay; workload { arrive batch(1); init { set c = 5; set K = 10; } }\n\
@@ -79,7 +79,7 @@ fn a_runtime_guard_error_exits_1_without_a_panic() {
     assert!(out.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("guard.seq: `branch (c / K)`: the guard is 0.5, not 0 or 1"),
+        stderr.contains("guard.serq: `branch (c / K)`: the guard is 0.5, not 0 or 1"),
         "{stderr}"
     );
     assert!(!stderr.contains("panicked"), "{stderr}");

@@ -7,15 +7,15 @@ where all the interesting behaviour lives.
 
 ## The program
 
-```seq title="docs/tutorial/programs/03-sessions.seq"
---8<-- "docs/tutorial/programs/03-sessions.seq"
+```serq title="docs/tutorial/programs/03-sessions.serq"
+--8<-- "docs/tutorial/programs/03-sessions.serq"
 ```
 
 ## What is new
 
 ### `loop` and `turn`
 
-```seq
+```serq
 session {
   turn;
   loop {
@@ -38,7 +38,7 @@ reader — and the figure — tell it from a test.
 
 ### Attributes carry state across turns
 
-```seq
+```serq
 init { set K = 0; }
 …
 set K = K + n + o;
@@ -51,7 +51,7 @@ on: it grows without bound, and memory does not.
 
 ### `delay`
 
-```seq
+```serq
 stage tool : delay;
 ```
 
@@ -62,7 +62,7 @@ tool call, a human reading, a downstream API.
 ## Running it
 
 ```bash
-seq-lang run docs/tutorial/programs/03-sessions.seq
+serq run docs/tutorial/programs/03-sessions.serq
 ```
 
 ```text
@@ -100,7 +100,7 @@ Turn the thinking time down and watch the sessions pile back in:
 
 ```bash
 for Z in 0.5 1 3 10; do
-  seq-lang run docs/tutorial/programs/03-sessions.seq --set Z=$Z
+  serq run docs/tutorial/programs/03-sessions.serq --set Z=$Z
 done
 ```
 

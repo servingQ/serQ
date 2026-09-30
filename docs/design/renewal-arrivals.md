@@ -1,7 +1,7 @@
 # Renewal arrivals and finite open runs
 
-Issue [#108](https://github.com/vrvrv/seQ/issues/108) and
-PR [#107](https://github.com/vrvrv/seQ/pull/107) add non-exponential
+Issue [#108](https://github.com/vrvrv/serQ/issues/108) and
+PR [#107](https://github.com/vrvrv/serQ/pull/107) add non-exponential
 interarrival distributions and finite samples for queue validation.
 
 ## Contract
@@ -42,10 +42,10 @@ zero. Retaining the two variants pays an IR cost for compatibility.
 
 ## PD comparison programs
 
-Keep `pd_open.seq` and `pd_tandem.seq` packaged under `examples/` as research
+Keep `pd_open.serq` and `pd_tandem.serq` packaged under `examples/` as research
 comparison fixtures used by serving-queue-theory. They are queueing models,
 not descriptions of an actual serving deployment. Their `mode` switch is
 part of the paired experiment: both variants draw the same work demands.
 A deployment drawing includes both topologies and should not be presented
 as the active topology for one mode. The directory README makes this scope
-explicit; a real deployment is illustrated by `llmd_pd.seq`.
+explicit; a real deployment is illustrated by `llmd_pd.serq`.

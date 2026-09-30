@@ -1,10 +1,10 @@
-//! Every `.seq` file in the repository survives a trip through the lexer.
+//! Every `.serq` file in the repository survives a trip through the lexer.
 //!
 //! `unlex(lex(src)) == src` is what makes a formatter possible: the lexer is
 //! the only thing that reads the source, so if it keeps every comment and
 //! every blank line, a tool that rewrites a program can put them back.
 
-use seq::frontend::lexer::{lex, unlex};
+use serq::frontend::lexer::{lex, unlex};
 use std::path::{Path, PathBuf};
 
 fn seq_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -15,7 +15,7 @@ fn seq_files(dir: &Path, out: &mut Vec<PathBuf>) {
         let p = e.path();
         if p.is_dir() {
             seq_files(&p, out);
-        } else if p.extension().is_some_and(|x| x == "seq") {
+        } else if p.extension().is_some_and(|x| x == "serq") {
             out.push(p);
         }
     }

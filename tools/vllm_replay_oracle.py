@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """Replay a trace through the real vLLM v1 scheduler and KV-cache manager
 (`ref/vllm`) with a time model instead of a GPU: the diagnostic that
-separates *semantics* from *timing* when seQ and a measured run disagree.
+separates *semantics* from *timing* when serQ and a measured run disagree.
 
 Each scheduler step lasts
     c_step + max(omega + beta * decode_kv, a * ntok + b * sum_chunks n (K + n/2))
-seconds (the cost expression of `examples/replay/vllm_replay.seq`), the
+seconds (the cost expression of `examples/replay/vllm_replay.serq`), the
 requests carry the trace's real token ids (so prefix hashing is exact), a
 request enters the scheduler `c0` after it is sent, session i sends its
 first turn at i * spacing and turn k+1 `think` seconds after turn k
@@ -139,7 +139,7 @@ def main():
             if r["cached"] is None:
                 r["cached"] = nr.num_computed_tokens
         ids = list(out.num_scheduled_tokens.keys())
-        # the cost expression of vllm_replay.seq, in the same quantities:
+        # the cost expression of vllm_replay.serq, in the same quantities:
         # kv_decode / kv_prefill = KV units held (allocated blocks) by the
         # scheduled decoding / prefilling requests, prefilled = prefill tokens
         # scheduled (the variables below keep the old short names)

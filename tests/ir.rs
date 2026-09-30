@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use seq::{Overrides, Program, compile_source, compile_source_at, run_ir, run_source};
+use serq::{Overrides, Program, compile_source, compile_source_at, run_ir, run_source};
 
 fn programs() -> Vec<std::path::PathBuf> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
@@ -12,7 +12,7 @@ fn programs() -> Vec<std::path::PathBuf> {
         .unwrap()
         .flat_map(|g| std::fs::read_dir(g.unwrap().path()).unwrap())
         .map(|e| e.unwrap().path())
-        .filter(|p| p.extension().is_some_and(|e| e == "seq"))
+        .filter(|p| p.extension().is_some_and(|e| e == "serq"))
         .collect();
     v.sort();
     assert!(v.len() >= 10, "example programs");
@@ -75,7 +75,7 @@ fn ir_runs_like_text() {
 
 #[test]
 fn malformed_ir_is_rejected() {
-    let src = std::fs::read_to_string(seq::program_path("mg1")).unwrap();
+    let src = std::fs::read_to_string(serq::program_path("mg1")).unwrap();
     let p = compile_source(&src, &Overrides::default()).unwrap();
     let mut bad = p.clone();
     bad.version = 0;
@@ -84,14 +84,14 @@ fn malformed_ir_is_rejected() {
     bad.session = bad.blocks.len();
     assert!(bad.validate().unwrap_err().contains("out of range"));
     let mut bad = p.clone();
-    bad.blocks[bad.session].push(seq::ir::CStmt::Set(99, seq::ir::CExpr::Num(1.0)));
+    bad.blocks[bad.session].push(serq::ir::CStmt::Set(99, serq::ir::CExpr::Num(1.0)));
     assert!(bad.validate().unwrap_err().contains("attribute slot 99"));
     // a context variable outside the moment that supplies it: `tokens` exists
     // in a step stage's budget and cost, not in a session statement
     let mut bad = p.clone();
-    bad.blocks[bad.session].push(seq::ir::CStmt::Set(
+    bad.blocks[bad.session].push(serq::ir::CStmt::Set(
         0,
-        seq::ir::CExpr::Ctx(seq::ir::CtxVar::Ntok),
+        serq::ir::CExpr::Ctx(serq::ir::CtxVar::Ntok),
     ));
     let e = bad.validate().unwrap_err();
     assert!(e.starts_with("session: "), "{e}");
@@ -156,7 +156,7 @@ fn inlined_trace_runs_like_the_corpus() {
     // the calibrated A100 replay over the full short-context trace (333
     // sessions): the trace file and its sessions inlined into the IR give
     // the same run
-    let path = seq::program_path("vllm_replay");
+    let path = serq::program_path("vllm_replay");
     let src = std::fs::read_to_string(&path).unwrap();
     let ov = Overrides {
         horizon: Some(1500.0),
@@ -165,7 +165,7 @@ fn inlined_trace_runs_like_the_corpus() {
     let p = compile_source(&src, &ov).unwrap();
     let base = path.parent();
     let from_trace = run_ir(&p, base).unwrap().text();
-    let inlined = seq::inline_trace(p, base).unwrap();
+    let inlined = serq::inline_trace(p, base).unwrap();
     assert!(inlined.trace.is_none());
     let q = Program::from_json(&inlined.to_json()).unwrap();
     let from_ir = run_ir(&q, None).unwrap().text();
@@ -233,9 +233,9 @@ fn branch_with_is_sugar_for_bernoulli() {
     let explicit = format!(
         "{head} session {{ turn; loop {{ branch (~bernoulli(0.8)) {{ run tool (Z); turn; }} else {{ end; }} }} }}"
     );
-    let ov = seq::Overrides::default();
-    let a = seq::compile_source(&sugar, &ov).expect("the sugar compiles");
-    let b = seq::compile_source(&explicit, &ov).expect("the explicit form compiles");
+    let ov = serq::Overrides::default();
+    let a = serq::compile_source(&sugar, &ov).expect("the sugar compiles");
+    let b = serq::compile_source(&explicit, &ov).expect("the explicit form compiles");
     assert_eq!(
         a.to_json(),
         b.to_json(),
@@ -247,8 +247,8 @@ fn branch_with_is_sugar_for_bernoulli() {
     // "no reported number moved" check that justified the rewrite cannot be
     // written any more - it was run once, over all sixteen programs, before
     // the lint existed.
-    let one = seq::run_source(&sugar, &ov, None).expect("runs");
-    let two = seq::run_source(&explicit, &ov, None).expect("runs");
+    let one = serq::run_source(&sugar, &ov, None).expect("runs");
+    let two = serq::run_source(&explicit, &ov, None).expect("runs");
     assert_eq!(one.text(), two.text(), "the sugar must not move a run");
 }
 
@@ -262,8 +262,8 @@ fn a_draw_is_labelled_w_p() {
         workload { arrive poisson(0.5); turn { set Z = ~exp(3); } }
         session { turn; loop { run svc (1); branch with (0.8) { run tool (Z); turn; } else { end; } } }
         run { horizon 100; }";
-    let p = seq::compile_source(src, &seq::Overrides::default()).unwrap();
-    let svg = seq::view::svg::render(&seq::view::deployment::figure(&p));
+    let p = serq::compile_source(src, &serq::Overrides::default()).unwrap();
+    let svg = serq::view::svg::render(&serq::view::deployment::figure(&p));
     assert!(
         svg.contains("w.p. 0.8"),
         "the deployment view labels the draw"
@@ -302,9 +302,9 @@ fn at_admission_is_substituted_into_the_header() {
           }} cache (prompt + o);
           set K = prompt + o; end; }} }}"
     );
-    let ov = seq::Overrides::default();
-    let a = seq::compile_source(&bound, &ov).expect("the clause compiles");
-    let b = seq::compile_source(&inlined, &ov).expect("the inlined form compiles");
+    let ov = serq::Overrides::default();
+    let a = serq::compile_source(&bound, &ov).expect("the clause compiles");
+    let b = serq::compile_source(&inlined, &ov).expect("the inlined form compiles");
     assert_eq!(
         a.to_json(),
         b.to_json(),
@@ -336,9 +336,9 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
             prefill (prompt - cached) growing kv;
           }} cache (prompt + o); end; }}"
     );
-    let ov = seq::Overrides::default();
-    let a = seq::compile_source(&bound, &ov).expect("the clause compiles");
-    let b = seq::compile_source(&inlined, &ov).expect("the inlined form compiles");
+    let ov = serq::Overrides::default();
+    let a = serq::compile_source(&bound, &ov).expect("the clause compiles");
+    let b = serq::compile_source(&inlined, &ov).expect("the inlined form compiles");
     assert_eq!(
         a.to_json(),
         b.to_json(),
@@ -354,7 +354,7 @@ fn at_admission_rejects_a_draw() {
         workload { arrive poisson(1); }
         session { hold kv (x) at admission (x = ~exp(3)) { run s (1); } end; }
         run { horizon 10; }";
-    let e = seq::compile_source(src, &seq::Overrides::default()).expect_err("rejected");
+    let e = serq::compile_source(src, &serq::Overrides::default()).expect_err("rejected");
     assert!(e.contains("draws a sample"), "{e}");
 }
 
@@ -369,10 +369,10 @@ fn at_admission_bindings_are_sequential() {
            {{ run s (1); }} end; }}"
     );
     let flat = format!("{head} session {{ hold kv (n / 2 + 1) {{ run s (1); }} end; }}");
-    let ov = seq::Overrides::default();
+    let ov = serq::Overrides::default();
     assert_eq!(
-        seq::compile_source(&steps, &ov).unwrap().to_json(),
-        seq::compile_source(&flat, &ov).unwrap().to_json()
+        serq::compile_source(&steps, &ov).unwrap().to_json(),
+        serq::compile_source(&flat, &ov).unwrap().to_json()
     );
 }
 
@@ -384,7 +384,7 @@ fn fits_says_it_is_now_reserve() {
         workload { arrive poisson(1); }
         session { hold kv (1) fits (2) { run s (1); } end; }
         run { horizon 10; }";
-    let e = seq::compile_source(src, &seq::Overrides::default()).expect_err("rejected");
+    let e = serq::compile_source(src, &serq::Overrides::default()).expect_err("rejected");
     assert!(e.contains("`fits` is now `reserve`"), "{e}");
 }
 
@@ -397,7 +397,7 @@ fn admit_as_a_statement_says_what_to_write() {
         workload { arrive poisson(1); }
         session { admit kv (1) { run s (1); } end; }
         run { horizon 10; }";
-    let e = seq::compile_source(src, &seq::Overrides::default()).expect_err("rejected");
+    let e = serq::compile_source(src, &serq::Overrides::default()).expect_err("rejected");
     assert!(e.contains("is now `hold … at admission"), "{e}");
     assert!(
         e.contains("admit via"),
@@ -461,13 +461,13 @@ fn the_two_sides_compile_to_the_session_ir() {
           }}
         }}"
     );
-    let ov = seq::Overrides::default();
-    let a = seq::compile_source(&split, &ov).expect("the two sides compile");
-    let b = seq::compile_source(&flat, &ov).expect("the session block compiles");
+    let ov = serq::Overrides::default();
+    let a = serq::compile_source(&split, &ov).expect("the two sides compile");
+    let b = serq::compile_source(&flat, &ov).expect("the session block compiles");
     assert_eq!(a.to_json(), b.to_json(), "one session, one IR");
     // and the same run: nothing downstream of the parser can tell
-    let ra = seq::run_source(&split, &ov, None).unwrap();
-    let rb = seq::run_source(&flat, &ov, None).unwrap();
+    let ra = serq::run_source(&split, &ov, None).unwrap();
+    let rb = serq::run_source(&flat, &ov, None).unwrap();
     assert_eq!(ra.json(), rb.json());
 }
 
@@ -485,10 +485,10 @@ fn enter_is_hold_and_admit_via_survives() {
     let kernel = format!(
         "{head} session {{ hold reqs (1), kv (n) {{ run engine prefill (n) growing kv; }} cache (n); end; }}"
     );
-    let ov = seq::Overrides::default();
+    let ov = serq::Overrides::default();
     assert_eq!(
-        seq::compile_source(&sugar, &ov).unwrap().to_json(),
-        seq::compile_source(&kernel, &ov).unwrap().to_json()
+        serq::compile_source(&sugar, &ov).unwrap().to_json(),
+        serq::compile_source(&kernel, &ov).unwrap().to_json()
     );
 }
 
@@ -496,8 +496,8 @@ fn enter_is_hold_and_admit_via_survives() {
 /// whole numbers keep every digit, and code to paste back is exact.
 #[test]
 fn numbers_read_as_written() {
-    use seq::ir::{show_num, show_num_exact};
-    assert_eq!(show_num(0.9100000000000001), "0.91"); // vllm_subagents.seq's folded arrival rate
+    use serq::ir::{show_num, show_num_exact};
+    assert_eq!(show_num(0.9100000000000001), "0.91"); // vllm_subagents.serq's folded arrival rate
     assert_eq!(show_num(1e-5 * 3.0), "3e-5");
     assert_eq!(show_num(-0.91), "-0.91");
     assert_eq!(show_num(2e-9), "2e-9");
@@ -545,7 +545,7 @@ fn an_old_or_keyless_choose_is_refused_plainly() {
     let json = p.to_json();
     let old = json
         .replacen(
-            &format!("\"version\": {}", seq::ir::IR_VERSION),
+            &format!("\"version\": {}", serq::ir::IR_VERSION),
             "\"version\": 6",
             1,
         )
