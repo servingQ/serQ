@@ -60,6 +60,8 @@ pub struct Net {
     pub arrival: String,
     /// Pools any `hold` caches a prefix in.
     pub cached: Vec<usize>,
+    /// The stations a run over several stages holds at once, by node.
+    pub flows: Vec<Vec<usize>>,
 }
 
 impl Net {
@@ -147,6 +149,12 @@ impl Walker<'_> {
     }
 
     fn visit_stage(&mut self, stage: usize, label: String, note: Option<String>) {
+        let idx = self.station(stage, label, note);
+        self.attach(idx);
+    }
+
+    /// The node of a stage the session reaches, made on the first visit.
+    fn station(&mut self, stage: usize, label: String, note: Option<String>) -> usize {
         let idx = match self.net.node_of(stage) {
             Some(i) => {
                 // Seen before: it belongs only to the pools held every time.
@@ -180,7 +188,7 @@ impl Walker<'_> {
         {
             self.net.nodes[idx].note = Some(n);
         }
-        self.attach(idx);
+        idx
     }
 
     fn walk(&mut self, block: usize) {
@@ -189,10 +197,26 @@ impl Walker<'_> {
         };
         for s in stmts.clone() {
             match s {
-                CStmt::Run { stage, .. } => {
+                CStmt::Run { stage, also, .. } => {
                     let label = self.p.show_stage_ref(&stage);
                     let note = stage.index.as_ref().and_then(|i| self.claim_choose(i));
                     self.visit_stage(stage.base, label, note);
+                    if !also.is_empty() {
+                        // the other stages are held at once, not passed in
+                        // turn: no arrow between them, and the session
+                        // leaves from the last
+                        let mut group = vec![self.net.node_of(stage.base).unwrap()];
+                        for r in &also {
+                            let label = self.p.show_stage_ref(r);
+                            let note = r.index.as_ref().and_then(|i| self.claim_choose(i));
+                            group.push(self.station(r.base, label, note));
+                        }
+                        let last = *group.last().unwrap();
+                        self.frontier = vec![(End::Node(last), None)];
+                        if !self.net.flows.contains(&group) {
+                            self.net.flows.push(group);
+                        }
+                    }
                 }
                 CStmt::Hold {
                     pools, body, lease, ..
@@ -640,6 +664,21 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         }
     }
     let row_right = x;
+
+    // A run over several stages: its stations bracketed as one job.
+    for group in &net.flows {
+        let r = group
+            .iter()
+            .map(|&i| rects[i])
+            .reduce(|a, b| a.union(&b))
+            .expect("a flow holds a stage");
+        let pad = 6.0;
+        f.boxed(
+            Rect::new(r.x - pad, r.y - pad, r.w + 2.0 * pad, r.h + 2.0 * pad),
+            BoxStyle::Flow,
+            4.0,
+        );
+    }
 
     // Enclosures first, so stations and glyphs paint over them.
     for (gi, g) in gs.iter().enumerate() {

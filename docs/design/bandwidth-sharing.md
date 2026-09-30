@@ -4,8 +4,9 @@ A KV transfer between a prefill and a decode instance moves its bytes out of
 the sender's NIC and into the receiver's, at once. A `run` sits at one stage,
 so a program today can put a transfer on one of the two and not on both.
 This document is the design for a run that holds several stages at once, and
-for the policy that divides their capacity. RFC #118. Nothing here is
-implemented yet: the Before runs, the After is a sketch.
+for the policy that divides their capacity. RFC #118, IR 8. The Before
+runs on IR 7; the After runs, and `tests/shared_stages.rs` checks it
+against the values derived by hand below.
 
 ## What the systems do
 
@@ -83,7 +84,7 @@ end at 3.0. The two ways the language offers today are both wrong:
 - Scaling the work by the reads in flight at the sender, read when the
   transfer starts, misses every read that starts or ends while it runs.
 
-## After (sketch)
+## After
 
 **A run over several stages.** `CStmt::Run` gains one field:
 
@@ -118,13 +119,14 @@ outside the sharing. The indices of a stage array are evaluated once, when
 the run starts, as a single-stage run's are.
 
 **The link rule.** Every stage of a run with a non-empty `also` is `ps(φ)`
-with `φ` a constant, and no stage array appears twice in one run: an index
+with `φ` a constant above 0 (a flow at rate 0 would wait for ever), and no stage array appears twice in one run: an index
 is evaluated when the run starts, so `egress[i], egress[j]` could name one
 stage twice, and the linker cannot tell. Every run on a shared stage (below),
 single-stage runs included, is plain: no `prefill`/`decode` mode and no
-`growing`, which a flow does not define. A `φ` that depends on `n` has no
-meaning for a flow that `n` does not describe, so it is a link error, not a
-choice. A program with a non-empty `also` anywhere must declare `share`.
+`growing`, which a flow does not define (a `ps` stage allows neither
+anyway). A `φ` that reads `present` has no meaning for a flow that
+`present` does not describe, so it is a link error, not a choice.
+`Program::validate` checks all of it, so IR from a tool meets the rule too. A program with a non-empty `also` anywhere must declare `share`.
 Every stage in the list is checked as declared, as `on S`'s one stage is
 today; the list is written only after `on` (and after `run`), since a form
 without `on` finds its one stage by its role.
@@ -151,25 +153,34 @@ owed `φ / n`: under `maxmin` it takes what the multi-stage flows through
 the same stage leave (`f3` in the second example below).
 
 **The simulator.** Flows on shared stages keep their remaining work; at
-every start and end of a flow the rates of its connected component are
-recomputed (water-filling for `maxmin`, a minimum per flow for
-`bottleneck`; O(stages × flows)) and the earliest end is scheduled.
+every start and end of a flow every flow's rate is recomputed
+(progressive filling for `maxmin`, a minimum per flow for `bottleneck`;
+O(stages × flows)), the earliest end is scheduled, and an end scheduled
+before is stale (`Interp::flows_reschedule`). A connected component at a
+time would be cheaper on a large deployment; no program here is large
+enough to ask for it.
 
 **What a shared stage reports.** With `n_s` the flows holding `s` and `r_f`
-their rates: `holders(s)` and the report's number in service are `n_s`;
+their rates: `queue(s)`, `busy(s)` and the report's mean number are
+`n_s`, as at any `ps` stage, where every job present is in service;
 `work(s)` is the sum of their remaining work; utilisation is `Σ r_f / φ_s`,
 the capacity carried, so `bottleneck` shows the share it leaves unused
 where "not empty" would count the stage busy; `done` and the mean service
 time count each flow once at every stage it held, its service being its
-time from start to end. A `ps` stage has no queue, shared or not.
+time from start to end, and so does the stage's price estimator.
 
-**The view.** A multi-stage run is one station per stage, drawn stacked in
-one column and bracketed as one job: the arrows enter and leave the
-bracket, not the stations.
+**The view.** A multi-stage run is one station per stage, next to each
+other in the station row and bracketed as one job (`BoxStyle::Flow`, drawn
+as a rail so the other figures' bytes do not move): the session comes in at
+the first station and leaves from the last, and no arrow runs between
+them. Stacking them in one column would say "at once" better, and needs
+edge routing the one-row layout does not have; so does a bracket around
+stations the row does not put side by side, which today also takes in the
+stations between them.
 
 ## Expected values
 
-Derived by hand, for the tests the implementation adds:
+Derived by hand, and checked by `tests/shared_stages.rs`:
 
 1. The Before, with the sender's NIC in the run: two flows of 1 on
    `egress (1)` shared, each also on its own `ingress (1)`, both start at
@@ -191,20 +202,24 @@ Derived by hand, for the tests the implementation adds:
 
 ## Cost
 
-- `IR_VERSION` 6 → 7. The field is new, but an old reader that ignores it
+- `IR_VERSION` 7 → 8 (7, `choose` over a tuple of keys, is tagged in
+  `v0.1.0-rc5`). The fields are new, but an old reader that ignores them
   runs a two-stage flow on one stage and is silently wrong, which is the
-  case `docs/ir.md` §Stability says bumps. #140 also plans v7; whichever
-  lands first bumps and the other rides along until the tag. Every
-  `tools/oracle/*.ir.json` is regenerated for its version.
+  case `docs/ir.md` §Stability says bumps. Every `tools/oracle/*.ir.json`
+  is regenerated and differs in its `"version"` line only.
 - `serving-queue-theory`: `scripts/gen_seq_oracle.py` pins the version and
   reads `Run` by field name, so it would ignore `also` without complaint.
   `SeqExec`'s fragment admits `step` and `delay` stages only (a `ps` stage
-  is already refused), so no oracle program is affected; the generator
-  raises `Fragment` on a non-empty `also` as well, so that the refusal does
-  not rest on the stage kind alone.
-- The linker rule above, the `share` declaration, the flow solver, the
-  report's definitions, the view, `docs/language.md` §3, `docs/ir.md`, the
-  API reference.
+  is already refused), so no oracle program is affected. The companion
+  change pins 8 and raises `Fragment` on a non-empty `also` as well, so
+  that the refusal does not rest on the stage kind alone; it lands when
+  `serving-queue-theory` moves to the tag that carries IR 8.
+- The language grows by three keywords (`share`, `maxmin`, `bottleneck`;
+  79 → 82 in `tools/metrics.json`) and one IR field on `Run` and one on
+  `Program`; no `CStmt` or `CExpr` variant is added.
+- The rule above, the `share` declaration, the flow solver, the report's
+  definitions, the view, `docs/language.md` §2 and §3, `docs/ir.md`, the
+  API reference, the cheatsheet and the docs lexer.
 
 ## Relations
 

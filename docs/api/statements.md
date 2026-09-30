@@ -139,6 +139,7 @@ and `cached` count them.
 
 ```seq
 run STAGE [prefill | decode] (work) [growing POOL];
+run STAGE, STAGE [, STAGE]* (work);
 ```
 
 | Argument | Type | Description |
@@ -149,6 +150,23 @@ run STAGE [prefill | decode] (work) [growing POOL];
 | `growing` | `pool` | Only on a `step` stage. The hold on this pool grows block by block as the run advances, preempting if needed. |
 
 Blocks the session until the work is done.
+
+With several stages the run is one job, a *flow*, that holds all of them
+from its start to its end; its work goes down at one rate everywhere, which
+the program's [`share`](program.md#share) sets from the stages'
+capacities. Every stage is `ps(φ)` with a constant `φ` above 0, a run names each
+stage array once, and the work is in the unit the capacities share (tokens
+at tokens per second, say). A stage array some run holds with another is
+*shared* for the whole run: every job on it, a single-stage run included,
+is a flow, and the report's utilisation is the capacity its flows carry.
+
+```seq
+stage egress[2] : ps(BwP);     // a prefiller's NIC, tokens per second
+stage ingress[2] : ps(BwD);    // a decoder's NIC
+share maxmin;
+…
+run egress[i], ingress[j] (tokens);
+```
 
 ## `branch`
 

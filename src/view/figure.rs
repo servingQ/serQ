@@ -74,6 +74,8 @@ pub enum BoxStyle {
     Cached,
     /// An enclosure: a pool's instance boundary.
     Enclosure,
+    /// The stations one job holds at once: a run over several stages.
+    Flow,
 }
 
 /// How a connector is drawn.

@@ -129,6 +129,8 @@ struct Parser {
     /// position of its keyword, until `assemble` puts them together.
     wl_session: Option<(usize, Vec<Stmt>)>,
     server: Option<(usize, Vec<Stmt>)>,
+    /// Where `share` was given, for the error that it is given twice.
+    share_at: Option<usize>,
     /// Header bindings the body of their hold reads, with the position of
     /// the name: `set` at the top of the body, checked once the program's
     /// attributes are known (`check_body_bindings`).
@@ -219,7 +221,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 79] = [
+pub const KEYWORDS: [&str; 82] = [
     "admission",
     "admit",
     "arrivals",
@@ -228,6 +230,7 @@ pub const KEYWORDS: [&str; 79] = [
     "batch",
     "bernoulli",
     "block",
+    "bottleneck",
     "branch",
     "budget",
     "by",
@@ -263,6 +266,7 @@ pub const KEYWORDS: [&str; 79] = [
     "load",
     "loop",
     "lru",
+    "maxmin",
     "memory",
     "none",
     "observe",
@@ -285,6 +289,7 @@ pub const KEYWORDS: [&str; 79] = [
     "server",
     "session",
     "set",
+    "share",
     "spill",
     "stage",
     "step",
@@ -387,6 +392,7 @@ fn parse_with(src: &str, base: Option<&Path>, root: Option<PathBuf>) -> PResult<
         side: Side::Session,
         wl_session: None,
         server: None,
+        share_at: None,
         body_binds: vec![],
         bind_at: vec![],
         defs: vec![],
@@ -412,6 +418,7 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
         side: Side::Session,
         wl_session: None,
         server: None,
+        share_at: None,
         body_binds: vec![],
         bind_at: vec![],
         defs: vec![],
@@ -666,9 +673,11 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
             stage,
             work,
             growing,
+            also,
             ..
         } => {
             ref_reads(stage, n)
+                || also.iter().any(|r| ref_reads(r, n))
                 || expr_reads(work, n)
                 || growing.as_ref().is_some_and(|g| ref_reads(g, n))
         }
@@ -1047,6 +1056,28 @@ impl Parser {
                 let body = self.block()?;
                 self.side = Side::Session;
                 self.server = Some((at, body));
+            } else if self.is_kw("share") {
+                let at = self.pos;
+                self.advance();
+                if let Some(first) = self.share_at {
+                    let line = self.toks[first].line;
+                    return self.err_at(
+                        at,
+                        format!("`share` is given twice: the first is on line {line}"),
+                    );
+                }
+                self.share_at = Some(at);
+                prog.share = Some(if self.eat_kw("maxmin") {
+                    crate::ir::Share::MaxMin
+                } else if self.eat_kw("bottleneck") {
+                    crate::ir::Share::Bottleneck
+                } else {
+                    return self.err(format!(
+                        "`share` takes `maxmin` or `bottleneck`, found {}",
+                        self.peek()
+                    ));
+                });
+                self.expect(&Tok::Semi)?;
             } else if self.eat_kw("run") {
                 self.expect(&Tok::LBrace)?;
                 while *self.peek() != Tok::RBrace {
@@ -2141,6 +2172,7 @@ impl Parser {
             "run" => {
                 self.advance();
                 let stage = self.reference()?;
+                let also = self.more_stages()?;
                 let mode = if self.eat_kw("prefill") {
                     RunMode::Prefill
                 } else if self.eat_kw("decode") {
@@ -2160,6 +2192,7 @@ impl Parser {
                     mode,
                     work,
                     growing,
+                    also,
                 })
             }
             "branch" => {
@@ -2386,25 +2419,15 @@ impl Parser {
         let span = Some(self.span());
         self.advance();
         let kw = role.keyword();
+        let mut also = vec![];
         let stage = if self.eat_kw("on") {
-            let ref_at = self.pos;
-            let r = self.reference()?;
-            if !self.stages.iter().any(|(n, _)| *n == r.name) {
-                let help = crate::frontend::diagnostic::suggestion(
-                    &r.name,
-                    self.stages.iter().map(|(name, _)| name.as_str()),
-                )
-                .map(|name| format!("did you mean stage `{name}`?"))
-                .unwrap_or_else(|| "declare the stage above this statement".into());
-                return self.err_at(
-                    ref_at,
-                    format!(
-                        "`{kw} on {}`: no stage `{}` is declared above\nhelp: {help}",
-                        r.name, r.name
-                    ),
-                );
+            // `on a, b`: the stages the job holds at once, each declared
+            let first = self.declared_stage(kw)?;
+            while *self.peek() == Tok::Comma {
+                self.advance();
+                also.push(self.declared_stage(kw)?);
             }
-            r
+            first
         } else {
             let index = if *self.peek() == Tok::LBracket {
                 self.advance();
@@ -2453,6 +2476,7 @@ impl Parser {
                     mode,
                     work,
                     growing: None,
+                    also,
                 },
                 Stmt::Load(to, units),
                 Stmt::Release(from),
@@ -2480,7 +2504,40 @@ impl Parser {
             mode,
             work,
             growing,
+            also,
         }])
+    }
+
+    /// A stage named after `on`, which must be declared above.
+    fn declared_stage(&mut self, kw: &str) -> PResult<Ref> {
+        let ref_at = self.pos;
+        let r = self.reference()?;
+        if !self.stages.iter().any(|(n, _)| *n == r.name) {
+            let help = crate::frontend::diagnostic::suggestion(
+                &r.name,
+                self.stages.iter().map(|(name, _)| name.as_str()),
+            )
+            .map(|name| format!("did you mean stage `{name}`?"))
+            .unwrap_or_else(|| "declare the stage above this statement".into());
+            return self.err_at(
+                ref_at,
+                format!(
+                    "`{kw} on {}`: no stage `{}` is declared above\nhelp: {help}",
+                    r.name, r.name
+                ),
+            );
+        }
+        Ok(r)
+    }
+
+    /// `run a, b (w)`: the stages after the first, if any.
+    fn more_stages(&mut self) -> PResult<Vec<Ref>> {
+        let mut also = vec![];
+        while *self.peek() == Tok::Comma {
+            self.advance();
+            also.push(self.reference()?);
+        }
+        Ok(also)
     }
 
     /// The stage a role names when none is given: the stage of the role's

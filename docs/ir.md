@@ -15,11 +15,12 @@ the program. A tool that knows what it wants to run (a scenario from JSON,
 a parameter sweep, a trace replay) builds or edits the IR as data instead
 of generating text.
 
-Source: `src/ir.rs`. Version: `IR_VERSION = 7` (2 added the sessions' turns;
+Source: `src/ir.rs`. Version: `IR_VERSION = 8` (2 added the sessions' turns;
 3 renamed the `route` field to `session`; 4 replaced `CStep`'s two booleans
 `exclusive_prefill` and `decode_first` by the one order `serve`;
 5 added KV transfer and leases; 6 added renewal arrivals and finite open runs;
-7 makes `Choose.key` a list of keys).
+7 makes `Choose.key` a list of keys; 8 lets a `Run` hold several stages at
+once, `also`, under the program's `share`).
 
 ## Why an IR first
 
@@ -70,6 +71,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `blocks` | the statement blocks (an arena; bodies of holds, branches and loops refer to blocks by index) |
 | `horizon`, `warmup`, `seed`, `arrivals` | the run; `arrivals` requires exactly N open arrivals and draining by `horizon` |
 | `hidden` | attribute slots the scheduler may not read (`hidden o;`): legal at the `Session` moment only, below |
+| `share` | `MaxMin` or `Bottleneck`: how the flows of runs over several stages divide the stages' capacity; present exactly when some `Run` has a non-empty `also`, omitted otherwise |
 | `slot_cached`, `slot_serial`, … | slots of the built-in attributes (`cached`, `serial`, `turn_no`, `new`, `out`, `think`, `more`, `forced`, `computed`) |
 
 `Sessions`: all the sessions arrive at time 0; each one runs `init`, then
@@ -92,7 +94,7 @@ runs identically (`tests/ir.rs`).
 | `Grow(pool, e)`, `Drop(pool)` | grow the current hold, drop the own cached entry |
 | `Release(pool)` | give the innermost enclosing hold's allocation on the pool back now, or end the session's lease of it, caching per the hold's `cache`; nothing held or leased there is a no-op. A KV transfer between instances is `Run` (the link), `Load` (the destination) and `Release` (the source's lease) |
 | `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
-| `Run {stage, mode, work, growing?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed |
+| `Run {stage, mode, work, growing?, also?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed; `also` further stages the same job holds at once (a flow of `share`), omitted when empty |
 | `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}` (`key` a list, compared in order), `End` | control; `End` ends the session |
 
 ### Expressions (`CExpr`)
@@ -108,8 +110,12 @@ and stage references are `CRef {base, count, index?}` (a family of
 ## Validation
 
 `Program::validate` checks the version, that every block, attribute,
-observation, pool and stage index exists, the run parameters, and that
-every context variable is read at the moment that supplies it.
+observation, pool and stage index exists, the run parameters, that
+every context variable is read at the moment that supplies it, and the
+flows: every stage array a `Run` holds with another (`also`) is a `ps` of
+a constant capacity, every run on such a *shared* stage is `Plain` with no
+`growing`, a run names each stage array once, and `share` is present
+exactly when some `also` is non-empty (`Program::shared_stages`).
 `Program::from_json`, `run_ir` and the linker (`compile_source`) call it,
 so a text program meets the same check as IR from files and tools.
 

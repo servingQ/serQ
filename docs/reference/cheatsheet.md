@@ -16,6 +16,7 @@ stage NAME [ '[' N ']' ] : kind;    // where time passes
 
 workload { … }                      // how sessions arrive and turns evolve
 session { … }                         // what every session does
+share maxmin;                       // or bottleneck: how a run over several stages divides them
 run { horizon …; warmup …; seed …; arrivals …; }
 ```
 
@@ -68,12 +69,14 @@ release P;                         // give the enclosing hold's units of P back 
 load P (n);                        // the KV of n tokens arrived: computed position += n
 
 run S [prefill|decode] (w) [growing P];
+run S, T (w);                      // one job holding ps stages S and T at once, at the rate share gives
 
 // the serving vocabulary: the same statements, named by the request lifecycle
 prefill W;  decode W;  tool Z;     // run on the stage of that name: W is
                                    // time on a fifo/ps/delay stage (seconds)
 prefill T;  decode T;              // on a step engine: T is tokens, the budget's unit
 transfer (X) from P to Q (n);      // run link (X); load Q (n); release P
+transfer on S, T (X) from P to Q (n);   // the read holds the sender's link and the receiver's
 prefill[j] W;  prefill on P (W);   // an instance of an array; an explicit stage
 
 branch (e) { … } [else { … }]      // a test: e is 0 or 1

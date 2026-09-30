@@ -243,6 +243,8 @@ pub enum Stmt {
         mode: RunMode,
         work: Expr,
         growing: Option<Ref>,
+        /// `run a, b (w)`: the further stages the job holds at once.
+        also: Vec<Ref>,
     },
     Branch(Expr, Vec<Stmt>, Vec<Stmt>),
     Loop(Vec<Stmt>),
@@ -276,6 +278,8 @@ pub struct Program {
     pub workload: Option<Workload>,
     pub session: Vec<Stmt>,
     pub run: RunOpts,
+    /// `share maxmin;` or `share bottleneck;`
+    pub share: Option<crate::ir::Share>,
 }
 
 /// Parser equivalence tests compare syntax after desugaring; the two spellings
@@ -345,9 +349,11 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                     stage,
                     work,
                     growing,
+                    also,
                     ..
                 } => {
                     reference(stage);
+                    also.iter_mut().for_each(reference);
                     expr(work);
                     growing.iter_mut().for_each(reference);
                 }

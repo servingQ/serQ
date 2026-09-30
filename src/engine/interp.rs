@@ -260,6 +260,20 @@ enum Kind {
         iter: Option<Iter>,
         epoch: u64,
     },
+    /// A `ps(cap)` stage some run holds together with another: its jobs are
+    /// flows of `Interp::flows`, their rates set by the program's `share`.
+    Shared {
+        cap: f64,
+    },
+}
+
+/// A job that holds several shared stages at once (or one, on a shared
+/// stage): its remaining work, the rate the policy gives it, and its stages,
+/// the first of which carries its `Status::InStage`.
+struct Flow {
+    stages: Vec<usize>,
+    remaining: f64,
+    rate: f64,
 }
 
 struct StageState {
@@ -335,6 +349,12 @@ pub struct Interp<'p> {
     by_serial: HashMap<u64, usize>,
     next_serial: u64,
     next_job: u64,
+    /// The flows on shared stages, their rates as of `flows_last`.
+    flows: HashMap<u64, Flow>,
+    flows_last: f64,
+    /// Bumped at every recomputation: a finish scheduled before is stale.
+    flow_epoch: u64,
+    flows_dirty: bool,
     pools: Vec<PoolState>,
     stages: Vec<StageState>,
     ready: VecDeque<usize>,
@@ -406,16 +426,19 @@ impl<'p> Interp<'p> {
                 stuck: 0,
             })
             .collect();
+        let shared = p.shared_stages();
         let stages = p
             .stages
             .iter()
-            .map(|cs| StageState {
+            .enumerate()
+            .map(|(k, cs)| StageState {
                 kind: match &cs.kind {
                     CStageKind::Fifo(c) => Kind::Fifo {
                         servers: *c,
                         queue: VecDeque::new(),
                         active: vec![],
                     },
+                    CStageKind::Ps(CExpr::Num(cap)) if shared[k] => Kind::Shared { cap: *cap },
                     CStageKind::Ps(_) => Kind::Ps {
                         v: 0.0,
                         v_last: 0.0,
@@ -453,6 +476,10 @@ impl<'p> Interp<'p> {
             by_serial: HashMap::new(),
             next_serial: 0,
             next_job: 0,
+            flows: HashMap::new(),
+            flows_last: 0.0,
+            flow_epoch: 0,
+            flows_dirty: false,
             pools,
             stages,
             ready: VecDeque::new(),
@@ -694,16 +721,41 @@ impl<'p> Interp<'p> {
                 _ => {}
             }
         }
+        if self.flows_dirty {
+            self.flows_reschedule();
+        }
         self.record();
     }
 
     fn record(&mut self) {
         let now = self.now;
         self.live_avg.set(now, self.live as f64);
+        let flows = &self.flows;
         for st in &mut self.stages {
             let n = st.jobs.len() as f64;
             st.number_avg.set(now, n);
-            st.busy_avg.set(now, if n > 0.0 { 1.0 } else { 0.0 });
+            let busy = match st.kind {
+                // the capacity the flows carry, not whether any is there: a
+                // `bottleneck` flow leaves the rest of its other stages unused
+                Kind::Shared { cap } => {
+                    // summed in job order: a HashMap's order is not the
+                    // seed's, and a float sum depends on it
+                    let mut ids: Vec<u64> = st.jobs.keys().copied().collect();
+                    ids.sort_unstable();
+                    ids.iter()
+                        .map(|id| flows.get(id).map_or(0.0, |f| f.rate))
+                        .sum::<f64>()
+                        / cap
+                }
+                _ => {
+                    if n > 0.0 {
+                        1.0
+                    } else {
+                        0.0
+                    }
+                }
+            };
+            st.busy_avg.set(now, busy);
         }
         for pl in &mut self.pools {
             pl.used_avg.set(now, pl.used);
@@ -1059,9 +1111,18 @@ impl<'p> Interp<'p> {
                     mode,
                     work,
                     growing,
+                    also,
                 } => {
                     let st = self.stage_index(stage, sid);
                     let w = self.eval(work, &Ctx::session(sid), Which::Session).max(0.0);
+                    if matches!(self.stages[st].kind, Kind::Shared { .. }) {
+                        let mut stages = vec![st];
+                        for r in also {
+                            stages.push(self.stage_index(r, sid));
+                        }
+                        self.start_flow(stages, Some(sid), w);
+                        return;
+                    }
                     let g = growing.as_ref().map(|r| self.pool_index(r, sid));
                     self.start_job(st, Some(sid), w, *mode, g);
                     return;
@@ -1920,6 +1981,11 @@ impl<'p> Interp<'p> {
             }
             return;
         }
+        if matches!(self.stages[st].kind, Kind::Shared { .. }) {
+            self.next_job -= 1;
+            self.start_flow(vec![st], owner, work);
+            return;
+        }
         if let Some(sid) = owner {
             self.sessions[sid].status = Status::InStage(st, id);
         }
@@ -1969,6 +2035,7 @@ impl<'p> Interp<'p> {
                     },
                 );
             }
+            Kind::Shared { .. } => unreachable!("`start_job` hands a shared stage to `start_flow`"),
             Kind::Step { residents, .. } => {
                 let mut job = job;
                 job.started = Some(now);
@@ -1984,6 +2051,153 @@ impl<'p> Interp<'p> {
                 residents.insert(pos, id);
             }
         }
+    }
+
+    // ------------------------------------------------ shared stages ----
+
+    /// A job on shared stages: it holds every one of `stages` until its work
+    /// is done at the rate the program's `share` gives it.
+    fn start_flow(&mut self, stages: Vec<usize>, owner: Option<usize>, work: f64) {
+        let id = self.next_job;
+        self.next_job += 1;
+        let now = self.now;
+        if work <= 0.0 {
+            if let Some(sid) = owner {
+                self.sessions[sid].status = Status::Ready;
+                self.ready.push_back(sid);
+            }
+            return;
+        }
+        if let Some(sid) = owner {
+            self.sessions[sid].status = Status::InStage(stages[0], id);
+        }
+        self.flows_advance();
+        for (k, &s) in stages.iter().enumerate() {
+            self.stages[s].jobs.insert(
+                id,
+                Job {
+                    // the session is readied once, by the first stage
+                    owner: if k == 0 { owner } else { None },
+                    work,
+                    mode: RunMode::Plain,
+                    growing: None,
+                    enqueued: now,
+                    started: Some(now),
+                },
+            );
+        }
+        self.flows.insert(
+            id,
+            Flow {
+                stages,
+                remaining: work,
+                rate: 0.0,
+            },
+        );
+        self.flows_dirty = true;
+    }
+
+    /// Bring every flow's remaining work to now, at the rates it had.
+    fn flows_advance(&mut self) {
+        let dt = self.now - self.flows_last;
+        if dt > 0.0 {
+            for f in self.flows.values_mut() {
+                f.remaining = (f.remaining - f.rate * dt).max(0.0);
+            }
+        }
+        self.flows_last = self.now;
+    }
+
+    /// The rates of every flow under the program's `share`, and the earliest
+    /// end among them scheduled; an end scheduled before is stale.
+    fn flows_reschedule(&mut self) {
+        self.flows_dirty = false;
+        self.flows_advance();
+        let cap = |st: &StageState| match st.kind {
+            Kind::Shared { cap } => cap,
+            _ => unreachable!("a flow holds shared stages only"),
+        };
+        let mut ids: Vec<u64> = self.flows.keys().copied().collect();
+        ids.sort_unstable();
+        match self.p.share.expect("a program with flows has a share") {
+            crate::ir::Share::Bottleneck => {
+                // each flow's equal share at the tightest of its stages
+                for &id in &ids {
+                    let r = self.flows[&id]
+                        .stages
+                        .iter()
+                        .map(|&s| cap(&self.stages[s]) / self.stages[s].jobs.len() as f64)
+                        .fold(f64::INFINITY, f64::min);
+                    self.flows.get_mut(&id).unwrap().rate = r;
+                }
+            }
+            crate::ir::Share::MaxMin => {
+                // progressive filling: the stage whose free capacity, split
+                // among its flows still rising, is least fills first; its
+                // flows stop there
+                let mut left: HashMap<usize, f64> = HashMap::new();
+                let mut rising: HashMap<usize, usize> = HashMap::new();
+                for &id in &ids {
+                    for &s in &self.flows[&id].stages {
+                        left.entry(s).or_insert_with(|| cap(&self.stages[s]));
+                        *rising.entry(s).or_insert(0) += 1;
+                    }
+                }
+                let mut open: Vec<u64> = ids.clone();
+                while !open.is_empty() {
+                    let (s_min, share) = rising
+                        .iter()
+                        .filter(|&(_, &n)| n > 0)
+                        .map(|(&s, &n)| (s, left[&s] / n as f64))
+                        .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
+                        .expect("an open flow holds a stage");
+                    let share = share.max(0.0);
+                    let (fill, keep): (Vec<u64>, Vec<u64>) = open
+                        .into_iter()
+                        .partition(|id| self.flows[id].stages.contains(&s_min));
+                    for id in fill {
+                        let f = self.flows.get_mut(&id).unwrap();
+                        f.rate = share;
+                        for &s in &f.stages {
+                            *left.get_mut(&s).unwrap() -= share;
+                            *rising.get_mut(&s).unwrap() -= 1;
+                        }
+                    }
+                    open = keep;
+                }
+            }
+        }
+        self.flow_epoch += 1;
+        let now = self.now;
+        let next = ids
+            .iter()
+            .filter(|id| self.flows[id].rate > 0.0)
+            .map(|id| (now + self.flows[id].remaining / self.flows[id].rate, *id))
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        if let Some((t, id)) = next {
+            self.at(
+                t,
+                Ev::Finish {
+                    stage: self.flows[&id].stages[0],
+                    job: id,
+                    epoch: self.flow_epoch,
+                },
+            );
+        }
+    }
+
+    /// A flow's work is done: it leaves all its stages, counted at each.
+    fn flow_done(&mut self, id: u64) {
+        self.flows_advance();
+        let Some(f) = self.flows.remove(&id) else {
+            return;
+        };
+        for s in f.stages {
+            if let Some(job) = self.stages[s].jobs.remove(&id) {
+                self.job_done(s, job);
+            }
+        }
+        self.flows_dirty = true;
     }
 
     fn fifo_fill(&mut self, st: usize) {
@@ -2069,6 +2283,17 @@ impl<'p> Interp<'p> {
     }
 
     fn remove_job(&mut self, st: usize, id: u64) {
+        if matches!(self.stages[st].kind, Kind::Shared { .. }) {
+            // a flow leaves every stage it holds, and the rest re-share
+            self.flows_advance();
+            if let Some(f) = self.flows.remove(&id) {
+                for s in f.stages {
+                    self.stages[s].jobs.remove(&id);
+                }
+                self.flows_dirty = true;
+            }
+            return;
+        }
         let _now = self.now;
         let stage = &mut self.stages[st];
         let Some(job) = stage.jobs.remove(&id) else {
@@ -2088,6 +2313,7 @@ impl<'p> Interp<'p> {
                 *dirty = true;
             }
             Kind::Delay => {}
+            Kind::Shared { .. } => unreachable!("a flow leaves by `remove_job`'s first branch"),
             Kind::Step {
                 residents, iter, ..
             } => {
@@ -2106,6 +2332,12 @@ impl<'p> Interp<'p> {
         // staleness
         match &self.stages[st].kind {
             Kind::Ps { epoch: g, .. } if *g != epoch => return,
+            Kind::Shared { .. } => {
+                if epoch == self.flow_epoch {
+                    self.flow_done(id);
+                }
+                return;
+            }
             _ => {}
         }
         if !self.stages[st].jobs.contains_key(&id) {
@@ -2132,6 +2364,7 @@ impl<'p> Interp<'p> {
                 *dirty = true;
             }
             Kind::Delay => {}
+            Kind::Shared { .. } => unreachable!("a flow finishes by `flow_done`"),
             Kind::Step { .. } => unreachable!("step jobs finish at iteration ends"),
         }
         self.job_done(st, job);
@@ -2671,6 +2904,15 @@ impl<'p> Interp<'p> {
                         .values()
                         .map(|j| (j.work - (now - j.started.unwrap())).max(0.0))
                         .sum(),
+                    Kind::Shared { .. } => {
+                        let dt = now - self.flows_last;
+                        let mut ids: Vec<u64> = st.jobs.keys().copied().collect();
+                        ids.sort_unstable();
+                        ids.iter()
+                            .filter_map(|id| self.flows.get(id))
+                            .map(|f| (f.remaining - f.rate * dt).max(0.0))
+                            .sum()
+                    }
                     Kind::Step { .. } => st.jobs.values().map(|j| j.work).sum(),
                 }
             }

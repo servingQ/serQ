@@ -42,7 +42,7 @@ takes time is `run link (X);`.
 ## `transfer … from … to`
 
 ```seq
-transfer [ '[' j ']' | on STAGE ] (X) from P to Q (n);
+transfer [ '[' j ']' | on STAGE [, STAGE]* ] (X) from P to Q (n);
 ```
 
 | Argument | Type | Description |
@@ -54,7 +54,10 @@ transfer [ '[' j ']' | on STAGE ] (X) from P to Q (n);
 
 `run link (X); load Q (n); release P;`. The KV of a prefill/decode split lives
 in two pools whose lifetimes overlap without nesting: the decode instance
-allocates before the prefill instance frees.
+allocates before the prefill instance frees. `on a, b` names several stages
+the read holds at once, the sender's link and the receiver's
+([`run`](statements.md#run)): `transfer on egress[i], ingress[j] (X) from P to Q (n);`
+is `run egress[i], ingress[j] (X); load Q (n); release P;`.
 
 ### Example
 

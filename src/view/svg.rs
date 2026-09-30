@@ -29,6 +29,7 @@ fn box_class(s: BoxStyle) -> &'static str {
         BoxStyle::Solid => "solid",
         BoxStyle::Cached => "cached",
         BoxStyle::Enclosure => "enclosure",
+        BoxStyle::Flow => "rail",
     }
 }
 

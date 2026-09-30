@@ -24,7 +24,8 @@ pub struct StageReport {
     pub name: String,
     /// Time-average jobs present (waiting and in service).
     pub mean_number: f64,
-    /// Fraction of time with at least one job present.
+    /// Fraction of time with at least one job present; on a shared stage,
+    /// the time-average capacity its flows carry (`Σ rate / φ`).
     pub utilization: f64,
     pub completed: u64,
     pub throughput: f64,
