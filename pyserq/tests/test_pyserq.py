@@ -35,9 +35,50 @@ def test_a_file_with_numbers_and_a_seed():
     want, dump = cli(MG1, "--set", "lam=0.8", "--set", "law=1", "--seed", "10")
     assert json.loads(r.json()) == want
     for name in want["observes"]:
-        values, times, sessions, turns = r.observe(name)
+        o = r.observes[name]
         rows = list(csv.reader(open(dump / f"{name}.csv")))[1:]
-        assert [(float(t), int(s), int(u), float(v)) for t, s, u, v in rows] == list(zip(times, sessions, turns, values))
+        assert [(float(t), int(s), int(u), float(v)) for t, s, u, v in rows] == list(zip(o.times, o.sessions, o.turns, o.samples))
+
+
+def same(x, j):
+    """An attribute and its JSON field: JSON writes a NaN or an infinity as null."""
+    return (j is None and not math.isfinite(x)) or x == j
+
+
+def attrs(x):
+    return {a for a in dir(x) if not a.startswith("_")}
+
+
+SAMPLES = {"samples", "times", "sessions", "turns"}
+LOOKUPS = {"json", "observes", "stages", "pools", "observe", "stage", "stages_named", "pool"}
+
+
+def test_the_report_is_its_json_by_name():
+    for r in [pyserq.run(pyserq.compile(MG1, seed=4, horizon=20000.0, warmup=1000.0)),
+              pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}))]:
+        js = json.loads(r.json())
+        scalars = {k: v for k, v in js.items() if k not in ("observes", "stages", "pools")}
+        # every field, both ways: nothing JSON has is missing, nothing it lacks is added
+        assert attrs(r) == set(scalars) | LOOKUPS
+        assert all(same(getattr(r, k), v) for k, v in scalars.items())
+        assert list(r.observes) == list(js["observes"])
+        for name, o in js["observes"].items():
+            ob = r.observe(name)
+            assert ob.name == name and attrs(ob) == set(o) | {"name"} | SAMPLES
+            assert all(same(getattr(ob, k), v) for k, v in o.items())
+            assert len(ob.samples) == ob.count
+        for rows, want in [(r.stages, js["stages"]), (r.pools, js["pools"])]:
+            assert len(rows) == len(want)
+            for row, w in zip(rows, want):
+                assert attrs(row) == set(w)
+                assert all(same(getattr(row, k), v) for k, v in w.items())
+        for s in r.stages:
+            assert r.stage(s.name).name == s.name and s.name in {t.name for t in r.stages_named(s.name)}
+        for p in r.pools:
+            assert r.pool(p.name).name == p.name
+        assert r.observe("nope") is None and r.stage("nope") is None and r.pool("nope") is None
+    assert type(r.pools[0]).__module__ == "pyserq" and type(r.observe("ttft")).__module__ == "pyserq"
+    assert pyserq.run(pyserq.compile(MG1, horizon=5.0, warmup=0.0)).observe("sojourn").ci == math.inf
 
 
 def test_program_text_with_run_options():
@@ -89,7 +130,6 @@ def test_errors_are_value_errors():
         lambda: pyserq.compile(source="session { run nowhere (1); end; }"),
         lambda: pyserq.compile(MG1, sets={"nope": 1}),
         lambda: pyserq.compile(MG1, source="x"),
-        lambda: pyserq.run(pyserq.compile(MG1)).observe("nope"),
         lambda: pyserq.compile(MG1, sets={"lam": float("nan")}),
         lambda: pyserq.compile(MG1, sets={"not a name": 1}),
         lambda: pyserq.compile(),

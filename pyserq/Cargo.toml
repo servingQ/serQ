@@ -11,5 +11,5 @@ name = "pyserq"
 crate-type = ["cdylib"]
 
 [dependencies]
-serq = { path = ".." }
-pyo3 = { version = "0.25", features = ["extension-module", "abi3-py39"] }
+serq = { path = "..", features = ["python"] }
+pyo3 = { workspace = true, features = ["extension-module", "abi3-py39"] }
