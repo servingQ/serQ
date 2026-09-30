@@ -194,7 +194,8 @@ priced as such. What a change to `src/ir.rs` does to the version:
 
 A version is a release, and the lines above decide one thing: whether a
 change to a *tagged* version opens the next number. While the version at
-`IR_VERSION` has no tag (5 in `v0.1.0-rc1`; `v0.1.0-rc0` is 3), no line bumps; the
+`IR_VERSION` has no tag (7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`, 5 in `v0.1.0-rc1`;
+`v0.1.0-rc0` is 3), no line bumps; the
 change is listed in the coming tag's message, which is the release note,
 and the handshake happens once, at the tag. A reader on an untagged version
 reads a commit, not a version: under 4, `serve` moved twice and the
