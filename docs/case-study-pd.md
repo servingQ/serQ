@@ -100,8 +100,8 @@ first `choose`.
 
 The router is the session's two `choose`s, and the instance it picked is
 carried by the index everywhere after: `hold reqsP[i] (1), kvP[i]
-(…)`, `prefill on P[i] … growing kvP[i]`, `lease kvP[i]`, `transfer[j] …
-from kvP[i] to kvD[j]`, `hold kvD[j] …`, `decode on D[j] … growing
+(…)`, `prefill on P[i] … growing kvP[i]`, `lease kvP[i]`, `transfer on
+egress[i], ingress[j] … from kvP[i] to kvD[j]`, `hold kvD[j] …`, `decode on D[j] … growing
 kvD[j]`. `release` and `load` (and so `transfer … from … to …`) name the
 pool exactly as the hold that took it did, index included; `hold kvP[i] …
 lease kvP[i]` followed by `transfer … from kvP[k]` does not link. The
@@ -185,7 +185,7 @@ step of latency. The reservation that would write it exactly is sketched in
 ```
 book kvD[j] (prompt) reserve (prompt);                      // join the decoder's queue now, not written yet
 hold reqsP[i] (1), kvP[i] (…) … { … } cache (prompt) lease kvP[i] (inf);
-hold kvD[j] { transfer on linkP[i] (…) from kvP[i] to kvD[j] (…); … }   // open the booking, waiting if it is not granted
+hold kvD[j] { transfer on egress[i], ingress[j] (…) from kvP[i] to kvD[j] (…); … }   // open the booking, waiting if it is not granted
 ```
 
 **Not modelled**: the lease's expiry and the decoder's heartbeats (the

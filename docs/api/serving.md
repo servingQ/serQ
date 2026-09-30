@@ -47,7 +47,7 @@ transfer [ '[' j ']' | on STAGE [, STAGE]* ] (X) from P to Q (n);
 
 | Argument | Type | Description |
 |---|---|---|
-| `X` | `expr` | Time the link takes. |
+| `X` | `expr` | The link's work, in its stages' unit: time at a `ps(1)`, tokens at a `ps` of tokens per second. |
 | `P` | `pool` | The session's lease (or hold) the KV comes from. Given back at the end. |
 | `Q` | `pool` | The session's hold the KV arrives in. |
 | `n` | `expr` | Tokens counted as computed at `Q`. |

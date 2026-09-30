@@ -255,7 +255,7 @@ hold reqsP (1), kvP (…) … {
 } cache (prompt) lease kvP (inf);       // finished on P: the slot goes, the blocks wait for the decoder's read
 hold kvD (prompt) reserve (prompt), reqsD (0) reserve (1) … {
   run setup (x0);
-  transfer ((prompt - c) / Bw) from kvP to kvD (prompt - 1 - c);   // takes the lease
+  transfer on egress, ingress (prompt - c) from kvP to kvD (prompt - 1 - c);   // takes the lease, over both NICs
   hold reqsD (1) { prefill on D (1) growing kvD; decode on D (o - 1) growing kvD; }
 } cache (prompt + o);
 ```
