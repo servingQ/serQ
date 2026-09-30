@@ -385,11 +385,12 @@ pub struct CStep {
     pub memory: Option<usize>,
 }
 
-/// How a step stage serves its residents, said once: an order (`Admission`,
-/// or `By(keys)` over the residents) or the rule that a prefill runs alone
+/// A step stage's serving policy: resident order (`By(keys)`) or the rule
+/// that a prefill runs alone
 /// (`ExclusivePrefill`, which selects one prefill alone, including a waiting
 /// prefill that displaces tentative resident decodes; it is not an order,
-/// and the one field means a program cannot combine it with another order). Two booleans described this before
+/// and one field means a program cannot combine it with another order).
+/// Two booleans described this before
 /// (`exclusive_prefill`, `decode_first`) and could both be set; the Lean
 /// fragment reads only `By([])`.
 #[derive(Clone, Debug, Serialize, Deserialize)]

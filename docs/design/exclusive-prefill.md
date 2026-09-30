@@ -76,9 +76,10 @@ the program chooses.
 `tests/exclusive_prefill.rs` derives expected schedules by hand and inspects
 actual iteration assignments. It checks takeover/full budget, discarded
 work's cache extent, ordinary mixed batching, insufficient slot/KV capacity,
-and a two-chunk resident prefill that must not admit another waiting request.
-The takeover scenario also runs from serialized IR. Existing vLLM scenarios
-and artifacts remain unchanged.
+a two-chunk resident prefill that must not admit another waiting request,
+exhausted decode budget, and LIFO preemption/re-admission preserving only
+selected progress. The takeover scenario also runs from serialized IR. Existing
+vLLM scenarios and artifacts remain unchanged.
 
 No schema or frontend construct was added; syntax highlighting needs no new
 keyword. The semantic change is restricted to `CServe::ExclusivePrefill`,

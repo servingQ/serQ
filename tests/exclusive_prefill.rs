@@ -41,7 +41,7 @@ fn trace(name: &str, src: &str) -> Vec<String> {
     let path = dir.join(format!("{name}.sq"));
     std::fs::write(&path, src).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_serq"))
-        .env("SEQ_TRACE_ITER", "1")
+        .env("SERQ_TRACE_ITER", "1")
         .args(["run", path.to_str().unwrap(), "--json"])
         .output()
         .unwrap();
@@ -152,4 +152,76 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 2.0, 4.0]);
     assert_eq!(r.stage("engine").unwrap().iterations, 7);
+}
+
+#[test]
+fn an_exhausted_decode_budget_defers_waiting_prefill() {
+    // A and B each decode two tokens. Budget 2 is exhausted by their
+    // resident decode batch, so waiting C cannot take over: admission is
+    // still gated by positive remaining budget, not just full-budget fit.
+    // C enters at 2 and prefills in two chunks, finishing at 4.
+    let src = r#"
+        pool reqs { cap 3; admit via engine; }
+        stage engine : step { budget 2; cost 1; serve exclusive prefill; }
+        workload { arrive batch(3); }
+        session {
+          hold reqs (1) {
+            observe admitted = now;
+            branch (serial < 2) {
+              run engine decode (2);
+            } else {
+              run engine prefill (4);
+            }
+          }
+          observe done = now;
+          end;
+        }
+        run { horizon 10; }
+    "#;
+    let r = run_source(src, &Overrides::default(), None).unwrap();
+    assert_eq!(r.ended, 3);
+    assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 0.0, 2.0]);
+    assert_eq!(r.observe("done").unwrap().samples, [2.0, 2.0, 4.0]);
+}
+
+#[test]
+fn preemption_keeps_only_committed_progress_and_defers_readmission() {
+    // Six KV units, two 2-token prompts, three decode tokens each:
+    // t0 A:p2; t1 B:p2 displaces A's tentative decode (A holds 3, knows 2);
+    // t2 A:d1+B:d1 uses all six units; t3 A's growth preempts B at known=3.
+    // No waiting admission follows that preemption; t4 A:d1 ends at 5.
+    // B enters at 5 with known=3, recomputes in chunks 2,1, then decodes the
+    // remaining two tokens at t7,t8. Both final computed extents are 5.
+    // `reuse (0)` removes hits from this arithmetic; the requested cache
+    // bound is deliberately loose to expose any unexecuted KV publication.
+    let src = r#"
+        pool reqs { cap 2; admit via engine; }
+        pool kv { cap 6; preempt lifo; }
+        stage engine : step {
+          budget 4; chunk 2; cost 1; memory kv; serve exclusive prefill;
+        }
+        workload { arrive batch(2); }
+        session {
+          hold reqs (1), kv (min(known, left)) reserve (known) reuse (0)
+               at admission (known = max(2, computed), left = budget_left(engine)) {
+            branch (serial == 1) {
+              observe admitted_b = now;
+              observe restored_b = known;
+            }
+            run engine prefill (known) growing kv;
+            run engine decode (3 - (known - 2)) growing kv;
+          } cache (100);
+          observe cached_extent = cachedin(kv);
+          observe done = now;
+          end;
+        }
+        run { horizon 20; }
+    "#;
+    let r = run_source(src, &Overrides::default(), None).unwrap();
+    assert_eq!(r.ended, 2, "{}", r.text());
+    assert_eq!(r.pool("kv").unwrap().preemptions, 1);
+    assert_eq!(r.observe("admitted_b").unwrap().samples, [1.0, 5.0]);
+    assert_eq!(r.observe("restored_b").unwrap().samples, [2.0, 3.0]);
+    assert_eq!(r.observe("done").unwrap().samples, [5.0, 9.0]);
+    assert_eq!(r.observe("cached_extent").unwrap().samples, [5.0, 5.0]);
 }
