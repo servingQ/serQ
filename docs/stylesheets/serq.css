@@ -6,30 +6,30 @@
  * this fills the one slot that is otherwise grey, so that what a program
  * *reads* is not the colour of a comment.
  *
- * Scoped to .language-seq: no other language on the site is touched.
+ * Scoped to .language-serq: no other language on the site is touched.
  */
-.language-seq {
+.language-serq {
   /* what a program reads: cachedin, budget_left, now, kv_decode */
-  --seq-observable: #0b7a86;
+  --serq-observable: #0b7a86;
 }
 
-[data-md-color-scheme="slate"] .language-seq {
-  --seq-observable: #5fd3e3;
+[data-md-color-scheme="slate"] .language-serq {
+  --serq-observable: #5fd3e3;
 }
 
-.language-seq .nv,
-.language-seq .vc,
-.language-seq .vg,
-.language-seq .vi {
-  color: var(--seq-observable);
+.language-serq .nv,
+.language-serq .vc,
+.language-serq .vg,
+.language-serq .vi {
+  color: var(--serq-observable);
 }
 
 /* `~` is where the randomness enters, and it earns a colour of its own */
-.language-seq .se {
+.language-serq .se {
   font-weight: 600;
 }
 
 /* the block a program is made of reads as its skeleton */
-.language-seq .k {
+.language-serq .k {
   font-weight: 600;
 }

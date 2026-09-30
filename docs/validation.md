@@ -78,7 +78,7 @@ program is **generated from the IR** — not hand-written alongside it.
 
 | | |
 |---|---|
-| `Seq.lean` | the syntax, the pool semantics, the memory invariant |
+| `Serq.lean` | the syntax, the pool semantics, the memory invariant |
 | `SerqExec.lean` | an executable semantics of the pool and step-engine fragment |
 | `SerqOracle.lean` | the vLLM scenarios as theorems, one per scenario, generated |
 | `SerqServe.lean` | serving order of a step engine |

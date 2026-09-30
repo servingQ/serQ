@@ -42,10 +42,12 @@ cargo run --release -- ir examples/multi-turn/vllm.sq > vllm.json      # the IR
 cargo run --release -- draw examples/multi-turn/vllm.sq --format svg --out vllm.svg   # experimental
 ```
 
+The last tag, `v0.1.0-rc5`, predates the rename: it is the crate `seq-lang` (library `seq`, CLI `seq-lang`). The first release under the name `serq` is `v0.1.0-rc6`.
+
 As a dependency, pin a release tag:
 
 ```toml
-serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.0-rc5" }
+seq = { package = "seq-lang", git = "https://github.com/vrvrv/serQ", tag = "v0.1.0-rc5" }
 ```
 
 Or install the CLI directly:

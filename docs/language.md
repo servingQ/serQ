@@ -15,7 +15,7 @@ of the first version against vLLM, the design decisions and the tooling
 survey are in `docs/review.md`.
 
 The formal model is in `serving-queue-theory`, which uses a pinned
-release of serQ: `lean/ServingQueueTheory/Seq.lean` (syntax `Route Env V`
+release of serQ: `lean/ServingQueueTheory/Serq.lean` (syntax `Route Env V`
 of the `session` block, pool semantics, memory invariant, surface syntax),
 `SerqExec.lean` (an executable semantics of the pool and step-engine
 fragment), `SerqOracle.lean` (the vLLM scheduler scenarios of

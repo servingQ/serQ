@@ -6,7 +6,7 @@ use serq::{Overrides, compile_source, compile_source_at};
 
 /// A fresh directory with these files in it.
 fn dir(name: &str, files: &[(&str, &str)]) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("seq-library-{name}-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("serq-library-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     for (f, text) in files {
         let p = d.join(f);

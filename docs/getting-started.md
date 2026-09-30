@@ -2,13 +2,15 @@
 
 ## Build
 
-serQ is one Rust crate, `serq`: a library (`seq`) and a CLI (`serq`).
+serQ is one Rust crate, `serq`: a library (`serq`) and a CLI (`serq`).
 
 ```bash
 git clone https://github.com/vrvrv/serQ && cd serQ
 cargo build --release
 ./target/release/serq --help
 ```
+
+The last tag, `v0.1.0-rc5`, predates the rename: it is the crate `seq-lang` (library `seq`, CLI `seq-lang`). The first release under the name `serq` is `v0.1.0-rc6`.
 
 Or install the CLI straight from a release tag:
 
@@ -19,7 +21,7 @@ cargo install --git https://github.com/vrvrv/serQ --tag v0.1.0-rc5 --locked --ro
 As a dependency, pin a tag:
 
 ```toml
-serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.0-rc5" }
+seq = { package = "seq-lang", git = "https://github.com/vrvrv/serQ", tag = "v0.1.0-rc5" }
 ```
 
 ## Run your first program

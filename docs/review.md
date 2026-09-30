@@ -191,7 +191,7 @@ programs):
   [syntax](https://leanprover-community.github.io/lean4-metaprogramming-book/main/05_syntax.html),
   [macros](https://leanprover-community.github.io/lean4-metaprogramming-book/main/06_macros.html)).
   Fit: the project already has its proofs in Lean/Mathlib; the surface
-  syntax was added this way in `Seq.lean` (`[route| … ]`) with no
+  syntax was added this way in `Serq.lean` (`[route| … ]`) with no
   parser of its own, and the two replica programs are proved well formed
   by `rfl`. Against: Lean's runtime has no random-number or statistics
   library to speak of and a compiled Lean interpreter would still be

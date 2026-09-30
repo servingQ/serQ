@@ -154,7 +154,7 @@ There are three kinds of result, and a program meets them differently:
 
 | | holds for | where |
 |---|---|---|
-| properties of the semantics | the model, not one program | `Seq.lean`: `SerqLang.Step.invariant` (every command of the pool model keeps `allocated + cached ≤ cap`); `SerqServe.lean`: `SerqLang.Serve.serve_eq_decode_first` (without a per-request chunk cap, serving in admission order is serving decode-first) |
+| properties of the semantics | the model, not one program | `Serq.lean`: `SerqLang.Step.invariant` (every command of the pool model keeps `allocated + cached ≤ cap`); `SerqServe.lean`: `SerqLang.Serve.serve_eq_decode_first` (without a per-request chunk cap, serving in admission order is serving decode-first) |
 | a program's outcome on a scenario | one IR file and one workload | `SerqOracle.lean`, generated: one theorem per scenario, proved by `decide +kernel` |
 | a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`examples/multi-turn/replica.sq`), `disaggregatedReplica` (the lecture notes' store-and-forward replica, in `serving-queue-theory`; no serQ program), with their well-formedness |
 
@@ -196,7 +196,7 @@ The steps:
 2. **serving-queue-theory:** `scripts/gen_serq_oracle.py` reads
    `tools/oracle/*.ir.json` with the matching `*.json` and `*.out.json` from
    a serQ checkout, and writes `lean/ServingQueueTheory/SerqOracle.lean`. By
-   default it reads the serQ release that repository pins (`make seq`
+   default it reads the serQ release that repository pins (`make serq`
    checks it out into `.serq/src`). To try a local serQ, point it there:
 
     ```bash

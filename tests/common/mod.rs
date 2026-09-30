@@ -12,7 +12,7 @@ impl Fixture {
     pub fn new() -> Self {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
-            "seq-cli-{}-{}",
+            "serq-cli-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
