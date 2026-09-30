@@ -80,6 +80,20 @@ pub struct Overrides {
     pub trace: Option<String>,
 }
 
+impl Overrides {
+    /// `--set name=expr`: the constant `name` is the expression `expr`.
+    pub fn set(&mut self, name: &str, expr: &str) -> Result<(), String> {
+        let e = crate::frontend::parser::parse_expr(expr).map_err(|e| e.to_string())?;
+        self.lets.push((name.to_string(), e));
+        Ok(())
+    }
+
+    /// The constant `name` is the number `x`, exactly (no text round trip).
+    pub fn set_num(&mut self, name: &str, x: f64) {
+        self.lets.push((name.to_string(), Expr::Num(x)));
+    }
+}
+
 struct Linker<'a> {
     consts: HashMap<String, f64>,
     attrs: Vec<String>,

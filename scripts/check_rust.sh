@@ -9,6 +9,7 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
+cargo clippy -p pyserq --locked -- -D warnings
 cargo test --release --locked
 cargo build --release --locked --quiet
 ./target/release/serq fmt --check examples/*/*.sq lib/*.sq docs/tutorial/programs/*.sq

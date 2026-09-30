@@ -1,0 +1,15 @@
+[package]
+name = "pyserq"
+version.workspace = true
+edition = "2024"
+rust-version = "1.85"
+description = "pyserq: serQ in Python, the IR and a run (a PyO3 binding of the serq crate)"
+publish = false
+
+[lib]
+name = "pyserq"
+crate-type = ["cdylib"]
+
+[dependencies]
+serq = { path = ".." }
+pyo3 = { version = "0.25", features = ["extension-module", "abi3-py39"] }

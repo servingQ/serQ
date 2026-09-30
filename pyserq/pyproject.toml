@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "pyserq"
+# the serq crate's version, as maturin writes it (0.1.0-rc6 -> 0.1.0rc6)
+dynamic = ["version"]
+description = "serQ in Python: compile a program to its IR and run it, in process"
+requires-python = ">=3.9"
+
+[tool.maturin]
+module-name = "pyserq"
