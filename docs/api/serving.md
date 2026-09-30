@@ -16,7 +16,7 @@ in the last column, so the AST, the IR and the interpreter know nothing of it.
 
 ## `prefill`, `decode`, `tool`
 
-```seq
+```serq
 prefill [ '[' j ']' | on STAGE ] work [growing POOL];
 decode  [ '[' j ']' | on STAGE ] work [growing POOL];
 tool    [ '[' j ']' | on STAGE ] work;
@@ -41,7 +41,7 @@ takes time is `run link (X);`.
 
 ## `transfer … from … to`
 
-```seq
+```serq
 transfer [ '[' j ']' | on STAGE [, STAGE]* ] (X) from P to Q (n);
 ```
 
@@ -61,10 +61,10 @@ is `run egress[i], ingress[j] (X); load Q (n); release P;`.
 
 ### Example
 
-From `examples/pd-disaggregation/llmd_nixl_pull.seq`, the decoder's read of
+From `examples/pd-disaggregation/llmd_nixl_pull.sq`, the decoder's read of
 the prefiller's leased blocks, over the prefiller's NIC and its own:
 
-```seq
+```serq
 hold kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) … {
   run setup (x0);
   transfer on egress[i], ingress[j] (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c);

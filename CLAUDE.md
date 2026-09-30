@@ -1,4 +1,4 @@
-# seQ
+# serQ
 
 A language in which an LLM serving deployment is a program. `docs/language.md`
 is the spec, `docs/ir.md` the definition, `docs/review.md` the design record.
@@ -7,7 +7,7 @@ is the spec, `docs/ir.md` the definition, `docs/review.md` the design record.
 
 **The IR is the definition of a program, not the text.** `src/ir.rs` is what the
 interpreter runs, what the Lean model is generated from, and what the oracle
-tests read; `.seq` is one frontend. So:
+tests read; `.sq` is one frontend. So:
 
 - `IR_VERSION` identifies meaning, not shape (`docs/ir.md` §Stability): a
   removed, renamed or retyped field or variant bumps it, and so does a change
@@ -15,7 +15,7 @@ tests read; `.seq` is one frontend. So:
   bumped 2); an added field a reader may ignore, or a stricter check, does
   not. The lines apply to a *tagged* version: while `IR_VERSION` has no tag,
   nothing bumps and the change goes in the coming tag's message;
-- `serving-queue-theory`'s `scripts/gen_seq_oracle.py` pins that version and
+- `serving-queue-theory`'s `scripts/gen_serq_oracle.py` pins that version and
   reads the IR by field name — it has to move in the same change;
 - a new `CExpr` or `CStmt` variant drops every oracle program that uses it
   out of the Lean fragment until the generator is taught it (the generator
@@ -43,8 +43,8 @@ product. Argued in #8, in the order they bite:
 0. **Unambiguity.** One construct, one meaning. First because it is the only one
    where being wrong produces a wrong *answer* rather than a slow reader.
 1. **Intention-revealing.** The program should say what it means, not how it
-   computes it. A serving engineer who does not know seQ should be able to read
-   `examples/multi-turn/vllm.seq` as vLLM.
+   computes it. A serving engineer who does not know serQ should be able to read
+   `examples/multi-turn/vllm.sq` as vLLM.
 2. **Policy is written in the program, not in the language.** The test: for every
    construct, can a program state the opposite? The language may supply a
    *mechanism* a program selects and parameterises, not a *rule* it would
@@ -103,7 +103,7 @@ GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.proj
 ```
 
 `gh` queries `projectCards` when it edits, and that field now errors. Use the
-REST API instead — `gh api -X PATCH repos/vrvrv/seQ/pulls/N --input -` with a
+REST API instead — `gh api -X PATCH repos/vrvrv/serQ/pulls/N --input -` with a
 JSON body, or `.../issues/N`. Creating works; only editing is affected.
 
 PR titles are Conventional Commits, `type(scope): subject`, and the subject is

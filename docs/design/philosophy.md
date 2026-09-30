@@ -1,6 +1,6 @@
 # Philosophy: what it is mathematically, how it grows linguistically
 
-A record of the discussion of 2026-09-28. seQ had already half chosen its
+A record of the discussion of 2026-09-28. serQ had already half chosen its
 philosophy; this document gives it a name. In one line:
 
 > Mathematically, **a stochastic process over resources whose definition is
@@ -11,7 +11,7 @@ philosophy; this document gives it a name. In one line:
 
 **Sessions are processes, pools are resources, stages are servers.** The
 semantics is a stochastic timed transition system. A session block is a
-sequential process and pools and stages are shared resources, which puts seQ
+sequential process and pools and stages are shared resources, which puts serQ
 where the stochastic process algebras (PEPA, Modest) are. "Commands take no
 time and only flow does" is then the computational rule that separates
 instantaneous from timed transitions.
@@ -46,7 +46,7 @@ not the whole away from the fragment.
 **From simulation to analysis.** A program is today the simulator's input and
 the closed forms are checked outside. Pushed to the end, checkability means
 the program states a claim and the tool turns it into a theorem or a
-statistical test. That `mg1.seq` is an M/G/1 is decidable from its
+statistical test. That `mg1.sq` is an M/G/1 is decidable from its
 structure. Expensive, but the best kind of answer to "why change the IR".
 
 ## Language: a fixed subject, definitional extension, polysemy by position only
@@ -78,7 +78,7 @@ subject. The order is: grammatical subject, upstream name, invented name.
 **Process imperative, policy declarative.** The session block is sequential
 and should be; a request's life is a sequence. Policies are expressions
 (`evict by`, `budget`, `cost`, `choose by`). Crossing that line is a smell:
-the five-way policy switch of `routing.seq` is one program carrying five
+the five-way policy switch of `routing.sq` is one program carrying five
 deployments, and by the principle that the IR is data, a sweep is an IR edit,
 not a branch in the program.
 

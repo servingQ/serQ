@@ -1,14 +1,14 @@
-//! Tests for `seq-lang draw`: the projection, the geometry and the writers.
+//! Tests for `serq draw`: the projection, the geometry and the writers.
 //!
 //! The assertions are on the `Figure` and on the projected `Net`, not on the
 //! rendered bytes, for the same reason `tsncd` unit-tests its geometry rather
 //! than its images: a coordinate that moved is a diagnosable failure, and a
 //! diff of two SVGs is not. The golden files at the bottom guard the writers.
 
-use seq::ir::Program;
-use seq::view::deployment::{self, End};
-use seq::view::figure::{BoxStyle, Figure, StationKind};
-use seq::{Overrides, compile_source, compile_source_at, program_path};
+use serq::ir::Program;
+use serq::view::deployment::{self, End};
+use serq::view::figure::{BoxStyle, Figure, StationKind};
+use serq::{Overrides, compile_source, compile_source_at, program_path};
 
 const PROGRAMS: [&str; 8] = [
     "mg1",
@@ -51,8 +51,8 @@ fn pools_of(p: &Program, net: &deployment::Net, stage_name: &str) -> Vec<String>
 
 // --- the station kinds -----------------------------------------------------
 
-/// Each stage kind has its glyph: `mg1.seq` is one FIFO server, `ps.seq` one
-/// processor-sharing server, and `llmd_nixl_pull.seq` has a step engine on each
+/// Each stage kind has its glyph: `mg1.sq` is one FIFO server, `ps.sq` one
+/// processor-sharing server, and `llmd_nixl_pull.sq` has a step engine on each
 /// side, a processor-sharing NIC on each and a delay for the tool call.
 #[test]
 fn stations_take_their_stage_kind() {
@@ -85,7 +85,7 @@ fn stations_take_their_stage_kind() {
 // --- the projection ---------------------------------------------------------
 
 /// Two runs at the same stage in a row are two visits, not a flow between
-/// stations: `vllm.seq` prefills and decodes at one engine.
+/// stations: `vllm.sq` prefills and decodes at one engine.
 #[test]
 fn no_self_edges() {
     for name in PROGRAMS {
@@ -98,7 +98,7 @@ fn no_self_edges() {
 }
 
 /// A chain of guards that moves nobody must not multiply the paths out.
-/// `routing.seq` has five sibling `branch (policy == k)` blocks.
+/// `routing.sq` has five sibling `branch (policy == k)` blocks.
 #[test]
 fn guard_chains_do_not_multiply_edges() {
     let p = program("routing");
@@ -195,7 +195,7 @@ fn lanes_below_the_row_do_not_collide() {
             .items
             .iter()
             .filter_map(|i| match i {
-                seq::view::figure::Item::Edge { pts, .. } if pts.len() >= 3 => Some(pts[1].y),
+                serq::view::figure::Item::Edge { pts, .. } if pts.len() >= 3 => Some(pts[1].y),
                 _ => None,
             })
             .collect();
@@ -234,7 +234,7 @@ fn a_second_entry_point_does_not_overdraw_the_first() {
     let labels = f
         .items
         .iter()
-        .filter(|i| matches!(i, seq::view::figure::Item::Text { text, .. } if text.starts_with("new sessions")))
+        .filter(|i| matches!(i, serq::view::figure::Item::Text { text, .. } if text.starts_with("new sessions")))
         .count();
     assert_eq!(labels, 1, "the arrival label is drawn once");
 }
@@ -258,22 +258,22 @@ fn negative_constants_reparse() {
         .iter()
         .flatten()
         .find_map(|s| match s {
-            seq::ir::CStmt::Observe(_, e) => Some(p.show_expr(e)),
+            serq::ir::CStmt::Observe(_, e) => Some(p.show_expr(e)),
             _ => None,
         })
         .expect("the observe is there");
     assert_eq!(printed, "(-2) ^ a");
     // and it means what it says
-    let round = seq::frontend::parser::parse_expr(&printed).expect("re-parses");
+    let round = serq::frontend::parser::parse_expr(&printed).expect("re-parses");
     assert!(matches!(
         round,
-        seq::frontend::ast::Expr::Binary(seq::frontend::ast::BinOp::Pow, ..)
+        serq::frontend::ast::Expr::Binary(serq::frontend::ast::BinOp::Pow, ..)
     ));
 }
 
 /// `release_hold` caches the growing run's position when a hold grew, and the
 /// allocation otherwise, so a hold with `growing` caches in that pool alone.
-/// `replica.seq` has no `growing` and really does keep a unit of `batch`.
+/// `replica.sq` has no `growing` and really does keep a unit of `batch`.
 #[test]
 fn cache_targets_follow_the_release_rule() {
     let p = program("vllm");
@@ -355,7 +355,7 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
     assert!(pools_of(&p, &net, "s3").is_empty());
 }
 
-/// `examples/pd-disaggregation/llmd_nixl_pull.seq`: the prompt's KV is in the prefiller's pool
+/// `examples/pd-disaggregation/llmd_nixl_pull.sq`: the prompt's KV is in the prefiller's pool
 /// through the transfer (leased past its scope) and in the decoder's from
 /// the transfer on, so the read's two stations (the prefiller's NIC and the
 /// decoder's, held at once) are inside both enclosures, the prefill station
@@ -420,7 +420,7 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
     );
 }
 
-/// `examples/pd-disaggregation/llmd_nixl_pull.seq`'s router sends a request either
+/// `examples/pd-disaggregation/llmd_nixl_pull.sq`'s router sends a request either
 /// to a prefiller and over the two NICs (remote), after the read's fixed
 /// wait (`setup`), or straight to the decoder (local); a request whose KV
 /// is already there skips both. Every turn
@@ -590,10 +590,10 @@ fn every_program_renders() {
     for name in PROGRAMS {
         let p = program(name);
         let f = deployment::figure(&p);
-        let svg = seq::view::svg::render(&f);
+        let svg = serq::view::svg::render(&f);
         assert!(svg.starts_with("<svg"), "{name}: not an svg");
         assert!(svg.ends_with("</svg>\n"));
-        let tikz = seq::view::tikz::render(&f);
+        let tikz = serq::view::tikz::render(&f);
         assert!(
             tikz.contains("\\begin{tikzpicture}"),
             "{name}: not a tikzpicture"
@@ -607,7 +607,7 @@ fn every_program_renders() {
 #[test]
 fn tikz_escapes_labels() {
     let p = program("vllm");
-    let tikz = seq::view::tikz::render(&deployment::figure(&p));
+    let tikz = serq::view::tikz::render(&deployment::figure(&p));
     for (i, line) in tikz.lines().enumerate() {
         if !line.trim_start().starts_with("\\node") {
             continue;
@@ -626,7 +626,7 @@ fn golden(name: &str, got: &str) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")
         .join(name);
-    if std::env::var("SEQ_BLESS").is_ok() {
+    if std::env::var("SERQ_BLESS").is_ok() {
         std::fs::write(&path, got).unwrap();
         return;
     }
@@ -645,19 +645,19 @@ fn golden_files_are_current() {
     let p = program("vllm");
     golden(
         "vllm.deployment.svg",
-        &seq::view::svg::render(&deployment::figure(&p)),
+        &serq::view::svg::render(&deployment::figure(&p)),
     );
     let p = program("llmd_nixl_pull");
     golden(
         "llmd_nixl_pull.deployment.svg",
-        &seq::view::svg::render(&deployment::figure(&p)),
+        &serq::view::svg::render(&deployment::figure(&p)),
     );
     docs_assets_are_current();
 }
 
 /// The figures the site shows are the program's figure, not a copy that
-/// once was: every `docs/assets/NAME.deployment.svg` is what `seq-lang draw`
-/// makes of `examples/*/NAME.seq` or `docs/tutorial/programs/NAME.seq`
+/// once was: every `docs/assets/NAME.deployment.svg` is what `serq draw`
+/// makes of `examples/*/NAME.sq` or `docs/tutorial/programs/NAME.sq`
 /// now, and `make draw-golden` rewrites them with the goldens. A figure
 /// without its program is an error, not a keepsake.
 fn docs_assets_are_current() {
@@ -676,11 +676,11 @@ fn docs_assets_are_current() {
         };
         let tutorial = root
             .join("docs/tutorial/programs")
-            .join(format!("{stem}.seq"));
+            .join(format!("{stem}.sq"));
         let mut found: Vec<std::path::PathBuf> = std::fs::read_dir(root.join("examples"))
             .unwrap()
             .flatten()
-            .map(|g| g.path().join(format!("{stem}.seq")))
+            .map(|g| g.path().join(format!("{stem}.sq")))
             .filter(|p| p.is_file())
             .collect();
         if tutorial.is_file() {
@@ -690,16 +690,16 @@ fn docs_assets_are_current() {
         // the order the directories are read in
         assert!(
             found.len() <= 1,
-            "docs/assets/{name}: several programs are {stem}.seq: {found:?}"
+            "docs/assets/{name}: several programs are {stem}.sq: {found:?}"
         );
         let src_path = found
             .pop()
-            .unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.seq"));
+            .unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.sq"));
         let src = std::fs::read_to_string(&src_path).unwrap();
-        let p = seq::compile_file(&src, &src_path, &Overrides::default())
+        let p = serq::compile_file(&src, &src_path, &Overrides::default())
             .unwrap_or_else(|e| panic!("{}: {e}", src_path.display()));
-        let got = seq::view::svg::render(&deployment::figure(&p));
-        if std::env::var("SEQ_BLESS").is_ok() {
+        let got = serq::view::svg::render(&deployment::figure(&p));
+        if std::env::var("SERQ_BLESS").is_ok() {
             std::fs::write(&path, &got).unwrap();
         } else {
             let want = std::fs::read_to_string(&path).unwrap();
@@ -714,8 +714,8 @@ fn docs_assets_are_current() {
     assert!(seen > 0, "no figures under docs/assets");
 }
 
-/// `routing.seq`'s next turn migrates or stays: back to the link, and
-/// straight back to a replica. `pd_tandem.seq`'s job re-enters down both
+/// `routing.sq`'s next turn migrates or stays: back to the link, and
+/// straight back to a replica. `pd_tandem.sq`'s job re-enters down both
 /// arms of its `mode` branch; the projection is structural, so it draws
 /// both although `mode` is one constant in a run.
 #[test]
@@ -799,7 +799,7 @@ fn a_flows_stations_are_neighbours_in_the_row() {
 }
 
 /// An arrow forward past other stations goes below the row, not through
-/// them: `llmd_nixl_pull.seq`'s `P -> D`, for a request whose KV is already
+/// them: `llmd_nixl_pull.sq`'s `P -> D`, for a request whose KV is already
 /// on the decoder, passes `setup` and the two NICs.
 #[test]
 fn an_arrow_past_stations_goes_below_the_row() {
@@ -813,7 +813,7 @@ fn an_arrow_past_stations_goes_below_the_row() {
     let (rp, rd) = (f.stations()[pf].0, f.stations()[d].0);
     let row_bottom = rp.bottom();
     let through = f.items.iter().any(|it| match it {
-        seq::view::figure::Item::Edge { pts, .. } => {
+        serq::view::figure::Item::Edge { pts, .. } => {
             pts.len() == 2 && (pts[0].x - rp.right()).abs() < 1e-9 && (pts[1].x - rd.x).abs() < 1e-9
         }
         _ => false,
@@ -822,8 +822,8 @@ fn an_arrow_past_stations_goes_below_the_row() {
     // leaving P's bottom at 0.625 and entering D's at 0.5, in a solid line:
     // no other edge of the figure has those ends
     let below = f.items.iter().any(|it| match it {
-        seq::view::figure::Item::Edge { pts, style, .. } => {
-            *style == seq::view::figure::EdgeStyle::Flow
+        serq::view::figure::Item::Edge { pts, style, .. } => {
+            *style == serq::view::figure::EdgeStyle::Flow
                 && pts.len() == 4
                 && (pts[0].x - (rp.x + rp.w * 0.625)).abs() < 1e-9
                 && pts[1].y > row_bottom

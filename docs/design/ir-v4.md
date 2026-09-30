@@ -1,6 +1,6 @@
 # IR v4: making the implicit static
 
-The body of RFC [#41](https://github.com/vrvrv/seQ/issues/41). The issue is
+The body of RFC [#41](https://github.com/vrvrv/serQ/issues/41). The issue is
 where the discussion happens and this document follows its outcome. Every
 After is a sketch and was not compiled. Every Before is copied from the
 repository.
@@ -133,14 +133,14 @@ free is infinite and the equation is vacuous; assert it on finite pools
 only. Making the eligible borrower a key rather than a session number puts a
 future content-addressed cache (a shared system prompt, §9 limitation 2) on
 the same state machine. Whether the equation makes the Lean proof easier
-than the inequality is to be checked on `SeqLang.Step.invariant` first, and
+than the inequality is to be checked on `SerqLang.Step.invariant` first, and
 not adopted before.
 
 **Before** (`docs/language.md` §3)
 
 ```
 The invariant `allocated + cached ≤ cap` holds in every reachable configuration
-(`SeqLang.Step.invariant`). `end` releases every hold but *keeps* the
+(`SerqLang.Step.invariant`). `end` releases every hold but *keeps* the
 session's cached prefixes
 ```
 
@@ -241,7 +241,7 @@ progress g was in the frame that was unwound, so it is gone. vLLM only sets
 rescheduling it recomputes prompt + g as a prefill and decodes o − g − 1
 more.
 
-| | seQ today | vLLM |
+| | serQ today | vLLM |
 |---|---|---|
 | decodes after re-admission | o − 1 again | o − g − 1 |
 | prefill recomputed | prompt − c | prompt + g − c |
@@ -254,7 +254,7 @@ prefill and wrong during decode. The Lean model has the same rule.
 **No oracle has exercised this path.** The preemption counts of
 `tools/oracle/*.out.json`: `chunked` 0, `hol` 0, `longchunk` 0, `mixed` 0,
 `seqcap` 0, `preempt` 1. That one is a self-preemption during prefill on
-10 usable blocks, before a token was produced. `examples/replay/vllm_replay.seq`
+10 usable blocks, before a token was produced. `examples/replay/vllm_replay.sq`
 run at spacings of 3.5 s and 2.5 s reports `preempt 0` in the `kv` row of
 both, with KV use of 793 and 1 865 of 128 160 tokens. The collapse at 2.5 s
 is the `reqs` queue waiting 35.8 s, not memory pressure. The 3 321-request
@@ -363,7 +363,7 @@ time passes and the run goes quietly to the horizon. There is no line in the
 report.
 
 **The cheap half (no IR change).** A session preempted twice without progress
-is written as `stuck` in the report and `seq-lang check` fails. "Without
+is written as `stuck` in the report and `serq check` fails. "Without
 progress" means 5's position counter is equal, so it is exact on top of 5;
 in today's IR it is approximated by zero tokens between re-admissions.
 
@@ -421,9 +421,9 @@ move were not added (§1, §2 **Outcome**); 4 is open.
 **v4b** (redesign): 5, then 6 on top, and the theorem of 7. The equation of
 2 goes into either, after the Lean-side check.
 
-At either stage `gen_seq_oracle.py` is a rewrite rather than a migration and
+At either stage `gen_serq_oracle.py` is a rewrite rather than a migration and
 the seven `tools/oracle/*.ir.json` are regenerated. v4b needs
-`SeqExec.lean` to read the automaton form. What that buys is that twelve of
+`SerqExec.lean` to read the automaton form. What that buys is that twelve of
 the fifteen defects in the table above become impossible as a class in the
 next program, and that the preemption recovery no oracle ever exercised is
 right by definition.

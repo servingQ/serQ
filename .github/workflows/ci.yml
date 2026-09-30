@@ -9,7 +9,7 @@ on:
 
 jobs:
   rust:
-    name: seQ interpreter (seq-lang)
+    name: serQ interpreter (serq)
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4

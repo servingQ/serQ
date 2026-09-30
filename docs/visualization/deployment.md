@@ -4,7 +4,7 @@ The program as a queueing network.
 
 ![llm-d prefill/decode over NIXL](../assets/llmd_nixl_pull.deployment.svg)
 
-That is `examples/pd-disaggregation/llmd_nixl_pull.seq`: two prefill and two decode
+That is `examples/pd-disaggregation/llmd_nixl_pull.sq`: two prefill and two decode
 instances, the KV read over NIXL. The read sits where the prefiller's `kvP`
 box and the decoder's `kvD` box cross: the prefiller's blocks stay leased
 until the read ends, and the decoder's are allocated before it starts. It
@@ -27,17 +27,17 @@ walks the session program carrying a hold stack:
 Three things the walk deliberately does *not* do:
 
 - **Two runs at the same stage in a row** are two visits, not a flow between
-  stations. `vllm.seq` prefills and decodes at one engine; there is no arrow
+  stations. `vllm.sq` prefills and decodes at one engine; there is no arrow
   (below).
 - **A chain of guards that moves nobody** collapses to one edge.
-  `routing.seq`'s five sibling `branch (policy == k)` blocks would otherwise
+  `routing.sq`'s five sibling `branch (policy == k)` blocks would otherwise
   multiply out to 68 edges with labels like `else, 0 == 0, 0 == 1, …`.
 - **A `choose` annotates the station it selects** — the one whose reference
   reads the attribute it names, `rep[j]`, not whatever station comes next.
 
 ![vLLM v1: one engine](../assets/vllm.deployment.svg)
 
-That is `examples/multi-turn/vllm.seq`, inside its request slot (`reqs`)
+That is `examples/multi-turn/vllm.sq`, inside its request slot (`reqs`)
 and its KV blocks (`kv`). The dashed arrow back to `engine` is the next
 turn, after the tool call.
 
@@ -62,7 +62,7 @@ over an empty cache says nothing.
 
 This follows `interp.rs::release_hold` rather than the syntax: a hold with a
 `growing` run caches in **that pool alone**, and one without caches in **all**
-of its pools. `examples/multi-turn/replica.seq` is the case that makes the difference
+of its pools. `examples/multi-turn/replica.sq` is the case that makes the difference
 visible — its `hold batch (1), kv (…)` has no `growing`, and the run really
 does keep about 7 units of `batch` cached.
 
@@ -70,7 +70,7 @@ does keep about 7 units of `batch` cached.
 
 ![The paper's two-resource replica](../assets/replica.deployment.svg)
 
-`replica.seq` holds `live` across the whole program including the tool call, and
+`replica.sq` holds `live` across the whole program including the tool call, and
 `batch` and `kv` only around the engine. The boxes nest accordingly, and the
 `tool` station sits inside `live` and outside the other two.
 
@@ -78,6 +78,6 @@ does keep about 7 units of `batch` cached.
 
 ![Four replicas and a migration link](../assets/routing.deployment.svg)
 
-`routing.seq` has no pools at all. There are no boxes, and that is the honest
+`routing.sq` has no pools at all. There are no boxes, and that is the honest
 rendering: a program that holds nothing has nothing for the enclosure notation
 to say. The `choose j of 4` under `rep[j]` is the routing policy.

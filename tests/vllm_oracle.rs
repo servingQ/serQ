@@ -2,7 +2,7 @@
 //! `ref/vllm` at 0c87a197, `tools/vllm_oracle.py` driven with a fake model
 //! runner, rbln platform plugin disabled with `VLLM_PLUGINS=`).
 //!
-//! One program, `examples/oracle/vllm_request.seq`, is compiled to IR once per
+//! One program, `examples/oracle/vllm_request.sq`, is compiled to IR once per
 //! scenario of `tools/oracle/*.json` (the scenario's engine as constants),
 //! and the scenario's requests become the IR's explicit sessions. The
 //! result is committed as `tools/oracle/<name>.ir.json`: the IR is the
@@ -11,7 +11,7 @@
 //! request's first and last token, the number of preemptions); the Lean
 //! theorems of serving-queue-theory are generated from the same files.
 //! `oracle_ir_files_are_current` fails if a file is stale; regenerate with
-//! `SEQ_BLESS=1 cargo test --release --test vllm_oracle` (`make oracle-ir`).
+//! `SERQ_BLESS=1 cargo test --release --test vllm_oracle` (`make oracle-ir`).
 //!
 //! The scenarios: `preempt` (the second request cannot grow its next chunk
 //! and preempts itself, vLLM `running[-1]`), `chunked` (a 3000-token prompt
@@ -22,9 +22,9 @@
 
 use std::path::Path;
 
-use seq::frontend::parser;
-use seq::{Overrides, compile_source, program_path, run_ir};
 use serde_json::Value;
+use serq::frontend::parser;
+use serq::{Overrides, compile_source, program_path, run_ir};
 
 fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
@@ -40,7 +40,7 @@ fn read(name: &str) -> Value {
 
 /// The IR of a scenario: the program compiled with the scenario's engine,
 /// the requests as explicit sessions.
-fn oracle_ir(name: &str) -> seq::Program {
+fn oracle_ir(name: &str) -> serq::Program {
     let sc: Value =
         serde_json::from_str(&std::fs::read_to_string(dir().join(format!("{name}.json"))).unwrap())
             .unwrap();
@@ -75,12 +75,12 @@ fn oracle_ir(name: &str) -> seq::Program {
 
 fn check(name: &str) {
     let ans = read(&format!("{name}.out.json"));
-    let ir = seq::Program::from_json(
+    let ir = serq::Program::from_json(
         &std::fs::read_to_string(dir().join(format!("{name}.ir.json"))).unwrap(),
     )
     .unwrap();
     let n = match &ir.arrival {
-        seq::ir::CArrival::Sessions(s) => s.len(),
+        serq::ir::CArrival::Sessions(s) => s.len(),
         a => panic!("{name}: arrival {a:?}"),
     };
     let rep = run_ir(&ir, None).unwrap();
@@ -141,7 +141,7 @@ fn every_oracle_scenario() {
 
 #[test]
 fn oracle_ir_files_are_current() {
-    let bless = std::env::var_os("SEQ_BLESS").is_some();
+    let bless = std::env::var_os("SERQ_BLESS").is_some();
     for n in scenarios() {
         let path = dir().join(format!("{n}.ir.json"));
         let want = oracle_ir(&n).to_json() + "\n";

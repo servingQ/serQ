@@ -1,4 +1,4 @@
-//! Tokens of the seQ surface syntax.
+//! Tokens of the serQ surface syntax.
 
 use std::fmt;
 
@@ -54,7 +54,7 @@ impl fmt::Display for Tok {
 ///
 /// The lexer used to drop both, which meant anything built on the token
 /// stream - a formatter, a rename that can tell a word in code from the same
-/// word in a comment - would have thrown away a third of `examples/multi-turn/vllm.seq`,
+/// word in a comment - would have thrown away a third of `examples/multi-turn/vllm.sq`,
 /// including the upstream citations `make check` verifies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TriviaKind {

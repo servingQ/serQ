@@ -1,6 +1,6 @@
-//! The seQ intermediate representation (IR).
+//! The serQ intermediate representation (IR).
 //!
-//! The IR is the definition of a seQ program: the interpreter (`engine::interp`) runs
+//! The IR is the definition of a serQ program: the interpreter (`engine::interp`) runs
 //! it, the Lean model is generated from it, and tools build or edit it as
 //! data. The text syntax (`frontend`) is one frontend that compiles
 //! to it. The format is serialised as JSON (`Program::to_json`), carries a
@@ -433,7 +433,7 @@ pub enum CArrival {
     None,
 }
 
-/// A seQ program in IR form: the deployment (pools, stages), the workload
+/// A serQ program in IR form: the deployment (pools, stages), the workload
 /// (arrival, `init`/`turn` blocks, trace, or explicit sessions), the session
 /// (statement blocks) and the run parameters. Every name is resolved to an
 /// index and every constant is folded; the tables `attrs` and `observes`
