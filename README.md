@@ -11,7 +11,7 @@ correspondence, cited `file:line` against `ref/vllm`, is
 
 [![CI](https://github.com/vrvrv/serQ/actions/workflows/ci.yml/badge.svg)](https://github.com/vrvrv/serQ/actions/workflows/ci.yml)
 [![Docs](https://github.com/vrvrv/serQ/actions/workflows/docs.yml/badge.svg)](https://vrvrv.github.io/serQ/)
-[![Release](https://img.shields.io/github/v/release/vrvrv/serQ?label=release)](https://github.com/vrvrv/serQ/releases)
+[![Release](https://img.shields.io/pypi/v/pyserq?label=release)](https://github.com/vrvrv/serQ/releases)
 [![Rust](https://img.shields.io/badge/rust-1.98.1-orange.svg)](rust-toolchain.toml)
 
 **[Read the docs →](https://vrvrv.github.io/serQ/)**
