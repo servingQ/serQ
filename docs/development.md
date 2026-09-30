@@ -262,7 +262,8 @@ theorem until the generator can translate it.
 
 `tools/metrics.json` records the size a reader has to learn: the IR's
 variants, the keywords, the functions and the context variables, and the
-code lines that three or more programs repeat. `make check` fails when it is
+code lines (over 30 characters, comments stripped, `let`s aside) that three
+or more of `examples/` and `lib/` repeat. `make check` fails when it is
 not current, so a change that adds a construct shows it in its diff, and a
 change that deletes one shows that too. `make metrics` regenerates it and
 prints the spec's and the programs' length beside it. A PR that grows the

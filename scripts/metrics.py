@@ -23,17 +23,20 @@ OUT = ROOT / "tools" / "metrics.json"
 
 
 def read(rel):
-    return (ROOT / rel).read_text()
+    return (ROOT / rel).read_text(encoding="utf-8")
 
 
 def enum_variants(src, name):
-    body = src[src.index(f"pub enum {name} {{"):]
+    head = f"pub enum {name} {{"
+    assert head in src, f"src/ir.rs: `{head}` not found"
+    body = src[src.index(head):]
     body = body[: body.index("\n}\n")]
     return len(re.findall(r"^    [A-Z][A-Za-z]*", body, re.M))
 
 
 def array_len(src, name):
     m = re.search(rf"pub const {name}: \[[^;]+; (\d+)\]", src)
+    assert m, f"`pub const {name}: [...; N]` not found"
     return int(m.group(1))
 
 
@@ -52,7 +55,8 @@ def metrics():
         lines = [l.strip() for l in read(p).splitlines()]
         c = [l for l in lines if l and not l.startswith("//")]
         code[p] = len(c)
-        lines_of[p] = {l.split("//")[0].strip() for l in c if len(l) > 30}
+        # the code of a line, its comment stripped, long enough to be a statement
+        lines_of[p] = {s for s in (l.split("//")[0].strip() for l in c) if len(s) > 30}
     seen = Counter(l for s in lines_of.values() for l in s)
     clones = sorted(l for l, n in seen.items() if n >= 3 and not l.startswith("let "))
     return {

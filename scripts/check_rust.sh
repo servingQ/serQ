@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The seQ interpreter and CLI (crate seq-lang): fmt + clippy + tests (pool
 # semantics, the vLLM scheduler scenarios against the upstream oracle in
-# tools/oracle), a static check of every program in examples/, and the
-# agreement of the CPU vLLM oracle with the A100 engine.
+# tools/oracle), a static check of every program in examples/, the
+# agreement of the CPU vLLM oracle with the A100 engine, and the language's
+# size against tools/metrics.json.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
