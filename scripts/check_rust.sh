@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The seQ interpreter and CLI (crate seq-lang): fmt + clippy + tests (pool
 # semantics, the vLLM scheduler scenarios against the upstream oracle in
-# tools/oracle), a static check of every program in examples/, and the
-# agreement of the CPU vLLM oracle with the A100 engine.
+# tools/oracle), a static check of every program in examples/, the
+# agreement of the CPU vLLM oracle with the A100 engine, and the language's
+# size against tools/metrics.json.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$HOME/.cargo/bin:$PATH"
@@ -36,4 +37,8 @@ python3 scripts/check_oracle_gpu.py
 # The docs' `file.py:line` evidence for the vLLM correspondence. Skips loudly
 # where ref/vllm is absent (scripts/fetch_vllm_ref.sh --sparse: 4 MB, 2 s).
 python3 scripts/check_citations.py
+# The language's size (#142): keywords, functions, context variables, IR
+# variants and the lines three programs repeat. A change that moves them
+# regenerates tools/metrics.json (`make metrics`) and says why in its PR.
+python3 scripts/metrics.py --check
 echo "OK: seq-lang, $n programs link and draw, $t tutorial programs link, $(ls tools/oracle/*.out.json | wc -l) vLLM oracle scenarios + 1 prefix-cache trace (CPU oracle = A100 engine = seQ)"

@@ -1,0 +1,23 @@
+{
+  "IR_VERSION": 6,
+  "ir": {
+    "CStmt": 13,
+    "CExpr": 8,
+    "Fun": 22,
+    "CtxVar": 16
+  },
+  "surface": {
+    "keywords": 79,
+    "functions": 23,
+    "context_variables": 16
+  },
+  "clones": [
+    "at admission (known = computed < prompt ? prompt : computed + 1,",
+    "branch (known == prompt) { observe ttft = now - t0; }",
+    "cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);",
+    "pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }",
+    "run { horizon 2000; warmup 200; seed 1; }",
+    "set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);",
+    "vllm_request(reqs, kv, engine, prompt, o, t0);"
+  ]
+}

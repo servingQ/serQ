@@ -258,6 +258,18 @@ generator stops with `FAIL: outside the Lean fragment: <what>` and writes
 nothing, so a new construct that one oracle program uses stops every
 theorem until the generator can translate it.
 
+### Changing the language's size
+
+`tools/metrics.json` records the size a reader has to learn: the IR's
+variants, the keywords, the functions and the context variables, and the
+code lines (over 30 characters, comments stripped, `let`s aside) that three
+or more of `examples/` and `lib/` repeat. `make check` fails when it is
+not current, so a change that adds a construct shows it in its diff, and a
+change that deletes one shows that too. `make metrics` regenerates it and
+prints the spec's and the programs' length beside it. A PR that grows the
+surface says why; a repeated line in `clones` is a definition waiting to be
+written.
+
 ### Changing the IR
 
 `IR_VERSION` identifies meaning, not shape ([IR](ir.md), Stability): a field
