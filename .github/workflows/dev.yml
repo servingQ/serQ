@@ -1,0 +1,60 @@
+name: Dev
+
+# Every commit on main that passes CI is published to PyPI as a dev release
+# of the next patch, numbered by the commits since the release tag: three
+# commits after v0.1.0 is pyserq 0.1.1.dev3 (`pip install --pre pyserq`).
+# The number is stamped at build time and never committed; the release
+# commit itself, and a bump whose tag is not pushed yet, publish nothing.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-22.04
+    outputs:
+      dev: ${{ steps.v.outputs.dev }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - id: v
+        run: |
+          python3 scripts/version.py check
+          echo "dev=$(python3 scripts/version.py dev)" >> "$GITHUB_OUTPUT"
+
+  wheels:
+    needs: version
+    if: needs.version.outputs.dev != ''
+    uses: ./.github/workflows/wheels.yml
+    with:
+      ref: ${{ github.event.workflow_run.head_sha }}
+      dev-version: ${{ needs.version.outputs.dev }}
+
+  pypi:
+    # PyPI trusted publishing: pyserq's publisher names this repository,
+    # this workflow (dev.yml) and the environment `pypi`
+    needs: [version, wheels]
+    runs-on: ubuntu-22.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - run: python3 scripts/version.py wheels dist "${{ needs.version.outputs.dev }}"
+      - uses: pypa/gh-action-pypi-publish@release/v1

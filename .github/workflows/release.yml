@@ -1,16 +1,18 @@
 name: Release
 
 # Push an annotated tag vX.Y.Z matching Cargo.toml's version:
-#   git tag -a v0.1.0-rc0 && git push origin v0.1.0-rc0   (a tag with "-" is a prerelease)
+#   git tag -a v0.1.0 && git push origin v0.1.0
+# A version is X.Y.Z, with no "-" (scripts/version.py); what comes between
+# two releases is a dev release, which dev.yml publishes from main.
 # The full CI runs first; the release carries the packaged crate and the
 # Linux CLI, and the Python binding pyserq as wheels (linux x86_64, macOS
-# arm64). Its notes are the tag message's body (what the release is,
-# written by hand) followed by GitHub's generated list of the pull requests
-# since the previous release. Consumers pin the tag (Cargo `git` + `tag`).
+# arm64), which go to PyPI as pyserq X.Y.Z. Its notes are the tag
+# message's body (what the release is, written by hand) followed by
+# GitHub's generated list of the pull requests since the previous release. Consumers pin the tag (Cargo `git` + `tag`).
 
 on:
   push:
-    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
   workflow_dispatch:
     inputs:
       tag:
@@ -25,34 +27,10 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   wheels:
-    # pyserq, the Python binding: one abi3 wheel per platform, built with
-    # the toolchain rust-toolchain.toml pins (rustup reads it in the
-    # manylinux container too)
     needs: check
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            target: x86_64
-            manylinux: auto
-          - os: macos-14
-            target: aarch64
-            manylinux: "off"
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref_name }}
-      - uses: PyO3/maturin-action@v1
-        with:
-          command: build
-          target: ${{ matrix.target }}
-          manylinux: ${{ matrix.manylinux }}
-          args: --release --locked -m pyserq/Cargo.toml -o dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheel-${{ matrix.os }}
-          path: dist/*.whl
+    uses: ./.github/workflows/wheels.yml
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref_name }}
 
   release:
     needs: [check, wheels]
@@ -67,10 +45,8 @@ jobs:
         # actions/checkout leaves a lightweight tag behind; the message is
         # only on the annotated one (actions/checkout#290)
         run: git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-      - name: Tag matches Cargo.toml
-        run: |
-          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          test "v$v" = "$TAG" || { echo "::error::tag $TAG but Cargo.toml says $v"; exit 1; }
+      - name: Tag matches Cargo.toml, and serq and pyserq are one version
+        run: python3 scripts/version.py check --tag "$TAG"
       - name: Install pinned Rust toolchain
         run: rustup toolchain install && cargo --version
       - uses: Swatinem/rust-cache@v2
@@ -86,6 +62,8 @@ jobs:
           pattern: wheel-*
           path: dist
           merge-multiple: true
+      - name: The wheels are the tag's version
+        run: python3 scripts/version.py wheels dist "${TAG#v}"
       - name: Checksums
         # once, over everything the release carries (a SHA256SUMS already in
         # dist would list itself)
@@ -110,14 +88,33 @@ jobs:
             gh release edit "$TAG" --notes-file notes.md
             gh release upload "$TAG" dist/* --clobber
           else
-            pre=""; case "$TAG" in *-*) pre="--prerelease";; esac   # v0.1.0-rc0 etc.
-            gh release create "$TAG" dist/* --title "serQ $TAG" --notes-file notes.md --verify-tag $pre
+            gh release create "$TAG" dist/* --title "serQ $TAG" --notes-file notes.md --verify-tag
           fi
 
+  pypi:
+    # PyPI trusted publishing: pyserq's publisher names this repository,
+    # this workflow (release.yml) and the environment `pypi`. Only the
+    # wheels go, not an sdist: the repository is private. A re-release
+    # (workflow_dispatch) skips a version PyPI already has.
+    needs: [wheels, release]
+    runs-on: ubuntu-22.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
   crates-io:
-    # Off by default: crates.io is public and permanent. Enable with the
-    # repository variable PUBLISH_CRATES_IO=true and the secret
-    # CARGO_REGISTRY_TOKEN, after adding a `license` to Cargo.toml.
+    # Off by default: crates.io is public and permanent, and would publish
+    # the source. Enable with the repository variable PUBLISH_CRATES_IO=true
+    # and the secret CARGO_REGISTRY_TOKEN.
     needs: release
     if: vars.PUBLISH_CRATES_IO == 'true'
     runs-on: ubuntu-22.04

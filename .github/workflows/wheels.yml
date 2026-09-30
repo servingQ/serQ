@@ -1,0 +1,49 @@
+name: Wheels
+
+# pyserq, the Python binding: one abi3 wheel per platform, built with the
+# toolchain rust-toolchain.toml pins (rustup reads it in the manylinux
+# container too). Called by release.yml (a tag) and dev.yml (a commit on
+# main, with the dev version stamped into Cargo.toml first).
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      dev-version:
+        description: "X.Y.Z-dev.N to stamp (scripts/version.py dev); empty for a release"
+        type: string
+        default: ""
+
+jobs:
+  wheels:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64
+            manylinux: auto
+          - os: macos-14
+            target: aarch64
+            manylinux: "off"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Stamp the dev version
+        if: inputs.dev-version != ''
+        run: python3 scripts/version.py stamp "${{ inputs.dev-version }}"
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          # a stamped version is not in Cargo.lock, which cargo then updates
+          # for the two workspace crates only
+          args: --release ${{ inputs.dev-version == '' && '--locked' || '' }} -m pyserq/Cargo.toml -o dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: dist/*.whl

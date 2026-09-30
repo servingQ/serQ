@@ -36,7 +36,7 @@ jobs:
       - name: Build the CLI and the wheel, install the wheel
         run: |
           cargo build --release --locked
-          python -m pip install --quiet "maturin>=1.7,<2"
+          python -m pip install --quiet "maturin>=1.9,<2"
           maturin build --release --locked -m pyserq/Cargo.toml -o dist
           python -m pip install --quiet dist/pyserq-*.whl
       - name: pyserq gives what the CLI gives

@@ -34,14 +34,19 @@ A program that does not compile or run raises `ValueError` with serQ's message; 
 
 ## Install
 
-A release carries one wheel per platform (linux x86_64, macOS arm64), with
-the version of its tag (`v0.1.0-rc8` is `pyserq 0.1.0rc8`). The repository is
-private, so download the wheel with `gh release download` and install it:
-
 ```bash
-gh release download v0.1.0-rc8 -R vrvrv/serQ -p 'pyserq-*.whl' -D wheels
-pip install wheels/pyserq-*manylinux*.whl      # or the macosx one
+pip install pyserq           # a release
+pip install --pre pyserq     # the latest commit on main
 ```
+
+A release `vX.Y.Z` is `pyserq X.Y.Z` on PyPI, one wheel per platform (linux
+x86_64, macOS arm64). Every commit on main that passes CI is published too,
+as a dev release of the next patch numbered by the commits since the tag:
+three commits after `v0.1.0` is `0.1.1.dev3`, which pip installs only with
+`--pre`. pyserq's version is serq's, and there is one of it: the
+`[workspace.package] version` in `Cargo.toml`, `X.Y.Z`, which both crates
+inherit and the wheel takes; `scripts/version.py` checks it and CI stamps
+the dev number without committing it.
 
 Or build it from a checkout: `pip install maturin && maturin develop -m pyserq/Cargo.toml`.
 
