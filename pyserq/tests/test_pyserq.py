@@ -198,6 +198,13 @@ def test_one_version():
     assert importlib.metadata.version("pyserq") == pyserq.__version__.replace("-dev.", ".dev")
 
 
+def test_the_wheel_carries_its_license():
+    # pyserq/LICENSE is a link to the repository's; maturin reads LICEN[CS]E*
+    meta = importlib.metadata.metadata("pyserq")
+    assert meta["License-Expression"] == "Apache-2.0"
+    assert any(f.name == "LICENSE" for f in importlib.metadata.files("pyserq"))
+
+
 if __name__ == "__main__":
     for name, f in list(globals().items()):
         if name.startswith("test_"):
