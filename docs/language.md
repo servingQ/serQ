@@ -432,7 +432,9 @@ stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.seq
 decoder's queue of requests whose KV has arrived before its queue of new
 ones, as vLLM serves `skipped_waiting` before `waiting`
 (`scheduler.py:2383-2385`). `budget_left(S)` then evaluates to the budget
-left. Until then a waiting session's cached prefix is evictable, which is
+left. Under `serve exclusive prefill`, a selected prefill ends admission;
+otherwise a fitting waiting prefill can displace tentative decodes, and
+its header sees the full budget. Until then a waiting session's cached prefix is evictable, which is
 the *wait channel* of Lecture 5.
 
 `grow m (d)` enlarges the innermost hold on `m` by `d` (rounded to
@@ -538,8 +540,16 @@ since it refuses at start-up a KV cache that cannot hold one request of
 is what the `stuck` counter below is for. A hold that reserves what it
 will need (`reserve (known)` after a preemption) is rejected instead, once
 the reservation is above the cap.
-`serve exclusive prefill` schedules only the first prefilling resident while
-one exists (the RBLN stack). Without a per-request chunk cap, serving in
+`serve exclusive prefill` selects either one prefill alone or a decode-only
+batch. A resident prefill takes precedence. Otherwise resident decodes are
+tentative: while budget is left, a waiting prefill that fits can replace them
+and use the full budget, including in `budget_left` at admission. Once a
+prefill is selected, no further waiting request is admitted in that iteration.
+Displaced decodes keep any newly acquired allocation but neither execute nor
+advance computed KV. Ordinary fit and no-admission-after-preemption gates
+remain; this mechanism does not implement PP decode caps or remote-KV waiting
+policy. [The batch isolation design](design/exclusive-prefill.md) states the
+counterexample and validation. Without a per-request chunk cap, serving in
 admission order *is* serving decode-first (`SeqLang.Serve.serve_eq_decode_first`;
 a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 "prefill from the budget decode leaves" describes vLLM too.

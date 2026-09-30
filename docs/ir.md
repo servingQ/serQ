@@ -228,6 +228,15 @@ loaded one says so, where version 6 packed the two into one number
 One key is a list of one. `Choose` is outside the Lean fragment, so the
 matching generator only moves its pin to 7.
 
+Version 8 also strengthens `CServe::ExclusivePrefill` from resident-only
+isolation to a whole-batch constraint: a prefill runs alone, including a
+waiting prefill that displaces tentative resident decodes. Cancelled work
+does not advance computed KV. Version 8 is still untagged (the latest tag,
+`v0.1.0-rc5`, carries 7), so the number remains 8 under the policy above;
+the change belongs in its release note. JSON shape and the ordinary serving
+order are unchanged. `ExclusivePrefill` is outside the Lean fragment;
+this change neither extends it nor changes the oracle IR files.
+
 ## The Lean fragment
 
 The Lean model (serving-queue-theory, `SeqExec.lean`) runs a fragment of

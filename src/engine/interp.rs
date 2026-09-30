@@ -2497,9 +2497,8 @@ impl<'p> Interp<'p> {
         // sort ahead of residents already served: the set of the served, not
         // an index into the list, is what says who is next.
         let mut served: BTreeSet<u64> = BTreeSet::new();
-        let mut prefill_taken = false;
         let exclusive = matches!(spec.serve, CServe::ExclusivePrefill);
-        let any_prefill = self
+        let resident_prefill = self
             .residents(st)
             .iter()
             .any(|&j| self.stages[st].jobs[&j].mode == RunMode::Prefill);
@@ -2512,7 +2511,11 @@ impl<'p> Interp<'p> {
                 // the budget left, unless this iteration preempted
                 // (scheduler.py:869, `if not preempted_reqs`)
                 let preempted = self.pools.iter().map(|p| p.preemptions).sum::<u64>() > preempt0;
-                if left > 0.0 && !preempted && self.admit_bound(st, left) {
+                // A local prefill admitted after tentative decodes replaces
+                // them and uses the whole budget (RBLN guard D). Its hold
+                // must therefore see that budget, not the decode remainder.
+                let admit_left = if exclusive { budget } else { left };
+                if left > 0.0 && !preempted && self.admit_bound(st, admit_left) {
                     continue;
                 }
                 break;
@@ -2533,8 +2536,13 @@ impl<'p> Interp<'p> {
                 }
                 RunMode::Plain => unreachable!(),
             };
-            let blocked = exclusive && any_prefill && (mode == RunMode::Decode || prefill_taken);
-            let tokens = if blocked { 0.0 } else { want.min(left) };
+            let blocked = exclusive && resident_prefill && mode == RunMode::Decode;
+            let available = if exclusive && mode == RunMode::Prefill {
+                budget
+            } else {
+                left
+            };
+            let tokens = if blocked { 0.0 } else { want.min(available) };
             if tokens <= 0.0 {
                 continue;
             }
@@ -2559,17 +2567,38 @@ impl<'p> Interp<'p> {
                 if mode == RunMode::Prefill {
                     attn += tokens * (pos + tokens / 2.0);
                 }
-                self.advance_pos(sid, pl, tokens);
+                // Exclusive-prefill decodes are candidates until waiting
+                // admission has finished: replacing them must not publish
+                // computed KV for work that will never run.
+                if !exclusive {
+                    self.advance_pos(sid, pl, tokens);
+                }
             } else if mode == RunMode::Prefill {
                 attn += tokens * tokens / 2.0;
             }
+            if exclusive && mode == RunMode::Prefill {
+                // Keep any allocation made for displaced decodes, as RBLN
+                // keeps pending runner block deltas; cancel only their work.
+                assign.clear();
+                left = budget;
+            }
             assign.push((id, tokens));
             left -= tokens;
-            if mode == RunMode::Prefill {
-                prefill_taken = true;
-            }
-            if left <= 0.0 {
+            if left <= 0.0 || (exclusive && mode == RunMode::Prefill) {
+                // A selected prefill is a lone batch. In particular do not
+                // admit another waiting request with its leftover budget.
                 break;
+            }
+        }
+        if exclusive {
+            // Growth can preempt an earlier candidate. Only surviving,
+            // selected jobs advance their holds' computed positions.
+            assign.retain(|(id, _)| self.stages[st].jobs.contains_key(id));
+            for &(id, tokens) in &assign {
+                let j = &self.stages[st].jobs[&id];
+                if let (Some(pl), Some(sid)) = (j.growing, j.owner) {
+                    self.advance_pos(sid, pl, tokens);
+                }
             }
         }
         // An iteration that scheduled nothing is no iteration, unless it

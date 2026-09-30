@@ -96,6 +96,7 @@ nav:
           - Renewal arrivals: design/renewal-arrivals.md
           - Bandwidth sharing: design/bandwidth-sharing.md
           - One admission: design/one-admission.md
+          - Separate prefill/decode batches: design/exclusive-prefill.md
   - API Reference:
       - api/index.md
       - Program: api/program.md
