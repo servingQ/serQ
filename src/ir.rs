@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 /// 2 added the sessions' turns; 3 renamed `route` to `session`; 4 replaced
 /// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`; 5 added
 /// `Release` and `Load`; 6 added renewal arrivals and finite open runs; 7
-/// makes `Choose.key` a list of keys, compared in order.
-pub const IR_VERSION: u32 = 7;
+/// makes `Choose.key` a list of keys, compared in order; 8 lets a `Run`
+/// hold several stages at once (`also`) under the program's `share`.
+pub const IR_VERSION: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -327,6 +328,11 @@ pub enum CStmt {
         mode: RunMode,
         work: CExpr,
         growing: Option<CRef>,
+        /// Further stages the same job holds from its start to its end: a
+        /// flow over `stage` and these, its rate set by the program's
+        /// `share` from their capacities. Empty for a run on one stage.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        also: Vec<CRef>,
     },
     Branch(CExpr, BlockId, BlockId),
     Loop(BlockId),
@@ -479,6 +485,22 @@ pub struct Program {
     /// called at scheduler.py:2426), so a program that reserves `prompt + o`
     /// is one vLLM cannot be.
     pub hidden: Vec<usize>,
+    /// How the flows of runs over several stages divide the stages'
+    /// capacity; present exactly when some `Run` has a non-empty `also`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share: Option<Share>,
+}
+
+/// The sharing policy of `share`: how flows that hold several `ps` stages at
+/// once divide their capacities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Share {
+    /// Max-min fair: every flow's rate rises together until a stage fills,
+    /// the flows through it stop there, and the rest go on.
+    MaxMin,
+    /// Each flow gets its equal share at the tightest of its stages,
+    /// `min over s of φ_s / n_s`; what that leaves at the others is unused.
+    Bottleneck,
 }
 
 /// One explicit session of `CArrival::Sessions`: preset attributes
@@ -495,6 +517,90 @@ pub struct SessionInit {
 }
 
 impl Program {
+    /// The stages some run over several stages holds, each array whole: a
+    /// run's index is known only when it starts. Every job on one of them
+    /// is a flow of the program's `share`; every other stage serves as its
+    /// kind says.
+    pub fn shared_stages(&self) -> Vec<bool> {
+        let mut shared = vec![false; self.stages.len()];
+        for b in &self.blocks {
+            for st in b {
+                if let CStmt::Run { stage, also, .. } = st
+                    && !also.is_empty()
+                {
+                    for r in std::iter::once(stage).chain(also) {
+                        for k in r.base..(r.base + r.count.max(1)).min(shared.len()) {
+                            shared[k] = true;
+                        }
+                    }
+                }
+            }
+        }
+        shared
+    }
+
+    /// A run over several stages holds `ps` stages of a constant capacity
+    /// (a flow is not described by the `n` a capacity could read), each
+    /// stage array once (an index is known only when the run starts), and
+    /// the program names its `share`; every run on a shared stage is plain.
+    fn validate_flows(&self) -> Result<(), String> {
+        let shared = self.shared_stages();
+        let any = shared.iter().any(|&x| x);
+        match (any, self.share) {
+            (true, None) => {
+                return Err(
+                    "a run over several stages needs the program's `share` (`share maxmin;` or `share bottleneck;`)"
+                        .into(),
+                );
+            }
+            (false, Some(_)) => {
+                return Err("`share` without a run over several stages".into());
+            }
+            _ => {}
+        }
+        for (k, on) in shared.iter().enumerate() {
+            if *on && !matches!(self.stages[k].kind, CStageKind::Ps(CExpr::Num(_))) {
+                return Err(format!(
+                    "stage `{}` is held with another stage by one run, so its capacity is shared: it must be `ps(φ)` with a constant φ",
+                    self.stages[k].name
+                ));
+            }
+        }
+        for b in &self.blocks {
+            for st in b {
+                let CStmt::Run {
+                    stage,
+                    mode,
+                    growing,
+                    also,
+                    ..
+                } = st
+                else {
+                    continue;
+                };
+                let on_shared = (stage.base..stage.base + stage.count.max(1))
+                    .any(|k| shared.get(k).copied().unwrap_or(false));
+                if on_shared && (*mode != RunMode::Plain || growing.is_some()) {
+                    return Err(format!(
+                        "a run on the shared stage `{}` is plain: no `prefill`/`decode`, no `growing`",
+                        self.stages[stage.base].name
+                    ));
+                }
+                let mut bases = vec![stage.base];
+                for r in also {
+                    if bases.contains(&r.base) {
+                        return Err(format!(
+                            "stage `{}` is named twice in one run",
+                            self.stages[r.base].name
+                        ));
+                    }
+                    bases.push(r.base);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// JSON form of the IR.
     pub fn to_json(&self) -> String {
         serde_json::to_string_pretty(self).expect("IR serialises")
@@ -633,6 +739,7 @@ impl Program {
         ] {
             v.block(blk).map_err(|e| format!("{k}: {e}"))?;
         }
+        self.validate_flows()?;
         for p in &self.pools {
             let at = |e| format!("pool `{}`: {e}", p.name);
             if let Some(e) = &p.queue {
@@ -924,9 +1031,13 @@ impl Validator<'_> {
                 stage,
                 work,
                 growing,
+                also,
                 ..
             } => {
                 self.cref(stage, ns, "stage", m)?;
+                for r in also {
+                    self.cref(r, ns, "stage", m)?;
+                }
                 self.expr(work, m)?;
                 if let Some(g) = growing {
                     self.cref(g, np, "pool", m)?;

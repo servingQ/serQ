@@ -2,7 +2,7 @@
 
 ```
 program := item*
-item    := let | def | use | pool | stage | workload | session | server | run
+item    := let | def | use | pool | stage | workload | session | server | share | run
 ```
 
 Items are read in order and declarations come first: a [serving form](serving.md)
@@ -154,6 +154,22 @@ that of the one-block `session`.
 
 A workload `session` without a `server`, a `server` that is never requested,
 and a `server` next to a top-level `session` are errors.
+
+## `share`
+
+```seq
+share maxmin;
+share bottleneck;
+```
+
+How the flows of [runs over several stages](statements.md#run) divide the
+stages' capacity. Required when some run holds several stages, an error
+otherwise; there is no default.
+
+| Policy | A flow's rate |
+|---|---|
+| `maxmin` | Max-min fair: every flow's rate rises together until a stage fills; the flows through it stop there, the others go on. Uses all the capacity it can. |
+| `bottleneck` | Its equal share at the tightest of its stages, `min over s of φ_s / n_s`. What that leaves at its other stages is unused. |
 
 ## `run`
 

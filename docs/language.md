@@ -78,6 +78,7 @@ item     := let NAME = expr ;
           | session block                     -- the session, in one block
           | server block                      -- or its server side, with the session inside workload
           | run { horizon expr ; warmup expr ; seed expr ; arrivals expr ; }
+          | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
 poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
@@ -111,6 +112,7 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | release POOL ;                   -- give the enclosing hold's allocation on POOL back now, or end a lease of it
           | load POOL ( expr ) ;             -- the KV of expr tokens arrived: the enclosing hold's computed position advances
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
+          | run STAGE , STAGE [, STAGE]* ( expr ) ;   -- one job holding every stage at once
           | branch ( expr ) block [ else block ]          -- a test
           | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
           | loop block
@@ -118,7 +120,7 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | end ;
           | serving                          -- the serving vocabulary, sugar for run
 serving  := prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
-          | transfer [ '[' expr ']' | on STAGE ] expr from POOL to POOL ( expr ) ;
+          | transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
           | decode   [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | tool     [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
@@ -192,6 +194,7 @@ unchanged.
 | `prefill (T) growing kv;` | `run E prefill (T) growing kv;` (`growing` passes through; a form never adds it) |
 | `prefill[j] W;` | `run prefill[j] (W);`, or `run prefill[j] prefill (T);` when the array is step engines (the index applies to the role's stage array) |
 | `prefill on P[j] (W);` | `run P[j] (W);`, or `run P[j] prefill (T);` when `P` is a step engine |
+| `transfer on egress[i], ingress[j] (X) from P to Q (n);` | `run egress[i], ingress[j] (X); load Q (n); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*) |
 
 The argument is work in the unit of the stage it runs on, and the two
 metavariables say which: `W` is the time the job takes alone on a `fifo`,
@@ -482,7 +485,21 @@ covered here has found a bug.
 
 **Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(present)/present`. `delay`: every job on its
-own at rate 1. `step { budget B; cost C; }`: an engine that runs
+own at rate 1. `run a, b (w)` is one job that holds `a` and `b` from its
+start to its end: a *flow*, whose work goes down at one rate at all its
+stages, set by the program's `share` from their capacities. `share maxmin`
+is max-min fair: every flow's rate rises together until a stage fills,
+the flows through it stop there, and the others go on. `share bottleneck`
+gives each flow its equal share at the tightest of its stages,
+`min over s of φ_s / n_s`, and leaves what that does not use at the other
+stages unused. Every stage of such a run is `ps(φ)` with a constant `φ`
+(a flow is not described by the `present` a capacity could read), a run
+names each stage array once (an index is known only when the run starts),
+and a program with one declares its `share`, which has no default. A
+stage array held by some run with another is *shared* for the whole run:
+every job on it, a single-stage `run` included, is a flow of the policy,
+and its utilisation is the capacity its flows carry, `Σ rate / φ`. Every
+other `ps` stage serves as above. See `docs/design/bandwidth-sharing.md`. `step { budget B; cost C; }`: an engine that runs
 iterations. A plain `run`'s work is time at rate 1, the clock's unit; a step
 engine's `prefill` and `decode` work is in the unit of `B`, tokens. The
 clock itself has no unit: a program whose costs are seconds runs in seconds,

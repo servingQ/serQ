@@ -422,6 +422,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     let linked = Linked {
         version: IR_VERSION,
         hidden,
+        share: prog.share,
         slot_cached: slot(&lk, "cached"),
         slot_serial: slot(&lk, "serial"),
         slot_turn: slot(&lk, "turn_no"),
@@ -993,8 +994,13 @@ impl Linker<'_> {
                     mode,
                     work,
                     growing,
+                    also,
                 } => {
                     let stage = self.stage_ref(stage)?;
+                    let also = also
+                        .iter()
+                        .map(|r| self.stage_ref(r))
+                        .collect::<LResult<Vec<_>>>()?;
                     let is_step = matches!(
                         self.prog.stages.iter().find(|s| {
                             self.stages.get(&s.name).map(|b| b.0) == Some(stage.base)
@@ -1018,6 +1024,7 @@ impl Linker<'_> {
                         mode: *mode,
                         work: self.expr(work)?,
                         growing: growing.as_ref().map(|g| self.pool_ref(g)).transpose()?,
+                        also,
                     }
                 }
                 Stmt::Branch(p, a, b) => {

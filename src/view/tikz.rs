@@ -51,6 +51,7 @@ fn box_style(s: BoxStyle) -> &'static str {
         BoxStyle::Solid => "seqsolid",
         BoxStyle::Cached => "seqcached",
         BoxStyle::Enclosure => "seqenclosure",
+        BoxStyle::Flow => "seqrail",
     }
 }
 

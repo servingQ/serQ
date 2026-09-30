@@ -648,3 +648,39 @@ fn the_examples_return_down_every_arm() {
     assert!(edge(&p, &net, "decode", "prefill").is_some_and(|e| e.back));
     assert!(edge(&p, &net, "agg", "prefill").is_some());
 }
+
+/// A run over several stages is one job at several stations: they are
+/// bracketed together, no arrow runs between them, and the session comes in
+/// at the first and leaves from the last.
+#[test]
+fn a_run_over_several_stages_is_one_bracketed_job() {
+    let src = "pool kvP { cap 100; } pool kvD[2] { cap 100; }
+               stage P : delay; stage egress : ps(1); stage ingress[2] : ps(1); stage D[2] : delay;
+               share maxmin;
+               workload { arrive batch(2); }
+               session {
+                 set j = serial;
+                 hold kvP (10) { run P (1); } lease kvP (inf);
+                 hold kvD[j] (10) {
+                   transfer on egress, ingress[j] (1) from kvP to kvD[j] (10);
+                   run D[j] (1);
+                 }
+                 end;
+               }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
+    let (pf, eg, ing, d) = (at("P"), at("egress"), at("ingress"), at("D"));
+    assert_eq!(net.flows, vec![vec![eg, ing]]);
+    assert!(net.has_edge(End::Node(pf), End::Node(eg)));
+    assert!(net.has_edge(End::Node(ing), End::Node(d)));
+    assert!(!net.has_edge(End::Node(eg), End::Node(ing)));
+    assert!(!net.has_edge(End::Node(pf), End::Node(ing)));
+    let f = deployment::layout(&p, &net);
+    let brackets = f.boxes(BoxStyle::Flow);
+    assert_eq!(brackets.len(), 1);
+    for i in [eg, ing] {
+        assert!(brackets[0].contains(&f.stations()[i].0));
+    }
+}

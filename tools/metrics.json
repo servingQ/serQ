@@ -1,5 +1,5 @@
 {
-  "IR_VERSION": 7,
+  "IR_VERSION": 8,
   "ir": {
     "CStmt": 13,
     "CExpr": 8,
@@ -7,7 +7,7 @@
     "CtxVar": 16
   },
   "surface": {
-    "keywords": 79,
+    "keywords": 82,
     "functions": 23,
     "context_variables": 16
   },
