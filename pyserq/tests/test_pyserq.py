@@ -59,6 +59,16 @@ def test_a_trace_given_as_a_path():
     assert pyserq.REPORT_VERSION >= 1
 
 
+def test_a_trace_read_as_a_replay_reads_it():
+    path = REPLAY.parent / "data" / "short_base.csv"
+    sessions = pyserq.read_trace(path)
+    rows = [r for r in csv.reader(open(path)) if r and not r[0].startswith(("#", "session"))]
+    assert sum(map(len, sessions)) == len(rows)
+    assert len(sessions) == len({r[0] for r in rows})
+    first = tuple(float(x) for x in rows[0][2:6]) + ((0.0,) if len(rows[0]) == 5 else ())
+    assert sessions[0][0] == first
+
+
 def test_the_ir_round_trips():
     p = pyserq.compile(MG1)
     ir = json.loads(p.to_json())
@@ -77,6 +87,8 @@ def test_errors_are_value_errors():
         lambda: pyserq.compile(MG1, sets={"lam": float("nan")}),
         lambda: pyserq.compile(MG1, sets={"not a name": 1}),
         lambda: pyserq.compile(),
+        lambda: pyserq.read_trace(ROOT / "nowhere.csv"),
+        lambda: pyserq.read_trace(MG1),
     ]:
         try:
             call()
