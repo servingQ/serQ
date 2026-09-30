@@ -96,7 +96,6 @@ shapes explicitly fall back or fail according to the tagged path. Graph
 capture/replay and rank maxima must not become hidden vendor-name semantics.
 This is a deferred candidate sketch, not a required extension, new syntax or implemented shape IR.
 
-The [IR investigation](../design/vendor-ir.md) preserves these questions for
-future consideration. Whether padding needs an IR representation remains
-undecided. Local logical phase isolation is already implemented; see the
+These source findings remain available for future consideration. Whether
+padding needs an IR representation remains undecided. Local logical phase isolation is already implemented; see the
 [RBLN model](rbln.md).

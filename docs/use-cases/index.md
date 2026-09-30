@@ -2,7 +2,7 @@
 
 How far can serQ describe vendor vLLM scheduling and KV-cache behavior? These pages examine the latest version tags checked on **2026-09-30**, including release candidates and alpha tags. They cover **full attention only** and distinguish the plugin version from its upstream vLLM dependency. Features from development branches or older schedulers are not mixed into the comparison.
 
-The examples run on the current IR v8. They are reduced specifications, not vendor scheduler oracles. Their capacities and cost constants are illustrative, not hardware measurements.
+The examples were verified with IR v8. They are reduced specifications, not vendor scheduler oracles. Their capacities and cost constants are illustrative, not hardware measurements.
 
 ## Version basis
 
@@ -52,4 +52,7 @@ Replace `rbln` with `ascend`, `tpu` or `metax`. All four use a finite batch of s
 
 The pages separate tagged-source findings, executable approximations, remaining gaps and proposed oracle scenarios. The examples have been checked and run. Vendor SDKs and hardware were not exercised, and no vendor differential tests were run. The existing [validation corpus](../validation.md) does not validate these vendor tags.
 
-[Vendor requirements for the IR](../design/vendor-ir.md) describes what IR v8 already supplies, what remains missing and how to check the next refinement. It proposes no implemented language changes.
+Each vendor page records the limitations of its executable example.
+The [Ascend waiting-selection change](https://github.com/vrvrv/serQ/pull/178)
+implements FCFS lane precedence and aging in IR v9; that separate PR is
+pending merge. This documentation PR changes no language semantics.
