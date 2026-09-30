@@ -7,15 +7,18 @@
 //! p = pyserq.compile("examples/single-turn/mg1.sq", sets={"lam": 0.8}, seed=10)
 //! r = pyserq.run(p)            # the GIL is released while it runs
 //! r.json()                     # what `serq run --json` prints
-//! values, times, sessions, turns = r.observe("sojourn")   # what `--dump` writes
+//! o = r.observes["sojourn"]   # o.mean, o.ci, ...; o.values, o.times: what `--dump` writes
+//! r.stages[0].utilization, r.pools[0].preemptions
 //! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 //! ```
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 /// A compiled program: its IR, and the directory a relative trace is read
 /// against (the program file's, as `serq run` does; none for text).
@@ -41,9 +44,10 @@ impl Program {
     }
 }
 
-/// What a run reports.
+/// What a run reports: the fields of `serq run --json`, by the same names
+/// (`REPORT_VERSION`), with each observation's samples.
 #[pyclass(frozen)]
-struct Report(serq::Report);
+struct Report(Arc<serq::Report>);
 
 #[pymethods]
 impl Report {
@@ -52,20 +56,119 @@ impl Report {
         self.0.json()
     }
 
-    /// One observation's samples: `(values, times, sessions, turns)`, what
-    /// `serq run --dump` writes for it.
-    #[allow(clippy::type_complexity)]
-    fn observe(&self, name: &str) -> PyResult<(Vec<f64>, Vec<f64>, Vec<u64>, Vec<u32>)> {
-        let o = self
-            .0
-            .observe(name)
-            .ok_or_else(|| PyValueError::new_err(format!("no observation `{name}`")))?;
-        Ok((
-            o.samples.clone(),
-            o.records.iter().map(|r| r.0).collect(),
-            o.records.iter().map(|r| r.1).collect(),
-            o.records.iter().map(|r| r.2).collect(),
-        ))
+    #[getter]
+    fn horizon(&self) -> f64 {
+        self.0.horizon
+    }
+    #[getter]
+    fn end(&self) -> f64 {
+        self.0.end
+    }
+    #[getter]
+    fn warmup(&self) -> f64 {
+        self.0.warmup
+    }
+    #[getter]
+    fn seed(&self) -> u64 {
+        self.0.seed
+    }
+    #[getter]
+    fn events(&self) -> u64 {
+        self.0.events
+    }
+    #[getter]
+    fn arrivals(&self) -> u64 {
+        self.0.arrivals
+    }
+    #[getter]
+    fn ended(&self) -> u64 {
+        self.0.ended
+    }
+    #[getter]
+    fn turns(&self) -> u64 {
+        self.0.turns
+    }
+    #[getter]
+    fn mean_live(&self) -> f64 {
+        self.0.mean_live
+    }
+
+    /// The observations by name, in the program's order.
+    #[getter]
+    fn observes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        for (i, o) in self.0.observes.iter().enumerate() {
+            d.set_item(&o.name, Observe(self.0.clone(), i))?;
+        }
+        Ok(d)
+    }
+
+    /// One row per stage (a replicated stage has a row per replica, under
+    /// one name).
+    #[getter]
+    fn stages(&self) -> Vec<serq::engine::report::StageReport> {
+        self.0.stages.clone()
+    }
+
+    #[getter]
+    fn pools(&self) -> Vec<serq::engine::report::PoolReport> {
+        self.0.pools.clone()
+    }
+}
+
+/// One observation: its statistics as `serq run --json` prints them, and
+/// its samples as `serq run --dump` writes them.
+#[pyclass(frozen)]
+struct Observe(Arc<serq::Report>, usize);
+
+impl Observe {
+    fn get(&self) -> &serq::engine::report::ObserveReport {
+        &self.0.observes[self.1]
+    }
+}
+
+#[pymethods]
+impl Observe {
+    #[getter]
+    fn name(&self) -> &str {
+        &self.get().name
+    }
+    #[getter]
+    fn count(&self) -> u64 {
+        self.get().count
+    }
+    #[getter]
+    fn mean(&self) -> f64 {
+        self.get().mean
+    }
+    /// Batch-means 95 % half-width (NaN below 40 samples).
+    #[getter]
+    fn ci(&self) -> f64 {
+        self.get().ci.half_width
+    }
+    #[getter]
+    fn cv2(&self) -> f64 {
+        self.get().cv2
+    }
+    #[getter]
+    fn p99(&self) -> f64 {
+        self.get().p99
+    }
+    #[getter]
+    fn values(&self) -> Vec<f64> {
+        self.get().samples.clone()
+    }
+    #[getter]
+    fn times(&self) -> Vec<f64> {
+        self.get().records.iter().map(|r| r.0).collect()
+    }
+    #[getter]
+    fn sessions(&self) -> Vec<u64> {
+        self.get().records.iter().map(|r| r.1).collect()
+    }
+    #[getter]
+    fn turns(&self) -> Vec<u32> {
+        self.get().records.iter().map(|r| r.2).collect()
     }
 }
 
@@ -128,7 +231,7 @@ fn compile(
 fn run(py: Python<'_>, program: &Program) -> PyResult<Report> {
     let (ir, base) = (&program.ir, program.base.as_deref());
     py.allow_threads(|| serq::run_ir(ir, base))
-        .map(Report)
+        .map(|r| Report(Arc::new(r)))
         .map_err(PyValueError::new_err)
 }
 
@@ -156,6 +259,9 @@ fn read_trace(path: PathBuf) -> PyResult<Vec<Vec<(f64, f64, f64, f64)>>> {
 fn pyserq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Program>()?;
     m.add_class::<Report>()?;
+    m.add_class::<Observe>()?;
+    m.add_class::<serq::engine::report::StageReport>()?;
+    m.add_class::<serq::engine::report::PoolReport>()?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;
     m.add_function(wrap_pyfunction!(read_trace, m)?)?;

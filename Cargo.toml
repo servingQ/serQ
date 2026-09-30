@@ -31,6 +31,11 @@ path = "src/main.rs"
 rand = "0.9"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+# `python`: a report's stage and pool rows are Python classes (pyserq)
+pyo3 = { version = "0.25", optional = true }
+
+[features]
+python = ["dep:pyo3"]
 
 [profile.test]
 opt-level = 3

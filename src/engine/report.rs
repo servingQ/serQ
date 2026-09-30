@@ -20,6 +20,10 @@ pub struct ObserveReport {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(get_all, frozen, name = "Stage", module = "pyserq")
+)]
 pub struct StageReport {
     pub name: String,
     /// Time-average jobs present (waiting and in service).
@@ -36,6 +40,10 @@ pub struct StageReport {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(get_all, frozen, name = "Pool", module = "pyserq")
+)]
 pub struct PoolReport {
     pub name: String,
     pub mean_used: f64,

@@ -265,6 +265,7 @@ dependencies = [
 name = "serq"
 version = "0.1.0-rc6"
 dependencies = [
+ "pyo3",
  "rand",
  "serde",
  "serde_json",

@@ -10,7 +10,9 @@ import pyserq
 p = pyserq.compile("examples/single-turn/mg1.sq", sets={"lam": 0.8, "law": 1}, seed=10)
 r = pyserq.run(p)            # the GIL is released while it runs
 r.json()                     # what `serq run --json` prints
-values, times, sessions, turns = r.observe("sojourn")   # what `--dump` writes
+o = r.observes["sojourn"]    # o.mean, o.ci, o.p99, ...
+o.values, o.times            # what `--dump` writes
+r.stages[0].utilization, r.pools[0].preemptions
 pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 ```
 
@@ -20,9 +22,11 @@ pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a repla
 | `Program.to_json()`, `Program.from_json(s)` | The IR as JSON (`serq ir`), and back. |
 | `run(program)` | A run. Runs in threads proceed in parallel. |
 | `Report.json()` | The summary `serq run --json` prints. |
-| `Report.observe(name)` | `(values, times, sessions, turns)` of one observation. |
+| `Report.horizon`, `.end`, `.warmup`, `.seed`, `.events`, `.arrivals`, `.ended`, `.turns`, `.mean_live` | The summary's fields, by the same names. A field JSON writes as `null` is NaN. |
+| `Report.observes` | The observations by name (a dict, in the program's order), each an `Observe`: `name`, `count`, `mean`, `ci` (batch-means 95 % half-width), `cv2`, `p99` as in the summary, and its samples `values`, `times`, `sessions`, `turns` as `--dump` writes them. |
+| `Report.stages`, `Report.pools` | One `Stage` or `Pool` per row of the summary, with its fields by the same names. |
 | `read_trace(path)` | A trace's sessions, each a list of its turns `(new, out, think, forced)`: the corpus a replay draws its sessions from, read as a replay reads it. A relative path is read from the current directory. |
-| `IR_VERSION`, `REPORT_VERSION`, `__version__` | The IR it reads, the shape of `Report.json()` (its field names; a change bumps it), and the serq version it is. |
+| `IR_VERSION`, `REPORT_VERSION`, `__version__` | The IR it reads, the shape of the report (the field names of `Report.json()`, which `Report`, `Observe`, `Stage` and `Pool` carry as attributes; a change bumps it), and the serq version it is. |
 
 A program that does not compile or run raises `ValueError` with serQ's message; an argument of the wrong type (`seed=-1`, `sets={"x": None}`) raises `TypeError` or `OverflowError`, as Python does.
 
