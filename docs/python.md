@@ -15,14 +15,14 @@ values, times, sessions, turns = r.observe("sojourn")   # what `--dump` writes
 
 | | |
 |---|---|
-| `compile(path=None, *, source=None, sets={}, seed, horizon, warmup, arrivals, trace)` | A program file or text to its IR, with the overrides of `serq run`. A number in `sets` is that number; a string is an expression. A relative trace is read next to the program file. |
+| `compile(path=None, *, source=None, sets={}, seed, horizon, warmup, arrivals, trace)` | A program file or text to its IR, with the overrides of `serq run`. A number in `sets` is that number (finite); a string is an expression. A relative trace is read next to the program file for `compile(path)`, and from the current directory with `trace=`, `source=` or `Program.from_json`, as `serq run` does. |
 | `Program.to_json()`, `Program.from_json(s)` | The IR as JSON (`serq ir`), and back. |
 | `run(program)` | A run. Runs in threads proceed in parallel. |
 | `Report.json()` | The summary `serq run --json` prints. |
 | `Report.observe(name)` | `(values, times, sessions, turns)` of one observation. |
-| `IR_VERSION`, `__version__` | The IR version it reads, and the serq version it is. |
+| `IR_VERSION`, `REPORT_VERSION`, `__version__` | The IR it reads, the shape of `Report.json()` (its field names; a change bumps it), and the serq version it is. |
 
-Errors are `ValueError` with the message the CLI prints.
+A program that does not compile or run raises `ValueError` with serQ's message; an argument of the wrong type (`seed=-1`, `sets={"x": None}`) raises `TypeError` or `OverflowError`, as Python does.
 
 ## Install
 

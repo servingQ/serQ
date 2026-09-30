@@ -89,19 +89,19 @@ fn compile(
     horizon: Option<f64>,
     warmup: Option<f64>,
     arrivals: Option<usize>,
-    trace: Option<String>,
+    trace: Option<PathBuf>,
 ) -> PyResult<Program> {
     let mut ov = serq::Overrides {
         seed,
         horizon,
         warmup,
         arrivals,
-        trace,
+        trace: trace.map(|t| t.to_string_lossy().into_owned()),
         ..Default::default()
     };
     for (name, v) in sets {
         match v {
-            SetValue::Num(x) => ov.set_num(&name, x),
+            SetValue::Num(x) => ov.set_num(&name, x).map_err(PyValueError::new_err)?,
             SetValue::Expr(e) => ov.set(&name, &e).map_err(PyValueError::new_err)?,
         }
     }
@@ -110,7 +110,7 @@ fn compile(
         (None, Some(src)) => (serq::compile_source(src, &ov), None),
         _ => {
             return Err(PyValueError::new_err(
-                "compile takes a path or a source, not both",
+                "compile takes exactly one of a path and a source",
             ));
         }
     };
@@ -138,6 +138,7 @@ fn pyserq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compile, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;
     m.add("IR_VERSION", serq::ir::IR_VERSION)?;
+    m.add("REPORT_VERSION", serq::engine::report::REPORT_VERSION)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

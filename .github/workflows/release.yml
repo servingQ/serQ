@@ -81,14 +81,15 @@ jobs:
           mkdir -p dist
           cp target/package/serq-*.crate dist/
           tar -C target/release -czf "dist/serq-$TAG-x86_64-unknown-linux-gnu.tar.gz" serq
-          (cd dist && sha256sum * > SHA256SUMS)
       - uses: actions/download-artifact@v4
         with:
           pattern: wheel-*
           path: dist
           merge-multiple: true
-      - name: Checksums with the wheels
-        run: (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+      - name: Checksums
+        # once, over everything the release carries (a SHA256SUMS already in
+        # dist would list itself)
+        run: (cd dist && sha256sum *.crate *.tar.gz *.whl > SHA256SUMS && cat SHA256SUMS)
       - name: Release notes
         # the tag message's body, then the generated pull request list
         env:

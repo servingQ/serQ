@@ -51,6 +51,14 @@ def test_a_trace_read_next_to_the_program_and_an_expression():
     assert json.loads(r.json()) == want
 
 
+def test_a_trace_given_as_a_path():
+    trace = REPLAY.parent / "data" / "short_base.csv"
+    r = pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}, trace=trace))
+    want, _ = cli(REPLAY, "--set", "N=40", "--trace", str(trace))
+    assert json.loads(r.json()) == want
+    assert pyserq.REPORT_VERSION >= 1
+
+
 def test_the_ir_round_trips():
     p = pyserq.compile(MG1)
     ir = json.loads(p.to_json())
@@ -66,6 +74,9 @@ def test_errors_are_value_errors():
         lambda: pyserq.compile(MG1, sets={"nope": 1}),
         lambda: pyserq.compile(MG1, source="x"),
         lambda: pyserq.run(pyserq.compile(MG1)).observe("nope"),
+        lambda: pyserq.compile(MG1, sets={"lam": float("nan")}),
+        lambda: pyserq.compile(MG1, sets={"not a name": 1}),
+        lambda: pyserq.compile(),
     ]:
         try:
             call()
