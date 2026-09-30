@@ -111,6 +111,11 @@ with `stage S[N]`), a family of one is shared by every member, and any other
 pair of counts is a link error. A stage that serves several pools tries them in
 declaration order.
 
+With `serve exclusive prefill`, selected prefills stop further admission;
+a fitting waiting prefill can displace tentative resident decodes. Its
+header sees the full token budget, since the cancelled decodes consume none.
+The usual fit, budget-exhaustion and preemption gates still apply.
+
 ## `spill`
 
 ```serq

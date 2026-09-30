@@ -77,7 +77,7 @@ that schedules no token is not one, unless it preempted.
 | `budget` | `expr` | `Budget` | `inf` | Tokens per iteration. Reads `residents`, `decoders`, `kv_decode`, `kv_prefill`. |
 | `cost` | `expr` | `Step` | required (a parse error without it) | Clock time of the iteration. Reads `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`. |
 | `chunk` | `expr` | `Budget` | `0` (no cap) | Cap on one request's prefill tokens in an iteration. |
-| `serve` | see below | `Serve` | `admission` | Order in which residents take tokens. At most once. |
+| `serve` | see below | `Serve` | `admission` | Resident order or an exclusive-prefill batch policy. At most once. |
 | `memory` | `pool` | | none | The pool whose holds give `kv_decode` and `kv_prefill`, and whose `preempt lifo` victims come from this stage. |
 
 ### `serve`
@@ -87,12 +87,21 @@ that schedules no token is not one, unless it preempted.
 | `admission` | admission order (vLLM's `running` list) | `By([])` |
 | `by (k1, …)` | ascending keys per resident, ties by admission order | `By(keys)` |
 | `decode first` | decodes before prefills | `By([decoding ? 0 : 1])` |
-| `exclusive prefill` | only the first prefilling resident while one exists; decodes stall | `ExclusivePrefill` |
+| `exclusive prefill` | one prefill alone, or a decode-only batch; a fitting waiting prefill displaces tentative resident decodes | `ExclusivePrefill` |
 
 Keys read `decoding`, `admission`, `remaining` and the totals `residents`,
 `decoders`, `kv_decode`, `kv_prefill`, and may not draw. `serve by (remaining)` is
 shortest-remaining-first; `serve by (-remaining)` is the opposite.
-`exclusive prefill` is not an order and cannot be combined with one.
+`exclusive prefill` is not an order and cannot be combined with one. A
+resident prefill takes precedence and runs alone. Otherwise residents are
+considered for decode; while budget is left, a fitting waiting prefill can
+replace that selection and use the full budget. A selected prefill admits
+no further waiting request in that iteration. Cancelled decode work neither
+runs nor advances computed KV; any capacity already allocated remains held.
+During these admissions `budget_left` supplies the full budget. Ordinary
+fit, queue-head and no-admission-after-preemption gates still apply. This
+policy does not supply vendor PP caps or remote-KV admission rules. See
+[Separate prefill/decode batches](../design/exclusive-prefill.md).
 
 ### Example
 
