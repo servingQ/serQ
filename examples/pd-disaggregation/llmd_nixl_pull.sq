@@ -66,11 +66,11 @@ queue gw : gateway {
       P[i].prefill (prompt);              // the sidecar: max_tokens = 1, wait for the answer
       set t1 = now;
       D[j].decode (prompt) from P[i];     // then the decode request, its KV read from P[i]
-      observe lease = D[j].read_done - t1;   // how long the prefiller's blocks stayed leased
+      observe lease = D.read_done - t1;   // how long the prefiller's blocks stayed leased
     } else {
       D[j].decode (prompt);
     }
-    observe ttft = D[j].first_token - t0;
+    observe ttft = D.first_token - t0;
     observe remote = remote;
     observe response = now - t0;
   }

@@ -39,6 +39,8 @@ pub struct Entry {
     pub params: Vec<String>,
     /// `from NAME`: the name the body gives the source pool.
     pub from: Option<String>,
+    /// Whether the body leases the queue's `leased` pool.
+    pub leases: bool,
     pub body: Vec<Stmt>,
     /// Names the body `set`s or `choose`s: the entry's own.
     pub locals: Vec<String>,
@@ -516,6 +518,17 @@ fn call(
                     r.name, r.name
                 ),
             })?;
+            // whichever entry of `S` the request went through left the lease
+            if let Some(e) = s.entries.iter().find(|e| !e.leases) {
+                return err(
+                    at,
+                    format!(
+                        "`from {}`: `{}.{}` leases nothing, so a request that went through it \
+                         would have no KV to take; a `from` needs every entry of `{}` to lease `{leased}`",
+                        r.name, r.name, e.verb, r.name
+                    ),
+                );
+            }
             match (&r.index, s.count) {
                 (None, 1) | (Some(_), 2..) => {}
                 (None, n) => {

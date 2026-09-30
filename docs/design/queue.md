@@ -41,7 +41,8 @@ qitem := pool NAME { poolopt* }                  -- the queue's own; only its en
 stmt  += QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
        | request QUEUE ;                          -- workload session: this gateway's route
        | mark NAME ;                             -- in an entry: now, read by the caller as Q.NAME
-expr  += QUEUE [ '[' expr ']' ] . NAME            -- from outside, reads only: holders(D[j].kv), D[j].first_token
+expr  += QUEUE [ '[' expr ']' ] . POOL            -- from outside, a pool's reads: holders(D[j].kv)
+       | QUEUE . NAME                             -- a mark or a set of QUEUE's entry: the request's, no member index (D.first_token)
        | self                                     -- a member's own index; a bare Q inside Q is Q[self]
 ```
 
@@ -60,20 +61,25 @@ expr  += QUEUE [ '[' expr ']' ] . NAME            -- from outside, reads only: h
    `at admission` bindings — reads the parameters, the queue's pools and stage and
    the `let` constants. The body also reads `now`, `cached`, the context
    variables and the request's `hidden` attributes; any other session
-   attribute is an error at the entry. This is the `hidden` rule
+   attribute, and another queue's `Q.x`, is an error at the entry, and so
+   is one read in the index of a reference the body writes. The body holds
+   only the queue's own pools and the pool its `from` names. This is the `hidden` rule
    generalised to the queue's boundary, and why `decode (prompt)` has no
    `o`: the scheduler knows `max_tokens`, not the length, and the body
    alone reads `o`.
 2. *An entry's `set` is the queue's; its `observe` is the program's; a
    moment is a `mark`.* `set c = cached` becomes the attribute `P.c`;
    `mark first_token` is `set D.first_token = now`, read by the gateway as
-   `D[j].first_token`. The gateway keeps the session's names, since it sets
+   `D.first_token`, with no member index: the attribute is the request's.
+   The gateway keeps the session's names, since it sets
    what the session reads back (`prompt`).
 3. *`from P[i]` is the pool `P`'s entry leases.* The queue is the handle;
    there is no value for a leased allocation. Inside the entry the `from`
    name is that pool, and in an index it is the member's index:
    `egress[src]` is the prefiller's own NIC. A `from` on a queue whose
-   entries lease nothing does not link. The rule is at the call, not on the
+   entries lease nothing does not link, nor on one with an entry that
+   leases nothing: the request may have gone through it, and `Release` of
+   no lease is the kernel's no-op, not an error. The rule is at the call, not on the
    role: a `prefill` entry that ends in a transfer (push mode) or a `cache`
    (store and forward) is a program's to write.
 
@@ -82,11 +88,11 @@ expr  += QUEUE [ '[' expr ']' ] . NAME            -- from outside, reads only: h
 | Surface | Kernel |
 |---|---|
 | `queue Q[N] { pool p {…} serve k; … }` | `pool Q.p[N] {…}; stage Q[N] : k;` |
-| `Q[i].verb (e, …)` | the body in place, parameters substituted as a `where` binding is (no `~`), `set` names renamed |
+| `Q[i].verb (e, …)` | the body in place, parameters substituted as an `at admission` binding is (no `~`), `set` names renamed |
 | `Q[i].decode (…) from S[k]` | the body's `src` := `S.kv[k]` |
 | `L[j].transfer (n) from src to kv (m)` | `run L[j] (t); load Q.kv[i] (m); release src`, `t` the link entry's `run (…)` |
 | `transfer on egress[src], ingress[self] (n) from src to kv (m)` in `D[j]`'s `decode … from src`, called `from P[i]` | `run egress[i], ingress[j] (n); load D.kv[j] (m); release P.kv[i]` |
-| `mark x;` / `Q[i].x` | `set Q.x = now;` / the attribute |
+| `mark x;` / `Q.x` | `set Q.x = now;` / the attribute |
 | `request Q;` | the named gateway's `route` body in place; no request node in the IR |
 
 `IR_VERSION` does not move, `serving-queue-theory`'s generator is

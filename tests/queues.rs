@@ -75,7 +75,7 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
 
 /// `from P[i]` is the pool `P`'s entry leases; a link's `transfer … from … to
 /// (m)` is `run; load; release`, the time the link's own; an entry's `set` is
-/// the queue's attribute; `mark x` is `set Q.x = now`, read as `Q[i].x`.
+/// the queue's attribute; `mark x` is `set Q.x = now`, read as `Q.x`.
 #[test]
 fn a_transfer_between_queues_is_the_flat_transfer() {
     let queues = "
@@ -84,7 +84,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
         set t0 = now;
         P.prefill (prompt);
         D[j].decode (prompt) from P;
-        observe ttft = D[j].first - t0;
+        observe ttft = D.first - t0;
       } }
       queue P[NP] : prefill {
         pool kv { cap 1000; }
@@ -471,16 +471,111 @@ fn call_indices_obey_entry_read_boundaries() {
          run {{ horizon 1; }}"
         )
     };
-    for call in [
-        "F[j].prefill (p);",
-        "F[0].prefill (p) from F[j];",
-        "F[0].prefill (p) from F[0] to F[j].kv (1);",
-    ] {
-        refused(
-            &program(call),
+    for (call, needle) in [
+        (
+            "F[j].prefill (p);",
             "reads `j`, a session attribute set outside the queue",
-        );
+        ),
+        (
+            "F[0].prefill (p) from F[j];",
+            "reads `j`, a session attribute set outside the queue",
+        ),
+        (
+            "F[0].prefill (p) from F[0] to F[j].kv (1);",
+            "holds `F.kv`, which is not a pool of `E`",
+        ),
+        // a stage's index is read as the body reads (#87 review)
+        (
+            "run F[j] (1);",
+            "reads `j`, a session attribute set outside the queue",
+        ),
+    ] {
+        refused(&program(call), needle);
     }
+}
+
+/// What the review of the rebased #87 found an entry could still reach.
+#[test]
+fn an_entry_reaches_only_its_own() {
+    let wl = "workload { arrive batch(1); hidden o, src; init { set prompt = 3; set o = 2; set src = 7; } session { request gw; end; } } run { horizon 10; }";
+    // the `from` name is a number only in an index, whatever `hidden` says
+    refused(
+        &format!(
+            "stage nic : delay;
+             queue gw : gateway {{ route {{ P[0].prefill (prompt); D.decode (prompt) from P[0]; }} }}
+             queue P[2] : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (p) {{ run (p); }} cache (p) lease kv (inf); }} }}
+             queue D : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }}
+               decode (p) from src {{ observe x = src; hold kv (p) {{ transfer on nic (p) from src to kv (p); }} }} }}
+             {wl}"
+        ),
+        "reads `src` as a number",
+    );
+    // another queue's mark is the gateway's to read
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ A.prefill (prompt); B.decode (prompt); }} }}
+             queue A : prefill {{ serve fifo; prefill (p) {{ run (p); mark secret; }} }}
+             queue B : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ observe leaked = A.secret; hold kv (p) {{ prefill (p) growing kv; }} }} }}
+             {wl}"
+        ),
+        "reads `A.secret`, another queue's",
+    );
+    // a top-level pool is not the entry's to allocate
+    refused(
+        &format!(
+            "pool shared {{ cap 100; }}
+             queue gw : gateway {{ route {{ P.prefill (prompt); }} }}
+             queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold shared (p) {{ run (p); }} }} }}
+             {wl}"
+        ),
+        "holds `shared`, which is not a pool of `P`",
+    );
+    // a mark is the request's: an index would say a member it does not read
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ set t0 = now; D[0].decode (prompt); observe t = D[missing].first_token - t0; }} }}
+             queue D[2] : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ hold kv (p) {{ prefill (p) growing kv; mark first_token; }} }} }}
+             {wl}"
+        ),
+        "write `Q.x`",
+    );
+    // every entry of the source leaves the lease a `from` takes
+    refused(
+        &format!(
+            "stage nic : delay;
+             queue gw : gateway {{ route {{ branch (prompt > 5) {{ P.prefill (prompt); }} else {{ P.decode (prompt); }} D.decode (prompt) from P; }} }}
+             queue P : prefill, decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               prefill (p) {{ hold kv (p) {{ prefill (p) growing kv; }} cache (p) lease kv (inf); }}
+               decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }} }}
+             queue D : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }}
+               decode (p) from src {{ hold kv (p) {{ transfer on nic (p) from src to kv (p); }} }} }}
+             {wl}"
+        ),
+        "`P.decode` leases nothing",
+    );
+    // a queue's pools are above its stage, whose `memory` names them
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ E.prefill (prompt); }} }}
+             queue E : prefill {{ serve step {{ cost 1; memory kv; }} pool kv {{ cap 10; }}
+               prefill (p) {{ hold kv (1) {{ prefill (p) growing kv; }} }} }}
+             {wl}"
+        ),
+        "declares its pools first",
+    );
+    // a family is bounded: every member is a pool or stage of its own
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ E[0].prefill (prompt); }} }}
+             queue E[1e20] : prefill {{ serve fifo; prefill (p) {{ run (p); }} }}
+             {wl}"
+        ),
+        "more than a family holds",
+    );
 }
 
 #[test]
