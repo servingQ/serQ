@@ -93,8 +93,8 @@ hand have the same IR.
 The units then read `min(prompt, hit + budget)` — the whole prompt, or as far
 as the hit and the budget reach, whichever is less.
 
-**`admit via engine`** on a pool (not used above, but in
-`examples/multi-turn/vllm.seq`'s `reqs`) hands the pool's queue to the engine's
+**`admit via engine`** on a pool (`reqs` in the program above, and in
+`examples/replay/vllm_replay.seq`) hands the pool's queue to the engine's
 scheduler: waiting requests are admitted at the start of an iteration, with
 the budget left, and never in an iteration that preempted.
 
