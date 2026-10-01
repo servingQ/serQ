@@ -1,9 +1,9 @@
 // Executable approximation: one prefill or a decode-only batch.
 // PP caps, remote-KV admission and sub-block copying are not modeled.
 // The native RBLNScheduler keeps vLLM's prefix cache: a waiting request
-// looks up its hit (vllm_rbln/v1/core/rbln_scheduler.py:535) and the step's
-// blocks are cached once it is final (:917). A failed allocation preempts the
-// last running request under FCFS (:380). Tag v0.11.3a21.
+// looks up its hit and the step's blocks are cached once it is final, and a
+// failed allocation preempts the last running request under FCFS
+// (docs/use-cases/rbln.md links the lines at tag v0.11.3a21).
 use "../../lib/vllm.sq";
 pool kv { cap 8192; block 16; evict lru; preempt lifo; }
 pool reqs { cap 4; admit via engine; }
