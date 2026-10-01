@@ -106,8 +106,8 @@ Two results worth naming:
 - The prefill/decode program (`examples/pd-disaggregation/llmd_nixl_pull.sq`) is checked against the
   source line by line and by deterministic tests of its statements, not yet
   against a machine or a scheduler oracle: that oracle would
-  drive two vLLM schedulers and a fake connector ([case
-  study](use-cases/pd.md)).
+  drive two vLLM schedulers and a fake connector ([P/D use
+  case](use-cases/pd.md)).
 
 ## Against a real machine
 

@@ -39,4 +39,4 @@ The program shares its request definition with the other existing workloads:
 
 For the latest tag, compare priority victims, output-preserving decode preemption, cross-request prefix sharing and deferred free of in-flight blocks. Observe per-step selection, physical allocation/reuse, committed tokens and release times.
 
-See [vendor use cases](index.md) for each repository's latest tag, executable model and remaining limitations.
+See [vendor plugins](index.md#vendor-plugins) for each repository's latest tag, executable model and remaining limitations.

@@ -1,6 +1,6 @@
 # Use cases
 
-Real serving systems written as serQ programs. Each page puts the system's source next to the program that describes it, says what the program checks, and says what it leaves out.
+Real serving systems and workloads written as serQ programs. Each page puts the source or the traffic next to the program that describes it, says what the program checks, and says what it leaves out.
 
 | Page | What it shows |
 |---|---|
@@ -12,7 +12,7 @@ Real serving systems written as serQ programs. Each page puts the system's sourc
 
 ## Vendor plugins
 
-The vendor pages examine the latest version tags checked on **2026-09-30**, including release candidates and alpha tags. They cover **full attention only** and distinguish the plugin version from its upstream vLLM dependency. Features from development branches or older schedulers are not mixed into the comparison.
+vLLM is the baseline the plugins are compared against. The vendor pages examine the latest version tags checked on **2026-09-30**, including release candidates and alpha tags. They cover **full attention only** and distinguish the plugin version from its upstream vLLM dependency. Features from development branches or older schedulers are not mixed into the comparison.
 
 The examples were verified with IR v9. They are reduced specifications, not vendor scheduler oracles. Their capacities and cost constants are illustrative, not hardware measurements.
 

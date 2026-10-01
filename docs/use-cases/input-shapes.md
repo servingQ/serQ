@@ -64,8 +64,7 @@ small full-attention program; no measured latency is claimed.
 
 Never increase `budget`, `prefill` or `decode` work just to account for dummy
 tokens. That changes progress, output count and KV writes. Batch padding does
-not automatically require live request KV blocks; static KV head padding is
-a different capacity calculation. Dummy metadata and workspace need their
+not automatically require live request KV blocks. Dummy metadata and workspace need their
 own accounting if they affect observable resource pressure.
 
 ## Deferred IR questions

@@ -87,7 +87,7 @@ is ordinary control flow: `branch`, `loop`, `end`.
 |---|---|
 | build it and run something | [Getting started](getting-started.md) |
 | learn the language from scratch | [Tutorial](tutorial/index.md) — six chapters, each a runnable program |
-| see a real system written in it | [vLLM](use-cases/vllm.md), [vendor use cases](use-cases/index.md), [prefill/decode over NIXL](use-cases/pd.md) |
+| see a real system written in it | [vLLM](use-cases/vllm.md), [vendor plugins](use-cases/index.md#vendor-plugins), [prefill/decode over NIXL](use-cases/pd.md) |
 | see one engine serve single-turn, chat and agent traffic | [Different workloads](use-cases/workloads.md) |
 | look something up | [API reference](api/index.md), [Cheatsheet](reference/cheatsheet.md), [CLI](reference/cli.md) |
 | know why any of this should be believed | [How serQ is checked](validation.md) |
