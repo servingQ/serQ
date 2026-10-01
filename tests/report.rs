@@ -15,12 +15,14 @@ fn the_report_has_the_shape_its_version_names() {
     let src = "pool kv { cap 10; } stage svc : fifo;
         workload { arrive poisson(1); }
         session { hold kv (1) { run svc (~exp(0.5)); } observe x = now; end; }
+        gauge g = used(kv);
         run { horizon 100; }";
     let p = compile_source(src, &Overrides::default()).unwrap();
     let j: serde_json::Value = serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
     let shape = (
         keys(&j),
         keys(&j["observes"]["x"]),
+        keys(&j["gauges"]["g"]),
         keys(&j["stages"][0]),
         keys(&j["pools"][0]),
     );
@@ -30,6 +32,7 @@ fn the_report_has_the_shape_its_version_names() {
             "end",
             "ended",
             "events",
+            "gauges",
             "horizon",
             "mean_live",
             "observes",
@@ -40,6 +43,7 @@ fn the_report_has_the_shape_its_version_names() {
             "warmup",
         ],
         vec!["ci", "count", "cv2", "mean", "p99"],
+        vec!["ci", "max", "mean", "min"],
         vec![
             "completed",
             "iterations",
@@ -71,6 +75,7 @@ fn the_report_has_the_shape_its_version_names() {
         want.1.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
         want.2.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
         want.3.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        want.4.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
     );
     assert_eq!(
         shape, want,

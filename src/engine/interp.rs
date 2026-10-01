@@ -374,6 +374,10 @@ pub struct Interp<'p> {
     rng_trace: StdRng,
     trace: Option<Corpus>,
     observes: Vec<ObserveStat>,
+    /// Per gauge: its change points `(time, value)`, the value from that
+    /// time on, one point per instant (the state after the instant's last
+    /// event).
+    gauges: Vec<Vec<(f64, f64)>>,
     /// Per pool: its eviction keys do not change while other entries are
     /// evicted (no pool or stage queries, no sampling), so `make_room` can
     /// key every entry once.
@@ -518,6 +522,7 @@ impl<'p> Interp<'p> {
                     records: vec![],
                 })
                 .collect(),
+            gauges: p.gauges.iter().map(|_| vec![]).collect(),
             live: 0,
             live_avg: TimeAverage::new(0.0, 0.0),
             admit_budget: None,
@@ -592,6 +597,7 @@ impl<'p> Interp<'p> {
         if let Some(error) = self.error.take() {
             return Err(error);
         }
+        self.read_gauges();
         while let Some(e) = self.heap.peek() {
             let arrivals_done = p.arrivals.is_some_and(|n| self.arrivals >= n as u64);
             if arrivals_done && self.live == 0 {
@@ -608,6 +614,7 @@ impl<'p> Interp<'p> {
             if let Some(error) = self.error.take() {
                 return Err(error);
             }
+            self.read_gauges();
         }
         if let Some(n) = p.arrivals {
             if self.arrivals < n as u64 {
@@ -632,6 +639,31 @@ impl<'p> Interp<'p> {
             self.now = p.horizon;
         }
         Ok(self.report())
+    }
+
+    /// Evaluate every gauge on the state as it stands, recording a change
+    /// point when the value moved; a later event at the same instant
+    /// replaces the instant's point, so a value no time is spent in leaves
+    /// none.
+    fn read_gauges(&mut self) {
+        let p = self.p;
+        for (k, g) in p.gauges.iter().enumerate() {
+            let v = self.eval(&g.expr, &Ctx::default(), Which::Session);
+            let now = self.now;
+            let pts = &mut self.gauges[k];
+            match pts.last_mut() {
+                Some(last) if last.0 == now => {
+                    last.1 = v;
+                    // back to what the previous instant held: no change
+                    let n = pts.len();
+                    if n >= 2 && pts[n - 2].1.total_cmp(&v).is_eq() {
+                        pts.pop();
+                    }
+                }
+                Some(last) if last.1.total_cmp(&v).is_eq() => {}
+                _ => pts.push((now, v)),
+            }
+        }
     }
 
     fn handle(&mut self, ev: Ev) {
@@ -3132,6 +3164,22 @@ impl<'p> Interp<'p> {
                 records: o.records.clone(),
             })
             .collect();
+        let gauges = self
+            .gauges
+            .iter()
+            .zip(&p.gauges)
+            .map(|(pts, g)| {
+                let ts = time_stats(pts, p.warmup, now, 20);
+                GaugeReport {
+                    name: g.name.clone(),
+                    mean: ts.mean,
+                    ci: ts.ci,
+                    min: ts.min,
+                    max: ts.max,
+                    points: pts.clone(),
+                }
+            })
+            .collect();
         let stages = self
             .stages
             .iter()
@@ -3178,6 +3226,7 @@ impl<'p> Interp<'p> {
             turns: self.turns,
             mean_live: self.live_avg.mean(now),
             observes,
+            gauges,
             stages,
             pools,
         }

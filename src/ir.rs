@@ -86,6 +86,9 @@ pub enum Moment {
     Step,
     /// A step stage's `serve by` keys: evaluated for one resident.
     Serve,
+    /// A `gauge`: evaluated on the state the deployment holds after every
+    /// instant, with no session, job or resident.
+    Gauge,
 }
 
 impl std::fmt::Display for Moment {
@@ -99,6 +102,7 @@ impl std::fmt::Display for Moment {
             Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
             Moment::Step => "a step stage's cost, after the iteration",
             Moment::Serve => "a step stage's serve keys",
+            Moment::Gauge => "a gauge, read on the deployment's state with no session",
         })
     }
 }
@@ -505,6 +509,18 @@ pub struct Program {
     /// capacity; present exactly when some `Run` has a non-empty `also`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share: Option<Share>,
+    /// `gauge NAME = e;`: functions of the deployment's state whose time
+    /// average the report gives. They read and do not act, so a reader that
+    /// ignores them runs the same program (`docs/ir.md`, Stability).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gauges: Vec<Gauge>,
+}
+
+/// A gauge: a name and an expression evaluated at `Moment::Gauge`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Gauge {
+    pub name: String,
+    pub expr: CExpr,
 }
 
 /// The sharing policy of `share`: how flows that hold several `ps` stages at
@@ -814,6 +830,18 @@ impl Program {
                 }
             }
         }
+        for (k, g) in self.gauges.iter().enumerate() {
+            let at = |e| format!("gauge `{}`: {e}", g.name);
+            v.expr(&g.expr, Moment::Gauge).map_err(at)?;
+            if self.gauges[..k].iter().any(|h| h.name == g.name) {
+                return Err(at("declared twice".into()));
+            }
+            if self.observes.contains(&g.name) {
+                return Err(at(
+                    "is also an `observe`: one name would be two statistics".into()
+                ));
+            }
+        }
         if let CArrival::Renewal(e) = &self.arrival {
             v.expr(e, Moment::Session)?;
             if !arrival_expr_is_pure(e) {
@@ -974,6 +1002,17 @@ impl Validator<'_> {
                     ))
                 }
             }
+            CExpr::Attr(a) if m == Moment::Gauge => Err(format!(
+                "`{}` is a session attribute, and a gauge has no session",
+                self.p.attrs.get(*a).map_or("?", |s| s.as_str())
+            )),
+            CExpr::Sample(..) if m == Moment::Gauge => Err(
+                "a gauge may not draw (`~`): it reads the state, and a draw would move the run's streams"
+                    .into(),
+            ),
+            CExpr::Call(Fun::CachedIn, _) if m == Moment::Gauge => Err(
+                "`cachedin` is the session's own cached prefix, and a gauge has no session".into(),
+            ),
             CExpr::Attr(a) => {
                 self.attr(*a)?;
                 if m != Moment::Session && self.p.hidden.contains(a) {

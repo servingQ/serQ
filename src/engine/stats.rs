@@ -173,6 +173,71 @@ pub fn batch_means(xs: &[f64], batches: usize) -> Estimate {
     }
 }
 
+/// Statistics of a piecewise-constant signal over `[from, to]`, given as
+/// change points `(t, v)` in time order (`v` holds from `t` to the next
+/// point; a value before `from` holds into it): the time average with a
+/// 95 % batch-means CI over `batches` equal windows, and the least and
+/// greatest value held for a positive time.
+pub fn time_stats(points: &[(f64, f64)], from: f64, to: f64, batches: usize) -> TimeStats {
+    let span = to - from;
+    let mut out = TimeStats {
+        mean: f64::NAN,
+        ci: Estimate::nan(),
+        min: f64::NAN,
+        max: f64::NAN,
+    };
+    if span.is_nan() || span <= 0.0 || points.is_empty() {
+        return out;
+    }
+    let width = span / batches as f64;
+    let mut windows = vec![0.0; batches];
+    let mut total = 0.0;
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for (k, &(t, v)) in points.iter().enumerate() {
+        let next = points.get(k + 1).map_or(to, |p| p.0);
+        let (a, b) = (t.max(from), next.min(to));
+        if b <= a {
+            continue;
+        }
+        lo = lo.min(v);
+        hi = hi.max(v);
+        total += v * (b - a);
+        // spread the segment over the windows it crosses
+        let mut x = a;
+        while x < b {
+            let w = (((x - from) / width) as usize).min(batches - 1);
+            let end = if w == batches - 1 {
+                b
+            } else {
+                (from + (w + 1) as f64 * width).min(b)
+            };
+            windows[w] += v * (end - x);
+            if end <= x {
+                break;
+            }
+            x = end;
+        }
+    }
+    out.mean = total / span;
+    out.min = lo;
+    out.max = hi;
+    if batches >= 2 {
+        let means: Vec<f64> = windows.iter().map(|x| x / width).collect();
+        out.ci = batch_means(&means, batches);
+        // the windows' average is the time average; keep the exact one
+        out.ci.mean = out.mean;
+    }
+    out
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TimeStats {
+    pub mean: f64,
+    pub ci: Estimate,
+    pub min: f64,
+    pub max: f64,
+}
+
 pub fn quantile(xs: &[f64], q: f64) -> f64 {
     if xs.is_empty() {
         return f64::NAN;
@@ -254,6 +319,17 @@ mod tests {
         t.set(1.0, 2.0);
         t.set(3.0, 0.0);
         assert!((t.mean(4.0) - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn time_stats_of_a_step() {
+        // 0 on [0, 1), 2 on [1, 3), 5 from 3; measured on [1, 4]
+        let ts = time_stats(&[(0.0, 0.0), (1.0, 2.0), (3.0, 5.0)], 1.0, 4.0, 20);
+        assert!((ts.mean - 3.0).abs() < 1e-12);
+        assert_eq!((ts.min, ts.max), (2.0, 5.0));
+        // a value held for no time is not the extreme
+        let ts = time_stats(&[(0.0, 1.0), (2.0, 9.0), (2.0, 1.0)], 0.0, 4.0, 20);
+        assert_eq!(ts.max, 1.0);
     }
 
     #[test]

@@ -10,6 +10,7 @@
 //!           | 'server' block
 //!           | 'queue' IDENT ('[' expr ']')? (':' IDENT (',' IDENT)*)? '{' qitem* '}'
 //!           | 'run' '{' ('horizon' | 'warmup' | 'seed' | 'arrivals') expr ';' ... '}'
+//!           | 'gauge' IDENT '=' expr ';'      -- a time average of the deployment's state
 //! qitem    := 'pool' IDENT '{' poolopt* '}' | 'serve' kind
 //!           | IDENT ('(' IDENT (',' IDENT)* ')')? ('from' IDENT)? block   -- an entry (crate::frontend::queue)
 //! poolopt  := 'cap' expr ';' | 'block' expr ';'
@@ -38,6 +39,7 @@
 //!           | 'branch' ('with')? '(' expr ')' block ('else' block)?
 //!           | 'loop' block | 'end' ';'
 //!           | 'choose' IDENT 'in' expr 'by' '(' expr (',' expr)* ')' ';'
+//! over     := ('max' | 'min' | 'sum') IDENT 'in' (NUM | IDENT) '(' expr ')'   -- an atom
 //!           | serving
 //! serving  := role ('[' expr ']' | 'on' ref)? expr ('growing' ref)? ';'
 //!           | 'transfer' ('[' expr ']' | 'on' ref)? expr 'from' ref 'to' ref '(' expr ')' ';'
@@ -287,6 +289,7 @@ pub const KEYWORDS: [&str; 86] = [
     "first",
     "fits",
     "from",
+    "gauge",
     "grow",
     "growing",
     "hidden",
@@ -332,6 +335,7 @@ pub const KEYWORDS: [&str; 86] = [
     "spill",
     "stage",
     "step",
+    "sum",
     "to",
     "tool",
     "trace",
@@ -538,6 +542,16 @@ fn subst(e: &mut Expr, binds: &[(String, Expr)]) {
             subst(a, binds);
             subst(b, binds);
         }
+        Expr::Over(_, j, n, body) => {
+            subst(n, binds);
+            // the index is the body's own `j`
+            let inner: Vec<_> = binds
+                .iter()
+                .filter(|(name, _)| name != j)
+                .cloned()
+                .collect();
+            subst(body, &inner);
+        }
     }
 }
 
@@ -554,6 +568,7 @@ fn has_sample(e: &Expr) -> bool {
         Expr::Unary(_, a) => has_sample(a),
         Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
         Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
+        Expr::Over(_, _, n, e) => has_sample(n) || has_sample(e),
     }
 }
 
@@ -726,6 +741,7 @@ fn expr_reads(e: &Expr, n: &str) -> bool {
         Expr::Unary(_, a) => expr_reads(a, n),
         Expr::Binary(_, a, b) => expr_reads(a, n) || expr_reads(b, n),
         Expr::Cond(c, a, b) => expr_reads(c, n) || expr_reads(a, n) || expr_reads(b, n),
+        Expr::Over(_, j, m, e) => expr_reads(m, n) || (j != n && expr_reads(e, n)),
     }
 }
 
@@ -924,6 +940,7 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
         Expr::Cond(c, a, b) => live_read(c, attrs, lets)
             .or_else(|| live_read(a, attrs, lets))
             .or_else(|| live_read(b, attrs, lets)),
+        Expr::Over(_, _, n, e) => live_read(n, attrs, lets).or_else(|| live_read(e, attrs, lets)),
     }
 }
 
@@ -987,6 +1004,14 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
             names_in(c, vars, indexed, refs);
             names_in(a, vars, indexed, refs);
             names_in(b, vars, indexed, refs);
+        }
+        // the index is the aggregate's own, not a name the expression reads
+        Expr::Over(_, j, n, body) => {
+            names_in(n, vars, indexed, refs);
+            let (mut v, mut i) = (vec![], vec![]);
+            names_in(body, &mut v, &mut i, refs);
+            vars.extend(v.into_iter().filter(|x| x != j));
+            indexed.extend(i.into_iter().filter(|x| x != j));
         }
     }
 }
@@ -1408,6 +1433,12 @@ impl Parser {
                 prog.lets.push((name, e));
             } else if self.eat_kw("def") {
                 self.def()?;
+            } else if self.eat_kw("gauge") {
+                let name = self.ident()?;
+                self.expect(&Tok::Assign)?;
+                let e = self.expr()?;
+                self.expect(&Tok::Semi)?;
+                prog.gauges.push((name, e));
             } else if self.eat_kw("pool") {
                 prog.pools.push(self.pool()?);
             } else if self.is_kw("queue") {
@@ -2354,6 +2385,8 @@ impl Parser {
                     self.const_value(b)?
                 }
             }
+            // the linker writes an aggregate out; the parser does not fold one
+            Expr::Over(..) => return None,
             // the linker's constant functions, so that a `let` the linker
             // folds the parser folds too (`let N = min(2, 3); queue D[N]`)
             Expr::Call(f, args) => {
@@ -4238,6 +4271,33 @@ impl Parser {
                 let e = self.expr()?;
                 self.expect(&Tok::RParen)?;
                 Ok(e)
+            }
+            Tok::Ident(name)
+                if Agg::from_name(&name).is_some()
+                    && matches!(self.peek(), Tok::Ident(_))
+                    && matches!(self.peek_at(1), Tok::Ident(k) if k == "in") =>
+            {
+                let agg = Agg::from_name(&name).expect("guarded");
+                let var = self.ident()?;
+                self.advance(); // in
+                // the count is a number or a name: `ND (` would read as a call
+                let cspan = self.span();
+                let count = match self.advance() {
+                    Tok::Num(x) => Expr::Num(x),
+                    Tok::Ident(n) => Expr::Located(cspan, Box::new(Expr::Var(n))),
+                    other => {
+                        return self.err(format!(
+                            "`{name} {var} in` takes a number or a constant's name, found {other}"
+                        ));
+                    }
+                };
+                self.expect(&Tok::LParen)?;
+                let body = self.expr()?;
+                self.expect(&Tok::RParen)?;
+                Ok(Expr::Located(
+                    span,
+                    Box::new(Expr::Over(agg, var, Box::new(count), Box::new(body))),
+                ))
             }
             Tok::Ident(name) => {
                 if *self.peek() == Tok::LParen {

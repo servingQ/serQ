@@ -26,13 +26,13 @@ from pygments.lexers import _mapping
 from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String, Text
 
 # The blocks a program is made of.
-STRUCTURE = ("let", "def", "use", "pool", "stage", "workload", "session", "server", "run", "queue", "gateway", "link", "route", "pull")
+STRUCTURE = ("let", "def", "use", "pool", "stage", "workload", "session", "server", "run", "queue", "gateway", "link", "route", "pull", "gauge")
 
 # Statements, in the session and server blocks.
 STATEMENTS = (
     "turn", "request", "set", "observe", "hold", "admit", "mark", "self", "grow", "drop", "release", "load", "lease", "from", "to", "branch", "with",
     "loop", "choose", "end", "run", "reserve", "reuse", "cache",
-    "at", "admission", "growing", "on", "in", "by", "else",
+    "at", "admission", "growing", "on", "in", "by", "else", "sum",
     # the serving vocabulary: sugar over hold and run
     "prefill", "transfer", "decode", "tool",
 )

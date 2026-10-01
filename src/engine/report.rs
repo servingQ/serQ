@@ -19,6 +19,22 @@ pub struct ObserveReport {
     pub records: Vec<(f64, u64, u32)>,
 }
 
+/// A `gauge`: the time average of a function of the deployment's state
+/// over `[warmup, end]`, and the extremes it held.
+#[derive(Clone, Debug)]
+pub struct GaugeReport {
+    pub name: String,
+    pub mean: f64,
+    /// Batch-means 95 % CI over 20 equal windows of the measured span.
+    pub ci: Estimate,
+    /// The least and greatest value held for a positive time after warm-up.
+    pub min: f64,
+    pub max: f64,
+    /// `(time, value)` change points, the value from that time on, from
+    /// time 0 (before warm-up included).
+    pub points: Vec<(f64, f64)>,
+}
+
 #[derive(Clone, Debug)]
 #[cfg_attr(
     feature = "python",
@@ -83,13 +99,15 @@ pub struct Report {
     pub turns: u64,
     pub mean_live: f64,
     pub observes: Vec<ObserveReport>,
+    pub gauges: Vec<GaugeReport>,
     pub stages: Vec<StageReport>,
     pub pools: Vec<PoolReport>,
 }
 
 impl Report {
-    /// Write every observation as `observe/<name>.csv` with columns
-    /// `time,session,turn,value` into `dir`.
+    /// Write every observation as `<name>.csv` with columns
+    /// `time,session,turn,value` into `dir`, and every gauge's change points
+    /// as `gauge/<name>.csv` with columns `time,value`.
     pub fn dump(&self, dir: &std::path::Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
         for o in &self.observes {
@@ -99,11 +117,26 @@ impl Report {
             }
             std::fs::write(dir.join(format!("{}.csv", o.name)), s)?;
         }
+        if !self.gauges.is_empty() {
+            let gdir = dir.join("gauge");
+            std::fs::create_dir_all(&gdir)?;
+            for g in &self.gauges {
+                let mut s = String::from("time,value\n");
+                for (t, v) in &g.points {
+                    s.push_str(&format!("{t},{v}\n"));
+                }
+                std::fs::write(gdir.join(format!("{}.csv", g.name)), s)?;
+            }
+        }
         Ok(())
     }
 
     pub fn observe(&self, name: &str) -> Option<&ObserveReport> {
         self.observes.iter().find(|o| o.name == name)
+    }
+
+    pub fn gauge(&self, name: &str) -> Option<&GaugeReport> {
+        self.gauges.iter().find(|g| g.name == name)
     }
 
     pub fn stage(&self, name: &str) -> Option<&StageReport> {
@@ -150,6 +183,18 @@ impl Report {
                 &["observe", "count", "mean", "95% CI", "cv2", "p99"],
                 rows,
             );
+        }
+        if !self.gauges.is_empty() {
+            let rows = self.gauges.iter().map(|g| {
+                vec![
+                    g.name.clone(),
+                    format!("{:.4}", g.mean),
+                    format!("±{:.4}", g.ci.half_width),
+                    format!("{:.4}", g.min),
+                    format!("{:.4}", g.max),
+                ]
+            });
+            table(&mut s, &["gauge", "mean", "95% CI", "min", "max"], rows);
         }
         if !self.stages.is_empty() {
             let rows = self.stages.iter().map(|st| {
@@ -247,6 +292,21 @@ impl Report {
                 f(o.ci.half_width),
                 f(o.cv2),
                 f(o.p99)
+            );
+        }
+        s.push_str("},\"gauges\":{");
+        for (i, g) in self.gauges.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(
+                s,
+                "\"{}\":{{\"mean\":{},\"ci\":{},\"min\":{},\"max\":{}}}",
+                g.name,
+                f(g.mean),
+                f(g.ci.half_width),
+                f(g.min),
+                f(g.max)
             );
         }
         s.push_str("},\"stages\":[");

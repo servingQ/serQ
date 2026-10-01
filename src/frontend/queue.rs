@@ -254,6 +254,24 @@ impl Ctx<'_> {
                 Box::new(self.expr(a)?),
                 Box::new(self.expr(b)?),
             ),
+            Expr::Over(agg, j, n, body) => {
+                // the entry's names would be substituted for the index
+                let taken = j == "self"
+                    || self.params.iter().any(|(p, _)| p == j)
+                    || self.locals.iter().any(|l| l == j)
+                    || self.from.as_ref().is_some_and(|(f, _)| f == j);
+                if taken {
+                    return err(
+                        self.at,
+                        format!(
+                            "`{} {j} in` inside queue `{}`: `{j}` is a name of the entry; give the index its own",
+                            agg.name(),
+                            self.q.name
+                        ),
+                    );
+                }
+                Expr::Over(*agg, j.clone(), Box::new(self.expr(n)?), Box::new(self.expr(body)?))
+            }
         })
     }
 
@@ -429,6 +447,7 @@ fn has_sample(e: &Expr) -> bool {
         Expr::Unary(_, a) => has_sample(a),
         Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
         Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
+        Expr::Over(_, _, n, e) => has_sample(n) || has_sample(e),
     }
 }
 

@@ -483,8 +483,20 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             }
         }
     }
+    let mut gauges = vec![];
+    for (name, e) in &prog.gauges {
+        let expr = lk.expr(e).map_err(|mut err| {
+            err.message = format!("gauge `{name}`: {}", err.message);
+            err
+        })?;
+        gauges.push(crate::ir::Gauge {
+            name: name.clone(),
+            expr,
+        });
+    }
     let slot = |lk: &Linker, n: &str| lk.attr_index[n];
     let linked = Linked {
+        gauges,
         version: IR_VERSION,
         hidden,
         share: prog.share,
@@ -697,7 +709,21 @@ impl Linker<'_> {
                 }
                 None
             }
-            Some(e) => Some(Box::new(self.expr(e)?)),
+            Some(e) => {
+                let i = self.expr(e)?;
+                // a constant index (`kv[2]`, or one an aggregate wrote out) is
+                // checked here, where the program still has its names
+                if let CExpr::Num(k) = i
+                    && !(k >= 0.0 && k.fract() == 0.0 && k < count as f64)
+                {
+                    return Err(LinkError::new(format!(
+                        "{what} `{}[{k}]` is out of range: `{}` has {count} member(s)",
+                        r.name, r.name
+                    ))
+                    .at(r.span));
+                }
+                Some(Box::new(i))
+            }
         };
         Ok(CRef { base, count, index })
     }
@@ -861,7 +887,56 @@ impl Linker<'_> {
                 }
             }
             Expr::Sample(..) => return Err(LinkError::new("a constant cannot sample".into())),
+            Expr::Over(agg, j, n, body) => self.eval_const(&self.unroll(*agg, j, n, body)?)?,
         })
+    }
+
+    /// `max j in n (e)` written out: `e` with `j` = 0, 1, …, n-1, folded by
+    /// binary `max`, `min` or `+`. `n` is a constant, and `j` a name of its
+    /// own: a constant, an attribute, a pool, a stage or a context variable
+    /// of the same name would leave the body saying two things.
+    fn unroll(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Expr> {
+        let what = format!("`{} {j} in`", agg.name());
+        let clash = if self.consts.contains_key(j) {
+            Some("a `let` constant")
+        } else if self.attr_index.contains_key(j) {
+            Some("a session attribute")
+        } else if self.pools.contains_key(j) {
+            Some("a pool")
+        } else if self.stages.contains_key(j) {
+            Some("a stage")
+        } else if CONTEXT_VARS.iter().any(|(name, _)| *name == j) || j == "inf" {
+            Some("a name the language supplies")
+        } else {
+            None
+        };
+        if let Some(c) = clash {
+            return Err(LinkError::new(format!(
+                "{what}: `{j}` is also {c}\nhelp: give the index a name of its own"
+            )));
+        }
+        let count = self.const_eval(n, &format!("{what}'s count"))?;
+        if !(count >= 1.0 && count.fract() == 0.0 && count.is_finite()) {
+            return Err(LinkError::new(format!(
+                "{what}'s count must be a positive integer, found {count}"
+            )));
+        }
+        let term = |k: usize| {
+            let mut e = body.clone();
+            bind_index(&mut e, j, k as f64);
+            e
+        };
+        let mut acc = term(0);
+        for k in 1..count as usize {
+            let t = term(k);
+            acc = match agg {
+                Agg::Sum => Expr::Binary(BinOp::Add, Box::new(acc), Box::new(t)),
+                Agg::Max | Agg::Min => {
+                    Expr::Call(agg.name().into(), vec![Arg::Expr(acc), Arg::Expr(t)])
+                }
+            };
+        }
+        Ok(acc)
     }
 
     fn expr(&self, e: &Expr) -> LResult<CExpr> {
@@ -972,6 +1047,7 @@ impl Linker<'_> {
                 Box::new(self.expr(a)?),
                 Box::new(self.expr(b)?),
             ),
+            Expr::Over(agg, j, n, body) => self.expr(&self.unroll(*agg, j, n, body)?)?,
         })
     }
 
@@ -1179,5 +1255,43 @@ fn has_draw(e: &Expr) -> bool {
         Expr::Unary(_, a) => has_draw(a),
         Expr::Binary(_, a, b) => has_draw(a) || has_draw(b),
         Expr::Cond(c, a, b) => has_draw(c) || has_draw(a) || has_draw(b),
+        Expr::Over(_, _, n, e) => has_draw(n) || has_draw(e),
+    }
+}
+
+/// Replace the index `j` of an `Expr::Over` by the number `k`, in the
+/// body and in its references' indices; an inner `Over` of the same name
+/// keeps its own.
+fn bind_index(e: &mut Expr, j: &str, k: f64) {
+    match e {
+        Expr::Located(_, inner) => bind_index(inner, j, k),
+        Expr::Var(n) if n == j => *e = Expr::Num(k),
+        Expr::Num(_) | Expr::Var(_) => {}
+        Expr::Sample(_, args) => args.iter_mut().for_each(|a| bind_index(a, j, k)),
+        Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
+            Arg::Expr(x) => bind_index(x, j, k),
+            Arg::Ref(r) if r.index.is_none() && r.name == j => *a = Arg::Expr(Expr::Num(k)),
+            Arg::Ref(r) => {
+                if let Some(i) = &mut r.index {
+                    bind_index(i, j, k);
+                }
+            }
+        }),
+        Expr::Unary(_, a) => bind_index(a, j, k),
+        Expr::Binary(_, a, b) => {
+            bind_index(a, j, k);
+            bind_index(b, j, k);
+        }
+        Expr::Cond(c, a, b) => {
+            bind_index(c, j, k);
+            bind_index(a, j, k);
+            bind_index(b, j, k);
+        }
+        Expr::Over(_, i, n, body) => {
+            bind_index(n, j, k);
+            if i != j {
+                bind_index(body, j, k);
+            }
+        }
     }
 }
