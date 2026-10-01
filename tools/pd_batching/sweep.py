@@ -54,11 +54,13 @@ EXCLUSIVE = "    serve exclusive prefill;\n"
 VARIATIONS = {
     "mixed": ("mixed batches, whole prompts (`serve exclusive prefill` deleted)", [0, 1], [40, 60, 70], {}, [(EXCLUSIVE, "")]),
     "mixed_c512": ("mixed batches, prompts in chunks of 512 (`chunk_cap = 512`)", [0, 1], [40, 60, 70], {"chunk_cap": 512}, [(EXCLUSIVE, "")]),
+    "mixed_w10ms": ("mixed batches, whole prompts, a 10 ms decode step (`omega = 0.01`)", [0, 1], [60], {"omega": 0.01}, [(EXCLUSIVE, "")]),
+    "mixed_c512_w10ms": ("mixed batches in chunks of 512, a 10 ms decode step", [0, 1], [60], {"omega": 0.01, "chunk_cap": 512}, [(EXCLUSIVE, "")]),
     "bw_2e5": ("a read over NICs of 2e5 tokens/s (10 ms a prompt) after 2 ms (`Bw`, `x0`)", [1], [60, 70], {"Bw": 2e5, "x0": 0.002}, []),
     "bw_1e5": ("NICs of 1e5 tokens/s (20 ms a prompt): the decode engine's NIC takes every read", [1], [40, 45], {"Bw": 1e5, "x0": 0.002}, []),
     "kv_d_16k": ("a decode engine of 16384 KV tokens (`blocksD = 1024`)", [1], [60, 70], {"blocksD": 1024}, []),
-    "kv_d_8k": ("a decode engine of 8192 KV tokens (`blocksD = 512`)", [1], [40, 60], {"blocksD": 512}, []),
-    "kv_e_8k": ("colocated engines of 8192 KV tokens each (`blocksE = 512`)", [0], [60, 70], {"blocksE": 512}, []),
+    "kv_d_8k": ("a decode engine of 8192 KV tokens (`blocksD = 512`)", [1], [40, 45, 50], {"blocksD": 512}, []),
+    "kv_e_8k": ("colocated engines of 8192 KV tokens each (`blocksE = 512`)", [0], [60, 65, 70], {"blocksE": 512}, []),
     "2p2d": ("2 prefill + 2 decode engines (`NP = 2`)", [0, 1], [30, 40], {}, [("let NP = 3;", "let NP = 2;")]),
     "2p2d_g15": ("2P/2D, prefill engines 1.5 times as fast (`gP = 1.5`)", [1], [40, 60], {"gP": 1.5}, [("let NP = 3;", "let NP = 2;")]),
 }
@@ -108,7 +110,7 @@ def mean(xs):
     return sum(xs) / len(xs) if xs else math.nan
 
 
-def row(experiment, mode, lam, prompt, seed, rep):
+def row(experiment, mode, lam, prompt, seed, rep, edits=()):
     span = rep["end"] - rep["warmup"]
     obs = rep["observes"]
     r = {
@@ -117,6 +119,8 @@ def row(experiment, mode, lam, prompt, seed, rep):
         "lambda": lam,
         "prompt": prompt,
         "seed": seed,
+        # the program's lines a variation states otherwise
+        "edits": json.dumps(edits) if edits else "",
         # ended after warm-up within four Poisson deviations of what the
         # rate brings in that span: a run that falls behind its arrivals
         # fails it; one that diverges slowly may not (summary.md says so)
@@ -176,7 +180,7 @@ def main():
         for experiment, program, mode, lam, prompt, sets, defs, edits in grid():
             for seed in SEEDS:
                 rep = run(program, sets, defs, seed, edits)
-                r = row(experiment, mode, lam, prompt, seed, rep)
+                r = row(experiment, mode, lam, prompt, seed, rep, edits)
                 rows.append(r)
                 params = {"program": str(program.relative_to(ROOT)), "edits": edits, "set": sets, "def": defs, "seed": seed}
                 raw.write(json.dumps({"params": params, "report": rep}) + "\n")
@@ -272,7 +276,7 @@ def summary(rows):
         "## Variations of the baseline (`pd_batching.sq`, prompts of 2000 tokens)",
         "",
         "One change at a time; the baseline it changes is the `fixed` table above. TPOT is token-weighted; `ITL p99` is the largest of the decoding engines'. "
-        "`admit wait` is the decode engine's admission after the first token, `transfer` the read after it; `P KV` is the tokens the prefill engines hold, leased until read; `preempt/s` counts the decoding engines' preemptions.",
+        "`admit wait` is the decode engine's admission after the prefill, `transfer` the read after it, both in the TTFT; `P KV` is the tokens the prefill engines hold, leased until read; `preempt/s` counts the decoding engines' preemptions.",
         "",
         "| variation | λ | mode | out tok/s | TTFT | TPOT (tok) | ITL p99 | response | batch | admit wait | transfer | P KV | preempt/s | unstable |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",

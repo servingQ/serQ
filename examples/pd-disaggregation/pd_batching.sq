@@ -5,17 +5,21 @@
 // latter; a decode engine runs nothing else, so its decodes step every
 // iteration and each step carries the decodes of more requests.
 //
-// The engines are examples/multi-turn/vllm.sq's: a slot and the blocks of
-// the first chunk at admission (the scheduler's, at a step), the KV grown
-// token by token, the last admitted preempted when it does not fit, and a
-// preempted request recomputing what it had. The split hands the KV over
-// as examples/pd-disaggregation/llmd_nixl_pull.sq does: the prefiller
-// keeps its blocks leased until the decoder has read them, the decoder
-// takes the request when the whole prompt fits its blocks and reads it
-// over both NICs.
+// The engines are examples/pd-disaggregation/llmd_nixl_pull.sq's, without
+// its prefix cache: a slot and the blocks of the first chunk at admission
+// (the scheduler's, at a step), room for the whole prompt reserved, the KV
+// grown token by token, the last admitted preempted when it does not fit,
+// and a preempted request recomputing what it had. The split hands the KV
+// over as llm-d does: the prefiller samples a token the client never sees
+// and keeps its blocks leased until the decoder has read them; the decoder
+// takes the request when the whole prompt fits its blocks, reads all of it
+// but the last token over both NICs, and recomputes that token, which is
+// the client's first (vLLM's NIXL proxy streams the decoder's answer,
+// tests/v1/kv_connector/nixl_integration/toy_proxy_server.py:166-243). The
+// read and the decoder's admission are in the TTFT.
 //
-// The baseline (#208): exclusive steps (one prefill alone, or decodes
-// only; a waiting prefill goes first), memory that never binds, a free and
+// The baseline (#208): exclusive steps on the engines that prefill prompts
+// (one prefill alone, or decodes only; a waiting prefill goes first), memory that never binds, a free and
 // instantaneous transfer, no specialisation. Each is a constant here, or
 // a line: `blocks*`, `Bw`, `x0`, `gP`, `gD`; mixed batches are this file
 // with `serve exclusive prefill;` deleted, and another split is this file
@@ -61,12 +65,14 @@ queue gw : gateway {
     } else {
       choose i in NP by (holders(P[i].reqs) + queued(P[i].reqs));
       P[i].prefill (prompt);
-      set first = P.first_token;
-      choose j in ND by (holders(D[j].reqs) + queued(D[j].kv));
+      set prefilled = P.prefilled;
+      // a request parked for its read holds blocks, not a running slot
+      choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
       D[j].decode (prompt) from P[i];
-      observe admit_wait = D.admitted - first;     // the decoder's admission: the prompt's blocks
-      observe transfer = D.read_done - D.admitted; // the read: the wait before it and both NICs
-      observe lease = D.read_done - first;         // how long the prefiller's blocks stayed leased
+      set first = D.first_token;
+      observe admit_wait = D.admitted - prefilled;  // the decoder's admission: the prompt's blocks
+      observe transfer = D.read_done - D.admitted;  // the read: the wait before it and both NICs
+      observe lease = D.read_done - prefilled;      // how long the prefiller's blocks stayed leased
     }
     observe ttft = first - t0;
     observe decode_time = now - first;
@@ -97,8 +103,10 @@ queue E[N] : decode {
   }
 }
 
-// A prefill engine: the prompt and its first token; its blocks stay
-// leased until the decoder has read them.
+// A prefill engine: the prompt, and a token the client never sees; its
+// blocks stay leased until the decoder has read them. A request reserves
+// its whole prompt at admission (scheduler_reserve_full_isl), so it is
+// never preempted here.
 queue P[NP] : prefill {
   pool reqs { cap max_seqs; admit via P; }
   pool kv { cap blocksP * bs; block bs; evict lru; }
@@ -113,7 +121,7 @@ queue P[NP] : prefill {
   prefill (prompt) {
     hold reqs (1), kv (min(prompt, budget_left(P))) reserve (prompt) {
       prefill (prompt) growing kv;
-      mark first_token;
+      mark prefilled;
     } lease kv (inf);
   }
 }
@@ -129,11 +137,11 @@ queue D[ND] : decode {
     chunk chunk_cap;
     cost c0 + max((omega + beta * (kv_decode + kv_prefill)) / gD, tokens * a);
     memory kv;
-    serve exclusive prefill;
+    // no exclusive steps: the one prompt token a decoder recomputes rides
+    // with the decodes, as in vLLM
   }
   nic ps(Bw);
-  // The pod prefilling the prompt itself, as a colocated engine (the
-  // gateway here never asks it to).
+  // The `decode` role asks for this entry; the gateway never calls it.
   decode (prompt) {
     hold kv (min(known, budget_left(D))) reserve (known), reqs (1)
          at admission (known = computed < prompt ? prompt : computed + 1) {
@@ -148,13 +156,16 @@ queue D[ND] : decode {
       set c = 0;
       branch (!transferred) {
         mark admitted;
-        transfer (prompt) from src to kv (prompt);   // over P's NIC and this pod's
+        transfer (prompt) from src to kv (prompt - 1);   // over P's NIC and this pod's
         mark read_done;
         set transferred = 1;
-        set c = prompt;
+        set c = prompt - 1;
       }
+      // a running slot and a token of budget: the last prompt token
+      // recomputed for its logits, or what a preemption lost
       hold reqs (1) {
-        branch (known > c) { prefill (known - c) growing kv; }
+        prefill (known - c) growing kv;
+        branch (known == prompt) { mark first_token; }
         decode (o - 1 - (known - prompt)) growing kv;
       }
     }
