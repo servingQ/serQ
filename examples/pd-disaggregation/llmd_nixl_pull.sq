@@ -198,8 +198,9 @@ workload {
 
 // How evenly the router spreads the decoders, read at every instant: the
 // time average of a spread is not the spread of the per-pod averages. The
-// KV usage is vLLM's `kv_cache_usage` (block_pool.py:879-890: a cached block
-// nobody holds is free) but for its null block, which vLLM takes out of
+// KV usage is vLLM's `kv_cache_usage` (block_pool.py:879-890, of the free
+// blocks; a cached block nobody holds is one, block_pool.py:42-45) but for
+// its null block, which vLLM takes out of
 // num_gpu_blocks and the pool here does not; the load is the
 // active-request scorer's.
 gauge running_spread = max k in ND (used(D[k].reqs)) - min k in ND (used(D[k].reqs));

@@ -125,6 +125,14 @@ fn an_aggregates_index_and_count_are_its_own() {
             "let k = 1; gauge x = max k in 2 (used(kv[k]));",
             "is also a `let` constant",
         ),
+        (
+            "let x = sum k in 2 (k); let k = 1; gauge y = x;",
+            "is also a `let` constant",
+        ),
+        (
+            "let k = sum k in 2 (k); gauge y = k;",
+            "is also a `let` constant",
+        ),
         ("gauge x = max kv in 2 (1);", "is also a pool"),
         // whatever the order the names are declared in
         ("let x = sum svc in 2 (1); gauge y = x;", "is also a stage"),

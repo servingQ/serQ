@@ -915,7 +915,7 @@ impl Linker<'_> {
     /// of the same name would leave the body saying two things.
     fn unroll(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Expr> {
         let what = format!("`{} {j} in`", agg.name());
-        let clash = if self.consts.contains_key(j) {
+        let clash = if self.prog.lets.iter().any(|(n, _)| n == j) {
             Some("a `let` constant")
         } else if self.attr_index.contains_key(j) {
             Some("a session attribute")

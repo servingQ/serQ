@@ -2130,8 +2130,25 @@ impl Parser {
             own[k] = true;
             own[k + 1] = true;
             own[k + 2] = true;
-            // the count, then the parenthesised body
-            let mut i = k + 4;
+            // the count (a token, or a parenthesised expression), then the
+            // parenthesised body
+            let mut i = k + 3;
+            if toks.get(i).map(|t| &t.tok) == Some(&Tok::LParen) {
+                let mut depth = 0;
+                while let Some(t) = toks.get(i) {
+                    match t.tok {
+                        Tok::LParen => depth += 1,
+                        Tok::RParen => depth -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            } else {
+                i += 1;
+            }
             if toks.get(i).map(|t| &t.tok) != Some(&Tok::LParen) {
                 continue;
             }
@@ -4793,6 +4810,12 @@ mod tests {
                 .contains("is a parameter")
         );
         parse("def total(n) = sum k in n (k); session { set x = total(2); }").unwrap();
+        // a parenthesised count: the body's `k` is still the aggregate's
+        parse(
+            "def total() = sum k in (1 + 1) (k); def next(x) { turn; observe p = x; } \
+               workload { turn { set k = 1; } } session { next(total()); end; }",
+        )
+        .unwrap();
         // an aggregate's index is its own, not a name the argument reads
         parse(
             "def total() = sum i in 2 (i); def next(x) { turn; observe p = x; } \
