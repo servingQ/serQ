@@ -388,3 +388,96 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
         "ITL {itl} against TPOT {tpot}"
     );
 }
+
+/// #232: a test (`c > 0`, `S == hit`, `!x`) that was 0 over 40 or more
+/// samples gets a note under the table. The table alone does not show it
+/// (cv2 is NaN for a constant 0), and an always-0 `hit` is how #230 was
+/// found, late. `batch(40)` arrives 40 sessions at once, one sample each,
+/// `serial` 0..39: `never` is 0 for every serial, as are `neither` (`!`),
+/// `both` (`&&`) and `defined` (a test inside a `def`); `odd` is 1 for the
+/// 20 odd serials, `always` is 1 for all (a test that held is not a
+/// finding), `zero` is a literal, not a test (an event counted is written
+/// `= 1`), `cond` is 0 but by `?:`, whose outermost operator is not a test,
+/// `mixed` is a test at one site and a literal at the other, and `few` is 0
+/// but only for the 10 serials below 10.
+#[test]
+fn a_test_observe_that_never_held_is_noted() {
+    let src = "def below(x) = x < 0;
+        stage svc : delay; workload { arrive batch(40); }
+        session {
+          run svc (serial);
+          observe never = serial < 0;
+          observe neither = !(serial >= 0);
+          observe both = serial < 0 && serial > 100;
+          observe defined = below(serial);
+          observe odd = serial - 2 * floor(serial / 2) == 1;
+          observe always = serial >= 0;
+          observe zero = 0;
+          observe cond = serial < 0 ? 1 : 0;
+          branch (serial < 20) { observe mixed = serial < 0; } else { observe mixed = 0; }
+          branch (serial < 10) { observe few = serial > 100; }
+          end;
+        }
+        run { horizon 100; }";
+    let r = run_ir(&compile_source(src, &Overrides::default()).unwrap(), None).unwrap();
+    assert_eq!(r.observe("never").unwrap().count, 40);
+    assert_eq!(r.observe("few").unwrap().count, 10);
+    let t = r.text();
+    for name in ["never", "neither", "both", "defined"] {
+        assert!(
+            t.contains(&format!(
+                "note: observe {name} is constant 0 over 40 samples"
+            )),
+            "{name}: {t}"
+        );
+    }
+    for name in ["odd", "always", "zero", "cond", "mixed", "few"] {
+        assert!(
+            !t.contains(&format!("observe {name} is constant")),
+            "{name}: {t}"
+        );
+    }
+}
+
+/// The note is a line of text, not a lint error, because one shipped program
+/// earns it by design: `vllm_single_turn.sq` never reads its cache back, so
+/// its `hit` (from `lib/vllm.sq`) is 0 all run long. Every other example and
+/// tutorial program runs without a note; a new one that earns it shows up
+/// here, to be judged.
+#[test]
+fn the_corpus_earns_one_note() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut programs = vec![];
+    for dir in std::fs::read_dir(root.join("examples")).unwrap().flatten() {
+        for f in std::fs::read_dir(dir.path()).unwrap().flatten() {
+            programs.push(f.path());
+        }
+    }
+    for f in std::fs::read_dir(root.join("docs/tutorial/programs"))
+        .unwrap()
+        .flatten()
+    {
+        programs.push(f.path());
+    }
+    programs.retain(|p| p.extension().is_some_and(|e| e == "sq"));
+    programs.sort();
+    assert!(programs.len() >= 25, "{programs:?}");
+    let mut noted = vec![];
+    for p in &programs {
+        let r = serq::run_file(p, &Overrides::default())
+            .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        for o in r.observes.iter().filter(|o| o.never_held()) {
+            noted.push((
+                p.strip_prefix(root).unwrap().to_string_lossy().into_owned(),
+                o.name.clone(),
+            ));
+        }
+    }
+    assert_eq!(
+        noted,
+        [(
+            "examples/single-turn/vllm_single_turn.sq".to_string(),
+            "hit".to_string()
+        )]
+    );
+}

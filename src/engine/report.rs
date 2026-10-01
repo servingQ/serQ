@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use crate::engine::stats::Estimate;
+use crate::engine::stats::{CI_MIN_SAMPLES, Estimate};
 
 #[derive(Clone, Debug)]
 pub struct ObserveReport {
@@ -17,6 +17,26 @@ pub struct ObserveReport {
     pub samples: Vec<f64>,
     /// `(time, session serial, turn number)` of every sample.
     pub records: Vec<(f64, u64, u32)>,
+    /// The observed expression is a test (its outermost operator a
+    /// comparison, `&&`, `||` or `!`): 0 or 1 by construction
+    /// (`Program::observe_is_test`).
+    pub is_test: bool,
+}
+
+impl ObserveReport {
+    /// A test that never held: 0 over `CI_MIN_SAMPLES` or more samples. A
+    /// `hit` that was 0 all run long is a program to look at before its
+    /// means are (#230 was found that way, late), and the table alone does
+    /// not show it (cv2 is NaN for a constant 0). A test that always held
+    /// is not noted: a routing policy that hits by construction is a
+    /// correct program. The note is a line of text, not an error: one
+    /// program of the corpus earns it by design
+    /// (`tests/report.rs::the_corpus_earns_one_note`).
+    pub fn never_held(&self) -> bool {
+        self.is_test
+            && self.samples.len() >= CI_MIN_SAMPLES
+            && self.samples.iter().all(|&x| x == 0.0)
+    }
 }
 
 /// A `gauge`: the time average of a function of the deployment's state
@@ -221,6 +241,13 @@ impl Report {
                 &["observe", "count", "mean", "95% CI", "cv2", "p99"],
                 rows,
             );
+            for o in self.observes.iter().filter(|o| o.never_held()) {
+                let _ = writeln!(
+                    s,
+                    "note: observe {} is constant 0 over {} samples",
+                    o.name, o.count
+                );
+            }
         }
         if !self.gauges.is_empty() {
             let rows = self.gauges.iter().map(|g| {

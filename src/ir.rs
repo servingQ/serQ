@@ -1302,6 +1302,44 @@ pub fn show_num_exact(x: f64) -> String {
 }
 
 impl Program {
+    /// Whether every `observe` of slot `k` records a test: an expression
+    /// whose outermost operator is a comparison, `&&`, `||` or `!`, so 0 or
+    /// 1 by construction (`observe hit = c > 0`). A literal `1` (an event
+    /// counted), a time, and `c > 0 ? 1 : 0` are not, whatever values they
+    /// take: the report notes a test that never held, and a miss there
+    /// costs less than a note on a correct program.
+    pub fn observe_is_test(&self, k: usize) -> bool {
+        let mut seen = false;
+        for block in &self.blocks {
+            for s in block {
+                if let CStmt::Observe(slot, e) = s
+                    && *slot == k
+                {
+                    seen = true;
+                    let test = match e {
+                        CExpr::Binary(op, _, _) => matches!(
+                            op,
+                            BinOp::Lt
+                                | BinOp::Le
+                                | BinOp::Gt
+                                | BinOp::Ge
+                                | BinOp::Eq
+                                | BinOp::Ne
+                                | BinOp::And
+                                | BinOp::Or
+                        ),
+                        CExpr::Unary(UnOp::Not, _) => true,
+                        _ => false,
+                    };
+                    if !test {
+                        return false;
+                    }
+                }
+            }
+        }
+        seen
+    }
+
     /// An expression in source form, with attribute, pool and stage names.
     ///
     /// `let` constants were folded at link time, so they come back as their

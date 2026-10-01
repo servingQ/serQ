@@ -39,7 +39,12 @@ observe NAME = expr;
 ```
 
 Records a sample of `expr` after warm-up, with the time, session and turn.
-`--dump DIR` writes the samples; the report summarises them.
+`--dump DIR` writes the samples; the report summarises them. A test (an
+expression whose outermost operator is a comparison, `&&`, `||` or `!`) that
+was 0 over 40 or more samples gets a line under the table, `note: observe hit
+is constant 0 over 5357 samples`; the note says the run never varied that
+value, which is the program's intent (`examples/single-turn/vllm_single_turn.sq`
+never reads its cache back) or a bug to find before reading the means.
 
 ## `turn`
 

@@ -153,6 +153,11 @@ impl std::fmt::Display for Estimate {
 
 /// Batch-means 95 % confidence interval (t-quantile for 19 degrees of
 /// freedom when `batches = 20`; 2.093).
+/// Samples below which an observe has no CI (its mean is reported, the
+/// half-width is +inf), and the count a run-long constant must reach to be
+/// noted (`ObserveReport::never_held`).
+pub const CI_MIN_SAMPLES: usize = 40;
+
 pub fn batch_means(xs: &[f64], batches: usize) -> Estimate {
     let size = xs.len() / batches;
     if batches < 2 || size < 1 {
