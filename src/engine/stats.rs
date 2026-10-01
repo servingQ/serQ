@@ -202,20 +202,30 @@ pub fn time_stats(points: &[(f64, f64)], from: f64, to: f64, batches: usize) -> 
         lo = lo.min(v);
         hi = hi.max(v);
         total += v * (b - a);
-        // spread the segment over the windows it crosses
-        let mut x = a;
-        while x < b {
-            let w = (((x - from) / width) as usize).min(batches - 1);
-            let end = if w == batches - 1 {
-                b
+        // add the segment's overlap with every window it can touch; the
+        // window bounds are computed, not stepped to, so no rounding stops
+        // the walk early
+        let at = |x: f64| (((x - from) / width).max(0.0) as usize).min(batches - 1);
+        for (w, acc) in windows
+            .iter_mut()
+            .enumerate()
+            .take(at(b) + 2)
+            .skip(at(a).saturating_sub(1))
+        {
+            let w_lo = if w == 0 {
+                from
             } else {
-                (from + (w + 1) as f64 * width).min(b)
+                from + w as f64 * width
             };
-            windows[w] += v * (end - x);
-            if end <= x {
-                break;
+            let w_hi = if w == batches - 1 {
+                to
+            } else {
+                from + (w + 1) as f64 * width
+            };
+            let overlap = b.min(w_hi) - a.max(w_lo);
+            if overlap > 0.0 {
+                *acc += v * overlap;
             }
-            x = end;
         }
     }
     out.mean = total / span;
@@ -330,6 +340,12 @@ mod tests {
         // a value held for no time is not the extreme
         let ts = time_stats(&[(0.0, 1.0), (2.0, 9.0), (2.0, 1.0)], 0.0, 4.0, 20);
         assert_eq!(ts.max, 1.0);
+        // a constant measured over a span whose windows do not divide it
+        // exactly: every window gets its share, so the CI is zero (it was
+        // 17 empty windows when a rounded bound stopped the walk)
+        let ts = time_stats(&[(0.0, 3.0)], 0.0, 7.0, 20);
+        assert!(ts.ci.half_width < 1e-12, "{}", ts.ci.half_width);
+        assert!((ts.mean - 3.0).abs() < 1e-12);
         // no windows: no statistics, and no panic
         assert!(time_stats(&[(0.0, 1.0)], 0.0, 1.0, 0).mean.is_nan());
     }
