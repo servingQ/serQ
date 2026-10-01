@@ -94,6 +94,13 @@ intention plainer, evidence is the code, one change). A review that does not
 answer all six is not done. Comments are in Korean, short: the finding and
 the evidence.
 
+Copilot reviews a pull request; when its review limit is reached, the
+subagents in `.claude/agents/` review instead, at most two in parallel.
+`design-reviewer` takes the checklist above and the readability of the
+code, and `sim-reviewer` — called only when the PR moves a number — whether
+the numbers reproduce and support the claim. The session merges their
+findings into one comment on the pull request, where Copilot's would be.
+
 ## Working with GitHub here
 
 `gh pr edit` and `gh issue edit` fail on this repository:
