@@ -858,6 +858,69 @@ fn a_latency_before_two_transfers_folds_into_both() {
     }
 }
 
+/// The second review of #197: a station group that moves two pairs of pools
+/// says neither, two latencies read in the order named, and a run over
+/// `a[i], b[j], c[i]` is no transfer between two boxes.
+#[test]
+fn a_transfers_note_is_what_every_run_over_it_moves() {
+    let src = "pool p1 { cap 9; } pool p2 { cap 9; } pool q1 { cap 9; } pool q2 { cap 9; }
+               stage s : delay; stage a : ps(1); stage b : ps(1);
+               share maxmin;
+               workload { arrive batch(1); }
+               session {
+                 set c = ~bernoulli(0.5);
+                 branch (c) {
+                   hold p1 (1) { run s (1); } lease p1 (inf);
+                   hold q1 (1) { transfer on a, b (1) from p1 to q1 (1); }
+                 } else {
+                   hold p2 (1) { run s (1); } lease p2 (inf);
+                   hold q2 (1) { transfer on a, b (1) from p2 to q2 (1); }
+                 }
+                 end;
+               }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    assert_eq!(net.flows.len(), 1);
+    let n = &net.flow_notes[0];
+    assert!(n.several && n.from.is_none() && n.to.is_none(), "{n:?}");
+
+    let src = "pool kP { cap 9; } pool kD { cap 9; } stage P : delay;
+               queue A : link { serve ps(1) latency 0.25; }
+               queue B : link { serve ps(1) latency 0.5; }
+               share maxmin;
+               workload { arrive batch(1); }
+               session {
+                 hold kP (1) { run P (1); } lease kP (inf);
+                 hold kD (1) { transfer on A, B (1) from kP to kD (1); }
+                 end;
+               }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    assert_eq!(
+        net.flow_notes[0].latency,
+        ["A latency (0.25)", "B latency (0.5)"]
+    );
+
+    let src = "pool kv[2] { cap 9; } stage a[2] : ps(1); stage b[2] : ps(1); stage c[2] : ps(1);
+               stage A[2] : delay; stage B[2] : delay;
+               share maxmin;
+               workload { arrive batch(1); }
+               session {
+                 choose i in 2 by (0);
+                 choose j in 2 by (0);
+                 hold kv[i] (1) { run A[i] (1); }
+                 hold kv[j] (1) { run B[j] (1); }
+                 run a[i], b[j], c[i] (1);
+                 end;
+               }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    assert!(!net.spans(&net.flows[0]));
+}
+
 /// A flow's stations stand side by side even when one of them was reached
 /// alone before, so the bracket takes in no other station: `ingress` is
 /// used alone first, then with `egress`, with `D` between.

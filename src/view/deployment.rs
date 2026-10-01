@@ -46,6 +46,28 @@ pub struct Node {
     pub modes: Vec<RunMode>,
 }
 
+impl FlowNote {
+    fn note_from(&mut self, pool: String) {
+        match &self.from {
+            Some(p) if *p != pool => self.mixed(),
+            _ if !self.several => self.from = Some(pool),
+            _ => {}
+        }
+    }
+    fn note_to(&mut self, pool: String) {
+        match &self.to {
+            Some(p) if *p != pool => self.mixed(),
+            _ if !self.several => self.to = Some(pool),
+            _ => {}
+        }
+    }
+    fn mixed(&mut self) {
+        self.several = true;
+        self.from = None;
+        self.to = None;
+    }
+}
+
 /// An instance: what the session addresses through one `choose`. A router
 /// that picks `i` picks a pod, and every stage and pool the session then
 /// indexes by `i` is that pod's (`P[i]`, `egress[i]`, `kvP[i]`).
@@ -67,6 +89,9 @@ pub struct FlowNote {
     pub from: Option<String>,
     pub to: Option<String>,
     pub latency: Vec<String>,
+    /// Two runs over these stations moved different pools: the figure
+    /// says neither.
+    pub several: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -106,11 +131,18 @@ impl Net {
     }
     /// Whether a run over several stages crosses from one instance to
     /// another: two of its stations in two different instances.
+    /// It does when its stations, in the order named, are one instance's
+    /// and then another's (`egress[i], ingress[j]`); any other mixture
+    /// (`a[i], b[j], c[i]`) is bracketed where it stands.
     pub fn spans(&self, flow: &[usize]) -> bool {
-        let mut owners = flow.iter().filter_map(|&k| self.instance_of(k));
-        owners
-            .next()
-            .is_some_and(|first| owners.any(|o| o != first))
+        let mut runs: Vec<Option<usize>> = vec![];
+        for &k in flow {
+            let o = self.instance_of(k);
+            if runs.last() != Some(&o) {
+                runs.push(o);
+            }
+        }
+        matches!(runs.as_slice(), [Some(a), Some(b)] if a != b)
     }
 
     /// The instance a station is in, if any.
@@ -385,7 +417,8 @@ impl Walker<'_> {
                 }
                 CStmt::Release(r) => {
                     if let Some(k) = self.last_flow {
-                        self.net.flow_notes[k].from = Some(self.p.show_pool_ref(&r));
+                        let pool = self.p.show_pool_ref(&r);
+                        self.net.flow_notes[k].note_from(pool);
                     }
                     // the pool leaves the enclosure here: the stations after
                     // this one are not inside it
@@ -454,7 +487,8 @@ impl Walker<'_> {
                 }
                 CStmt::Load(r, _) => {
                     if let Some(k) = self.last_flow {
-                        self.net.flow_notes[k].to = Some(self.p.show_pool_ref(&r));
+                        let pool = self.p.show_pool_ref(&r);
+                        self.net.flow_notes[k].note_to(pool);
                     }
                 }
                 CStmt::Turn | CStmt::Set(..) | CStmt::Observe(..) => {}
@@ -616,7 +650,9 @@ fn fold_latencies(p: &Program, net: &mut Net) {
         let wait = format!("{link} latency ({})", net.nodes[k].work);
         for &(_, flow) in &into {
             if !net.flow_notes[flow].latency.contains(&wait) {
-                net.flow_notes[flow].latency.push(wait.clone());
+                // folded from the transfer back: the one named first is
+                // folded last and goes first
+                net.flow_notes[flow].latency.insert(0, wait.clone());
             }
         }
         // the arrows into the delay go on to each transfer it leads into
