@@ -94,6 +94,11 @@ intention plainer, evidence is the code, one change). A review that does not
 answer all six is not done. Comments are in Korean, short: the finding and
 the evidence.
 
+Copilot reviews a pull request. When it cannot — its review limit is
+reached — a subagent reviews instead, from the same checklist, and its
+findings go on the pull request as a comment so the record is where
+Copilot's would be.
+
 ## Working with GitHub here
 
 `gh pr edit` and `gh issue edit` fail on this repository:
