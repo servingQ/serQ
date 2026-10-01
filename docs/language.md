@@ -814,13 +814,14 @@ report now names the livelock.
 and the report gives its time average over `[warmup, end]`, with a
 batch-means 95% CI over 20 windows, and the least and greatest value held for
 a positive time. An `observe` is a sample a session takes when it gets
-there; a gauge is a signal in time, read after every instant (the state the
-instant's last event leaves, which is the state until the next one), so
+there; a gauge is a signal in time, read at the end of every instant (the
+state the instant's last event leaves, which is the state until the next
+one; what the instant passes through on the way is not read), so
 `gauge u = used(kv);` is the pool's time-average `used`. The expression has
 no session and is held constant between events: it reads pool and stage
 observables and constants, and an attribute, a draw, `cachedin` (the
-session's own prefix), `now` or `work(…)` (both move between events) is a
-link error. What to call an imbalance is the program's: the time fraction some
+session's own prefix), `now` or `work(…)` (both move between events), or
+`budget_left(…)` (it plans an iteration, which may draw) is a link error. What to call an imbalance is the program's: the time fraction some
 decoder is full is `gauge full = max j in N (free(reqs[j]) == 0);`, the
 spread `max j in N (used(kv[j])) - min j in N (used(kv[j]))`. `--dump DIR`
 writes each gauge's change points as `gauge/NAME.csv` (`time,value`).

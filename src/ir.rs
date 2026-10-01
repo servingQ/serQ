@@ -88,7 +88,8 @@ pub enum Moment {
     Serve,
     /// A `gauge`: evaluated on the state the deployment holds after every
     /// instant, with no session, job or resident, and held until the next
-    /// one, so neither `now` nor `work(…)`, which move in between.
+    /// one, so neither `now` nor `work(…)`, which move in between, nor
+    /// `budget_left(…)`, which plans an iteration to answer.
     Gauge,
 }
 
@@ -1021,6 +1022,11 @@ impl Validator<'_> {
             CExpr::Call(Fun::Work, _) if m == Moment::Gauge => Err(
                 "a gauge may not read `work(…)`: the work left drains between events, and a \
                  gauge is held constant between them"
+                    .into(),
+            ),
+            CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Gauge => Err(
+                "a gauge may not read `budget_left(…)`: it plans the next iteration, which \
+                 evaluates the stage's budget and may draw"
                     .into(),
             ),
             CExpr::Call(Fun::CachedIn, _) if m == Moment::Gauge => Err(

@@ -149,6 +149,9 @@ struct Linker<'a> {
     /// `release` of one may stand outside any hold of it.
     leased: Vec<Ref>,
     prog: &'a Program,
+    /// Terms the program's aggregates have written out so far, nested ones
+    /// included, against `MAX_OVER`.
+    over_terms: std::cell::Cell<usize>,
 }
 
 /// The context variables by their source names (`docs/api/context.md`). A
@@ -173,7 +176,8 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 17] = [
     ("remaining", CtxVar::Remaining),
 ];
 
-/// The most terms `max j in n (e)` writes out.
+/// The most terms the aggregates (`max j in n (e)`) of one program write
+/// out, nested ones included.
 const MAX_OVER: usize = 4096;
 
 /// Calls the linker folds to a constant from a declaration.
@@ -248,6 +252,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         held: vec![],
         leased: vec![],
         prog,
+        over_terms: std::cell::Cell::new(0),
     };
     for a in BUILTIN_ATTRS {
         lk.attr(a);
@@ -926,13 +931,15 @@ impl Linker<'_> {
                 "{what}'s count must be a positive integer, found {count}"
             )));
         }
-        // the terms are written out: a count past any array a program
-        // declares is a mistake, not a deployment
-        if count > MAX_OVER as f64 {
+        // the terms are written out, nested aggregates' included: the
+        // program's total is bounded, so no count makes the linker run away
+        let total = self.over_terms.get() as f64 + count;
+        if total > MAX_OVER as f64 {
             return Err(LinkError::new(format!(
-                "{what}'s count is {count}: an aggregate writes its terms out, at most {MAX_OVER}"
+                "{what}: the program's aggregates write out {total} terms, at most {MAX_OVER}"
             )));
         }
+        self.over_terms.set(total as usize);
         let term = |k: usize| {
             let mut e = body.clone();
             bind_index(&mut e, j, k as f64);

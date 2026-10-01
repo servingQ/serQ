@@ -597,10 +597,6 @@ impl<'p> Interp<'p> {
         if let Some(error) = self.error.take() {
             return Err(error);
         }
-        self.read_gauges();
-        if let Some(error) = self.error.take() {
-            return Err(error);
-        }
         while let Some(e) = self.heap.peek() {
             let arrivals_done = p.arrivals.is_some_and(|n| self.arrivals >= n as u64);
             if arrivals_done && self.live == 0 {
@@ -608,6 +604,14 @@ impl<'p> Interp<'p> {
             }
             if e.time > p.horizon {
                 break;
+            }
+            // the clock moves on: the instant behind it is over, and what its
+            // last event left is what the gauges read
+            if e.time > self.now {
+                self.read_gauges();
+                if let Some(error) = self.error.take() {
+                    return Err(error);
+                }
             }
             let e = self.heap.pop().unwrap();
             self.now = e.time;
@@ -617,10 +621,10 @@ impl<'p> Interp<'p> {
             if let Some(error) = self.error.take() {
                 return Err(error);
             }
-            self.read_gauges();
-            if let Some(error) = self.error.take() {
-                return Err(error);
-            }
+        }
+        self.read_gauges();
+        if let Some(error) = self.error.take() {
+            return Err(error);
         }
         if let Some(n) = p.arrivals {
             if self.arrivals < n as u64 {
@@ -647,10 +651,9 @@ impl<'p> Interp<'p> {
         Ok(self.report())
     }
 
-    /// Evaluate every gauge on the state as it stands, recording a change
-    /// point when the value moved; a later event at the same instant
-    /// replaces the instant's point, so a value no time is spent in leaves
-    /// none.
+    /// Evaluate every gauge on the state an instant's last event left (the
+    /// run calls it when the clock is about to move, and at the end),
+    /// recording a change point when the value moved.
     fn read_gauges(&mut self) {
         let p = self.p;
         for (k, g) in p.gauges.iter().enumerate() {

@@ -129,6 +129,7 @@ fn an_aggregates_index_and_count_are_its_own() {
         ("gauge x = sum k in 1.5 (1);", "must be a positive integer"),
         ("gauge x = sum k in 3 (used(kv[k]));", "out of range"),
         ("gauge x = sum k in 1e20 (1);", "at most 4096"),
+        ("gauge x = sum k in 64 (sum i in 65 (1));", "at most 4096"),
         ("gauge x = used(kv[-1]);", "out of range"),
         ("let N = 2; gauge x = used(kv[N + 1 - 1]);", "out of range"),
     ] {
@@ -174,4 +175,40 @@ fn a_gauge_out_of_range_at_run_time_is_an_error() {
     let src = format!("{DEPLOYMENT} gauge x = used(kv[holders(kv[0]) + 1]);");
     let e = run_source(&src, &Overrides::default(), None).unwrap_err();
     assert!(e.contains("out of range") || e.contains("index"), "{e}");
+}
+
+/// A gauge plans no iteration: `budget_left` would evaluate the budget,
+/// which may draw, and the run would change.
+#[test]
+fn a_gauge_does_not_plan_an_iteration() {
+    let src = "stage e : step { budget ~uniform(1, 2); cost 1; }
+        session { run e prefill (1); end; } run { horizon 1; }
+        gauge g = budget_left(e);";
+    assert!(link_error(src).contains("may not read `budget_left"));
+}
+
+/// The gauges read the state an instant ends with: a session that takes
+/// the pool and one that releases it at the same time leave one holder,
+/// and an index that the intermediate two would put out of range is fine.
+#[test]
+fn a_gauge_reads_the_end_of_an_instant() {
+    let src = "
+        pool kv { cap 10; }
+        pool slot[2] { cap 1; }
+        stage gate : delay;
+        workload { arrive batch(2); }
+        session {
+          run gate (serial == 0 ? 0 : 1);
+          hold kv (1) { run gate (1); }
+          end;
+        }
+        gauge h = used(slot[holders(kv)]);
+        gauge n = holders(kv);
+        run { horizon 3; }";
+    let r = run_source(src, &Overrides::default(), None).unwrap();
+    // [0, 1): session 0 holds; at 1 it releases and session 1 takes, and
+    // in between the instant has two holders, which no gauge reads
+    let n = r.gauge("n").unwrap();
+    assert_eq!(n.max, 1.0);
+    assert!(n.points.iter().all(|p| p.1 <= 1.0), "{:?}", n.points);
 }

@@ -134,7 +134,7 @@ its position in the IR, and a context variable exists at one of them:
 | `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
 | `Step` | a step stage's `cost`, evaluated after the iteration is scheduled | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
 | `Serve` | a step stage's `serve by` keys, evaluated for one resident once the residents are known | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
-| `Gauge` | a gauge, evaluated on the state after every instant and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Now` or `Work` is rejected) | none |
+| `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Now`, `Work` or `BudgetLeft` is rejected) | none |
 
 The index of a pool or stage reference (`CRef.index`) is evaluated with the
 expression around it, so at that expression's moment: `evict by (size +
