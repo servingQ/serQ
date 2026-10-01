@@ -72,7 +72,9 @@ the report's: the gaps between a request's successive tokens.
   not the reference there; the decode step over the decode fraction
   (0.21/0.27 ≈ 0.78 ms at λ = 70) comes within 8 % of the measured
   0.84 ms. The split's TTFT is larger at 10 ms (72–151 ms against 54–72)
-  by the decode engine's step, which its recompute waits for.
+  by about two and a half of the decode engine's steps: the rest of the
+  step running at admission, the step that moves the parked request to
+  running, and the recompute's own.
 - **Request- and token-weighted TPOT differ colocated.** A short answer
   that sits behind a prefill has a large TPOT: at λ = 60 the request mean
   is 1.06 ms and the token mean 0.55 ms. Split, they agree.
@@ -103,13 +105,16 @@ deleted, `let NP = 2;`) and records in `results.csv`; the rest are `--set`.
   long.** Without exclusive steps a decode rides in the step of a whole
   prompt instead of waiting for it, and gains a token per prefill step: a
   share of the order of a decode step over a prefill step. At 0.2 ms that
-  is nothing — TPOT 0.534 ms at λ = 60 against 0.545 exclusive, 0.494 with
-  prompts in chunks of 512 (`chunk_cap`) — against the split's 0.215. At
-  10 ms (`omega = 0.01`, λ = 60) it is most of it: 19.8 ms mixed and
-  13.0 ms in chunks, against 25.7 exclusive and the split's 10.6. A
-  decode riding with a prompt waits for it: at λ = 70 the ITL p99 is 40 ms
-  whole and 20 ms in chunks; at λ = 60, where fewer than 1 % of the gaps
-  hold a prefill, 0.28 ms whole and 10 ms in chunks. The split's prefill
+  is nothing — TPOT 0.534 ms at λ = 60 against 0.545 exclusive — and
+  prompts in chunks of 512 (`chunk_cap`) give 0.494, a 9 % that this
+  share does not account for and the runs do not explain; either is far
+  from the split's 0.215. At 10 ms (`omega = 0.01`, λ = 60) it is most of
+  it: 19.8 ms mixed and 13.0 ms in chunks, against 25.7 exclusive and the
+  split's 10.6. A decode riding with a prompt waits for it: at λ = 70 the
+  ITL p99 is 40 ms whole and 20 ms in chunks; at λ = 60, where fewer than
+  1 % of the gaps hold a prefill, 0.28 ms whole and 10 ms in chunks. A
+  chunk limit is per prompt, so several prompts' chunks share a step of
+  the 8192-token budget: at 10 ms the chunked ITL p99 is still 41 ms. The split's prefill
   engines batch several prompts once exclusive steps are gone, and pay
   for it in TTFT: 151 ms at λ = 70 against 125.
 - **A transfer is in the TTFT.** Over NICs of 2e5 tokens/s after a 2 ms
@@ -126,7 +131,8 @@ deleted, `let NP = 2;`) and records in `results.csv`; the rest are `--set`.
   25 ms for its blocks, 1.3 preemptions a second recompute what they
   lost, TTFT is 71 ms against 46 and TPOT 0.230 ms, and the prefill
   engines hold 5200 leased tokens against 3200; at λ = 45 the wait is
-  153 ms and the leases 17000 tokens; at λ = 50 it does not keep up. The
+  153 ms and the leases 17000 tokens (TTFT 202 ms over 300 s, 196–286 ms
+  over 3000 s); at λ = 50 it does not keep up. The
   decode engine then serves about 48 requests a second: a third of its
   time goes to recomputing preempted requests, and three decodes fit its
   blocks. Meanwhile every waiting prompt stays leased on a prefill
@@ -134,8 +140,9 @@ deleted, `let NP = 2;`) and records in `results.csv`; the rest are `--set`.
   prefill engines would stop admitting in turn.
 - **The colocated engines meet their memory limit too.** At 8192 tokens
   each, 4.6 preemptions a second at λ = 60 and TTFT 85 ms against 50; at
-  λ = 65, 8.4 a second and 244 ms, close to saturation; at λ = 70 they do
-  not keep up (about 67 requests a second). The totals differ: four
+  λ = 65, 8.4 a second and 244 ms over 300 s, 294–399 ms over 3000 s with
+  300 s of warm-up (seeds 1–3): close to saturation, slow to settle; at
+  λ = 70 they do not keep up (about 67 requests a second). The totals differ: four
   colocated engines hold 32768 tokens, the split's decode engine 8192 or
   16384 and its prefill engines what their leases need.
 - **Another split moves the cost between TTFT and TPOT.** 2P/2D at
