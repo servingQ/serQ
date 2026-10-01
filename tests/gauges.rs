@@ -142,6 +142,11 @@ fn an_aggregates_index_and_count_are_its_own() {
         ("gauge x = sum k in 64 (sum i in 65 (1));", "at most 4096"),
         ("gauge x = used(kv[-1]);", "out of range"),
         ("let N = 2; gauge x = used(kv[N + 1 - 1]);", "out of range"),
+        // a folded call is a number too
+        (
+            "pool b { cap 1; block 4; } gauge x = used(kv[blocksize(b)]);",
+            "out of range",
+        ),
         // the fold of the index spends no budget the linking spent already
         ("gauge x = used(kv[sum k in 2100 (1)]);", "out of range"),
     ] {

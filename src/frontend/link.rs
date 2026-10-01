@@ -728,7 +728,11 @@ impl Linker<'_> {
                 // the fold writes the index's aggregates out again: against
                 // the budget they met the first time, and without spending it
                 self.over_terms.set(before);
-                let folded = (!has_draw(e)).then(|| self.eval_const(e).ok()).flatten();
+                let folded = match i {
+                    // already a number (`blocksize(p)` folds here, not in `eval_const`)
+                    CExpr::Num(k) => Some(k),
+                    _ => (!has_draw(e)).then(|| self.eval_const(e).ok()).flatten(),
+                };
                 self.over_terms.set(after);
                 if let Some(k) = folded
                     && !(k >= 0.0 && k.fract() == 0.0 && k < count as f64)
