@@ -147,6 +147,9 @@ pub struct PoolDecl {
     pub span: Option<Span>,
     pub name: String,
     pub count: usize,
+    /// Declared as an array (`pool kv[N]`): its members carry their index,
+    /// a one-member array's too.
+    pub array: bool,
     pub cap: Expr,
     pub block: Option<Expr>,
     pub evict: EvictOrder,
@@ -208,6 +211,9 @@ pub struct StageDecl {
     pub span: Option<Span>,
     pub name: String,
     pub count: usize,
+    /// Declared as an array (`stage E[N]`): its members carry their index,
+    /// a one-member array's too.
+    pub array: bool,
     pub kind: StageKind,
 }
 

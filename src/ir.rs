@@ -369,6 +369,10 @@ pub struct CSpill {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CPool {
     pub name: String,
+    /// The member's index in an array (`pool kv[N]`), `None` for a single
+    /// pool: a label for the report, which the simulation does not read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
     /// Capacity in units; `inf` (a pool without `cap`) is the string
     /// `"inf"` in JSON, as for `CExpr::Num`.
     #[serde(with = "real")]
@@ -437,6 +441,10 @@ pub enum CStageKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CStage {
     pub name: String,
+    /// The member's index in an array (`stage E[N]`), `None` for a single
+    /// stage: a label for the report, which the simulation does not read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
     pub kind: CStageKind,
 }
 

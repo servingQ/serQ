@@ -365,6 +365,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             pools.push(CPool {
                 admit_via,
                 name: p.name.clone(),
+                index: p.array.then_some(i as u32),
                 cap,
                 block,
                 evict: evict.clone(),
@@ -424,6 +425,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             }
             stages.push(CStage {
                 name: s.name.clone(),
+                index: s.array.then_some(i as u32),
                 kind,
             });
         }
