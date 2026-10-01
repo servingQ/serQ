@@ -73,15 +73,15 @@ diff is the next step.
 ## 4. Theorems
 
 The same program is an inductive type in Lean with an operational semantics
-(`serving-queue-theory`, `lean/ServingQueueTheory/Seq*.lean`), and the Lean
-program is **generated from the IR** — not hand-written alongside it.
+(`lean/`, `docs/lean.md`), and the Lean program is **generated from the
+IR** — not hand-written alongside it.
 
 | | |
 |---|---|
-| `Serq.lean` | the syntax, the pool semantics, the memory invariant |
-| `SerqExec.lean` | an executable semantics of the pool and step-engine fragment |
-| `SerqOracle.lean` | the vLLM scenarios as theorems, one per scenario, generated |
-| `SerqServe.lean` | serving order of a step engine |
+| `Serq/Core.lean` | the syntax, the pool semantics, the memory invariant |
+| `Serq/Exec.lean` | an executable semantics of the pool and step-engine fragment |
+| `Serq/Oracle.lean` | the vLLM scenarios as theorems, one per scenario, generated |
+| `Serq/Serve.lean` | serving order of a step engine |
 
 Two results worth naming:
 

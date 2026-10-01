@@ -1,0 +1,409 @@
+#!/usr/bin/env python3
+"""Generate lean/Serq/Oracle.lean from the IR of the vLLM scheduler
+scenarios in tools/oracle/ (SERQ_SRC overrides the checkout the files are
+read from):
+
+- <name>.ir.json for the six single-request scenarios:
+  examples/oracle/vllm_request.sq compiled with the scenario's engine, the
+  requests as explicit sessions; answers in <name>.out.json.
+- cache_trace.ir.json for the multi-turn prefix-cache scenario:
+  examples/replay/vllm_replay.sq on a unit step clock with the trace inlined as
+  explicit sessions with turns; answers in cache_trace.out.csv.
+
+Every program, deployment and workload in the Lean file is translated from
+that IR, not written by hand: the Lean theorems are about the same IR the
+serQ tests run. The translation accepts the fragment of the IR that the
+executable semantics (lean/Serq/Exec.lean) covers and fails on anything else.
+`--check` fails if the committed file is stale."""
+import json
+import os
+import sys
+
+ROOT = os.path.join(os.path.dirname(__file__), "..")
+SERQ_SRC = os.environ.get("SERQ_SRC", ROOT)
+ODIR = os.path.join(SERQ_SRC, "tools", "oracle")
+OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
+# 5 added the statements `Release` and `Load` (a KV transfer between two pools),
+# which are outside the fragment: a program that uses them fails below.
+# 6 adds renewal arrivals and finite open runs, outside explicit-session semantics.
+# 7 makes `choose` compare a tuple of keys. 8 lets a run hold several stages
+# at once (`Run.also`, under `Program.share`), outside the fragment.
+# 9 reevaluates non-FIFO queue keys and supplies Waited, outside this fragment.
+# 10 makes a hold's `cache` clause what consumes the session's own prefix
+# (serQ #234): a hold without it leaves the entry where it is, and the
+# fragment's `admit` (lean/Serq/Exec.lean) does the same; same shape, and no
+# oracle program holds a pool with entries without `cache`.
+# The translation is one, with 10's meaning: a 7-9 file reads the same
+# only where no hold without `cache` meets a pool with entries, which holds
+# for every file the generator has read. The pinned corpus (v0.1.1, IR 10)
+# is FIFO and stays inside the fragment.
+IR_VERSION = 10
+SUPPORTED_IR_VERSIONS = (7, 8, 9, IR_VERSION)
+
+
+class Fragment(Exception):
+    """An IR construct outside the Lean executable fragment."""
+
+
+def nat(v, what):
+    if not (isinstance(v, (int, float)) and v >= 0 and float(v).is_integer()):
+        raise Fragment(f"{what}: {v} is not a natural number")
+    return int(v)
+
+
+def one_ref(r, what):
+    if r["count"] != 1 or r["index"] is not None:
+        raise Fragment(f"{what}: families of pools/stages are outside the fragment")
+    return r["base"]
+
+
+def fold(e):
+    """The value of an expression that does not depend on the session or the
+    context (constants, and products with a zero constant), else None."""
+    if "Num" in e:
+        return e["Num"]
+    if "Binary" in e:
+        op, a, b = e["Binary"]
+        x, y = fold(a), fold(b)
+        if op == "Mul" and (x == 0 or y == 0):
+            return 0.0
+        if x is None or y is None:
+            return None
+        return {"Add": x + y, "Sub": x - y, "Mul": x * y}.get(op)
+    return None
+
+
+class Lean:
+    """IR (a serQ program as JSON) to the Lean surface syntax `[route| … ]`
+    of `Route Exec.Env ℕ`. Attribute slots are the IR's; the built-in
+    `cached` and `serial` read the environment."""
+
+    def __init__(self, ir):
+        self.ir = ir
+        self.builtin = {ir["slot_cached"]: "x.cached", ir["slot_serial"]: "x.serial"}
+
+    def arg(self, a):
+        if "Expr" not in a:
+            raise Fragment(f"argument {a}")
+        return self.expr(a["Expr"])
+
+    def expr(self, e):
+        if "Num" in e:
+            return str(nat(e["Num"], "constant"))
+        if "Attr" in e:
+            k = e["Attr"]
+            return self.builtin.get(k, f"(x.attr {k})")
+        if "Ctx" in e:
+            if e["Ctx"] == "Now":
+                return "x.now"
+            raise Fragment(f"context variable {e['Ctx']}")
+        if "Call" in e:
+            f, args = e["Call"]
+            if f in ("Min", "Max") and len(args) == 2:
+                return f"({f.lower()} {self.arg(args[0])} {self.arg(args[1])})"
+            if f == "BudgetLeft" and len(args) == 1 and "Stage" in args[0]:
+                if one_ref(args[0]["Stage"], "budget_left") != 0:
+                    raise Fragment("budget_left of a stage other than the engine")
+                return "x.budgetLeft"
+            if f == "CachedIn" and len(args) == 1 and "Pool" in args[0]:
+                return f"(x.cachedIn {one_ref(args[0]['Pool'], 'cachedin')})"
+            if f == "Floor" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
+                op, a, b = args[0]["Expr"]["Binary"]
+                if op == "Div":
+                    return f"({self.expr(a)} / {self.expr(b)})"
+            raise Fragment(f"call {f}")
+        if "Binary" in e:
+            op, a, b = e["Binary"]
+            sym = {"Add": "+", "Sub": "-", "Mul": "*"}.get(op)
+            if sym:
+                return f"({self.expr(a)} {sym} {self.expr(b)})"
+            rel = {"Lt": "<", "Le": "≤", "Gt": ">", "Ge": "≥", "Eq": "=", "Ne": "≠"}.get(op)
+            if rel:
+                return f"(if {self.expr(a)} {rel} {self.expr(b)} then 1 else 0)"
+            raise Fragment(f"operator {op}")
+        if "Cond" in e:
+            c, a, b = e["Cond"]
+            return f"(if {self.expr(c)} ≠ 0 then {self.expr(a)} else {self.expr(b)})"
+        raise Fragment(f"expression {e}")
+
+    def top(self, e):
+        """An expression in statement position: drop one pair of outer parentheses."""
+        t = self.expr(e)
+        return t[1:-1] if t.startswith("(") and t.endswith(")") else t
+
+    def block(self, b, ind):
+        pad = "  " * ind
+        out = []
+        for st in self.ir["blocks"][b]:
+            if st == "End":
+                out.append(pad + "stop")
+                return "\n".join(out)
+            if st == "Turn":
+                out.append(pad + "turn;")
+                continue
+            (kind, v), = st.items()
+            if kind == "Set":
+                slot, e = v
+                if slot in self.builtin:
+                    raise Fragment(f"set of the built-in `{self.ir['attrs'][slot]}`")
+                out.append(f"{pad}set {slot} = {self.top(e)};")
+            elif kind == "Observe":
+                k, e = v
+                out.append(f"{pad}observe {k} = {self.top(e)};")
+            elif kind == "Run":
+                if v.get("also"):
+                    raise Fragment("a run over several stages (`also`)")
+                s = one_ref(v["stage"], "run")
+                mode = {"Plain": "", "Prefill": " prefill", "Decode": " decode"}[v["mode"]]
+                if (s == 0) == (mode == ""):
+                    raise Fragment("prefill/decode run the engine, plain runs a delay")
+                g = f" growing {one_ref(v['growing'], 'growing')}" if v["growing"] else ""
+                out.append(f"{pad}run {s}{mode} ({self.top(v['work'])}){g};")
+            elif kind == "Hold":
+                if v.get("lease") is not None:
+                    raise Fragment("a hold with a lease is outside the fragment")
+                ps = []
+                for r, u, fits in v["pools"]:
+                    f = f" fits ({self.top(fits)})" if fits is not None else ""
+                    ps.append(f"{one_ref(r, 'hold')} ({self.top(u)}){f}")
+                ru = f" reuse ({self.top(v['reuse'])})" if v["reuse"] is not None else ""
+                ca = f" cache ({self.top(v['cache'])})" if v["cache"] is not None else ""
+                out.append(f"{pad}hold {', '.join(ps)}{ru} {{")
+                out.append(self.block(v["body"], ind + 1))
+                out.append(f"{pad}}}{ca};")
+            elif kind == "Branch":
+                c, t, f = v
+                out.append(f"{pad}branch ({self.top(c)}) {{")
+                out.append(self.block(t, ind + 1))
+                out.append(f"{pad}}} else {{")
+                out.append(self.block(f, ind + 1))
+                out.append(f"{pad}}};")
+            elif kind == "Loop":
+                out.append(f"{pad}loop {{")
+                out.append(self.block(v, ind + 1))
+                out.append(f"{pad}}}")
+                return "\n".join(out)
+            else:
+                raise Fragment(f"statement {kind}")
+        out.append(pad + "done")
+        return "\n".join(out)
+
+    def deployment(self):
+        ir = self.ir
+        st = ir["stages"]
+        if not st or "Step" not in st[0]["kind"] or any(s["kind"] != "Delay" for s in st[1:]):
+            raise Fragment("stages must be one step engine (stage 0) and delays")
+        step = st[0]["kind"]["Step"]
+        if fold(step["cost"]) != 1:
+            raise Fragment("the engine's iteration cost must be the constant 1 (the step clock)")
+        if step["serve"] != {"By": []}:
+            raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
+        pools = []
+        for i, p in enumerate(ir["pools"]):
+            if p["evict"] != "Lru" or p["queue"] is not None or p["spill"] is not None:
+                raise Fragment(f"pool {p['name']}: only LRU eviction, FIFO queue, no spill")
+            via = p["admit_via"] is not None
+            if via and p["admit_via"] != 0:
+                raise Fragment(f"pool {p['name']}: admitted by a stage other than the engine")
+            if p["preempt"] != ("None" if via else "Lifo"):
+                raise Fragment(f"pool {p['name']}: preemption {p['preempt']}")
+            if not via and step["memory"] != i:
+                raise Fragment(f"pool {p['name']}: not the engine's memory")
+            pools.append(f"⟨{nat(p['cap'], 'cap')}, {nat(p['block'] or 1, 'block')}, {'true' if via else 'false'}⟩")
+        return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
+                f"{nat(fold(step['chunk']), 'chunk')}⟩")
+
+    def workload(self):
+        """`Exec.Workload` of the IR's explicit sessions."""
+        ir = self.ir
+        ss = ir["arrival"].get("Sessions") if isinstance(ir["arrival"], dict) else None
+        if not ss:
+            raise Fragment("the workload must be explicit sessions (`CArrival::Sessions`)")
+        if ir["trace"] is not None:
+            raise Fragment("a trace file: inline it (`serq ir --inline-trace`)")
+        for st in ir["blocks"][ir["init"]]:
+            if "Set" not in st or any(st["Set"][0] not in {a for a, _ in s["attrs"]} for s in ss):
+                raise Fragment("`init` does more than every session's presets override")
+        if ir["blocks"][ir["turn"]]:
+            raise Fragment("a `turn` block (the fragment reads turns from the workload only)")
+
+        def pairs(xs):
+            return "[" + ", ".join(f"({slot}, {nat(v, 'attribute value')})" for slot, v in xs) + "]"
+
+        init = "[" + ", ".join(pairs(s["attrs"]) for s in ss) + "]"
+        if any(s.get("turns") for s in ss):
+            turns = "[" + ", ".join("[" + ", ".join(pairs(t) for t in s.get("turns", [])) + "]" for s in ss) + "]"
+            return f"⟨{init}, {turns}, some {ir['slot_turn']}, {ir['slot_more']}⟩"
+        return f"⟨{init}, [], none, 0⟩"
+
+
+def load(name):
+    with open(os.path.join(ODIR, name + ".ir.json")) as source:
+        ir = json.load(source)
+    if ir["version"] not in SUPPORTED_IR_VERSIONS:
+        raise Fragment(f"{name}: IR version {ir['version']} (this generator reads {SUPPORTED_IR_VERSIONS})")
+    if ir.get("share") is not None:
+        raise Fragment(f"{name}: shared multi-stage execution is outside the fragment")
+    if ir.get("arrivals") is not None:
+        raise Fragment(f"{name}: finite arrival limits are outside the fragment")
+    return ir, Lean(ir)
+
+
+def doc_tables(ir):
+    pools = ", ".join(f"{i} = {p['name']}" for i, p in enumerate(ir["pools"]))
+    stages = ", ".join(f"{i} = {s['name']}" for i, s in enumerate(ir["stages"]))
+    obs = ", ".join(f"{i} = {n}" for i, n in enumerate(ir["observes"]))
+    skip = {ir["slot_cached"], ir["slot_serial"]}
+    attrs = ", ".join(f"{i} = {n}" for i, n in enumerate(ir["attrs"]) if i not in skip)
+    return f"Attributes: {attrs}. Observations: {obs}. Pools: {pools}. Stages: {stages}."
+
+
+def program(defname, names, source):
+    """A Lean program from the IR session program of every named scenario; the programs
+    must be the same program (only constants in the deployment and the
+    workload differ)."""
+    progs = {}
+    for name in names:
+        ir, lean = load(name)
+        progs[name] = (lean.block(ir["session"], 1), doc_tables(ir))
+    body, tables = next(iter(progs.values()))
+    for name, p in progs.items():
+        if p != (body, tables):
+            raise Fragment(f"{name}: its session program differs from the other scenarios'")
+    return f"""/-- {source}, translated from its IR. {tables} -/
+def {defname} : Prog := [route|
+{body}]
+
+theorem {defname}_wf : {defname}.wf = true := by decide
+"""
+
+
+HEAD = '''/-
+# vLLM scheduler scenarios as theorems about serQ programs
+
+Generated by `scripts/gen_lean_oracle.py` from the IR of serQ's oracle
+scenarios (`tools/oracle/*.ir.json`) and the real vLLM v1 scheduler's
+answers (`*.out.json`, `cache_trace.out.csv`: serQ `tools/vllm_oracle.py`
+and `tools/vllm_replay_oracle.py`, upstream `ref/vllm` at 0c87a197).
+Do not edit. The programs, the deployments and the workloads below are
+translations of that IR, the same IR the serQ tests run.
+
+Six scenarios run one request program, `vllmRequest` (serQ
+`examples/oracle/vllm_request.sq`): wait until the arrival, hold a slot and the
+KV blocks of the chunk the engine's budget leaves (admission needs room for
+the whole prompt), prefill growing the hold, decode growing it. The
+theorems say that the executable semantics gives, for every request, the
+step of its first token and of its last token, and the number of
+preemptions, that the real scheduler gives. The seventh, `vllmTurn` (serQ
+`examples/replay/vllm_replay.sq` on a unit step clock, the trace inlined as the
+sessions' turns), is a multi-turn replay with a prefix cache: hits, a
+partial hit and misses caused by eviction; its theorem gives, for every
+turn, the send step, the time to first token, the latency and the cached
+tokens that the real scheduler and KV-cache manager give. All are checked
+by evaluation in the kernel (`decide +kernel`: no axiom beyond the
+standard three).
+-/
+import Serq.Exec
+
+set_option maxRecDepth 100000
+
+namespace SerqLang
+namespace Oracle
+
+open Exec
+
+{REQUEST}
+/-- (first-token steps, last-token steps, preemptions) of `vllmRequest`. -/
+def outcome (D : Deployment) (ticks : ℕ) (w : Workload) :
+    List (ℕ × ℕ) × List (ℕ × ℕ) × ℕ :=
+  let m := Exec.runW D ticks w vllmRequest
+  (observed m 0, observed m 1, m.preempts)
+'''
+
+
+def request_scenarios():
+    return sorted(f[:-9] for f in os.listdir(ODIR) if f.endswith(".out.json") and os.path.exists(os.path.join(ODIR, f[:-9] + ".json")))
+
+
+def gen():
+    names = request_scenarios()
+    for n in names:
+        if not os.path.exists(os.path.join(ODIR, n + ".ir.json")):
+            raise Fragment(f"{n}: no IR file ({n}.ir.json)")
+    out = [HEAD.replace("{REQUEST}", program("vllmRequest", names, "The vLLM request program (serQ `examples/oracle/vllm_request.sq`)"))]
+    for name in names:
+        sc = json.load(open(os.path.join(ODIR, name + ".json")))
+        ans = json.load(open(os.path.join(ODIR, name + ".out.json")))
+        ir, lean = load(name)
+        n = len(ir["arrival"]["Sessions"])
+        if n != len(sc["requests"]):
+            raise Fragment(f"{name}: {n} sessions in the IR, {len(sc['requests'])} requests in the scenario")
+        first = sorted((int(k), v) for k, v in ans["first"].items())
+        done = sorted((int(k), v) for k, v in ans["done"].items())
+        ticks = max([v for _, v in done] + [0]) + 5
+        fs = ", ".join(f"({k}, {v})" for k, v in first)
+        ds = ", ".join(f"({k}, {v})" for k, v in done)
+        obs = ir["observes"]
+        if obs[:2] != ["first", "done"]:
+            raise Fragment(f"{name}: observations {obs} (outcome reads 0 = first, 1 = done)")
+        out.append(f'''
+/-- serQ `tools/oracle/{name}.ir.json`: {n} requests, {sc["num_blocks"]} blocks of {sc["block_size"]}, budget {sc["budget"]}, {sc["max_seqs"]} slots, chunk {sc.get("chunk", 0)}; the deployment and the workload are the IR's. -/
+theorem vllm_{name} :
+    outcome {lean.deployment()} {ticks}
+      {lean.workload()} =
+    ([{fs}], [{ds}], {ans["preemptions"]}) := by
+  decide +kernel
+''')
+    out.append(gen_cache())
+    out.append("\nend Oracle\nend SerqLang\n")
+    return "".join(out)
+
+
+def gen_cache():
+    ir, lean = load("cache_trace")
+    rows = {}
+    for l in open(os.path.join(ODIR, "cache_trace.out.csv")).read().splitlines()[1:]:
+        s, k, sent, first, done, prompt, cached, o = l.split(",")
+        rows[(int(s), int(k))] = tuple(nat(float(x), "answer") for x in (sent, first, done, cached))
+    keys = sorted(rows)
+    ticks = max(r[2] for r in rows.values()) + 5
+    ob = {n: i for i, n in enumerate(ir["observes"])}
+    for n in ("sent", "ttft", "latency", "cached_tokens"):
+        if n not in ob:
+            raise Fragment(f"cache_trace: no observation `{n}`")
+
+    def col(f):
+        return "[" + ", ".join(f"({s}, {f(rows[(s, k)])})" for s, k in keys) + "]"
+
+    return "\n/-! ### A multi-turn scenario with a prefix cache -/\n\n" + program(
+        "vllmTurn", ["cache_trace"], "The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock"
+    ) + f'''
+/-- serQ `tools/oracle/cache_trace.ir.json`: {len(ir["arrival"]["Sessions"])} sessions of the inlined trace
+`cache_trace.csv`; the deployment and the workload are the IR's. Per turn:
+send step, time to first token, latency, cached tokens at admission. -/
+theorem vllm_cache_trace :
+    let m := Exec.runW {lean.deployment()} {ticks}
+      {lean.workload()} vllmTurn
+    (observed m {ob["sent"]}, observed m {ob["ttft"]}, observed m {ob["latency"]}, observed m {ob["cached_tokens"]}) =
+      ({col(lambda r: r[0])},
+       {col(lambda r: r[1] - r[0])},
+       {col(lambda r: r[2] - r[0])},
+       {col(lambda r: r[3])}) := by
+  decide +kernel
+'''
+
+
+if __name__ == "__main__":
+    try:
+        txt = gen()
+    except Fragment as e:
+        print("FAIL: outside the Lean fragment:", e)
+        sys.exit(1)
+    if "--check" in sys.argv:
+        if open(OUT).read() != txt:
+            print("STALE: lean/Serq/Oracle.lean; run scripts/gen_lean_oracle.py")
+            sys.exit(1)
+        print("lean/Serq/Oracle.lean is current")
+    else:
+        open(OUT, "w").write(txt)
+        print("wrote", OUT)

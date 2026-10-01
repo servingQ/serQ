@@ -15,8 +15,8 @@ tests read; `.sq` is one frontend. So:
   bumped 2); an added field a reader may ignore, or a stricter check, does
   not. The lines apply to a *tagged* version: while `IR_VERSION` has no tag,
   nothing bumps and the change goes in the coming tag's message;
-- `serving-queue-theory`'s `scripts/gen_serq_oracle.py` pins that version and
-  reads the IR by field name — it has to move in the same change;
+- `scripts/gen_lean_oracle.py` pins that version and reads the IR by field
+  name — it has to move in the same change, and `make lean` must pass;
 - a new `CExpr` or `CStmt` variant drops every oracle program that uses it
   out of the Lean fragment until the generator is taught it (the generator
   raises `Fragment` on a construct it does not know).
@@ -29,6 +29,7 @@ Price an IR version at a cross-repository handshake, not a line of code.
 make check        # fmt, clippy, tests, every program links and draws, oracles agree
 make oracle-ir    # regenerate tools/oracle/*.ir.json
 make draw-golden  # regenerate tests/golden/ and docs/assets/*.deployment.svg
+make lean         # the Lean model: oracle theorems current, lake build, no sorry, axiom audit
 ```
 
 `make check` is the gate. Generated files (`tools/oracle/*.ir.json`,

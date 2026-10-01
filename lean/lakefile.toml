@@ -1,0 +1,16 @@
+name = "Serq"
+version = "0.1.1"
+defaultTargets = ["Serq"]
+
+[leanOptions]
+autoImplicit = false
+relaxedAutoImplicit = false
+pp.unicode.fun = true
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.34.0"
+
+[[lean_lib]]
+name = "Serq"

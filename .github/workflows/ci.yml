@@ -41,3 +41,25 @@ jobs:
           python -m pip install --quiet dist/pyserq-*.whl
       - name: pyserq gives what the CLI gives
         run: python pyserq/tests/test_pyserq.py
+
+  lean:
+    name: Lean model (lean/)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install elan (the toolchain is pinned by lean/lean-toolchain)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          path: lean/.lake
+          key: lean-${{ hashFiles('lean/lean-toolchain', 'lean/lake-manifest.json') }}
+      - name: Mathlib cache
+        working-directory: lean
+        run: lake exe cache get
+      - name: oracle theorems current, lake build, no sorry, axiom audit
+        run: scripts/check_lean.sh
