@@ -67,11 +67,13 @@ named.
 From `examples/pd-disaggregation/llmd_nixl_pull.sq`, the decoder's read of
 the prefiller's leased blocks, over the prefiller's NIC and its own, in the
 decoder's `decode (prompt) from src` entry (`src` is the prefiller's leased
-pool, and as an index the prefiller's member):
+pool). The NICs are the pods' (`nic ps(BwD);`), and the relation `D pull P
+latency x0 share maxmin;` makes a `transfer` without `on` the read over
+`P.nic[i]` and `D.nic[j]`, after the decoder's wait `x0`:
 
 ```serq
 hold kv (known) reserve (known), reqs (0) reserve (1) … {
-  transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);   // after ingress's latency x0
+  transfer (prompt - c) from src to kv (prompt - 1 - c);   // over P's NIC and this pod's
   …
 } cache (prompt + o);
 ```

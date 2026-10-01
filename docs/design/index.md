@@ -74,5 +74,6 @@ here. This directory is the record of **applying** them.
 | [Waiting selection](waiting-selection.md) | Selection-time queue keys, elapsed wait and Ascend-style FCFS aging | IR v9 |
 | [Queues](queue.md) | gateway, prefill, link and decode as roles of one `queue` that owns its pools, its stage and the entries holding a request's admission, allocation and service; what an entry may read; parse-time sugar; a link whose `serve` is its cost | RFC #72, with `examples/pd-disaggregation/llmd_nixl_pull.sq` |
 | [Explicit gateways](explicit-gateways.md) | `request gw;` selects a gateway by name; predefined vocabulary and the proposed import boundary | PR #87 follow-up |
+| [The pull relation](pull-relation.md) | A pod owns its `nic`; `D pull P latency x share s;` is a transfer's topology, mode and policy in one line, and a `transfer` without `on` its read | #200, parse-time sugar |
 
 A new design document adds a row to this table.

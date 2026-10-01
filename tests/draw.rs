@@ -71,8 +71,8 @@ fn stations_take_their_stage_kind() {
     for (name, kind) in [
         ("P", StationKind::Step),
         ("D", StationKind::Step),
-        ("egress", StationKind::Ps),
-        ("ingress", StationKind::Ps),
+        ("P.nic", StationKind::Ps),
+        ("D.nic", StationKind::Ps),
         ("tool", StationKind::Delay),
     ] {
         let i = net
@@ -373,7 +373,7 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "P"), ["P.reqs", "P.kv"]);
-    for nic in ["egress", "ingress"] {
+    for nic in ["P.nic", "D.nic"] {
         assert_eq!(pools_of(&p, &net, nic), ["P.kv", "D.kv"], "{nic}");
     }
     assert_eq!(pools_of(&p, &net, "D"), ["D.kv", "D.reqs"]);
@@ -381,8 +381,8 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
     let node = |name: &str| net.node_of(stage(&p, name)).unwrap();
     let (pf, eg, ing, d, tool) = (
         node("P"),
-        node("egress"),
-        node("ingress"),
+        node("P.nic"),
+        node("D.nic"),
         node("D"),
         node("tool"),
     );
@@ -390,7 +390,7 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
     let note = &net.flow_notes[0];
     assert_eq!(note.from.as_deref(), Some("P.kv[i]"));
     assert_eq!(note.to.as_deref(), Some("D.kv[j]"));
-    assert_eq!(note.latency, ["ingress latency (2e-3)"]);
+    assert_eq!(note.latency, ["D.nic latency (2e-3)"]);
     assert_eq!(net.instances.len(), 2);
     assert_eq!(net.instances[0].nodes, [pf, eg]);
     assert_eq!(net.instances[1].nodes, [ing, d]);
@@ -454,8 +454,8 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
-    let (pf, eg, ing, d, tool) = (at("P"), at("egress"), at("ingress"), at("D"), at("tool"));
-    assert!(net.node_of(stage(&p, "ingress.latency")).is_none());
+    let (pf, eg, ing, d, tool) = (at("P"), at("P.nic"), at("D.nic"), at("D"), at("tool"));
+    assert!(net.node_of(stage(&p, "D.nic.latency")).is_none());
     let route = decision(&net).expect("the router");
     assert!(net.has_edge(End::Arrival, route));
     assert!(net.has_edge(route, pf), "remote");

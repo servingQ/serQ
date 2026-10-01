@@ -80,8 +80,10 @@ item     := let NAME = expr ;
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
           | run { horizon expr ; warmup expr ; seed expr ; arrivals expr ; }
           | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
+          | QUEUE pull QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the reader, its source, the read (below, *Queues*)
 qitem    := pool NAME { poolopt* }              -- the queue's own; only its entries hold it
           | serve kind [ latency expr ] ;       -- the queue's stage, named after the queue; `latency` a link's
+          | nic kind ;                          -- the queue's NIC, the stage `QUEUE.nic`
           | VERB [ ( NAME, ... ) ] [ from NAME ] block   -- an entry of one of the queue's roles
 poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
@@ -426,7 +428,7 @@ it targets a separate `server { … }` block and fails without one.
 
 `queue`, `pool`, `serve`, `request` and `mark` are language syntax. The role
 names and their entry signatures in the table are predefined vocabulary;
-`gw`, `P`, `D`, `egress` and `ingress` are names declared by this program. There is
+`gw`, `P` and `D` are names declared by this program. There is
 currently no `import` or user-defined role syntax; the proposed separation
 is discussed in [Explicit gateways](design/explicit-gateways.md).
 
@@ -436,21 +438,39 @@ The deployment calls an entry where the request goes: `P[i].prefill
 through it, so that whichever one the request went through left the KV; a `from` on a queue that leases
 nothing does not link.
 Inside the entry the `from` name is that pool, and in an index it is
-the source member's index, so the decoder reaches the prefiller's own NIC:
+the source member's index.
+
+A pod's NIC is the pod's: `nic ps(BwD);` in a queue is the stage
+`D.nic`, one per member. A *pull relation* says which queue reads the KV
+from which, and how the reads share the NICs:
 
 ```
-queue egress[NP] : link { serve ps(BwP); }
-queue ingress[ND] : link { serve ps(BwD) latency x0; }
-…
+queue P[NP] : prefill { … nic ps(BwP); prefill (prompt) { … } }
+queue D[ND] : decode {
+  … nic ps(BwD);
   decode (prompt) from src {
     …
-    transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);
+    transfer (prompt - c) from src to kv (prompt - 1 - c);   // over P's NIC and this pod's
+  }
+}
+D pull P latency x0 share maxmin;
 ```
 
-is the kernel's `run ingress.latency[j] (x0); run egress[i], ingress[j]
-(…); load D.kv[j] (…); release P.kv[i];`: a fixed wait, then one read that
-holds both NICs at once, each serving it at the bandwidth its `serve`
-gives. `latency x` on a link's `serve` is that wait: a delay stage
+`D pull P` is one line for the topology and the mode: the KV goes from `P`
+to `D`, `D` starts the read (NIXL pull), `D` waits `x0` before each one
+(a number or a constant over `let`s), and concurrent reads divide the two
+NICs by the policy, which is the program's `share` and is written here, not
+left to a default. Inside an entry of `D` called `from P[i]`, a `transfer`
+without `on` is the read: the kernel's `run D.nic.latency[j] (x0); run
+P.nic[i], D.nic[j] (…); load D.kv[j] (…); release P.kv[i];`. Both queues
+are declared above the relation and have a `nic`; a reader has one source;
+an entry of `D` called `from` another queue is an error, and so is a
+`transfer` without `on` in a queue that pulls from none. A program with a
+relation does not also write `share` on its own.
+
+`transfer on L[k], M[l] (n) from S to P (m)` names the stages itself, as
+a `server` does: link queues, or any `ps` stages. `latency x` on a link's
+`serve` is the wait before such a transfer: a delay stage
 `L.latency` of the link's own, which every `transfer on` naming the link
 runs first, one wait per link named, in the order named. A number or a
 `let` constant; only a link without an entry takes one. A link with a `transfer (n)` entry is called

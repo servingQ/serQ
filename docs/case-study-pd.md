@@ -17,7 +17,7 @@ and what it still cannot say, is in [The KV transfer](design/pd-transfer.md).
 The router picks a prefill instance and a decode instance, each a box with
 its engine, its NIC and its pools. The read crosses between them: it holds
 the prefiller's NIC and the decoder's at once, which is the bracket around
-`egress[i]` and `ingress[j]`, and moves the prompt's KV from the
+`P.nic[i]` and `D.nic[j]`, and moves the prompt's KV from the
 prefiller's leased blocks to the decoder's (`P.kv[i] → D.kv[j]`) after the
 decoder's read latency.
 
@@ -67,7 +67,7 @@ and block 16. What differs from the guide is written next to each number.
 | the decoder's scheduler looks at its waiting queue only at a step with budget left and a running slot free | `admit via D` on both of the decoder's pools; `reqs (0) reserve (1)` — a slot must be free, none is taken | `scheduler.py:872-879` |
 | the decoder's local prefix hit, then the connector: for a remote prefill every prompt token beyond the local hit is external and loaded asynchronously | `kv (known) reserve (known)` with `reuse (reusable(known, bs))` in `D`'s `decode … from` entry; `c = cached` is the local hit | `scheduler.py:932-954`; `nixl/pull_scheduler.py:34-66` |
 | blocks are allocated for the whole prompt, and the request is parked, `WAITING_FOR_REMOTE_KVS`, holding them and no slot; one transfer per request | the hold on `kv`; `transferred` is `do_remote_prefill`, spent | `scheduler.py:1199-1226, 1264-1294`; `nixl/pull_scheduler.py:108-189` |
-| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c)`, with `latency x0` on `ingress`: a fixed wait, then the bytes out of the prefiller's NIC and into the decoder's at once, the two shared max-min fairly (`share maxmin`, a model, not a measurement: [Bandwidth sharing](design/bandwidth-sharing.md)) | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
+| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `transfer (prompt - c) from src to kv (prompt - 1 - c)` in `D`'s entry, and `D pull P latency x0 share maxmin;`: the decoder reads; a fixed wait, then the bytes out of the prefiller's NIC and into the decoder's at once, the two shared max-min fairly (a model, not a measurement: [Bandwidth sharing](design/bandwidth-sharing.md)) | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
 | the read done, the blocks are cached, the last prompt token is marked uncomputed (its logits are needed), and the request is back in the waiting queue, served before new arrivals | the `load D.kv[j] (prompt - 1 - c)` the transfer stands for; `hold reqs (1)`, with `reqs` declared before `kv` | `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; `_try_promote_blocked_waiting_request`, `scheduler.py:3079-3092`; `scheduler.py:2383-2385` |
 | the prefiller frees the leased blocks when the read completes | the `release P.kv[i]` the transfer stands for takes the lease | `_update_from_kv_xfer_finished`, `scheduler.py:3113-3138` |
 | the decoder recomputes the last prompt token and decodes; a request preempted afterwards is rescheduled without a second transfer, prefilling locally what it lost | `prefill (known - c) growing kv; decode (o - 1 - (known - prompt)) growing kv;` with `known` from `computed` | `scheduler.py:1560-1561`; `nixl/pull_scheduler.py:187-189` |
@@ -82,10 +82,9 @@ gateway selected by `request gw;` in the workload's session.
 
 ```
 queue gw : gateway { route { … } }                 // the router and the sidecar
-queue egress[NP] : link { serve ps(BwP); }         // a prefiller's NIC
-queue ingress[ND] : link { serve ps(BwD) latency x0; }   // a decoder's NIC; its worker posts the READ
-queue P[NP] : prefill { pool reqs { … admit via P; } pool kv { … } serve step { … memory kv; } prefill (prompt) { … } }
-queue D[ND] : decode  { pool reqs { … admit via D; } pool kv { … admit via D; } serve step { … memory kv; } decode (prompt) { … } decode (prompt) from src { … } }
+queue P[NP] : prefill { pool reqs { … admit via P; } pool kv { … } serve step { … memory kv; } nic ps(BwP); prefill (prompt) { … } }
+queue D[ND] : decode  { pool reqs { … admit via D; } pool kv { … admit via D; } serve step { … memory kv; } nic ps(BwD); decode (prompt) { … } decode (prompt) from src { … } }
+D pull P latency x0 share maxmin;                  // the decoder reads the KV from the prefiller
 stage tool : delay;
 ```
 
@@ -94,18 +93,19 @@ prefiller, `admit via P` inside `P` means the member's own scheduler serves
 the pool, and `memory kv` on its stage counts the member's own blocks as its
 residents' memory (`kv_decode`, `kv_prefill`). The family's size is the
 `let` the router chooses over (`queue D[ND]`, `choose j in ND`), so the
-number is written once. A link with only a `serve` is a NIC whose cost is
-its bandwidth; the links are declared above the pods, whose entries name
-them.
+number is written once. Each pod's NIC is its own (`nic ps(BwD);`, the
+stage `D.nic`), and `D pull P latency x0 share maxmin;` is the transfer's
+topology and mode in one line: the decoder reads the KV from the
+prefiller, waits `x0` before each read, and concurrent reads divide the two
+NICs max-min fairly.
 
 The router is the gateway's two `choose`s, and the instance it picked is
 the queue the request is handed to: `P[i].prefill (prompt)`, then
 `D[j].decode (prompt) from P[i]`. Inside an entry nothing is indexed — `kv`,
-`reqs`, `P` are the member's own — and `self` is the member's index where
-another family has to be matched (`ingress[self]`). `from P[i]` is the pool
-`P`'s entry leases; read as an index, the `from` name is the source member's
-(`egress[src]`, the prefiller's NIC). The transfer's `load` and `release`
-name the pool as the holds did, index included. The admission, the
+`reqs`, `P` are the member's own. `from P[i]` is the pool `P`'s entry
+leases, and the read's NICs are the relation's: the source member's
+`P.nic[i]` and the reader's own `D.nic[j]`. The transfer's `load` and
+`release` name the pool as the holds did, index included. The admission, the
 allocation and the two runs are the entries' and appear once each: the
 router's body has no `hold`.
 
@@ -144,13 +144,16 @@ decoder is admitted, and the decoder's worker reads over both NICs:
 ```
 P[i].prefill (prompt);              // hold reqs (1), kv (…) … { prefill (…) growing kv; } cache (prompt) lease kv (inf);
 D[j].decode (prompt) from P[i];     // hold kv (known) reserve (known), reqs (0) reserve (1) … {
-                                    //   transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);   // D READs; the lease ends
+                                    //   transfer (prompt - c) from src to kv (prompt - 1 - c);   // D READs over both NICs; the lease ends
                                     //   hold reqs (1) { … }
                                     // } cache (prompt + o);
 ```
 
-Push through the llm-d sidecar (serial dispatch) is the same three lines
-with two differences a reader can see: the copy is the prefiller's WRITE
+The relation has no `push` yet: the push a reader expects is vLLM's proxy,
+where the decoder allocates during the prefill, and that needs a
+reservation the language does not have (below). Push through the llm-d
+sidecar (serial dispatch) can be written with link queues and `transfer
+on`, the same three lines with two differences a reader can see: the copy is the prefiller's WRITE
 (`nixl/push_worker.py:714-722`), which crosses the same two NICs but is
 posted by the prefiller's worker, so the latency is `egress`'s; and it
 starts one notification after the decoder's admission (the registration,

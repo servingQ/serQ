@@ -76,17 +76,6 @@ queue gw : gateway {
   }
 }
 
-// The NICs: a prefiller's, which the reads out of it share, and a
-// decoder's, which the reads into it share. A read holds both at once; how
-// concurrent reads divide them is UCX's and the fabric's, not vLLM's, and
-// max-min fairness is the model, not a measurement
-// (docs/design/bandwidth-sharing.md).
-queue egress[NP] : link { serve ps(BwP); }
-// The decoder's worker posts the READ and finds it done at a later step:
-// a fixed wait per read, not bandwidth.
-queue ingress[ND] : link { serve ps(BwD) latency x0; }
-share maxmin;
-
 // A prefill instance: vLLM's engine on one device (examples/multi-turn/vllm.sq)
 // with no decode. The scheduler admits a request with a slot and the blocks
 // of its first chunk, and room for the whole prompt
@@ -102,6 +91,7 @@ queue P[NP] : prefill {
     cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
     memory kv;
   }
+  nic ps(BwP);                          // the pod's NIC: the reads out of it share it
   prefill (prompt) {
     hold reqs (1), kv (min(prompt, hit + budget_left(P))) reserve (prompt)
          at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
@@ -123,6 +113,7 @@ queue D[ND] : decode {
     cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
     memory kv;
   }
+  nic ps(BwD);                          // the pod's NIC: the reads into it share it
 
   // Decode only: the pod prefills the prompt itself (examples/multi-turn/vllm.sq).
   decode (prompt) {
@@ -153,7 +144,7 @@ queue D[ND] : decode {
         // once; the read done, the prefiller's lease ends. The last prompt
         // token is recomputed for its logits.
         observe remote_tokens = prompt - c;
-        transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);
+        transfer (prompt - c) from src to kv (prompt - 1 - c);   // over P's NIC and this pod's
         mark read_done;
         set transferred = 1;
         set c = prompt - 1;
@@ -169,6 +160,13 @@ queue D[ND] : decode {
     } cache (prompt + o);
   }
 }
+
+// The decoder's worker reads the KV (NIXL pull): it posts the READ and finds
+// it done at a later step, a fixed wait per read, and the bytes cross the
+// prefiller's NIC and the decoder's at once. How concurrent reads divide the
+// two NICs is UCX's and the fabric's, not vLLM's: max-min fairness is the
+// model, not a measurement (docs/design/bandwidth-sharing.md).
+D pull P latency x0 share maxmin;
 
 stage tool : delay;
 

@@ -849,6 +849,135 @@ fn the_contract_holds_at_four_more_edges() {
     );
 }
 
+/// `D pull P latency x share maxmin;`: the queues own their NICs, and a
+/// `transfer` without `on` in `D`'s entry is the read over `P`'s NIC and
+/// `D`'s at once, after `D`'s wait - the flat program with the stages and
+/// the policy written out (#200).
+#[test]
+fn a_pull_relation_is_the_flat_read() {
+    let queues = "
+      let x0 = 0.5;
+      queue gw : gateway { route {
+        P[i].prefill (prompt);
+        D[j].decode (prompt) from P[i];
+      } }
+      queue P[2] : prefill {
+        pool kv { cap 1000; }
+        serve fifo;
+        nic ps(100);
+        prefill (prompt) { hold kv (prompt) { run (prompt); } cache (prompt) lease kv (inf); }
+      }
+      queue D[2] : decode {
+        pool kv { cap 1000; block 16; }
+        serve step { cost 1; memory kv; }
+        nic ps(200);
+        decode (prompt) { hold kv (prompt) { prefill (prompt) growing kv; } }
+        decode (prompt) from src {
+          hold kv (prompt) {
+            transfer (prompt) from src to kv (prompt - 1);
+            decode (o - 1) growing kv;
+          }
+        }
+      }
+      D pull P latency x0 share maxmin;
+      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request gw; end; } }
+      run { horizon 100; }";
+    let flat = "
+      let x0 = 0.5;
+      pool kvP[2] { cap 1000; }
+      stage P[2] : fifo;
+      stage nicP[2] : ps(100);
+      pool kvD[2] { cap 1000; block 16; }
+      stage D[2] : step { cost 1; memory kvD; }
+      stage nicD[2] : ps(200);
+      stage wait[2] : delay;
+      share maxmin;
+      server {
+        hold kvP[i] (prompt) { run P[i] (prompt); } cache (prompt) lease kvP[i] (inf);
+        hold kvD[j] (prompt) {
+          run wait[j] (x0);
+          transfer on nicP[i], nicD[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
+          decode on D[j] (o - 1) growing kvD[j];
+        }
+      }
+      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
+      run { horizon 100; }";
+    same_ir(
+        queues,
+        flat,
+        &[
+            ("P.kv", "kvP"),
+            ("D.kv", "kvD"),
+            ("P.nic", "nicP"),
+            ("D.nic", "nicD"),
+            ("D.nic.latency", "wait"),
+        ],
+    );
+}
+
+/// A pull relation names what it couples and how: both queues declared
+/// above with a NIC, one source per reader, a policy, and the source the
+/// entry is called from.
+#[test]
+fn a_pull_relation_says_what_it_couples() {
+    let program = |p_nic: &str, rel: &str, call_from: &str| {
+        format!(
+            "queue gw : gateway {{ route {{ P.prefill (prompt); Q.prefill (prompt); D.decode (prompt) from {call_from}; }} }}
+             queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; {p_nic}
+               prefill (p) {{ hold kv (p) {{ run (p); }} cache (p) lease kv (inf); }} }}
+             queue Q : prefill {{ pool kv {{ cap 100; }} serve fifo; nic ps(1);
+               prefill (p) {{ hold kv (p) {{ run (p); }} cache (p) lease kv (inf); }} }}
+             queue D : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }} nic ps(1);
+               decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }}
+               decode (p) from src {{ hold kv (p) {{ transfer (p) from src to kv (p); }} }} }}
+             {rel}
+             workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ request gw; end; }} }} run {{ horizon 10; }}"
+        )
+    };
+    compile_source(
+        &program("nic ps(1);", "D pull P share maxmin;", "P"),
+        &Overrides::default(),
+    )
+    .unwrap();
+    refused(
+        &program("", "D pull P share maxmin;", "P"),
+        "queue `P` has no `nic`",
+    );
+    refused(
+        &program("nic ps(1);", "D pull P;", "P"),
+        "names how concurrent reads divide the NICs",
+    );
+    refused(
+        &program(
+            "nic ps(1);",
+            "D pull P share maxmin; share bottleneck;",
+            "P",
+        ),
+        "`share` is given twice: the pull relation",
+    );
+    refused(&program("nic ps(1);", "", "P"), "pulls from no queue");
+    // the read takes from the entry's source, not any pool (#207 review)
+    refused(
+        &program("nic ps(1);", "D pull P share maxmin;", "P").replace(
+            "transfer (p) from src to kv (p)",
+            "transfer (p) from kv to kv (p)",
+        ),
+        "a read takes from the entry's source, `from src`",
+    );
+    refused(
+        &program("nic ps(1);", "D pull P share maxmin;", "Q"),
+        "`D` pulls from `P`, and this entry was called `from Q.kv`",
+    );
+    refused(
+        &program("nic ps(1);", "D pull P latency ~exp(1) share maxmin;", "P"),
+        "`latency` is a number or a constant over `let`s",
+    );
+    refused(
+        &format!("D pull P share maxmin; {}", program("nic ps(1);", "", "P")),
+        "no queue `D` is declared above",
+    );
+}
+
 /// What the review of the rebased #87 found an entry could still reach.
 #[test]
 fn an_entry_reaches_only_its_own() {

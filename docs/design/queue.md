@@ -75,8 +75,7 @@ expr  += QUEUE [ '[' expr ']' ] . POOL            -- from outside, a pool's read
    what the session reads back (`prompt`).
 3. *`from P[i]` is the pool `P`'s entry leases.* The queue is the handle;
    there is no value for a leased allocation. Inside the entry the `from`
-   name is that pool, and in an index it is the member's index:
-   `egress[src]` is the prefiller's own NIC. A `from` on a queue whose
+   name is that pool, and in an index it is the member's index. A `from` on a queue whose
    entries lease nothing does not link, nor on one with an entry that
    leases nothing: the request may have gone through it, and `Release` of
    no lease is the kernel's no-op, not an error. The rule is at the call, not on the
@@ -91,7 +90,8 @@ expr  += QUEUE [ '[' expr ']' ] . POOL            -- from outside, a pool's read
 | `Q[i].verb (e, …)` | the body in place, parameters substituted as an `at admission` binding is (no `~`), `set` names renamed |
 | `Q[i].decode (…) from S[k]` | the body's `src` := `S.kv[k]` |
 | `L[j].transfer (n) from src to kv (m)` | `run L[j] (t); load Q.kv[i] (m); release src`, `t` the link entry's `run (…)` |
-| `transfer on egress[src], ingress[self] (n) from src to kv (m)` in `D[j]`'s `decode … from src`, called `from P[i]` | `run egress[i], ingress[j] (n); load D.kv[j] (m); release P.kv[i]` |
+| `nic k;` in `queue Q[N]` | `stage Q.nic[N] : k;` |
+| `D pull P latency x share s;`, and `transfer (n) from src to kv (m)` in `D[j]`'s `decode … from src`, called `from P[i]` | `stage D.nic.latency[N] : delay; share s;`, and `run D.nic.latency[j] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i]` ([The pull relation](pull-relation.md)) |
 | `queue L[N] : link { serve k latency x; }`, and a `transfer on L[k] …` | `stage L[N] : k; stage L.latency[N] : delay;`, and `run L.latency[k] (x);` before the transfer's `run` |
 | `mark x;` / `Q.x` | `set Q.x = now;` / the attribute |
 | `request Q;` | the named gateway's `route` body in place; no request node in the IR |
@@ -167,17 +167,16 @@ estimate. An `expose` clause naming what a queue lets the deployment read
 is the next step, and the moment the router's estimate and the pod's truth
 part in the notation.
 
-**`self` and `src` stand in for ownership.** The NICs are the pods';
-`queue D { queue nic { … } }` would say so, and the flat families with
-`ingress[self]` and `egress[src]` are the cheaper start. `src` is a pun: a
-pool where a pool is read, the source member in an index. Nothing
-else can be meant in either place, so no program reads two ways, but a
-reader has to know the rule.
+**`src` in an index is a pun.** A pool where a pool is read, the source
+member in an index. Nothing else can be meant in either place, so no
+program reads two ways, but a reader has to know the rule. The NICs no
+longer need it: a pod owns its `nic`, and the [pull
+relation](pull-relation.md) names the read's two ends.
 
 **Two ways to cross a link.** A link with a `transfer (n)` entry is called
 (`nic[self].transfer (n) from src to kv (m)`) and runs its body; a link with
-none is named by the serving form (`transfer on egress[src], ingress[self]
-(n) …`) and runs its `serve`. The first says what one NIC costs; the second
+none is named by the serving form (`transfer on L[k], M[l] (n) …`) and
+runs its `serve`. The first says what one NIC costs; the second
 is the only way to hold two at once. A joint call over entries — which
 body's `run` holds both? — has no answer yet, so the form is not offered.
 

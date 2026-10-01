@@ -174,6 +174,10 @@ struct Parser {
     structural_overrides: Vec<String>,
     /// The queue whose entry is being parsed.
     in_queue: Option<usize>,
+    /// The `from` name of the entry being parsed.
+    entry_from: Option<String>,
+    /// The program's `share` was given by a pull relation.
+    relation_share: bool,
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
@@ -252,7 +256,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 84] = [
+pub const KEYWORDS: [&str; 86] = [
     "admission",
     "admit",
     "arrivals",
@@ -301,6 +305,7 @@ pub const KEYWORDS: [&str; 84] = [
     "mark",
     "maxmin",
     "memory",
+    "nic",
     "none",
     "observe",
     "on",
@@ -310,6 +315,7 @@ pub const KEYWORDS: [&str; 84] = [
     "preempt",
     "prefill",
     "ps",
+    "pull",
     "queue",
     "release",
     "renewal",
@@ -1217,6 +1223,8 @@ impl Parser {
             consts: vec![],
             structural_overrides: vec![],
             in_queue: None,
+            entry_from: None,
+            relation_share: false,
             latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
@@ -1432,15 +1440,21 @@ impl Parser {
                 let body = self.block()?;
                 self.side = Side::Session;
                 self.server = Some((at, body));
+            } else if matches!(self.peek(), Tok::Ident(_))
+                && *self.peek_at(1) == Tok::Ident("pull".into())
+            {
+                self.pull_relation(&mut prog)?;
             } else if self.is_kw("share") {
                 let at = self.pos;
                 self.advance();
                 if let Some(first) = self.share_at {
                     let line = self.toks[first].line;
-                    return self.err_at(
-                        at,
-                        format!("`share` is given twice: the first is on line {line}"),
-                    );
+                    let what = if self.relation_share {
+                        "the pull relation on line"
+                    } else {
+                        "the first is on line"
+                    };
+                    return self.err_at(at, format!("`share` is given twice: {what} {line}"));
                 }
                 self.share_at = Some(at);
                 prog.share = Some(if self.eat_kw("maxmin") {
@@ -2632,6 +2646,8 @@ impl Parser {
             leased: None,
             marks: vec![],
             latency: None,
+            nic: false,
+            pulls: None,
             at,
         });
         let qi = self.queues.len() - 1;
@@ -2718,6 +2734,28 @@ impl Parser {
                 prog.stages.push(StageDecl {
                     span,
                     name: name.clone(),
+                    count,
+                    kind,
+                });
+            } else if self.is_kw("nic") {
+                let n_at = self.pos;
+                self.advance();
+                if self.queues[qi].nic {
+                    return self.err_at(n_at, format!("`nic` twice: queue `{name}` has one NIC"));
+                }
+                if !self.queues[qi].entries.is_empty() {
+                    return self.err_at(
+                        n_at,
+                        format!("queue `{name}` declares its `nic` above its entries"),
+                    );
+                }
+                let kind = self.stage_kind()?;
+                self.queues[qi].nic = true;
+                let nname = format!("{name}.nic");
+                self.stages.push((nname.clone(), false));
+                prog.stages.push(StageDecl {
+                    span,
+                    name: nname,
                     count,
                     kind,
                 });
@@ -2865,9 +2903,14 @@ impl Parser {
         let outer_stages = std::mem::take(&mut self.stages);
         // the body's serving forms find the queue's own step engine; the
         // stages that are not one (a link's, a delay) it may name
-        let own = self.queues[qi]
-            .has_stage
-            .then(|| outer_stages.last().cloned().expect("the queue's stage"));
+        let own = self.queues[qi].has_stage.then(|| {
+            outer_stages
+                .iter()
+                .rev()
+                .find(|(n, _)| *n == qname)
+                .cloned()
+                .expect("the queue's stage")
+        });
         self.stages = outer_stages
             .iter()
             .filter(|(n, step)| !step && own.as_ref().is_none_or(|o| o.0 != *n))
@@ -2876,7 +2919,9 @@ impl Parser {
             .collect();
         self.side = Side::Server;
         self.in_queue = Some(qi);
+        self.entry_from = from.clone();
         let body = self.block();
+        self.entry_from = None;
         self.in_queue = None;
         self.side = outer_side;
         self.stages = outer_stages;
@@ -3721,6 +3766,121 @@ impl Parser {
         Ok(binds)
     }
 
+    /// `D pull P latency x share maxmin;`: the KV the entries of `D` take
+    /// `from P` is read by `D`, over `P`'s NIC and `D`'s at once, after `D`
+    /// waits `x`; concurrent reads divide the two NICs by the policy, which
+    /// is the program's `share`.
+    fn pull_relation(&mut self, prog: &mut Program) -> PResult<()> {
+        let at = self.pos;
+        let span = Some(self.span());
+        let puller = self.ident()?;
+        self.advance(); // `pull`
+        let s_at = self.pos;
+        let source = self.ident()?;
+        for (q, q_at) in [(&puller, at), (&source, s_at)] {
+            let Some(d) = self.queues.iter().find(|d| d.name == *q) else {
+                return self.err_at(
+                    q_at,
+                    format!("`{puller} pull {source}`: no queue `{q}` is declared above"),
+                );
+            };
+            if !d.nic {
+                return self.err_at(
+                    q_at,
+                    format!(
+                        "`{puller} pull {source}`: queue `{q}` has no `nic`; a read runs over \
+                         the source's NIC and the reader's"
+                    ),
+                );
+            }
+        }
+        if puller == source {
+            return self.err_at(
+                s_at,
+                format!("`{puller} pull {source}`: a queue reads from another"),
+            );
+        }
+        let qi = self
+            .queues
+            .iter()
+            .position(|d| d.name == puller)
+            .expect("checked above");
+        if let Some((other, _)) = &self.queues[qi].pulls {
+            return self.err_at(
+                at,
+                format!("`{puller}` pulls from `{other}` already: one relation per reader"),
+            );
+        }
+        let latency = if self.eat_kw("latency") {
+            let l_at = self.pos;
+            let e = self.expr()?;
+            let Some(v) = self.const_value(&e) else {
+                return self.err_at(
+                    l_at,
+                    "`latency` is a number or a constant over `let`s: the reader's fixed wait \
+                     before each read",
+                );
+            };
+            // a constant of its own (see the link's `latency`), and a delay
+            // stage of the reader's, one per member
+            let lname = format!("{puller}.pull.time");
+            self.consts.push((lname.clone(), v));
+            prog.lets.push((lname.clone(), e));
+            let count = self.queues[qi].count;
+            let sname = format!("{puller}.nic.latency");
+            self.stages.push((sname.clone(), false));
+            prog.stages.push(StageDecl {
+                span,
+                name: sname,
+                count,
+                kind: StageKind::Delay,
+            });
+            Some(Expr::Var(lname))
+        } else {
+            None
+        };
+        // the policy is the relation's: written here, not left to a default
+        if !self.eat_kw("share") {
+            return self.err(format!(
+                "`{puller} pull {source}` names how concurrent reads divide the NICs: \
+                 `share maxmin` or `share bottleneck`, found {}",
+                self.peek()
+            ));
+        }
+        let policy = if self.eat_kw("maxmin") {
+            crate::ir::Share::MaxMin
+        } else if self.eat_kw("bottleneck") {
+            crate::ir::Share::Bottleneck
+        } else {
+            return self.err(format!(
+                "`share` takes `maxmin` or `bottleneck`, found {}",
+                self.peek()
+            ));
+        };
+        self.expect(&Tok::Semi)?;
+        match prog.share {
+            Some(p) if p != policy => {
+                return self.err_at(
+                    at,
+                    "the program divides shared stages by one policy: every relation and \
+                     `share` names the same",
+                );
+            }
+            Some(_) if !self.relation_share => {
+                return self.err_at(
+                    at,
+                    "`share` is declared on its own and on the relation: the relation names it",
+                );
+            }
+            _ => {}
+        }
+        prog.share = Some(policy);
+        self.relation_share = true;
+        self.share_at.get_or_insert(at);
+        self.queues[qi].pulls = Some((source, latency));
+        Ok(())
+    }
+
     /// `prefill S;`, `transfer[j] X from P to Q (n);`, `decode on E (D)
     /// growing kv;`, ...: a `run` on the stage that plays the role.
     fn serving(&mut self, role: Role) -> PResult<Vec<Stmt>> {
@@ -3729,7 +3889,18 @@ impl Parser {
         self.advance();
         let kw = role.keyword();
         let mut also = vec![];
-        let stage = if self.eat_kw("on") {
+        // a read the queue's relation says: over the source's NIC and its own
+        let pulled = role == Role::Transfer
+            && *self.peek() == Tok::LParen
+            && self.entry_from.is_some()
+            && self.in_queue.is_some_and(|qi| self.queues[qi].nic);
+        let stage = if pulled {
+            Ref {
+                span,
+                name: queue::PULL.into(),
+                index: None,
+            }
+        } else if self.eat_kw("on") {
             // `on a, b`: the stages the job holds at once, each declared
             let first = self.declared_stage(kw)?;
             while *self.peek() == Tok::Comma {
@@ -3774,7 +3945,21 @@ impl Parser {
                     "`transfer … from P to Q`: a transfer does not grow a pool",
                 );
             }
+            let f_at = self.pos;
             let from = self.own_pool("transfer … from")?;
+            // the read takes the source's lease: the entry's `from` name
+            if pulled
+                && (from.index.is_some() || self.entry_from.as_deref() != Some(from.name.as_str()))
+            {
+                return self.err_at(
+                    f_at,
+                    format!(
+                        "`transfer … from {}`: a read takes from the entry's source, `from {}`",
+                        from.name,
+                        self.entry_from.as_deref().unwrap_or("?")
+                    ),
+                );
+            }
             self.expect_kw("to")?;
             let to = self.own_pool("transfer … to")?;
             let units = self.paren_expr()?;
