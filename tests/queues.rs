@@ -79,7 +79,7 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
 #[test]
 fn a_transfer_between_queues_is_the_flat_transfer() {
     let queues = "
-      let NP = 1; let ND = 2; let Bw = 1000;
+      let ND = 2; let Bw = 1000;
       queue gw : gateway { route {
         set t0 = now;
         P.prefill (prompt);
@@ -108,7 +108,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request gw; end; } }
       run { horizon 100; }";
     let flat = "
-      let NP = 1; let ND = 2; let Bw = 1000;
+      let ND = 2; let Bw = 1000;
       pool kvP { cap 1000; }
       pool kvD[2] { cap 1000; block 16; }
       stage P : fifo;
@@ -494,6 +494,10 @@ fn roles_and_entries_agree() {
     );
     refused(
         &format!("queue gw[2] : gateway {{ route {{ }} }} {rest}"),
+        "a gateway is one queue",
+    );
+    refused(
+        &format!("queue gw[1] : gateway {{ route {{ }} }} {rest}"),
         "a gateway is one queue",
     );
     refused(
