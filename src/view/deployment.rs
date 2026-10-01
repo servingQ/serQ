@@ -191,11 +191,7 @@ impl Net {
     /// (`kvP[i] → kvD[j]`), not with boxes that cross.
     pub fn drawn_pools(&self, node: usize) -> Vec<usize> {
         let here = self.instance_of(node);
-        let across = self
-            .flows
-            .iter()
-            .any(|g| g.contains(&node) && self.spans(g));
-        if across {
+        if self.across(node) {
             return vec![];
         }
         self.nodes[node]
@@ -211,10 +207,19 @@ impl Net {
             .collect()
     }
 
+    /// Whether a station is one of a transfer between two instances.
+    fn across(&self, node: usize) -> bool {
+        self.flows
+            .iter()
+            .any(|g| g.contains(&node) && self.spans(g))
+    }
+
     /// The pools drawn inside a station's own box: drawn at it, and every
     /// hold that takes the pool there reaches no other station. A request
     /// holds them only while it is there, so the figure draws them as that
-    /// station's.
+    /// station's. A transfer between instances does not count: it holds the
+    /// sender's pool and the receiver's, and its arrow says so
+    /// (`P.kv[i] → D.kv[j]`), so the prefiller's KV is the prefiller's.
     pub fn resident_pools(&self, node: usize) -> Vec<usize> {
         if self.nodes[node].stage.is_none() {
             return vec![];
@@ -225,7 +230,7 @@ impl Net {
                 self.holds
                     .iter()
                     .filter(|h| h.nodes_of(q).any(|n| n == node))
-                    .all(|h| h.nodes_of(q).all(|n| n == node))
+                    .all(|h| h.nodes_of(q).all(|n| n == node || self.across(n)))
             })
             .collect()
     }
@@ -434,6 +439,17 @@ impl Walker<'_> {
                     let n = &mut self.net.nodes[node];
                     if n.modes.is_empty() {
                         n.work = self.p.show_expr(&work);
+                        // a delay is its duration: written inside it, under
+                        // the shape of its density, when it is a
+                        // distribution or a constant and fits
+                        let fits = TextSize::Normal.width_of(&n.work) <= STATION_W - 12.0;
+                        if n.kind == StationKind::Delay
+                            && fits
+                            && crate::view::figure::density(&n.work, Rect::new(0.0, 0.0, 1.0, 1.0))
+                                .is_some()
+                        {
+                            n.inner = n.work.clone();
+                        }
                     }
                     if !n.modes.contains(&mode) {
                         n.modes.push(mode);

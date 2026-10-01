@@ -37,11 +37,8 @@
 <text x="305.2" y="69" text-anchor="middle" font-size="10" fill="#1d2021">engine</text>
 <text x="305.2" y="142" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">budget 8192</text>
 <rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="522.4" y="77" width="84" height="52" rx="8"/>
-<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="536.4" cy="103" r="4"/>
-<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="550.4" cy="103" r="4"/>
-<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="564.4" cy="103" r="4"/>
-<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="578.4" cy="103" r="4"/>
-<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="592.4" cy="103" r="4"/>
+<path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M 538.4 85.32 L 540.57 88.42 L 542.73 91.11 L 544.9 93.43 L 547.07 95.43 L 549.23 97.16 L 551.4 98.66 L 553.57 99.96 L 555.73 101.08 L 557.9 102.04 L 560.07 102.88 L 562.23 103.6 L 564.4 104.22 L 566.57 104.76 L 568.73 105.23 L 570.9 105.63 L 573.07 105.98 L 575.23 106.28 L 577.4 106.54 L 579.57 106.77 L 581.73 106.96 L 583.9 107.13 L 586.07 107.28 L 588.23 107.4 L 590.4 107.51"/>
+<text x="564.4" y="121" text-anchor="middle" font-size="10" fill="#1d2021">~exp(3)</text>
 <text x="564.4" y="69" text-anchor="middle" font-size="10" fill="#1d2021">tool</text>
 <text x="564.4" y="142" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">delay</text>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M28 103 L263.2 103" marker-end="url(#a)"/>

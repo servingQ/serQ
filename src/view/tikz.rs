@@ -129,9 +129,17 @@ pub fn render(f: &Figure) -> String {
                             p(rect.x, rect.y),
                             p(rect.right(), rect.bottom())
                         );
-                        for k in 0..5 {
-                            let x = rect.x + rect.w * (k as f64 + 1.0) / 6.0;
-                            let _ = writeln!(s, "  \\draw[seqcell] {} circle (4pt);", p(x, c.y));
+                        if let Some(pts) = crate::view::figure::density(text, *rect) {
+                            let path: Vec<String> = pts.iter().map(|q| p(q.x, q.y)).collect();
+                            let _ = writeln!(s, "  \\draw[seqrail] {};", path.join(" -- "));
+                        } else {
+                            // a duration that is no distribution: infinitely
+                            // many servers, as the lecture draws a delay
+                            for k in 0..5 {
+                                let x = rect.x + rect.w * (k as f64 + 1.0) / 6.0;
+                                let _ =
+                                    writeln!(s, "  \\draw[seqcell] {} circle (4pt);", p(x, c.y));
+                            }
                         }
                     }
                     StationKind::Decision => {
@@ -169,10 +177,11 @@ pub fn render(f: &Figure) -> String {
                     }
                 }
                 if !text.is_empty() {
-                    let dy = if *kind == StationKind::Step {
-                        -8.0
-                    } else {
-                        0.0
+                    // under the budget bar, or the density
+                    let dy = match kind {
+                        StationKind::Step => -8.0,
+                        StationKind::Delay => 15.0,
+                        _ => 0.0,
                     };
                     let _ = writeln!(
                         s,

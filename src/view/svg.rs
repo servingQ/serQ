@@ -212,15 +212,26 @@ pub fn render(f: &Figure) -> String {
                             n(rect.w),
                             n(rect.h)
                         );
-                        for k in 0..5 {
-                            let x = rect.x + rect.w * (k as f64 + 1.0) / 6.0;
-                            let _ = writeln!(
-                                s,
-                                r#"<circle {} cx="{}" cy="{}" r="4"/>"#,
-                                paint("cell"),
-                                n(x),
-                                n(c.y)
-                            );
+                        if let Some(pts) = crate::view::figure::density(text, *rect) {
+                            let d: Vec<String> = pts
+                                .iter()
+                                .map(|q| format!("{} {}", n(q.x), n(q.y)))
+                                .collect();
+                            let _ =
+                                writeln!(s, r#"<path {} d="M {}"/>"#, paint("rail"), d.join(" L "));
+                        } else {
+                            // a duration that is no distribution: infinitely
+                            // many servers, as the lecture draws a delay
+                            for k in 0..5 {
+                                let x = rect.x + rect.w * (k as f64 + 1.0) / 6.0;
+                                let _ = writeln!(
+                                    s,
+                                    r#"<circle {} cx="{}" cy="{}" r="4"/>"#,
+                                    paint("cell"),
+                                    n(x),
+                                    n(c.y)
+                                );
+                            }
                         }
                     }
                     StationKind::Decision => {
@@ -277,10 +288,11 @@ pub fn render(f: &Figure) -> String {
                     }
                 }
                 if !text.is_empty() {
-                    let dy = if *kind == StationKind::Step {
-                        -4.0
-                    } else {
-                        3.5
+                    // under the budget bar, or the density
+                    let dy = match kind {
+                        StationKind::Step => -4.0,
+                        StationKind::Delay => 18.0,
+                        _ => 3.5,
                     };
                     let _ = writeln!(
                         s,

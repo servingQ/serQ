@@ -48,11 +48,8 @@
 <text x="410.4" y="95" text-anchor="middle" font-size="10" fill="#1d2021">engine</text>
 <text x="410.4" y="168" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">budget max(decoders, (2e-4 + 2e-9 * kv_decode) / 2e-5)</text>
 <rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="630" y="103" width="84" height="52" rx="8"/>
-<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="644" cy="129" r="4"/>
-<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="658" cy="129" r="4"/>
-<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="672" cy="129" r="4"/>
-<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="686" cy="129" r="4"/>
-<circle class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="700" cy="129" r="4"/>
+<path class="rail" fill="none" stroke="#4b5563" stroke-width="1" d="M 646 111.32 L 648.17 114.42 L 650.33 117.11 L 652.5 119.43 L 654.67 121.43 L 656.83 123.16 L 659 124.66 L 661.17 125.96 L 663.33 127.08 L 665.5 128.04 L 667.67 128.88 L 669.83 129.6 L 672 130.22 L 674.17 130.76 L 676.33 131.23 L 678.5 131.63 L 680.67 131.98 L 682.83 132.28 L 685 132.54 L 687.17 132.77 L 689.33 132.96 L 691.5 133.13 L 693.67 133.28 L 695.83 133.4 L 698 133.51"/>
+<text x="672" y="147" text-anchor="middle" font-size="10" fill="#1d2021">~exp(Z)</text>
 <text x="672" y="95" text-anchor="middle" font-size="10" fill="#1d2021">tool</text>
 <text x="672" y="168" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">delay</text>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M28 129 L368.4 129" marker-end="url(#a)"/>

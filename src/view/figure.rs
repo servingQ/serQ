@@ -179,6 +179,56 @@ pub enum Item {
     },
 }
 
+/// The outline of a delay station's duration density, as a polyline over
+/// the upper part of the station: decaying for `~exp` and `~h2`, a hump for
+/// `~erlang`, flat for `~uniform`, a spike for `~det` or a constant. Its
+/// shape, not its scale: the duration itself (`~exp(3)`) is written under
+/// it. `None` for a duration that is neither.
+pub fn density(duration: &str, rect: Rect) -> Option<Vec<Point>> {
+    let family = match duration.strip_prefix('~') {
+        Some(d) => d.split('(').next().unwrap_or(""),
+        None if duration.parse::<f64>().is_ok() => "det",
+        None => "",
+    };
+    let (x0, x1) = (rect.x + 16.0, rect.right() - 16.0);
+    let (top, base) = (rect.y + rect.h * 0.16, rect.y + rect.h * 0.6);
+    let at = |t: f64, f: f64| Point {
+        x: x0 + (x1 - x0) * t,
+        y: base - (base - top) * f,
+    };
+    let curve = |f: &dyn Fn(f64) -> f64| {
+        (0..=24)
+            .map(|k| k as f64 / 24.0)
+            .map(|t| at(t, f(t)))
+            .collect()
+    };
+    Some(match family {
+        "exp" => curve(&|t| (-3.5 * t).exp()),
+        "h2" => curve(&|t| 0.75 * (-9.0 * t).exp() + 0.25 * (-1.8 * t).exp()),
+        // k = 3: t² e^(-t), its peak at 2, scaled to one
+        "erlang" => curve(&|t| {
+            let u = 7.0 * t;
+            u * u * (-u).exp() / (4.0 * (-2.0f64).exp())
+        }),
+        "uniform" => vec![
+            at(0.0, 0.0),
+            at(0.2, 0.0),
+            at(0.2, 0.7),
+            at(0.8, 0.7),
+            at(0.8, 0.0),
+            at(1.0, 0.0),
+        ],
+        "det" => vec![
+            at(0.0, 0.0),
+            at(0.5, 0.0),
+            at(0.5, 1.0),
+            at(0.5, 0.0),
+            at(1.0, 0.0),
+        ],
+        _ => return None,
+    })
+}
+
 /// A laid-out figure.
 #[derive(Clone, Debug, Default)]
 pub struct Figure {

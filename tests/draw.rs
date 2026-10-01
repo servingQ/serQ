@@ -342,11 +342,23 @@ fn pools_held_at_one_station_are_drawn_in_it() {
     assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 1, "live");
     assert_eq!(queues(&f), 1, "live's");
 
-    // the prefiller's KV stays leased through the read, its slot does not
+    // the prefiller's KV stays leased through the read and the decoder's is
+    // taken before it, but a read between instances is drawn as the arrow
+    // between them (`P.kv[i] → D.kv[j]`): each KV is its engine's
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let prefill = net.node_of(stage(&p, "P")).unwrap();
-    assert_eq!(net.resident_pools(prefill), [pool(&p, "P.reqs")]);
+    let decode = net.node_of(stage(&p, "D")).unwrap();
+    assert_eq!(
+        net.resident_pools(prefill),
+        [pool(&p, "P.reqs"), pool(&p, "P.kv")]
+    );
+    assert_eq!(
+        net.resident_pools(decode),
+        [pool(&p, "D.kv"), pool(&p, "D.reqs")]
+    );
+    let f = deployment::layout(&p, &net);
+    assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 0);
 }
 
 /// Two holds of one pool at stations side by side are two frames, not one
