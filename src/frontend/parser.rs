@@ -45,7 +45,7 @@
 //! role     := 'prefill' | 'decode' | 'tool'
 //! ref      := IDENT ('[' expr ']')?
 //! atom     := NUM | '(' expr ')' | IDENT | IDENT '(' arg (',' arg)* ')' | over
-//! over     := ('max' | 'min' | 'sum') IDENT 'in' (NUM | IDENT) '(' expr ')'
+//! over     := ('max' | 'min' | 'sum') IDENT 'in' (NUM | IDENT | '(' expr ')') '(' expr ')'
 //! ```
 //!
 //! The serving forms (`serving`) are sugar: they are rewritten to `hold`
@@ -2045,10 +2045,17 @@ impl Parser {
         }
         // a parameter where the body names what it assigns would put an
         // argument there, which is not a name
-        for w in body.windows(2) {
+        for (k, w) in body.windows(2).enumerate() {
             let named = match (&w[0].tok, &w[1].tok) {
                 (Tok::Ident(kw), Tok::Ident(n)) if kw == "choose" => Some(n),
                 (Tok::Ident(n), Tok::Assign) => Some(n),
+                // `sum k in …`: the aggregate binds `k`
+                (Tok::Ident(kw), Tok::Ident(n))
+                    if Agg::from_name(kw).is_some()
+                        && matches!(body.get(k + 2).map(|t| &t.tok), Some(Tok::Ident(i)) if i == "in") =>
+                {
+                    Some(n)
+                }
                 _ => None,
             };
             if let Some(n) = named
@@ -4324,14 +4331,20 @@ impl Parser {
                 let agg = Agg::from_name(&name).expect("guarded");
                 let var = self.ident()?;
                 self.advance(); // in
-                // the count is a number or a name: `ND (` would read as a call
+                // the count is a number, a name or a parenthesised expression
+                // (what a `def` argument becomes): `ND (` would read as a call
                 let cspan = self.span();
                 let count = match self.advance() {
                     Tok::Num(x) => Expr::Num(x),
                     Tok::Ident(n) => Expr::Located(cspan, Box::new(Expr::Var(n))),
+                    Tok::LParen => {
+                        let e = self.expr()?;
+                        self.expect(&Tok::RParen)?;
+                        e
+                    }
                     other => {
                         return self.err(format!(
-                            "`{name} {var} in` takes a number or a constant's name, found {other}"
+                            "`{name} {var} in` takes a number, a constant's name or `( expr )`, found {other}"
                         ));
                     }
                 };
@@ -4774,6 +4787,12 @@ mod tests {
             )
             .contains("is a parameter")
         );
+        // a parameter may not be an aggregate's index, and a count may be one
+        assert!(
+            err("def total(k) = sum k in 2 (k); session { set x = total(7); }")
+                .contains("is a parameter")
+        );
+        parse("def total(n) = sum k in n (k); session { set x = total(2); }").unwrap();
         // an aggregate's index is its own, not a name the argument reads
         parse(
             "def total() = sum i in 2 (i); def next(x) { turn; observe p = x; } \

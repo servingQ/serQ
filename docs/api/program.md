@@ -2,7 +2,7 @@
 
 ```
 program := item*
-item    := let | def | use | pool | stage | workload | session | server | share | run
+item    := let | def | use | pool | stage | workload | session | server | share | run | gauge
 ```
 
 Items are read in order and declarations come first: a [serving form](serving.md)
@@ -176,6 +176,22 @@ otherwise; there is no default.
 |---|---|
 | `maxmin` | Max-min fair: every flow's rate rises together until a stage fills; the flows through it stop there, the others go on. Uses all the capacity it can. |
 | `bottleneck` | Its equal share at the tightest of its stages, `min over s of φ_s / n_s`. What that leaves at its other stages is unused. |
+
+## `gauge`
+
+```serq
+gauge NAME = expr;
+```
+
+A function of the deployment's state whose time average over
+`[warmup, end]` the report gives, with a batch-means 95 % CI and the least
+and greatest value held; `--dump` writes its change points
+(`gauge/NAME.csv`). See [the language](../language.md), *Gauges*.
+
+| Argument | Type | Description |
+|---|---|---|
+| `NAME` | identifier | Not also an `observe`'s name, nor another gauge's. |
+| `expr` | `expr`, at the `Gauge` moment | Pool and stage observables and constants; not an attribute, a draw, `now`, `cachedin`, `work` or `budget_left`. A pool or stage index is a number (`kv[0]`, or the `kv[k]` of `max k in N (…)`). |
 
 ## `run`
 

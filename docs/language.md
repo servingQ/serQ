@@ -167,7 +167,8 @@ non-zero operand is true; only a `branch` guard is held to 0 or 1),
 time), `price(s, s_hit, ds)` (the online price of a miss,
 `missPrice` with the stage's measured λ̂, ρ̂, Ŵ), `est_lambda(s)`,
 `est_rho(s)`, `est_wait(s)`; aggregates over an index, `max j in n (e)`,
-`min j in n (e)`, `sum j in n (e)` (`n` a number or a constant's name; the
+`min j in n (e)`, `sum j in n (e)` (`n` a number, a constant's name or a
+parenthesised constant expression; the
 linker writes the terms out with `j` = 0 … n-1, so `max k in 2 (used(kv[k]))`
 is `max(used(kv[0]), used(kv[1]))`, and `j` may not be a name the program
 already has); context variables `now`, `size`, `age`,

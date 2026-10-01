@@ -18,6 +18,7 @@ workload { … }                      // how sessions arrive and turns evolve
 session { … }                         // what every session does
 share maxmin;                       // or bottleneck: how a run over several stages divides them
 run { horizon …; warmup …; seed …; arrivals …; }
+gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
 ```
 
 ## Pools
