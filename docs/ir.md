@@ -269,15 +269,18 @@ cache (#230): a hold without it consumes nothing of the session's own
 entry and sets `cached` to 0, where 9 consumed the entry at every admission,
 so a hold admitted inside another on the same pool found none. A hold written
 around the request's on the same pool (a reservation given back before the
-request is admitted) thus no longer costs the request its hit. The shape
-is unchanged; the meaning of an absent `cache` is, on a tagged version, so
-this opens 10. No oracle program holds a pool with entries without
-`cache`, so the oracle schedules and the trace are unchanged; the files
-carry the new version. The Lean fragment's `admit` (`SeqExec.lean`)
-consumes unconditionally and moves with the generator's pin in the
-matching `serving-queue-theory` change. The linker rejects a `cached`
-read, or a `reuse`, in a hold without `cache` (a stricter check), and
-`cache (0)` is the spelling for the old meaning.
+request is admitted) thus no longer costs the request its hit. A hold
+without `cache` on a pool where the session has an entry no longer drops
+it, whether or not its body reads `cached`; `cache (0)` is the 9 meaning.
+The shape is unchanged; the meaning of an absent `cache` is, on a tagged
+version, so this opens 10. No oracle program holds a pool with entries
+without `cache`, so the oracle schedules and the trace are unchanged; the
+files carry the new version. The Lean fragment's `admit`
+(`SerqExec.lean`) consumes unconditionally and moves with the generator's
+pin in the matching `serving-queue-theory` change. The linker rejects a
+`cached` read, or a `reuse`, in a hold without `cache` (a stricter check,
+which catches the body that would read a different number, not every
+program whose numbers move).
 
 ## The Lean fragment
 

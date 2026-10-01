@@ -548,7 +548,11 @@ body that reads it there, and a `reuse` there; `cache (0)` is the hold
 that consumes the prefix and keeps nothing). So a hold around the
 request's on the same pool, a reservation given back with `release`
 before the request's admission, say, does not touch what the request
-will find. Other entries are evicted in the
+will find. vLLM's `enable_caching` switches the lookup and the caching
+on together (`prefix_cache_lookup_enabled`, `kv_cache_manager.py:249-251`;
+`cache_blocks`, `kv_cache_manager.py:802-812`), and a request may skip
+the lookup alone (`skip_reading_prefix_cache`, `request.py:314-324`),
+which is `reuse (0) cache (ℓ)` here. Other entries are evicted in the
 pool's order until allocations and cache fit; `u` units are allocated and
 the body runs. At the end of the body the units are released and
 `min(ℓ, computed)` units stay cached, rounded down to blocks (`computed`

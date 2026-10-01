@@ -1406,8 +1406,10 @@ impl<'p> Interp<'p> {
             let need = self.round_up(q, units);
             // A hold with a `cache` clause takes part in the prefix cache:
             // it consumes the own prefix, at most `reuse` of it; the rest
-            // stays cached as a dead entry of the same age (vLLM: the blocks
-            // past the common prefix keep their place in the free queue).
+            // stays cached as a dead entry of the same age (vLLM: the hit is
+            // the longest run of cached blocks and the blocks past it are not
+            // touched, so they keep their place in the free queue,
+            // single_type_kv_cache_manager.py:743-838).
             // One without the clause is memory alone and leaves the
             // session's cached blocks where they are (#230: an outer hold
             // around the request's used to consume them at its admission,
