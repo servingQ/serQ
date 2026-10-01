@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ir::{CArg, CArrival, CExpr, CStageKind, CStmt, Program};
+use crate::ir::{CArg, CArrival, CExpr, CRef, CStageKind, CStmt, Program, RunMode};
 use crate::view::figure::{
     Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
@@ -40,6 +40,33 @@ pub struct Node {
     pub note: Option<String>,
     /// Pools held around every visit to this stage, outermost first.
     pub pools: Vec<usize>,
+    /// The work of the first visit, as written (`x0`).
+    pub work: String,
+    /// The modes the session runs it in.
+    pub modes: Vec<RunMode>,
+}
+
+/// An instance: what the session addresses through one `choose`. A router
+/// that picks `i` picks a pod, and every stage and pool the session then
+/// indexes by `i` is that pod's (`P[i]`, `egress[i]`, `kvP[i]`).
+#[derive(Clone, Debug)]
+pub struct Instance {
+    /// `choose i of NP`.
+    pub label: String,
+    /// Its stations, by node.
+    pub nodes: Vec<usize>,
+    /// Its pools.
+    pub pools: Vec<usize>,
+}
+
+/// What a run over several stages moves and waits for, when it is a
+/// transfer: the pool it releases and the one it loads, and the delays the
+/// session passes just before it (folded in: `setup (x0)`).
+#[derive(Clone, Debug, Default)]
+pub struct FlowNote {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub latency: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +89,10 @@ pub struct Net {
     pub cached: Vec<usize>,
     /// The stations a run over several stages holds at once, by node.
     pub flows: Vec<Vec<usize>>,
+    /// Per flow, what it moves and waits for.
+    pub flow_notes: Vec<FlowNote>,
+    /// The instances, in the order the session reaches them.
+    pub instances: Vec<Instance>,
 }
 
 impl Net {
@@ -72,6 +103,37 @@ impl Net {
     /// Whether an edge exists between two ends, in that direction.
     pub fn has_edge(&self, from: End, to: End) -> bool {
         self.edges.iter().any(|e| e.from == from && e.to == to)
+    }
+    /// The instance a station is in, if any.
+    pub fn instance_of(&self, node: usize) -> Option<usize> {
+        self.instances.iter().position(|g| g.nodes.contains(&node))
+    }
+    /// The pools drawn around a station: those held there, less a pool of
+    /// another instance, and none at a station of a transfer between two
+    /// instances. A transfer holds the sender's pool and the receiver's at
+    /// both NICs; the figure says so on the link between the instances
+    /// (`kvP[i] → kvD[j]`), not with boxes that cross.
+    pub fn drawn_pools(&self, node: usize) -> Vec<usize> {
+        let here = self.instance_of(node);
+        let across = self.flows.iter().any(|g| {
+            g.contains(&node)
+                && g.iter()
+                    .any(|&k| self.instance_of(k) != self.instance_of(g[0]))
+        });
+        if across {
+            return vec![];
+        }
+        self.nodes[node]
+            .pools
+            .iter()
+            .copied()
+            .filter(
+                |&q| match self.instances.iter().position(|g| g.pools.contains(&q)) {
+                    Some(owner) => here.is_none_or(|h| h == owner),
+                    None => true,
+                },
+            )
+            .collect()
     }
 }
 
@@ -92,9 +154,44 @@ struct Walker<'a> {
     pending: Vec<(usize, String)>,
     /// The guard of the branch arm being walked, for the first edge it takes.
     arm: Option<String>,
+    /// Every `choose` seen, as (attribute slot, label): the instances.
+    chosen: Vec<(usize, String)>,
+    /// The instance each chosen slot made, by slot.
+    instance_of_slot: Vec<(usize, usize)>,
+    /// The flow just run, whose `load` and `release` follow it.
+    last_flow: Option<usize>,
 }
 
 impl Walker<'_> {
+    /// The instance an index addresses: exactly a chosen attribute.
+    fn instance(&mut self, index: Option<&CExpr>) -> Option<usize> {
+        let Some(CExpr::Attr(slot)) = index else {
+            return None;
+        };
+        let (_, label) = self.chosen.iter().find(|(s, _)| s == slot)?.clone();
+        if let Some(&(_, k)) = self.instance_of_slot.iter().find(|(s, _)| s == slot) {
+            return Some(k);
+        }
+        self.net.instances.push(Instance {
+            label,
+            nodes: vec![],
+            pools: vec![],
+        });
+        let k = self.net.instances.len() - 1;
+        self.instance_of_slot.push((*slot, k));
+        Some(k)
+    }
+
+    /// Put a station in the instance its reference addresses; a station
+    /// reached through two is the first's.
+    fn place(&mut self, node: usize, r: &CRef) {
+        if let Some(k) = self.instance(r.index.as_deref())
+            && self.net.instance_of(node).is_none()
+        {
+            self.net.instances[k].nodes.push(node);
+        }
+    }
+
     /// The pending `choose` this index expression selects with, if any.
     fn claim_choose(&mut self, index: &CExpr) -> Option<String> {
         let i = self
@@ -172,6 +269,8 @@ impl Walker<'_> {
                     kind,
                     inner,
                     note: kind_note,
+                    work: String::new(),
+                    modes: vec![],
                     pools: self.holds.iter().fold(vec![], |mut v, &(q, _, e)| {
                         // nested holds of one pool are one enclosure
                         if e && !v.contains(&q) {
@@ -197,10 +296,26 @@ impl Walker<'_> {
         };
         for s in stmts.clone() {
             match s {
-                CStmt::Run { stage, also, .. } => {
+                CStmt::Run {
+                    stage,
+                    also,
+                    mode,
+                    work,
+                    ..
+                } => {
+                    self.last_flow = None;
                     let label = self.p.show_stage_ref(&stage);
                     let note = stage.index.as_ref().and_then(|i| self.claim_choose(i));
                     self.visit_stage(stage.base, label, note);
+                    let node = self.net.node_of(stage.base).unwrap();
+                    self.place(node, &stage);
+                    let n = &mut self.net.nodes[node];
+                    if n.modes.is_empty() {
+                        n.work = self.p.show_expr(&work);
+                    }
+                    if !n.modes.contains(&mode) {
+                        n.modes.push(mode);
+                    }
                     if !also.is_empty() {
                         // the other stages are held at once, not passed in
                         // turn: no arrow between them, and the session
@@ -209,13 +324,21 @@ impl Walker<'_> {
                         for r in &also {
                             let label = self.p.show_stage_ref(r);
                             let note = r.index.as_ref().and_then(|i| self.claim_choose(i));
-                            group.push(self.station(r.base, label, note));
+                            let k = self.station(r.base, label, note);
+                            self.place(k, r);
+                            group.push(k);
                         }
                         let last = *group.last().unwrap();
                         self.frontier = vec![(End::Node(last), None)];
-                        if !self.net.flows.contains(&group) {
-                            self.net.flows.push(group);
-                        }
+                        let k = match self.net.flows.iter().position(|g| *g == group) {
+                            Some(k) => k,
+                            None => {
+                                self.net.flows.push(group);
+                                self.net.flow_notes.push(FlowNote::default());
+                                self.net.flows.len() - 1
+                            }
+                        };
+                        self.last_flow = Some(k);
                     }
                 }
                 CStmt::Hold {
@@ -226,6 +349,11 @@ impl Walker<'_> {
                     for (r, units, _) in &pools {
                         let encloses = !matches!(units, CExpr::Num(x) if *x == 0.0);
                         self.holds.push((r.base, id, encloses));
+                        if let Some(k) = self.instance(r.index.as_deref())
+                            && !self.net.instances.iter().any(|g| g.pools.contains(&r.base))
+                        {
+                            self.net.instances[k].pools.push(r.base);
+                        }
                     }
                     self.walk(body);
                     // by hold, not by depth: a `release` inside may have
@@ -248,6 +376,9 @@ impl Walker<'_> {
                     }
                 }
                 CStmt::Release(r) => {
+                    if let Some(k) = self.last_flow {
+                        self.net.flow_notes[k].from = Some(self.p.show_pool_ref(&r));
+                    }
                     // the pool leaves the enclosure here: the stations after
                     // this one are not inside it
                     if let Some(i) = self.holds.iter().rposition(|&(p, _, _)| p == r.base) {
@@ -308,10 +439,18 @@ impl Walker<'_> {
                     let name = self.p.attrs.get(var).map_or("?", String::as_str);
                     let label = format!("choose {name} of {}", self.p.show_expr(&count));
                     self.pending.retain(|(v, _)| *v != var);
-                    self.pending.push((var, label));
+                    self.pending.push((var, label.clone()));
+                    if !self.chosen.iter().any(|(v, _)| *v == var) {
+                        self.chosen.push((var, label));
+                    }
+                }
+                CStmt::Load(r, _) => {
+                    if let Some(k) = self.last_flow {
+                        self.net.flow_notes[k].to = Some(self.p.show_pool_ref(&r));
+                    }
                 }
                 CStmt::Turn | CStmt::Set(..) | CStmt::Observe(..) => {}
-                CStmt::Grow(..) | CStmt::Drop(..) | CStmt::Load(..) => {}
+                CStmt::Grow(..) | CStmt::Drop(..) => {}
             }
         }
     }
@@ -393,6 +532,9 @@ pub fn project(p: &Program) -> Net {
         next_hold: 0,
         pending: vec![],
         arm: None,
+        chosen: vec![],
+        instance_of_slot: vec![],
+        last_flow: None,
     };
     w.walk(p.session);
     // Anything still on the frontier ran off the end of the session program.
@@ -417,8 +559,141 @@ pub fn project(p: &Program) -> Net {
     }
     w.net.cached = cached;
     let mut net = w.net;
+    fold_latencies(p, &mut net);
+    // one station and nothing else is a choice, not an instance to box
+    net.instances
+        .retain(|g| g.nodes.len() + g.pools.len() >= 2 && !g.nodes.is_empty());
     adjacent_flows(&mut net);
+    contiguous_instances(&mut net);
     net
+}
+
+/// A link's latency (`serve ps(BwD) latency x0;`, which the parser writes
+/// as a delay stage `ingress.latency` run before every transfer over
+/// `ingress`) is the transfer's wait, not a station of the deployment. It
+/// is written on the transfer (`ingress latency (x0)`) and its station
+/// goes; the arrows into it go to the transfer's first station. Only the
+/// name says so: any other delay before a transfer is a station.
+fn fold_latencies(p: &Program, net: &mut Net) {
+    loop {
+        let found = (0..net.nodes.len()).find_map(|k| {
+            if net.nodes[k].kind != StationKind::Delay || net.flows.iter().any(|g| g.contains(&k)) {
+                return None;
+            }
+            let outs: Vec<&Edge> = net
+                .edges
+                .iter()
+                .filter(|e| e.from == End::Node(k))
+                .collect();
+            let [out] = outs.as_slice() else {
+                return None;
+            };
+            let End::Node(to) = out.to else {
+                return None;
+            };
+            let flow = net.flows.iter().position(|g| g[0] == to)?;
+            let name = &p.stages[net.nodes[k].stage].name;
+            let link = name.strip_suffix(".latency")?;
+            net.flows[flow]
+                .iter()
+                .any(|&i| p.stages[net.nodes[i].stage].name == link)
+                .then_some((k, to, flow))
+        });
+        let Some((k, to, flow)) = found else {
+            return;
+        };
+        let n = &net.nodes[k];
+        let link = p.stages[n.stage]
+            .name
+            .trim_end_matches(".latency")
+            .to_string();
+        net.flow_notes[flow]
+            .latency
+            .push(format!("{link} latency ({})", n.work));
+        // the arrows into the delay go on to the transfer
+        let mut edges = std::mem::take(&mut net.edges);
+        edges.retain(|e| e.from != End::Node(k));
+        for e in &mut edges {
+            if e.to == End::Node(k) {
+                e.to = End::Node(to);
+            }
+        }
+        let mut kept: Vec<Edge> = vec![];
+        for e in edges {
+            match kept.iter_mut().find(|x| x.from == e.from && x.to == e.to) {
+                Some(x) => x.back &= e.back,
+                None => kept.push(e),
+            }
+        }
+        net.edges = kept;
+        remove_node(net, k);
+    }
+}
+
+/// Take a station out of the net, renumbering the ones after it.
+fn remove_node(net: &mut Net, k: usize) {
+    net.nodes.remove(k);
+    let at = |i: usize| if i > k { i - 1 } else { i };
+    for e in &mut net.edges {
+        for end in [&mut e.from, &mut e.to] {
+            if let End::Node(i) = *end {
+                *end = End::Node(at(i));
+            }
+        }
+    }
+    for g in &mut net.flows {
+        for i in g.iter_mut() {
+            *i = at(*i);
+        }
+    }
+    for g in &mut net.instances {
+        g.nodes.retain(|&i| i != k);
+        for i in g.nodes.iter_mut() {
+            *i = at(*i);
+        }
+    }
+}
+
+/// Reorder the stations by a permutation: `order[k]` is the node that goes
+/// to place `k`. Edges point the way the new order says.
+fn reorder(net: &mut Net, order: &[usize]) {
+    let n = net.nodes.len();
+    if order.iter().enumerate().all(|(pos, &i)| pos == i) {
+        return;
+    }
+    let mut pos = vec![0; n];
+    for (k, &i) in order.iter().enumerate() {
+        pos[i] = k;
+    }
+    let mut nodes: Vec<Option<Node>> = std::mem::take(&mut net.nodes)
+        .into_iter()
+        .map(Some)
+        .collect();
+    net.nodes = order.iter().map(|&i| nodes[i].take().unwrap()).collect();
+    let at = |e: End| match e {
+        End::Node(i) => End::Node(pos[i]),
+        other => other,
+    };
+    for e in &mut net.edges {
+        e.from = at(e.from);
+        e.to = at(e.to);
+        // the new order decides which way an arrow points, and so how it
+        // is drawn: a return that now points right is drawn forward
+        if let (End::Node(a), End::Node(b)) = (e.from, e.to) {
+            e.back = a >= b;
+        }
+    }
+    for g in &mut net.flows {
+        for k in g.iter_mut() {
+            *k = pos[*k];
+        }
+    }
+    for g in &mut net.instances {
+        for k in g.nodes.iter_mut() {
+            *k = pos[*k];
+        }
+        g.nodes.sort_unstable();
+    }
 }
 
 /// Put the stations of each run over several stages side by side, in the
@@ -453,36 +728,38 @@ fn adjacent_flows(net: &mut Net) {
             }
         }
     }
-    if order.iter().enumerate().all(|(pos, &i)| pos == i) {
+    reorder(net, &order);
+}
+
+/// Put each instance's stations side by side, where its first stands, so
+/// that its box takes in no other station.
+fn contiguous_instances(net: &mut Net) {
+    if net.instances.is_empty() {
         return;
     }
-    let mut pos = vec![0; n];
-    for (k, &i) in order.iter().enumerate() {
-        pos[i] = k;
-    }
-    let mut nodes: Vec<Option<Node>> = std::mem::take(&mut net.nodes)
-        .into_iter()
-        .map(Some)
-        .collect();
-    net.nodes = order.iter().map(|&i| nodes[i].take().unwrap()).collect();
-    let at = |e: End| match e {
-        End::Node(i) => End::Node(pos[i]),
-        other => other,
-    };
-    for e in &mut net.edges {
-        e.from = at(e.from);
-        e.to = at(e.to);
-        // the new order decides which way an arrow points, and so how it
-        // is drawn: a return that now points right is drawn forward
-        if let (End::Node(a), End::Node(b)) = (e.from, e.to) {
-            e.back = a >= b;
+    let n = net.nodes.len();
+    let mut order: Vec<usize> = Vec::with_capacity(n);
+    let mut placed = vec![false; n];
+    for i in 0..n {
+        if placed[i] {
+            continue;
+        }
+        match net.instance_of(i) {
+            Some(g) => {
+                for &k in &net.instances[g].nodes {
+                    if !placed[k] {
+                        placed[k] = true;
+                        order.push(k);
+                    }
+                }
+            }
+            None => {
+                placed[i] = true;
+                order.push(i);
+            }
         }
     }
-    for g in &mut net.flows {
-        for k in g.iter_mut() {
-            *k = pos[*k];
-        }
-    }
+    reorder(net, &order);
 }
 
 /// For every `hold` with a `cache` clause, the pools that clause can leave
@@ -578,6 +855,9 @@ const BACK_DROP: f64 = 26.0;
 const CACHE_ROOM: f64 = 20.0;
 /// Baseline-to-baseline for the stacked pool options.
 const NOTE_LINE: f64 = 11.0;
+/// An instance box's margin around what it holds, and the room for its title.
+const INST_PAD: f64 = 12.0;
+const INST_HEAD: f64 = 26.0;
 
 /// A pool's extent over the station row, and the geometry the walk gives it.
 struct Group {
@@ -602,8 +882,9 @@ struct Group {
 /// does not make.
 fn groups(net: &Net) -> Vec<Group> {
     let mut runs: Vec<(usize, usize, usize)> = vec![];
+    let drawn: Vec<Vec<usize>> = (0..net.nodes.len()).map(|i| net.drawn_pools(i)).collect();
     let pools: Vec<usize> = {
-        let mut v: Vec<usize> = net.nodes.iter().flat_map(|n| n.pools.clone()).collect();
+        let mut v: Vec<usize> = drawn.iter().flatten().copied().collect();
         v.sort_unstable();
         v.dedup();
         v
@@ -611,12 +892,12 @@ fn groups(net: &Net) -> Vec<Group> {
     for pool in pools {
         let mut i = 0;
         while i < net.nodes.len() {
-            if !net.nodes[i].pools.contains(&pool) {
+            if !drawn[i].contains(&pool) {
                 i += 1;
                 continue;
             }
             let start = i;
-            while i < net.nodes.len() && net.nodes[i].pools.contains(&pool) {
+            while i < net.nodes.len() && drawn[i].contains(&pool) {
                 i += 1;
             }
             runs.push((pool, start, i - 1));
@@ -650,8 +931,8 @@ fn groups(net: &Net) -> Vec<Group> {
             if strict {
                 d += 1;
             } else if same {
-                let order = net.nodes[f].pools.iter().position(|&x| x == p);
-                let other = net.nodes[f].pools.iter().position(|&x| x == o.pool);
+                let order = drawn[f].iter().position(|&x| x == p);
+                let other = drawn[f].iter().position(|&x| x == o.pool);
                 if other < order {
                     d += 1;
                 }
@@ -670,7 +951,27 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     };
     let mut gs = groups(net);
     let max_depth = gs.iter().map(|g| g.depth).max().unwrap_or(0);
-    let row_y = MARGIN + 34.0 + (max_depth as f64 + 1.0) * DEPTH_PAD;
+    let boxed = !net.instances.is_empty();
+    let row_y = MARGIN
+        + 34.0
+        + (max_depth as f64 + 1.0) * DEPTH_PAD
+        + if boxed { INST_HEAD + INST_PAD } else { 0.0 };
+    // a transfer between two instances is drawn in the gap between their
+    // boxes, with what it moves above and what it waits for below
+    let flow_texts = |g: usize| -> (Option<String>, Option<String>) {
+        let n = &net.flow_notes[g];
+        let moves = match (&n.from, &n.to) {
+            (Some(a), Some(b)) => Some(format!("{a} → {b}")),
+            _ => None,
+        };
+        let wait = (!n.latency.is_empty()).then(|| n.latency.join(" + "));
+        (moves, wait)
+    };
+    let spanning = |g: usize| -> bool {
+        let f = &net.flows[g];
+        f.iter()
+            .any(|&k| net.instance_of(k) != net.instance_of(f[0]))
+    };
     let cached_here = |g: &Group| net.cached.contains(&g.pool);
     // Room under the station row for the stacked pool options and the strip.
     let own_below = |g: &Group| {
@@ -707,6 +1008,33 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     let mut x = MARGIN + lead;
     let mut rects: Vec<Rect> = Vec::with_capacity(net.nodes.len());
     for i in 0..net.nodes.len() {
+        let here = net.instance_of(i);
+        let before = if i == 0 { None } else { net.instance_of(i - 1) };
+        if here != before {
+            // the boxes' margins, and for a transfer across the boundary the
+            // width of what is written in the gap
+            let mut room = INST_PAD
+                * if i > 0 && here.is_some() && before.is_some() {
+                    2.0
+                } else {
+                    1.0
+                };
+            if i > 0
+                && let Some(g) = (0..net.flows.len())
+                    .find(|&g| net.flows[g].contains(&(i - 1)) && net.flows[g].contains(&i))
+            {
+                let (moves, wait) = flow_texts(g);
+                let w = [moves, wait]
+                    .iter()
+                    .flatten()
+                    .map(|t| TextSize::Small.width_of(t) + 32.0)
+                    .fold(0.0, f64::max);
+                // the walls are `INST_PAD` outside the stations: the text
+                // stands between them
+                room += (w + 2.0 * INST_PAD - GAP).max(0.0);
+            }
+            x += room;
+        }
         // Enclosures open outermost first, so that a nested pool's glyph
         // column sits beside its parent's rather than on top of it.
         let mut opening: Vec<usize> = (0..gs.len()).filter(|&k| gs[k].first == i).collect();
@@ -756,7 +1084,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     let row_right = x;
 
     // A run over several stages: its stations bracketed as one job.
-    for group in &net.flows {
+    for (g, group) in net.flows.iter().enumerate() {
         let r = group
             .iter()
             .map(|&i| rects[i])
@@ -768,9 +1096,27 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             BoxStyle::Flow,
             4.0,
         );
+        let (moves, wait) = flow_texts(g);
+        if spanning(g) {
+            // the job crosses from one instance to the other: an arrow
+            // through the gap, in the order the stages are named
+            let (a, b) = (rects[group[0]], rects[*group.last().unwrap()]);
+            let y = a.centre().y;
+            f.edge(vec![pt(a.right(), y), pt(b.x, y)], EdgeStyle::Flow);
+            let mid = (a.right() + b.x) / 2.0;
+            if let Some(t) = moves {
+                f.note(pt(mid, y - 8.0), t, Anchor::Middle);
+            }
+            if let Some(t) = wait {
+                f.note(pt(mid, y + 15.0), t, Anchor::Middle);
+            }
+        } else if let Some(t) = wait {
+            f.note(pt(r.centre().x, r.bottom() + pad + 24.0), t, Anchor::Middle);
+        }
     }
 
     // Enclosures first, so stations and glyphs paint over them.
+    let mut enclosures: Vec<(usize, Rect)> = vec![];
     for (gi, g) in gs.iter().enumerate() {
         let pool = &p.pools[g.pool];
         let d = (max_depth - g.depth) as f64 * DEPTH_PAD;
@@ -783,6 +1129,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             inner.h + 2.0 * (PAD + d) + extra,
         );
         f.boxed(r, BoxStyle::Enclosure, 8.0);
+        enclosures.push((g.first, r));
 
         // The queue glyph and the capacity, in the room reserved at the left.
         let gx = g.glyph_x;
@@ -857,6 +1204,75 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 Anchor::Middle,
             );
         }
+    }
+
+    // An instance's box: its stations with their names and notes, and the
+    // enclosures that start at them, under everything else.
+    let prefill_only = |k: usize| {
+        net.instances[k]
+            .nodes
+            .iter()
+            .any(|&i| net.nodes[i].kind == StationKind::Step)
+            && net.instances[k].nodes.iter().all(|&i| {
+                net.nodes[i].kind != StationKind::Step
+                    || net.nodes[i].modes.iter().all(|m| *m == RunMode::Prefill)
+            })
+    };
+    let any_prefill_only = (0..net.instances.len()).any(prefill_only);
+    for (k, g) in net.instances.iter().enumerate() {
+        let mut r = g
+            .nodes
+            .iter()
+            .map(|&i| {
+                let s = rects[i];
+                Rect::new(s.x, s.y - 20.0, s.w, s.h + 38.0)
+            })
+            .reduce(|a, b| a.union(&b))
+            .expect("an instance has a station");
+        for (first, e) in &enclosures {
+            if g.nodes.contains(first) {
+                r = r.union(&e.pad(0.0));
+            }
+        }
+        let r = Rect::new(
+            r.x - INST_PAD,
+            r.y - INST_PAD - 14.0,
+            r.w + 2.0 * INST_PAD,
+            r.h + 2.0 * INST_PAD + 14.0,
+        );
+        f.items.insert(
+            0,
+            Item::Box {
+                rect: r,
+                style: BoxStyle::Instance,
+                round: 10.0,
+            },
+        );
+        // named after its engine, and for prefill/decode by its part
+        let engine = g
+            .nodes
+            .iter()
+            .find(|&&i| net.nodes[i].kind == StationKind::Step)
+            .unwrap_or(&g.nodes[0]);
+        let role = if prefill_only(k) {
+            "prefill "
+        } else if any_prefill_only && net.nodes[*engine].modes.contains(&RunMode::Decode) {
+            "decode "
+        } else {
+            ""
+        };
+        let title = format!("{role}instance {}", net.nodes[*engine].label);
+        f.text(
+            pt(r.x + 10.0, r.y - 7.0),
+            title.clone(),
+            Anchor::Start,
+            TextSize::Normal,
+        );
+        f.note(
+            pt(r.x + 22.0 + TextSize::Normal.width_of(&title), r.y - 7.0),
+            g.label.clone(),
+            Anchor::Start,
+        );
     }
 
     // One counter for every edge that needs a lane below the station row:

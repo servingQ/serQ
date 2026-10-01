@@ -5,11 +5,13 @@ The program as a queueing network.
 ![llm-d prefill/decode over NIXL](../assets/llmd_nixl_pull.deployment.svg)
 
 That is `examples/pd-disaggregation/llmd_nixl_pull.sq`: two prefill and two decode
-instances, the KV read over NIXL. The read sits where the prefiller's `P.kv`
-box and the decoder's `D.kv` box cross: the prefiller's blocks stay leased
-until the read ends, and the decoder's are allocated before it starts. It
-holds the prefiller's NIC and the decoder's at once, so its two stations
-are bracketed as one job.
+instances, the KV read over NIXL. Each solid box is an instance: what the
+router's `choose` picks, a pod with its engine, its NIC and its pools. The
+read crosses from the prefiller's box to the decoder's: it holds the
+prefiller's NIC and the decoder's at once, so its two stations are bracketed
+as one job, and what it moves (`P.kv[i] → D.kv[j]`: the prefiller's blocks
+stay leased until it ends, the decoder's are allocated before it starts) and
+the link's latency are written on it.
 
 ## The flow is projected from the session program
 
@@ -20,7 +22,9 @@ walks the session program carrying a hold stack:
 |---|---|
 | **Nodes** | one per stage a `Run` reaches. A stage array is one node labelled `[N]` |
 | **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (walked twice, so the body's last stations lead back to every station a pass through it can start at, each with the guard of its arm). An arrow forward past other stations, and an entry past the first, run in a lane below the row rather than through them |
-| **Enclosure** | every `Run` is tagged with the `Hold`s around it; stations sharing a hold on pool `p` sit inside `p`'s dashed box — an instance's boundary. A hold whose units are the constant 0 only reserves, occupies nothing, and draws no box |
+| **Instance** | a `choose v` is a pick of an instance: the stages and pools the session then indexes by exactly `v` (`P[i]`, `egress[i]`, `P.kv[i]`) are one, drawn in a solid box named after its step engine (`prefill instance P[i]` when it only prefills). A choice of one station and nothing else is no box |
+| **Enclosure** | every `Run` is tagged with the `Hold`s around it; stations sharing a hold on pool `p` sit inside `p`'s dashed box. Inside an instance's box only its own pools are drawn, and none at the stations of a run between two instances: the run's arrow says what it moves |
+| **Latency** | a link's `serve … latency` (a delay stage `L.latency` run before every transfer over `L`) is written on the transfer, not drawn as a station |
 | **Edge labels** | a `Branch` guard, printed by `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
 

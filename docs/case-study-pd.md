@@ -14,10 +14,12 @@ and what it still cannot say, is in [The KV transfer](design/pd-transfer.md).
 
 ![llm-d prefill/decode over NIXL as a queueing network](assets/llmd_nixl_pull.deployment.svg)
 
-The prompt's KV is in the prefiller's pool through the transfer and in the
-decoder's from the transfer on, which is why the two enclosures cross at the
-read, and the read holds the prefiller's NIC and the decoder's at once, which
-is the bracket around `egress[i]` and `ingress[j]`.
+The router picks a prefill instance and a decode instance, each a box with
+its engine, its NIC and its pools. The read crosses between them: it holds
+the prefiller's NIC and the decoder's at once, which is the bracket around
+`egress[i]` and `ingress[j]`, and moves the prompt's KV from the
+prefiller's leased blocks to the decoder's (`P.kv[i] → D.kv[j]`) after the
+decoder's read latency.
 
 ## The deployment
 

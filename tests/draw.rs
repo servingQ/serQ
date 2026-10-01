@@ -358,15 +358,18 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
 /// `examples/pd-disaggregation/llmd_nixl_pull.sq`: the prompt's KV is in the prefiller's pool
 /// through the transfer (leased past its scope) and in the decoder's from
 /// the transfer on, so the read's two stations (the prefiller's NIC and the
-/// decoder's, held at once) are inside both enclosures, the prefill station
-/// in the prefiller's only and the decode station in the decoder's only.
-/// The prefiller's request slot ends with its scope, so it encloses the
-/// prefill station alone. The decoder's slot is only reserved during the
-/// transfer (`reqs (0) reserve (1)`: the request is parked, not
-/// running, `scheduler.py:1264-1268`), so it encloses the decode station
-/// and not the read.
+/// decoder's, held at once) hold both. The prefiller's request slot ends
+/// with its scope, so it encloses the prefill station alone. The decoder's
+/// slot is only reserved during the transfer (`reqs (0) reserve (1)`: the
+/// request is parked, not running, `scheduler.py:1264-1268`), so it
+/// encloses the decode station and not the read.
+///
+/// What the router picks is an instance: `P[i]` with its NIC and pools, and
+/// `D[j]` with its own. The figure boxes each and draws the read between
+/// the boxes, with what it moves and the link's latency written on it, and
+/// so no pool box at the NICs: two boxes would cross there.
 #[test]
-fn a_transfer_puts_the_read_in_both_enclosures() {
+fn a_transfer_between_instances_is_drawn_between_their_boxes() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "P"), ["P.reqs", "P.kv"]);
@@ -375,21 +378,40 @@ fn a_transfer_puts_the_read_in_both_enclosures() {
     }
     assert_eq!(pools_of(&p, &net, "D"), ["D.kv", "D.reqs"]);
     assert!(pools_of(&p, &net, "tool").is_empty());
-    let f = deployment::layout(&p, &net);
-    let boxes = f.boxes(BoxStyle::Enclosure);
-    for nic in ["egress", "ingress"] {
-        let (rect, _) = f.stations()[net.node_of(stage(&p, nic)).unwrap()];
-        assert_eq!(
-            boxes.iter().filter(|b| b.contains(&rect)).count(),
-            2,
-            "{nic}"
-        );
-    }
-    let (eg, ing) = (
-        net.node_of(stage(&p, "egress")).unwrap(),
-        net.node_of(stage(&p, "ingress")).unwrap(),
+    let node = |name: &str| net.node_of(stage(&p, name)).unwrap();
+    let (pf, eg, ing, d, tool) = (
+        node("P"),
+        node("egress"),
+        node("ingress"),
+        node("D"),
+        node("tool"),
     );
     assert_eq!(net.flows, vec![vec![eg, ing]]);
+    let note = &net.flow_notes[0];
+    assert_eq!(note.from.as_deref(), Some("P.kv[i]"));
+    assert_eq!(note.to.as_deref(), Some("D.kv[j]"));
+    assert_eq!(note.latency, ["ingress latency (2e-3)"]);
+    assert_eq!(net.instances.len(), 2);
+    assert_eq!(net.instances[0].nodes, [pf, eg]);
+    assert_eq!(net.instances[1].nodes, [ing, d]);
+    assert_eq!(net.instance_of(tool), None);
+    for nic in [eg, ing] {
+        assert!(net.drawn_pools(nic).is_empty());
+    }
+    let f = deployment::layout(&p, &net);
+    let boxes = f.boxes(BoxStyle::Instance);
+    let st = f.stations();
+    assert_eq!(boxes.len(), 2);
+    let inside = |b: &serq::view::figure::Rect, k: usize| b.contains(&st[k].0);
+    let (pbox, dbox) = if inside(&boxes[0], pf) {
+        (boxes[0], boxes[1])
+    } else {
+        (boxes[1], boxes[0])
+    };
+    assert!(inside(&pbox, pf) && inside(&pbox, eg) && !inside(&pbox, ing));
+    assert!(inside(&dbox, ing) && inside(&dbox, d) && !inside(&dbox, eg));
+    assert!(!inside(&pbox, tool) && !inside(&dbox, tool));
+    assert!(!pbox.overlaps(&dbox), "the read is between the boxes");
 }
 
 fn pools_at(src: &str, stage_name: &str) -> Vec<String> {
@@ -422,26 +444,20 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
 
 /// `examples/pd-disaggregation/llmd_nixl_pull.sq`'s router sends a request either
 /// to a prefiller and over the two NICs (remote), after the read's fixed
-/// wait (`ingress`'s `latency`, a delay stage of its own), or straight to the decoder (local); a request whose KV
-/// is already there skips both. Every turn
-/// ends at the decoder, which the session leaves or resumes after a tool call.
+/// wait (`ingress`'s `latency`, written on the read and not a station), or
+/// straight to the decoder (local); a request whose KV is already there
+/// skips both. Every turn ends at the decoder, which the session leaves or
+/// resumes after a tool call.
 #[test]
 fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
-    let (pf, setup, eg, ing, d, tool) = (
-        at("P"),
-        at("ingress.latency"),
-        at("egress"),
-        at("ingress"),
-        at("D"),
-        at("tool"),
-    );
+    let (pf, eg, ing, d, tool) = (at("P"), at("egress"), at("ingress"), at("D"), at("tool"));
+    assert!(net.node_of(stage(&p, "ingress.latency")).is_none());
     assert!(net.has_edge(End::Arrival, pf), "remote");
     assert!(net.has_edge(End::Arrival, d), "local");
-    assert!(net.has_edge(pf, setup));
-    assert!(net.has_edge(setup, eg));
+    assert!(net.has_edge(pf, eg));
     assert!(net.has_edge(ing, d));
     assert!(!net.has_edge(eg, ing), "held at once, not passed in turn");
     assert!(net.has_edge(pf, d), "the KV is already on the decoder");
@@ -547,14 +563,13 @@ fn enclosures_contain_their_stations_and_nest() {
             net.nodes.len(),
             "{name}: a station per node"
         );
-        for (node, (rect, _)) in net.nodes.iter().zip(stations) {
+        for (i, (node, (rect, _))) in net.nodes.iter().zip(stations).enumerate() {
             let inside = boxes.iter().filter(|b| b.contains(&rect)).count();
+            let drawn = net.drawn_pools(i).len();
             assert_eq!(
-                inside,
-                node.pools.len(),
-                "{name}: {} is in {inside} boxes, wants {}",
-                node.label,
-                node.pools.len()
+                inside, drawn,
+                "{name}: {} is in {inside} boxes, wants {drawn}",
+                node.label
             );
         }
     }
@@ -765,6 +780,26 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
     for i in [eg, ing] {
         assert!(brackets[0].contains(&f.stations()[i].0));
     }
+}
+
+/// A delay before a transfer is a station unless it is a link's latency:
+/// only `serve … latency` says the wait is the link's.
+#[test]
+fn only_a_links_latency_folds_into_the_transfer() {
+    let src = "pool kvP { cap 100; } pool kvD { cap 100; }
+               stage P : delay; stage wait : delay; stage egress : ps(1); stage ingress : ps(1); stage D : delay;
+               share maxmin;
+               workload { arrive batch(1); }
+               session {
+                 hold kvP (10) { run P (1); } lease kvP (inf);
+                 hold kvD (10) { run wait (1); transfer on egress, ingress (1) from kvP to kvD (10); run D (1); }
+                 end;
+               }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    assert!(net.node_of(stage(&p, "wait")).is_some());
+    assert!(net.flow_notes[0].latency.is_empty());
 }
 
 /// A flow's stations stand side by side even when one of them was reached

@@ -30,6 +30,7 @@ fn box_class(s: BoxStyle) -> &'static str {
         BoxStyle::Cached => "cached",
         BoxStyle::Enclosure => "enclosure",
         BoxStyle::Flow => "rail",
+        BoxStyle::Instance => "instance",
     }
 }
 
@@ -73,6 +74,11 @@ const PAINTS: &[Paint] = &[
         class: "cached",
         light: "fill=\"#e6e2da\" stroke=\"none\"",
         dark: "fill:#33302a",
+    },
+    Paint {
+        class: "instance",
+        light: "fill=\"#f5f7f9\" stroke=\"#4b5563\" stroke-width=\"1.2\"",
+        dark: "fill:#1a1f24;stroke:#b6bfcc",
     },
     Paint {
         class: "enclosure",
