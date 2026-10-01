@@ -618,9 +618,8 @@ pub fn project(p: &Program) -> Net {
 /// name says so: any other delay before a transfer is a station.
 fn fold_latencies(p: &Program, net: &mut Net) {
     loop {
-        // a link's latency station, and every transfer over that link it
-        // leads into: one stage may wait before several (`ingress` read
-        // with one prefiller's NIC or another's)
+        // a link's latency station, and the transfer over that link it
+        // leads into
         let found = (0..net.nodes.len()).find_map(|k| {
             if net.nodes[k].kind != StationKind::Delay || net.flows.iter().any(|g| g.contains(&k)) {
                 return None;
@@ -642,7 +641,10 @@ fn fold_latencies(p: &Program, net: &mut Net) {
                 })?;
                 into.push((to, flow));
             }
-            (!into.is_empty()).then(|| (k, link.to_string(), into))
+            // one transfer only: a latency waited before transfers down two
+            // arms is one node of the projection, and folding it into both
+            // would join each arm's way in to the other's transfer
+            (into.len() == 1).then(|| (k, link.to_string(), into))
         });
         let Some((k, link, into)) = found else {
             return;

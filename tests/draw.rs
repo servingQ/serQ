@@ -830,10 +830,12 @@ fn a_run_from_an_unboxed_choice_does_not_span() {
     assert_eq!(net.drawn_pools(ing), net.nodes[ing].pools);
 }
 
-/// One link's latency waited before transfers with two different partners
-/// is the latency of both, and no station (#197 review).
+/// One link's latency waited before transfers with two different partners,
+/// down two arms, is one node of the projection: folded into both it would
+/// draw each arm's way in into the other's transfer, so it stays a station
+/// (#197 review).
 #[test]
-fn a_latency_before_two_transfers_folds_into_both() {
+fn a_latency_before_two_transfers_stays_a_station() {
     let src = "pool kvP { cap 100; } pool kvD { cap 100; }
                stage P : delay; stage a : ps(1); stage b : ps(1);
                queue L : link { serve ps(1) latency 0.5; }
@@ -851,10 +853,10 @@ fn a_latency_before_two_transfers_folds_into_both() {
                run { horizon 10; }";
     let p = compile_source(src, &Overrides::default()).unwrap();
     let net = deployment::project(&p);
-    assert!(net.node_of(stage(&p, "L.latency")).is_none());
+    assert!(net.node_of(stage(&p, "L.latency")).is_some());
     assert_eq!(net.flows.len(), 2);
     for n in &net.flow_notes {
-        assert_eq!(n.latency, ["L latency (0.5)"]);
+        assert!(n.latency.is_empty());
     }
 }
 
