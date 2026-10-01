@@ -94,11 +94,15 @@ intention plainer, evidence is the code, one change). A review that does not
 answer all six is not done. Comments are in Korean, short: the finding and
 the evidence.
 
-A Claude Code session asked to review a PR spawns at most two reviewers, in
-parallel, defined in `.claude/agents/`: `design-reviewer` (the checklist
-above, plus the readability of the code) and `sim-reviewer` (do the numbers
-reproduce, satisfy Little's law and the closed forms, and support the claim).
-Call `sim-reviewer` only when the PR moves a simulated or measured number.
+Copilot reviews a pull request. When it cannot — its review limit is
+reached — subagents review instead, from the same checklist: at most two,
+in parallel, defined in `.claude/agents/`. `design-reviewer` takes the
+checklist above plus the readability of the code; `sim-reviewer` asks
+whether the numbers reproduce, satisfy Little's law and the closed forms,
+and support the claim, and is called only when the PR moves a simulated or
+measured number. The agents return their findings to the session, which
+merges them and posts one comment on the pull request, so the record is
+where Copilot's would be.
 
 ## Working with GitHub here
 
