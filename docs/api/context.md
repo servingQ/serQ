@@ -3,10 +3,10 @@
 A context variable is supplied by the scheduler at one *moment* and exists only
 there (`now` at every moment). Reading it anywhere else is a link error rather
 than a 0: `set x = tokens;` in a session, or `evict by (tokens)`, does not link.
-Its name is its own: a `set`, `choose` or `let` may not take it (a name resolves
-to an attribute first, then a constant, so `set present = 500;` anywhere in the
-program would make a stage's `ps(min(present, 16))` read the attribute), and
-the linker rejects the program.
+Its name is its own: a `set`, `choose` or `let` may not take it (an attribute
+of that name would be read where the context variable was meant: `set present
+= 500;` anywhere in the program would make a stage's `ps(min(present, 16))`
+read the attribute), and the linker rejects the program.
 
 ## Moments
 
