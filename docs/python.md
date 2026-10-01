@@ -30,7 +30,7 @@ pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a repla
 | `Report.observe(name)`, `.gauge(name)`, `.stage(name)`, `.stages_named(name)`, `.pool(name)` | One by name, or `None`, as `serq::Report` has them; `stages_named` gives every member of a replicated stage. |
 | `Rng(seed)` | The generator a run draws from, rand 0.9's `StdRng` seeded by `seed_from_u64`: `next_u32()`, `next_u64()`, `random_f64()` in [0, 1), and `range_u64`, `range_u32`, `range_f64(low, high)`, both ends included. A run seeded `s` draws its arrivals from `Rng(s)`; a check that reproduces a run's draws uses it rather than a port of rand. An empty range raises `ValueError`. |
 | `read_trace(path)` | A trace's sessions, each a list of its turns `(new, out, think, forced)`: the corpus a replay draws its sessions from, read as a replay reads it. A relative path is read from the current directory. |
-| `IR_VERSION`, `REPORT_VERSION`, `__version__` | The IR it reads, the shape of the report (the field names of `Report.json()`, which `Report`, `Observe`, `Stage` and `Pool` carry as attributes; a change bumps it), and the serq version it is. |
+| `IR_VERSION`, `REPORT_VERSION`, `__version__` | The IR it reads, the shape of the report (the field names of `Report.json()`, which `Report`, `Observe`, `Gauge`, `Stage` and `Pool` carry as attributes; a renamed, removed or retyped field bumps it, an added one does not, by the rules of the IR's Stability), and the serq version it is. |
 
 A program that does not compile or run raises `ValueError` with serQ's message; an argument of the wrong type (`seed=-1`, `sets={"x": None}`) raises `TypeError` or `OverflowError`, as Python does.
 

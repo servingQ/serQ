@@ -718,11 +718,17 @@ impl Linker<'_> {
                 None
             }
             Some(e) => {
+                let before = self.over_terms.get();
                 let i = self.expr(e)?;
+                let after = self.over_terms.get();
                 // a constant index (`kv[2]`, `kv[-1]`, `kv[N + 1]`, or one an
                 // aggregate wrote out) is checked here, where the program
                 // still has its names; one that reads state links as before
+                // the fold writes the index's aggregates out again: against
+                // the budget they met the first time, and without spending it
+                self.over_terms.set(before);
                 let folded = (!has_draw(e)).then(|| self.eval_const(e).ok()).flatten();
+                self.over_terms.set(after);
                 if let Some(k) = folded
                     && !(k >= 0.0 && k.fract() == 0.0 && k < count as f64)
                 {

@@ -1,5 +1,6 @@
 //! The shape of `Report::json`, which consumers read by field name: a
-//! change to it is a change of `REPORT_VERSION`.
+//! renamed, removed or retyped field is a change of `REPORT_VERSION`, an
+//! added one is recorded here (`docs/ir.md`, Stability).
 
 use serq::engine::report::REPORT_VERSION;
 use serq::{Overrides, compile_source, run_ir};
@@ -79,6 +80,6 @@ fn the_report_has_the_shape_its_version_names() {
     );
     assert_eq!(
         shape, want,
-        "the report's shape moved: bump REPORT_VERSION ({REPORT_VERSION}) and say so in the release"
+        "the report's shape moved: a renamed, removed or retyped field bumps REPORT_VERSION ({REPORT_VERSION}); an added one is recorded here; say so in the release"
     );
 }
