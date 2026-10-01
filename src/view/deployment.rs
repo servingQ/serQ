@@ -27,10 +27,20 @@ pub enum End {
     Exit,
 }
 
-/// A station: one stage the session reaches.
+/// Where the walk is: an end of the net, or the start of a loop body whose
+/// first stations the walk is looking for. The walker's own; a `Net` has
+/// only `End`s.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum At {
+    End(End),
+    Probe(usize),
+}
+
+/// A station: one stage the session reaches, or a decision before any
+/// (`kind: Decision`, with no stage).
 #[derive(Clone, Debug)]
 pub struct Node {
-    pub stage: usize,
+    pub stage: Option<usize>,
     /// `engine`, `rep[4]`.
     pub label: String,
     pub kind: StationKind,
@@ -123,7 +133,7 @@ pub struct Net {
 impl Net {
     /// The node for a stage, if the session reaches it.
     pub fn node_of(&self, stage: usize) -> Option<usize> {
-        self.nodes.iter().position(|n| n.stage == stage)
+        self.nodes.iter().position(|n| n.stage == Some(stage))
     }
     /// Whether an edge exists between two ends, in that direction.
     pub fn has_edge(&self, from: End, to: End) -> bool {
@@ -181,7 +191,7 @@ struct Walker<'a> {
     p: &'a Program,
     net: Net,
     /// Ends the next station will be reached from, with the label of the path.
-    frontier: Vec<(End, Option<String>)>,
+    frontier: Vec<(At, Option<String>)>,
     /// Pools held right now, outermost first, each with the hold that took
     /// it (a `release` takes one off before its hold ends) and whether it
     /// encloses: a hold of no units only reserves, and occupies nothing.
@@ -200,6 +210,11 @@ struct Walker<'a> {
     instance_of_slot: Vec<(usize, usize)>,
     /// The flow just run, whose `load` and `release` follow it.
     last_flow: Option<usize>,
+    /// Per loop being probed, the ends its body first reaches.
+    probes: Vec<Vec<End>>,
+    /// The decision node of each loop body that has one, by body block: a
+    /// loop walked twice (inside another) has one decision, not two.
+    decisions: Vec<(usize, usize)>,
 }
 
 impl Walker<'_> {
@@ -245,6 +260,15 @@ impl Walker<'_> {
         let arm = self.arm.take();
         let frontier = std::mem::take(&mut self.frontier);
         for (from, label) in frontier {
+            let from = match from {
+                At::Probe(k) => {
+                    if !self.probes[k].contains(&End::Node(node)) {
+                        self.probes[k].push(End::Node(node));
+                    }
+                    continue;
+                }
+                At::End(e) => e,
+            };
             // Two runs at the same stage in a row are two visits, not a flow
             // between stations; there is nothing to draw.
             if from == End::Node(node) {
@@ -260,7 +284,7 @@ impl Walker<'_> {
                 back,
             });
         }
-        self.frontier = vec![(End::Node(node), None)];
+        self.frontier = vec![(At::End(End::Node(node)), None)];
     }
 
     /// Add an edge unless the same one is already there. Programs written as
@@ -304,7 +328,7 @@ impl Walker<'_> {
             None => {
                 let (kind, inner, kind_note) = station_of(self.p, stage);
                 self.net.nodes.push(Node {
-                    stage,
+                    stage: Some(stage),
                     label,
                     kind,
                     inner,
@@ -369,7 +393,7 @@ impl Walker<'_> {
                             group.push(k);
                         }
                         let last = *group.last().unwrap();
-                        self.frontier = vec![(End::Node(last), None)];
+                        self.frontier = vec![(At::End(End::Node(last)), None)];
                         let k = match self.net.flows.iter().position(|g| *g == group) {
                             Some(k) => k,
                             None => {
@@ -453,12 +477,89 @@ impl Walker<'_> {
                     self.arm = outer;
                 }
                 CStmt::Loop(body) => {
-                    // The second pass starts where the first ended, so every
-                    // way back into the body is drawn, from every arm, with
-                    // the guard of the arm it takes; edges already there are
-                    // not drawn twice.
+                    // A body that decides before its first station (several
+                    // first stations, or an `end` before any) is a router at
+                    // the top of every turn: one decision node the body
+                    // starts from and every pass returns to. A pass from a
+                    // mark at the body's start finds out what it reaches
+                    // first - a station, the one it was at included, or the
+                    // exit - and is undone whole.
+                    let saved = (
+                        self.net.clone(),
+                        self.frontier.clone(),
+                        self.holds.clone(),
+                        self.pending.clone(),
+                        self.arm.clone(),
+                        self.chosen.clone(),
+                        self.instance_of_slot.clone(),
+                        self.last_flow,
+                        self.next_hold,
+                        self.decisions.clone(),
+                    );
+                    let k = self.probes.len();
+                    self.probes.push(vec![]);
+                    self.frontier = vec![(At::Probe(k), None)];
                     self.walk(body);
-                    self.walk(body);
+                    let entries = self.probes.pop().expect("pushed above");
+                    (
+                        self.net,
+                        self.frontier,
+                        self.holds,
+                        self.pending,
+                        self.arm,
+                        self.chosen,
+                        self.instance_of_slot,
+                        self.last_flow,
+                        self.next_hold,
+                        self.decisions,
+                    ) = saved;
+                    let known = self
+                        .decisions
+                        .iter()
+                        .find(|(b, _)| *b == body)
+                        .map(|&(_, d)| d);
+                    if let Some(d) = known {
+                        self.attach(d);
+                        self.walk(body);
+                        self.attach(d);
+                    } else if entries.len() > 1 {
+                        // named by the `choose`s it makes before any station:
+                        // the router's name is the gateway's, which is the
+                        // parser's and not the IR's
+                        let mut slots = vec![];
+                        leading_chooses(self.p, body, &mut slots);
+                        let names: Vec<&str> = slots
+                            .iter()
+                            .map(|v| self.p.attrs.get(*v).map_or("?", String::as_str))
+                            .collect();
+                        let label = if names.is_empty() {
+                            String::new()
+                        } else {
+                            format!("choose {}", names.join(", "))
+                        };
+                        self.net.nodes.push(Node {
+                            stage: None,
+                            label,
+                            kind: StationKind::Decision,
+                            inner: String::new(),
+                            note: None,
+                            pools: vec![],
+                            work: String::new(),
+                            modes: vec![],
+                        });
+                        let d = self.net.nodes.len() - 1;
+                        self.decisions.push((body, d));
+                        self.attach(d);
+                        self.walk(body);
+                        self.attach(d);
+                    } else {
+                        // The second pass starts where the first ended, so
+                        // every way back into the body is drawn, from every
+                        // arm, with the guard of the arm it takes; edges
+                        // already there are not drawn twice.
+                        self.walk(body);
+                        self.walk(body);
+                    }
                     self.frontier.clear();
                     // A loop is left only by `end`, which already recorded it.
                 }
@@ -466,6 +567,15 @@ impl Walker<'_> {
                     let arm = self.arm.take();
                     let frontier = std::mem::take(&mut self.frontier);
                     for (from, label) in frontier {
+                        let from = match from {
+                            At::Probe(k) => {
+                                if !self.probes[k].contains(&End::Exit) {
+                                    self.probes[k].push(End::Exit);
+                                }
+                                continue;
+                            }
+                            At::End(e) => e,
+                        };
                         let label = label.or_else(|| arm.clone());
                         self.push_edge(Edge {
                             from,
@@ -498,9 +608,41 @@ impl Walker<'_> {
     }
 }
 
+/// The attributes a block `choose`s before any station, down every path,
+/// in order; whether every path reaches a station or ends.
+fn leading_chooses(p: &Program, block: usize, out: &mut Vec<usize>) -> bool {
+    let Some(stmts) = p.blocks.get(block) else {
+        return false;
+    };
+    for s in stmts {
+        match s {
+            CStmt::Choose { var, .. } => {
+                if !out.contains(var) {
+                    out.push(*var);
+                }
+            }
+            CStmt::Run { .. } | CStmt::End => return true,
+            CStmt::Branch(_, t, e) => {
+                let a = leading_chooses(p, *t, out);
+                let b = leading_chooses(p, *e, out);
+                if a && b {
+                    return true;
+                }
+            }
+            // a guard that walks the body: the chooses in it are collected
+            // whether or not it reaches a station
+            CStmt::Hold { body, .. } | CStmt::Loop(body) if leading_chooses(p, *body, out) => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Keep one entry per end: the arms of a guard that moved nobody all rejoin.
-fn dedupe(frontier: &mut Vec<(End, Option<String>)>) {
-    let mut seen: Vec<End> = vec![];
+fn dedupe(frontier: &mut Vec<(At, Option<String>)>) {
+    let mut seen: Vec<At> = vec![];
     frontier.retain(|(e, _)| {
         if seen.contains(e) {
             false
@@ -569,7 +711,7 @@ pub fn project(p: &Program) -> Net {
             arrival: arrival_label(p),
             ..Net::default()
         },
-        frontier: vec![(End::Arrival, None)],
+        frontier: vec![(At::End(End::Arrival), None)],
         holds: vec![],
         next_hold: 0,
         pending: vec![],
@@ -577,12 +719,16 @@ pub fn project(p: &Program) -> Net {
         chosen: vec![],
         instance_of_slot: vec![],
         last_flow: None,
+        probes: vec![],
+        decisions: vec![],
     };
     w.walk(p.session);
     // Anything still on the frontier ran off the end of the session program.
     let frontier = std::mem::take(&mut w.frontier);
     for (from, label) in frontier {
-        if from != End::Arrival {
+        if let At::End(from) = from
+            && from != End::Arrival
+        {
             w.push_edge(Edge {
                 from,
                 to: End::Exit,
@@ -602,11 +748,14 @@ pub fn project(p: &Program) -> Net {
     w.net.cached = cached;
     let mut net = w.net;
     fold_latencies(p, &mut net);
+    decisions_first(&mut net);
     // one station and nothing else is a choice, not an instance to box
     net.instances
         .retain(|g| g.nodes.len() + g.pools.len() >= 2 && !g.nodes.is_empty());
     adjacent_flows(&mut net);
     contiguous_instances(&mut net);
+    // grouping may have moved a decision after the stations it sends to
+    decisions_first(&mut net);
     net
 }
 
@@ -624,7 +773,9 @@ fn fold_latencies(p: &Program, net: &mut Net) {
             if net.nodes[k].kind != StationKind::Delay || net.flows.iter().any(|g| g.contains(&k)) {
                 return None;
             }
-            let link = p.stages[net.nodes[k].stage].name.strip_suffix(".latency")?;
+            let link = p.stages[net.nodes[k].stage?]
+                .name
+                .strip_suffix(".latency")?;
             let outs: Vec<End> = net
                 .edges
                 .iter()
@@ -637,7 +788,12 @@ fn fold_latencies(p: &Program, net: &mut Net) {
                     return None;
                 };
                 let flow = net.flows.iter().position(|g| {
-                    g[0] == to && g.iter().any(|&i| p.stages[net.nodes[i].stage].name == link)
+                    g[0] == to
+                        && g.iter().any(|&i| {
+                            net.nodes[i]
+                                .stage
+                                .is_some_and(|st| p.stages[st].name == link)
+                        })
                 })?;
                 into.push((to, flow));
             }
@@ -676,6 +832,43 @@ fn fold_latencies(p: &Program, net: &mut Net) {
         }
         net.edges = kept;
         remove_node(net, k);
+    }
+}
+
+/// A decision stands before the stations it sends sessions to.
+fn decisions_first(net: &mut Net) {
+    for d in 0..net.nodes.len() {
+        if net.nodes[d].kind != StationKind::Decision {
+            continue;
+        }
+        let Some(first) = net
+            .edges
+            .iter()
+            .filter(|e| e.from == End::Node(d))
+            .filter_map(|e| match e.to {
+                End::Node(k) if k != d => Some(k),
+                _ => None,
+            })
+            .min()
+        else {
+            continue;
+        };
+        // before the instance its first station is in, not inside its box
+        let first = match net.instance_of(first) {
+            Some(g) => *net.instances[g]
+                .nodes
+                .iter()
+                .min()
+                .expect("an instance has a station"),
+            None => first,
+        };
+        if first > d {
+            continue;
+        }
+        let mut order: Vec<usize> = (0..net.nodes.len()).filter(|&k| k != d).collect();
+        let at = order.iter().position(|&k| k == first).unwrap();
+        order.insert(at, d);
+        reorder(net, &order);
     }
 }
 
@@ -1424,11 +1617,9 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     EdgeStyle::Flow,
                 );
                 if let Some(l) = label {
-                    f.note(
-                        pt((ra.right() + rb.x) / 2.0, ra.centre().y - 8.0),
-                        l,
-                        Anchor::Middle,
-                    );
+                    // by the station it leaves: the pool glyphs before the
+                    // next one stand in the middle
+                    f.note(pt(ra.right() + 6.0, ra.centre().y - 8.0), l, Anchor::Start);
                 }
             }
             (End::Node(a), End::Node(b)) => {

@@ -136,6 +136,9 @@ pub enum StationKind {
     /// `step`: an iterating engine. The lecture's notation has no glyph for
     /// this one; it is a budget bar rather than a queueing station.
     Step,
+    /// Where a session decides before it reaches a station - the router
+    /// at the top of every turn: a diamond. Not a stage.
+    Decision,
 }
 
 /// One drawable.

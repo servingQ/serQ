@@ -217,6 +217,22 @@ pub fn render(f: &Figure) -> String {
                             );
                         }
                     }
+                    StationKind::Decision => {
+                        let r = rect.h.min(rect.w) / 2.0;
+                        let _ = writeln!(
+                            s,
+                            r#"<polygon {} points="{},{} {},{} {},{} {},{}"/>"#,
+                            paint("station"),
+                            n(c.x),
+                            n(c.y - r),
+                            n(c.x + r),
+                            n(c.y),
+                            n(c.x),
+                            n(c.y + r),
+                            n(c.x - r),
+                            n(c.y)
+                        );
+                    }
                     StationKind::Step => {
                         let _ = writeln!(
                             s,
