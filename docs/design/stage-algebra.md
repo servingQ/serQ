@@ -86,6 +86,48 @@ stationary law. A step engine, a `hold` that binds, or a run with `also`
 leaves the product form, and those are what a program runs the simulator
 for.
 
+## Placement: where an exact algebra could live
+
+⊕ and ⊗ depend on a policy because φ is a performance. What a job holds
+does not: it is a map from the job's coordinate to stage indices, and a
+map composes exactly. A family `E[N]` is a shape, an index expression is
+the map, and `CRef {base, count, index}` already flattens any such map to
+one array, so a (shape, stride) placement would be parse-time sugar. A
+stride of 0 is sharing: several coordinates hold one stage, the φ of
+§Distributivity left uncopied.
+
+vLLM's read of the KV across tensor-parallel ranks is such a map. A
+decoder of TP `tpD` reading a prefiller of TP `tpP ≤ tpD`: rank `r` reads
+from prefiller rank `r * tpP // tpD` (`nixl/tp_mapping.py:98`) the head
+chunk `r % (tpD / tpP)` (`nixl/tp_mapping.py:149`), so the prefiller-rank
+mode has stride 0 inside each group of `tpD / tpP`. Under MLA the cache is
+replicated and every decoder rank of the group reads all of it from that
+rank (`nixl/base_worker.py:2170-2171`).
+
+When every read fans out the same way, and every rank has a link of its
+own (a property of the machine, not of vLLM), the map reduces to one
+capacity per side, in tokens of the read per second:
+
+| | prefiller side | decoder side |
+|---|---|---|
+| GQA, `tpD / tpP` dividing the heads | `tpP · BwP` | `tpD · BwD` |
+| MLA | `BwP · tpP / tpD` | `BwD` |
+
+A program can write that today, `nic ps(tpD * BwD);`. In
+`examples/pd-disaggregation/llmd_nixl_pull.sq` with every prompt
+prefilled remotely (`--set thr=1`), a TP-4 decoder's ingress (`BwD`
+times 4) leaves the mean TTFT at 0.0311 s (λ = 0.6, seed 1) while the
+ingress utilisation falls from 0.024 to 0.006, and at a tenth of the
+bandwidth it moves from 0.1709 to 0.1708: the links do not bind in that
+deployment.
+
+A placement layout would earn its place where no capacity says the
+sharing: a link shared by several pods (a stride-0 mode across a family,
+pods of one node behind one NIC), where the reads of different pods
+contend, or reads that fan out differently from request to request. No
+program in the repository is one, so the layout waits for one that moves a
+number.
+
 ## Checks
 
 | Law | Test |
