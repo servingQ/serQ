@@ -26,7 +26,7 @@ session {
                      hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
     set c = min(cached, reusable(known, blocksize(kv)));
     prefill (known - c) growing kv;
-    branch (known == prompt) { observe ttft = now - t0; }
+    branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
     decode (out - (known - prompt)) growing kv;
   } cache (prompt + out);
   observe response = now - t0;
