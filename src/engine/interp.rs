@@ -3294,11 +3294,11 @@ impl<'p> Interp<'p> {
             .enumerate()
             .map(|(k, (o, name))| ObserveReport {
                 name: name.clone(),
-                test: p.observe_is_test(k),
+                is_test: p.observe_is_test(k),
                 count: o.w.count(),
                 mean: o.w.mean(),
                 cv2: o.w.cv2(),
-                ci: if o.samples.len() >= 40 {
+                ci: if o.samples.len() >= CI_MIN_SAMPLES {
                     batch_means(&o.samples, 20)
                 } else {
                     Estimate::nan()

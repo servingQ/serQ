@@ -1302,14 +1302,12 @@ pub fn show_num_exact(x: f64) -> String {
 }
 
 impl Program {
-    /// An expression in source form, with attribute, pool and stage names.
-    ///
-    /// `let` constants were folded at link time, so they come back as their
-    /// values: `cap blocks * bs` prints as `160000`.
     /// Whether every `observe` of slot `k` records a test: an expression
-    /// whose top is a comparison, `&&`, `||` or `!`, so 0 or 1 by
-    /// construction (`observe hit = c > 0`). A literal `1` (an event
-    /// counted) or a time are not, whatever values they take.
+    /// whose outermost operator is a comparison, `&&`, `||` or `!`, so 0 or
+    /// 1 by construction (`observe hit = c > 0`). A literal `1` (an event
+    /// counted), a time, and `c > 0 ? 1 : 0` are not, whatever values they
+    /// take: the report notes a test that never held, and a miss there
+    /// costs less than a note on a correct program.
     pub fn observe_is_test(&self, k: usize) -> bool {
         let mut seen = false;
         for block in &self.blocks {
@@ -1342,6 +1340,10 @@ impl Program {
         seen
     }
 
+    /// An expression in source form, with attribute, pool and stage names.
+    ///
+    /// `let` constants were folded at link time, so they come back as their
+    /// values: `cap blocks * bs` prints as `160000`.
     pub fn show_expr(&self, e: &CExpr) -> String {
         let mut s = String::new();
         self.write_expr(&mut s, e, prec::COND);

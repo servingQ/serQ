@@ -829,7 +829,16 @@ advanced past the position of their previous preemption. A hold that fits at
 admission but can never grow to what its body needs (`prompt + out > cap`
 under `preempt lifo`) preempts itself and re-executes forever; the run would
 otherwise end at the horizon with nothing but a preemption count, and the
-report now names the livelock.
+report now names the livelock. An `observe` whose expression is a test (its
+outermost operator a comparison, `&&`, `||` or `!`) and that was 0 over 40
+or more samples gets a line under the table, `note: observe hit is constant
+0 over 5357 samples`: a `hit` that never held is how the first overlapping
+hold was found, late, and the table does not show it (cv2 is NaN). Unlike
+the lints this is a note, not an error, because one program of the corpus
+earns it by design (`vllm_single_turn.sq` never reads its cache back); the
+note says the run never varied that value, and whether that is the
+program's intent or a bug is the reader's to decide. A test that always
+held is not noted.
 
 **Gauges.** `gauge x = e;` declares a function of the deployment's state
 and the report gives its time average over `[warmup, end]`, with a
