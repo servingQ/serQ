@@ -24,7 +24,7 @@ pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a repla
 | `Program.to_json()`, `Program.from_json(s)` | The IR as JSON (`serq ir`), and back. |
 | `run(program)` | A run. Runs in threads proceed in parallel. |
 | `Report.json()` | The summary `serq run --json` prints. |
-| `Report.horizon`, `.end`, `.warmup`, `.seed`, `.events`, `.arrivals`, `.ended`, `.turns`, `.mean_live` | The summary's fields, by the same names. A field JSON writes as `null` is the number the run computed, which is not finite (NaN, or ±inf). |
+| `Report.serq_version`, `.horizon`, `.end`, `.warmup`, `.seed`, `.events`, `.arrivals`, `.ended`, `.turns`, `.mean_live` | The summary's fields, by the same names. A field JSON writes as `null` is the number the run computed, which is not finite (NaN, or ±inf). |
 | `Report.observes` | The observations by name (a new dict on each access, in the program's order), each an `Observe`: `name`, `count`, `mean`, `ci` (batch-means 95 % half-width, +inf below 40 samples), `cv2`, `p99` as in the summary, and its samples `samples`, `times`, `sessions`, `turns` as `--dump` writes them (each access makes a new list: bind it once). |
 | `Report.stages`, `Report.pools` | One `Stage` or `Pool` per row of the summary, with its fields by the same names. |
 | `Report.gauges` | The gauges by name (a new dict on each access, in the program's order), each a `Gauge`: `name`, `mean` (time average over `[warmup, end]`), `ci` (batch-means 95 % half-width over 20 windows), `min`, `max` (held for a positive time) as in the summary, and its change points `times`, `values` as `--dump` writes them (`gauge/NAME.csv`). |

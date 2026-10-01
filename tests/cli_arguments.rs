@@ -117,3 +117,28 @@ fn supported_options_still_work() {
     }
     assert!(f.0.join("figure.svg").exists());
 }
+
+/// #232: `serq --version` prints the crate's version, for the record of a
+/// run; `-V` is the same, and either with anything else is an error.
+#[test]
+fn version_is_printed_on_request() {
+    let f = Fixture::new();
+    for flag in ["--version", "-V"] {
+        let out = f.run(&[flag]);
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("serq {}\n", env!("CARGO_PKG_VERSION"))
+        );
+    }
+    failure(
+        &f.run(&["--version", "x.sq"]),
+        2,
+        &["`--version` takes no arguments, found `x.sq`"],
+    );
+    failure(
+        &f.run(&["run", "x.sq", "--version"]),
+        2,
+        &["unknown option `--version`"],
+    );
+}

@@ -8,6 +8,7 @@ serq ir    FILE [--set name=expr]... [--def name=expr]... [--seed N] [--horizon 
                     [--arrivals N] [--trace F] [--inline-trace]
 serq draw  FILE [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH]   (experimental)
 serq fmt   [--check] FILE...
+serq --version
 ```
 
 `FILE` is program text (`.sq`) or IR (`.json`, as written by `serq ir`).
@@ -21,6 +22,7 @@ serq fmt   [--check] FILE...
 | `ir` | print the program's [IR](../ir.md) as JSON |
 | `draw` | render the program as a figure ([visualization](../visualization/index.md)) |
 | `fmt` | format one or more `.sq` files in place; comments, blank lines, number spellings, and aligned trailing comments are preserved |
+| `--version` (or `-V`) | print `serq X.Y.Z`, the interpreter's version, for the record of a run; `run --json` writes the same as `serq_version` |
 
 ## Options
 
@@ -51,7 +53,7 @@ serq run examples/multi-turn/vllm.sq --json | jq '.pools[] | select(.name=="kv")
 
 | Path | |
 |---|---|
-| top level | `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals`, `ended`, `turns`, `mean_live` |
+| top level | `serq_version` (the interpreter that ran, `serq --version`), `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals`, `ended`, `turns`, `mean_live` |
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
 | `gauges.<name>` | `mean` (time average over `[warmup, end]`), `ci`, `min`, `max` |
 | `stages[]` | `name`, `index` (the member's index in a stage array, `null` for a single stage), `mean_number`, `utilization`, `completed`, `throughput`, `mean_wait`, `mean_service`, `iterations`, and for a step stage: `prefill_only`, `decode_only`, `mixed` (fractions of the measured time an iteration of prefill only, decodes only, or both was running; the rest is idle), `mean_decodes` (time-average decodes in the running iteration, 0 while none runs), `mean_decode_batch` and `mean_decode_step` (the decodes and the duration of an iteration that carried a decode, averaged over those started after warm-up: the batch a decode is in and the step it waits for), `mean_itl`, `itl_p50`, `itl_p99` (the gaps between a turn's successive tokens, a session's tokens with the same `turn_no`, that end on the stage after warm-up, wherever the earlier token was: a transfer between a prefill engine's first token and a decode engine's second is in the gap, and so is a preemption; a prefill's end is the next token after a decode or after a preemption on the previous token's stage, otherwise the first, replacing any before it, so a decoder's recompute replaces a prefiller's dropped token; a turn's gaps add up to its last token less its first; the quantiles are within 0.5 %, exact for a single value, the mean exact); 0 for the fractions and `mean_decodes`, `null` for the others, on other stages. An iteration that only preempted counts as idle; `utilization` is the time with a job present, which differs from `1 - idle` while residents stall. `iterations` counts the whole run, warm-up included |
