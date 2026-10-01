@@ -47,12 +47,18 @@ fn the_report_has_the_shape_its_version_names() {
         vec!["ci", "max", "mean", "min"],
         vec![
             "completed",
+            "decode_only",
             "index",
             "iterations",
+            "mean_decode_batch",
+            "mean_decode_step",
+            "mean_decodes",
             "mean_number",
             "mean_service",
             "mean_wait",
+            "mixed",
             "name",
+            "prefill_only",
             "throughput",
             "utilization",
         ],
@@ -164,4 +170,46 @@ fn a_queue_family_of_one_is_reported_by_index() {
     let r = run_ir(&p, None).unwrap();
     assert_eq!(r.pools_named("D.kv")[0].index, Some(0));
     assert_eq!(r.stages_named("D")[0].index, Some(0));
+}
+
+#[test]
+fn a_step_stage_reports_what_its_iterations_carried() {
+    // examples/single-turn/separate_phases.sq: with the serve clause the
+    // iterations are A:p2, B:p4, A:d1, A:d1 of a unit each; without it,
+    // A:p2, then A:d1+B:p3 and A:d1+B:p1 mixed.
+    let src = |serve: &str| {
+        format!(
+            "pool reqs {{ cap 2; admit via engine; }} pool kv {{ cap 20; }} stage gate : delay;
+             stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
+             workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} }}
+             session {{
+               run gate (serial);
+               hold reqs (1), kv (min(prompt, left)) reserve (prompt)
+                    at admission (left = budget_left(engine)) {{
+                 prefill prompt growing kv;
+                 branch (serial == 0) {{ decode (2) growing kv; }}
+               }}
+               end;
+             }}
+             run {{ horizon 20; warmup 0; seed 1; }}"
+        )
+    };
+    let stage = |serve: &str| {
+        let p = compile_source(&src(serve), &Overrides::default()).unwrap();
+        let r = run_ir(&p, None).unwrap();
+        let s = r.stage("engine").unwrap().clone();
+        (
+            s.prefill_only,
+            s.decode_only,
+            s.mixed,
+            s.mean_decodes,
+            s.mean_decode_batch,
+            s.mean_decode_step,
+        )
+    };
+    assert_eq!(
+        stage("serve exclusive prefill;"),
+        (0.1, 0.1, 0.0, 0.1, 1.0, 1.0)
+    );
+    assert_eq!(stage(""), (0.05, 0.0, 0.1, 0.1, 1.0, 1.0));
 }

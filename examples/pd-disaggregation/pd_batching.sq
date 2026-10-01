@@ -1,0 +1,126 @@
+// The same requests on the same N engines, colocated or split: does
+// disaggregation shorten the time between tokens without serving more?
+// (#208, serving-queue-theory#28). A colocated engine spends its time on
+// prefill steps and decode steps, and its decodes advance only in the
+// latter; a decode engine runs nothing else, so its decodes step every
+// iteration and each step carries the decodes of more requests.
+//
+// The baseline the issue fixes: exclusive steps (a step is one prefill or
+// decodes only, `serve exclusive prefill`), memory enough that nothing
+// waits for it, and a free, instantaneous transfer — the prefill engine
+// drops the KV and the decode engine holds it at once. Nothing gives the
+// split an advantage per token: the engines are the colocated one's, and
+// TPOT is what the steps make of the work.
+//
+// `mode = 0` sends every request to one of the N colocated engines, the
+// least busy; `mode = 1` to one of NP prefill engines, then one of ND
+// decode engines. Both modes draw the same requests from the same seed.
+// The queues of the other mode are declared and stay idle. The report's
+// step table splits each engine's time into prefill-only, decode-only,
+// mixed and idle iterations, with the decodes each iteration carried.
+let N = 4;             // colocated engines
+let NP = 3;            // prefill engines when split
+let ND = N - NP;       // decode engines when split: the same engines
+let mode = 1;          // 0 colocated, 1 split
+let B = 8192;          // max_num_batched_tokens
+let max_seqs = 1024;   // max_num_seqs: enough that it never binds
+let blocks = 1e6;      // num_gpu_blocks: enough that memory never binds
+let bs = 16;           // block_size
+let a = 2e-5;          // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident context token (s)
+let c0 = 0;            // fixed cost per iteration (s)
+let Lambda = 60.0;     // requests per second
+
+// the laws, by name (`--def output='1001'`)
+def prompt_len() = floor(~uniform(1000, 3000));
+def output() = floor(~exp(200)) + 2;   // at least two tokens, so a TPOT exists
+
+queue gw : gateway {
+  route {
+    set t0 = now;
+    set prompt = n;
+    branch (mode == 0) {
+      choose j in N by (holders(E[j].reqs));
+      E[j].decode (prompt);
+      set first = E.first_token;
+    } else {
+      choose i in NP by (holders(P[i].reqs));
+      P[i].prefill (prompt);
+      set first = P.first_token;
+      choose j in ND by (holders(D[j].reqs));
+      D[j].decode (prompt);
+    }
+    observe ttft = first - t0;
+    observe decode_time = now - first;
+    observe tpot = (now - first) / (o - 1);
+    observe response = now - t0;
+    observe output_tokens = o;
+  }
+}
+
+// A colocated engine: the prompt and the answer on one device.
+queue E[N] : decode {
+  pool reqs { cap max_seqs; }
+  pool kv { cap blocks * bs; block bs; }
+  serve step {
+    budget B;
+    cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+    memory kv;
+    serve exclusive prefill;
+  }
+  decode (prompt) {
+    hold reqs (1), kv (prompt) {
+      prefill (prompt);
+      mark first_token;
+      decode (o - 1) growing kv;
+    }
+  }
+}
+
+// A prefill engine: the prompt and its first token; the KV goes with it.
+queue P[NP] : prefill {
+  pool reqs { cap max_seqs; }
+  pool kv { cap blocks * bs; block bs; }
+  serve step {
+    budget B;
+    cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+    memory kv;
+    serve exclusive prefill;
+  }
+  prefill (prompt) {
+    hold reqs (1), kv (prompt) {
+      prefill (prompt);
+      mark first_token;
+    }
+  }
+}
+
+// A decode engine: the KV arrives with the request, and it decodes.
+queue D[ND] : decode {
+  pool reqs { cap max_seqs; }
+  pool kv { cap blocks * bs; block bs; }
+  serve step {
+    budget B;
+    cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+    memory kv;
+    serve exclusive prefill;
+  }
+  decode (prompt) {
+    hold reqs (1), kv (prompt) {
+      decode (o - 1) growing kv;
+    }
+  }
+}
+
+workload {
+  arrive poisson(Lambda);
+  hidden o;              // the scheduler knows max_tokens, not the length
+  turn {
+    set n = prompt_len();
+    set o = output();
+  }
+  session { turn; request gw; end; }
+}
+
+run { horizon 300; warmup 30; seed 1; }

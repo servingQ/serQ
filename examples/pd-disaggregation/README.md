@@ -12,3 +12,9 @@ to its pinned serQ revision.
 link and decode tandem. Both modes use the same work draws. A deployment
 drawing shows all declared queues, including inactive ones: it depicts the
 comparison fixture, not a single active serving deployment.
+
+`pd_batching.sq` runs the same requests on N engines colocated or split
+into NP prefill and ND decode engines, with a free transfer, to see what
+the split does to the time per output token at equal throughput (#208);
+`pd_ps.sq` is the processor-sharing idealisation it is compared to.
+`tools/pd_batching/` sweeps both and keeps the results.
