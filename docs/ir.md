@@ -208,7 +208,7 @@ priced as such. What a change to `src/ir.rs` does to the version:
 
 A version is a release, and the lines above decide one thing: whether a
 change to a *tagged* version opens the next number. While the version at
-`IR_VERSION` has no tag (9 in `v0.1.0` and `v0.1.0-rc7`, 8 in `v0.1.0-rc6`, 7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`,
+`IR_VERSION` has no tag (10 in `v0.1.1`, 9 in `v0.1.0` and `v0.1.0-rc7`, 8 in `v0.1.0-rc6`, 7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`,
 5 in `v0.1.0-rc1`;
 `v0.1.0-rc0` is 3), no line bumps; the
 change is listed in the coming tag's message, which is the release note,
@@ -273,7 +273,8 @@ request is admitted) thus no longer costs the request its hit. A hold
 without `cache` on a pool where the session has an entry no longer drops
 it, whether or not its body reads `cached`; `cache (0)` is the 9 meaning.
 The shape is unchanged; the meaning of an absent `cache` is, on a tagged
-version, so this opens 10. No oracle program holds a pool with entries
+version, so this opened 10, which `v0.1.1` carries; the next change to the
+IR opens 11. No oracle program holds a pool with entries
 without `cache`, so the oracle schedules and the trace are unchanged; the
 files carry the new version. The Lean fragment's `admit`
 (`SerqExec.lean`) consumes unconditionally and moves with the generator's
