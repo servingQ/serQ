@@ -388,3 +388,40 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
         "ITL {itl} against TPOT {tpot}"
     );
 }
+
+/// #232: a test (`c > 0`, `S == hit`, `!x`) that was 0 over 40 or more
+/// samples gets a note under the table. The table alone does not show it
+/// (cv2 is NaN for a constant 0), and an always-0 `hit` is how #230 was
+/// found, late. `batch(40)` arrives 40 sessions at once, one sample each,
+/// `serial` 0..39: `never` is 0 for every serial, `odd` is 1 for the 20 odd
+/// serials, `always` is 1 for all (a test that held is not a finding),
+/// `zero` is a literal, not a test (an event counted is written `= 1`),
+/// and `few` is 0 but only for the 10 serials below 10.
+#[test]
+fn a_test_observe_that_never_held_is_noted() {
+    let src = "stage svc : delay; workload { arrive batch(40); }
+        session {
+          run svc (serial);
+          observe never = serial < 0;
+          observe odd = serial - 2 * floor(serial / 2) == 1;
+          observe always = serial >= 0;
+          observe zero = 0;
+          branch (serial < 10) { observe few = serial > 100; }
+          end;
+        }
+        run { horizon 100; }";
+    let r = run_ir(&compile_source(src, &Overrides::default()).unwrap(), None).unwrap();
+    assert_eq!(r.observe("never").unwrap().count, 40);
+    assert_eq!(r.observe("few").unwrap().count, 10);
+    let t = r.text();
+    assert!(
+        t.contains("note: observe never is constant 0 over 40 samples"),
+        "{t}"
+    );
+    for name in ["odd", "always", "zero", "few"] {
+        assert!(
+            !t.contains(&format!("observe {name} is constant")),
+            "{name}: {t}"
+        );
+    }
+}

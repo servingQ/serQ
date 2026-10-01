@@ -3291,8 +3291,10 @@ impl<'p> Interp<'p> {
             .observes
             .iter()
             .zip(&p.observes)
-            .map(|(o, name)| ObserveReport {
+            .enumerate()
+            .map(|(k, (o, name))| ObserveReport {
                 name: name.clone(),
+                test: p.observe_is_test(k),
                 count: o.w.count(),
                 mean: o.w.mean(),
                 cv2: o.w.cv2(),

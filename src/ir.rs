@@ -1306,6 +1306,42 @@ impl Program {
     ///
     /// `let` constants were folded at link time, so they come back as their
     /// values: `cap blocks * bs` prints as `160000`.
+    /// Whether every `observe` of slot `k` records a test: an expression
+    /// whose top is a comparison, `&&`, `||` or `!`, so 0 or 1 by
+    /// construction (`observe hit = c > 0`). A literal `1` (an event
+    /// counted) or a time are not, whatever values they take.
+    pub fn observe_is_test(&self, k: usize) -> bool {
+        let mut seen = false;
+        for block in &self.blocks {
+            for s in block {
+                if let CStmt::Observe(slot, e) = s
+                    && *slot == k
+                {
+                    seen = true;
+                    let test = match e {
+                        CExpr::Binary(op, _, _) => matches!(
+                            op,
+                            BinOp::Lt
+                                | BinOp::Le
+                                | BinOp::Gt
+                                | BinOp::Ge
+                                | BinOp::Eq
+                                | BinOp::Ne
+                                | BinOp::And
+                                | BinOp::Or
+                        ),
+                        CExpr::Unary(UnOp::Not, _) => true,
+                        _ => false,
+                    };
+                    if !test {
+                        return false;
+                    }
+                }
+            }
+        }
+        seen
+    }
+
     pub fn show_expr(&self, e: &CExpr) -> String {
         let mut s = String::new();
         self.write_expr(&mut s, e, prec::COND);
