@@ -3193,10 +3193,10 @@ impl<'p> Interp<'p> {
             .stages
             .iter()
             .zip(&p.stages)
-            .enumerate()
-            .map(|(i, (s, cs))| StageReport {
+            .zip(members(p.stages.iter().map(|s| &s.name)))
+            .map(|((s, cs), index)| StageReport {
                 name: cs.name.clone(),
-                index: member(&p.stages, i, |s| &s.name),
+                index,
                 mean_number: s.number_avg.mean(now),
                 utilization: s.busy_avg.mean(now),
                 completed: s.completed,
@@ -3210,10 +3210,10 @@ impl<'p> Interp<'p> {
             .pools
             .iter()
             .zip(&p.pools)
-            .enumerate()
-            .map(|(i, (pl, cp))| PoolReport {
+            .zip(members(p.pools.iter().map(|p| &p.name)))
+            .map(|((pl, cp), index)| PoolReport {
                 name: cp.name.clone(),
-                index: member(&p.pools, i, |p| &p.name),
+                index,
                 mean_used: pl.used_avg.mean(now),
                 mean_cached: pl.cached_avg.mean(now),
                 mean_queue: pl.queue_avg.mean(now),
@@ -3271,15 +3271,23 @@ impl Ord for KeyOrd {
     }
 }
 
-/// The index of `xs[i]` in its array, `None` if no other entry has its name:
-/// an array's members are the entries of one name (`kvD`, `kvD`), in index
-/// order. A one-member array has no other, and reads as a single entry.
-fn member<T>(xs: &[T], i: usize, name: impl Fn(&T) -> &String) -> Option<u32> {
-    let n = name(&xs[i]);
-    if xs.iter().filter(|x| name(x) == n).count() < 2 {
-        return None;
+/// Each entry's index in its array, `None` for an entry no other shares
+/// its name with: an array's members are the entries of one name (`kvD`,
+/// `kvD`), in index order. A one-member array has no other, and reads as a
+/// single entry.
+fn members<'a>(names: impl Iterator<Item = &'a String> + Clone) -> Vec<Option<u32>> {
+    let mut count: HashMap<&String, u32> = HashMap::new();
+    for n in names.clone() {
+        *count.entry(n).or_default() += 1;
     }
-    Some(xs[..i].iter().filter(|x| name(x) == n).count() as u32)
+    let mut seen: HashMap<&String, u32> = HashMap::new();
+    names
+        .map(|n| {
+            let k = seen.entry(n).or_default();
+            *k += 1;
+            (count[n] > 1).then_some(*k - 1)
+        })
+        .collect()
 }
 
 /// Whether an eviction key reads only its entry, the clock and the stage

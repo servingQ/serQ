@@ -22,6 +22,10 @@ ROOT = Path(__file__).resolve().parents[2]
 CLI = os.environ.get("SERQ_CLI", str(ROOT / "target" / "release" / "serq"))
 MG1 = ROOT / "examples" / "single-turn" / "mg1.sq"
 REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
+ARRAYS = """pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
+workload { arrive poisson(1); }
+session { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } end; }
+run { horizon 100; }"""
 
 
 def cli(path, *args):
@@ -87,7 +91,10 @@ LOOKUPS = {"json", "observes", "gauges", "stages", "pools", "observe", "gauge", 
 
 
 def test_the_report_is_its_json_by_name():
+    arrays = pyserq.run(pyserq.compile(source=ARRAYS))
+    assert [p.index for p in arrays.pools_named("kv")] == [0, 1] and arrays.pool("reqs").index is None
     for r in [pyserq.run(pyserq.compile(MG1, seed=4, horizon=20000.0, warmup=1000.0)),
+              arrays,
               pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}))]:
         js = json.loads(r.json())
         scalars = {k: v for k, v in js.items() if k not in ("observes", "gauges", "stages", "pools")}
