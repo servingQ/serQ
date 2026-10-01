@@ -146,3 +146,22 @@ fn a_one_member_array_keeps_its_index() {
     assert!(text.lines().any(|l| l.starts_with("kv[0] ")), "{text}");
     assert!(text.lines().any(|l| l.starts_with("svc[0] ")), "{text}");
 }
+
+/// A queue family of one is a family (`D[j].decode`), so its pools and
+/// stages are reported as `D[0]`, as the program calls them.
+#[test]
+fn a_queue_family_of_one_is_reported_by_index() {
+    let src = "let ND = 1;
+        queue gw : gateway { route { choose j in ND by (0); D[j].decode (prompt); } }
+        queue D[ND] : decode {
+          pool kv { cap 100; }
+          serve step { cost 1; memory kv; }
+          decode (p) { hold kv (p) { prefill (p) growing kv; } }
+        }
+        workload { arrive batch(1); init { set prompt = 4; } session { request gw; end; } }
+        run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let r = run_ir(&p, None).unwrap();
+    assert_eq!(r.pools_named("D.kv")[0].index, Some(0));
+    assert_eq!(r.stages_named("D")[0].index, Some(0));
+}

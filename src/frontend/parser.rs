@@ -2832,9 +2832,11 @@ impl Parser {
         if self.queues.iter().any(|q| q.name == name) {
             return self.err_at(at + 1, format!("duplicate queue `{name}`"));
         }
-        // a family of one is one queue (`D.verb`, not `D[0].verb`), and so
-        // are its pools and stages
-        let count = self.array_count()?.unwrap_or(1);
+        // `Q[n]` is a family whatever `n`, called by index, and its pools and
+        // stages are arrays; `Q` is one queue
+        let array = self.array_count()?;
+        let family = array.is_some();
+        let count = array.unwrap_or(1);
         let mut roles = vec![];
         if *self.peek() == Tok::Colon {
             self.advance();
@@ -2861,7 +2863,7 @@ impl Parser {
             }
         }
         let is_gateway = roles.iter().any(|r| r == "gateway");
-        if is_gateway && count != 1 {
+        if is_gateway && family {
             return self.err_at(
                 at,
                 "a gateway is one queue, not a family: the requests enter it",
@@ -2870,6 +2872,7 @@ impl Parser {
         self.queues.push(QueueDecl {
             name: name.clone(),
             count,
+            family,
             roles: roles.clone(),
             pools: vec![],
             has_stage: false,
@@ -2921,7 +2924,7 @@ impl Parser {
                 self.queues[qi].pools.push(d.name.clone());
                 d.name = format!("{name}.{}", d.name);
                 d.count = count;
-                d.array = count > 1;
+                d.array = family;
                 prog.pools.push(d);
             } else if self.is_kw("serve") {
                 let s_at = self.pos;
@@ -2967,7 +2970,7 @@ impl Parser {
                     span,
                     name: name.clone(),
                     count,
-                    array: count > 1,
+                    array: family,
                     kind,
                 });
             } else if self.is_kw("nic") {
@@ -2990,7 +2993,7 @@ impl Parser {
                     span,
                     name: nname,
                     count,
-                    array: count > 1,
+                    array: family,
                     kind,
                 });
             } else if let Tok::Ident(verb) = self.peek().clone() {
@@ -3021,7 +3024,7 @@ impl Parser {
                 span,
                 name: lname,
                 count,
-                array: count > 1,
+                array: family,
                 kind: StageKind::Delay,
             });
         }
@@ -4068,7 +4071,7 @@ impl Parser {
                 span,
                 name: sname,
                 count,
-                array: count > 1,
+                array: self.queues[qi].family,
                 kind: StageKind::Delay,
             });
             Some(Expr::Var(lname))

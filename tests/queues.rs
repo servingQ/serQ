@@ -86,7 +86,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
         D[j].decode (prompt) from P;
         observe ttft = D.first - t0;
       } }
-      queue P[NP] : prefill {
+      queue P : prefill {
         pool kv { cap 1000; }
         serve fifo;
         prefill (prompt) { hold kv (prompt) { run (prompt); } cache (prompt) lease kv (inf); }
@@ -554,6 +554,14 @@ fn a_family_size_is_a_constant() {
     };
     assert!(parse(&decl("N")).is_ok());
     assert!(parse(&decl("N + 1")).is_ok());
+    // a family of one is still called by index: a program reads the same at N = 1
+    let one = parse(&decl("N - 1")).unwrap();
+    assert!(serq::frontend::link::link(&one, &Overrides::default()).is_ok());
+    // and only by index: one call, one spelling, whatever N is
+    refused(
+        &decl("N - 1").replace("E[j].decode", "E.decode"),
+        "is a family of 1; index it",
+    );
     refused(&decl("N / 4"), "array size must be a positive integer");
     refused(&decl("j"), "positive integer or a `let` constant");
 }
