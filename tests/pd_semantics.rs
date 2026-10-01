@@ -57,7 +57,7 @@ fn release_caches_per_the_hold_clause() {
         workload { arrive batch(1); }
         session {
           hold kv (8) { run svc (1); release kv; run svc (1); } cache (8);
-          hold kv (8) { observe hit = cached; }
+          hold kv (8) { observe hit = cached; } cache (0);
           end;
         }
         run { horizon 100; }
@@ -113,7 +113,7 @@ fn load_advances_the_computed_position() {
         workload { arrive batch(1); }
         session {
           hold kv (40) { run svc (1); load kv (30); } cache (40);
-          hold kv (40) { observe hit = cached; }
+          hold kv (40) { observe hit = cached; } cache (0);
           end;
         }
         run { horizon 100; }
@@ -467,7 +467,7 @@ fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
             hold kv (10) { run svc (1); } cache (10) lease kv (2);
             observe leased = used(kv);
             run svc (5);
-            hold kv (10) { observe hit = cached; }
+            hold kv (10) { observe hit = cached; } cache (0);
           } else {
             run gate (0.5);
             hold kv (10) { observe admitted = now; }

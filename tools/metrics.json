@@ -1,5 +1,5 @@
 {
-  "IR_VERSION": 9,
+  "IR_VERSION": 10,
   "ir": {
     "CStmt": 13,
     "CExpr": 8,

@@ -15,7 +15,7 @@ the program. A tool that knows what it wants to run (a scenario from JSON,
 a parameter sweep, a trace replay) builds or edits the IR as data instead
 of generating text.
 
-Source: `src/ir.rs`. Version: `IR_VERSION = 9` (2 added the sessions' turns;
+Source: `src/ir.rs`. Version: `IR_VERSION = 10` (2 added the sessions' turns;
 3 renamed the `route` field to `session`; 4 replaced `CStep`'s two booleans
 `exclusive_prefill` and `decode_first` by the one order `serve`;
 5 added KV transfer and leases; 6 added renewal arrivals and finite open runs;
@@ -92,7 +92,7 @@ runs identically (`tests/ir.rs`).
 |---|---|
 | `Turn` | draw the next turn's attributes (workload `turn` block or trace) |
 | `Set(slot, e)`, `Observe(k, e)` | assign an attribute, record an observation |
-| `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?, lease?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; `reuse` bounds the own cached prefix consumed, `cache` the units left cached; `lease: (pool, t)` keeps that pool's allocation past the scope, neither evictable nor a preemption victim, until the session's `Release` of it, `t` seconds, or its end (vLLM's `delay_free_blocks`) |
+| `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?, lease?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; with `cache` the admission consumes the own cached prefix, `reuse` bounds how much, and `cache` is the units left cached; without `cache` the hold leaves the session's cached prefix where it is (10); `lease: (pool, t)` keeps that pool's allocation past the scope, neither evictable nor a preemption victim, until the session's `Release` of it, `t` seconds, or its end (vLLM's `delay_free_blocks`) |
 | `Grow(pool, e)`, `Drop(pool)` | grow the current hold, drop the own cached entry |
 | `Release(pool)` | give the innermost enclosing hold's allocation on the pool back now, or end the session's lease of it, caching per the hold's `cache`; nothing held or leased there is a no-op. A KV transfer between instances is `Run` (the link), `Load` (the destination) and `Release` (the source's lease) |
 | `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
@@ -263,6 +263,24 @@ for its FIFO fragment and rejects non-FIFO queues. It also retains support
 for its pinned version 7 and version 8 FIFO programs. No waiting-selection
 proof is claimed. Oracle JSON files move to version 9; their schedules and
 generated Lean programs remain unchanged.
+
+Version 10 makes `Hold.cache` the clause that admits a hold to the prefix
+cache (#230): a hold without it consumes nothing of the session's own
+entry and sets `cached` to 0, where 9 consumed the entry at every admission,
+so a hold admitted inside another on the same pool found none. A hold written
+around the request's on the same pool (a reservation given back before the
+request is admitted) thus no longer costs the request its hit. A hold
+without `cache` on a pool where the session has an entry no longer drops
+it, whether or not its body reads `cached`; `cache (0)` is the 9 meaning.
+The shape is unchanged; the meaning of an absent `cache` is, on a tagged
+version, so this opens 10. No oracle program holds a pool with entries
+without `cache`, so the oracle schedules and the trace are unchanged; the
+files carry the new version. The Lean fragment's `admit`
+(`SerqExec.lean`) consumes unconditionally and moves with the generator's
+pin in the matching `serving-queue-theory` change. The linker rejects a
+`cached` read, or a `reuse`, in a hold without `cache` (a stricter check,
+which catches the body that would read a different number, not every
+program whose numbers move).
 
 ## The Lean fragment
 

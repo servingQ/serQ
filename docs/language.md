@@ -187,7 +187,8 @@ and a stage's cost, which has no session, would read it as undefined). Every con
 `let`, or a constant position: `cap`, `block`, a `fifo` count, the arrival
 rate or population, the `run` block) is a number or `inf`; one that
 evaluates to NaN (`0/0`, `inf - inf`) does not link. Built-in session attributes: `serial`, `turn_no`, `cached` (the
-prefix consumed at the last admission), `computed` (the position the hold
+prefix consumed at the last admission; 0 after a hold without `cache`,
+which consumes none), `computed` (the position the hold
 had computed when it was preempted, 0 otherwise; below), and with a trace
 `new`, `out`, `think`, `more`, `forced`. Every name assigned by `set` or
 `choose` is a session attribute.
@@ -536,10 +537,22 @@ has room for its `reserve` units next to the allocated units (`used + r ≤ cap`
 for "do not let me in until there is room for this", which is separate from
 how much the hold then takes; vLLM spells the same rule
 `scheduler_reserve_full_isl`; the first that does not
-fit blocks the rest (head-of-line blocking). On admission the session
-consumes at most `ρ` units of its own cached prefix (`cached :=` what it
-consumed); the rest of that entry stays in the cache as a *dead* entry with
-the same age, unusable, until evicted; other entries are evicted in the
+fit blocks the rest (head-of-line blocking). The `cache` clause is what
+makes a hold take part in the prefix cache. With it, on admission the
+session consumes at most `ρ` units of its own cached prefix (`cached :=`
+what it consumed); the rest of that entry stays in the cache as a *dead*
+entry with the same age, unusable, until evicted. Without it the hold is
+memory alone: it leaves the session's cached blocks where they are,
+evictable as before, and `cached` is 0 in its body (the linker rejects a
+body that reads it there, and a `reuse` there; `cache (0)` is the hold
+that consumes the prefix and keeps nothing). So a hold around the
+request's on the same pool, a reservation given back with `release`
+before the request's admission, say, does not touch what the request
+will find. vLLM's `enable_caching` switches the lookup and the caching
+on together (`prefix_cache_lookup_enabled`, `kv_cache_manager.py:249-251`;
+`cache_blocks`, `kv_cache_manager.py:802-812`), and a request may skip
+the lookup alone (`skip_reading_prefix_cache`, `request.py:314-324`),
+which is `reuse (0) cache (ℓ)` here. Other entries are evicted in the
 pool's order until allocations and cache fit; `u` units are allocated and
 the body runs. At the end of the body the units are released and
 `min(ℓ, computed)` units stay cached, rounded down to blocks (`computed`

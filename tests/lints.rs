@@ -416,3 +416,73 @@ fn an_old_context_variable_name_says_the_new_one() {
         assert!(e.contains(&format!("`{old}` is now `{new}`")), "{e}");
     }
 }
+
+const CACHE_ENGINE: &str = "pool kv { cap 1e5; block 16; evict lru; }
+    stage engine : step { budget 512; cost 1e-3; memory kv; }
+    stage think : delay;
+    workload { arrive closed(1); }";
+
+/// #230: a hold without a `cache` clause consumes nothing of the session's
+/// prefix, so `cached` is 0 in its body; reading it there is the old idiom
+/// for a probe that consumed and kept nothing, which is now `cache (0)`.
+#[test]
+fn cached_in_a_hold_without_cache_is_rejected() {
+    let src = format!(
+        "{CACHE_ENGINE} session {{ loop {{ run think (1);
+            hold kv (1000) {{ observe hit = cached > 0; prefill on engine (1000 - cached) growing kv; }}
+        }} }} run {{ horizon 20; }}"
+    );
+    let e = check(&src).expect_err("rejected");
+    assert!(
+        e.contains("`cached` is read in a hold on `kv` that has no `cache` clause"),
+        "{e}"
+    );
+    assert!(e.contains("`cache (0)`"), "names the spelling for it: {e}");
+}
+
+/// `cache (0)` is that spelling, and the usual request links as before.
+#[test]
+fn cache_zero_is_the_way_through() {
+    for clause in ["cache (0)", "cache (1000)"] {
+        let src = format!(
+            "{CACHE_ENGINE} session {{ loop {{ run think (1);
+                hold kv (1000) {{ observe hit = cached > 0; prefill on engine (1000 - cached) growing kv; }} {clause};
+            }} }} run {{ horizon 20; }}"
+        );
+        check(&src).unwrap_or_else(|e| panic!("{clause}: {e}"));
+    }
+}
+
+/// The innermost hold is the admission that set `cached`: a hold on
+/// another pool nested in the request's reads its own, which is 0.
+#[test]
+fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
+    let src = format!(
+        "{CACHE_ENGINE} pool reqs {{ cap 4; }} session {{ loop {{ run think (1);
+            hold kv (1000) {{ hold reqs (1) {{ prefill on engine (1000 - cached) growing kv; }} }} cache (1000);
+        }} }} run {{ horizon 20; }}"
+    );
+    let e = check(&src).expect_err("rejected");
+    assert!(e.contains("hold on `reqs`"), "{e}");
+    let src = format!(
+        "{CACHE_ENGINE} pool reqs {{ cap 4; }} session {{ loop {{ run think (1);
+            hold kv (1000) {{ set c = cached; hold reqs (1) {{ prefill on engine (1000 - c) growing kv; }} }} cache (1000);
+        }} }} run {{ horizon 20; }}"
+    );
+    check(&src).expect("read above the inner hold, as llmd_nixl_pull.sq does");
+}
+
+/// `reuse` bounds what the admission consumes; without `cache` it consumes nothing.
+#[test]
+fn reuse_without_cache_is_rejected() {
+    let src = format!(
+        "{CACHE_ENGINE} session {{ loop {{ run think (1);
+            hold kv (1000) reuse (512) {{ prefill on engine (1000) growing kv; }}
+        }} }} run {{ horizon 20; }}"
+    );
+    let e = check(&src).expect_err("rejected");
+    assert!(
+        e.contains("`reuse` on a hold on `kv` that has no `cache` clause"),
+        "{e}"
+    );
+}
