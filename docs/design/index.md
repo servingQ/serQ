@@ -71,7 +71,8 @@ here. This directory is the record of **applying** them.
 | [Bandwidth sharing](bandwidth-sharing.md) | A transfer holds the sender's and the receiver's link at once: `Run.also`, `share maxmin` or `bottleneck`, the flow solver | RFC #118, design before implementation |
 | [One admission](one-admission.md) | One spelling for one admission: `hold … at admission (…) … cache`; `enter`, `admit if … fit where` and `keep` retired, the serving name moved into a `def` | #136 |
 | [Separate prefill/decode batches](exclusive-prefill.md) | Whole-batch isolation and waiting-prefill takeover using the existing serve policy | untagged IR v8 semantics |
-
 | [Waiting selection](waiting-selection.md) | Selection-time queue keys, elapsed wait and Ascend-style FCFS aging | IR v9 |
+| [Queues](queue.md) | gateway, prefill, link and decode as roles of one `queue` that owns its pools, its stage and the entries holding a request's admission, allocation and service; what an entry may read; parse-time sugar; a link whose `serve` is its cost | RFC #72, with `examples/pd-disaggregation/llmd_nixl_pull.sq` |
+| [Explicit gateways](explicit-gateways.md) | `request gw;` selects a gateway by name; predefined vocabulary and the proposed import boundary | PR #87 follow-up |
 
 A new design document adds a row to this table.

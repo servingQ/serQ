@@ -5,8 +5,8 @@ The program as a queueing network.
 ![llm-d prefill/decode over NIXL](../assets/llmd_nixl_pull.deployment.svg)
 
 That is `examples/pd-disaggregation/llmd_nixl_pull.sq`: two prefill and two decode
-instances, the KV read over NIXL. The read sits where the prefiller's `kvP`
-box and the decoder's `kvD` box cross: the prefiller's blocks stay leased
+instances, the KV read over NIXL. The read sits where the prefiller's `P.kv`
+box and the decoder's `D.kv` box cross: the prefiller's blocks stay leased
 until the read ends, and the decoder's are allocated before it starts. It
 holds the prefiller's NIC and the decoder's at once, so its two stations
 are bracketed as one job.

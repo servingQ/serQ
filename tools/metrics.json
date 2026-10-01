@@ -7,13 +7,12 @@
     "CtxVar": 17
   },
   "surface": {
-    "keywords": 82,
+    "keywords": 83,
     "functions": 23,
     "context_variables": 17
   },
   "clones": [
     "at admission (known = computed < prompt ? prompt : computed + 1,",
-    "branch (known == prompt) { observe ttft = now - t0; }",
     "cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);",
     "hold reqs (1), kv (prompt + out) {",
     "init { set prompt = 256; set out = 16; }",

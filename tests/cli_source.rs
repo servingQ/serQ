@@ -108,6 +108,24 @@ fn desugaring_keeps_server_and_header_binding_locations() {
 }
 
 #[test]
+fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
+    let src = "queue engine : prefill {\n  serve fifo;\n  prefill (prompt) { run (prompt); }\n}\nqueue gw : gateway { route {\n  engine.prefill (missing);\n} }\nworkload { arrive batch(1); session { request gw; end; } }\nrun { horizon 10; }";
+    let err = compile_source(src, &Overrides::default()).unwrap_err();
+    // Parameter substitution must point to the argument at the call site,
+    // rather than the parameter inside the queue's entry.
+    assert!(err.contains("6:19:"), "{err}");
+    assert!(err.contains("unknown name `missing`"), "{err}");
+    assert!(err.contains("6 |   engine.prefill (missing);"), "{err}");
+
+    let src = "queue engine : prefill {\n  pool kv { cap 10; admit via engin; }\n  serve step { cost 1; memory kv; }\n  prefill (prompt) { hold kv (prompt) { prefill (prompt) growing kv; } }\n}\nrun { horizon 10; }";
+    let err = compile_source(src, &Overrides::default()).unwrap_err();
+    assert!(err.contains("2:31:"), "{err}");
+    assert!(err.contains("unknown stage `engin`"), "{err}");
+    assert!(err.contains("did you mean stage `engine`?"), "{err}");
+    assert!(err.contains("declared at 1:7"), "{err}");
+}
+
+#[test]
 fn ambiguous_suggestions_and_override_spans_are_not_misleading() {
     let src = "stage cat : fifo; stage cut : fifo; session { run cot (1); } run { horizon 1; }";
     let err = compile_source(src, &Overrides::default()).unwrap_err();

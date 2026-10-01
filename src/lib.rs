@@ -35,7 +35,8 @@ pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> 
 /// Compile `src`, the text of the program file `path`: its `use`s read
 /// next to it, and a library that `use`s it back does not read it again.
 pub fn compile_file(src: &str, path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
-    let prog = frontend::parser::parse_file_with(src, path, &ov.defs).map_err(|e| e.render(src))?;
+    let prog = frontend::parser::parse_file_with(src, path, &ov.defs, &overridden(ov))
+        .map_err(|e| e.render(src))?;
     finish(prog, src, ov)
 }
 
@@ -46,8 +47,14 @@ pub fn compile_source_at(
     base: Option<&Path>,
     ov: &Overrides,
 ) -> Result<ir::Program, String> {
-    let prog = frontend::parser::parse_at_with(src, base, &ov.defs).map_err(|e| e.render(src))?;
+    let prog = frontend::parser::parse_at_with(src, base, &ov.defs, &overridden(ov))
+        .map_err(|e| e.render(src))?;
     finish(prog, src, ov)
+}
+
+/// The constants `--set` overrides, which the parser checks size no queue family.
+fn overridden(ov: &Overrides) -> Vec<String> {
+    ov.lets.iter().map(|(name, _)| name.clone()).collect()
 }
 
 /// Link a parsed program and check its IR.

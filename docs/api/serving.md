@@ -62,12 +62,14 @@ is `run egress[i], ingress[j] (X); load Q (n); release P;`.
 ### Example
 
 From `examples/pd-disaggregation/llmd_nixl_pull.sq`, the decoder's read of
-the prefiller's leased blocks, over the prefiller's NIC and its own:
+the prefiller's leased blocks, over the prefiller's NIC and its own, in the
+decoder's `decode (prompt) from src` entry (`src` is the prefiller's leased
+pool, and as an index the prefiller's member):
 
 ```serq
-hold kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) … {
+hold kv (known) reserve (known), reqs (0) reserve (1) … {
   run setup (x0);
-  transfer on egress[i], ingress[j] (prompt - c) from kvP[i] to kvD[j] (prompt - 1 - c);
+  transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);
   …
 } cache (prompt + o);
 ```

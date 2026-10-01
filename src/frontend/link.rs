@@ -850,17 +850,9 @@ impl Linker<'_> {
                             .map_err(|e| e.at(r.span)),
                     })
                     .collect::<LResult<_>>()?;
-                match (f.as_str(), xs.as_slice()) {
-                    ("min", [a, b]) => a.min(*b),
-                    ("max", [a, b]) => a.max(*b),
-                    ("abs", [a]) => a.abs(),
-                    ("floor", [a]) => a.floor(),
-                    ("ceil", [a]) => a.ceil(),
-                    ("sqrt", [a]) => a.sqrt(),
-                    ("exp", [a]) => a.exp(),
-                    ("ln", [a]) => a.ln(),
-                    ("pow", [a, b]) => a.powf(*b),
-                    _ => {
+                match const_call(f, &xs) {
+                    Some(x) => x,
+                    None => {
                         return Err(LinkError::new(format!(
                             "`{f}` with {} argument(s) is not a constant function",
                             xs.len()
@@ -1017,6 +1009,12 @@ impl Linker<'_> {
                             .into(),
                     ));
                 }
+                Stmt::Call { .. } | Stmt::Mark(_) => {
+                    return Err(LinkError::new(
+                        "a queue's entry call survived parsing: the parser expands it in place"
+                            .into(),
+                    ));
+                }
                 Stmt::Hold {
                     pools,
                     reuse,
@@ -1129,6 +1127,24 @@ impl Linker<'_> {
         self.blocks[id] = out;
         Ok(id)
     }
+}
+
+/// A constant function of constants: what a `let`, a `cap` or an array size
+/// may call. The parser folds a family's size with it, the linker every
+/// constant.
+pub fn const_call(f: &str, xs: &[f64]) -> Option<f64> {
+    Some(match (f, xs) {
+        ("min", [a, b]) => a.min(*b),
+        ("max", [a, b]) => a.max(*b),
+        ("abs", [a]) => a.abs(),
+        ("floor", [a]) => a.floor(),
+        ("ceil", [a]) => a.ceil(),
+        ("sqrt", [a]) => a.sqrt(),
+        ("exp", [a]) => a.exp(),
+        ("ln", [a]) => a.ln(),
+        ("pow", [a, b]) => a.powf(*b),
+        _ => return None,
+    })
 }
 
 pub fn binop(op: BinOp, a: f64, b: f64) -> f64 {

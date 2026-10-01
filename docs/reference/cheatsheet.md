@@ -57,6 +57,8 @@ stage engine : step {
 
 ```serq
 turn;                              // draw the next turn's attributes
+request;                           // workload session: run the anonymous server block
+request gw;                        // workload session: run the named gateway's route
 set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
 

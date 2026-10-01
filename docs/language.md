@@ -77,8 +77,12 @@ item     := let NAME = expr ;
           | workload { wlitem* }
           | session block                     -- the session, in one block
           | server block                      -- or its server side, with the session inside workload
+          | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
           | run { horizon expr ; warmup expr ; seed expr ; arrivals expr ; }
           | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
+qitem    := pool NAME { poolopt* }              -- the queue's own; only its entries hold it
+          | serve kind ;                        -- the queue's stage, named after the queue
+          | VERB [ ( NAME, ... ) ] [ from NAME ] block   -- an entry of one of the queue's roles
 poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
@@ -100,6 +104,7 @@ wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive close
           | hidden NAME [, NAME]* ;           -- the scheduler may not read these
 stmt     := turn ;                           -- next turn's attributes (workload `turn`, trace)
           | request ;                        -- the server block, once (workload `session` only)
+          | request QUEUE ;                  -- the named gateway's route, once (workload `session` only)
           | set NAME = expr ;
           | observe NAME = expr ;
           | hold POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]*
@@ -118,6 +123,9 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | loop block
           | choose NAME in expr by ( expr , ... ) ; -- NAME := argmin over 0..n, keys in order
           | end ;
+          | QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
+                                             -- a queue's entry, in its place (*Queues*)
+          | mark NAME ;                        -- in an entry: the moment, read by the caller as QUEUE.NAME
           | serving                          -- the serving vocabulary, sugar for run
 serving  := prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
           | transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
@@ -362,6 +370,110 @@ and #136 took them out: a serving program names its admission with a
 A `session` at top level stays the kernel form and the one the tutorial
 teaches. The two forms are exclusive in one program; a workload's `session`
 without a `server`, or a `server` that is never requested, is an error.
+
+### Queues
+
+A request travels through stations, and each station is a queue: a waiting
+line, an admission, a service, memory of its own.
+`examples/pd-disaggregation/llmd_nixl_pull.sq` has four kinds — the router,
+the prefill instances, the NICs, the decode instances — and a `server` block
+writes them as pools, stages and `hold … at admission` at the call site, so
+that vLLM's admission appears three times in a program about the router. A
+`queue` declares one station whole:
+
+```
+queue P[NP] : prefill {
+  pool reqs { cap max_seqsP; admit via P; }
+  pool kv { cap blocksP * bs; block bs; evict lru; preempt lifo; }
+  serve step { budget B; cost …; memory kv; }
+  prefill (prompt) {
+    hold reqs (1), kv (min(prompt, hit + budget_left(P))) reserve (prompt)
+         at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
+      set c = cached;
+      prefill (prompt - c) growing kv;
+    } cache (prompt) lease kv (inf);
+  }
+}
+```
+
+The pools are the queue's (`P.kv` from outside, `kv` within), the stage is
+named after the queue (`admit via P`, `budget_left(P)`, `work(P[i])`), and
+an *entry* — one per verb of the queue's roles — holds what the station
+does with one request, with the role's parameters (`prefill (prompt)`). A
+queue declares its pools, then its `serve`, then its entries, each reading
+what is above it. The body is the server's statements; `run (X)` with
+no stage names the queue's own, and a serving form with no `on` finds it;
+the stages that are not a step engine (a link's, a delay) the body may name
+as a `server` does. `self` is the member's index in a family. A family's
+size may be a `let` constant (`queue D[ND]`).
+
+Four roles are built into the parser, and a queue declares which it plays:
+
+| Role | Entries | The queue |
+|---|---|---|
+| `gateway` | `route { … }` | `request Q;` enters this queue's `route`; each gateway is a single queue |
+| `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `cache`, a transfer) is the entry's |
+| `decode` | `decode (prompt)`, `decode (prompt) from Q` | a local prefill, or with the KV `Q`'s entry leased for this request |
+| `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost |
+
+The workload names its entry point with `request gw;`, where `gw` is a
+queue declared with the `gateway` role. The parser checks that the target
+exists and plays that role, then expands its `route` at the request site.
+Declarations may follow the workload, and several gateways may coexist;
+there is no default gateway. Declaring a gateway does not execute it or
+register it as the `server`. Bare `request;` retains its existing meaning:
+it targets a separate `server { … }` block and fails without one.
+
+`queue`, `pool`, `serve`, `request` and `mark` are language syntax. The role
+names and their entry signatures in the table are predefined vocabulary;
+`gw`, `P`, `D`, `egress` and `ingress` are names declared by this program. There is
+currently no `import` or user-defined role syntax; the proposed separation
+is discussed in [Explicit gateways](design/explicit-gateways.md).
+
+The deployment calls an entry where the request goes: `P[i].prefill
+(prompt);` and `D[j].decode (prompt) from P[i];`. `from P[i]` is the pool
+`P`'s entry leases, and every entry of `P` must lease it on every way
+through it, so that whichever one the request went through left the KV; a `from` on a queue that leases
+nothing does not link.
+Inside the entry the `from` name is that pool, and in an index it is
+the source member's index, so the decoder reaches the prefiller's own NIC:
+
+```
+queue egress[NP] : link { serve ps(BwP); }
+queue ingress[ND] : link { serve ps(BwD); }
+…
+  decode (prompt) from src {
+    …
+    transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);
+```
+
+is the kernel's `run egress[i], ingress[j] (…); load D.kv[j] (…); release
+P.kv[i];`: one read that holds both NICs at once, each serving it at the
+bandwidth its `serve` gives. A link with a `transfer (n)` entry is called
+instead, `nic[self].transfer (n) from src to kv (m);`, and runs its body on
+its own stage. Arguments are substituted like an `at admission` binding, so
+none may draw.
+
+An entry sees its own. Its header — the units, `reserve`, `reuse`, the
+`at admission` bindings — reads the parameters, the queue's pools and stage and the
+constants; its body also reads `now`, `cached` and the request's `hidden`
+attributes, and nothing else the session has set, nor another queue's
+`Q.x`; every index it writes (`run nic[k]`) reads as the body does. Its
+statements hold, grow, load and release only the queue's own pools and the
+pool its `from` names. That is the `hidden` rule
+at the queue's boundary: vLLM's scheduler knows `max_tokens`, not the length,
+so `o` is not a parameter of `decode` and the body alone reads it. What the
+body `set`s is the queue's (`D.known`); what it `observe`s is the program's;
+a moment the caller needs is `mark first_token;`, read afterwards as
+`D.first_token` — the request's attribute, so without a member index. The gateway is the exception on the session's side: its
+`route` reads the request's attributes as a `server` does and sets the ones
+the session reads back (`prompt`).
+
+Everything here is the parser's. A queue's pools and stage are the program's
+under their long names, an entry call is its body in place, `mark` is a
+`set`, and the linker, the IR and the interpreter see the program the
+`server` form compiled to. `stage` and top-level `pool` remain the kernel's
+forms; the client's `tool` is a stage, not a queue.
 
 ## 3. Semantics
 

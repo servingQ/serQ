@@ -362,18 +362,18 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
 /// in the prefiller's only and the decode station in the decoder's only.
 /// The prefiller's request slot ends with its scope, so it encloses the
 /// prefill station alone. The decoder's slot is only reserved during the
-/// transfer (`reqsD[j] (0) reserve (1)`: the request is parked, not
+/// transfer (`reqs (0) reserve (1)`: the request is parked, not
 /// running, `scheduler.py:1264-1268`), so it encloses the decode station
 /// and not the read.
 #[test]
 fn a_transfer_puts_the_read_in_both_enclosures() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
-    assert_eq!(pools_of(&p, &net, "P"), ["reqsP", "kvP"]);
+    assert_eq!(pools_of(&p, &net, "P"), ["P.reqs", "P.kv"]);
     for nic in ["egress", "ingress"] {
-        assert_eq!(pools_of(&p, &net, nic), ["kvP", "kvD"], "{nic}");
+        assert_eq!(pools_of(&p, &net, nic), ["P.kv", "D.kv"], "{nic}");
     }
-    assert_eq!(pools_of(&p, &net, "D"), ["kvD", "reqsD"]);
+    assert_eq!(pools_of(&p, &net, "D"), ["D.kv", "D.reqs"]);
     assert!(pools_of(&p, &net, "tool").is_empty());
     let f = deployment::layout(&p, &net);
     let boxes = f.boxes(BoxStyle::Enclosure);
