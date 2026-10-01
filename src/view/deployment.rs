@@ -104,6 +104,15 @@ impl Net {
     pub fn has_edge(&self, from: End, to: End) -> bool {
         self.edges.iter().any(|e| e.from == from && e.to == to)
     }
+    /// Whether a run over several stages crosses from one instance to
+    /// another: two of its stations in two different instances.
+    pub fn spans(&self, flow: &[usize]) -> bool {
+        let mut owners = flow.iter().filter_map(|&k| self.instance_of(k));
+        owners
+            .next()
+            .is_some_and(|first| owners.any(|o| o != first))
+    }
+
     /// The instance a station is in, if any.
     pub fn instance_of(&self, node: usize) -> Option<usize> {
         self.instances.iter().position(|g| g.nodes.contains(&node))
@@ -115,11 +124,10 @@ impl Net {
     /// (`kvP[i] → kvD[j]`), not with boxes that cross.
     pub fn drawn_pools(&self, node: usize) -> Vec<usize> {
         let here = self.instance_of(node);
-        let across = self.flows.iter().any(|g| {
-            g.contains(&node)
-                && g.iter()
-                    .any(|&k| self.instance_of(k) != self.instance_of(g[0]))
-        });
+        let across = self
+            .flows
+            .iter()
+            .any(|g| g.contains(&node) && self.spans(g));
         if across {
             return vec![];
         }
@@ -576,53 +584,56 @@ pub fn project(p: &Program) -> Net {
 /// name says so: any other delay before a transfer is a station.
 fn fold_latencies(p: &Program, net: &mut Net) {
     loop {
+        // a link's latency station, and every transfer over that link it
+        // leads into: one stage may wait before several (`ingress` read
+        // with one prefiller's NIC or another's)
         let found = (0..net.nodes.len()).find_map(|k| {
             if net.nodes[k].kind != StationKind::Delay || net.flows.iter().any(|g| g.contains(&k)) {
                 return None;
             }
-            let outs: Vec<&Edge> = net
+            let link = p.stages[net.nodes[k].stage].name.strip_suffix(".latency")?;
+            let outs: Vec<End> = net
                 .edges
                 .iter()
                 .filter(|e| e.from == End::Node(k))
+                .map(|e| e.to)
                 .collect();
-            let [out] = outs.as_slice() else {
-                return None;
-            };
-            let End::Node(to) = out.to else {
-                return None;
-            };
-            let flow = net.flows.iter().position(|g| g[0] == to)?;
-            let name = &p.stages[net.nodes[k].stage].name;
-            let link = name.strip_suffix(".latency")?;
-            net.flows[flow]
-                .iter()
-                .any(|&i| p.stages[net.nodes[i].stage].name == link)
-                .then_some((k, to, flow))
+            let mut into: Vec<(usize, usize)> = vec![];
+            for to in &outs {
+                let End::Node(to) = *to else {
+                    return None;
+                };
+                let flow = net.flows.iter().position(|g| {
+                    g[0] == to && g.iter().any(|&i| p.stages[net.nodes[i].stage].name == link)
+                })?;
+                into.push((to, flow));
+            }
+            (!into.is_empty()).then(|| (k, link.to_string(), into))
         });
-        let Some((k, to, flow)) = found else {
+        let Some((k, link, into)) = found else {
             return;
         };
-        let n = &net.nodes[k];
-        let link = p.stages[n.stage]
-            .name
-            .trim_end_matches(".latency")
-            .to_string();
-        net.flow_notes[flow]
-            .latency
-            .push(format!("{link} latency ({})", n.work));
-        // the arrows into the delay go on to the transfer
-        let mut edges = std::mem::take(&mut net.edges);
-        edges.retain(|e| e.from != End::Node(k));
-        for e in &mut edges {
-            if e.to == End::Node(k) {
-                e.to = End::Node(to);
+        let wait = format!("{link} latency ({})", net.nodes[k].work);
+        for &(_, flow) in &into {
+            if !net.flow_notes[flow].latency.contains(&wait) {
+                net.flow_notes[flow].latency.push(wait.clone());
             }
         }
+        // the arrows into the delay go on to each transfer it leads into
+        let mut edges = std::mem::take(&mut net.edges);
+        edges.retain(|e| e.from != End::Node(k));
         let mut kept: Vec<Edge> = vec![];
         for e in edges {
-            match kept.iter_mut().find(|x| x.from == e.from && x.to == e.to) {
-                Some(x) => x.back &= e.back,
-                None => kept.push(e),
+            let targets: Vec<End> = if e.to == End::Node(k) {
+                into.iter().map(|&(to, _)| End::Node(to)).collect()
+            } else {
+                vec![e.to]
+            };
+            for to in targets {
+                match kept.iter_mut().find(|x| x.from == e.from && x.to == to) {
+                    Some(x) => x.back &= e.back,
+                    None => kept.push(Edge { to, ..e.clone() }),
+                }
             }
         }
         net.edges = kept;
@@ -967,11 +978,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         let wait = (!n.latency.is_empty()).then(|| n.latency.join(" + "));
         (moves, wait)
     };
-    let spanning = |g: usize| -> bool {
-        let f = &net.flows[g];
-        f.iter()
-            .any(|&k| net.instance_of(k) != net.instance_of(f[0]))
-    };
+    let spanning = |g: usize| net.spans(&net.flows[g]);
     let cached_here = |g: &Group| net.cached.contains(&g.pool);
     // Room under the station row for the stacked pool options and the strip.
     let own_below = |g: &Group| {

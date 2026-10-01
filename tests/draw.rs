@@ -802,6 +802,62 @@ fn only_a_links_latency_folds_into_the_transfer() {
     assert!(net.flow_notes[0].latency.is_empty());
 }
 
+/// A transfer crosses between instances only when two of its stations are
+/// in two of them: a choice of one station is no instance, and a run from
+/// it into a boxed instance keeps that instance's pools drawn (#197 review).
+#[test]
+fn a_run_from_an_unboxed_choice_does_not_span() {
+    let src =
+        "pool kv[2] { cap 100; } stage nic[2] : ps(1); stage ing[2] : ps(1); stage D[2] : delay;
+               share maxmin;
+               workload { arrive batch(1); }
+               session {
+                 choose i in 2 by (0);
+                 choose j in 2 by (0);
+                 hold kv[j] (10) { run nic[i], ing[j] (1); run D[j] (1); }
+                 end;
+               }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    let ing = net.node_of(stage(&p, "ing")).unwrap();
+    assert_eq!(
+        net.instances.len(),
+        1,
+        "j's: ing, D and kv; i's is one station"
+    );
+    assert!(!net.spans(&net.flows[0]));
+    assert_eq!(net.drawn_pools(ing), net.nodes[ing].pools);
+}
+
+/// One link's latency waited before transfers with two different partners
+/// is the latency of both, and no station (#197 review).
+#[test]
+fn a_latency_before_two_transfers_folds_into_both() {
+    let src = "pool kvP { cap 100; } pool kvD { cap 100; }
+               stage P : delay; stage a : ps(1); stage b : ps(1);
+               queue L : link { serve ps(1) latency 0.5; }
+               share maxmin;
+               workload { arrive batch(1); }
+               session {
+                 hold kvP (10) { run P (1); } lease kvP (inf);
+                 set c = ~bernoulli(0.5);
+                 hold kvD (10) {
+                   branch (c) { transfer on a, L (1) from kvP to kvD (10); }
+                   else { transfer on b, L (1) from kvP to kvD (10); }
+                 }
+                 end;
+               }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    assert!(net.node_of(stage(&p, "L.latency")).is_none());
+    assert_eq!(net.flows.len(), 2);
+    for n in &net.flow_notes {
+        assert_eq!(n.latency, ["L latency (0.5)"]);
+    }
+}
+
 /// A flow's stations stand side by side even when one of them was reached
 /// alone before, so the bracket takes in no other station: `ingress` is
 /// used alone first, then with `egress`, with `D` between.
