@@ -96,6 +96,11 @@ impl Report {
     fn mean_live(&self) -> f64 {
         self.0.mean_live
     }
+    /// The serq that ran (`__version__`), as `serq run --json` records it.
+    #[getter]
+    fn serq_version(&self) -> &'static str {
+        serq::VERSION
+    }
 
     /// The observations by name, in the program's order.
     #[getter]
@@ -419,6 +424,6 @@ fn pyserq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_trace, m)?)?;
     m.add("IR_VERSION", serq::ir::IR_VERSION)?;
     m.add("REPORT_VERSION", serq::engine::report::REPORT_VERSION)?;
-    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    m.add("__version__", serq::VERSION)?;
     Ok(())
 }

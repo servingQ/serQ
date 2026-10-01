@@ -39,6 +39,7 @@ fn the_report_has_the_shape_its_version_names() {
             "observes",
             "pools",
             "seed",
+            "serq_version",
             "stages",
             "turns",
             "warmup",
@@ -329,4 +330,16 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         (0.1, 0.1, 0.0, 0.1, 1.0, 1.0)
     );
     assert_eq!(stage(""), (0.05, 0.0, 0.1, 0.1, 1.0, 1.0));
+}
+
+/// #232: the report says which serq produced it.
+#[test]
+fn the_report_records_the_serq_version() {
+    let p = compile_source(
+        "stage svc : delay; workload { arrive batch(1); } session { run svc (1); end; } run { horizon 2; }",
+        &Overrides::default(),
+    )
+    .unwrap();
+    let j: serde_json::Value = serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
+    assert_eq!(j["serq_version"], env!("CARGO_PKG_VERSION"));
 }

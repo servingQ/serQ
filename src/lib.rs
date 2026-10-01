@@ -28,6 +28,11 @@ pub use frontend::link::{Linked, Overrides};
 pub use ir::Program;
 
 /// Compile program text to IR (parse and link; `--set` overrides apply).
+/// The version of this serq, as `serq --version` prints it and `Report::json`
+/// records it (`serq_version`): the one version of `Cargo.toml`
+/// (`scripts/version.py`), which pyserq inherits.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
     compile_source_at(src, None, ov)
 }

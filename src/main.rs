@@ -3,6 +3,7 @@
 //! `serq ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]`
 //! `serq draw FILE [--format tikz|svg] [--out PATH]` (experimental)
 //! `serq fmt [--check] FILE...`
+//! `serq --version`
 //!
 //! FILE is program text (`.sq`) or IR (`.json`, as written by `serq ir`).
 
@@ -25,7 +26,7 @@ fn usage(cmd: &str) -> &'static str {
             "serq draw FILE [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH]"
         }
         "fmt" => "serq fmt [--check] FILE...",
-        _ => "serq <run|check|ir|draw|fmt> FILE [OPTIONS]",
+        _ => "serq <run|check|ir|draw|fmt> FILE [OPTIONS] | serq --version",
     }
 }
 
@@ -98,10 +99,21 @@ fn format_files(args: &[String]) {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("");
+    if matches!(cmd, "--version" | "-V") {
+        // what ran, for a record of a run next to its IR (`run --json` has
+        // it as `serq_version`)
+        if let Some(extra) = args.get(1) {
+            argument_error(cmd, format!("`{cmd}` takes no arguments, found `{extra}`"));
+        }
+        println!("serq {}", serq::VERSION);
+        return;
+    }
     if !matches!(cmd, "run" | "check" | "ir" | "draw" | "fmt") {
         argument_error(
             cmd,
-            format!("unknown command `{cmd}`\nhelp: choose run, check, ir, draw, or fmt"),
+            format!(
+                "unknown command `{cmd}`\nhelp: choose run, check, ir, draw, or fmt, or --version"
+            ),
         );
     }
     if cmd == "fmt" {

@@ -339,6 +339,8 @@ impl Report {
             i.map_or("null".into(), |i| i.to_string())
         }
         let mut s = String::from("{");
+        // the interpreter that ran, for a record kept next to the IR
+        let _ = write!(s, "\"serq_version\":\"{}\",", crate::VERSION);
         let _ = write!(
             s,
             "\"horizon\":{},\"end\":{},\"warmup\":{},\"seed\":{},\"events\":{},\"arrivals\":{},\"ended\":{},\"turns\":{},\"mean_live\":{}",
