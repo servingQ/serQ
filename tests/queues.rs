@@ -956,6 +956,14 @@ fn a_pull_relation_says_what_it_couples() {
         "`share` is given twice: the pull relation",
     );
     refused(&program("nic ps(1);", "", "P"), "pulls from no queue");
+    // the read takes from the entry's source, not any pool (#207 review)
+    refused(
+        &program("nic ps(1);", "D pull P share maxmin;", "P").replace(
+            "transfer (p) from src to kv (p)",
+            "transfer (p) from kv to kv (p)",
+        ),
+        "a read takes from the entry's source, `from src`",
+    );
     refused(
         &program("nic ps(1);", "D pull P share maxmin;", "Q"),
         "`D` pulls from `P`, and this entry was called `from Q.kv`",

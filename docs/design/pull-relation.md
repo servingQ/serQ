@@ -112,8 +112,11 @@ not replace it, and `--set` still reaches the expression.
 ## Self-critique
 
 **No `push`.** `P push D` would read as the push a reader expects, vLLM's
-proxy, where the decoder allocates during the prefill and the write
-starts the moment it ends. That needs a reservation the language does not
+proxy, which sends the prefill and the decode request at once
+(`disagg_proxy_pushconnector_demo.py:227-270`), so that the decoder
+allocates during the prefill and the prefiller writes as soon as it has
+both the finished request and the decoder's registration
+(`nixl/push_scheduler.py:207-294`). That needs a reservation the language does not
 have ([The KV transfer](pd-transfer.md)). The push this model can write
 today is llm-d's serial one, which differs from pull only in whose worker
 waits; under the word `push` it would mean less than it says (criterion 0).

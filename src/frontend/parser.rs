@@ -3945,7 +3945,21 @@ impl Parser {
                     "`transfer … from P to Q`: a transfer does not grow a pool",
                 );
             }
+            let f_at = self.pos;
             let from = self.own_pool("transfer … from")?;
+            // the read takes the source's lease: the entry's `from` name
+            if pulled
+                && (from.index.is_some() || self.entry_from.as_deref() != Some(from.name.as_str()))
+            {
+                return self.err_at(
+                    f_at,
+                    format!(
+                        "`transfer … from {}`: a read takes from the entry's source, `from {}`",
+                        from.name,
+                        self.entry_from.as_deref().unwrap_or("?")
+                    ),
+                );
+            }
             self.expect_kw("to")?;
             let to = self.own_pool("transfer … to")?;
             let units = self.paren_expr()?;
