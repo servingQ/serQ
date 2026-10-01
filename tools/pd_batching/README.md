@@ -10,6 +10,7 @@ measurements.
 ```
 cargo build --release
 tools/pd_batching/sweep.py     # about ten minutes; writes raw.jsonl (not committed), results.csv, summary.md
+tools/pd_batching/sessions.py  # about fifteen minutes; writes sessions.csv, sessions.md
 ```
 
 | File | |
@@ -18,6 +19,7 @@ tools/pd_batching/sweep.py     # about ten minutes; writes raw.jsonl (not commit
 | `examples/pd-disaggregation/pd_batching.sq` | the engines: 4 colocated vs 3 prefill + 1 decode, `llmd_nixl_pull.sq`'s engines and hand-over without its prefix cache; the baseline is exclusive steps on the engines that prefill prompts (one prefill alone, or decodes only; a waiting prefill goes first), memory that never binds, a free and instantaneous transfer |
 | `results.csv` | one row per run (experiment, mode, load, case, the program's lines a variation edits, seed) |
 | `summary.md` | mean ± 95 % CI over five seeds |
+| `sessions.py`, `sessions.csv`, `sessions.md` | the same comparison on `llmd_nixl_pull.sq` as written: multi-turn sessions with a tool call between turns and prefix reuse, open and closed |
 
 Both modes of a program draw the same requests from a seed: the output
 tokens of every session agree between the modes. The output throughput of
@@ -152,7 +154,49 @@ deleted, `let NP = 2;`) and records in `results.csv`; the rest are `--set`.
   with TPOT 0.207–0.208 ms; specialisation is what lets the split have
   both.
 
-Not covered here: prefix reuse and sessions that come back after a tool
-call (this workload is single-turn and open); N, NP, ND as constants a
+## Sessions on llm-d's deployment
+
+`sessions.py` asks the same question of `llmd_nixl_pull.sq` as it is
+written: the llm-d router, vLLM's default mixed batches, the NIXL read at
+2e5 tokens/s after 2 ms, bounded KV, and multi-turn sessions that call a
+tool for 3 s between turns and reuse their prefix. Three deployments of
+four engines: *colocated* is 4 decode pods that prefill every prompt
+themselves (`thr` past any prompt), the router picking a pod by load as
+the program's decode profile does; *colocated_cache* is the same pods,
+the router picking one that has the session's prefix first, as it picks
+a prefill pod; *split* is 3 prefill pods and 1 decode pod, every prompt
+remote (`thr = 1`). `sessions.md` has the table; `sessions.py` adds one
+`observe` to the prefill pods' entry to count what they compute, and
+records each deployment's edits in `sessions.csv`.
+
+- **With prefix reuse the cache decides before the batching does.** At
+  3 sessions/s (27 turns/s) TTFT is 167 ms colocated, 36 ms
+  colocated_cache and 192 ms split, the response 344, 86 and 237 ms, the
+  prompt tokens computed a turn 5016, 1316 and 2294. A colocated pod
+  caches the prompt and the answer of a turn, and the next turn's prompt
+  is them and the new tokens; a prefill pod caches the prompt only
+  (`cache (prompt)`), so the split computes the previous answer again.
+  Routed by load, the colocated pods lose the prefix and prefill most of
+  every prompt: their decodes then wait behind prefills, 177 ms of decode
+  against 46 split, an ITL of 0.89 ms against 0.23 (a mean above the
+  p99 of 0.38: the gaps beyond the p99 are the prefills a decode rides
+  with). Routed by prefix, they prefill little, and the decode is 50 ms
+  against 46, the ITL 0.25 against 0.23 ms.
+- **At low load the split answers before the load-routed colocated pods,
+  and that is the cache too.** At 1 session/s TTFT is 57 ms colocated,
+  18 ms colocated_cache and 43 ms split; the decode time is 43.6 ms
+  colocated and split. The split's 43 ms are its prefill of 1157 tokens
+  (23 ms), the read of the 2050 the decode pod lacks (2 ms of wait and
+  10 on the NIC), and the waits between.
+- **Closed sessions: a faster answer brings the next turn a little
+  sooner.** With 60 users colocated serves 21.11 turns/s, split 21.39 and
+  colocated_cache 21.90, with responses of 180, 142 and 77 ms. A turn's
+  cycle is 60/21.11 = 2.84 s, most of it the tool; Little's law, users =
+  turns/s × cycle, gives 21.11 × 2.84 / (2.84 − 0.038) = 21.40 for the
+  split and 21.11 × 2.84 / (2.84 − 0.103) = 21.90 for colocated_cache.
+  With a tool call that long, a gain in the answer is the user's more
+  than the throughput's.
+
+Not covered here: N, NP, ND as constants a
 run can set (`--set` refuses a family's size); and how concurrent reads
 share a NIC beyond max-min fairness. Routing ties go to the lowest index.
