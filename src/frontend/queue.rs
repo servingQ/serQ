@@ -270,7 +270,12 @@ impl Ctx<'_> {
                         ),
                     );
                 }
-                Expr::Over(*agg, j.clone(), Box::new(self.expr(n)?), Box::new(self.expr(body)?))
+                Expr::Over(
+                    *agg,
+                    j.clone(),
+                    Box::new(self.expr(n)?),
+                    Box::new(self.expr(body)?),
+                )
             }
         })
     }
