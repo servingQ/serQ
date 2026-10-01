@@ -65,13 +65,13 @@ fn queued_sessions_are_evicted_after_suspended_ones() {
               branch (serial == 0) {{
                 hold slot (1) {{ hold kv (8) {{ run svc (1); }} cache (8); }}
                 run gate (2);                                   // t = 3: queue for the slot
-                hold slot (1) {{ hold kv (8) {{ observe hit0 = cached >= 8; run svc (0.1); }} }}
+                hold slot (1) {{ hold kv (8) {{ observe hit0 = cached >= 8; run svc (0.1); }} cache (0); }}
               }}
               branch (serial == 1) {{
                 run gate (1);
                 hold slot (1) {{ hold kv (10) {{ run svc (1); }} cache (10); }}
                 run gate (5);                                   // tool call t = 2..7
-                hold slot (1) {{ hold kv (10) {{ observe hit1 = cached >= 10; run svc (0.1); }} }}
+                hold slot (1) {{ hold kv (10) {{ observe hit1 = cached >= 10; run svc (0.1); }} cache (0); }}
               }}
               branch (serial == 2) {{
                 run gate (3.5);
@@ -118,7 +118,7 @@ fn block_pools_round_and_evict_by_block() {
           // s1 takes 70 -> needs 70 of 100 - 0 used; cached 50 -> evict 2 blocks
           hold kv (serial == 0 ? 55 : 70) { observe used = used(kv); run svc (1); } cache (serial == 0 ? 55 : 0);
           run gate (10);
-          branch (serial == 0) { hold kv (55) { observe cached0 = cached; run svc (0.1); } }
+          branch (serial == 0) { hold kv (55) { observe cached0 = cached; run svc (0.1); } cache (0); }
           end;
         }
         run { horizon 100; }
@@ -412,4 +412,50 @@ fn a_negative_guard_is_an_error() {
 fn a_boolean_guard_and_a_declared_draw_run() {
     run(&GUARD.replace("GUARD", "c < K"));
     run(&GUARD.replace("branch (GUARD)", "branch with (c / K)"));
+}
+
+/// #230: a hold without a `cache` clause takes no part in the prefix
+/// cache. One session sends the same 1000-token prompt every second; the
+/// request's hold keeps `cache (1000)`, i.e. 992 (62 full blocks of 16).
+/// Alone, turn 1 misses and every later turn hits: `cached` = min(992,
+/// 992) > 0. Wrapped in an outer hold on the same pool, with or without a
+/// `release kv;` first, the outer hold has no `cache` clause, so it leaves
+/// the 992 cached units where they are and the inner hold finds them: the
+/// same hits. (Before: the outer admission consumed the entry and its end,
+/// with nothing to cache, dropped it; every turn missed.) With `cache (0)`
+/// on the outer hold the program says the opposite, consume and keep
+/// nothing, and every turn misses.
+#[test]
+fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
+    let request =
+        "hold kv (min(cachedin(kv), 992) + 8) at admission (hit = min(cachedin(kv), 992)) {
+                     observe hit = cached > 0;
+                     prefill on engine (1000 - cached) growing kv;
+                   } cache (1000);";
+    for (wrap, want_hit) in [
+        (request.to_string(), 1.0),
+        (format!("hold kv (0) {{ {request} }}"), 1.0),
+        (format!("hold kv (0) {{ release kv; {request} }}"), 1.0),
+        (format!("hold kv (0) {{ {request} }} cache (0);"), 0.0),
+    ] {
+        let src = format!(
+            r#"
+            pool kv {{ cap 100000; block 16; evict lru; }}
+            stage engine : step {{ budget 8192; cost tokens * 1e-5 + 1e-4; memory kv; }}
+            stage think : delay;
+            workload {{ arrive closed(1); }}
+            session {{ loop {{ run think (1); {wrap} }} }}
+            run {{ horizon 20; warmup 0; seed 1; }}
+            "#
+        );
+        let r = run(&src);
+        let hits = &r.observe("hit").unwrap().samples;
+        assert!(hits.len() >= 10, "{wrap}\n{}", r.text());
+        assert_eq!(hits[0], 0.0, "the first turn is cold: {wrap}");
+        assert!(
+            hits[1..].iter().all(|&h| h == want_hit),
+            "{wrap}: hits {hits:?}\n{}",
+            r.text()
+        );
+    }
 }

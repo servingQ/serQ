@@ -17,8 +17,10 @@ use serde::{Deserialize, Serialize};
 /// makes `Choose.key` a list of keys, compared in order; 8 lets a `Run`
 /// hold several stages at once (`also`) under the program's `share` and
 /// makes `ExclusivePrefill` isolate the whole batch, including admissions;
-/// 9 reevaluates lexicographic queue keys at selection and supplies `Waited`.
-pub const IR_VERSION: u32 = 9;
+/// 9 reevaluates lexicographic queue keys at selection and supplies `Waited`;
+/// 10 makes `Hold.cache` the clause that admits a hold to the prefix cache
+/// (a hold without it consumes nothing of the session's own entry).
+pub const IR_VERSION: u32 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {

@@ -2,8 +2,8 @@
 //!
 //! `link` rejects a program that makes no sense: an unknown pool, a negative
 //! block, a warm-up past the horizon. These are the other kind - a program
-//! that is well formed and whose author meant something else. Both checks
-//! below come from bugs this repository actually shipped, and both have no
+//! that is well formed and whose author meant something else. The checks
+//! below come from bugs this repository actually shipped, and none has a
 //! legitimate instance in `examples/`, so they are errors rather than
 //! warnings: a warning nobody acts on is worse than no check.
 
@@ -191,12 +191,105 @@ fn constant_probability_guard(p: &Program, block: usize, out: &mut Vec<String>) 
     }
 }
 
+/// Every expression a statement evaluates (a hold's header and clauses
+/// included; its body is a block of its own).
+fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
+    match s {
+        CStmt::Set(_, e) | CStmt::Observe(_, e) | CStmt::Grow(_, e) | CStmt::Load(_, e) => {
+            vec![e]
+        }
+        CStmt::Hold {
+            pools,
+            reuse,
+            cache,
+            lease,
+            ..
+        } => pools
+            .iter()
+            .flat_map(|(_, u, r)| std::iter::once(u).chain(r.iter()))
+            .chain(reuse.iter())
+            .chain(cache.iter())
+            .chain(lease.iter().map(|(_, t)| t))
+            .collect(),
+        CStmt::Run { work, .. } => vec![work],
+        CStmt::Branch(g, _, _) => vec![g],
+        CStmt::Choose { count, key, .. } => std::iter::once(count).chain(key.iter()).collect(),
+        CStmt::Turn | CStmt::Drop(_) | CStmt::Release(_) | CStmt::Loop(_) | CStmt::End => {
+            vec![]
+        }
+    }
+}
+
+/// `cached` read in the body of a hold without a `cache` clause, and
+/// `reuse` on one.
+///
+/// The clause is what makes a hold take part in the prefix cache: with it
+/// the admission consumes the session's own prefix (`cached :=` what it
+/// consumed) and the release keeps `min(ℓ, computed)`; without it the hold
+/// is memory alone, leaves the prefix where it is, and sets `cached` to 0
+/// (#230: an outer hold around the request's used to consume the prefix
+/// and drop it). So `cached` in such a body is always 0, and `reuse` bounds
+/// nothing. A hold that consumed and kept nothing, which is what the body
+/// used to see, is `cache (0)`.
+fn cached_in_a_hold_without_cache(
+    p: &Program,
+    block: usize,
+    hold: Option<(&str, bool)>,
+    out: &mut Vec<String>,
+) {
+    let Some(stmts) = p.blocks.get(block) else {
+        return;
+    };
+    for s in stmts {
+        if let Some((pool, false)) = hold
+            && exprs_of(s)
+                .into_iter()
+                .any(|e| mentions_attr(e, p.slot_cached))
+        {
+            out.push(format!(
+                "`cached` is read in a hold on `{pool}` that has no `cache` clause: such a \
+                 hold consumes nothing of the session's cached prefix, so `cached` is 0 \
+                 there. Write `cache (0)` to consume the prefix and keep nothing, \
+                 `cache (ℓ)` to keep ℓ of what was computed, or read `cached` above the \
+                 hold, where the admission that set it is the enclosing hold's."
+            ));
+        }
+        match s {
+            CStmt::Hold {
+                pools,
+                reuse,
+                body,
+                cache,
+                ..
+            } => {
+                let pool = p.show_pool_ref(&pools[0].0);
+                if reuse.is_some() && cache.is_none() {
+                    out.push(format!(
+                        "`reuse` on a hold on `{pool}` that has no `cache` clause: such a hold \
+                         consumes nothing of the session's cached prefix, so the bound has \
+                         nothing to bound. Write `cache (0)` to consume the prefix and keep \
+                         nothing, or `cache (ℓ)` to keep ℓ."
+                    ));
+                }
+                cached_in_a_hold_without_cache(p, *body, Some((&pool, cache.is_some())), out);
+            }
+            CStmt::Branch(_, t, e) => {
+                cached_in_a_hold_without_cache(p, *t, hold, out);
+                cached_in_a_hold_without_cache(p, *e, hold, out);
+            }
+            CStmt::Loop(b) => cached_in_a_hold_without_cache(p, *b, hold, out),
+            _ => {}
+        }
+    }
+}
+
 /// Every lint, over a linked program.
 pub fn lint(p: &Program) -> Result {
     let mut out = vec![];
     for block in [p.session, p.init, p.turn] {
         stale_header_read(p, block, &mut out);
         constant_probability_guard(p, block, &mut out);
+        cached_in_a_hold_without_cache(p, block, None, &mut out);
     }
     out.dedup();
     if out.is_empty() {

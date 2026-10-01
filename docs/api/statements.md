@@ -63,17 +63,22 @@ hold POOL (units) [reserve (r)] [, POOL (units) [reserve (r)]]*
 
 Joins the queue of the first pool. When the head is admitted, `units` of each
 pool are allocated, the body runs, and at its end the units are released and
-`min(ℓ, computed)` stay cached (rounded down to blocks).
+`min(ℓ, computed)` stay cached (rounded down to blocks). The `cache` clause is
+what makes the hold take part in the prefix cache: with it the admission
+consumes the session's own cached prefix (`cached`); without it the hold
+leaves the session's cached blocks where they are and `cached` is 0 in its
+body (a body that reads it there, or a `reuse` there, does not link).
+`cache (0)` consumes the prefix and keeps nothing.
 
 | Argument | Type | Moment | Default | Description |
 |---|---|---|---|---|
 | `POOL` | `pool` | | | One or more. Admission needs room in every one; the hold waits in the first pool's queue. |
 | `units` | `expr` | `Admit` | | Units to allocate at admission. |
 | `reserve` | `expr` | `Admit` | `units` | Room required before admitting, `used + max(units, r) ≤ cap`. It does not change what is taken. |
-| `reuse` | `expr` | `Admit` | no bound | At most this many units of the session's own cached prefix are consumed (rounded down to blocks); `cached` is set to what was. The rest stays as a dead entry until evicted. Without `reuse`, the whole own prefix is consumed. |
+| `reuse` | `expr` | `Admit` | no bound | At most this many units of the session's own cached prefix are consumed (rounded down to blocks); `cached` is set to what was. The rest stays as a dead entry until evicted. Without `reuse`, the whole own prefix is consumed. Only with `cache`: a hold without the clause consumes nothing. |
 | `at admission` | `NAME = expr, …` | `Admit` | | Names for the header, substituted by the parser into the units, `reserve`, `reuse`, `cache` and `lease`, and set at the top of the body when the body reads it. A binding the body reads may read only attributes and constants: one of live state (`cachedin(p)`, `cached`, `now`) is a parse error, and the body reads `cached` instead. Its name is its own (not a builtin attribute, context variable, `let` or attribute the program sets) and is read only in the holds that bind it. A later binding sees earlier ones. A binding may not draw. |
 | `block` | `block` | `Session` | | The body. |
-| `cache` | `expr` | `Session` | `0` | Units kept cached at the end, at most what was computed. Read when the session releases. |
+| `cache` | `expr` | `Session` | none | Units kept cached at the end, at most what was computed. Read when the session releases. Its presence is what makes the hold consume the session's prefix at admission; `cache (0)` consumes and keeps nothing, no clause leaves the prefix where it is. |
 | `lease` | `pool`, `expr` | `Session` | none | That pool's allocation outlives the scope: neither evictable nor a preemption victim until `release` of it, `t` clock units, or the session's end; `cache` applies then. |
 
 The header (`units`, `reserve`, `reuse`) is read at admission, not when the

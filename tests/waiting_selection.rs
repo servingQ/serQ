@@ -229,7 +229,7 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         workload { arrive batch(3); }
         session {
           run delay (serial == 2 ? 3.25 : 0);
-          hold reqs (1), kv (min(known, left)) reserve (known) reuse (0)
+          hold reqs (1), kv (min(known, left)) reserve (known)
                at admission (known = serial == 2 ? 0 : max(2, computed), left = budget_left(engine)) {
             observe selected = serial;
             observe admitted = now;
