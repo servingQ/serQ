@@ -2684,21 +2684,22 @@ impl Parser {
                 if self.eat_kw("latency") {
                     let l_at = self.pos;
                     let e = self.expr()?;
-                    let mut vars = vec![];
-                    names(&e, &mut vars, &mut Vec::new());
-                    if let Some(v) = vars
-                        .iter()
-                        .find(|v| !self.consts.iter().any(|(c, _)| c == *v))
-                    {
+                    let Some(v) = self.const_value(&e) else {
                         return self.err_at(
                             l_at,
-                            format!(
-                                "`latency` reads `{v}`: a link's latency is a number or a `let` constant"
-                            ),
+                            "`latency` is a number or a constant over `let`s: a link's fixed wait, \
+                             the same for every transfer",
                         );
-                    }
+                    };
                     self.expect(&Tok::Semi)?;
-                    self.queues[qi].latency = Some(e);
+                    // a constant of its own, which the transfer's wait reads: an
+                    // entry the transfer is written in substitutes its parameters
+                    // and locals by name, and no name of one has a dot. The
+                    // expression stays the program's, so `--set` reaches it.
+                    let lname = format!("{name}.latency.time");
+                    self.consts.push((lname.clone(), v));
+                    prog.lets.push((lname.clone(), e));
+                    self.queues[qi].latency = Some(Expr::Var(lname));
                 }
                 if let StageKind::Step(s) = &mut kind
                     && let Some(m) = &mut s.memory
@@ -2988,6 +2989,9 @@ impl Parser {
                             ),
                         );
                     }
+                    if allowed_var(&v, header) {
+                        continue;
+                    }
                     if v.contains('.') {
                         return self.err_at(
                             at,
@@ -2996,9 +3000,6 @@ impl Parser {
                                  the gateway reads across queues and passes what an entry needs"
                             ),
                         );
-                    }
-                    if allowed_var(&v, header) {
-                        continue;
                     }
                     if header {
                         return self.err_at(

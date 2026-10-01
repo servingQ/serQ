@@ -262,6 +262,61 @@ fn a_link_latency_is_a_wait_before_the_read() {
     );
 }
 
+/// The latency is the link's constant: an entry the transfer is written in
+/// does not rename it, a draw or a reading is refused, and `--set` reaches
+/// it (#196 review).
+#[test]
+fn a_latency_is_the_links_constant() {
+    let program = |latency: &str, param: &str| {
+        format!(
+            "let x = 0.5;
+      queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (32) from P; }} }}
+      queue egress : link {{ serve ps(100); }}
+      queue ingress : link {{ serve ps(200) latency {latency}; }}
+      queue P : prefill {{
+        pool kv {{ cap 1000; }}
+        serve fifo;
+        prefill (prompt) {{ hold kv (prompt) {{ run (prompt); }} cache (prompt) lease kv (inf); }}
+      }}
+      queue D : decode {{
+        pool kv {{ cap 1000; }}
+        serve step {{ cost 1; memory kv; }}
+        decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }}
+        decode ({param}) from src {{
+          hold kv ({param}) {{ transfer on egress, ingress ({param}) from src to kv ({param} - 1); }}
+        }}
+      }}
+      share maxmin;
+      workload {{ arrive batch(1); init {{ set prompt = 32; }} session {{ request gw; end; }} }}
+      run {{ horizon 100; }}"
+        )
+    };
+    let wait = |src: &str, ov: &Overrides| -> String {
+        let p = compile_source(src, ov).unwrap_or_else(|e| panic!("{e}\n{src}"));
+        let ir = p.to_json();
+        let at = ir.find("\"Delay\"").map(|_| ()).is_some();
+        assert!(at, "a delay stage");
+        ir
+    };
+    // the entry's parameter `x` is not the constant `x`
+    let named = wait(&program("x", "x"), &Overrides::default());
+    let other = wait(&program("x", "y"), &Overrides::default());
+    assert_eq!(named, other.replace("\"y\"", "\"x\""));
+    assert!(named.contains("0.5"), "waits 0.5, the constant");
+    // --set reaches the latency
+    let ov = Overrides {
+        lets: vec![("x".into(), parse_expr("0.125").unwrap())],
+        ..Default::default()
+    };
+    assert!(wait(&program("x", "y"), &ov).contains("0.125"));
+    for bad in ["~exp(1)", "work(egress)"] {
+        refused(
+            &program(bad, "y"),
+            "`latency` is a number or a constant over `let`s",
+        );
+    }
+}
+
 /// `latency` is a link's, a number or a constant, and not a called link's.
 #[test]
 fn a_latency_belongs_to_a_link() {
@@ -285,7 +340,7 @@ fn a_latency_belongs_to_a_link() {
         &format!(
             "queue gw : gateway {{ route {{ }} }} queue nic : link {{ serve ps(1) latency prompt; }} {WORKLOAD}"
         ),
-        "`latency` reads `prompt`",
+        "`latency` is a number or a constant over `let`s",
     );
 }
 
