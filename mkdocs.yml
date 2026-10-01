@@ -106,6 +106,7 @@ nav:
           - Queues: design/queue.md
           - Explicit gateways: design/explicit-gateways.md
           - The pull relation: design/pull-relation.md
+          - The stage algebra: design/stage-algebra.md
   - API Reference:
       - api/index.md
       - Program: api/program.md
