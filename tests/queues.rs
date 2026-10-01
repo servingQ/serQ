@@ -79,14 +79,14 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
 #[test]
 fn a_transfer_between_queues_is_the_flat_transfer() {
     let queues = "
-      let NP = 1; let ND = 2; let Bw = 1000;
+      let ND = 2; let Bw = 1000;
       queue gw : gateway { route {
         set t0 = now;
         P.prefill (prompt);
         D[j].decode (prompt) from P;
         observe ttft = D.first - t0;
       } }
-      queue P[NP] : prefill {
+      queue P : prefill {
         pool kv { cap 1000; }
         serve fifo;
         prefill (prompt) { hold kv (prompt) { run (prompt); } cache (prompt) lease kv (inf); }
@@ -108,7 +108,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request gw; end; } }
       run { horizon 100; }";
     let flat = "
-      let NP = 1; let ND = 2; let Bw = 1000;
+      let ND = 2; let Bw = 1000;
       pool kvP { cap 1000; }
       pool kvD[2] { cap 1000; block 16; }
       stage P : fifo;
@@ -497,6 +497,10 @@ fn roles_and_entries_agree() {
         "a gateway is one queue",
     );
     refused(
+        &format!("queue gw[1] : gateway {{ route {{ }} }} {rest}"),
+        "a gateway is one queue",
+    );
+    refused(
         "queue prefill : link { serve fifo; transfer (n) { run (n); } } stage s : fifo; session { run s (1); end; }",
         "serving word",
     );
@@ -554,6 +558,14 @@ fn a_family_size_is_a_constant() {
     };
     assert!(parse(&decl("N")).is_ok());
     assert!(parse(&decl("N + 1")).is_ok());
+    // a family of one is still called by index: a program reads the same at N = 1
+    let one = parse(&decl("N - 1")).unwrap();
+    assert!(serq::frontend::link::link(&one, &Overrides::default()).is_ok());
+    // and only by index: one call, one spelling, whatever N is
+    refused(
+        &decl("N - 1").replace("E[j].decode", "E.decode"),
+        "is a family of 1; index it",
+    );
     refused(&decl("N / 4"), "array size must be a positive integer");
     refused(&decl("j"), "positive integer or a `let` constant");
 }

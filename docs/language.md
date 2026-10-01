@@ -413,7 +413,11 @@ what is above it. The body is the server's statements; `run (X)` with
 no stage names the queue's own, and a serving form with no `on` finds it;
 the stages that are not a step engine (a link's, a delay) the body may name
 as a `server` does. `self` is the member's index in a family. A family's
-size may be a `let` constant (`queue D[ND]`).
+size may be a `let` constant (`queue D[ND]`), and a family of one is still
+a family: its entries are called `D[j].decode (…)` and its lease taken
+`from D[j]`, as at any size. A reference to a member's pool or stage
+(`holders(D[j].kv)`) is the kernel's array reference, which at size one
+also takes `D.kv`.
 
 Four roles are built into the parser, and a queue declares which it plays:
 

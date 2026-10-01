@@ -56,6 +56,8 @@ pub struct Entry {
 pub struct QueueDecl {
     pub name: String,
     pub count: usize,
+    /// Declared `Q[n]`: its members are indexed, even when `n` is 1.
+    pub family: bool,
     pub roles: Vec<String>,
     /// Pools declared inside, by their bare names (`kv`, not `Q.kv`).
     pub pools: Vec<String>,
@@ -566,9 +568,10 @@ fn call(
                 queue.name, queue.name
             ),
         })?;
+    // a family is called by index whatever its size, a single queue without
     let index = match (&queue.index, q.count) {
-        (None, 1) => None,
-        (Some(i), n) if n > 1 => Some((**i).clone()),
+        (None, _) if !q.family => None,
+        (Some(i), _) if q.family => Some((**i).clone()),
         (None, n) => {
             return err(
                 at,
@@ -662,7 +665,8 @@ fn call(
                 );
             }
             match (&r.index, s.count) {
-                (None, 1) | (Some(_), 2..) => {}
+                (None, _) if !s.family => {}
+                (Some(_), _) if s.family => {}
                 (None, n) => {
                     return err(
                         at,
