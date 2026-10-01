@@ -201,7 +201,52 @@ struct Deferred {
     file: usize,
     reads: Vec<String>,
     turn: bool,
-    request: bool,
+    /// Where its `request`s go.
+    request: Vec<Sends>,
+}
+
+/// Where a `request` in a `def` body goes.
+#[derive(Clone, Debug, PartialEq)]
+enum Sends {
+    /// `request;`: the anonymous server.
+    Server,
+    /// `request gw;`: the gateway `gw`.
+    Gateway(String),
+    /// `request p;` with `p` the definition's `k`-th parameter: the
+    /// gateway its argument names.
+    Param(usize),
+    /// A parameter of a definition the body uses: any of them.
+    Any,
+}
+
+/// What a request assigns, by where it goes.
+#[derive(Default)]
+struct Served {
+    /// Whatever it goes to: `cached`, `computed`, the entries' locals and
+    /// marks.
+    shared: Vec<String>,
+    /// The server's assignments.
+    server: Vec<String>,
+    /// Each gateway's `route`'s.
+    gateways: Vec<(String, Vec<String>)>,
+}
+
+impl Served {
+    /// Does a request sent `to` assign `n`?
+    fn assigns(&self, to: &Sends, n: &str) -> bool {
+        let n = n.to_string();
+        self.shared.contains(&n)
+            || match to {
+                Sends::Server => self.server.contains(&n),
+                Sends::Gateway(g) => self
+                    .gateways
+                    .iter()
+                    .any(|(q, names)| q == g && names.contains(&n)),
+                Sends::Param(_) | Sends::Any => {
+                    self.server.contains(&n) || self.gateways.iter().any(|(_, ns)| ns.contains(&n))
+                }
+            }
+    }
 }
 
 /// The tokens a use of a `def` became, and where it was used.
@@ -236,9 +281,10 @@ struct Def {
     /// definition it uses: what an argument that uses it reads.
     reads: Vec<String>,
     calls: Vec<String>,
-    /// The body says `turn;` or `request;`, itself or through a definition.
+    /// The body says `turn;`, itself or through a definition.
     turn: bool,
-    request: bool,
+    /// Where the body's `request`s go, itself or through a definition.
+    request: Vec<Sends>,
     /// Where the name is written.
     line: usize,
     col: usize,
@@ -676,15 +722,26 @@ fn says(b: &[Token], w: &str) -> bool {
         .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
 }
 
-/// Do these tokens say `request;` or `request gw;`: send a request, to
-/// the server or to a named gateway?
-fn says_request(b: &[Token]) -> bool {
-    says(b, "request")
-        || b.windows(3).any(|x| {
-            x[0].tok == Tok::Ident("request".into())
-                && matches!(x[1].tok, Tok::Ident(_))
-                && x[2].tok == Tok::Semi
-        })
+/// Where the `request;` and `request gw;` these tokens say go, `params`
+/// being the definition's.
+fn sends_of(b: &[Token], params: &[String]) -> Vec<Sends> {
+    let mut out = vec![];
+    for (k, t) in b.iter().enumerate() {
+        if t.tok != Tok::Ident("request".into()) {
+            continue;
+        }
+        match (b.get(k + 1).map(|t| &t.tok), b.get(k + 2).map(|t| &t.tok)) {
+            (Some(Tok::Semi), _) => out.push(Sends::Server),
+            (Some(Tok::Ident(g)), Some(Tok::Semi)) => {
+                out.push(match params.iter().position(|p| p == g) {
+                    Some(i) => Sends::Param(i),
+                    None => Sends::Gateway(g.clone()),
+                })
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// A function of the language: one the linker resolves or one it folds.
@@ -1531,24 +1588,27 @@ impl Parser {
                 );
             }
         }
-        // a request runs the server, whose admissions set `cached` and
-        // `computed` too
-        let mut served: Vec<String> = vec!["cached".into(), "computed".into()];
+        // a request runs the server or a named gateway's `route`, whose
+        // admissions set `cached` and `computed`, and the entries it calls
+        // set and mark (`D.first_token`)
+        let mut shared: Vec<String> = vec!["cached".into(), "computed".into()];
+        let mut served = Served::default();
         if let Some((_, server)) = &self.server {
-            assigned_in(server, &mut served);
+            assigned_in(server, &mut served.server);
         }
-        // and a named gateway's `route`, with what the entries it calls set
-        // and mark (`D.first_token`): `request gw;` assigns them too
         for q in &self.queues {
             for e in &q.entries {
                 if e.verb == "route" {
-                    assigned_in(&e.body, &mut served);
+                    let mut names = vec![];
+                    assigned_in(&e.body, &mut names);
+                    served.gateways.push((q.name.clone(), names));
                 } else {
-                    served.extend(e.locals.iter().map(|l| format!("{}.{l}", q.name)));
+                    shared.extend(e.locals.iter().map(|l| format!("{}.{l}", q.name)));
                 }
             }
-            served.extend(q.marks.iter().map(|m| format!("{}.{m}", q.name)));
+            shared.extend(q.marks.iter().map(|m| format!("{}.{m}", q.name)));
         }
+        served.shared = shared;
         self.assemble(&mut prog)?;
         self.check_body_bindings(&prog)?;
         self.check_def_names(&prog)?;
@@ -1786,7 +1846,7 @@ impl Parser {
 
     /// A use whose body says `turn;` or `request;` may not pass an argument
     /// that reads what the workload's `turn` or the server assigns.
-    fn check_deferred(&self, prog: &Program, served: &[String]) -> PResult<()> {
+    fn check_deferred(&self, prog: &Program, served: &Served) -> PResult<()> {
         // a turn draws the workload's `turn` block, or a trace's attributes
         let mut turned: Vec<String> = BUILTIN_ATTRS.iter().map(|a| a.to_string()).collect();
         if let Some(w) = &prog.workload {
@@ -1810,10 +1870,9 @@ impl Parser {
                     origin: self.origin(u.file),
                 });
             }
-            let found = u
-                .reads
-                .iter()
-                .find(|n| (u.turn && turned.contains(n)) || (u.request && served.contains(*n)));
+            let found = u.reads.iter().find(|n| {
+                (u.turn && turned.contains(n)) || u.request.iter().any(|s| served.assigns(s, n))
+            });
             if let Some(n) = found {
                 let by = if u.turn && turned.contains(n) {
                     "`turn;`"
@@ -2074,16 +2133,21 @@ impl Parser {
         let used: Vec<&Def> = self.defs.iter().filter(|d| uses(&body, &d.name)).collect();
         let mut assigns = assigned_tokens(&body);
         let mut turn = says(&body, "turn");
-        let mut request = says_request(&body);
+        let mut request = sends_of(&body, &params);
         let (mut reads, mut calls) = self.reads_of(&body, !stmts);
         reads.retain(|n| !params.contains(n));
         for d in &used {
             assigns.extend(d.assigns.iter().cloned());
             turn |= d.turn;
-            request |= d.request;
+            // a parameter of `d` is whatever this body passes it
+            request.extend(d.request.iter().map(|s| match s {
+                Sends::Param(_) => Sends::Any,
+                s => s.clone(),
+            }));
         }
         assigns.sort();
         assigns.dedup();
+        request.dedup();
         calls.sort();
         calls.dedup();
         self.defs.push(Def {
@@ -2292,7 +2356,22 @@ impl Parser {
                 }
             }
         }
-        let (turn, request) = (d.turn, d.request);
+        let turn = d.turn;
+        // a parameter's gateway is the argument's name
+        let request: Vec<Sends> = d
+            .request
+            .iter()
+            .map(|s| match s {
+                Sends::Param(i) => match args[*i].as_slice() {
+                    [t] => match &t.tok {
+                        Tok::Ident(g) => Sends::Gateway(g.clone()),
+                        _ => Sends::Any,
+                    },
+                    _ => Sends::Any,
+                },
+                s => s.clone(),
+            })
+            .collect();
         if d.stmts {
             let mut reads: Vec<String> =
                 args.iter().flat_map(|a| self.reads_of(a, true).0).collect();

@@ -708,6 +708,39 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
     compile_source(&program("hidden out;"), &Overrides::default()).unwrap();
 }
 
+/// #203: a `def` that says `request gw;` captures what `gw`'s `route`
+/// assigns, not what every gateway's does.
+#[test]
+fn a_def_captures_what_the_gateway_it_requests_assigns() {
+    let program = |defs: &str, session: &str| {
+        format!(
+            "{defs}
+             queue clean : gateway {{ route {{ E.decode (prompt); }} }}
+             queue dirty : gateway {{ route {{ set x = now; E.decode (prompt); }} }}
+             queue E : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }} }}
+             workload {{ arrive batch(1); hidden o; init {{ set prompt = 3; set o = 2; }} session {{ set x = 1; {session} end; }} }} run {{ horizon 10; }}"
+        )
+    };
+    let go = "def go(x) { request clean; observe b = x; }";
+    compile_source(&program(go, "go(x);"), &Overrides::default()).unwrap();
+    let go = "def go(x) { request dirty; observe b = x; }";
+    refused(&program(go, "go(x);"), "an argument of `go` reads `x`");
+    // a gateway a parameter names is the argument's
+    let send = "def send(g, x) { request g; observe b = x; }";
+    compile_source(&program(send, "send(clean, x);"), &Overrides::default()).unwrap();
+    refused(
+        &program(send, "send(dirty, x);"),
+        "an argument of `send` reads `x`",
+    );
+    // through a definition the body passes a parameter to, any gateway
+    let ask = "def ask(g) { request g; } def go(x) { ask(clean); observe b = x; }";
+    refused(&program(ask, "go(x);"), "an argument of `go` reads `x`");
+    // and through one that names its gateway, that one
+    let ask = "def ask() { request clean; } def go(x) { ask(); observe b = x; }";
+    compile_source(&program(ask, "go(x);"), &Overrides::default()).unwrap();
+}
+
 /// The third review of #87: six ways a program still got past the queue's
 /// contract, each refused or, for a constant, accepted as the linker does.
 #[test]
