@@ -673,6 +673,9 @@ fn a_decision_stays_before_its_stations() {
     let End::Node(d) = decision(&net).expect("a decision") else {
         unreachable!()
     };
+    // before the whole instance, so its box does not take the diamond in
+    let a = net.node_of(stage(&p, "A")).unwrap();
+    assert!(d < a, "the decision before the instance's first station");
     for st in ["B", "C"] {
         let k = net.node_of(stage(&p, st)).unwrap();
         assert!(d < k, "the decision before {st}");

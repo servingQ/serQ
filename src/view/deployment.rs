@@ -853,6 +853,15 @@ fn decisions_first(net: &mut Net) {
         else {
             continue;
         };
+        // before the instance its first station is in, not inside its box
+        let first = match net.instance_of(first) {
+            Some(g) => *net.instances[g]
+                .nodes
+                .iter()
+                .min()
+                .expect("an instance has a station"),
+            None => first,
+        };
         if first > d {
             continue;
         }
