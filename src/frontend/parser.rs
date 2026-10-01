@@ -2505,8 +2505,8 @@ impl Parser {
     }
 
     /// `[N]` after a name: a family's size, a positive integer or a `let`
-    /// constant that is one (`queue D[ND]`).
-    fn array_count(&mut self) -> PResult<usize> {
+    /// constant that is one (`queue D[ND]`); `None` without brackets.
+    fn array_count(&mut self) -> PResult<Option<usize>> {
         if *self.peek() == Tok::LBracket {
             self.advance();
             let at = self.pos;
@@ -2547,9 +2547,9 @@ impl Parser {
                 }
             };
             self.expect(&Tok::RBracket)?;
-            Ok(n)
+            Ok(Some(n))
         } else {
-            Ok(1)
+            Ok(None)
         }
     }
 
@@ -2603,12 +2603,13 @@ impl Parser {
     fn pool(&mut self) -> PResult<PoolDecl> {
         let span = Some(self.span());
         let name = self.ident()?;
-        let count = self.array_count()?;
+        let array = self.array_count()?;
         self.expect(&Tok::LBrace)?;
         let mut d = PoolDecl {
             span,
             name,
-            count,
+            count: array.unwrap_or(1),
+            array: array.is_some(),
             cap: Expr::Num(f64::INFINITY),
             block: None,
             evict: EvictOrder::Lru,
@@ -2693,13 +2694,14 @@ impl Parser {
     fn stage(&mut self) -> PResult<StageDecl> {
         let span = Some(self.span());
         let name = self.ident()?;
-        let count = self.array_count()?;
+        let array = self.array_count()?;
         self.expect(&Tok::Colon)?;
         let kind = self.stage_kind()?;
         Ok(StageDecl {
             span,
             name,
-            count,
+            count: array.unwrap_or(1),
+            array: array.is_some(),
             kind,
         })
     }
@@ -2830,7 +2832,9 @@ impl Parser {
         if self.queues.iter().any(|q| q.name == name) {
             return self.err_at(at + 1, format!("duplicate queue `{name}`"));
         }
-        let count = self.array_count()?;
+        // a family of one is one queue (`D.verb`, not `D[0].verb`), and so
+        // are its pools and stages
+        let count = self.array_count()?.unwrap_or(1);
         let mut roles = vec![];
         if *self.peek() == Tok::Colon {
             self.advance();
@@ -2917,6 +2921,7 @@ impl Parser {
                 self.queues[qi].pools.push(d.name.clone());
                 d.name = format!("{name}.{}", d.name);
                 d.count = count;
+                d.array = count > 1;
                 prog.pools.push(d);
             } else if self.is_kw("serve") {
                 let s_at = self.pos;
@@ -2962,6 +2967,7 @@ impl Parser {
                     span,
                     name: name.clone(),
                     count,
+                    array: count > 1,
                     kind,
                 });
             } else if self.is_kw("nic") {
@@ -2984,6 +2990,7 @@ impl Parser {
                     span,
                     name: nname,
                     count,
+                    array: count > 1,
                     kind,
                 });
             } else if let Tok::Ident(verb) = self.peek().clone() {
@@ -3014,6 +3021,7 @@ impl Parser {
                 span,
                 name: lname,
                 count,
+                array: count > 1,
                 kind: StageKind::Delay,
             });
         }
@@ -4060,6 +4068,7 @@ impl Parser {
                 span,
                 name: sname,
                 count,
+                array: count > 1,
                 kind: StageKind::Delay,
             });
             Some(Expr::Var(lname))

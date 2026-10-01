@@ -128,3 +128,21 @@ fn an_array_member_is_reported_with_its_index() {
     assert_eq!(named, vec![Some(0), Some(1)]);
     assert_eq!(r.pools_named("reqs")[0].index, None);
 }
+
+/// #214: a one-member array is an array, as the program writes it
+/// (`kv[0]`), so a sweep over its size keeps the label at N = 1.
+#[test]
+fn a_one_member_array_keeps_its_index() {
+    let src = "pool kv[1] { cap 10; } pool reqs { cap 4; } stage svc[1] : fifo;
+        workload { arrive poisson(1); }
+        session { hold reqs (1) { hold kv[0] (1) { run svc[0] (~exp(2)); } } end; }
+        run { horizon 100; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let r = run_ir(&p, None).unwrap();
+    assert_eq!(r.pools_named("kv")[0].index, Some(0));
+    assert_eq!(r.pools_named("reqs")[0].index, None);
+    assert_eq!(r.stages[0].index, Some(0));
+    let text = r.text();
+    assert!(text.lines().any(|l| l.starts_with("kv[0] ")), "{text}");
+    assert!(text.lines().any(|l| l.starts_with("svc[0] ")), "{text}");
+}
