@@ -37,6 +37,8 @@ or padded device buffers. See [input shapes](input-shapes.md).
 
 ## Executable serQ approximation
 
+![vllm-ascend deployment in serQ](../assets/ascend.deployment.svg)
+
 ```serq title="examples/vendors/ascend.sq"
 --8<-- "examples/vendors/ascend.sq"
 ```

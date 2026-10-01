@@ -1,7 +1,7 @@
 // vLLM v1 serving a multi-turn chat: a person reads the answer, types a
 // short follow-up, and sends the whole conversation back. The engine is
 // `examples/multi-turn/vllm.sq`'s line for line; only the workload differs
-// (docs/case-study-workloads.md).
+// (docs/use-cases/workloads.md).
 use "../../lib/vllm.sq";
 
 let B = 8192;          // max_num_batched_tokens

@@ -4,7 +4,7 @@ The prefill/decode split of llm-d over vLLM's NIXL connector, checked
 against the source (llm-d `8a2f37d`, the router `13eebdb`, vLLM `0c87a197`),
 and what the language had to gain to state it. Before is the repository as
 it was; After runs (`examples/pd-disaggregation/llmd_pd.sq`, `tests/pd_semantics.rs`,
-`docs/case-study-pd.md`). IR version 5.
+`docs/use-cases/pd.md`). IR version 5.
 
 ## What the systems do
 

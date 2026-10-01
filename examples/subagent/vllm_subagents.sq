@@ -3,7 +3,7 @@
 // subagents arrive as sessions of their own in the same Poisson stream,
 // and a parent waits for them at a delay stage for `W`, the time the
 // slowest of its subagents took in a previous run. The engine is
-// `examples/multi-turn/vllm.sq`'s line for line (docs/case-study-workloads.md).
+// `examples/multi-turn/vllm.sq`'s line for line (docs/use-cases/workloads.md).
 // `--set q=0` is the same agents without subagents.
 use "../../lib/vllm.sq";
 

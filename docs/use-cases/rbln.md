@@ -42,6 +42,8 @@ expressions and the remaining IR requirements.
 
 ## Executable serQ approximation
 
+![vllm-rbln deployment in serQ](../assets/rbln.deployment.svg)
+
 ```serq title="examples/vendors/rbln.sq"
 --8<-- "examples/vendors/rbln.sq"
 ```

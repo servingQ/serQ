@@ -1,7 +1,7 @@
 // vLLM v1 serving single-turn requests: a session is one request — a
 // prompt, an answer, gone. The engine (the constants down to `c0`, the
 // pools, the stage and the `server` block) is `examples/multi-turn/vllm.sq`'s line
-// for line; only the workload differs (docs/case-study-workloads.md).
+// for line; only the workload differs (docs/use-cases/workloads.md).
 use "../../lib/vllm.sq";
 
 let B = 8192;          // max_num_batched_tokens

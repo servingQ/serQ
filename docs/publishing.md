@@ -5,7 +5,7 @@ private repository by `.github/workflows/docs.yml`.
 
 Anyone can read it, and search engines index it. That includes the pages that
 quote unpublished work: [How serQ is checked](validation.md) and the [case
-study](case-study-vllm.md) carry the A100 measurements, the pre-registered
+study](use-cases/vllm.md) carry the A100 measurements, the pre-registered
 predictions of `data/exp/seq/prereg/` and the paper's replica. Treat anything
 you add here as published.
 

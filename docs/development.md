@@ -38,7 +38,7 @@ Keep the engine and the client apart, as the programs in `examples/` do: the
 pools, the stages and a `server` block for the deployment, and `workload` for
 the traffic ([the two sides](language.md#the-two-sides)). Then a question
 about traffic is an edit of `workload` alone, and a test can hold the engine
-fixed ([one engine, four workloads](case-study-workloads.md)).
+fixed ([different workloads](use-cases/workloads.md)).
 
 ### Read the report
 
@@ -117,7 +117,7 @@ designs get the same arrival times. Once one design changes when things
 happen, the turn draws (`n`, `o`, `more`) and the tool times go to different
 sessions, and the traffic is no longer paired. To give both designs exactly
 the same sessions, replay a trace with `trace "file.csv" ordered`. The
-pre-registered prediction in the [vLLM case study](case-study-vllm.md) is this
+pre-registered prediction in the [vLLM use case](use-cases/vllm.md) is this
 kind of comparison: the same program with and without `admit via engine`.
 
 ### Calibrate

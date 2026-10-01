@@ -121,7 +121,7 @@ have ([The KV transfer](pd-transfer.md)). The push this model can write
 today is llm-d's serial one, which differs from pull only in whose worker
 waits; under the word `push` it would mean less than it says (criterion 0).
 Serial push is still written with link queues and `transfer on`
-([case study](../case-study-pd.md), *The two modes in the program*).
+([case study](../use-cases/pd.md), *The two modes in the program*).
 
 **One policy per program.** The IR's `share` is the program's, so every
 relation names the same. NVLink one way and RDMA another is a policy per

@@ -11,14 +11,13 @@ A second pass over the same [latest tags](index.md) follows full-attention
 requests from scheduler selection into the runner. A valid logical batch is
 not necessarily a valid compiled input. Only the native RBLN path is included.
 
-## Four distinct contracts
+## Three distinct contracts
 
 | Contract | Examples | Consequence for serQ |
 |---|---|---|
 | Logical selection | RBLN lone prefill versus decodes; PP decode cap | Determine which real requests/tokens execute |
-| Input shape | RBLN compiled request buckets; Ascend SP/graph shapes; TPU request/token buckets | Derive padded dimensions separately from selected tokens |
+| Input shape | RBLN compiled request buckets; Ascend SP/graph shapes | Derive padded dimensions separately from selected tokens |
 | Metadata validity | Uniform query length; FIA query boundaries, dummy rows and block tables | Check per-request lengths and the valid/padded mask |
-| Static storage/backend compatibility | TPU padded head dimension; MetaX kernel block/head support | Derive capacity or reject the selected backend configuration |
 
 Padding is not uniformly caused by an NPU: the code imposes specific compiler,
 graph, kernel and sharding contracts. A configuration can choose a different
@@ -35,13 +34,10 @@ The numbers below are selected configurations, not vendor defaults.
 | Native RBLN text prefill, compiled width 128 | One 17-token chunk | One row padded to 128; still only 17 real tokens |
 | Native RBLN specialized DP, a peer prefills | Local three-request decode, top bucket 8 and token target 128 | Top bucket, 128-token dimension; not the local four-row shape |
 | [vllm-ascend](ascend.md#device-inputs-and-padding), SP enabled, TP4 | Five scheduled tokens | Eight tokens before graph/DP dispatch; query metadata must cover padding |
-| [tpu-inference](tpu.md#static-inputs-and-padding), buckets `[8,16,32,48,64]` | Rank token counts 17 and 3 | Per-rank width 32, total width 64; requests are bucketed separately |
-| TPU regular KV | Head dimensions 64, 80 and 129 | Dimensions 64, 128 and 256; logical sequence lengths unchanged |
-| [vLLM-metax](metax.md#backend-input-constraints-and-padding), FLASH_ATTN | Head sizes 72 and 70 | 72 passes the support check; 70 does not. Block 17 fails KV shape construction |
 
 CPU spot checks executed extracted pure helper functions from these tagged
-sources: RBLN shape routes and uniform-count assertions, Ascend SP rounding,
-TPU bucket/head helpers and MetaX block/head checks. Dependencies were replaced
+sources: RBLN shape routes and uniform-count assertions and Ascend SP
+rounding. Dependencies were replaced
 with minimal helper inputs; no vendor SDK, runner or hardware execution was
 performed. Graph replay, attention masks and per-request metadata have not
 been validated end to end.
