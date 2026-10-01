@@ -248,6 +248,61 @@ pub struct TimeStats {
     pub max: f64,
 }
 
+/// A distribution kept as counts in buckets of a constant relative width
+/// (1 %), so that it costs the range of its values, not their number: a
+/// quantile is its bucket's geometric middle, within 0.5 % of the values
+/// in that bucket. The mean is exact.
+#[derive(Clone, Debug, Default)]
+pub struct LogHistogram {
+    counts: std::collections::BTreeMap<i32, u64>,
+    n: u64,
+    sum: f64,
+}
+
+impl LogHistogram {
+    const WIDTH: f64 = 0.01;
+
+    pub fn push(&mut self, x: f64) {
+        // zero and below share one bucket, below every other
+        let k = if x > 0.0 {
+            (x.ln() / Self::WIDTH.ln_1p()).floor() as i32
+        } else {
+            i32::MIN
+        };
+        *self.counts.entry(k).or_default() += 1;
+        self.n += 1;
+        self.sum += x;
+    }
+
+    pub fn mean(&self) -> f64 {
+        if self.n == 0 {
+            f64::NAN
+        } else {
+            self.sum / self.n as f64
+        }
+    }
+
+    /// The bucket of the `ceil(q n)`-th smallest value, as `quantile` ranks.
+    pub fn quantile(&self, q: f64) -> f64 {
+        if self.n == 0 {
+            return f64::NAN;
+        }
+        let rank = ((q * self.n as f64).ceil() as u64).clamp(1, self.n);
+        let mut seen = 0;
+        for (&k, &c) in &self.counts {
+            seen += c;
+            if seen >= rank {
+                return if k == i32::MIN {
+                    0.0
+                } else {
+                    ((k as f64 + 0.5) * Self::WIDTH.ln_1p()).exp()
+                };
+            }
+        }
+        unreachable!("the ranks add up to n")
+    }
+}
+
 pub fn quantile(xs: &[f64], q: f64) -> f64 {
     if xs.is_empty() {
         return f64::NAN;

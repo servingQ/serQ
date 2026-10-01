@@ -167,6 +167,18 @@ struct Session<'p> {
     stuck: bool,
     /// Allocations that outlived their scope (`lease`).
     leases: Vec<Lease<'p>>,
+    /// The request's latest token on a step stage, for the gaps between
+    /// tokens (`Interp::token`).
+    last_token: Option<LastToken>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LastToken {
+    turn: f64,
+    at: f64,
+    /// Whether the turn has decoded a token, or been preempted, since its
+    /// first: a prefill's end is then the next token, not the first again.
+    resumed: bool,
 }
 
 // ------------------------------------------------------------- pools ----
@@ -239,8 +251,6 @@ struct Job {
     growing: Option<usize>,
     enqueued: f64,
     started: Option<f64>,
-    /// Step stages, a decode: when its last token was committed.
-    last_token: Option<f64>,
 }
 
 struct Iter {
@@ -308,8 +318,9 @@ struct StepStats {
     decodes: TimeAverage,
     batch: Welford,
     duration: Welford,
-    /// The gaps between a decode's successive tokens, after warm-up.
-    itl: Vec<f64>,
+    /// The gaps between a request's successive tokens that end here,
+    /// after warm-up (`Interp::token`).
+    itl: LogHistogram,
 }
 
 impl StepStats {
@@ -321,7 +332,7 @@ impl StepStats {
             decodes: TimeAverage::new(0.0, 0.0),
             batch: Welford::new(),
             duration: Welford::new(),
-            itl: vec![],
+            itl: LogHistogram::default(),
         }
     }
 
@@ -903,6 +914,7 @@ impl<'p> Interp<'p> {
             preempt_pos: HashMap::new(),
             stuck: false,
             leases: vec![],
+            last_token: None,
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -2005,6 +2017,10 @@ impl<'p> Interp<'p> {
             }
         }
         self.sessions[victim].preempt_pos.insert(pl, computed);
+        // its next prefill's end is a token after this one, with a gap
+        if let Some(t) = &mut self.sessions[victim].last_token {
+            t.resumed = true;
+        }
         // the same value is what the re-executed hold resumes from (vLLM
         // keeps the generated tokens: `_preempt_request` resets
         // `num_computed_tokens` only)
@@ -2121,7 +2137,6 @@ impl<'p> Interp<'p> {
             growing,
             enqueued: now,
             started: None,
-            last_token: None,
         };
         match &mut stage.kind {
             Kind::Fifo { queue, .. } => {
@@ -2208,7 +2223,6 @@ impl<'p> Interp<'p> {
                     growing: None,
                     enqueued: now,
                     started: Some(now),
-                    last_token: None,
                 },
             );
         }
@@ -2935,24 +2949,27 @@ impl<'p> Interp<'p> {
         let now = self.now;
         self.stages[st].steps.set(now, 0.0, 0.0);
         let mut finished = vec![];
-        let warm = self.warm;
-        let stage = &mut self.stages[st];
+        // the requests that commit a token now: a decode's, or a prefill's
+        // at its end
+        let mut tokens_of = vec![];
         for (id, tokens) in it.assign {
-            if let Some(j) = stage.jobs.get_mut(&id) {
-                // a decode's token is committed here: the gap since its
-                // previous one, which is none for its first (that follows
-                // a prefill, maybe on another stage)
-                if j.mode == RunMode::Decode {
-                    if let (Some(t), true) = (j.last_token, warm) {
-                        stage.steps.itl.push(now - t);
-                    }
-                    j.last_token = Some(now);
-                }
+            if let Some(j) = self.stages[st].jobs.get_mut(&id) {
                 j.work -= tokens;
-                if j.work <= 1e-9 {
+                let done = j.work <= 1e-9;
+                if let Some(sid) = j.owner {
+                    match j.mode {
+                        RunMode::Decode => tokens_of.push((sid, true)),
+                        RunMode::Prefill if done => tokens_of.push((sid, false)),
+                        _ => {}
+                    }
+                }
+                if done {
                     finished.push(id);
                 }
             }
+        }
+        for (sid, decode) in tokens_of {
+            self.token(st, sid, decode);
         }
         for id in finished {
             let job = self.stages[st].jobs.remove(&id).unwrap();
@@ -2964,6 +2981,32 @@ impl<'p> Interp<'p> {
             }
             self.job_done(st, job);
         }
+    }
+
+    /// A token of `sid`'s request committed on stage `st` now: a decode's,
+    /// or a prefill's at its end. The gap since the turn's previous token
+    /// goes to the stage's ITL, wherever that token was. A prefill's end is
+    /// the client's first token when nothing has happened since the turn's
+    /// last one but more prefill: a decoder recomputing the token a
+    /// prefiller sampled and dropped (llmd_nixl_pull.sq) replaces it. After
+    /// a decode or a preemption it is the resumed request's next token, and
+    /// its gap holds the preemption.
+    fn token(&mut self, st: usize, sid: usize, decode: bool) {
+        let now = self.now;
+        let turn = self.sessions[sid].attrs[self.p.slot_turn];
+        let last = self.sessions[sid].last_token.filter(|t| t.turn == turn);
+        let resumed = last.is_some_and(|t| t.resumed);
+        if let Some(t) = last
+            && (decode || resumed)
+            && self.warm
+        {
+            self.stages[st].steps.itl.push(now - t.at);
+        }
+        self.sessions[sid].last_token = Some(LastToken {
+            turn,
+            at: now,
+            resumed: resumed || decode,
+        });
     }
 
     // ---------------------------------------------------- evaluation ----
@@ -3282,9 +3325,9 @@ impl<'p> Interp<'p> {
                 mean_decodes: s.steps.decodes.mean(now),
                 mean_decode_batch: s.steps.batch.mean(),
                 mean_decode_step: s.steps.duration.mean(),
-                mean_itl: s.steps.itl.iter().sum::<f64>() / s.steps.itl.len() as f64,
-                itl_p50: quantile(&s.steps.itl, 0.5),
-                itl_p99: quantile(&s.steps.itl, 0.99),
+                mean_itl: s.steps.itl.mean(),
+                itl_p50: s.steps.itl.quantile(0.5),
+                itl_p99: s.steps.itl.quantile(0.99),
             })
             .collect();
         let pools = self
