@@ -5,31 +5,45 @@
 // latter; a decode engine runs nothing else, so its decodes step every
 // iteration and each step carries the decodes of more requests.
 //
-// The baseline the issue fixes: exclusive steps (a step is one prefill or
-// decodes only, `serve exclusive prefill`), memory enough that nothing
-// waits for it, and a free, instantaneous transfer — the prefill engine
-// drops the KV and the decode engine holds it at once. Nothing gives the
-// split an advantage per token: the engines are the colocated one's, and
-// TPOT is what the steps make of the work.
+// The engines are examples/multi-turn/vllm.sq's: a slot and the blocks of
+// the first chunk at admission (the scheduler's, at a step), the KV grown
+// token by token, the last admitted preempted when it does not fit, and a
+// preempted request recomputing what it had. The split hands the KV over
+// as examples/pd-disaggregation/llmd_nixl_pull.sq does: the prefiller
+// keeps its blocks leased until the decoder has read them, the decoder
+// takes the request when the whole prompt fits its blocks and reads it
+// over both NICs.
 //
-// `mode = 0` sends every request to one of the N colocated engines, the
-// least busy; `mode = 1` to one of NP prefill engines, then one of ND
-// decode engines. Both modes draw the same requests from the same seed.
-// The queues of the other mode are declared and stay idle. The report's
-// step table splits each engine's time into prefill-only, decode-only,
-// mixed and idle iterations, with the decodes each iteration carried.
+// The baseline (#208): exclusive steps (one prefill alone, or decodes
+// only; a waiting prefill goes first), memory that never binds, a free and
+// instantaneous transfer, no specialisation. Each is a constant here, or
+// a line: `blocks*`, `Bw`, `x0`, `gP`, `gD`; mixed batches are this file
+// with `serve exclusive prefill;` deleted, and another split is this file
+// with another `NP` (tools/pd_batching/sweep.py writes both).
+//
+// `mode = 0` sends every request to one of the N colocated engines;
+// `mode = 1` to one of NP prefill engines, then one of ND decode engines,
+// the least busy of each. Both modes draw the same requests from a seed.
+// The queues of the other mode are declared and stay idle.
 let N = 4;             // colocated engines
 let NP = 3;            // prefill engines when split
 let ND = N - NP;       // decode engines when split: the same engines
 let mode = 1;          // 0 colocated, 1 split
 let B = 8192;          // max_num_batched_tokens
+let chunk_cap = 0;     // long_prefill_token_threshold (0: none)
 let max_seqs = 1024;   // max_num_seqs: enough that it never binds
-let blocks = 1e6;      // num_gpu_blocks: enough that memory never binds
 let bs = 16;           // block_size
+let blocksE = 1e6;     // num_gpu_blocks of a colocated engine
+let blocksP = 1e6;     // of a prefill engine
+let blocksD = 1e6;     // of a decode engine
 let a = 2e-5;          // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
 let c0 = 0;            // fixed cost per iteration (s)
+let gP = 1;            // a prefill engine's compute against a colocated one's
+let gD = 1;            // a decode engine's memory bandwidth against a colocated one's
+let Bw = 1e15;         // NIC bandwidth, tokens/s (2e5: 128 KB per token at 25 GB/s)
+let x0 = 0;            // wait before every read (s)
 let Lambda = 60.0;     // requests per second
 
 // the laws, by name (`--def output='1001'`)
@@ -41,15 +55,18 @@ queue gw : gateway {
     set t0 = now;
     set prompt = n;
     branch (mode == 0) {
-      choose j in N by (holders(E[j].reqs));
+      choose j in N by (holders(E[j].reqs) + queued(E[j].kv));   // a request waits at the blocks
       E[j].decode (prompt);
       set first = E.first_token;
     } else {
-      choose i in NP by (holders(P[i].reqs));
+      choose i in NP by (holders(P[i].reqs) + queued(P[i].reqs));
       P[i].prefill (prompt);
       set first = P.first_token;
-      choose j in ND by (holders(D[j].reqs));
-      D[j].decode (prompt);
+      choose j in ND by (holders(D[j].reqs) + queued(D[j].kv));
+      D[j].decode (prompt) from P[i];
+      observe admit_wait = D.admitted - first;     // the decoder's admission: the prompt's blocks
+      observe transfer = D.read_done - D.admitted; // the read: the wait before it and both NICs
+      observe lease = D.read_done - first;         // how long the prefiller's blocks stayed leased
     }
     observe ttft = first - t0;
     observe decode_time = now - first;
@@ -61,57 +78,92 @@ queue gw : gateway {
 
 // A colocated engine: the prompt and the answer on one device.
 queue E[N] : decode {
-  pool reqs { cap max_seqs; }
-  pool kv { cap blocks * bs; block bs; }
+  pool reqs { cap max_seqs; admit via E; }
+  pool kv { cap blocksE * bs; block bs; evict lru; preempt lifo; admit via E; }
   serve step {
     budget B;
+    chunk chunk_cap;
     cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
     memory kv;
     serve exclusive prefill;
   }
   decode (prompt) {
-    hold reqs (1), kv (prompt) {
-      prefill (prompt);
-      mark first_token;
-      decode (o - 1) growing kv;
+    hold kv (min(known, budget_left(E))) reserve (known), reqs (1)
+         at admission (known = computed < prompt ? prompt : computed + 1) {
+      prefill (known) growing kv;
+      branch (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
+      decode (o - 1 - (known - prompt)) growing kv;
     }
   }
 }
 
-// A prefill engine: the prompt and its first token; the KV goes with it.
+// A prefill engine: the prompt and its first token; its blocks stay
+// leased until the decoder has read them.
 queue P[NP] : prefill {
-  pool reqs { cap max_seqs; }
-  pool kv { cap blocks * bs; block bs; }
+  pool reqs { cap max_seqs; admit via P; }
+  pool kv { cap blocksP * bs; block bs; evict lru; }
   serve step {
     budget B;
-    cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+    chunk chunk_cap;
+    cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a / gP);
     memory kv;
     serve exclusive prefill;
   }
+  nic ps(Bw);
   prefill (prompt) {
-    hold reqs (1), kv (prompt) {
-      prefill (prompt);
+    hold reqs (1), kv (min(prompt, budget_left(P))) reserve (prompt) {
+      prefill (prompt) growing kv;
       mark first_token;
+    } lease kv (inf);
+  }
+}
+
+// A decode engine: the request is taken when its prompt fits the blocks,
+// waits for the read without a running slot, then decodes. A request
+// preempted here recomputes what it lost.
+queue D[ND] : decode {
+  pool reqs { cap max_seqs; admit via D; }
+  pool kv { cap blocksD * bs; block bs; evict lru; preempt lifo; admit via D; }
+  serve step {
+    budget B;
+    chunk chunk_cap;
+    cost c0 + max((omega + beta * (kv_decode + kv_prefill)) / gD, tokens * a);
+    memory kv;
+    serve exclusive prefill;
+  }
+  nic ps(Bw);
+  // The pod prefilling the prompt itself, as a colocated engine (the
+  // gateway here never asks it to).
+  decode (prompt) {
+    hold kv (min(known, budget_left(D))) reserve (known), reqs (1)
+         at admission (known = computed < prompt ? prompt : computed + 1) {
+      prefill (known) growing kv;
+      decode (o - 1 - (known - prompt)) growing kv;
+    }
+  }
+  decode (prompt) from src {
+    set transferred = 0;
+    hold kv (known) reserve (known), reqs (0) reserve (1)
+         at admission (known = computed < prompt ? prompt : computed + 1) {
+      set c = 0;
+      branch (!transferred) {
+        mark admitted;
+        transfer (prompt) from src to kv (prompt);   // over P's NIC and this pod's
+        mark read_done;
+        set transferred = 1;
+        set c = prompt;
+      }
+      hold reqs (1) {
+        branch (known > c) { prefill (known - c) growing kv; }
+        decode (o - 1 - (known - prompt)) growing kv;
+      }
     }
   }
 }
 
-// A decode engine: the KV arrives with the request, and it decodes.
-queue D[ND] : decode {
-  pool reqs { cap max_seqs; }
-  pool kv { cap blocks * bs; block bs; }
-  serve step {
-    budget B;
-    cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-    memory kv;
-    serve exclusive prefill;
-  }
-  decode (prompt) {
-    hold reqs (1), kv (prompt) {
-      decode (o - 1) growing kv;
-    }
-  }
-}
+// How concurrent reads divide the two NICs is the fabric's, not vLLM's:
+// max-min fairness is the model (docs/design/bandwidth-sharing.md).
+D pull P latency x0 share maxmin;
 
 workload {
   arrive poisson(Lambda);
