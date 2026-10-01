@@ -1009,10 +1009,12 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
         // the index is the aggregate's own, not a name the expression reads
         Expr::Over(_, j, n, body) => {
             names_in(n, vars, indexed, refs);
-            let (mut v, mut i) = (vec![], vec![]);
-            names_in(body, &mut v, &mut i, refs);
+            let (mut v, mut i, mut r) = (vec![], vec![], vec![]);
+            names_in(body, &mut v, &mut i, &mut r);
             vars.extend(v.into_iter().filter(|x| x != j));
             indexed.extend(i.into_iter().filter(|x| x != j));
+            // a bare `j` argument (`max(j, 1)`) parses as a reference
+            refs.extend(r.into_iter().filter(|x| x.index.is_some() || x.name != *j));
         }
     }
 }

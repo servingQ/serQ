@@ -225,3 +225,19 @@ fn a_gauge_does_not_plan_an_iteration() {
         gauge g = budget_left(e);";
     assert!(link_error(src).contains("may not read `budget_left"));
 }
+
+/// Inside a queue's entry an aggregate's index is the aggregate's, not a
+/// session attribute the entry would read from outside, also where a bare
+/// `k` argument parses as a reference.
+#[test]
+fn an_aggregate_in_a_queue_entry_reads_its_own_index() {
+    let src = "queue engine : prefill {
+          serve fifo;
+          prefill (prompt) { run (sum k in 2 (max(k, 1)) * prompt); }
+        }
+        queue gw : gateway { route { engine.prefill (1); } }
+        workload { arrive batch(1); session { request gw; end; } }
+        run { horizon 10; }";
+    let r = run_source(src, &Overrides::default(), None).unwrap();
+    assert!((r.stage("engine").unwrap().mean_service - 2.0).abs() < 1e-12);
+}
