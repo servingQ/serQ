@@ -27,7 +27,8 @@ pub enum End {
     Exit,
 }
 
-/// A station: one stage the session reaches.
+/// A station: one stage the session reaches, or a decision before any
+/// (`kind: Decision`, `stage` then `NO_STAGE`).
 #[derive(Clone, Debug)]
 pub struct Node {
     pub stage: usize,
@@ -67,6 +68,9 @@ impl FlowNote {
         self.to = None;
     }
 }
+
+/// The `stage` of a decision node.
+pub const NO_STAGE: usize = usize::MAX;
 
 /// An instance: what the session addresses through one `choose`. A router
 /// that picks `i` picks a pod, and every stage and pool the session then
@@ -453,12 +457,62 @@ impl Walker<'_> {
                     self.arm = outer;
                 }
                 CStmt::Loop(body) => {
-                    // The second pass starts where the first ended, so every
-                    // way back into the body is drawn, from every arm, with
-                    // the guard of the arm it takes; edges already there are
-                    // not drawn twice.
+                    // A body that decides before its first station (several
+                    // first stations, or an `end` before any) is a router at
+                    // the top of every turn: one decision node the body
+                    // starts from and every pass returns to. The first pass
+                    // finds out, and is undone if it does.
+                    let before = self.net.edges.len();
+                    let from: Vec<End> = self.frontier.iter().map(|(e, _)| *e).collect();
+                    let saved = (
+                        self.frontier.clone(),
+                        self.holds.clone(),
+                        self.pending.clone(),
+                        self.arm.clone(),
+                    );
+                    let chosen = self.chosen.len();
                     self.walk(body);
-                    self.walk(body);
+                    let mut entries: Vec<End> = vec![];
+                    for e in &self.net.edges[before..] {
+                        if from.contains(&e.from) && !entries.contains(&e.to) {
+                            entries.push(e.to);
+                        }
+                    }
+                    if entries.len() > 1 {
+                        self.net.edges.truncate(before);
+                        (self.frontier, self.holds, self.pending, self.arm) = saved;
+                        let names: Vec<&str> = self.chosen[chosen..]
+                            .iter()
+                            .map(|(v, _)| self.p.attrs.get(*v).map_or("?", String::as_str))
+                            .collect();
+                        // named by what it chooses: the router's name is the
+                        // gateway's, which is the parser's and not the IR's
+                        let label = if names.is_empty() {
+                            String::new()
+                        } else {
+                            format!("choose {}", names.join(", "))
+                        };
+                        self.net.nodes.push(Node {
+                            stage: NO_STAGE,
+                            label,
+                            kind: StationKind::Decision,
+                            inner: String::new(),
+                            note: None,
+                            pools: vec![],
+                            work: String::new(),
+                            modes: vec![],
+                        });
+                        let d = self.net.nodes.len() - 1;
+                        self.attach(d);
+                        self.walk(body);
+                        self.attach(d);
+                    } else {
+                        // The second pass starts where the first ended, so
+                        // every way back into the body is drawn, from every
+                        // arm, with the guard of the arm it takes; edges
+                        // already there are not drawn twice.
+                        self.walk(body);
+                    }
                     self.frontier.clear();
                     // A loop is left only by `end`, which already recorded it.
                 }
@@ -602,6 +656,7 @@ pub fn project(p: &Program) -> Net {
     w.net.cached = cached;
     let mut net = w.net;
     fold_latencies(p, &mut net);
+    decisions_first(&mut net);
     // one station and nothing else is a choice, not an instance to box
     net.instances
         .retain(|g| g.nodes.len() + g.pools.len() >= 2 && !g.nodes.is_empty());
@@ -676,6 +731,34 @@ fn fold_latencies(p: &Program, net: &mut Net) {
         }
         net.edges = kept;
         remove_node(net, k);
+    }
+}
+
+/// A decision stands before the stations it sends sessions to.
+fn decisions_first(net: &mut Net) {
+    for d in 0..net.nodes.len() {
+        if net.nodes[d].kind != StationKind::Decision {
+            continue;
+        }
+        let Some(first) = net
+            .edges
+            .iter()
+            .filter(|e| e.from == End::Node(d))
+            .filter_map(|e| match e.to {
+                End::Node(k) if k != d => Some(k),
+                _ => None,
+            })
+            .min()
+        else {
+            continue;
+        };
+        if first > d {
+            continue;
+        }
+        let mut order: Vec<usize> = (0..net.nodes.len()).filter(|&k| k != d).collect();
+        let at = order.iter().position(|&k| k == first).unwrap();
+        order.insert(at, d);
+        reorder(net, &order);
     }
 }
 
@@ -1424,11 +1507,9 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     EdgeStyle::Flow,
                 );
                 if let Some(l) = label {
-                    f.note(
-                        pt((ra.right() + rb.x) / 2.0, ra.centre().y - 8.0),
-                        l,
-                        Anchor::Middle,
-                    );
+                    // by the station it leaves: the pool glyphs before the
+                    // next one stand in the middle
+                    f.note(pt(ra.right() + 6.0, ra.centre().y - 8.0), l, Anchor::Start);
                 }
             }
             (End::Node(a), End::Node(b)) => {

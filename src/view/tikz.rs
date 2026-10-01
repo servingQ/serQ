@@ -132,6 +132,17 @@ pub fn render(f: &Figure) -> String {
                             let _ = writeln!(s, "  \\draw[seqcell] {} circle (4pt);", p(x, c.y));
                         }
                     }
+                    StationKind::Decision => {
+                        let r = rect.h.min(rect.w) / 2.0;
+                        let _ = writeln!(
+                            s,
+                            "  \\draw[seqstation] {} -- {} -- {} -- {} -- cycle;",
+                            p(c.x, c.y - r),
+                            p(c.x + r, c.y),
+                            p(c.x, c.y + r),
+                            p(c.x - r, c.y)
+                        );
+                    }
                     StationKind::Step => {
                         let _ = writeln!(
                             s,
