@@ -76,6 +76,8 @@ pub enum BoxStyle {
     Enclosure,
     /// The stations one job holds at once: a run over several stages.
     Flow,
+    /// An instance: what one `choose` picks, a pod.
+    Instance,
 }
 
 /// How a connector is drawn.
