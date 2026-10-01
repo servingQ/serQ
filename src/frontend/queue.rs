@@ -68,8 +68,18 @@ pub struct QueueDecl {
     /// A link's `serve … latency x;`: every transfer over it first waits
     /// `x` at the generated delay stage `Q.latency`.
     pub latency: Option<Expr>,
+    /// `nic kind;`: the queue's NIC, the stage `Q.nic`.
+    pub nic: bool,
+    /// `Q pull S latency x share …;`: the queue `S` its entries read the KV
+    /// from, and the wait before each read (the constant's name).
+    pub pulls: Option<(String, Option<Expr>)>,
     pub at: usize,
 }
+
+/// The stage a `transfer` without `on` names inside an entry of a queue
+/// with a NIC: the read over the source's NIC and the queue's own, which
+/// the expansion writes once it knows the source.
+pub const PULL: &str = "@pull";
 
 impl QueueDecl {
     pub fn entry(&self, verb: &str, from: bool) -> Option<&Entry> {
@@ -258,7 +268,71 @@ impl Ctx<'_> {
     }
 
     fn stmts(&self, stmts: &[Stmt]) -> Result<Vec<Stmt>, ExpandError> {
-        stmts.iter().map(|s| self.stmt(s)).collect()
+        let mut out = Vec::with_capacity(stmts.len());
+        for s in stmts {
+            match s {
+                Stmt::Run { stage, work, .. } if stage.name == PULL => out.extend(self.pull(work)?),
+                _ => out.push(self.stmt(s)?),
+            }
+        }
+        Ok(out)
+    }
+
+    /// `transfer (n) from src to kv (m)` in an entry of a queue that pulls:
+    /// the reader's wait, then one run over the source's NIC and its own
+    /// (the `load` and `release` follow as written).
+    fn pull(&self, work: &Expr) -> Result<Vec<Stmt>, ExpandError> {
+        let Some((source, latency)) = &self.q.pulls else {
+            return err(
+                self.at,
+                format!(
+                    "`{}`'s `transfer` names no NIC and `{}` pulls from no queue: declare \
+                     `{} pull SOURCE share …;`, or write `transfer on …`",
+                    self.q.name, self.q.name, self.q.name
+                ),
+            );
+        };
+        let Some((_, src)) = &self.from else {
+            return err(self.at, "a read takes `from` the entry's source");
+        };
+        let from_queue = src.name.split_once('.').map(|(q, _)| q);
+        if from_queue != Some(source.as_str()) {
+            return err(
+                self.at,
+                format!(
+                    "`{}` pulls from `{source}`, and this entry was called `from {}`",
+                    self.q.name, src.name
+                ),
+            );
+        }
+        // the generated references point at the call, for the linker's errors
+        let own = |name: String| Ref {
+            span: Some(self.at),
+            name,
+            index: self.index.clone().map(Box::new),
+        };
+        let mut out = vec![];
+        if let Some(l) = latency {
+            out.push(Stmt::Run {
+                stage: own(format!("{}.nic.latency", self.q.name)),
+                mode: crate::ir::RunMode::Plain,
+                work: l.clone(),
+                growing: None,
+                also: vec![],
+            });
+        }
+        out.push(Stmt::Run {
+            stage: Ref {
+                span: Some(self.at),
+                name: format!("{source}.nic"),
+                index: src.index.clone(),
+            },
+            mode: crate::ir::RunMode::Plain,
+            work: self.expr(work)?,
+            growing: None,
+            also: vec![own(format!("{}.nic", self.q.name))],
+        });
+        Ok(out)
     }
 
     fn stmt(&self, s: &Stmt) -> Result<Stmt, ExpandError> {

@@ -108,6 +108,7 @@ nav:
           - Waiting selection: design/waiting-selection.md
           - Queues: design/queue.md
           - Explicit gateways: design/explicit-gateways.md
+          - The pull relation: design/pull-relation.md
   - API Reference:
       - api/index.md
       - Program: api/program.md
