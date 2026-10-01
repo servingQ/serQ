@@ -50,9 +50,12 @@ fn the_report_has_the_shape_its_version_names() {
             "decode_only",
             "index",
             "iterations",
+            "itl_p50",
+            "itl_p99",
             "mean_decode_batch",
             "mean_decode_step",
             "mean_decodes",
+            "mean_itl",
             "mean_number",
             "mean_service",
             "mean_wait",
@@ -133,6 +136,38 @@ fn an_array_member_is_reported_with_its_index() {
     let named: Vec<Option<u32>> = r.pools_named("kv").iter().map(|p| p.index).collect();
     assert_eq!(named, vec![Some(0), Some(1)]);
     assert_eq!(r.pools_named("reqs")[0].index, None);
+}
+
+#[test]
+fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
+    // A (prompt 2, three decodes) from t = 0, B (prompt 4, none) from t = 2,
+    // unit steps. Exclusive: A:p2, A:d1, B:p4, A:d1, A:d1, so A's tokens
+    // come at 2, 4, 5: gaps 2 and 1. Mixed: A:p2, A:d1, A:d1+B:p3,
+    // A:d1+B:p1: tokens at 2, 3, 4, gaps 1 and 1. The first token of a
+    // decode has no gap.
+    let itl = |serve: &str| {
+        let src = format!(
+            "pool reqs {{ cap 2; admit via engine; }} pool kv {{ cap 20; }} stage gate : delay;
+             stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
+             workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} }}
+             session {{
+               run gate (2 * serial);
+               hold reqs (1), kv (min(prompt, left)) reserve (prompt)
+                    at admission (left = budget_left(engine)) {{
+                 prefill prompt growing kv;
+                 branch (serial == 0) {{ decode (3) growing kv; }}
+               }}
+               end;
+             }}
+             run {{ horizon 20; warmup 0; seed 1; }}"
+        );
+        let p = compile_source(&src, &Overrides::default()).unwrap();
+        let r = run_ir(&p, None).unwrap();
+        let s = r.stage("engine").unwrap().clone();
+        (s.mean_itl, s.itl_p99)
+    };
+    assert_eq!(itl("serve exclusive prefill;").0, 1.5);
+    assert_eq!(itl(""), (1.0, 1.0));
 }
 
 /// #214: a one-member array is an array, as the program writes it

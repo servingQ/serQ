@@ -70,6 +70,14 @@ pub struct StageReport {
     /// otherwise): the batch a decode is in and the step it waits for.
     pub mean_decode_batch: f64,
     pub mean_decode_step: f64,
+    /// Step stages: the gaps between a decode's successive tokens on this
+    /// stage, after warm-up: their mean, median and 99th percentile (NaN
+    /// without any). The gap before a decode's first token is not one: it
+    /// follows a prefill, maybe on another stage; a preempted decode starts
+    /// over.
+    pub mean_itl: f64,
+    pub itl_p50: f64,
+    pub itl_p99: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -253,6 +261,8 @@ impl Report {
                     format!("{:.3}", st.mean_decodes),
                     format!("{:.3}", st.mean_decode_batch),
                     format!("{:.6}", st.mean_decode_step),
+                    format!("{:.6}", st.itl_p50),
+                    format!("{:.6}", st.itl_p99),
                 ]
             });
             table(
@@ -266,6 +276,8 @@ impl Report {
                     "decodes",
                     "decode batch",
                     "decode step",
+                    "itl p50",
+                    "itl p99",
                 ],
                 rows,
             );
@@ -373,7 +385,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{},\"prefill_only\":{},\"decode_only\":{},\"mixed\":{},\"mean_decodes\":{},\"mean_decode_batch\":{},\"mean_decode_step\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{},\"prefill_only\":{},\"decode_only\":{},\"mixed\":{},\"mean_decodes\":{},\"mean_decode_batch\":{},\"mean_decode_step\":{},\"mean_itl\":{},\"itl_p50\":{},\"itl_p99\":{}}}",
                 st.name,
                 index(st.index),
                 f(st.mean_number),
@@ -388,7 +400,10 @@ impl Report {
                 f(st.mixed),
                 f(st.mean_decodes),
                 f(st.mean_decode_batch),
-                f(st.mean_decode_step)
+                f(st.mean_decode_step),
+                f(st.mean_itl),
+                f(st.itl_p50),
+                f(st.itl_p99)
             );
         }
         s.push_str("],\"pools\":[");

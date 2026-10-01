@@ -239,6 +239,8 @@ struct Job {
     growing: Option<usize>,
     enqueued: f64,
     started: Option<f64>,
+    /// Step stages, a decode: when its last token was committed.
+    last_token: Option<f64>,
 }
 
 struct Iter {
@@ -306,6 +308,8 @@ struct StepStats {
     decodes: TimeAverage,
     batch: Welford,
     duration: Welford,
+    /// The gaps between a decode's successive tokens, after warm-up.
+    itl: Vec<f64>,
 }
 
 impl StepStats {
@@ -317,6 +321,7 @@ impl StepStats {
             decodes: TimeAverage::new(0.0, 0.0),
             batch: Welford::new(),
             duration: Welford::new(),
+            itl: vec![],
         }
     }
 
@@ -2116,6 +2121,7 @@ impl<'p> Interp<'p> {
             growing,
             enqueued: now,
             started: None,
+            last_token: None,
         };
         match &mut stage.kind {
             Kind::Fifo { queue, .. } => {
@@ -2202,6 +2208,7 @@ impl<'p> Interp<'p> {
                     growing: None,
                     enqueued: now,
                     started: Some(now),
+                    last_token: None,
                 },
             );
         }
@@ -2928,8 +2935,19 @@ impl<'p> Interp<'p> {
         let now = self.now;
         self.stages[st].steps.set(now, 0.0, 0.0);
         let mut finished = vec![];
+        let warm = self.warm;
+        let stage = &mut self.stages[st];
         for (id, tokens) in it.assign {
-            if let Some(j) = self.stages[st].jobs.get_mut(&id) {
+            if let Some(j) = stage.jobs.get_mut(&id) {
+                // a decode's token is committed here: the gap since its
+                // previous one, which is none for its first (that follows
+                // a prefill, maybe on another stage)
+                if j.mode == RunMode::Decode {
+                    if let (Some(t), true) = (j.last_token, warm) {
+                        stage.steps.itl.push(now - t);
+                    }
+                    j.last_token = Some(now);
+                }
                 j.work -= tokens;
                 if j.work <= 1e-9 {
                     finished.push(id);
@@ -3264,6 +3282,9 @@ impl<'p> Interp<'p> {
                 mean_decodes: s.steps.decodes.mean(now),
                 mean_decode_batch: s.steps.batch.mean(),
                 mean_decode_step: s.steps.duration.mean(),
+                mean_itl: s.steps.itl.iter().sum::<f64>() / s.steps.itl.len() as f64,
+                itl_p50: quantile(&s.steps.itl, 0.5),
+                itl_p99: quantile(&s.steps.itl, 0.99),
             })
             .collect();
         let pools = self
