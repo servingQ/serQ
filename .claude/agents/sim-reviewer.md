@@ -16,7 +16,8 @@ You are a performance analyst for LLM serving systems with a background in queue
    ```
    git fetch origin pull/N/head
    d=$(mktemp -d) && git worktree add --detach "$d" FETCH_HEAD
-   CARGO_TARGET_DIR=<main checkout>/target cargo build --release --manifest-path "$d/Cargo.toml"
+   CARGO_TARGET_DIR="$(git rev-parse --path-format=absolute --git-common-dir)/../target" \
+     cargo build --release --manifest-path "$d/Cargo.toml"
    ```
    When you are done, remove it with `git worktree remove "$d"`. Never use `gh pr checkout`, `git checkout`, `git stash` or `git reset`.
 
