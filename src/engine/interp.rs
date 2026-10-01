@@ -176,9 +176,12 @@ struct Session<'p> {
 struct LastToken {
     turn: f64,
     at: f64,
-    /// Whether the turn has decoded a token, or been preempted, since its
-    /// first: a prefill's end is then the next token, not the first again.
-    resumed: bool,
+    /// The stage it was committed on.
+    stage: usize,
+    /// Whether the turn has decoded a token.
+    decoded: bool,
+    /// Whether the request has been preempted since this token.
+    preempted: bool,
 }
 
 // ------------------------------------------------------------- pools ----
@@ -2017,9 +2020,8 @@ impl<'p> Interp<'p> {
             }
         }
         self.sessions[victim].preempt_pos.insert(pl, computed);
-        // its next prefill's end is a token after this one, with a gap
         if let Some(t) = &mut self.sessions[victim].last_token {
-            t.resumed = true;
+            t.preempted = true;
         }
         // the same value is what the re-executed hold resumes from (vLLM
         // keeps the generated tokens: `_preempt_request` resets
@@ -2983,21 +2985,23 @@ impl<'p> Interp<'p> {
         }
     }
 
-    /// A token of `sid`'s request committed on stage `st` now: a decode's,
-    /// or a prefill's at its end. The gap since the turn's previous token
-    /// goes to the stage's ITL, wherever that token was. A prefill's end is
-    /// the client's first token when nothing has happened since the turn's
-    /// last one but more prefill: a decoder recomputing the token a
-    /// prefiller sampled and dropped (llmd_nixl_pull.sq) replaces it. After
-    /// a decode or a preemption it is the resumed request's next token, and
-    /// its gap holds the preemption.
+    /// A token of `sid`'s turn committed on stage `st` now: a decode's, or
+    /// a prefill's at its end. The gap since the turn's previous token goes
+    /// to the stage's ITL, wherever that token was. A prefill's end is the
+    /// next token after a decode, or after a preemption on the stage of the
+    /// previous token (a resumed request samples one); otherwise it is the
+    /// client's first, and replaces any before it: a decoder recomputing
+    /// the token a prefiller sampled and dropped (llmd_nixl_pull.sq), again
+    /// if it is preempted before it ends. The turn's gaps add up to its last
+    /// token less its first.
     fn token(&mut self, st: usize, sid: usize, decode: bool) {
         let now = self.now;
         let turn = self.sessions[sid].attrs[self.p.slot_turn];
         let last = self.sessions[sid].last_token.filter(|t| t.turn == turn);
-        let resumed = last.is_some_and(|t| t.resumed);
+        let decoded = last.is_some_and(|t| t.decoded);
+        let next = decode || decoded || last.is_some_and(|t| t.preempted && t.stage == st);
         if let Some(t) = last
-            && (decode || resumed)
+            && next
             && self.warm
         {
             self.stages[st].steps.itl.push(now - t.at);
@@ -3005,7 +3009,9 @@ impl<'p> Interp<'p> {
         self.sessions[sid].last_token = Some(LastToken {
             turn,
             at: now,
-            resumed: resumed || decode,
+            stage: st,
+            decoded: decoded || decode,
+            preempted: false,
         });
     }
 

@@ -70,15 +70,16 @@ pub struct StageReport {
     /// otherwise): the batch a decode is in and the step it waits for.
     pub mean_decode_batch: f64,
     pub mean_decode_step: f64,
-    /// Step stages: the gaps between a request's successive tokens that end
-    /// on this stage after warm-up, wherever the earlier token was: their
-    /// mean, and their median and 99th percentile within 0.5 % (NaN without
-    /// any). A request's tokens are its decodes' and its prefills' ends; a
-    /// prefill's end with only prefill since the last token is the first
-    /// (a decoder's recompute replaces a prefiller's), after a decode or a
-    /// preemption it is the resumed request's next token, and its gap holds
-    /// the preemption. A request's gaps add up to its last token less its
-    /// first.
+    /// Step stages: the gaps between a turn's successive tokens (a session's
+    /// tokens with the same `turn_no`) that end on this stage after warm-up,
+    /// wherever the earlier token was: their mean, and their median and
+    /// 99th percentile within 0.5 % (NaN without any). A turn's tokens are
+    /// its decodes' and its prefills' ends; a prefill's end is the next
+    /// token after a decode, or after a preemption on the previous token's
+    /// stage, and its gap holds the preemption; otherwise it is the first,
+    /// and replaces any before it (a decoder's recompute replaces a
+    /// prefiller's dropped token). A turn's gaps add up to its last token
+    /// less its first.
     pub mean_itl: f64,
     pub itl_p50: f64,
     pub itl_p99: f64,
