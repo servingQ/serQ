@@ -292,7 +292,7 @@ of `n` tokens arrived from outside the engine: the enclosing hold's
 computed position on `Q` advances by `n` (within its allocation), as a
 `growing` run's would token by token, so `cache` and `cached` count them.
 `transfer (X) from P to Q (n)` is the two around the link run.
-`examples/pd-disaggregation/llmd_nixl_pull.sq` is the whole path, and `docs/case-study-pd.md` its
+`examples/pd-disaggregation/llmd_nixl_pull.sq` is the whole path, and `docs/use-cases/pd.md` its
 line-by-line correspondence with llm-d and the NIXL connector.
 
 **Against vLLM.** Each form is one part of a request's life in the v1
@@ -583,7 +583,7 @@ q[N] { admit via S; }` next to `stage S[N]` serves `q[i]` by `S[i]`, and
 `stage E[N] : step { memory kv; }` next to `pool kv[N]` counts `kv[i]` for
 `E[i]`; next to a family of one, every member gets that one, and any other
 pair of counts is a link error (`examples/pd-disaggregation/llmd_nixl_pull.sq` is the xPyD case,
-`docs/case-study-pd.md` §Writing xPyD). A stage that serves several queues tries them in
+`docs/use-cases/pd.md` §Writing xPyD). A stage that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
 stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.sq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
@@ -864,9 +864,9 @@ and, in Lean, `Deployments.colocatedReplica`.
 | `mg1.sq`, `ps.sq`, `closed.sq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | closed forms (`seq_closed_forms.rs`): M/M/1 sojourn, PK for four laws, PS insensitivity, MVA |
 | `replica.sq` | the paper's two-resource replica (`TwoStage`) on the open-session scenario (`serve decode first`, `drop kv` before `end`) | no memory limit: TTFT 0.253 vs 0.250 s, response 0.336 vs 0.333 s; 20 seeds at 16 and 20 live sessions: hit rate, TTFT and throughput agree (Mann–Whitney p ≥ 0.05); at 24 live sessions the iteration-level engine has 10 % lower throughput and twice the mean TTFT (p = 0.017, 0.047), hit rate 0.80 vs 0.86 (p = 0.11); no seed of either engine falls below a 0.5 hit rate (`data/exp/seq/replica_seeds.csv`, `seq_replica_and_pd.rs`) |
 | `routing.sq` | four replicas, five policies | `models::routing` within 1–2 % on response and hit rate |
-| `llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation on vLLM with the NIXL connector: the router, the sidecar, two prefill and two decode instances (`docs/case-study-pd.md`) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle yet |
+| `llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation on vLLM with the NIXL connector: the router, the sidecar, two prefill and two decode instances (`docs/use-cases/pd.md`) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle yet |
 | `vllm.sq` | vLLM v1 engine (Section 7) | scheduler semantics tests, the upstream oracle |
-| `vllm_single_turn.sq`, `vllm_chat.sq`, `vllm_subagents.sq` | `vllm.sq`'s engine under a single-turn, a chat and an approximated subagent workload ([case study](case-study-workloads.md)) | the engine is `vllm.sq`'s text (`tests/workloads.rs`) |
+| `vllm_single_turn.sq`, `vllm_chat.sq`, `vllm_subagents.sq` | `vllm.sq`'s engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | the engine is `vllm.sq`'s text (`tests/workloads.rs`) |
 | `vllm_request.sq` | one vLLM v1 request on the step clock; compiled per scenario to `tools/oracle/*.ir.json` | the six upstream oracle scenarios (`tests/vllm_oracle.rs`), the Lean theorems generated from the same IR |
 | `vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace | ten measured runs (Section 8) |
 

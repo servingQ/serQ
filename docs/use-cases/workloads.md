@@ -1,4 +1,4 @@
-# Case study: one engine, four workloads
+# Different workloads
 
 A serving system is an engine plus the traffic it serves, and a program says
 which part is which. The pools, `stage engine` and the `server` block are
@@ -6,7 +6,7 @@ the engine: what vLLM does with one request. The `workload` block is the
 client: when sessions arrive, what each turn sends, what happens between
 turns, and when a session leaves. The `delay` stages a workload runs between
 turns (`tool`, `user`, `delegate`) belong to the client too: they are the
-time a session spends outside the engine. [The vLLM case study](case-study-vllm.md) held the
+time a session spends outside the engine. [The vLLM use case](vllm.md) held the
 workload fixed and checked the engine against the real scheduler. This page
 holds the engine fixed and changes the client.
 
@@ -46,7 +46,7 @@ parent's hash, its token ids and extra keys (LoRA, multimodal inputs,
 `cache_salt`), with no request id (`kv_cache_utils.py:650-680`), and a lookup
 finds any cached block with that hash (`block_pool.py:197-223`). So they hit
 on it. serQ
-keeps one cache entry per session ([language](language.md) §9), so a shared
+keeps one cache entry per session ([language](../language.md) §9), so a shared
 prefix cannot be written yet.
 
 ## Multi-turn chat
@@ -69,7 +69,7 @@ say it was.
 --8<-- "examples/multi-turn/vllm.sq:workload"
 ```
 
-This is `examples/multi-turn/vllm.sq`, the program the vLLM case study checks. Its
+This is `examples/multi-turn/vllm.sq`, the program the vLLM use case checks. Its
 shape is the same as the chat's. The differences are only in the numbers: the
 gap is a tool call (3 s rather than 20 s), each turn brings back a tool's
 output (`~exp(500)` new tokens rather than `~exp(100)`), and the first prompt
@@ -83,7 +83,7 @@ A subagent is a parent agent sending requests to the same engine and waiting
 for the answers. From the parent's side it looks like a tool call. From the
 system's side it is not one: the wait is the engine's own response time, a
 function of load, and the arrivals come from inside the system. [Subagents in
-the IR](design/subagents.md) explains why that needs two new statements,
+the IR](../design/subagents.md) explains why that needs two new statements,
 `spawn` and `join`. Until those exist, the program below approximates
 subagents, and it is useful to see exactly what the approximation gives up.
 
@@ -129,7 +129,7 @@ cache is content-addressed (`kv_cache_utils.py:650-680`,
 `block_pool.py:197-223`), and this serQ program cannot.
 
 What the approximation cannot show, in the order of
-[the subagent design](design/subagents.md):
+[the subagent design](../design/subagents.md):
 
 1. **Feedback.** `W` is a number, not the engine's response time. If the
    engine slows down, the parents do not wait longer, so the loop that makes a

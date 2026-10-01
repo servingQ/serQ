@@ -1,4 +1,4 @@
-# Case study: prefill/decode disaggregation over NIXL
+# Prefill/decode disaggregation over NIXL
 
 `examples/pd-disaggregation/llmd_nixl_pull.sq` is llm-d's prefill/decode split on vLLM: the router
 that decides which pod prefills and which decodes, the sidecar that sends
@@ -10,9 +10,9 @@ the vLLM citations are hashed by `make check`, the llm-d ones are not).
 
 It is a specification checked against the code, not yet against a
 scheduler oracle. What the program cannot say without two new statements,
-and what it still cannot say, is in [The KV transfer](design/pd-transfer.md).
+and what it still cannot say, is in [The KV transfer](../design/pd-transfer.md).
 
-![llm-d prefill/decode over NIXL as a queueing network](assets/llmd_nixl_pull.deployment.svg)
+![llm-d prefill/decode over NIXL as a queueing network](../assets/llmd_nixl_pull.deployment.svg)
 
 The router picks a prefill instance and a decode instance, each a box with
 its engine, its NIC and its pools. The read crosses between them: it holds
@@ -53,21 +53,21 @@ and block 16. What differs from the guide is written next to each number.
 | the prefill profile: pods that have the prefix (`prefix-cache-affinity-filter`), then the least loaded (`token-load-scorer`) | `choose i in NP by (cachedin(P[i].kv) > 0 ? 0 : 1, work(P[i]) + queued(P[i].reqs))` | the same values file |
 | the decode pod's sidecar sends the prompt to the prefiller with `max_tokens = 1` and `do_remote_decode`, waits for the answer, then sends the decode request to its own engine with the prefiller's block ids | `P[i].prefill (prompt);` then `D[j].decode (prompt) from P[i];` — the prefiller's entry, its blocks leased at its end, then the decoder's | `connector_nixlv2.go:69-232` (the prefill leg, `CapSingleToken` at 145), `261-379` (the decode leg) |
 | no prefill header: the request goes to the decode pod's engine as it is | the `else` branch, `D[j].decode (prompt);`: vLLM's engine on one device (`examples/multi-turn/vllm.sq`) | `dispatch.go:196-213` |
-| the two legs in parallel, so the decoder allocates while the prefiller works | not written: a session waits at one pool at a time ([The KV transfer](design/pd-transfer.md)) | `connector_nixlv2.go:60-67` (MoRI-IO write mode only); vLLM's push-mode proxy, `disagg_proxy_pushconnector_demo.py:227-270` |
+| the two legs in parallel, so the decoder allocates while the prefiller works | not written: a session waits at one pool at a time ([The KV transfer](../design/pd-transfer.md)) | `connector_nixlv2.go:60-67` (MoRI-IO write mode only); vLLM's push-mode proxy, `disagg_proxy_pushconnector_demo.py:227-270` |
 
 #### The two schedulers, against vLLM
 
 | vLLM | serQ | Where |
 |---|---|---|
 | a prompt of `max_model_len` tokens or more is refused before it is scheduled; a generation stops at `max_model_len` tokens; no KV cache smaller than one request of `max_model_len` is started | `branch (K + n >= max_model_len) { end; }` before `request gw;`; `set o = min(o, max_model_len - prompt)` in the route; `max_model_len = 16384` below every pool | `input_processor.py:512-536`; `sched/utils.py:114-120`; `kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742` |
-| the prefiller admits like any vLLM engine: a slot, the blocks of the first chunk, room for the whole prompt, the prefix hit looked up when the scheduler takes the request | `hold reqs (1), kv (min(prompt, hit + budget_left(P))) reserve (prompt) at admission (hit = …)` in `P`'s `prefill` entry | the waiting loop, `scheduler.py:868-1128`; [the vLLM case study](case-study-vllm.md) |
+| the prefiller admits like any vLLM engine: a slot, the blocks of the first chunk, room for the whole prompt, the prefix hit looked up when the scheduler takes the request | `hold reqs (1), kv (min(prompt, hit + budget_left(P))) reserve (prompt) at admission (hit = …)` in `P`'s `prefill` entry | the waiting loop, `scheduler.py:868-1128`; [the vLLM use case](vllm.md) |
 | the prefiller computes the prompt in chunks and samples one token, which the sidecar discards | `prefill (prompt - c) growing kv` | `scheduler.py:624-823`; the truncation for Mamba and MTP only, `nixl/base_scheduler.py:409-436` |
 | the request finishes on the prefiller: its slot is freed, its blocks are not — `request_finished` returns `delay_free_blocks` and a lease of `kv_lease_duration` (30 s), renewed by the decoder's heartbeats while the request waits | `} cache (prompt) lease kv (inf);` — the scope ends, the slot goes, the blocks stay the session's | `nixl/pull_scheduler.py:191-292`; `_free_request`, `scheduler.py:2628-2657`; the renewal, `nixl/base_scheduler.py:199-238`, `nixl/base_worker.py:3010-3030` |
 | the prefiller keeps every computed full block of the prompt cached once the lease ends | `cache (prompt)` on that hold, applied when the lease ends | `_connector_finished`, `scheduler.py:2929-2982`; `kv_cache_manager.py:610-619` |
 | the decoder's scheduler looks at its waiting queue only at a step with budget left and a running slot free | `admit via D` on both of the decoder's pools; `reqs (0) reserve (1)` — a slot must be free, none is taken | `scheduler.py:872-879` |
 | the decoder's local prefix hit, then the connector: for a remote prefill every prompt token beyond the local hit is external and loaded asynchronously | `kv (known) reserve (known)` with `reuse (reusable(known, bs))` in `D`'s `decode … from` entry; `c = cached` is the local hit | `scheduler.py:932-954`; `nixl/pull_scheduler.py:34-66` |
 | blocks are allocated for the whole prompt, and the request is parked, `WAITING_FOR_REMOTE_KVS`, holding them and no slot; one transfer per request | the hold on `kv`; `transferred` is `do_remote_prefill`, spent | `scheduler.py:1199-1226, 1264-1294`; `nixl/pull_scheduler.py:108-189` |
-| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `transfer (prompt - c) from src to kv (prompt - 1 - c)` in `D`'s entry, and `D pull P latency x0 share maxmin;`: the decoder reads; a fixed wait, then the bytes out of the prefiller's NIC and into the decoder's at once, the two shared max-min fairly (a model, not a measurement: [Bandwidth sharing](design/bandwidth-sharing.md)) | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
+| the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `transfer (prompt - c) from src to kv (prompt - 1 - c)` in `D`'s entry, and `D pull P latency x0 share maxmin;`: the decoder reads; a fixed wait, then the bytes out of the prefiller's NIC and into the decoder's at once, the two shared max-min fairly (a model, not a measurement: [Bandwidth sharing](../design/bandwidth-sharing.md)) | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
 | the read done, the blocks are cached, the last prompt token is marked uncomputed (its logits are needed), and the request is back in the waiting queue, served before new arrivals | the `load D.kv[j] (prompt - 1 - c)` the transfer stands for; `hold reqs (1)`, with `reqs` declared before `kv` | `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; `_try_promote_blocked_waiting_request`, `scheduler.py:3079-3092`; `scheduler.py:2383-2385` |
 | the prefiller frees the leased blocks when the read completes | the `release P.kv[i]` the transfer stands for takes the lease | `_update_from_kv_xfer_finished`, `scheduler.py:3113-3138` |
 | the decoder recomputes the last prompt token and decodes; a request preempted afterwards is rescheduled without a second transfer, prefilling locally what it lost | `prefill (known - c) growing kv; decode (o - 1 - (known - prompt)) growing kv;` with `known` from `computed` | `scheduler.py:1560-1561`; `nixl/pull_scheduler.py:187-189` |
@@ -187,7 +187,7 @@ decoder memory pressure both forms lease at the prefiller, since the write
 cannot start before the decoder has allocated; without it, the concurrent
 form takes the decoder's blocks a prefill earlier and saves one decoder
 step of latency. The reservation that would write it exactly is sketched in
-[The KV transfer](design/pd-transfer.md):
+[The KV transfer](../design/pd-transfer.md):
 
 ```
 book kvD[j] (prompt) reserve (prompt);                      // join the decoder's queue now, not written yet
@@ -281,7 +281,7 @@ after the decoder is full and the two leases have taken the prefiller.
 
 ## Why you should believe it
 
-The claim is weaker than the [vLLM case study](case-study-vllm.md)'s, and
+The claim is weaker than the [vLLM use case](vllm.md)'s, and
 the difference is the point of saying so.
 
 1. **The source, by line.** The tables above name the function for every
@@ -307,4 +307,4 @@ the difference is the point of saying so.
 
 ---
 
-See also: [The KV transfer](design/pd-transfer.md), [How serQ is checked](validation.md).
+See also: [The KV transfer](../design/pd-transfer.md), [How serQ is checked](../validation.md).

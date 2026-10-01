@@ -1,6 +1,6 @@
-//! One engine, four workloads (`docs/case-study-workloads.md`).
+//! Different workloads (`docs/use-cases/workloads.md`).
 //!
-//! The case study's claim is that the single-turn, chat and subagent programs
+//! The use case's claim is that the single-turn, chat and subagent programs
 //! run `examples/multi-turn/vllm.sq`'s engine and differ from it only in the client.
 //! The engine is the text a reader would compare: the constants from `B` to
 //! `c0`, the declarations from `pool kv` to the end of `stage engine`, and the

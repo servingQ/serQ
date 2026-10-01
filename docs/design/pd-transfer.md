@@ -4,7 +4,7 @@ The prefill/decode split of llm-d over vLLM's NIXL connector, checked
 against the source (llm-d `8a2f37d`, the router `13eebdb`, vLLM `0c87a197`),
 and what the language had to gain to state it. Before is the repository as
 it was; After runs (`examples/pd-disaggregation/llmd_pd.sq`, `tests/pd_semantics.rs`,
-`docs/case-study-pd.md`). IR version 5.
+`docs/use-cases/pd.md`). IR version 5.
 
 ## What the systems do
 
@@ -115,7 +115,7 @@ admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit
 The program reads in the order the request travels: the prefiller's
 scope, the decoder's scope, and between them the one line that says what
 the prefiller's `}` does *not* free. Every line is one thing the source
-does (the case study has the table). `lease kvP[i] (inf)` is
+does ([the P/D use case](../use-cases/pd.md) has the table). `lease kvP[i] (inf)` is
 `delay_free_blocks` with a lease the decoder's heartbeats renew; `30` would
 be a prefiller nobody heartbeats. `reqsD[j] (0) reserve (1)` is the
 decoder's gate for a parked request: there must be a free running slot,
@@ -223,7 +223,7 @@ choose between them.
   with a fake model runner; a P/D oracle drives two, with a fake connector
   that completes a read after a chosen number of steps, and checks the
   parked request's admission step, the prefiller's free step and the
-  decoder's first-token step. The case study's table is checked against
+  decoder's first-token step. The P/D use case's table is checked against
   the source by line; the program's answers are not yet checked against the
   scheduler's.
 

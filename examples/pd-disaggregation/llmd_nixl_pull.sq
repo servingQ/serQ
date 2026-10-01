@@ -18,7 +18,7 @@
 // prefiller; the read done, the prefiller frees the lease (its full blocks
 // stay cached), and the decoder's request queues once more for a running slot
 // and a token of budget, recomputes the last prompt token for its logits,
-// and decodes. docs/case-study-pd.md has the line-by-line correspondence.
+// and decodes. docs/use-cases/pd.md has the line-by-line correspondence.
 use "../../lib/vllm.sq";
 
 let NP = 2;            // prefill instances

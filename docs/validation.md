@@ -28,7 +28,7 @@ serQ programs next to them:
 
 ## 3. The real scheduler as an oracle
 
-Described in full in the [vLLM case study](case-study-vllm.md). Three oracles
+Described in full in the [vLLM use case](use-cases/vllm.md). Three oracles
 agreeing on six deterministic scenarios, and request-for-request agreement on a
 3 321-request trace.
 
@@ -106,8 +106,8 @@ Two results worth naming:
 - The prefill/decode program (`examples/pd-disaggregation/llmd_nixl_pull.sq`) is checked against the
   source line by line and by deterministic tests of its statements, not yet
   against a machine or a scheduler oracle: that oracle would
-  drive two vLLM schedulers and a fake connector ([case
-  study](case-study-pd.md)).
+  drive two vLLM schedulers and a fake connector ([P/D use
+  case](use-cases/pd.md)).
 
 ## Against a real machine
 

@@ -112,4 +112,4 @@ serq run docs/tutorial/programs/05-engine.sq --set Lambda=1.8 --set Z=1
 ---
 
 That is the language. Next: [a real system written in
-it](../case-study-vllm.md), or [the reference](../reference/cheatsheet.md).
+it](../use-cases/vllm.md), or [the reference](../reference/cheatsheet.md).
