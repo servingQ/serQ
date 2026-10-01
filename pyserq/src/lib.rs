@@ -8,7 +8,8 @@
 //! r = pyserq.run(p)            # the GIL is released while it runs
 //! r.json()                     # what `serq run --json` prints
 //! o = r.observe("sojourn")    # o.mean, o.ci, ...; o.samples, o.times: what `--dump` writes
-//! g = r.gauge("spread")       # g.mean, g.ci, g.min, g.max; g.times, g.values: what `--dump` writes
+//! g = pyserq.run(pyserq.compile("examples/pd-disaggregation/llmd_nixl_pull.sq")).gauge("load_spread")
+//! g.mean, g.ci, g.min, g.max  # g.times, g.values: what `--dump` writes
 //! r.stage("svc").utilization; r.observes, r.gauges, r.stages, r.pools: all of them
 //! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 //! ```

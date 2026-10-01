@@ -2104,8 +2104,49 @@ impl Parser {
     fn reads_of(&self, toks: &[Token], expr: bool) -> (Vec<String>, Vec<String>) {
         let mut reads = vec![];
         let mut calls = vec![];
+        // `max j in n (e)`: the word, `j`, `in` and the `j`s of `(e)` are the
+        // aggregate's own, not names read
+        let mut own = vec![false; toks.len()];
+        for k in 0..toks.len() {
+            let ident = |i: usize| match toks.get(i).map(|t| &t.tok) {
+                Some(Tok::Ident(n)) => Some(n.as_str()),
+                _ => None,
+            };
+            let (Some(w), Some(j), Some("in")) = (ident(k), ident(k + 1), ident(k + 2)) else {
+                continue;
+            };
+            if Agg::from_name(w).is_none() {
+                continue;
+            }
+            own[k] = true;
+            own[k + 1] = true;
+            own[k + 2] = true;
+            // the count, then the parenthesised body
+            let mut i = k + 4;
+            if toks.get(i).map(|t| &t.tok) != Some(&Tok::LParen) {
+                continue;
+            }
+            let mut depth = 0;
+            while let Some(t) = toks.get(i) {
+                match &t.tok {
+                    Tok::LParen => depth += 1,
+                    Tok::RParen => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    Tok::Ident(n) if n == j => own[i] = true,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
         for (k, t) in toks.iter().enumerate() {
             let Tok::Ident(n) = &t.tok else { continue };
+            if own[k] {
+                continue;
+            }
             let called = toks.get(k + 1).is_some_and(|t| t.tok == Tok::LParen);
             if called && FUNCTIONS.contains(&n.as_str()) {
                 if !PURE.contains(&n.as_str()) {
@@ -4731,6 +4772,12 @@ mod tests {
             )
             .contains("is a parameter")
         );
+        // an aggregate's index is its own, not a name the argument reads
+        parse(
+            "def total() = sum i in 2 (i); def next(x) { turn; observe p = x; } \
+               workload { turn { set i = 1; } } session { next(total()); end; }",
+        )
+        .unwrap();
         // what a turn, a request or an admission assigns is captured too
         assert!(
             err("def next(x) { turn; observe p = x; } workload { turn { set n = 1; } } session { next(n); end; }")

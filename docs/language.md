@@ -821,7 +821,9 @@ one; what the instant passes through on the way is not read), so
 no session and is held constant between events: it reads pool and stage
 observables and constants, and an attribute, a draw, `cachedin` (the
 session's own prefix), `now` or `work(…)` (both move between events), or
-`budget_left(…)` (it plans an iteration, which may draw) is a link error. What to call an imbalance is the program's: the time fraction some
+`budget_left(…)` (it plans an iteration, which may draw) is a link error. A
+pool or stage it names has a number for its index (`kv[0]`, or the `kv[k]`
+an aggregate writes out), so reading a gauge cannot fail the run. What to call an imbalance is the program's: the time fraction some
 decoder is full is `gauge full = max j in N (free(reqs[j]) == 0);`, the
 spread `max j in N (used(kv[j])) - min j in N (used(kv[j]))`. `--dump DIR`
 writes each gauge's change points as `gauge/NAME.csv` (`time,value`).

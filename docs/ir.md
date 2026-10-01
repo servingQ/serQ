@@ -134,7 +134,7 @@ its position in the IR, and a context variable exists at one of them:
 | `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
 | `Step` | a step stage's `cost`, evaluated after the iteration is scheduled | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
 | `Serve` | a step stage's `serve by` keys, evaluated for one resident once the residents are known | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
-| `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Now`, `Work` or `BudgetLeft` is rejected) | none |
+| `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
 
 The index of a pool or stage reference (`CRef.index`) is evaluated with the
 expression around it, so at that expression's moment: `evict by (size +
@@ -194,7 +194,8 @@ priced as such. What a change to `src/ir.rs` does to the version:
   change; the generator reads by name and ignores what it does not know.
   `gauges` does not bump: it changes what the report says, not what the
   program does, and a reader that drops it (the Lean generator) runs the
-  same sessions.
+  same sessions to the same end, since a gauge reads no draw, plans no
+  iteration and names its pools and stages by number.
 - **Same shape, a stricter check: no bump.** An IR file that validated before
   and is rejected now was reading a context variable at a moment that never
   supplied it (Moments, above), or a new file lists in `hidden` an attribute

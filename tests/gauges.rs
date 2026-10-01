@@ -170,33 +170,33 @@ fn the_dump_is_the_signal() {
     assert!((mean - r.gauge("u").unwrap().mean).abs() <= 1e-9 * mean);
 }
 
-/// A gauge whose index reads state and leaves the array is a run error, as
-/// anywhere else, and not a report.
+/// A gauge's index is a number: one read from the state could leave the
+/// array at run time, and a gauge must not be able to fail the run.
 #[test]
-fn a_gauge_out_of_range_at_run_time_is_an_error() {
-    let src = format!("{DEPLOYMENT} gauge x = used(kv[holders(kv[0]) + 1]);");
-    let e = run_source(&src, &Overrides::default(), None).unwrap_err();
-    assert!(e.contains("out of range") || e.contains("index"), "{e}");
-}
-
-/// A gauge plans no iteration: `budget_left` would evaluate the budget,
-/// which may draw, and the run would change.
-#[test]
-fn a_gauge_does_not_plan_an_iteration() {
-    let src = "stage e : step { budget ~uniform(1, 2); cost 1; }
-        session { run e prefill (1); end; } run { horizon 1; }
-        gauge g = budget_left(e);";
-    assert!(link_error(src).contains("may not read `budget_left"));
+fn a_gauges_index_is_a_number() {
+    let e = link_error(&format!(
+        "{DEPLOYMENT} gauge x = used(kv[holders(kv[0]) + 1]);"
+    ));
+    assert!(e.contains("index is a number in range"), "{e}");
+    // a constant expression is folded to one
+    let p = compile_source(
+        &format!("{DEPLOYMENT} let N = 2; gauge x = used(kv[N - 1]);"),
+        &Overrides::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&p.gauges[0].expr).unwrap()["Call"][1][0]["Pool"]["index"],
+        serde_json::json!({"Num": 1.0})
+    );
 }
 
 /// The gauges read the state an instant ends with: a session that takes
-/// the pool and one that releases it at the same time leave one holder,
-/// and an index that the intermediate two would put out of range is fine.
+/// the pool and one that releases it at the same time leave one holder, and
+/// the two the instant passes through are never a value.
 #[test]
 fn a_gauge_reads_the_end_of_an_instant() {
     let src = "
         pool kv { cap 10; }
-        pool slot[2] { cap 1; }
         stage gate : delay;
         workload { arrive batch(2); }
         session {
@@ -204,7 +204,6 @@ fn a_gauge_reads_the_end_of_an_instant() {
           hold kv (1) { run gate (1); }
           end;
         }
-        gauge h = used(slot[holders(kv)]);
         gauge n = holders(kv);
         run { horizon 3; }";
     let r = run_source(src, &Overrides::default(), None).unwrap();

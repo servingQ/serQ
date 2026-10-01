@@ -186,7 +186,7 @@ pub fn time_stats(points: &[(f64, f64)], from: f64, to: f64, batches: usize) -> 
         min: f64::NAN,
         max: f64::NAN,
     };
-    if span.is_nan() || span <= 0.0 || points.is_empty() {
+    if span.is_nan() || span <= 0.0 || points.is_empty() || batches == 0 {
         return out;
     }
     let width = span / batches as f64;
@@ -330,6 +330,8 @@ mod tests {
         // a value held for no time is not the extreme
         let ts = time_stats(&[(0.0, 1.0), (2.0, 9.0), (2.0, 1.0)], 0.0, 4.0, 20);
         assert_eq!(ts.max, 1.0);
+        // no windows: no statistics, and no panic
+        assert!(time_stats(&[(0.0, 1.0)], 0.0, 1.0, 0).mean.is_nan());
     }
 
     #[test]

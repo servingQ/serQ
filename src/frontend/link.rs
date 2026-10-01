@@ -738,7 +738,8 @@ impl Linker<'_> {
                     ))
                     .at(r.span));
                 }
-                Some(Box::new(i))
+                // a constant index is a number in the IR: a gauge accepts no other
+                Some(Box::new(folded.map_or(i, CExpr::Num)))
             }
         };
         Ok(CRef { base, count, index })

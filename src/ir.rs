@@ -982,6 +982,18 @@ impl Validator<'_> {
                 r.base + r.count
             ));
         }
+        // a gauge names its members by number (an aggregate writes them so):
+        // an index read from the state could leave the array, and a gauge
+        // that fails the run would be one a reader ignoring gauges does not
+        if m == Moment::Gauge
+            && let Some(e) = &r.index
+            && !matches!(**e, CExpr::Num(k) if k >= 0.0 && k.fract() == 0.0 && k < r.count as f64)
+        {
+            return Err(format!(
+                "a gauge's {what} index is a number in range (`kv[0]`, or an aggregate's `kv[k]`), \
+                 not one read from the state"
+            ));
+        }
         if let Some(e) = &r.index {
             self.expr(e, m)?;
         }
