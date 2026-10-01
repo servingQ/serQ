@@ -593,6 +593,71 @@ fn a_loop_that_can_end_before_a_station() {
     assert!(edge(&p, &net, "arrival", "exit").is_none());
 }
 
+/// Coming back to the station the loop was entered from is a way in too:
+/// a body that ends or goes back to `A` decides (#199 review).
+#[test]
+fn a_return_to_the_same_station_is_a_way_in() {
+    let (p, net) = shape(
+        "run A (1); loop { set c = ~bernoulli(0.5); branch (c) { end; } else { run A (1); } }",
+    );
+    let d = decision(&net).expect("a decision");
+    assert!(has(&net, &p, d, "exit").is_some());
+    assert!(has(&net, &p, d, "A").is_some());
+    let a = End::Node(net.node_of(stage(&p, "A")).unwrap());
+    assert!(net.has_edge(a, d));
+}
+
+/// The decision is named by the `choose`s before the first station, down
+/// every path: one made before the loop, or after a station, is not its.
+#[test]
+fn a_decision_is_named_by_its_leading_chooses() {
+    let (_, net) = shape(
+        "set j = 0; loop { choose j in 2 by (0); set c = ~bernoulli(0.5);
+           branch (c) { choose k in 2 by (0); run A (1); } else { run B (1); }
+           choose m in 2 by (0); run C (1); }",
+    );
+    let d = net
+        .nodes
+        .iter()
+        .find(|n| n.kind == StationKind::Decision)
+        .expect("a decision");
+    assert_eq!(d.label, "choose j, k");
+}
+
+/// The pass that looks for the ways in leaves nothing behind: a body with a
+/// flow and a decision has the flow once and the decision once.
+#[test]
+fn the_looking_pass_leaves_nothing() {
+    let src = "stage A : delay; stage x : ps(1); stage y : ps(1);
+               share maxmin;
+               workload { arrive batch(1); }
+               session {
+                 loop {
+                   set c = ~bernoulli(0.5);
+                   branch (c) { end; }
+                   run x, y (1);
+                   run A (1);
+                 }
+               }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    assert_eq!(net.flows.len(), 1);
+    assert_eq!(net.flow_notes.len(), 1);
+    assert_eq!(
+        net.nodes
+            .iter()
+            .filter(|n| n.kind == StationKind::Decision)
+            .count(),
+        1
+    );
+    assert!(
+        !net.edges
+            .iter()
+            .any(|e| matches!(e.from, End::Probe(_)) || matches!(e.to, End::Probe(_)))
+    );
+}
+
 /// A body that starts at one station needs no decision: it comes back to it.
 #[test]
 fn a_loop_with_one_way_in_has_no_decision() {
