@@ -1410,8 +1410,8 @@ impl<'p> Interp<'p> {
             // past the common prefix keep their place in the free queue).
             // One without the clause is memory alone and leaves the
             // session's cached blocks where they are (#230: an outer hold
-            // around the request's used to consume them and, with nothing
-            // to cache, drop them at its end).
+            // around the request's used to consume them at its admission,
+            // so the request found none, and had no clause to put them back).
             let mut own = if pending.cache.is_some() {
                 self.remove_entry(q, serial)
             } else {

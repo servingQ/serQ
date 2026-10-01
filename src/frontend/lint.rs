@@ -227,8 +227,9 @@ fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
 /// the admission consumes the session's own prefix (`cached :=` what it
 /// consumed) and the release keeps `min(ℓ, computed)`; without it the hold
 /// is memory alone, leaves the prefix where it is, and sets `cached` to 0
-/// (#230: an outer hold around the request's used to consume the prefix
-/// and drop it). So `cached` in such a body is always 0, and `reuse` bounds
+/// (#230: an outer hold around the request's used to consume the prefix at
+/// its admission, so the request found none). So `cached` in such a body is
+/// always 0, and `reuse` bounds
 /// nothing. A hold that consumed and kept nothing, which is what the body
 /// used to see, is `cache (0)`.
 fn cached_in_a_hold_without_cache(

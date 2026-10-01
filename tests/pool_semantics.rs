@@ -421,8 +421,9 @@ fn a_boolean_guard_and_a_declared_draw_run() {
 /// 992) > 0. Wrapped in an outer hold on the same pool, with or without a
 /// `release kv;` first, the outer hold has no `cache` clause, so it leaves
 /// the 992 cached units where they are and the inner hold finds them: the
-/// same hits. (Before: the outer admission consumed the entry and its end,
-/// with nothing to cache, dropped it; every turn missed.) With `cache (0)`
+/// same hits. (Before: the outer admission consumed the entry, so the inner
+/// hold found none and every turn missed; the inner hold cached 992 again,
+/// which the outer hold's end, without a clause, left alone.) With `cache (0)`
 /// on the outer hold the program says the opposite, consume and keep
 /// nothing, and every turn misses.
 #[test]

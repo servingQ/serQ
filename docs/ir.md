@@ -266,8 +266,8 @@ generated Lean programs remain unchanged.
 
 Version 10 makes `Hold.cache` the clause that admits a hold to the prefix
 cache (#230): a hold without it consumes nothing of the session's own
-entry and sets `cached` to 0, where 9 consumed the entry at every admission
-and, with nothing to cache, dropped it at the release. A hold written
+entry and sets `cached` to 0, where 9 consumed the entry at every admission,
+so a hold admitted inside another on the same pool found none. A hold written
 around the request's on the same pool (a reservation given back before the
 request is admitted) thus no longer costs the request its hit. The shape
 is unchanged; the meaning of an absent `cache` is, on a tagged version, so
