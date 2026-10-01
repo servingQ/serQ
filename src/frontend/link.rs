@@ -173,6 +173,9 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 17] = [
     ("remaining", CtxVar::Remaining),
 ];
 
+/// The most terms `max j in n (e)` writes out.
+const MAX_OVER: usize = 4096;
+
 /// Calls the linker folds to a constant from a declaration.
 pub const FOLDED: [&str; 1] = ["blocksize"];
 
@@ -711,9 +714,11 @@ impl Linker<'_> {
             }
             Some(e) => {
                 let i = self.expr(e)?;
-                // a constant index (`kv[2]`, or one an aggregate wrote out) is
-                // checked here, where the program still has its names
-                if let CExpr::Num(k) = i
+                // a constant index (`kv[2]`, `kv[-1]`, `kv[N + 1]`, or one an
+                // aggregate wrote out) is checked here, where the program
+                // still has its names; one that reads state links as before
+                let folded = (!has_draw(e)).then(|| self.eval_const(e).ok()).flatten();
+                if let Some(k) = folded
                     && !(k >= 0.0 && k.fract() == 0.0 && k < count as f64)
                 {
                     return Err(LinkError::new(format!(
@@ -919,6 +924,13 @@ impl Linker<'_> {
         if !(count >= 1.0 && count.fract() == 0.0 && count.is_finite()) {
             return Err(LinkError::new(format!(
                 "{what}'s count must be a positive integer, found {count}"
+            )));
+        }
+        // the terms are written out: a count past any array a program
+        // declares is a mistake, not a deployment
+        if count > MAX_OVER as f64 {
+            return Err(LinkError::new(format!(
+                "{what}'s count is {count}: an aggregate writes its terms out, at most {MAX_OVER}"
             )));
         }
         let term = |k: usize| {

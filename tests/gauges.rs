@@ -96,6 +96,8 @@ fn a_gauge_reads_only_the_deployment() {
         ("gauge x = ~exp(1);", "a gauge may not draw"),
         ("gauge x = cachedin(kv[0]);", "a gauge has no session"),
         ("gauge x = tokens;", "exists only in"),
+        ("gauge x = now;", "may not read `now`"),
+        ("gauge x = work(svc[0]);", "may not read `work"),
     ] {
         let e = link_error(&format!("{DEPLOYMENT}{gauge}"));
         assert!(e.contains(want), "{gauge}: {e}");
@@ -126,6 +128,9 @@ fn an_aggregates_index_and_count_are_its_own() {
         ("gauge x = max kv in 2 (1);", "is also a pool"),
         ("gauge x = sum k in 1.5 (1);", "must be a positive integer"),
         ("gauge x = sum k in 3 (used(kv[k]));", "out of range"),
+        ("gauge x = sum k in 1e20 (1);", "at most 4096"),
+        ("gauge x = used(kv[-1]);", "out of range"),
+        ("let N = 2; gauge x = used(kv[N + 1 - 1]);", "out of range"),
     ] {
         let e = link_error(&format!("{DEPLOYMENT}{gauge}"));
         assert!(e.contains(want), "{gauge}: {e}");
@@ -160,4 +165,13 @@ fn the_dump_is_the_signal() {
     }
     let mean = area / (to - from);
     assert!((mean - r.gauge("u").unwrap().mean).abs() <= 1e-9 * mean);
+}
+
+/// A gauge whose index reads state and leaves the array is a run error, as
+/// anywhere else, and not a report.
+#[test]
+fn a_gauge_out_of_range_at_run_time_is_an_error() {
+    let src = format!("{DEPLOYMENT} gauge x = used(kv[holders(kv[0]) + 1]);");
+    let e = run_source(&src, &Overrides::default(), None).unwrap_err();
+    assert!(e.contains("out of range") || e.contains("index"), "{e}");
 }

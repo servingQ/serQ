@@ -39,12 +39,13 @@
 //!           | 'branch' ('with')? '(' expr ')' block ('else' block)?
 //!           | 'loop' block | 'end' ';'
 //!           | 'choose' IDENT 'in' expr 'by' '(' expr (',' expr)* ')' ';'
-//! over     := ('max' | 'min' | 'sum') IDENT 'in' (NUM | IDENT) '(' expr ')'   -- an atom
 //!           | serving
 //! serving  := role ('[' expr ']' | 'on' ref)? expr ('growing' ref)? ';'
 //!           | 'transfer' ('[' expr ']' | 'on' ref)? expr 'from' ref 'to' ref '(' expr ')' ';'
 //! role     := 'prefill' | 'decode' | 'tool'
 //! ref      := IDENT ('[' expr ']')?
+//! atom     := NUM | '(' expr ')' | IDENT | IDENT '(' arg (',' arg)* ')' | over
+//! over     := ('max' | 'min' | 'sum') IDENT 'in' (NUM | IDENT) '(' expr ')'
 //! ```
 //!
 //! The serving forms (`serving`) are sugar: they are rewritten to `hold`

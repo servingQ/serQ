@@ -598,6 +598,9 @@ impl<'p> Interp<'p> {
             return Err(error);
         }
         self.read_gauges();
+        if let Some(error) = self.error.take() {
+            return Err(error);
+        }
         while let Some(e) = self.heap.peek() {
             let arrivals_done = p.arrivals.is_some_and(|n| self.arrivals >= n as u64);
             if arrivals_done && self.live == 0 {
@@ -615,6 +618,9 @@ impl<'p> Interp<'p> {
                 return Err(error);
             }
             self.read_gauges();
+            if let Some(error) = self.error.take() {
+                return Err(error);
+            }
         }
         if let Some(n) = p.arrivals {
             if self.arrivals < n as u64 {

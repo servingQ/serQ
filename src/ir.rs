@@ -87,7 +87,8 @@ pub enum Moment {
     /// A step stage's `serve by` keys: evaluated for one resident.
     Serve,
     /// A `gauge`: evaluated on the state the deployment holds after every
-    /// instant, with no session, job or resident.
+    /// instant, with no session, job or resident, and held until the next
+    /// one, so neither `now` nor `work(…)`, which move in between.
     Gauge,
 }
 
@@ -989,6 +990,13 @@ impl Validator<'_> {
     fn expr(&self, e: &CExpr, m: Moment) -> Result<(), String> {
         match e {
             CExpr::Num(_) => Ok(()),
+            // a gauge is integrated as constant between events: what moves
+            // between them would be read at the event and held
+            CExpr::Ctx(CtxVar::Now) if m == Moment::Gauge => Err(
+                "a gauge may not read `now`: it changes between events, and a gauge is held \
+                 constant between them"
+                    .into(),
+            ),
             CExpr::Ctx(v) => {
                 let at = v.moments();
                 if at.is_empty() || at.contains(&m) {
@@ -1008,6 +1016,11 @@ impl Validator<'_> {
             )),
             CExpr::Sample(..) if m == Moment::Gauge => Err(
                 "a gauge may not draw (`~`): it reads the state, and a draw would move the run's streams"
+                    .into(),
+            ),
+            CExpr::Call(Fun::Work, _) if m == Moment::Gauge => Err(
+                "a gauge may not read `work(…)`: the work left drains between events, and a \
+                 gauge is held constant between them"
                     .into(),
             ),
             CExpr::Call(Fun::CachedIn, _) if m == Moment::Gauge => Err(

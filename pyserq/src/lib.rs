@@ -8,7 +8,8 @@
 //! r = pyserq.run(p)            # the GIL is released while it runs
 //! r.json()                     # what `serq run --json` prints
 //! o = r.observe("sojourn")    # o.mean, o.ci, ...; o.samples, o.times: what `--dump` writes
-//! r.stage("svc").utilization; r.observes, r.stages, r.pools: all of them
+//! g = r.gauge("spread")       # g.mean, g.ci, g.min, g.max; g.times, g.values: what `--dump` writes
+//! r.stage("svc").utilization; r.observes, r.gauges, r.stages, r.pools: all of them
 //! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 //! ```
 
@@ -105,6 +106,22 @@ impl Report {
         Ok(d)
     }
 
+    /// The gauges by name, in the program's order.
+    #[getter]
+    fn gauges<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        for (i, g) in self.0.gauges.iter().enumerate() {
+            d.set_item(&g.name, Gauge(self.0.clone(), i))?;
+        }
+        Ok(d)
+    }
+
+    /// The gauge `name`, or `None` (`serq::Report::gauge`).
+    fn gauge(&self, name: &str) -> Option<Gauge> {
+        let i = self.0.gauges.iter().position(|g| g.name == name)?;
+        Some(Gauge(self.0.clone(), i))
+    }
+
     /// One row per stage (a replicated stage has a row per replica, under
     /// one name).
     #[getter]
@@ -194,6 +211,52 @@ impl Observe {
     #[getter]
     fn turns(&self) -> Vec<u32> {
         self.get().records.iter().map(|r| r.2).collect()
+    }
+}
+
+/// One gauge: its statistics as `serq run --json` prints them, and its
+/// change points as `serq run --dump` writes them (`times`, `values`; each
+/// access makes a new list).
+#[pyclass(frozen, module = "pyserq")]
+struct Gauge(Arc<serq::Report>, usize);
+
+impl Gauge {
+    fn get(&self) -> &serq::engine::report::GaugeReport {
+        &self.0.gauges[self.1]
+    }
+}
+
+#[pymethods]
+impl Gauge {
+    #[getter]
+    fn name(&self) -> &str {
+        &self.get().name
+    }
+    /// Time average over `[warmup, end]`.
+    #[getter]
+    fn mean(&self) -> f64 {
+        self.get().mean
+    }
+    /// Batch-means 95 % half-width over 20 equal windows.
+    #[getter]
+    fn ci(&self) -> f64 {
+        self.get().ci.half_width
+    }
+    #[getter]
+    fn min(&self) -> f64 {
+        self.get().min
+    }
+    #[getter]
+    fn max(&self) -> f64 {
+        self.get().max
+    }
+    #[getter]
+    fn times(&self) -> Vec<f64> {
+        self.get().points.iter().map(|p| p.0).collect()
+    }
+    #[getter]
+    fn values(&self) -> Vec<f64> {
+        self.get().points.iter().map(|p| p.1).collect()
     }
 }
 
@@ -341,6 +404,7 @@ fn pyserq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Rng>()?;
     m.add_class::<Report>()?;
     m.add_class::<Observe>()?;
+    m.add_class::<Gauge>()?;
     m.add_class::<serq::engine::report::StageReport>()?;
     m.add_class::<serq::engine::report::PoolReport>()?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
