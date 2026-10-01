@@ -1,6 +1,11 @@
 // Executable approximation: one prefill or a decode-only batch.
 // PP caps, remote-KV admission and sub-block copying are not modeled.
-pool kv { cap 8192; block 16; evict lru; }
+// The native RBLNScheduler keeps vLLM's prefix cache: a waiting request
+// looks up its hit and the step's blocks are cached once it is final, and a
+// failed allocation preempts the last running request under FCFS
+// (docs/use-cases/rbln.md links the lines at tag v0.11.3a21).
+use "../../lib/vllm.sq";
+pool kv { cap 8192; block 16; evict lru; preempt lifo; }
 pool reqs { cap 4; admit via engine; }
 stage engine : step {
   budget 256;
@@ -15,12 +20,15 @@ workload {
 }
 session {
   set t0 = now;
-  hold reqs (1), kv (min(prompt, min(128, left))) reserve (prompt)
-       at admission (left = budget_left(engine)) {
-    prefill prompt growing kv;
-    observe ttft = now - t0;
-    decode out growing kv;
-  }
+  hold reqs (1), kv (min(known, hit + min(128, left))) reserve (known)
+       at admission (known = computed < prompt ? prompt : computed + 1,
+                     left = budget_left(engine),
+                     hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
+    set c = min(cached, reusable(known, blocksize(kv)));
+    prefill (known - c) growing kv;
+    branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
+    decode (out - (known - prompt)) growing kv;
+  } cache (prompt + out);
   observe response = now - t0;
   end;
 }

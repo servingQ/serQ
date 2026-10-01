@@ -57,10 +57,24 @@ still apply. [PR #171](https://github.com/vrvrv/serQ/pull/171) implemented this
 policy in the current interpreter; see the [phase-isolation contract](../design/exclusive-prefill.md)
 for the regression scenarios and exact limits.
 
-`reserve (prompt)` tests the whole prompt's capacity, while the hold allocates
+`reserve (known)` tests the current sequence's capacity (the prompt, or what a resumed request had computed), while the hold allocates
 only the initial chunk and `growing kv` extends it as computation advances.
 The live token budget is bound at admission, rather than captured before
-queuing. There are no prefix hits in this workload.
+queuing.
+
+The native scheduler keeps vLLM's prefix cache and preemption. A waiting
+request looks up its prefix hit ([`get_computed_blocks`][hit]), the step's
+blocks are cached once scheduling is final ([`cache_blocks`][cached]), and a
+failed allocation preempts the last running request under FCFS
+([`running.pop()`][preempt]). The program says the same for a session's own
+prefix, with the hit bound at admission, `cache (prompt + out)` and `preempt
+lifo` on `kv`. `RBLNScheduler` hands a preemption to upstream vLLM
+([`_preempt_request`][resume]), which keeps the generated tokens and drops
+their KV, so a resumed request prefills from what it had computed (`known`,
+as `lib/vllm.sq` cites). In this workload neither fires: the six requests
+are separate sessions, and serQ's cache is keyed by session where vLLM's is
+shared by content hash, so none hits another's prefix; four slots of at most
+272 tokens never fill 8192 tokens (512 blocks) of KV.
 
 The example covers local phase isolation. PP caps, remote-KV decode-ready
 admission guards and sub-block copy semantics remain outside it. The hand-derived
@@ -88,3 +102,7 @@ tests. No native RBLN differential test has been run.
 [native]: https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/core/rbln_scheduler.py#L180
 [budget]: https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/core/utils.py#L178
 [subblock]: https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/core/rbln_kv_cache_manager.py#L468
+[hit]: https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/core/rbln_scheduler.py#L535
+[cached]: https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/core/rbln_scheduler.py#L917
+[preempt]: https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/core/rbln_scheduler.py#L380
+[resume]: https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/vllm_rbln/v1/core/rbln_scheduler.py#L1026
