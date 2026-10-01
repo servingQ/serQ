@@ -360,13 +360,33 @@ fn has_sample(e: &Expr) -> bool {
 /// so the replacement is expanded too. Only a repeated entry on the active
 /// expansion path is a cycle.
 pub fn expand(stmts: &mut Vec<Stmt>, queues: &[QueueDecl]) -> Result<(), ExpandError> {
-    expand_at(stmts, queues, &mut Vec::new())
+    expand_at(stmts, queues, &mut Vec::new(), &mut 0)
+}
+
+/// The most statements the calls of one block may expand to. A chain of
+/// entries that each call the next twice has no cycle and doubles at every
+/// link; the bound stops it before the memory does.
+const MAX_EXPANDED: usize = 100_000;
+
+/// The statements of `stmts`, nested blocks included.
+fn size(stmts: &[Stmt]) -> usize {
+    stmts
+        .iter()
+        .map(|s| {
+            1 + match s {
+                Stmt::Hold { body, .. } | Stmt::Loop(body) => size(body),
+                Stmt::Branch(_, a, b) => size(a) + size(b),
+                _ => 0,
+            }
+        })
+        .sum()
 }
 
 fn expand_at(
     stmts: &mut Vec<Stmt>,
     queues: &[QueueDecl],
     stack: &mut Vec<(String, String, bool)>,
+    expanded: &mut usize,
 ) -> Result<(), ExpandError> {
     let mut out = Vec::with_capacity(stmts.len());
     for mut s in std::mem::take(stmts) {
@@ -394,17 +414,28 @@ fn expand_at(
                     );
                 }
                 let mut body = call(queue, verb, args, from.as_ref(), to.as_ref(), queues, at)?;
+                *expanded += size(&body);
+                if *expanded > MAX_EXPANDED {
+                    return err(
+                        at,
+                        format!(
+                            "`{}.{verb}`: the queue calls expand to more than {MAX_EXPANDED} \
+                             statements; an entry that calls others more than once multiplies them",
+                            queue.name
+                        ),
+                    );
+                }
                 stack.push(key);
-                let result = expand_at(&mut body, queues, stack);
+                let result = expand_at(&mut body, queues, stack, expanded);
                 stack.pop();
                 result?;
                 out.extend(body);
                 continue;
             }
-            Stmt::Hold { body, .. } | Stmt::Loop(body) => expand_at(body, queues, stack)?,
+            Stmt::Hold { body, .. } | Stmt::Loop(body) => expand_at(body, queues, stack, expanded)?,
             Stmt::Branch(_, a, b) => {
-                expand_at(a, queues, stack)?;
-                expand_at(b, queues, stack)?;
+                expand_at(a, queues, stack, expanded)?;
+                expand_at(b, queues, stack, expanded)?;
             }
             _ => {}
         }

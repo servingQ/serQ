@@ -987,15 +987,11 @@ const CONTEXT: &[&str] = &[
     "decoding",
     "admission",
     "remaining",
+    // what the scheduler keeps of a request: its cache hit and the tokens
+    // it has computed. The session's own (`out`, `think`, `more`, `forced`,
+    // `new`, `turn_no`, `serial`) an entry reads only if `hidden`.
     "cached",
     "computed",
-    "serial",
-    "turn_no",
-    "new",
-    "out",
-    "think",
-    "more",
-    "forced",
 ];
 
 /// An entry's body: what it `set`s or `choose`s, what it `mark`s, and the

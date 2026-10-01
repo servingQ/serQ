@@ -494,6 +494,52 @@ fn call_indices_obey_entry_read_boundaries() {
     }
 }
 
+/// A chain of entries that each call the next twice has no cycle and
+/// doubles at every link: the expansion is bounded, not the memory.
+#[test]
+fn an_expansion_is_bounded() {
+    let mut decls = String::new();
+    let n = 30;
+    for k in 0..n {
+        let body = if k + 1 < n {
+            format!("Q{}.prefill (p); Q{}.prefill (p);", k + 1, k + 1)
+        } else {
+            "run (p);".to_string()
+        };
+        decls.push_str(&format!(
+            "queue Q{k} : prefill {{ serve fifo; prefill (p) {{ {body} }} }}\n"
+        ));
+    }
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ Q0.prefill (prompt); }} }} {decls}
+             workload {{ arrive batch(1); init {{ set prompt = 1; }} session {{ request gw; end; }} }} run {{ horizon 1; }}"
+        ),
+        "the queue calls expand to more than",
+    );
+}
+
+/// A session's own attributes (`out`, `more`, …) are an entry's only if
+/// the workload hides them: the scheduler knows the cache hit and what it
+/// has computed, not the length the session wants.
+#[test]
+fn a_session_attribute_reaches_an_entry_only_if_hidden() {
+    let program = |hidden: &str| {
+        format!(
+            "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+             queue E : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ hold kv (p) {{ prefill (p) growing kv; decode (out) growing kv; }} }} }}
+             workload {{ arrive batch(1); {hidden} init {{ set prompt = 3; set out = 2; }} session {{ request gw; end; }} }}
+             run {{ horizon 10; }}"
+        )
+    };
+    refused(
+        &program(""),
+        "reads `out`, a session attribute set outside the queue",
+    );
+    compile_source(&program("hidden out;"), &Overrides::default()).unwrap();
+}
+
 /// What the review of the rebased #87 found an entry could still reach.
 #[test]
 fn an_entry_reaches_only_its_own() {

@@ -52,7 +52,7 @@ The current boundary is:
 | Category | Examples | Defined by |
 |---|---|---|
 | Language syntax and mechanisms | `queue`, `pool`, `serve`, `request`, `mark`, `hold`, `run` | Parser and kernel semantics |
-| Predefined roles and entry signatures | `gateway` / `route`, `prefill`, `decode`, `link` / `transfer` | `ROLES` in `src/queue.rs` |
+| Predefined roles and entry signatures | `gateway` / `route`, `prefill`, `decode`, `link` / `transfer` | `ROLES` in `src/frontend/queue.rs` |
 | Built-in expressions and context | `min`, `now`, `cached`, `budget_left` | Expression semantics and evaluation context |
 | Program declarations | `gw`, `P`, `D`, `nic`, `prompt`, `NP` | The program |
 
