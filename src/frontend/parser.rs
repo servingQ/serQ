@@ -2020,7 +2020,7 @@ impl Parser {
         let mut assigns = assigned_tokens(&body);
         let mut turn = says(&body, "turn");
         let mut request = says_request(&body);
-        let (mut reads, mut calls) = self.reads_of(&body);
+        let (mut reads, mut calls) = self.reads_of(&body, !stmts);
         reads.retain(|n| !params.contains(n));
         for d in &used {
             assigns.extend(d.assigns.iter().cloned());
@@ -2051,7 +2051,11 @@ impl Parser {
 
     /// The names `toks` read and the functions of live state they call,
     /// joined over the definitions they use.
-    fn reads_of(&self, toks: &[Token]) -> (Vec<String>, Vec<String>) {
+    /// `expr`: the tokens are an expression (an argument, an expression
+    /// definition's body), where a word that is also a keyword (`cap`,
+    /// `latency`) can only be a name read; in statements it may be the
+    /// keyword.
+    fn reads_of(&self, toks: &[Token], expr: bool) -> (Vec<String>, Vec<String>) {
         let mut reads = vec![];
         let mut calls = vec![];
         for (k, t) in toks.iter().enumerate() {
@@ -2061,7 +2065,7 @@ impl Parser {
                 if !PURE.contains(&n.as_str()) {
                     calls.push(n.clone());
                 }
-            } else if !called && !KEYWORDS.contains(&n.as_str()) {
+            } else if !called && (expr || !KEYWORDS.contains(&n.as_str())) {
                 reads.push(n.clone());
             }
         }
@@ -2147,7 +2151,7 @@ impl Parser {
             if a.is_empty() {
                 return self.err_at(at, format!("`{}`: the argument for `{p}` is empty", d.name));
             }
-            let (reads, _) = self.reads_of(a);
+            let (reads, _) = self.reads_of(a, true);
             if let Some(n) = d.assigns.iter().find(|n| reads.contains(n)) {
                 return self.err_at(at, capture_message(&d.name, p, n));
             }
@@ -2169,7 +2173,7 @@ impl Parser {
         }
         if d.stmts {
             for (p, a) in d.params.iter().zip(&args) {
-                let (_, calls) = self.reads_of(a);
+                let (_, calls) = self.reads_of(a, true);
                 if let Some(f) = calls.first() {
                     return self.err_at(at, live_message(&d.name, p, &format!("{f}(…)")));
                 }
@@ -2177,7 +2181,8 @@ impl Parser {
         }
         let (turn, request) = (d.turn, d.request);
         if d.stmts {
-            let mut reads: Vec<String> = args.iter().flat_map(|a| self.reads_of(a).0).collect();
+            let mut reads: Vec<String> =
+                args.iter().flat_map(|a| self.reads_of(a, true).0).collect();
             reads.sort();
             reads.dedup();
             self.deferred.push(Deferred {

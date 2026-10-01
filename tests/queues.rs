@@ -317,6 +317,27 @@ fn a_latency_is_the_links_constant() {
     }
 }
 
+/// In an expression a word that is also a keyword (`latency`, `cap`) can
+/// only be a name: a `def` argument that reads it is checked against what
+/// the body assigns like any other name (#196 review).
+#[test]
+fn a_keyword_named_attribute_is_a_read() {
+    for word in ["latency", "cap"] {
+        let src = format!(
+            "def get() = {word};
+             def f(x) {{ set {word} = 2; observe o = x; }}
+             stage s : delay;
+             session {{ set {word} = 1; f(get()); run s (1); end; }}
+             run {{ horizon 1; }}"
+        );
+        let e = compile_source(&src, &Overrides::default()).unwrap_err();
+        assert!(
+            e.contains(&format!("reads `{word}`, which `f` assigns")),
+            "{e}"
+        );
+    }
+}
+
 /// `latency` is a link's, a number or a constant, and not a called link's.
 #[test]
 fn a_latency_belongs_to_a_link() {
