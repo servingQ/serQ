@@ -41,7 +41,7 @@ of the session program. `deployment::project` walks it carrying a hold stack:
 |---|---|
 | **Nodes** | one per stage a `Run` reaches (`Node::stage` is `Some`); a `CRef` with `count > 1` is one node labelled `[N]`. A loop that decides before its first station adds a decision ◇, a node with no stage (`Node::stage` is `None`, `kind` is `Decision`) |
 | **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a body that decides before its first station - several first stations, or an `end` before any - starts at a decision ◇, named by the `choose`s it makes, which every turn comes back to and which an `end` before any station leaves from; any other body is walked twice, so its last stations lead back to the station it starts at). An arrow forward past other stations, and an entry past the first, run in a lane below the row rather than through them |
-| **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box: the units it holds there. A leased pool stays on the stations after its hold and a `Release` takes it off. A `choose` picks an instance, drawn as a solid box around what the session indexes by its variable; inside one only its own pools are boxed, and a run between two instances (`examples/pd-disaggregation/llmd_nixl_pull.sq`'s read) is an arrow between their boxes carrying what it moves and the link's `latency`, where pool boxes would cross. A hold whose units are the constant 0 only reserves (`reqs (0) reserve (1)`, a request parked without a running slot), occupies nothing, and draws no box. A pool held at one station alone - at it and at neither station beside it - is that station's: the station is drawn in a solid frame with the pool's slot grid and options under its glyph, and no dashed box (`Net::resident_pools`) |
+| **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box: the units it holds there. A leased pool stays on the stations after its hold and a `Release` takes it off. A `choose` picks an instance, drawn as a solid box around what the session indexes by its variable; inside one only its own pools are boxed, and a run between two instances (`examples/pd-disaggregation/llmd_nixl_pull.sq`'s read) is an arrow between their boxes carrying what it moves and the link's `latency`, where pool boxes would cross. A hold whose units are the constant 0 only reserves (`reqs (0) reserve (1)`, a request parked without a running slot), occupies nothing, and draws no box. A pool held at one station alone - every hold that takes it there reaches no other station (`Net::resident_pools`, from the stations each `hold` reaches) - is that station's: the station is drawn in an unfilled frame with a row per such pool under its glyph, and no dashed box. An instance is a filled panel, so a frame inside one reads as the station's, not the pod's |
 | **Edge labels** | a `Branch` guard, via `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
 
@@ -59,11 +59,11 @@ names — `rep[j]`, not whatever station happens to come next.
 | `Ps(φ)` | circle, `PS`, `φ` beneath |
 | `Delay` | rounded box of small circles — infinitely many servers |
 | `Step { … }` | a rounded box with a token-budget bar. The lecture has no glyph for this one: `docs/language.md` §4 calls the colocated engine the one stage kind the lecture could not express |
-| a pool held at one station alone | a row in the station's solid frame, under its glyph: slot grid, name, options |
-| a pool enclosing several stations | dashed rounded box, with its options stacked in the column at its left |
-| finite `cap` | a slot grid: `cap` cells when `cap ≤ 32`, schematic above that — `kv` at 160 000 is not 160 000 squares |
+| a pool | a drum, its capacity and options written beside it (`cap 8192 · block 16`) |
+| a pool held at one station alone | a row in the station's unfilled frame, under its glyph: drum, name, options |
+| a pool held across several stations | dashed rounded box, the drum and options in the column at its left |
 | a pool a hold caches in | a grey strip under its row, or along the bottom of its box |
-| the queue a hold waits in | one queue glyph per hold, not per pool: a hold of several pools joins the queue of its first (`interp.rs` `enqueue_hold`). At a frame's entrance, named by the pools it takes there (`reqs + kv`); otherwise ahead of the first pool's box |
+| the queue a hold waits in | ahead of a dashed box, one per hold rather than per pool: a hold of several pools joins the queue of its first (`interp.rs` `enqueue_hold`). A frame draws none: its pools are taken at its entrance |
 | `admit via S` | `admit via S` among the pool's options; from a dashed box, also a dashed edge from the queue to `S` |
 
 A pool's eviction order is drawn only where something is cached in it: an
@@ -114,10 +114,10 @@ every program in both formats, and every IR file in
 
 ## 5. Not done
 
-* **A pool held in two places gets two enclosures.** That is correct — a box
-  spanning both would swallow the stations between them — but a reader may
-  want to see that the two boxes are the same pool, and nothing says so beyond
-  the name.
+* **A pool held in two places is drawn twice**, as two frames or two
+  enclosures. That is correct — a box spanning both would swallow the
+  stations between them — but a reader may want to see that the two are the
+  same pool, and nothing says so beyond the name.
 * **One station row.** A program with many stages runs off to the right
   instead of wrapping.
 * **Long expressions are elided** with `~` rather than wrapped or footnoted.

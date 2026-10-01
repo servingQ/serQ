@@ -50,10 +50,6 @@ pub struct Node {
     pub note: Option<String>,
     /// Pools held around every visit to this stage, outermost first.
     pub pools: Vec<usize>,
-    /// Per pool in `pools`, the pool whose queue its hold waits in: the
-    /// hold's first, as `interp.rs` `first_pool` enqueues it. A hold of
-    /// several pools waits once, not once per pool.
-    pub waits_in: Vec<usize>,
     /// The work of the first visit, as written (`x0`).
     pub work: String,
     /// The modes the session runs it in.
@@ -108,6 +104,29 @@ pub struct FlowNote {
     pub several: bool,
 }
 
+/// One `hold` the walk entered: the pool its request waits in, the pools it
+/// occupies, and the stations reached while it held them.
+#[derive(Clone, Debug)]
+pub struct HoldSpan {
+    /// The hold's first pool: a hold of several pools waits once, in this
+    /// pool's queue (`interp.rs` `enqueue_hold`, `first_pool`).
+    pub queue: usize,
+    /// The stations reached while it held a pool, as (pool, node). A pool
+    /// of no units occupies nothing and has none; a `release` ends one pool's
+    /// before the others', and a leased pool's runs on past the hold.
+    pub visits: Vec<(usize, usize)>,
+}
+
+impl HoldSpan {
+    /// The stations reached while it held `pool`.
+    pub fn nodes_of(&self, pool: usize) -> impl Iterator<Item = usize> + '_ {
+        self.visits
+            .iter()
+            .filter(move |&&(q, _)| q == pool)
+            .map(|&(_, n)| n)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Edge {
     pub from: End,
@@ -132,6 +151,8 @@ pub struct Net {
     pub flow_notes: Vec<FlowNote>,
     /// The instances, in the order the session reaches them.
     pub instances: Vec<Instance>,
+    /// Every `hold` the walk entered, by the order it entered them.
+    pub holds: Vec<HoldSpan>,
 }
 
 impl Net {
@@ -190,66 +211,31 @@ impl Net {
             .collect()
     }
 
-    /// The pools drawn inside a station's own box: drawn at it and at
-    /// neither station beside it in the row, so that an enclosure would hold
-    /// it alone. A request holds them only while it is there, and the figure
-    /// draws them as that station's.
+    /// The pools drawn inside a station's own box: drawn at it, and every
+    /// hold that takes the pool there reaches no other station. A request
+    /// holds them only while it is there, so the figure draws them as that
+    /// station's.
     pub fn resident_pools(&self, node: usize) -> Vec<usize> {
         if self.nodes[node].stage.is_none() {
             return vec![];
         }
-        let beside = |k: Option<usize>| {
-            k.filter(|&k| k < self.nodes.len())
-                .map_or(vec![], |k| self.drawn_pools(k))
-        };
-        let (left, right) = (beside(node.checked_sub(1)), beside(Some(node + 1)));
         self.drawn_pools(node)
             .into_iter()
-            .filter(|q| !left.contains(q) && !right.contains(q))
+            .filter(|&q| {
+                self.holds
+                    .iter()
+                    .filter(|h| h.nodes_of(q).any(|n| n == node))
+                    .all(|h| h.nodes_of(q).all(|n| n == node))
+            })
             .collect()
     }
 
-    /// The pool a hold around a station waits in, for one of the pools it
-    /// takes there.
-    fn waits_in(&self, node: usize, pool: usize) -> Option<usize> {
-        let n = &self.nodes[node];
-        n.pools
+    /// Whether `pool`'s enclosure over the stations `first..=last` draws a
+    /// queue: a hold that waits in `pool` reaches one of them.
+    fn waits_in_enclosure(&self, pool: usize, first: usize, last: usize) -> bool {
+        self.holds
             .iter()
-            .position(|&x| x == pool)
-            .map(|k| n.waits_in[k])
-    }
-
-    /// The queues at a station's entrance: per hold whose pools are resident
-    /// there, the resident pools it takes. A hold that waits in a pool drawn
-    /// as an enclosure waits there, not here.
-    pub fn queues_at(&self, node: usize) -> Vec<Vec<usize>> {
-        let resident = self.resident_pools(node);
-        let drawn = self.drawn_pools(node);
-        let mut out: Vec<(usize, Vec<usize>)> = vec![];
-        for &q in &resident {
-            let w = self.waits_in(node, q).unwrap_or(q);
-            if drawn.contains(&w) && !resident.contains(&w) {
-                continue;
-            }
-            match out.iter_mut().find(|(k, _)| *k == w) {
-                Some((_, v)) => v.push(q),
-                None => out.push((w, vec![q])),
-            }
-        }
-        out.into_iter().map(|(_, v)| v).collect()
-    }
-
-    /// Whether an enclosure of `pool` opening at `node` draws the queue its
-    /// hold waits in: the pool is that queue's, or that one is drawn nowhere
-    /// here and this is the hold's first pool that is.
-    fn queue_in_enclosure(&self, node: usize, pool: usize) -> bool {
-        let Some(w) = self.waits_in(node, pool) else {
-            return true;
-        };
-        let drawn = self.drawn_pools(node);
-        w == pool
-            || (!drawn.contains(&w)
-                && drawn.iter().find(|&&q| self.waits_in(node, q) == Some(w)) == Some(&pool))
+            .any(|h| h.queue == pool && h.visits.iter().any(|(_, n)| (first..=last).contains(n)))
     }
 }
 
@@ -386,16 +372,9 @@ impl Walker<'_> {
             Some(i) => {
                 // Seen before: it belongs only to the pools held every time.
                 let held = &self.holds;
-                let n = &mut self.net.nodes[i];
-                let keep: Vec<bool> = n
+                self.net.nodes[i]
                     .pools
-                    .iter()
-                    .map(|p| held.iter().any(|&(q, _, e)| e && q == *p))
-                    .collect();
-                let mut k = keep.iter();
-                n.pools.retain(|_| *k.next().unwrap());
-                let mut k = keep.iter();
-                n.waits_in.retain(|_| *k.next().unwrap());
+                    .retain(|p| held.iter().any(|&(q, _, e)| e && q == *p));
                 i
             }
             None => {
@@ -408,21 +387,23 @@ impl Walker<'_> {
                     note: kind_note,
                     work: String::new(),
                     modes: vec![],
-                    pools: vec![],
-                    waits_in: vec![],
+                    pools: self.holds.iter().fold(vec![], |mut v, &(q, _, e)| {
+                        // nested holds of one pool are one enclosure
+                        if e && !v.contains(&q) {
+                            v.push(q);
+                        }
+                        v
+                    }),
                 });
-                let k = self.net.nodes.len() - 1;
-                for &(q, id, e) in &self.holds {
-                    // nested holds of one pool are one enclosure
-                    if e && !self.net.nodes[k].pools.contains(&q) {
-                        let first = self.holds.iter().find(|h| h.1 == id).unwrap().0;
-                        self.net.nodes[k].pools.push(q);
-                        self.net.nodes[k].waits_in.push(first);
-                    }
-                }
-                k
+                self.net.nodes.len() - 1
             }
         };
+        for &(q, id, e) in &self.holds {
+            let visits = &mut self.net.holds[id].visits;
+            if e && !visits.contains(&(q, idx)) {
+                visits.push((q, idx));
+            }
+        }
         if let Some(n) = note
             && self.net.nodes[idx].note.is_none()
         {
@@ -487,6 +468,10 @@ impl Walker<'_> {
                 } => {
                     let id = self.next_hold;
                     self.next_hold += 1;
+                    self.net.holds.push(HoldSpan {
+                        queue: pools[0].0.base,
+                        visits: vec![],
+                    });
                     for (r, units, _) in &pools {
                         let encloses = !matches!(units, CExpr::Num(x) if *x == 0.0);
                         self.holds.push((r.base, id, encloses));
@@ -621,7 +606,6 @@ impl Walker<'_> {
                             inner: String::new(),
                             note: None,
                             pools: vec![],
-                            waits_in: vec![],
                             work: String::new(),
                             modes: vec![],
                         });
@@ -972,6 +956,12 @@ fn remove_node(net: &mut Net, k: usize) {
             *i = at(*i);
         }
     }
+    for h in &mut net.holds {
+        h.visits.retain(|&(_, i)| i != k);
+        for (_, i) in h.visits.iter_mut() {
+            *i = at(*i);
+        }
+    }
 }
 
 /// Reorder the stations by a permutation: `order[k]` is the node that goes
@@ -1013,6 +1003,11 @@ fn reorder(net: &mut Net, order: &[usize]) {
             *k = pos[*k];
         }
         g.nodes.sort_unstable();
+    }
+    for h in &mut net.holds {
+        for (_, k) in h.visits.iter_mut() {
+            *k = pos[*k];
+        }
     }
 }
 
@@ -1181,6 +1176,9 @@ const FRAME_HEAD: f64 = 26.0;
 const FRAME_PAD: f64 = 12.0;
 const ROW_H: f64 = 32.0;
 const QUEUE_W: f64 = 30.0;
+/// A pool's drum.
+const DRUM_W: f64 = 22.0;
+const DRUM_H: f64 = 26.0;
 
 /// An instance box's margin around what it holds, and the room for its title.
 const INST_PAD: f64 = 12.0;
@@ -1209,7 +1207,15 @@ struct Group {
 /// does not make.
 fn groups(net: &Net) -> Vec<Group> {
     let mut runs: Vec<(usize, usize, usize)> = vec![];
-    let drawn: Vec<Vec<usize>> = (0..net.nodes.len()).map(|i| net.drawn_pools(i)).collect();
+    // a pool held at one station alone is drawn inside it, not boxed
+    let drawn: Vec<Vec<usize>> = (0..net.nodes.len())
+        .map(|i| {
+            let resident = net.resident_pools(i);
+            let mut v = net.drawn_pools(i);
+            v.retain(|q| !resident.contains(q));
+            v
+        })
+        .collect();
     let pools: Vec<usize> = {
         let mut v: Vec<usize> = drawn.iter().flatten().copied().collect();
         v.sort_unstable();
@@ -1227,10 +1233,7 @@ fn groups(net: &Net) -> Vec<Group> {
             while i < net.nodes.len() && drawn[i].contains(&pool) {
                 i += 1;
             }
-            // a pool held at one station alone is drawn inside it
-            if !(start == i - 1 && net.resident_pools(start).contains(&pool)) {
-                runs.push((pool, start, i - 1));
-            }
+            runs.push((pool, start, i - 1));
         }
     }
     let mut gs: Vec<Group> = runs
@@ -1282,11 +1285,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     let mut gs = groups(net);
     let max_depth = gs.iter().map(|g| g.depth).max().unwrap_or(0);
     let boxed = !net.instances.is_empty();
-    // per station, the pools drawn inside it and the queues at its entrance
+    // per station, the pools drawn inside it
     let resident: Vec<Vec<usize>> = (0..net.nodes.len())
         .map(|i| net.resident_pools(i))
         .collect();
-    let queues: Vec<Vec<Vec<usize>>> = (0..net.nodes.len()).map(|i| net.queues_at(i)).collect();
     let framed = |i: usize| !resident[i].is_empty();
     let row_y = MARGIN
         + 34.0
@@ -1299,41 +1301,13 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         } else {
             0.0
         };
-    let queue_label = |pools: &[usize]| {
-        pools
-            .iter()
-            .map(|&q| p.pools[q].name.clone())
-            .collect::<Vec<_>>()
-            .join(" + ")
-    };
-    let queue_w = |i: usize| -> Vec<f64> {
-        queues[i]
-            .iter()
-            .map(|q| TextSize::Small.width_of(&queue_label(q)).max(QUEUE_W) + 10.0)
-            .collect()
-    };
-    let row_notes = |i: usize, q: usize| {
-        let via = p.pools[q].admit_via;
-        pool_notes(p, q, net.cached.contains(&q))
-            .into_iter()
-            .map(|l| match via {
-                Some(s) if l == "admit via" => {
-                    let by = if net.nodes[i].stage == Some(s) {
-                        &net.nodes[i].label
-                    } else {
-                        &p.stages[s].name
-                    };
-                    format!("admit via {by}")
-                }
-                _ => l,
-            })
-            .collect::<Vec<_>>()
-            .join(" · ")
-    };
-    let row_w = |i: usize, q: usize| {
-        36.0 + TextSize::Normal
-            .width_of(&format!("pool {}", p.pools[q].name))
-            .max(TextSize::Small.width_of(&row_notes(i, q)))
+    let row_notes = |q: usize| pool_notes(p, q, net.cached.contains(&q)).join(" · ");
+    let row_w = |q: usize| {
+        DRUM_W
+            + 10.0
+            + TextSize::Normal
+                .width_of(&format!("pool {}", p.pools[q].name))
+                .max(TextSize::Small.width_of(&row_notes(q)))
     };
     // under the glyph: its note, then a row per resident pool
     let rows_top = |i: usize| {
@@ -1458,13 +1432,11 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         .into_iter()
         .fold(0.0, f64::max);
         if framed(i) {
-            // the queues stand at the entrance, the glyph after them, and
-            // the frame is as wide as its widest row
-            let qw = FRAME_PAD + queue_w(i).iter().sum::<f64>();
-            let rows = resident[i].iter().map(|&q| row_w(i, q)).fold(0.0, f64::max);
-            let w = (qw + slot + FRAME_PAD).max(rows + 2.0 * FRAME_PAD);
+            // the frame is as wide as its glyph or its widest row
+            let rows = resident[i].iter().map(|&q| row_w(q)).fold(0.0, f64::max);
+            let w = (slot + 2.0 * FRAME_PAD).max(rows + 2.0 * FRAME_PAD);
             rects.push(Rect::new(
-                x + qw + (slot - STATION_W) / 2.0,
+                x + (w - STATION_W) / 2.0,
                 row_y,
                 STATION_W,
                 STATION_H,
@@ -1553,18 +1525,15 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             Anchor::Start,
             TextSize::Normal,
         );
-        // a hold of several pools waits in one queue, not one per pool
-        if net.queue_in_enclosure(g.first, g.pool) {
+        // a hold of several pools waits in one queue, its first pool's
+        if net.waits_in_enclosure(g.pool, g.first, g.last) {
             f.push(Item::Queue {
                 rect: Rect::new(gx, gy - 11.0, QUEUE_W, 22.0),
                 cells: 3,
             });
         }
-        let (cols, rows) = slot_grid(pool.cap);
-        f.push(Item::Slots {
-            rect: Rect::new(gx + 38.0, gy - 11.0, 28.0, 22.0),
-            cols,
-            rows,
+        f.push(Item::Drum {
+            rect: Rect::new(gx + 40.0, gy - DRUM_H / 2.0, DRUM_W, DRUM_H),
         });
         for (k, line) in pool_notes(p, g.pool, cached_here(g))
             .into_iter()
@@ -1586,6 +1555,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             );
         }
         if let Some(via) = pool.admit_via {
+            // the option among the notes says which; the edge says where
             if let Some(n) = net.node_of(via) {
                 f.push(Item::Edge {
                     pts: vec![
@@ -1595,42 +1565,29 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     style: EdgeStyle::Relation,
                     arrow: true,
                 });
-                f.note(pt(gx + 18.0, gy - 20.0), "admit via", Anchor::Start);
             }
         }
     }
 
-    // A framed station: the queues its holds wait in at the entrance, and
-    // the pools held there alone under its glyph.
+    // A framed station: the pools held there alone, a row each under its
+    // glyph.
     for i in (0..net.nodes.len()).filter(|&i| framed(i)) {
         let fr = frames[i];
         f.boxed(fr, BoxStyle::Frame, 8.0);
-        let gy = rects[i].centre().y;
-        let mut qx = fr.x + FRAME_PAD;
-        for (q, w) in queues[i].iter().zip(queue_w(i)) {
-            f.push(Item::Queue {
-                rect: Rect::new(qx, gy - 11.0, QUEUE_W, 22.0),
-                cells: 3,
-            });
-            f.note(pt(qx, gy + 24.0), queue_label(q), Anchor::Start);
-            qx += w;
-        }
         let mut y = row_y + rows_top(i);
         for &q in &resident[i] {
-            let (cols, rows) = slot_grid(p.pools[q].cap);
             let gx = fr.x + FRAME_PAD;
-            f.push(Item::Slots {
-                rect: Rect::new(gx, y + 2.0, 28.0, 22.0),
-                cols,
-                rows,
+            f.push(Item::Drum {
+                rect: Rect::new(gx, y + 1.0, DRUM_W, DRUM_H),
             });
+            let tx = gx + DRUM_W + 10.0;
             f.text(
-                pt(gx + 36.0, y + 11.0),
+                pt(tx, y + 11.0),
                 format!("pool {}", p.pools[q].name),
                 Anchor::Start,
                 TextSize::Normal,
             );
-            f.note(pt(gx + 36.0, y + 23.0), row_notes(i, q), Anchor::Start);
+            f.note(pt(tx, y + 23.0), row_notes(q), Anchor::Start);
             y += ROW_H;
             if net.cached.contains(&q) {
                 let strip = Rect::new(gx, y - 4.0, fr.right() - FRAME_PAD - gx, 11.0);
@@ -1921,24 +1878,10 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
     if pool.preempt == crate::ir::Preempt::Lifo {
         parts.push("preempt lifo".into());
     }
-    if pool.admit_via.is_some() {
-        parts.push("admit via".into());
+    if let Some(s) = pool.admit_via {
+        parts.push(format!("admit via {}", p.stages[s].name));
     }
     parts
-}
-
-/// A readable grid for a capacity: exact cells when there are few enough.
-fn slot_grid(cap: f64) -> (usize, usize) {
-    if !cap.is_finite() || cap <= 0.0 {
-        return (4, 2);
-    }
-    let n = cap.min(32.0) as usize;
-    if cap <= 32.0 {
-        let rows = if n > 8 { 2 } else { 1 };
-        (n.div_ceil(rows), rows)
-    } else {
-        (4, 2)
-    }
 }
 
 /// The deployment figure of a program.

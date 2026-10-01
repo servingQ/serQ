@@ -78,8 +78,8 @@ pub enum BoxStyle {
     Flow,
     /// An instance: what one `choose` picks, a pod.
     Instance,
-    /// A station with the pools held at it alone: their queue at its
-    /// entrance, their capacity under its glyph.
+    /// A station with the pools held at it alone, a row each under its
+    /// glyph. Unfilled, where an instance is a filled panel.
     Frame,
 }
 
@@ -162,12 +162,8 @@ pub enum Item {
     },
     /// The queueing-theory queue glyph: `cells` boxes between two rails.
     Queue { rect: Rect, cells: usize },
-    /// A pool's capacity as a grid of units.
-    Slots {
-        rect: Rect,
-        cols: usize,
-        rows: usize,
-    },
+    /// A pool: a drum, its capacity written beside it.
+    Drum { rect: Rect },
     Edge {
         pts: Vec<Point>,
         style: EdgeStyle,
@@ -263,7 +259,7 @@ impl Figure {
                 Item::Box { rect, .. }
                 | Item::Station { rect, .. }
                 | Item::Queue { rect, .. }
-                | Item::Slots { rect, .. } => visit(pt(rect.right(), rect.bottom())),
+                | Item::Drum { rect } => visit(pt(rect.right(), rect.bottom())),
                 Item::Edge { pts, .. } => pts.iter().for_each(|p| visit(*p)),
                 Item::Text {
                     at,

@@ -206,20 +206,26 @@ pub fn render(f: &Figure) -> String {
                     );
                 }
             }
-            Item::Slots { rect, cols, rows } => {
-                let cw = rect.w / *cols as f64;
-                let ch = rect.h / *rows as f64;
-                for r in 0..*rows {
-                    for c in 0..*cols {
-                        let (x, y) = (rect.x + cw * c as f64, rect.y + ch * r as f64);
-                        let _ = writeln!(
-                            s,
-                            "  \\draw[seqcell] {} rectangle {};",
-                            p(x, y),
-                            p(x + cw * 0.82, y + ch * 0.78)
-                        );
-                    }
-                }
+            Item::Drum { rect } => {
+                // y grows downwards here: the arc from 180 to 0 passes 90,
+                // the near side of the bottom
+                let (rx, ry) = (rect.w / 2.0, (rect.h / 5.0).min(4.0));
+                let _ = writeln!(
+                    s,
+                    "  \\draw[seqcell] {} -- {} arc[start angle=180, end angle=0, x radius={}, y radius={}] -- {} -- cycle;",
+                    p(rect.x, rect.y + ry),
+                    p(rect.x, rect.bottom() - ry),
+                    n(rx),
+                    n(ry),
+                    p(rect.right(), rect.y + ry)
+                );
+                let _ = writeln!(
+                    s,
+                    "  \\draw[seqcell] {} ellipse [x radius={}, y radius={}];",
+                    p(rect.centre().x, rect.y + ry),
+                    n(rx),
+                    n(ry)
+                );
             }
             Item::Edge { pts, style, arrow } => {
                 let path: Vec<String> = pts.iter().map(|q| p(q.x, q.y)).collect();

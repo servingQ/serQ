@@ -30,8 +30,9 @@ serq run   examples/my.sq
 `check` is what `make check` runs over every `examples/*/*.sq`, and it also
 catches the two lints (a stale header read, a draw written as a test,
 [language](language.md) §3). Draw the program before trusting a run. A hold
-is drawn as its pool's enclosure around the stations it spans, so a hold that
-closes one statement too early leaves a station outside the box
+is drawn around the stations it spans - its pool's enclosure, or the frame of
+the one station it reaches - so a hold that closes one statement too early
+leaves a station outside the box
 ([visualization](visualization/index.md)).
 
 Keep the engine and the client apart, as the programs in `examples/` do: the

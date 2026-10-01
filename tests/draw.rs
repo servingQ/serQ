@@ -307,9 +307,8 @@ fn nested_holds_nest() {
 }
 
 /// A pool held at one station alone is that station's: drawn in its frame,
-/// with one queue per hold at its entrance, as `interp.rs` `enqueue_hold`
-/// queues a hold of several pools once. A pool held across stations keeps
-/// its enclosure: `replica.sq`'s `live` is held through the tool call.
+/// not in a dashed box. "Alone" is what the program's holds reach, not
+/// what stands beside the station in the row.
 #[test]
 fn pools_held_at_one_station_are_drawn_in_it() {
     let queues = |f: &Figure| {
@@ -325,16 +324,13 @@ fn pools_held_at_one_station_are_drawn_in_it() {
         net.resident_pools(engine),
         [pool(&p, "reqs"), pool(&p, "kv")]
     );
-    assert_eq!(
-        net.queues_at(engine),
-        [vec![pool(&p, "reqs"), pool(&p, "kv")]],
-        "one hold, one queue"
-    );
     let f = deployment::layout(&p, &net);
     assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 0);
     assert_eq!(f.boxes(BoxStyle::Frame).len(), 1);
-    assert_eq!(queues(&f), 1);
+    assert_eq!(queues(&f), 0, "a frame draws no queue");
 
+    // `live` is held through the tool call; the hold that waits in it does
+    // so ahead of its box
     let p = program("replica");
     let net = deployment::project(&p);
     let engine = net.node_of(stage(&p, "engine")).unwrap();
@@ -344,7 +340,52 @@ fn pools_held_at_one_station_are_drawn_in_it() {
     );
     let f = deployment::layout(&p, &net);
     assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 1, "live");
-    assert_eq!(queues(&f), 2, "live's, and batch's with kv");
+    assert_eq!(queues(&f), 1, "live's");
+
+    // the prefiller's KV stays leased through the read, its slot does not
+    let p = program("llmd_nixl_pull");
+    let net = deployment::project(&p);
+    let prefill = net.node_of(stage(&p, "P")).unwrap();
+    assert_eq!(net.resident_pools(prefill), [pool(&p, "P.reqs")]);
+}
+
+/// Two holds of one pool at stations side by side are two frames, not one
+/// box that reads as one hold across both.
+#[test]
+fn separate_holds_side_by_side_are_two_frames() {
+    let p = compile(
+        r#"
+        pool a { cap 10; } stage s1 : fifo; stage s2 : fifo;
+        workload { arrive poisson(0.2); }
+        session { hold a (1) { run s1 (1); } hold a (1) { run s2 (1); } end; }
+        run { horizon 100; }
+        "#,
+    );
+    let net = deployment::project(&p);
+    assert_eq!(net.resident_pools(0), [pool(&p, "a")]);
+    assert_eq!(net.resident_pools(1), [pool(&p, "a")]);
+    let f = deployment::layout(&p, &net);
+    assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 0);
+    assert_eq!(f.boxes(BoxStyle::Frame).len(), 2);
+}
+
+/// A hold that reaches other stations is not one station's, even where the
+/// figure draws the pool at that station only: `s1` and `s2` are also
+/// visited without it, so the pool is drawn at `s3` alone.
+#[test]
+fn a_hold_across_stations_is_no_stations_own() {
+    let p = compile(
+        r#"
+        pool a { cap 10; } stage s1 : fifo; stage s2 : fifo; stage s3 : fifo;
+        workload { arrive poisson(0.2); }
+        session { run s1 (1); run s2 (1); hold a (1) { run s1 (1); run s3 (1); run s2 (1); } end; }
+        run { horizon 100; }
+        "#,
+    );
+    let net = deployment::project(&p);
+    let s3 = net.node_of(stage(&p, "s3")).unwrap();
+    assert_eq!(net.drawn_pools(s3), [pool(&p, "a")]);
+    assert!(net.resident_pools(s3).is_empty());
 }
 
 // --- geometry ---------------------------------------------------------------

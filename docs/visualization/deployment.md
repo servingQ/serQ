@@ -24,7 +24,7 @@ walks the session program carrying a hold stack:
 | **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a body that decides before its first station - several first stations, or an `end` before any - starts at a decision ◇, named by the `choose`s it makes, which every turn comes back to and which an `end` before any station leaves from; any other body is walked twice, so its last stations lead back to the station it starts at). An arrow forward past other stations, and an entry past the first, run in a lane below the row rather than through them |
 | **Instance** | a `choose v` is a pick of an instance: the stages and pools the session then indexes by exactly `v` (`P[i]`, `P.nic[i]`, `P.kv[i]`) are one, drawn in a solid box named after its step engine (`prefill instance P[i]` when it only prefills). A choice of one station and nothing else is no box |
 | **Enclosure** | every `Run` is tagged with the `Hold`s around it; stations sharing a hold on pool `p` sit inside `p`'s dashed box. Inside an instance's box only its own pools are drawn, and none at the stations of a run between two instances: the run's arrow says what it moves |
-| **Frame** | a pool held at one station alone - at it and at neither station beside it - is that station's: the station is drawn in a solid frame, the pool's slot grid and options under its glyph, and the queue its hold waits in at the entrance. A dashed box is left for a pool held across stations |
+| **Frame** | A pool held at one station alone - every hold that takes it there reaches no other station - is that station's: the station is drawn in an unfilled frame with a row per such pool under its glyph, and no dashed box. An instance is a filled panel, so a frame inside one reads as the station's, not the pod's |
 | **Latency** | a link's `serve … latency` (a delay stage `L.latency` run before every transfer over `L`) is written on the transfer, not drawn as a station, when it waits before one transfer; before several (down two arms) it stays a station, which keeps each arm's way in to its own transfer |
 | **Edge labels** | a `Branch` guard, printed by `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
@@ -43,9 +43,8 @@ Three things the walk deliberately does *not* do:
 ![vLLM v1: one engine](../assets/vllm.deployment.svg)
 
 That is `examples/multi-turn/vllm.sq`. Its request slot (`reqs`) and its
-KV blocks (`kv`) are held only at `engine`, so they are drawn in its frame,
-behind the one queue their hold waits in (`reqs + kv`). The dashed arrow
-back to `engine` is the next turn, after the tool call.
+KV blocks (`kv`) are held only at `engine`, so they are drawn in its frame.
+The dashed arrow back to `engine` is the next turn, after the tool call.
 
 ## Glyphs
 
@@ -55,11 +54,11 @@ back to `engine` is the next turn, after the tool call.
 | `Ps(φ)` | circle, `PS`, with `φ` beneath |
 | `Delay` | rounded box of small circles — infinitely many servers |
 | `Step { … }` | rounded box with a token-budget bar: an iterating engine, not a queueing station |
-| a pool held at one station alone | a row in the station's solid frame, under its glyph: slot grid, name, options |
-| a pool enclosing several stations | dashed rounded box, options stacked in the column at its left |
-| finite `cap` | a slot grid — `cap` cells when `cap ≤ 32`, schematic above that. `kv` at 160 000 is not 160 000 squares |
+| a pool | a drum, its capacity and options written beside it (`cap 8192 · block 16`) |
+| a pool held at one station alone | a row in the station's unfilled frame, under its glyph: drum, name, options |
+| a pool held across several stations | dashed rounded box, the drum and options in the column at its left |
 | a pool a hold caches in | a grey strip under its row, or along the bottom of its box |
-| the queue a hold waits in | one queue glyph per hold, not per pool: a hold of several pools joins the queue of its first (`interp.rs` `enqueue_hold`). At a frame's entrance, named by the pools it takes there; otherwise ahead of the first pool's box |
+| the queue a hold waits in | ahead of a dashed box, one per hold rather than per pool: a hold of several pools joins the queue of its first (`interp.rs` `enqueue_hold`). A frame draws none: its pools are taken at its entrance |
 | `admit via S` | `admit via S` among the pool's options; from a dashed box, also a dashed edge from the queue to `S` |
 
 A pool's eviction order is drawn only where something is cached in it: an order

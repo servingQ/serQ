@@ -319,22 +319,33 @@ pub fn render(f: &Figure) -> String {
                     );
                 }
             }
-            Item::Slots { rect, cols, rows } => {
-                let cw = rect.w / *cols as f64;
-                let ch = rect.h / *rows as f64;
-                for r in 0..*rows {
-                    for c in 0..*cols {
-                        let _ = writeln!(
-                            s,
-                            r#"<rect {} x="{}" y="{}" width="{}" height="{}"/>"#,
-                            paint("cell"),
-                            n(rect.x + cw * c as f64),
-                            n(rect.y + ch * r as f64),
-                            n(cw * 0.82),
-                            n(ch * 0.78)
-                        );
-                    }
-                }
+            Item::Drum { rect } => {
+                // the side and the near half of the bottom, then the lid
+                let (rx, ry) = (rect.w / 2.0, (rect.h / 5.0).min(4.0));
+                let _ = writeln!(
+                    s,
+                    r#"<path {} d="M {} {} L {} {} A {} {} 0 0 0 {} {} L {} {} Z"/>"#,
+                    paint("cell"),
+                    n(rect.x),
+                    n(rect.y + ry),
+                    n(rect.x),
+                    n(rect.bottom() - ry),
+                    n(rx),
+                    n(ry),
+                    n(rect.right()),
+                    n(rect.bottom() - ry),
+                    n(rect.right()),
+                    n(rect.y + ry)
+                );
+                let _ = writeln!(
+                    s,
+                    r#"<ellipse {} cx="{}" cy="{}" rx="{}" ry="{}"/>"#,
+                    paint("cell"),
+                    n(rect.centre().x),
+                    n(rect.y + ry),
+                    n(rx),
+                    n(ry)
+                );
             }
             Item::Edge { pts, style, arrow } => {
                 let mut d = String::new();

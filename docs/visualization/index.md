@@ -71,9 +71,10 @@ formats, and every IR file in `tools/oracle/`.
 
 ## What is not done
 
-* **A pool held in two places gets two enclosures.** That is correct — a box
-  spanning both would swallow the stations between them — but nothing beyond
-  the name says the two boxes are the same pool.
+* **A pool held in two places is drawn twice**, as two frames or two
+  enclosures. That is correct — a box spanning both would swallow the
+  stations between them — but nothing beyond the name says the two are the
+  same pool.
 * **One station row.** A program with many stages runs off to the right
   instead of wrapping.
 * **Long expressions are elided** with `~` rather than wrapped or footnoted.
