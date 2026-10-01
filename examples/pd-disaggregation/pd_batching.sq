@@ -20,7 +20,7 @@
 // mixed and idle iterations, with the decodes each iteration carried.
 let N = 4;             // colocated engines
 let NP = 3;            // prefill engines when split
-let ND = 1;            // decode engines when split (NP + ND = N)
+let ND = N - NP;       // decode engines when split: the same engines
 let mode = 1;          // 0 colocated, 1 split
 let B = 8192;          // max_num_batched_tokens
 let max_seqs = 1024;   // max_num_seqs: enough that it never binds

@@ -259,8 +259,8 @@ impl Report {
                 &mut s,
                 &[
                     "step",
-                    "prefill",
-                    "decode",
+                    "prefill only",
+                    "decode only",
                     "mixed",
                     "idle",
                     "decodes",

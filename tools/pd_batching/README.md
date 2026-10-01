@@ -15,13 +15,15 @@ tools/pd_batching/sweep.py     # about two minutes; writes raw.jsonl (not commit
 | File | |
 |---|---|
 | `examples/pd-disaggregation/pd_ps.sq` | the idealisation: decode as processor sharing at a constant fraction `f` of each of `N` engines, colocated or pooled as `N f` engines |
-| `examples/pd-disaggregation/pd_batching.sq` | the engines: 4 colocated vs 3 prefill + 1 decode, vLLM's step cost, exclusive steps (one prefill alone, or decodes only; a waiting prefill goes first), memory that never binds, a free and instantaneous transfer |
+| `examples/pd-disaggregation/pd_batching.sq` | the engines: 4 colocated vs 3 prefill + 1 decode, the step cost of `examples/multi-turn/vllm.sq`, exclusive steps (one prefill alone, or decodes only; a waiting prefill goes first), memory that never binds, a free and instantaneous transfer |
 | `results.csv` | one row per run (mode, load, case, seed) |
 | `summary.md` | mean ± 95 % CI over five seeds |
 
 Both modes of a program draw the same requests from a seed: the output
-tokens of every session agree between the modes, and so does the output
-throughput of a seed.
+tokens of every session agree between the modes. The output throughput of
+a seed differs by up to 1 %, because the sessions that end inside the
+measured span are not the same; over five seeds the means agree within
+their intervals.
 
 TPOT of a request is (last token − first token)/(o − 1), with o ≥ 2 by
 the output law. *Request-weighted* is the mean of that over requests,
@@ -52,32 +54,37 @@ token-weighted unless it says otherwise.
   prefills and sits idle. Its decode fraction is 0.20, 0.32, 0.32, 0.27 at
   λ = 20–70, its idle time 0.60 down to 0.03. The denominator is
   wall-clock time, idle included.
-- **With a 10 ms decode step (`omega = 0.01`) the ratio is 1/(1 − p).**
+- **With a 10 ms decode step (`omega = 0.01`) the ratio is about 1/(1 − p).**
   The decodes no longer drain: a colocated engine is never idle, its
   decode fraction is exactly 1 − p for a prefill fraction p, and TPOT is
   16.7, 25.6, 34.6 ms colocated against 10.4, 10.5, 10.6 ms split at
-  λ = 40, 60, 70 — 1.6×, 2.4×, 3.3× for p = 0.4, 0.6, 0.7, where 1/(1 − p)
-  is 1.7, 2.5, 3.3. The issue's 4× is p = 0.75, at λ = 75, where the three
-  prefill engines are exactly saturated: a limit, not an operating point.
-  At 0.2 ms the ratio at λ = 70 exceeds 1/(1 − p) = 3.3, because a decode
-  that has just started waits behind the prefill that arrived during the
-  last one, and over 200 tokens that wait is not averaged away.
+  λ = 40, 60, 70 — 1.62×, 2.43×, 3.26× for p = 0.4, 0.6, 0.7, where
+  1/(1 − p) is 1.67, 2.5, 3.33. The 2–3 % short is the step: the split's
+  decode engine carries larger batches (83–149 against 34–122), and its
+  step is 1–2 % longer by the KV term. The issue's 4× is p = 0.75, at
+  λ = 75, where the three prefill engines are exactly saturated: a limit,
+  not an operating point. At 0.2 ms the colocated engine idles, so
+  1/(1 − p) is not the reference there; the decode step over the decode
+  fraction (0.21/0.27 ≈ 0.77 ms at λ = 70) comes within 9 % of the
+  measured 0.84 ms.
 - **Request- and token-weighted TPOT differ colocated.** A short answer
   that sits behind a prefill has a large TPOT: at λ = 60 the request mean
   is 1.05 ms and the token mean 0.54 ms. Split, they agree.
 - **The split pays in TTFT.** Three prefill engines carry what four did:
   at λ = 70, TTFT is 56 ms colocated and 124 ms split. With prompts of the
   same mean and squared coefficient of variation 9 (`h2cv9`: Poisson
-  arrivals, rare very long prompts), it is 175 ms against 907 ms, and the
-  response time turns worse split as well (498 vs 951 ms; at λ = 60 the
+  arrivals, rare very long prompts), it is about 160 ms against 900 ms
+  over a long run (below), and the response time turns worse split as
+  well (about 475 against 940 ms; at λ = 60, in the 300 s runs, the
   intervals overlap). The mean prefill fraction alone does not decide the
   comparison.
 - **The h2cv9 point at λ = 70 is near saturation.** The prefill engines are
   94 % busy and the prompts vary widely, so 300 s is far from steady state
-  (the ±360 ms). Run for 2000 s with 200 s of warm-up, seeds 1–3, TTFT is
-  154, 160, 162 ms colocated and 808, 754, 850 ms split: the conclusion
-  stands and the summary's mean is high. To repeat:
-  `serq run examples/pd-disaggregation/pd_batching.sq --set mode=1 --set Lambda=70 --def 'prompt_len=max(1, floor(~h2(2000, 9)))' --horizon 2000 --warmup 200 --seed 1`.
+  (the ±360 ms). Run for 8000 s with 500 s of warm-up, seeds 1–5, TTFT is
+  155, 160, 163, 159, 160 ms colocated (mean 159; the summary's 175 is
+  high) and 802, 916, 954, 901, 919 ms split (mean 898; the summary's 907
+  stands), response 459–491 against 846–998 ms. To repeat:
+  `serq run examples/pd-disaggregation/pd_batching.sq --set mode=1 --set Lambda=70 --def 'prompt_len=max(1, floor(~h2(2000, 9)))' --horizon 8000 --warmup 500 --seed 1`.
 
 ## Not covered yet
 
