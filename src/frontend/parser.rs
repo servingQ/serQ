@@ -174,6 +174,8 @@ struct Parser {
     structural_overrides: Vec<String>,
     /// The queue whose entry is being parsed.
     in_queue: Option<usize>,
+    /// Parsing the `serve` of a link queue, which may take a `latency`.
+    latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
     dotted_reads: Vec<(usize, String)>,
     /// `Q[i].x` references, checked once the queues are known: `x` must be
@@ -250,7 +252,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 83] = [
+pub const KEYWORDS: [&str; 84] = [
     "admission",
     "admit",
     "arrivals",
@@ -288,6 +290,7 @@ pub const KEYWORDS: [&str; 83] = [
     "horizon",
     "in",
     "init",
+    "latency",
     "lease",
     "let",
     "lifo",
@@ -1214,6 +1217,7 @@ impl Parser {
             consts: vec![],
             structural_overrides: vec![],
             in_queue: None,
+            latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
             requests: vec![],
@@ -2547,6 +2551,14 @@ impl Parser {
         } else {
             return self.err(format!("unknown stage kind {}", self.peek()));
         };
+        if self.is_kw("latency") {
+            if self.latency_ok {
+                return Ok(kind);
+            }
+            return self.err(
+                "`latency` belongs to the `serve` of a queue that plays `link`: a link's fixed wait",
+            );
+        }
         // `step { ... }` needs no semicolon
         if *self.peek() == Tok::Semi || !matches!(kind, StageKind::Step(_)) {
             self.expect(&Tok::Semi)?;
@@ -2614,6 +2626,7 @@ impl Parser {
             entries: vec![],
             leased: None,
             marks: vec![],
+            latency: None,
             at,
         });
         let qi = self.queues.len() - 1;
@@ -2664,7 +2677,29 @@ impl Parser {
                     return self
                         .err_at(s_at, format!("`serve` twice: queue `{name}` is one stage"));
                 }
-                let mut kind = self.stage_kind()?;
+                self.latency_ok = roles.iter().any(|r| r == "link");
+                let kind = self.stage_kind();
+                self.latency_ok = false;
+                let mut kind = kind?;
+                if self.eat_kw("latency") {
+                    let l_at = self.pos;
+                    let e = self.expr()?;
+                    let mut vars = vec![];
+                    names(&e, &mut vars, &mut Vec::new());
+                    if let Some(v) = vars
+                        .iter()
+                        .find(|v| !self.consts.iter().any(|(c, _)| c == *v))
+                    {
+                        return self.err_at(
+                            l_at,
+                            format!(
+                                "`latency` reads `{v}`: a link's latency is a number or a `let` constant"
+                            ),
+                        );
+                    }
+                    self.expect(&Tok::Semi)?;
+                    self.queues[qi].latency = Some(e);
+                }
                 if let StageKind::Step(s) = &mut kind
                     && let Some(m) = &mut s.memory
                     && self.queues[qi].pools.contains(&m.name)
@@ -2690,6 +2725,27 @@ impl Parser {
             }
         }
         self.expect(&Tok::RBrace)?;
+        // a link's latency: a delay stage of its own, which a transfer over
+        // the link runs first
+        if self.queues[qi].latency.is_some() {
+            if self.queues[qi].entry("transfer", false).is_some() {
+                return self.err_at(
+                    at,
+                    format!(
+                        "queue `{name}` has a `transfer` entry and a `latency`: a called link's \
+                         time is its entry's; write the latency in the entry body"
+                    ),
+                );
+            }
+            let lname = format!("{name}.latency");
+            self.stages.push((lname.clone(), false));
+            prog.stages.push(StageDecl {
+                span,
+                name: lname,
+                count,
+                kind: StageKind::Delay,
+            });
+        }
         // every role's entries are there, and nothing else
         let q = &self.queues[qi];
         for r in &roles {
@@ -3717,7 +3773,25 @@ impl Parser {
             let to = self.own_pool("transfer … to")?;
             let units = self.paren_expr()?;
             self.expect(&Tok::Semi)?;
-            return Ok(vec![
+            // each link with a latency is waited at first, in the order named
+            let mut out: Vec<Stmt> = std::iter::once(&stage)
+                .chain(also.iter())
+                .filter_map(|r| {
+                    let q = self.queues.iter().find(|q| q.name == r.name)?;
+                    Some(Stmt::Run {
+                        stage: Ref {
+                            span: r.span,
+                            name: format!("{}.latency", q.name),
+                            index: r.index.clone(),
+                        },
+                        mode: RunMode::Plain,
+                        work: q.latency.clone()?,
+                        growing: None,
+                        also: vec![],
+                    })
+                })
+                .collect();
+            out.extend([
                 Stmt::Run {
                     stage,
                     mode,
@@ -3728,6 +3802,7 @@ impl Parser {
                 Stmt::Load(to, units),
                 Stmt::Release(from),
             ]);
+            return Ok(out);
         }
         // A KV transfer leaves one hold and enters another; a link that
         // only takes time is the kernel's `run`, and says so.

@@ -36,7 +36,7 @@ client's thinking time and not a station of the deployment.
 ```
 item  := queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- expr a let constant: queue D[ND]
 qitem := pool NAME { poolopt* }                  -- the queue's own; only its entries hold it
-       | serve kind ;                            -- the Q of admit via Q, budget_left(Q), work(Q)
+       | serve kind [ latency expr ] ;           -- the Q of admit via Q, budget_left(Q), work(Q); latency: a link's
        | VERB [ ( NAME, ... ) ] [ from NAME ] block
 stmt  += QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
        | request QUEUE ;                          -- workload session: this gateway's route
@@ -53,7 +53,7 @@ expr  += QUEUE [ '[' expr ']' ] . POOL            -- from outside, a pool's read
 | `gateway` | `route` | the workload's `request Q;` selects this queue's `route`; no implicit registration |
 | `prefill` | `prefill (prompt)` | computes the prompt; how the KV is left (`lease`, `cache`, a transfer) is the entry's |
 | `decode` | `decode (prompt)`, `decode (prompt) from Q` | told apart by the `from` |
-| `link` | `transfer (n)`, or none | the body sees `n`; `from S to P (m)` are the call's, and the linker writes `load P (m); release S` after the run. A link with no entry is its `serve`: `transfer on L[k], M[l] (n) from S to P (m)` holds it, with another link, at once |
+| `link` | `transfer (n)`, or none | the body sees `n`; `from S to P (m)` are the call's, and the linker writes `load P (m); release S` after the run. A link with no entry is its `serve`: `transfer on L[k], M[l] (n) from S to P (m)` holds it, with another link, at once, after the `latency` of each that has one |
 
 **Three rules.**
 
@@ -92,6 +92,7 @@ expr  += QUEUE [ '[' expr ']' ] . POOL            -- from outside, a pool's read
 | `Q[i].decode (…) from S[k]` | the body's `src` := `S.kv[k]` |
 | `L[j].transfer (n) from src to kv (m)` | `run L[j] (t); load Q.kv[i] (m); release src`, `t` the link entry's `run (…)` |
 | `transfer on egress[src], ingress[self] (n) from src to kv (m)` in `D[j]`'s `decode … from src`, called `from P[i]` | `run egress[i], ingress[j] (n); load D.kv[j] (m); release P.kv[i]` |
+| `queue L[N] : link { serve k latency x; }`, and a `transfer on L[k] …` | `stage L[N] : k; stage L.latency[N] : delay;`, and `run L.latency[k] (x);` before the transfer's `run` |
 | `mark x;` / `Q.x` | `set Q.x = now;` / the attribute |
 | `request Q;` | the named gateway's `route` body in place; no request node in the IR |
 

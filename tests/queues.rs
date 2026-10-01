@@ -197,6 +197,98 @@ fn a_read_over_both_links_is_the_flat_read() {
     same_ir(queues, flat, &[("P.kv", "kvP"), ("D.kv", "kvD")]);
 }
 
+/// A link's `latency` is a wait before every transfer over it: a delay
+/// stage of its own, run first, one per link named, in the order named.
+#[test]
+fn a_link_latency_is_a_wait_before_the_read() {
+    let queues = "
+      let x0 = 0.5; let x1 = 0.25;
+      queue gw : gateway { route {
+        P[i].prefill (prompt);
+        D[j].decode (prompt) from P[i];
+      } }
+      queue egress[2] : link { serve ps(100) latency x1; }
+      queue ingress[2] : link { serve ps(200) latency x0; }
+      queue P[2] : prefill {
+        pool kv { cap 1000; }
+        serve fifo;
+        prefill (prompt) { hold kv (prompt) { run (prompt); } cache (prompt) lease kv (inf); }
+      }
+      queue D[2] : decode {
+        pool kv { cap 1000; block 16; }
+        serve step { cost 1; memory kv; }
+        decode (prompt) { hold kv (prompt) { prefill (prompt) growing kv; } }
+        decode (prompt) from src {
+          hold kv (prompt) {
+            transfer on egress[src], ingress[self] (prompt) from src to kv (prompt - 1);
+            decode (o - 1) growing kv;
+          }
+        }
+      }
+      share maxmin;
+      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request gw; end; } }
+      run { horizon 100; }";
+    let flat = "
+      let x0 = 0.5; let x1 = 0.25;
+      stage egress[2] : ps(100);
+      stage egressL[2] : delay;
+      stage ingress[2] : ps(200);
+      stage ingressL[2] : delay;
+      pool kvP[2] { cap 1000; }
+      stage P[2] : fifo;
+      pool kvD[2] { cap 1000; block 16; }
+      stage D[2] : step { cost 1; memory kvD; }
+      share maxmin;
+      server {
+        hold kvP[i] (prompt) { run P[i] (prompt); } cache (prompt) lease kvP[i] (inf);
+        hold kvD[j] (prompt) {
+          run egressL[i] (x1);
+          run ingressL[j] (x0);
+          transfer on egress[i], ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
+          decode on D[j] (o - 1) growing kvD[j];
+        }
+      }
+      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
+      run { horizon 100; }";
+    same_ir(
+        queues,
+        flat,
+        &[
+            ("P.kv", "kvP"),
+            ("D.kv", "kvD"),
+            ("egress.latency", "egressL"),
+            ("ingress.latency", "ingressL"),
+        ],
+    );
+}
+
+/// `latency` is a link's, a number or a constant, and not a called link's.
+#[test]
+fn a_latency_belongs_to_a_link() {
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ }} }} queue P : prefill {{ serve fifo latency 1; prefill (p) {{ run (p); }} }} {WORKLOAD}"
+        ),
+        "`latency` belongs to the `serve` of a queue that plays `link`",
+    );
+    refused(
+        "stage s : ps(1) latency 1; session { run s (1); end; } run { horizon 1; }",
+        "`latency` belongs to the `serve` of a queue that plays `link`",
+    );
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ }} }} queue nic : link {{ serve ps(1) latency 1; transfer (n) {{ run (n); }} }} {WORKLOAD}"
+        ),
+        "write the latency in the entry body",
+    );
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ }} }} queue nic : link {{ serve ps(1) latency prompt; }} {WORKLOAD}"
+        ),
+        "`latency` reads `prompt`",
+    );
+}
+
 /// A link says what crossing it costs: an entry, or its `serve`.
 #[test]
 fn a_link_has_a_cost() {

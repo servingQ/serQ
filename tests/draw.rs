@@ -422,7 +422,7 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
 
 /// `examples/pd-disaggregation/llmd_nixl_pull.sq`'s router sends a request either
 /// to a prefiller and over the two NICs (remote), after the read's fixed
-/// wait (`setup`), or straight to the decoder (local); a request whose KV
+/// wait (`ingress`'s `latency`, a delay stage of its own), or straight to the decoder (local); a request whose KV
 /// is already there skips both. Every turn
 /// ends at the decoder, which the session leaves or resumes after a tool call.
 #[test]
@@ -432,7 +432,7 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
     let (pf, setup, eg, ing, d, tool) = (
         at("P"),
-        at("setup"),
+        at("ingress.latency"),
         at("egress"),
         at("ingress"),
         at("D"),

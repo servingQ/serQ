@@ -68,8 +68,7 @@ pool, and as an index the prefiller's member):
 
 ```serq
 hold kv (known) reserve (known), reqs (0) reserve (1) … {
-  run setup (x0);
-  transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);
+  transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);   // after ingress's latency x0
   …
 } cache (prompt + o);
 ```
