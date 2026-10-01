@@ -42,6 +42,9 @@ pub struct GaugeReport {
 )]
 pub struct StageReport {
     pub name: String,
+    /// The member's index in a stage array (`rep[1]`), `None` for a single
+    /// stage.
+    pub index: Option<u32>,
     /// Time-average jobs present (waiting and in service).
     pub mean_number: f64,
     /// Fraction of time with at least one job present; on a shared stage,
@@ -62,6 +65,9 @@ pub struct StageReport {
 )]
 pub struct PoolReport {
     pub name: String,
+    /// The member's index in a pool array (`kvD[1]`), `None` for a single
+    /// pool.
+    pub index: Option<u32>,
     pub mean_used: f64,
     pub mean_cached: f64,
     pub mean_queue: f64,
@@ -152,6 +158,11 @@ impl Report {
         self.pools.iter().find(|p| p.name == name)
     }
 
+    /// All array members of a pool, in index order.
+    pub fn pools_named(&self, name: &str) -> Vec<&PoolReport> {
+        self.pools.iter().filter(|p| p.name == name).collect()
+    }
+
     pub fn text(&self) -> String {
         let mut s = String::new();
         let _ = writeln!(
@@ -199,7 +210,7 @@ impl Report {
         if !self.stages.is_empty() {
             let rows = self.stages.iter().map(|st| {
                 vec![
-                    st.name.clone(),
+                    label(&st.name, st.index),
                     format!("{:.3}", st.mean_number),
                     format!("{:.3}", st.utilization),
                     st.completed.to_string(),
@@ -220,7 +231,7 @@ impl Report {
         if !self.pools.is_empty() {
             let rows = self.pools.iter().map(|p| {
                 vec![
-                    p.name.clone(),
+                    label(&p.name, p.index),
                     format!("{:.1}", p.mean_used),
                     format!("{:.1}", p.mean_cached),
                     format!("{:.3}", p.mean_queue),
@@ -248,7 +259,8 @@ impl Report {
                     let _ = writeln!(
                         s,
                         "stuck: {} session(s) preempted again at pool `{}` without passing the position of their previous preemption",
-                        p.stuck, p.name
+                        p.stuck,
+                        label(&p.name, p.index)
                     );
                 }
             }
@@ -263,6 +275,9 @@ impl Report {
             } else {
                 "null".into()
             }
+        }
+        fn index(i: Option<u32>) -> String {
+            i.map_or("null".into(), |i| i.to_string())
         }
         let mut s = String::from("{");
         let _ = write!(
@@ -316,8 +331,9 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{}}}",
                 st.name,
+                index(st.index),
                 f(st.mean_number),
                 f(st.utilization),
                 st.completed,
@@ -334,8 +350,9 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{}}}",
                 p.name,
+                index(p.index),
                 f(p.mean_used),
                 f(p.mean_cached),
                 f(p.mean_queue),
@@ -352,6 +369,14 @@ impl Report {
         }
         s.push_str("]}");
         s
+    }
+}
+
+/// A row's name: `kvD[0]` for an array member, `kv` otherwise.
+fn label(name: &str, index: Option<u32>) -> String {
+    match index {
+        Some(i) => format!("{name}[{i}]"),
+        None => name.to_string(),
     }
 }
 

@@ -3193,8 +3193,10 @@ impl<'p> Interp<'p> {
             .stages
             .iter()
             .zip(&p.stages)
-            .map(|(s, cs)| StageReport {
+            .enumerate()
+            .map(|(i, (s, cs))| StageReport {
                 name: cs.name.clone(),
+                index: member(&p.stages, i, |s| &s.name),
                 mean_number: s.number_avg.mean(now),
                 utilization: s.busy_avg.mean(now),
                 completed: s.completed,
@@ -3208,8 +3210,10 @@ impl<'p> Interp<'p> {
             .pools
             .iter()
             .zip(&p.pools)
-            .map(|(pl, cp)| PoolReport {
+            .enumerate()
+            .map(|(i, (pl, cp))| PoolReport {
                 name: cp.name.clone(),
+                index: member(&p.pools, i, |p| &p.name),
                 mean_used: pl.used_avg.mean(now),
                 mean_cached: pl.cached_avg.mean(now),
                 mean_queue: pl.queue_avg.mean(now),
@@ -3265,6 +3269,17 @@ impl Ord for KeyOrd {
         }
         self.0.len().cmp(&o.0.len())
     }
+}
+
+/// The index of `xs[i]` in its array, `None` if no other entry has its name:
+/// an array's members are the entries of one name (`kvD`, `kvD`), in index
+/// order. A one-member array has no other, and reads as a single entry.
+fn member<T>(xs: &[T], i: usize, name: impl Fn(&T) -> &String) -> Option<u32> {
+    let n = name(&xs[i]);
+    if xs.iter().filter(|x| name(x) == n).count() < 2 {
+        return None;
+    }
+    Some(xs[..i].iter().filter(|x| name(x) == n).count() as u32)
 }
 
 /// Whether an eviction key reads only its entry, the clock and the stage

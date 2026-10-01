@@ -152,9 +152,15 @@ impl Report {
         self.0.stages_named(name).into_iter().cloned().collect()
     }
 
-    /// The pool `name`, or `None`.
+    /// The first pool named `name`, or `None`.
     fn pool(&self, name: &str) -> Option<serq::engine::report::PoolReport> {
         self.0.pool(name).cloned()
+    }
+
+    /// Every row of the pool `name`: a pool array's members, in index
+    /// order.
+    fn pools_named(&self, name: &str) -> Vec<serq::engine::report::PoolReport> {
+        self.0.pools_named(name).into_iter().cloned().collect()
     }
 }
 

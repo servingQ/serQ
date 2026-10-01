@@ -75,7 +75,7 @@ def test_a_gauge_is_its_json_and_its_dump():
 
 def same(x, j):
     """An attribute and its JSON field: JSON writes a NaN or an infinity as null."""
-    return (j is None and not math.isfinite(x)) or x == j
+    return x == j or (j is None and x is not None and not math.isfinite(x))
 
 
 def attrs(x):
@@ -83,7 +83,7 @@ def attrs(x):
 
 
 SAMPLES = {"samples", "times", "sessions", "turns"}
-LOOKUPS = {"json", "observes", "gauges", "stages", "pools", "observe", "gauge", "stage", "stages_named", "pool"}
+LOOKUPS = {"json", "observes", "gauges", "stages", "pools", "observe", "gauge", "stage", "stages_named", "pool", "pools_named"}
 
 
 def test_the_report_is_its_json_by_name():
@@ -109,6 +109,11 @@ def test_the_report_is_its_json_by_name():
             assert r.stage(s.name).name == s.name and s.name in {t.name for t in r.stages_named(s.name)}
         for p in r.pools:
             assert r.pool(p.name).name == p.name
+        # an array's members are its rows of one name, indexed in order; a single one has no index
+        for rows, named in [(r.stages, r.stages_named), (r.pools, r.pools_named)]:
+            for x in rows:
+                members = [m.index for m in named(x.name)]
+                assert members in ([None], list(range(len(members))))
         assert list(r.gauges) == list(js["gauges"])
         assert r.observe("nope") is None and r.stage("nope") is None and r.pool("nope") is None
         assert r.gauge("nope") is None
