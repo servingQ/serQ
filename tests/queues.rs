@@ -733,9 +733,22 @@ fn a_def_captures_what_the_gateway_it_requests_assigns() {
         &program(send, "send(dirty, x);"),
         "an argument of `send` reads `x`",
     );
-    // through a definition the body passes a parameter to, any gateway
+    refused(
+        &program(send, "send(dirty, x);"),
+        "which its `request dirty;` assigns",
+    );
+    // through a definition the body passes a gateway to, that gateway
     let ask = "def ask(g) { request g; } def go(x) { ask(clean); observe b = x; }";
+    compile_source(&program(ask, "go(x);"), &Overrides::default()).unwrap();
+    let ask = "def ask(g) { request g; } def go(x) { ask(dirty); observe b = x; }";
     refused(&program(ask, "go(x);"), "an argument of `go` reads `x`");
+    // and one it passes its own parameter to, the argument's
+    let ask = "def ask(g) { request g; } def go(g, x) { ask(g); observe b = x; }";
+    compile_source(&program(ask, "go(clean, x);"), &Overrides::default()).unwrap();
+    refused(
+        &program(ask, "go(dirty, x);"),
+        "an argument of `go` reads `x`",
+    );
     // and through one that names its gateway, that one
     let ask = "def ask() { request clean; } def go(x) { ask(); observe b = x; }";
     compile_source(&program(ask, "go(x);"), &Overrides::default()).unwrap();

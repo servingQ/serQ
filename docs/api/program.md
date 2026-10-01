@@ -62,7 +62,7 @@ would be written out. So that a use reads as a call, an argument that reads
 a name the body assigns is refused rather than read after the assignment:
 a `set`, `choose` or binding of the body, the attributes a hold's admission
 sets (`cached`, `computed`) when the body holds, and what a `turn;` or
-`request;` in the body assigns, directly or through a definition the body uses. A `request gw;` assigns what `gw`'s `route` does, not what another gateway's does; when the gateway is a parameter, it is the argument's, and through a definition the body passes a parameter to, any gateway's. For the same reason an argument of statements may not read the clock or
+`request;` in the body assigns, directly or through a definition the body uses. A `request gw;` assigns what `gw`'s `route` does, not what another gateway's does; when the gateway is a parameter, it is the one the argument names, at the use and through every definition that passes it on; an argument that is not a name stands for any gateway. For the same reason an argument of statements may not read the clock or
 live state (`now`, `used(kv)`): the body would read it after its runs. Name
 the value with `set` first and pass the name. An error in
 an expansion is reported in the body, with a note naming the use.

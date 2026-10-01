@@ -215,8 +215,69 @@ enum Sends {
     /// `request p;` with `p` the definition's `k`-th parameter: the
     /// gateway its argument names.
     Param(usize),
-    /// A parameter of a definition the body uses: any of them.
+    /// A gateway an argument names other than by its name: any of them.
     Any,
+}
+
+impl Sends {
+    /// The statement, as an error names it.
+    fn says(&self) -> String {
+        match self {
+            Sends::Server => "`request;`".into(),
+            Sends::Gateway(g) => format!("`request {g};`"),
+            Sends::Param(_) | Sends::Any => "`request`".into(),
+        }
+    }
+
+    /// Where it goes at a use with these arguments, `params` being those
+    /// of the definition the use is in (none at the top level).
+    fn at(&self, args: &[Vec<Token>], params: &[String]) -> Sends {
+        let Sends::Param(i) = self else {
+            return self.clone();
+        };
+        match args.get(*i).map(Vec::as_slice) {
+            Some([t]) => match &t.tok {
+                Tok::Ident(g) => match params.iter().position(|p| p == g) {
+                    Some(j) => Sends::Param(j),
+                    None => Sends::Gateway(g.clone()),
+                },
+                _ => Sends::Any,
+            },
+            _ => Sends::Any,
+        }
+    }
+}
+
+/// The arguments of each use `name(a, …)` in these tokens, split at the
+/// commas outside brackets.
+fn uses_args(toks: &[Token], name: &str) -> Vec<Vec<Vec<Token>>> {
+    let mut out = vec![];
+    for (k, w) in toks.windows(2).enumerate() {
+        if !(matches!(&w[0].tok, Tok::Ident(n) if n == name) && w[1].tok == Tok::LParen) {
+            continue;
+        }
+        let mut args = vec![];
+        let mut cur = vec![];
+        let mut depth = 0usize;
+        for t in &toks[k + 2..] {
+            match t.tok {
+                Tok::RParen if depth == 0 => break,
+                Tok::Comma if depth == 0 => {
+                    args.push(std::mem::take(&mut cur));
+                    continue;
+                }
+                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
+                Tok::RParen | Tok::RBracket | Tok::RBrace => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            cur.push(t.clone());
+        }
+        if !cur.is_empty() || !args.is_empty() {
+            args.push(cur);
+        }
+        out.push(args);
+    }
+    out
 }
 
 /// What a request assigns, by where it goes.
@@ -1870,15 +1931,15 @@ impl Parser {
                     origin: self.origin(u.file),
                 });
             }
-            let found = u.reads.iter().find(|n| {
-                (u.turn && turned.contains(n)) || u.request.iter().any(|s| served.assigns(s, n))
-            });
-            if let Some(n) = found {
-                let by = if u.turn && turned.contains(n) {
-                    "`turn;`"
+            let found = u.reads.iter().find_map(|n| {
+                if u.turn && turned.contains(n) {
+                    Some((n, "`turn;`".to_string()))
                 } else {
-                    "`request;`"
-                };
+                    let s = u.request.iter().find(|s| served.assigns(s, n))?;
+                    Some((n, s.says()))
+                }
+            });
+            if let Some((n, by)) = found {
                 return Err(ParseError {
                     line: u.line,
                     col: u.col,
@@ -2140,10 +2201,9 @@ impl Parser {
             assigns.extend(d.assigns.iter().cloned());
             turn |= d.turn;
             // a parameter of `d` is whatever this body passes it
-            request.extend(d.request.iter().map(|s| match s {
-                Sends::Param(_) => Sends::Any,
-                s => s.clone(),
-            }));
+            for args in uses_args(&body, &d.name) {
+                request.extend(d.request.iter().map(|s| s.at(&args, &params)));
+            }
         }
         assigns.sort();
         assigns.dedup();
@@ -2358,20 +2418,7 @@ impl Parser {
         }
         let turn = d.turn;
         // a parameter's gateway is the argument's name
-        let request: Vec<Sends> = d
-            .request
-            .iter()
-            .map(|s| match s {
-                Sends::Param(i) => match args[*i].as_slice() {
-                    [t] => match &t.tok {
-                        Tok::Ident(g) => Sends::Gateway(g.clone()),
-                        _ => Sends::Any,
-                    },
-                    _ => Sends::Any,
-                },
-                s => s.clone(),
-            })
-            .collect();
+        let request: Vec<Sends> = d.request.iter().map(|s| s.at(&args, &[])).collect();
         if d.stmts {
             let mut reads: Vec<String> =
                 args.iter().flat_map(|a| self.reads_of(a, true).0).collect();
