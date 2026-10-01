@@ -257,6 +257,30 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     for a in BUILTIN_ATTRS {
         lk.attr(a);
     }
+    // Names of pools, stages and attributes, before the constants: an
+    // aggregate in a `let` checks its index against all of them.
+    let mut base = 0;
+    for p in &prog.pools {
+        if lk.pools.insert(p.name.clone(), (base, p.count)).is_some() {
+            return Err(lk.duplicate("pool", &p.name, p.span));
+        }
+        base += p.count;
+    }
+    let mut base = 0;
+    for s in &prog.stages {
+        if lk.stages.insert(s.name.clone(), (base, s.count)).is_some() {
+            return Err(lk.duplicate("stage", &s.name, s.span));
+        }
+        base += s.count;
+    }
+    // Attributes: everything assigned anywhere.
+    let wl = prog.workload.as_ref();
+    if let Some(w) = wl {
+        collect_attrs(&w.init, &mut lk);
+        collect_attrs(&w.turn, &mut lk);
+    }
+    collect_attrs(&prog.session, &mut lk);
+    collect_leases(&prog.session, &mut lk.leased);
     // Constants, in order; an override replaces the value of a `let`.
     for (name, e) in &prog.lets {
         let overridden = ov.lets.iter().any(|(n, _)| n == name);
@@ -282,29 +306,6 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         })?;
         lk.consts.insert(name.clone(), v);
     }
-    // Names of pools and stages.
-    let mut base = 0;
-    for p in &prog.pools {
-        if lk.pools.insert(p.name.clone(), (base, p.count)).is_some() {
-            return Err(lk.duplicate("pool", &p.name, p.span));
-        }
-        base += p.count;
-    }
-    let mut base = 0;
-    for s in &prog.stages {
-        if lk.stages.insert(s.name.clone(), (base, s.count)).is_some() {
-            return Err(lk.duplicate("stage", &s.name, s.span));
-        }
-        base += s.count;
-    }
-    // Attributes: everything assigned anywhere.
-    let wl = prog.workload.as_ref();
-    if let Some(w) = wl {
-        collect_attrs(&w.init, &mut lk);
-        collect_attrs(&w.turn, &mut lk);
-    }
-    collect_attrs(&prog.session, &mut lk);
-    collect_leases(&prog.session, &mut lk.leased);
     // An attribute would shadow a constant of the same name everywhere
     // (a stage's cost has no session, so the constant would read as NaN).
     for (name, _) in &prog.lets {

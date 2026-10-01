@@ -126,6 +126,8 @@ fn an_aggregates_index_and_count_are_its_own() {
             "is also a `let` constant",
         ),
         ("gauge x = max kv in 2 (1);", "is also a pool"),
+        // whatever the order the names are declared in
+        ("let x = sum svc in 2 (1); gauge y = x;", "is also a stage"),
         ("gauge x = sum k in 1.5 (1);", "must be a positive integer"),
         ("gauge x = sum k in 3 (used(kv[k]));", "out of range"),
         ("gauge x = sum k in 1e20 (1);", "at most 4096"),
@@ -212,4 +214,14 @@ fn a_gauge_reads_the_end_of_an_instant() {
     let n = r.gauge("n").unwrap();
     assert_eq!(n.max, 1.0);
     assert!(n.points.iter().all(|p| p.1 <= 1.0), "{:?}", n.points);
+}
+
+/// A gauge plans no iteration: `budget_left` would evaluate the budget,
+/// which may draw, and the run would change.
+#[test]
+fn a_gauge_does_not_plan_an_iteration() {
+    let src = "stage e : step { budget ~uniform(1, 2); cost 1; }
+        session { run e prefill (1); end; } run { horizon 1; }
+        gauge g = budget_left(e);";
+    assert!(link_error(src).contains("may not read `budget_left"));
 }
