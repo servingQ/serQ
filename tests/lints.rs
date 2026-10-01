@@ -486,3 +486,40 @@ fn reuse_without_cache_is_rejected() {
         "{e}"
     );
 }
+
+/// #231: a name resolves to an attribute first, then a `let`, then a context
+/// variable, so `set present = 500;` anywhere made `ps(min(present, 16))`
+/// read the attribute: capacity 16 for 2 jobs, a service time of 0.125
+/// where the jobs present give 1. Neither an attribute nor a `let` may take
+/// a name the language supplies (a context variable, `inf`).
+#[test]
+fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
+    const PS: &str = "stage dec : ps(min(present, 16));
+        stage think : delay;
+        workload { arrive closed(2); }
+        session { loop { SET run dec (1); observe r = now; run think (1); } }
+        run { horizon 50; warmup 0; seed 1; }";
+    let e = check(&PS.replace("SET", "set present = 500;")).expect_err("rejected");
+    assert!(
+        e.contains("`present` is a name the language supplies, read in a ps stage's capacity"),
+        "{e}"
+    );
+    assert!(e.contains("a session attribute named `present`"), "{e}");
+    let e = check(&format!("let present = 500; {}", PS.replace("SET", ""))).expect_err("rejected");
+    assert!(e.contains("a `let` constant named `present`"), "{e}");
+    // `inf` is folded at parse time, so the answer would be right, but the
+    // name is the language's, as it is for a binding or an aggregate's index.
+    let e = check(&PS.replace("SET", "set inf = 500;")).expect_err("rejected");
+    assert!(
+        e.contains("`inf` is a name the language supplies, read in every expression"),
+        "{e}"
+    );
+    // Renamed, the program links, and the capacity reads the jobs present:
+    // `ps(φ)` serves each job at `φ(present)/present` = 1 while at most 16
+    // are present, so a unit of work takes exactly 1 s whatever the arrivals
+    // (the attribute's 0.125 needs the two jobs together: 16/2 = 8).
+    let src = PS.replace("SET", "set prompt = 500;");
+    check(&src).expect("links");
+    let r = serq::run_source(&src, &Overrides::default(), None).unwrap();
+    assert_eq!(r.stage("dec").unwrap().mean_service, 1.0, "{}", r.text());
+}

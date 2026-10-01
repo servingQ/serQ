@@ -181,9 +181,12 @@ chunks, `K` the position before the chunk), `decoding`, `admission`,
 residents' four as well). Each context variable exists at the one place named in
 its parenthesis (`now` everywhere), and reading it anywhere else is a link
 error rather than a 0: `set x = tokens;` in a session, or `evict by (tokens)`,
-does not link (`docs/ir.md`, Moments). A name may not be both a `let` constant and a session
-attribute (the linker rejects it: an attribute would shadow the constant,
-and a stage's cost, which has no session, would read it as undefined). Every constant (a
+does not link (`docs/ir.md`, Moments). Session attributes, `let` constants
+and the names the language supplies (the context variables, `inf`) have
+names of their own: the linker rejects a program that gives two of them one
+name (an attribute would be read where the constant or the context variable
+was meant; `set present = …` would make `ps(min(present, 16))` read the
+attribute, not the jobs present). Every constant (a
 `let`, or a constant position: `cap`, `block`, a `fifo` count, the arrival
 rate or population, the `run` block) is a number or `inf`; one that
 evaluates to NaN (`0/0`, `inf - inf`) does not link. Built-in session attributes: `serial`, `turn_no`, `cached` (the
