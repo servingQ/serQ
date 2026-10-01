@@ -197,6 +197,174 @@ fn a_read_over_both_links_is_the_flat_read() {
     same_ir(queues, flat, &[("P.kv", "kvP"), ("D.kv", "kvD")]);
 }
 
+/// A link's `latency` is a wait before every transfer over it: a delay
+/// stage of its own, run first, one per link named, in the order named.
+#[test]
+fn a_link_latency_is_a_wait_before_the_read() {
+    let queues = "
+      let x0 = 0.5; let x1 = 0.25;
+      queue gw : gateway { route {
+        P[i].prefill (prompt);
+        D[j].decode (prompt) from P[i];
+      } }
+      queue egress[2] : link { serve ps(100) latency x1; }
+      queue ingress[2] : link { serve ps(200) latency x0; }
+      queue P[2] : prefill {
+        pool kv { cap 1000; }
+        serve fifo;
+        prefill (prompt) { hold kv (prompt) { run (prompt); } cache (prompt) lease kv (inf); }
+      }
+      queue D[2] : decode {
+        pool kv { cap 1000; block 16; }
+        serve step { cost 1; memory kv; }
+        decode (prompt) { hold kv (prompt) { prefill (prompt) growing kv; } }
+        decode (prompt) from src {
+          hold kv (prompt) {
+            transfer on egress[src], ingress[self] (prompt) from src to kv (prompt - 1);
+            decode (o - 1) growing kv;
+          }
+        }
+      }
+      share maxmin;
+      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request gw; end; } }
+      run { horizon 100; }";
+    let flat = "
+      let x0 = 0.5; let x1 = 0.25;
+      stage egress[2] : ps(100);
+      stage egressL[2] : delay;
+      stage ingress[2] : ps(200);
+      stage ingressL[2] : delay;
+      pool kvP[2] { cap 1000; }
+      stage P[2] : fifo;
+      pool kvD[2] { cap 1000; block 16; }
+      stage D[2] : step { cost 1; memory kvD; }
+      share maxmin;
+      server {
+        hold kvP[i] (prompt) { run P[i] (prompt); } cache (prompt) lease kvP[i] (inf);
+        hold kvD[j] (prompt) {
+          run egressL[i] (x1);
+          run ingressL[j] (x0);
+          transfer on egress[i], ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
+          decode on D[j] (o - 1) growing kvD[j];
+        }
+      }
+      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
+      run { horizon 100; }";
+    same_ir(
+        queues,
+        flat,
+        &[
+            ("P.kv", "kvP"),
+            ("D.kv", "kvD"),
+            ("egress.latency", "egressL"),
+            ("ingress.latency", "ingressL"),
+        ],
+    );
+}
+
+/// The latency is the link's constant: an entry the transfer is written in
+/// does not rename it, a draw or a reading is refused, and `--set` reaches
+/// it (#196 review).
+#[test]
+fn a_latency_is_the_links_constant() {
+    let program = |latency: &str, param: &str| {
+        format!(
+            "let x = 0.5;
+      queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (32) from P; }} }}
+      queue egress : link {{ serve ps(100); }}
+      queue ingress : link {{ serve ps(200) latency {latency}; }}
+      queue P : prefill {{
+        pool kv {{ cap 1000; }}
+        serve fifo;
+        prefill (prompt) {{ hold kv (prompt) {{ run (prompt); }} cache (prompt) lease kv (inf); }}
+      }}
+      queue D : decode {{
+        pool kv {{ cap 1000; }}
+        serve step {{ cost 1; memory kv; }}
+        decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }}
+        decode ({param}) from src {{
+          hold kv ({param}) {{ transfer on egress, ingress ({param}) from src to kv ({param} - 1); }}
+        }}
+      }}
+      share maxmin;
+      workload {{ arrive batch(1); init {{ set prompt = 32; }} session {{ request gw; end; }} }}
+      run {{ horizon 100; }}"
+        )
+    };
+    let wait = |src: &str, ov: &Overrides| -> String {
+        let p = compile_source(src, ov).unwrap_or_else(|e| panic!("{e}\n{src}"));
+        let ir = p.to_json();
+        let at = ir.find("\"Delay\"").map(|_| ()).is_some();
+        assert!(at, "a delay stage");
+        ir
+    };
+    // the entry's parameter `x` is not the constant `x`
+    let named = wait(&program("x", "x"), &Overrides::default());
+    let other = wait(&program("x", "y"), &Overrides::default());
+    assert_eq!(named, other.replace("\"y\"", "\"x\""));
+    assert!(named.contains("0.5"), "waits 0.5, the constant");
+    // --set reaches the latency
+    let ov = Overrides {
+        lets: vec![("x".into(), parse_expr("0.125").unwrap())],
+        ..Default::default()
+    };
+    assert!(wait(&program("x", "y"), &ov).contains("0.125"));
+    for bad in ["~exp(1)", "work(egress)"] {
+        refused(
+            &program(bad, "y"),
+            "`latency` is a number or a constant over `let`s",
+        );
+    }
+}
+
+/// In an expression a word that is also a keyword (`latency`, `cap`) can
+/// only be a name: a `def` argument that reads it is checked against what
+/// the body assigns like any other name (#196 review).
+#[test]
+fn a_keyword_named_attribute_is_a_read() {
+    for word in ["latency", "cap"] {
+        let src = format!(
+            "def get() = {word};
+             def f(x) {{ set {word} = 2; observe o = x; }}
+             stage s : delay;
+             session {{ set {word} = 1; f(get()); run s (1); end; }}
+             run {{ horizon 1; }}"
+        );
+        let e = compile_source(&src, &Overrides::default()).unwrap_err();
+        assert!(
+            e.contains(&format!("reads `{word}`, which `f` assigns")),
+            "{e}"
+        );
+    }
+}
+
+/// `latency` is a link's, a number or a constant, and not a called link's.
+#[test]
+fn a_latency_belongs_to_a_link() {
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ }} }} queue P : prefill {{ serve fifo latency 1; prefill (p) {{ run (p); }} }} {WORKLOAD}"
+        ),
+        "`latency` belongs to the `serve` of a queue that plays `link`",
+    );
+    refused(
+        "stage s : ps(1) latency 1; session { run s (1); end; } run { horizon 1; }",
+        "`latency` belongs to the `serve` of a queue that plays `link`",
+    );
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ }} }} queue nic : link {{ serve ps(1) latency 1; transfer (n) {{ run (n); }} }} {WORKLOAD}"
+        ),
+        "write the latency in the entry body",
+    );
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ }} }} queue nic : link {{ serve ps(1) latency prompt; }} {WORKLOAD}"
+        ),
+        "`latency` is a number or a constant over `let`s",
+    );
+}
+
 /// A link says what crossing it costs: an entry, or its `serve`.
 #[test]
 fn a_link_has_a_cost() {

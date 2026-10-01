@@ -65,6 +65,9 @@ pub struct QueueDecl {
     pub leased: Option<String>,
     /// Names `mark`ed in some entry.
     pub marks: Vec<String>,
+    /// A link's `serve … latency x;`: every transfer over it first waits
+    /// `x` at the generated delay stage `Q.latency`.
+    pub latency: Option<Expr>,
     pub at: usize,
 }
 

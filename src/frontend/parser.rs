@@ -174,6 +174,8 @@ struct Parser {
     structural_overrides: Vec<String>,
     /// The queue whose entry is being parsed.
     in_queue: Option<usize>,
+    /// Parsing the `serve` of a link queue, which may take a `latency`.
+    latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
     dotted_reads: Vec<(usize, String)>,
     /// `Q[i].x` references, checked once the queues are known: `x` must be
@@ -250,7 +252,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 83] = [
+pub const KEYWORDS: [&str; 84] = [
     "admission",
     "admit",
     "arrivals",
@@ -288,6 +290,7 @@ pub const KEYWORDS: [&str; 83] = [
     "horizon",
     "in",
     "init",
+    "latency",
     "lease",
     "let",
     "lifo",
@@ -1214,6 +1217,7 @@ impl Parser {
             consts: vec![],
             structural_overrides: vec![],
             in_queue: None,
+            latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
             requests: vec![],
@@ -2016,7 +2020,7 @@ impl Parser {
         let mut assigns = assigned_tokens(&body);
         let mut turn = says(&body, "turn");
         let mut request = says_request(&body);
-        let (mut reads, mut calls) = self.reads_of(&body);
+        let (mut reads, mut calls) = self.reads_of(&body, !stmts);
         reads.retain(|n| !params.contains(n));
         for d in &used {
             assigns.extend(d.assigns.iter().cloned());
@@ -2047,7 +2051,11 @@ impl Parser {
 
     /// The names `toks` read and the functions of live state they call,
     /// joined over the definitions they use.
-    fn reads_of(&self, toks: &[Token]) -> (Vec<String>, Vec<String>) {
+    /// `expr`: the tokens are an expression (an argument, an expression
+    /// definition's body), where a word that is also a keyword (`cap`,
+    /// `latency`) can only be a name read; in statements it may be the
+    /// keyword.
+    fn reads_of(&self, toks: &[Token], expr: bool) -> (Vec<String>, Vec<String>) {
         let mut reads = vec![];
         let mut calls = vec![];
         for (k, t) in toks.iter().enumerate() {
@@ -2057,7 +2065,7 @@ impl Parser {
                 if !PURE.contains(&n.as_str()) {
                     calls.push(n.clone());
                 }
-            } else if !called && !KEYWORDS.contains(&n.as_str()) {
+            } else if !called && (expr || !KEYWORDS.contains(&n.as_str())) {
                 reads.push(n.clone());
             }
         }
@@ -2143,7 +2151,7 @@ impl Parser {
             if a.is_empty() {
                 return self.err_at(at, format!("`{}`: the argument for `{p}` is empty", d.name));
             }
-            let (reads, _) = self.reads_of(a);
+            let (reads, _) = self.reads_of(a, true);
             if let Some(n) = d.assigns.iter().find(|n| reads.contains(n)) {
                 return self.err_at(at, capture_message(&d.name, p, n));
             }
@@ -2165,7 +2173,7 @@ impl Parser {
         }
         if d.stmts {
             for (p, a) in d.params.iter().zip(&args) {
-                let (_, calls) = self.reads_of(a);
+                let (_, calls) = self.reads_of(a, true);
                 if let Some(f) = calls.first() {
                     return self.err_at(at, live_message(&d.name, p, &format!("{f}(…)")));
                 }
@@ -2173,7 +2181,8 @@ impl Parser {
         }
         let (turn, request) = (d.turn, d.request);
         if d.stmts {
-            let mut reads: Vec<String> = args.iter().flat_map(|a| self.reads_of(a).0).collect();
+            let mut reads: Vec<String> =
+                args.iter().flat_map(|a| self.reads_of(a, true).0).collect();
             reads.sort();
             reads.dedup();
             self.deferred.push(Deferred {
@@ -2547,6 +2556,14 @@ impl Parser {
         } else {
             return self.err(format!("unknown stage kind {}", self.peek()));
         };
+        if self.is_kw("latency") {
+            if self.latency_ok {
+                return Ok(kind);
+            }
+            return self.err(
+                "`latency` belongs to the `serve` of a queue that plays `link`: a link's fixed wait",
+            );
+        }
         // `step { ... }` needs no semicolon
         if *self.peek() == Tok::Semi || !matches!(kind, StageKind::Step(_)) {
             self.expect(&Tok::Semi)?;
@@ -2614,6 +2631,7 @@ impl Parser {
             entries: vec![],
             leased: None,
             marks: vec![],
+            latency: None,
             at,
         });
         let qi = self.queues.len() - 1;
@@ -2664,7 +2682,30 @@ impl Parser {
                     return self
                         .err_at(s_at, format!("`serve` twice: queue `{name}` is one stage"));
                 }
-                let mut kind = self.stage_kind()?;
+                self.latency_ok = roles.iter().any(|r| r == "link");
+                let kind = self.stage_kind();
+                self.latency_ok = false;
+                let mut kind = kind?;
+                if self.eat_kw("latency") {
+                    let l_at = self.pos;
+                    let e = self.expr()?;
+                    let Some(v) = self.const_value(&e) else {
+                        return self.err_at(
+                            l_at,
+                            "`latency` is a number or a constant over `let`s: a link's fixed wait, \
+                             the same for every transfer",
+                        );
+                    };
+                    self.expect(&Tok::Semi)?;
+                    // a constant of its own, which the transfer's wait reads: an
+                    // entry the transfer is written in substitutes its parameters
+                    // and locals by name, and no name of one has a dot. The
+                    // expression stays the program's, so `--set` reaches it.
+                    let lname = format!("{name}.latency.time");
+                    self.consts.push((lname.clone(), v));
+                    prog.lets.push((lname.clone(), e));
+                    self.queues[qi].latency = Some(Expr::Var(lname));
+                }
                 if let StageKind::Step(s) = &mut kind
                     && let Some(m) = &mut s.memory
                     && self.queues[qi].pools.contains(&m.name)
@@ -2690,6 +2731,27 @@ impl Parser {
             }
         }
         self.expect(&Tok::RBrace)?;
+        // a link's latency: a delay stage of its own, which a transfer over
+        // the link runs first
+        if self.queues[qi].latency.is_some() {
+            if self.queues[qi].entry("transfer", false).is_some() {
+                return self.err_at(
+                    at,
+                    format!(
+                        "queue `{name}` has a `transfer` entry and a `latency`: a called link's \
+                         time is its entry's; write the latency in the entry body"
+                    ),
+                );
+            }
+            let lname = format!("{name}.latency");
+            self.stages.push((lname.clone(), false));
+            prog.stages.push(StageDecl {
+                span,
+                name: lname,
+                count,
+                kind: StageKind::Delay,
+            });
+        }
         // every role's entries are there, and nothing else
         let q = &self.queues[qi];
         for r in &roles {
@@ -2932,6 +2994,9 @@ impl Parser {
                             ),
                         );
                     }
+                    if allowed_var(&v, header) {
+                        continue;
+                    }
                     if v.contains('.') {
                         return self.err_at(
                             at,
@@ -2940,9 +3005,6 @@ impl Parser {
                                  the gateway reads across queues and passes what an entry needs"
                             ),
                         );
-                    }
-                    if allowed_var(&v, header) {
-                        continue;
                     }
                     if header {
                         return self.err_at(
@@ -3717,7 +3779,25 @@ impl Parser {
             let to = self.own_pool("transfer … to")?;
             let units = self.paren_expr()?;
             self.expect(&Tok::Semi)?;
-            return Ok(vec![
+            // each link with a latency is waited at first, in the order named
+            let mut out: Vec<Stmt> = std::iter::once(&stage)
+                .chain(also.iter())
+                .filter_map(|r| {
+                    let q = self.queues.iter().find(|q| q.name == r.name)?;
+                    Some(Stmt::Run {
+                        stage: Ref {
+                            span: r.span,
+                            name: format!("{}.latency", q.name),
+                            index: r.index.clone(),
+                        },
+                        mode: RunMode::Plain,
+                        work: q.latency.clone()?,
+                        growing: None,
+                        also: vec![],
+                    })
+                })
+                .collect();
+            out.extend([
                 Stmt::Run {
                     stage,
                     mode,
@@ -3728,6 +3808,7 @@ impl Parser {
                 Stmt::Load(to, units),
                 Stmt::Release(from),
             ]);
+            return Ok(out);
         }
         // A KV transfer leaves one hold and enters another; a link that
         // only takes time is the kernel's `run`, and says so.

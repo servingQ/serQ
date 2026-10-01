@@ -81,7 +81,7 @@ item     := let NAME = expr ;
           | run { horizon expr ; warmup expr ; seed expr ; arrivals expr ; }
           | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
 qitem    := pool NAME { poolopt* }              -- the queue's own; only its entries hold it
-          | serve kind ;                        -- the queue's stage, named after the queue
+          | serve kind [ latency expr ] ;       -- the queue's stage, named after the queue; `latency` a link's
           | VERB [ ( NAME, ... ) ] [ from NAME ] block   -- an entry of one of the queue's roles
 poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
@@ -414,7 +414,7 @@ Four roles are built into the parser, and a queue declares which it plays:
 | `gateway` | `route { … }` | `request Q;` enters this queue's `route`; each gateway is a single queue |
 | `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `cache`, a transfer) is the entry's |
 | `decode` | `decode (prompt)`, `decode (prompt) from Q` | a local prefill, or with the KV `Q`'s entry leased for this request |
-| `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost |
+| `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost, and its `latency` a wait before it |
 
 The workload names its entry point with `request gw;`, where `gw` is a
 queue declared with the `gateway` role. The parser checks that the target
@@ -440,16 +440,20 @@ the source member's index, so the decoder reaches the prefiller's own NIC:
 
 ```
 queue egress[NP] : link { serve ps(BwP); }
-queue ingress[ND] : link { serve ps(BwD); }
+queue ingress[ND] : link { serve ps(BwD) latency x0; }
 …
   decode (prompt) from src {
     …
     transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);
 ```
 
-is the kernel's `run egress[i], ingress[j] (…); load D.kv[j] (…); release
-P.kv[i];`: one read that holds both NICs at once, each serving it at the
-bandwidth its `serve` gives. A link with a `transfer (n)` entry is called
+is the kernel's `run ingress.latency[j] (x0); run egress[i], ingress[j]
+(…); load D.kv[j] (…); release P.kv[i];`: a fixed wait, then one read that
+holds both NICs at once, each serving it at the bandwidth its `serve`
+gives. `latency x` on a link's `serve` is that wait: a delay stage
+`L.latency` of the link's own, which every `transfer on` naming the link
+runs first, one wait per link named, in the order named. A number or a
+`let` constant; only a link without an entry takes one. A link with a `transfer (n)` entry is called
 instead, `nic[self].transfer (n) from src to kv (m);`, and runs its body on
 its own stage. Arguments are substituted like an `at admission` binding, so
 none may draw.

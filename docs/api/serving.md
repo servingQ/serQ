@@ -57,7 +57,10 @@ in two pools whose lifetimes overlap without nesting: the decode instance
 allocates before the prefill instance frees. `on a, b` names several stages
 the read holds at once, the sender's link and the receiver's
 ([`run`](statements.md#run)): `transfer on egress[i], ingress[j] (X) from P to Q (n);`
-is `run egress[i], ingress[j] (X); load Q (n); release P;`.
+is `run egress[i], ingress[j] (X); load Q (n); release P;`. A link queue with
+a `latency` (`serve ps(BwD) latency x0;`) is waited first: each named link
+that has one adds `run L.latency[k] (x0);` before the `run`, in the order
+named.
 
 ### Example
 
@@ -68,8 +71,7 @@ pool, and as an index the prefiller's member):
 
 ```serq
 hold kv (known) reserve (known), reqs (0) reserve (1) … {
-  run setup (x0);
-  transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);
+  transfer on egress[src], ingress[self] (prompt - c) from src to kv (prompt - 1 - c);   // after ingress's latency x0
   …
 } cache (prompt + o);
 ```
