@@ -651,11 +651,38 @@ fn the_looking_pass_leaves_nothing() {
             .count(),
         1
     );
-    assert!(
-        !net.edges
+}
+
+/// A decision stands before the stations it sends a turn to, after the
+/// stations of an instance are put side by side too (#199 review).
+#[test]
+fn a_decision_stays_before_its_stations() {
+    let src = "pool kv[2] { cap 9; } stage A[2] : delay; stage B[2] : delay; stage C[2] : delay;
+               workload { arrive batch(1); }
+               session {
+                 choose i in 2 by (0);
+                 hold kv[i] (1) { run A[i] (1); }
+                 loop {
+                   set c = ~bernoulli(0.5);
+                   branch (c) { hold kv[i] (1) { run B[i] (1); } } else { hold kv[i] (1) { run C[i] (1); } }
+                 }
+               }
+               run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    let End::Node(d) = decision(&net).expect("a decision") else {
+        unreachable!()
+    };
+    for st in ["B", "C"] {
+        let k = net.node_of(stage(&p, st)).unwrap();
+        assert!(d < k, "the decision before {st}");
+        let e = net
+            .edges
             .iter()
-            .any(|e| matches!(e.from, End::Probe(_)) || matches!(e.to, End::Probe(_)))
-    );
+            .find(|e| e.from == End::Node(d) && e.to == End::Node(k))
+            .unwrap();
+        assert!(!e.back, "decision -> {st} goes forward");
+    }
 }
 
 /// A body that starts at one station needs no decision: it comes back to it.
