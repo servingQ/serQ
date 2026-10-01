@@ -94,6 +94,12 @@ intention plainer, evidence is the code, one change). A review that does not
 answer all six is not done. Comments are in Korean, short: the finding and
 the evidence.
 
+A Claude Code session asked to review a PR spawns at most two reviewers, in
+parallel, defined in `.claude/agents/`: `design-reviewer` (the checklist
+above, plus the readability of the code) and `sim-reviewer` (do the numbers
+reproduce, satisfy Little's law and the closed forms, and support the claim).
+Call `sim-reviewer` only when the PR moves a simulated or measured number.
+
 ## Working with GitHub here
 
 `gh pr edit` and `gh issue edit` fail on this repository:
