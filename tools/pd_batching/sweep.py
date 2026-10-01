@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Colocated vs split engines on the same requests (#208): run
 examples/pd-disaggregation/pd_ps.sq and pd_batching.sq over loads, prompt
-laws and seeds, and write what they report.
+laws, the variations of the baseline and seeds, and write what they report.
 
     cargo build --release
     tools/pd_batching/sweep.py            # writes raw.jsonl, results.csv, summary.md here
@@ -44,9 +44,37 @@ CASES = {
     "fixed_w10ms": ("2000", {"omega": 0.01}, [40, 60, 70]),
 }
 
+EXCLUSIVE = "    serve exclusive prefill;\n"
 
-def run(program, sets, defs, seed):
+# The variations of the baseline, one at a time, on prompts of 2000
+# tokens: (title, the modes, the loads, `--set`s, edits of the program's
+# text). An edit is a line the program states and the variation states
+# otherwise: a policy (`serve exclusive prefill`) or a family's size
+# (`NP`), which `--set` refuses.
+VARIATIONS = {
+    "mixed": ("mixed batches, whole prompts (`serve exclusive prefill` deleted)", [0, 1], [40, 60, 70], {}, [(EXCLUSIVE, "")]),
+    "mixed_c512": ("mixed batches, prompts in chunks of 512 (`chunk_cap = 512`)", [0, 1], [40, 60, 70], {"chunk_cap": 512}, [(EXCLUSIVE, "")]),
+    "mixed_w10ms": ("mixed batches, whole prompts, a 10 ms decode step (`omega = 0.01`)", [0, 1], [60], {"omega": 0.01}, [(EXCLUSIVE, "")]),
+    "mixed_c512_w10ms": ("mixed batches in chunks of 512, a 10 ms decode step", [0, 1], [60], {"omega": 0.01, "chunk_cap": 512}, [(EXCLUSIVE, "")]),
+    "bw_2e5": ("a read over NICs of 2e5 tokens/s (10 ms a prompt) after 2 ms (`Bw`, `x0`)", [1], [60, 70], {"Bw": 2e5, "x0": 0.002}, []),
+    "bw_1e5": ("NICs of 1e5 tokens/s (20 ms a prompt): the decode engine's NIC takes every read", [1], [40, 45], {"Bw": 1e5, "x0": 0.002}, []),
+    "kv_d_16k": ("a decode engine of 16384 KV tokens (`blocksD = 1024`)", [1], [60, 70], {"blocksD": 1024}, []),
+    "kv_d_8k": ("a decode engine of 8192 KV tokens (`blocksD = 512`)", [1], [40, 45, 50], {"blocksD": 512}, []),
+    "kv_e_8k": ("colocated engines of 8192 KV tokens each (`blocksE = 512`)", [0], [60, 65, 70], {"blocksE": 512}, []),
+    "2p2d": ("2 prefill + 2 decode engines (`NP = 2`)", [0, 1], [30, 40], {}, [("let NP = 3;", "let NP = 2;")]),
+    "2p2d_g15": ("2P/2D, prefill engines 1.5 times as fast (`gP = 1.5`)", [1], [40, 60], {"gP": 1.5}, [("let NP = 3;", "let NP = 2;")]),
+}
+
+
+def run(program, sets, defs, seed, edits=()):
     with tempfile.TemporaryDirectory() as dump:
+        if edits:
+            text = program.read_text()
+            for old, new in edits:
+                assert old in text, old
+                text = text.replace(old, new)
+            program = Path(dump) / program.name
+            program.write_text(text)
         cmd = [SERQ, "run", str(program), "--json", "--seed", str(seed), "--dump", dump]
         for k, v in sets.items():
             cmd += ["--set", f"{k}={v}"]
@@ -82,7 +110,7 @@ def mean(xs):
     return sum(xs) / len(xs) if xs else math.nan
 
 
-def row(experiment, mode, lam, prompt, seed, rep):
+def row(experiment, mode, lam, prompt, seed, rep, edits=()):
     span = rep["end"] - rep["warmup"]
     obs = rep["observes"]
     r = {
@@ -91,6 +119,8 @@ def row(experiment, mode, lam, prompt, seed, rep):
         "lambda": lam,
         "prompt": prompt,
         "seed": seed,
+        # the program's lines a variation states otherwise
+        "edits": json.dumps(edits) if edits else "",
         # ended after warm-up within four Poisson deviations of what the
         # rate brings in that span: a run that falls behind its arrivals
         # fails it; one that diverges slowly may not (summary.md says so)
@@ -114,6 +144,13 @@ def row(experiment, mode, lam, prompt, seed, rep):
     r["batch_per_step"] = mean([s["mean_decode_batch"] for s in dec])
     r["decode_step"] = mean([s["mean_decode_step"] for s in dec])
     r["residents_per_engine"] = mean([p["mean_holders"] for p in pool(rep, "E.reqs" if mode == 0 else "D.reqs")])
+    r["mean_itl"] = mean([s["mean_itl"] for s in dec])
+    r["itl_p99"] = max([s["itl_p99"] for s in dec], default=math.nan)
+    r["preemptions_per_s"] = sum(p["preemptions"] for p in pool(rep, "E.kv" if mode == 0 else "D.kv")) / span
+    # the prefill engines' blocks, leased until the decoder reads them
+    r["p_kv_used"] = sum(p["mean_used"] for p in pool(rep, "P.kv"))
+    for k in ["admit_wait", "transfer", "lease"]:
+        r[k] = obs[k]["mean"] if obs.get(k, {}).get("count") else math.nan
     for role in ["E", "P", "D"]:
         st = stages(rep, role)
         if st and st[0]["iterations"] > 0:
@@ -126,22 +163,27 @@ def row(experiment, mode, lam, prompt, seed, rep):
 def grid():
     for mode in [0, 1]:
         for lam in [5, 10, 15, 20]:
-            yield "ps", PS, mode, lam, "-", {"mode": mode, "Lambda": lam}, {}
+            yield "ps", PS, mode, lam, "-", {"mode": mode, "Lambda": lam}, {}, []
     for case, (law, sets, lams) in CASES.items():
         for mode in [0, 1]:
             for lam in lams:
-                yield "step", STEP, mode, lam, case, {"mode": mode, "Lambda": lam, **sets}, {"prompt_len": law}
+                yield "step", STEP, mode, lam, case, {"mode": mode, "Lambda": lam, **sets}, {"prompt_len": law}, []
+    for case, (_, modes, lams, sets, edits) in VARIATIONS.items():
+        for mode in modes:
+            for lam in lams:
+                yield "variation", STEP, mode, lam, case, {"mode": mode, "Lambda": lam, **sets}, {"prompt_len": "2000"}, edits
 
 
 def main():
     rows = []
     with open(HERE / "raw.jsonl", "w") as raw:
-        for experiment, program, mode, lam, prompt, sets, defs in grid():
+        for experiment, program, mode, lam, prompt, sets, defs, edits in grid():
             for seed in SEEDS:
-                rep = run(program, sets, defs, seed)
-                r = row(experiment, mode, lam, prompt, seed, rep)
+                rep = run(program, sets, defs, seed, edits)
+                r = row(experiment, mode, lam, prompt, seed, rep, edits)
                 rows.append(r)
-                raw.write(json.dumps({"params": {"program": str(program.relative_to(ROOT)), "set": sets, "def": defs, "seed": seed}, "report": rep}) + "\n")
+                params = {"program": str(program.relative_to(ROOT)), "edits": edits, "set": sets, "def": defs, "seed": seed}
+                raw.write(json.dumps({"params": params, "report": rep}) + "\n")
                 print(f"{experiment} {r['mode']:9} lambda {lam:3} {prompt:7} seed {seed}", file=sys.stderr)
     keys = []
     for r in rows:
@@ -229,6 +271,33 @@ def summary(rows):
                     + f"{label} | {fmt([r[f'{role}_prefill_only'] for r in s], 1, 2)} | {fmt([r[f'{role}_decode_only'] for r in s], 1, 2)} | {fmt([r[f'{role}_idle'] for r in s], 1, 2)} | "
                     + (f"{len(g) - len(s)} |" if i == 0 else " |")
                 )
+    out += [
+        "",
+        "## Variations of the baseline (`pd_batching.sq`, prompts of 2000 tokens)",
+        "",
+        "One change at a time; the baseline it changes is the `fixed` table above. TPOT is token-weighted; `ITL p99` is the largest of the decoding engines'. "
+        "`admit wait` is the decode engine's admission after the prefill, `transfer` the read after it, both in the TTFT; `P KV` is the tokens the prefill engines hold, leased until read; `preempt/s` counts the decoding engines' preemptions.",
+        "",
+        "| variation | λ | mode | out tok/s | TTFT | TPOT (tok) | ITL p99 | response | batch | admit wait | transfer | P KV | preempt/s | unstable |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+    ]
+    for case, (title, *_rest) in VARIATIONS.items():
+        first = True
+        for (e, p, lam, mode), g in groups.items():
+            if e != "variation" or p != case:
+                continue
+            s = [r for r in g if r["stable"]]
+            label = f"`{case}`: {title}" if first else ""
+            first = False
+            if not s:
+                out.append(f"| {label} | {lam} | {mode} | | | | | | | | | | | {len(g)} |")
+                continue
+            out.append(
+                f"| {label} | {lam} | {mode} | {fmt([r['output_tokens_per_s'] for r in s], 1, 0)} | {fmt([r['ttft'] for r in s], 1e3, 1)} | "
+                f"{fmt([r['tpot_token_weighted'] for r in s], 1e3)} | {fmt([r['itl_p99'] for r in s], 1e3, 2)} | {fmt([r['response'] for r in s], 1e3, 1)} | "
+                f"{fmt([r['batch_per_step'] for r in s], 1, 2)} | {fmt([r['admit_wait'] for r in s], 1e3, 2)} | {fmt([r['transfer'] for r in s], 1e3, 2)} | "
+                f"{fmt([r['p_kv_used'] for r in s], 1, 0)} | {fmt([r['preemptions_per_s'] for r in s], 1, 2)} | {len(g) - len(s)} |"
+            )
     return "\n".join(out) + "\n"
 
 

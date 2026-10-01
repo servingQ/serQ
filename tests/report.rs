@@ -343,3 +343,48 @@ fn the_report_records_the_serq_version() {
     let j: serde_json::Value = serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
     assert_eq!(j["serq_version"], env!("CARGO_PKG_VERSION"));
 }
+
+#[test]
+fn a_decoders_gaps_add_up_through_its_preemptions() {
+    // examples/pd-disaggregation/pd_batching.sq split, its decode engine
+    // short of KV: requests are preempted there, before and after their
+    // recompute of the last prompt token (the client's first). Every
+    // session drains, so the decode engine's mean gap is the token-weighted
+    // TPOT exactly.
+    let ov = Overrides {
+        lets: [("mode", "1"), ("blocksD", "512"), ("Lambda", "40")]
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.to_string(),
+                    serq::frontend::parser::parse_expr(v).unwrap(),
+                )
+            })
+            .collect(),
+        defs: vec![("prompt_len".into(), "2000".into())],
+        warmup: Some(0.0),
+        arrivals: Some(4000),
+        ..Default::default()
+    };
+    let src = include_str!("../examples/pd-disaggregation/pd_batching.sq");
+    let p = compile_source(src, &ov).unwrap();
+    let r = run_ir(&p, None).unwrap();
+    assert!(
+        r.pool("D.kv").unwrap().preemptions > 0,
+        "no preemption to test"
+    );
+    let sum = |name: &str| r.observe(name).unwrap().samples.iter().sum::<f64>();
+    let gaps = r
+        .observe("output_tokens")
+        .unwrap()
+        .samples
+        .iter()
+        .map(|o| o - 1.0)
+        .sum::<f64>();
+    let tpot = sum("decode_time") / gaps;
+    let itl = r.stage("D").unwrap().mean_itl;
+    assert!(
+        (itl - tpot).abs() <= 1e-9 * tpot,
+        "ITL {itl} against TPOT {tpot}"
+    );
+}

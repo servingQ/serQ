@@ -9,14 +9,14 @@ measurements.
 
 ```
 cargo build --release
-tools/pd_batching/sweep.py     # about two minutes; writes raw.jsonl (not committed), results.csv, summary.md
+tools/pd_batching/sweep.py     # about ten minutes; writes raw.jsonl (not committed), results.csv, summary.md
 ```
 
 | File | |
 |---|---|
 | `examples/pd-disaggregation/pd_ps.sq` | the idealisation: decode as processor sharing at a constant fraction `f` of each of `N` engines, colocated or pooled as `N f` engines |
-| `examples/pd-disaggregation/pd_batching.sq` | the engines: 4 colocated vs 3 prefill + 1 decode, the step cost of `examples/multi-turn/vllm.sq`, exclusive steps (one prefill alone, or decodes only; a waiting prefill goes first), memory that never binds, a free and instantaneous transfer |
-| `results.csv` | one row per run (mode, load, case, seed) |
+| `examples/pd-disaggregation/pd_batching.sq` | the engines: 4 colocated vs 3 prefill + 1 decode, `llmd_nixl_pull.sq`'s engines and hand-over without its prefix cache; the baseline is exclusive steps on the engines that prefill prompts (one prefill alone, or decodes only; a waiting prefill goes first), memory that never binds, a free and instantaneous transfer |
+| `results.csv` | one row per run (experiment, mode, load, case, the program's lines a variation edits, seed) |
 | `summary.md` | mean ± 95 % CI over five seeds |
 
 Both modes of a program draw the same requests from a seed: the output
@@ -25,12 +25,16 @@ a seed differs by up to 1 %, because the sessions that end inside the
 measured span are not the same; over five seeds the means agree within
 their intervals.
 
-TPOT of a request is (last token − first token)/(o − 1), with o ≥ 2 by
-the output law. *Request-weighted* is the mean of that over requests,
-*token-weighted* all decode time over all gaps. A ratio below is
-token-weighted unless it says otherwise.
+The client's first token is the decode engine's when split, as llm-d
+streams it: the prefill engine's token is dropped, the decode engine reads
+the KV and recomputes the last prompt token. The decode engine's admission
+and the read are in the TTFT. TPOT of a request is (last token − first
+token)/(o − 1), with o ≥ 2 by the output law. *Request-weighted* is the
+mean of that over requests, *token-weighted* all decode time over all
+gaps. A ratio below is token-weighted unless it says otherwise. The ITL is
+the report's: the gaps between a request's successive tokens.
 
-## What the runs show
+## The baseline
 
 - **The PS identity holds and is exact in the model.** Split is colocated
   with arrival rate and capacity both multiplied by `N`: the decodes
@@ -42,58 +46,113 @@ token-weighted unless it says otherwise.
   speed.
 - **With a 0.2 ms decode step the engines gain little at low load.** At
   λ = 20 a colocated engine is idle 60 % of the time, its decodes rarely
-  wait for a prefill, and TPOT is 0.219 ms colocated against 0.208 ms
-  split (5 %; 15 % request-weighted). The gain grows as the colocated
-  engines fill: 0.304 vs 0.211 ms at λ = 40, 0.542 vs 0.214 at λ = 60,
-  0.839 vs 0.215 at λ = 70 (3.9×; 8.6× request-weighted). The decode step
+  wait for a prefill, and TPOT is 0.220 ms colocated against 0.208 ms
+  split (6 %; 16 % request-weighted). The gain grows as the colocated
+  engines fill: 0.305 vs 0.211 ms at λ = 40, 0.545 vs 0.215 at λ = 60,
+  0.844 vs 0.216 at λ = 70 (3.9×; 8.7× request-weighted). The decode step
   is 0.20–0.21 ms in both modes; a decode iteration carries 3.1 decodes
-  split at λ = 70 and 2.8 colocated.
+  split at λ = 70 and 2.8 colocated (prompts of 2000 tokens, the `fixed`
+  table).
 - **`f` is not constant there, because the decodes drain.** A request's
   whole decode (200 tokens of 0.2 ms) is as long as one prefill step
   (2000 tokens, 40 ms), so a colocated engine empties its decodes between
-  prefills and sits idle. Its decode fraction is 0.20, 0.32, 0.32, 0.27 at
+  prefills and sits idle. Its decode fraction is 0.20, 0.33, 0.32, 0.27 at
   λ = 20–70, its idle time 0.60 down to 0.03. The denominator is
   wall-clock time, idle included.
 - **With a 10 ms decode step (`omega = 0.01`) the ratio is about 1/(1 − p).**
   The decodes no longer drain: a colocated engine is never idle, its
   decode fraction is exactly 1 − p for a prefill fraction p, and TPOT is
-  16.7, 25.6, 34.6 ms colocated against 10.4, 10.5, 10.6 ms split at
+  16.8, 25.7, 34.8 ms colocated against 10.4, 10.6, 10.7 ms split at
   λ = 40, 60, 70 — 1.62×, 2.43×, 3.26× for p = 0.4, 0.6, 0.7, where
   1/(1 − p) is 1.67, 2.5, 3.33. The 2–3 % short is the step: the split's
-  decode engine carries larger batches (83–149 against 34–122), and its
-  step is 1–2 % longer by the KV term. The issue's 4× is p = 0.75, at
-  λ = 75, where the three prefill engines are exactly saturated: a limit,
-  not an operating point. At 0.2 ms the colocated engine idles, so
-  1/(1 − p) is not the reference there; the decode step over the decode
-  fraction (0.21/0.27 ≈ 0.77 ms at λ = 70) comes within 9 % of the
-  measured 0.84 ms.
+  decode engine carries larger batches (83–150 against 34–122), and its
+  step is longer by the KV term. The issue's 4× is p = 0.75, at λ = 75,
+  where the three prefill engines are exactly saturated: a limit, not an
+  operating point. At 0.2 ms the colocated engine idles, so 1/(1 − p) is
+  not the reference there; the decode step over the decode fraction
+  (0.21/0.27 ≈ 0.78 ms at λ = 70) comes within 8 % of the measured
+  0.84 ms. The split's TTFT is larger at 10 ms (72–151 ms against 54–72)
+  by about two and a half of the decode engine's steps: the rest of the
+  step running at admission, the step that moves the parked request to
+  running, and the recompute's own.
 - **Request- and token-weighted TPOT differ colocated.** A short answer
   that sits behind a prefill has a large TPOT: at λ = 60 the request mean
-  is 1.05 ms and the token mean 0.54 ms. Split, they agree.
+  is 1.06 ms and the token mean 0.55 ms. Split, they agree.
 - **The split pays in TTFT.** Three prefill engines carry what four did:
-  at λ = 70, TTFT is 56 ms colocated and 124 ms split. With prompts of the
+  at λ = 70, TTFT is 56 ms colocated and 125 ms split. With prompts of the
   same mean and squared coefficient of variation 9 (`h2cv9`: Poisson
   arrivals, rare very long prompts), it is about 160 ms against 900 ms
   over a long run (below), and the response time turns worse split as
-  well (about 475 against 940 ms; at λ = 60, in the 300 s runs, the
+  well (about 480 against 940 ms; at λ = 60, in the 300 s runs, the
   intervals overlap). The mean prefill fraction alone does not decide the
   comparison.
 - **The h2cv9 point at λ = 70 is near saturation.** The prefill engines are
   94 % busy and the prompts vary widely, so 300 s is far from steady state
   (the ±360 ms). Run for 8000 s with 500 s of warm-up, seeds 1–5, TTFT is
-  155, 160, 163, 159, 160 ms colocated (mean 159; the summary's 175 is
-  high) and 802, 916, 954, 901, 919 ms split (mean 898; the summary's 907
-  stands), response 459–491 against 846–998 ms. To repeat:
+  155, 159, 163, 159, 161 ms colocated (mean 160; the summary's 172 is
+  high) and 802, 917, 955, 901, 920 ms split (mean 899; the summary's 907
+  stands), response 458–493 against 846–999 ms. To repeat:
   `serq run examples/pd-disaggregation/pd_batching.sq --set mode=1 --set Lambda=70 --def 'prompt_len=max(1, floor(~h2(2000, 9)))' --horizon 8000 --warmup 500 --seed 1`.
 
-## Not covered yet
+## The variations
 
-Each is a variation of `pd_batching.sq` the issue lists: mixed batches
-(drop `serve exclusive prefill`, or chunk), a transfer with the cost and
-the double occupancy of `llmd_nixl_pull.sq`, KV capacity and prefix reuse,
-a closed or tool-loop workload, and other P/D ratios. `N`, `NP` and `ND`
-size queue families, which `--set` refuses, so another ratio is another
-copy of the program. Routing ties go to the lowest index (at λ = 70 the
-first colocated engine admits 8 % more than the last). The report has
-the time split and batches per engine but not the distribution of
-inter-token latencies, which would need a per-token record.
+One change to the baseline at a time, prompts of 2000 tokens; the last
+table of `summary.md`. A policy or a family's size is a line of the
+program, which `sweep.py` edits in a copy (`serve exclusive prefill;`
+deleted, `let NP = 2;`) and records in `results.csv`; the rest are `--set`.
+
+- **Mixed batches help the colocated engines only when a decode step is
+  long.** Without exclusive steps a decode rides in the step of a whole
+  prompt instead of waiting for it, and gains a token per prefill step: a
+  share of the order of a decode step over a prefill step. At 0.2 ms that
+  is nothing — TPOT 0.534 ms at λ = 60 against 0.545 exclusive — and
+  prompts in chunks of 512 (`chunk_cap`) give 0.494, a 9 % that this
+  share does not account for and the runs do not explain; either is far
+  from the split's 0.215. At 10 ms (`omega = 0.01`, λ = 60) it is most of
+  it: 19.8 ms mixed and 13.0 ms in chunks, against 25.7 exclusive and the
+  split's 10.6. A decode riding with a prompt waits for it: at λ = 70 the
+  ITL p99 is 40 ms whole and 20 ms in chunks; at λ = 60, where fewer than
+  1 % of the gaps hold a prefill, 0.28 ms whole and 10 ms in chunks. A
+  chunk limit is per prompt, so several prompts' chunks share a step of
+  the 8192-token budget: at 10 ms the chunked ITL p99 is still 41 ms. The split's prefill
+  engines batch several prompts once exclusive steps are gone, and pay
+  for it in TTFT: 151 ms at λ = 70 against 125.
+- **A transfer is in the TTFT.** Over NICs of 2e5 tokens/s after a 2 ms
+  wait, the read takes 17 ms and TTFT rises from 65 to 82 ms at λ = 60;
+  TPOT stays at 0.215 ms.
+- **The decode engine's NIC takes every read.** Three prefill engines send
+  and one decode engine receives, so its NIC carries λ × 2000 tokens/s.
+  At 1e5 tokens/s it is 80 % busy at λ = 40: the read takes 88 ms and TTFT
+  is 134 ms against 46; at λ = 45 (90 %), 172 and 220 ms. At 5e4
+  tokens/s λ = 60 asks 2.4 times what the NIC carries.
+- **A decode engine short of KV holds the prefill engines' memory.** With
+  16384 tokens it preempts now and then (0.2–0.4 preemptions a second)
+  and admission takes 1–3 ms. With 8192 tokens, at λ = 40 a request waits
+  25 ms for its blocks, 1.3 preemptions a second recompute what they
+  lost, TTFT is 71 ms against 46 and TPOT 0.230 ms, and the prefill
+  engines hold 5200 leased tokens against 3200; at λ = 45 the wait is
+  153 ms and the leases 17000 tokens (TTFT 202 ms over 300 s, 196–286 ms
+  over 3000 s); at λ = 50 it does not keep up. The
+  decode engine then serves about 48 requests a second: a third of its
+  time goes to recomputing preempted requests, and three decodes fit its
+  blocks. Meanwhile every waiting prompt stays leased on a prefill
+  engine; their memory never binds here, and with a bounded one the
+  prefill engines would stop admitting in turn.
+- **The colocated engines meet their memory limit too.** At 8192 tokens
+  each, 4.6 preemptions a second at λ = 60 and TTFT 85 ms against 50; at
+  λ = 65, 8.4 a second and 244 ms over 300 s, 294–399 ms over 3000 s with
+  300 s of warm-up (seeds 1–3): close to saturation, slow to settle; at
+  λ = 70 they do not keep up (about 67 requests a second). The totals differ: four
+  colocated engines hold 32768 tokens, the split's decode engine 8192 or
+  16384 and its prefill engines what their leases need.
+- **Another split moves the cost between TTFT and TPOT.** 2P/2D at
+  λ = 30, 40: TPOT 0.206 ms against 0.251 and 0.305 colocated, TTFT 53
+  and 78 ms against 41 and 43. Prefill engines 1.5 times as fast
+  (`gP = 1.5`) make 2P/2D's TTFT 33 ms at λ = 40 and 52 ms at λ = 60,
+  with TPOT 0.207–0.208 ms; specialisation is what lets the split have
+  both.
+
+Not covered here: prefix reuse and sessions that come back after a tool
+call (this workload is single-turn and open); N, NP, ND as constants a
+run can set (`--set` refuses a family's size); and how concurrent reads
+share a NIC beyond max-min fairness. Routing ties go to the lowest index.
