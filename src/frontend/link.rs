@@ -149,6 +149,9 @@ struct Linker<'a> {
     /// `release` of one may stand outside any hold of it.
     leased: Vec<Ref>,
     prog: &'a Program,
+    /// Terms the program's aggregates have written out so far, nested ones
+    /// included, against `MAX_OVER`.
+    over_terms: std::cell::Cell<usize>,
 }
 
 /// The context variables by their source names (`docs/api/context.md`). A
@@ -172,6 +175,10 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 17] = [
     ("admission", CtxVar::Admission),
     ("remaining", CtxVar::Remaining),
 ];
+
+/// The most terms the aggregates (`max j in n (e)`) of one program write
+/// out, nested ones included.
+const MAX_OVER: usize = 4096;
 
 /// Calls the linker folds to a constant from a declaration.
 pub const FOLDED: [&str; 1] = ["blocksize"];
@@ -245,10 +252,35 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         held: vec![],
         leased: vec![],
         prog,
+        over_terms: std::cell::Cell::new(0),
     };
     for a in BUILTIN_ATTRS {
         lk.attr(a);
     }
+    // Names of pools, stages and attributes, before the constants: an
+    // aggregate in a `let` checks its index against all of them.
+    let mut base = 0;
+    for p in &prog.pools {
+        if lk.pools.insert(p.name.clone(), (base, p.count)).is_some() {
+            return Err(lk.duplicate("pool", &p.name, p.span));
+        }
+        base += p.count;
+    }
+    let mut base = 0;
+    for s in &prog.stages {
+        if lk.stages.insert(s.name.clone(), (base, s.count)).is_some() {
+            return Err(lk.duplicate("stage", &s.name, s.span));
+        }
+        base += s.count;
+    }
+    // Attributes: everything assigned anywhere.
+    let wl = prog.workload.as_ref();
+    if let Some(w) = wl {
+        collect_attrs(&w.init, &mut lk);
+        collect_attrs(&w.turn, &mut lk);
+    }
+    collect_attrs(&prog.session, &mut lk);
+    collect_leases(&prog.session, &mut lk.leased);
     // Constants, in order; an override replaces the value of a `let`.
     for (name, e) in &prog.lets {
         let overridden = ov.lets.iter().any(|(n, _)| n == name);
@@ -274,29 +306,6 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         })?;
         lk.consts.insert(name.clone(), v);
     }
-    // Names of pools and stages.
-    let mut base = 0;
-    for p in &prog.pools {
-        if lk.pools.insert(p.name.clone(), (base, p.count)).is_some() {
-            return Err(lk.duplicate("pool", &p.name, p.span));
-        }
-        base += p.count;
-    }
-    let mut base = 0;
-    for s in &prog.stages {
-        if lk.stages.insert(s.name.clone(), (base, s.count)).is_some() {
-            return Err(lk.duplicate("stage", &s.name, s.span));
-        }
-        base += s.count;
-    }
-    // Attributes: everything assigned anywhere.
-    let wl = prog.workload.as_ref();
-    if let Some(w) = wl {
-        collect_attrs(&w.init, &mut lk);
-        collect_attrs(&w.turn, &mut lk);
-    }
-    collect_attrs(&prog.session, &mut lk);
-    collect_leases(&prog.session, &mut lk.leased);
     // An attribute would shadow a constant of the same name everywhere
     // (a stage's cost has no session, so the constant would read as NaN).
     for (name, _) in &prog.lets {
@@ -483,8 +492,20 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             }
         }
     }
+    let mut gauges = vec![];
+    for (name, e) in &prog.gauges {
+        let expr = lk.expr(e).map_err(|mut err| {
+            err.message = format!("gauge `{name}`: {}", err.message);
+            err
+        })?;
+        gauges.push(crate::ir::Gauge {
+            name: name.clone(),
+            expr,
+        });
+    }
     let slot = |lk: &Linker, n: &str| lk.attr_index[n];
     let linked = Linked {
+        gauges,
         version: IR_VERSION,
         hidden,
         share: prog.share,
@@ -697,7 +718,34 @@ impl Linker<'_> {
                 }
                 None
             }
-            Some(e) => Some(Box::new(self.expr(e)?)),
+            Some(e) => {
+                let before = self.over_terms.get();
+                let i = self.expr(e)?;
+                let after = self.over_terms.get();
+                // a constant index (`kv[2]`, `kv[-1]`, `kv[N + 1]`, or one an
+                // aggregate wrote out) is checked here, where the program
+                // still has its names; one that reads state links as before
+                // the fold writes the index's aggregates out again: against
+                // the budget they met the first time, and without spending it
+                self.over_terms.set(before);
+                let folded = match i {
+                    // already a number (`blocksize(p)` folds here, not in `eval_const`)
+                    CExpr::Num(k) => Some(k),
+                    _ => (!has_draw(e)).then(|| self.eval_const(e).ok()).flatten(),
+                };
+                self.over_terms.set(after);
+                if let Some(k) = folded
+                    && !(k >= 0.0 && k.fract() == 0.0 && k < count as f64)
+                {
+                    return Err(LinkError::new(format!(
+                        "{what} `{}[{k}]` is out of range: `{}` has {count} member(s)",
+                        r.name, r.name
+                    ))
+                    .at(r.span));
+                }
+                // a constant index is a number in the IR: a gauge accepts no other
+                Some(Box::new(folded.map_or(i, CExpr::Num)))
+            }
         };
         Ok(CRef { base, count, index })
     }
@@ -861,7 +909,65 @@ impl Linker<'_> {
                 }
             }
             Expr::Sample(..) => return Err(LinkError::new("a constant cannot sample".into())),
+            Expr::Over(agg, j, n, body) => self.eval_const(&self.unroll(*agg, j, n, body)?)?,
         })
+    }
+
+    /// `max j in n (e)` written out: `e` with `j` = 0, 1, …, n-1, folded by
+    /// binary `max`, `min` or `+`. `n` is a constant, and `j` a name of its
+    /// own: a constant, an attribute, a pool, a stage or a context variable
+    /// of the same name would leave the body saying two things.
+    fn unroll(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Expr> {
+        let what = format!("`{} {j} in`", agg.name());
+        let clash = if self.prog.lets.iter().any(|(n, _)| n == j) {
+            Some("a `let` constant")
+        } else if self.attr_index.contains_key(j) {
+            Some("a session attribute")
+        } else if self.pools.contains_key(j) {
+            Some("a pool")
+        } else if self.stages.contains_key(j) {
+            Some("a stage")
+        } else if CONTEXT_VARS.iter().any(|(name, _)| *name == j) || j == "inf" {
+            Some("a name the language supplies")
+        } else {
+            None
+        };
+        if let Some(c) = clash {
+            return Err(LinkError::new(format!(
+                "{what}: `{j}` is also {c}\nhelp: give the index a name of its own"
+            )));
+        }
+        let count = self.const_eval(n, &format!("{what}'s count"))?;
+        if !(count >= 1.0 && count.fract() == 0.0 && count.is_finite()) {
+            return Err(LinkError::new(format!(
+                "{what}'s count must be a positive integer, found {count}"
+            )));
+        }
+        // the terms are written out, nested aggregates' included: the
+        // program's total is bounded, so no count makes the linker run away
+        let total = self.over_terms.get() as f64 + count;
+        if total > MAX_OVER as f64 {
+            return Err(LinkError::new(format!(
+                "{what}: the program's aggregates write out {total} terms, at most {MAX_OVER}"
+            )));
+        }
+        self.over_terms.set(total as usize);
+        let term = |k: usize| {
+            let mut e = body.clone();
+            bind_index(&mut e, j, k as f64);
+            e
+        };
+        let mut acc = term(0);
+        for k in 1..count as usize {
+            let t = term(k);
+            acc = match agg {
+                Agg::Sum => Expr::Binary(BinOp::Add, Box::new(acc), Box::new(t)),
+                Agg::Max | Agg::Min => {
+                    Expr::Call(agg.name().into(), vec![Arg::Expr(acc), Arg::Expr(t)])
+                }
+            };
+        }
+        Ok(acc)
     }
 
     fn expr(&self, e: &Expr) -> LResult<CExpr> {
@@ -972,6 +1078,7 @@ impl Linker<'_> {
                 Box::new(self.expr(a)?),
                 Box::new(self.expr(b)?),
             ),
+            Expr::Over(agg, j, n, body) => self.expr(&self.unroll(*agg, j, n, body)?)?,
         })
     }
 
@@ -1179,5 +1286,43 @@ fn has_draw(e: &Expr) -> bool {
         Expr::Unary(_, a) => has_draw(a),
         Expr::Binary(_, a, b) => has_draw(a) || has_draw(b),
         Expr::Cond(c, a, b) => has_draw(c) || has_draw(a) || has_draw(b),
+        Expr::Over(_, _, n, e) => has_draw(n) || has_draw(e),
+    }
+}
+
+/// Replace the index `j` of an `Expr::Over` by the number `k`, in the
+/// body and in its references' indices; an inner `Over` of the same name
+/// keeps its own.
+fn bind_index(e: &mut Expr, j: &str, k: f64) {
+    match e {
+        Expr::Located(_, inner) => bind_index(inner, j, k),
+        Expr::Var(n) if n == j => *e = Expr::Num(k),
+        Expr::Num(_) | Expr::Var(_) => {}
+        Expr::Sample(_, args) => args.iter_mut().for_each(|a| bind_index(a, j, k)),
+        Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
+            Arg::Expr(x) => bind_index(x, j, k),
+            Arg::Ref(r) if r.index.is_none() && r.name == j => *a = Arg::Expr(Expr::Num(k)),
+            Arg::Ref(r) => {
+                if let Some(i) = &mut r.index {
+                    bind_index(i, j, k);
+                }
+            }
+        }),
+        Expr::Unary(_, a) => bind_index(a, j, k),
+        Expr::Binary(_, a, b) => {
+            bind_index(a, j, k);
+            bind_index(b, j, k);
+        }
+        Expr::Cond(c, a, b) => {
+            bind_index(c, j, k);
+            bind_index(a, j, k);
+            bind_index(b, j, k);
+        }
+        Expr::Over(_, i, n, body) => {
+            bind_index(n, j, k);
+            if i != j {
+                bind_index(body, j, k);
+            }
+        }
     }
 }

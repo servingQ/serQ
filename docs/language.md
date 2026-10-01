@@ -81,6 +81,7 @@ item     := let NAME = expr ;
           | run { horizon expr ; warmup expr ; seed expr ; arrivals expr ; }
           | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
           | QUEUE pull QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the reader, its source, the read (below, *Queues*)
+          | gauge NAME = expr ;              -- the time average of a function of the state (Statistics)
 qitem    := pool NAME { poolopt* }              -- the queue's own; only its entries hold it
           | serve kind [ latency expr ] ;       -- the queue's stage, named after the queue; `latency` a link's
           | nic kind ;                          -- the queue's NIC, the stage `QUEUE.nic`
@@ -165,7 +166,12 @@ non-zero operand is true; only a `branch` guard is held to 0 or 1),
 `budget_left(step)`, `blocksize(p)` (the pool's `block`, folded at link
 time), `price(s, s_hit, ds)` (the online price of a miss,
 `missPrice` with the stage's measured λ̂, ρ̂, Ŵ), `est_lambda(s)`,
-`est_rho(s)`, `est_wait(s)`; context variables `now`, `size`, `age`,
+`est_rho(s)`, `est_wait(s)`; aggregates over an index, `max j in n (e)`,
+`min j in n (e)`, `sum j in n (e)` (`n` a number, a constant's name or a
+parenthesised constant expression; the
+linker writes the terms out with `j` = 0 … n-1, so `max k in 2 (used(kv[k]))`
+is `max(used(kv[0]), used(kv[1]))`, and `j` may not be a name the program
+already has); context variables `now`, `size`, `age`,
 `last`, `waiting` (eviction keys and spill predicates), `present` (ps
 capacity), `residents`, `decoders`, `kv_decode`, `kv_prefill` (a step stage's budget, chunk and
 cost: the residents before the iteration), `tokens`, `prefilled`, `attention` (its cost
@@ -804,6 +810,24 @@ admission but can never grow to what its body needs (`prompt + out > cap`
 under `preempt lifo`) preempts itself and re-executes forever; the run would
 otherwise end at the horizon with nothing but a preemption count, and the
 report now names the livelock.
+
+**Gauges.** `gauge x = e;` declares a function of the deployment's state
+and the report gives its time average over `[warmup, end]`, with a
+batch-means 95% CI over 20 windows, and the least and greatest value held for
+a positive time. An `observe` is a sample a session takes when it gets
+there; a gauge is a signal in time, read at the end of every instant (the
+state the instant's last event leaves, which is the state until the next
+one; what the instant passes through on the way is not read), so
+`gauge u = used(kv);` is the pool's time-average `used`. The expression has
+no session and is held constant between events: it reads pool and stage
+observables and constants, and an attribute, a draw, `cachedin` (the
+session's own prefix), `now` or `work(…)` (both move between events), or
+`budget_left(…)` (it plans an iteration, which may draw) is a link error. A
+pool or stage it names has a number for its index (`kv[0]`, or the `kv[k]`
+an aggregate writes out), so reading a gauge cannot fail the run. What to call an imbalance is the program's: the time fraction some
+decoder is full is `gauge full = max j in N (free(reqs[j]) == 0);`, the
+spread `max j in N (used(kv[j])) - min j in N (used(kv[j]))`. `--dump DIR`
+writes each gauge's change points as `gauge/NAME.csv` (`time,value`).
 
 **Executable semantics in Lean.** `SerqExec.lean` defines the same rules
 for the fragment of pools and one step engine on the step clock (values in

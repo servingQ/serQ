@@ -27,6 +27,36 @@ pub enum Expr {
     Binary(BinOp, Box<Expr>, Box<Expr>),
     /// `c ? a : b`
     Cond(Box<Expr>, Box<Expr>, Box<Expr>),
+    /// `max j in n (e)`, `min …`, `sum …`: `e` over `j = 0 … n-1`. Sugar:
+    /// the linker writes it out with `j` a number, as binary `max`, `min`
+    /// or `+`, so `n` is a constant.
+    Over(Agg, String, Box<Expr>, Box<Expr>),
+}
+
+/// What `Expr::Over` folds its terms with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Agg {
+    Max,
+    Min,
+    Sum,
+}
+
+impl Agg {
+    /// The aggregate a word names when `j in n (e)` follows it: `max` and
+    /// `min` are functions otherwise, `sum` is a keyword.
+    pub fn from_name(w: &str) -> Option<Agg> {
+        [Agg::Max, Agg::Min, Agg::Sum]
+            .into_iter()
+            .find(|a| a.name() == w)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Agg::Max => "max",
+            Agg::Min => "min",
+            Agg::Sum => "sum",
+        }
+    }
 }
 
 /// A call argument: an expression or a reference to a pool or stage
@@ -69,6 +99,9 @@ impl Expr {
             }
             (Self::Cond(a, b, c), Self::Cond(d, e, f)) => {
                 a.same_syntax(d) && b.same_syntax(e) && c.same_syntax(f)
+            }
+            (Self::Over(f, j, n, a), Self::Over(g, k, m, b)) => {
+                f == g && j == k && n.same_syntax(m) && a.same_syntax(b)
             }
             (Self::Sample(a, xs), Self::Sample(b, ys)) => {
                 a == b && xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| x.same_syntax(y))
@@ -293,6 +326,8 @@ pub struct Program {
     pub run: RunOpts,
     /// `share maxmin;` or `share bottleneck;`
     pub share: Option<crate::ir::Share>,
+    /// `gauge NAME = e;`, in order.
+    pub gauges: Vec<(String, Expr)>,
 }
 
 /// Parser equivalence tests compare syntax after desugaring; the two spellings
@@ -319,6 +354,10 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                 expr(a);
                 expr(b);
                 expr(c);
+            }
+            Expr::Over(_, _, n, e) => {
+                expr(n);
+                expr(e);
             }
             _ => {}
         }

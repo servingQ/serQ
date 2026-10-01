@@ -86,6 +86,11 @@ pub enum Moment {
     Step,
     /// A step stage's `serve by` keys: evaluated for one resident.
     Serve,
+    /// A `gauge`: evaluated on the state the deployment holds after every
+    /// instant, with no session, job or resident, and held until the next
+    /// one, so neither `now` nor `work(…)`, which move in between, nor
+    /// `budget_left(…)`, which plans an iteration to answer.
+    Gauge,
 }
 
 impl std::fmt::Display for Moment {
@@ -99,6 +104,7 @@ impl std::fmt::Display for Moment {
             Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
             Moment::Step => "a step stage's cost, after the iteration",
             Moment::Serve => "a step stage's serve keys",
+            Moment::Gauge => "a gauge, read on the deployment's state with no session",
         })
     }
 }
@@ -505,6 +511,18 @@ pub struct Program {
     /// capacity; present exactly when some `Run` has a non-empty `also`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub share: Option<Share>,
+    /// `gauge NAME = e;`: functions of the deployment's state whose time
+    /// average the report gives. They read and do not act, so a reader that
+    /// ignores them runs the same program (`docs/ir.md`, Stability).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gauges: Vec<Gauge>,
+}
+
+/// A gauge: a name and an expression evaluated at `Moment::Gauge`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Gauge {
+    pub name: String,
+    pub expr: CExpr,
 }
 
 /// The sharing policy of `share`: how flows that hold several `ps` stages at
@@ -814,6 +832,18 @@ impl Program {
                 }
             }
         }
+        for (k, g) in self.gauges.iter().enumerate() {
+            let at = |e| format!("gauge `{}`: {e}", g.name);
+            v.expr(&g.expr, Moment::Gauge).map_err(at)?;
+            if self.gauges[..k].iter().any(|h| h.name == g.name) {
+                return Err(at("declared twice".into()));
+            }
+            if self.observes.contains(&g.name) {
+                return Err(at(
+                    "is also an `observe`: one name would be two statistics".into()
+                ));
+            }
+        }
         if let CArrival::Renewal(e) = &self.arrival {
             v.expr(e, Moment::Session)?;
             if !arrival_expr_is_pure(e) {
@@ -952,6 +982,18 @@ impl Validator<'_> {
                 r.base + r.count
             ));
         }
+        // a gauge names its members by number (an aggregate writes them so):
+        // an index read from the state could leave the array, and a gauge
+        // that fails the run would be one a reader ignoring gauges does not
+        if m == Moment::Gauge
+            && let Some(e) = &r.index
+            && !matches!(**e, CExpr::Num(k) if k >= 0.0 && k.fract() == 0.0 && k < r.count as f64)
+        {
+            return Err(format!(
+                "a gauge's {what} index is a number in range (`kv[0]`, or an aggregate's `kv[k]`), \
+                 not one read from the state"
+            ));
+        }
         if let Some(e) = &r.index {
             self.expr(e, m)?;
         }
@@ -961,6 +1003,13 @@ impl Validator<'_> {
     fn expr(&self, e: &CExpr, m: Moment) -> Result<(), String> {
         match e {
             CExpr::Num(_) => Ok(()),
+            // a gauge is integrated as constant between events: what moves
+            // between them would be read at the event and held
+            CExpr::Ctx(CtxVar::Now) if m == Moment::Gauge => Err(
+                "a gauge may not read `now`: it changes between events, and a gauge is held \
+                 constant between them"
+                    .into(),
+            ),
             CExpr::Ctx(v) => {
                 let at = v.moments();
                 if at.is_empty() || at.contains(&m) {
@@ -974,6 +1023,27 @@ impl Validator<'_> {
                     ))
                 }
             }
+            CExpr::Attr(a) if m == Moment::Gauge => Err(format!(
+                "`{}` is a session attribute, and a gauge has no session",
+                self.p.attrs.get(*a).map_or("?", |s| s.as_str())
+            )),
+            CExpr::Sample(..) if m == Moment::Gauge => Err(
+                "a gauge may not draw (`~`): it reads the state, and a draw would move the run's streams"
+                    .into(),
+            ),
+            CExpr::Call(Fun::Work, _) if m == Moment::Gauge => Err(
+                "a gauge may not read `work(…)`: the work left drains between events, and a \
+                 gauge is held constant between them"
+                    .into(),
+            ),
+            CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Gauge => Err(
+                "a gauge may not read `budget_left(…)`: it plans the next iteration, which \
+                 evaluates the stage's budget and may draw"
+                    .into(),
+            ),
+            CExpr::Call(Fun::CachedIn, _) if m == Moment::Gauge => Err(
+                "`cachedin` is the session's own cached prefix, and a gauge has no session".into(),
+            ),
             CExpr::Attr(a) => {
                 self.attr(*a)?;
                 if m != Moment::Session && self.p.hidden.contains(a) {

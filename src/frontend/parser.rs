@@ -10,6 +10,7 @@
 //!           | 'server' block
 //!           | 'queue' IDENT ('[' expr ']')? (':' IDENT (',' IDENT)*)? '{' qitem* '}'
 //!           | 'run' '{' ('horizon' | 'warmup' | 'seed' | 'arrivals') expr ';' ... '}'
+//!           | 'gauge' IDENT '=' expr ';'      -- a time average of the deployment's state
 //! qitem    := 'pool' IDENT '{' poolopt* '}' | 'serve' kind
 //!           | IDENT ('(' IDENT (',' IDENT)* ')')? ('from' IDENT)? block   -- an entry (crate::frontend::queue)
 //! poolopt  := 'cap' expr ';' | 'block' expr ';'
@@ -43,6 +44,8 @@
 //!           | 'transfer' ('[' expr ']' | 'on' ref)? expr 'from' ref 'to' ref '(' expr ')' ';'
 //! role     := 'prefill' | 'decode' | 'tool'
 //! ref      := IDENT ('[' expr ']')?
+//! atom     := NUM | '(' expr ')' | IDENT | IDENT '(' arg (',' arg)* ')' | over
+//! over     := ('max' | 'min' | 'sum') IDENT 'in' (NUM | IDENT | '(' expr ')') '(' expr ')'
 //! ```
 //!
 //! The serving forms (`serving`) are sugar: they are rewritten to `hold`
@@ -256,7 +259,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 86] = [
+pub const KEYWORDS: [&str; 88] = [
     "admission",
     "admit",
     "arrivals",
@@ -287,6 +290,7 @@ pub const KEYWORDS: [&str; 86] = [
     "first",
     "fits",
     "from",
+    "gauge",
     "grow",
     "growing",
     "hidden",
@@ -332,6 +336,7 @@ pub const KEYWORDS: [&str; 86] = [
     "spill",
     "stage",
     "step",
+    "sum",
     "to",
     "tool",
     "trace",
@@ -538,6 +543,16 @@ fn subst(e: &mut Expr, binds: &[(String, Expr)]) {
             subst(a, binds);
             subst(b, binds);
         }
+        Expr::Over(_, j, n, body) => {
+            subst(n, binds);
+            // the index is the body's own `j`
+            let inner: Vec<_> = binds
+                .iter()
+                .filter(|(name, _)| name != j)
+                .cloned()
+                .collect();
+            subst(body, &inner);
+        }
     }
 }
 
@@ -554,6 +569,7 @@ fn has_sample(e: &Expr) -> bool {
         Expr::Unary(_, a) => has_sample(a),
         Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
         Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
+        Expr::Over(_, _, n, e) => has_sample(n) || has_sample(e),
     }
 }
 
@@ -726,6 +742,7 @@ fn expr_reads(e: &Expr, n: &str) -> bool {
         Expr::Unary(_, a) => expr_reads(a, n),
         Expr::Binary(_, a, b) => expr_reads(a, n) || expr_reads(b, n),
         Expr::Cond(c, a, b) => expr_reads(c, n) || expr_reads(a, n) || expr_reads(b, n),
+        Expr::Over(_, j, m, e) => expr_reads(m, n) || (j != n && expr_reads(e, n)),
     }
 }
 
@@ -924,6 +941,7 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
         Expr::Cond(c, a, b) => live_read(c, attrs, lets)
             .or_else(|| live_read(a, attrs, lets))
             .or_else(|| live_read(b, attrs, lets)),
+        Expr::Over(_, _, n, e) => live_read(n, attrs, lets).or_else(|| live_read(e, attrs, lets)),
     }
 }
 
@@ -987,6 +1005,16 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
             names_in(c, vars, indexed, refs);
             names_in(a, vars, indexed, refs);
             names_in(b, vars, indexed, refs);
+        }
+        // the index is the aggregate's own, not a name the expression reads
+        Expr::Over(_, j, n, body) => {
+            names_in(n, vars, indexed, refs);
+            let (mut v, mut i, mut r) = (vec![], vec![], vec![]);
+            names_in(body, &mut v, &mut i, &mut r);
+            vars.extend(v.into_iter().filter(|x| x != j));
+            indexed.extend(i.into_iter().filter(|x| x != j));
+            // a bare `j` argument (`max(j, 1)`) parses as a reference
+            refs.extend(r.into_iter().filter(|x| x.index.is_some() || x.name != *j));
         }
     }
 }
@@ -1408,6 +1436,12 @@ impl Parser {
                 prog.lets.push((name, e));
             } else if self.eat_kw("def") {
                 self.def()?;
+            } else if self.eat_kw("gauge") {
+                let name = self.ident()?;
+                self.expect(&Tok::Assign)?;
+                let e = self.expr()?;
+                self.expect(&Tok::Semi)?;
+                prog.gauges.push((name, e));
             } else if self.eat_kw("pool") {
                 prog.pools.push(self.pool()?);
             } else if self.is_kw("queue") {
@@ -2011,10 +2045,17 @@ impl Parser {
         }
         // a parameter where the body names what it assigns would put an
         // argument there, which is not a name
-        for w in body.windows(2) {
+        for (k, w) in body.windows(2).enumerate() {
             let named = match (&w[0].tok, &w[1].tok) {
                 (Tok::Ident(kw), Tok::Ident(n)) if kw == "choose" => Some(n),
                 (Tok::Ident(n), Tok::Assign) => Some(n),
+                // `sum k in …`: the aggregate binds `k`
+                (Tok::Ident(kw), Tok::Ident(n))
+                    if Agg::from_name(kw).is_some()
+                        && matches!(body.get(k + 2).map(|t| &t.tok), Some(Tok::Ident(i)) if i == "in") =>
+                {
+                    Some(n)
+                }
                 _ => None,
             };
             if let Some(n) = named
@@ -2072,8 +2113,66 @@ impl Parser {
     fn reads_of(&self, toks: &[Token], expr: bool) -> (Vec<String>, Vec<String>) {
         let mut reads = vec![];
         let mut calls = vec![];
+        // `max j in n (e)`: the word, `j`, `in` and the `j`s of `(e)` are the
+        // aggregate's own, not names read
+        let mut own = vec![false; toks.len()];
+        for k in 0..toks.len() {
+            let ident = |i: usize| match toks.get(i).map(|t| &t.tok) {
+                Some(Tok::Ident(n)) => Some(n.as_str()),
+                _ => None,
+            };
+            let (Some(w), Some(j), Some("in")) = (ident(k), ident(k + 1), ident(k + 2)) else {
+                continue;
+            };
+            if Agg::from_name(w).is_none() {
+                continue;
+            }
+            own[k] = true;
+            own[k + 1] = true;
+            own[k + 2] = true;
+            // the count (a token, or a parenthesised expression), then the
+            // parenthesised body
+            let mut i = k + 3;
+            if toks.get(i).map(|t| &t.tok) == Some(&Tok::LParen) {
+                let mut depth = 0;
+                while let Some(t) = toks.get(i) {
+                    match t.tok {
+                        Tok::LParen => depth += 1,
+                        Tok::RParen => depth -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            } else {
+                i += 1;
+            }
+            if toks.get(i).map(|t| &t.tok) != Some(&Tok::LParen) {
+                continue;
+            }
+            let mut depth = 0;
+            while let Some(t) = toks.get(i) {
+                match &t.tok {
+                    Tok::LParen => depth += 1,
+                    Tok::RParen => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    Tok::Ident(n) if n == j => own[i] = true,
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
         for (k, t) in toks.iter().enumerate() {
             let Tok::Ident(n) = &t.tok else { continue };
+            if own[k] {
+                continue;
+            }
             let called = toks.get(k + 1).is_some_and(|t| t.tok == Tok::LParen);
             if called && FUNCTIONS.contains(&n.as_str()) {
                 if !PURE.contains(&n.as_str()) {
@@ -2354,6 +2453,8 @@ impl Parser {
                     self.const_value(b)?
                 }
             }
+            // the linker writes an aggregate out; the parser does not fold one
+            Expr::Over(..) => return None,
             // the linker's constant functions, so that a `let` the linker
             // folds the parser folds too (`let N = min(2, 3); queue D[N]`)
             Expr::Call(f, args) => {
@@ -4239,6 +4340,39 @@ impl Parser {
                 self.expect(&Tok::RParen)?;
                 Ok(e)
             }
+            Tok::Ident(name)
+                if Agg::from_name(&name).is_some()
+                    && matches!(self.peek(), Tok::Ident(_))
+                    && matches!(self.peek_at(1), Tok::Ident(k) if k == "in") =>
+            {
+                let agg = Agg::from_name(&name).expect("guarded");
+                let var = self.ident()?;
+                self.advance(); // in
+                // the count is a number, a name or a parenthesised expression
+                // (what a `def` argument becomes): `ND (` would read as a call
+                let cspan = self.span();
+                let count = match self.advance() {
+                    Tok::Num(x) => Expr::Num(x),
+                    Tok::Ident(n) => Expr::Located(cspan, Box::new(Expr::Var(n))),
+                    Tok::LParen => {
+                        let e = self.expr()?;
+                        self.expect(&Tok::RParen)?;
+                        e
+                    }
+                    other => {
+                        return self.err(format!(
+                            "`{name} {var} in` takes a number, a constant's name or `( expr )`, found {other}"
+                        ));
+                    }
+                };
+                self.expect(&Tok::LParen)?;
+                let body = self.expr()?;
+                self.expect(&Tok::RParen)?;
+                Ok(Expr::Located(
+                    span,
+                    Box::new(Expr::Over(agg, var, Box::new(count), Box::new(body))),
+                ))
+            }
             Tok::Ident(name) => {
                 if *self.peek() == Tok::LParen {
                     self.advance();
@@ -4670,6 +4804,24 @@ mod tests {
             )
             .contains("is a parameter")
         );
+        // a parameter may not be an aggregate's index, and a count may be one
+        assert!(
+            err("def total(k) = sum k in 2 (k); session { set x = total(7); }")
+                .contains("is a parameter")
+        );
+        parse("def total(n) = sum k in n (k); session { set x = total(2); }").unwrap();
+        // a parenthesised count: the body's `k` is still the aggregate's
+        parse(
+            "def total() = sum k in (1 + 1) (k); def next(x) { turn; observe p = x; } \
+               workload { turn { set k = 1; } } session { next(total()); end; }",
+        )
+        .unwrap();
+        // an aggregate's index is its own, not a name the argument reads
+        parse(
+            "def total() = sum i in 2 (i); def next(x) { turn; observe p = x; } \
+               workload { turn { set i = 1; } } session { next(total()); end; }",
+        )
+        .unwrap();
         // what a turn, a request or an admission assigns is captured too
         assert!(
             err("def next(x) { turn; observe p = x; } workload { turn { set n = 1; } } session { next(n); end; }")

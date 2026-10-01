@@ -47,6 +47,32 @@ def test_a_file_with_numbers_and_a_seed():
         assert [(float(t), int(s), int(u), float(v)) for t, s, u, v in rows] == list(zip(o.times, o.sessions, o.turns, o.samples))
 
 
+GAUGED = """
+pool kv[2] { cap 100; }
+stage svc[2] : fifo;
+workload { arrive poisson(1.5); }
+session {
+  choose j in 2 by (holders(kv[j]));
+  hold kv[j] (~uniform(1, 20)) { run svc[j] (~exp(0.5)); }
+  end;
+}
+gauge spread = max k in 2 (used(kv[k])) - min k in 2 (used(kv[k]));
+run { horizon 2000; warmup 100; seed 3; }
+"""
+
+
+def test_a_gauge_is_its_json_and_its_dump():
+    r = pyserq.run(pyserq.compile(source=GAUGED))
+    want, dump = cli_source(GAUGED)
+    assert json.loads(r.json()) == want
+    g = r.gauge("spread")
+    assert list(r.gauges) == ["spread"] and g.name == "spread"
+    assert attrs(g) == set(want["gauges"]["spread"]) | {"name", "times", "values"}
+    assert all(same(getattr(g, k), v) for k, v in want["gauges"]["spread"].items())
+    rows = list(csv.reader(open(dump / "gauge" / "spread.csv")))[1:]
+    assert [(float(t), float(v)) for t, v in rows] == list(zip(g.times, g.values))
+
+
 def same(x, j):
     """An attribute and its JSON field: JSON writes a NaN or an infinity as null."""
     return (j is None and not math.isfinite(x)) or x == j
@@ -57,14 +83,14 @@ def attrs(x):
 
 
 SAMPLES = {"samples", "times", "sessions", "turns"}
-LOOKUPS = {"json", "observes", "stages", "pools", "observe", "stage", "stages_named", "pool"}
+LOOKUPS = {"json", "observes", "gauges", "stages", "pools", "observe", "gauge", "stage", "stages_named", "pool"}
 
 
 def test_the_report_is_its_json_by_name():
     for r in [pyserq.run(pyserq.compile(MG1, seed=4, horizon=20000.0, warmup=1000.0)),
               pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}))]:
         js = json.loads(r.json())
-        scalars = {k: v for k, v in js.items() if k not in ("observes", "stages", "pools")}
+        scalars = {k: v for k, v in js.items() if k not in ("observes", "gauges", "stages", "pools")}
         # every field, both ways: nothing JSON has is missing, nothing it lacks is added
         assert attrs(r) == set(scalars) | LOOKUPS
         assert all(same(getattr(r, k), v) for k, v in scalars.items())
@@ -83,7 +109,9 @@ def test_the_report_is_its_json_by_name():
             assert r.stage(s.name).name == s.name and s.name in {t.name for t in r.stages_named(s.name)}
         for p in r.pools:
             assert r.pool(p.name).name == p.name
+        assert list(r.gauges) == list(js["gauges"])
         assert r.observe("nope") is None and r.stage("nope") is None and r.pool("nope") is None
+        assert r.gauge("nope") is None
     assert type(r.pools[0]).__module__ == "pyserq" and type(r.observe("ttft")).__module__ == "pyserq"
     assert pyserq.run(pyserq.compile(MG1, horizon=5.0, warmup=0.0)).observe("sojourn").ci == math.inf
 

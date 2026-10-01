@@ -73,6 +73,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `horizon`, `warmup`, `seed`, `arrivals` | the run; `arrivals` requires exactly N open arrivals and draining by `horizon` |
 | `hidden` | attribute slots the scheduler may not read (`hidden o;`): legal at the `Session` moment only, below |
 | `share` | `MaxMin` or `Bottleneck`: how the flows of runs over several stages divide the stages' capacity; present exactly when some `Run` has a non-empty `also`, omitted otherwise |
+| `gauges` | `[{name, expr}]`: functions of the state whose time average the report gives, each read at the `Gauge` moment after every instant; omitted when empty. They read and do not act, so a reader that ignores them runs the same program |
 | `slot_cached`, `slot_serial`, … | slots of the built-in attributes (`cached`, `serial`, `turn_no`, `new`, `out`, `think`, `more`, `forced`, `computed`) |
 
 `Sessions`: all the sessions arrive at time 0; each one runs `init`, then
@@ -133,6 +134,7 @@ its position in the IR, and a context variable exists at one of them:
 | `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
 | `Step` | a step stage's `cost`, evaluated after the iteration is scheduled | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
 | `Serve` | a step stage's `serve by` keys, evaluated for one resident once the residents are known | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
+| `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
 
 The index of a pool or stage reference (`CRef.index`) is evaluated with the
 expression around it, so at that expression's moment: `evict by (size +
@@ -190,6 +192,10 @@ priced as such. What a change to `src/ir.rs` does to the version:
   field without a default also makes a new reader reject old files
   (`missing field`), so the committed IR files are regenerated in the same
   change; the generator reads by name and ignores what it does not know.
+  `gauges` does not bump: it changes what the report says, not what the
+  program does, and a reader that drops it (the Lean generator) runs the
+  same sessions to the same end, since a gauge reads no draw, plans no
+  iteration and names its pools and stages by number.
 - **Same shape, a stricter check: no bump.** An IR file that validated before
   and is rejected now was reading a context variable at a moment that never
   supplied it (Moments, above), or a new file lists in `hidden` an attribute
