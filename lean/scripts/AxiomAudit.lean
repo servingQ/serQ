@@ -31,3 +31,4 @@ import Serq
 #print axioms SerqLang.Serve.serve_eq_decode_first
 #print axioms SerqLang.Serve.shape_append_prefill
 #print axioms SerqLang.Serve.chunk_cap_breaks_shape
+#print axioms SerqLang.Exec.Attrs.get_upd

@@ -99,9 +99,84 @@ inductive Status
   | ended
   deriving DecidableEq
 
+/-- A session's attributes: the preset values `base`, overridden slot by slot
+by `vals` (slots below `vals.length`). `get` is the attribute function the
+programs read and `upd` is `Function.update` on it (`get_upd`); stored this
+way, a read costs at most one pass over the program's few slots however many
+times the session has set them. -/
+structure Attrs where
+  base : ℕ → ℕ
+  vals : List ℕ
+
+namespace Attrs
+
+def get (a : Attrs) (k : ℕ) : ℕ := a.vals.getD k (a.base k)
+
+/-- The values `base n, base (n+1), …, base (n+c-1)`. -/
+def fill (base : ℕ → ℕ) (n : ℕ) : ℕ → List ℕ
+  | 0 => []
+  | c + 1 => base n :: fill base (n + 1) c
+
+def upd (a : Attrs) (k v : ℕ) : Attrs :=
+  if k < a.vals.length then { a with vals := a.vals.set k v }
+  else { a with vals := a.vals ++ fill a.base a.vals.length (k - a.vals.length) ++ [v] }
+
+theorem fill_length (base : ℕ → ℕ) (n c : ℕ) : (fill base n c).length = c := by
+  induction c generalizing n with
+  | zero => rfl
+  | succ c ih => simp [fill, ih]
+
+theorem fill_getElem? (base : ℕ → ℕ) (n c i : ℕ) (h : i < c) :
+    (fill base n c)[i]? = some (base (n + i)) := by
+  induction c generalizing n i with
+  | zero => omega
+  | succ c ih =>
+    cases i with
+    | zero => simp [fill]
+    | succ i =>
+      simp only [fill, List.getElem?_cons_succ]
+      rw [ih (n + 1) i (by omega)]; congr 2; omega
+
+/-- `upd` is `Function.update` on the attribute function. -/
+theorem get_upd (a : Attrs) (k v j : ℕ) :
+    (a.upd k v).get j = Function.update a.get k v j := by
+  unfold upd get
+  simp only [List.getD_eq_getElem?_getD]
+  by_cases hk : k < a.vals.length
+  · rw [if_pos hk]
+    simp only [List.getElem?_set]
+    by_cases hjk : j = k
+    · subst hjk; simp [hk]
+    · simp [Ne.symm hjk, Function.update, hjk]
+  · rw [if_neg hk]
+    have hl := fill_length a.base a.vals.length (k - a.vals.length)
+    by_cases hjk : j = k
+    · subst hjk
+      rw [List.getElem?_append_right (by simp [hl]; omega)]
+      have h0 : j - (a.vals.length + (j - a.vals.length)) = 0 := by omega
+      simp [hl, Function.update, h0]
+    · simp only [Function.update, hjk, dite_false]
+      by_cases hj : j < a.vals.length
+      · rw [List.append_assoc, List.getElem?_append_left hj]
+      · rw [List.append_assoc, List.getElem?_append_right (by omega)]
+        by_cases hjk' : j < k
+        · rw [List.getElem?_append_left (by rw [hl]; omega),
+            fill_getElem? _ _ _ _ (by omega)]
+          have : a.vals[j]? = none := List.getElem?_eq_none (by omega)
+          simp [this]; congr 1; omega
+        · rw [List.getElem?_append_right (by rw [hl]; omega)]
+          have h2 : j - a.vals.length - (fill a.base a.vals.length (k - a.vals.length)).length ≠ 0 := by
+            rw [hl]; omega
+          have : a.vals[j]? = none := List.getElem?_eq_none (by omega)
+          simp [this]
+          rw [List.getElem?_eq_none (by simp; omega)]
+          simp
+
+end Attrs
+
 structure Sess where
   serial : ℕ
-  attr : ℕ → ℕ
+  attr : Attrs
   cached : ℕ
   prog : Prog
   stack : List Frame
@@ -136,11 +211,12 @@ structure PoolSt where
 structure Machine where
   wl : Workload := ⟨[], [], none, 0⟩
   now : ℕ
-  sess : List Sess
+  sess : Array Sess
   pools : List PoolSt
   jobs : List Job
   iter : List (ℕ × ℕ)
-  /-- (name, serial, time, value) -/
+  /-- (name, serial, time, value), the most recent first (`observed` reads
+  them in the order they were made) -/
   obs : List (ℕ × ℕ × ℕ × ℕ)
   preempts : ℕ
   nextAdm : ℕ
@@ -159,8 +235,8 @@ def roundDown (b u : ℕ) : ℕ := if b = 0 then u else u / b * b
 def pdef (p : ℕ) : PoolDef := D.pools.getD p ⟨0, 1, false⟩
 def pst (m : Machine) (p : ℕ) : PoolSt := m.pools.getD p ⟨0, [], [], []⟩
 def setPool (m : Machine) (p : ℕ) (s : PoolSt) : Machine := { m with pools := m.pools.set p s }
-def getS (m : Machine) (i : ℕ) : Sess := m.sess.getD i ⟨i, fun _ => 0, 0, .stop, [], .ended, 0, 0⟩
-def setS (m : Machine) (i : ℕ) (s : Sess) : Machine := { m with sess := m.sess.set i s }
+def getS (m : Machine) (i : ℕ) : Sess := m.sess.getD i ⟨i, ⟨fun _ => 0, []⟩, 0, .stop, [], .ended, 0, 0⟩
+def setS (m : Machine) (i : ℕ) (s : Sess) : Machine := { m with sess := m.sess.setIfInBounds i s }
 
 def cachedTotal (s : PoolSt) : ℕ := (s.entries.map Entry.size).sum
 def ownEntry (s : PoolSt) (r : ℕ) : ℕ := ((s.entries.find? (·.owner = r)).map Entry.size).getD 0
@@ -168,7 +244,7 @@ def removeEntry (s : PoolSt) (r : ℕ) : PoolSt := { s with entries := s.entries
 
 def env (m : Machine) (i : ℕ) (left : ℕ := 0) : Env :=
   let s := getS m i
-  { attr := s.attr, serial := s.serial, now := m.now, cached := s.cached,
+  { attr := s.attr.get, serial := s.serial, now := m.now, cached := s.cached,
     cachedIn := fun p => ownEntry (pst m p) s.serial, budgetLeft := left }
 
 def evalE (m : Machine) (i : ℕ) (e : Env → ℕ) (left : ℕ := 0) : ℕ := e (env m i left)
@@ -405,23 +481,23 @@ def exec : ℕ → Machine → ℕ → Machine
     | .stop => endSession D m i
     | .turn k =>
       let a := match m.wl.turnSlot with
-        | some t => Function.update s.attr t (s.attr t + 1)
+        | some t => s.attr.upd t (s.attr.get t + 1)
         | none => s.attr
       let ts := m.wl.turns.getD s.serial []
       if ts = [] then exec f (setS m i { s with attr := a, prog := k }) i
       else match ts[s.turnIx]? with
         | some asg =>
-          let a := asg.foldl (fun a p => Function.update a p.1 p.2) a
-          let a := Function.update a m.wl.moreSlot (if s.turnIx + 1 < ts.length then 1 else 0)
+          let a := asg.foldl (fun a p => a.upd p.1 p.2) a
+          let a := a.upd m.wl.moreSlot (if s.turnIx + 1 < ts.length then 1 else 0)
           exec f (setS m i { s with attr := a, prog := k, turnIx := s.turnIx + 1 }) i
         | none =>
-          exec f (setS m i { s with attr := Function.update a m.wl.moreSlot 0, prog := k }) i
+          exec f (setS m i { s with attr := a.upd m.wl.moreSlot 0, prog := k }) i
     | .set slot e k =>
       let v := evalE m i e
-      exec f (setS m i { s with attr := Function.update s.attr slot v, prog := k }) i
+      exec f (setS m i { s with attr := s.attr.upd slot v, prog := k }) i
     | .observe n e k =>
       let v := evalE m i e
-      exec f { setS m i { s with prog := k } with obs := m.obs ++ [(n, s.serial, m.now, v)] } i
+      exec f { setS m i { s with prog := k } with obs := (n, s.serial, m.now, v) :: m.obs } i
     | .branch p a b k =>
       let c := evalE m i p
       exec f (setS m i { s with prog := if c ≠ 0 then a else b, stack := List.cons (Frame.seq k) s.stack }) i
@@ -587,7 +663,7 @@ def insertBy (a : ℕ × ℕ) : List (ℕ × ℕ) → List (ℕ × ℕ)
 commands they enable, and the next iteration. -/
 def tick (m : Machine) : Machine :=
   let m := { m with now := m.now + 1 }
-  let wake := ((List.range m.sess.length).filterMap fun i => match (getS m i).status with
+  let wake := (m.sess.toList.zipIdx.filterMap fun (s, i) => match s.status with
     | .delay u q => if u ≤ m.now then some (q, i) else none
     | _ => none).foldr insertBy [] |>.map (·.2)
   let m := wake.foldl (fun m i => { setS m i { getS m i with status := .ready } with ready := m.ready ++ [i] }) m
@@ -599,7 +675,7 @@ def start (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload :=
   let m : Machine := {
     wl := wl
     now := 0
-    sess := (List.range n).map fun i => ⟨i, init i, 0, prog, [], .ready, 0, 0⟩
+    sess := ((List.range n).map fun i => ⟨i, ⟨init i, []⟩, 0, prog, [], .ready, 0, 0⟩).toArray
     pools := D.pools.map fun _ => ⟨0, [], [], []⟩
     jobs := [], iter := [], obs := [], preempts := 0
     nextAdm := 0, nextRel := 0, nextDead := 0, nextDelay := 0
@@ -619,7 +695,7 @@ def runW (ticks : ℕ) (w : Workload) (prog : Prog) : Machine :=
 
 /-- The values of observation `name`, as (serial, value), in serial order. -/
 def observed (m : Machine) (name : ℕ) : List (ℕ × ℕ) :=
-  ((m.obs.filter (·.1 = name)).map fun (_, s, _, v) => (s, v)).foldr insertBy []
+  ((m.obs.reverse.filter (·.1 = name)).map fun (_, s, _, v) => (s, v)).foldr insertBy []
 
 end Exec
 end SerqLang
