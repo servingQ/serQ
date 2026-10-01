@@ -22,6 +22,10 @@ ROOT = Path(__file__).resolve().parents[2]
 CLI = os.environ.get("SERQ_CLI", str(ROOT / "target" / "release" / "serq"))
 MG1 = ROOT / "examples" / "single-turn" / "mg1.sq"
 REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
+ARRAYS = """pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
+workload { arrive poisson(1); }
+session { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } end; }
+run { horizon 100; }"""
 
 
 def cli(path, *args):
@@ -75,7 +79,7 @@ def test_a_gauge_is_its_json_and_its_dump():
 
 def same(x, j):
     """An attribute and its JSON field: JSON writes a NaN or an infinity as null."""
-    return (j is None and not math.isfinite(x)) or x == j
+    return x == j or (j is None and x is not None and not math.isfinite(x))
 
 
 def attrs(x):
@@ -83,11 +87,14 @@ def attrs(x):
 
 
 SAMPLES = {"samples", "times", "sessions", "turns"}
-LOOKUPS = {"json", "observes", "gauges", "stages", "pools", "observe", "gauge", "stage", "stages_named", "pool"}
+LOOKUPS = {"json", "observes", "gauges", "stages", "pools", "observe", "gauge", "stage", "stages_named", "pool", "pools_named"}
 
 
 def test_the_report_is_its_json_by_name():
+    arrays = pyserq.run(pyserq.compile(source=ARRAYS))
+    assert [p.index for p in arrays.pools_named("kv")] == [0, 1] and arrays.pool("reqs").index is None
     for r in [pyserq.run(pyserq.compile(MG1, seed=4, horizon=20000.0, warmup=1000.0)),
+              arrays,
               pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}))]:
         js = json.loads(r.json())
         scalars = {k: v for k, v in js.items() if k not in ("observes", "gauges", "stages", "pools")}
@@ -109,6 +116,11 @@ def test_the_report_is_its_json_by_name():
             assert r.stage(s.name).name == s.name and s.name in {t.name for t in r.stages_named(s.name)}
         for p in r.pools:
             assert r.pool(p.name).name == p.name
+        # an array's members are its rows of one name, indexed in order; a single one has no index
+        for rows, named in [(r.stages, r.stages_named), (r.pools, r.pools_named)]:
+            for x in rows:
+                members = [m.index for m in named(x.name)]
+                assert members in ([None], list(range(len(members))))
         assert list(r.gauges) == list(js["gauges"])
         assert r.observe("nope") is None and r.stage("nope") is None and r.pool("nope") is None
         assert r.gauge("nope") is None

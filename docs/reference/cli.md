@@ -54,8 +54,8 @@ serq run examples/multi-turn/vllm.sq --json | jq '.pools[] | select(.name=="kv")
 | top level | `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals`, `ended`, `turns`, `mean_live` |
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
 | `gauges.<name>` | `mean` (time average over `[warmup, end]`), `ci`, `min`, `max` |
-| `stages[]` | `name`, `mean_number`, `utilization`, `completed`, `throughput`, `mean_wait`, `mean_service`, `iterations` |
-| `pools[]` | `name`, `mean_used`, `mean_cached`, `mean_queue`, `mean_holders`, `mean_wait`, `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected`, `stuck` (sessions preempted again without progress since their previous preemption) |
+| `stages[]` | `name`, `index` (the member's index in a stage array, `null` for a single stage), `mean_number`, `utilization`, `completed`, `throughput`, `mean_wait`, `mean_service`, `iterations` |
+| `pools[]` | `name`, `index` (the member's index in a pool array, `null` for a single pool), `mean_used`, `mean_cached`, `mean_queue`, `mean_holders`, `mean_wait`, `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected`, `stuck` (sessions preempted again without progress since their previous preemption) |
 
 ## Make targets
 
