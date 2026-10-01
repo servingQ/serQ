@@ -297,7 +297,7 @@ fn an_entry_sees_its_parameters_and_its_queue() {
             "hold kv (prompt) { prefill (1) growing kv; }",
             "observe x = E.late;",
         ),
-        "no entry of `E` marks `late`",
+        "no entry of `E` marks or sets `late`",
     );
 }
 
@@ -619,6 +619,65 @@ fn the_contract_holds_at_every_edge() {
             wl("request gw; end;")
         ),
         "`P.prefill` leases nothing",
+    );
+}
+
+/// The fourth review of #87.
+#[test]
+fn the_contract_holds_at_four_more_edges() {
+    let wl = "workload { arrive batch(1); hidden o; init { set prompt = 3; set o = 2; } session { request gw; end; } } run { horizon 10; }";
+    let engine = |body: &str| {
+        format!(
+            "queue E[2] : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ {body} }} }}"
+        )
+    };
+    // an entry's `set` is read from outside as `Q.x`
+    compile_source(
+        &format!(
+            "queue gw : gateway {{ route {{ E[0].decode (prompt); observe r = E.result; }} }} {} {wl}",
+            engine("hold kv (p) { prefill (p) growing kv; } set result = 7;")
+        ),
+        &Overrides::default(),
+    )
+    .unwrap();
+    // `Q[i].x` is refused in a function's argument too
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ E[0].decode (prompt); observe r = min(E[missing].done, 0); }} }} {} {wl}",
+            engine("hold kv (p) { prefill (p) growing kv; mark done; }")
+        ),
+        "write `E.done`",
+    );
+    // an entry does not set a `let` constant: its header reads the constant
+    refused(
+        &format!(
+            "let n = 5; queue gw : gateway {{ route {{ E[0].decode (prompt); }} }} {} {wl}",
+            engine("hold kv (n) { prefill (p) growing kv; } set n = 1;")
+        ),
+        "sets `n`, a `let` constant",
+    );
+    // a call takes `from` a queue, so the queue's lease check applies
+    refused(
+        &format!(
+            "stage nic : delay;
+             queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P.kv; }} }}
+             queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (p) {{ run (p); }} cache (p) lease kv (inf); }} }}
+             queue D : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }}
+               decode (p) from src {{ hold kv (p) {{ transfer on nic (p) from src to kv (p); }} }} }}
+             {wl}"
+        ),
+        "a call takes from a queue",
+    );
+    // a queue's pool is one per member, not a family of its own
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ E[0].decode (prompt); }} }}
+             queue E[3] : decode {{ pool kv[2] {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }} }} {wl}"
+        ),
+        "a queue's pool is the member's",
     );
 }
 

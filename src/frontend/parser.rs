@@ -176,6 +176,9 @@ struct Parser {
     in_queue: Option<usize>,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
     dotted_reads: Vec<(usize, String)>,
+    /// `Q[i].x` references, checked once the queues are known: `x` must be
+    /// a pool of `Q`.
+    indexed_dotted: Vec<(usize, String)>,
     /// Request sites and their explicit gateway, resolved after declarations.
     requests: Vec<(usize, Option<String>)>,
 }
@@ -1212,6 +1215,7 @@ impl Parser {
             structural_overrides: vec![],
             in_queue: None,
             dotted_reads: vec![],
+            indexed_dotted: vec![],
             requests: vec![],
         }
     }
@@ -1559,17 +1563,34 @@ impl Parser {
                     }
                 }
             }
+            for (at, name) in std::mem::take(&mut self.indexed_dotted) {
+                let (qn, field) = name.split_once('.').expect("a dotted name");
+                if let Some(q) = self.queues.iter().find(|q| q.name == qn)
+                    && !q.pools.iter().any(|p| p == field)
+                {
+                    return self.err_at(
+                        at,
+                        format!(
+                            "`{qn}[…].{field}` reads the request's attribute, which is no member's: \
+                             write `{qn}.{field}`"
+                        ),
+                    );
+                }
+            }
             for (at, name) in std::mem::take(&mut self.dotted_reads) {
                 let (qn, field) = name.split_once('.').expect("a dotted name");
                 let ok = self.queues.iter().any(|q| {
                     q.name == qn
                         && (q.marks.iter().any(|m| m == field)
-                            || q.pools.iter().any(|p| p == field))
+                            || q.pools.iter().any(|p| p == field)
+                            || q.entries
+                                .iter()
+                                .any(|e| e.locals.iter().any(|l| l == field)))
                 });
                 if !ok {
                     return self.err_at(
                         at,
-                        format!("`{name}`: no entry of `{qn}` marks `{field}`, and `{qn}` has no pool `{field}`"),
+                        format!("`{name}`: no entry of `{qn}` marks or sets `{field}`, and `{qn}` has no pool `{field}`"),
                     );
                 }
             }
@@ -2617,7 +2638,18 @@ impl Parser {
                 );
             }
             if self.eat_kw("pool") {
+                let p_at = self.pos;
                 let mut d = self.pool()?;
+                if d.count != 1 {
+                    return self.err_at(
+                        p_at,
+                        format!(
+                            "`pool {}[…]` in queue `{name}`: a queue's pool is the member's, one per \
+                             member of `{name}`; write `pool {}`",
+                            d.name, d.name
+                        ),
+                    );
+                }
                 if self.queues[qi].pools.contains(&d.name) {
                     return self.err(format!("duplicate pool `{}` in queue `{name}`", d.name));
                 }
@@ -2795,6 +2827,18 @@ impl Parser {
         collect_entry(&body, &mut locals, &mut marks, &mut leased);
         if let Some(p) = locals.iter().find(|l| params.contains(l)) {
             return self.err_at(at, format!("`{qname}.{verb}` sets its parameter `{p}`"));
+        }
+        if let Some(l) = locals
+            .iter()
+            .find(|l| self.consts.iter().any(|(c, _)| c == *l))
+        {
+            return self.err_at(
+                at,
+                format!(
+                    "`{qname}.{verb}` sets `{l}`, a `let` constant: the header would read the \
+                     constant and the body the attribute\nhelp: name the attribute otherwise"
+                ),
+            );
         }
         let q = &self.queues[qi];
         for l in &leased {
@@ -3082,7 +3126,13 @@ impl Parser {
         };
         let name = if *self.peek() == Tok::Dot {
             self.advance();
-            format!("{name}.{}", self.ident()?)
+            let full = format!("{name}.{}", self.ident()?);
+            if index.is_some() {
+                // `D[j].kv` is a member's pool; `D[j].first_token` would be a
+                // member's mark, and a mark is the request's
+                self.indexed_dotted.push((self.pos - 1, full.clone()));
+            }
+            full
         } else {
             name
         };
@@ -3142,7 +3192,19 @@ impl Parser {
         }
         self.expect(&Tok::RParen)?;
         let from = if self.eat_kw("from") {
-            Some(self.reference()?)
+            let f_at = self.pos;
+            let r = self.reference()?;
+            if let Some((q, _)) = r.name.split_once('.') {
+                // the lease check is the queue's: whichever entry of `q` ran
+                return self.err_at(
+                    f_at,
+                    format!(
+                        "`from {}`: a call takes from a queue, `from {q}[…]`",
+                        r.name
+                    ),
+                );
+            }
+            Some(r)
         } else {
             None
         };
