@@ -70,6 +70,19 @@ pub struct StageReport {
     /// otherwise): the batch a decode is in and the step it waits for.
     pub mean_decode_batch: f64,
     pub mean_decode_step: f64,
+    /// Step stages: the gaps between a turn's successive tokens (a session's
+    /// tokens with the same `turn_no`) that end on this stage after warm-up,
+    /// wherever the earlier token was: their mean, and their median and
+    /// 99th percentile within 0.5 % (NaN without any). A turn's tokens are
+    /// its decodes' and its prefills' ends; a prefill's end is the next
+    /// token after a decode, or after a preemption on the previous token's
+    /// stage, and its gap holds the preemption; otherwise it is the first,
+    /// and replaces any before it (a decoder's recompute replaces a
+    /// prefiller's dropped token). A turn's gaps add up to its last token
+    /// less its first.
+    pub mean_itl: f64,
+    pub itl_p50: f64,
+    pub itl_p99: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -253,6 +266,8 @@ impl Report {
                     format!("{:.3}", st.mean_decodes),
                     format!("{:.3}", st.mean_decode_batch),
                     format!("{:.6}", st.mean_decode_step),
+                    format!("{:.6}", st.itl_p50),
+                    format!("{:.6}", st.itl_p99),
                 ]
             });
             table(
@@ -266,6 +281,8 @@ impl Report {
                     "decodes",
                     "decode batch",
                     "decode step",
+                    "itl p50",
+                    "itl p99",
                 ],
                 rows,
             );
@@ -373,7 +390,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{},\"prefill_only\":{},\"decode_only\":{},\"mixed\":{},\"mean_decodes\":{},\"mean_decode_batch\":{},\"mean_decode_step\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{},\"prefill_only\":{},\"decode_only\":{},\"mixed\":{},\"mean_decodes\":{},\"mean_decode_batch\":{},\"mean_decode_step\":{},\"mean_itl\":{},\"itl_p50\":{},\"itl_p99\":{}}}",
                 st.name,
                 index(st.index),
                 f(st.mean_number),
@@ -388,7 +405,10 @@ impl Report {
                 f(st.mixed),
                 f(st.mean_decodes),
                 f(st.mean_decode_batch),
-                f(st.mean_decode_step)
+                f(st.mean_decode_step),
+                f(st.mean_itl),
+                f(st.itl_p50),
+                f(st.itl_p99)
             );
         }
         s.push_str("],\"pools\":[");

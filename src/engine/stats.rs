@@ -248,6 +248,67 @@ pub struct TimeStats {
     pub max: f64,
 }
 
+/// A distribution kept as counts in buckets of a constant relative width
+/// (1 %), so that it costs the range of its values, not their number: a
+/// quantile is its bucket's geometric middle held within the smallest and
+/// largest value the bucket saw, so within 0.5 % of them, and exact when
+/// they are one value. The mean is exact.
+#[derive(Clone, Debug, Default)]
+pub struct LogHistogram {
+    /// bucket -> (count, smallest, largest)
+    counts: std::collections::BTreeMap<i32, (u64, f64, f64)>,
+    n: u64,
+    sum: f64,
+}
+
+impl LogHistogram {
+    const WIDTH: f64 = 0.01;
+
+    pub fn push(&mut self, x: f64) {
+        // zero and below share one bucket, below every other
+        let k = if x > 0.0 {
+            (x.ln() / Self::WIDTH.ln_1p()).floor() as i32
+        } else {
+            i32::MIN
+        };
+        let b = self.counts.entry(k).or_insert((0, x, x));
+        b.0 += 1;
+        b.1 = b.1.min(x);
+        b.2 = b.2.max(x);
+        self.n += 1;
+        self.sum += x;
+    }
+
+    pub fn mean(&self) -> f64 {
+        if self.n == 0 {
+            f64::NAN
+        } else {
+            self.sum / self.n as f64
+        }
+    }
+
+    /// The bucket of the `ceil(q n)`-th smallest value, as `quantile` ranks.
+    pub fn quantile(&self, q: f64) -> f64 {
+        if self.n == 0 {
+            return f64::NAN;
+        }
+        let rank = ((q * self.n as f64).ceil() as u64).clamp(1, self.n);
+        let mut seen = 0;
+        for (&k, &(c, lo, hi)) in &self.counts {
+            seen += c;
+            if seen >= rank {
+                let middle = if k == i32::MIN {
+                    0.0
+                } else {
+                    ((k as f64 + 0.5) * Self::WIDTH.ln_1p()).exp()
+                };
+                return middle.clamp(lo, hi);
+            }
+        }
+        unreachable!("the ranks add up to n")
+    }
+}
+
 pub fn quantile(xs: &[f64], q: f64) -> f64 {
     if xs.is_empty() {
         return f64::NAN;

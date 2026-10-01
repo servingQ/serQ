@@ -167,6 +167,21 @@ struct Session<'p> {
     stuck: bool,
     /// Allocations that outlived their scope (`lease`).
     leases: Vec<Lease<'p>>,
+    /// The request's latest token on a step stage, for the gaps between
+    /// tokens (`Interp::token`).
+    last_token: Option<LastToken>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LastToken {
+    turn: f64,
+    at: f64,
+    /// The stage it was committed on.
+    stage: usize,
+    /// Whether the turn has decoded a token.
+    decoded: bool,
+    /// Whether the request has been preempted since this token.
+    preempted: bool,
 }
 
 // ------------------------------------------------------------- pools ----
@@ -306,6 +321,9 @@ struct StepStats {
     decodes: TimeAverage,
     batch: Welford,
     duration: Welford,
+    /// The gaps between a request's successive tokens that end here,
+    /// after warm-up (`Interp::token`).
+    itl: LogHistogram,
 }
 
 impl StepStats {
@@ -317,6 +335,7 @@ impl StepStats {
             decodes: TimeAverage::new(0.0, 0.0),
             batch: Welford::new(),
             duration: Welford::new(),
+            itl: LogHistogram::default(),
         }
     }
 
@@ -898,6 +917,7 @@ impl<'p> Interp<'p> {
             preempt_pos: HashMap::new(),
             stuck: false,
             leases: vec![],
+            last_token: None,
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -2011,6 +2031,9 @@ impl<'p> Interp<'p> {
             }
         }
         self.sessions[victim].preempt_pos.insert(pl, computed);
+        if let Some(t) = &mut self.sessions[victim].last_token {
+            t.preempted = true;
+        }
         // the same value is what the re-executed hold resumes from (vLLM
         // keeps the generated tokens: `_preempt_request` resets
         // `num_computed_tokens` only)
@@ -2939,13 +2962,27 @@ impl<'p> Interp<'p> {
         let now = self.now;
         self.stages[st].steps.set(now, 0.0, 0.0);
         let mut finished = vec![];
+        // the requests that commit a token now: a decode's, or a prefill's
+        // at its end
+        let mut tokens_of = vec![];
         for (id, tokens) in it.assign {
             if let Some(j) = self.stages[st].jobs.get_mut(&id) {
                 j.work -= tokens;
-                if j.work <= 1e-9 {
+                let done = j.work <= 1e-9;
+                if let Some(sid) = j.owner {
+                    match j.mode {
+                        RunMode::Decode => tokens_of.push((sid, true)),
+                        RunMode::Prefill if done => tokens_of.push((sid, false)),
+                        _ => {}
+                    }
+                }
+                if done {
                     finished.push(id);
                 }
             }
+        }
+        for (sid, decode) in tokens_of {
+            self.token(st, sid, decode);
         }
         for id in finished {
             let job = self.stages[st].jobs.remove(&id).unwrap();
@@ -2957,6 +2994,36 @@ impl<'p> Interp<'p> {
             }
             self.job_done(st, job);
         }
+    }
+
+    /// A token of `sid`'s turn committed on stage `st` now: a decode's, or
+    /// a prefill's at its end. The gap since the turn's previous token goes
+    /// to the stage's ITL, wherever that token was. A prefill's end is the
+    /// next token after a decode, or after a preemption on the stage of the
+    /// previous token (a resumed request samples one); otherwise it is the
+    /// client's first, and replaces any before it: a decoder recomputing
+    /// the token a prefiller sampled and dropped (llmd_nixl_pull.sq), again
+    /// if it is preempted before it ends. The turn's gaps add up to its last
+    /// token less its first.
+    fn token(&mut self, st: usize, sid: usize, decode: bool) {
+        let now = self.now;
+        let turn = self.sessions[sid].attrs[self.p.slot_turn];
+        let last = self.sessions[sid].last_token.filter(|t| t.turn == turn);
+        let decoded = last.is_some_and(|t| t.decoded);
+        let next = decode || decoded || last.is_some_and(|t| t.preempted && t.stage == st);
+        if let Some(t) = last
+            && next
+            && self.warm
+        {
+            self.stages[st].steps.itl.push(now - t.at);
+        }
+        self.sessions[sid].last_token = Some(LastToken {
+            turn,
+            at: now,
+            stage: st,
+            decoded: decoded || decode,
+            preempted: false,
+        });
     }
 
     // ---------------------------------------------------- evaluation ----
@@ -3275,6 +3342,9 @@ impl<'p> Interp<'p> {
                 mean_decodes: s.steps.decodes.mean(now),
                 mean_decode_batch: s.steps.batch.mean(),
                 mean_decode_step: s.steps.duration.mean(),
+                mean_itl: s.steps.itl.mean(),
+                itl_p50: s.steps.itl.quantile(0.5),
+                itl_p99: s.steps.itl.quantile(0.99),
             })
             .collect();
         let pools = self
