@@ -540,6 +540,88 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
     compile_source(&program("hidden out;"), &Overrides::default()).unwrap();
 }
 
+/// The third review of #87: six ways a program still got past the queue's
+/// contract, each refused or, for a constant, accepted as the linker does.
+#[test]
+fn the_contract_holds_at_every_edge() {
+    let wl = |session: &str| {
+        format!(
+            "workload {{ arrive batch(1); hidden o; init {{ set prompt = 3; set o = 2; }} session {{ {session} }} }} run {{ horizon 10; }}"
+        )
+    };
+    let engine = "queue E : decode { pool kv { cap 100; } serve step { cost 1; memory kv; }
+                    decode (p) { hold kv (p) { prefill (p) growing kv; } } }";
+    // 1. what a named gateway assigns is what a request assigns: an argument
+    //    that reads it would read the new value
+    refused(
+        &format!(
+            "def go(x) {{ request gw; observe b = x; }}
+             queue gw : gateway {{ route {{ set t0 = now; E.decode (prompt); }} }} {engine}
+             {}",
+            wl("set t0 = 1; go(t0); end;")
+        ),
+        "an argument of `go` reads `t0`",
+    );
+    // 2. a family's size folds as the linker folds a constant
+    compile_source(
+        &format!(
+            "let N = min(2, 3);
+             queue gw : gateway {{ route {{ E[N - 1].decode (prompt); }} }}
+             queue E[N] : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ hold kv (p + N) {{ prefill (p) growing kv; }} }} }}
+             {}",
+            wl("request gw; end;")
+        ),
+        &Overrides::default(),
+    )
+    .unwrap();
+    // 3. a role's entry has the role's parameters
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ P.prefill (1, 2); }} }}
+             queue P : prefill {{ serve fifo; prefill (a, b) {{ run (a + b); }} }}
+             {}",
+            wl("request gw; end;")
+        ),
+        "takes 1 parameter(s), as the role says",
+    );
+    // 4. a queue that is also a gateway: only its `route` is the deployment's
+    refused(
+        &format!(
+            "queue gw : gateway, prefill {{ serve fifo; route {{ gw.prefill (prompt); }} prefill (p) {{ run (p + o + prompt); }} }}
+             {}",
+            wl("request gw; end;")
+        ),
+        "reads `prompt`, a session attribute set outside the queue",
+    );
+    // 5. the serving forms do not take another queue's pool either
+    refused(
+        &format!(
+            "pool shared {{ cap 100; }} stage nic : ps(1);
+             queue gw : gateway {{ route {{ P.prefill (prompt); hold shared (1) {{ transfer on nic (1) from P.kv to shared (1); }} }} }}
+             queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (p) {{ run (p); }} cache (p) lease kv (inf); }} }}
+             {}",
+            wl("request gw; end;")
+        ),
+        "`kv` is a pool of queue `P`",
+    );
+    // 6. a `from` needs the lease on every way through the entry
+    refused(
+        &format!(
+            "stage nic : delay;
+             queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P; }} }}
+             queue P : prefill {{ pool kv {{ cap 100; }} serve fifo;
+               prefill (p) {{ branch (p > 1) {{ hold kv (p) {{ run (p); }} cache (p) lease kv (inf); }} else {{ run (p); }} }} }}
+             queue D : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
+               decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }}
+               decode (p) from src {{ hold kv (p) {{ transfer on nic (p) from src to kv (p); }} }} }}
+             {}",
+            wl("request gw; end;")
+        ),
+        "`P.prefill` leases nothing",
+    );
+}
+
 /// What the review of the rebased #87 found an entry could still reach.
 #[test]
 fn an_entry_reaches_only_its_own() {

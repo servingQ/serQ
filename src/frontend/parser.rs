@@ -648,6 +648,17 @@ fn says(b: &[Token], w: &str) -> bool {
         .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
 }
 
+/// Do these tokens say `request;` or `request gw;`: send a request, to
+/// the server or to a named gateway?
+fn says_request(b: &[Token]) -> bool {
+    says(b, "request")
+        || b.windows(3).any(|x| {
+            x[0].tok == Tok::Ident("request".into())
+                && matches!(x[1].tok, Tok::Ident(_))
+                && x[2].tok == Tok::Semi
+        })
+}
+
 /// A function of the language: one the linker resolves or one it folds.
 fn is_function(name: &str) -> bool {
     FUNCTIONS.contains(&name) || FOLDED.contains(&name)
@@ -1128,6 +1139,21 @@ fn split_reads<'a>(
     }
 }
 
+/// Whether every way through `stmts` leaves a lease: a `from` takes the KV
+/// the entry leased, and a way that leases nothing would leave none to take.
+fn always_leases(stmts: &[Stmt]) -> bool {
+    for s in stmts {
+        match s {
+            Stmt::Hold { lease: Some(_), .. } => return true,
+            Stmt::Hold { body, .. } if always_leases(body) => return true,
+            Stmt::Branch(_, a, b) if always_leases(a) && always_leases(b) => return true,
+            Stmt::End => return false,
+            _ => {}
+        }
+    }
+    false
+}
+
 /// The pools an entry's statements name: its holds', leases', and those of
 /// `grow`, `drop`, `release`, `load`, `growing` and a call's `to`.
 fn pools_named<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Ref>) {
@@ -1454,6 +1480,18 @@ impl Parser {
         let mut served: Vec<String> = vec!["cached".into(), "computed".into()];
         if let Some((_, server)) = &self.server {
             assigned_in(server, &mut served);
+        }
+        // and a named gateway's `route`, with what the entries it calls set
+        // and mark (`D.first_token`): `request gw;` assigns them too
+        for q in &self.queues {
+            for e in &q.entries {
+                if e.verb == "route" {
+                    assigned_in(&e.body, &mut served);
+                } else {
+                    served.extend(e.locals.iter().map(|l| format!("{}.{l}", q.name)));
+                }
+            }
+            served.extend(q.marks.iter().map(|m| format!("{}.{m}", q.name)));
         }
         self.assemble(&mut prog)?;
         self.check_body_bindings(&prog)?;
@@ -1956,7 +1994,7 @@ impl Parser {
         let used: Vec<&Def> = self.defs.iter().filter(|d| uses(&body, &d.name)).collect();
         let mut assigns = assigned_tokens(&body);
         let mut turn = says(&body, "turn");
-        let mut request = says(&body, "request");
+        let mut request = says_request(&body);
         let (mut reads, mut calls) = self.reads_of(&body);
         reads.retain(|n| !params.contains(n));
         for d in &used {
@@ -2252,12 +2290,42 @@ impl Parser {
         Some(match e {
             Expr::Located(_, inner) => self.const_value(inner)?,
             Expr::Num(x) => *x,
+            Expr::Var(n) if n == "inf" => f64::INFINITY,
             Expr::Var(n) => self.consts.iter().rev().find(|(c, _)| c == n)?.1,
             Expr::Unary(UnOp::Neg, a) => -self.const_value(a)?,
+            Expr::Unary(UnOp::Not, a) => {
+                if self.const_value(a)? != 0.0 {
+                    0.0
+                } else {
+                    1.0
+                }
+            }
             Expr::Binary(op, a, b) => {
                 crate::frontend::link::binop(*op, self.const_value(a)?, self.const_value(b)?)
             }
-            _ => return None,
+            Expr::Cond(c, a, b) => {
+                if self.const_value(c)? != 0.0 {
+                    self.const_value(a)?
+                } else {
+                    self.const_value(b)?
+                }
+            }
+            // the linker's constant functions, so that a `let` the linker
+            // folds the parser folds too (`let N = min(2, 3); queue D[N]`)
+            Expr::Call(f, args) => {
+                let xs = args
+                    .iter()
+                    .map(|a| match a {
+                        Arg::Expr(e) => self.const_value(e),
+                        Arg::Ref(r) if r.index.is_none() => {
+                            self.const_value(&Expr::Var(r.name.clone()))
+                        }
+                        Arg::Ref(_) => None,
+                    })
+                    .collect::<Option<Vec<f64>>>()?;
+                crate::frontend::link::const_call(f, &xs)?
+            }
+            Expr::Sample(..) => return None,
         })
     }
 
@@ -2678,6 +2746,27 @@ impl Parser {
         if self.queues[qi].entry(&verb, from.is_some()).is_some() {
             return self.err_at(at, format!("queue `{qname}` has `{verb}` twice"));
         }
+        // the role's signature: `prefill (prompt)`, not one of the program's
+        if let Some(&(_, n, _)) = queue::ROLES
+            .iter()
+            .flat_map(|(_, sigs)| sigs.iter())
+            .find(|(v, _, f)| *v == verb && *f == from.is_some())
+            && params.len() != n
+        {
+            return self.err_at(
+                at,
+                format!(
+                    "`{qname}.{verb}` takes {n} parameter(s), as the role says (`{verb}{}`); \
+                     it declares {}",
+                    if n == 0 {
+                        String::new()
+                    } else {
+                        " (…)".into()
+                    },
+                    params.len()
+                ),
+            );
+        }
         let outer_side = self.side;
         let outer_stages = std::mem::take(&mut self.stages);
         // the body's serving forms find the queue's own step engine; the
@@ -2729,7 +2818,9 @@ impl Parser {
         // the header sees the parameters and the queue's own; the body also
         // the context and the request's hidden attributes
         let mut reads = vec![];
-        let is_gateway = q.roles.iter().any(|r| r == "gateway");
+        // the gateway's `route` is the deployment's and reads as a server
+        // does; any other entry of a queue that is also a gateway is an entry
+        let is_gateway = verb == "route" && q.roles.iter().any(|r| r == "gateway");
         let allowed_var = |n: &str, header: bool| -> bool {
             params.iter().any(|p| p == n)
                 || n == "self"
@@ -2860,7 +2951,7 @@ impl Parser {
                 q.marks.push(m);
             }
         }
-        let leases = !leased.is_empty();
+        let leases = always_leases(&body);
         q.entries.push(queue::Entry {
             verb,
             params,
@@ -3263,7 +3354,7 @@ impl Parser {
                 };
                 let work = self.paren_expr()?;
                 let growing = if self.eat_kw("growing") {
-                    Some(self.reference()?)
+                    Some(self.own_pool("growing")?)
                 } else {
                     None
                 };
@@ -3544,7 +3635,7 @@ impl Parser {
         };
         let work = self.expr()?;
         let growing = if self.eat_kw("growing") {
-            Some(self.reference()?)
+            Some(self.own_pool("growing")?)
         } else {
             None
         };
@@ -3559,9 +3650,9 @@ impl Parser {
                     "`transfer … from P to Q`: a transfer does not grow a pool",
                 );
             }
-            let from = self.reference()?;
+            let from = self.own_pool("transfer … from")?;
             self.expect_kw("to")?;
-            let to = self.reference()?;
+            let to = self.own_pool("transfer … to")?;
             let units = self.paren_expr()?;
             self.expect(&Tok::Semi)?;
             return Ok(vec![

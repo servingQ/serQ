@@ -399,8 +399,9 @@ queue P[NP] : prefill {
 The pools are the queue's (`P.kv` from outside, `kv` within), the stage is
 named after the queue (`admit via P`, `budget_left(P)`, `work(P[i])`), and
 an *entry* — one per verb of the queue's roles — holds what the station
-does with one request. A queue declares its pools, then its `serve`, then its
-entries, each reading what is above it. The body is the server's statements; `run (X)` with
+does with one request, with the role's parameters (`prefill (prompt)`). A
+queue declares its pools, then its `serve`, then its entries, each reading
+what is above it. The body is the server's statements; `run (X)` with
 no stage names the queue's own, and a serving form with no `on` finds it;
 the stages that are not a step engine (a link's, a delay) the body may name
 as a `server` does. `self` is the member's index in a family. A family's
@@ -431,8 +432,8 @@ is discussed in [Explicit gateways](design/explicit-gateways.md).
 
 The deployment calls an entry where the request goes: `P[i].prefill
 (prompt);` and `D[j].decode (prompt) from P[i];`. `from P[i]` is the pool
-`P`'s entry leases, and every entry of `P` must lease it, so that whichever
-one the request went through left the KV; a `from` on a queue that leases
+`P`'s entry leases, and every entry of `P` must lease it on every way
+through it, so that whichever one the request went through left the KV; a `from` on a queue that leases
 nothing does not link.
 Inside the entry the `from` name is that pool, and in an index it is
 the source member's index, so the decoder reaches the prefiller's own NIC:
