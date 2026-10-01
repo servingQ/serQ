@@ -1348,3 +1348,72 @@ fn a_box_takes_in_only_the_enclosures_wholly_in_it() {
     let b = f.boxes(BoxStyle::Instance)[0];
     assert!(!b.contains(&f.stations()[s].0));
 }
+
+/// Every instance box and every pool enclosure are apart or one holds the
+/// other: an enclosure that crosses a box draws a hold the box denies.
+fn boxes_do_not_cross(p: &Program, net: &deployment::Net) {
+    let f = deployment::layout(p, net);
+    for b in f.boxes(BoxStyle::Instance) {
+        for e in f.boxes(BoxStyle::Enclosure) {
+            assert!(
+                !b.overlaps(&e) || b.contains(&e) || e.contains(&b),
+                "instance {b:?} crosses enclosure {e:?}"
+            );
+        }
+    }
+}
+
+/// A reply from `j` to `i` after `i` sent to `j` cannot stand side by side
+/// with both boxes: it stays an arrow between them, and keeps its stations
+/// in their boxes (#216 review).
+#[test]
+fn a_transfer_back_stays_between_the_boxes() {
+    let (p, net) = instance_net(
+        "pool kp[2] { cap 9; } pool kd[2] { cap 9; }
+         stage P[2] : delay; stage D[2] : delay;
+         stage a[2] : ps(1); stage b[2] : ps(1); stage a2[2] : ps(1); stage b2[2] : ps(1);
+         share maxmin;",
+        "hold kp[i] (1) { run P[i] (1); run a[i], b[j] (1); }
+         hold kd[j] (1) { run D[j] (1); run b2[j], a2[i] (1); }",
+    );
+    let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
+    assert_eq!(net.flows.len(), 2);
+    assert!(net.flows.iter().all(|g| net.spans(g)));
+    assert_eq!(net.instance_of(at("a2")), net.instance_of(at("P")));
+    assert_eq!(net.instance_of(at("b2")), net.instance_of(at("D")));
+    boxes_do_not_cross(&p, &net);
+}
+
+/// A stage the session indexes by `i` and by a constant is in no box, and
+/// `i`'s pool is not drawn there: its enclosure would cross `i`'s box
+/// (#216 review).
+#[test]
+fn an_instances_pool_is_drawn_only_in_its_box() {
+    let (p, net) = instance_net(
+        "pool kp[2] { cap 9; } stage P[2] : delay; stage a[2] : delay;",
+        "hold kp[i] (1) { run P[i] (1); run a[i] (1); run P[0] (1); }",
+    );
+    let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
+    assert_eq!(net.instance_of(at("P")), None);
+    assert!(net.drawn_pools(at("P")).is_empty());
+    assert_eq!(net.drawn_pools(at("a")), [pool(&p, "kp")]);
+    boxes_do_not_cross(&p, &net);
+}
+
+/// After a branch whose arms end on different flows, a `load` follows
+/// neither: the branch ends on no flow.
+#[test]
+fn after_a_branch_a_load_follows_no_arms_transfer() {
+    let (_, net) = instance_net(
+        "pool q[2] { cap 9; } stage P[2] : delay; stage a[2] : ps(1); stage b[2] : ps(1);
+         share maxmin;",
+        "set c = ~bernoulli(0.5);
+         hold q[j] (1) {
+           run a[i], b[j] (1);
+           branch (c) { run P[i] (1); } else { }
+           load q[j] (1);
+         }",
+    );
+    let n = &net.flow_notes[0];
+    assert!(n.from.is_none() && n.to.is_none(), "{n:?}");
+}

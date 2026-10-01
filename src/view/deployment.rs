@@ -159,9 +159,9 @@ impl Net {
     pub fn instance_of(&self, node: usize) -> Option<usize> {
         self.instances.iter().position(|g| g.nodes.contains(&node))
     }
-    /// The pools drawn around a station: those held there, less a pool of
-    /// another instance, and none at a station of a transfer between two
-    /// instances. A transfer holds the sender's pool and the receiver's at
+    /// The pools drawn around a station: those held there, less an
+    /// instance's pool anywhere but in its box, and none at a station of a
+    /// transfer between two instances. A transfer holds the sender's pool and the receiver's at
     /// both NICs; the figure says so on the link between the instances
     /// (`kvP[i] → kvD[j]`), not with boxes that cross.
     pub fn drawn_pools(&self, node: usize) -> Vec<usize> {
@@ -179,7 +179,8 @@ impl Net {
             .copied()
             .filter(
                 |&q| match self.instances.iter().position(|g| g.pools.contains(&q)) {
-                    Some(owner) => here.is_none_or(|h| h == owner),
+                    // outside the box, its enclosure would cross the box
+                    Some(owner) => here == Some(owner),
                     None => true,
                 },
             )
@@ -1024,9 +1025,12 @@ fn keep_instances(net: &mut Net) {
 /// Put each instance's stations side by side, where its first stands, so
 /// that its box takes in no other station. Inside a box the stations a
 /// transfer between two instances arrives at come first and those it leaves
-/// from last, so that its stations stay side by side across the boundary;
-/// a flow the boxes would still pull apart takes its stations out of them,
-/// and is drawn where `adjacent_flows` put it.
+/// from last, so that its stations stay side by side across the boundary.
+/// A flow inside one instance, or in and out of one, that the boxes would
+/// still pull apart takes its stations out of them, and is drawn where
+/// `adjacent_flows` put it; a transfer between two instances stays an arrow
+/// between their boxes, whichever way it points (a reply from `j` to `i`
+/// after `i` sent to `j`).
 fn contiguous_instances(net: &mut Net) {
     loop {
         if net.instances.is_empty() {
@@ -1043,7 +1047,7 @@ fn contiguous_instances(net: &mut Net) {
         let broken: Vec<usize> = net
             .flows
             .iter()
-            .filter(|g| together(g, &|i| i) && !together(g, &|i| at[i]))
+            .filter(|g| together(g, &|i| i) && !together(g, &|i| at[i]) && !net.spans(g))
             .flatten()
             .copied()
             .collect();
