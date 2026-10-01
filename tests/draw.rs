@@ -166,9 +166,13 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
     let p = compile(
         r#"
         pool kv { cap 100; }
-        stage s1 : fifo; stage s2 : delay; stage s3 : fifo;
+        stage s1 : fifo; stage s2 : fifo; stage s3 : delay; stage s4 : fifo; stage s5 : fifo;
         workload { arrive poisson(0.2); }
-        session { hold kv (1) { run s1 (1); } run s2 (1); hold kv (1) { run s3 (1); } end; }
+        session {
+          hold kv (1) { run s1 (1); run s2 (1); }
+          run s3 (1);
+          hold kv (1) { run s4 (1); run s5 (1); }
+          end; }
         run { horizon 100; }
         "#,
     );
@@ -176,7 +180,7 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
     let f = deployment::layout(&p, &net);
     assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 2);
     // and the station in the middle is in neither
-    let middle = f.stations()[1].0;
+    let middle = f.stations()[2].0;
     assert!(
         f.boxes(BoxStyle::Enclosure)
             .iter()
@@ -300,6 +304,47 @@ fn nested_holds_nest() {
         ["live"],
         "the tool call keeps its slot"
     );
+}
+
+/// A pool held at one station alone is that station's: drawn in its frame,
+/// with one queue per hold at its entrance, as `interp.rs` `enqueue_hold`
+/// queues a hold of several pools once. A pool held across stations keeps
+/// its enclosure: `replica.sq`'s `live` is held through the tool call.
+#[test]
+fn pools_held_at_one_station_are_drawn_in_it() {
+    let queues = |f: &Figure| {
+        f.items
+            .iter()
+            .filter(|i| matches!(i, serq::view::figure::Item::Queue { .. }))
+            .count()
+    };
+    let p = program("vllm");
+    let net = deployment::project(&p);
+    let engine = net.node_of(stage(&p, "engine")).unwrap();
+    assert_eq!(
+        net.resident_pools(engine),
+        [pool(&p, "reqs"), pool(&p, "kv")]
+    );
+    assert_eq!(
+        net.queues_at(engine),
+        [vec![pool(&p, "reqs"), pool(&p, "kv")]],
+        "one hold, one queue"
+    );
+    let f = deployment::layout(&p, &net);
+    assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 0);
+    assert_eq!(f.boxes(BoxStyle::Frame).len(), 1);
+    assert_eq!(queues(&f), 1);
+
+    let p = program("replica");
+    let net = deployment::project(&p);
+    let engine = net.node_of(stage(&p, "engine")).unwrap();
+    assert_eq!(
+        net.resident_pools(engine),
+        [pool(&p, "batch"), pool(&p, "kv")]
+    );
+    let f = deployment::layout(&p, &net);
+    assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 1, "live");
+    assert_eq!(queues(&f), 2, "live's, and batch's with kv");
 }
 
 // --- geometry ---------------------------------------------------------------
@@ -714,14 +759,19 @@ fn enclosures_contain_their_stations_and_nest() {
             net.nodes.len(),
             "{name}: a station per node"
         );
+        let frames = f.boxes(BoxStyle::Frame);
         for (i, (node, (rect, _))) in net.nodes.iter().zip(stations).enumerate() {
+            // a pool held here alone is in the station's frame, not a box
             let inside = boxes.iter().filter(|b| b.contains(&rect)).count();
-            let drawn = net.drawn_pools(i).len();
+            let drawn = net.drawn_pools(i).len() - net.resident_pools(i).len();
             assert_eq!(
                 inside, drawn,
                 "{name}: {} is in {inside} boxes, wants {drawn}",
                 node.label
             );
+            let framed = frames.iter().filter(|b| b.contains(&rect)).count();
+            let want = usize::from(!net.resident_pools(i).is_empty());
+            assert_eq!(framed, want, "{name}: {} has {framed} frames", node.label);
         }
     }
 }
@@ -736,6 +786,7 @@ fn figures_are_fitted() {
         for r in f
             .boxes(BoxStyle::Enclosure)
             .iter()
+            .chain(f.boxes(BoxStyle::Frame).iter())
             .chain(f.boxes(BoxStyle::Solid).iter())
         {
             assert!(

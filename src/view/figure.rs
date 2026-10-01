@@ -78,6 +78,9 @@ pub enum BoxStyle {
     Flow,
     /// An instance: what one `choose` picks, a pod.
     Instance,
+    /// A station with the pools held at it alone: their queue at its
+    /// entrance, their capacity under its glyph.
+    Frame,
 }
 
 /// How a connector is drawn.

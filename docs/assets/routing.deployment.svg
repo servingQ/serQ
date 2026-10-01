@@ -7,6 +7,7 @@
     .solid { fill:#232a31;stroke:#b6bfcc }
     .cached { fill:#33302a }
     .instance { fill:#1a1f24;stroke:#b6bfcc }
+    .frame { stroke:#b6bfcc }
     .enclosure { stroke:#9aa4b2 }
     .station { fill:#26403d;stroke:#b6bfcc }
     .cell { fill:#14171a;stroke:#b6bfcc }
