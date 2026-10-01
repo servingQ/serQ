@@ -155,7 +155,10 @@ struct Linker<'a> {
 }
 
 /// The context variables by their source names (`docs/api/context.md`). A
-/// name resolves to an attribute first, then a `let`, then one of these.
+/// name resolves to an attribute first, then a `let`, then one of these, so
+/// neither an attribute nor a `let` may take one of these names (`link`
+/// rejects it): the expression that meant the context variable would read
+/// the attribute instead (#231).
 pub const CONTEXT_VARS: [(&str, CtxVar); 17] = [
     ("now", CtxVar::Now),
     ("waited", CtxVar::Waited),
@@ -281,6 +284,33 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     }
     collect_attrs(&prog.session, &mut lk);
     collect_leases(&prog.session, &mut lk.leased);
+    // A context variable's name is its own. A name resolves to an attribute
+    // first, then a `let`, then a context variable, so a `set present = …`
+    // anywhere in the program would make a stage's `ps(min(present, 16))`
+    // read the attribute, not the jobs present, with no warning (#231: a PS
+    // service time off by 8×; before it, the PD lecture's attribute `n`).
+    for (name, _) in CONTEXT_VARS {
+        let taken = if lk.attr_index.contains_key(name) {
+            Some("session attribute")
+        } else if prog.lets.iter().any(|(n, _)| n == name) {
+            Some("`let` constant")
+        } else {
+            None
+        };
+        if let Some(kind) = taken {
+            return Err(LinkError::new(format!(
+                "`{name}` is a context variable, so it cannot name a {kind}: an expression \
+                 that means the context variable (`{name}` in a stage's capacity, budget, \
+                 cost or keys) would read the {kind} instead\n\
+                 help: rename the {kind}; the context variables are {}",
+                CONTEXT_VARS
+                    .iter()
+                    .map(|(n, _)| format!("`{n}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+    }
     // Constants, in order; an override replaces the value of a `let`.
     for (name, e) in &prog.lets {
         let overridden = ov.lets.iter().any(|(n, _)| n == name);

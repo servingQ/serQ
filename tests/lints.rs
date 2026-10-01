@@ -486,3 +486,34 @@ fn reuse_without_cache_is_rejected() {
         "{e}"
     );
 }
+
+/// #231: a name resolves to an attribute first, then a `let`, then a context
+/// variable, so `set present = 500;` anywhere made `ps(min(present, 16))`
+/// read the attribute: capacity 16 for 2 jobs, a service time of 0.125
+/// where the jobs present give 1. Neither an attribute nor a `let` may take
+/// a context variable's name.
+#[test]
+fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
+    const PS: &str = "stage dec : ps(min(present, 16));
+        stage think : delay;
+        workload { arrive closed(2); }
+        session { loop { SET run dec (1); observe r = now; run think (1); } }
+        run { horizon 50; warmup 0; seed 1; }";
+    let e = check(&PS.replace("SET", "set present = 500;")).expect_err("rejected");
+    assert!(
+        e.contains("`present` is a context variable, so it cannot name a session attribute"),
+        "{e}"
+    );
+    let e = check(&format!("let present = 500; {}", PS.replace("SET", ""))).expect_err("rejected");
+    assert!(
+        e.contains("`present` is a context variable, so it cannot name a `let` constant"),
+        "{e}"
+    );
+    // Renamed, the program links, and the capacity reads the jobs present:
+    // two sessions in lockstep (both start at 0, serve 1 s at rate 2/2,
+    // think 1 s), so every service takes exactly 1 s.
+    let src = PS.replace("SET", "set prompt = 500;");
+    check(&src).expect("links");
+    let r = serq::run_source(&src, &Overrides::default(), None).unwrap();
+    assert_eq!(r.stage("dec").unwrap().mean_service, 1.0, "{}", r.text());
+}

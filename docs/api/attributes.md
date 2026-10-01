@@ -3,7 +3,8 @@
 A session carries named numeric attributes. Every name assigned by
 [`set`](statements.md#set) or [`choose`](statements.md#choose) is an attribute
 of every session, starting at 0. The built-in ones below need no assignment.
-A name may not be both an attribute and a `let` constant.
+A name may not be both an attribute and a `let` constant, and neither may take
+a [context variable](context.md)'s name.
 
 | Name | Set by | Meaning |
 |---|---|---|

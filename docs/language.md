@@ -183,7 +183,10 @@ its parenthesis (`now` everywhere), and reading it anywhere else is a link
 error rather than a 0: `set x = tokens;` in a session, or `evict by (tokens)`,
 does not link (`docs/ir.md`, Moments). A name may not be both a `let` constant and a session
 attribute (the linker rejects it: an attribute would shadow the constant,
-and a stage's cost, which has no session, would read it as undefined). Every constant (a
+and a stage's cost, which has no session, would read it as undefined), and
+neither may take a context variable's name (a name resolves to an attribute
+first, so a `set present = …` would make `ps(min(present, 16))` read the
+attribute, not the jobs present; the linker rejects it). Every constant (a
 `let`, or a constant position: `cap`, `block`, a `fifo` count, the arrival
 rate or population, the `run` block) is a number or `inf`; one that
 evaluates to NaN (`0/0`, `inf - inf`) does not link. Built-in session attributes: `serial`, `turn_no`, `cached` (the
