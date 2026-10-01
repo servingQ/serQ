@@ -53,6 +53,7 @@ fn box_style(s: BoxStyle) -> &'static str {
         BoxStyle::Enclosure => "seqenclosure",
         BoxStyle::Flow => "seqrail",
         BoxStyle::Instance => "seqinstance",
+        BoxStyle::Frame => "seqframe",
     }
 }
 
@@ -80,6 +81,7 @@ const STYLES: &str = r#"x=1pt, y=-1pt, line cap=round, line join=round,
   seqsolid/.style={draw=seqline, fill=seqfill, line width=.8pt},
   seqcached/.style={draw=none, fill=seqcache},
   seqinstance/.style={draw=seqline, fill=seqpanel, line width=.8pt},
+  seqframe/.style={draw=seqline, line width=.8pt},
   seqenclosure/.style={draw=seqdim, line width=.7pt, dash pattern=on 4.5pt off 3pt},
   seqstation/.style={draw=seqline, fill=seqtint, line width=.9pt},
   seqcell/.style={draw=seqline, fill=white, line width=.5pt},
@@ -127,9 +129,17 @@ pub fn render(f: &Figure) -> String {
                             p(rect.x, rect.y),
                             p(rect.right(), rect.bottom())
                         );
-                        for k in 0..5 {
-                            let x = rect.x + rect.w * (k as f64 + 1.0) / 6.0;
-                            let _ = writeln!(s, "  \\draw[seqcell] {} circle (4pt);", p(x, c.y));
+                        if let Some(pts) = crate::view::figure::density(text, *rect) {
+                            let path: Vec<String> = pts.iter().map(|q| p(q.x, q.y)).collect();
+                            let _ = writeln!(s, "  \\draw[seqrail] {};", path.join(" -- "));
+                        } else {
+                            // a duration that is no distribution: infinitely
+                            // many servers, as the lecture draws a delay
+                            for k in 0..5 {
+                                let x = rect.x + rect.w * (k as f64 + 1.0) / 6.0;
+                                let _ =
+                                    writeln!(s, "  \\draw[seqcell] {} circle (4pt);", p(x, c.y));
+                            }
                         }
                     }
                     StationKind::Decision => {
@@ -167,10 +177,11 @@ pub fn render(f: &Figure) -> String {
                     }
                 }
                 if !text.is_empty() {
-                    let dy = if *kind == StationKind::Step {
-                        -8.0
-                    } else {
-                        0.0
+                    // under the budget bar, or the density
+                    let dy = match kind {
+                        StationKind::Step => -8.0,
+                        StationKind::Delay => 15.0,
+                        _ => 0.0,
                     };
                     let _ = writeln!(
                         s,
@@ -204,20 +215,26 @@ pub fn render(f: &Figure) -> String {
                     );
                 }
             }
-            Item::Slots { rect, cols, rows } => {
-                let cw = rect.w / *cols as f64;
-                let ch = rect.h / *rows as f64;
-                for r in 0..*rows {
-                    for c in 0..*cols {
-                        let (x, y) = (rect.x + cw * c as f64, rect.y + ch * r as f64);
-                        let _ = writeln!(
-                            s,
-                            "  \\draw[seqcell] {} rectangle {};",
-                            p(x, y),
-                            p(x + cw * 0.82, y + ch * 0.78)
-                        );
-                    }
-                }
+            Item::Drum { rect } => {
+                // y grows downwards here: the arc from 180 to 0 passes 90,
+                // the near side of the bottom
+                let (rx, ry) = (rect.w / 2.0, (rect.h / 5.0).min(4.0));
+                let _ = writeln!(
+                    s,
+                    "  \\draw[seqcell] {} -- {} arc[start angle=180, end angle=0, x radius={}, y radius={}] -- {} -- cycle;",
+                    p(rect.x, rect.y + ry),
+                    p(rect.x, rect.bottom() - ry),
+                    n(rx),
+                    n(ry),
+                    p(rect.right(), rect.y + ry)
+                );
+                let _ = writeln!(
+                    s,
+                    "  \\draw[seqcell] {} ellipse [x radius={}, y radius={}];",
+                    p(rect.centre().x, rect.y + ry),
+                    n(rx),
+                    n(ry)
+                );
             }
             Item::Edge { pts, style, arrow } => {
                 let path: Vec<String> = pts.iter().map(|q| p(q.x, q.y)).collect();

@@ -166,9 +166,13 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
     let p = compile(
         r#"
         pool kv { cap 100; }
-        stage s1 : fifo; stage s2 : delay; stage s3 : fifo;
+        stage s1 : fifo; stage s2 : fifo; stage s3 : delay; stage s4 : fifo; stage s5 : fifo;
         workload { arrive poisson(0.2); }
-        session { hold kv (1) { run s1 (1); } run s2 (1); hold kv (1) { run s3 (1); } end; }
+        session {
+          hold kv (1) { run s1 (1); run s2 (1); }
+          run s3 (1);
+          hold kv (1) { run s4 (1); run s5 (1); }
+          end; }
         run { horizon 100; }
         "#,
     );
@@ -176,7 +180,7 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
     let f = deployment::layout(&p, &net);
     assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 2);
     // and the station in the middle is in neither
-    let middle = f.stations()[1].0;
+    let middle = f.stations()[2].0;
     assert!(
         f.boxes(BoxStyle::Enclosure)
             .iter()
@@ -300,6 +304,100 @@ fn nested_holds_nest() {
         ["live"],
         "the tool call keeps its slot"
     );
+}
+
+/// A pool held at one station alone is that station's: drawn in its frame,
+/// not in a dashed box. "Alone" is what the program's holds reach, not
+/// what stands beside the station in the row.
+#[test]
+fn pools_held_at_one_station_are_drawn_in_it() {
+    let queues = |f: &Figure| {
+        f.items
+            .iter()
+            .filter(|i| matches!(i, serq::view::figure::Item::Queue { .. }))
+            .count()
+    };
+    let p = program("vllm");
+    let net = deployment::project(&p);
+    let engine = net.node_of(stage(&p, "engine")).unwrap();
+    assert_eq!(
+        net.resident_pools(engine),
+        [pool(&p, "reqs"), pool(&p, "kv")]
+    );
+    let f = deployment::layout(&p, &net);
+    assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 0);
+    assert_eq!(f.boxes(BoxStyle::Frame).len(), 1);
+    assert_eq!(queues(&f), 0, "a frame draws no queue");
+
+    // `live` is held through the tool call; the hold that waits in it does
+    // so ahead of its box
+    let p = program("replica");
+    let net = deployment::project(&p);
+    let engine = net.node_of(stage(&p, "engine")).unwrap();
+    assert_eq!(
+        net.resident_pools(engine),
+        [pool(&p, "batch"), pool(&p, "kv")]
+    );
+    let f = deployment::layout(&p, &net);
+    assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 1, "live");
+    assert_eq!(queues(&f), 1, "live's");
+
+    // the prefiller's KV stays leased through the read and the decoder's is
+    // taken before it, but a read between instances is drawn as the arrow
+    // between them (`P.kv[i] → D.kv[j]`): each KV is its engine's
+    let p = program("llmd_nixl_pull");
+    let net = deployment::project(&p);
+    let prefill = net.node_of(stage(&p, "P")).unwrap();
+    let decode = net.node_of(stage(&p, "D")).unwrap();
+    assert_eq!(
+        net.resident_pools(prefill),
+        [pool(&p, "P.reqs"), pool(&p, "P.kv")]
+    );
+    assert_eq!(
+        net.resident_pools(decode),
+        [pool(&p, "D.kv"), pool(&p, "D.reqs")]
+    );
+    let f = deployment::layout(&p, &net);
+    assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 0);
+}
+
+/// Two holds of one pool at stations side by side are two frames, not one
+/// box that reads as one hold across both.
+#[test]
+fn separate_holds_side_by_side_are_two_frames() {
+    let p = compile(
+        r#"
+        pool a { cap 10; } stage s1 : fifo; stage s2 : fifo;
+        workload { arrive poisson(0.2); }
+        session { hold a (1) { run s1 (1); } hold a (1) { run s2 (1); } end; }
+        run { horizon 100; }
+        "#,
+    );
+    let net = deployment::project(&p);
+    assert_eq!(net.resident_pools(0), [pool(&p, "a")]);
+    assert_eq!(net.resident_pools(1), [pool(&p, "a")]);
+    let f = deployment::layout(&p, &net);
+    assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 0);
+    assert_eq!(f.boxes(BoxStyle::Frame).len(), 2);
+}
+
+/// A hold that reaches other stations is not one station's, even where the
+/// figure draws the pool at that station only: `s1` and `s2` are also
+/// visited without it, so the pool is drawn at `s3` alone.
+#[test]
+fn a_hold_across_stations_is_no_stations_own() {
+    let p = compile(
+        r#"
+        pool a { cap 10; } stage s1 : fifo; stage s2 : fifo; stage s3 : fifo;
+        workload { arrive poisson(0.2); }
+        session { run s1 (1); run s2 (1); hold a (1) { run s1 (1); run s3 (1); run s2 (1); } end; }
+        run { horizon 100; }
+        "#,
+    );
+    let net = deployment::project(&p);
+    let s3 = net.node_of(stage(&p, "s3")).unwrap();
+    assert_eq!(net.drawn_pools(s3), [pool(&p, "a")]);
+    assert!(net.resident_pools(s3).is_empty());
 }
 
 // --- geometry ---------------------------------------------------------------
@@ -714,14 +812,19 @@ fn enclosures_contain_their_stations_and_nest() {
             net.nodes.len(),
             "{name}: a station per node"
         );
+        let frames = f.boxes(BoxStyle::Frame);
         for (i, (node, (rect, _))) in net.nodes.iter().zip(stations).enumerate() {
+            // a pool held here alone is in the station's frame, not a box
             let inside = boxes.iter().filter(|b| b.contains(&rect)).count();
-            let drawn = net.drawn_pools(i).len();
+            let drawn = net.drawn_pools(i).len() - net.resident_pools(i).len();
             assert_eq!(
                 inside, drawn,
                 "{name}: {} is in {inside} boxes, wants {drawn}",
                 node.label
             );
+            let framed = frames.iter().filter(|b| b.contains(&rect)).count();
+            let want = usize::from(!net.resident_pools(i).is_empty());
+            assert_eq!(framed, want, "{name}: {} has {framed} frames", node.label);
         }
     }
 }
@@ -736,6 +839,7 @@ fn figures_are_fitted() {
         for r in f
             .boxes(BoxStyle::Enclosure)
             .iter()
+            .chain(f.boxes(BoxStyle::Frame).iter())
             .chain(f.boxes(BoxStyle::Solid).iter())
         {
             assert!(

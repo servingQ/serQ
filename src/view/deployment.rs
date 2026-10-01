@@ -104,6 +104,29 @@ pub struct FlowNote {
     pub several: bool,
 }
 
+/// One `hold` the walk entered: the pool its request waits in, the pools it
+/// occupies, and the stations reached while it held them.
+#[derive(Clone, Debug)]
+pub struct HoldSpan {
+    /// The hold's first pool: a hold of several pools waits once, in this
+    /// pool's queue (`interp.rs` `enqueue_hold`, `first_pool`).
+    pub queue: usize,
+    /// The stations reached while it held a pool, as (pool, node). A pool
+    /// of no units occupies nothing and has none; a `release` ends one pool's
+    /// before the others', and a leased pool's runs on past the hold.
+    pub visits: Vec<(usize, usize)>,
+}
+
+impl HoldSpan {
+    /// The stations reached while it held `pool`.
+    pub fn nodes_of(&self, pool: usize) -> impl Iterator<Item = usize> + '_ {
+        self.visits
+            .iter()
+            .filter(move |&&(q, _)| q == pool)
+            .map(|&(_, n)| n)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Edge {
     pub from: End,
@@ -128,6 +151,8 @@ pub struct Net {
     pub flow_notes: Vec<FlowNote>,
     /// The instances, in the order the session reaches them.
     pub instances: Vec<Instance>,
+    /// Every `hold` the walk entered, by the order it entered them.
+    pub holds: Vec<HoldSpan>,
 }
 
 impl Net {
@@ -166,11 +191,7 @@ impl Net {
     /// (`kvP[i] → kvD[j]`), not with boxes that cross.
     pub fn drawn_pools(&self, node: usize) -> Vec<usize> {
         let here = self.instance_of(node);
-        let across = self
-            .flows
-            .iter()
-            .any(|g| g.contains(&node) && self.spans(g));
-        if across {
+        if self.across(node) {
             return vec![];
         }
         self.nodes[node]
@@ -184,6 +205,42 @@ impl Net {
                 },
             )
             .collect()
+    }
+
+    /// Whether a station is one of a transfer between two instances.
+    fn across(&self, node: usize) -> bool {
+        self.flows
+            .iter()
+            .any(|g| g.contains(&node) && self.spans(g))
+    }
+
+    /// The pools drawn inside a station's own box: drawn at it, and every
+    /// hold that takes the pool there reaches no other station. A request
+    /// holds them only while it is there, so the figure draws them as that
+    /// station's. A transfer between instances does not count: it holds the
+    /// sender's pool and the receiver's, and its arrow says so
+    /// (`P.kv[i] → D.kv[j]`), so the prefiller's KV is the prefiller's.
+    pub fn resident_pools(&self, node: usize) -> Vec<usize> {
+        if self.nodes[node].stage.is_none() {
+            return vec![];
+        }
+        self.drawn_pools(node)
+            .into_iter()
+            .filter(|&q| {
+                self.holds
+                    .iter()
+                    .filter(|h| h.nodes_of(q).any(|n| n == node))
+                    .all(|h| h.nodes_of(q).all(|n| n == node || self.across(n)))
+            })
+            .collect()
+    }
+
+    /// Whether `pool`'s enclosure over the stations `first..=last` draws a
+    /// queue: a hold that waits in `pool` reaches one of them.
+    fn waits_in_enclosure(&self, pool: usize, first: usize, last: usize) -> bool {
+        self.holds
+            .iter()
+            .any(|h| h.queue == pool && h.visits.iter().any(|(_, n)| (first..=last).contains(n)))
     }
 }
 
@@ -346,6 +403,12 @@ impl Walker<'_> {
                 self.net.nodes.len() - 1
             }
         };
+        for &(q, id, e) in &self.holds {
+            let visits = &mut self.net.holds[id].visits;
+            if e && !visits.contains(&(q, idx)) {
+                visits.push((q, idx));
+            }
+        }
         if let Some(n) = note
             && self.net.nodes[idx].note.is_none()
         {
@@ -376,6 +439,17 @@ impl Walker<'_> {
                     let n = &mut self.net.nodes[node];
                     if n.modes.is_empty() {
                         n.work = self.p.show_expr(&work);
+                        // a delay is its duration: written inside it, under
+                        // the shape of its density, when it is a
+                        // distribution or a constant and fits
+                        let fits = TextSize::Normal.width_of(&n.work) <= STATION_W - 12.0;
+                        if n.kind == StationKind::Delay
+                            && fits
+                            && crate::view::figure::density(&n.work, Rect::new(0.0, 0.0, 1.0, 1.0))
+                                .is_some()
+                        {
+                            n.inner = n.work.clone();
+                        }
                     }
                     if !n.modes.contains(&mode) {
                         n.modes.push(mode);
@@ -410,6 +484,10 @@ impl Walker<'_> {
                 } => {
                     let id = self.next_hold;
                     self.next_hold += 1;
+                    self.net.holds.push(HoldSpan {
+                        queue: pools[0].0.base,
+                        visits: vec![],
+                    });
                     for (r, units, _) in &pools {
                         let encloses = !matches!(units, CExpr::Num(x) if *x == 0.0);
                         self.holds.push((r.base, id, encloses));
@@ -894,6 +972,12 @@ fn remove_node(net: &mut Net, k: usize) {
             *i = at(*i);
         }
     }
+    for h in &mut net.holds {
+        h.visits.retain(|&(_, i)| i != k);
+        for (_, i) in h.visits.iter_mut() {
+            *i = at(*i);
+        }
+    }
 }
 
 /// Reorder the stations by a permutation: `order[k]` is the node that goes
@@ -935,6 +1019,11 @@ fn reorder(net: &mut Net, order: &[usize]) {
             *k = pos[*k];
         }
         g.nodes.sort_unstable();
+    }
+    for h in &mut net.holds {
+        for (_, k) in h.visits.iter_mut() {
+            *k = pos[*k];
+        }
     }
 }
 
@@ -1097,6 +1186,16 @@ const BACK_DROP: f64 = 26.0;
 const CACHE_ROOM: f64 = 20.0;
 /// Baseline-to-baseline for the stacked pool options.
 const NOTE_LINE: f64 = 11.0;
+/// A framed station: the room above its glyph for its name, its margin,
+/// and the height of one resident pool's row under it.
+const FRAME_HEAD: f64 = 26.0;
+const FRAME_PAD: f64 = 12.0;
+const ROW_H: f64 = 32.0;
+const QUEUE_W: f64 = 30.0;
+/// A pool's drum.
+const DRUM_W: f64 = 22.0;
+const DRUM_H: f64 = 26.0;
+
 /// An instance box's margin around what it holds, and the room for its title.
 const INST_PAD: f64 = 12.0;
 const INST_HEAD: f64 = 26.0;
@@ -1124,7 +1223,15 @@ struct Group {
 /// does not make.
 fn groups(net: &Net) -> Vec<Group> {
     let mut runs: Vec<(usize, usize, usize)> = vec![];
-    let drawn: Vec<Vec<usize>> = (0..net.nodes.len()).map(|i| net.drawn_pools(i)).collect();
+    // a pool held at one station alone is drawn inside it, not boxed
+    let drawn: Vec<Vec<usize>> = (0..net.nodes.len())
+        .map(|i| {
+            let resident = net.resident_pools(i);
+            let mut v = net.drawn_pools(i);
+            v.retain(|q| !resident.contains(q));
+            v
+        })
+        .collect();
     let pools: Vec<usize> = {
         let mut v: Vec<usize> = drawn.iter().flatten().copied().collect();
         v.sort_unstable();
@@ -1194,10 +1301,46 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     let mut gs = groups(net);
     let max_depth = gs.iter().map(|g| g.depth).max().unwrap_or(0);
     let boxed = !net.instances.is_empty();
+    // per station, the pools drawn inside it
+    let resident: Vec<Vec<usize>> = (0..net.nodes.len())
+        .map(|i| net.resident_pools(i))
+        .collect();
+    let framed = |i: usize| !resident[i].is_empty();
     let row_y = MARGIN
         + 34.0
         + (max_depth as f64 + 1.0) * DEPTH_PAD
-        + if boxed { INST_HEAD + INST_PAD } else { 0.0 };
+        + if boxed { INST_HEAD + INST_PAD } else { 0.0 }
+        // a frame's name sits inside it, above the glyph: room for that
+        // only where an enclosure or an instance box is drawn above it
+        + if (0..net.nodes.len()).any(framed) && (!gs.is_empty() || boxed) {
+            FRAME_HEAD
+        } else {
+            0.0
+        };
+    let row_notes = |q: usize| pool_notes(p, q, net.cached.contains(&q)).join(" · ");
+    let row_w = |q: usize| {
+        DRUM_W
+            + 10.0
+            + TextSize::Normal
+                .width_of(&format!("pool {}", p.pools[q].name))
+                .max(TextSize::Small.width_of(&row_notes(q)))
+    };
+    // under the glyph: its note, then a row per resident pool
+    let rows_top = |i: usize| {
+        STATION_H
+            + if net.nodes[i].note.is_some() {
+                24.0
+            } else {
+                10.0
+            }
+    };
+    let frame_h = |i: usize| {
+        let cached = resident[i]
+            .iter()
+            .filter(|q| net.cached.contains(q))
+            .count();
+        FRAME_HEAD + rows_top(i) + resident[i].len() as f64 * ROW_H + cached as f64 * 16.0 + 4.0
+    };
     // a transfer between two instances is drawn in the gap between their
     // boxes, with what it moves above and what it waits for below
     let flow_texts = |g: usize| -> (Option<String>, Option<String>) {
@@ -1245,6 +1388,8 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     // close around each station and for the pool glyphs inside them.
     let mut x = MARGIN + lead;
     let mut rects: Vec<Rect> = Vec::with_capacity(net.nodes.len());
+    // a station's outline: its frame when it has one, its glyph otherwise
+    let mut frames: Vec<Rect> = Vec::with_capacity(net.nodes.len());
     for i in 0..net.nodes.len() {
         let here = net.instance_of(i);
         let before = if i == 0 { None } else { net.instance_of(i - 1) };
@@ -1302,13 +1447,28 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         ]
         .into_iter()
         .fold(0.0, f64::max);
-        rects.push(Rect::new(
-            x + (slot - STATION_W) / 2.0,
-            row_y,
-            STATION_W,
-            STATION_H,
-        ));
-        x += slot;
+        if framed(i) {
+            // the frame is as wide as its glyph or its widest row
+            let rows = resident[i].iter().map(|&q| row_w(q)).fold(0.0, f64::max);
+            let w = (slot + 2.0 * FRAME_PAD).max(rows + 2.0 * FRAME_PAD);
+            rects.push(Rect::new(
+                x + (w - STATION_W) / 2.0,
+                row_y,
+                STATION_W,
+                STATION_H,
+            ));
+            frames.push(Rect::new(x, row_y - FRAME_HEAD, w, frame_h(i)));
+            x += w;
+        } else {
+            rects.push(Rect::new(
+                x + (slot - STATION_W) / 2.0,
+                row_y,
+                STATION_W,
+                STATION_H,
+            ));
+            frames.push(rects[i]);
+            x += slot;
+        }
         let mut closing: Vec<usize> = (0..gs.len()).filter(|&k| gs[k].last == i).collect();
         closing.sort_by_key(|&k| std::cmp::Reverse(gs[k].depth));
         for k in closing {
@@ -1358,7 +1518,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     for (gi, g) in gs.iter().enumerate() {
         let pool = &p.pools[g.pool];
         let d = (max_depth - g.depth) as f64 * DEPTH_PAD;
-        let inner = rects[g.first].union(&rects[g.last]);
+        let inner = (g.first..=g.last)
+            .map(|i| frames[i])
+            .reduce(|a, b| a.union(&b))
+            .unwrap();
         let extra = below[gi];
         let r = Rect::new(
             g.left,
@@ -1371,22 +1534,22 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
 
         // The queue glyph and the capacity, in the room reserved at the left.
         let gx = g.glyph_x;
-        let gy = inner.centre().y;
+        let gy = rects[g.first].centre().y;
         f.text(
             pt(gx, r.y - 5.0),
             format!("pool {}", pool.name),
             Anchor::Start,
             TextSize::Normal,
         );
-        f.push(Item::Queue {
-            rect: Rect::new(gx, gy - 11.0, 30.0, 22.0),
-            cells: 3,
-        });
-        let (cols, rows) = slot_grid(pool.cap);
-        f.push(Item::Slots {
-            rect: Rect::new(gx + 38.0, gy - 11.0, 28.0, 22.0),
-            cols,
-            rows,
+        // a hold of several pools waits in one queue, its first pool's
+        if net.waits_in_enclosure(g.pool, g.first, g.last) {
+            f.push(Item::Queue {
+                rect: Rect::new(gx, gy - 11.0, QUEUE_W, 22.0),
+                cells: 3,
+            });
+        }
+        f.push(Item::Drum {
+            rect: Rect::new(gx + 40.0, gy - DRUM_H / 2.0, DRUM_W, DRUM_H),
         });
         for (k, line) in pool_notes(p, g.pool, cached_here(g))
             .into_iter()
@@ -1408,6 +1571,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             );
         }
         if let Some(via) = pool.admit_via {
+            // the option among the notes says which; the edge says where
             if let Some(n) = net.node_of(via) {
                 f.push(Item::Edge {
                     pts: vec![
@@ -1417,7 +1581,39 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     style: EdgeStyle::Relation,
                     arrow: true,
                 });
-                f.note(pt(gx + 18.0, gy - 20.0), "admit via", Anchor::Start);
+            }
+        }
+    }
+
+    // A framed station: the pools held there alone, a row each under its
+    // glyph.
+    for i in (0..net.nodes.len()).filter(|&i| framed(i)) {
+        let fr = frames[i];
+        f.boxed(fr, BoxStyle::Frame, 8.0);
+        let mut y = row_y + rows_top(i);
+        for &q in &resident[i] {
+            let gx = fr.x + FRAME_PAD;
+            f.push(Item::Drum {
+                rect: Rect::new(gx, y + 1.0, DRUM_W, DRUM_H),
+            });
+            let tx = gx + DRUM_W + 10.0;
+            f.text(
+                pt(tx, y + 11.0),
+                format!("pool {}", p.pools[q].name),
+                Anchor::Start,
+                TextSize::Normal,
+            );
+            f.note(pt(tx, y + 23.0), row_notes(q), Anchor::Start);
+            y += ROW_H;
+            if net.cached.contains(&q) {
+                let strip = Rect::new(gx, y - 4.0, fr.right() - FRAME_PAD - gx, 11.0);
+                f.boxed(strip, BoxStyle::Cached, 2.0);
+                f.note(
+                    pt(strip.centre().x, strip.y + 8.5),
+                    "prefix cache",
+                    Anchor::Middle,
+                );
+                y += 16.0;
             }
         }
     }
@@ -1463,7 +1659,11 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             .iter()
             .map(|&i| {
                 let s = rects[i];
-                Rect::new(s.x, s.y - 20.0, s.w, s.h + 38.0)
+                if framed(i) {
+                    frames[i]
+                } else {
+                    Rect::new(s.x, s.y - 20.0, s.w, s.h + 38.0)
+                }
             })
             .reduce(|a, b| a.union(&b))
             .expect("an instance has a station");
@@ -1517,9 +1717,16 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     // feedback, an early exit and a second entry point must not share one.
     let mut lanes = 0.0;
     let deep = below.iter().copied().fold(0.0, f64::max);
+    // and clear of every frame, and of every enclosure around one
+    let floor = frames
+        .iter()
+        .chain(enclosures.iter().map(|(_, r)| r))
+        .map(|r| r.bottom())
+        .fold(0.0, f64::max);
+    let base = (row_y + STATION_H + deep + BACK_DROP).max(floor + 14.0);
     let lane = |n: &mut f64| {
         *n += 1.0;
-        row_y + STATION_H + deep + BACK_DROP + *n * 22.0
+        base + *n * 22.0
     };
     let mut arrivals = 0;
     for e in &net.edges {
@@ -1545,7 +1752,12 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     let ly = lane(&mut lanes);
                     let x = r.x + r.w * 0.25;
                     f.push(Item::Edge {
-                        pts: vec![pt(MARGIN, y), pt(MARGIN, ly), pt(x, ly), pt(x, r.bottom())],
+                        pts: vec![
+                            pt(MARGIN, y),
+                            pt(MARGIN, ly),
+                            pt(x, ly),
+                            pt(x, frames[i].bottom()),
+                        ],
                         style: EdgeStyle::Flow,
                         arrow: true,
                     });
@@ -1574,7 +1786,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     let y = lane(&mut lanes);
                     f.push(Item::Edge {
                         pts: vec![
-                            pt(r.x + r.w * 0.75, r.bottom()),
+                            pt(r.x + r.w * 0.75, frames[i].bottom()),
                             pt(r.x + r.w * 0.75, y),
                             pt(row_right + 26.0, y),
                         ],
@@ -1594,10 +1806,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let (ax, bx) = (ra.x + ra.w * 0.625, rb.x + rb.w * 0.5);
                 f.push(Item::Edge {
                     pts: vec![
-                        pt(ax, ra.bottom()),
+                        pt(ax, frames[a].bottom()),
                         pt(ax, y),
                         pt(bx, y),
-                        pt(bx, rb.bottom()),
+                        pt(bx, frames[b].bottom()),
                     ],
                     style: EdgeStyle::Flow,
                     arrow: true,
@@ -1619,7 +1831,11 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 if let Some(l) = label {
                     // by the station it leaves: the pool glyphs before the
                     // next one stand in the middle
-                    f.note(pt(ra.right() + 6.0, ra.centre().y - 8.0), l, Anchor::Start);
+                    f.note(
+                        pt(frames[a].right() + 6.0, ra.centre().y - 8.0),
+                        l,
+                        Anchor::Start,
+                    );
                 }
             }
             (End::Node(a), End::Node(b)) => {
@@ -1628,10 +1844,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let (ax, bx) = (ra.x + ra.w * 0.25, rb.x + rb.w * 0.25);
                 f.push(Item::Edge {
                     pts: vec![
-                        pt(ax, ra.bottom()),
+                        pt(ax, frames[a].bottom()),
                         pt(ax, y),
                         pt(bx, y),
-                        pt(bx, rb.bottom()),
+                        pt(bx, frames[b].bottom()),
                     ],
                     style: EdgeStyle::Back,
                     arrow: true,
@@ -1678,24 +1894,10 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
     if pool.preempt == crate::ir::Preempt::Lifo {
         parts.push("preempt lifo".into());
     }
-    if pool.admit_via.is_some() {
-        parts.push("admit via".into());
+    if let Some(s) = pool.admit_via {
+        parts.push(format!("admit via {}", p.stages[s].name));
     }
     parts
-}
-
-/// A readable grid for a capacity: exact cells when there are few enough.
-fn slot_grid(cap: f64) -> (usize, usize) {
-    if !cap.is_finite() || cap <= 0.0 {
-        return (4, 2);
-    }
-    let n = cap.min(32.0) as usize;
-    if cap <= 32.0 {
-        let rows = if n > 8 { 2 } else { 1 };
-        (n.div_ceil(rows), rows)
-    } else {
-        (4, 2)
-    }
 }
 
 /// The deployment figure of a program.

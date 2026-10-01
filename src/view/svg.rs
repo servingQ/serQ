@@ -31,6 +31,7 @@ fn box_class(s: BoxStyle) -> &'static str {
         BoxStyle::Enclosure => "enclosure",
         BoxStyle::Flow => "rail",
         BoxStyle::Instance => "instance",
+        BoxStyle::Frame => "frame",
     }
 }
 
@@ -79,6 +80,11 @@ const PAINTS: &[Paint] = &[
         class: "instance",
         light: "fill=\"#f5f7f9\" stroke=\"#4b5563\" stroke-width=\"1.2\"",
         dark: "fill:#1a1f24;stroke:#b6bfcc",
+    },
+    Paint {
+        class: "frame",
+        light: "fill=\"none\" stroke=\"#4b5563\" stroke-width=\"1.1\"",
+        dark: "stroke:#b6bfcc",
     },
     Paint {
         class: "enclosure",
@@ -206,15 +212,26 @@ pub fn render(f: &Figure) -> String {
                             n(rect.w),
                             n(rect.h)
                         );
-                        for k in 0..5 {
-                            let x = rect.x + rect.w * (k as f64 + 1.0) / 6.0;
-                            let _ = writeln!(
-                                s,
-                                r#"<circle {} cx="{}" cy="{}" r="4"/>"#,
-                                paint("cell"),
-                                n(x),
-                                n(c.y)
-                            );
+                        if let Some(pts) = crate::view::figure::density(text, *rect) {
+                            let d: Vec<String> = pts
+                                .iter()
+                                .map(|q| format!("{} {}", n(q.x), n(q.y)))
+                                .collect();
+                            let _ =
+                                writeln!(s, r#"<path {} d="M {}"/>"#, paint("rail"), d.join(" L "));
+                        } else {
+                            // a duration that is no distribution: infinitely
+                            // many servers, as the lecture draws a delay
+                            for k in 0..5 {
+                                let x = rect.x + rect.w * (k as f64 + 1.0) / 6.0;
+                                let _ = writeln!(
+                                    s,
+                                    r#"<circle {} cx="{}" cy="{}" r="4"/>"#,
+                                    paint("cell"),
+                                    n(x),
+                                    n(c.y)
+                                );
+                            }
                         }
                     }
                     StationKind::Decision => {
@@ -271,10 +288,11 @@ pub fn render(f: &Figure) -> String {
                     }
                 }
                 if !text.is_empty() {
-                    let dy = if *kind == StationKind::Step {
-                        -4.0
-                    } else {
-                        3.5
+                    // under the budget bar, or the density
+                    let dy = match kind {
+                        StationKind::Step => -4.0,
+                        StationKind::Delay => 18.0,
+                        _ => 3.5,
                     };
                     let _ = writeln!(
                         s,
@@ -313,22 +331,33 @@ pub fn render(f: &Figure) -> String {
                     );
                 }
             }
-            Item::Slots { rect, cols, rows } => {
-                let cw = rect.w / *cols as f64;
-                let ch = rect.h / *rows as f64;
-                for r in 0..*rows {
-                    for c in 0..*cols {
-                        let _ = writeln!(
-                            s,
-                            r#"<rect {} x="{}" y="{}" width="{}" height="{}"/>"#,
-                            paint("cell"),
-                            n(rect.x + cw * c as f64),
-                            n(rect.y + ch * r as f64),
-                            n(cw * 0.82),
-                            n(ch * 0.78)
-                        );
-                    }
-                }
+            Item::Drum { rect } => {
+                // the side and the near half of the bottom, then the lid
+                let (rx, ry) = (rect.w / 2.0, (rect.h / 5.0).min(4.0));
+                let _ = writeln!(
+                    s,
+                    r#"<path {} d="M {} {} L {} {} A {} {} 0 0 0 {} {} L {} {} Z"/>"#,
+                    paint("cell"),
+                    n(rect.x),
+                    n(rect.y + ry),
+                    n(rect.x),
+                    n(rect.bottom() - ry),
+                    n(rx),
+                    n(ry),
+                    n(rect.right()),
+                    n(rect.bottom() - ry),
+                    n(rect.right()),
+                    n(rect.y + ry)
+                );
+                let _ = writeln!(
+                    s,
+                    r#"<ellipse {} cx="{}" cy="{}" rx="{}" ry="{}"/>"#,
+                    paint("cell"),
+                    n(rect.centre().x),
+                    n(rect.y + ry),
+                    n(rx),
+                    n(ry)
+                );
             }
             Item::Edge { pts, style, arrow } => {
                 let mut d = String::new();
