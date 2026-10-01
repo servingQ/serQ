@@ -292,6 +292,50 @@ struct StageState {
     wait: Welford,
     service: Welford,
     iterations: u64,
+    steps: StepStats,
+}
+
+/// What a step stage's iterations carried: how long each kind of batch
+/// ran (prefill only, decode only, both), the decodes in the running
+/// iteration, and per iteration that carried a decode its decodes and
+/// its duration: the batch a decode is in and the step it waits for.
+struct StepStats {
+    prefill_only: TimeAverage,
+    decode_only: TimeAverage,
+    mixed: TimeAverage,
+    decodes: TimeAverage,
+    batch: Welford,
+    duration: Welford,
+}
+
+impl StepStats {
+    fn new() -> Self {
+        Self {
+            prefill_only: TimeAverage::new(0.0, 0.0),
+            decode_only: TimeAverage::new(0.0, 0.0),
+            mixed: TimeAverage::new(0.0, 0.0),
+            decodes: TimeAverage::new(0.0, 0.0),
+            batch: Welford::new(),
+            duration: Welford::new(),
+        }
+    }
+
+    /// An iteration of `ndec` decodes and `npre` prefill tokens starts at
+    /// `now` (`ndec == npre == 0`: one that only preempted, or one ended).
+    fn set(&mut self, now: f64, ndec: f64, npre: f64) {
+        let (p, d) = (npre > 0.0, ndec > 0.0);
+        self.prefill_only.set(now, f64::from(p && !d));
+        self.decode_only.set(now, f64::from(d && !p));
+        self.mixed.set(now, f64::from(p && d));
+        self.decodes.set(now, ndec);
+    }
+
+    fn reset(&mut self, now: f64) {
+        self.prefill_only.reset(now);
+        self.decode_only.reset(now);
+        self.mixed.reset(now);
+        self.decodes.reset(now);
+    }
 }
 
 // ------------------------------------------------------------ interp ----
@@ -475,6 +519,7 @@ impl<'p> Interp<'p> {
                 wait: Welford::new(),
                 service: Welford::new(),
                 iterations: 0,
+                steps: StepStats::new(),
             })
             .collect();
         Interp {
@@ -684,6 +729,7 @@ impl<'p> Interp<'p> {
                 for st in &mut self.stages {
                     st.number_avg.reset(now);
                     st.busy_avg.reset(now);
+                    st.steps.reset(now);
                 }
                 for pl in &mut self.pools {
                     pl.used_avg.reset(now);
@@ -2751,6 +2797,13 @@ impl<'p> Interp<'p> {
         *iter = Some(Iter { epoch: g, assign });
         self.stages[st].iterations += 1;
         let now = self.now;
+        let warm = self.warm;
+        let steps = &mut self.stages[st].steps;
+        steps.set(now, ndec, npre);
+        if warm && ndec > 0.0 {
+            steps.batch.push(ndec);
+            steps.duration.push(cost);
+        }
         self.at(
             now + cost,
             Ev::IterEnd {
@@ -2872,6 +2925,8 @@ impl<'p> Interp<'p> {
             *iter = Some(it);
             return;
         }
+        let now = self.now;
+        self.stages[st].steps.set(now, 0.0, 0.0);
         let mut finished = vec![];
         for (id, tokens) in it.assign {
             if let Some(j) = self.stages[st].jobs.get_mut(&id) {
@@ -3203,6 +3258,12 @@ impl<'p> Interp<'p> {
                 mean_wait: s.wait.mean(),
                 mean_service: s.service.mean(),
                 iterations: s.iterations,
+                prefill_only: s.steps.prefill_only.mean(now),
+                decode_only: s.steps.decode_only.mean(now),
+                mixed: s.steps.mixed.mean(now),
+                mean_decodes: s.steps.decodes.mean(now),
+                mean_decode_batch: s.steps.batch.mean(),
+                mean_decode_step: s.steps.duration.mean(),
             })
             .collect();
         let pools = self

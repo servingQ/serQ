@@ -56,6 +56,20 @@ pub struct StageReport {
     pub mean_service: f64,
     /// Step stages: iterations run (0 otherwise).
     pub iterations: u64,
+    /// Step stages: the fraction of the measured time an iteration of
+    /// prefill only, of decodes only, or of both was running (0 otherwise;
+    /// the rest of the time the engine was idle).
+    pub prefill_only: f64,
+    pub decode_only: f64,
+    pub mixed: f64,
+    /// Step stages: time-average decodes in the running iteration (0 while
+    /// none runs).
+    pub mean_decodes: f64,
+    /// Step stages: the decodes of an iteration that carried any, and its
+    /// duration, averaged over such iterations started after warm-up (NaN
+    /// otherwise): the batch a decode is in and the step it waits for.
+    pub mean_decode_batch: f64,
+    pub mean_decode_step: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -228,6 +242,34 @@ impl Report {
                 rows,
             );
         }
+        if self.stages.iter().any(|st| st.iterations > 0) {
+            let rows = self.stages.iter().filter(|st| st.iterations > 0).map(|st| {
+                vec![
+                    label(&st.name, st.index),
+                    format!("{:.3}", st.prefill_only),
+                    format!("{:.3}", st.decode_only),
+                    format!("{:.3}", st.mixed),
+                    format!("{:.3}", 1.0 - st.prefill_only - st.decode_only - st.mixed),
+                    format!("{:.3}", st.mean_decodes),
+                    format!("{:.3}", st.mean_decode_batch),
+                    format!("{:.6}", st.mean_decode_step),
+                ]
+            });
+            table(
+                &mut s,
+                &[
+                    "step",
+                    "prefill",
+                    "decode",
+                    "mixed",
+                    "idle",
+                    "decodes",
+                    "decode batch",
+                    "decode step",
+                ],
+                rows,
+            );
+        }
         if !self.pools.is_empty() {
             let rows = self.pools.iter().map(|p| {
                 vec![
@@ -331,7 +373,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{},\"prefill_only\":{},\"decode_only\":{},\"mixed\":{},\"mean_decodes\":{},\"mean_decode_batch\":{},\"mean_decode_step\":{}}}",
                 st.name,
                 index(st.index),
                 f(st.mean_number),
@@ -340,7 +382,13 @@ impl Report {
                 f(st.throughput),
                 f(st.mean_wait),
                 f(st.mean_service),
-                st.iterations
+                st.iterations,
+                f(st.prefill_only),
+                f(st.decode_only),
+                f(st.mixed),
+                f(st.mean_decodes),
+                f(st.mean_decode_batch),
+                f(st.mean_decode_step)
             );
         }
         s.push_str("],\"pools\":[");
