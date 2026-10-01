@@ -65,14 +65,14 @@ queue gw : gateway {
     } else {
       choose i in NP by (holders(P[i].reqs) + queued(P[i].reqs));
       P[i].prefill (prompt);
-      set prefilled = P.prefilled;
+      set t_prefill = P.prefill_done;
       // a request parked for its read holds blocks, not a running slot
       choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
       D[j].decode (prompt) from P[i];
       set first = D.first_token;
-      observe admit_wait = D.admitted - prefilled;  // the decoder's admission: the prompt's blocks
+      observe admit_wait = D.admitted - t_prefill;  // the decoder's admission: the prompt's blocks
       observe transfer = D.read_done - D.admitted;  // the read: the wait before it and both NICs
-      observe lease = D.read_done - prefilled;      // how long the prefiller's blocks stayed leased
+      observe lease = D.read_done - t_prefill;      // how long the prefiller's blocks stayed leased
     }
     observe ttft = first - t0;
     observe decode_time = now - first;
@@ -121,7 +121,7 @@ queue P[NP] : prefill {
   prefill (prompt) {
     hold reqs (1), kv (min(prompt, budget_left(P))) reserve (prompt) {
       prefill (prompt) growing kv;
-      mark prefilled;
+      mark prefill_done;
     } lease kv (inf);
   }
 }
