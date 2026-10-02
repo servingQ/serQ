@@ -6,7 +6,7 @@ program is compiled in; the deployment and the sessions come from the file
 
   {"pools": [[cap, block, viaEngine], ...], "budget": B, "chunk": c,
    "memory": p, "cost": [c0, c_tok, c_pre, c_dec, c_kv, c_att2],
-   "horizon": T, "turnSlot": t, "moreSlot": m,
+   "horizon": T, "turnSlot": t, "moreSlot": m, "computedSlot": c,
    "init": [[[slot, value], ...], ...], "sessions": [[[[slot, value], ...], ...], ...]}
 
 (`sessions[i]` is session `i`'s turns, each a list of attribute assignments),
@@ -65,7 +65,8 @@ def main (args : List String) : IO UInt32 := do
   let D : Deployment := ⟨pools, budget, chunk, memory,
     fun st => c 0 + c 1 * st.tokens + c 2 * st.prefilled + c 3 * st.decoders
       + c 4 * st.kvDecode + c 5 * st.attention2⟩
-  let w : Workload := ⟨init, sessions, some turnSlot, moreSlot⟩
+  let computedSlot ← IO.ofExcept (natOf (j.getObjValD "computedSlot"))
+  let w : Workload := ⟨init, sessions, some turnSlot, moreSlot, some computedSlot⟩
   let t0 ← IO.monoMsNow
   let m := loop D horizon (start D w.init.length w.attr Oracle.vllmTurn w)
   let n := m.obs.length

@@ -1,0 +1,348 @@
+{
+ "arrival": {
+  "Sessions": [
+   {
+    "attrs": [
+     [
+      9,
+      40.0
+     ],
+     [
+      10,
+      3.0
+     ],
+     [
+      11,
+      0.0
+     ]
+    ],
+    "turns": []
+   },
+   {
+    "attrs": [
+     [
+      9,
+      70.0
+     ],
+     [
+      10,
+      2.0
+     ],
+     [
+      11,
+      5.0
+     ]
+    ],
+    "turns": []
+   }
+  ]
+ },
+ "attrs": [
+  "cached",
+  "serial",
+  "turn_no",
+  "new",
+  "out",
+  "think",
+  "more",
+  "forced",
+  "computed",
+  "n",
+  "o",
+  "t0"
+ ],
+ "blocks": [
+  [
+   {
+    "Set": [
+     9,
+     {
+      "Num": 0.0
+     }
+    ]
+   },
+   {
+    "Set": [
+     10,
+     {
+      "Num": 0.0
+     }
+    ]
+   },
+   {
+    "Set": [
+     11,
+     {
+      "Num": 0.0
+     }
+    ]
+   }
+  ],
+  [],
+  [
+   {
+    "Run": {
+     "growing": null,
+     "mode": "Plain",
+     "stage": {
+      "base": 1,
+      "count": 1,
+      "index": null
+     },
+     "work": {
+      "Attr": 11
+     }
+    }
+   },
+   {
+    "Hold": {
+     "body": 3,
+     "cache": null,
+     "lease": null,
+     "pools": [
+      [
+       {
+        "base": 1,
+        "count": 1,
+        "index": null
+       },
+       {
+        "Num": 1.0
+       },
+       null
+      ],
+      [
+       {
+        "base": 0,
+        "count": 1,
+        "index": null
+       },
+       {
+        "Call": [
+         "Min",
+         [
+          {
+           "Expr": {
+            "Attr": 9
+           }
+          },
+          {
+           "Expr": {
+            "Call": [
+             "BudgetLeft",
+             [
+              {
+               "Stage": {
+                "base": 0,
+                "count": 1,
+                "index": null
+               }
+              }
+             ]
+            ]
+           }
+          }
+         ]
+        ]
+       },
+       {
+        "Attr": 9
+       }
+      ]
+     ],
+     "reuse": null
+    }
+   },
+   "End"
+  ],
+  [
+   {
+    "Run": {
+     "growing": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     },
+     "mode": "Prefill",
+     "stage": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     },
+     "work": {
+      "Attr": 9
+     }
+    }
+   },
+   {
+    "Observe": [
+     0,
+     {
+      "Binary": [
+       "Sub",
+       {
+        "Ctx": "Now"
+       },
+       {
+        "Attr": 11
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "Run": {
+     "growing": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     },
+     "mode": "Decode",
+     "stage": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     },
+     "work": {
+      "Attr": 10
+     }
+    }
+   },
+   {
+    "Observe": [
+     1,
+     {
+      "Ctx": "Now"
+     }
+    ]
+   }
+  ]
+ ],
+ "hidden": [],
+ "horizon": 100000.0,
+ "init": 0,
+ "observes": [
+  "ttft",
+  "done"
+ ],
+ "pools": [
+  {
+   "admit_via": null,
+   "block": 16.0,
+   "cap": 2048.0,
+   "evict": "Lru",
+   "name": "kv",
+   "preempt": "Lifo",
+   "queue": null,
+   "spill": null
+  },
+  {
+   "admit_via": 0,
+   "block": null,
+   "cap": 4.0,
+   "evict": "Lru",
+   "name": "slots",
+   "preempt": "None",
+   "queue": null,
+   "spill": null
+  }
+ ],
+ "seed": 1,
+ "session": 2,
+ "slot_cached": 0,
+ "slot_computed": 8,
+ "slot_forced": 7,
+ "slot_more": 6,
+ "slot_new": 3,
+ "slot_out": 4,
+ "slot_serial": 1,
+ "slot_think": 5,
+ "slot_turn": 2,
+ "stages": [
+  {
+   "kind": {
+    "Step": {
+     "budget": {
+      "Num": 48.0
+     },
+     "chunk": {
+      "Num": 0.0
+     },
+     "cost": {
+      "Binary": [
+       "Add",
+       {
+        "Binary": [
+         "Add",
+         {
+          "Binary": [
+           "Add",
+           {
+            "Binary": [
+             "Add",
+             {
+              "Binary": [
+               "Add",
+               {
+                "Num": 3.0
+               },
+               {
+                "Ctx": "Ntok"
+               }
+              ]
+             },
+             {
+              "Binary": [
+               "Mul",
+               {
+                "Num": 2.0
+               },
+               {
+                "Ctx": "Npre"
+               }
+              ]
+             }
+            ]
+           },
+           {
+            "Ctx": "Ndec"
+           }
+          ]
+         },
+         {
+          "Ctx": "Kvb"
+         }
+        ]
+       },
+       {
+        "Binary": [
+         "Mul",
+         {
+          "Num": 2.0
+         },
+         {
+          "Ctx": "Attn"
+         }
+        ]
+       }
+      ]
+     },
+     "memory": 0,
+     "serve": {
+      "By": []
+     }
+    }
+   },
+   "name": "engine"
+  },
+  {
+   "kind": "Delay",
+   "name": "gate"
+  }
+ ],
+ "trace": null,
+ "trace_ordered": false,
+ "turn": 1,
+ "version": 10,
+ "warmup": 0.0
+}
