@@ -3,16 +3,25 @@
 
 `Exec.assign` builds the iteration: residents in serving order, each takes
 what it wants (one token for a decode, the rest or a chunk for a prefill)
-from the budget left. With nothing growing past its allocation and no
-request waiting for the engine (so no admission during the iteration), it
-is the greedy fill of the budget over the job list, `fillIter`; and the
-greedy fill serves in order: a job gets tokens only if every job before it
-got all it wanted (`fillAmounts_fifo`). This is what a FIFO prefill queue
-needs from the engine (serving-queue-theory's `StepEngine`).
+from the budget left. When no growth in it needs more than the hold already
+has (every growing job's allocation covers the position it will reach, so
+`assign` calls no `grow` and preempts no one) and nobody waits for the
+engine (so it admits no one), it is the greedy fill of the budget over the
+job list, `fillIter`; and the greedy fill serves in order (a job gets tokens
+only if every job before it got all it wanted, `fillAmounts_fifo`), never
+gives more than wanted (`fillAmounts_le_want`) and is work-conserving
+(`fillAmounts_sum`). This is what a FIFO prefill queue needs from the engine
+(serving-queue-theory's `StepEngine`).
+
+Not covered yet: an iteration whose growth crosses a block boundary (the
+vLLM programs' decode every `bs` tokens and their prefill chunks after the
+first) and one that admits waiting requests; for those programs the
+theorems apply to the iterations that do neither.
 
 Key definitions: `Exec.wantOf`, `Exec.fillAmounts`, `Exec.fillIter`.
-Key theorems: `Exec.assign_eq_fillIter`, `Exec.fillIter_eq_amounts`,
-`Exec.fillAmounts_fifo`, `Exec.fillAmounts_le_want`.
+Key theorems: `Exec.assign_iter_eq_fillIter`, `Exec.assign_eq_fillIter`,
+`Exec.fillIter_eq_amounts`, `Exec.fillAmounts_fifo`, `Exec.fillAmounts_le_want`,
+`Exec.fillAmounts_sum`.
 -/
 import Serq.Exec
 
@@ -52,6 +61,15 @@ theorem fillAmounts_le_want : ∀ (js : List Job) (left k : ℕ),
     cases k with
     | zero => simp [fillAmounts]
     | succ k => simpa [fillAmounts] using fillAmounts_le_want js _ k
+
+/-- The fill is work-conserving: it hands out the budget, or all that is
+wanted if that is less. -/
+theorem fillAmounts_sum : ∀ (js : List Job) (left : ℕ),
+    (fillAmounts D js left).sum = min left (js.map (wantOf D)).sum
+  | [], _ => by simp [fillAmounts]
+  | j :: js, left => by
+    simp only [fillAmounts, List.sum_cons, List.map_cons, fillAmounts_sum js]
+    omega
 
 /-- The iteration is the amounts, without the jobs that take nothing. -/
 theorem fillIter_eq_amounts : ∀ (js : List Job) (left : ℕ),
@@ -123,6 +141,86 @@ theorem admitVia_empty (m : Machine) (left : ℕ) (h : engineQueuesEmpty D m) :
     · simp [hv, h p hv]
     · simp [hv]
   rw [this]
+
+theorem getS_setS_ne (m : Machine) {i k : ℕ} (s : Sess) (h : i ≠ k) :
+    getS (setS m i s) k = getS m k := by
+  simp only [getS, setS, Array.getD_eq_getD_getElem?, Array.getElem?_setIfInBounds_ne h]
+
+/-- **`assign` is the greedy fill, growing jobs included.** If nobody waits
+for the engine, the owners of the jobs are distinct, and every growing job
+from `idx` on holds enough of its pool for the position it will reach, then
+the iteration `assign` builds is `fillIter` of the rest of the job list (with
+enough fuel): it advances the holds' positions but calls no `grow`. -/
+theorem assign_iter_eq_fillIter (pre0 : ℕ) :
+    ∀ (f : ℕ) (M : Machine) (idx left : ℕ), engineQueuesEmpty D M →
+      (M.jobs.map (·.owner)).Nodup →
+      (∀ j ∈ M.jobs.drop idx, ∀ p, j.growing = some p →
+        ∃ a x, holdOn (getS M j.owner) p = some (a, x) ∧ x + wantOf D j ≤ a) →
+      M.jobs.length - idx < f →
+      (assign D f M idx left pre0).iter = M.iter ++ fillIter D (M.jobs.drop idx) left := by
+  intro f
+  induction f with
+  | zero => intro M idx left _ _ _ h; omega
+  | succ f ih =>
+    intro M idx left hq hnd hcov hf
+    rw [assign]
+    cases hj : M.jobs[idx]? with
+    | none =>
+      have hlen : M.jobs.length ≤ idx := by simpa [List.getElem?_eq_none_iff] using hj
+      simp only [List.drop_eq_nil_of_le hlen, fillIter, List.append_nil]
+      split_ifs
+      · rw [admitVia_empty D M left hq]
+      · rfl
+    | some j =>
+      obtain ⟨hl, he⟩ := List.getElem?_eq_some_iff.mp hj
+      have hdrop : M.jobs.drop idx = j :: M.jobs.drop (idx + 1) := by
+        rw [List.drop_eq_getElem_cons hl, he]
+      have hcov' : ∀ j' ∈ M.jobs.drop (idx + 1), ∀ p, j'.growing = some p →
+          ∃ a x, holdOn (getS M j'.owner) p = some (a, x) ∧ x + wantOf D j' ≤ a :=
+        fun j' hj' => hcov j' (by rw [hdrop]; exact List.mem_cons_of_mem _ hj')
+      have hfresh : ∀ j' ∈ M.jobs.drop (idx + 1), j.owner ≠ j'.owner := by
+        have hsub : ((M.jobs.drop idx).map (·.owner)).Nodup :=
+          hnd.sublist ((List.drop_sublist _ _).map _)
+        rw [hdrop, List.map_cons, List.nodup_cons] at hsub
+        intro j' hj' heq
+        exact hsub.1 (heq ▸ List.mem_map.mpr ⟨j', hj', rfl⟩)
+      rw [hdrop, fillIter]
+      simp only
+      by_cases h0 : min (wantOf D j) left = 0
+      · rw [if_pos h0, if_pos h0]
+        exact ih M (idx + 1) left hq hnd hcov' (by omega)
+      · rw [if_neg h0, if_neg h0]
+        cases hg : j.growing with
+        | none =>
+          simp only
+          by_cases h1 : left - min (wantOf D j) left = 0
+          · rw [if_pos h1, if_pos h1]
+          · rw [if_neg h1, if_neg h1]
+            refine (ih _ (idx + 1) _ ?_ ?_ ?_ ?_).trans ?_
+            · exact fun q hv => hq q hv
+            · exact hnd
+            · intro j' hj' p' hg'
+              exact hcov' j' hj' p' hg'
+            · exact (by omega : M.jobs.length - (idx + 1) < f)
+            · simp
+        | some p =>
+          obtain ⟨a, x, hh, hax⟩ := hcov j (by rw [hdrop]; exact List.mem_cons_self) p hg
+          simp only [hh]
+          have hnot : ¬ (x + min (wantOf D j) left > a) := by
+            have := min_le_left (wantOf D j) left; omega
+          simp only [hnot, if_false, ite_true]
+          by_cases h1 : left - min (wantOf D j) left = 0
+          · rw [if_pos h1, if_pos h1]; simp [setS]
+          · rw [if_neg h1, if_neg h1]
+            refine (ih _ (idx + 1) _ ?_ ?_ ?_ ?_).trans ?_
+            · exact fun q hv => hq q hv
+            · exact hnd
+            · intro j' hj' p' hg'
+              have := hcov' j' hj' p' hg'
+              simpa [getS, setS, Array.getD_eq_getD_getElem?,
+                Array.getElem?_setIfInBounds_ne (hfresh j' hj')] using this
+            · exact (by omega : M.jobs.length - (idx + 1) < f)
+            · simp [setS]
 
 /-- **`assign` is the greedy fill.** With no job growing and nobody waiting
 for the engine, the iteration `assign` builds from job `idx` on, with `left`
