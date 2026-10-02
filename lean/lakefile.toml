@@ -13,3 +13,8 @@ rev = "v4.34.0"
 
 [[lean_lib]]
 name = "Serq"
+
+# performance probe: the executable semantics on a workload from a JSON file
+[[lean_exe]]
+name = "serq-lean-bench"
+root = "Bench.Main"

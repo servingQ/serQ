@@ -15,7 +15,9 @@ lake build 2>&1 | tee build.log
 if grep -q "declaration uses 'sorry'" build.log; then
   echo "FAIL: a declaration uses sorry"; exit 1
 fi
-if grep -rn --include='*.lean' -E '\bsorry\b' Serq Serq.lean; then
+echo "== serq-lean-bench (the executable the bench and DRT run) =="
+lake build serq-lean-bench 2>&1 | tail -1
+if grep -rn --include='*.lean' -E '\bsorry\b' Serq Serq.lean Bench; then
   echo "FAIL: literal 'sorry' found in sources"; exit 1
 fi
 

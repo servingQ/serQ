@@ -42,6 +42,26 @@ package moved here, and the projects that cite them keep them. `serving-queue-th
 queueing results start from `Serq.Exec` rather than from a queue model of
 its own.
 
+## Running it
+
+`lake build serq-lean-bench` builds an executable that runs `Exec` on the
+vLLM replay program (`Oracle.vllmTurn`, compiled in) with a workload from a
+JSON file; `scripts/lean_bench.py small|full` writes the IR and the workload
+from `tools/oracle/cache_trace.ir.json` or the 333-session trace
+(`examples/replay/data/short_base.csv`, A100 engine, unit step clock), runs
+`serq run` and the Lean executable, and compares, for every observation and
+session, the sequence of (time, value). On the full trace (3 321 turns,
+16 605 observations) the two agree on every value; `make lean` builds the
+executable.
+
+The compiled code is faster than the definitions read, by theorems:
+`makeRoom` evicts one block per step, and `@[csimp] makeRoom_eq_fast`
+(from `makeRoomFast_eq`) makes the compiler evict an entry's blocks at once;
+attributes are stored as `Attrs`, whose `upd` is `Function.update`
+(`Attrs.get_upd`). The session table is an array and observations are kept
+newest first; those two, and the wake scan over the sessions, are checked by
+the oracle theorems and the bench, not by a theorem.
+
 ## What is not covered yet
 
 The step engine runs on the step clock (one iteration per tick); iteration
