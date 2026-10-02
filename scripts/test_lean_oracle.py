@@ -67,5 +67,46 @@ class FragmentBoundaries(unittest.TestCase):
         self.fail("the mixed oracle must contain a Hold")
 
 
+
+class IterationCost(unittest.TestCase):
+    def test_the_step_clock_is_the_constant_one(self):
+        ir, _ = generator.load("mixed")
+        self.assertEqual(generator.cost_fn(ir["stages"][0]["kind"]["Step"]["cost"]), "fun _ => 1")
+
+    def test_integer_affine_costs_translate(self):
+        e = {"Binary": ["Add", {"Num": 4000.0},
+                        {"Binary": ["Add", {"Binary": ["Mul", {"Num": 52.0}, {"Ctx": "Npre"}]},
+                                    {"Binary": ["Mul", {"Num": 41.0}, {"Ctx": "Ndec"}]}]}]}
+        self.assertEqual(generator.cost_fn(e), "fun st => 4000 + 52 * st.prefilled + 41 * st.decoders")
+
+    # The expected values follow from the interpreter's arithmetic on
+    # expressions (`binop` in src/link.rs: + - * on reals), which `affine`
+    # normalises: (5 - Ntok) + Ntok is 5, 2 * (3 * Npre) is 6 Npre,
+    # 2 * 3 is 6.
+    def test_affine_normalises_as_the_interpreter_computes(self):
+        num = lambda v: {"Num": float(v)}
+        ctx = lambda v: {"Ctx": v}
+        bi = lambda op, a, b: {"Binary": [op, a, b]}
+        self.assertEqual(generator.cost_fn(bi("Add", bi("Sub", num(5), ctx("Ntok")), ctx("Ntok"))), "fun st => 5")
+        self.assertEqual(generator.cost_fn(bi("Add", num(1), bi("Mul", num(2), bi("Mul", num(3), ctx("Npre"))))),
+                         "fun st => 1 + 6 * st.prefilled")
+        self.assertEqual(generator.cost_fn(bi("Mul", num(2), num(3))), "fun st => 6")
+
+    def test_negative_or_zero_constant_costs_are_outside(self):
+        num = lambda v: {"Num": float(v)}
+        bi = lambda op, a, b: {"Binary": [op, a, b]}
+        with self.assertRaises(generator.Fragment):
+            generator.cost_fn(bi("Sub", num(4000), bi("Mul", num(2), {"Ctx": "Ndec"})))
+        with self.assertRaises(generator.Fragment):  # an iteration of length 0 in the interpreter
+            generator.cost_fn(bi("Mul", num(52), {"Ctx": "Npre"}))
+        with self.assertRaises(generator.Fragment):
+            generator.cost_fn(num(0))
+
+    def test_fractional_or_unknown_costs_are_outside(self):
+        with self.assertRaises(generator.Fragment):
+            generator.cost_fn({"Binary": ["Mul", {"Num": 0.004}, {"Ctx": "Ndec"}]})
+        with self.assertRaises(generator.Fragment):
+            generator.cost_fn({"Binary": ["Mul", {"Num": 1.0}, {"Ctx": "Attn"}]})
+
 if __name__ == "__main__":
     unittest.main()

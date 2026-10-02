@@ -224,7 +224,9 @@ The steps:
 The Lean semantics runs a fragment of the IR ([IR](ir.md), the Lean
 fragment). In practice, a program is in it when:
 
-- the time is the step clock: one step engine as stage 0 with `cost 1`,
+- one step engine as stage 0 whose `cost` is affine in `tokens`,
+  `prefilled` and `decoders` with natural coefficients and a constant term
+  of at least 1 (`cost 1` is the step clock),
   serving its residents in admission order (no `serve` clause but the
   default), and any other stage a `delay`;
 - the pools are LRU, and either admitted via the engine or the engine's

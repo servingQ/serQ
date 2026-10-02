@@ -2755,8 +2755,8 @@ impl<'p> Interp<'p> {
         // preempted: then it is the scheduler step that only preempted (vLLM's
         // `schedule()` returns with `preempted_reqs` and admits nothing,
         // scheduler.py:869; the oracle driver counts the step; the Lean
-        // model's `startIteration` returns the empty iteration and `tick`
-        // re-admits at the next), and the next iteration re-admits the
+        // model's `startIteration` gives that step its cost and `step`
+        // re-admits at the next event), and the next iteration re-admits the
         // victim. Dropping it left the engine idle with the victim queued and
         // no event to wake it.
         let preempted = self.pools.iter().map(|p| p.preemptions).sum::<u64>() > preempt0;
