@@ -106,9 +106,18 @@ class IterationCost(unittest.TestCase):
         with self.assertRaises(generator.Fragment):
             generator.cost_fn({"Binary": ["Mul", {"Num": 0.004}, {"Ctx": "Ndec"}]})
         with self.assertRaises(generator.Fragment):
-            generator.cost_fn({"Binary": ["Mul", {"Num": 1.0}, {"Ctx": "Attn"}]})
-        with self.assertRaises(generator.Fragment):
-            generator.cost_fn({"Binary": ["Mul", {"Num": 1.0}, {"Ctx": "Nres"}]})
+            generator.cost_fn({"Binary": ["Add", {"Num": 1.0}, {"Binary": ["Mul", {"Num": 1.0}, {"Ctx": "Nres"}]}]})
+
+    def test_an_odd_attention_coefficient_is_outside(self):
+        # attention is a multiple of 1/2 (n^2/2 for a chunk of n at 0), so an
+        # odd coefficient would leave the clock's natural numbers
+        for c in (1.0, 3.0):
+            with self.assertRaises(generator.Fragment):
+                generator.cost_fn({"Binary": ["Add", {"Num": 1.0}, {"Binary": ["Mul", {"Num": c}, {"Ctx": "Attn"}]}]})
+
+    def test_the_deployment_names_the_engine_memory(self):
+        ir, lean = generator.load("mixed")
+        self.assertIn(f", some {ir['stages'][0]['kind']['Step']['memory']}, fun _ => 1⟩", lean.deployment())
 
     def test_attention_is_read_doubled_and_kv_decode_directly(self):
         e = {"Binary": ["Add", {"Num": 1.0},

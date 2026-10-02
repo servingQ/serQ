@@ -71,7 +71,10 @@ Iteration costs are natural numbers of clock units and read `tokens`,
 `prefilled`, `decoders`, `kv_decode` and `attention` (as `attention2`, twice
 the attention work, so an IR coefficient of `attention` must be even); the
 generator rejects fractional coefficients, a constant term below 1 and the
-other cost variables (`residents`, `kv_prefill`). The session-level semantics
+other cost variables (`residents`, `kv_prefill`, `now`). `kv_decode` is the
+memory the scheduled decode residents hold on the engine's pool over all
+their holds, and both it and `attention` are read after the iteration's
+growths, as the interpreter does. The session-level semantics
 outside the fragment (renewal arrivals, transfers between pools, flows over
 several stages) and the setting of `computed` on a preemption are not
 formalised (`docs/language.md` §9), and there is no proof that the Rust

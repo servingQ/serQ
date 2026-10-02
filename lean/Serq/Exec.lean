@@ -74,7 +74,8 @@ serves (`tokens`), the prefill tokens among them (`prefilled`), the decoding
 residents it advances (`decoders`), the memory those hold on the engine's
 pool (`kv_decode`), and twice the attention work of its prefill chunks,
 `Σ n (2K + n)` with `K` the position before the chunk (`2 · attention`,
-so that it is a natural number). -/
+so that it is a natural number). They are read after the iteration's
+growths, as the interpreter reads them. -/
 structure IterStats where
   tokens : ℕ
   prefilled : ℕ
@@ -935,10 +936,15 @@ def iterStats (m : Machine) : IterStats :=
     match (jobOf o).bind (·.growing) with
     | some p => match holdOn (getS m o) p with
       | some (_, x) => t * (2 * x - t)
-      | none => t * t
+      -- unreachable: `assign` serves no growing job without a hold on its pool
+      | none => 0
     | none => t * t
+  -- what the session holds on the engine's memory, over all its holds (the
+  -- interpreter's `held_in`)
   let held (o : ℕ) : ℕ := match D.memory with
-    | some p => ((holdOn (getS m o) p).map (·.1)).getD 0
+    | some p => ((getS m o).stack.filterMap fun
+        | .hold h _ => (h.pools.find? (·.1 = p)).map (·.2.1)
+        | _ => none).sum
     | none => 0
   { tokens := (m.iter.map (·.2)).sum
     prefilled := (pre.map (·.2)).sum
