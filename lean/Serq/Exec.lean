@@ -735,6 +735,25 @@ def enqueue (m : Machine) (i : ℕ) (front : Bool) : Machine :=
     setS m i { getS m i with status := .queued }
   | _ => m
 
+/-- Admit the heads of pool `p`'s queue, in order, while they fit (the
+interpreter's `try_admit`): each admitted session is ready and queued to
+run, but does not run yet. -/
+def admitHeads (p : ℕ) : ℕ → Machine → Machine
+  | 0, m => m
+  | f + 1, m => match (pst m p).queue with
+    | i :: q =>
+      if fitsAll D m (holdNeeds m i 0 (getS m i).prog) then
+        admitHeads p f (admit D (setPool m p { pst m p with queue := q }) i 0)
+      else m
+    | [] => m
+
+/-- `admitHeads` on every pool not served by the engine, in declaration
+order (the interpreter's `try_admit_all`; a pool the engine serves admits at
+the start of an iteration). -/
+def admitAll (m : Machine) : Machine :=
+  (List.range D.pools.length).foldl (fun m p =>
+    if (pdef D p).viaEngine then m else admitHeads D p 1000 m) m
+
 /-! ### Running a session's commands (zero time) -/
 
 def endSession (m : Machine) (i : ℕ) : Machine :=
@@ -756,7 +775,10 @@ def exec : ℕ → Machine → ℕ → Machine
       | [] => setS m i { s with status := .ended }
       | .seq k :: st => exec f (setS m i { s with prog := k, stack := st }) i
       | .hold h k :: st =>
-        let m := release D (setS m i { s with stack := st }) i h
+        -- the hold completed: its units go back, and the queues it may
+        -- unblock admit at once (the interpreter's `end_hold` then
+        -- `try_admit_all`), before this session goes on
+        let m := admitAll D (release D (setS m i { s with stack := st }) i h)
         exec f (setS m i { getS m i with prog := k }) i
       | .loop body :: st => exec f (setS m i { s with prog := body, stack := List.cons (Frame.loop body) st }) i
     | .stop => endSession D m i
@@ -807,23 +829,15 @@ def drain : ℕ → Machine → Machine
     | [] => m
     | i :: rest => drain f (exec D 10000 { m with ready := rest } i)
 
-/-- Admit from the queues not served by the engine, head first. -/
-def admitFree : ℕ → Machine → Machine
+/-- Run every ready session, then admit at every pool not served by the
+engine, until nothing is ready (the interpreter's `settle`). -/
+def settleLoop : ℕ → Machine → Machine
   | 0, m => m
   | f + 1, m =>
-    let pick := (List.range D.pools.length).find? fun p =>
-      !(pdef D p).viaEngine && match (pst m p).queue with
-        | i :: _ => fitsAll D m (holdNeeds m i 0 (getS m i).prog)
-        | [] => false
-    match pick with
-    | none => m
-    | some p => match (pst m p).queue with
-      | i :: q =>
-        let m := setPool m p { pst m p with queue := q }
-        admitFree f (drain D 10000 (admit D m i 0))
-      | [] => m
+    let m := admitAll D (drain D 10000 m)
+    if m.ready.isEmpty then m else settleLoop f m
 
-def settle (m : Machine) : Machine := admitFree D 1000 (drain D 10000 m)
+def settle (m : Machine) : Machine := settleLoop D 1000 m
 
 /-! ### The engine -/
 
