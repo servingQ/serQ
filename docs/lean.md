@@ -65,6 +65,21 @@ attributes are stored as `Attrs`, whose `upd` is `Function.update`
 newest first; those two, and the wake scan over the sessions, are checked by
 the oracle theorems and the bench, not by a theorem.
 
+## Differential testing
+
+`make drt` (CI job `lean-drt`) runs `scripts/lean_drt.py`: random cases of
+the vLLM replay program, each with a random engine (KV blocks, request
+slots, budget, chunk cap, the step clock or a random affine iteration cost)
+and random explicit sessions (turns, prompt and output lengths, think
+times, forced misses), run by `serq run` and by the Lean executable, every
+observation of every session compared. A failing case is kept under
+`target/lean-drt/<seed>/`. The first 300 seeds found three differences
+from the interpreter, now fixed and held by theorems or tests: a run of
+zero work yields (`exec`), a preemption takes the engine resident admitted
+last and sets `computed` (`Exec.victim`, `preemptLast`,
+`Serq/Regress.lean`). Like the oracle, the cases run one program; a
+difference in a construct that program does not use is not found here.
+
 ## What is not covered yet
 
 Iteration costs are natural numbers of clock units and read `tokens`,
