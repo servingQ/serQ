@@ -5,6 +5,7 @@ observations as CSV. A performance probe for "Lean core, Rust shell": the
 program is compiled in; the deployment and the sessions come from the file
 
   {"pools": [[cap, block, viaEngine], ...], "budget": B, "chunk": c,
+   "memory": p, "cost": [c0, c_tok, c_pre, c_dec, c_kv, c_att2],
    "horizon": T, "turnSlot": t, "moreSlot": m,
    "init": [[[slot, value], ...], ...], "sessions": [[[[slot, value], ...], ...], ...]}
 
@@ -51,12 +52,19 @@ def main (args : List String) : IO UInt32 := do
   let moreSlot ← IO.ofExcept (natOf (j.getObjValD "moreSlot"))
   let init ← IO.ofExcept (j.getObjValD "init" |> listOf (listOf pairOf))
   let sessions ← IO.ofExcept (j.getObjValD "sessions" |> listOf (listOf (listOf pairOf)))
-  -- iteration cost `c0 + c_tok tokens + c_pre prefilled + c_dec decoders` (default 1)
-  let costArr ← IO.ofExcept (match j.getObjVal? "cost" with | .ok v => v.getArr? | .error _ => pure #[(1 : Json), 0, 0, 0])
+  -- the engine's memory pool, and the iteration cost
+  -- `c0 + c_tok tokens + c_pre prefilled + c_dec decoders + c_kv kv_decode + c_att2 (2 attention)`
+  let memory : Option ℕ := match j.getObjVal? "memory" with
+    | .ok v => (natOf v).toOption
+    | .error _ => none
+  let costArr ← IO.ofExcept (match j.getObjVal? "cost" with
+    | .ok v => v.getArr?
+    | .error _ => pure #[(1 : Json), 0, 0, 0, 0, 0])
   let cs ← IO.ofExcept (costArr.toList.mapM natOf)
   let c := fun k => cs.getD k 0
-  let D : Deployment := ⟨pools, budget, chunk,
-    fun st => c 0 + c 1 * st.tokens + c 2 * st.prefilled + c 3 * st.decoders⟩
+  let D : Deployment := ⟨pools, budget, chunk, memory,
+    fun st => c 0 + c 1 * st.tokens + c 2 * st.prefilled + c 3 * st.decoders
+      + c 4 * st.kvDecode + c 5 * st.attention2⟩
   let w : Workload := ⟨init, sessions, some turnSlot, moreSlot⟩
   let t0 ← IO.monoMsNow
   let m := loop D horizon (start D w.init.length w.attr Oracle.vllmTurn w)

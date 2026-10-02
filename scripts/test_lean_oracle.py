@@ -107,6 +107,14 @@ class IterationCost(unittest.TestCase):
             generator.cost_fn({"Binary": ["Mul", {"Num": 0.004}, {"Ctx": "Ndec"}]})
         with self.assertRaises(generator.Fragment):
             generator.cost_fn({"Binary": ["Mul", {"Num": 1.0}, {"Ctx": "Attn"}]})
+        with self.assertRaises(generator.Fragment):
+            generator.cost_fn({"Binary": ["Mul", {"Num": 1.0}, {"Ctx": "Nres"}]})
+
+    def test_attention_is_read_doubled_and_kv_decode_directly(self):
+        e = {"Binary": ["Add", {"Num": 1.0},
+                        {"Binary": ["Add", {"Binary": ["Mul", {"Num": 8.0}, {"Ctx": "Attn"}]},
+                                    {"Binary": ["Mul", {"Num": 138.0}, {"Ctx": "Kvb"}]}]}]}
+        self.assertEqual(generator.cost_fn(e), "fun st => 1 + 4 * st.attention2 + 138 * st.kvDecode")
 
 if __name__ == "__main__":
     unittest.main()

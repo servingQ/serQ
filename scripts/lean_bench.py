@@ -5,6 +5,8 @@
     scripts/lean_bench.py full    # examples/replay/data/short_base.csv, A100 engine
     scripts/lean_bench.py cost    # the same on a microsecond clock with the A100 iteration
                                   # cost, rounded to whole us (4000 + 52 prefilled + 41 decoders)
+    scripts/lean_bench.py fullcost  # on a nanosecond clock with the whole A100 fit,
+                                    # kv_decode and attention included
 
 Writes, under target/lean-bench/<name>/, the IR (`prog.ir.json`, the vLLM
 replay program on a unit step clock with the trace inlined: the template is
@@ -29,16 +31,21 @@ SERQ = ROOT / "target/release/serq"
 
 # the A100 step-cost fit of examples/replay/vllm_replay.sq in whole microseconds:
 # c_it = 4 ms per iteration, a = 51.5 us per prefill token, d = 41 us per decoder
-COST_US = [4000, 0, 52, 41]
+COST_US = [4000, 0, 52, 41, 0, 0]
+# the whole fit in nanoseconds: c_it 4 ms, a 51.527 us/token, d 41.053 us per
+# decoder, e 137.86 ns per decoder KV token, b 4.02 ns per token^2 of attention
+# (the Lean cost reads 2 * attention, so its coefficient is b / 2 = 2)
+COST_NS = [4_000_000, 0, 51_527, 41_053, 138, 2]
 
 
 def cost_ir(c):
-    """The IR of `c0 + c_tok tokens + c_pre prefilled + c_dec decoders`."""
+    """The IR of `c0 + c_tok tokens + c_pre prefilled + c_dec decoders +
+    c_kv kv_decode + c_att2 (2 attention)`."""
     term = lambda k, v: {"Binary": ["Mul", {"Num": float(k)}, {"Ctx": v}]}
     e = {"Num": float(c[0])}
-    for k, v in zip(c[1:], ["Ntok", "Npre", "Ndec"]):
+    for k, v in zip(c[1:5], ["Ntok", "Npre", "Ndec", "Kvb"]):
         e = {"Binary": ["Add", e, term(k, v)]}
-    return e
+    return {"Binary": ["Add", e, term(2 * c[5], "Attn")]}
 
 
 def sessions_from_csv(path, ir, scale=1):
@@ -58,9 +65,9 @@ def sessions_from_csv(path, ir, scale=1):
 
 def build(name):
     ir = json.load(open(TEMPLATE))
-    cost = [1, 0, 0, 0]
-    if name in ("full", "cost"):
-        scale = 1_000_000 if name == "cost" else 1
+    cost = [1, 0, 0, 0, 0, 0]
+    if name in ("full", "cost", "fullcost"):
+        scale = {"full": 1, "cost": 1_000_000, "fullcost": 1_000_000_000}[name]
         ir["arrival"] = {"Sessions": sessions_from_csv(ROOT / "examples/replay/data/short_base.csv", ir, scale)}
         ir["pools"][0]["cap"] = 8010.0 * 16   # A100 KV pool, block 16
         ir["pools"][1]["cap"] = 64.0          # max_num_seqs
@@ -69,6 +76,10 @@ def build(name):
         if name == "cost":
             cost = COST_US
             ir["stages"][0]["kind"]["Step"]["cost"] = cost_ir(cost)
+        if name == "fullcost":
+            cost = COST_NS
+            ir["stages"][0]["kind"]["Step"]["cost"] = cost_ir(cost)
+            ir["horizon"] = 1e16
     out = ROOT / "target/lean-bench" / name
     out.mkdir(parents=True, exist_ok=True)
     (out / "prog.ir.json").write_text(json.dumps(ir))
@@ -93,7 +104,7 @@ def is_zero(e):
 
 def write_workload(out, ir, cost):
     """The workload JSON of `serq-lean-bench` for the IR: pools, engine,
-    the iteration cost as [c0, c_tok, c_pre, c_dec] (the IR's `cost` must be
+    the iteration cost as [c0, c_tok, c_pre, c_dec, c_kv, c_att2] (the IR's `cost` must be
     `cost_ir(cost)`), the turn and `more` slots, and every session's preset
     attributes and turns. The program is compiled into the executable, so everything else
     must be the template's."""
@@ -102,13 +113,13 @@ def write_workload(out, ir, cost):
         assert ir[k] == template[k], f"{k} differs from the program compiled into serq-lean-bench"
     pools = [[int(p["cap"]), int(p["block"] or 1), 1 if p["admit_via"] is not None else 0] for p in ir["pools"]]
     step = ir["stages"][0]["kind"]["Step"]
-    assert cost == [1, 0, 0, 0] and fold_one(step["cost"]) or step["cost"] == cost_ir(cost), \
+    assert cost == [1, 0, 0, 0, 0, 0] and fold_one(step["cost"]) or step["cost"] == cost_ir(cost), \
         "the workload's cost is not the IR's"
     nat = lambda v: int(v) if v == int(v) else (_ for _ in ()).throw(ValueError(f"{v} is not a natural number"))
     ss = ir["arrival"]["Sessions"]
     w = {"pools": pools, "budget": nat(step["budget"]["Num"]), "chunk": nat(step["chunk"]["Num"]),
          "horizon": nat(ir["horizon"]), "turnSlot": ir["slot_turn"], "moreSlot": ir["slot_more"],
-         "cost": cost,
+         "cost": cost, "memory": step["memory"],
          "init": [[[a, nat(v)] for a, v in s["attrs"]] for s in ss],
          "sessions": [[[[a, nat(v)] for a, v in t] for t in s["turns"]] for s in ss]}
     (out / "workload.json").write_text(json.dumps(w))
