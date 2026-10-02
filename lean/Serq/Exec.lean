@@ -109,8 +109,9 @@ inductive Status
   | ready
   | queued
   | engine
-  /-- in a delay until `wake`; `seq` orders delays that end at the same tick
-  by when they started (the event order of the Rust interpreter) -/
+  /-- in a delay until `wake`; `seq` is the delay's event number (events at
+  the same time are handled in the order they were scheduled, as in the
+  interpreter) -/
   | delay (wake seq : ℕ)
   | ended
   deriving DecidableEq
@@ -238,13 +239,17 @@ structure Machine where
   nextAdm : ℕ
   nextRel : ℕ
   nextDead : ℕ
+  /-- the number of the next scheduled event (a delay's end or an
+  iteration's end): events at the same time are handled in this order -/
   nextDelay : ℕ
   ready : List ℕ
-  /-- the sessions in a delay, as (end, start order, session), by end time
-  and then start order -/
+  /-- the delays scheduled, as (end, event number, session), by end time and
+  then event number. A preempted session's entry stays until its time and is
+  then ignored: the session's status no longer names that delay. -/
   delays : List (ℕ × ℕ × ℕ) := []
-  /-- the end of the engine's running iteration; `none` while it is idle -/
-  iterEnd : Option ℕ := none
+  /-- the end of the engine's running iteration and its event number;
+  `none` while the engine is idle -/
+  iterEnd : Option (ℕ × ℕ) := none
 
 variable (D : Deployment)
 
@@ -927,7 +932,8 @@ def startIteration (m : Machine) : Machine :=
   if busy then
     let m' := assign D 100000 { m with iter := [] } 0 D.budget m.preempts
     if !m'.iter.isEmpty || m'.preempts ≠ m.preempts then
-      { m' with iterEnd := some (m'.now + max 1 (D.cost (iterStats m'))) }
+      { m' with iterEnd := some (m'.now + max 1 (D.cost (iterStats m')), m'.nextDelay)
+                nextDelay := m'.nextDelay + 1 }
     else { m' with iterEnd := none }
   else { m with iter := [], iterEnd := none }
 
@@ -942,37 +948,50 @@ def insertBy (a : ℕ × ℕ) : List (ℕ × ℕ) → List (ℕ × ℕ)
   | [] => [a]
   | b :: bs => if a.1 ≤ b.1 then a :: b :: bs else b :: insertBy a bs
 
-/-- The time of the next event: the end of the running iteration or of the
-first delay. -/
-def nextEvent (m : Machine) : Option ℕ :=
+/-- The next event, as (time, event number): the end of the running
+iteration or of the first delay, whichever comes first in that order. -/
+def nextEvent (m : Machine) : Option (ℕ × ℕ) :=
   match m.iterEnd, m.delays.head? with
-  | some a, some (b, _, _) => some (min a b)
+  | some (a, qa), some (t, q, _) => some (if t < a ∨ (t = a ∧ q < qa) then (t, q) else (a, qa))
   | some a, none => some a
-  | none, some (b, _, _) => some b
+  | none, some (t, q, _) => some (t, q)
   | none, none => none
 
-/-- One event: the clock moves to the next event; the delays that end then
-(in the order they started), the iteration that ends then, the commands they
-enable, and, if the engine is idle, the next iteration. Every event the
-step creates is later than it, so time moves forward at every step. -/
+/-- Whether an event is pending at time `t` or before. -/
+def pendingBy (m : Machine) (t : ℕ) : Bool := (nextEvent m).any (·.1 ≤ t)
+
+/-- After an event: run what it enabled, then, if the engine is idle and no
+other event is pending at this time, start an iteration (a scheduler step
+sees every event of its instant, as in the interpreter's `settle`). -/
+def afterEvent (m : Machine) : Machine :=
+  let m := settle D m
+  if m.iterEnd.isNone && !pendingBy m m.now then startIteration D m else m
+
+/-- One event, in (time, event number) order: the clock moves to it, and it
+is handled: a delay that ends wakes its session (unless the session was
+preempted meanwhile and its status names another state), an iteration that
+ends applies its tokens; then `afterEvent`. -/
 def step (m : Machine) : Machine :=
   match nextEvent m with
   | none => m
-  | some t =>
-    let wake := m.delays.takeWhile (·.1 ≤ t)
-    let m : Machine := { m with now := t, delays := m.delays.dropWhile (·.1 ≤ t) }
-    let m : Machine := wake.foldl (fun (m : Machine) (d : ℕ × ℕ × ℕ) =>
-      { setS m d.2.2 { getS m d.2.2 with status := .ready } with ready := m.ready ++ [d.2.2] }) m
+  | some (t, q) =>
+    let m : Machine := { m with now := t }
     let m : Machine :=
-      if m.iterEnd = some t then endIteration { m with iterEnd := none } else m
-    let m : Machine := settle D m
-    if m.iterEnd = none then startIteration D m else m
+      if m.iterEnd = some (t, q) then endIteration { m with iterEnd := none }
+      else match m.delays with
+        | (u, q', i) :: rest =>
+          let m : Machine := { m with delays := rest }
+          if (getS m i).status = .delay u q' then
+            { setS m i { getS m i with status := .ready } with ready := m.ready ++ [i] }
+          else m
+        | [] => m
+    afterEvent D m
 
 /-- Run the events up to time `horizon` (at most `f` of them). -/
 def runUntil (horizon : ℕ) : ℕ → Machine → Machine
   | 0, m => m
   | f + 1, m => match nextEvent m with
-    | some t => if t ≤ horizon then runUntil horizon f (step D m) else m
+    | some (t, _) => if t ≤ horizon then runUntil horizon f (step D m) else m
     | none => m
 
 /-- `n` sessions with attributes `init i`, all running `prog`, from time 0. -/
@@ -985,12 +1004,17 @@ def start (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload :=
     jobs := [], iter := [], obs := [], preempts := 0
     nextAdm := 0, nextRel := 0, nextDead := 0, nextDelay := 0
     ready := List.range n }
-  startIteration D (settle D m)
+  afterEvent D m
 
-/-- Run `n` sessions up to time `horizon`: time moves forward at every
-event, so `horizon + 1` events suffice. -/
+/-- Enough events for time `horizon`: at each instant every session ends at
+most one delay and the engine at most one iteration, and every event a step
+creates is later than it (a delay of positive work, an iteration of at least
+one unit). -/
+def eventBound (horizon n : ℕ) : ℕ := (horizon + 1) * (n + 1)
+
+/-- Run `n` sessions up to time `horizon`. -/
 def run (horizon n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) : Machine :=
-  runUntil D horizon (horizon + 1) (start D n init prog)
+  runUntil D horizon (eventBound horizon n) (start D n init prog)
 
 /-- A session's preset value of `slot`. -/
 def Workload.attr (w : Workload) (i slot : ℕ) : ℕ :=
@@ -998,7 +1022,7 @@ def Workload.attr (w : Workload) (i slot : ℕ) : ℕ :=
 
 /-- Run a workload instance: one session per `init` entry. -/
 def runW (horizon : ℕ) (w : Workload) (prog : Prog) : Machine :=
-  runUntil D horizon (horizon + 1) (start D w.init.length w.attr prog w)
+  runUntil D horizon (eventBound horizon w.init.length) (start D w.init.length w.attr prog w)
 
 /-- The values of observation `name`, as (serial, value), in serial order. -/
 def observed (m : Machine) (name : ℕ) : List (ℕ × ℕ) :=

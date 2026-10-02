@@ -286,18 +286,20 @@ program whose numbers move).
 ## The Lean fragment
 
 The Lean model (`lean/Serq/Exec.lean`, [docs/lean.md](lean.md)) runs a fragment of
-the IR on a step clock over natural numbers: pools with LRU eviction and
-LIFO preemption, one step engine (stage 0) with unit iteration cost, delay
-stages, explicit sessions with preset attributes and turns, and the
+the IR over natural numbers, event by event as the interpreter does: pools
+with LRU eviction and LIFO preemption, one step engine (stage 0) whose
+iteration cost is affine in `tokens`, `prefilled` and `decoders` with
+natural coefficients and a constant term of at least 1 (`cost 1` is the
+step clock), delay stages, explicit sessions with preset attributes and turns, and the
 statements `Turn`, `Hold`, `Run`, `Set`, `Observe`, `Branch`, `Loop`, `End`
 (not `Release`, `Load` or a hold with a `lease`: a program with a KV
 transfer is outside the fragment until `Exec` gives a hold's pool
 its own release)
 with expressions built from integer constants, attributes, `Now`,
 `CachedIn`, `BudgetLeft`, `min`, `max`, `+`, `-` (truncated at 0), `*`,
-`floor(a / b)`, comparisons and conditionals. A constant expression over
-context variables with zero coefficients (the replay's cost at `a = b = 0`)
-counts as a constant. Its generator translates an IR file into Lean and
+`floor(a / b)`, comparisons and conditionals. In a cost, a context
+variable with a zero coefficient (the replay's cost at `a = b = 0`) is
+dropped. Its generator translates an IR file into Lean and
 fails on anything outside the fragment. The Lean `Branch` takes the first
 block when the guard is non-zero; the interpreter admits only 0 or 1
 (`docs/language.md`, Branching), so the two agree on every program that

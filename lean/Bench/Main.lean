@@ -36,7 +36,7 @@ def poolOf (j : Json) : Except String PoolDef := do
 /-- Run every event up to `horizon`. -/
 partial def loop (D : Deployment) (horizon : ℕ) (m : Machine) : Machine :=
   match nextEvent m with
-  | some t => if t ≤ horizon then loop D horizon (step D m) else m
+  | some (t, _) => if t ≤ horizon then loop D horizon (step D m) else m
   | none => m
 
 def main (args : List String) : IO UInt32 := do
@@ -62,7 +62,7 @@ def main (args : List String) : IO UInt32 := do
   let m := loop D horizon (start D w.init.length w.attr Oracle.vllmTurn w)
   let n := m.obs.length
   let t1 ← IO.monoMsNow
-  IO.eprintln s!"ticks {m.now}  sessions {m.sess.size}  ended {(m.sess.filter (·.status = .ended)).size}  observations {n}  ms {t1 - t0}"
+  IO.eprintln s!"last event {m.now}  sessions {m.sess.size}  ended {(m.sess.filter (·.status = .ended)).size}  observations {n}  ms {t1 - t0}"
   IO.println "name,serial,time,value"
   for (nm, s, t, v) in m.obs.reverse do
     IO.println s!"{nm},{s},{t},{v}"

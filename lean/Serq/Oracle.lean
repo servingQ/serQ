@@ -53,9 +53,9 @@ def vllmRequest : Prog := [route|
 theorem vllmRequest_wf : vllmRequest.wf = true := by decide
 
 /-- (first-token steps, last-token steps, preemptions) of `vllmRequest`. -/
-def outcome (D : Deployment) (ticks : ℕ) (w : Workload) :
+def outcome (D : Deployment) (horizon : ℕ) (w : Workload) :
     List (ℕ × ℕ) × List (ℕ × ℕ) × ℕ :=
-  let m := Exec.runW D ticks w vllmRequest
+  let m := Exec.runW D horizon w vllmRequest
   (observed m 0, observed m 1, m.preempts)
 
 /-- serQ `tools/oracle/chunked.ir.json`: 3 requests, 1000 blocks of 16, budget 1024, 16 slots, chunk 0; the deployment and the workload are the IR's. -/

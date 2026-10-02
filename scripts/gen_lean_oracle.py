@@ -103,12 +103,17 @@ def affine(e):
 
 
 def cost_fn(e):
-    """`Exec.Deployment.cost` of a step engine's `cost`: nonnegative integer
-    coefficients on tokens, prefilled and decoders (clock units, at least 1
-    is used); anything else is outside the fragment."""
+    """`Exec.Deployment.cost` of a step engine's `cost`: natural
+    coefficients on tokens, prefilled and decoders and a constant term of at
+    least 1 (the interpreter lets an iteration last 0; `Exec` lasts at least
+    one clock unit, so the two agree only when the constant is at least 1);
+    anything else is outside the fragment."""
     a = affine(e)
     if a is None:
         raise Fragment("the iteration cost must be affine in the context variables")
+    if a.get(None, 0.0) < 1:
+        raise Fragment("iteration cost: the constant term must be at least 1 clock unit "
+                       "(the interpreter allows an iteration of length 0, the fragment does not)")
     terms = []
     for k, v in a.items():
         if v == 0:
@@ -364,9 +369,9 @@ open Exec
 
 {REQUEST}
 /-- (first-token steps, last-token steps, preemptions) of `vllmRequest`. -/
-def outcome (D : Deployment) (ticks : ℕ) (w : Workload) :
+def outcome (D : Deployment) (horizon : ℕ) (w : Workload) :
     List (ℕ × ℕ) × List (ℕ × ℕ) × ℕ :=
-  let m := Exec.runW D ticks w vllmRequest
+  let m := Exec.runW D horizon w vllmRequest
   (observed m 0, observed m 1, m.preempts)
 '''
 
@@ -390,7 +395,7 @@ def gen():
             raise Fragment(f"{name}: {n} sessions in the IR, {len(sc['requests'])} requests in the scenario")
         first = sorted((int(k), v) for k, v in ans["first"].items())
         done = sorted((int(k), v) for k, v in ans["done"].items())
-        ticks = max([v for _, v in done] + [0]) + 5
+        horizon = max([v for _, v in done] + [0]) + 5
         fs = ", ".join(f"({k}, {v})" for k, v in first)
         ds = ", ".join(f"({k}, {v})" for k, v in done)
         obs = ir["observes"]
@@ -399,7 +404,7 @@ def gen():
         out.append(f'''
 /-- serQ `tools/oracle/{name}.ir.json`: {n} requests, {sc["num_blocks"]} blocks of {sc["block_size"]}, budget {sc["budget"]}, {sc["max_seqs"]} slots, chunk {sc.get("chunk", 0)}; the deployment and the workload are the IR's. -/
 theorem vllm_{name} :
-    outcome {lean.deployment()} {ticks}
+    outcome {lean.deployment()} {horizon}
       {lean.workload()} =
     ([{fs}], [{ds}], {ans["preemptions"]}) := by
   decide +kernel
@@ -416,7 +421,7 @@ def gen_cache():
         s, k, sent, first, done, prompt, cached, o = l.split(",")
         rows[(int(s), int(k))] = tuple(nat(float(x), "answer") for x in (sent, first, done, cached))
     keys = sorted(rows)
-    ticks = max(r[2] for r in rows.values()) + 5
+    horizon = max(r[2] for r in rows.values()) + 5
     ob = {n: i for i, n in enumerate(ir["observes"])}
     for n in ("sent", "ttft", "latency", "cached_tokens"):
         if n not in ob:
@@ -432,7 +437,7 @@ def gen_cache():
 `cache_trace.csv`; the deployment and the workload are the IR's. Per turn:
 send step, time to first token, latency, cached tokens at admission. -/
 theorem vllm_cache_trace :
-    let m := Exec.runW {lean.deployment()} {ticks}
+    let m := Exec.runW {lean.deployment()} {horizon}
       {lean.workload()} vllmTurn
     (observed m {ob["sent"]}, observed m {ob["ttft"]}, observed m {ob["latency"]}, observed m {ob["cached_tokens"]}) =
       ({col(lambda r: r[0])},
