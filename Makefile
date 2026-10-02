@@ -6,7 +6,7 @@ check:   ## fmt, clippy, tests, every program links, the oracles agree
 	scripts/check_rust.sh
 lean:              ## the Lean model (lean/, docs/lean.md): oracle theorems current, lake build, no sorry, axiom audit
 	PATH=$(HOME)/.elan/bin:$$PATH scripts/check_lean.sh
-drt:               ## differential random testing: the Lean semantics against the interpreter (needs `make lean` and `cargo build --release`)
+drt:               ## differential random testing: the Lean semantics against the interpreter (needs `make lean`, which builds serq-lean-bench, and `cargo build --release`)
 	python3 scripts/lean_drt.py 200
 	python3 scripts/lean_bench.py full
 	python3 scripts/lean_bench.py fullcost

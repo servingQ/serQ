@@ -126,12 +126,15 @@ def write_workload(out, ir, cost):
     (out / "workload.json").write_text(json.dumps(w))
 
 
-def run_lean(out):
+def run_lean(out, keep=None):
     """Seconds, the executable's summary line, and {observation: {session:
-    [(time, value)]}} in the order the observations were made."""
+    [(time, value)]}} in the order the observations were made; `keep` is a
+    file to write the executable's CSV to."""
     t = time.time()
     p = subprocess.run([str(LEAN), str(out / "workload.json")], capture_output=True, text=True, check=True)
     dt = time.time() - t
+    if keep is not None:
+        keep.write_text(p.stdout)
     obs = defaultdict(lambda: defaultdict(list))
     for line in p.stdout.splitlines()[1:]:
         n, s, tm, v = map(int, line.split(","))

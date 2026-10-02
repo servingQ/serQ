@@ -10,10 +10,13 @@ engine (KV blocks, request slots, budget, chunk cap, iteration cost on the
 step clock or an affine one with natural coefficients) and random explicit
 sessions (turns, prompt and output lengths, think times, forced misses).
 Both `serq run` and the Lean executable run it; every observation of every
-turn must agree. A failing case is kept in target/lean-drt/<seed>/ with
-both outputs, and the script exits 1.
+session must agree. A failing case is kept in target/lean-drt/<seed>/ (its
+IR, the workload, `lean.csv` and the interpreter's `rust/` dump) with the
+command that reruns it, and the script exits 1; a passing case is removed.
+The seeds are fixed (0 to N-1 by default), so CI checks the same cases
+every time; `--seed S` checks others.
 """
-import json, random, sys
+import json, random, shutil, sys, traceback
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -59,10 +62,10 @@ def run(seed):
     out.mkdir(parents=True, exist_ok=True)
     (out / "prog.ir.json").write_text(json.dumps(ir))
     lb.write_workload(out, ir, cost)
-    _, info, lean = lb.run_lean(out)
+    _, info, lean = lb.run_lean(out, keep=out / "lean.csv")
     _, rust = lb.run_rust(out, ir)
     bad = [r for r in lb.compare(ir, lean, rust) if r[3] is not None]
-    return ir, info, bad
+    return ir, info, bad, out
 
 
 def main():
@@ -71,14 +74,22 @@ def main():
     base = int(args[args.index("--seed") + 1]) if "--seed" in args else 0
     failed = 0
     for seed in range(base, base + n):
-        ir, info, bad = run(seed)
+        try:
+            ir, info, bad, out = run(seed)
+        except Exception:
+            failed += 1
+            print(f"seed {seed}: ERROR (rerun: scripts/lean_drt.py 1 --seed {seed})")
+            traceback.print_exc()
+            continue
         sessions = len(ir["arrival"]["Sessions"])
         if bad:
             failed += 1
-            print(f"seed {seed}: DIFFER ({sessions} sessions; {info})")
+            print(f"seed {seed}: DIFFER ({sessions} sessions; {info}); kept in {out.relative_to(lb.ROOT)}, "
+                  f"rerun: scripts/lean_drt.py 1 --seed {seed}")
             for name, la, lr, (sess, x, y) in bad:
                 print(f"  {name}: Lean {la}, Rust {lr}; session {sess}: Lean {x} Rust {y}")
         else:
+            shutil.rmtree(out)
             print(f"seed {seed}: identical ({sessions} sessions)")
     print(f"{n - failed} of {n} cases identical")
     sys.exit(1 if failed else 0)
