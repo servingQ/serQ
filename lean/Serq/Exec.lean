@@ -947,6 +947,12 @@ def admitVia (m : Machine) (left : ℕ) : Machine × Bool :=
       else (m, false)
     | [] => (m, false)
 
+/-- What a job wants from an iteration: one token for a decode, the rest of
+its work for a prefill (or a chunk of it, with a chunk cap). -/
+def wantOf (j : Job) : ℕ := match j.mode with
+  | .decode => min 1 j.left
+  | _ => if D.chunk > 0 then min j.left D.chunk else j.left
+
 /-- Build the iteration starting now. -/
 def assign : ℕ → Machine → ℕ → ℕ → ℕ → Machine
   | 0, m, _, _, _ => m
@@ -959,10 +965,7 @@ def assign : ℕ → Machine → ℕ → ℕ → ℕ → Machine
         | (m, false) => m
       else m
     | some j =>
-      let want := match j.mode with
-        | .decode => min 1 j.left
-        | _ => if D.chunk > 0 then min j.left D.chunk else j.left
-      let t := min want left
+      let t := min (wantOf D j) left
       if t = 0 then assign f m (idx + 1) left pre0 else
       match j.growing with
       | none =>
