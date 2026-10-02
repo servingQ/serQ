@@ -32,3 +32,8 @@ import Serq
 #print axioms SerqLang.Serve.shape_append_prefill
 #print axioms SerqLang.Serve.chunk_cap_breaks_shape
 #print axioms SerqLang.Exec.Attrs.get_upd
+#print axioms SerqLang.Exec.lru_before
+#print axioms SerqLang.Exec.evictOne_evictK
+#print axioms SerqLang.Exec.makeRoom_unroll
+#print axioms SerqLang.Exec.makeRoomFast_eq
+#print axioms SerqLang.Exec.makeRoom_eq_fast

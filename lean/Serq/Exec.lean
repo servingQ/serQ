@@ -379,6 +379,245 @@ theorem makeRoom_room (b cap need : ℕ) :
       have := makeRoom_room b cap need f (evictOne b s) (by omega) (evictOne_pos b s hpos)
       simpa [evictOne_used] using this
 
+/-! ### Evicting an entry's blocks at once
+
+`makeRoom` is the definition: one block per step. `makeRoomFast` evicts, in
+one step, as many blocks of the least recently released entry as the
+definition would evict one by one, so it finds that entry and sums the cache
+once per entry instead of once per block. `makeRoom_eq_fast` proves the two
+equal, and `@[csimp]` makes the compiler run the fast one; every theorem is
+still about `makeRoom`. -/
+
+/-- `e` comes no later than `g` in eviction order (release time, then order). -/
+def Entry.before (e g : Entry) : Prop := e.last < g.last ∨ (e.last = g.last ∧ e.seq ≤ g.seq)
+
+theorem Entry.before_trans {e f g : Entry} (h1 : e.before f) (h2 : f.before g) : e.before g := by
+  unfold Entry.before at *; omega
+
+theorem Entry.before_total (e f : Entry) : e.before f ∨ f.before e := by
+  unfold Entry.before; omega
+
+/-- The least recently released entry comes no later than any other. -/
+theorem lru_before : ∀ {l : List Entry} {e : Entry}, lru l = some e → ∀ g ∈ l, e.before g
+  | [], _, h, _, _ => by simp [lru] at h
+  | x :: xs, e, h, g, hg => by
+    unfold lru at h
+    cases hx : lru xs with
+    | none =>
+      rw [hx] at h; simp at h; subst h
+      rcases List.mem_cons.mp hg with rfl | hg
+      · unfold Entry.before; omega
+      · obtain ⟨_, hy⟩ := lru_some (l := xs) (List.ne_nil_of_mem hg)
+        rw [hx] at hy; simp at hy
+    | some f =>
+      rw [hx] at h
+      simp only at h
+      have hf := lru_before hx
+      split_ifs at h with hc
+      · simp at h; subst h
+        rcases List.mem_cons.mp hg with rfl | hg
+        · unfold Entry.before; omega
+        · exact Entry.before_trans hc (hf g hg)
+      · simp at h; subst h
+        have hfx : f.before x := by
+          rcases Entry.before_total x f with h' | h'
+          · exact absurd h' hc
+          · exact h'
+        rcases List.mem_cons.mp hg with rfl | hg
+        · exact hfx
+        · exact hf g hg
+
+/-- An entry that comes no later than every other is the one `lru` picks
+when it is first. -/
+theorem lru_cons_of_before {e : Entry} {es : List Entry} (h : ∀ g ∈ es, e.before g) :
+    lru (e :: es) = some e := by
+  unfold lru
+  cases hx : lru es with
+  | none => rfl
+  | some f =>
+    have := h f (lru_mem hx)
+    unfold Entry.before at this
+    simp only [this, if_true]
+
+/-- The entries other than `e` (by owner and release order). -/
+def others (e : Entry) (s : PoolSt) : List Entry :=
+  s.entries.filter (fun f => ¬ (f.owner = e.owner ∧ f.seq = e.seq))
+
+/-- Evict `k` blocks from the tail of entry `e`. -/
+def evictK (b k : ℕ) (e : Entry) (s : PoolSt) : PoolSt :=
+  { s with entries :=
+      if e.size - min (k * max b 1) e.size = 0 then others e s
+      else { e with size := e.size - min (k * max b 1) e.size } :: others e s }
+
+theorem evictOne_eq (b : ℕ) {s : PoolSt} {e : Entry} (h : lru s.entries = some e) :
+    evictOne b s = evictK b 1 e s := by
+  simp [evictOne, evictK, h, others]
+
+theorem others_filter_none (e : Entry) (s : PoolSt) :
+    ∀ g ∈ others e s, ¬ (g.owner = e.owner ∧ g.seq = e.seq) := by
+  intro g hg
+  simp only [others, List.mem_filter, decide_eq_true_eq] at hg
+  exact hg.2
+
+/-- One more block from an entry that is still there. -/
+theorem evictOne_evictK (b : ℕ) {s : PoolSt} {e : Entry} (h : lru s.entries = some e)
+    (j : ℕ) (hj : j * max b 1 < e.size) :
+    evictOne b (evictK b j e s) = evictK b (j + 1) e s := by
+  have hrm : min (j * max b 1) e.size = j * max b 1 := min_eq_left hj.le
+  have hne : ¬ (e.size - j * max b 1 = 0) := by omega
+  have hbef : ∀ g ∈ others e s, ({ e with size := e.size - j * max b 1 } : Entry).before g :=
+    fun g hg => lru_before h g (List.mem_of_mem_filter hg)
+  have hent : (evictK b j e s).entries = { e with size := e.size - j * max b 1 } :: others e s := by
+    simp only [evictK, hrm, hne, ↓reduceIte]
+  have hl : lru ((evictK b j e s).entries) = some { e with size := e.size - j * max b 1 } := by
+    rw [hent]; exact lru_cons_of_before hbef
+  have hfilt : ((evictK b j e s).entries.filter
+      (fun f => ¬ (f.owner = e.owner ∧ f.seq = e.seq))) = others e s := by
+    rw [hent, List.filter_cons_of_neg (by simp)]
+    exact List.filter_eq_self.mpr fun g hg => decide_eq_true (others_filter_none e s g hg)
+  have key : e.size - j * max b 1 - min (max b 1) (e.size - j * max b 1)
+      = e.size - min ((j + 1) * max b 1) e.size := by
+    rw [Nat.succ_mul]; generalize j * max b 1 = P at *; omega
+  rw [evictOne, hl]
+  simp only [hfilt, key]
+  rfl
+
+/-- Unrolling the definition: while the states in between do not fit,
+`makeRoom` evicts `j` blocks of the least recently released entry. -/
+theorem makeRoom_unroll (b cap need : ℕ) {s : PoolSt} {e : Entry} (h : lru s.entries = some e) :
+    ∀ (j f : ℕ), 1 ≤ j → j ≤ f → (j - 1) * max b 1 < e.size ∨ j = 1 →
+      ¬ (s.used + cachedTotal s + need ≤ cap ∨ s.entries = []) →
+      (∀ i, 1 ≤ i → i < j →
+        ¬ (s.used + cachedTotal (evictK b i e s) + need ≤ cap ∨ (evictK b i e s).entries = [])) →
+      makeRoom b cap need f s = makeRoom b cap need (f - j) (evictK b j e s)
+  | 0, _, h1, _, _, _, _ => by omega
+  | 1, f + 1, _, _, _, hs, _ => by
+    rw [makeRoom, if_neg hs, evictOne_eq b h]; rfl
+  | 1, 0, _, h2, _, _, _ => by omega
+  | j + 2, f, _, hjf, hsz, hs, hmid => by
+    have hsz' : (j + 1) * max b 1 < e.size := by
+      rcases hsz with h' | h'
+      · simpa using h'
+      · omega
+    have hle : j * max b 1 ≤ (j + 1) * max b 1 := Nat.mul_le_mul_right _ (by omega)
+    have ih := makeRoom_unroll b cap need h (j + 1) f (by omega) (by omega)
+      (Or.inl (by simp only [Nat.add_sub_cancel]; omega)) hs (fun i h1 h2 => hmid i h1 (by omega))
+    rw [ih]
+    have hfj : f - (j + 1) = (f - (j + 2)) + 1 := by omega
+    have hnot := hmid (j + 1) (by omega) (by omega)
+    have hnot' : ¬ ((evictK b (j + 1) e s).used + cachedTotal (evictK b (j + 1) e s) + need ≤ cap ∨
+        (evictK b (j + 1) e s).entries = []) := hnot
+    rw [hfj, makeRoom, if_neg hnot', evictOne_evictK b h (j + 1) hsz']
+
+theorem cachedTotal_evictK (b k : ℕ) (e : Entry) (s : PoolSt) :
+    cachedTotal (evictK b k e s)
+      = ((others e s).map Entry.size).sum + (e.size - min (k * max b 1) e.size) := by
+  unfold cachedTotal evictK
+  dsimp only
+  split_ifs with h0
+  · rw [h0]; simp
+  · simp only [List.map_cons, List.sum_cons]; omega
+
+/-- `makeRoom`, evicting an entry's blocks in one step. -/
+def makeRoomFast (b cap need : ℕ) (f : ℕ) (s : PoolSt) : PoolSt :=
+  match f with
+  | 0 => s
+  | f + 1 =>
+    if s.used + cachedTotal s + need ≤ cap ∨ s.entries = [] then s
+    else match lru s.entries with
+      | none => s
+      | some e =>
+        -- the cache left after removing `e`, and the blocks to evict from it
+        let rest := ((others e s).map Entry.size).sum
+        let deficit := s.used + rest + e.size + need - cap
+        let k := min (max 1 (min ((deficit + max b 1 - 1) / max b 1)
+          ((e.size + max b 1 - 1) / max b 1))) (f + 1)
+        makeRoomFast b cap need (f + 1 - k) (evictK b k e s)
+termination_by f
+decreasing_by
+  exact Nat.sub_lt (Nat.succ_pos f)
+    (lt_of_lt_of_le Nat.zero_lt_one (le_min (le_max_left _ _) (Nat.succ_pos f)))
+
+theorem ceil_div_pred_lt {x b k : ℕ} (hb : 0 < b) (hk : k ≤ (x + b - 1) / b) (hk2 : 2 ≤ k) :
+    (k - 1) * b < x := by
+  have h1 : k * b ≤ (x + b - 1) / b * b := Nat.mul_le_mul_right _ hk
+  have h2 : (x + b - 1) / b * b ≤ x + b - 1 := Nat.div_mul_le_self _ _
+  have h3 : 2 * b ≤ k * b := Nat.mul_le_mul_right _ hk2
+  rw [Nat.sub_mul, one_mul]
+  generalize k * b = P at *
+  generalize (x + b - 1) / b * b = Q at *
+  omega
+
+theorem lt_ceil_div {d b i : ℕ} (hb : 0 < b) (hi : i < (d + b - 1) / b) : i * b < d := by
+  have h1 : (i + 1) * b ≤ (d + b - 1) / b * b := Nat.mul_le_mul_right _ hi
+  have h2 : (d + b - 1) / b * b ≤ d + b - 1 := Nat.div_mul_le_self _ _
+  rw [Nat.succ_mul] at h1
+  generalize i * b = P at *
+  generalize (d + b - 1) / b * b = Q at *
+  omega
+
+/-- The fast loop is the definition. -/
+theorem makeRoomFast_eq (b cap need : ℕ) :
+    ∀ (f : ℕ) (s : PoolSt), makeRoomFast b cap need f s = makeRoom b cap need f s := by
+  intro f
+  induction f using Nat.strong_induction_on with
+  | _ f ih =>
+    intro s
+    cases f with
+    | zero => rw [makeRoomFast, makeRoom]
+    | succ f =>
+      rw [makeRoomFast]
+      by_cases hs : s.used + cachedTotal s + need ≤ cap ∨ s.entries = []
+      · rw [if_pos hs, makeRoom, if_pos hs]
+      · rw [if_neg hs]
+        have hne : s.entries ≠ [] := fun h => hs (Or.inr h)
+        obtain ⟨e, he⟩ := lru_some hne
+        simp only [he]
+        have hb : 0 < max b 1 := lt_of_lt_of_le Nat.zero_lt_one (le_max_right b 1)
+        generalize hrest : ((others e s).map Entry.size).sum = rest
+        generalize hwant : (s.used + rest + e.size + need - cap + max b 1 - 1) / max b 1 = want
+        generalize hblocks : (e.size + max b 1 - 1) / max b 1 = blocks
+        generalize hk : min (max 1 (min want blocks)) (f + 1) = k
+        have hk1 : 1 ≤ k := hk ▸ le_min (le_max_left _ _) (by omega)
+        have hkf : k ≤ f + 1 := hk ▸ min_le_right _ _
+        have hkm : k ≤ max 1 (min want blocks) := hk ▸ min_le_left _ _
+        rw [ih (f + 1 - k) (by omega)]
+        symm
+        refine makeRoom_unroll b cap need he k (f + 1) hk1 hkf ?_ hs ?_
+        · -- the entry is still there before the last block
+          by_cases hk2 : 2 ≤ k
+          · left
+            have : k ≤ blocks := by
+              have : max 1 (min want blocks) = min want blocks := by
+                rcases le_total 1 (min want blocks) with h' | h'
+                · exact max_eq_right h'
+                · omega
+              omega
+            exact ceil_div_pred_lt hb (hblocks ▸ this) hk2
+          · right; omega
+        · intro i hi1 hik
+          have hmin : i < min want blocks := by
+            rcases le_total 1 (min want blocks) with h' | h'
+            · rw [max_eq_right h'] at hkm; omega
+            · rw [max_eq_left h'] at hkm; omega
+          have hiw : i * max b 1 < s.used + rest + e.size + need - cap :=
+            lt_ceil_div hb (hwant ▸ lt_of_lt_of_le hmin (min_le_left _ _))
+          have hib : i * max b 1 < e.size :=
+            lt_ceil_div hb (hblocks ▸ lt_of_lt_of_le hmin (min_le_right _ _))
+          rw [not_or]
+          refine ⟨?_, ?_⟩
+          · rw [cachedTotal_evictK, hrest]
+            have : min (i * max b 1) e.size = i * max b 1 := min_eq_left hib.le
+            rw [this]; omega
+          · have hne' : ¬ (e.size - min (i * max b 1) e.size = 0) := by
+              rw [min_eq_left hib.le]; omega
+            simp [evictK, hne']
+
+/-- The compiler runs `makeRoomFast` wherever the definition says `makeRoom`. -/
+@[csimp] theorem makeRoom_eq_fast : @makeRoom = @makeRoomFast := by
+  funext b cap need f s
+  exact (makeRoomFast_eq b cap need f s).symm
+
 /-! ### Holds -/
 
 /-- Units and admission units of the hold statement of session `i`. -/
