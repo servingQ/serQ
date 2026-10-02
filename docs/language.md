@@ -634,10 +634,10 @@ programs write `known = computed < prompt ? prompt : computed + 1` (the token
 sampled at `computed` is the request's too), `prefill (known - c)` and
 `decode (o - 1 - (known - prompt))`. A program that recomputes from the
 prompt alone says so by not reading `computed`. The Lean fragment sets
-`computed` the same way (`Serq/Exec.lean`'s `preemptLast`, and 0 when a hold
-completes), and picks the same victim (`Exec.victim`);
-`lean/Serq/Regress.lean` holds it to the interpreter on
-`examples/oracle/preempt_delay.sq`.
+`computed` the same way (`Serq/Exec.lean`'s `preemptVictim`, and 0 when a
+hold completes) and picks the same victim (`Exec.victim`);
+`tests/lean-regress/preempt_delay.sq` observes both, and the generated
+`lean/Serq/Regress.lean` states the interpreter's answer for it.
 
 **Waiting selection.** `queue by (k1, …)` reevaluates pure keys for every
 waiting hold before each admission attempt. `waited` is elapsed simulation

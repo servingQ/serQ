@@ -871,7 +871,9 @@ def mapHold (s : Sess) (p : ℕ) (g : ℕ × ℕ → ℕ × ℕ) : Sess :=
 `lifo_victim`, vLLM's `running[-1]`): for the engine's memory, the holder
 that is a resident of the engine and was admitted last; a holder away from
 the engine (in a delay) is not preempted. For another pool, its most
-recently admitted holder. -/
+recently admitted holder (in the fragment only the engine's memory grows:
+the generator rejects a growth on another pool). Admission numbers are
+distinct, so the order of ties does not matter. -/
 def victim (m : Machine) (p : ℕ) : Option ℕ :=
   if D.memory = some p then
     ((pst m p).holders.filter fun v => (getS m v).status = .engine).foldl
@@ -880,30 +882,32 @@ def victim (m : Machine) (p : ℕ) : Option ℕ :=
         | some b => if (getS m b).admSeq < (getS m v).admSeq then some v else some b) none
   else (pst m p).holders.getLast?
 
-/-- Preempt the victim of pool `p`: its job leaves the engine, the hold on
-`p` (and every hold inside it) is released with its computed prefix cached,
-`computed` is set to the position the hold had reached, and the session
-re-enters the head of the pool's queue with the hold to execute again. -/
-def preemptLast (m : Machine) (p : ℕ) : Machine × Option ℕ :=
+/-- Preempt the victim of pool `p`: `computed` is set to the position its
+hold on `p` had reached (before the holds are released, so that a `cache`
+clause reading it sees the new value, as in the interpreter's `preempt`),
+its job leaves the engine, the hold on `p` and every hold inside it are
+released with their computed prefixes cached, and the session re-enters the
+head of the pool's queue with the hold to execute again. -/
+def preemptVictim (m : Machine) (p : ℕ) : Machine × Option ℕ :=
   match victim D m p with
   | none => (m, none)
   | some v =>
     let s := getS m v
+    let a := match m.wl.computedSlot, holdOn s p with
+      | some c, some (_, pos) => s.attr.upd c pos
+      | _, _ => s.attr
+    let m := setS m v { s with attr := a }
     let jobs := m.jobs.filter (·.owner ≠ v)
     let iter := m.iter.filter (·.1 ≠ v)
-    -- unwind to the hold on `p`, release it (its computed prefix cached)
+    -- unwind to the hold on `p`, releasing it and every hold inside it
     let rec unwind (m : Machine) : List Frame → Machine
       | [] => m
       | .hold h _ :: fs =>
         let m := release D m v h
-        match h.pools.find? (·.1 = p) with
-        | some (_, _, pos) =>
-          let a := match m.wl.computedSlot with
-            | some c => (getS m v).attr.upd c pos
-            | none => (getS m v).attr
-          let m := setS m v { getS m v with prog := h.stmt, stack := fs, status := .ready, attr := a }
+        if h.pools.any (·.1 = p) then
+          let m := setS m v { getS m v with prog := h.stmt, stack := fs, status := .ready }
           enqueue m v true
-        | none => unwind m fs
+        else unwind m fs
       | _ :: fs => unwind m fs
     let m := unwind { m with jobs := jobs, iter := iter } s.stack
     ({ m with preempts := m.preempts + 1 }, some v)
@@ -924,7 +928,10 @@ def grow : ℕ → Machine → ℕ → ℕ → ℕ → Machine × Bool
         let m := setPool m p { s with used := s.used + need }
         (setS m i (mapHold (getS m i) p fun (a, x) => (a + need, x)), true)
       else
-        match preemptLast D m p with
+        match preemptVictim D m p with
+        -- unreachable in the fragment: the grower is a job of `assign`, so
+        -- an engine resident holding `p`, and is itself a candidate (the
+        -- interpreter would make it wait as `Growing`)
         | (m, none) => (m, false)
         | (m, some v) => if v = i then (m, false) else grow f m i p d
 

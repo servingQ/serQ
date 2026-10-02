@@ -14,7 +14,9 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo clippy -p pyserq --locked -- -D warnings
 cargo test --release --locked
 cargo build --release --locked --quiet
-./target/release/serq fmt --check examples/*/*.sq lib/*.sq docs/tutorial/programs/*.sq
+./target/release/serq fmt --check examples/*/*.sq lib/*.sq docs/tutorial/programs/*.sq tests/lean-regress/*.sq
+# the interpreter's answers the Lean regressions state (lean/Serq/Regress.lean)
+python3 scripts/lean_regress.py
 n=0
 for f in examples/*/*.sq; do
   ./target/release/serq check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }

@@ -1,0 +1,32 @@
+// An iteration cost that reads every context variable the Lean fragment has:
+// tokens, prefilled, decoders, kv_decode and attention (an even coefficient:
+// the fragment holds twice the attention work). The second prompt is longer
+// than the budget, so its chunks have positions; both decode while holding
+// what they prefilled. The Lean semantics must give the interpreter's
+// answer (lean/Serq/Regress.lean).
+pool kv { cap 2048; block 16; evict lru; preempt lifo; }
+pool slots { cap 4; admit via engine; }
+stage engine : step {
+  budget 48;
+  cost 3 + tokens + 2 * prefilled + decoders + kv_decode + 2 * attention;
+  memory kv;
+}
+stage gate : delay;
+
+workload {
+  arrive batch(2);
+  init { set n = 0; set o = 0; set t0 = 0; }
+}
+
+session {
+  run gate (t0);
+  hold slots (1), kv (min(n, budget_left(engine))) reserve (n) {
+    run engine prefill (n) growing kv;
+    observe ttft = now - t0;
+    run engine decode (o) growing kv;
+    observe done = now;
+  }
+  end;
+}
+
+run { horizon 100000; }
