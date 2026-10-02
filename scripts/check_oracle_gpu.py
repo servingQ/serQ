@@ -2,7 +2,7 @@
 """The vLLM scheduler scenarios answered three ways must agree: the CPU
 oracle on upstream vLLM (tools/oracle/*.out.json), the real A100
 engine (tools/oracle/a100_engine.json), and serQ (tests/ and
-lean/ServingQueueTheory/SerqOracle.lean check against *.out.json)."""
+lean/Serq/Oracle.lean check against *.out.json)."""
 import json
 import os
 import sys

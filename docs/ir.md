@@ -26,7 +26,7 @@ reevaluates them at selection and supplies `Waited`).
 ## Why an IR first
 
 - **One program, several consumers.** The interpreter runs the IR, the Lean
-  model of serving-queue-theory is generated from the IR, and the vLLM
+  model (`lean/`) is generated from the IR, and the vLLM
   oracle tests run the IR. Before the IR existed, the vLLM request program
   had three hand-kept copies: the Rust test built it as a string per
   scenario, the Lean generator held a hand-written Lean version, and
@@ -160,15 +160,15 @@ and now fails was reading a value the semantics never supplied.
 The IR carries no field for what breaks a tie: every ordered collection
 has one rule, stated in `docs/language.md` §3 (Ties), so a `tie` field
 (the IR v4 RFC's `COrder`) would carry no information. A Lean model of a
-collection uses the same event number (`SerqExec.lean`'s `lru`: release
-order).
+collection uses the same event number (`lean/Serq/Exec.lean`'s `lru`:
+release order).
 
 ## Stability
 
 `IR_VERSION` identifies what a reader must understand, not the shape of the
-file. `serving-queue-theory`'s `scripts/gen_serq_oracle.py` pins it and reads
-the IR by field name, so a bump is a handshake between the two repositories,
-priced as such. What a change to `src/ir.rs` does to the version:
+file. `scripts/gen_lean_oracle.py` pins it and reads the IR by field name,
+so a bump moves the generator and `lean/Serq/Oracle.lean` in the same change
+(`make lean`), and every other reader of the IR with it. What a change to `src/ir.rs` does to the version:
 
 - **Removed, renamed or retyped field or variant: bump.** An old reader
   fails loudly. `route` became `session` in 3, and the generator's
@@ -285,13 +285,13 @@ program whose numbers move).
 
 ## The Lean fragment
 
-The Lean model (serving-queue-theory, `SerqExec.lean`) runs a fragment of
+The Lean model (`lean/Serq/Exec.lean`, [docs/lean.md](lean.md)) runs a fragment of
 the IR on a step clock over natural numbers: pools with LRU eviction and
 LIFO preemption, one step engine (stage 0) with unit iteration cost, delay
 stages, explicit sessions with preset attributes and turns, and the
 statements `Turn`, `Hold`, `Run`, `Set`, `Observe`, `Branch`, `Loop`, `End`
 (not `Release`, `Load` or a hold with a `lease`: a program with a KV
-transfer is outside the fragment until `SerqExec.lean` gives a hold's pool
+transfer is outside the fragment until `Exec` gives a hold's pool
 its own release)
 with expressions built from integer constants, attributes, `Now`,
 `CachedIn`, `BudgetLeft`, `min`, `max`, `+`, `-` (truncated at 0), `*`,

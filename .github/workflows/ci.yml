@@ -56,7 +56,8 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - uses: actions/cache@v4
         with:
-          path: lean/.lake
+          # the dependencies only (Mathlib's oleans); the package itself is rebuilt
+          path: lean/.lake/packages
           key: lean-${{ hashFiles('lean/lean-toolchain', 'lean/lake-manifest.json') }}
       - name: Mathlib cache
         working-directory: lean

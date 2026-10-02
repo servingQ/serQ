@@ -36,7 +36,9 @@ rev = "<tag or commit>"
 subDir = "lean"
 ```
 
-and imports `Serq` (or one module). `serving-queue-theory` does this: its
+and imports `Serq` (or one module). The definitions live in the namespace
+`SerqLang` (the package is `Serq`): the names were `SerqLang.*` before the
+package moved here, and the projects that cite them keep them. `serving-queue-theory` does this: its
 queueing results start from `Serq.Exec` rather than from a queue model of
 its own.
 

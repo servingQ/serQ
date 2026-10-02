@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Generate lean/Serq/Oracle.lean from the IR of the vLLM scheduler
-scenarios in tools/oracle/ (SERQ_SRC overrides the checkout the files are
-read from):
+scenarios in tools/oracle/:
 
 - <name>.ir.json for the six single-request scenarios:
   examples/oracle/vllm_request.sq compiled with the scenario's engine, the
@@ -20,8 +19,7 @@ import os
 import sys
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
-SERQ_SRC = os.environ.get("SERQ_SRC", ROOT)
-ODIR = os.path.join(SERQ_SRC, "tools", "oracle")
+ODIR = os.path.join(ROOT, "tools", "oracle")
 OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # 5 added the statements `Release` and `Load` (a KV transfer between two pools),
 # which are outside the fragment: a program that uses them fails below.

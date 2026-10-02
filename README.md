@@ -25,9 +25,8 @@ intermediate representation, the **IR** (`src/ir.rs`, [`docs/ir.md`][ir]) —
 a closed, versioned data structure that the interpreter runs, the Lean
 model is generated from, and tools build or edit as JSON. The text syntax
 ([`examples/*/*.sq`][examples], [`docs/language.md`][language]) is one
-frontend that compiles to it. The Lean formalisation lives in the
-companion research repository, `serving-queue-theory`
-(`lean/ServingQueueTheory/Seq*.lean`), where the vLLM scenarios below are
+frontend that compiles to it. The Lean formalisation is the package in
+`lean/` ([docs/lean.md](docs/lean.md)), where the vLLM scenarios below are
 theorems.
 
 [ir]: docs/ir.md
