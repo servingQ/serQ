@@ -12,7 +12,7 @@ needs from the engine (serving-queue-theory's `StepEngine`).
 
 Key definitions: `Exec.wantOf`, `Exec.fillAmounts`, `Exec.fillIter`.
 Key theorems: `Exec.assign_eq_fillIter`, `Exec.fillIter_eq_amounts`,
-`Exec.fillAmounts_fifo`.
+`Exec.fillAmounts_fifo`, `Exec.fillAmounts_le_want`.
 -/
 import Serq.Exec
 
@@ -39,6 +39,19 @@ def fillIter : List Job → ℕ → List (ℕ × ℕ)
 theorem fillAmounts_zero : ∀ js : List Job, fillAmounts D js 0 = js.map fun _ => 0
   | [] => rfl
   | j :: js => by simp [fillAmounts, fillAmounts_zero js]
+
+theorem fillAmounts_length : ∀ (js : List Job) (left : ℕ), (fillAmounts D js left).length = js.length
+  | [], _ => rfl
+  | _ :: js, _ => by simp [fillAmounts, fillAmounts_length js]
+
+/-- No job gets more than it wants. -/
+theorem fillAmounts_le_want : ∀ (js : List Job) (left k : ℕ),
+    (fillAmounts D js left).getD k 0 ≤ (js.map (wantOf D)).getD k 0
+  | [], _, _ => by simp [fillAmounts]
+  | j :: js, left, k => by
+    cases k with
+    | zero => simp [fillAmounts]
+    | succ k => simpa [fillAmounts] using fillAmounts_le_want js _ k
 
 /-- The iteration is the amounts, without the jobs that take nothing. -/
 theorem fillIter_eq_amounts : ∀ (js : List Job) (left : ℕ),

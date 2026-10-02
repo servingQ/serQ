@@ -44,3 +44,4 @@ import Serq
 #print axioms SerqLang.Exec.fillIter_eq_amounts
 #print axioms SerqLang.Exec.fillAmounts_fifo
 #print axioms SerqLang.Exec.assign_eq_fillIter
+#print axioms SerqLang.Exec.fillAmounts_le_want
