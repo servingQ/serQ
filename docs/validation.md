@@ -74,7 +74,9 @@ diff is the next step.
 
 The same program is an inductive type in Lean with an operational semantics
 (`lean/`, `docs/lean.md`), and the Lean program is **generated from the
-IR** — not hand-written alongside it.
+IR** — not hand-written alongside it. Beyond the oracle scenarios,
+`make drt` compares the Lean semantics with the interpreter on random
+workloads (`docs/lean.md`, Differential testing).
 
 | | |
 |---|---|

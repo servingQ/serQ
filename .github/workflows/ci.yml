@@ -43,10 +43,14 @@ jobs:
         run: python pyserq/tests/test_pyserq.py
 
   lean:
-    name: Lean model (lean/)
+    name: Lean model (lean/) and differential testing against the interpreter
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -62,5 +66,17 @@ jobs:
       - name: Mathlib cache
         working-directory: lean
         run: lake exe cache get
-      - name: oracle theorems current, lake build, no sorry, axiom audit
+      - name: oracle theorems current, lake build (and serq-lean-bench), no sorry, axiom audit
         run: scripts/check_lean.sh
+      - name: the interpreter
+        run: cargo build --release --locked
+      - name: differential testing (200 random cases, the 333-session trace on the step clock and with the A100 cost)
+        run: make drt
+      - name: keep the failing cases
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-drt-failures
+          path: target/lean-drt
+          if-no-files-found: ignore
+
