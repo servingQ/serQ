@@ -34,7 +34,10 @@ programs (`Serq/Oracle.lean`), checked by evaluation in the kernel.
 
 Key definitions: `Exec.Deployment`, `Exec.Workload`, `Exec.Machine`,
 `Exec.tick`, `Exec.run`, `Exec.runW`.
-Key theorems: `Exec.makeRoom_used` (eviction never touches the allocation),
+Key theorems: `Exec.makeRoomFast_eq` and `@[csimp] Exec.makeRoom_eq_fast`
+(the compiled code evicts an entry's blocks at once, and that is the
+definition), `Exec.Attrs.get_upd` (stored attributes are `Function.update`),
+`Exec.makeRoom_used` (eviction never touches the allocation),
 `Exec.makeRoom_room` (the eviction loop makes the room it is asked for, or
 empties the cache).
 -/
@@ -386,7 +389,8 @@ one step, as many blocks of the least recently released entry as the
 definition would evict one by one, so it finds that entry and sums the cache
 once per entry instead of once per block. `makeRoom_eq_fast` proves the two
 equal, and `@[csimp]` makes the compiler run the fast one; every theorem is
-still about `makeRoom`. -/
+still about `makeRoom`. The attribute applies to code compiled after it, so
+it must precede the first caller of `makeRoom` (`admit`, `grow`). -/
 
 /-- `e` comes no later than `g` in eviction order (release time, then order). -/
 def Entry.before (e g : Entry) : Prop := e.last < g.last ∨ (e.last = g.last ∧ e.seq ≤ g.seq)
@@ -440,23 +444,23 @@ theorem lru_cons_of_before {e : Entry} {es : List Entry} (h : ∀ g ∈ es, e.be
     simp only [this, if_true]
 
 /-- The entries other than `e` (by owner and release order). -/
-def others (e : Entry) (s : PoolSt) : List Entry :=
+def othersIn (e : Entry) (s : PoolSt) : List Entry :=
   s.entries.filter (fun f => ¬ (f.owner = e.owner ∧ f.seq = e.seq))
 
 /-- Evict `k` blocks from the tail of entry `e`. -/
 def evictK (b k : ℕ) (e : Entry) (s : PoolSt) : PoolSt :=
   { s with entries :=
-      if e.size - min (k * max b 1) e.size = 0 then others e s
-      else { e with size := e.size - min (k * max b 1) e.size } :: others e s }
+      if e.size - min (k * max b 1) e.size = 0 then othersIn e s
+      else { e with size := e.size - min (k * max b 1) e.size } :: othersIn e s }
 
 theorem evictOne_eq (b : ℕ) {s : PoolSt} {e : Entry} (h : lru s.entries = some e) :
     evictOne b s = evictK b 1 e s := by
-  simp [evictOne, evictK, h, others]
+  simp [evictOne, evictK, h, othersIn]
 
-theorem others_filter_none (e : Entry) (s : PoolSt) :
-    ∀ g ∈ others e s, ¬ (g.owner = e.owner ∧ g.seq = e.seq) := by
+theorem othersIn_filter_none (e : Entry) (s : PoolSt) :
+    ∀ g ∈ othersIn e s, ¬ (g.owner = e.owner ∧ g.seq = e.seq) := by
   intro g hg
-  simp only [others, List.mem_filter, decide_eq_true_eq] at hg
+  simp only [othersIn, List.mem_filter, decide_eq_true_eq] at hg
   exact hg.2
 
 /-- One more block from an entry that is still there. -/
@@ -465,16 +469,16 @@ theorem evictOne_evictK (b : ℕ) {s : PoolSt} {e : Entry} (h : lru s.entries = 
     evictOne b (evictK b j e s) = evictK b (j + 1) e s := by
   have hrm : min (j * max b 1) e.size = j * max b 1 := min_eq_left hj.le
   have hne : ¬ (e.size - j * max b 1 = 0) := by omega
-  have hbef : ∀ g ∈ others e s, ({ e with size := e.size - j * max b 1 } : Entry).before g :=
+  have hbef : ∀ g ∈ othersIn e s, ({ e with size := e.size - j * max b 1 } : Entry).before g :=
     fun g hg => lru_before h g (List.mem_of_mem_filter hg)
-  have hent : (evictK b j e s).entries = { e with size := e.size - j * max b 1 } :: others e s := by
+  have hent : (evictK b j e s).entries = { e with size := e.size - j * max b 1 } :: othersIn e s := by
     simp only [evictK, hrm, hne, ↓reduceIte]
   have hl : lru ((evictK b j e s).entries) = some { e with size := e.size - j * max b 1 } := by
     rw [hent]; exact lru_cons_of_before hbef
   have hfilt : ((evictK b j e s).entries.filter
-      (fun f => ¬ (f.owner = e.owner ∧ f.seq = e.seq))) = others e s := by
+      (fun f => ¬ (f.owner = e.owner ∧ f.seq = e.seq))) = othersIn e s := by
     rw [hent, List.filter_cons_of_neg (by simp)]
-    exact List.filter_eq_self.mpr fun g hg => decide_eq_true (others_filter_none e s g hg)
+    exact List.filter_eq_self.mpr fun g hg => decide_eq_true (othersIn_filter_none e s g hg)
   have key : e.size - j * max b 1 - min (max b 1) (e.size - j * max b 1)
       = e.size - min ((j + 1) * max b 1) e.size := by
     rw [Nat.succ_mul]; generalize j * max b 1 = P at *; omega
@@ -511,7 +515,7 @@ theorem makeRoom_unroll (b cap need : ℕ) {s : PoolSt} {e : Entry} (h : lru s.e
 
 theorem cachedTotal_evictK (b k : ℕ) (e : Entry) (s : PoolSt) :
     cachedTotal (evictK b k e s)
-      = ((others e s).map Entry.size).sum + (e.size - min (k * max b 1) e.size) := by
+      = ((othersIn e s).map Entry.size).sum + (e.size - min (k * max b 1) e.size) := by
   unfold cachedTotal evictK
   dsimp only
   split_ifs with h0
@@ -528,7 +532,7 @@ def makeRoomFast (b cap need : ℕ) (f : ℕ) (s : PoolSt) : PoolSt :=
       | none => s
       | some e =>
         -- the cache left after removing `e`, and the blocks to evict from it
-        let rest := ((others e s).map Entry.size).sum
+        let rest := ((othersIn e s).map Entry.size).sum
         let deficit := s.used + rest + e.size + need - cap
         let k := min (max 1 (min ((deficit + max b 1 - 1) / max b 1)
           ((e.size + max b 1 - 1) / max b 1))) (f + 1)
@@ -574,7 +578,7 @@ theorem makeRoomFast_eq (b cap need : ℕ) :
         obtain ⟨e, he⟩ := lru_some hne
         simp only [he]
         have hb : 0 < max b 1 := lt_of_lt_of_le Nat.zero_lt_one (le_max_right b 1)
-        generalize hrest : ((others e s).map Entry.size).sum = rest
+        generalize hrest : ((othersIn e s).map Entry.size).sum = rest
         generalize hwant : (s.used + rest + e.size + need - cap + max b 1 - 1) / max b 1 = want
         generalize hblocks : (e.size + max b 1 - 1) / max b 1 = blocks
         generalize hk : min (max 1 (min want blocks)) (f + 1) = k
