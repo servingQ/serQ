@@ -73,7 +73,7 @@ def fold(e):
 
 # the context variables an iteration cost may read, and the field of
 # `Exec.IterStats` each one is
-COST_VARS = {"Ntok": "tokens", "Npre": "prefilled", "Ndec": "decoders"}
+COST_VARS = {"Ntok": "tokens", "Npre": "prefilled", "Ndec": "decoders", "Kvb": "kvDecode"}
 
 
 def affine(e):
@@ -104,10 +104,12 @@ def affine(e):
 
 def cost_fn(e):
     """`Exec.Deployment.cost` of a step engine's `cost`: natural
-    coefficients on tokens, prefilled and decoders and a constant term of at
-    least 1 (the interpreter lets an iteration last 0; `Exec` lasts at least
-    one clock unit, so the two agree only when the constant is at least 1);
-    anything else is outside the fragment."""
+    coefficients on tokens, prefilled, decoders, kv_decode and attention and
+    a constant term of at least 1 (the interpreter lets an iteration last 0;
+    `Exec` lasts at least one clock unit, so the two agree only when the
+    constant is at least 1). `IterStats` holds twice the attention work, so
+    the coefficient of `attention` must be even; anything else is outside
+    the fragment."""
     a = affine(e)
     if a is None:
         raise Fragment("the iteration cost must be affine in the context variables")
@@ -124,6 +126,11 @@ def cost_fn(e):
             terms.append(str(int(v)))
         elif k in COST_VARS:
             terms.append(f"{int(v)} * st.{COST_VARS[k]}")
+        elif k == "Attn":
+            if int(v) % 2:
+                raise Fragment(f"attention coefficient {v}: attention is a multiple of 1/2, "
+                               "so an odd coefficient leaves the clock's natural numbers")
+            terms.append(f"{int(v) // 2} * st.attention2")
         else:
             raise Fragment(f"iteration cost reads {k}, which the fragment's IterStats does not have")
     return "fun _ => 1" if terms == ["1"] else f"fun st => {' + '.join(terms) or '0'}"
@@ -266,7 +273,8 @@ class Lean:
                 raise Fragment(f"pool {p['name']}: not the engine's memory")
             pools.append(f"⟨{nat(p['cap'], 'cap')}, {nat(p['block'] or 1, 'block')}, {'true' if via else 'false'}⟩")
         return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
-                f"{nat(fold(step['chunk']), 'chunk')}, {cost}⟩")
+                f"{nat(fold(step['chunk']), 'chunk')}, "
+                f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}⟩")
 
     def workload(self):
         """`Exec.Workload` of the IR's explicit sessions."""

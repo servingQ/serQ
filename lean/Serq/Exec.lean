@@ -69,12 +69,19 @@ structure PoolDef where
   block : ℕ
   viaEngine : Bool
 
-/-- What an iteration's cost reads: the tokens it serves, the prefill tokens
-among them, and the decoding residents it advances. -/
+/-- What an iteration's cost reads (serQ's context variables): the tokens it
+serves (`tokens`), the prefill tokens among them (`prefilled`), the decoding
+residents it advances (`decoders`), the memory those hold on the engine's
+pool (`kv_decode`), and twice the attention work of its prefill chunks,
+`Σ n (2K + n)` with `K` the position before the chunk (`2 · attention`,
+so that it is a natural number). They are read after the iteration's
+growths, as the interpreter reads them. -/
 structure IterStats where
   tokens : ℕ
   prefilled : ℕ
   decoders : ℕ
+  kvDecode : ℕ
+  attention2 : ℕ
 
 /-- A deployment: pools, the step engine (stage 0) and a delay stage (1). -/
 structure Deployment where
@@ -82,6 +89,8 @@ structure Deployment where
   budget : ℕ
   /-- per-request chunk cap (`long_prefill_token_threshold`), 0 = none -/
   chunk : ℕ
+  /-- the engine's memory pool (`memory` of the step stage), if any -/
+  memory : Option ℕ
   /-- the length of an iteration in clock units (at least 1 is used);
   `fun _ => 1` is the step clock -/
   cost : IterStats → ℕ
@@ -916,12 +925,32 @@ def assign : ℕ → Machine → ℕ → ℕ → ℕ → Machine
             if left - t = 0 then m else assign f m (idx + 1) (left - t) pre0
           else assign f m idx left pre0
 
-/-- What the cost of the iteration `m.iter` reads. -/
+/-- What the cost of the iteration `m.iter` reads, after its growths (as
+the interpreter reads it). A growing prefill chunk of `t` tokens has moved its
+hold's position to `x`, so it started at `x - t`. -/
 def iterStats (m : Machine) : IterStats :=
-  let modeOf (o : ℕ) := (m.jobs.find? (·.owner = o)).map (·.mode)
+  let jobOf (o : ℕ) := m.jobs.find? (·.owner = o)
+  let pre := m.iter.filter fun (o, _) => (jobOf o).map (·.mode) = some .prefill
+  let dec := m.iter.filter fun (o, _) => (jobOf o).map (·.mode) = some .decode
+  let chunk2 (o t : ℕ) : ℕ :=
+    match (jobOf o).bind (·.growing) with
+    | some p => match holdOn (getS m o) p with
+      | some (_, x) => t * (2 * x - t)
+      -- unreachable: `assign` serves no growing job without a hold on its pool
+      | none => 0
+    | none => t * t
+  -- what the session holds on the engine's memory, over all its holds (the
+  -- interpreter's `held_in`)
+  let held (o : ℕ) : ℕ := match D.memory with
+    | some p => ((getS m o).stack.filterMap fun
+        | .hold h _ => (h.pools.find? (·.1 = p)).map (·.2.1)
+        | _ => none).sum
+    | none => 0
   { tokens := (m.iter.map (·.2)).sum
-    prefilled := ((m.iter.filter fun (o, _) => modeOf o = some .prefill).map (·.2)).sum
-    decoders := (m.iter.filter fun (o, _) => modeOf o = some .decode).length }
+    prefilled := (pre.map (·.2)).sum
+    decoders := dec.length
+    kvDecode := (dec.map fun (o, _) => held o).sum
+    attention2 := (pre.map fun (o, t) => chunk2 o t).sum }
 
 /-- Start an iteration on the idle engine. It lasts `cost` (at least one
 clock unit) if it serves a token or preempted; otherwise the engine stays
@@ -932,7 +961,7 @@ def startIteration (m : Machine) : Machine :=
   if busy then
     let m' := assign D 100000 { m with iter := [] } 0 D.budget m.preempts
     if !m'.iter.isEmpty || m'.preempts ≠ m.preempts then
-      { m' with iterEnd := some (m'.now + max 1 (D.cost (iterStats m')), m'.nextDelay)
+      { m' with iterEnd := some (m'.now + max 1 (D.cost (iterStats D m')), m'.nextDelay)
                 nextDelay := m'.nextDelay + 1 }
     else { m' with iterEnd := none }
   else { m with iter := [], iterEnd := none }
