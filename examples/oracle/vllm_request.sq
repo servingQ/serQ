@@ -1,6 +1,6 @@
 // One vLLM v1 request on the step clock: the program of the vLLM scheduler
 // oracle (tools/oracle/*.json, tests/vllm_oracle.rs) and, compiled to IR,
-// of the Lean theorems about it (serving-queue-theory SerqOracle.lean).
+// of the Lean theorems about it (lean/Serq/Oracle.lean).
 // The constants are a scenario's engine; the requests are the workload
 // instance, given as explicit sessions in the IR (prompt, o, arrive).
 let bs = 16;           // block_size

@@ -92,6 +92,7 @@ nav:
   - Developer Guide:
       - Development guide: development.md
       - How serQ is checked: validation.md
+      - The Lean model: lean.md
       - Design:
           - design/index.md
           - Philosophy: design/philosophy.md

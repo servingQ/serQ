@@ -2,15 +2,15 @@
 
 A serQ program has two consumers besides its reader. The **simulator**
 (`serq run`) executes it as a discrete-event system and reports what a
-deployment under that traffic does. **Lean** (the `serving-queue-theory`
-repository) executes the same program's [IR](ir.md) in an executable
+deployment under that traffic does. **Lean** (the `lean/` package,
+[The Lean model](lean.md)) executes the same program's [IR](ir.md) in an executable
 semantics and states, as theorems checked by the kernel, what it does. This
 page covers how to use each one and what each one needs from a program.
 
 ```
 program.sq ──serq ir──▶ IR (JSON) ──serq run──▶ report, samples     (simulator)
                               │
-                              └──gen_serq_oracle.py──▶ SerqOracle.lean ──lake build──▶ theorems  (Lean)
+                              └──gen_lean_oracle.py──▶ lean/Serq/Oracle.lean ──lake build──▶ theorems  (Lean)
 ```
 
 The IR sits in the middle, not the text. The simulator reads it too
@@ -155,21 +155,21 @@ There are three kinds of result, and a program meets them differently:
 
 | | holds for | where |
 |---|---|---|
-| properties of the semantics | the model, not one program | `Serq.lean`: `SerqLang.Step.invariant` (every command of the pool model keeps `allocated + cached ≤ cap`); `SerqServe.lean`: `SerqLang.Serve.serve_eq_decode_first` (without a per-request chunk cap, serving in admission order is serving decode-first) |
-| a program's outcome on a scenario | one IR file and one workload | `SerqOracle.lean`, generated: one theorem per scenario, proved by `decide +kernel` |
-| a real-valued model of a deployment | a hand-written `Route` | `Deployments.lean`: `colocatedReplica` (`examples/multi-turn/replica.sq`), `disaggregatedReplica` (the lecture notes' store-and-forward replica, in `serving-queue-theory`; no serQ program), with their well-formedness |
+| properties of the semantics | the model, not one program | `Serq/Core.lean`: `SerqLang.Step.invariant` (every command of the pool model keeps `allocated + cached ≤ cap`); `Serq/Serve.lean`: `SerqLang.Serve.serve_eq_decode_first` (without a per-request chunk cap, serving in admission order is serving decode-first) |
+| a program's outcome on a scenario | one IR file and one workload | `Serq/Oracle.lean`, generated: one theorem per scenario, proved by `decide +kernel` |
+| a real-valued model of a deployment | a hand-written `Route` | `serving-queue-theory`'s `Deployments.lean`, which requires this package: `colocatedReplica` (`examples/multi-turn/replica.sq`), `disaggregatedReplica` (the lecture notes' store-and-forward replica; no serQ program), with their well-formedness |
 
 The first kind needs nothing from a program. It is about the pool model and
 the serving order, and it is not yet connected to the executable semantics
 that runs programs ([validation](validation.md), what is not proved). The
 second is how a specific program is checked. The third is written by hand in
 serving-queue-theory, so a change to the program it describes has to be
-repeated there.
+repeated there when that repository moves its pin of this package.
 
 ### From a program to a theorem
 
 A generated theorem says: the executable semantics (`Exec.runW`, in
-`SerqExec.lean`) runs this program on this deployment and these sessions, and
+`lean/Serq/Exec.lean`) runs this program on this deployment and these sessions, and
 gives these observations. For example, for `tools/oracle/hol.ir.json`:
 
 ```lean
@@ -194,25 +194,12 @@ The steps:
    overrides and its requests as explicit sessions. `make oracle-ir` writes
    `tools/oracle/<name>.ir.json`, and `make check` fails if a committed file
    is stale.
-2. **serving-queue-theory:** `scripts/gen_serq_oracle.py` reads
-   `tools/oracle/*.ir.json` with the matching `*.json` and `*.out.json` from
-   a serQ checkout, and writes `lean/ServingQueueTheory/SerqOracle.lean`. By
-   default it reads the serQ release that repository pins (`make serq`
-   checks it out into `.serq/src`). To try a local serQ, point it there:
-
-    ```bash
-    SERQ_SRC=~/dev/serQ python3 scripts/gen_serq_oracle.py          # write
-    SERQ_SRC=~/dev/serQ python3 scripts/gen_serq_oracle.py --check  # or compare
-    ```
-
-3. **Lean:** `make lean` builds the project, which checks every theorem
-   by evaluation in the kernel. It also fails on a `sorry` or on any axiom
-   beyond `propext`, `Classical.choice` and `Quot.sound`, and checks that
-   `SerqOracle.lean` is what the generator produces from the **pinned** serQ.
-   A file written from a local serQ with `SERQ_SRC` therefore builds, but
-   `make lean` reports it `STALE` until the pin moves to a release that
-   contains the change. To try a local change, run `lake build` in `lean/`
-   instead.
+2. **Lean:** `make oracle-ir` also runs `scripts/gen_lean_oracle.py`, which
+   reads `tools/oracle/*.ir.json` with the matching `*.json` and
+   `*.out.json` and writes `lean/Serq/Oracle.lean`. `make lean` checks that
+   the file is current, builds the package (which checks every theorem by
+   evaluation in the kernel), and fails on a `sorry` or on any axiom beyond
+   `propext`, `Classical.choice` and `Quot.sound`.
 
 ### Adding a scenario
 
@@ -228,11 +215,9 @@ The steps:
    `scripts/fetch_vllm_ref.sh --sparse` makes for the citation check is not
    enough.
 3. Add the name to the list in `tests/vllm_oracle.rs::scenarios`, run
-   `make oracle-ir`, then `make check`. The interpreter now has to agree.
-4. In serving-queue-theory, after the pin moves to a serQ release that has
-   the scenario, run `scripts/gen_serq_oracle.py` and `make lean`. The
-   generator finds the scenarios by listing the directory, so it needs no
-   list of its own.
+   `make oracle-ir`, then `make check` and `make lean`. The interpreter and
+   the Lean semantics now have to agree. The generator finds the scenarios
+   by listing the directory, so it needs no list of its own.
 
 ### What fits in the fragment
 
@@ -277,10 +262,8 @@ written.
 or variant removed, renamed or retyped, or a change of meaning under the same
 shape, bumps it once the version is tagged. The generator pins the version it
 reads and refuses any other
-(`IR version N (this generator reads M)`). So an IR change is two changes in
-two repositories: serQ bumps the version and regenerates `tools/oracle/`, and
-serving-queue-theory moves the generator's pin, teaches it the new node if a
-committed program uses one, and regenerates `SerqOracle.lean` against the
-new release. Until both have landed, the Lean check fails on the new serQ,
-and that is intended. Plan an IR change as that handshake, not as a
-one-repository edit ([IR](ir.md), Stability).
+(`IR version N (this generator reads M)`). So an IR change moves three
+things in one PR: the version, `tools/oracle/` (`make oracle-ir`), and
+`scripts/gen_lean_oracle.py` (its pin, and the new node if a committed
+program uses one), with `lean/Serq/Oracle.lean` regenerated; `make lean`
+fails until all three agree ([IR](ir.md), Stability).

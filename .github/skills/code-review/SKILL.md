@@ -35,11 +35,10 @@ consult `docs/review.md` and relevant `docs/design/` records when intent matters
   (Stability) and `.github/copilot-instructions.md`, including the distinction
   between tagged and untagged versions. Check meaning as well as shape;
   do not request a bump for every type edit. Check serialization, validation,
-  interpreter consumers, and committed oracle IR together. The external
-  `serving-queue-theory/scripts/gen_serq_oracle.py` consumer pins the version and
-  reads fields by name; new `CExpr` or `CStmt` variants require generator support.
-  If that repository is unavailable, identify the unverified dependency rather
-  than claiming it is compatible or broken without evidence.
+  interpreter consumers, and committed oracle IR together. The Lean
+  generator `scripts/gen_lean_oracle.py` pins the version and reads fields by
+  name; new `CExpr` or `CStmt` variants require generator support, and
+  `make lean` must pass with `lean/Serq/Oracle.lean` regenerated.
 - **Semantics must survive the whole pipeline.** Follow relevant changes from
   lexer/parser through linking, IR validation, and interpretation. Check both
   `.sq` input and direct JSON IR loading where applicable. Keep reports and
