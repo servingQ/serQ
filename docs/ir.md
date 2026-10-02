@@ -208,7 +208,7 @@ so a bump moves the generator and `lean/Serq/Oracle.lean` in the same change
 
 A version is a release, and the lines above decide one thing: whether a
 change to a *tagged* version opens the next number. While the version at
-`IR_VERSION` has no tag (10 in `v0.1.1`, 9 in `v0.1.0` and `v0.1.0-rc7`, 8 in `v0.1.0-rc6`, 7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`,
+`IR_VERSION` has no tag (10 in `v0.1.2` and `v0.1.1`, 9 in `v0.1.0` and `v0.1.0-rc7`, 8 in `v0.1.0-rc6`, 7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`,
 5 in `v0.1.0-rc1`;
 `v0.1.0-rc0` is 3), no line bumps; the
 change is listed in the coming tag's message, which is the release note,

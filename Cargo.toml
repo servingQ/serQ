@@ -5,7 +5,7 @@ members = [".", "pyserq"]
 default-members = ["."]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 license = "Apache-2.0"
 
 # one pyo3 for serq's `python` feature and pyserq (pyo3-ffi links python once)

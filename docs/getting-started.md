@@ -13,13 +13,13 @@ cargo build --release
 Or install the CLI straight from a release tag:
 
 ```bash
-cargo install --git https://github.com/vrvrv/serQ --tag v0.1.1 --locked --root ~/.local
+cargo install --git https://github.com/vrvrv/serQ --tag v0.1.2 --locked --root ~/.local
 ```
 
 As a dependency, pin a tag:
 
 ```toml
-serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.1" }
+serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.2" }
 ```
 
 ## Run your first program
