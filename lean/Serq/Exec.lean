@@ -221,6 +221,10 @@ structure Workload where
   turns : List (List (List (ℕ × ℕ))) := []
   turnSlot : Option ℕ := none
   moreSlot : ℕ := 0
+  /-- the slot of `computed`: set to the position a hold had reached when it
+  is preempted (what its re-execution resumes from) and to 0 when a hold
+  completes, as in the interpreter -/
+  computedSlot : Option ℕ := none
 
 structure Job where
   owner : ℕ
@@ -235,7 +239,7 @@ structure PoolSt where
   queue : List ℕ
 
 structure Machine where
-  wl : Workload := ⟨[], [], none, 0⟩
+  wl : Workload := ⟨[], [], none, 0, none⟩
   now : ℕ
   sess : Array Sess
   pools : List PoolSt
@@ -775,10 +779,15 @@ def exec : ℕ → Machine → ℕ → Machine
       | [] => setS m i { s with status := .ended }
       | .seq k :: st => exec f (setS m i { s with prog := k, stack := st }) i
       | .hold h k :: st =>
-        -- the hold completed: its units go back, and the queues it may
-        -- unblock admit at once (the interpreter's `end_hold` then
-        -- `try_admit_all`), before this session goes on
-        let m := admitAll D (release D (setS m i { s with stack := st }) i h)
+        -- the hold completed: its units go back, nothing is left to resume
+        -- from (`computed` is 0), and the queues it may unblock admit at once
+        -- (the interpreter's `end_hold`, then `try_admit_all`), before this
+        -- session goes on
+        let m := release D (setS m i { s with stack := st }) i h
+        let a := match m.wl.computedSlot with
+          | some c => (getS m i).attr.upd c 0
+          | none => (getS m i).attr
+        let m := admitAll D (setS m i { getS m i with attr := a })
         exec f (setS m i { getS m i with prog := k }) i
       | .loop body :: st => exec f (setS m i { s with prog := body, stack := List.cons (Frame.loop body) st }) i
     | .stop => endSession D m i
@@ -858,10 +867,26 @@ def mapHold (s : Sess) (p : ℕ) (g : ℕ × ℕ → ℕ × ℕ) : Sess :=
     | f :: fs, done => f :: go fs done
   { s with stack := go s.stack false }
 
-/-- Preempt the most recently admitted holder of pool `p`. -/
-def preemptLast (m : Machine) (p : ℕ) : Machine × ℕ :=
-  match (pst m p).holders.getLast? with
-  | none => (m, 0)
+/-- The holder of pool `p` that a failed growth preempts (the interpreter's
+`lifo_victim`, vLLM's `running[-1]`): for the engine's memory, the holder
+that is a resident of the engine and was admitted last; a holder away from
+the engine (in a delay) is not preempted. For another pool, its most
+recently admitted holder. -/
+def victim (m : Machine) (p : ℕ) : Option ℕ :=
+  if D.memory = some p then
+    ((pst m p).holders.filter fun v => (getS m v).status = .engine).foldl
+      (fun best v => match best with
+        | none => some v
+        | some b => if (getS m b).admSeq < (getS m v).admSeq then some v else some b) none
+  else (pst m p).holders.getLast?
+
+/-- Preempt the victim of pool `p`: its job leaves the engine, the hold on
+`p` (and every hold inside it) is released with its computed prefix cached,
+`computed` is set to the position the hold had reached, and the session
+re-enters the head of the pool's queue with the hold to execute again. -/
+def preemptLast (m : Machine) (p : ℕ) : Machine × Option ℕ :=
+  match victim D m p with
+  | none => (m, none)
   | some v =>
     let s := getS m v
     let jobs := m.jobs.filter (·.owner ≠ v)
@@ -871,13 +896,17 @@ def preemptLast (m : Machine) (p : ℕ) : Machine × ℕ :=
       | [] => m
       | .hold h _ :: fs =>
         let m := release D m v h
-        if h.pools.any (·.1 = p) then
-          let m := setS m v { getS m v with prog := h.stmt, stack := fs, status := .ready }
+        match h.pools.find? (·.1 = p) with
+        | some (_, _, pos) =>
+          let a := match m.wl.computedSlot with
+            | some c => (getS m v).attr.upd c pos
+            | none => (getS m v).attr
+          let m := setS m v { getS m v with prog := h.stmt, stack := fs, status := .ready, attr := a }
           enqueue m v true
-        else unwind m fs
+        | none => unwind m fs
       | _ :: fs => unwind m fs
     let m := unwind { m with jobs := jobs, iter := iter } s.stack
-    ({ m with preempts := m.preempts + 1 }, v)
+    ({ m with preempts := m.preempts + 1 }, some v)
 
 /-- Grow session `i`'s hold on `p` to cover `d` more units; preempt on
 failure. Returns whether `i` still holds (and grew). -/
@@ -895,8 +924,9 @@ def grow : ℕ → Machine → ℕ → ℕ → ℕ → Machine × Bool
         let m := setPool m p { s with used := s.used + need }
         (setS m i (mapHold (getS m i) p fun (a, x) => (a + need, x)), true)
       else
-        let (m, v) := preemptLast D m p
-        if v = i then (m, false) else grow f m i p d
+        match preemptLast D m p with
+        | (m, none) => (m, false)
+        | (m, some v) => if v = i then (m, false) else grow f m i p d
 
 /-- Admit from a queue the engine serves, with `left` tokens left. -/
 def admitVia (m : Machine) (left : ℕ) : Machine × Bool :=
@@ -1042,7 +1072,7 @@ def runUntil (horizon : ℕ) : ℕ → Machine → Machine
     | none => m
 
 /-- `n` sessions with attributes `init i`, all running `prog`, from time 0. -/
-def start (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload := ⟨[], [], none, 0⟩) : Machine :=
+def start (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload := ⟨[], [], none, 0, none⟩) : Machine :=
   let m : Machine := {
     wl := wl
     now := 0

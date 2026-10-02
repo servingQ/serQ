@@ -119,6 +119,7 @@ def write_workload(out, ir, cost):
     ss = ir["arrival"]["Sessions"]
     w = {"pools": pools, "budget": nat(step["budget"]["Num"]), "chunk": nat(step["chunk"]["Num"]),
          "horizon": nat(ir["horizon"]), "turnSlot": ir["slot_turn"], "moreSlot": ir["slot_more"],
+         "computedSlot": ir["slot_computed"],
          "cost": cost, "memory": step["memory"],
          "init": [[[a, nat(v)] for a, v in s["attrs"]] for s in ss],
          "sessions": [[[[a, nat(v)] for a, v in t] for t in s["turns"]] for s in ss]}

@@ -633,12 +633,11 @@ output tokens (`scheduler.py:1560-1561`), so the request is rescheduled with
 programs write `known = computed < prompt ? prompt : computed + 1` (the token
 sampled at `computed` is the request's too), `prefill (known - c)` and
 `decode (o - 1 - (known - prompt))`. A program that recomputes from the
-prompt alone says so by not reading `computed`. The Lean fragment does not
-set `computed` on a preemption yet (`Serq/Exec.lean`'s `preemptLast` touches
-no attribute), so on the decode-preemption path it restarts from the prompt
-and diverges from the interpreter; no oracle scenario takes that path, and
-the recorded scenario that will is the change that teaches the Lean model
-the attribute.
+prompt alone says so by not reading `computed`. The Lean fragment sets
+`computed` the same way (`Serq/Exec.lean`'s `preemptLast`, and 0 when a hold
+completes), and picks the same victim (`Exec.victim`);
+`lean/Serq/Regress.lean` holds it to the interpreter on
+`examples/oracle/preempt_delay.sq`.
 
 **Waiting selection.** `queue by (k1, …)` reevaluates pure keys for every
 waiting hold before each admission attempt. `waited` is elapsed simulation

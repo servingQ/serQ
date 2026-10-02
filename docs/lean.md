@@ -76,7 +76,6 @@ memory the scheduled decode residents hold on the engine's pool over all
 their holds, and both it and `attention` are read after the iteration's
 growths, as the interpreter does. The session-level semantics
 outside the fragment (renewal arrivals, transfers between pools, flows over
-several stages) and the setting of `computed` on a preemption are not
-formalised (`docs/language.md` §9), and there is no proof that the Rust
+several stages) are not formalised (`docs/language.md` §9), and there is no proof that the Rust
 interpreter implements `Exec`: the oracle scenarios, run by both, are the
 evidence (`docs/review.md` §4 lists the tools that would close the gap).

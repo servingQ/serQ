@@ -37,3 +37,4 @@ import Serq
 #print axioms SerqLang.Exec.makeRoom_unroll
 #print axioms SerqLang.Exec.makeRoomFast_eq
 #print axioms SerqLang.Exec.makeRoom_eq_fast
+#print axioms SerqLang.Regress.preempt_in_delay
