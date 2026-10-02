@@ -9,12 +9,12 @@ reproduces the upstream vLLM v1 scheduler request for request — the
 correspondence, cited `file:line` against `ref/vllm`, is
 [`docs/language.md` §7][language].
 
-[![CI](https://github.com/vrvrv/serQ/actions/workflows/ci.yml/badge.svg)](https://github.com/vrvrv/serQ/actions/workflows/ci.yml)
-[![Docs](https://github.com/vrvrv/serQ/actions/workflows/docs.yml/badge.svg)](https://vrvrv.github.io/serQ/)
-[![Release](https://img.shields.io/pypi/v/pyserq?label=release)](https://github.com/vrvrv/serQ/releases)
+[![CI](https://github.com/servingQ/serQ/actions/workflows/ci.yml/badge.svg)](https://github.com/servingQ/serQ/actions/workflows/ci.yml)
+[![Docs](https://github.com/servingQ/serQ/actions/workflows/docs.yml/badge.svg)](https://servingq.github.io/serQ/)
+[![Release](https://img.shields.io/pypi/v/pyserq?label=release)](https://github.com/servingQ/serQ/releases)
 [![Rust](https://img.shields.io/badge/rust-1.98.1-orange.svg)](rust-toolchain.toml)
 
-**[Read the docs →](https://vrvrv.github.io/serQ/)**
+**[Read the docs →](https://servingq.github.io/serQ/)**
 
 ## Why
 
@@ -44,13 +44,13 @@ cargo run --release -- draw examples/multi-turn/vllm.sq --format svg --out vllm.
 As a dependency, pin a release tag:
 
 ```toml
-serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.2" }
+serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.2" }
 ```
 
 Or install the CLI directly:
 
 ```bash
-cargo install --git https://github.com/vrvrv/serQ --tag v0.1.2 --locked --root <dir>
+cargo install --git https://github.com/servingQ/serQ --tag v0.1.2 --locked --root <dir>
 ```
 
 ## Layout

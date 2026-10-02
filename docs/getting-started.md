@@ -5,7 +5,7 @@
 serQ is one Rust crate, `serq`: a library (`serq`) and a CLI (`serq`).
 
 ```bash
-git clone https://github.com/vrvrv/serQ && cd serQ
+git clone https://github.com/servingQ/serQ && cd serQ
 cargo build --release
 ./target/release/serq --help
 ```
@@ -13,13 +13,13 @@ cargo build --release
 Or install the CLI straight from a release tag:
 
 ```bash
-cargo install --git https://github.com/vrvrv/serQ --tag v0.1.2 --locked --root ~/.local
+cargo install --git https://github.com/servingQ/serQ --tag v0.1.2 --locked --root ~/.local
 ```
 
 As a dependency, pin a tag:
 
 ```toml
-serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.2" }
+serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.2" }
 ```
 
 ## Run your first program

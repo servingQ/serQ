@@ -53,7 +53,7 @@ A fitting waiting prefill can replace tentative resident decodes and use the
 full token budget. Cancelled decode work does not advance computed KV; its
 already acquired allocation stays held. A selected prefill stops further
 waiting admission. Ordinary capacity, budget-exhaustion and preemption gates
-still apply. [PR #171](https://github.com/vrvrv/serQ/pull/171) implemented this
+still apply. [PR #171](https://github.com/servingQ/serQ/pull/171) implemented this
 policy in the current interpreter; see the [phase-isolation contract](../design/exclusive-prefill.md)
 for the regression scenarios and exact limits.
 

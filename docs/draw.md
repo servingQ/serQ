@@ -4,7 +4,7 @@
 and every IR file in `tools/oracle/` renders under `make check`, but the
 notation, the flags and the output are not stable, and `--format svg`/`tikz`
 output may change between releases. §5 lists what is not done. Design
-discussion: [RFC #1](https://github.com/vrvrv/serQ/issues/1).
+discussion: [RFC #1](https://github.com/servingQ/serQ/issues/1).
 
 ```
 serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]... [--def name=expr]...

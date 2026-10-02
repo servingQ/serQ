@@ -1,8 +1,8 @@
 site_name: serQ
 site_description: A language for the formal verification and simulation of LLM serving systems
-site_url: https://vrvrv.github.io/serQ/
-repo_url: https://github.com/vrvrv/serQ
-repo_name: vrvrv/serQ
+site_url: https://servingq.github.io/serQ/
+repo_url: https://github.com/servingQ/serQ
+repo_name: servingQ/serQ
 edit_uri: edit/main/docs/
 copyright: serQ — a serving deployment is a program
 
