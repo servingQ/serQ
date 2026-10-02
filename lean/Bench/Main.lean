@@ -33,10 +33,11 @@ def poolOf (j : Json) : Except String PoolDef := do
     pure ⟨← natOf a[0], ← natOf a[1], (← natOf a[2]) ≠ 0⟩
   else throw "pool"
 
-def allEnded (m : Machine) : Bool := m.sess.all (·.status = .ended)
-
+/-- Run every event up to `horizon`. -/
 partial def loop (D : Deployment) (horizon : ℕ) (m : Machine) : Machine :=
-  if allEnded m || m.now ≥ horizon then m else loop D horizon (tick D m)
+  match nextEvent m with
+  | some t => if t ≤ horizon then loop D horizon (step D m) else m
+  | none => m
 
 def main (args : List String) : IO UInt32 := do
   let path := args.headD "workload.json"
@@ -50,7 +51,12 @@ def main (args : List String) : IO UInt32 := do
   let moreSlot ← IO.ofExcept (natOf (j.getObjValD "moreSlot"))
   let init ← IO.ofExcept (j.getObjValD "init" |> listOf (listOf pairOf))
   let sessions ← IO.ofExcept (j.getObjValD "sessions" |> listOf (listOf (listOf pairOf)))
-  let D : Deployment := ⟨pools, budget, chunk⟩
+  -- iteration cost `c0 + c_tok tokens + c_pre prefilled + c_dec decoders` (default 1)
+  let costArr ← IO.ofExcept (match j.getObjVal? "cost" with | .ok v => v.getArr? | .error _ => pure #[(1 : Json), 0, 0, 0])
+  let cs ← IO.ofExcept (costArr.toList.mapM natOf)
+  let c := fun k => cs.getD k 0
+  let D : Deployment := ⟨pools, budget, chunk,
+    fun st => c 0 + c 1 * st.tokens + c 2 * st.prefilled + c 3 * st.decoders⟩
   let w : Workload := ⟨init, sessions, some turnSlot, moreSlot⟩
   let t0 ← IO.monoMsNow
   let m := loop D horizon (start D w.init.length w.attr Oracle.vllmTurn w)

@@ -860,10 +860,13 @@ spread `max j in N (used(kv[j])) - min j in N (used(kv[j]))`. `--dump DIR`
 writes each gauge's change points as `gauge/NAME.csv` (`time,value`).
 
 **Executable semantics in Lean.** `Serq/Exec.lean` defines the same rules
-for the fragment of pools and one step engine on the step clock (values in
-ℕ): `Exec.run` interprets a `Route Env ℕ` program for `n` sessions (the Lean
-type keeps the block's former name for now). It is
-the semantics the oracle theorems are about.
+for the fragment of pools and one step engine (values and time in ℕ), and
+moves time the way the interpreter does, from event to event, with the
+iteration lasting its `cost` (`docs/lean.md`): `Exec.run` interprets a
+`Route Env ℕ` program for `n` sessions (the Lean type keeps the block's
+former name for now). It is the semantics the oracle theorems are about,
+and on the 333-session trace it gives every observation the interpreter
+gives (`scripts/lean_bench.py`).
 
 
 ## 4. From the lecture's version to v2
@@ -1093,10 +1096,11 @@ the pinned run, so the comparison is conservative. One run per point.
 * One eviction order per pool; the priced orders use `price(stage, …)`
   with the stage's online estimates, as `libqueuingsim` does.
 * The Lean model (`lean/`, `docs/lean.md`) covers the syntax, the pool
-  semantics, the stage rates and, on the step clock, the pool and
-  step-engine fragment (`Serq/Exec.lean`); iteration costs in seconds and
-  the session-level semantics outside that fragment (flows, transfers,
-  renewal arrivals) are not formalised yet, and there is no proof that the Rust
+  semantics, the stage rates and the pool and step-engine fragment
+  (`Serq/Exec.lean`, event-driven, iteration costs affine in `tokens`,
+  `prefilled` and `decoders` with natural coefficients); `kv_decode`,
+  `attention` and the session-level semantics outside that fragment (flows,
+  transfers, renewal arrivals) are not formalised yet, and there is no proof that the Rust
   interpreter implements the Lean relation (the vLLM oracle and the
   closed-form checks are the evidence; `docs/review.md` §4 lists
   the tools that would close this gap).

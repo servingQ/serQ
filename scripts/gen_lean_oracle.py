@@ -71,6 +71,59 @@ def fold(e):
     return None
 
 
+# the context variables an iteration cost may read, and the field of
+# `Exec.IterStats` each one is
+COST_VARS = {"Ntok": "tokens", "Npre": "prefilled", "Ndec": "decoders"}
+
+
+def affine(e):
+    """An expression as {variable or None (the constant): coefficient}, if it
+    is affine in the context variables, else None."""
+    if "Num" in e:
+        return {None: e["Num"]}
+    if "Ctx" in e:
+        return {e["Ctx"]: 1.0}
+    if "Binary" in e:
+        op, a, b = e["Binary"]
+        x, y = affine(a), affine(b)
+        if x is None or y is None:
+            return None
+        if op in ("Add", "Sub"):
+            sign = 1.0 if op == "Add" else -1.0
+            out = dict(x)
+            for k, v in y.items():
+                out[k] = out.get(k, 0.0) + sign * v
+            return out
+        if op == "Mul":
+            if set(x) == {None}:
+                return {k: x[None] * v for k, v in y.items()}
+            if set(y) == {None}:
+                return {k: y[None] * v for k, v in x.items()}
+    return None
+
+
+def cost_fn(e):
+    """`Exec.Deployment.cost` of a step engine's `cost`: nonnegative integer
+    coefficients on tokens, prefilled and decoders (clock units, at least 1
+    is used); anything else is outside the fragment."""
+    a = affine(e)
+    if a is None:
+        raise Fragment("the iteration cost must be affine in the context variables")
+    terms = []
+    for k, v in a.items():
+        if v == 0:
+            continue
+        if v < 0 or v != int(v):
+            raise Fragment(f"iteration cost coefficient {v}: clock units are natural numbers")
+        if k is None:
+            terms.append(str(int(v)))
+        elif k in COST_VARS:
+            terms.append(f"{int(v)} * st.{COST_VARS[k]}")
+        else:
+            raise Fragment(f"iteration cost reads {k}, which the fragment's IterStats does not have")
+    return "fun _ => 1" if terms == ["1"] else f"fun st => {' + '.join(terms) or '0'}"
+
+
 class Lean:
     """IR (a serQ program as JSON) to the Lean surface syntax `[route| … ]`
     of `Route Exec.Env ℕ`. Attribute slots are the IR's; the built-in
@@ -192,8 +245,7 @@ class Lean:
         if not st or "Step" not in st[0]["kind"] or any(s["kind"] != "Delay" for s in st[1:]):
             raise Fragment("stages must be one step engine (stage 0) and delays")
         step = st[0]["kind"]["Step"]
-        if fold(step["cost"]) != 1:
-            raise Fragment("the engine's iteration cost must be the constant 1 (the step clock)")
+        cost = cost_fn(step["cost"])
         if step["serve"] != {"By": []}:
             raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
         pools = []
@@ -209,7 +261,7 @@ class Lean:
                 raise Fragment(f"pool {p['name']}: not the engine's memory")
             pools.append(f"⟨{nat(p['cap'], 'cap')}, {nat(p['block'] or 1, 'block')}, {'true' if via else 'false'}⟩")
         return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
-                f"{nat(fold(step['chunk']), 'chunk')}⟩")
+                f"{nat(fold(step['chunk']), 'chunk')}, {cost}⟩")
 
     def workload(self):
         """`Exec.Workload` of the IR's explicit sessions."""
