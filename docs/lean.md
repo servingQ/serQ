@@ -53,7 +53,8 @@ from `tools/oracle/cache_trace.ir.json` or the 333-session trace
 session, the sequence of (time, value). On the full trace (3 321 turns,
 16 605 observations) the two agree on every value, on the step clock and
 on a microsecond clock with the A100 iteration cost rounded to whole µs
-(`4000 + 52 prefilled + 41 decoders`); the Lean executable takes about
+(`4000 + 52 prefilled + 41 decoders`), and on a nanosecond clock with the
+whole fit (`fullcost`: kv_decode and attention included); the Lean executable takes about
 0.16 s, the interpreter 0.14 s. `make lean` builds the executable.
 
 The compiled code is faster than the definitions read, by theorems:
@@ -66,9 +67,11 @@ the oracle theorems and the bench, not by a theorem.
 
 ## What is not covered yet
 
-Iteration costs are natural numbers of clock units and read only `tokens`,
-`prefilled` and `decoders` (the generator rejects fractional coefficients
-and `kv_decode`, `attention` and the other cost variables). The session-level semantics
+Iteration costs are natural numbers of clock units and read `tokens`,
+`prefilled`, `decoders`, `kv_decode` and `attention` (as `attention2`, twice
+the attention work, so an IR coefficient of `attention` must be even); the
+generator rejects fractional coefficients, a constant term below 1 and the
+other cost variables (`residents`, `kv_prefill`). The session-level semantics
 outside the fragment (renewal arrivals, transfers between pools, flows over
 several stages) and the setting of `computed` on a preemption are not
 formalised (`docs/language.md` §9), and there is no proof that the Rust
