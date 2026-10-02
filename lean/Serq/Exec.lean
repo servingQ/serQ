@@ -785,7 +785,11 @@ def exec : ℕ → Machine → ℕ → Machine
     | .loop body => exec f (setS m i { s with prog := body, stack := List.cons (Frame.loop body) s.stack }) i
     | .run st mode w g k =>
       let work := evalE m i w
-      if work = 0 then exec f (setS m i { s with prog := k }) i
+      -- a run of zero work completes at once, and the session goes to the
+      -- back of the ready queue (the interpreter's `start_job`): sessions
+      -- made ready before it run first
+      if work = 0 then
+        { setS m i { s with prog := k, status := .ready } with ready := m.ready ++ [i] }
       else if st ≠ 0 then
         { setS m i { s with prog := k, status := .delay (m.now + work) m.nextDelay } with
           nextDelay := m.nextDelay + 1
