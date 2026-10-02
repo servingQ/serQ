@@ -17,7 +17,7 @@ preemption — and watched it fall off a cliff.
 | 6 | [The cliff](06-the-cliff.md) | the cache and the queue feed each other | — |
 
 The programs are in
-[`docs/tutorial/programs/`](https://github.com/vrvrv/serQ/tree/main/docs/tutorial/programs).
+[`docs/tutorial/programs/`](https://github.com/servingQ/serQ/tree/main/docs/tutorial/programs).
 Every number quoted in these pages came from running them.
 
 !!! tip "Run as you read"

@@ -5,7 +5,7 @@ members = [".", "pyserq"]
 default-members = ["."]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.1.2"
 license = "Apache-2.0"
 
 # one pyo3 for serq's `python` feature and pyserq (pyo3-ffi links python once)
@@ -21,7 +21,7 @@ license.workspace = true
 edition = "2024"
 rust-version = "1.85"
 description = "serQ: serQ, a language for formal verification and simulation of LLM serving systems (interpreter and CLI)"
-repository = "https://github.com/vrvrv/serQ"
+repository = "https://github.com/servingQ/serQ"
 readme = "README.md"
 keywords = ["llm", "serving", "queueing", "simulation", "vllm"]
 categories = ["simulation", "science"]

@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 [project.urls]
-Documentation = "https://vrvrv.github.io/serQ/python/"
+Documentation = "https://servingq.github.io/serQ/python/"
 
 [tool.maturin]
 module-name = "pyserq"

@@ -111,7 +111,7 @@ GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.proj
 ```
 
 `gh` queries `projectCards` when it edits, and that field now errors. Use the
-REST API instead — `gh api -X PATCH repos/vrvrv/serQ/pulls/N --input -` with a
+REST API instead — `gh api -X PATCH repos/servingQ/serQ/pulls/N --input -` with a
 JSON body, or `.../issues/N`. Creating works; only editing is affected.
 
 PR titles are Conventional Commits, `type(scope): subject`, and the subject is

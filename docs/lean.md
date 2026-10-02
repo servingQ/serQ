@@ -32,7 +32,7 @@ A Lake project requires it at a release:
 ```toml
 [[require]]
 name = "Serq"
-git = "https://github.com/vrvrv/serQ"
+git = "https://github.com/servingQ/serQ"
 rev = "<tag or commit>"
 subDir = "lean"
 ```

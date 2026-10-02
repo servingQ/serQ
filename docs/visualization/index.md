@@ -4,7 +4,7 @@
     `serq draw` works and is covered by `make check`, but the notation, the
     flags and the output are **not stable** and may change between releases.
     [What is not done](#what-is-not-done) is at the bottom of this page.
-    Design discussion: [RFC #1](https://github.com/vrvrv/serQ/issues/1).
+    Design discussion: [RFC #1](https://github.com/servingQ/serQ/issues/1).
 
 ```
 serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]... [--def name=expr]...
