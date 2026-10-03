@@ -811,8 +811,31 @@ Write the draw as
 **Workload.** `init` runs at arrival, `turn` at every `turn` statement;
 with a `trace`, `turn` loads the next turn's `new`, `out`, `think`,
 `forced` and sets `more` (`ordered`: session `i` replays trace session `i`).
-Random draws use separate streams for arrivals, workload, the session and
-eviction.
+Random draws read separate streams: the arrival law reads the run's
+arrival stream and an unordered trace its trace stream; a session's `init`
+and `turn` blocks read a stream of their own, seeded from (seed, session,
+turn), and the session's statements another, seeded from (seed, session);
+a draw the machine makes — an eviction key, a spill predicate, a `cost`, a
+`budget`, a `ps` capacity — reads the interpreter's stream for it. So a
+(session, turn) draws the same marks under every deployment run on one
+seed, whatever the schedule did before it: two programs that differ in the
+machine compare the same workload (common random numbers), and the only
+draws a machine change can move are a session's own, after its own path
+diverges (`docs/design/stochastic-model.md`, Proposition 1).
+
+**Every instant settles.** A `loop` must let time pass on every pass
+through its body: every path through it reaches a `run` (a constant zero
+work does not count), a `hold` whose body does, or `end`; the linker
+refuses a loop that does not (`loop { set w = w + 1; }`, or a `run` on one
+arm of a `branch` only). What the linker cannot see — a `run` whose
+computed work is 0 on every pass, a `hold` that fits, grows past its pool
+and preempts itself — the run time catches: a session that executes a
+million statements at one instant, or an instant in which the ready
+sessions are served a thousand times per live session without time
+passing, ends the run with an error naming the session. Before these two
+rules such a program ran forever. Likewise an iteration that schedules
+tokens lasts a positive time: a `cost` that evaluates to 0 on it is an
+error (the step that only preempted may cost 0, above).
 
 **Lints.** Linking rejects two programs that are well formed and almost
 certainly not what their author meant. A `set` that reads live pool or stage

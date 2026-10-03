@@ -65,9 +65,9 @@ and §4 is about the distance between the two.
 | Configuration (Def. 2) | $X = (t, \mathcal E, (\sigma_i), (P_m), (Q_s))$: clock, pending events, sessions (attributes, program counter, holds), pools (allocation, the *ordered* cache $\mathcal C_m$, queue), stages (jobs, residents, iteration, estimator $\hat\theta_s$) | `Interp`, field for field |
 | Environment (Def. 3) | $\xi$: five independent uniform streams; every `~` reads one | the only randomness |
 | Kernel (Def. 4) | $X' = \mathsf{start} \circ \mathsf{settle} \circ \mathsf{apply}_{e^\ast}(X)$ at the earliest event, ties by sequence number | deterministic |
-| Process (Def. 5) | $X(t) = \Phi_t(\xi)$, a generalised semi-Markov process; finitely many transitions in $[0,t]$ under Lemma 1 and a positive clock bound | the object the theorems are about |
-| Prop. 1 | $\Phi$ deterministic; one seed fixes the arrivals across machines, the marks only until the paths diverge | proved |
-| Prop. 2 | $U_m + \lvert\mathcal C_m\rvert \le M_m$ on every path | proved for `Core.Step`'s five commands; conjecture for the interpreter |
+| Process (Def. 5) | $X(t) = \Phi_t(\xi)$, a generalised semi-Markov process, total: a path either has finitely many transitions in $[0,t]$ or ends in the error state the run time reports | the object the theorems are about |
+| Prop. 1 | $\Phi$ deterministic; one seed fixes, across machines, the arrivals and the marks of every (session, turn) | proved |
+| Prop. 2 | $U_m + \lvert\mathcal C_m\rvert \le M_m$ on every path | proved for `Core.Step`'s five commands; asserted on every run of the interpreter |
 | Prop. 3 | the prefill queue is a FIFO queue whose per-slot capacity is $B - d_\ell$ | proved per iteration by `Fill.lean`; the order step argued |
 | Prop. 4 | Markov on the configuration space; a countable chain at integer times under `cost 1` and integer marks | proved |
 | Prop. 5 | dead cache entries do not change what a live session sees: the process regenerates when empty | eviction step proved (`Regen.lean`); path lift a conjecture |
@@ -106,9 +106,10 @@ not the lecture's link bandwidth.
   blocks: a session's next attributes given its current ones, with draws).
 
 The IR (`docs/ir.md`) is this tuple as data. `Program::validate` checks
-its indices, moments and flows; it checks nothing about loops (`serq
-check` accepts `session { loop { set w = w + 1; } }`), so the condition
-Lemma 1 needs is enforced by neither the linker nor the interpreter (§6).
+its indices, moments, flows, and that every path through a loop body
+reaches a `run`, a `hold` whose body does, or `end` (`Validator::lets_time_pass`,
+`src/ir.rs`): the syntactic half of Lemma 1's hypothesis; the run time
+holds the other half (§6, Outcome).
 
 **Definition 2 (Configuration).** A configuration is
 
@@ -140,20 +141,23 @@ one session that may read each, and "will $i$'s next turn hit" is a
 question about $i$'s entry's rank in that order against the allocations to
 come.
 
-**Definition 3 (Environment).** Let $\xi = (\xi_{\mathrm{arr}}, \xi_{\mathrm{wl}}, \xi_{\mathrm{sess}}, \xi_{\mathrm{evict}}, \xi_{\mathrm{trace}})$,
-five i.i.d. sequences of $U(0,1)$ variables under the product measure
-$\mathbb P = \mu^{\otimes 5}$, $\mu$ the law of an i.i.d. uniform sequence.
-Every draw `~d(…)` in the program consumes the next element, or the next
-few (`~h2`, `~erlang`), of one stream (the five generators,
-`interp.rs:564-568`; which statement reads which, `Interp::rng`,
-`interp.rs:620`, and the trace stream directly at `interp.rs:899`; the
-inverse transforms, `dist.rs:61`): the arrival law
-from $\xi_{\mathrm{arr}}$, the `init`/`turn` blocks from $\xi_{\mathrm{wl}}$,
-the session's statements from $\xi_{\mathrm{sess}}$, eviction keys and
-spill predicates from $\xi_{\mathrm{evict}}$, the choice of a trace
-session for an unordered `trace` from $\xi_{\mathrm{trace}}$
-(`interp.rs:899`). Nothing else in the semantics reads $\xi$. An ordered
-trace with `arrive batch` and no `~` reads none of it: $\xi$ is the file.
+**Definition 3 (Environment).** Let
+$\xi = \bigl(\xi_{\mathrm{arr}},\ \xi_{\mathrm{trace}},\ \xi_{\mathrm{evict}},\ \xi_{\mathrm{mach}},\ (\xi_{\mathrm{wl}}(i,k))_{i,k},\ (\xi_{\mathrm{sess}}(i))_i\bigr)$,
+independent i.i.d. sequences of $U(0,1)$ variables, one per name, under
+the product measure. Every draw `~d(…)` in the program consumes the next
+element, or the next few (`~h2`, `~erlang`), of one stream (the
+interpreter's four generators, `interp.rs:564-568`; a session's two,
+`substream`, seeded from (seed, serial, turn, kind); which draw reads
+which, `Interp::rng` and the `Sample` arm of `eval`; the inverse
+transforms, `dist.rs:61`): the arrival law from $\xi_{\mathrm{arr}}$, the
+choice of a trace session for an unordered `trace` from
+$\xi_{\mathrm{trace}}$ (`interp.rs:899`), eviction keys and spill
+predicates from $\xi_{\mathrm{evict}}$, a draw in a `cost`, `budget`,
+`chunk` or `ps` capacity from $\xi_{\mathrm{mach}}$, the `init` and `turn`
+blocks of session $i$ at its turn $k$ from $\xi_{\mathrm{wl}}(i, k)$, and
+the statements of session $i$ from $\xi_{\mathrm{sess}}(i)$. Nothing else
+in the semantics reads $\xi$. An ordered trace with `arrive batch` and no
+`~` reads none of it: $\xi$ is the file.
 
 **Definition 4 (Kernel).** Let $e^\ast = \min \mathcal E$ in the
 lexicographic order (time, seq). The transition at $e^\ast$ is
@@ -197,48 +201,51 @@ every change of the stage's population (virtual time: Glynn's
 state-dependent clock speed, written as rescheduling), a lease's end at
 the lease. Where any of these maps draws, it reads $\xi$ per Definition 3.
 
-**Lemma 1 (settle terminates).** Call a statement *blocking* if it is a
-`run` of positive work (the session waits for its `Finish`, or on a step
+**Lemma 1 (every instant settles).** Call a statement *blocking* if it is
+a `run` of positive work (the session waits for its `Finish`, or on a step
 stage for the `IterEnd`), a `hold` that does not fit, a `grow` that
-stalls, or `end`. Suppose every pass of every session
-through a loop body reaches a blocking statement. Then $\mathsf{settle}$
-reaches its fixed point in finitely many rounds.
+stalls, or `end`. For every program the linker accepts, $\mathsf{settle}$
+either reaches its fixed point in finitely many rounds or ends the run in
+the error state $\bot$, naming a session; it reaches the fixed point
+whenever every pass of every session through a loop body reaches a
+blocking statement.
 
 *Proof.* A ready session executes commands until a blocking statement.
-Between two blocking statements it executes finitely many: a pass through
-a loop body reaches one by hypothesis, and outside loops the program is
-finite. An admission round admits at least one hold or changes nothing;
-there are finitely many waiting holds, and a session re-enters a queue only
-through a statement, which again precedes a blocking statement. $\square$
+Between two blocking statements it executes finitely many when every pass
+through a loop body reaches one, and outside loops the program is finite.
+An admission round admits at least one hold or changes nothing; there are
+finitely many waiting holds, and a session re-enters a queue only through
+a statement, which again precedes a blocking statement. When the
+hypothesis fails, a session executes without bound at one instant or is
+re-readied without bound, and the run time's two counters
+(`STEPS_PER_INSTANT`, `READIES_PER_SESSION`, `interp.rs`) end the run in
+$\bot$. $\square$
 
-The hypothesis is about paths, and no syntactic check implies it. The Lean
-`wf` (`Core.lean:113-122`, `hasRun`) asks that a loop body *contain* a
-`run`, which is neither necessary (a body whose `hold` never fits blocks
-without one) nor sufficient: a run of zero work completes at once and puts
-the session back on the ready queue (`start_job`, `interp.rs:2129`), and
-`hasRun` is an OR over the arms of a `branch` (`Core.lean:107`), so a run
-on an arm never taken counts. Two programs that pass `wf` and the linker,
-on which `serq run` never returns (both verified, 2026-10-03):
+The hypothesis is about paths. The linker enforces its syntactic half:
+every path through a loop body must reach a `run` (a constant zero work
+does not count), a `hold` whose body does, or `end`
+(`Validator::lets_time_pass`), which is stronger than the Lean `wf`
+(`Core.lean:113-122`, `hasRun`): `hasRun` is an OR over the arms of a
+`branch` (`Core.lean:107`), so a run on an arm never taken counts there and
+not here. What the linker cannot see is a `run` whose computed work is 0
+on every pass (`start_job` completes it at once, `interp.rs`), or a `hold`
+that fits, grows past its pool and preempts itself back into its own queue
+at the same instant; those the counters catch. Three programs that passed
+`wf` and ran forever before the two rules (verified, 2026-10-03), now a
+link error, a link error and a run-time error respectively:
 
 ```
-stage tool : delay;
-workload { arrive batch(1); init { set w = 0; } }
-session { loop { run tool (w); } }
-run { horizon 10; }
-```
-
-```
+session { loop { set w = w + 1; } }
 session { loop { branch (w > 0) { run tool (w); } else { set w = w; } } }
+session { loop { run tool (w); } }           // with w = 0 from init
 ```
 
-Making a zero-work run a transition (a `Finish` at $t$) would not help:
-the failure moves to Definition 5 as infinitely many transitions at one
-instant. What closes it is a run-time diagnostic, or a linker check that every
-path through a loop body reaches a run of positive work, as far as it can
-decide that; §6 records the choice as a candidate. Termination of $\mathsf{settle}$ is in any case progress at one
-instant, not in time: a hold whose body can never fit preempts itself at
-every iteration and re-executes forever, each iteration lasting $\tau$
-(`docs/language.md` §3, the `stuck` counter).
+Making a zero-work run a transition (a `Finish` at $t$) would not have
+helped: the failure would have moved to Definition 5 as infinitely many
+transitions at one instant. Termination of $\mathsf{settle}$ is progress
+at one instant, not in time: a hold whose body can never fit preempts
+itself at every iteration and re-executes forever, each iteration lasting
+$\tau$ (`docs/language.md` §3, the `stuck` counter).
 
 **Definition 5 (The process).** $X(t)$ is the configuration after the last
 transition at time $\le t$, with the convention that a transition at $t$
@@ -273,14 +280,16 @@ The hypotheses are met by the shipped programs: `vllm.sq`'s `tool
 paced by $\tau \ge$ `omega`, and `vllm_request.sq`'s `decode (o - 1 - …)`
 of zero work at $o = 1$ completes at once, finitely often per turn.
 Without the bounds the path can be Zeno: `loop { set w = w / 2; run tool
-(w); }` makes infinitely many transitions before twice its initial `w`,
-and a `cost`
-that evaluates to 0 on a preempt-only iteration (`cost c_it * tokens` at
-zero tokens) makes the self-preempting hold above transition infinitely
-often at one instant. The interpreter checks neither bound (`at`,
-`interp.rs:606`, asserts only that time does not go backwards; the cost
-is clipped at 0, `interp.rs:2799`); the Lean fragment demands a constant
-term of at least 1 in `cost` (`docs/lean.md`), which is $\tau_0$.
+(w); }` makes infinitely many transitions before twice its initial `w`.
+The run time holds two of the bounds and not the third: an iteration that
+schedules tokens at a `cost` of 0 is an error (`start_iteration`,
+`interp.rs`), so $\tau > 0$ on every iteration that does work, and the
+step that only preempted may cost 0 but is bounded by Lemma 1's counters;
+a positive *lower* bound $\tau_0$ and the work bound $w_0$ are
+hypotheses, since the halving loop has positive clocks at every step.
+For a `cost` affine in its variables with non-negative coefficients, which
+every shipped one is, $\tau_0$ is its value on the empty batch; the Lean
+fragment demands that constant to be at least 1 (`docs/lean.md`).
 
 $(X(t))_{t \ge 0}$ is a **generalised semi-Markov process** in the sense of
 Glynn (1989, *Proc. IEEE* 77(1):14–23): the discrete part of $X$ is the
@@ -300,47 +309,46 @@ or a mark, and nothing else is random.
 **Proposition 1 (Determinism; common random numbers).** $\Phi_t$ is a
 measurable function of $\xi$, and every observation and gauge of a run is
 $f(\Phi_\cdot(\xi))$. Let two deployments differ only in the machine (a
-key, a budget, a cap: anything outside $\mathcal W$) and run on one $\xi$.
+key, a budget, a cap: anything outside $\mathcal W$) and run on one seed.
 Then (i) under `poisson`, `renewal`, `batch` or explicit sessions, if the
 arrival expression reads no pool or stage observable, the arrival instants
 coincide for every session, and so do the attributes of explicit sessions
 and of an ordered trace, and the trace session an unordered trace picks
 at each arrival ($\xi_{\mathrm{trace}}$ alone, in arrival order,
-`interp.rs:899`); (ii) the `init` and `turn` marks and the think
-times of a session coincide until the first instant the two paths differ;
-(iii) under `closed(n)` not even (i) holds, since a session is created
-when one ends (`interp.rs:1039`).
+`interp.rs:899`); (ii) the `init` and `turn` marks of every (session,
+turn) coincide, whatever either schedule did before it; (iii) a session's
+own draws (`tool (~exp(Z))`, a `branch with`) coincide in program order
+until the session's own path diverges; (iv) under `closed(n)` not even (i)
+holds, since a session is created when one ends (`interp.rs:1039`).
 
 *Proof.* Definition 4 is a composition of total functions of $(X, \xi)$,
 Definition 3 fixes which stream each draw reads, and the streams are
 independent. (i): the arrival law reads $\xi_{\mathrm{arr}}$ alone, in
-arrival order, which the machine does not set. (ii): `init` and `turn`
-both read $\xi_{\mathrm{wl}}$ (`exec_workload_block`, `interp.rs:938`,
-`:1011`), and `tool (~…)` reads $\xi_{\mathrm{sess}}$, in the order the
-sessions reach those statements, which the machine sets; the orders agree
-while the paths do. $\square$
+arrival order, which the machine does not set. (ii): the `init` and
+`turn` blocks of session $i$ at turn $k$ read $\xi_{\mathrm{wl}}(i, k)$,
+a stream of their own seeded from (seed, $i$, $k$) at that `turn`
+(`substream`, `do_turn`, `interp.rs`), which no other draw reads. (iii):
+the session's statements read $\xi_{\mathrm{sess}}(i)$ in the order the
+session reaches them, which is the same on both paths until its own
+`branch` or `choose` reads the machine. $\square$
 
-Clause (ii) is weaker than one would like, and it covers `init`: because
-`init` and `turn` share one generator, a machine that changes how many
-`turn` draws precede an arrival shifts that arrival's `init` draws
-(verified, 2026-10-03: `vllm.sq` with `set u0 = ~exp(1);` in `init`, seed
-1, `B` = 8192 against 512: 424 of 570 sessions draw a different `u0`;
-with `observe nn = n`, 967 of 4 733 common (session, turn) pairs draw a
-different `n`). What one seed fixes across machines is the arrival
-process, which is why `routing.sq`'s five policies under one seed are a
-sweep over one *arrival* environment, and why the oracle is possible:
-`first_divergence.sh` is the search for the instant in (ii) between the
-program and the real scheduler, whose workload is a trace and draws
-nothing. Per-session CRN — the same marks for the same (session, turn)
-under every machine — needs a substream per session (seeded by serial and
-turn number), which the five global generators are not; §6 lists it with
-its price. The *machine* may read $\xi$ too:
+Before the per-session streams (2026-10-03) `init` and `turn` of every
+session shared one generator, and a machine that changed how many `turn`
+draws preceded an arrival shifted that arrival's draws: on `vllm.sq`, seed
+1, `B` = 8192 against 512, 424 of 570 sessions drew a different `init`
+value and 967 of 4 733 common (session, turn) pairs a different `n`
+(`tests/settle.rs` holds the new property: 0 of them). What one seed fixes
+across machines is now the *workload*, which is what a policy comparison
+wants: `routing.sq`'s five policies under one seed are a sweep over one
+workload, and the oracle's `first_divergence.sh` is the search for the
+instant in (iii) between the program and the real scheduler, whose
+workload is a trace and draws nothing. The *machine* may read $\xi$ too:
 an eviction key or spill predicate that samples reads $\xi_{\mathrm{evict}}$,
 and a `cost`, `budget`, `chunk`, `ps` capacity, hold unit or `cache`
 clause that samples reads $\xi_{\mathrm{sess}}$ (`interp.rs:2799`,
 `Which::Session`), interleaved with the sessions' own draws. No shipped
 program does either; one that does has a scheduler that is not a function
-of its state, and Proposition 1 (ii) fails for it at the first such draw.
+of its state, and Proposition 1 (iii) fails for it at the first such draw.
 
 **Proposition 2 (Memory invariant).** For every $t$ and every
 $m$: $U_m(t) + |\mathcal C_m(t)| \le M_m$.
@@ -353,9 +361,9 @@ the room it is asked for or empties the cache and never touches the
 allocation (`Exec.makeRoom_room`, `makeRoom_used`), and the commands the
 fragment adds — `grow`, preemption, `reserve` — have no invariant theorem
 yet. `lease`, `load` and `spill` are outside the fragment. For the
-interpreter the statement is a conjecture: no assertion checks it, and the
-oracle and differential tests (`docs/lean.md`) compare observations with
-`Exec`, not this inequality. §6 lists the assertion.
+interpreter the statement is checked, not proved: a debug assertion at the
+end of every $\mathsf{settle}$ holds it for every pool on every test,
+oracle and differential-test run (§6, item 6).
 
 **Proposition 3 (The prefill queue is a FIFO queue in the environment of
 the decode batch).** Consider one step stage with `serve admission`, no
@@ -646,45 +654,45 @@ causal chain behind the long-context misses.
 
 The document adds nothing to the IR. Writing Definitions 4–5 and
 Propositions 1, 2 and 5 against the interpreter found six things the
-language or the interpreter should say and does not; each is a candidate
-for an issue with a Before/After, none argued here.
+language or the interpreter should say and did not. Four are rules of the
+language now (2026-10-03; `tests/settle.rs`), with no IR change under
+`docs/ir.md` §Stability; two need an IR node and stay candidates for an
+issue with a Before/After.
 
-1. **A loop that passes without blocking hangs the interpreter**
-   (Lemma 1), and the linker checks nothing about loops today: not that a
-   body contains a `run` (`serq check` accepts `loop { set w = w + 1; }`),
-   let alone that every pass reaches one of positive work. Making a
-   zero-work run a transition at $t$ does not remove the hang: `loop {
-   run tool (0); }` then transitions infinitely often at one instant, the
-   Zeno path of Definition 5. What removes it is either a run-time
-   diagnostic — a settle round that executed a bound of statements
-   without blocking, or a bound of transitions at one instant, names the
-   session, like `stuck` — which changes no report, or a check that every
-   path through a loop body (both arms of every `branch`) reaches a `run`
-   of positive work, which the linker can decide only for constant work.
-   If the transition at $t$ is wanted anyway, it
-   changes the order of a zero-work run's completion against the
-   admissions of the same instant (Definition 4's rounds), and #249 found
-   that this order moves the LRU order and the reuse; which reports move
-   is to be measured, not assumed.
-2. **Positivity of `cost` is unchecked** (Definition 5). The Lean fragment
-   requires a constant term $\ge 1$; the interpreter accepts a `cost` that
-   is 0 on a preempt-only iteration and then loops at one instant. A link
-   check on the constant term would reject `vllm.sq`, whose `cost c0 +
-   max(omega + …, tokens * a)` has `c0 = 0` and is positive through
-   `omega`; the check is that $\tau$ at zero tokens is positive, at run
-   time, or a lower bound the linker can evaluate.
-3. **Per-session random substreams** (Proposition 1). Seeding a session's
-   draws by (serial, turn number) makes the marks of (session, turn) the
-   same under every machine, which is the common-random-numbers property
-   a policy comparison wants and the five global generators do not give.
-   The price is every number produced from a seed: the figures of `docs/`
-   (`docs/validation.md`, `docs/language.md` §8), the tests' expected
-   values, the companion repository's serQ-derived numbers, and the
-   "separate streams" sentence of `docs/language.md` §3. The IR's shape
-   does not move; whether the meaning of `seed` does, under `docs/ir.md`
-   §Stability's "same shape, different meaning", is the question the
-   issue has to answer, and either way it is a cross-repository handshake
-   priced as one.
+1. **A loop that passes without blocking hung the interpreter**
+   (Lemma 1), and the linker checked nothing about loops: `serq check`
+   accepted `loop { set w = w + 1; }`. *Outcome:* the linker requires every
+   path through a loop body to reach a `run` (a constant zero work does not
+   count), a `hold` whose body does, or `end` (`Validator::lets_time_pass`),
+   and the run time ends the run with an error naming the session when a
+   session executes a million statements at one instant or the ready
+   sessions are served a thousand times per live session without time
+   passing (`STEPS_PER_INSTANT`, `READIES_PER_SESSION`). No program of the
+   corpus is affected. Making a zero-work run a transition at $t$ was
+   considered and rejected: `loop { run tool (0); }` would then transition
+   infinitely often at one instant, the Zeno path of Definition 5, and the
+   order of its completion against the same instant's admissions would move
+   the LRU order (#249).
+2. **Positivity of `cost` was unchecked** (Definition 5). *Outcome:* an
+   iteration that schedules tokens at a cost of 0 is a run-time error
+   (`start_iteration`); the step that only preempted may still cost 0, as
+   `tests/pool_semantics.rs` requires and Lemma 1's counters bound. A link
+   check on the constant term was rejected: `vllm.sq`'s `cost c0 + max(omega
+   + …, tokens * a)` has `c0 = 0` and is positive through `omega`.
+3. **Per-session random substreams** (Proposition 1). *Outcome:* a
+   session's `init` and `turn` blocks read a stream seeded from (seed,
+   serial, turn), its statements one seeded from (seed, serial), and the
+   machine's draws the interpreter's streams (`substream`, `do_turn`, the
+   `Sample` arm of `eval`); Proposition 1 (ii) is now the clean
+   common-random-numbers statement, and `tests/settle.rs` holds it (0 of
+   the (session, turn) pairs differ where 967 of 4 733 did). The price,
+   paid: every number a seeded run prints moved. The tests compare against
+   closed forms, confidence intervals and traces and did not; the figures
+   of `docs/` that quote seeded runs (`docs/validation.md`,
+   `docs/language.md` §5) are measurements of their date, and the
+   companion repository's serQ-derived numbers move when it moves its pin.
+   The IR's version does not move: how the interpreter draws is its
+   sampling, not the program's meaning (`docs/ir.md` §Stability).
 4. **An observation channel.** $\mathsf{Gw}$ reads $X$ at the instant; the
    router reads a delayed or periodic picture. A look that reads the state
    as of an instant the program names, or as of the last tick of a period,
@@ -694,10 +702,11 @@ for an issue with a Before/After, none argued here.
 5. **A shared iteration clock.** $N$ step stages whose iteration ends at
    $\max_r \tau_r$ (§5, lockstep). `stage E[N] : step` cannot say it.
 6. **The memory invariant as an assertion** (Proposition 2). The
-   interpreter never checks $U_m + |\mathcal C_m| \le M_m$; a debug
-   assertion after every pool command would make every oracle run and
-   every differential-test case a check of it, for the commands Lean does
-   not cover.
+   interpreter never checked $U_m + |\mathcal C_m| \le M_m$. *Outcome:* a
+   debug assertion at the end of every $\mathsf{settle}$ checks it for
+   every pool (`interp.rs`), so every test, oracle run and
+   differential-test case checks the invariant for the commands Lean does
+   not cover; the whole suite passes it.
 
 And the rest of Proposition 5 in Lean: its eviction step is
 `Exec.makeRoom_dead_irrelevant` (`lean/Serq/Regen.lean`); the lift to the
@@ -762,7 +771,8 @@ regeneration at hitting times under `poisson` or at the arrivals that find
 the system empty under `renewal`); its eviction step is proved
 (`makeRoom_dead_irrelevant`), its path lift is not. Proposition 3 covers the
 iterations `Fill.lean` covers and takes the admission iteration as a datum.
-Proposition 1 (ii) is path-wise only until divergence.
+Proposition 1 (iii) is path-wise only until the session's own path
+diverges; (ii) no longer is.
 
 **Why a design document and not a page of the spec.** `docs/language.md`
 §3 is the semantics rule by rule, checkable one at a time against the

@@ -170,7 +170,44 @@ struct Session<'p> {
     /// The request's latest token on a step stage, for the gaps between
     /// tokens (`Interp::token`).
     last_token: Option<LastToken>,
+    /// The session's own random streams (`docs/design/stochastic-model.md`,
+    /// Definition 3): `rng_wl` serves the workload's `init` and `turn`
+    /// blocks and is reseeded from (seed, serial, turn) at every turn, so a
+    /// (session, turn) draws the same marks whatever the rest of the
+    /// deployment does; `rng` serves the session's own statements in
+    /// program order. A draw the machine makes (a cost, a budget, an
+    /// eviction key) reads the interpreter's streams, not a session's.
+    rng_wl: StdRng,
+    rng: StdRng,
 }
+
+/// The stream of one (seed, session, turn, kind): splitmix64 over the four,
+/// so that no two sessions, turns or kinds share a stream.
+fn substream(seed: u64, serial: u64, turn: u64, kind: u64) -> StdRng {
+    let mut x = seed;
+    for v in [serial, turn, kind] {
+        x = x.wrapping_add(0x9E37_79B9_7F4A_7C15).wrapping_add(v);
+        x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        x ^= x >> 31;
+    }
+    StdRng::seed_from_u64(x)
+}
+
+/// Kinds of a session's streams (`substream`).
+const STREAM_WORKLOAD: u64 = 1;
+const STREAM_SESSION: u64 = 2;
+
+/// Statements a session may execute at one instant before the run is an
+/// error: a loop that never reaches a `run`, a `hold` that waits, or `end`
+/// would otherwise hang the interpreter (`docs/design/stochastic-model.md`,
+/// Lemma 1). No program of the corpus comes within a factor of a thousand.
+const STEPS_PER_INSTANT: u64 = 1_000_000;
+
+/// Times the ready queue may be served while settling one instant, per live
+/// session: a run of zero work or a hold admitted and released inside a loop
+/// re-readies its session without time passing.
+const READIES_PER_SESSION: u64 = 1_000;
 
 #[derive(Clone, Copy, Debug)]
 struct LastToken {
@@ -798,8 +835,19 @@ impl<'p> Interp<'p> {
         if self.error.is_some() {
             return;
         }
+        let mut readies: u64 = 0;
         loop {
             while let Some(sid) = self.ready.pop_front() {
+                readies += 1;
+                if readies > READIES_PER_SESSION * (self.live as u64).max(1) {
+                    self.error = Some(format!(
+                        "the instant t = {} does not settle: session {} became ready {readies} times \
+                         without time passing (a `run` of zero work, or a `hold` admitted and released, \
+                         inside a loop)",
+                        self.now, self.sessions[sid].serial
+                    ));
+                    return;
+                }
                 if self.sessions[sid].status == Status::Ready {
                     self.exec(sid);
                     if self.error.is_some() {
@@ -817,6 +865,22 @@ impl<'p> Interp<'p> {
             if self.ready.is_empty() {
                 break;
             }
+        }
+        // The memory invariant, `allocated + cached <= cap` in every
+        // reachable configuration (`SerqLang.Step.invariant` proves it for
+        // the pool relation; this checks the interpreter on every run of the
+        // tests, the oracle and the differential tests).
+        #[cfg(debug_assertions)]
+        for (cp, pl) in self.p.pools.iter().zip(&self.pools) {
+            debug_assert!(
+                pl.used + pl.cached <= pl.cap + 1e-6,
+                "pool `{}`: used {} + cached {} > cap {} at t = {}",
+                cp.name,
+                pl.used,
+                pl.cached,
+                pl.cap,
+                self.now
+            );
         }
         // An iteration starts only once every event of this instant has
         // been handled (a scheduler step sees all the arrivals up to it).
@@ -918,6 +982,8 @@ impl<'p> Interp<'p> {
             stuck: false,
             leases: vec![],
             last_token: None,
+            rng_wl: substream(self.p.seed, serial, 0, STREAM_WORKLOAD),
+            rng: substream(self.p.seed, serial, 0, STREAM_SESSION),
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -976,6 +1042,10 @@ impl<'p> Interp<'p> {
         if self.warm {
             self.turns += 1;
         }
+        // this turn's marks come from the stream of (seed, session, turn)
+        let turn_no = self.sessions[sid].attrs[p.slot_turn] as u64;
+        let serial = self.sessions[sid].serial;
+        self.sessions[sid].rng_wl = substream(p.seed, serial, turn_no, STREAM_WORKLOAD);
         if let Some((k, ti)) = self.sessions[sid].script {
             let CArrival::Sessions(ss) = &p.arrival else {
                 unreachable!("explicit turns come from explicit sessions")
@@ -1063,11 +1133,21 @@ impl<'p> Interp<'p> {
     /// Execute commands of a ready session until it blocks or ends.
     fn exec(&mut self, sid: usize) {
         let p = self.p;
+        let mut steps: u64 = 0;
         loop {
             if self.error.is_some() {
                 return;
             }
             if self.sessions[sid].status != Status::Ready {
+                return;
+            }
+            steps += 1;
+            if steps > STEPS_PER_INSTANT {
+                self.error = Some(format!(
+                    "session {} executes statements at t = {} without reaching a `run`, a `hold` \
+                     that waits, or `end` ({STEPS_PER_INSTANT} statements: a loop that never blocks)",
+                    self.sessions[sid].serial, self.now
+                ));
                 return;
             }
             let Some(fr) = self.sessions[sid].frames.last().cloned() else {
@@ -2797,6 +2877,16 @@ impl<'p> Interp<'p> {
             ..Default::default()
         };
         let cost = self.eval(&spec.cost, &ctx, Which::Session).max(0.0);
+        // An iteration that schedules tokens lasts a positive time; only the
+        // step that merely preempted may cost 0 (`docs/language.md` §3).
+        if ntok > 0.0 && cost <= 0.0 {
+            self.error = Some(format!(
+                "stage `{}`: an iteration of {ntok} tokens costs {cost}; an iteration that \
+                 schedules tokens lasts a positive time",
+                p.stages[st].name
+            ));
+            return;
+        }
         if self.trace_iter {
             let parts: Vec<String> = assign
                 .iter()
@@ -3057,7 +3147,14 @@ impl<'p> Interp<'p> {
             },
             CExpr::Sample(kind, args) => {
                 let a: Vec<f64> = args.iter().map(|x| self.eval(x, ctx, w)).collect();
-                let rng = self.rng(w);
+                // a draw made for a session reads that session's stream; one
+                // the machine makes (a cost, a budget, an eviction key) reads
+                // the interpreter's
+                let rng = match (w, ctx.sid) {
+                    (Which::Workload, Some(sid)) => &mut self.sessions[sid].rng_wl,
+                    (Which::Session, Some(sid)) => &mut self.sessions[sid].rng,
+                    _ => self.rng(w),
+                };
                 let d = match kind {
                     DistKind::Det => Dist::Deterministic(a[0]),
                     DistKind::Exp => Dist::exp(a[0]),
