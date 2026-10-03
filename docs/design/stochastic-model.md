@@ -694,13 +694,43 @@ issue with a Before/After.
    The IR's version does not move: how the interpreter draws is its
    sampling, not the program's meaning (`docs/ir.md` §Stability).
 4. **An observation channel.** $\mathsf{Gw}$ reads $X$ at the instant; the
-   router reads a delayed or periodic picture. A look that reads the state
-   as of an instant the program names, or as of the last tick of a period,
-   would let a program state the difference between llm-d's estimate and
-   the pod's truth, and a sweep over the delay would say what the estimate
-   costs. Today a stale router is written by hand, as session attributes.
+   router reads a delayed or periodic picture. Today a stale router is
+   written by hand, as session attributes. *Sketch, not compiled:* a
+   `probe` is a gauge sampled on a clock of its own and held between
+   samples, which is what a scraped metric is; the program reads it where
+   it would read the observable, and the period is the program's.
+
+   ```
+   // Before (examples/pd-disaggregation/llmd_nixl_pull.sq): the router reads the pods exactly
+   choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
+
+   // After: the router reads a picture refreshed every second
+   probe load[j in ND] = holders(D[j].kv) + queued(D[j].kv) every 1;
+   choose j in ND by (load[j]);
+   ```
+
+   In the process a probe is one more component of $Q_s$'s kind, updated
+   by a state-set clock of period $T$: still a GSMP, and $\hat\theta_s$ is
+   the special case of an estimator refreshed at every job. It is an IR
+   field that changes what the program does, so it opens the next version;
+   a sweep over `every` is what says what the estimate costs.
 5. **A shared iteration clock.** $N$ step stages whose iteration ends at
    $\max_r \tau_r$ (§5, lockstep). `stage E[N] : step` cannot say it.
+   *Sketch, not compiled:* a step family declared `lockstep` starts its
+   members' iterations together and ends them at the slowest; a member
+   with nothing to do idles for the common step.
+
+   ```
+   // Before: N engines, each on its own clock
+   stage E[N] : step { budget B; cost c_it + a * prefilled + b * attention; memory kv; }
+
+   // After: N ranks, one clock
+   stage E[N] : step { budget B; cost c_it + a * prefilled + b * attention; memory kv; } lockstep;
+   ```
+
+   One Boolean on `CStep`, a change of what the program does, hence a
+   version; the lockstep model of `memory-model.md` is the measurement it
+   would be checked against.
 6. **The memory invariant as an assertion** (Proposition 2). The
    interpreter never checked $U_m + |\mathcal C_m| \le M_m$. *Outcome:* a
    debug assertion at the end of every $\mathsf{settle}$ checks it for
