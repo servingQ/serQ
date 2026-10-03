@@ -521,7 +521,12 @@ continuation (a stack of block frames), status (ready, queued at a pool,
 at a stage, waiting to grow, ended) and active holds; for each pool its
 capacity, the allocations of its holders (in admission order), its cache
 (entries of units, release time and release order, per session or dead),
-its admission queue and its growers; for each stage its jobs.
+its admission queue and its growers; for each stage its jobs. Read as one
+object, the configuration and the rules below are a generalised
+semi-Markov process, and in every program of `examples/` its only random
+clocks are the workload's; [the design
+document](design/stochastic-model.md) writes it out and says what the
+paper's queueing model keeps of it.
 
 **Commands take no time**; they run whenever a session is ready, in the
 order sessions became ready. Flow lets time pass at the stages. After
