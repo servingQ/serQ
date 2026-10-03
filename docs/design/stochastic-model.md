@@ -57,6 +57,21 @@ and §4 is about the distance between the two.
 
 ## 2. Definition
 
+**At a glance.**
+
+| | | |
+|---|---|---|
+| Deployment (Def. 1) | $(\mathcal M, \mathcal S, R, \mathcal W)$: pools with capacity, block, eviction order $\prec_m$ and preemption rule; stages (`fifo`, `ps`, `delay`, `step`); the session program; the workload (arrival law, turn kernel $G$) | the IR as data |
+| Configuration (Def. 2) | $X = (t, \mathcal E, (\sigma_i), (P_m), (Q_s))$: clock, pending events, sessions (attributes, program counter, holds), pools (allocation, the *ordered* cache $\mathcal C_m$, queue), stages (jobs, residents, iteration, estimator $\hat\theta_s$) | `Interp`, field for field |
+| Environment (Def. 3) | $\xi$: five independent uniform streams; every `~` reads one | the only randomness |
+| Kernel (Def. 4) | $X' = \mathsf{start} \circ \mathsf{settle} \circ \mathsf{apply}_{e^\ast}(X)$ at the earliest event, ties by sequence number | deterministic |
+| Process (Def. 5) | $X(t) = \Phi_t(\xi)$, a generalised semi-Markov process; finitely many transitions in $[0,t]$ under Lemma 1 and a positive clock bound | the object the theorems are about |
+| Prop. 1 | $\Phi$ deterministic; one seed fixes the arrivals across machines, the marks only until the paths diverge | proved |
+| Prop. 2 | $U_m + \lvert\mathcal C_m\rvert \le M_m$ on every path | proved for `Core.Step`'s five commands; conjecture for the interpreter |
+| Prop. 3 | the prefill queue is a FIFO queue whose per-slot capacity is $B - d_\ell$ | proved per iteration by `Fill.lean`; the order step argued |
+| Prop. 4 | Markov on the configuration space; a countable chain at integer times under `cost 1` and integer marks | proved |
+| Prop. 5 | dead cache entries do not change what a live session sees: the process regenerates when empty | eviction step proved (`Regen.lean`); path lift a conjecture |
+
 The notation follows the lecture (`serving-queue-theory/lectures/…/lecture1.tex`:
 L1:def:workload's turn kernel $G$, L1:def:costs' step time $\tau$,
 L1:lem:paths' request times) and the Lean model (`lean/Serq/Core.lean`,
