@@ -14,7 +14,8 @@ deployment (agents, router, engines, links) as a composition of such
 processes (§5); and what the language does not yet say that the definition
 needs (§6).
 
-Status: 2026-10-03, a definition. It adds no IR node.
+Status: 2026-10-03, a definition. It adds no IR node; it adds one Lean
+module, `lean/Serq/Regen.lean`, for Proposition 5's eviction step.
 
 ## 1. The shape: a deterministic machine in a random environment
 
@@ -485,8 +486,15 @@ conjecture is for `lru`). For the renewal structure the residual arrival
 clock at the regeneration epoch must be fresh: under `poisson` every
 hitting time of $X_\emptyset$ will do; under `renewal` the epochs are the
 arrivals that find $X_\emptyset$, where the gap just drawn is fresh; under
-`closed(n)` the set $X_\emptyset$ is unreachable. The lemma belongs in
-`lean/` on `Exec`'s `makeRoom` and `admit` and is not proved. $\square$
+`closed(n)` the set $X_\emptyset$ is unreachable. The eviction step of
+this sketch is a theorem: `Exec.makeRoom_dead_irrelevant`
+(`lean/Serq/Regen.lean`) states that for a set of owners whose entries all
+come strictly before every other entry, and with more fuel than cached
+units, the live entries `makeRoom` leaves are exactly those it leaves on
+the pool without the dead entries, and `makeRoom_fuel` that the fuel is
+then irrelevant. What remains unproved is the lift from one eviction to
+the path: that admission, release and the step engine read the dead
+entries through `makeRoom` alone. $\square$
 
 The closed system (`arrive closed(n)`) has a bounded population and, under
 Proposition 4 (iii)'s hypotheses and quotient with bounded marks, a finite
@@ -676,7 +684,9 @@ for an issue with a Before/After, none argued here.
    every differential-test case a check of it, for the commands Lean does
    not cover.
 
-And Proposition 5 in Lean, on `Exec`. One question about the model, not
+And the rest of Proposition 5 in Lean: its eviction step is
+`Exec.makeRoom_dead_irrelevant` (`lean/Serq/Regen.lean`); the lift to the
+path over `Exec.step` is not written. One question about the model, not
 the language: whether the linker should refuse a draw in `cost` (and in
 `budget`, `chunk`, a `ps` capacity, a hold's units, a `cache` clause),
 which it accepts today (§1). Every shipped `cost` is a fitted function,
@@ -734,7 +744,8 @@ an LRU order one more block shifts), not that it cannot happen. No closed
 form. Proposition 5 is a conjecture with the hypotheses its sketch needed
 (`lru`, no `spill`, no `now`/`serial` and no online estimator read,
 regeneration at hitting times under `poisson` or at the arrivals that find
-the system empty under `renewal`). Proposition 3 covers the
+the system empty under `renewal`); its eviction step is proved
+(`makeRoom_dead_irrelevant`), its path lift is not. Proposition 3 covers the
 iterations `Fill.lean` covers and takes the admission iteration as a datum.
 Proposition 1 (ii) is path-wise only until divergence.
 
