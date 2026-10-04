@@ -69,7 +69,6 @@ nav:
   - Home: index.md
   - User Guide:
       - Getting started: getting-started.md
-      - Python (pyserq): python.md
       - Tutorial:
           - tutorial/index.md
           - 1. A queue: tutorial/01-a-queue.md
@@ -129,3 +128,4 @@ nav:
   - CLI Reference:
       - reference/cli.md
       - Drawing figures: draw.md
+  - Python (pyserq): python.md
