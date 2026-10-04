@@ -256,7 +256,7 @@ theorem start_facts {g : Ghost} {m : Machine} (hI : DaiStable.CI g m) (hA : A0 m
     simp [Claims.DaiSarathi.deployment]
   have hb : DaiStable.D.budget = 128 := rfl
   unfold startIteration
-  simp only [iterDeployment_of_none _ (rfl : Claims.DaiSarathi.deployment.chunkLift = none)]
+  simp only [iterDeployment_of_none _ (rfl : Claims.DaiSarathi.deployment.chunkAt = none)]
   rw [hvia, Bool.or_false]
   by_cases hjs : m.jobs = []
   · have he0 : m.jobs.isEmpty = true := by simp [hjs]

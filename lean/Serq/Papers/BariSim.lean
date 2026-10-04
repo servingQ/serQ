@@ -291,7 +291,7 @@ theorem start_facts {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : Bar
     simp [BariStable.D, Claims.BariRad.deployment]
   have hb : BariStable.D.budget = 128 := rfl
   unfold startIteration
-  simp only [iterDeployment_of_none _ (rfl : Claims.BariRad.deployment.chunkLift = none)]
+  simp only [iterDeployment_of_none _ (rfl : Claims.BariRad.deployment.chunkAt = none)]
   rw [hvia, Bool.or_false]
   by_cases hjs : m.jobs = []
   · have he0 : m.jobs.isEmpty = true := by simp [hjs]
