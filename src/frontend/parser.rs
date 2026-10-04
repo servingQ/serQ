@@ -1075,6 +1075,9 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
 /// conversation): each site comes wrapped in them, outermost first, since
 /// the deployment holds them while it serves the request.
 fn request_sites(stmts: &[Stmt], holds: &[&Stmt], out: &mut Vec<Stmt>) {
+    // Two sites are one request when they name the same server or gateway
+    // inside holds of the same pools; the units held do not change what the
+    // figure draws, so `hold live (1)` and `hold live (2)` are one.
     fn same(a: &Stmt, b: &Stmt) -> bool {
         match (a, b) {
             (Stmt::Request, Stmt::Request) => true,
@@ -1099,14 +1102,13 @@ fn request_sites(stmts: &[Stmt], holds: &[&Stmt], out: &mut Vec<Stmt>) {
             Stmt::Call { verb, .. } if verb != "route" => {}
             Stmt::Request | Stmt::Call { .. } => {
                 let mut site = s.clone();
-                for h in holds.iter().rev() {
-                    if let Stmt::Hold { .. } = h {
-                        let mut h = (*h).clone();
-                        if let Stmt::Hold { body, .. } = &mut h {
-                            *body = vec![site];
-                        }
-                        site = h;
-                    }
+                for &h in holds.iter().rev() {
+                    let mut h = h.clone();
+                    let Stmt::Hold { body, .. } = &mut h else {
+                        unreachable!("only holds are pushed")
+                    };
+                    *body = vec![site];
+                    site = h;
                 }
                 if !out.iter().any(|o| same(o, &site)) {
                     out.push(site);

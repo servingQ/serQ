@@ -155,7 +155,8 @@ pub fn load_drawn(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 
 /// The request in place of the session. What the server reads of the
 /// workload's attributes (`prev`, the previous prompt) is declared ahead of
-/// it, with a value the figure never evaluates.
+/// it, set to `now`: a value the view cannot know, so a server guard on a
+/// workload attribute (`branch (first)`) draws both arms.
 fn drawn(mut prog: frontend::ast::Program) -> frontend::ast::Program {
     use frontend::ast::{Expr, Stmt};
     use frontend::parser::assigned_in;
@@ -173,7 +174,7 @@ fn drawn(mut prog: frontend::ast::Program) -> frontend::ast::Program {
                 .iter()
                 .any(|s| matches!(s, Stmt::Set(n, _) if *n == name))
         {
-            session.push(Stmt::Set(name, Expr::Num(0.0)));
+            session.push(Stmt::Set(name, Expr::Var("now".into())));
         }
     }
     session.extend(request);

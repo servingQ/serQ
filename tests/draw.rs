@@ -628,6 +628,90 @@ fn a_split_program_is_drawn_as_its_server() {
     }
 }
 
+/// The stations a figure has, by stage name.
+fn drawn_stages(p: &Program, net: &deployment::Net) -> Vec<String> {
+    let mut v: Vec<String> = net
+        .nodes
+        .iter()
+        .filter_map(|n| n.stage.map(|s| p.stages[s].name.clone()))
+        .collect();
+    v.sort();
+    v
+}
+
+/// A server's guard on a workload attribute is not decided by the figure:
+/// the server does not know what the workload set (`routing.sq`'s
+/// `branch (first)`).
+#[test]
+fn a_server_guard_on_the_workload_draws_both_arms() {
+    let src = "stage big : fifo; stage small : fifo; stage tool : delay;
+        workload {
+          arrive poisson(1);
+          init { set first = 1; }
+          turn { set n = ~exp(10); }
+          session { loop { turn; request; set first = 0;
+                           branch with (0.5) { run tool (1); } else { end; } } }
+        }
+        server { branch (first) { run big (n); } else { run small (n); } }
+        run { horizon 100; }";
+    let p = compile_drawn_source_at(src, None, &Overrides::default()).unwrap();
+    let net = deployment::project(&p);
+    assert_eq!(drawn_stages(&p, &net), ["big", "small"]);
+}
+
+/// A guard is decided by what this path set, and only until a `turn`
+/// draws the attributes again.
+#[test]
+fn a_turn_forgets_what_the_path_set() {
+    let p = compile(
+        "stage A : fifo; stage B : fifo;
+         workload { arrive poisson(1); turn { set n = ~exp(10); } }
+         session { set n = 0; turn; branch (n > 0) { run A (n); } else { run B (1); } }
+         run { horizon 100; }",
+    );
+    let net = deployment::project(&p);
+    assert_eq!(drawn_stages(&p, &net), ["A", "B"]);
+}
+
+/// A decided guard draws only its arm when the other has no station: it
+/// would only skip stations, joining two the session never travels
+/// between (`llmd_nixl_pull.sq`'s read). An other arm with a station of its
+/// own runs when the hold is executed again after a preemption, and is
+/// drawn.
+#[test]
+fn a_decided_guard_drops_only_an_arm_with_no_station() {
+    let program = |arms: &str| {
+        compile(&format!(
+            "stage A : fifo; stage B : fifo; stage C : fifo; pool kv {{ cap 100; }}
+             workload {{ arrive poisson(1); }}
+             session {{ set x = 0; hold kv (1) {{ run A (1); {arms} set x = 1; run C (1); }} end; }}
+             run {{ horizon 100; }}"
+        ))
+    };
+    let p = program("branch (!x) { run B (1); }");
+    let net = deployment::project(&p);
+    assert_eq!(drawn_stages(&p, &net), ["A", "B", "C"]);
+    assert!(edge(&p, &net, "A", "C").is_none(), "the skip is not drawn");
+    assert!(edge(&p, &net, "A", "B").is_some_and(|e| e.label.is_none()));
+    let p = program("branch (!x) { run B (1); } else { run C (1); }");
+    let net = deployment::project(&p);
+    assert!(edge(&p, &net, "A", "C").is_some(), "an arm with a station");
+}
+
+/// A guard on constants alone is the program's setting, which `--set`
+/// changes: both arms are drawn.
+#[test]
+fn a_guard_on_constants_draws_both_arms() {
+    let p = compile(
+        "let mode = 0; stage A : fifo; stage B : fifo;
+         workload { arrive poisson(1); }
+         session { branch (mode == 0) { run A (1); } else { run B (1); } end; }
+         run { horizon 100; }",
+    );
+    let net = deployment::project(&p);
+    assert_eq!(drawn_stages(&p, &net), ["A", "B"]);
+}
+
 // --- loops ------------------------------------------------------------------
 
 /// A session program over stages `A`, `B`, `C`, projected.
@@ -678,10 +762,10 @@ fn has(net: &deployment::Net, p: &Program, from: End, to: &str) -> Option<deploy
 }
 
 /// A loop body that starts with a branch decides before its first station:
-/// one decision node, which sends a turn down each arm with the arm's guard.
-/// Nothing comes back to it: the next turn is the workload's.
+/// one decision node, which every turn comes back to and which sends it down
+/// each arm with the arm's guard.
 #[test]
-fn a_loop_that_decides_first_starts_at_its_decision() {
+fn a_loop_that_decides_first_returns_to_its_decision() {
     let (p, net) = shape(
         "loop { set a = ~bernoulli(0.5); branch (a) { run A (1); } else { run B (1); } run C (1); }",
     );
@@ -692,15 +776,14 @@ fn a_loop_that_decides_first_starts_at_its_decision() {
         assert_eq!(e.label.as_deref(), Some(label));
     }
     let c = End::Node(net.node_of(stage(&p, "C")).unwrap());
-    assert!(!net.has_edge(c, d), "no way back");
-    assert!(edge(&p, &net, "C", "A").is_none());
-    assert!(net.edges.iter().all(|e| !e.back));
+    assert!(net.edges.iter().any(|e| e.from == c && e.to == d && e.back));
+    assert!(edge(&p, &net, "C", "A").is_none(), "not back to each arm");
 }
 
 /// A loop whose body is a loop: the inner one decides, the outer one comes
-/// in through it, and neither draws a way back.
+/// in through it.
 #[test]
-fn a_nested_loop_comes_in_through_the_inner_decision() {
+fn a_nested_loop_returns_to_the_inner_decision() {
     let (p, net) = shape(
         "run C (1); loop { loop { set a = ~bernoulli(0.5); branch (a) { run A (1); } else { run B (1); } } }",
     );
@@ -715,7 +798,7 @@ fn a_nested_loop_comes_in_through_the_inner_decision() {
     for st in ["A", "B"] {
         assert!(has(&net, &p, d, st).is_some());
         let n = End::Node(net.node_of(stage(&p, st)).unwrap());
-        assert!(!net.has_edge(n, d), "{st} does not return");
+        assert!(net.has_edge(n, d), "{st} returns");
     }
     let c = End::Node(net.node_of(stage(&p, "C")).unwrap());
     assert!(net.has_edge(c, d));
@@ -723,7 +806,7 @@ fn a_nested_loop_comes_in_through_the_inner_decision() {
 
 /// An arm with no station of its own goes on to the station after the
 /// branch: the decision sends a turn to `A` or straight to `B`, and `B`
-/// goes back neither to the decision nor to itself.
+/// comes back to the decision, not to itself.
 #[test]
 fn a_loop_through_an_empty_arm() {
     let (p, net) =
@@ -732,11 +815,12 @@ fn a_loop_through_an_empty_arm() {
     assert!(has(&net, &p, d, "A").is_some());
     assert!(has(&net, &p, d, "B").is_some());
     let b = End::Node(net.node_of(stage(&p, "B")).unwrap());
-    assert!(!net.has_edge(b, d));
+    assert!(net.has_edge(b, d));
     assert!(edge(&p, &net, "B", "B").is_none());
 }
 
-/// A body that can end before its first station ends at its decision.
+/// A body that can end before its first station ends at its decision, on
+/// the first turn and every one after.
 #[test]
 fn a_loop_that_can_end_before_a_station() {
     let (p, net) =
@@ -745,7 +829,7 @@ fn a_loop_that_can_end_before_a_station() {
     assert!(has(&net, &p, d, "exit").is_some_and(|e| e.label.as_deref() == Some("c")));
     assert!(has(&net, &p, d, "A").is_some());
     let b = End::Node(net.node_of(stage(&p, "B")).unwrap());
-    assert!(!net.has_edge(b, d));
+    assert!(net.has_edge(b, d));
     assert!(edge(&p, &net, "arrival", "exit").is_none());
 }
 
@@ -844,16 +928,13 @@ fn a_decision_stays_before_its_stations() {
     }
 }
 
-/// A body that starts at one station needs no decision, and the next turn,
-/// the workload's, draws no arrow back to it.
+/// A body that starts at one station needs no decision: it comes back to it.
 #[test]
 fn a_loop_with_one_way_in_has_no_decision() {
     let (p, net) =
         shape("loop { run A (1); set c = ~bernoulli(0.5); branch (c) { end; } run B (1); }");
     assert!(decision(&net).is_none());
-    assert!(edge(&p, &net, "B", "A").is_none());
-    assert!(edge(&p, &net, "A", "B").is_some());
-    assert!(edge(&p, &net, "A", "exit").is_some());
+    assert!(edge(&p, &net, "B", "A").is_some_and(|e| e.back));
 }
 
 /// Every enclosure holds the stations it encloses, and enclosures either nest
@@ -1013,12 +1094,12 @@ fn docs_assets_are_current() {
     assert!(seen > 0, "no figures under docs/assets");
 }
 
-/// `routing.sq`'s turn migrates or stays: to the link, or straight to a
-/// replica. `pd_tandem.sq`'s job goes down both arms of its `mode` branch;
-/// the projection is structural, so it draws both although `mode` is one
-/// constant in a run. Whether a session comes back for another turn - after
-/// `routing.sq`'s tool call, or round `pd_tandem.sq`'s closed loop - is the
-/// workload's, and no arrow returns to the decision.
+/// `routing.sq`'s request migrates or stays: to the link, or straight to a
+/// replica; its tool call and next turn are the workload's, and not drawn.
+/// `pd_tandem.sq`, one session with no server apart, is drawn whole: its
+/// job re-enters down both arms of its `mode` branch, drawn although `mode`
+/// is one constant in a run, since a guard on constants is the program's
+/// setting.
 #[test]
 fn the_examples_start_at_their_decision() {
     let p = program("routing");
@@ -1035,7 +1116,10 @@ fn the_examples_start_at_their_decision() {
     }
     for st in ["agg", "decode"] {
         let n = End::Node(net.node_of(stage(&p, st)).unwrap());
-        assert!(!net.has_edge(n, d), "{st}");
+        assert!(
+            net.edges.iter().any(|e| e.from == n && e.to == d && e.back),
+            "{st}"
+        );
     }
 }
 

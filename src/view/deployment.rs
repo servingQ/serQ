@@ -269,6 +269,9 @@ struct Walker<'a> {
     last_flow: Option<usize>,
     /// Per block being probed, the ends it first reaches.
     probes: Vec<Vec<End>>,
+    /// The decision node of each loop body that has one, by body block: a
+    /// loop walked twice (inside another) has one decision, not two.
+    decisions: Vec<(usize, usize)>,
     /// Attributes this path has set to a constant, by slot. A guard that
     /// reads only these is decided, and only its arm is drawn.
     known: Vec<(usize, f64)>,
@@ -531,12 +534,18 @@ impl Walker<'_> {
                 CStmt::Branch(c, t, e) => {
                     // A guard this path has decided (`set transferred = 0;`
                     // before `branch (!transferred)`) takes one arm. The
-                    // other is taken only when a hold is executed again
-                    // after a preemption, which returns to a station the
-                    // session is already at: no flow between stations.
+                    // other may still run, when a hold is executed again
+                    // after a preemption: one with a station of its own is
+                    // drawn, as any arm. One with none only skips stations,
+                    // and its edge would join the station before the guard
+                    // to the one after, which the session never travels:
+                    // the hold executed again starts where it was.
                     if let Some(v) = self.decided(&c) {
-                        self.walk(if v != 0.0 { t } else { e });
-                        continue;
+                        let (taken, other) = if v != 0.0 { (t, e) } else { (e, t) };
+                        if !reaches_a_station(self.p, other) {
+                            self.walk(taken);
+                            continue;
+                        }
                     }
                     // The guard labels the first edge the arm takes. An arm
                     // with no station of its own contributes no label, which
@@ -569,13 +578,15 @@ impl Walker<'_> {
                 }
                 CStmt::Loop(body) => {
                     // Every loop is the session's: a server cannot write
-                    // `end`, so a loop in one could never be left. Whether
-                    // the session comes back for another turn is the
-                    // workload's choice, not the deployment's, so the body
-                    // is walked once and its way back is not drawn. What
-                    // was set before it holds on the first pass only.
+                    // `end`, so a loop in one could never be left, and the
+                    // request `serq draw` draws of a program with a server
+                    // has none. A program written as one session cannot
+                    // tell its workload from its deployment and is drawn
+                    // whole: its way back too, so that no station is a dead
+                    // end. What was set before it holds on the first pass
+                    // only.
                     self.known.clear();
-                    self.enter(body);
+                    self.enter(body, true);
                     self.frontier.clear();
                     // A loop is left only by `end`, which already recorded it.
                 }
@@ -625,7 +636,9 @@ impl Walker<'_> {
                         self.known.push((slot, v));
                     }
                 }
-                CStmt::Turn | CStmt::Observe(..) => {}
+                // a turn draws the attributes of the `turn` block again
+                CStmt::Turn => self.known.clear(),
+                CStmt::Observe(..) => {}
                 CStmt::Grow(..) | CStmt::Drop(..) => {}
             }
         }
@@ -681,7 +694,12 @@ impl Walker<'_> {
     /// block starts from. A pass from a mark at the block's start finds out
     /// what it reaches first - a station, the one it was at included, or
     /// the exit - and is undone whole.
-    fn enter(&mut self, body: usize) {
+    ///
+    /// A loop's body is entered `again`: its last stations lead back to the
+    /// decision, or a second pass from where the first ended draws every
+    /// way back to the station it starts at, from every arm, with the guard
+    /// of the arm it takes; edges already there are not drawn twice.
+    fn enter(&mut self, body: usize, again: bool) {
         let saved = (
             self.net.clone(),
             self.frontier.clone(),
@@ -693,6 +711,7 @@ impl Walker<'_> {
             self.last_flow,
             self.known.clone(),
             self.next_hold,
+            self.decisions.clone(),
         );
         let k = self.probes.len();
         self.probes.push(vec![]);
@@ -710,7 +729,21 @@ impl Walker<'_> {
             self.last_flow,
             self.known,
             self.next_hold,
+            self.decisions,
         ) = saved;
+        let known = self
+            .decisions
+            .iter()
+            .find(|(b, _)| *b == body)
+            .map(|&(_, d)| d);
+        if let Some(d) = known {
+            self.attach(d);
+            self.walk(body);
+            if again {
+                self.attach(d);
+            }
+            return;
+        }
         if entries.len() > 1 {
             // named by the `choose`s it makes before any station: the
             // router's name is the gateway's, which is the parser's and not
@@ -737,10 +770,33 @@ impl Walker<'_> {
                 modes: vec![],
             });
             let d = self.net.nodes.len() - 1;
+            self.decisions.push((body, d));
             self.attach(d);
+            self.walk(body);
+            if again {
+                self.attach(d);
+            }
+            return;
         }
         self.walk(body);
+        if again {
+            // a later turn: what the first pass set may have changed
+            self.known.clear();
+            self.walk(body);
+        }
     }
+}
+
+/// Does a block run at any station, at any depth?
+fn reaches_a_station(p: &Program, block: usize) -> bool {
+    p.blocks.get(block).is_some_and(|stmts| {
+        stmts.iter().any(|s| match s {
+            CStmt::Run { .. } => true,
+            CStmt::Hold { body, .. } | CStmt::Loop(body) => reaches_a_station(p, *body),
+            CStmt::Branch(_, a, b) => reaches_a_station(p, *a) || reaches_a_station(p, *b),
+            _ => false,
+        })
+    })
 }
 
 /// The attributes a block `choose`s before any station, down every path,
@@ -855,9 +911,10 @@ pub fn project(p: &Program) -> Net {
         instance_of_slot: vec![],
         last_flow: None,
         probes: vec![],
+        decisions: vec![],
         known: vec![],
     };
-    w.enter(p.session);
+    w.enter(p.session, false);
     // Anything still on the frontier ran off the end of the session program.
     let frontier = std::mem::take(&mut w.frontier);
     for (from, label) in frontier {
