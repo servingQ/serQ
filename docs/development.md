@@ -102,11 +102,11 @@ done
 
 | `Lambda` | seed 1 TTFT (s) / preemptions | seed 2 | seed 3 |
 |---|---|---|---|
-| 0.3 | 0.017 / 0 | 0.017 / 0 | 0.014 / 0 |
-| 0.6 | 0.137 / 240 | **5.00 / 2 349** | 0.255 / 899 |
-| 0.9 | 26.6 / 235 | 28.1 / 236 | 23.4 / 737 |
+| 0.3 | 0.018 / 0 | 0.016 / 0 | 0.015 / 0 |
+| 0.6 | 0.131 / 87 | 0.579 / 185 | 0.089 / 34 |
+| 0.9 | 23.8 / 138 | 24.8 / 166 | 18.8 / 187 |
 
-At 0.6 the three seeds disagree by a factor of 36. The deployment is at its
+At 0.6 the three seeds disagree by a factor of 6. The deployment is at its
 cliff, and whether one run falls off depends on the draws. The report's 95 %
 CI is within one run and does not show this. Near a load where preemptions
 start, report the spread across seeds, not one seed's interval.

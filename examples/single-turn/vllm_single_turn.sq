@@ -16,7 +16,7 @@ let c0 = 0;            // fixed cost per iteration (s)
 let Lambda = 3.0;      // requests per second
 
 pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool reqs { cap max_seqs; admit via engine; }
+pool reqs { cap max_seqs; admit via engine; }   // the engine's step admits the waiting, FCFS
 
 stage engine : step {
   budget B;

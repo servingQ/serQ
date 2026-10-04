@@ -110,7 +110,8 @@ The approximation has three parts:
   share entries across sessions, so the subagent misses that prefix.
 
 `--set q=0` gives the same agents with no delegation. Here are both next to
-the other three (seed 1, 1 800 s after warm-up; each program runs at its own
+the other three (seed 1, 1 800 s after warm-up; requests/s is the number of
+`response` observations over those 1 800 s; each program runs at its own
 arrival rate, so compare the rows within a pair, not across the table):
 
 | program | requests/s | hit rate | prefill tokens | TTFT (ms) | response (ms) | engine busy |
@@ -121,9 +122,13 @@ arrival rate, so compare the rows within a pair, not across the table):
 | `vllm_subagents --set q=0` | 0.82 | 0.88 | 706 | 14 | 57 | 0.05 |
 | `vllm_subagents` | 3.65 | 0.70 | 1 823 | 45 | 100 | 0.27 |
 
-For the same parent arrival rate, delegation makes 4.5 times as many requests.
-Each first request of a subagent is a full miss on the context it copied, so
-the mean prefill is 2.6 times as large and TTFT rises from 14 ms to 45 ms. The prefill row
+For the same parent arrival rate, delegation makes 3.7 times as many requests
+(0.1 tasks/s each asking 10, and 0.81 subagents in flight each asking every
+0.3 s, against 1.0 requests/s). Each first request of a subagent is a full
+miss on the context it copied, so the mean prefill triples and TTFT rises
+from 13 ms to 53 ms: the means of three runs of 50 000 s (seeds 1–3). One
+run of 1 800 s, the table's, is short for the subagent rows and gives
+4.5×, 2.6× and 14 → 45 ms. The prefill row
 is an upper bound: the real vLLM would hit on the shared prefix, since its
 cache is content-addressed (`kv_cache_utils.py:650-680`,
 `block_pool.py:197-223`), and this serQ program cannot.

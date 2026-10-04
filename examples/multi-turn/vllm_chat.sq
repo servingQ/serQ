@@ -18,7 +18,7 @@ let p = 0.8;           // the person asks again
 let Z = 20.0;          // reading and typing time (s)
 
 pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool reqs { cap max_seqs; admit via engine; }
+pool reqs { cap max_seqs; admit via engine; }   // the engine's step admits the waiting, FCFS
 
 stage engine : step {
   budget B;
