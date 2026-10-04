@@ -143,6 +143,24 @@ class IterationCost(unittest.TestCase):
         zero = {"Cond": [rule["Cond"][0], {"Num": 0.0}, {"Num": 0.0}]}
         self.assertEqual(generator.chunk_rule(zero), (0.0, None))
 
+    def test_a_constant_folds_to_the_interpreters_value(self):
+        # an intermediate difference stays negative: 20 + (8 - 16) is 12
+        e = {"Binary": ["Add", {"Num": 20.0}, {"Binary": ["Sub", {"Num": 8.0}, {"Num": 16.0}]}]}
+        self.assertEqual(generator.fold(e), 12.0)
+        self.assertEqual(generator.chunk_rule(e), (12.0, None))
+        # a product with a zero constant is 0 whatever the other factor
+        self.assertEqual(generator.fold({"Binary": ["Mul", {"Num": 0.0}, {"Attr": 3}]}), 0.0)
+
+    def test_a_session_expression_reads_logic_and_ceil(self):
+        x = generator.Expr(lambda e: f"(x.attr {e['Attr']})")
+        a, b = {"Attr": 1}, {"Attr": 2}
+        self.assertEqual(x.top({"Binary": ["And", {"Binary": ["Lt", a, b]}, {"Unary": ["Not", a]}]}),
+                         "if (((x.attr 1) < (x.attr 2)) ∧ (¬ ((x.attr 1) ≠ 0))) then 1 else 0")
+        ceil = {"Call": ["Ceil", [{"Expr": {"Binary": ["Div", a, {"Num": 16.0}]}}]]}
+        self.assertEqual(x.top(ceil), "((x.attr 1) + 15) / 16")
+        with self.assertRaises(generator.Fragment):
+            x.top({"Call": ["Ceil", [{"Expr": {"Binary": ["Div", a, {"Num": 0.0}]}}]]})
+
     def test_attention_is_read_doubled_and_kv_decode_directly(self):
         e = {"Binary": ["Add", {"Num": 1.0},
                         {"Binary": ["Add", {"Binary": ["Mul", {"Num": 8.0}, {"Ctx": "Attn"}]},

@@ -63,8 +63,10 @@ def one_ref(r, what):
 def fold(e):
     """The value of an expression that does not depend on the session or the
     context, else None: constants, products with a zero constant, and the
-    arithmetic, division and rounding of constants (a difference stops at 0,
-    as ℕ does)."""
+    arithmetic, division and rounding of constants, as the interpreter
+    computes them (a negative difference stays negative, and `nat` refuses
+    a negative result: a budget or a chunk folds to the interpreter's
+    value, not to ℕ's)."""
     if "Num" in e:
         return e["Num"]
     if "Binary" in e:
@@ -76,7 +78,7 @@ def fold(e):
             return None
         if op == "Div":
             return x / y if y != 0 else None
-        return {"Add": x + y, "Sub": max(x - y, 0), "Mul": x * y}.get(op)
+        return {"Add": x + y, "Sub": x - y, "Mul": x * y}.get(op)
     if "Call" in e:
         f, args = e["Call"]
         vals = [fold(a["Expr"]) if "Expr" in a else None for a in args]
@@ -149,6 +151,8 @@ class Expr:
                 op, a, b = args[0]["Expr"]["Binary"]
                 if op == "Div" and fold(b) is not None:
                     k = nat(fold(b), "ceil divisor")
+                    if k == 0:
+                        raise Fragment("ceil of a division by 0")
                     return f"(({self.nat(a)} + {k - 1}) / {k})"
             if f in ("Min", "Max") and len(args) == 2 and all("Expr" in a for a in args):
                 return f"({f.lower()} {self.nat(args[0]['Expr'])} {self.nat(args[1]['Expr'])})"
@@ -297,9 +301,6 @@ class Lean:
                 return f"(x.cachedIn {one_ref(args[0]['Pool'], 'cachedin')})"
             raise Fragment(f"call {f}")
         raise Fragment(f"expression {e}")
-
-    def expr(self, e):
-        return Expr(self.leaf).nat(e)
 
     def top(self, e):
         """An expression in statement position: drop one pair of outer parentheses."""
