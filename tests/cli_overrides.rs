@@ -11,13 +11,19 @@ fn misspelled_and_empty_override_names_do_not_produce_ir() {
         failure(
             &f.run(&["ir", "model.sq", "--set", &format!("{name}=2")]),
             if name.is_empty() { 2 } else { 1 },
-            &["--set"],
+            // an empty name is the CLI's argument error; a misspelled one
+            // the linker's, which speaks of the `let` it overrides
+            &[if name.is_empty() {
+                "--set"
+            } else {
+                "`let` override"
+            }],
         );
     }
     failure(
         &f.run(&["ir", "model.sq", "--set", "raet=2"]),
         1,
-        &["unknown --set constant `raet`", "available constants: rate"],
+        &["unknown `let` override `raet`", "available constants: rate"],
     );
 }
 
@@ -48,7 +54,7 @@ fn sdk_cannot_inject_an_undeclared_constant() {
         ..Default::default()
     };
     let err = compile_source("run { horizon outside; }", &ov).unwrap_err();
-    assert!(err.contains("unknown --set constant `outside`"));
+    assert!(err.contains("unknown `let` override `outside`"));
     assert!(err.contains("available constants: (none)"));
 }
 

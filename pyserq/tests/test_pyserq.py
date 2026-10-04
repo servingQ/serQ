@@ -263,6 +263,25 @@ def test_an_override_on_ir_says_what_it_overrides():
         raise AssertionError("no ValueError")
 
 
+def test_an_override_error_names_the_let_or_def():
+    # sets= and defs= meet the library's errors; they speak of what is
+    # overridden, not of the CLI's --set and --def
+    for call, what in [
+        (lambda: pyserq.compile(MG1, sets={"nope": 1}), "unknown `let` override `nope`"),
+        (lambda: pyserq.compile(MG1, sets={"x y": 1}), "invalid `let` override name `x y`"),
+        (lambda: pyserq.compile(MG1, sets={"lam": "~"}), "invalid expression in the `let` override"),
+        (lambda: pyserq.compile(MG1, defs={"nope": "1"}), "unknown `def` override `nope`"),
+        (lambda: pyserq.compile(MG1, defs={"x y": "1"}), "invalid `def` override name `x y`"),
+        (lambda: pyserq.compile(MG1, defs={"service": "~exp("}), "invalid expression in the `def` override"),
+    ]:
+        try:
+            call()
+        except ValueError as e:
+            assert what in str(e) and "--set" not in str(e) and "--def" not in str(e), e
+            continue
+        raise AssertionError("no ValueError")
+
+
 def test_runs_in_threads_are_the_runs_alone():
     ps = [pyserq.compile(MG1, seed=s, horizon=1e6) for s in range(4)]
     t0 = time.time()
