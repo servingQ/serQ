@@ -671,7 +671,8 @@ one,
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); a victim
 the iteration has already served leaves it and its tokens return to the
-budget (scheduler.py:779-797), and a grower that preempts itself ends the
+budget (scheduler.py:779-797) and its hold caches its position, not the
+chunk the iteration gave it (§7); a grower that preempts itself ends the
 iteration's serving (scheduler.py:807-813); then the stage admits from the
 queues it serves. The iteration advances the clock by
 `C`, an expression in `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`; its
@@ -1011,9 +1012,18 @@ rather than from the previous prompt, and caches `prompt + o`.
 | a finished session's blocks stay in the free queue | `end` keeps the cache | `block_pool.py:776-805` |
 | a forced miss (a nonce at the head of the prompt) matches nothing; the old blocks stay | `reuse (0)` | trace |
 
-Not modelled: the watermark (0 by default), the "alone" exception of the
-long-prefill threshold, encoder inputs, speculative decoding, sliding
-window, priority scheduling and its victims, the deferred free of in-flight
+Not modelled, on purpose: a victim the PRIORITY path takes out of a step that
+had scheduled it leaves the full blocks of that step's chunk hashed in the
+prefix cache (`allocate_slots` cached them, kv_cache_manager.py:602-606, and
+the freed blocks return with their hashes, block_pool.py:776-805), though
+the step never computes their KV; serQ caches what was computed, the
+position (§3).
+
+Not modelled: the watermark (0 by default), the adaptive long-prefill
+threshold (off by default), encoder inputs, speculative decoding, sliding
+window, the PRIORITY policy's choice of victim (the largest `(priority,
+arrival_time)`; serQ's `preempt lifo` takes the latest admitted, as FCFS's
+`running[-1]`), the deferred free of in-flight
 blocks, asynchronous scheduling (§8), and cross-session prefix sharing
 (cache entries are per session, §9).
 
