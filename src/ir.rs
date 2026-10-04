@@ -1133,10 +1133,21 @@ impl Validator<'_> {
                         .iter()
                         .find(|s| !matches!(s.kind, CStageKind::Step(_)))
                 {
+                    let kind = match s.kind {
+                        CStageKind::Fifo(_) => "fifo",
+                        CStageKind::Ps(_) => "ps",
+                        CStageKind::Delay => "delay",
+                        CStageKind::Step(_) => unreachable!("found a stage that is not a step"),
+                    };
+                    let n = &s.name;
+                    let what = if s.index.is_some() {
+                        format!("a member of `{n}`")
+                    } else {
+                        format!("`{n}`")
+                    };
                     return Err(format!(
-                        "`budget_left({})`: `{}` is not a step stage; budget_left reads a \
-                         step engine's token budget",
-                        s.name, s.name
+                        "`budget_left({n})`: {what} is a {kind} stage; only a step stage has \
+                         a token budget"
                     ));
                 }
                 Ok(())

@@ -134,7 +134,13 @@ fn budget_left_needs_a_step_stage() {
         session { set b = budget_left(d); run d (1); end; }
         run { horizon 10; }";
     let e = compile_source(src, &Overrides::default()).unwrap_err();
-    assert!(e.contains("`d` is not a step stage"), "{e}");
+    assert!(e.contains("`budget_left(d)`: `d` is a delay stage"), "{e}");
+    // an array is named as one
+    let fam = src
+        .replace("stage d : delay;", "stage d : delay; stage F[2] : fifo;")
+        .replace("budget_left(d)", "budget_left(F[serial])");
+    let e = compile_source(&fam, &Overrides::default()).unwrap_err();
+    assert!(e.contains("a member of `F` is a fifo stage"), "{e}");
     let ok = src.replace("budget_left(d)", "budget_left(engine)");
     let mut p = compile_source(&ok, &Overrides::default()).unwrap();
     // the same refusal from IR: point the call at the delay stage
@@ -154,7 +160,7 @@ fn budget_left_needs_a_step_stage() {
     };
     r.base = d;
     let e = p.validate().unwrap_err();
-    assert!(e.contains("`d` is not a step stage"), "{e}");
+    assert!(e.contains("`budget_left(d)`: `d` is a delay stage"), "{e}");
 }
 
 #[test]

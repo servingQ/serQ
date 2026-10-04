@@ -3370,8 +3370,7 @@ impl<'p> Interp<'p> {
                 }
                 let p = self.p;
                 let CStageKind::Step(spec) = &p.stages[s].kind else {
-                    self.error = Some("budget_left needs a step stage".into());
-                    return 0.0;
+                    unreachable!("Program::validate refuses budget_left of a non-step stage (#268)")
                 };
                 let (budget, _, want) = self.pre_iteration(s, spec);
                 (budget - want).max(0.0)
