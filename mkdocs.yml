@@ -131,6 +131,7 @@ nav:
       - Separate prefill/decode batches: design/exclusive-prefill.md
       - Serving a subset: design/serve-only.md
       - Claims: design/claims.md
+      - Stability: design/stability.md
       - Waiting selection: design/waiting-selection.md
       - Queues: design/queue.md
       - Explicit gateways: design/explicit-gateways.md

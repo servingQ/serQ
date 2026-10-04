@@ -40,7 +40,8 @@ def family_token_rate (w : Workload) : Prop :=
     w.init.length ≤ 500 ∧
     w.turns = [] ∧
     w.turnSlot = none ∧
-    w.computedSlot = some 8
+    w.computedSlot = some 8 ∧
+    w.arriveSlot = some 12
 
 /-- `claim token_rate` of `bari_rad.sq`. -/
 def token_rate : Prop :=
@@ -52,6 +53,7 @@ def family_optimal_tiling (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
+    w.arriveSlot = some 12 ∧
     ∀ i < w.init.length, (((w.attr i 10) = (128 * ((w.attr i 10) / 128))))
 
 /-- `claim optimal_tiling` of `bari_rad.sq`. -/
@@ -82,6 +84,7 @@ def family_not_work_conserving (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
+    w.arriveSlot = some 10 ∧
     ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
 
 /-- `claim not_work_conserving` of `dai_fastertransformer.sq`. -/
@@ -94,6 +97,7 @@ def family_token_rate (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
+    w.arriveSlot = some 10 ∧
     ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
 
 /-- `claim token_rate` of `dai_fastertransformer.sq`. -/
@@ -124,6 +128,7 @@ def family_work_conserving (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
+    w.arriveSlot = some 10 ∧
     ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
 
 /-- `claim work_conserving` of `dai_sarathi.sq`. -/
@@ -136,11 +141,25 @@ def family_token_rate (w : Workload) : Prop :=
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
+    w.arriveSlot = some 10 ∧
     ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
 
 /-- `claim token_rate` of `dai_sarathi.sq`. -/
 def token_rate : Prop :=
   EveryIteration deployment family_token_rate prog fun r => ((r.served * 4675) ≤ (128 * r.start))
+
+/-- The workloads `claim bounded` quantifies over: its own `given` only. -/
+def family_bounded (w : Workload) : Prop :=
+    w.init.length ≤ 500 ∧
+    w.turns = [] ∧
+    w.turnSlot = none ∧
+    w.computedSlot = some 8 ∧
+    w.arriveSlot = some 10 ∧
+    ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
+
+/-- `claim bounded` of `dai_sarathi.sq`. -/
+def bounded : Prop :=
+  EveryIteration deployment family_bounded prog fun r => ((r.arrived * 1280) ≤ (r.served + 165120))
 
 end DaiSarathi
 

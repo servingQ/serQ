@@ -66,7 +66,7 @@ def main (args : List String) : IO UInt32 := do
     fun st => c 0 + c 1 * st.tokens + c 2 * st.prefilled + c 3 * st.decoders
       + c 4 * st.kvDecode + c 5 * st.attention2, none⟩
   let computedSlot ← IO.ofExcept (natOf (j.getObjValD "computedSlot"))
-  let w : Workload := ⟨init, sessions, some turnSlot, moreSlot, some computedSlot⟩
+  let w : Workload := ⟨init, sessions, some turnSlot, moreSlot, some computedSlot, none⟩
   let t0 ← IO.monoMsNow
   let m := loop D horizon (start D w.init.length w.attr Oracle.vllmTurn w)
   let n := m.obs.length

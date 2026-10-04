@@ -244,6 +244,71 @@
           }
         ]
       }
+    },
+    {
+      "name": "bounded",
+      "kind": {
+        "EveryIteration": 0
+      },
+      "expr": {
+        "Binary": [
+          "Le",
+          {
+            "Binary": [
+              "Mul",
+              {
+                "Ctx": "Arrived"
+              },
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Num": 290.0
+                  },
+                  {
+                    "Num": 990.0
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Binary": [
+              "Add",
+              {
+                "Ctx": "Served"
+              },
+              {
+                "Binary": [
+                  "Mul",
+                  {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Num": 128.0
+                      },
+                      {
+                        "Num": 1.0
+                      }
+                    ]
+                  },
+                  {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Num": 290.0
+                      },
+                      {
+                        "Num": 990.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
     }
   ]
 }

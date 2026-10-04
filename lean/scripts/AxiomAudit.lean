@@ -58,6 +58,7 @@ import Serq
 #print axioms SerqLang.Exec.every_iteration_of
 #print axioms SerqLang.Papers.DaiSarathi.token_rate
 #print axioms SerqLang.Papers.DaiSarathi.work_conserving
+#print axioms SerqLang.Papers.DaiSarathi.bounded
 #print axioms SerqLang.Papers.DaiFastertransformer.token_rate
 #print axioms SerqLang.Papers.DaiFastertransformer.not_work_conserving
 #print axioms SerqLang.Papers.BariRad.token_rate

@@ -17,6 +17,7 @@ example : Claims.DaiFastertransformer.not_work_conserving := Papers.DaiFastertra
 example : Claims.DaiFastertransformer.token_rate := Papers.DaiFastertransformer.token_rate
 example : Claims.DaiSarathi.work_conserving := Papers.DaiSarathi.work_conserving
 example : Claims.DaiSarathi.token_rate := Papers.DaiSarathi.token_rate
+example : Claims.DaiSarathi.bounded := Papers.DaiSarathi.bounded
 example : Claims.KongSvf.queueing_bound := Papers.KongSvf.queueing_bound
 
 end ClaimsProved

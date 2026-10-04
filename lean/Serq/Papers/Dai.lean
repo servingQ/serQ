@@ -69,7 +69,7 @@ theorem token_rate : Claims.DaiFastertransformer.token_rate :=
     exact staircase_rate 1128 3547 128 1 st.tokens (by norm_num) (by have : st.tokens ≤ 128 := h; omega)) _ _
 
 /-- Two requests, the second arriving 467.5 ms after the first. -/
-def witness : Workload := ⟨[[(10, 46750)], [(10, 93500)]], [], none, 0, some 8⟩
+def witness : Workload := ⟨[[(10, 46750)], [(10, 93500)]], [], none, 0, some 8, some 10⟩
 
 theorem reach_iterate (D : Deployment) (w : Workload) (P : Prog) :
     ∀ k, Reach D w P ((step D)^[k] (Exec.start D w.init.length w.attr P w))
@@ -86,7 +86,7 @@ def at_ (k : ℕ) : Machine :=
 
 theorem not_work_conserving : Claims.DaiFastertransformer.not_work_conserving := by
   refine ⟨witness, ?_, at_ 12, reach_iterate _ _ _ 12, ?_⟩
-  · refine ⟨by decide, rfl, rfl, rfl, ?_⟩
+  · refine ⟨by decide, rfl, rfl, rfl, rfl, ?_⟩
     intro i hi
     simp only [witness, List.length_cons, List.length_nil] at hi
     interval_cases i <;> decide

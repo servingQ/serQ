@@ -30,9 +30,10 @@ claim NAME [given ( expr )] : at end ( expr ) ;
 - **`every iteration of S (e)`**: `e` holds at the start of every iteration
   of the step stage `S`, after its batch is formed (the moment the cost is
   read). It reads the cost's variables, `now`, the pool and stage
-  observables, and two new ones. `demand` is what the residents could take
+  observables, and three new ones. `demand` is what the residents could take
   with an unlimited budget, Dai et al.'s $\sum_i (p_i + \mathbf 1\{p_i=0\})$.
-  `served` is the tokens of the earlier iterations.
+  `served` is the tokens of the earlier iterations, and `arrived` the
+  sessions started by the iteration's start.
 - **`some iteration of S (e)`**: some iteration of some path. A refutation,
   such as FasterTransformer not being work-conserving.
 - **`at end (e)`**: when every session has ended, over aggregates of the
@@ -83,7 +84,8 @@ interpreter already:
 - `queue by` in `Exec.admitHeads`: the waiting session of least key, ties in
   queue order (`PoolDef.key`, `argminKey`);
 - an iteration record, `Machine.last` and `Machine.served`, which is what a
-  claim over iterations reads;
+  claim over iterations reads; its `arrived` counts the sessions whose
+  arrival time (`Workload.arriveSlot`) is not after the iteration's start;
 - costs with terms `k * ceil(tokens / b)` in the generator.
 
 `Exec.admit`'s fold was named (`admitPool`) and `Exec.step` split into
@@ -112,7 +114,7 @@ Three results hold for every program, not only the papers':
 
 | Paper | Claim | Proof |
 |---|---|---|
-| Dai et al. (#257) | `token_rate`, `work_conserving` (Sarathi), `not_work_conserving` (FasterTransformer) | `served_rate`; `work_conserving`; a witness of two requests, computed in the kernel |
+| Dai et al. (#257) | `token_rate`, `work_conserving`, `bounded` (Sarathi), `not_work_conserving` (FasterTransformer) | `served_rate`; `work_conserving`; Lindley's potential, kept by every event; a witness of two requests, computed in the kernel |
 | Bari et al. (#260) | `token_rate`, `optimal_tiling` (RAD) | `served_rate`; an invariant of RAD's run: prefill work stays a multiple of the tile |
 | Kong et al. (#258) | `queueing_bound` (SVF), and Theorem 3.2 from it | an invariant of SVF's run: Lemma A.2's potential, kept by every operation; Proposition 3.1 for every feasible schedule |
 
@@ -123,7 +125,7 @@ propositions and the proofs.
 ## The price
 
 - **IR**: one field, `Program.claims`. One `CExpr` variant (`Agg`) and two
-  `CtxVar` variants (`Demand`, `Served`). Three moments (`Given`,
+  `CtxVar` variants (`Demand`, `Served`, `Arrived`). Three moments (`Given`,
   `Iteration`, `End`). No program without claims changes, and no oracle IR
   file changes.
 - **Language**: six keywords (`claim`, `every`, `some`, `iteration`, `of`,

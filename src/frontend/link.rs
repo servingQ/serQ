@@ -157,7 +157,7 @@ struct Linker<'a> {
 /// rejects it, as it does a `let` and an attribute of one name): the
 /// expression that meant the context variable would read the attribute
 /// instead (#231).
-pub const CONTEXT_VARS: [(&str, CtxVar); 19] = [
+pub const CONTEXT_VARS: [(&str, CtxVar); 20] = [
     ("now", CtxVar::Now),
     ("waited", CtxVar::Waited),
     ("size", CtxVar::Size),
@@ -177,6 +177,7 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 19] = [
     ("remaining", CtxVar::Remaining),
     ("demand", CtxVar::Demand),
     ("served", CtxVar::Served),
+    ("arrived", CtxVar::Arrived),
 ];
 
 /// The most terms the aggregates (`max j in n (e)`) of one program write

@@ -47,6 +47,7 @@ read the attribute), and the linker rejects the program.
 | `remaining` | number | `Serve` | tokens the resident's run has left |
 | `demand` | number | `Iteration` | tokens the residents could take this iteration with no budget: `min(1, remaining)` per decode, the remaining work up to the `chunk` per prefill, over the residents after the batch is scheduled (those `serve only` leaves out included) |
 | `served` | number | `Iteration` | tokens the stage scheduled in its earlier iterations, from the start of the run |
+| `arrived` | number | `Iteration` | sessions the workload has started by the iteration's start, one arriving at that instant included |
 
 `residents`, `decoders`, `kv_decode` and `kv_prefill` are totals over the residents, the same for
 every resident at `Serve`. At `Budget` and `Serve` they count every resident

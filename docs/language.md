@@ -145,7 +145,7 @@ The rules that are the language's, not the catalogue's:
   and serve keys and a claim over its iterations; `tokens`, `prefilled`,
   `attention` its cost's and that claim's (what the iteration scheduled);
   `decoding`, `admission`, `remaining` its `serve by` keys' and `serve
-  only`'s; `demand`, `served` a claim over iterations'. The aggregates of a
+  only`'s; `demand`, `served`, `arrived` a claim over iterations'. The aggregates of a
   run's observations, `total(o)`, `count(o)`, `largest(o)`, `smallest(o)`,
   `prefix_total(o)`, are a claim `at end`'s.
   `budget_left(step)` plans an iteration and is not read in that step's own
@@ -882,13 +882,17 @@ an iteration starts, after its batch is scheduled, where the cost is read:
 it reads the cost's variables (`tokens`, `prefilled`, `decoders`,
 `residents`, `kv_decode`, `kv_prefill`, `attention`), `now` (the start),
 the observables `queue`, `busy`, `used`, `free`, `holders`, `queued` (a
-pool or stage named by a number, as in a gauge) and two variables of its
+pool or stage named by a number, as in a gauge) and three variables of its
 own. `demand` is the tokens the stage's residents could take in this
 iteration if the budget were unlimited: one for a decode with work left,
 the remaining prompt (up to the `chunk`) for a prefill, summed over the
 residents after the batch is scheduled, the ones it admitted and the ones
 `serve only` leaves out included. `served` is the tokens the stage
-scheduled in its earlier iterations, from the start of the run. A claim
+scheduled in its earlier iterations, from the start of the run. `arrived`
+is the sessions the workload has started by the iteration's start, one
+arriving at that instant included, so `arrived * W - served` is the work
+that has arrived and not been scheduled when every session brings `W`
+tokens. A claim
 `at end` reads the constants, `now` (the end) and the aggregates of the
 run's observations, every value observed under `o` from time 0, warm-up
 included: `total(o)`, `count(o)`, `largest(o)` and `smallest(o)` (0 when

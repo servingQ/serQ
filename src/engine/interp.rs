@@ -476,6 +476,7 @@ struct Ctx {
     remaining: f64,
     demand: f64,
     served: f64,
+    arrived: f64,
 }
 
 impl Ctx {
@@ -3073,7 +3074,7 @@ impl<'p> Interp<'p> {
 
     /// Read the claims over the iterations of stage `st` as an iteration
     /// starts, with the cost's context `ctx`, `demand` (what the residents
-    /// could take in it, `chunk` capping a prefill's) and `served`.
+    /// could take in it, `chunk` capping a prefill's), `served` and `arrived`.
     fn check_iteration(&mut self, st: usize, chunk: f64, ctx: &Ctx) {
         let p = self.p;
         let mine = |c: &crate::ir::Claim| c.kind.stage() == Some(st);
@@ -3094,6 +3095,7 @@ impl<'p> Interp<'p> {
         let ctx = Ctx {
             demand,
             served: self.served[st],
+            arrived: self.arrivals as f64,
             ..ctx.clone()
         };
         let now = self.now;
@@ -3335,6 +3337,7 @@ impl<'p> Interp<'p> {
                 CtxVar::Remaining => ctx.remaining,
                 CtxVar::Demand => ctx.demand,
                 CtxVar::Served => ctx.served,
+                CtxVar::Arrived => ctx.arrived,
             },
             CExpr::Agg(a, k) => a.of(self.observed[*k].as_deref().unwrap_or(&[])),
             CExpr::Sample(kind, args) => {
