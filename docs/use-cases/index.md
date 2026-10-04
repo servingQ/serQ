@@ -1,20 +1,34 @@
 # Use cases
 
-Real serving systems and workloads written as serQ programs. Each page puts the source or the traffic next to the program that describes it, says what the program checks, and says what it leaves out.
+Serving systems, workloads and scheduling papers written as serQ programs, in two kinds: programs that are run, and programs whose claims are proved.
+
+## Simulation
+
+A real serving system or workload as a program that runs: the source next to
+the program, what the runs show, and what the program leaves out.
 
 | Page | What it shows |
 |---|---|
 | [vLLM](vllm.md) | The vLLM v1 engine, checked against the scheduler oracle |
-| [vllm-ascend](ascend.md), [vllm-rbln](rbln.md) | Vendor plugins' scheduling and KV-cache behavior, as reduced specifications |
+| [vllm-ascend](ascend.md), [vllm-rbln](rbln.md) | Vendor plugins' scheduling and KV-cache behavior, as reduced specifications ([below](#vendor-plugins)) |
 | [Input shapes and padding](input-shapes.md) | How scheduler output becomes compiled device inputs, per vendor |
 | [Different workloads](workloads.md) | One engine under single-turn, chat and subagent traffic |
 | [Prefill/decode over NIXL](pd.md) | llm-d's prefill/decode disaggregation with the KV transfer |
 | [FasterTransformer](fastertransformer.md) | Decode first, no mixed batching (`serve only`), unstable where Sarathi is stable |
-| [Throughput-optimal scheduling](dai.md) | Dai et al.: the engine's capacity, Sarathi's work conservation and FasterTransformer's failure, stated as claims and proved in Lean |
-| [RAD: optimal tiling](bari.md) | Bari et al.: the upper bound of Theorem 1 and RAD's full tiles, stated as claims and proved in Lean |
-| [Smallest Volume First](kong.md) | Kong et al.: SVF's waiting bound and its competitive ratio 1 + 2/(1 − α), proved in Lean over the program's runs |
 
-The last three pages follow one shape: the paper, its contributions, the serving system it assumes, that system as a serQ program, the paper's propositions, the propositions as `claim`s of the program, and the Lean proof of the claims about every path of the program.
+## Formal verification
+
+A scheduling paper's serving system as a program, the paper's propositions as
+`claim`s of it, and the Lean proof of the claims about every path of the
+program. Each page follows one shape: the paper, its contributions, the
+serving system it assumes, that system as a serQ program, the propositions,
+the claims, and the proof.
+
+| Page | What it proves |
+|---|---|
+| [Throughput-optimal scheduling](dai.md) | Dai et al.: the engine's capacity, Sarathi's work conservation and FasterTransformer's failure |
+| [RAD: optimal tiling](bari.md) | Bari et al.: the upper bound of Theorem 1 and RAD's full tiles |
+| [Smallest Volume First](kong.md) | Kong et al.: SVF's waiting bound and its competitive ratio 1 + 2/(1 − α) |
 
 ## Vendor plugins
 

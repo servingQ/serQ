@@ -86,16 +86,18 @@ nav:
           - Deployment view: visualization/deployment.md
   - Use cases:
       - use-cases/index.md
-      - vLLM: use-cases/vllm.md
-      - vllm-ascend: use-cases/ascend.md
-      - vllm-rbln: use-cases/rbln.md
-      - Input shapes and padding: use-cases/input-shapes.md
-      - Different workloads: use-cases/workloads.md
-      - Prefill/decode over NIXL: use-cases/pd.md
-      - FasterTransformer: use-cases/fastertransformer.md
-      - Throughput-optimal scheduling (Dai et al.): use-cases/dai.md
-      - "RAD: optimal tiling (Bari et al.)": use-cases/bari.md
-      - Smallest Volume First (Kong et al.): use-cases/kong.md
+      - Simulation:
+          - vLLM: use-cases/vllm.md
+          - vllm-ascend: use-cases/ascend.md
+          - vllm-rbln: use-cases/rbln.md
+          - Input shapes and padding: use-cases/input-shapes.md
+          - Different workloads: use-cases/workloads.md
+          - Prefill/decode over NIXL: use-cases/pd.md
+          - FasterTransformer: use-cases/fastertransformer.md
+      - Formal verification:
+          - Throughput-optimal scheduling (Dai et al.): use-cases/dai.md
+          - "RAD: optimal tiling (Bari et al.)": use-cases/bari.md
+          - Smallest Volume First (Kong et al.): use-cases/kong.md
   - API Reference:
       - api/index.md
       - Program: api/program.md

@@ -44,7 +44,7 @@ the simulation, the proofs and the figure cannot disagree with one another.
     inter-token latency, and whatever the program observes (time to first
     token, say) with a confidence interval. `--set` and `--def` change a
     constant or a law without editing the file, for sweeps.
-    [Getting started](getting-started.md)
+    [Getting started](getting-started.md), [use cases](use-cases/index.md#simulation)
 
 - **State claims and prove them**
 
@@ -52,8 +52,8 @@ the simulation, the proofs and the figure cannot disagree with one another.
     the program: the simulator checks it on the path it runs, and Lean
     proves it about all of them. Three papers' propositions are proved this
     way, and the memory invariant `allocated + cached ≤ cap` is a theorem
-    for every pool.
-    [The Lean model](lean.md), [Claims](design/claims.md)
+    of the pool model.
+    [The Lean model](lean.md), [Claims](design/claims.md), [use cases](use-cases/index.md#formal-verification)
 
 - **Draw it**
 
