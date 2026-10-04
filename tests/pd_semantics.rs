@@ -194,6 +194,36 @@ fn grow_and_growing_need_an_enclosing_hold() {
     check_source(src, &Overrides::default()).unwrap();
 }
 
+/// `kv[j]` in a hold's body names the hold's pool only while `j` is what it
+/// was at admission: a body that sets `j` and then grows `kv[j]` grew another
+/// hold, or failed in the run, though it linked (#282).
+#[test]
+fn a_hold_whose_body_sets_its_index_does_not_act_on_it() {
+    let run = |body: &str| {
+        let src = format!(
+            "pool kv[2] {{ cap 4096; block 16; }} stage d : delay;
+             workload {{ arrive batch(2); init {{ set j = 0; }} }}
+             session {{ hold kv[1] (16) {{ hold kv[j] (16) {{ {body} run d (1); }} }} end; }}
+             run {{ horizon 10; }}"
+        );
+        check_source(&src, &Overrides::default())
+    };
+    for body in [
+        "set j = 1; grow kv[j] (16);",
+        "branch (j == 0) { set j = 1; } grow kv[j] (16);",
+        "grow kv[j] (16); choose j in 2 by (j);",
+        "set j = 1; release kv[j];",
+    ] {
+        let e = run(body).err().unwrap_or_else(|| panic!("`{body}` linked"));
+        assert!(
+            e.contains("sets `j` in its body, which its index reads"),
+            "{body}: {e}"
+        );
+    }
+    // setting it is fine when nothing in the body acts on the pool again
+    run("set j = 1;").unwrap();
+}
+
 /// The transfer: the source's lease outlives its scope, the KV is in both
 /// pools during the link run and in the destination alone after it. The source's next session (queued at
 /// 0.5) is admitted when the transfer ends (t = 2), the destination's

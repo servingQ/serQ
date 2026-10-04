@@ -663,23 +663,44 @@ impl Program {
     /// hold of their pool around them, as the reference is written, index
     /// included; `release` may instead end a lease of it; a hold leases
     /// one of its own pools (#272). Holds nest as the blocks do.
+    ///
+    /// A hold whose index reads an attribute its body sets is *stale* for
+    /// these: `hold kv[j] { set j = 1; grow kv[j] (…); }` reads `kv[j]` twice,
+    /// at admission and at the `grow`, and the two may name different pools
+    /// (#282). The interpreter would grow another hold, or none.
     fn enclosed<'a>(
         &'a self,
         b: BlockId,
-        held: &mut Vec<&'a CRef>,
+        held: &mut Vec<(&'a CRef, Option<usize>)>,
         leased: &[&'a CRef],
     ) -> Result<(), String> {
-        let need = |held: &[&CRef], r: &CRef, what: &str, or_leased: bool| {
-            let leased: &[&CRef] = if or_leased { leased } else { &[] };
-            if held.iter().chain(leased).any(|h| *h == r) {
-                return Ok(());
-            }
+        let need = |held: &[(&CRef, Option<usize>)], r: &CRef, what: &str, or_leased: bool| {
             let name = &self.pools[r.base].name;
             let shown = match &r.index {
                 None => name.clone(),
                 Some(_) => format!("{name}[…]"),
             };
-            let hint = if held.iter().chain(leased).any(|h| h.base == r.base) {
+            if let Some(&(_, stale)) = held.iter().rev().find(|(h, _)| *h == r) {
+                return match stale {
+                    None => Ok(()),
+                    Some(a) => Err(format!(
+                        "`{what} {shown}`: the hold of `{shown}` sets `{}` in its body, which \
+                         its index reads, so the two may name different pools; name the \
+                         member in an attribute the body does not set",
+                        self.attrs.get(a).map_or("?", |s| s.as_str())
+                    )),
+                };
+            }
+            let leased: &[&CRef] = if or_leased { leased } else { &[] };
+            if leased.contains(&r) {
+                return Ok(());
+            }
+            let hint = if held
+                .iter()
+                .map(|(h, _)| h)
+                .chain(leased)
+                .any(|h| h.base == r.base)
+            {
                 ": write the pool as the hold does, index included"
             } else if or_leased {
                 ": it takes an enclosing hold's allocation, or a lease of it"
@@ -705,7 +726,15 @@ impl Program {
                         ));
                     }
                     let depth = held.len();
-                    held.extend(pools.iter().map(|(r, _, _)| r));
+                    let set = self.assigned(*body);
+                    held.extend(pools.iter().map(|(r, _, _)| {
+                        let stale = set.iter().copied().find(|a| {
+                            r.index
+                                .as_ref()
+                                .is_some_and(|i| i.any(&|x| matches!(x, CExpr::Attr(s) if s == a)))
+                        });
+                        (r, stale)
+                    }));
                     self.enclosed(*body, held, leased)?;
                     held.truncate(depth);
                 }
@@ -724,6 +753,23 @@ impl Program {
             }
         }
         Ok(())
+    }
+
+    /// The attributes a block sets, in it or in a block in it.
+    fn assigned(&self, b: BlockId) -> Vec<usize> {
+        let mut out = vec![];
+        for s in &self.blocks[b] {
+            match s {
+                CStmt::Set(a, _) | CStmt::Choose { var: a, .. } => out.push(*a),
+                CStmt::Hold { body, .. } | CStmt::Loop(body) => out.extend(self.assigned(*body)),
+                CStmt::Branch(_, x, y) => {
+                    out.extend(self.assigned(*x));
+                    out.extend(self.assigned(*y));
+                }
+                _ => {}
+            }
+        }
+        out
     }
 
     fn validate_flows(&self) -> Result<(), String> {
