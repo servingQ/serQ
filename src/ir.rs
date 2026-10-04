@@ -22,6 +22,29 @@ use serde::{Deserialize, Serialize};
 /// (a hold without it consumes nothing of the session's own entry).
 pub const IR_VERSION: u32 = 11;
 
+/// A reason `Program::validate` refuses a program, and the statement it is
+/// about (block, index in it) when it is about one.
+#[derive(Debug)]
+pub struct Invalid {
+    pub message: String,
+    pub at: Option<(BlockId, usize)>,
+}
+
+impl Invalid {
+    fn at(message: String, block: BlockId, index: usize) -> Self {
+        Self {
+            message,
+            at: Some((block, index)),
+        }
+    }
+}
+
+impl From<String> for Invalid {
+    fn from(message: String) -> Self {
+        Self { message, at: None }
+    }
+}
+
 /// The most sessions a workload may start at once (`closed`, `batch`): each
 /// is a state of its own, made before the run begins.
 pub const MAX_SESSIONS: usize = 1_000_000;
@@ -810,7 +833,7 @@ impl Program {
         b: BlockId,
         held: &mut Vec<(&'a CRef, Option<&'static str>)>,
         leased: &[&'a CRef],
-    ) -> Result<(), String> {
+    ) -> Result<(), Invalid> {
         let need =
             |held: &[(&CRef, Option<&'static str>)], r: &CRef, what: &str, or_leased: bool| {
                 let name = &self.pools[r.base].name;
@@ -851,7 +874,8 @@ impl Program {
                     "`{what} {shown}` outside a hold of `{shown}`{hint}"
                 ))
             };
-        for s in &self.blocks[b] {
+        for (k, s) in self.blocks[b].iter().enumerate() {
+            let here = |m: String| Invalid::at(m, b, k);
             match s {
                 CStmt::Hold {
                     pools, body, lease, ..
@@ -859,11 +883,11 @@ impl Program {
                     if let Some((r, _)) = lease
                         && !pools.iter().any(|(q, _, _)| q == r)
                     {
-                        return Err(format!(
+                        return Err(here(format!(
                             "`lease {}`: the hold does not take that pool (write it as the hold \
                              does, index included)",
                             self.pools[r.base].name
-                        ));
+                        )));
                     }
                     let depth = held.len();
                     let set = self.assigned(*body);
@@ -873,14 +897,14 @@ impl Program {
                             .iter()
                             .find(|&&a| i.any(&|x| matches!(x, CExpr::Attr(s) if *s == a)))
                         {
-                            return Err(format!(
+                            return Err(here(format!(
                                 "`hold {}[{}]`: its body changes `{}`, which the index reads, so \
                                  the member read at admission, at a statement inside and after a \
                                  preemption may differ; set it before the hold",
                                 self.pools[r.base].name,
                                 self.show_expr(i),
                                 self.attrs.get(a).map_or("?", |s| s.as_str())
-                            ));
+                            )));
                         }
                     }
                     held.extend(pools.iter().map(|(r, _, _)| {
@@ -909,12 +933,12 @@ impl Program {
                     self.enclosed(*body, held, leased)?;
                     held.truncate(depth);
                 }
-                CStmt::Grow(r, _) => need(held, r, "grow", false)?,
-                CStmt::Load(r, _) => need(held, r, "load", false)?,
-                CStmt::Release(r) => need(held, r, "release", true)?,
+                CStmt::Grow(r, _) => need(held, r, "grow", false).map_err(here)?,
+                CStmt::Load(r, _) => need(held, r, "load", false).map_err(here)?,
+                CStmt::Release(r) => need(held, r, "release", true).map_err(here)?,
                 CStmt::Run {
                     growing: Some(g), ..
-                } => need(held, g, "growing", false)?,
+                } => need(held, g, "growing", false).map_err(here)?,
                 CStmt::Branch(_, a, c) => {
                     self.enclosed(*a, held, leased)?;
                     self.enclosed(*c, held, leased)?;
@@ -1118,11 +1142,25 @@ impl Program {
     /// linker runs it on what it produces; it also guards IR read from JSON
     /// or built by tools.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_located().map_err(|e| e.message)
+    }
+
+    /// `validate`, with the statement an error is about, which the linker
+    /// maps back to the program's text (#279).
+    pub fn validate_located(&self) -> Result<(), Invalid> {
+        self.validate_statements()?;
+        self.validate_declarations()?;
+        Ok(())
+    }
+
+    /// The checks of the blocks and their statements.
+    fn validate_statements(&self) -> Result<(), Invalid> {
         if self.version != IR_VERSION {
             return Err(format!(
                 "IR version {} (this interpreter reads {IR_VERSION})",
                 self.version
-            ));
+            )
+            .into());
         }
         self.blocks_are_a_tree()?;
         let v = Validator { p: self };
@@ -1136,8 +1174,9 @@ impl Program {
             } else {
                 "session"
             };
-            for s in b {
-                v.stmt(s).map_err(|e| format!("{role}: {e}"))?;
+            for (k, s) in b.iter().enumerate() {
+                v.stmt(s)
+                    .map_err(|e| Invalid::at(format!("{role}: {e}"), i, k))?;
             }
         }
         for (k, blk) in [
@@ -1149,11 +1188,15 @@ impl Program {
         }
         // the workload draws marks; time passes in the session (#272)
         for (k, blk) in [("init", self.init), ("turn", self.turn)] {
-            if self.blocks[blk]
+            if let Some(at) = self.blocks[blk]
                 .iter()
-                .any(|s| !matches!(s, CStmt::Set(..) | CStmt::Observe(..)))
+                .position(|s| !matches!(s, CStmt::Set(..) | CStmt::Observe(..)))
             {
-                return Err(format!("{k}: workload blocks may only `set` and `observe`"));
+                return Err(Invalid::at(
+                    format!("{k}: workload blocks may only `set` and `observe`"),
+                    blk,
+                    at,
+                ));
             }
         }
         let leased: Vec<&CRef> = self
@@ -1169,7 +1212,16 @@ impl Program {
             })
             .collect();
         self.enclosed(self.session, &mut vec![], &leased)
-            .map_err(|e| format!("session: {e}"))?;
+            .map_err(|e| Invalid {
+                message: format!("session: {}", e.message),
+                at: e.at,
+            })?;
+        Ok(())
+    }
+
+    /// The checks of the declarations and the run.
+    fn validate_declarations(&self) -> Result<(), String> {
+        let v = Validator { p: self };
         self.validate_flows()?;
         for p in &self.pools {
             let at = |e| format!("pool `{}`: {e}", p.name);
