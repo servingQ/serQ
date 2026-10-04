@@ -214,7 +214,27 @@ fn a_preemptible_hold_reads_no_moving_index() {
         )
     };
     let e = check_source(&src("lifo"), &Overrides::default()).unwrap_err();
-    assert!(e.contains("a preempted hold reads it again"), "{e}");
+    assert!(e.contains("`kv` may preempt it"), "{e}");
+    // `computed`, which the preemption sets before the hold is admitted anew
+    let e = check_source(
+        &src("lifo").replace("aux[1 - min(1, floor(now))]", "aux[min(1, computed)]"),
+        &Overrides::default(),
+    )
+    .unwrap_err();
+    assert!(e.contains("`kv` may preempt it"), "{e}");
+    // a hold inside one that is preempted runs again too
+    let nested = src("lifo").replace(
+        "hold kv (16), aux[1 - min(1, floor(now))] (1) {",
+        "hold kv (16) { hold aux[1 - min(1, floor(now))] (1) {",
+    );
+    let nested = nested.replace(
+        "decode 200 growing kv;
+               }",
+        "decode 200 growing kv;
+               } }",
+    );
+    let e = check_source(&nested, &Overrides::default()).unwrap_err();
+    assert!(e.contains("`kv` may preempt it"), "{e}");
     // a hold no pool preempts reads its index once
     check_source(&src("none"), &Overrides::default()).unwrap();
 }

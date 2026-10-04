@@ -128,8 +128,11 @@ and `Observe`, that a `Run`'s mode is `Prefill` or `Decode` exactly on a
 step stage and its `growing` only there, that `Grow`, `Load`, `Release`
 and `growing` stand inside a `Hold` of an equal `CRef` (base, count and
 index expression; `Release` also where a hold leases it), and a hold leases
-one of its own pools, that the blocks reached from `init`, `turn` and
-`session` form a tree, that
+one of its own pools, that a hold's body changes no attribute its index
+reads and an index read again inside reads no state or clock, that a hold a
+pool may preempt reads no such index nor `cached`/`computed` (it is admitted
+anew), that the blocks reached from `init`, `turn` and `session` form a
+tree, that
 every context variable is read at the moment that supplies it, that every
 `Loop` lets time pass on every path through its body (a `Run` of
 non-constant or positive work, a `Hold` whose body does, or `End`;
