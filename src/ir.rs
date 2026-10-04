@@ -1787,6 +1787,17 @@ impl Validator<'_> {
                         Ok(())
                     }
                 };
+                // a hold takes each pool once: two entries for one pool are
+                // two allocations the statements inside cannot tell apart
+                // (`grow kv` grew one and was given back twice, #309)
+                for (k, (r, _, _)) in pools.iter().enumerate() {
+                    if pools[..k].iter().any(|(q, _, _)| q == r) {
+                        return Err(format!(
+                            "a hold takes pool `{}` twice; hold it once, with the units added",
+                            self.p.pools[r.base].name
+                        ));
+                    }
+                }
                 for (r, u, reserve) in pools {
                     self.cref(r, np, "pool", m)?;
                     self.expr(u, Moment::Admit)?;

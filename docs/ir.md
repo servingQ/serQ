@@ -135,7 +135,8 @@ every context variable is read at the moment that supplies it, that every
 non-constant or positive work, a `Hold` whose body does, or `End`;
 `docs/language.md` §3, Every instant settles), that a `Hold`'s units,
 `reserve` and `reuse` do not draw (they are re-read at every admission
-attempt; the rule of a queue key), that a `Hold` whose units or `reserve`
+attempt; the rule of a queue key), that a `Hold` takes each pool reference
+once, that a `Hold` whose units or `reserve`
 are a constant, rounded to blocks, fits some pool its reference may name
 (one that fits none is rejected whenever it is reached), that a `BudgetLeft` names step stages
 only (every member of the array it references), that a constant renewal

@@ -699,7 +699,8 @@ index. A pool's growers: the order they stalled, the head blocking the
 rest. Events at one instant: the order they were scheduled; sessions run
 in the order they became ready; jobs of a `ps` stage with equal finish
 tags finish in the order they started. Each pool has one queue, and a hold
-on several pools waits in its first pool's; where the heads of two queues
+on several pools (each once: a pool twice does not link) waits in its first
+pool's; where the heads of two queues
 both wait for room in one pool, or one stage serves several queues, the
 pool declared first is served first. A reader who finds an order not
 covered here has found a bug.

@@ -623,3 +623,31 @@ fn bad_amounts_and_indices_fail_the_run() {
          run { horizon 10; }");
     assert_eq!(r.ended, 1, "{}", r.text());
 }
+
+/// A hold takes each pool once. Twice, `grow` grew one entry, the pool's
+/// `used` once, and the release gave both back: `used` went negative (#309).
+#[test]
+fn a_hold_takes_a_pool_once() {
+    let src = "pool kv { cap 400; block 16; }
+        stage engine : step { budget 128; chunk 128; cost 0.001; memory kv; }
+        workload { arrive batch(3); }
+        session {
+          set prompt = 64;
+          hold kv (16), kv (16) { prefill prompt growing kv; decode 40 growing kv; }
+          end;
+        }
+        run { horizon 1; }";
+    let e = serq::compile_source(src, &Overrides::default()).unwrap_err();
+    assert!(e.contains("a hold takes pool `kv` twice"), "{e}");
+    // indices the run sets to one member: only the run can tell
+    let e = run_source(
+        "pool kv[2] { cap 64; } stage d : delay;
+         workload { arrive batch(1); init { set i = 1; set j = 1; } }
+         session { hold kv[i] (1), kv[j] (1) { run d (1); } end; }
+         run { horizon 10; }",
+        &Overrides::default(),
+        None,
+    )
+    .unwrap_err();
+    assert!(e.contains("the hold takes this member twice"), "{e}");
+}
