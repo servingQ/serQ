@@ -4,7 +4,7 @@ Run the executable semantics (`Serq.Exec`) of the vLLM replay program
 observations as CSV. A performance probe for "Lean core, Rust shell": the
 program is compiled in; the deployment and the sessions come from the file
 
-  {"pools": [[cap, block, viaEngine], ...], "budget": B, "chunk": c, "chunkLift": p (optional),
+  {"pools": [[cap, block, viaEngine], ...], "budget": B, "chunk": c, "chunkPool": p (optional),
    "memory": p, "cost": [c0, c_tok, c_pre, c_dec, c_kv, c_att2],
    "horizon": T, "turnSlot": t, "moreSlot": m, "computedSlot": c,
    "init": [[[slot, value], ...], ...], "sessions": [[[[slot, value], ...], ...], ...]}
@@ -62,10 +62,10 @@ def main (args : List String) : IO UInt32 := do
     | .error _ => pure #[(1 : Json), 0, 0, 0, 0, 0])
   let cs ← IO.ofExcept (costArr.toList.mapM natOf)
   let c := fun k => cs.getD k 0
-  -- `chunkLift: p`: the program's chunk is vLLM's rule, the cap `chunk` only
+  -- `chunkPool: p`: the program's chunk is vLLM's rule, the cap `chunk` only
   -- while the engine's jobs and pool `p`'s waiting requests number more
   -- than one (`scripts/lean_bench.py` writes it from the IR)
-  let chunkAt : Option (ChunkEnv → ℕ) := match j.getObjVal? "chunkLift" with
+  let chunkAt : Option (ChunkEnv → ℕ) := match j.getObjVal? "chunkPool" with
     | .ok v => (natOf v).toOption.map fun p c =>
         if c.residents + c.queued p > 1 then chunk else 0
     | .error _ => none

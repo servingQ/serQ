@@ -82,6 +82,10 @@ def chunk_rule(e):
     `Exec.ChunkEnv` (vLLM's `residents + queued(p) > 1 ? c : 0`,
     scheduler.py:606-616, is one)."""
     c = fold(e)
+    if c is None and "Cond" in e:
+        # a rule whose two outcomes are one constant is that constant
+        a, b = fold(e["Cond"][1]), fold(e["Cond"][2])
+        c = a if a is not None and a == b else None
     if c is not None:
         return c, None
     return 0, f"some fun c => {ChunkLean().top(e)}"
@@ -107,9 +111,13 @@ class ChunkLean:
             raise Fragment(f"chunk calls {f}")
         if "Binary" in e:
             op, a, b = e["Binary"]
-            sym = {"Add": "+", "Sub": "-", "Mul": "*"}.get(op)
+            sym = {"Add": "+", "Mul": "*"}.get(op)
             if sym:
                 return f"({self.expr(a)} {sym} {self.expr(b)})"
+            if op == "Sub":
+                # ℕ stops at 0 where the interpreter goes negative, and a
+                # comparison or a condition over the difference would differ
+                raise Fragment("chunk subtracts: ℕ truncates where the interpreter goes negative")
             rel = {"Lt": "<", "Le": "≤", "Gt": ">", "Ge": "≥", "Eq": "=", "Ne": "≠"}.get(op)
             if rel:
                 return f"(if {self.expr(a)} {rel} {self.expr(b)} then 1 else 0)"

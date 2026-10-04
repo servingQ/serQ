@@ -67,14 +67,14 @@ theorem vllm_alone :
 
 /-- serQ `tools/oracle/chunked.ir.json`: 3 requests, 1000 blocks of 16, budget 1024, 16 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_chunked :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, some fun c => if (if (c.residents + (c.queued 0)) > 1 then 1 else 0) ≠ 0 then 0 else 0⟩ 13
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none⟩ 13
       ⟨[[(9, 3000), (10, 2), (11, 0)], [(9, 700), (10, 5), (11, 1)], [(9, 100), (10, 3), (11, 1)]], [], none, 0, some 8, none⟩ =
     ([(0, 3), (1, 4), (2, 4)], [(0, 4), (1, 8), (2, 6)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/hol.ir.json`: 3 requests, 11 blocks of 16, budget 1024, 16 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_hol :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, some fun c => if (if (c.residents + (c.queued 0)) > 1 then 1 else 0) ≠ 0 then 0 else 0⟩ 25
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none⟩ 25
       ⟨[[(9, 96), (10, 10), (11, 0)], [(9, 96), (10, 10), (11, 0)], [(9, 16), (10, 3), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 11), (2, 11)], [(0, 10), (1, 20), (2, 13)], 0) := by
   decide +kernel
@@ -88,21 +88,21 @@ theorem vllm_longchunk :
 
 /-- serQ `tools/oracle/mixed.ir.json`: 6 requests, 40 blocks of 16, budget 512, 4 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_mixed :
-    outcome ⟨[⟨4, 1, true, none⟩, ⟨624, 16, false, none⟩], 512, 0, some 1, fun _ => 1, none, some fun c => if (if (c.residents + (c.queued 0)) > 1 then 1 else 0) ≠ 0 then 0 else 0⟩ 105
+    outcome ⟨[⟨4, 1, true, none⟩, ⟨624, 16, false, none⟩], 512, 0, some 1, fun _ => 1, none, none⟩ 105
       ⟨[[(9, 300), (10, 40), (11, 0)], [(9, 200), (10, 30), (11, 2)], [(9, 250), (10, 20), (11, 3)], [(9, 150), (10, 60), (11, 3)], [(9, 400), (10, 10), (11, 5)], [(9, 100), (10, 25), (11, 9)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 3), (2, 33), (3, 41), (4, 53), (5, 63)], [(0, 40), (1, 32), (2, 52), (3, 100), (4, 62), (5, 87)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/preempt.ir.json`: 2 requests, 11 blocks of 16, budget 100, 16 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_preempt :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 100, 0, some 1, fun _ => 1, none, some fun c => if (if (c.residents + (c.queued 0)) > 1 then 1 else 0) ≠ 0 then 0 else 0⟩ 65
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 100, 0, some 1, fun _ => 1, none, none⟩ 65
       ⟨[[(9, 80), (10, 30), (11, 0)], [(9, 80), (10, 30), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 31)], [(0, 30), (1, 60)], 1) := by
   decide +kernel
 
 /-- serQ `tools/oracle/seqcap.ir.json`: 4 requests, 1000 blocks of 16, budget 1024, 2 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_seqcap :
-    outcome ⟨[⟨2, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, some fun c => if (if (c.residents + (c.queued 0)) > 1 then 1 else 0) ≠ 0 then 0 else 0⟩ 18
+    outcome ⟨[⟨2, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none⟩ 18
       ⟨[[(9, 1024), (10, 5), (11, 0)], [(9, 1024), (10, 5), (11, 0)], [(9, 1024), (10, 5), (11, 0)], [(9, 1024), (10, 5), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 3), (2, 7), (3, 9)], [(0, 5), (1, 7), (2, 11), (3, 13)], 0) := by
   decide +kernel

@@ -135,6 +135,13 @@ class IterationCost(unittest.TestCase):
         # what an iteration's start does not supply is outside the fragment
         with self.assertRaises(generator.Fragment):
             generator.chunk_rule({"Ctx": "Ntok"})
+        # and so is a difference, which ℕ truncates where the interpreter does not
+        sub = {"Cond": [{"Binary": ["Sub", {"Ctx": "Nres"}, {"Num": 1.0}]}, {"Num": 24.0}, {"Num": 0.0}]}
+        with self.assertRaises(generator.Fragment):
+            generator.chunk_rule(sub)
+        # a rule whose outcomes are one constant is that constant
+        zero = {"Cond": [rule["Cond"][0], {"Num": 0.0}, {"Num": 0.0}]}
+        self.assertEqual(generator.chunk_rule(zero), (0.0, None))
 
     def test_attention_is_read_doubled_and_kv_decode_directly(self):
         e = {"Binary": ["Add", {"Num": 1.0},

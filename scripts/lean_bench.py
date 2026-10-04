@@ -104,15 +104,23 @@ def is_zero(e):
 
 def chunk_of(e):
     """A step's chunk as the bench takes it: a constant, or vLLM's rule
-    `residents + queued(p) > 1 ? c : 0` as the cap `c` and the pool `p`."""
+    `residents + queued(p) > 1 ? c : 0` as the cap `c` and the pool `p`
+    (the bench's program is vLLM's; JSON carries no Lean function)."""
     if "Num" in e:
         return e["Num"], None
-    test, then, other = e["Cond"]
-    op, lhs, one = test["Binary"]
-    plus, res, q = lhs["Binary"]
-    assert (op, one, plus, res, other) == ("Gt", {"Num": 1.0}, "Add", {"Ctx": "Nres"}, {"Num": 0.0}) \
-        and q["Call"][0] == "Queued", f"the bench takes a constant chunk or vLLM's rule, not {e}"
-    return then["Num"], q["Call"][1][0]["Pool"]["base"]
+    try:
+        test, then, other = e["Cond"]
+        op, lhs, one = test["Binary"]
+        plus, res, q = lhs["Binary"]
+        f, args = q["Call"]
+        ref = args[0]["Pool"]
+        ok = ((op, one, plus, res, other, f) == ("Gt", {"Num": 1.0}, "Add", {"Ctx": "Nres"}, {"Num": 0.0}, "Queued")
+              and "Num" in then and ref["count"] == 1 and ref.get("index") is None)
+    except (KeyError, TypeError, ValueError, IndexError):
+        ok = False
+    if not ok:
+        raise ValueError(f"the bench takes a constant chunk or vLLM's rule, not {e}")
+    return then["Num"], ref["base"]
 
 
 def write_workload(out, ir, cost):
@@ -138,7 +146,7 @@ def write_workload(out, ir, cost):
          "init": [[[a, nat(v)] for a, v in s["attrs"]] for s in ss],
          "sessions": [[[[a, nat(v)] for a, v in t] for t in s["turns"]] for s in ss]}
     if lift is not None:
-        w["chunkLift"] = lift
+        w["chunkPool"] = lift
     (out / "workload.json").write_text(json.dumps(w))
 
 
