@@ -34,9 +34,9 @@ it has observed (the correspondence, line by line, is `docs/language.md`
   part of the device the model does not carry.
 
 The language does not enforce the boundary: a `cost`, `budget`, `chunk`, a
-`ps` capacity, a hold's units or a `cache` clause may contain a `~`
-(`Program::validate` refuses a draw only in a queue key and a `serve` key,
-`src/ir.rs:795`, `:829`), and then the machine itself is random. No
+`ps` capacity or a `cache` clause may contain a `~` (`Program::validate`
+refuses a draw in a queue key, a `serve` key and a hold's header, which
+are re-read at every attempt), and then the machine itself is random. No
 program in `examples/` does this, and §6 asks whether the linker should
 refuse it.
 
@@ -217,8 +217,8 @@ An admission round admits at least one hold or changes nothing; there are
 finitely many waiting holds, and a session re-enters a queue only through
 a statement, which again precedes a blocking statement. When the
 hypothesis fails, a session executes without bound at one instant or is
-re-readied without bound, and the run time's two counters
-(`STEPS_PER_INSTANT`, `READIES_PER_SESSION`, `interp.rs`) end the run in
+re-readied without bound, and the run time's two per-session counters
+(`STEPS_PER_INSTANT`, `READIES_PER_INSTANT`, `interp.rs`) end the run in
 $\bot$. $\square$
 
 The hypothesis is about paths. The linker enforces its syntactic half:
@@ -344,9 +344,11 @@ workload, and the oracle's `first_divergence.sh` is the search for the
 instant in (iii) between the program and the real scheduler, whose
 workload is a trace and draws nothing. The *machine* may read $\xi$ too:
 an eviction key or spill predicate that samples reads $\xi_{\mathrm{evict}}$,
-and a `cost`, `budget`, `chunk`, `ps` capacity, hold unit or `cache`
-clause that samples reads $\xi_{\mathrm{sess}}$ (`interp.rs:2799`,
-`Which::Session`), interleaved with the sessions' own draws. No shipped
+and a `cost`, `budget`, `chunk`, `ps` capacity or `cache` clause that
+samples reads $\xi_{\mathrm{mach}}$ (`Which::Session` with no session,
+`interp.rs`); a hold's header may not draw, since it is re-read at every
+admission attempt and would otherwise move a session's later draws with
+the machine. No shipped
 program does either; one that does has a scheduler that is not a function
 of its state, and Proposition 1 (iii) fails for it at the first such draw.
 
@@ -666,9 +668,9 @@ candidates for an issue with a Before/After.
    path through a loop body to reach a `run` (a constant zero work does not
    count), a `hold` whose body does, or `end` (`Validator::lets_time_pass`),
    and the run time ends the run with an error naming the session when a
-   session executes a million statements at one instant or the ready
-   sessions are served a thousand times per live session without time
-   passing (`STEPS_PER_INSTANT`, `READIES_PER_SESSION`). No program of the
+   session executes a million statements without blocking or becomes ready
+   a thousand times at one instant (`STEPS_PER_INSTANT`,
+   `READIES_PER_INSTANT`, both per session). No program of the
    corpus is affected. Making a zero-work run a transition at $t$ was
    considered and rejected: `loop { run tool (0); }` would then transition
    infinitely often at one instant, the Zeno path of Definition 5, and the

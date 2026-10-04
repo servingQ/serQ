@@ -229,3 +229,56 @@ fn the_machine_still_matters() {
     let b = run(&src(512)).expect("runs").observe("ttft").unwrap().mean;
     assert!(a < b, "a wider budget prefills faster: {a} vs {b}");
 }
+
+// ------------------------------------------------------------ bounds ----
+
+/// The re-ready bound is per session: a batch of two thousand sessions that
+/// all end at t = 0 is one busy instant, not a loop (the bound once scaled
+/// with the live count, which fell as they ended, and refused this).
+#[test]
+fn a_large_batch_that_ends_at_once_settles() {
+    let r = run("let N = 2000;
+         stage tool : delay;
+         workload { arrive batch(N); init { set w = ~uniform(0, 1); } }
+         session { observe w = w; end; }
+         run { horizon 10; }")
+    .expect("settles");
+    assert_eq!(r.observe("w").unwrap().count, 2000);
+}
+
+/// A hold's header is re-read at every admission attempt, so it may not
+/// draw: a draw there would move the session's later draws with the
+/// machine (127 of 183 sessions did, on a cap of 10 000 against 150).
+#[test]
+fn a_hold_header_may_not_draw() {
+    for (what, header) in [
+        ("units", "kv (~uniform(1, 100))"),
+        ("`reserve`", "kv (10) reserve (~uniform(1, 100))"),
+        ("`reuse`", "kv (10) reuse (~uniform(0, 10))"),
+    ] {
+        let e = check(&format!(
+            "pool kv {{ cap 1000; }} stage tool : delay; workload {{ arrive batch(1); }}
+             session {{ hold {header} {{ run tool (1); }} cache (5); end; }} run {{ horizon 10; }}"
+        ))
+        .expect_err(what);
+        assert!(
+            e.contains(&format!("a hold's {what} may not draw")),
+            "{what}: {e}"
+        );
+    }
+}
+
+/// The turn stream is keyed by the interpreter's count of turns, not by
+/// the attribute `turn_no`, which a program may overwrite: a session that
+/// resets `turn_no` still draws fresh marks every turn.
+#[test]
+fn overwriting_turn_no_does_not_repeat_the_marks() {
+    let r = run("stage tool : delay;
+         workload { arrive batch(1); turn { set n = ~uniform(0, 1); } }
+         session { turn; loop { observe nn = n; set turn_no = 0; run tool (1); turn; } }
+         run { horizon 5; }")
+    .expect("runs");
+    let s = &r.observe("nn").unwrap().samples;
+    assert!(s.len() >= 4, "{s:?}");
+    assert!(s.windows(2).all(|w| w[0] != w[1]), "{s:?}");
+}

@@ -179,6 +179,13 @@ struct Session<'p> {
     /// eviction key) reads the interpreter's streams, not a session's.
     rng_wl: StdRng,
     rng: StdRng,
+    /// Turns taken, the key of `rng_wl`'s reseeding: the interpreter's
+    /// count, not the attribute `turn_no`, which a program may overwrite.
+    turn_count: u64,
+    /// (instant, times the session became ready at it): a session that
+    /// keeps becoming ready without time passing is a loop that never
+    /// blocks (`READIES_PER_INSTANT`).
+    readies: (f64, u64),
 }
 
 /// The stream of one (seed, session, turn, kind): splitmix64 over the four,
@@ -198,16 +205,17 @@ fn substream(seed: u64, serial: u64, turn: u64, kind: u64) -> StdRng {
 const STREAM_WORKLOAD: u64 = 1;
 const STREAM_SESSION: u64 = 2;
 
-/// Statements a session may execute at one instant before the run is an
+/// Statements a session may execute without blocking before the run is an
 /// error: a loop that never reaches a `run`, a `hold` that waits, or `end`
 /// would otherwise hang the interpreter (`docs/design/stochastic-model.md`,
-/// Lemma 1). No program of the corpus comes within a factor of a thousand.
+/// Lemma 1).
 const STEPS_PER_INSTANT: u64 = 1_000_000;
 
-/// Times the ready queue may be served while settling one instant, per live
-/// session: a run of zero work or a hold admitted and released inside a loop
-/// re-readies its session without time passing.
-const READIES_PER_SESSION: u64 = 1_000;
+/// Times one session may become ready at one instant: a run of zero work
+/// or a hold admitted and released inside a loop re-readies its session
+/// without time passing. Per session, so that an instant with many
+/// sessions (a `batch` arrival) is not mistaken for one.
+const READIES_PER_INSTANT: u64 = 1_000;
 
 #[derive(Clone, Copy, Debug)]
 struct LastToken {
@@ -468,7 +476,6 @@ pub struct Interp<'p> {
     stages: Vec<StageState>,
     ready: VecDeque<usize>,
     rng_arr: StdRng,
-    rng_wl: StdRng,
     rng_session: StdRng,
     rng_evict: StdRng,
     rng_trace: StdRng,
@@ -599,7 +606,6 @@ impl<'p> Interp<'p> {
             stages,
             ready: VecDeque::new(),
             rng_arr: StdRng::seed_from_u64(seed),
-            rng_wl: StdRng::seed_from_u64(seed ^ 0x9e37_79b9_7f4a_7c15),
             rng_session: StdRng::seed_from_u64(seed ^ 0x5851_f42d_4c95_7f2d),
             rng_evict: StdRng::seed_from_u64(seed ^ 0x2545_f491_4f6c_dd1d),
             rng_trace: StdRng::seed_from_u64(seed ^ 0x6a09_e667_f3bc_c908),
@@ -657,7 +663,7 @@ impl<'p> Interp<'p> {
     fn rng(&mut self, w: Which) -> &mut StdRng {
         match w {
             Which::Arrival => &mut self.rng_arr,
-            Which::Workload => &mut self.rng_wl,
+            Which::Workload => unreachable!("a workload draw is a session's (`eval`, Sample)"),
             Which::Session => &mut self.rng_session,
             Which::Evict => &mut self.rng_evict,
         }
@@ -835,16 +841,20 @@ impl<'p> Interp<'p> {
         if self.error.is_some() {
             return;
         }
-        let mut readies: u64 = 0;
         loop {
             while let Some(sid) = self.ready.pop_front() {
-                readies += 1;
-                if readies > READIES_PER_SESSION * (self.live as u64).max(1) {
+                let now = self.now;
+                let s = &mut self.sessions[sid];
+                if s.readies.0 != now {
+                    s.readies = (now, 0);
+                }
+                s.readies.1 += 1;
+                if s.readies.1 > READIES_PER_INSTANT {
                     self.error = Some(format!(
-                        "the instant t = {} does not settle: session {} became ready {readies} times \
+                        "the instant t = {now} does not settle: session {} became ready {} times \
                          without time passing (a `run` of zero work, or a `hold` admitted and released, \
                          inside a loop)",
-                        self.now, self.sessions[sid].serial
+                        s.serial, s.readies.1
                     ));
                     return;
                 }
@@ -984,6 +994,8 @@ impl<'p> Interp<'p> {
             last_token: None,
             rng_wl: substream(self.p.seed, serial, 0, STREAM_WORKLOAD),
             rng: substream(self.p.seed, serial, 0, STREAM_SESSION),
+            turn_count: 0,
+            readies: (f64::NAN, 0),
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -1043,9 +1055,10 @@ impl<'p> Interp<'p> {
             self.turns += 1;
         }
         // this turn's marks come from the stream of (seed, session, turn)
-        let turn_no = self.sessions[sid].attrs[p.slot_turn] as u64;
+        self.sessions[sid].turn_count += 1;
+        let turn_count = self.sessions[sid].turn_count;
         let serial = self.sessions[sid].serial;
-        self.sessions[sid].rng_wl = substream(p.seed, serial, turn_no, STREAM_WORKLOAD);
+        self.sessions[sid].rng_wl = substream(p.seed, serial, turn_count, STREAM_WORKLOAD);
         if let Some((k, ti)) = self.sessions[sid].script {
             let CArrival::Sessions(ss) = &p.arrival else {
                 unreachable!("explicit turns come from explicit sessions")
