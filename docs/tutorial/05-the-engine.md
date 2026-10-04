@@ -50,8 +50,9 @@ scheduled, whichever is larger. On an A100 with Qwen3-8B, fitting
 2.7 % for decode and 5.6 % for prefill — the cost expression is where a real
 measurement enters the model.
 
-Other options: `chunk` caps one request's prefill chunk
-(`long_prefill_token_threshold`), and `serve` names the one order the
+Other options: `chunk` caps one request's prefill chunk (vLLM's
+`long_prefill_token_threshold` is `chunk long_prefill(reqs, c)` in
+`lib/vllm.sq`: the cap holds only while another request runs or waits), and `serve` names the one order the
 iteration serves its residents in: `serve admission` (vLLM's `running` list,
 the default), `serve by (keys)` (ascending keys per resident, from
 `decoding`, `admission` and `remaining`; `serve decode first` is

@@ -114,7 +114,7 @@ structure Deployment where
   /-- `some p`: the chunk cap holds only while the engine's jobs and the
   requests waiting in pool `p` number more than one, and an iteration that
   starts with one or none of them runs uncapped. This is the program's
-  `chunk (residents + queued(p) > 1 ? c : 0)`, vLLM's rule (scheduler.py
+  `chunk (residents + queued(p) > 1 ? c : 0)`, vLLM's rule (scheduler.py:606-616,
   `long_prefill_token_threshold` when `num_eligible_reqs > 1`). `none`:
   the cap always holds. -/
   chunkLift : Option ℕ

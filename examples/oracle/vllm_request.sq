@@ -3,6 +3,7 @@
 // of the Lean theorems about it (lean/Serq/Oracle.lean).
 // The constants are a scenario's engine; the requests are the workload
 // instance, given as explicit sessions in the IR (prompt, o, arrive).
+use "../../lib/vllm.sq";
 let bs = 16;           // block_size
 let B = 1024;          // max_num_batched_tokens
 let blocks = 999;      // num_gpu_blocks less the null block
@@ -12,8 +13,8 @@ let chunk = 0;         // long_prefill_token_threshold (0: none)
 pool reqs { cap max_seqs; admit via engine; }
 pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
 // the chunk cap holds only while more than one request is running or
-// waiting (scheduler.py:606-616): a request alone takes the whole budget
-stage engine : step { budget B; chunk (residents + queued(reqs) > 1 ? chunk : 0); cost 1; memory kv; }
+// waiting (lib/vllm.sq's long_prefill): a request alone takes the whole budget
+stage engine : step { budget B; chunk long_prefill(reqs, chunk); cost 1; memory kv; }
 stage gate : delay;
 
 workload {

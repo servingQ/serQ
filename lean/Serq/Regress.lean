@@ -34,7 +34,7 @@ def costCtx : Prog := [route|
 /-- `serq run`: ttft, done per session, and 0 preemptions. -/
 theorem regress_cost_ctx :
     let m := Exec.runW ⟨[⟨2048, 16, false, none⟩, ⟨4, 1, true, none⟩], 48, 0, some 0, fun st => 3 + 1 * st.tokens + 2 * st.prefilled + 1 * st.decoders + 1 * st.kvDecode + 1 * st.attention2, none, none⟩ 100000
-      ⟨[[(9, 40), (10, 3), (11, 0)], [(9, 70), (10, 2), (11, 5)]], [], none, 0, some 8⟩ costCtx
+      ⟨[[(9, 40), (10, 3), (11, 0)], [(9, 70), (10, 2), (11, 5)]], [], none, 0, some 8, none⟩ costCtx
     ([observed m 0, observed m 1], m.preempts) =
     ([[(0, 1723), (1, 6934)], [(0, 7074), (1, 7159)]], 0) := by
   decide +kernel
@@ -54,7 +54,7 @@ def preemptDelay : Prog := [route|
 /-- `serq run`: resumed, done per session, and 8 preemptions. -/
 theorem regress_preempt_delay :
     let m := Exec.runW ⟨[⟨48, 16, false, none⟩, ⟨4, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none, none⟩ 1000
-      ⟨[[(9, 1)], [(9, 10)]], [], none, 0, some 8⟩ preemptDelay
+      ⟨[[(9, 1)], [(9, 10)]], [], none, 0, some 8, none⟩ preemptDelay
     ([observed m 0, observed m 1], m.preempts) =
     ([[(0, 0), (0, 32), (0, 18), (0, 16), (0, 16), (0, 16), (0, 16), (0, 16), (1, 0), (1, 16)], [(0, 65), (1, 43)]], 8) := by
   decide +kernel
