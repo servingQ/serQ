@@ -584,7 +584,9 @@ preempted (vLLM `running[-1]`, `scheduler.py:742-813`: a holder away from
 the engine — a prefiller's finished request keeping its blocks leased, a
 decoder's request parked for a read — is in no `running` list; a pool that
 is no engine's memory preempts its most recently admitted holder): its job
-leaves its stage, its hold is released with its computed prefix cached, and
+leaves its stage, its hold is released with its computed prefix cached (its
+position: the cached prefix it consumed when no `growing` run or `load`
+advanced it, not its allocation), and
 it re-enters the head of the pool's queue with the hold statement to
 execute again. The grower
 itself can be the victim. The re-executed hold finds `computed` set to the

@@ -240,6 +240,48 @@ fn grow_waits_under_preempt_none() {
     assert_eq!(r.pool("kv").unwrap().preemptions, 0);
 }
 
+/// #326: a hold preempted before it computes anything caches nothing of
+/// what it was allocated. Session 1, admitted last, has run 2 of its 5
+/// seconds and advanced no position when session 0's growth preempts it; it
+/// used to come back with `cached = 10` (its 12 units, less what the
+/// growth evicted) while `computed` read 0. A preempted hold caches its
+/// position, which `computed` reads too; the scope's end still counts a
+/// hold without a `growing` run as having computed what it holds.
+#[test]
+fn a_preempted_hold_caches_what_it_computed() {
+    let src = r#"
+        pool kv { cap 20; block 1; preempt lifo; }
+        stage d : delay;
+        workload { arrive batch(2); }
+        session {
+          branch (serial == 0) {
+            hold kv (5) { run d (2); grow kv (5); run d (10); }
+          } else {
+            hold kv (12) {
+              observe cached_at_admission = cached;
+              observe computed_at_admission = computed;
+              run d (5);
+            } cache (12);
+          }
+          end;
+        }
+        run { horizon 100; warmup 0; seed 1; }
+    "#;
+    let r = run(src);
+    assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
+    // the scope's end keeps its rule: session 1, done, caches what it holds
+    // (the preemption cached nothing, so anything cached is from the end)
+    assert!(r.pool("kv").unwrap().mean_cached > 0.0, "{}", r.text());
+    for name in ["cached_at_admission", "computed_at_admission"] {
+        assert_eq!(
+            r.observe(name).unwrap().samples,
+            vec![0.0, 0.0],
+            "{name}: {}",
+            r.text()
+        );
+    }
+}
+
 /// `queue by (key)`: a priority queue admits the smallest key first.
 #[test]
 fn priority_queue_orders_admissions() {
