@@ -11,6 +11,9 @@
 //!           | 'queue' IDENT ('[' expr ']')? (':' IDENT (',' IDENT)*)? '{' qitem* '}'
 //!           | 'run' '{' ('horizon' | 'warmup' | 'seed' | 'arrivals') expr ';' ... '}'
 //!           | 'gauge' IDENT '=' expr ';'      -- a time average of the deployment's state
+//!           | 'claim' IDENT ('given' '(' expr ')')? ':'
+//!                 ('every' | 'some') 'iteration' 'of' ref '(' expr ')' ';'
+//!           | 'claim' IDENT ('given' '(' expr ')')? ':' 'at' 'end' '(' expr ')' ';'
 //! qitem    := 'pool' IDENT '{' poolopt* '}' | 'serve' kind
 //!           | IDENT ('(' IDENT (',' IDENT)* ')')? ('from' IDENT)? block   -- an entry (crate::frontend::queue)
 //! poolopt  := 'cap' expr ';' | 'block' expr ';'
@@ -74,7 +77,7 @@ use std::path::{Path, PathBuf};
 use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
-use crate::frontend::link::{BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
+use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
 use crate::frontend::queue::{self, QueueDecl};
 
 #[derive(Debug, Clone)]
@@ -368,7 +371,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 89] = [
+pub const KEYWORDS: [&str; 95] = [
     "admission",
     "admit",
     "arrivals",
@@ -385,6 +388,7 @@ pub const KEYWORDS: [&str; 89] = [
     "cap",
     "choose",
     "chunk",
+    "claim",
     "closed",
     "cost",
     "decode",
@@ -393,6 +397,7 @@ pub const KEYWORDS: [&str; 89] = [
     "drop",
     "else",
     "end",
+    "every",
     "evict",
     "exclusive",
     "fifo",
@@ -400,6 +405,7 @@ pub const KEYWORDS: [&str; 89] = [
     "fits",
     "from",
     "gauge",
+    "given",
     "grow",
     "growing",
     "hidden",
@@ -407,6 +413,7 @@ pub const KEYWORDS: [&str; 89] = [
     "horizon",
     "in",
     "init",
+    "iteration",
     "latency",
     "lease",
     "let",
@@ -421,6 +428,7 @@ pub const KEYWORDS: [&str; 89] = [
     "nic",
     "none",
     "observe",
+    "of",
     "on",
     "only",
     "ordered",
@@ -443,6 +451,7 @@ pub const KEYWORDS: [&str; 89] = [
     "session",
     "set",
     "share",
+    "some",
     "spill",
     "stage",
     "step",
@@ -810,7 +819,9 @@ fn sends_of(b: &[Token], params: &[String]) -> Vec<Sends> {
 
 /// A function of the language: one the linker resolves or one it folds.
 fn is_function(name: &str) -> bool {
-    FUNCTIONS.contains(&name) || FOLDED.contains(&name)
+    FUNCTIONS.contains(&name)
+        || FOLDED.contains(&name)
+        || AGGREGATES.iter().any(|(n, _)| *n == name)
 }
 
 /// Do these tokens use the definition `name`, `name(`?
@@ -1588,6 +1599,56 @@ impl Parser {
         }
     }
 
+    /// `claim NAME [given (e)] : …;`, after `claim`: a proposition about
+    /// every path, which reads and does not act.
+    fn claim(&mut self) -> PResult<ClaimDecl> {
+        let span = Some(self.span());
+        let name = self.name()?;
+        let given = if self.eat_kw("given") {
+            self.expect(&Tok::LParen)?;
+            let e = self.expr()?;
+            self.expect(&Tok::RParen)?;
+            Some(e)
+        } else {
+            None
+        };
+        self.expect(&Tok::Colon)?;
+        let over = if self.is_kw("every") || self.is_kw("some") {
+            let every = self.eat_kw("every");
+            if !every {
+                self.expect_kw("some")?;
+            }
+            self.expect_kw("iteration")?;
+            self.expect_kw("of")?;
+            let r = self.reference()?;
+            if every {
+                ClaimOver::Every(r)
+            } else {
+                ClaimOver::Some(r)
+            }
+        } else if self.eat_kw("at") {
+            self.expect_kw("end")?;
+            ClaimOver::End
+        } else {
+            return self.err(format!(
+                "a claim is `every iteration of STAGE (…)`, `some iteration of STAGE (…)` \
+                 or `at end (…)`, found {}",
+                self.peek()
+            ));
+        };
+        self.expect(&Tok::LParen)?;
+        let expr = self.expr()?;
+        self.expect(&Tok::RParen)?;
+        self.expect(&Tok::Semi)?;
+        Ok(ClaimDecl {
+            span,
+            name,
+            given,
+            over,
+            expr,
+        })
+    }
+
     fn program(&mut self) -> PResult<Program> {
         let mut prog = Program::default();
         while *self.peek() != Tok::Eof {
@@ -1620,6 +1681,8 @@ impl Parser {
                 prog.lets.push((name, e));
             } else if self.eat_kw("def") {
                 self.def()?;
+            } else if self.eat_kw("claim") {
+                prog.claims.push(self.claim()?);
             } else if self.eat_kw("gauge") {
                 let name = self.ident()?;
                 self.expect(&Tok::Assign)?;
@@ -5074,20 +5137,20 @@ mod tests {
         );
         // a parameter may not be an aggregate's index, and a count may be one
         assert!(
-            err("def total(k) = sum k in 2 (k); session { set x = total(7); }")
+            err("def tally(k) = sum k in 2 (k); session { set x = tally(7); }")
                 .contains("is a parameter")
         );
-        parse("def total(n) = sum k in n (k); session { set x = total(2); }").unwrap();
+        parse("def tally(n) = sum k in n (k); session { set x = tally(2); }").unwrap();
         // a parenthesised count: the body's `k` is still the aggregate's
         parse(
-            "def total() = sum k in (1 + 1) (k); def next(x) { turn; observe p = x; } \
-               workload { turn { set k = 1; } } session { next(total()); end; }",
+            "def tally() = sum k in (1 + 1) (k); def next(x) { turn; observe p = x; } \
+               workload { turn { set k = 1; } } session { next(tally()); end; }",
         )
         .unwrap();
         // an aggregate's index is its own, not a name the argument reads
         parse(
-            "def total() = sum i in 2 (i); def next(x) { turn; observe p = x; } \
-               workload { turn { set i = 1; } } session { next(total()); end; }",
+            "def tally() = sum i in 2 (i); def next(x) { turn; observe p = x; } \
+               workload { turn { set i = 1; } } session { next(tally()); end; }",
         )
         .unwrap();
         // what a turn, a request or an admission assigns is captured too

@@ -154,7 +154,7 @@ struct Linker<'a> {
 /// rejects it, as it does a `let` and an attribute of one name): the
 /// expression that meant the context variable would read the attribute
 /// instead (#231).
-pub const CONTEXT_VARS: [(&str, CtxVar); 17] = [
+pub const CONTEXT_VARS: [(&str, CtxVar); 19] = [
     ("now", CtxVar::Now),
     ("waited", CtxVar::Waited),
     ("size", CtxVar::Size),
@@ -172,6 +172,8 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 17] = [
     ("decoding", CtxVar::Decoding),
     ("admission", CtxVar::Admission),
     ("remaining", CtxVar::Remaining),
+    ("demand", CtxVar::Demand),
+    ("served", CtxVar::Served),
 ];
 
 /// The most terms the aggregates (`max j in n (e)`) of one program write
@@ -207,6 +209,16 @@ pub const FUNCTIONS: [&str; 22] = [
     "est_lambda",
     "est_rho",
     "est_wait",
+];
+
+/// The aggregates of a run's observations, `total(o)` …, which a claim
+/// `at end` reads: a call whose argument is an `observe` name.
+pub const AGGREGATES: [(&str, crate::ir::Agg); 5] = [
+    ("total", crate::ir::Agg::Total),
+    ("count", crate::ir::Agg::Count),
+    ("largest", crate::ir::Agg::Largest),
+    ("smallest", crate::ir::Agg::Smallest),
+    ("prefix_total", crate::ir::Agg::PrefixTotal),
 ];
 
 /// Context variables renamed for what they mean (#139), for a program that
@@ -547,9 +559,39 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             expr,
         });
     }
+    let mut claims = vec![];
+    for c in &prog.claims {
+        let at = |mut err: LinkError| {
+            err.message = format!("claim `{}`: {}", c.name, err.message);
+            err.at(c.span)
+        };
+        let given = c
+            .given
+            .as_ref()
+            .map(|e| lk.expr(e))
+            .transpose()
+            .map_err(at)?;
+        let kind = match &c.over {
+            ClaimOver::Every(r) => {
+                crate::ir::ClaimKind::EveryIteration(lk.claim_stage(r).map_err(at)?)
+            }
+            ClaimOver::Some(r) => {
+                crate::ir::ClaimKind::SomeIteration(lk.claim_stage(r).map_err(at)?)
+            }
+            ClaimOver::End => crate::ir::ClaimKind::AtEnd,
+        };
+        let expr = lk.expr(&c.expr).map_err(at)?;
+        claims.push(crate::ir::Claim {
+            name: c.name.clone(),
+            given,
+            kind,
+            expr,
+        });
+    }
     let slot = |lk: &Linker, n: &str| lk.attr_index[n];
     let linked = Linked {
         gauges,
+        claims,
         version: IR_VERSION,
         hidden,
         share: prog.share,
@@ -770,6 +812,21 @@ impl Linker<'_> {
             }
         };
         Ok(CRef { base, count, index })
+    }
+
+    /// The stage a claim over iterations names: one stage, or a member of
+    /// an array by a constant index (`E[0]`).
+    fn claim_stage(&self, r: &Ref) -> LResult<usize> {
+        let cr = self.stage_ref(r)?;
+        match cr.index.as_deref() {
+            None => Ok(cr.base),
+            Some(CExpr::Num(k)) => Ok(cr.base + *k as usize),
+            Some(_) => Err(LinkError::new(format!(
+                "the stage `{}[…]` of a claim is a member named by a constant index",
+                r.name
+            ))
+            .at(r.span)),
+        }
     }
 
     fn pool_ref(&self, r: &Ref) -> LResult<CRef> {
@@ -1009,6 +1066,25 @@ impl Linker<'_> {
                 )
             }
             Expr::Call(f, args) if f == "blocksize" => CExpr::Num(self.blocksize(args)?),
+            Expr::Call(f, args) if AGGREGATES.iter().any(|(n, _)| n == f) => {
+                let agg = AGGREGATES.iter().find(|(n, _)| n == f).expect("guarded").1;
+                let [Arg::Ref(r)] = args.as_slice() else {
+                    return Err(LinkError::new(format!(
+                        "`{f}` takes the name of an `observe`, as `{f}(latency)`"
+                    )));
+                };
+                let k = (r.index.is_none())
+                    .then(|| self.observes.iter().position(|o| *o == r.name))
+                    .flatten()
+                    .ok_or_else(|| {
+                        LinkError::new(format!(
+                            "`{f}({})`: `{}` is not an `observe` of the program",
+                            r.name, r.name
+                        ))
+                        .at(r.span)
+                    })?;
+                CExpr::Agg(agg, k)
+            }
             Expr::Call(f, args) => {
                 let Some(fun) = Fun::from_name(f) else {
                     return Err(LinkError::new(format!("unknown function `{f}`")));

@@ -131,6 +131,96 @@ pub struct PoolReport {
     pub stuck: u64,
 }
 
+/// A `claim`: what the run found of it on the path it ran.
+#[derive(Clone, Debug)]
+pub struct ClaimReport {
+    pub name: String,
+    pub kind: crate::ir::ClaimKind,
+    pub result: ClaimResult,
+    /// Iterations the claim was read at (an iteration claim), or 1 when a
+    /// claim `at end` was read.
+    pub checked: u64,
+    /// Of those, the ones it read as 0.
+    pub failures: u64,
+    /// The first failure of an `every` claim or one `at end` (the end), the
+    /// first witness of a `some` claim.
+    pub first: Option<f64>,
+    /// Why the claim was not read: the sessions live at the end, or the
+    /// session that failed its `given`.
+    pub note: Option<String>,
+}
+
+/// What a run says of a claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimResult {
+    /// Every iteration read, or the end, satisfied it.
+    Holds,
+    /// Some iteration read, or the end, did not.
+    Fails,
+    /// A `some` claim: an iteration satisfied it.
+    Witnessed,
+    /// A `some` claim: no iteration read satisfied it.
+    NotWitnessed,
+    /// A claim `at end` with sessions live at the end: the run did not
+    /// reach the end the claim is about.
+    NotEvaluated,
+    /// A session failed the claim's `given`.
+    OutOfScope,
+}
+
+impl ClaimResult {
+    /// The JSON spelling.
+    pub fn name(self) -> &'static str {
+        match self {
+            ClaimResult::Holds => "holds",
+            ClaimResult::Fails => "fails",
+            ClaimResult::Witnessed => "witnessed",
+            ClaimResult::NotWitnessed => "not_witnessed",
+            ClaimResult::NotEvaluated => "not_evaluated",
+            ClaimResult::OutOfScope => "out_of_scope",
+        }
+    }
+}
+
+impl ClaimReport {
+    /// The JSON spelling of the kind.
+    pub fn kind_name(&self) -> &'static str {
+        match self.kind {
+            crate::ir::ClaimKind::EveryIteration(_) => "every_iteration",
+            crate::ir::ClaimKind::SomeIteration(_) => "some_iteration",
+            crate::ir::ClaimKind::AtEnd => "at_end",
+        }
+    }
+
+    /// The result as the text report says it.
+    fn said(&self) -> String {
+        let iterations = |n: u64| format!("{n} iteration{}", if n == 1 { "" } else { "s" });
+        let at = |t: Option<f64>| t.map_or(String::new(), |t| format!(" at {t:.4}"));
+        let at_end = matches!(self.kind, crate::ir::ClaimKind::AtEnd);
+        match self.result {
+            ClaimResult::Holds if at_end => "holds".into(),
+            ClaimResult::Holds => format!("holds ({})", iterations(self.checked)),
+            ClaimResult::Fails if at_end => "fails".into(),
+            ClaimResult::Fails => format!(
+                "fails{} ({} of {})",
+                at(self.first),
+                self.failures,
+                iterations(self.checked)
+            ),
+            ClaimResult::Witnessed => {
+                format!("witnessed{} ({})", at(self.first), iterations(self.checked))
+            }
+            ClaimResult::NotWitnessed => format!("not witnessed ({})", iterations(self.checked)),
+            ClaimResult::NotEvaluated => {
+                format!("not evaluated: {}", self.note.as_deref().unwrap_or(""))
+            }
+            ClaimResult::OutOfScope => {
+                format!("out of scope: {}", self.note.as_deref().unwrap_or(""))
+            }
+        }
+    }
+}
+
 /// Version of `Report::json`'s shape: the names of its fields, which
 /// consumers read by name (serving-queue-theory, pyserq). Bump it on a
 /// renamed, removed or retyped field, by the rules of `docs/ir.md`
@@ -153,6 +243,9 @@ pub struct Report {
     pub mean_live: f64,
     pub observes: Vec<ObserveReport>,
     pub gauges: Vec<GaugeReport>,
+    /// The program's claims, in order; empty (and absent from the JSON)
+    /// when it has none.
+    pub claims: Vec<ClaimReport>,
     pub stages: Vec<StageReport>,
     pub pools: Vec<PoolReport>,
 }
@@ -190,6 +283,10 @@ impl Report {
 
     pub fn gauge(&self, name: &str) -> Option<&GaugeReport> {
         self.gauges.iter().find(|g| g.name == name)
+    }
+
+    pub fn claim(&self, name: &str) -> Option<&ClaimReport> {
+        self.claims.iter().find(|c| c.name == name)
     }
 
     pub fn stage(&self, name: &str) -> Option<&StageReport> {
@@ -260,6 +357,17 @@ impl Report {
                 ]
             });
             table(&mut s, &["gauge", "mean", "95% CI", "min", "max"], rows);
+        }
+        if !self.claims.is_empty() {
+            let rows = self.claims.iter().map(|c| {
+                let kind = match c.kind {
+                    crate::ir::ClaimKind::EveryIteration(_) => "every iteration",
+                    crate::ir::ClaimKind::SomeIteration(_) => "some iteration",
+                    crate::ir::ClaimKind::AtEnd => "at end",
+                };
+                vec![c.name.clone(), kind.into(), c.said()]
+            });
+            table_aligned(&mut s, &["claim", "kind", "result"], rows, true);
         }
         if !self.stages.is_empty() {
             let rows = self.stages.iter().map(|st| {
@@ -420,7 +528,28 @@ impl Report {
                 f(g.max)
             );
         }
-        s.push_str("},\"stages\":[");
+        s.push('}');
+        if !self.claims.is_empty() {
+            s.push_str(",\"claims\":[");
+            for (i, c) in self.claims.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                let _ = write!(
+                    s,
+                    "{{\"name\":{},\"kind\":\"{}\",\"result\":\"{}\",\"checked\":{},\"failures\":{},\"first\":{},\"note\":{}}}",
+                    json_string(&c.name),
+                    c.kind_name(),
+                    c.result.name(),
+                    c.checked,
+                    c.failures,
+                    c.first.map_or("null".into(), f),
+                    c.note.as_deref().map_or("null".into(), json_string)
+                );
+            }
+            s.push(']');
+        }
+        s.push_str(",\"stages\":[");
         for (i, st) in self.stages.iter().enumerate() {
             if i > 0 {
                 s.push(',');
@@ -489,6 +618,21 @@ fn label(name: &str, index: Option<u32>) -> String {
 /// the name column left-aligned and the numbers right-aligned, a rule under
 /// the header, a blank line above. The width is measured in `char`s, so `±` counts as one.
 fn table(s: &mut String, header: &[&str], rows: impl Iterator<Item = Vec<String>>) {
+    table_aligned(s, header, rows, false);
+}
+
+/// A string as JSON writes it.
+fn json_string(x: &str) -> String {
+    serde_json::to_string(x).expect("a string serialises")
+}
+
+/// `table`, every column left-aligned when `left` (a column of words).
+fn table_aligned(
+    s: &mut String,
+    header: &[&str],
+    rows: impl Iterator<Item = Vec<String>>,
+    left: bool,
+) {
     let rows: Vec<Vec<String>> = rows.collect();
     let width: Vec<usize> = (0..header.len())
         .map(|c| {
@@ -505,6 +649,8 @@ fn table(s: &mut String, header: &[&str], rows: impl Iterator<Item = Vec<String>
         for (c, (cell, w)) in cells.iter().zip(&width).enumerate() {
             if c == 0 {
                 let _ = write!(l, "{cell:<w$}");
+            } else if left {
+                let _ = write!(l, "  {cell:<w$}");
             } else {
                 let _ = write!(l, "  {cell:>w$}");
             }

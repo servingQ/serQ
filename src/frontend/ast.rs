@@ -342,6 +342,27 @@ pub struct Program {
     pub share: Option<crate::ir::Share>,
     /// `gauge NAME = e;`, in order.
     pub gauges: Vec<(String, Expr)>,
+    /// `claim NAME …;`, in order.
+    pub claims: Vec<ClaimDecl>,
+}
+
+/// `claim NAME [given (e)] : every iteration of STAGE (e) ;`, `… some
+/// iteration of STAGE (e) ;` or `… at end (e) ;`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClaimDecl {
+    pub span: Option<Span>,
+    pub name: String,
+    pub given: Option<Expr>,
+    pub over: ClaimOver,
+    pub expr: Expr,
+}
+
+/// What a claim quantifies over.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClaimOver {
+    Every(Ref),
+    Some(Ref),
+    End,
 }
 
 /// Parser equivalence tests compare syntax after desugaring; the two spellings
@@ -492,5 +513,13 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
     p.run.warmup.iter_mut().for_each(expr);
     p.run.seed.iter_mut().for_each(expr);
     p.run.arrivals.iter_mut().for_each(expr);
+    for c in &mut p.claims {
+        c.span = None;
+        c.given.iter_mut().for_each(expr);
+        if let ClaimOver::Every(r) | ClaimOver::Some(r) = &mut c.over {
+            reference(r);
+        }
+        expr(&mut c.expr);
+    }
     p
 }

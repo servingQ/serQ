@@ -20,6 +20,7 @@ use crate::engine::stats::*;
 
 use crate::frontend::ast::{BinOp, Preempt, RunMode, UnOp};
 use crate::frontend::link::*;
+use crate::ir::ClaimKind;
 use crate::ir::trace::Corpus;
 
 /// The tolerance of a comparison of amounts that sums of floats produce
@@ -473,6 +474,8 @@ struct Ctx {
     decoding: f64,
     admission: f64,
     remaining: f64,
+    demand: f64,
+    served: f64,
 }
 
 impl Ctx {
@@ -482,6 +485,20 @@ impl Ctx {
             ..Default::default()
         }
     }
+}
+
+/// What the run found of one claim so far.
+#[derive(Default)]
+struct ClaimState {
+    /// Iterations the claim was read at.
+    checked: u64,
+    /// Of those, the ones it read as 0.
+    failures: u64,
+    /// An `every` claim's first failure, a `some` claim's first witness.
+    first: Option<f64>,
+    /// The serial of the first session that failed its `given`: the claim
+    /// is out of scope for the run, and read no further.
+    out_of_scope: Option<u64>,
 }
 
 struct ObserveStat {
@@ -526,6 +543,14 @@ pub struct Interp<'p> {
     /// time on, one point per instant (the state after the instant's last
     /// event).
     gauges: Vec<Vec<(f64, f64)>>,
+    /// Per claim: what the run found of it.
+    claims: Vec<ClaimState>,
+    /// Per stage: the tokens its iterations scheduled so far, the run's
+    /// whole (an iteration claim's `served`).
+    served: Vec<f64>,
+    /// Per observation a claim `at end` aggregates: every value observed,
+    /// warm-up included.
+    observed: Vec<Option<Vec<f64>>>,
     /// Per pool: its eviction keys do not change while other entries are
     /// evicted (no pool or stage queries, no sampling), so `make_room` can
     /// key every entry once.
@@ -673,6 +698,15 @@ impl<'p> Interp<'p> {
                 })
                 .collect(),
             gauges: p.gauges.iter().map(|_| vec![]).collect(),
+            claims: p.claims.iter().map(|_| ClaimState::default()).collect(),
+            served: vec![0.0; p.stages.len()],
+            observed: {
+                let mut aggregated = vec![false; p.observes.len()];
+                for c in &p.claims {
+                    aggregates(&c.expr, &mut aggregated);
+                }
+                aggregated.iter().map(|&a| a.then(Vec::new)).collect()
+            },
             live: 0,
             live_avg: TimeAverage::new(0.0, 0.0),
             admit_budget: None,
@@ -1067,7 +1101,22 @@ impl<'p> Interp<'p> {
         for &(slot, v) in preset {
             self.sessions[sid].attrs[slot] = v;
         }
+        self.check_given(sid);
         self.ready.push_back(sid);
+    }
+
+    /// Read every claim's `given` for a session whose `init` has run: one
+    /// that fails it puts the claim out of scope for the run.
+    fn check_given(&mut self, sid: usize) {
+        let p = self.p;
+        for (k, c) in p.claims.iter().enumerate() {
+            if let Some(g) = &c.given
+                && self.claims[k].out_of_scope.is_none()
+                && self.eval(g, &Ctx::session(sid), Which::Session) == 0.0
+            {
+                self.claims[k].out_of_scope = Some(self.sessions[sid].serial);
+            }
+        }
     }
 
     fn exec_workload_block(&mut self, sid: usize, block: BlockId) {
@@ -1089,6 +1138,9 @@ impl<'p> Interp<'p> {
     }
 
     fn observe_for(&mut self, sid: usize, k: usize, v: f64) {
+        if let Some(all) = &mut self.observed[k] {
+            all.push(v);
+        }
         if self.warm {
             let s = &self.sessions[sid];
             let rec = (self.now, s.serial, s.attrs[self.p.slot_turn] as u32);
@@ -2906,6 +2958,8 @@ impl<'p> Interp<'p> {
             ));
             return;
         }
+        self.check_iteration(st, chunk, &ctx);
+        self.served[st] += ntok;
         if self.trace_iter {
             let parts: Vec<String> = assign
                 .iter()
@@ -2956,6 +3010,52 @@ impl<'p> Interp<'p> {
                 epoch: g,
             },
         );
+    }
+
+    /// Read the claims over the iterations of stage `st` as an iteration
+    /// starts, with the cost's context `ctx`, `demand` (what the residents
+    /// could take in it, `chunk` capping a prefill's) and `served`.
+    fn check_iteration(&mut self, st: usize, chunk: f64, ctx: &Ctx) {
+        let p = self.p;
+        let mine = |c: &crate::ir::Claim| c.kind.stage() == Some(st);
+        if !p.claims.iter().any(mine) {
+            return;
+        }
+        let mut demand = 0.0;
+        for j in self.residents(st) {
+            let job = &self.stages[st].jobs[&j];
+            demand += if job.mode == RunMode::Decode {
+                1.0f64.min(job.work)
+            } else if chunk > 0.0 {
+                job.work.min(chunk)
+            } else {
+                job.work
+            };
+        }
+        let ctx = Ctx {
+            demand,
+            served: self.served[st],
+            ..ctx.clone()
+        };
+        let now = self.now;
+        for (k, c) in p.claims.iter().enumerate() {
+            if !mine(c) || self.claims[k].out_of_scope.is_some() {
+                continue;
+            }
+            let holds = self.eval(&c.expr, &ctx, Which::Session) != 0.0;
+            let state = &mut self.claims[k];
+            state.checked += 1;
+            if !holds {
+                state.failures += 1;
+            }
+            let found = match c.kind {
+                ClaimKind::SomeIteration(_) => holds,
+                _ => !holds,
+            };
+            if found && state.first.is_none() {
+                state.first = Some(now);
+            }
+        }
     }
 
     /// Whether a queue served by stage `st` has a waiting session.
@@ -3174,7 +3274,10 @@ impl<'p> Interp<'p> {
                 CtxVar::Decoding => ctx.decoding,
                 CtxVar::Admission => ctx.admission,
                 CtxVar::Remaining => ctx.remaining,
+                CtxVar::Demand => ctx.demand,
+                CtxVar::Served => ctx.served,
             },
+            CExpr::Agg(a, k) => a.of(self.observed[*k].as_deref().unwrap_or(&[])),
             CExpr::Sample(kind, args) => {
                 let a: Vec<f64> = args.iter().map(|x| self.eval(x, ctx, w)).collect();
                 // a draw made for a session reads that session's stream; one
@@ -3459,6 +3562,7 @@ impl<'p> Interp<'p> {
                 }
             })
             .collect();
+        let claims = (0..p.claims.len()).map(|k| self.claim_report(k)).collect();
         let stages = self
             .stages
             .iter()
@@ -3517,9 +3621,64 @@ impl<'p> Interp<'p> {
             mean_live: self.live_avg.mean(now),
             observes,
             gauges,
+            claims,
             stages,
             pools,
         }
+    }
+
+    /// What the run found of claim `k`: an iteration claim from what its
+    /// iterations read, a claim `at end` read now, when no session is live.
+    fn claim_report(&mut self, k: usize) -> ClaimReport {
+        let p = self.p;
+        let c = &p.claims[k];
+        let state = &self.claims[k];
+        let mut r = ClaimReport {
+            name: c.name.clone(),
+            kind: c.kind,
+            result: ClaimResult::Holds,
+            checked: state.checked,
+            failures: state.failures,
+            first: state.first,
+            note: None,
+        };
+        if let Some(serial) = state.out_of_scope {
+            r.result = ClaimResult::OutOfScope;
+            r.note = Some(format!("session {serial} fails `given`"));
+            return r;
+        }
+        match c.kind {
+            ClaimKind::EveryIteration(_) => {
+                if r.failures > 0 {
+                    r.result = ClaimResult::Fails;
+                }
+            }
+            ClaimKind::SomeIteration(_) => {
+                r.result = if r.first.is_some() {
+                    ClaimResult::Witnessed
+                } else {
+                    ClaimResult::NotWitnessed
+                };
+            }
+            ClaimKind::AtEnd => {
+                if self.live > 0 {
+                    r.result = ClaimResult::NotEvaluated;
+                    r.note = Some(format!(
+                        "{} session{} live at the end",
+                        self.live,
+                        if self.live == 1 { "" } else { "s" }
+                    ));
+                } else {
+                    r.checked = 1;
+                    if self.eval(&c.expr, &Ctx::default(), Which::Session) == 0.0 {
+                        r.result = ClaimResult::Fails;
+                        r.failures = 1;
+                        r.first = Some(self.now);
+                    }
+                }
+            }
+        }
+        r
     }
 }
 
@@ -3556,7 +3715,7 @@ impl Ord for KeyOrd {
 /// (#273).
 fn static_key(e: &CExpr) -> bool {
     !e.any(&|x| match x {
-        CExpr::Sample(..) => true,
+        CExpr::Sample(..) | CExpr::Agg(..) => true,
         CExpr::Call(f, _) => !matches!(
             f,
             Fun::Min
@@ -3575,6 +3734,37 @@ fn static_key(e: &CExpr) -> bool {
         ),
         _ => false,
     })
+}
+
+/// Mark the observations an expression aggregates (`total(o)`, …).
+fn aggregates(e: &CExpr, out: &mut [bool]) {
+    match e {
+        CExpr::Agg(_, k) => out[*k] = true,
+        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => {}
+        CExpr::Sample(_, xs) => xs.iter().for_each(|x| aggregates(x, out)),
+        CExpr::Call(_, args) => {
+            for a in args {
+                match a {
+                    CArg::Expr(x) => aggregates(x, out),
+                    CArg::Pool(r) | CArg::Stage(r) => {
+                        if let Some(i) = &r.index {
+                            aggregates(i, out);
+                        }
+                    }
+                }
+            }
+        }
+        CExpr::Unary(_, x) => aggregates(x, out),
+        CExpr::Binary(_, a, b) => {
+            aggregates(a, out);
+            aggregates(b, out);
+        }
+        CExpr::Cond(c, a, b) => {
+            aggregates(c, out);
+            aggregates(a, out);
+            aggregates(b, out);
+        }
+    }
 }
 
 fn lex_less(a: &[f64], b: &[f64]) -> bool {
