@@ -76,26 +76,52 @@ def fold(e):
 
 
 def chunk_rule(e):
-    """A step's chunk as `Exec.Deployment`'s `chunk` and `chunkLift`: a
-    constant cap that always holds, or vLLM's rule, the cap only while the
-    engine's residents and the requests waiting in one pool number more
-    than one: `residents + queued(p) > 1 ? c : 0` (scheduler.py:606-616)."""
+    """A step's chunk as `Exec.Deployment`'s `chunk` and `chunkAt`: a
+    constant cap, or the program's expression over what an iteration's
+    start reads, `residents` and `queued(p)`, as a Lean function of
+    `Exec.ChunkEnv` (vLLM's `residents + queued(p) > 1 ? c : 0`,
+    scheduler.py:606-616, is one)."""
     c = fold(e)
     if c is not None:
         return c, None
-    if "Cond" in e:
-        test, then, other = e["Cond"]
-        if fold(other) == 0 and fold(then) is not None and "Binary" in test:
-            op, lhs, one = test["Binary"]
-            if op == "Gt" and fold(one) == 1 and "Binary" in lhs:
-                plus, res, q = lhs["Binary"]
-                if plus == "Add" and res == {"Ctx": "Nres"} and "Call" in q:
-                    f, args = q["Call"]
-                    if f == "Queued" and len(args) == 1 and "Pool" in args[0]:
-                        r = args[0]["Pool"]
-                        if r["count"] == 1 and r.get("index") is None:
-                            return fold(then), r["base"]
-    raise Fragment(f"chunk {e}: a constant, or `residents + queued(p) > 1 ? c : 0`")
+    return 0, f"some fun c => {ChunkLean().top(e)}"
+
+
+class ChunkLean:
+    """A step's `chunk` as a Lean term over `c : Exec.ChunkEnv`."""
+
+    def expr(self, e):
+        v = fold(e)
+        if v is not None:
+            return str(nat(v, "chunk"))
+        if "Ctx" in e:
+            if e["Ctx"] == "Nres":
+                return "c.residents"
+            raise Fragment(f"chunk reads {e['Ctx']}: `residents` and `queued(p)` only")
+        if "Call" in e:
+            f, args = e["Call"]
+            if f == "Queued" and len(args) == 1 and "Pool" in args[0]:
+                return f"(c.queued {one_ref(args[0]['Pool'], 'queued')})"
+            if f in ("Min", "Max") and len(args) == 2 and all("Expr" in a for a in args):
+                return f"({f.lower()} {self.expr(args[0]['Expr'])} {self.expr(args[1]['Expr'])})"
+            raise Fragment(f"chunk calls {f}")
+        if "Binary" in e:
+            op, a, b = e["Binary"]
+            sym = {"Add": "+", "Sub": "-", "Mul": "*"}.get(op)
+            if sym:
+                return f"({self.expr(a)} {sym} {self.expr(b)})"
+            rel = {"Lt": "<", "Le": "≤", "Gt": ">", "Ge": "≥", "Eq": "=", "Ne": "≠"}.get(op)
+            if rel:
+                return f"(if {self.expr(a)} {rel} {self.expr(b)} then 1 else 0)"
+            raise Fragment(f"chunk operator {op}")
+        if "Cond" in e:
+            t, a, b = e["Cond"]
+            return f"(if {self.expr(t)} ≠ 0 then {self.expr(a)} else {self.expr(b)})"
+        raise Fragment(f"chunk {e}")
+
+    def top(self, e):
+        t = self.expr(e)
+        return t[1:-1] if t.startswith("(") and t.endswith(")") else t
 
 
 # the context variables an iteration cost may read, and the field of
@@ -307,11 +333,11 @@ class Lean:
             if not via and step["memory"] != i:
                 raise Fragment(f"pool {p['name']}: not the engine's memory")
             pools.append(f"⟨{nat(p['cap'], 'cap')}, {nat(p['block'] or 1, 'block')}, {'true' if via else 'false'}, none⟩")
-        chunk, lift = chunk_rule(step["chunk"])
+        chunk, at = chunk_rule(step["chunk"])
         return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
                 f"{nat(chunk, 'chunk')}, "
                 f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, none, "
-                f"{'none' if lift is None else 'some ' + str(lift)}⟩")
+                f"{at or 'none'}⟩")
 
     def workload(self):
         """`Exec.Workload` of the IR's explicit sessions."""

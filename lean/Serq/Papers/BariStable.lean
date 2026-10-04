@@ -990,8 +990,8 @@ theorem ci_start {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI L g
   have hb : D.budget = 128 := rfl
   have hR := ci_R hI (hI.iterNone hie)
   unfold startIteration
-  -- the deployment has no `chunkLift`: every iteration runs it as it is
-  simp only [iterDeployment_of_none _ (rfl : Claims.BariRad.deployment.chunkLift = none)]
+  -- the deployment has no `chunkAt`: every iteration runs it as it is
+  simp only [iterDeployment_of_none _ (rfl : Claims.BariRad.deployment.chunkAt = none)]
   rw [hvia, Bool.or_false]
   by_cases hjs : m.jobs = []
   · have he0 : m.jobs.isEmpty = true := by simp [hjs]

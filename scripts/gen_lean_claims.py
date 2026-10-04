@@ -264,11 +264,11 @@ class Program:
                     raise Fragment(f"pool {p['name']}: one queue key")
                 key = f"some fun x => {self.lean.top(p['queue'][0])}"
             pools.append(f"⟨{nat(p['cap'], 'cap')}, {nat(p['block'] or 1, 'block')}, false, {key}⟩")
-        chunk, lift = chunk_rule(step["chunk"])
+        chunk, at = chunk_rule(step["chunk"])
         return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
                 f"{nat(chunk, 'chunk')}, "
                 f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, {only}, "
-                f"{'none' if lift is None else 'some ' + str(lift)}⟩")
+                f"{at or 'none'}⟩")
 
     def grown_pools(self):
         out = set()
