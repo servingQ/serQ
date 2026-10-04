@@ -35,7 +35,7 @@ The program shares its request definition with the other existing workloads:
 
 ## Validation and next scenarios
 
-[How serQ is checked](../validation.md) records the existing scheduler scenarios and trace. Those checks apply to their stated reference and paths, not to every feature of v0.31.0rc2. Current local recovery already accounts for known generated progress; the older [IR v4 discussion](../design/ir-v4.md) is a historical design record, not a list of current missing features.
+[The language §7](../language.md#7-vllm-v1-as-a-serq-program) records the existing scheduler scenarios and trace. Those checks apply to their stated reference and paths, not to every feature of v0.31.0rc2. Current local recovery already accounts for known generated progress; the older [IR v4 discussion](../design/ir-v4.md) is a historical design record, not a list of current missing features.
 
 For the latest tag, compare priority victims, output-preserving decode preemption, cross-request prefix sharing and deferred free of in-flight blocks. Observe per-step selection, physical allocation/reuse, committed tokens and release times.
 

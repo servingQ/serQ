@@ -11,7 +11,8 @@ serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]... [--def name
 ```
 
 `FILE` is program text (`.sq`) or IR (`.json`), as for the other commands.
-In Python, [`pyserq.draw`](../python.md) returns the same text.
+Output goes to stdout unless `--out` names a file. In Python,
+[`pyserq.draw`](../python.md) returns the same text.
 
 ## Why the figure is generated rather than drawn
 
@@ -66,9 +67,12 @@ src/view/svg.rs        Figure -> String
 ```
 
 `Figure` is the test surface; no writer decides a coordinate. `tests/draw.rs`
-asserts on rectangles and on the projected network, with golden files guarding
-the writers (`make draw-golden`). `make check` draws every program in both
-formats, and every IR file in `tools/oracle/`.
+asserts on rectangles and on the projected network. The figures this site
+shows (`docs/assets/NAME.deployment.svg`) must be what their program draws
+now, byte for byte, which also guards the SVG writer; `make draw-golden`
+rewrites them. `make check` draws every program in both formats, and every
+IR file in `tools/oracle/`. The view adds no type to `src/ir.rs`, so it
+never moves `IR_VERSION`.
 
 ## What is not done
 

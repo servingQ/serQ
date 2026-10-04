@@ -1,100 +1,72 @@
-# serQ
+---
+hide:
+  - navigation
+---
 
-**A serving deployment is a program.**
+# Welcome to serQ
 
-serQ is a small language in which an LLM serving system — its memory pools, its
-engine, the path a session takes through them — is written down once, as a
-program. That one program is then simulated, checked against the real system,
-and reasoned about formally.
+*pronounced "ser-Q": **se**rving + **Q**ueue*
 
-```serq
-pool kv    { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool reqs { cap max_seqs; admit via engine; }
+**serQ is a language in which an LLM serving deployment is a program.** Its
+memory pools, its engines, the traffic that arrives and the path every
+request takes through them are written down once. That one program is then
+simulated, proved about in Lean, and drawn; the vLLM program is checked
+against the real scheduler request for request.
 
-stage engine : step {
-  budget B;
-  cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-  memory kv;
-}
+## Why serQ exists
 
-workload {
-  arrive poisson(Lambda);
-  hidden o;
-  init { set K = 0; }
-  turn { set n = ~exp(500); set o = ~exp(200) + 1; set more = ~bernoulli(p); }
-  session {
-    turn;
-    loop {
-      request;
-      set K = prompt + o;
-      branch (more) { tool (~exp(Z)); turn; } else { end; }
-    }
-  }
-}
+A serving system is usually described three times, and the three are never
+reconciled: a paper's queueing model, the scheduler's source code, and
+whatever load test last ran against it. Each answers a different question,
+and none of them can be checked against the others.
 
-server {
-  set prompt = K + n;
-  set hitmax = floor((prompt - 1) / bs) * bs;
-  hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
-        at admission (hit = min(cachedin(kv), hitmax)) {
-    prefill (prompt - c) growing kv;
-    observe ttft = now - t0;
-    decode (o - 1) growing kv;
-  } cache (prompt + o);
-}
-```
+serQ replaces the three with one program. Its definition is an intermediate
+representation, the [IR](ir.md): the simulator runs it, the Lean model is
+generated from it, and the oracle tests read it. The `.sq` text you write is
+one frontend that compiles to it. Because they read the same IR, a change to
+the program reaches the simulation, the Lean statements and the figure at
+once. That the interpreter and the Lean semantics agree is tested (the
+oracle scenarios, random differential runs), not proved.
 
-That is most of `examples/multi-turn/vllm.sq`, and it **is** vLLM v1's engine: on six
-deterministic scenarios and on a 333-session, 3 321-request trace, it gives the
-real scheduler's answer for every request — every first-token time, every
-cached-token count.
-
-## The organising idea
-
-A serving deployment does four things to a request:
-
-1. makes it **wait for a resource**,
-2. **runs** it on a stage,
-3. **frees** the resource, possibly keeping a prefix cached,
-4. **sends it somewhere next**.
-
-serQ makes the first three one scoped statement — `hold p (u) { … } cache (ℓ)`
-— and generalises "resource" so that KV memory, request slots, live-session
-caps and offload tiers are all the same kind of object: a **pool**. The fourth
-is ordinary control flow: `branch`, `loop`, `end`.
-
-## One program, three uses
+## What you can do with it
 
 <div class="grid cards" markdown>
 
-- **Simulation** — `serq run prog.sq` executes the program as a
-  discrete-event simulation and reports time averages, per-observation
-  statistics and per-turn records.
+- **Write a deployment**
 
-- **Specification** — vLLM v1's engine is a 50-line program that reproduces the
-  upstream scheduler request for request. Change one line and you have a
-  different deployment to compare against.
+    Pools of KV blocks or request slots, step engines with a token budget
+    and a cost model, a workload of sessions and turns, and the policy a
+    request runs. The [tutorial](tutorial/index.md) builds one up in six
+    runnable programs.
 
-- **Formal verification** — the same program is an inductive type in Lean with
-  an operational semantics. The memory invariant of every pool is a theorem;
-  the vLLM scheduler scenarios are theorems.
+- **Simulate it**
+
+    `serq run` executes the program as a discrete-event simulation and
+    reports each stage's throughput, utilisation and waits, an engine's
+    inter-token latency, and whatever the program observes (time to first
+    token, say) with a confidence interval. `--set` and `--def` change a
+    constant or a law without editing the file, for sweeps.
+    [Getting started](getting-started.md), [use cases](use-cases/index.md#simulation)
+
+- **State claims and prove them**
+
+    A `claim` is a proposition about every path of the program, written in
+    the program: the simulator checks it on the path it runs, and for a
+    program inside Lean's fragment a Lean proof covers every path. Three
+    papers' propositions are proved this way, and the memory invariant `allocated + cached ≤ cap` is a theorem
+    of the pool model.
+    [The Lean model](lean.md), [Claims](design/claims.md), [use cases](use-cases/index.md#formal-verification)
+
+- **Draw it**
+
+    `serq draw` renders the program as a queueing network, in TikZ or SVG.
+    The figure is generated from the program, so it cannot fall out of date.
+    [Visualization](visualization/index.md)
+
+- **Use it from Python**
+
+    `pip install pyserq` gives you compile, run and draw in process, with
+    the report as Python objects.
+    [pyserq](python.md)
 
 </div>
-
-## Where to start
-
-| If you want to | Go to |
-|---|---|
-| build it and run something | [Getting started](getting-started.md) |
-| learn the language from scratch | [Tutorial](tutorial/index.md) — six chapters, each a runnable program |
-| see a real system written in it | [vLLM](use-cases/vllm.md), [vendor plugins](use-cases/index.md#vendor-plugins), [prefill/decode over NIXL](use-cases/pd.md) |
-| see one engine serve single-turn, chat and agent traffic | [Different workloads](use-cases/workloads.md) |
-| look something up | [API reference](api/index.md), [Cheatsheet](reference/cheatsheet.md), [CLI](reference/cli.md) |
-| know why any of this should be believed | [How serQ is checked](validation.md) |
-| use a program in the simulator or in Lean | [Development guide](development.md) |
-
-!!! note "The reference documents"
-    [The language](language.md) and [The IR](ir.md) are the specification-grade
-    documents. They are complete and dense. The tutorial is the way in; those are
-    what you read afterwards, and the [API reference](api/index.md) is where you
-    look a construct up.

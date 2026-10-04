@@ -307,4 +307,4 @@ the difference is the point of saying so.
 
 ---
 
-See also: [The KV transfer](../design/pd-transfer.md), [How serQ is checked](../validation.md).
+See also: [The KV transfer](../design/pd-transfer.md).
