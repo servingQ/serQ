@@ -46,12 +46,14 @@ the simulation, the proofs and the figure cannot disagree with one another.
     constant or a law without editing the file, for sweeps.
     [Getting started](getting-started.md)
 
-- **Prove things about it**
+- **State claims and prove them**
 
-    The same IR is a program in a Lean semantics. The memory invariant
-    `allocated + cached ≤ cap` is a theorem for every pool, and the vLLM
-    scenarios are theorems checked by the kernel.
-    [The Lean model](lean.md)
+    A `claim` is a proposition about every path of the program, written in
+    the program: the simulator checks it on the path it runs, and Lean
+    proves it about all of them. Three papers' propositions are proved this
+    way, and the memory invariant `allocated + cached ≤ cap` is a theorem
+    for every pool.
+    [The Lean model](lean.md), [Claims](design/claims.md)
 
 - **Draw it**
 
@@ -107,6 +109,7 @@ is ordinary control flow: `branch`, `loop`, `end`.
 | learn the language from scratch | [Tutorial](tutorial/index.md): six chapters, each a runnable program |
 | see a real system written in it | [vLLM](use-cases/vllm.md), [vendor plugins](use-cases/index.md#vendor-plugins), [prefill/decode over NIXL](use-cases/pd.md) |
 | see one engine serve single-turn, chat and agent traffic | [Different workloads](use-cases/workloads.md) |
+| see a scheduling paper's theorem proved about a program | [Dai et al.](use-cases/dai.md), [Bari et al.](use-cases/bari.md), [Kong et al.](use-cases/kong.md) |
 | sweep a parameter, compare two designs, or take a program to Lean | [Working with a program](development.md) |
 | look something up | [API reference](api/index.md), [Cheatsheet](reference/cheatsheet.md), [CLI](reference/cli.md), [Python](python.md) |
 | know why the language is the way it is | [Design](design/index.md) |
