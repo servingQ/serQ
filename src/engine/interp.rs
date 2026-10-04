@@ -102,13 +102,28 @@ enum Status {
     Ended,
 }
 
+/// One pool of a hold: what it has allocated there, and where the session
+/// stands in its sequence.
+#[derive(Clone, Debug)]
+struct Held {
+    pool: usize,
+    alloc: f64,
+    /// Advanced by `growing` runs and `load`; starts at the consumed
+    /// cached prefix.
+    pos: f64,
+}
+
+impl Held {
+    /// What has been computed, and so may be cached: the position, once a
+    /// `growing` run of the hold advanced it, else the whole allocation.
+    fn computed(&self, grown: bool) -> f64 {
+        if grown { self.pos } else { self.alloc }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Hold<'p> {
-    /// (pool, allocated units)
-    pools: Vec<(usize, f64)>,
-    /// Per pool: the session's position in its sequence, advanced by
-    /// `growing` runs; starts at the consumed cached prefix.
-    pos: Vec<f64>,
+    pools: Vec<Held>,
     /// Whether a `growing` run advanced `pos` (then `pos`, not the
     /// allocation, is what has been computed).
     grown: bool,
@@ -130,18 +145,27 @@ struct Lease<'p> {
     cache: Option<&'p CExpr>,
 }
 
+/// One pool a waiting hold asks for.
 #[derive(Clone, Debug)]
-struct Pending<'p> {
-    pools: Vec<(usize, f64)>,
-    /// The unit expressions, re-evaluated at admission (the lecture's
+struct Wanted<'p> {
+    pool: usize,
+    units: f64,
+    /// The unit expression, re-evaluated at admission (the lecture's
     /// `[Admit]` evaluates `c(x_r)` then: observables such as the cache or
     /// the engine's budget may have changed while the session waited).
-    exprs: Vec<&'p CExpr>,
-    /// Per pool: units that must fit for the admission (default: the
-    /// allocation), e.g. the whole prompt while only its first chunk is
-    /// allocated (vLLM `scheduler_reserve_full_isl`).
-    reserve: Vec<Option<&'p CExpr>>,
-    need: Vec<f64>,
+    expr: &'p CExpr,
+    /// Units that must fit for the admission (default: the allocation),
+    /// e.g. the whole prompt while only its first chunk is allocated (vLLM
+    /// `scheduler_reserve_full_isl`).
+    reserve: Option<&'p CExpr>,
+    /// What the admission waits for: the units, or the reservation above
+    /// them, as `pending_now` last evaluated them.
+    need: f64,
+}
+
+#[derive(Clone, Debug)]
+struct Pending<'p> {
+    pools: Vec<Wanted<'p>>,
     reuse: Option<&'p CExpr>,
     cache: Option<&'p CExpr>,
     lease: Option<(usize, &'p CExpr)>,
@@ -191,6 +215,18 @@ struct Session<'p> {
     /// keeps becoming ready without time passing is a loop that never
     /// blocks (`READIES_PER_INSTANT`).
     readies: (f64, u64),
+}
+
+impl Session<'_> {
+    /// The innermost hold of pool `pl`, as (the hold, the pool's place in
+    /// it): the one `grow`, `load`, `release` and `growing` act on.
+    fn innermost(&self, pl: usize) -> Option<(usize, usize)> {
+        self.holds
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(hi, h)| h.pools.iter().position(|e| e.pool == pl).map(|k| (hi, k)))
+    }
 }
 
 /// The stream of one (seed, session, turn, kind): splitmix64 over the four,
@@ -521,7 +557,7 @@ const DEAD_ENTRY: u64 = 1 << 62;
 
 /// Which pool a `hold` waits at: the first one listed.
 fn first_pool(pending: &Pending) -> usize {
-    pending.pools[0].0
+    pending.pools[0].pool
 }
 
 impl<'p> Interp<'p> {
@@ -1200,8 +1236,8 @@ impl<'p> Interp<'p> {
                         // this hold completed: its pools' preemption positions
                         // are history (an enclosing hold keeps its own), and
                         // there is nothing to resume from
-                        for &(q, _) in &h.pools {
-                            self.sessions[sid].preempt_pos.remove(&q);
+                        for e in &h.pools {
+                            self.sessions[sid].preempt_pos.remove(&e.pool);
                         }
                         let slot_computed = self.p.slot_computed;
                         self.sessions[sid].attrs[slot_computed] = 0.0;
@@ -1289,23 +1325,10 @@ impl<'p> Interp<'p> {
                     cache,
                     lease,
                 } => {
-                    let mut ps = vec![];
-                    let mut exprs = vec![];
-                    let mut reserve = vec![];
-                    for (r, e, f) in pools {
-                        let pl = self.session_index(r, sid);
-                        let units = self.amount(e, sid, &format!("hold {}", self.p.pools[pl].name));
-                        ps.push((pl, units));
-                        exprs.push(e);
-                        reserve.push(f.as_ref());
-                    }
+                    let wanted = self.wanted(pools, sid);
                     let lease = lease.as_ref().map(|(r, t)| (self.session_index(r, sid), t));
-                    let n = ps.len();
                     let pending = Pending {
-                        pools: ps,
-                        exprs,
-                        reserve,
-                        need: vec![0.0; n],
+                        pools: wanted,
                         reuse: reuse.as_ref(),
                         cache: cache.as_ref(),
                         lease,
@@ -1413,19 +1436,38 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// The pools a hold statement asks for, its units evaluated now.
+    fn wanted(&mut self, pools: &'p [(CRef, CExpr, Option<CExpr>)], sid: usize) -> Vec<Wanted<'p>> {
+        pools
+            .iter()
+            .map(|(r, e, f)| {
+                let pool = self.session_index(r, sid);
+                let what = format!("hold {}", self.p.pools[pool].name);
+                let units = self.amount(e, sid, &what);
+                Wanted {
+                    pool,
+                    units,
+                    expr: e,
+                    reserve: f.as_ref(),
+                    need: 0.0,
+                }
+            })
+            .collect()
+    }
+
     /// Put a hold request in its pool's queue. `front`: a preempted
     /// session re-enters at the head (vLLM `waiting.prepend_request`).
     /// Returns false if the request can never fit (the session ends).
     fn enqueue_hold(&mut self, sid: usize, pending: Pending<'p>, front: bool) -> bool {
-        for k in 0..pending.pools.len() {
-            let (pl, units) = pending.pools[k];
+        for w in &pending.pools {
+            let pl = w.pool;
             // what admission waits for: the units, or the reservation above them
-            let need = match pending.reserve[k] {
+            let need = match w.reserve {
                 Some(f) => {
                     let what = format!("hold {} reserve", self.p.pools[pl].name);
-                    self.amount(f, sid, &what).max(units)
+                    self.amount(f, sid, &what).max(w.units)
                 }
-                None => units,
+                None => w.units,
             };
             if self.round_up(pl, need) > self.pools[pl].cap {
                 self.pools[pl].rejected += 1;
@@ -1489,16 +1531,12 @@ impl<'p> Interp<'p> {
             .pending
             .clone()
             .expect("queued session has a hold");
-        for k in 0..pending.pools.len() {
-            let e = pending.exprs[k];
-            let pl = pending.pools[k].0;
-            let u = self.amount(e, sid, &format!("hold {}", self.p.pools[pl].name));
-            pending.pools[k].1 = u;
-            pending.need[k] = match pending.reserve[k] {
-                Some(f) => {
-                    let what = format!("hold {} reserve", self.p.pools[pl].name);
-                    self.amount(f, sid, &what).max(u)
-                }
+        for w in &mut pending.pools {
+            let what = format!("hold {}", self.p.pools[w.pool].name);
+            let u = self.amount(w.expr, sid, &what);
+            w.units = u;
+            w.need = match w.reserve {
+                Some(f) => self.amount(f, sid, &format!("{what} reserve")).max(u),
                 None => u,
             };
         }
@@ -1519,8 +1557,7 @@ impl<'p> Interp<'p> {
             let reserve = pending
                 .pools
                 .iter()
-                .zip(&pending.need)
-                .all(|(&(q, _), &need)| self.fits(q, self.round_up(q, need)));
+                .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need)));
             if !reserve {
                 break;
             }
@@ -1541,13 +1578,13 @@ impl<'p> Interp<'p> {
         let serial = self.sessions[sid].serial;
         let mut cached_first = None;
         let mut held = vec![];
-        let mut pos = vec![];
         let reuse = pending
             .reuse
             .as_ref()
             .map(|e| self.eval(e, &Ctx::session(sid), Which::Session).max(0.0));
-        for &(q, units) in &pending.pools {
-            let need = self.round_up(q, units);
+        for w in &pending.pools {
+            let q = w.pool;
+            let need = self.round_up(q, w.units);
             // A hold with a `cache` clause takes part in the prefix cache:
             // it consumes the own prefix, at most `reuse` of it; the rest
             // stays cached as a dead entry of the same age (vLLM: the hit is
@@ -1590,8 +1627,11 @@ impl<'p> Interp<'p> {
             self.pools[q].used += need;
             self.pools[q].holders.push(sid);
             self.pools[q].admissions += 1;
-            held.push((q, need));
-            pos.push(own);
+            held.push(Held {
+                pool: q,
+                alloc: need,
+                pos: own,
+            });
         }
         let pl = first_pool(&pending);
         if self.warm {
@@ -1607,7 +1647,6 @@ impl<'p> Interp<'p> {
         s.status = Status::Ready;
         s.holds.push(Hold {
             pools: held,
-            pos,
             grown: false,
             cache: pending.cache,
             lease: pending.lease,
@@ -1796,11 +1835,8 @@ impl<'p> Interp<'p> {
 
     /// A preempted or ended hold gives everything back at once.
     fn release_hold(&mut self, sid: usize, h: &Hold<'p>) {
-        for (k, &(q, alloc)) in h.pools.iter().enumerate() {
-            // only what was computed can be cached: the position of a
-            // growing hold, else the whole allocation
-            let computed = if h.grown { h.pos[k] } else { alloc };
-            self.release_units(sid, q, alloc, computed, h.cache);
+        for e in &h.pools {
+            self.release_units(sid, e.pool, e.alloc, e.computed(h.grown), h.cache);
         }
     }
 
@@ -1809,8 +1845,8 @@ impl<'p> Interp<'p> {
     /// preemption victim) until its `release`, the expiry or the session's
     /// end.
     fn end_hold(&mut self, sid: usize, h: &Hold<'p>) {
-        for (k, &(q, alloc)) in h.pools.iter().enumerate() {
-            let computed = if h.grown { h.pos[k] } else { alloc };
+        for e in &h.pools {
+            let (q, alloc, computed) = (e.pool, e.alloc, e.computed(h.grown));
             match h.lease {
                 Some((lp, t)) if lp == q => {
                     let t = self.eval(t, &Ctx::session(sid), Which::Session).max(0.0);
@@ -1880,24 +1916,18 @@ impl<'p> Interp<'p> {
     /// lease of it ends (the transfer took the KV). Neither: a no-op (a
     /// hold re-executed after a preemption reaches the statement again).
     fn release_early(&mut self, sid: usize, pl: usize) {
-        let Some(hi) = self.sessions[sid]
-            .holds
-            .iter()
-            .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
-        else {
+        let Some((hi, k)) = self.sessions[sid].innermost(pl) else {
             if let Some(i) = self.sessions[sid].leases.iter().position(|l| l.pool == pl) {
                 self.end_lease(sid, i);
             }
             return;
         };
         let h = &mut self.sessions[sid].holds[hi];
-        let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
-        let (q, alloc) = h.pools.remove(k);
-        let pos = h.pos.remove(k);
-        let computed = if h.grown { pos } else { alloc };
+        let e = h.pools.remove(k);
+        let computed = e.computed(h.grown);
         let cache = h.cache;
-        self.release_units(sid, q, alloc, computed, cache);
-        self.sessions[sid].preempt_pos.remove(&q);
+        self.release_units(sid, pl, e.alloc, computed, cache);
+        self.sessions[sid].preempt_pos.remove(&pl);
     }
 
     /// `load P (n)`: the KV of `n` tokens arrived from outside the engine;
@@ -1906,49 +1936,35 @@ impl<'p> Interp<'p> {
     /// vLLM's decoder allocates the whole prompt before it reads).
     fn load(&mut self, sid: usize, pl: usize, n: f64) {
         let name = &self.p.pools[pl].name;
-        let Some(hi) = self.sessions[sid]
-            .holds
-            .iter()
-            .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
-        else {
+        let Some((hi, k)) = self.sessions[sid].innermost(pl) else {
             self.error = Some(format!("`load {name}` outside a hold of `{name}`"));
             return;
         };
         let h = &mut self.sessions[sid].holds[hi];
-        let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
-        let alloc = h.pools[k].1;
-        if h.pos[k] + n > alloc + EPS {
+        let e = &mut h.pools[k];
+        if e.pos + n > e.alloc + EPS {
             self.error = Some(format!(
-                "`load {name} ({n})`: the hold has {alloc} allocated and {} computed; \
+                "`load {name} ({n})`: the hold has {} allocated and {} computed; \
                  a load must fit the allocation (grow first)",
-                h.pos[k]
+                e.alloc, e.pos
             ));
             return;
         }
-        h.pos[k] += n;
+        e.pos += n;
         h.grown = true;
     }
 
     /// Allocate `units` more for the innermost hold of `sid` on `pl`.
     /// Returns false if the session blocked (or was preempted).
     fn grow(&mut self, sid: usize, pl: usize, units: f64) -> bool {
-        let Some(hi) = self.sessions[sid]
-            .holds
-            .iter()
-            .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
-        else {
+        let Some((hi, k)) = self.sessions[sid].innermost(pl) else {
             self.error = Some(format!(
                 "grow outside a hold of pool `{}`",
                 self.p.pools[pl].name
             ));
             return false;
         };
-        let alloc_now = self.sessions[sid].holds[hi]
-            .pools
-            .iter()
-            .find(|&&(q, _)| q == pl)
-            .unwrap()
-            .1;
+        let alloc_now = self.sessions[sid].holds[hi].pools[k].alloc;
         let target = self.round_up(pl, alloc_now + units);
         let need = target - alloc_now;
         if need <= 0.0 {
@@ -1958,12 +1974,7 @@ impl<'p> Interp<'p> {
             if self.fits(pl, need) {
                 self.make_room(pl, need);
                 self.pools[pl].used += need;
-                let h = &mut self.sessions[sid].holds[hi];
-                for e in h.pools.iter_mut() {
-                    if e.0 == pl {
-                        e.1 += need;
-                    }
-                }
+                self.sessions[sid].holds[hi].pools[k].alloc += need;
                 return true;
             }
             let victim = match self.p.pools[pl].preempt {
@@ -2017,12 +2028,11 @@ impl<'p> Interp<'p> {
         if engines.is_empty() {
             // the last holder that holds the pool in a scope: a lease is
             // not preempted
-            return holders.iter().copied().rev().find(|&s| {
-                self.sessions[s]
-                    .holds
-                    .iter()
-                    .any(|h| h.pools.iter().any(|&(q, _)| q == pl))
-            });
+            return holders
+                .iter()
+                .copied()
+                .rev()
+                .find(|&s| self.sessions[s].innermost(pl).is_some());
         }
         holders
             .iter()
@@ -2039,17 +2049,10 @@ impl<'p> Interp<'p> {
                 self.pools[pl].growers.pop_front();
                 continue;
             };
-            let hi = self.sessions[sid]
-                .holds
-                .iter()
-                .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
-                .unwrap();
-            let alloc_now = self.sessions[sid].holds[hi]
-                .pools
-                .iter()
-                .find(|&&(q, _)| q == pl)
-                .unwrap()
-                .1;
+            let (hi, k) = self.sessions[sid]
+                .innermost(pl)
+                .expect("a growing session holds the pool");
+            let alloc_now = self.sessions[sid].holds[hi].pools[k].alloc;
             let need = self.round_up(pl, alloc_now + units) - alloc_now;
             if !self.fits(pl, need) {
                 break;
@@ -2057,11 +2060,7 @@ impl<'p> Interp<'p> {
             self.pools[pl].growers.pop_front();
             self.make_room(pl, need);
             self.pools[pl].used += need;
-            for e in self.sessions[sid].holds[hi].pools.iter_mut() {
-                if e.0 == pl {
-                    e.1 += need;
-                }
-            }
+            self.sessions[sid].holds[hi].pools[k].alloc += need;
             match resume {
                 Some((st, j)) => {
                     self.sessions[sid].status = Status::InStage(st, j);
@@ -2078,31 +2077,23 @@ impl<'p> Interp<'p> {
 
     /// `(allocated, position)` of the innermost hold of `sid` on `pl`.
     fn hold_alloc_pos(&mut self, sid: usize, pl: usize) -> (f64, f64) {
-        let Some(h) = self.sessions[sid]
-            .holds
-            .iter()
-            .rev()
-            .find(|h| h.pools.iter().any(|&(q, _)| q == pl))
-        else {
+        let Some((hi, k)) = self.sessions[sid].innermost(pl) else {
             self.error = Some(format!(
                 "`growing {}` outside a hold of it",
                 self.p.pools[pl].name
             ));
             return (0.0, 0.0);
         };
-        let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
-        (h.pools[k].1, h.pos[k])
+        let e = &self.sessions[sid].holds[hi].pools[k];
+        (e.alloc, e.pos)
     }
 
     fn advance_pos(&mut self, sid: usize, pl: usize, tokens: f64) {
-        let h = self.sessions[sid]
-            .holds
-            .iter_mut()
-            .rev()
-            .find(|h| h.pools.iter().any(|&(q, _)| q == pl))
-            .unwrap();
-        let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
-        h.pos[k] += tokens;
+        let (hi, k) = self.sessions[sid]
+            .innermost(pl)
+            .expect("a growing run is inside a hold of its pool");
+        let h = &mut self.sessions[sid].holds[hi];
+        h.pools[k].pos += tokens;
         h.grown = true;
     }
 
@@ -2112,8 +2103,8 @@ impl<'p> Interp<'p> {
             .holds
             .iter()
             .flat_map(|h| h.pools.iter())
-            .filter(|&&(q, _)| q == pl)
-            .map(|&(_, u)| u)
+            .filter(|e| e.pool == pl)
+            .map(|e| e.alloc)
             .sum()
     }
 
@@ -2121,21 +2112,15 @@ impl<'p> Interp<'p> {
     /// hold's allocations are released (cached), and it re-queues at the
     /// head of the pool's queue with the hold to execute again.
     fn preempt(&mut self, victim: usize, pl: usize) {
-        let hi = self.sessions[victim]
-            .holds
-            .iter()
-            .rposition(|h| h.pools.iter().any(|&(q, _)| q == pl))
+        let (hi, k) = self.sessions[victim]
+            .innermost(pl)
             .expect("victim holds the pool");
         // what the hold has computed on this pool: its position there, which
         // starts at the cached prefix it consumed and advances with its
         // `growing` runs. Not the allocation: a holder preempted before its
         // first iteration has computed nothing of what it was allocated
         // (vLLM: `num_computed_tokens` is 0 for it, and it has no output)
-        let computed = {
-            let h = &self.sessions[victim].holds[hi];
-            let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
-            h.pos[k]
-        };
+        let computed = self.sessions[victim].holds[hi].pools[k].pos;
         if let Some(&prev) = self.sessions[victim].preempt_pos.get(&pl) {
             if computed <= prev + EPS && !self.sessions[victim].stuck {
                 self.sessions[victim].stuck = true;
@@ -2163,7 +2148,7 @@ impl<'p> Interp<'p> {
                 }
             }
         }
-        let h_pools: Vec<(usize, f64, &'p CExpr, Option<&'p CExpr>)> = {
+        let h_pools = {
             // re-evaluate the hold's requested units from the statement
             let parent = self.sessions[victim]
                 .frames
@@ -2175,18 +2160,8 @@ impl<'p> Interp<'p> {
             let CStmt::Hold { pools, .. } = stmt else {
                 panic!("preempted frame is not a hold");
             };
-            let mut v = vec![];
-            for (r, e, f) in pools {
-                let q = self.session_index(r, victim);
-                let what = format!("hold {}", self.p.pools[q].name);
-                let u = self.amount(e, victim, &what);
-                v.push((q, u, e, f.as_ref()));
-            }
-            v
+            self.wanted(pools, victim)
         };
-        let h_exprs: Vec<&'p CExpr> = h_pools.iter().map(|x| x.2).collect();
-        let h_fits: Vec<Option<&'p CExpr>> = h_pools.iter().map(|x| x.3).collect();
-        let h_pools: Vec<(usize, f64)> = h_pools.iter().map(|x| (x.0, x.1)).collect();
         let lease_pool = {
             let parent = self.sessions[victim].frames.last().cloned().unwrap();
             let p = self.p;
@@ -2211,12 +2186,8 @@ impl<'p> Interp<'p> {
         let (cache, reuse) = cache;
         self.pools[pl].preemptions += 1;
         self.preempted = true;
-        let n = h_pools.len();
         let pending = Pending {
             pools: h_pools,
-            exprs: h_exprs,
-            reserve: h_fits,
-            need: vec![0.0; n],
             reuse,
             cache,
             lease: lease_pool,
@@ -3016,8 +2987,7 @@ impl<'p> Interp<'p> {
             let reserve = pending
                 .pools
                 .iter()
-                .zip(&pending.need)
-                .all(|(&(q, _), &need)| self.fits(q, self.round_up(q, need)));
+                .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need)));
             if !reserve {
                 return false;
             }
