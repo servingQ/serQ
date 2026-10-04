@@ -1532,12 +1532,11 @@ impl<'p> Interp<'p> {
             .clone()
             .expect("queued session has a hold");
         for w in &mut pending.pools {
-            let name = &self.p.pools[w.pool].name;
-            let (what, reserve) = (format!("hold {name}"), format!("hold {name} reserve"));
+            let what = format!("hold {}", self.p.pools[w.pool].name);
             let u = self.amount(w.expr, sid, &what);
             w.units = u;
             w.need = match w.reserve {
-                Some(f) => self.amount(f, sid, &reserve).max(u),
+                Some(f) => self.amount(f, sid, &format!("{what} reserve")).max(u),
                 None => u,
             };
         }
