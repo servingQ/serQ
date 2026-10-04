@@ -312,6 +312,53 @@ fn an_oversized_reservation_is_rejected() {
 /// …, 372: six before the horizon of 400, the second of them at the same
 /// position (160) as the first.
 #[test]
+fn a_hold_larger_than_the_cap_is_refused_or_reported() {
+    // constant units that fit no member of the reference do not link
+    // (#271), rounded to blocks, `reserve` included
+    for hold in [
+        "hold kv (20)",
+        "hold kv (2 * 5 + 1)",
+        "hold kv (1) reserve (11)",
+        "hold kv2[0] (20)",
+    ] {
+        let src = format!(
+            "pool kv {{ cap 10; }} pool kv2[2] {{ cap 10; }} stage d : delay;
+             workload {{ arrive batch(1); }}
+             session {{ {hold} {{ run d (1); }} end; }}
+             run {{ horizon 10; }}"
+        );
+        let e = run_source(&src, &Overrides::default(), None).unwrap_err();
+        assert!(e.contains("never fits its cap 10"), "{hold}: {e}");
+    }
+    let e = run_source(
+        "pool kv { cap 10; block 4; } stage d : delay;
+         workload { arrive batch(1); }
+         session { hold kv (9) { run d (1); } end; }
+         run { horizon 10; }",
+        &Overrides::default(),
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("never fits"),
+        "9 units are 12 in blocks of 4: {e}"
+    );
+    // units the program computes are the run's: the session ends, counted
+    // in `rej`, and the report says so
+    let r = run("pool kv { cap 10; } stage d : delay;
+         workload { arrive batch(2); init { set u = 5 + 10 * serial; } }
+         session { hold kv (u) { run d (1); } end; }
+         run { horizon 10; }");
+    assert_eq!(r.pool("kv").unwrap().rejected, 1, "{}", r.text());
+    assert!(
+        r.text()
+            .contains("rej: 1 session(s) ended at pool `kv` asking for more than its cap"),
+        "{}",
+        r.text()
+    );
+}
+
+#[test]
 fn a_hold_that_can_never_fit_is_reported_stuck() {
     let src = r#"
         pool reqs { cap 4; admit via engine; }

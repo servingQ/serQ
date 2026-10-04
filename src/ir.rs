@@ -987,6 +987,20 @@ fn reads_clock(e: &CExpr) -> bool {
     }
 }
 
+/// The value of an expression of numbers and operators, if it is one.
+fn constant(e: &CExpr) -> Option<f64> {
+    match e {
+        CExpr::Num(x) => Some(*x),
+        CExpr::Unary(UnOp::Neg, x) => constant(x).map(|x| -x),
+        CExpr::Binary(op, a, b) => Some(crate::frontend::link::binop(
+            *op,
+            constant(a)?,
+            constant(b)?,
+        )),
+        _ => None,
+    }
+}
+
 fn arrival_expr_is_pure(e: &CExpr) -> bool {
     match e {
         CExpr::Num(_) => true,
@@ -1245,6 +1259,25 @@ impl Validator<'_> {
                     if let Some(f) = reserve {
                         self.expr(f, Moment::Admit)?;
                         no_draw(f, "`reserve`")?;
+                    }
+                    // what admission waits for, when the program fixes it,
+                    // must fit some member the reference may name: one that
+                    // fits none is rejected on every run (#271)
+                    let need = [Some(u), reserve.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(constant)
+                        .reduce(f64::max);
+                    if let Some(need) = need
+                        && self.p.pools[r.base..r.base + r.count]
+                            .iter()
+                            .all(|q| q.block.map_or(need, |b| (need / b).ceil() * b) > q.cap)
+                    {
+                        let q = &self.p.pools[r.base];
+                        return Err(format!(
+                            "a hold of {need} units on pool `{}` never fits its cap {}",
+                            q.name, q.cap
+                        ));
                     }
                 }
                 if let Some(e) = reuse {
