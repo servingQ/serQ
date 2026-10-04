@@ -115,7 +115,14 @@ and stage references are `CRef {base, count, index?}` (a family of
 ## Validation
 
 `Program::validate` checks the version, that every block, attribute,
-observation, pool and stage index exists, the run parameters, that
+observation, pool and stage index exists, the run parameters, that every
+call has its function's arguments (`Fun::signature`) and every draw its
+distribution's (`DistKind::arity`), that `init` and `turn` only `Set`
+and `Observe`, that a `Run`'s mode is `Prefill` or `Decode` exactly on a
+step stage and its `growing` only there, that `Grow`, `Load`, `Release`
+and `growing` stand inside a `Hold` of their pool as it is written, index
+included (`Release` also where a hold leases it), and a hold leases one of
+its own pools, that
 every context variable is read at the moment that supplies it, that every
 `Loop` lets time pass on every path through its body (a `Run` of
 non-constant or positive work, a `Hold` whose body does, or `End`;

@@ -112,23 +112,11 @@ fn the_parser_keyword_list_is_every_keyword() {
 }
 
 /// A `def` may not be named like a function: `link::FUNCTIONS` is every
-/// function the linker's call resolution names.
+/// function a call may name, the IR's table (`Fun::names`) by which the
+/// linker resolves a call and `Program::validate` checks one.
 #[test]
 fn the_function_list_is_every_function_the_linker_resolves() {
-    let src = read("src/frontend/link.rs");
-    let mut resolved = BTreeSet::new();
-    for line in src.lines() {
-        let t = line.trim();
-        if let Some(rest) = t.strip_prefix('"')
-            && let Some((w, tail)) = rest.split_once('"')
-            && tail.trim_start().starts_with("=> (Fun::")
-        {
-            resolved.insert(w.to_string());
-        }
-    }
-    let listed: BTreeSet<String> = serq::frontend::link::FUNCTIONS
-        .iter()
-        .map(|w| w.to_string())
-        .collect();
+    let resolved: BTreeSet<&str> = serq::ir::Fun::names().collect();
+    let listed: BTreeSet<&str> = serq::frontend::link::FUNCTIONS.iter().copied().collect();
     assert_eq!(resolved, listed);
 }
