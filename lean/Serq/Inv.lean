@@ -346,7 +346,7 @@ theorem inv_unwind {P : Prog} (p v : ℕ) :
   | .hold hr k :: fs, m, hf, h => by
     unfold preemptVictim.unwind
     simp only
-    have h1 := h.of_skey (skey_release D m v hr)
+    have h1 := h.of_skey (skey_release D m v { hr with grown := true })
     split
     · exact inv_enqueue _ v true (Inv.upd' h1 v _ fun ho =>
         ⟨(hf _ List.mem_cons_self).1, fun f hf' => hf f (List.mem_cons_of_mem _ hf')⟩)

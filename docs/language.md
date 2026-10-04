@@ -511,7 +511,9 @@ which is `reuse (0) cache (ℓ)` here. Other entries are evicted in the
 pool's order until allocations and cache fit; `u` units are allocated and
 the body runs. At the end of the body the units are released and
 `min(ℓ, computed)` units stay cached, rounded down to blocks (`computed`
-is the allocation, or the position a `growing` run or a `load` reached).
+is the allocation, or the position a `growing` run or a `load` reached; a
+preempted hold caches its position, since the preemption cut its body
+short).
 `release m` inside the body does the same for `m` alone, at that point:
 the innermost enclosing hold on `m` gives its allocation there back,
 caching per its clause, and holds `m` no longer. A hold's `lease m (t)`

@@ -978,7 +978,9 @@ def preemptVictim (m : Machine) (p : ℕ) : Machine × Option ℕ :=
     let rec unwind (m : Machine) : List Frame → Machine
       | [] => m
       | .hold h _ :: fs =>
-        let m := release D m v h
+        -- a preempted hold caches what it computed, its position, not its
+        -- allocation (serQ `interp.rs` `preempt`)
+        let m := release D m v { h with grown := true }
         if h.pools.any (·.1 = p) then
           let m := setS m v { getS m v with prog := h.stmt, stack := fs, status := .ready }
           enqueue m v true
