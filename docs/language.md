@@ -855,8 +855,10 @@ Write the draw as
 `grow` and a `load` are amounts, and an amount is not negative and not NaN;
 an index names a member, a whole number from 0 below the array's count.
 Anything else is the program's error, not a value to round: a constant
-amount that is one is refused at link time, and a computed one, or an
-index, when it is evaluated. Zero is an amount (a run of no work).
+amount or index that is one is refused at link time, a computed one when it
+is evaluated. Zero is an amount (a run of no work). The Lean model's
+fragment computes over ℕ, where a subtraction stops at 0, so it agrees with
+the interpreter on programs whose amounts are never negative.
 
 **Workload.** `init` runs at arrival, `turn` at every `turn` statement;
 with a `trace`, `turn` loads the next turn's `new`, `out`, `think`,

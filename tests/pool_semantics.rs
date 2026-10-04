@@ -555,16 +555,24 @@ fn bad_amounts_and_indices_fail_the_run() {
         ("run a[i + 0.5] (1);", "index `i + 0.5` is 0.5"),
         ("run a[i + 2] (1);", "index `i + 2` is 2"),
         ("hold q[i - 1] (1) { run d (1); }", "index `i - 1` is -1"),
+        (
+            "hold kv (1) reserve (z / z) { run d (1); }",
+            "`hold kv reserve (z / z)`: the amount is NaN",
+        ),
+        (
+            "choose j in (z - 1) by (j);",
+            "`choose … in (z - 1)`: the count is -1, not a whole number",
+        ),
     ] {
         let e = fail(stmt);
         assert!(e.contains(said), "{stmt}: {e}");
     }
     // a constant one does not link
     for (stmt, said) in [
-        ("run d (-5);", "`run (-5)`"),
-        ("hold kv (2 - 3) { run d (1); }", "`hold (-1)`"),
-        ("hold kv (8) { grow kv (-1); }", "`grow (-1)`"),
-        ("hold kv (8) { load kv (0 / 0); }", "`load (NaN)`"),
+        ("run d (-5);", "`run d (-5)`"),
+        ("hold kv (2 - 3) { run d (1); }", "`hold kv (-1)`"),
+        ("hold kv (8) { grow kv (-1); }", "`grow kv (-1)`"),
+        ("hold kv (8) { load kv (0 / 0); }", "`load kv (NaN)`"),
     ] {
         let src = format!(
             "pool kv {{ cap 64; }} stage d : delay;
@@ -574,10 +582,40 @@ fn bad_amounts_and_indices_fail_the_run() {
         );
         let e = serq::compile_source(&src, &Overrides::default()).unwrap_err();
         assert!(
-            e.contains(said) && e.contains("is not negative"),
+            e.contains(said) && e.contains("is a number, and not negative"),
             "{stmt}: {e}"
         );
     }
+    // a constant index names a member, in IR as in text
+    let mut p = serq::compile_source(
+        "stage a[2] : delay; workload { arrive batch(1); }
+         session { run a[0] (1); end; } run { horizon 10; }",
+        &Overrides::default(),
+    )
+    .unwrap();
+    let serq::ir::CStmt::Run { stage, .. } = &mut p.blocks[p.session][0] else {
+        panic!("the session runs first")
+    };
+    stage.index = Some(Box::new(serq::ir::CExpr::Num(-1.0)));
+    let e = p.validate().unwrap_err();
+    assert!(
+        e.contains("stage index -1: a member of an array of 2 is 0 to 1"),
+        "{e}"
+    );
+    // a decode is named as the kernel writes it (`decode on E (…)`)
+    let e = run_source(
+        "pool kv { cap 64; } stage eng : step { budget 8; cost 1; memory kv; }
+         workload { arrive batch(1); init { set z = 0; } }
+         session { hold kv (8) { run eng decode (z - 1); } end; }
+         run { horizon 10; }",
+        &Overrides::default(),
+        None,
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("`run eng decode (z - 1)`: the amount is -1"),
+        "{e}"
+    );
     // zero is an amount: a run of no work, a hold of nothing
     let r = run("pool kv { cap 64; } stage d : delay;
          workload { arrive batch(1); init { set z = 0; } }
