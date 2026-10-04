@@ -17,6 +17,7 @@ certificate `(M - P + 1) W_j ≤ Σ_{i ≺ j} p_i o_i`.
 -/
 import Serq.Work
 import Serq.Claims
+import Serq.Papers.KongMath
 
 
 namespace SerqLang
@@ -2167,6 +2168,218 @@ theorem end_sinv {w : Workload} {g : Ghost} {m : Machine} (hB : Bnd w g m) {s : 
         rw [hnoe] at hce
         obtain ⟨l1, l2⟩ := hI.latE i hi hce
         exact ⟨l1, show g.lat i ≤ R.now by rw [hnow]; omega⟩ }
+
+/-! ### The run -/
+
+/-- At the start every request is about to run its first command. -/
+def g0 : Ghost := ⟨fun _ => .s0, fun _ => 0, fun _ => 0⟩
+
+theorem sinv_initial (w : Workload) (hF : Fam w) :
+    SInv w g0 (Exec.initial Dk w.init.length w.attr Pk w) := by
+  have hget : ∀ i < w.init.length, getS (Exec.initial Dk w.init.length w.attr Pk w) i =
+      ⟨i, ⟨w.attr i, []⟩, 0, Pk, [], .ready, 0, 0⟩ := by
+    intro i hi
+    simp [getS, Exec.initial, Array.getD_eq_getD_getElem?, hi]
+  have hpst : pst (Exec.initial Dk w.init.length w.attr Pk w) 0 = ⟨0, [], [], []⟩ := by
+    simp [pst, Exec.initial, deployment_eq]
+  have hattr : ∀ i k, (⟨w.attr i, []⟩ : Attrs).get k = w.attr i k := fun i k => by simp [Attrs.get]
+  have hval : ∀ k, values (Exec.initial Dk w.init.length w.attr Pk w) k = [] := fun k => by
+    simp [values, Exec.initial]
+  have hfe : ∀ (p : Cat → Prop) [DecidablePred p], ¬ p .s0 →
+      (List.range w.init.length).filter (fun j => p (g0.c j)) = [] := by
+    intro p _ hp
+    simp [g0, hp]
+  exact
+    { wl := rfl
+      size := by simp [Exec.initial]
+      shape := fun i hi => by rw [hget i hi]; exact ⟨rfl, rfl, rfl⟩
+      serial := fun i hi => by rw [hget i hi]
+      attr9 := fun i hi => by rw [hget i hi]; exact hattr i 9
+      attr10 := fun i hi => by rw [hget i hi]; exact hattr i 10
+      pools := by simp [Exec.initial, deployment_eq]
+      entries := by rw [hpst]
+      queue := by rw [hpst]; exact List.Pairwise.nil
+      queueMem := fun i => by rw [hpst]; simp [g0]
+      holders := by rw [hpst]; exact List.nodup_nil
+      holdersMem := fun i => by rw [hpst]; simp [g0, holding]
+      used := by rw [hpst]; rfl
+      jobs := fun j hj => by simp [Exec.initial] at hj
+      jobsA := fun i _ h => by simp [g0] at h
+      jobsNodup := by simp [Exec.initial]
+      leftPos := fun i _ h => by simp [g0] at h
+      ready := by simp [Exec.initial, List.nodup_range]
+      readyMem := fun i => by simp [Exec.initial, g0]
+      s0 := fun _ i _ => Or.inl rfl
+      s0order := fun j _ k _ h _ => by simp [g0] at h
+      readyS0 := fun _ => by simp [Exec.initial]; exact List.pairwise_lt_range
+      nowS0 := fun _ => rfl
+      delays := rfl
+      obs0 := by rw [hval, hfe (· ≠ .s0) (by simp)]; rfl
+      obs1 := by rw [hval, hfe (· ≠ .s0) (by simp)]; rfl
+      obs2 := by rw [hval, hfe (· = .e) (by simp)]; rfl
+      before := fun i _ j _ _ _ h => by simp [g0] at h
+      pot := fun j _ h => by simp [g0] at h
+      cert := fun i _ _ h => by simp [g0] at h
+      latE := fun i _ h => by simp [g0] at h }
+
+theorem nextEvent_of_delays {m : Machine} (h : m.delays = []) : nextEvent m = m.iterEnd := by
+  unfold nextEvent; rw [h]; cases m.iterEnd <;> rfl
+
+theorem afterEvent_bnd {w : Workload} (hF : Fam w) {g : Ghost} {m : Machine} (hI : SInv w g m)
+    (hx : ∀ j < w.init.length, g.c j ≠ .x) (hie : m.iterEnd = none) :
+    ∃ g', Bnd w g' (afterEvent Dk m) := by
+  obtain ⟨g', hS, -⟩ := settle_settled hF hI hx
+  have hie' : (settle Dk m).iterEnd = none := by rw [(same_settle Dk m).iterEnd, hie]
+  have hpend : pendingBy (settle Dk m) (settle Dk m).now = false := by
+    simp [pendingBy, nextEvent_of_delays hS.inv.delays, hie']
+  refine ⟨g', ?_⟩
+  unfold afterEvent
+  simp only [hie', Option.isNone_none, hpend, Bool.not_false, Bool.and_self, ↓reduceIte]
+  exact start_bnd hF hS hie'
+
+/-- **Every machine of every path is at a boundary.** -/
+theorem reach_bnd {w : Workload} (hF : Fam w) {m : Machine} (hr : Reach Dk w Pk m) : ∃ g, Bnd w g m := by
+  induction hr with
+  | start =>
+    exact afterEvent_bnd hF (sinv_initial w hF) (fun j _ => by simp [g0]) rfl
+  | step _ ih =>
+    obtain ⟨g, hB⟩ := ih
+    unfold step
+    rw [nextEvent_of_delays hB.inv.delays]
+    by_cases ha : ∃ j < w.init.length, g.c j = .a
+    · obtain ⟨⟨s, hs⟩, -⟩ := hB.running ha
+      rw [hs]
+      obtain ⟨hI', hie, hcats⟩ := end_sinv hB hs
+      refine afterEvent_bnd hF hI' (fun j hj hx => ?_) hie
+      rcases hcats j hj with h | h | h | h <;> rw [h] at hx <;> exact absurd hx (by decide)
+    · rw [hB.idle ha]
+      exact ⟨g, hB⟩
+
+/-! ### The claim -/
+
+theorem fam_of_family {w : Workload} (hw : Claims.KongSvf.family w) : Fam w := by
+  obtain ⟨h1, -, -, h4, h5⟩ := hw
+  exact ⟨h1, h4, fun i hi => (h5 i hi).1, fun i hi => (h5 i hi).2⟩
+
+theorem prefixSums_eq : ∀ l : List ℕ, Exec.prefixSums l = KongMath.prefixSums l
+  | [] => rfl
+  | v :: vs => by simp [Exec.prefixSums, KongMath.prefixSums, prefixSums_eq vs]
+
+/-- The claim's `prefix_total` is the mathematics' one. -/
+theorem prefixTotal_eq (l : List ℕ) : Exec.prefixTotal l = KongMath.prefixTotal l := by
+  simp [Exec.prefixTotal, KongMath.prefixTotal, prefixSums_eq]
+
+theorem prefixTotal_perm {l₁ l₂ : List ℕ} (h : l₁.Perm l₂) : Exec.prefixTotal l₁ = Exec.prefixTotal l₂ := by
+  rw [prefixTotal_eq, prefixTotal_eq, KongMath.prefixTotal_eq, KongMath.prefixTotal_eq, h.sum_eq,
+    KongMath.pmin_perm h]
+
+theorem filter_all {n : ℕ} (p : ℕ → Bool) (h : ∀ i < n, p i = true) : (List.range n).filter p = List.range n :=
+  List.filter_eq_self.mpr fun i hi => h i (List.mem_range.mp hi)
+
+/-- **The claim of `kong_svf.sq`.** When every request has ended,
+`(M - P) Σ_j W_j ≤ 2 Σ_j Σ_{i ≺ j} vol_i`, with `W_j` the latency less the
+decode time. -/
+theorem queueing_bound : Claims.KongSvf.queueing_bound := by
+  intro w hw m hr hend
+  have hF := fam_of_family hw
+  obtain ⟨g, hB⟩ := reach_bnd hF hr
+  have hI := hB.inv
+  set n := w.init.length
+  -- every request has ended
+  have hall : ∀ i < n, g.c i = .e := by
+    intro i hi
+    have hst : (getS m i).status = .ended := hend _ (getS_mem m (hI.size ▸ hi))
+    have hsh := hI.shape i hi
+    rcases hB.cats i hi with h | h | h <;> rw [h] at hsh
+    · rw [hsh.2.2] at hst; exact absurd hst (by decide)
+    · rw [hsh.2.2] at hst; exact absurd hst (by decide)
+    · exact h
+  have hf0 : (List.range n).filter (fun j => decide (g.c j ≠ .s0)) = List.range n :=
+    filter_all _ fun i hi => by simp [hall i hi]
+  have hfe : (List.range n).filter (fun j => decide (g.c j = .e)) = List.range n :=
+    filter_all _ fun i hi => by simp [hall i hi]
+  have hv0 := hI.obs0; rw [hf0] at hv0
+  have hv1 := hI.obs1; rw [hf0] at hv1
+  have hv2 := hI.obs2; rw [hfe] at hv2
+  have hL : Exec.total m 2 = ∑ i ∈ Finset.range n, g.lat i := by
+    rw [Exec.total, hv2.sum_eq, KongMath.list_sum_range]
+  have hO : Exec.total m 0 = ∑ i ∈ Finset.range n, oo w i := by
+    rw [Exec.total, hv0.sum_eq, KongMath.list_sum_range]
+  have hV : Exec.total m 1 = ∑ i ∈ Finset.range n, vv w i := by
+    rw [Exec.total, hv1.sum_eq, KongMath.list_sum_range]
+  have hPT : Exec.prefixTotal (Exec.values m 1) =
+      (∑ i ∈ Finset.range n, vv w i) + ∑ j ∈ Finset.range n,
+        ∑ i ∈ (Finset.range n).filter (fun i => KongMath.prec (vv w) i j), vv w i := by
+    rw [prefixTotal_perm hv1, prefixTotal_eq, KongMath.prefixTotal_eq, KongMath.list_sum_range,
+      KongMath.sum_prec]
+  rw [hL, hO, hV, hPT, Nat.add_sub_cancel_left]
+  -- each request's certificate
+  have hcert : ∀ i ∈ Finset.range n, 17501 * (g.lat i - oo w i) ≤
+      2 * ∑ k ∈ (Finset.range n).filter (fun k => KongMath.prec (vv w) k i), vv w k := by
+    intro i hi
+    have hi' := Finset.mem_range.mp hi
+    have hc := (hI.cert i hi' (by rw [hall i hi']; decide) (by rw [hall i hi']; decide)).2
+    have hadm : adm w g m.now i = g.lat i - oo w i := by simp [adm, hall i hi']
+    rw [hadm] at hc
+    refine hc.trans ?_
+    rw [Finset.mul_sum]
+    apply Finset.sum_le_sum
+    intro k _
+    have := KongMath.vol_bound (ss w k) (oo w k)
+    simp only [pp, vv]
+    omega
+  have hlo : ∀ i ∈ Finset.range n, oo w i ≤ g.lat i :=
+    fun i hi => (hI.latE i (Finset.mem_range.mp hi) (hall i (Finset.mem_range.mp hi))).1
+  rw [← Finset.sum_tsub_distrib _ hlo]
+  calc 17500 * ∑ i ∈ Finset.range n, (g.lat i - oo w i)
+      ≤ 17501 * ∑ i ∈ Finset.range n, (g.lat i - oo w i) := Nat.mul_le_mul_right _ (by norm_num)
+    _ = ∑ i ∈ Finset.range n, 17501 * (g.lat i - oo w i) := Finset.mul_sum _ _ _
+    _ ≤ ∑ i ∈ Finset.range n, 2 * ∑ k ∈ (Finset.range n).filter (fun k => KongMath.prec (vv w) k i), vv w k :=
+        Finset.sum_le_sum hcert
+    _ = _ := by rw [← Finset.mul_sum]
+
+/-- **Theorem 3.2 (burst).** For every workload of the program's family and
+every path that ends, against every schedule of the same requests that is
+feasible in the paper's model (start times `x`, memory `s + t - x` per active
+request, at most `M` at every step), SVF's total latency is within
+`(3M - P) / (M - P) = 1 + 2 / (1 - α)` of the schedule's, `α = P / M`. -/
+theorem competitive_ratio {w : Workload} (hw : Claims.KongSvf.family w) {m : Machine}
+    (hr : Reach Claims.KongSvf.deployment w Claims.KongSvf.prog m) (hend : Ended m)
+    (x : ℕ → ℕ) (hx : KongMath.Feasible (ss w) (oo w) x w.init.length 20000) :
+    (20000 - 2500) * Exec.total m 2 ≤ (3 * 20000 - 2500) * KongMath.TEL (oo w) x w.init.length := by
+  have hF := fam_of_family hw
+  obtain ⟨g, hB⟩ := reach_bnd hF hr
+  have hI := hB.inv
+  have hcl := queueing_bound w hw m hr hend
+  have hall : ∀ i < w.init.length, g.c i = .e := by
+    intro i hi
+    have hst : (getS m i).status = .ended := hend _ (getS_mem m (hI.size ▸ hi))
+    have hsh := hI.shape i hi
+    rcases hB.cats i hi with h | h | h <;> rw [h] at hsh
+    · rw [hsh.2.2] at hst; exact absurd hst (by decide)
+    · rw [hsh.2.2] at hst; exact absurd hst (by decide)
+    · exact h
+  have hf0 : (List.range w.init.length).filter (fun j => decide (g.c j ≠ .s0)) = List.range w.init.length :=
+    filter_all _ fun i hi => by simp [hall i hi]
+  have hfe : (List.range w.init.length).filter (fun j => decide (g.c j = .e)) = List.range w.init.length :=
+    filter_all _ fun i hi => by simp [hall i hi]
+  have hv0 := hI.obs0; rw [hf0] at hv0
+  have hv1 := hI.obs1; rw [hf0] at hv1
+  have hv2 := hI.obs2; rw [hfe] at hv2
+  have hO : Exec.total m 0 = ∑ i ∈ Finset.range w.init.length, oo w i := by
+    rw [Exec.total, hv0.sum_eq, KongMath.list_sum_range]
+  have hL : Exec.total m 2 = ∑ i ∈ Finset.range w.init.length, g.lat i := by
+    rw [Exec.total, hv2.sum_eq, KongMath.list_sum_range]
+  have hlo : Exec.total m 0 ≤ Exec.total m 2 := by
+    rw [hO, hL]
+    exact Finset.sum_le_sum fun i hi =>
+      (hI.latE i (Finset.mem_range.mp hi) (hall i (Finset.mem_range.mp hi))).1
+  have hpt : Exec.prefixTotal (Exec.values m 1) ≤ 20000 * KongMath.TEL (oo w) x w.init.length := by
+    rw [prefixTotal_perm hv1, prefixTotal_eq]
+    exact KongMath.opt_lower_bound (ss w) (oo w) x w.init.length 20000 hx
+  have hso : Exec.total m 0 ≤ KongMath.TEL (oo w) x w.init.length := by
+    rw [hO]; exact KongMath.tel_ge_out (oo w) x w.init.length
+  exact KongMath.competitive 20000 2500 _ _ _ _ _ (by norm_num) hcl hlo hpt hso
 
 end KongSvf
 end Papers

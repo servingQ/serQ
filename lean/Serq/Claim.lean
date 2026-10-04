@@ -72,14 +72,15 @@ def total (m : Machine) (name : ℕ) : ℕ := (values m name).sum
 /-- `count(o)`. -/
 def count (m : Machine) (name : ℕ) : ℕ := (values m name).length
 
-/-- `Σ_k Σ_{i ≤ k} v_(i)` of a list sorted ascending. -/
+/-- On a list sorted descending `vₙ ≥ … ≥ v₁`, the sum of its suffix sums,
+which are the sums of the `k` smallest values: `Σ_k (v₁ + … + v_k)`. -/
 def prefixSums : List ℕ → ℕ
   | [] => 0
   | v :: vs => (v :: vs).sum + prefixSums vs
 
 /-- `prefix_total(o)`: the values sorted ascending `v₁ ≤ … ≤ vₙ`, the sum
 over `k` of `v₁ + … + v_k`, which is `Σ_k (n - k + 1) v_k`. -/
-def prefixTotal (l : List ℕ) : ℕ := prefixSums (l.mergeSort (fun a b => decide (a ≥ b))).reverse
+def prefixTotal (l : List ℕ) : ℕ := prefixSums (l.mergeSort (fun a b => decide (a ≥ b)))
 
 /-! ### What an instant's commands leave alone -/
 
