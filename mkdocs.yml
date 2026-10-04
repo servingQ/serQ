@@ -42,6 +42,7 @@ hooks:
 markdown_extensions:
   - admonition
   - attr_list
+  - md_in_html
   - footnotes
   - tables
   - toc:
@@ -78,60 +79,59 @@ nav:
           - 4. The prefix cache: tutorial/04-prefix-cache.md
           - 5. The engine: tutorial/05-the-engine.md
           - 6. The cliff: tutorial/06-the-cliff.md
+      - Working with a program: development.md
       - Visualization:
           - visualization/index.md
           - Deployment view: visualization/deployment.md
-      - Use cases:
-          - use-cases/index.md
-          - vLLM: use-cases/vllm.md
-          - vllm-ascend: use-cases/ascend.md
-          - vllm-rbln: use-cases/rbln.md
-          - Input shapes and padding: use-cases/input-shapes.md
-          - Different workloads: use-cases/workloads.md
-          - Prefill/decode over NIXL: use-cases/pd.md
-          - FasterTransformer: use-cases/fastertransformer.md
-          - Throughput-optimal scheduling (Dai et al.): use-cases/dai.md
-          - "RAD: optimal tiling (Bari et al.)": use-cases/bari.md
-          - Smallest Volume First (Kong et al.): use-cases/kong.md
-  - Developer Guide:
-      - Development guide: development.md
-      - How serQ is checked: validation.md
-      - The Lean model: lean.md
-      - Design:
-          - design/index.md
-          - Philosophy: design/philosophy.md
-          - The stochastic process: design/stochastic-model.md
-          - Frontend: design/frontend.md
-          - Subagents: design/subagents.md
-          - The KV transfer: design/pd-transfer.md
-          - Renewal arrivals: design/renewal-arrivals.md
-          - Bandwidth sharing: design/bandwidth-sharing.md
-          - One admission: design/one-admission.md
-          - Separate prefill/decode batches: design/exclusive-prefill.md
-          - Serving a subset: design/serve-only.md
-          - Claims: design/claims.md
-          - Waiting selection: design/waiting-selection.md
-          - Queues: design/queue.md
-          - Explicit gateways: design/explicit-gateways.md
-          - The pull relation: design/pull-relation.md
-  - API Reference:
-      - api/index.md
-      - Program: api/program.md
-      - Pool: api/pool.md
-      - Stage: api/stage.md
-      - Workload: api/workload.md
-      - Statements: api/statements.md
-      - Serving vocabulary: api/serving.md
-      - Functions: api/functions.md
-      - Distributions: api/distributions.md
-      - Context variables: api/context.md
-      - Attributes: api/attributes.md
+  - Use cases:
+      - use-cases/index.md
+      - vLLM: use-cases/vllm.md
+      - vllm-ascend: use-cases/ascend.md
+      - vllm-rbln: use-cases/rbln.md
+      - Input shapes and padding: use-cases/input-shapes.md
+      - Different workloads: use-cases/workloads.md
+      - Prefill/decode over NIXL: use-cases/pd.md
+      - FasterTransformer: use-cases/fastertransformer.md
+      - Throughput-optimal scheduling (Dai et al.): use-cases/dai.md
+      - "RAD: optimal tiling (Bari et al.)": use-cases/bari.md
+      - Smallest Volume First (Kong et al.): use-cases/kong.md
+  - Reference:
+      - Language:
+          - api/index.md
+          - Program: api/program.md
+          - Pool: api/pool.md
+          - Stage: api/stage.md
+          - Workload: api/workload.md
+          - Statements: api/statements.md
+          - Serving vocabulary: api/serving.md
+          - Functions: api/functions.md
+          - Distributions: api/distributions.md
+          - Context variables: api/context.md
+          - Attributes: api/attributes.md
       - Specification:
           - Cheatsheet: reference/cheatsheet.md
           - The language: language.md
           - The IR: ir.md
-  - CLI Reference:
-      - reference/cli.md
-      - Drawing figures: draw.md
-  - Python Reference:
-      - python.md
+      - Tools:
+          - CLI: reference/cli.md
+          - Python (pyserq): python.md
+  - Validation:
+      - How serQ is checked: validation.md
+      - The Lean model: lean.md
+  - Design:
+      - design/index.md
+      - Philosophy: design/philosophy.md
+      - The stochastic process: design/stochastic-model.md
+      - Frontend: design/frontend.md
+      - Subagents: design/subagents.md
+      - The KV transfer: design/pd-transfer.md
+      - Renewal arrivals: design/renewal-arrivals.md
+      - Bandwidth sharing: design/bandwidth-sharing.md
+      - One admission: design/one-admission.md
+      - Separate prefill/decode batches: design/exclusive-prefill.md
+      - Serving a subset: design/serve-only.md
+      - Claims: design/claims.md
+      - Waiting selection: design/waiting-selection.md
+      - Queues: design/queue.md
+      - Explicit gateways: design/explicit-gateways.md
+      - The pull relation: design/pull-relation.md

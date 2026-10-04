@@ -1,4 +1,4 @@
-# API Reference
+# Language reference
 
 serQ's API is its language: the constructs a program is written with. Each
 entry gives the signature, what it does, the type of every argument, what it

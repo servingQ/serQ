@@ -1,4 +1,4 @@
-# Development guide
+# Working with a program
 
 A serQ program has two consumers besides its reader. The **simulator**
 (`serq run`) executes it as a discrete-event system and reports what a
