@@ -851,6 +851,13 @@ and was meant as a draw); a computed one is refused when it is evaluated.
 Write the draw as
 `branch with` so that the program, and the figure, say which one it is.
 
+**Amounts and indices.** The work of a `run`, the units of a `hold`, a
+`grow` and a `load` are amounts, and an amount is not negative and not NaN;
+an index names a member, a whole number from 0 below the array's count.
+Anything else is the program's error, not a value to round: a constant
+amount that is one is refused at link time, and a computed one, or an
+index, when it is evaluated. Zero is an amount (a run of no work).
+
 **Workload.** `init` runs at arrival, `turn` at every `turn` statement;
 with a `trace`, `turn` loads the next turn's `new`, `out`, `think`,
 `forced` and sets `more` (`ordered`: session `i` replays trace session `i`).

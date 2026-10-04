@@ -559,6 +559,25 @@ fn bad_amounts_and_indices_fail_the_run() {
         let e = fail(stmt);
         assert!(e.contains(said), "{stmt}: {e}");
     }
+    // a constant one does not link
+    for (stmt, said) in [
+        ("run d (-5);", "`run (-5)`"),
+        ("hold kv (2 - 3) { run d (1); }", "`hold (-1)`"),
+        ("hold kv (8) { grow kv (-1); }", "`grow (-1)`"),
+        ("hold kv (8) { load kv (0 / 0); }", "`load (NaN)`"),
+    ] {
+        let src = format!(
+            "pool kv {{ cap 64; }} stage d : delay;
+             workload {{ arrive batch(1); }}
+             session {{ {stmt} end; }}
+             run {{ horizon 10; }}"
+        );
+        let e = serq::compile_source(&src, &Overrides::default()).unwrap_err();
+        assert!(
+            e.contains(said) && e.contains("is not negative"),
+            "{stmt}: {e}"
+        );
+    }
     // zero is an amount: a run of no work, a hold of nothing
     let r = run("pool kv { cap 64; } stage d : delay;
          workload { arrive batch(1); init { set z = 0; } }

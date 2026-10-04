@@ -1028,6 +1028,18 @@ fn constant(e: &CExpr) -> Option<f64> {
     }
 }
 
+/// An amount a statement names (units, tokens, seconds) is not negative,
+/// and not NaN: a constant one that is does not link; a computed one fails
+/// the run (#270).
+fn amount(e: &CExpr, what: &str) -> Result<(), String> {
+    match constant(e) {
+        Some(x) if x.is_nan() || x < 0.0 => Err(format!(
+            "`{what} ({x})`: an amount of units, tokens or seconds is not negative"
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn arrival_expr_is_pure(e: &CExpr) -> bool {
     match e {
         CExpr::Num(_) => true,
@@ -1290,6 +1302,7 @@ impl Validator<'_> {
                     self.cref(r, np, "pool", m)?;
                     self.expr(u, Moment::Admit)?;
                     no_draw(u, "units")?;
+                    amount(u, "hold")?;
                     if let Some(f) = reserve {
                         self.expr(f, Moment::Admit)?;
                         no_draw(f, "`reserve`")?;
@@ -1349,12 +1362,14 @@ impl Validator<'_> {
             }
             CStmt::Grow(r, e) => {
                 self.cref(r, np, "pool", m)?;
-                self.expr(e, m)
+                self.expr(e, m)?;
+                amount(e, "grow")
             }
             CStmt::Drop(r) | CStmt::Release(r) => self.cref(r, np, "pool", m),
             CStmt::Load(r, e) => {
                 self.cref(r, np, "pool", m)?;
-                self.expr(e, m)
+                self.expr(e, m)?;
+                amount(e, "load")
             }
             CStmt::Run {
                 stage,
@@ -1368,6 +1383,7 @@ impl Validator<'_> {
                     self.cref(r, ns, "stage", m)?;
                 }
                 self.expr(work, m)?;
+                amount(work, "run")?;
                 if let Some(g) = growing {
                     self.cref(g, np, "pool", m)?;
                 }
