@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # a merge queue checks a PR on top of what is queued ahead of it (#347)
+  merge_group:
   workflow_dispatch:
   workflow_call:
 
