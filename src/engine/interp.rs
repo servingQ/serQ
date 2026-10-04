@@ -1281,7 +1281,7 @@ impl<'p> Interp<'p> {
                     let mut reserve = vec![];
                     for (r, e, f) in pools {
                         let pl = self.pool_index(r, sid);
-                        let units = self.amount(e, sid, "hold");
+                        let units = self.amount(e, sid, &format!("hold {}", self.p.pools[pl].name));
                         ps.push((pl, units));
                         exprs.push(e);
                         reserve.push(f.as_ref());
@@ -1304,7 +1304,7 @@ impl<'p> Interp<'p> {
                 }
                 CStmt::Grow(r, e) => {
                     let pl = self.pool_index(r, sid);
-                    let units = self.amount(e, sid, "grow");
+                    let units = self.amount(e, sid, &format!("grow {}", self.p.pools[pl].name));
                     if !self.grow(sid, pl, units) {
                         return;
                     }
@@ -1321,7 +1321,7 @@ impl<'p> Interp<'p> {
                 }
                 CStmt::Load(r, e) => {
                     let pl = self.pool_index(r, sid);
-                    let n = self.amount(e, sid, "load");
+                    let n = self.amount(e, sid, &format!("load {}", self.p.pools[pl].name));
                     self.load(sid, pl, n);
                 }
                 CStmt::Run {
@@ -1332,7 +1332,7 @@ impl<'p> Interp<'p> {
                     also,
                 } => {
                     let st = self.stage_index(stage, sid);
-                    let w = self.amount(work, sid, "run");
+                    let w = self.amount(work, sid, &format!("run {}", self.p.stages[st].name));
                     if matches!(self.stages[st].kind, Kind::Shared { .. }) {
                         let mut stages = vec![st];
                         for r in also {
@@ -1357,7 +1357,7 @@ impl<'p> Interp<'p> {
         self.ref_index(r, &Ctx::session(sid), Which::Session)
     }
 
-    /// The amount a session statement names (`what`: its keyword), which
+    /// The amount a session statement names (`what`: its keyword and target), which
     /// is a number of units, tokens or seconds: not NaN and not negative
     /// beyond rounding (#270). On a program error, 0 and the error set.
     fn amount(&mut self, e: &CExpr, sid: usize, what: &str) -> f64 {
@@ -1465,7 +1465,8 @@ impl<'p> Interp<'p> {
             .expect("queued session has a hold");
         for k in 0..pending.pools.len() {
             let e = pending.exprs[k];
-            let u = self.amount(e, sid, "hold");
+            let pl = pending.pools[k].0;
+            let u = self.amount(e, sid, &format!("hold {}", self.p.pools[pl].name));
             pending.pools[k].1 = u;
             pending.need[k] = match pending.reserve[k] {
                 Some(f) => self.eval(f, &Ctx::session(sid), Which::Session).max(u),

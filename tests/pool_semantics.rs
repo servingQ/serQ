@@ -517,3 +517,52 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
         );
     }
 }
+
+/// An amount a statement names is a number of units, tokens or seconds,
+/// and an index names a member: NaN, a negative amount and an index that
+/// is negative, fractional or past the array are program errors. They used
+/// to be clamped to 0 in silence (#270).
+#[test]
+fn bad_amounts_and_indices_fail_the_run() {
+    let fail = |stmt: &str| {
+        let src = format!(
+            "pool kv {{ cap 64; }} pool q[2] {{ cap 64; }} stage d : delay; stage a[2] : delay;
+             workload {{ arrive batch(1); init {{ set z = 0; set i = 0; }} }}
+             session {{ {stmt} end; }}
+             run {{ horizon 10; }}"
+        );
+        run_source(&src, &Overrides::default(), None).unwrap_err()
+    };
+    for (stmt, said) in [
+        ("run d (z / z);", "`run d (z / z)`: the amount is NaN"),
+        ("run d (z - 5);", "`run d (z - 5)`: the amount is -5"),
+        (
+            "hold kv (z - 1) { run d (1); }",
+            "`hold kv (z - 1)`: the amount is -1",
+        ),
+        (
+            "hold kv (8) { grow kv (z - 1); }",
+            "`grow kv (z - 1)`: the amount is -1",
+        ),
+        (
+            "hold kv (8) { load kv (z / z); }",
+            "`load kv (z / z)`: the amount is NaN",
+        ),
+        (
+            "run a[i - 1] (1);",
+            "index `i - 1` is -1: a member of an array of 2 is 0 to 1",
+        ),
+        ("run a[i + 0.5] (1);", "index `i + 0.5` is 0.5"),
+        ("run a[i + 2] (1);", "index `i + 2` is 2"),
+        ("hold q[i - 1] (1) { run d (1); }", "index `i - 1` is -1"),
+    ] {
+        let e = fail(stmt);
+        assert!(e.contains(said), "{stmt}: {e}");
+    }
+    // zero is an amount: a run of no work, a hold of nothing
+    let r = run("pool kv { cap 64; } stage d : delay;
+         workload { arrive batch(1); init { set z = 0; } }
+         session { run d (z); hold kv (z) { run d (1); } end; }
+         run { horizon 10; }");
+    assert_eq!(r.ended, 1, "{}", r.text());
+}
