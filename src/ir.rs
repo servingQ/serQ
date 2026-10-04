@@ -997,6 +997,24 @@ fn constant(e: &CExpr) -> Option<f64> {
             constant(a)?,
             constant(b)?,
         )),
+        CExpr::Cond(c, a, b) => {
+            if constant(c)? != 0.0 {
+                constant(a)
+            } else {
+                constant(b)
+            }
+        }
+        // the linker's constant functions (`min`, `max`, …) of constants
+        CExpr::Call(f, args) => {
+            let xs = args
+                .iter()
+                .map(|a| match a {
+                    CArg::Expr(x) => constant(x),
+                    CArg::Pool(_) | CArg::Stage(_) => None,
+                })
+                .collect::<Option<Vec<f64>>>()?;
+            crate::frontend::link::const_call(f.name(), &xs)
+        }
         _ => None,
     }
 }
@@ -1262,21 +1280,41 @@ impl Validator<'_> {
                     }
                     // what admission waits for, when the program fixes it,
                     // must fit some member the reference may name: one that
-                    // fits none is rejected on every run (#271)
+                    // fits none is rejected whenever it is reached (#271)
                     let need = [Some(u), reserve.as_ref()]
                         .into_iter()
                         .flatten()
                         .filter_map(constant)
                         .reduce(f64::max);
+                    let round = |q: &CPool, x: f64| q.block.map_or(x, |b| (x / b).ceil() * b);
+                    // the member a constant index names, or every member
+                    let members = match r.index.as_deref().and_then(constant) {
+                        Some(k) if k >= 0.0 && k.fract() == 0.0 && (k as usize) < r.count => {
+                            r.base + k as usize..r.base + k as usize + 1
+                        }
+                        _ => r.base..r.base + r.count,
+                    };
+                    let several = members.len() > 1;
                     if let Some(need) = need
-                        && self.p.pools[r.base..r.base + r.count]
+                        && self.p.pools[members.clone()]
                             .iter()
-                            .all(|q| q.block.map_or(need, |b| (need / b).ceil() * b) > q.cap)
+                            .all(|q| round(q, need) > q.cap)
                     {
-                        let q = &self.p.pools[r.base];
+                        let q = &self.p.pools[members.start];
+                        let blocks = match q.block {
+                            Some(b) if round(q, need) != need => {
+                                format!(" ({} in blocks of {b})", round(q, need))
+                            }
+                            _ => String::new(),
+                        };
+                        let cap = if several {
+                            format!("the cap of every member (`{}`: {})", q.name, q.cap)
+                        } else {
+                            format!("its cap {}", q.cap)
+                        };
                         return Err(format!(
-                            "a hold of {need} units on pool `{}` never fits its cap {}",
-                            q.name, q.cap
+                            "a hold on pool `{}` waits for {need} units{blocks}, more than {cap}",
+                            q.name
                         ));
                     }
                 }

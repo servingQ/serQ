@@ -296,21 +296,8 @@ fn an_oversized_reservation_is_rejected() {
     assert_eq!(r.pool("kv").unwrap().rejected, 1);
 }
 
-/// A hold that fits at admission but can never grow to what its body needs
-/// preempts itself, re-enters at the head of the queue, and does it again:
-/// a livelock the run would otherwise hide behind a preemption count. The
-/// report counts the session once as `stuck` (preempted again at the same
-/// position) and says so.
-///
-/// On 10 blocks of 16 (160 tokens) with a 1000-token budget: step 1
-/// prefills the 100-token prompt (7 blocks), steps 2..61 decode tokens
-/// 101..160 (block 8 at 113, 9 at 129, 10 at 145), step 62 needs an 11th
-/// block, none is free, the request is `running[-1]` and preempts itself:
-/// the step schedules nothing and is not skipped (vLLM's `schedule()` runs
-/// it and admits nothing, scheduler.py:869). Step 63 re-admits and
-/// prefills again. The cycle is 62 steps, so preemptions fall at 62, 124,
-/// …, 372: six before the horizon of 400, the second of them at the same
-/// position (160) as the first.
+/// A hold that can never fit: a constant one does not link, a computed one
+/// ends its session and the report says so.
 #[test]
 fn a_hold_larger_than_the_cap_is_refused_or_reported() {
     // constant units that fit no member of the reference do not link
@@ -319,7 +306,10 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
         "hold kv (20)",
         "hold kv (2 * 5 + 1)",
         "hold kv (1) reserve (11)",
+        "hold kv (max(20, 1))",
+        "hold kv (1 > 0 ? 20 : 1)",
         "hold kv2[0] (20)",
+        "hold kv2[serial] (20)",
     ] {
         let src = format!(
             "pool kv {{ cap 10; }} pool kv2[2] {{ cap 10; }} stage d : delay;
@@ -328,7 +318,12 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
              run {{ horizon 10; }}"
         );
         let e = run_source(&src, &Overrides::default(), None).unwrap_err();
-        assert!(e.contains("never fits its cap 10"), "{hold}: {e}");
+        let said = if hold.contains("serial") {
+            "more than the cap of every member (`kv2`: 10)"
+        } else {
+            "more than its cap 10"
+        };
+        assert!(e.contains(said), "{hold}: {e}");
     }
     let e = run_source(
         "pool kv { cap 10; block 4; } stage d : delay;
@@ -340,8 +335,8 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
     )
     .unwrap_err();
     assert!(
-        e.contains("never fits"),
-        "9 units are 12 in blocks of 4: {e}"
+        e.contains("waits for 9 units (12 in blocks of 4), more than its cap 10"),
+        "{e}"
     );
     // units the program computes are the run's: the session ends, counted
     // in `rej`, and the report says so
@@ -358,6 +353,21 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
     );
 }
 
+/// A hold that fits at admission but can never grow to what its body needs
+/// preempts itself, re-enters at the head of the queue, and does it again:
+/// a livelock the run would otherwise hide behind a preemption count. The
+/// report counts the session once as `stuck` (preempted again at the same
+/// position) and says so.
+///
+/// On 10 blocks of 16 (160 tokens) with a 1000-token budget: step 1
+/// prefills the 100-token prompt (7 blocks), steps 2..61 decode tokens
+/// 101..160 (block 8 at 113, 9 at 129, 10 at 145), step 62 needs an 11th
+/// block, none is free, the request is `running[-1]` and preempts itself:
+/// the step schedules nothing and is not skipped (vLLM's `schedule()` runs
+/// it and admits nothing, scheduler.py:869). Step 63 re-admits and
+/// prefills again. The cycle is 62 steps, so preemptions fall at 62, 124,
+/// …, 372: six before the horizon of 400, the second of them at the same
+/// position (160) as the first.
 #[test]
 fn a_hold_that_can_never_fit_is_reported_stuck() {
     let src = r#"
