@@ -197,6 +197,14 @@ fn a_poisson_rate_must_be_positive() {
 fn a_count_is_a_whole_number_in_range() {
     for (workload, run, said) in [
         ("closed(-1)", "", "the closed population is -1"),
+        ("closed(0)", "", "the closed population is 0"),
+        ("poisson(1)", "seed -1;", "the seed is -1"),
+        ("poisson(1)", "seed 2.5;", "the seed is 2.5"),
+        (
+            "poisson(1)",
+            "arrivals 1e30;",
+            "arrivals is 1000000000000000000000000000000",
+        ),
         ("closed(2.5)", "", "the closed population is 2.5"),
         ("batch(0)", "", "the batch size is 0"),
         ("batch(0.5)", "", "the batch size is 0.5"),
@@ -220,8 +228,19 @@ fn a_count_is_a_whole_number_in_range() {
             "{workload} {run}: {e}"
         );
     }
-    // `closed(0)` is a population of none, and links
-    let src = "stage svc : delay; workload { arrive closed(0); }
-        session { run svc (1); end; } run { horizon 10; }";
-    serq::compile_source(src, &Overrides::default()).unwrap();
+    // IR that bypasses the text meets the same bound
+    let mut p = serq::compile_source(
+        "stage svc : delay; workload { arrive batch(1); }
+         session { run svc (1); end; } run { horizon 10; }",
+        &Overrides::default(),
+    )
+    .unwrap();
+    for n in [0, serq::ir::MAX_SESSIONS + 1] {
+        p.arrival = serq::ir::CArrival::Batch(n);
+        let e = p.validate().unwrap_err();
+        assert!(
+            e.contains("a closed population or a batch is from 1 to"),
+            "{n}: {e}"
+        );
+    }
 }

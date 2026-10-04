@@ -11,6 +11,7 @@ use std::fmt;
 
 use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
+use crate::ir::MAX_SESSIONS;
 
 #[derive(Debug, Clone)]
 pub struct LinkError {
@@ -183,10 +184,6 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 17] = [
 /// The most terms the aggregates (`max j in n (e)`) of one program write
 /// out, nested ones included.
 pub(crate) const MAX_OVER: usize = 4096;
-
-/// The most sessions a workload may start at once (`closed`, `batch`): each
-/// is a state of its own, made before the run begins.
-const MAX_SESSIONS: usize = 1_000_000;
 
 /// Calls the linker folds to a constant from a declaration.
 pub const FOLDED: [&str; 1] = ["blocksize"];
@@ -489,7 +486,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                     Err(_) => CArrival::Renewal(lk.expr(e)?),
                 },
                 Arrival::Closed(e) => {
-                    CArrival::Closed(lk.const_count(e, "the closed population", 0, MAX_SESSIONS)?)
+                    CArrival::Closed(lk.const_count(e, "the closed population", 1, MAX_SESSIONS)?)
                 }
                 Arrival::Batch(e) => {
                     CArrival::Batch(lk.const_count(e, "the batch size", 1, MAX_SESSIONS)?)
@@ -520,12 +517,12 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     };
     let seed = match (&ov.seed, &prog.run.seed) {
         (Some(s), _) => *s,
-        (None, Some(e)) => lk.const_eval(e, "the seed")? as u64,
+        (None, Some(e)) => lk.const_count(e, "the seed", 0, 1 << 53)? as u64,
         (None, None) => 1,
     };
     let arrivals = match (ov.arrivals, &prog.run.arrivals) {
         (Some(n), _) => Some(n),
-        (None, Some(e)) => Some(lk.const_count(e, "arrivals", 1, usize::MAX)?),
+        (None, Some(e)) => Some(lk.const_count(e, "arrivals", 1, 1 << 53)?),
         (None, None) => None,
     };
     if warmup >= horizon {
@@ -909,13 +906,8 @@ impl Linker<'_> {
     fn const_count(&self, e: &Expr, what: &str, min: usize, max: usize) -> LResult<usize> {
         let v = self.const_eval(e, what)?;
         if !(v.fract() == 0.0 && v >= min as f64 && v <= max as f64) {
-            let range = if max == usize::MAX {
-                format!("{min} or more")
-            } else {
-                format!("from {min} to {max}")
-            };
             return Err(LinkError::new(format!(
-                "{what} is {v}: a count is a whole number, {range}"
+                "{what} is {v}: a count is a whole number from {min} to {max}"
             )));
         }
         Ok(v as usize)
