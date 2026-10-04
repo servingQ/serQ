@@ -928,8 +928,8 @@ impl<'p> Interp<'p> {
         }
         // The memory invariant, `allocated + cached <= cap` in every
         // reachable configuration (`SerqLang.Step.invariant` proves it for
-        // the pool relation; this checks the interpreter on every run of the
-        // tests, the oracle and the differential tests).
+        // the pool relation; this checks the interpreter on every debug run:
+        // `make check` runs the tests once more in a debug build).
         #[cfg(debug_assertions)]
         for (cp, pl) in self.p.pools.iter().zip(&self.pools) {
             debug_assert!(
@@ -939,6 +939,51 @@ impl<'p> Interp<'p> {
                 pl.used,
                 pl.cached,
                 pl.cap,
+                self.now
+            );
+        }
+        // Conservation (#277): a pool's `used` is what the sessions' holds
+        // and leases have allocated on it, and its `cached` the sizes of its
+        // entries. The counters are kept apart from those records, so an
+        // allocation released twice or never would otherwise pass unseen
+        // while the pool stays within its cap.
+        #[cfg(debug_assertions)]
+        for (k, (cp, pl)) in self.p.pools.iter().zip(&self.pools).enumerate() {
+            let held: f64 = self
+                .sessions
+                .iter()
+                .map(|s| {
+                    let holds: f64 = s
+                        .holds
+                        .iter()
+                        .flat_map(|h| &h.pools)
+                        .filter(|e| e.pool == k)
+                        .map(|e| e.alloc)
+                        .sum();
+                    let leases: f64 = s
+                        .leases
+                        .iter()
+                        .filter(|l| l.pool == k)
+                        .map(|l| l.alloc)
+                        .sum();
+                    holds + leases
+                })
+                .sum();
+            let cached: f64 = pl.entries.values().map(|e| e.size).sum();
+            // sums of fractional units drift with the pool's size, not with
+            // what is held at this instant
+            let scale = if pl.cap.is_finite() {
+                pl.cap
+            } else {
+                pl.used.max(pl.cached).max(held)
+            };
+            let tol = 1e-9 * scale.max(1.0);
+            debug_assert!(
+                (pl.used - held).abs() <= tol && (pl.cached - cached).abs() <= tol,
+                "pool `{}`: used {} against {held} held, cached {} against {cached} in entries, at t = {}",
+                cp.name,
+                pl.used,
+                pl.cached,
                 self.now
             );
         }
