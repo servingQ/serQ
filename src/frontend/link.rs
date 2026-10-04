@@ -184,6 +184,10 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 17] = [
 /// out, nested ones included.
 pub(crate) const MAX_OVER: usize = 4096;
 
+/// The most sessions a workload may start at once (`closed`, `batch`): each
+/// is a state of its own, made before the run begins.
+const MAX_SESSIONS: usize = 1_000_000;
+
 /// Calls the linker folds to a constant from a declaration.
 pub const FOLDED: [&str; 1] = ["blocksize"];
 
@@ -485,9 +489,11 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                     Err(_) => CArrival::Renewal(lk.expr(e)?),
                 },
                 Arrival::Closed(e) => {
-                    CArrival::Closed(lk.const_eval(e, "the closed population")? as usize)
+                    CArrival::Closed(lk.const_count(e, "the closed population", 0, MAX_SESSIONS)?)
                 }
-                Arrival::Batch(e) => CArrival::Batch(lk.const_eval(e, "the batch size")? as usize),
+                Arrival::Batch(e) => {
+                    CArrival::Batch(lk.const_count(e, "the batch size", 1, MAX_SESSIONS)?)
+                }
                 Arrival::None => CArrival::None,
             };
             (
@@ -519,7 +525,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     };
     let arrivals = match (ov.arrivals, &prog.run.arrivals) {
         (Some(n), _) => Some(n),
-        (None, Some(e)) => Some(lk.const_eval(e, "arrivals")? as usize),
+        (None, Some(e)) => Some(lk.const_count(e, "arrivals", 1, usize::MAX)?),
         (None, None) => None,
     };
     if warmup >= horizon {
@@ -895,6 +901,24 @@ impl Linker<'_> {
             .at(span));
         }
         Ok(v)
+    }
+
+    /// A constant that counts (sessions, arrivals): a whole number from `min`
+    /// to `max`. A cast would have made -1 a 0, 2.5 a 2 and 1e30 a run that
+    /// never starts (#289).
+    fn const_count(&self, e: &Expr, what: &str, min: usize, max: usize) -> LResult<usize> {
+        let v = self.const_eval(e, what)?;
+        if !(v.fract() == 0.0 && v >= min as f64 && v <= max as f64) {
+            let range = if max == usize::MAX {
+                format!("{min} or more")
+            } else {
+                format!("from {min} to {max}")
+            };
+            return Err(LinkError::new(format!(
+                "{what} is {v}: a count is a whole number, {range}"
+            )));
+        }
+        Ok(v as usize)
     }
 
     /// Evaluate a constant expression (no attributes, no samples).
