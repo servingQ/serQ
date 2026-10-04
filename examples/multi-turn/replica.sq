@@ -46,36 +46,42 @@ workload {
                  : (doc ? ~exp(500) : ~exp(800));
     set o = ~exp(300);
   }
-}
-
-// libqueuingsim frees a finished session's KV: `drop kv;` before every `end;`
-session {
-  set t_arr = now;
-  hold live (1) {
-    observe entry_wait = now - t_arr;
-    loop {
-      turn;
-      set t0 = now;
-      hold batch (1), kv (K + n + o) {
-        set hit = !cold && cached >= K;
-        // prefill work in tokens: the overhead and the attention term are
-        // converted at the compute rate 1/a
-        set P = s0 / a + (hit ? n + (b / a) * n * (K + n / 2)
-                              : (K + n) + (b / a) * (K + n) * (K + n) / 2);
-        run engine prefill (P);
-        observe ttft = now - t0;
-        run engine decode (o);
-      } cache (K + n + o);
-      observe response = now - t0;
-      branch (!cold) { observe hit = hit; }
-      set K = K + n + o;
-      set cold = 0;
-      branch (K > maxctx) { drop kv; end; }
-      // whether the session continues is decided when the tool returns
-      run tool (~exp(Z));
-      branch with (p) { } else { drop kv; end; }
+  // A session waits to enter and then holds a live slot for its whole
+  // conversation. libqueuingsim frees a finished session's KV: `drop kv;`
+  // before every `end;`
+  session {
+    set t_arr = now;
+    hold live (1) {
+      observe entry_wait = now - t_arr;
+      loop {
+        turn;
+        request;
+        set K = K + n + o;
+        set cold = 0;
+        branch (K > maxctx) { drop kv; end; }
+        // whether the session continues is decided when the tool returns
+        run tool (~exp(Z));
+        branch with (p) { } else { drop kv; end; }
+      }
     }
   }
+}
+
+// the replica: one turn's prefill and decode
+server {
+  set t0 = now;
+  hold batch (1), kv (K + n + o) {
+    set hit = !cold && cached >= K;
+    // prefill work in tokens: the overhead and the attention term are
+    // converted at the compute rate 1/a
+    set P = s0 / a + (hit ? n + (b / a) * n * (K + n / 2)
+                          : (K + n) + (b / a) * (K + n) * (K + n) / 2);
+    run engine prefill (P);
+    observe ttft = now - t0;
+    run engine decode (o);
+  } cache (K + n + o);
+  observe response = now - t0;
+  branch (!cold) { observe hit = hit; }
 }
 
 run { horizon 3000; warmup 500; seed 1; }

@@ -23,8 +23,9 @@ request runs when the program splits its session into a `workload` and a
 workload's own statements are not drawn: its tool calls, its next turn,
 and the `end`s that close a session. Whether a session comes back, and
 when it stops, is the workload's choice, not the deployment's. A request
-arrives, runs what the server runs, and goes out. A program written as one
-`session`, with no server apart, is drawn whole.
+arrives, runs what the server runs inside the holds the workload has
+around its `request`, and goes out. A program written as one `session`,
+with no server apart, is drawn whole.
 
 | | |
 |---|---|
@@ -85,10 +86,10 @@ does keep about 7 units of `batch` cached.
 
 ![The paper's two-resource replica](../assets/replica.deployment.svg)
 
-`replica.sq` holds `live` across the whole program including the tool call, and
-`batch` and `kv` only around the engine. `live` is a dashed box around both
-stations; `batch` and `kv` are rows in `engine`'s frame, and `tool` is
-outside them.
+`replica.sq`'s workload holds `live` for a session's whole conversation,
+and its server holds `batch` and `kv` only around the engine. A request is
+served inside the workload's hold, so `live` is drawn too. All three are
+held at `engine` alone, so all three are rows in its frame.
 
 ## A program that holds nothing
 

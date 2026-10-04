@@ -1069,24 +1069,58 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
 
 /// The distinct requests `stmts` makes, at any depth: `request;`, or a
 /// gateway's `route` (`request gw;`), each once.
-fn request_sites(stmts: &[Stmt], out: &mut Vec<Stmt>) {
+///
+/// A request is made inside the holds the workload's session has around it
+/// (`replica.sq`'s `hold live (1)`, a session's slot for its whole
+/// conversation): each site comes wrapped in them, outermost first, since
+/// the deployment holds them while it serves the request.
+fn request_sites(stmts: &[Stmt], holds: &[&Stmt], out: &mut Vec<Stmt>) {
+    fn same(a: &Stmt, b: &Stmt) -> bool {
+        match (a, b) {
+            (Stmt::Request, Stmt::Request) => true,
+            (Stmt::Call { queue: a, .. }, Stmt::Call { queue: b, .. }) => a.same_target(b),
+            (
+                Stmt::Hold {
+                    pools: p, body: x, ..
+                },
+                Stmt::Hold {
+                    pools: q, body: y, ..
+                },
+            ) => {
+                p.len() == q.len()
+                    && p.iter().zip(q).all(|(a, b)| a.0.same_target(&b.0))
+                    && same(&x[0], &y[0])
+            }
+            _ => false,
+        }
+    }
     for s in stmts {
         match s {
             Stmt::Call { verb, .. } if verb != "route" => {}
             Stmt::Request | Stmt::Call { .. } => {
-                let same = |o: &Stmt| match (o, s) {
-                    (Stmt::Request, Stmt::Request) => true,
-                    (Stmt::Call { queue: a, .. }, Stmt::Call { queue: b, .. }) => a.same_target(b),
-                    _ => false,
-                };
-                if !out.iter().any(same) {
-                    out.push(s.clone());
+                let mut site = s.clone();
+                for h in holds.iter().rev() {
+                    if let Stmt::Hold { .. } = h {
+                        let mut h = (*h).clone();
+                        if let Stmt::Hold { body, .. } = &mut h {
+                            *body = vec![site];
+                        }
+                        site = h;
+                    }
+                }
+                if !out.iter().any(|o| same(o, &site)) {
+                    out.push(site);
                 }
             }
-            Stmt::Hold { body, .. } | Stmt::Loop(body) => request_sites(body, out),
+            Stmt::Hold { body, .. } => {
+                let mut inner = holds.to_vec();
+                inner.push(s);
+                request_sites(body, &inner, out);
+            }
+            Stmt::Loop(body) => request_sites(body, holds, out),
             Stmt::Branch(_, a, b) => {
-                request_sites(a, out);
-                request_sites(b, out);
+                request_sites(a, holds, out);
+                request_sites(b, holds, out);
             }
             _ => {}
         }
@@ -1746,7 +1780,7 @@ impl Parser {
         // thing every `request` of the workload's session names
         let mut request = vec![];
         if let Some((_, s)) = &self.wl_session {
-            request_sites(s, &mut request);
+            request_sites(s, &[], &mut request);
             if request.len() > 1 {
                 request.clear();
             }

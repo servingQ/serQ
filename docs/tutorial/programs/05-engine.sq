@@ -34,29 +34,35 @@ workload {
     set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
     set o = ~exp(200) + 1;
   }
+  // the conversation: a request per turn, then a tool call and the next
+  // turn, or the end
+  session {
+    turn;
+    loop {
+      request;
+      set K = prompt + o;
+      branch with (p) { run tool (~exp(Z)); turn; } else { drop kv; end; }
+    }
+  }
 }
 
-session {
-  turn;
-  loop {
-    set t0 = now;
-    set prompt = K + n;
-    // how much of the prompt the cache could supply, in whole blocks. The
-    // cache itself is read inside the hold's units, so it is read when the
-    // request is admitted -- while it waits, its prefix is still evictable
-    set hitmax = floor((prompt - 1) / bs) * bs;
-    hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
-         at admission (hit = min(cachedin(kv), hitmax)) {
-      set c = min(cached, floor((prompt - 1) / bs) * bs);
-      observe hit = c > 0;
-      run engine prefill (prompt - c) growing kv;
-      observe ttft = now - t0;
-      run engine decode (o - 1) growing kv;
-    } cache (prompt + o);
-    observe response = now - t0;
-    set K = prompt + o;
-    branch with (p) { run tool (~exp(Z)); turn; } else { drop kv; end; }
-  }
+// the engine: what it does with one request
+server {
+  set t0 = now;
+  set prompt = K + n;
+  // how much of the prompt the cache could supply, in whole blocks. The
+  // cache itself is read inside the hold's units, so it is read when the
+  // request is admitted -- while it waits, its prefix is still evictable
+  set hitmax = floor((prompt - 1) / bs) * bs;
+  hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+       at admission (hit = min(cachedin(kv), hitmax)) {
+    set c = min(cached, floor((prompt - 1) / bs) * bs);
+    observe hit = c > 0;
+    run engine prefill (prompt - c) growing kv;
+    observe ttft = now - t0;
+    run engine decode (o - 1) growing kv;
+  } cache (prompt + o);
+  observe response = now - t0;
 }
 
 run { horizon 20000; warmup 2000; seed 1; }
