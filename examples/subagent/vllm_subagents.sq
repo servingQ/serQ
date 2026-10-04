@@ -48,12 +48,12 @@ workload {
   hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   init {
     set sub = ~bernoulli(kids / (1 + kids));
-    set K = sub ? ~uniform(2000, 6000) : 0;
+    set K = sub ? floor(~uniform(2000, 6000)) : 0;
     set t_s = now;
   }
   turn {
-    set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
-    set o = ~exp(200) + 1;
+    set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+    set o = floor(~exp(200)) + 1;
     set more = ~bernoulli(sub ? pc : p);
     set fan = sub ? 0 : ~bernoulli(q);
   }

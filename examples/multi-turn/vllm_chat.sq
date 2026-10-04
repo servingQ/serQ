@@ -36,8 +36,8 @@ workload {
   hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
   init { set K = 0; }
   turn {
-    set n = K == 0 ? ~uniform(200, 1000) : ~exp(100);
-    set o = ~exp(300) + 1;
+    set n = ceil(K == 0 ? ~uniform(200, 1000) : ~exp(100));
+    set o = floor(~exp(300)) + 1;
     set more = ~bernoulli(p);
   }
   session {

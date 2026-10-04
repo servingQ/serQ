@@ -49,27 +49,27 @@ entry:
 
 ```
 $ serq run examples/multi-turn/vllm.sq --horizon 300 --warmup 30
-run: horizon 300 end 300 warmup 30 seed 1 events 134771 arrivals 95 ended 87 turns 697 mean live 6.618
+run: horizon 300 end 300 warmup 30 seed 1 events 133894 arrivals 95 ended 87 turns 697 mean live 6.617
 
 observe         count      mean    95% CI    cv2        p99
 --------------  -----  --------  --------  -----  ---------
 hit               697    0.8723   ±0.0223  0.147     1.0000
-prefill_tokens    697  722.9294  ±53.1813  0.986  2889.9272
-ttft              697    0.0151   ±0.0009  0.959     0.0578
-response          697    0.0600   ±0.0033  0.596     0.2257
+prefill_tokens    697  723.1133  ±53.2095  0.985  2890.0000
+ttft              697    0.0151   ±0.0010  0.952     0.0578
+response          697    0.0598   ±0.0032  0.602     0.2257
 
 stage   number   util  done    thru    wait  service   iters
 ------  ------  -----  ----  ------  ------  -------  ------
-engine   0.153  0.140  1394  5.1630  0.0000   0.0297  134051
+engine   0.153  0.139  1392  5.1556  0.0000   0.0296  133174
 tool     6.463  1.000   608  2.2519  0.0000   2.8874       0
 
 step    prefill only  decode only  mixed   idle  decodes  decode batch  decode step   itl p50   itl p99
 ------  ------------  -----------  -----  -----  -------  ------------  -----------  --------  --------
-engine         0.033        0.103  0.005  0.860    0.116         1.075     0.000224  0.000211  0.000253
+engine         0.033        0.102  0.005  0.861    0.115         1.076     0.000225  0.000211  0.000253
 
 pool    used    cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  ------  --------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    1033.7  144253.9  0.000    0.153     NaN     719        70    500016        0      0    0      0
+kv    1032.6  144255.8  0.000    0.153     NaN     719        70    500048        0      0    0      0
 reqs     0.2       0.0  0.002    0.153  0.0006     719         0         0        0      0    0      0
 ```
 
@@ -103,10 +103,10 @@ done
 | `Lambda` | seed 1 TTFT (s) / preemptions | seed 2 | seed 3 |
 |---|---|---|---|
 | 0.3 | 0.018 / 0 | 0.016 / 0 | 0.015 / 0 |
-| 0.6 | 0.131 / 87 | 0.579 / 185 | 0.089 / 34 |
-| 0.9 | 23.8 / 138 | 24.8 / 166 | 18.8 / 187 |
+| 0.6 | 0.109 / 31 | 0.600 / 227 | 0.085 / 40 |
+| 0.9 | 23.9 / 124 | 24.6 / 127 | 18.9 / 153 |
 
-At 0.6 the three seeds disagree by a factor of 6. The deployment is at its
+At 0.6 the three seeds disagree by a factor of 7. The deployment is at its
 cliff, and whether one run falls off depends on the draws. The report's 95 %
 CI is within one run and does not show this. Near a load where preemptions
 start, report the spread across seeds, not one seed's interval.

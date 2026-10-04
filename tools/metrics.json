@@ -21,7 +21,6 @@
     "pool reqs { cap max_seqs; admit via engine; }",
     "prefill (known - c) growing kv;",
     "run { horizon 2000; warmup 200; seed 1; }",
-    "set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);",
     "vllm_request(reqs, kv, engine, prompt, o, t0);"
   ]
 }
