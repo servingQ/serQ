@@ -41,18 +41,3 @@ A program that does not compile or run raises `ValueError` with serQ's message; 
 pip install pyserq           # a release
 pip install --pre pyserq     # the latest commit on main
 ```
-
-A release `vX.Y.Z` is `pyserq X.Y.Z` on PyPI, one wheel per platform (linux
-x86_64, macOS arm64). Every commit on main that passes CI is published too,
-as a dev release of the next patch numbered by the commits since the tag:
-three commits after `v0.1.0` is `0.1.1.dev3`, which pip installs only with
-`--pre`. pyserq's version is serq's, and there is one of it: the
-`[workspace.package] version` in `Cargo.toml`, `X.Y.Z`, which both crates
-inherit and the wheel takes; `scripts/version.py` checks it and CI stamps
-the dev number without committing it.
-
-Or build it from a checkout: `pip install maturin && maturin develop -m pyserq/Cargo.toml`.
-
-`pyserq/tests/test_pyserq.py` checks that pyserq gives what the CLI gives: the
-same report for the same program, overrides and seed, and the samples
-`--dump` writes. CI runs it.
