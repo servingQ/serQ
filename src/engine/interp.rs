@@ -17,9 +17,14 @@ use rand::rngs::StdRng;
 use crate::engine::dist::Dist;
 use crate::engine::report::*;
 use crate::engine::stats::*;
+
 use crate::frontend::ast::{BinOp, Preempt, RunMode, UnOp};
 use crate::frontend::link::*;
 use crate::ir::trace::Corpus;
+
+/// The tolerance of a comparison of amounts that sums of floats produce
+/// (units, tokens, work): below it, two amounts are equal.
+const EPS: f64 = 1e-9;
 
 // ------------------------------------------------------------ events ----
 
@@ -498,10 +503,12 @@ pub struct Interp<'p> {
     admit_budget: Option<(usize, f64)>,
     next_dead: u64,
     next_lease: u64,
-    removed_last: f64,
+    /// Whether a preemption happened since the iteration being scheduled
+    /// began (vLLM's `preempted_reqs`, scheduler.py:869): set by `preempt`,
+    /// cleared where `start_iteration` begins to serve its residents.
+    preempted: bool,
     next_adm: u64,
     next_release: u64,
-    removed_seq: u64,
     arrivals: u64,
     ended: u64,
     turns: u64,
@@ -635,10 +642,9 @@ impl<'p> Interp<'p> {
             admit_budget: None,
             next_dead: 0,
             next_lease: 0,
-            removed_last: 0.0,
+            preempted: false,
             next_adm: 0,
             next_release: 0,
-            removed_seq: 0,
             arrivals: 0,
             ended: 0,
             turns: 0,
@@ -1373,7 +1379,7 @@ impl<'p> Interp<'p> {
     /// beyond rounding (#270). On a program error, 0 and the error set.
     fn amount(&mut self, e: &CExpr, sid: usize, what: &str) -> f64 {
         let x = self.eval(e, &Ctx::session(sid), Which::Session);
-        if x.is_nan() || x < -1e-9 {
+        if x.is_nan() || x < -EPS {
             if self.error.is_none() {
                 self.error = Some(format!(
                     "`{what} ({})`: the amount is {x}, not a number of units, tokens or seconds",
@@ -1386,6 +1392,12 @@ impl<'p> Interp<'p> {
     }
 
     // --------------------------------------------------------- pools ----
+
+    /// Whether `units` more fit pool `pl` beside what is allocated (the
+    /// cache not counted: it is evicted to make room).
+    fn fits(&self, pl: usize, units: f64) -> bool {
+        self.pools[pl].used + units <= self.pools[pl].cap + EPS
+    }
 
     fn round_up(&self, pl: usize, units: f64) -> f64 {
         match self.pools[pl].block {
@@ -1508,9 +1520,7 @@ impl<'p> Interp<'p> {
                 .pools
                 .iter()
                 .zip(&pending.need)
-                .all(|(&(q, _), &need)| {
-                    self.pools[q].used + self.round_up(q, need) <= self.pools[q].cap + 1e-9
-                });
+                .all(|(&(q, _), &need)| self.fits(q, self.round_up(q, need)));
             if !reserve {
                 break;
             }
@@ -1536,7 +1546,7 @@ impl<'p> Interp<'p> {
             .reuse
             .as_ref()
             .map(|e| self.eval(e, &Ctx::session(sid), Which::Session).max(0.0));
-        for (i, &(q, units)) in pending.pools.iter().enumerate() {
+        for &(q, units) in &pending.pools {
             let need = self.round_up(q, units);
             // A hold with a `cache` clause takes part in the prefix cache:
             // it consumes the own prefix, at most `reuse` of it; the rest
@@ -1548,12 +1558,15 @@ impl<'p> Interp<'p> {
             // session's cached blocks where they are (#230: an outer hold
             // around the request's used to consume them at its admission,
             // so the request found none, and had no clause to put them back).
-            let mut own = if pending.cache.is_some() {
+            let removed = if pending.cache.is_some() {
                 self.remove_entry(q, serial)
             } else {
-                0.0
+                None
             };
-            if let Some(r) = reuse {
+            let mut own = removed.as_ref().map_or(0.0, |e| e.size);
+            if let Some(r) = reuse
+                && let Some(removed) = &removed
+            {
                 let r = self.round_down(q, r);
                 if own > r {
                     let dead = own - r;
@@ -1561,9 +1574,9 @@ impl<'p> Interp<'p> {
                     let key = DEAD_ENTRY + self.next_dead;
                     self.next_dead += 1;
                     let entry = CacheEntry {
-                        seq: self.removed_seq,
+                        seq: removed.seq,
                         size: dead,
-                        last: self.last_release(q, serial),
+                        last: removed.last,
                         snap: self.sessions[sid].attrs.clone(),
                     };
                     self.pools[q].entries.insert(key, entry);
@@ -1572,7 +1585,6 @@ impl<'p> Interp<'p> {
             }
             // `cached`: the consumed prefix (the largest, if several pools
             // of the hold had one)
-            let _ = i;
             cached_first = Some(cached_first.map_or(own, |c: f64| c.max(own)));
             self.make_room(q, need);
             self.pools[q].used += need;
@@ -1611,10 +1623,10 @@ impl<'p> Interp<'p> {
 
     /// Evict cached prefixes until `need` more units fit.
     fn make_room(&mut self, pl: usize, need: f64) {
-        let over = |s: &Self| s.pools[pl].used + s.pools[pl].cached + need > s.pools[pl].cap + 1e-9;
+        let over = |s: &Self| s.pools[pl].used + s.pools[pl].cached + need > s.pools[pl].cap + EPS;
         // one victim is a linear scan; the heap pays off only for several
         let short = self.pools[pl].used + self.pools[pl].cached + need - self.pools[pl].cap;
-        let several = self.pools[pl].block.is_some_and(|b| short > b + 1e-9);
+        let several = self.pools[pl].block.is_some_and(|b| short > b + EPS);
         if self.evict_static[pl] && several {
             // The keys of the entries not evicted do not change within one
             // call: key every entry once, then re-key only the one that
@@ -1643,7 +1655,7 @@ impl<'p> Interp<'p> {
             }
         }
         debug_assert!(
-            self.pools[pl].used + need <= self.pools[pl].cap + 1e-9,
+            self.fits(pl, need),
             "make_room called without a passing guard"
         );
     }
@@ -1719,7 +1731,7 @@ impl<'p> Interp<'p> {
         }
         let snap = e.snap.clone();
         let last = e.last;
-        let gone = e.size <= 1e-9;
+        let gone = e.size <= EPS;
         if gone {
             self.pools[pl].entries.remove(&serial);
             self.pools[pl].evicted_entries += 1;
@@ -1775,25 +1787,11 @@ impl<'p> Interp<'p> {
         self.start_job(sp.via, None, work, RunMode::Plain, None);
     }
 
-    /// Remove a session's entry from a pool; returns its size.
-    fn remove_entry(&mut self, pl: usize, serial: u64) -> f64 {
-        match self.pools[pl].entries.remove(&serial) {
-            Some(e) => {
-                self.pools[pl].cached -= e.size;
-                self.removed_last = e.last;
-                self.removed_seq = e.seq;
-                e.size
-            }
-            None => {
-                self.removed_last = self.now;
-                0.0
-            }
-        }
-    }
-
-    /// Release time of the entry `remove_entry` just removed.
-    fn last_release(&self, _pl: usize, _serial: u64) -> f64 {
-        self.removed_last
+    /// Remove a session's entry from a pool, and return it.
+    fn remove_entry(&mut self, pl: usize, serial: u64) -> Option<CacheEntry> {
+        let e = self.pools[pl].entries.remove(&serial)?;
+        self.pools[pl].cached -= e.size;
+        Some(e)
     }
 
     /// A preempted or ended hold gives everything back at once.
@@ -1919,7 +1917,7 @@ impl<'p> Interp<'p> {
         let h = &mut self.sessions[sid].holds[hi];
         let k = h.pools.iter().position(|&(q, _)| q == pl).unwrap();
         let alloc = h.pools[k].1;
-        if h.pos[k] + n > alloc + 1e-9 {
+        if h.pos[k] + n > alloc + EPS {
             self.error = Some(format!(
                 "`load {name} ({n})`: the hold has {alloc} allocated and {} computed; \
                  a load must fit the allocation (grow first)",
@@ -1957,7 +1955,7 @@ impl<'p> Interp<'p> {
             return true;
         }
         loop {
-            if self.pools[pl].used + need <= self.pools[pl].cap + 1e-9 {
+            if self.fits(pl, need) {
                 self.make_room(pl, need);
                 self.pools[pl].used += need;
                 let h = &mut self.sessions[sid].holds[hi];
@@ -2053,7 +2051,7 @@ impl<'p> Interp<'p> {
                 .unwrap()
                 .1;
             let need = self.round_up(pl, alloc_now + units) - alloc_now;
-            if self.pools[pl].used + need > self.pools[pl].cap + 1e-9 {
+            if !self.fits(pl, need) {
                 break;
             }
             self.pools[pl].growers.pop_front();
@@ -2139,7 +2137,7 @@ impl<'p> Interp<'p> {
             h.pos[k]
         };
         if let Some(&prev) = self.sessions[victim].preempt_pos.get(&pl) {
-            if computed <= prev + 1e-9 && !self.sessions[victim].stuck {
+            if computed <= prev + EPS && !self.sessions[victim].stuck {
                 self.sessions[victim].stuck = true;
                 self.pools[pl].stuck += 1;
             }
@@ -2212,6 +2210,7 @@ impl<'p> Interp<'p> {
         };
         let (cache, reuse) = cache;
         self.pools[pl].preemptions += 1;
+        self.preempted = true;
         let n = h_pools.len();
         let pending = Pending {
             pools: h_pools,
@@ -2776,7 +2775,7 @@ impl<'p> Interp<'p> {
             .residents(st)
             .iter()
             .any(|&j| self.stages[st].jobs[&j].mode == RunMode::Prefill);
-        let preempt0: u64 = self.pools.iter().map(|p| p.preemptions).sum();
+        self.preempted = false;
         let mut attn = 0.0;
         loop {
             let residents = self.serving_order(st, spec);
@@ -2784,7 +2783,7 @@ impl<'p> Interp<'p> {
                 // the running requests are served; admit waiting ones with
                 // the budget left, unless this iteration preempted
                 // (scheduler.py:869, `if not preempted_reqs`)
-                let preempted = self.pools.iter().map(|p| p.preemptions).sum::<u64>() > preempt0;
+                let preempted = self.preempted;
                 // A local prefill admitted after tentative decodes replaces
                 // them and uses the whole budget (RBLN guard D). Its hold
                 // must therefore see that budget, not the decode remainder.
@@ -2838,7 +2837,7 @@ impl<'p> Interp<'p> {
                     return;
                 }
                 let need = pos + tokens - alloc;
-                if need > 1e-9 && !self.grow(sid, pl, need) {
+                if need > EPS && !self.grow(sid, pl, need) {
                     // preempted (lifo): no longer a resident; waiting
                     // (none): stalls as a resident. Either way, no tokens
                     continue;
@@ -2888,7 +2887,7 @@ impl<'p> Interp<'p> {
         // re-admits at the next event), and the next iteration re-admits the
         // victim. Dropping it left the engine idle with the victim queued and
         // no event to wake it.
-        let preempted = self.pools.iter().map(|p| p.preemptions).sum::<u64>() > preempt0;
+        let preempted = self.preempted;
         if assign.is_empty() && !preempted {
             return;
         }
@@ -2951,15 +2950,17 @@ impl<'p> Interp<'p> {
                     )
                 })
                 .collect();
+            // in the pool's blocks, or units when it has none
             let kv = spec.memory.map_or((0.0, 0.0), |pl| {
-                (self.pools[pl].used, self.pools[pl].cached)
+                let b = self.pools[pl].block.unwrap_or(1.0);
+                (self.pools[pl].used / b, self.pools[pl].cached / b)
             });
             eprintln!(
                 "ITER {:.4} {} | used {} cached {}",
                 self.now,
                 parts.join(" "),
-                kv.0 / 16.0,
-                kv.1 / 16.0
+                kv.0,
+                kv.1
             );
         }
         let Kind::Step { iter, epoch, .. } = &mut self.stages[st].kind else {
@@ -3016,9 +3017,7 @@ impl<'p> Interp<'p> {
                 .pools
                 .iter()
                 .zip(&pending.need)
-                .all(|(&(q, _), &need)| {
-                    self.pools[q].used + self.round_up(q, need) <= self.pools[q].cap + 1e-9
-                });
+                .all(|(&(q, _), &need)| self.fits(q, self.round_up(q, need)));
             if !reserve {
                 return false;
             }
@@ -3119,7 +3118,7 @@ impl<'p> Interp<'p> {
         for (id, tokens) in it.assign {
             if let Some(j) = self.stages[st].jobs.get_mut(&id) {
                 j.work -= tokens;
-                let done = j.work <= 1e-9;
+                let done = j.work <= EPS;
                 if let Some(sid) = j.owner {
                     match j.mode {
                         RunMode::Decode => tokens_of.push((sid, true)),
