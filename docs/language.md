@@ -1039,8 +1039,8 @@ request runs (`growing kv`).
    engine with Qwen3-8B stepped by hand (`tools/oracle/a100_engine.json`,
    `scripts/check_oracle_gpu.py`), the serQ program (`tests/vllm_oracle.rs`)
    and the Lean executable semantics (`Serq/Oracle.lean`, one theorem per
-   scenario, `decide +kernel`) give the same first-token step, last-token
-   step and preemption count for every request (7 scenarios:
+   scenario, `decide +kernel`) give the same first-token and last-token
+   step for every request, and the same number of preemptions (7 scenarios:
    self-preemption, chunked prefill sharing the budget, the request cap,
    head-of-line blocking, the chunk cap, six mixed requests with staggered
    arrivals on 39 blocks, and the chunk cap lifted for a request alone; the

@@ -29,7 +29,7 @@ def P1 : Prog := .set 9 (fun x => x.now) P2
 
 theorem prog_eq : Pd = .run 1 .plain (fun x => x.attr 10) none P1 := rfl
 
-theorem deployment_eq : Dd = ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), none⟩ := rfl
+theorem deployment_eq : Dd = ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), none, none⟩ := rfl
 
 /-! ### The state of a request -/
 
@@ -1114,6 +1114,8 @@ theorem start_bnd {w : Workload} (hF : Fam w) {g : Ghost} {m : Machine} (hI : DI
   rw [hiter0] at hcons
   simp only [tokSum, List.map_nil, List.sum_nil, Nat.add_zero] at hcons
   unfold startIteration
+  -- the deployment has no `chunkLift`: every iteration runs it as it is
+  simp only [iterDeployment_of_none _ (rfl : Claims.DaiSarathi.deployment.chunkLift = none)]
   rw [hvia, Bool.or_false]
   by_cases hjs : m.jobs = []
   · have he0 : m.jobs.isEmpty = true := by simp [hjs]
