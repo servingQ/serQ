@@ -1,5 +1,6 @@
 """pyserq gives what the CLI gives: the same report for the same program,
-overrides and seed, and the samples `--dump` writes.
+overrides and seed, the samples `--dump` writes, and the figure `serq draw`
+prints.
 
     maturin develop -m pyserq/Cargo.toml      # pyserq from this checkout
     python pyserq/tests/test_pyserq.py        # with pyserq installed and target/release/serq built
@@ -201,6 +202,23 @@ def test_rng_is_the_stream_a_run_draws_from():
     assert all(2 <= pyserq.Rng(s).range_u64(2, 9) <= 9 for s in range(50))
 
 
+def test_draw_is_serq_draw():
+    # every example, both formats; a program split into a workload and a
+    # server draws what one request runs, which a compiled Program does not say
+    for f in sorted((ROOT / "examples").rglob("*.sq")):
+        for fmt in ["svg", "tikz"]:
+            want = subprocess.run([CLI, "draw", str(f), "--format", fmt],
+                                  capture_output=True, text=True, check=True).stdout
+            assert pyserq.draw(f, format=fmt) == want, f
+    want = subprocess.run([CLI, "draw", str(MG1), "--set", "lam=0.8", "--def", "service=~exp(1)"],
+                          capture_output=True, text=True, check=True).stdout
+    assert pyserq.draw(MG1, sets={"lam": 0.8}, defs={"service": "~exp(1)"}) == want
+    assert pyserq.draw(source=MG1.read_text()) == pyserq.draw(MG1)
+    ir = Path(tempfile.mkdtemp(prefix="pyserq-")) / "mg1.json"
+    ir.write_text(pyserq.compile(MG1).to_json())
+    assert pyserq.draw(ir) == subprocess.run([CLI, "draw", str(ir)], capture_output=True, text=True, check=True).stdout
+
+
 def test_errors_are_value_errors():
     for call in [
         lambda: pyserq.compile(ROOT / "nowhere.sq"),
@@ -215,6 +233,9 @@ def test_errors_are_value_errors():
         lambda: pyserq.Rng(1).range_u64(5, 4),
         lambda: pyserq.Rng(1).range_f64(0.0, math.inf),
         lambda: pyserq.compile(MG1, defs={"nope": "1"}),
+        lambda: pyserq.draw(MG1, format="png"),
+        lambda: pyserq.draw(),
+        lambda: pyserq.draw(MG1, sets={"nope": 1}),
     ]:
         try:
             call()

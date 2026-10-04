@@ -11,6 +11,7 @@ serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]... [--def name
 ```
 
 `FILE` is program text (`.sq`) or IR (`.json`), as for the other commands.
+In Python, [`pyserq.draw`](../python.md) returns the same text.
 
 ## Why the figure is generated rather than drawn
 

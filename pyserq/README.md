@@ -10,6 +10,7 @@ p = pyserq.compile("mg1.sq", sets={"lam": 0.8}, seed=10)
 r = pyserq.run(p)            # the GIL is released while it runs
 r.json()                     # what `serq run --json` prints
 o = r.observe("sojourn")     # o.mean, o.ci, o.samples, o.times
+pyserq.draw("mg1.sq", format="svg")  # what `serq draw --format svg` prints
 ```
 
 ```bash
