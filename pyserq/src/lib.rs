@@ -356,15 +356,6 @@ fn draw(
     defs: HashMap<String, String>,
     format: &str,
 ) -> PyResult<String> {
-    let render = match format {
-        "tikz" => serq::view::tikz::render,
-        "svg" => serq::view::svg::render,
-        f => {
-            return Err(PyValueError::new_err(format!(
-                "unknown format `{f}` (tikz, svg)"
-            )));
-        }
-    };
     let mut ov = serq::Overrides::default();
     overriding(&mut ov, sets, defs)?;
     let ir = match (&path, source) {
@@ -377,7 +368,7 @@ fn draw(
         }
     }
     .map_err(PyValueError::new_err)?;
-    Ok(render(&serq::view::deployment::figure(&ir)))
+    serq::view::render(&serq::view::deployment::figure(&ir), format).map_err(PyValueError::new_err)
 }
 
 /// `run(program)`: run it. The run does not hold the GIL, so runs in

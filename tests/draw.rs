@@ -1014,6 +1014,26 @@ fn every_program_renders() {
     }
 }
 
+/// `view::render` is the one place a format's name meets its writer: the CLI
+/// and pyserq both go through it.
+#[test]
+fn a_format_is_named_once() {
+    let f = deployment::figure(&program("vllm"));
+    assert_eq!(
+        serq::view::render(&f, "tikz").unwrap(),
+        serq::view::tikz::render(&f)
+    );
+    assert_eq!(
+        serq::view::render(&f, "svg").unwrap(),
+        serq::view::svg::render(&f)
+    );
+    assert_eq!(serq::view::FORMATS, ["tikz", "svg"]);
+    assert_eq!(
+        serq::view::render(&f, "png").unwrap_err(),
+        "unknown format `png` (tikz, svg)"
+    );
+}
+
 /// TikZ output goes into a LaTeX document, so every special character in a
 /// label has to survive the trip.
 #[test]

@@ -229,10 +229,13 @@ fn main() {
             "--inline-trace" => inline = true,
             "--format" => {
                 format = next(&mut i);
-                if !matches!(format.as_str(), "tikz" | "svg") {
+                if !serq::view::FORMATS.contains(&format.as_str()) {
                     argument_error(
                         cmd,
-                        format!("invalid --format `{format}`\nhelp: choose tikz or svg"),
+                        format!(
+                            "invalid --format `{format}`\nhelp: choose {}",
+                            serq::view::FORMATS.join(" or ")
+                        ),
                     );
                 }
             }
@@ -266,11 +269,7 @@ fn main() {
         "ir" => println!("{}", prog.to_json()),
         "draw" => {
             let figure = serq::view::deployment::figure(&prog);
-            let text = match format.as_str() {
-                "tikz" => serq::view::tikz::render(&figure),
-                "svg" => serq::view::svg::render(&figure),
-                f => fail(file, format!("unknown --format `{f}` (tikz, svg)")),
-            };
+            let text = serq::view::render(&figure, &format).unwrap_or_else(|e| fail(file, e));
             match &out {
                 None => print!("{text}"),
                 Some(path) => {
