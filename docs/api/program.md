@@ -2,7 +2,7 @@
 
 ```
 program := item*
-item    := let | def | use | pool | stage | workload | session | server | share | run | gauge
+item    := let | def | use | pool | stage | workload | session | server | share | run | gauge | claim
 ```
 
 Items are read in order and declarations come first: a [serving form](serving.md)
@@ -192,6 +192,27 @@ and greatest value held; `--dump` writes its change points
 |---|---|---|
 | `NAME` | identifier | Not also an `observe`'s name, nor another gauge's. |
 | `expr` | `expr`, at the `Gauge` moment | Pool and stage observables and constants; not an attribute, a draw, `now`, `cachedin`, `work` or `budget_left`. A pool or stage index is a number (`kv[0]`, or the `kv[k]` of `max k in N (…)`). |
+
+## `claim`
+
+```serq
+claim NAME [given (expr)]: every iteration of STAGE (expr);
+claim NAME [given (expr)]: some iteration of STAGE (expr);
+claim NAME [given (expr)]: at end (expr);
+```
+
+A proposition about every path of the program, which reads and does not
+act. The interpreter checks it on the path it runs and the report says
+whether it held, failed (and when first), was witnessed, or was not
+evaluated. See [the language](../language.md), *Claims*.
+
+| Argument | Type | Description |
+|---|---|---|
+| `NAME` | identifier | Not another claim's. |
+| `given` | `expr`, at the `Given` moment | Read for each session once its `init` has run, from its attributes and the constants. A session that reads 0 puts the claim out of the run's scope. |
+| `STAGE` | a `step` stage | One stage, or an array's member by a constant index (`E[0]`). |
+| `expr` | `expr`, at the `Iteration` moment | The cost's variables, `demand`, `served`, `now`, and `queue`, `busy`, `used`, `free`, `holders`, `queued` by a number; not an attribute or a draw. |
+| `expr` (`at end`) | `expr`, at the `End` moment | Constants, `now` and `total`, `count`, `largest`, `smallest`, `prefix_total` of an `observe`. |
 
 ## `run`
 

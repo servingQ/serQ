@@ -77,6 +77,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `hidden` | attribute slots the scheduler may not read (`hidden o;`): legal at the `Session` moment only, below |
 | `share` | `MaxMin` or `Bottleneck`: how the flows of runs over several stages divide the stages' capacity; present exactly when some `Run` has a non-empty `also`, omitted otherwise |
 | `gauges` | `[{name, expr}]`: functions of the state whose time average the report gives, each read at the `Gauge` moment after every instant; omitted when empty. They read and do not act, so a reader that ignores them runs the same program |
+| `claims` | `[{name, given?, kind, expr}]`: propositions about every path, which the interpreter checks on the path it runs and the report states; omitted when empty. `kind` is `EveryIteration(stage)` or `SomeIteration(stage)` (a step stage's index; `expr` read at the `Iteration` moment) or `AtEnd` (`expr` read at the `End` moment); `given`, omitted when absent, is read at the `Given` moment for every session, and one that reads 0 puts the claim out of the run's scope. Claim names are distinct. They read and do not act, so a reader that ignores them runs the same program |
 | `slot_cached`, `slot_serial`, … | slots of the built-in attributes (`cached`, `serial`, `turn_no`, `new`, `out`, `think`, `more`, `forced`, `computed`) |
 
 `Sessions`: all the sessions arrive at time 0; each one runs `init`, then
@@ -105,10 +106,15 @@ runs identically (`tests/ir.rs`).
 ### Expressions (`CExpr`)
 
 `Num`, `Attr(slot)`, `Ctx(var)` (`Now`, `Waited`, `Size`, `Age`, `Last`, `Queued`,
-`N`, `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`: each exists at
+`N`, `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Decoding`,
+`Admission`, `Remaining`, `Demand`, `Served`: each exists at
 one *moment*, below, and `Now` at every one), `Sample(dist, args)`,
 `Call(fun, args)` (arithmetic functions, pool and stage queries such as
-`CachedIn(pool)`, `BudgetLeft(stage)`), `Unary`, `Binary`, `Cond`. Pool
+`CachedIn(pool)`, `BudgetLeft(stage)`), `Unary`, `Binary`, `Cond`, and
+`Agg(agg, observation)`: `Total`, `Count`, `Largest`, `Smallest` (0 when
+none) or `PrefixTotal` (`Σ_k Σ_{i≤k} v_i` over the values sorted
+ascending) of every value the run observed under the observation, warm-up
+included; read at the `End` moment only. Pool
 and stage references are `CRef {base, count, index?}` (a family of
 `count` pools from `base`, selected by `index`).
 
@@ -157,6 +163,16 @@ its position in the IR, and a context variable exists at one of them:
 | `Step` | a step stage's `cost`, evaluated after the iteration is scheduled | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
 | `Serve` | a step stage's `serve by` keys and `only`, evaluated for one resident at its turn, the totals as the residents stand then (a session the iteration admitted included) | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` (`only` not `Now`) |
 | `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
+| `Given` | a claim's `given`, evaluated for each session once its `init` has run (and its preset attributes are set), on its attributes (`hidden` ones included: a claim is no scheduler) and the constants; no `Sample`, no `Call` but arithmetic | none (not `Now`) |
+| `Iteration` | a claim over the iterations of a step stage, evaluated when an iteration starts, after its batch is scheduled (where the cost is read); no `Attr`, no `Sample`, of the calls only arithmetic, `Queue`, `Busy`, `Used`, `Free`, `Holders`, `Queued`, an index a `Num` in range | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Demand`, `Served`, `Now` |
+| `End` | a claim `at end`, evaluated once when the run ends, when no session is live; no `Attr`, no `Sample`, no `Call` but arithmetic; the only moment that reads `Agg` | `Now` |
+
+`Demand` is the tokens the stage's residents could take in the iteration
+if the budget were unlimited: `min(1, remaining)` for a decode, the
+remaining work (capped by a positive `chunk`) for a prefill, summed over the
+residents after the batch is scheduled (those admitted by it and those
+`only` excludes included). `Served` is the tokens the stage scheduled in its
+earlier iterations, over the whole run.
 
 The index of a pool or stage reference (`CRef.index`) is evaluated with the
 expression around it, so at that expression's moment: `evict by (size +
@@ -217,7 +233,12 @@ so a bump moves the generator and `lean/Serq/Oracle.lean` in the same change
   `gauges` does not bump: it changes what the report says, not what the
   program does, and a reader that drops it (the Lean generator) runs the
   same sessions to the same end, since a gauge reads no draw, plans no
-  iteration and names its pools and stages by number.
+  iteration and names its pools and stages by number. `claims` does not
+  bump for the same reason: a claim reads no draw, plans no iteration, names
+  its pools and stages by number and acts on nothing, so a reader that drops
+  it runs the same sessions to the same end. It adds the variants
+  `CExpr::Agg`, `CtxVar::Demand` and `CtxVar::Served`, which only a claim
+  reads; IR 11 has no tag, so they go in the coming tag's message.
 - **Same shape, a stricter check: no bump.** An IR file that validated before
   and is rejected now was reading a context variable at a moment that never
   supplied it (Moments, above), or a new file lists in `hidden` an attribute

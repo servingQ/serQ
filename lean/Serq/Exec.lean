@@ -68,6 +68,20 @@ structure PoolDef where
   cap : ℕ
   block : ℕ
   viaEngine : Bool
+  /-- `queue by (key)`: the waiting session with the least key is admitted
+  next (ties: queue order); `none` is FIFO -/
+  key : Option (Env → ℕ)
+
+/-- What a `serve only` predicate reads for one resident (serQ
+`Moment::Serve`): its attributes, whether it decodes, its admission number,
+the work its run has left, and the residents' totals as they stand. -/
+structure ServeEnv where
+  attr : ℕ → ℕ
+  decoding : ℕ
+  admission : ℕ
+  remaining : ℕ
+  residents : ℕ
+  decoders : ℕ
 
 /-- What an iteration's cost reads (serQ's context variables): the tokens it
 serves (`tokens`), the prefill tokens among them (`prefilled`), the decoding
@@ -94,6 +108,24 @@ structure Deployment where
   /-- the length of an iteration in clock units (at least 1 is used);
   `fun _ => 1` is the step clock -/
   cost : IterStats → ℕ
+  /-- `serve only (p)`: a resident for which `p` is 0 gets no token in the
+  iteration; `none` serves every resident -/
+  only : Option (ServeEnv → ℕ)
+
+/-- What a claim over iterations reads (serQ `Moment::Iteration`): the
+iteration's start, the tokens the engine scheduled before it (`served`), its
+`IterStats`, the residents after its batch was formed and what they could
+take with an unlimited budget (`demand`), and per pool the waiting sessions,
+the holders and the allocated units. -/
+structure IterRec where
+  start : ℕ := 0
+  served : ℕ := 0
+  stats : IterStats := ⟨0, 0, 0, 0, 0⟩
+  residents : ℕ := 0
+  demand : ℕ := 0
+  queued : List ℕ := []
+  holders : List ℕ := []
+  used : List ℕ := []
 
 structure Entry where
   owner : ℕ
@@ -263,6 +295,10 @@ structure Machine where
   /-- the end of the engine's running iteration and its event number;
   `none` while the engine is idle -/
   iterEnd : Option (ℕ × ℕ) := none
+  /-- the tokens of every iteration started so far -/
+  served : ℕ := 0
+  /-- the record of the last iteration started (what a claim reads) -/
+  last : IterRec := {}
 
 variable (D : Deployment)
 
@@ -277,7 +313,7 @@ def insertDelay (d : ℕ × ℕ × ℕ) : List (ℕ × ℕ × ℕ) → List (ℕ
 def roundUp (b u : ℕ) : ℕ := if b = 0 then u else (u + b - 1) / b * b
 def roundDown (b u : ℕ) : ℕ := if b = 0 then u else u / b * b
 
-def pdef (p : ℕ) : PoolDef := D.pools.getD p ⟨0, 1, false⟩
+def pdef (p : ℕ) : PoolDef := D.pools.getD p ⟨0, 1, false, none⟩
 def pst (m : Machine) (p : ℕ) : PoolSt := m.pools.getD p ⟨0, [], [], []⟩
 def setPool (m : Machine) (p : ℕ) (s : PoolSt) : Machine := { m with pools := m.pools.set p s }
 def getS (m : Machine) (i : ℕ) : Sess := m.sess.getD i ⟨i, ⟨fun _ => 0, []⟩, 0, .stop, [], .ended, 0, 0⟩
@@ -676,6 +712,35 @@ def holdNeeds (m : Machine) (i : ℕ) (left : ℕ) : Prog → List (ℕ × ℕ �
 def fitsAll (m : Machine) (ns : List (ℕ × ℕ × ℕ)) : Bool :=
   ns.all fun (p, _, need) => decide ((pst m p).used + roundUp (pdef D p).block need ≤ (pdef D p).cap)
 
+/-- One pool `(p, u, _)` of session `i`'s admission: the own cached prefix it
+consumes (at most `r?`, with a `cache` clause only), the dead rest, the
+eviction that makes room, the allocation. The accumulator carries the
+machine, the pools held so far and the most consumed. -/
+def admitPool (i serial : ℕ) (cache : Option (Env → ℕ)) (r? : Option ℕ)
+    (acc : Machine × List (ℕ × ℕ × ℕ) × ℕ) (x : ℕ × ℕ × ℕ) : Machine × List (ℕ × ℕ × ℕ) × ℕ :=
+  let m := acc.1
+  let p := x.1
+  let u := x.2.1
+  let pd := pdef D p
+  let s := pst m p
+  -- a hold takes from the prefix cache only if it will give back to
+  -- it: without a `cache` clause the entry stays where it is (IR 10)
+  let own := if cache.isSome then ownEntry s serial else 0
+  let s := if cache.isSome then removeEntry s serial else s
+  let keepR := match r? with
+    | some r => roundDown pd.block (min r own)
+    | none => own
+  let dead := own - keepR
+  let lastOf := ((( (pst m p).entries.find? (·.owner = serial)).map fun e => (e.last, e.seq))).getD (m.now, 0)
+  let s' := if dead > 0 then
+      { s with entries := ⟨1000000 + m.nextDead, dead, lastOf.1, lastOf.2⟩ :: s.entries }
+    else s
+  let m' := if dead > 0 then { m with nextDead := m.nextDead + 1 } else m
+  let alloc := roundUp pd.block u
+  let s := makeRoom pd.block pd.cap alloc (pd.cap + 1) s'
+  let s := { s with used := s.used + alloc, holders := s.holders ++ [i] }
+  (setPool m' p s, acc.2.1 ++ [(p, alloc, keepR)], max acc.2.2 keepR)
+
 /-- Admit session `i` (its `prog` is a hold statement) with the budget
 `left` visible to its unit expressions. -/
 def admit (m : Machine) (i : ℕ) (left : ℕ) : Machine :=
@@ -683,32 +748,12 @@ def admit (m : Machine) (i : ℕ) (left : ℕ) : Machine :=
   | stmt@(.hold _ reuse body cache k) =>
     let ns := holdNeeds m i left stmt
     let r? := reuse.map (evalE m i · left)
-    let serial := (getS m i).serial
-    let (m, held, consumed) := ns.foldl (fun (acc : Machine × List (ℕ × ℕ × ℕ) × ℕ) (p, u, _) =>
-      let (m, held, cons) := acc
-      let pd := pdef D p
-      let s := pst m p
-      -- a hold takes from the prefix cache only if it will give back to
-      -- it: without a `cache` clause the entry stays where it is (IR 10)
-      let own := if cache.isSome then ownEntry s serial else 0
-      let s := if cache.isSome then removeEntry s serial else s
-      let keepR := match r? with
-        | some r => roundDown pd.block (min r own)
-        | none => own
-      let dead := own - keepR
-      let lastOf := ((( (pst m p).entries.find? (·.owner = serial)).map fun e => (e.last, e.seq))).getD (m.now, 0)
-      let (s, m) := if dead > 0 then
-          ({ s with entries := ⟨1000000 + m.nextDead, dead, lastOf.1, lastOf.2⟩ :: s.entries },
-           { m with nextDead := m.nextDead + 1 })
-        else (s, m)
-      let alloc := roundUp pd.block u
-      let s := makeRoom pd.block pd.cap alloc (pd.cap + 1) s
-      let s := { s with used := s.used + alloc, holders := s.holders ++ [i] }
-      (setPool m p s, held ++ [(p, alloc, keepR)], max cons keepR)) (m, [], 0)
-    let h : HoldRec := ⟨held, false, cache, stmt⟩
+    let res := ns.foldl (admitPool D i (getS m i).serial cache r?) (m, [], 0)
+    let m := res.1
+    let h : HoldRec := ⟨res.2.1, false, cache, stmt⟩
     let s := getS m i
     let st' : List Frame := Frame.hold h k :: s.stack
-    let m := setS m i { s with cached := consumed, prog := body, stack := st', status := .ready, admSeq := m.nextAdm }
+    let m := setS m i { s with cached := res.2.2, prog := body, stack := st', status := .ready, admSeq := m.nextAdm }
     { m with nextAdm := m.nextAdm + 1, ready := m.ready ++ [i] }
   | _ => m
 
@@ -739,17 +784,35 @@ def enqueue (m : Machine) (i : ℕ) (front : Bool) : Machine :=
     setS m i { getS m i with status := .queued }
   | _ => m
 
+/-- The first of `q` with the least key (the interpreter's `next_waiter`). -/
+def argminKey (k : ℕ → ℕ) : List ℕ → Option ℕ
+  | [] => none
+  | i :: q => match argminKey k q with
+    | none => some i
+    | some j => if k j < k i then some j else some i
+
+/-- The waiting session pool `p` admits next, and the queue without it: the
+head, or under `queue by` the first with the least key. -/
+def selectHead (m : Machine) (p : ℕ) : Option (ℕ × List ℕ) :=
+  match (pdef D p).key with
+  | none => match (pst m p).queue with
+    | i :: q => some (i, q)
+    | [] => none
+  | some key => match argminKey (fun i => evalE m i key) (pst m p).queue with
+    | some i => some (i, (pst m p).queue.erase i)
+    | none => none
+
 /-- Admit the heads of pool `p`'s queue, in order, while they fit (the
 interpreter's `try_admit`): each admitted session is ready and queued to
 run, but does not run yet. -/
 def admitHeads (p : ℕ) : ℕ → Machine → Machine
   | 0, m => m
-  | f + 1, m => match (pst m p).queue with
-    | i :: q =>
+  | f + 1, m => match selectHead D m p with
+    | some (i, q) =>
       if fitsAll D m (holdNeeds m i 0 (getS m i).prog) then
         admitHeads p f (admit D (setPool m p { pst m p with queue := q }) i 0)
       else m
-    | [] => m
+    | none => m
 
 /-- `admitHeads` on every pool not served by the engine, in declaration
 order (the interpreter's `try_admit_all`; a pool the engine serves admits at
@@ -953,6 +1016,15 @@ def wantOf (j : Job) : ℕ := match j.mode with
   | .decode => min 1 j.left
   | _ => if D.chunk > 0 then min j.left D.chunk else j.left
 
+/-- Whether `serve only` lets job `j` take tokens, read on the residents as
+they stand (serQ `serves`). -/
+def serves (m : Machine) (j : Job) : Bool :=
+  match D.only with
+  | none => true
+  | some p =>
+    p ⟨(getS m j.owner).attr.get, if j.mode = .decode then 1 else 0, (getS m j.owner).admSeq, j.left,
+       m.jobs.length, (m.jobs.filter (·.mode = .decode)).length⟩ ≠ 0
+
 /-- Build the iteration starting now. -/
 def assign : ℕ → Machine → ℕ → ℕ → ℕ → Machine
   | 0, m, _, _, _ => m
@@ -965,6 +1037,7 @@ def assign : ℕ → Machine → ℕ → ℕ → ℕ → Machine
         | (m, false) => m
       else m
     | some j =>
+      if !serves D m j then assign f m (idx + 1) left pre0 else
       let t := min (wantOf D j) left
       if t = 0 then assign f m (idx + 1) left pre0 else
       match j.growing with
@@ -1010,6 +1083,15 @@ def iterStats (m : Machine) : IterStats :=
     kvDecode := (dec.map fun (o, _) => held o).sum
     attention2 := (pre.map fun (o, t) => chunk2 o t).sum }
 
+/-- What a claim reads of the iteration `m.iter` (with its stats `st`), as
+the batch was formed. -/
+def iterRec (m : Machine) (st : IterStats) : IterRec :=
+  { start := m.now, served := m.served, stats := st, residents := m.jobs.length,
+    demand := (m.jobs.map (wantOf D)).sum,
+    queued := (List.range D.pools.length).map fun p => (pst m p).queue.length,
+    holders := (List.range D.pools.length).map fun p => (pst m p).holders.length,
+    used := (List.range D.pools.length).map fun p => (pst m p).used }
+
 /-- Start an iteration on the idle engine. It lasts `cost` (at least one
 clock unit) if it serves a token or preempted; otherwise the engine stays
 idle until the next event. -/
@@ -1017,10 +1099,13 @@ def startIteration (m : Machine) : Machine :=
   let busy := !m.jobs.isEmpty ||
     (List.range D.pools.length).any fun p => (pdef D p).viaEngine && !(pst m p).queue.isEmpty
   if busy then
-    let m' := assign D 100000 { m with iter := [] } 0 D.budget m.preempts
+    let m' := assign D (m.jobs.length + 100000) { m with iter := [] } 0 D.budget m.preempts
     if !m'.iter.isEmpty || m'.preempts ≠ m.preempts then
-      { m' with iterEnd := some (m'.now + max 1 (D.cost (iterStats D m')), m'.nextDelay)
-                nextDelay := m'.nextDelay + 1 }
+      let st := iterStats D m'
+      { m' with iterEnd := some (m'.now + max 1 (D.cost st), m'.nextDelay)
+                nextDelay := m'.nextDelay + 1
+                served := m'.served + st.tokens
+                last := iterRec D m' st }
     else { m' with iterEnd := none }
   else { m with iter := [], iterEnd := none }
 
@@ -1054,25 +1139,25 @@ def afterEvent (m : Machine) : Machine :=
   let m := settle D m
   if m.iterEnd.isNone && !pendingBy m m.now then startIteration D m else m
 
-/-- One event, in (time, event number) order: the clock moves to it, and it
-is handled: a delay that ends wakes its session (unless the session was
-preempted meanwhile and its status names another state), an iteration that
-ends applies its tokens; then `afterEvent`. -/
+/-- The event at `(t, q)` handled: the clock moves to it; a delay that ends
+wakes its session (unless the session was preempted meanwhile and its status
+names another state), an iteration that ends applies its tokens. -/
+def handle (m : Machine) (t q : ℕ) : Machine :=
+  let m : Machine := { m with now := t }
+  if m.iterEnd = some (t, q) then endIteration { m with iterEnd := none }
+  else match m.delays with
+    | (u, q', i) :: rest =>
+      let m : Machine := { m with delays := rest }
+      if (getS m i).status = .delay u q' then
+        { setS m i { getS m i with status := .ready } with ready := m.ready ++ [i] }
+      else m
+    | [] => m
+
+/-- One event, in (time, event number) order: `handle`, then `afterEvent`. -/
 def step (m : Machine) : Machine :=
   match nextEvent m with
   | none => m
-  | some (t, q) =>
-    let m : Machine := { m with now := t }
-    let m : Machine :=
-      if m.iterEnd = some (t, q) then endIteration { m with iterEnd := none }
-      else match m.delays with
-        | (u, q', i) :: rest =>
-          let m : Machine := { m with delays := rest }
-          if (getS m i).status = .delay u q' then
-            { setS m i { getS m i with status := .ready } with ready := m.ready ++ [i] }
-          else m
-        | [] => m
-    afterEvent D m
+  | some (t, q) => afterEvent D (handle m t q)
 
 /-- Run the events up to time `horizon` (at most `f` of them). -/
 def runUntil (horizon : ℕ) : ℕ → Machine → Machine
@@ -1081,17 +1166,19 @@ def runUntil (horizon : ℕ) : ℕ → Machine → Machine
     | some (t, _) => if t ≤ horizon then runUntil horizon f (step D m) else m
     | none => m
 
-/-- `n` sessions with attributes `init i`, all running `prog`, from time 0. -/
-def start (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload := ⟨[], [], none, 0, none⟩) : Machine :=
-  let m : Machine := {
-    wl := wl
+/-- `n` sessions with attributes `init i`, all ready to run `prog` at time 0. -/
+def initial (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload := ⟨[], [], none, 0, none⟩) : Machine :=
+  { wl := wl
     now := 0
     sess := ((List.range n).map fun i => ⟨i, ⟨init i, []⟩, 0, prog, [], .ready, 0, 0⟩).toArray
     pools := D.pools.map fun _ => ⟨0, [], [], []⟩
     jobs := [], iter := [], obs := [], preempts := 0
     nextAdm := 0, nextRel := 0, nextDead := 0, nextDelay := 0
     ready := List.range n }
-  afterEvent D m
+
+/-- `n` sessions with attributes `init i`, all running `prog`, from time 0. -/
+def start (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload := ⟨[], [], none, 0, none⟩) : Machine :=
+  afterEvent D (initial D n init prog wl)
 
 /-- Enough events for time `horizon`: at each instant every session ends at
 most one delay and the engine at most one iteration, and every event a step

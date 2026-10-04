@@ -72,6 +72,19 @@ lengthens a hit service `s_hit` by `ds`, with `s_miss = s_hit + ds`:
 A definition that takes a pool reads its block size from it:
 `reusable(known, blocksize(kv))` in `lib/vllm.sq`.
 
+## Aggregates of the observations
+
+Read by a [`claim`](program.md#claim) `at end` only, over every value the
+run observed under `o`, warm-up included.
+
+| Signature | Returns |
+|---|---|
+| `total(o: observe)` | the sum of the values |
+| `count(o: observe)` | how many values |
+| `largest(o: observe)` | the greatest value (0 when none) |
+| `smallest(o: observe)` | the least value (0 when none) |
+| `prefix_total(o: observe)` | `Σ_k (v_1 + … + v_k)` over the values sorted ascending: the least total completion time of jobs of those sizes served one at a time |
+
 ## Where an observable may be read
 
 Observables read state that eviction and admission change, so a `set` that

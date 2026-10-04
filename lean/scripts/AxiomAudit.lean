@@ -50,3 +50,18 @@ import Serq
 -- dead cache entries are irrelevant to the live ones under LRU (Serq/Regen.lean)
 #print axioms SerqLang.Exec.makeRoom_fuel
 #print axioms SerqLang.Exec.makeRoom_dead_irrelevant
+-- claims: what every path keeps, and the paper programs' claims (Serq/Claim.lean, Serq/Inv.lean,
+-- Serq/Work.lean, Serq/Papers/)
+#print axioms SerqLang.Exec.served_rate
+#print axioms SerqLang.Exec.reach_sub
+#print axioms SerqLang.Exec.work_conserving
+#print axioms SerqLang.Exec.every_iteration_of
+#print axioms SerqLang.Papers.DaiSarathi.token_rate
+#print axioms SerqLang.Papers.DaiSarathi.work_conserving
+#print axioms SerqLang.Papers.DaiFastertransformer.token_rate
+#print axioms SerqLang.Papers.DaiFastertransformer.not_work_conserving
+#print axioms SerqLang.Papers.BariRad.token_rate
+#print axioms SerqLang.Papers.BariRad.optimal_tiling
+#print axioms SerqLang.Papers.KongMath.opt_lower_bound
+#print axioms SerqLang.Papers.KongSvf.queueing_bound
+#print axioms SerqLang.Papers.KongSvf.competitive_ratio

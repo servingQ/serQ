@@ -675,7 +675,9 @@ impl Walker<'_> {
                     );
                     if c != 0.0 { a } else { b }
                 }
-                CExpr::Ctx(_) | CExpr::Sample(..) | CExpr::Call(..) => return None,
+                CExpr::Ctx(_) | CExpr::Sample(..) | CExpr::Call(..) | CExpr::Agg(..) => {
+                    return None;
+                }
             })
         }
         let mut read = false;

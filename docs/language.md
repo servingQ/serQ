@@ -83,6 +83,9 @@ item     := let NAME = expr ;
           | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
           | QUEUE pull QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the reader, its source, the read (below, *Queues*)
           | gauge NAME = expr ;              -- the time average of a function of the state (Statistics)
+          | claim NAME [given ( expr )] : every iteration of STAGE ( expr ) ;   -- a proposition about every path (Claims)
+          | claim NAME [given ( expr )] : some iteration of STAGE ( expr ) ;
+          | claim NAME [given ( expr )] : at end ( expr ) ;
 qitem    := pool NAME { poolopt* }              -- the queue's own; only its entries hold it
           | serve kind [ latency expr ] ;       -- the queue's stage, named after the queue; `latency` a link's
           | nic kind ;                          -- the queue's NIC, the stage `QUEUE.nic`
@@ -189,7 +192,10 @@ cost: the residents before the iteration), `tokens`, `prefilled`, `attention` (i
 only: what the iteration scheduled; `attention = Σ n (K + n/2)` over the prefill
 chunks, `K` the position before the chunk), `decoding`, `admission`,
 `remaining` (a step stage's `serve by` keys and `serve only`, per resident; they read the
-residents' four as well). Each context variable exists at the one place named in
+residents' four as well), `demand`, `served` (a claim over iterations, below,
+which reads the cost's variables as well); aggregates of a run's
+observations, `total(o)`, `count(o)`, `largest(o)`, `smallest(o)`,
+`prefix_total(o)` (`o` an `observe` name; a claim `at end` only). Each context variable exists at the one place named in
 its parenthesis (`now` everywhere), and reading it anywhere else is a link
 error rather than a 0: `set x = tokens;` in a session, or `evict by (tokens)`,
 does not link (`docs/ir.md`, Moments). Session attributes, `let` constants
@@ -942,6 +948,84 @@ an aggregate writes out), so reading a gauge cannot fail the run. What to call a
 decoder is full is `gauge full = max j in N (free(reqs[j]) == 0);`, the
 spread `max j in N (used(kv[j])) - min j in N (used(kv[j]))`. `--dump DIR`
 writes each gauge's change points as `gauge/NAME.csv` (`time,value`).
+
+**Claims.** A claim is a proposition about every path of the program,
+written in the program. It reads and does not act: a program runs the same
+with its claims removed. The interpreter checks each claim on the path it
+runs and the report says what it found; the same IR is the source of the
+claim's statement in Lean. There are three forms:
+
+```
+claim work_conserving: every iteration of engine (demand < bmax || tokens == bmax);
+claim starved: some iteration of engine (demand >= bmax && tokens < bmax);
+claim mean_ok: at end (total(response) <= 1000000 * count(response));
+```
+
+`every iteration of S (e)` says `e` is non-zero at every iteration of the
+step stage `S` (a member of an array is named by a constant index,
+`E[0]`); `some iteration of S (e)` says it is at one of them at least; `at
+end (e)` says it is when the run ends. A claim over iterations is read when
+an iteration starts, after its batch is scheduled, where the cost is read:
+it reads the cost's variables (`tokens`, `prefilled`, `decoders`,
+`residents`, `kv_decode`, `kv_prefill`, `attention`), `now` (the start),
+the observables `queue`, `busy`, `used`, `free`, `holders`, `queued` (a
+pool or stage named by a number, as in a gauge) and two variables of its
+own. `demand` is the tokens the stage's residents could take in this
+iteration if the budget were unlimited: one for a decode with work left,
+the remaining prompt (up to the `chunk`) for a prefill, summed over the
+residents after the batch is scheduled, the ones it admitted and the ones
+`serve only` leaves out included. `served` is the tokens the stage
+scheduled in its earlier iterations, from the start of the run. A claim
+`at end` reads the constants, `now` (the end) and the aggregates of the
+run's observations, every value observed under `o` from time 0, warm-up
+included: `total(o)`, `count(o)`, `largest(o)` and `smallest(o)` (0 when
+there is none), and `prefix_total(o)`, `Σ_k (v_1 + … + v_k)` over the
+values sorted ascending, the least total completion time of jobs of those
+sizes served one at a time. Neither form reads a session attribute, draws,
+or reads `work(…)`, `budget_left(…)` or `cachedin(…)`; each is a link
+error. Warm-up does not apply: a claim is about the whole path.
+
+`given (e)` restricts the claim to the paths whose every session
+satisfies `e`. It is read for each session once its `init` block has run,
+from the session's attributes and the constants (no `now`, no draw, no
+observable). A session that fails it puts the claim out of the run's
+scope, and the claim is checked no further.
+
+The report gives one line per claim:
+
+```
+claim            kind             result
+---------------  ---------------  ---------------------------------------------
+work_conserving  every iteration  fails at 93500.0000 (1047 of 1060 iterations)
+token_rate       every iteration  holds (1060 iterations)
+starved          some iteration   witnessed at 93500.0000 (1060 iterations)
+mean_ok          at end           not evaluated: 105 sessions live at the end
+```
+
+A claim over iterations holds, or fails at the start of its first failing
+iteration; a `some` claim is witnessed at the first iteration that
+satisfies it, or not witnessed. A claim `at end` holds or fails, and is
+not evaluated when sessions are still live at the end, since the run did
+not reach the end the claim is about (`run { arrivals N; }` drains them).
+A claim a session put out of scope says which session. The JSON report has
+a `claims` array of `{name, kind, result, checked, failures, first, note}`
+(`docs/reference/cli.md`). A path that holds a claim is evidence, not a
+proof: the proof is the Lean statement's.
+
+For a program inside the Lean fragment, `scripts/gen_lean_claims.py`
+writes each claim as a statement about the executable semantics below
+(`lean/Serq/Claims.lean`): for every workload of the program's family
+(any number of sessions up to 500, a drawn attribute any natural number,
+the arrival times any under `poisson`, the program's under a constant
+`renewal`, the sessions that satisfy `given`), every machine of every path
+of the program satisfies the claim (`every iteration`), some machine of
+some path does (`some iteration`, whose workload must not draw), or every
+machine at which every session has ended does (`at end`). The proofs are
+Lean files, and the build fails when a claim has none or the program has
+changed what it claims (`lean/Serq/ClaimsProved.lean`). The programs under
+`examples/papers/` are written this way: three papers' propositions, each
+stated in the program that is the paper's serving system and proved about
+that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 
 **Executable semantics in Lean.** `Serq/Exec.lean` defines the same rules
 for the fragment of pools and one step engine (values and time in ℕ), and

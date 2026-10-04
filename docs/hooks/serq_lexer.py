@@ -26,7 +26,7 @@ from pygments.lexers import _mapping
 from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String, Text
 
 # The blocks a program is made of.
-STRUCTURE = ("let", "def", "use", "pool", "stage", "workload", "session", "server", "run", "queue", "gateway", "link", "route", "pull", "gauge")
+STRUCTURE = ("let", "def", "use", "pool", "stage", "workload", "session", "server", "run", "queue", "gateway", "link", "route", "pull", "gauge", "claim")
 
 # Statements, in the session and server blocks.
 STATEMENTS = (
@@ -44,6 +44,8 @@ OPTIONS = (
     "chunk", "serve", "latency", "nic", "exclusive", "first", "only", "memory", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden",
     "batch", "trace", "ordered", "init", "horizon", "warmup", "seed",
     "share", "maxmin", "bottleneck",
+    # a claim's forms
+    "given", "every", "some", "iteration", "of",
 )
 
 # Observables and arithmetic: things a program reads rather than declares.

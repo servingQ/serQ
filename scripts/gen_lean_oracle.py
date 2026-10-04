@@ -283,10 +283,10 @@ class Lean:
                 raise Fragment(f"pool {p['name']}: preemption {p['preempt']}")
             if not via and step["memory"] != i:
                 raise Fragment(f"pool {p['name']}: not the engine's memory")
-            pools.append(f"⟨{nat(p['cap'], 'cap')}, {nat(p['block'] or 1, 'block')}, {'true' if via else 'false'}⟩")
+            pools.append(f"⟨{nat(p['cap'], 'cap')}, {nat(p['block'] or 1, 'block')}, {'true' if via else 'false'}, none⟩")
         return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
                 f"{nat(fold(step['chunk']), 'chunk')}, "
-                f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}⟩")
+                f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, none⟩")
 
     def workload(self):
         """`Exec.Workload` of the IR's explicit sessions."""

@@ -98,6 +98,20 @@ pub enum Moment {
     /// one, so neither `now` nor `work(…)`, which move in between, nor
     /// `budget_left(…)`, which plans an iteration to answer.
     Gauge,
+    /// A claim's `given`: read for each session once its `init` block has
+    /// run (and an explicit session's preset attributes are set), from the
+    /// session's attributes and the constants only: no `now`, no draw, no
+    /// observable, no context variable.
+    Given,
+    /// A claim over the iterations of a step stage: read when an iteration
+    /// starts, after its batch is scheduled (the instant its cost is read),
+    /// from the cost's variables, `demand`, `served`, `now` and the pool and
+    /// stage observables that do not move between events; no attribute, no
+    /// draw, no `work(…)`, no `budget_left(…)`.
+    Iteration,
+    /// A claim `at end`: read once, when the run ends, from the constants,
+    /// `now` (the end) and the aggregates of the run's observations.
+    End,
 }
 
 impl std::fmt::Display for Moment {
@@ -112,6 +126,9 @@ impl std::fmt::Display for Moment {
             Moment::Step => "a step stage's cost, after the iteration",
             Moment::Serve => "a step stage's serve keys or `only`",
             Moment::Gauge => "a gauge, read on the deployment's state with no session",
+            Moment::Given => "a claim's `given`, read on one session's attributes",
+            Moment::Iteration => "a claim over iterations, read when an iteration starts",
+            Moment::End => "a claim `at end`, read when the run ends",
         })
     }
 }
@@ -155,6 +172,15 @@ pub enum CtxVar {
     Admission,
     /// Serve keys: tokens the resident's run has left.
     Remaining,
+    /// Iteration claims: the tokens the stage's residents could take in
+    /// this iteration if the budget were unlimited (`min(1, remaining)` for
+    /// a decode, the remaining work up to the chunk for a prefill), summed
+    /// over the residents after the batch is scheduled, those `serve only`
+    /// excludes included.
+    Demand,
+    /// Iteration claims: the tokens the stage scheduled in its earlier
+    /// iterations, over the whole run.
+    Served,
 }
 
 impl CtxVar {
@@ -178,6 +204,8 @@ impl CtxVar {
             CtxVar::Decoding => "decoding",
             CtxVar::Admission => "admission",
             CtxVar::Remaining => "remaining",
+            CtxVar::Demand => "demand",
+            CtxVar::Served => "served",
         }
     }
 
@@ -193,11 +221,16 @@ impl CtxVar {
             // scheduled, the prefill tokens and the attention work only after
             // (the serve keys see the residents too: they are known when the
             // order is taken)
-            CtxVar::Nres | CtxVar::Ndec | CtxVar::Kvb | CtxVar::Kvp => {
-                &[Moment::Budget, Moment::Step, Moment::Serve]
-            }
-            CtxVar::Ntok | CtxVar::Npre | CtxVar::Attn => &[Moment::Step],
+            // (a claim over iterations reads what the cost reads)
+            CtxVar::Nres | CtxVar::Ndec | CtxVar::Kvb | CtxVar::Kvp => &[
+                Moment::Budget,
+                Moment::Step,
+                Moment::Serve,
+                Moment::Iteration,
+            ],
+            CtxVar::Ntok | CtxVar::Npre | CtxVar::Attn => &[Moment::Step, Moment::Iteration],
             CtxVar::Decoding | CtxVar::Admission | CtxVar::Remaining => &[Moment::Serve],
+            CtxVar::Demand | CtxVar::Served => &[Moment::Iteration],
         }
     }
 }
@@ -271,6 +304,56 @@ pub enum CExpr {
     Unary(UnOp, Box<CExpr>),
     Binary(BinOp, Box<CExpr>, Box<CExpr>),
     Cond(Box<CExpr>, Box<CExpr>, Box<CExpr>),
+    /// An aggregate of every value the run observed under an observation
+    /// (its index), warm-up included: read only at `Moment::End`.
+    Agg(Agg, usize),
+}
+
+/// The aggregates of a run's observations a claim `at end` reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Agg {
+    /// The sum of the values.
+    Total,
+    /// How many values.
+    Count,
+    /// The greatest value (0 when none).
+    Largest,
+    /// The least value (0 when none).
+    Smallest,
+    /// With the values sorted ascending `v1 <= … <= vn`, `Σ_k Σ_{i<=k} v_i`:
+    /// the least total of the completion times of jobs of these sizes run
+    /// one at a time (shortest first), whatever the order of ties.
+    PrefixTotal,
+}
+
+impl Agg {
+    /// The source spelling (`link.rs` maps the same names).
+    pub fn name(self) -> &'static str {
+        match self {
+            Agg::Total => "total",
+            Agg::Count => "count",
+            Agg::Largest => "largest",
+            Agg::Smallest => "smallest",
+            Agg::PrefixTotal => "prefix_total",
+        }
+    }
+
+    /// The aggregate of `values` (in any order).
+    pub fn of(self, values: &[f64]) -> f64 {
+        match self {
+            Agg::Total => values.iter().sum(),
+            Agg::Count => values.len() as f64,
+            Agg::Largest => values.iter().copied().reduce(f64::max).unwrap_or(0.0),
+            Agg::Smallest => values.iter().copied().reduce(f64::min).unwrap_or(0.0),
+            Agg::PrefixTotal => {
+                let mut v = values.to_vec();
+                v.sort_by(f64::total_cmp);
+                // v_i is in the prefix of every k >= i: n - i of them
+                let n = v.len();
+                v.iter().enumerate().map(|(i, x)| x * (n - i) as f64).sum()
+            }
+        }
+    }
 }
 
 impl CExpr {
@@ -282,7 +365,7 @@ impl CExpr {
             return Some(self);
         }
         match self {
-            CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => None,
+            CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) | CExpr::Agg(..) => None,
             CExpr::Sample(_, xs) => xs.iter().find_map(|x| x.find(f)),
             CExpr::Call(_, args) => args.iter().find_map(|a| match a {
                 CArg::Expr(x) => x.find(f),
@@ -569,6 +652,12 @@ pub struct Program {
     /// ignores them runs the same program (`docs/ir.md`, Stability).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gauges: Vec<Gauge>,
+    /// `claim NAME …;`: propositions about every path of the program, which
+    /// the interpreter checks on the path it runs and the report states.
+    /// They read and do not act, so a reader that ignores them runs the
+    /// same program (`docs/ir.md`, Stability).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<Claim>,
 }
 
 /// A gauge: a name and an expression evaluated at `Moment::Gauge`.
@@ -576,6 +665,51 @@ pub struct Program {
 pub struct Gauge {
     pub name: String,
     pub expr: CExpr,
+}
+
+/// A claim: `expr` holds of every iteration of a step stage, of some
+/// iteration of it, or at the end of the run (`kind`), on every path whose
+/// sessions all satisfy `given`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Claim {
+    pub name: String,
+    /// Read at `Moment::Given` for each session: a session for which it is
+    /// 0 puts the path out of the claim's scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub given: Option<CExpr>,
+    pub kind: ClaimKind,
+    /// Read at `Moment::Iteration` for an iteration claim, at `Moment::End`
+    /// for one `at end`.
+    pub expr: CExpr,
+}
+
+/// What a claim quantifies over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClaimKind {
+    /// Every iteration of the step stage (its index) satisfies the claim.
+    EveryIteration(usize),
+    /// Some iteration of the step stage (its index) satisfies the claim.
+    SomeIteration(usize),
+    /// The run's end satisfies the claim.
+    AtEnd,
+}
+
+impl ClaimKind {
+    /// The moment the claim's expression is read at.
+    pub fn moment(self) -> Moment {
+        match self {
+            ClaimKind::EveryIteration(_) | ClaimKind::SomeIteration(_) => Moment::Iteration,
+            ClaimKind::AtEnd => Moment::End,
+        }
+    }
+
+    /// The stage an iteration claim is about.
+    pub fn stage(self) -> Option<usize> {
+        match self {
+            ClaimKind::EveryIteration(s) | ClaimKind::SomeIteration(s) => Some(s),
+            ClaimKind::AtEnd => None,
+        }
+    }
 }
 
 /// The sharing policy of `share`: how flows that hold several `ps` stages at
@@ -1043,6 +1177,29 @@ impl Program {
                 ));
             }
         }
+        for (k, c) in self.claims.iter().enumerate() {
+            let at = |e| format!("claim `{}`: {e}", c.name);
+            if self.claims[..k].iter().any(|d| d.name == c.name) {
+                return Err(at("declared twice".into()));
+            }
+            if let Some(g) = &c.given {
+                v.expr(g, Moment::Given).map_err(at)?;
+            }
+            if let Some(st) = c.kind.stage() {
+                v.stage(st).map_err(at)?;
+                if !matches!(self.stages[st].kind, CStageKind::Step(_)) {
+                    let s = &self.stages[st];
+                    let name = match s.index {
+                        Some(i) => format!("{}[{i}]", s.name),
+                        None => s.name.clone(),
+                    };
+                    return Err(at(format!(
+                        "stage `{name}` is not a `step` stage: only a step stage has iterations"
+                    )));
+                }
+            }
+            v.expr(&c.expr, c.kind.moment()).map_err(at)?;
+        }
         if let CArrival::Renewal(e) = &self.arrival {
             v.expr(e, Moment::Session)?;
             if !arrival_expr_is_pure(e) {
@@ -1239,15 +1396,21 @@ impl Validator<'_> {
                 r.base + r.count
             ));
         }
-        // a gauge names its members by number (an aggregate writes them so):
-        // an index read from the state could leave the array, and a gauge
-        // that fails the run would be one a reader ignoring gauges does not
-        if m == Moment::Gauge
+        // a gauge or a claim names its members by number (an aggregate
+        // writes them so): an index read from the state could leave the
+        // array, and a gauge or a claim that fails the run would be one a
+        // reader ignoring them does not
+        if matches!(m, Moment::Gauge | Moment::Iteration)
             && let Some(e) = &r.index
             && !matches!(**e, CExpr::Num(k) if k >= 0.0 && k.fract() == 0.0 && k < r.count as f64)
         {
+            let whose = if m == Moment::Gauge {
+                "a gauge"
+            } else {
+                "a claim"
+            };
             return Err(format!(
-                "a gauge's {what} index is a number in range (`kv[0]`, or an aggregate's `kv[k]`), \
+                "{whose}'s {what} index is a number in range (`kv[0]`, or an aggregate's `kv[k]`), \
                  not one read from the state"
             ));
         }
@@ -1274,6 +1437,11 @@ impl Validator<'_> {
             CExpr::Ctx(CtxVar::Now) if m == Moment::Gauge => Err(
                 "a gauge may not read `now`: it changes between events, and a gauge is held \
                  constant between them"
+                    .into(),
+            ),
+            CExpr::Ctx(CtxVar::Now) if m == Moment::Given => Err(
+                "a claim's `given` may not read `now`: it is a condition on one session's \
+                 attributes"
                     .into(),
             ),
             CExpr::Ctx(v) => {
@@ -1317,9 +1485,65 @@ impl Validator<'_> {
             CExpr::Call(Fun::CachedIn, _) if m == Moment::Gauge => Err(
                 "`cachedin` is the session's own cached prefix, and a gauge has no session".into(),
             ),
+            // a claim reads and does not act: no draw, and what its moment
+            // supplies (a `given` the session, an iteration claim the stage
+            // as the iteration starts, a claim `at end` the run)
+            CExpr::Sample(..) if matches!(m, Moment::Given | Moment::Iteration | Moment::End) => {
+                Err("a claim may not draw (`~`): it reads and does not act, and a draw would \
+                     move the run's streams"
+                    .into())
+            }
+            CExpr::Attr(a) if m == Moment::Iteration => Err(format!(
+                "`{}` is a session attribute, and a claim over iterations reads the stage, \
+                 not a session",
+                self.p.attrs.get(*a).map_or("?", |s| s.as_str())
+            )),
+            CExpr::Attr(a) if m == Moment::End => Err(format!(
+                "`{}` is a session attribute, and a claim `at end` reads the run, not a session",
+                self.p.attrs.get(*a).map_or("?", |s| s.as_str())
+            )),
+            CExpr::Call(f, _) if matches!(m, Moment::Given | Moment::End) && !f.is_arithmetic() => {
+                Err(format!(
+                    "`{}(…)` reads the deployment's state, and {m} reads {}",
+                    f.name(),
+                    if m == Moment::Given {
+                        "the session's attributes and the constants"
+                    } else {
+                        "the constants, `now` and the aggregates of the observations"
+                    }
+                ))
+            }
+            CExpr::Call(f, _)
+                if m == Moment::Iteration
+                    && !f.is_arithmetic()
+                    && !matches!(
+                        f,
+                        Fun::Queue | Fun::Busy | Fun::Used | Fun::Free | Fun::Holders | Fun::Queued
+                    ) =>
+            {
+                Err(format!(
+                    "a claim over iterations may not read `{}(…)`: it reads the deployment as the \
+                     iteration starts through `queue`, `busy`, `used`, `free`, `holders` and \
+                     `queued` (`work` drains between events, `budget_left` plans an iteration, \
+                     `cachedin` is a session's)",
+                    f.name()
+                ))
+            }
+            CExpr::Agg(a, k) => {
+                if m != Moment::End {
+                    return Err(format!(
+                        "`{}(…)` aggregates the run's observations and is read only by a claim \
+                         `at end`, but is read in {m}",
+                        a.name()
+                    ));
+                }
+                self.observe(*k)
+            }
             CExpr::Attr(a) => {
                 self.attr(*a)?;
-                if m != Moment::Session && self.p.hidden.contains(a) {
+                // a claim's `given` is no scheduler's: it may read anything
+                // the session has
+                if !matches!(m, Moment::Session | Moment::Given) && self.p.hidden.contains(a) {
                     return Err(format!(
                         "`{}` is hidden from the scheduler, but is read in {m}",
                         self.p.attrs[*a]
@@ -1699,6 +1923,23 @@ const FUNS: [Fun; 22] = [
 ];
 
 impl Fun {
+    /// A function of its arguments alone (`min`, `ceil`, …), which reads
+    /// no state.
+    pub fn is_arithmetic(self) -> bool {
+        matches!(
+            self,
+            Fun::Min
+                | Fun::Max
+                | Fun::Abs
+                | Fun::Floor
+                | Fun::Ceil
+                | Fun::Sqrt
+                | Fun::Exp
+                | Fun::Ln
+                | Fun::Pow
+        )
+    }
+
     /// The function's name in a program and the kind of each argument. The
     /// linker resolves a call by it, and `Program::validate` checks one.
     fn entry(self) -> (&'static str, &'static [ArgKind]) {
@@ -1935,6 +2176,10 @@ impl Program {
                 let _ = write!(out, "{}(", f.name());
                 self.write_list(out, args);
                 out.push(')');
+            }
+            CExpr::Agg(a, k) => {
+                let name = self.observes.get(*k).map_or("?", String::as_str);
+                let _ = write!(out, "{}({name})", a.name());
             }
             CExpr::Unary(op, a) => {
                 let wrap = min > prec::UNARY;

@@ -20,6 +20,9 @@ read the attribute), and the linker rejects the program.
 | `Budget` | a step stage's `budget` and `chunk` | before the iteration, from the residents |
 | `Step` | a step stage's `cost` | after the iteration is scheduled |
 | `Serve` | a step stage's `serve by` keys | for one resident |
+| `Given` | a claim's `given` | for each session, once its `init` has run |
+| `Iteration` | a claim over iterations | when an iteration starts, where the cost is read |
+| `End` | a claim `at end` | once, when the run ends |
 
 ## Variables
 
@@ -32,16 +35,18 @@ read the attribute), and the linker rejects the program.
 | `last` | number | `Evict` | time the entry was released |
 | `waiting` | 0 / 1 | `Evict` | 1 if the entry's session waits in a pool queue |
 | `present` | number | `Ps` | jobs present |
-| `residents` | number | `Budget`, `Step`, `Serve` | residents, scheduled or not |
-| `decoders` | number | `Budget`, `Step`, `Serve` | decode residents |
-| `kv_decode` | number | `Budget`, `Step`, `Serve` | memory held in the stage's `memory` pool by the decode residents (0 without `memory`) |
-| `kv_prefill` | number | `Budget`, `Step`, `Serve` | the same, by the prefill residents |
-| `tokens` | number | `Step` | tokens scheduled this iteration |
-| `prefilled` | number | `Step` | prefill tokens scheduled |
-| `attention` | number | `Step` | attention work of the prefill chunks, `Σ n (K + n/2)`, `K` the position before a chunk (exact for `growing` runs) |
+| `residents` | number | `Budget`, `Step`, `Serve`, `Iteration` | residents, scheduled or not |
+| `decoders` | number | `Budget`, `Step`, `Serve`, `Iteration` | decode residents |
+| `kv_decode` | number | `Budget`, `Step`, `Serve`, `Iteration` | memory held in the stage's `memory` pool by the decode residents (0 without `memory`) |
+| `kv_prefill` | number | `Budget`, `Step`, `Serve`, `Iteration` | the same, by the prefill residents |
+| `tokens` | number | `Step`, `Iteration` | tokens scheduled this iteration |
+| `prefilled` | number | `Step`, `Iteration` | prefill tokens scheduled |
+| `attention` | number | `Step`, `Iteration` | attention work of the prefill chunks, `Σ n (K + n/2)`, `K` the position before a chunk (exact for `growing` runs) |
 | `decoding` | 0 / 1 | `Serve` | 1 if the resident is decoding, 0 if prefilling |
 | `admission` | number | `Serve` | the resident's admission sequence number (its place in vLLM's `running` list) |
 | `remaining` | number | `Serve` | tokens the resident's run has left |
+| `demand` | number | `Iteration` | tokens the residents could take this iteration with no budget: `min(1, remaining)` per decode, the remaining work up to the `chunk` per prefill, over the residents after the batch is scheduled (those `serve only` leaves out included) |
+| `served` | number | `Iteration` | tokens the stage scheduled in its earlier iterations, from the start of the run |
 
 `residents`, `decoders`, `kv_decode` and `kv_prefill` are totals over the residents, the same for
 every resident at `Serve`. At `Budget` and `Serve` they count every resident
