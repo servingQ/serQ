@@ -117,11 +117,12 @@ stmt     := turn ;                           -- next turn's attributes (workload
                  block [ cache ( expr ) ] [ lease POOL ( expr ) ] ;
                                              -- lease: that pool's allocation outlives the scope,
                                              -- until a release/transfer takes it, expr seconds, or the end
-          | grow POOL ( expr ) ;
+          | grow POOL ( expr ) ;             -- the enclosing hold's allocation on POOL grows
           | drop POOL ;                      -- discard the own cached prefix
           | release POOL ;                   -- give the enclosing hold's allocation on POOL back now, or end a lease of it
           | load POOL ( expr ) ;             -- the KV of expr tokens arrived: the enclosing hold's computed position advances
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
+                                             -- growing: inside a hold of POOL, which grows with the tokens
           | run STAGE , STAGE [, STAGE]* ( expr ) ;   -- one job holding every stage at once
           | branch ( expr ) block [ else block ]          -- a test
           | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
