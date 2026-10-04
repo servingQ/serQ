@@ -1,3 +1,8 @@
+---
+hide:
+  - navigation
+---
+
 # Welcome to serQ
 
 *pronounced "ser-Q": **se**rving + **Q**ueue*
