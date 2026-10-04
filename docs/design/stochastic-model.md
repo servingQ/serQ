@@ -655,9 +655,10 @@ causal chain behind the long-context misses.
 The document adds nothing to the IR. Writing Definitions 4–5 and
 Propositions 1, 2 and 5 against the interpreter found six things the
 language or the interpreter should say and did not. Four are rules of the
-language now (2026-10-03; `tests/settle.rs`), with no IR change under
-`docs/ir.md` §Stability; two need an IR node and stay candidates for an
-issue with a Before/After.
+language now (2026-10-03; `tests/settle.rs`): three are stricter checks
+and the fourth, the streams, changes what a `seed` names and opened IR
+version 11 (`docs/ir.md` §Stability); two need an IR node and stay
+candidates for an issue with a Before/After.
 
 1. **A loop that passes without blocking hung the interpreter**
    (Lemma 1), and the linker checked nothing about loops: `serq check`
@@ -691,8 +692,9 @@ issue with a Before/After.
    of `docs/` that quote seeded runs (`docs/validation.md`,
    `docs/language.md` §5) are measurements of their date, and the
    companion repository's serQ-derived numbers move when it moves its pin.
-   The IR's version does not move: how the interpreter draws is its
-   sampling, not the program's meaning (`docs/ir.md` §Stability).
+   The IR's shape does not move but the meaning of `seed` does — it names
+   a workload now, not a sequence of draws — so this opened IR version 11
+   (`docs/ir.md` §Stability), the handshake priced as one.
 4. **An observation channel.** $\mathsf{Gw}$ reads $X$ at the instant; the
    router reads a delayed or periodic picture. Today a stale router is
    written by hand, as session attributes. *Sketch, not compiled:* a

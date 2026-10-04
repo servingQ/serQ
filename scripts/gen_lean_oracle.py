@@ -35,10 +35,12 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # oracle program holds a pool with entries without `cache`.
 # The translation is one, with 10's meaning: a 7-9 file reads the same
 # only where no hold without `cache` meets a pool with entries, which holds
-# for every file the generator has read. The pinned corpus (v0.1.1, IR 10)
-# is FIFO and stays inside the fragment.
-IR_VERSION = 10
-SUPPORTED_IR_VERSIONS = (7, 8, 9, IR_VERSION)
+# for every file the generator has read. 11 changed what a `seed` names
+# (per-session random streams), which the fragment never reads: its
+# programs draw nothing, so a 10 file and an 11 file translate alike. The
+# pinned corpus (IR 11) is FIFO and stays inside the fragment.
+IR_VERSION = 11
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, IR_VERSION)
 
 
 class Fragment(Exception):
