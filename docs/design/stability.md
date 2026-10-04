@@ -6,9 +6,11 @@ chain: positive recurrence, or an expectation over Poisson arrivals. Mathlib
 has neither Foster–Lyapunov nor fluid limits, and building a path measure for
 `Exec` is a project of its own. This design reaches the same statements by
 three steps, each of which is useful without the next (#305).
-What the result does not yet say: the states keep the absolute clock, so the
-chain is not irreducible as it stands, and that finite return times to a
-small set make an irreducible chain positive recurrent is not proved.
+What the result does not yet say: the states keep the absolute clock and
+every ended session (`inject` appends, nothing removes), so `F` is an
+infinite set and the chain is not irreducible as it stands, and that finite
+return times to a small set make an irreducible chain positive recurrent is
+not proved.
 
 ## 1. Pathwise stability, as a claim
 
@@ -65,10 +67,19 @@ capacity Foster's criterion bounds the expected time to reach `F` by
 `backlog / ε`. The phase term of step 1 is not needed: random arrivals are
 counted per slot, not on a clock.
 
-At most 10 000 sessions arrive in a slot. An instant's commands run with
-finite fuel (`Exec.settle`), and with more arrivals some would still be
-ready, not yet jobs, when the slot ends; the drift would then be false. The
-claims' families stop at 500 sessions for the same reason.
+At most 10 000 sessions arrive in a slot. That is the proof's bound, not the
+semantics': the proof follows one round of `Exec.drain`, which runs 10 000
+sessions. The fuel of an instant itself runs out near 10⁷ arrivals
+(`Exec.settle` repeats the round 1 000 times), and only beyond it would some
+arrivals still be ready, not yet jobs, when the slot ends, and the drift be
+false. The claims' families stop at 500 sessions for the same kind of
+reason.
+
+A slot is one iteration, not one unit of the paper's time, and an idle slot
+lets no time pass. The capacity condition `1280 · E[k] < 128` is still the
+paper's `λ (v_p + v_d) < b_max / t_{b_max}`: outside `F` every iteration is
+full and lasts `t_{b_max} = c + a`, so the arrivals in a slot are those of
+`t_{b_max}` units, `E[k] = λ t_{b_max}`.
 
 Bari Theorem 2 is next, with the arriving requests' lengths drawn too. Kong
 3.4–3.5 also need an expectation inequality (Harris).

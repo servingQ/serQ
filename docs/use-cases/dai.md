@@ -101,7 +101,7 @@ def work_conserving : Prop :=
     - a state whose batch is not full, or whose engine is idle, has backlog below $128 \cdot 1280$ (`backlog_lt_of_F`, from work conservation);
     - so below capacity, $1280 \sum_k k p_k < 128$, the backlog drifts down by $\varepsilon = 128 - 1280 \sum_k k p_k$ outside that set (`drift`).
 
-  Foster's criterion (`Serq/Foster.lean`) then gives $\varepsilon \cdot E[\text{slots to reach } F] \le \text{backlog}$ from every state (`hitTime_le`), and a finite expected return time to $F$ (`returnTime_le`).
+  Foster's criterion (`Serq/Foster.lean`) then gives $\varepsilon \cdot E[\text{slots to reach } F] \le \text{backlog}$ from every state (`hitTime_le`), the expectation finite (`hit_tendsto`: its truncations converge to it), and a finite expected return time to $F$ (`returnTime_le`). Two examples check the theorem is not vacuous: one request makes a full batch, and one arrival per slot with probability 1/20 is below capacity.
 - **`not_work_conserving`** is a witness. Two requests arrive 467.5 ms apart, and after 12 events (at 0.935 s) the first decodes alone while the second's 290 prompt tokens wait: `demand = 291`, `tokens = 1`. The machine is computed in the kernel (`decide +kernel`).
 
 ## On the run
@@ -125,7 +125,7 @@ The interpreter finds FasterTransformer's witness at the same instant as the Lea
 
 ## What it leaves out
 
-- **Positive recurrence in the textbook sense.** `DaiStable` proves finite expected return times to `F`, a set of bounded backlog. That an irreducible chain with this property is positive recurrent is not proved, and the states keep the absolute clock, so the chain is not irreducible as it stands (`docs/design/stochastic-model.md`, Proposition 4(iii), takes the clock out).
-- **Poisson arrivals in continuous time.** The kernel draws a finite number of arrivals per iteration, at most 10 000, independently of the past: the paper's discrete-time model, not `arrive poisson(λ)`. The divergence above capacity also needs the strong law on the arrivals.
+- **Positive recurrence in the textbook sense.** `DaiStable` proves finite expected return times to `F`, a set of bounded backlog. That an irreducible chain with this property is positive recurrent is not proved, and the states keep the absolute clock and every ended session, so the chain is not irreducible as it stands (`docs/design/stochastic-model.md`, Proposition 4(iii), takes the clock out, not the ended sessions).
+- **Poisson arrivals in continuous time.** The kernel draws a finite number of arrivals at each iteration, at most 10 000, independently of the past: arrivals embedded at iteration ends, not `arrive poisson(λ)`. Outside `F` every iteration is full and lasts $t_{b_{\max}}$, so $E[k] = \lambda t_{b_{\max}}$ and the condition $1280\,E[k] < 128$ is the paper's $\lambda (v_p + v_d) < b_{\max}/t_{b_{\max}}$. The divergence above capacity also needs the strong law on the arrivals.
 - **Orca and vanilla vLLM.** Orca needs `serve by` and vanilla vLLM `exclusive prefill`, and the Lean fragment has neither. `Exec.work_conserving` would cover Orca once the fragment sorts residents by a key, since the fill conserves work in any order.
 - **§5 and §6.** Multi-class and DAG workloads are written with `branch with` and `choose`, but the fragment has one engine. Fork-join needs a statement that creates sessions. The batch-size limit of §6 is a pool `cap` the program can write, and its stability region is not claimed.

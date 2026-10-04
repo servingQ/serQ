@@ -41,7 +41,7 @@ def arrived : Prog :=
   | p => p
 
 /-- No session, the engine idle. -/
-def empty : Machine := Exec.initial D 0 (fun _ _ => 0) arrived ⟨[], [], none, 0, some 8, none⟩
+def empty : Machine := Exec.initial D 0 (fun _ _ => 0) arrived { init := [], computedSlot := some 8 }
 
 /-- One slot with `k` arrivals. -/
 def slot (k : ℕ) (m : Machine) : Machine := Exec.slot D arrived (fun _ => 0) k m
@@ -1079,6 +1079,32 @@ is finite. -/
 theorem returnTime_le {K : ℕ} (A : Arrivals K) (hA : 1280 * A.mean < 128) (x : State K) (hx : F x) :
     returnTime (kernel A) F x ≤ 1 + (kernel A).apply (fun y => (backlog y.1 : ℝ)) x / ε A :=
   Foster.returnTime_le_of_drift (drift A hA) x hx
+
+/-- The expected hitting time is finite: the truncated expectations are
+bounded and converge to `hitTime`. (`hitTime` is a supremum in ℝ, which
+would read 0 were they unbounded, so `hitTime_le` alone does not say this.) -/
+theorem hit_tendsto {K : ℕ} (A : Arrivals K) (hA : 1280 * A.mean < 128) (x : State K) :
+    Filter.Tendsto (fun n => hit (kernel A) F n x) Filter.atTop (nhds (hitTime (kernel A) F x)) :=
+  Foster.hit_tendsto (drift A hA) x
+
+/-- The theorem is not vacuous: one request makes a full batch (290 prompt
+tokens, a budget of 128), a state outside `F`. -/
+example : ¬ F (K := 1) ⟨slot 1 empty, Reach.slot 1 le_rfl .empty⟩ := by
+  have h : (slot 1 empty).iterEnd.isSome = true ∧ (slot 1 empty).last.stats.tokens = 128 := by
+    decide +kernel
+  intro hF
+  change (slot 1 empty).iterEnd = none ∨ (slot 1 empty).last.stats.tokens < 128 at hF
+  rcases hF with hF | hF
+  · rw [hF] at h; exact absurd h.1 (by decide)
+  · omega
+
+/-- … and the load condition can hold: one arrival in a slot with
+probability 1/20 is 64 tokens per slot. -/
+example : ∃ A : Arrivals 1, 1280 * A.mean < 128 :=
+  ⟨⟨le_of_lt (by norm_num), fun k => if k = 0 then 19 / 20 else if k = 1 then 1 / 20 else 0,
+      fun k => by split_ifs <;> norm_num,
+      by simp [Finset.sum_range_succ]; norm_num⟩,
+    by simp [Arrivals.mean, Finset.sum_range_succ]; norm_num⟩
 
 end DaiStable
 end Papers

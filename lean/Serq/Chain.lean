@@ -10,10 +10,11 @@ program reaches (`Foster.Kernel`), and Foster's criterion
 
 * `Exec.inject`: a session arrives now: it is appended, ready to run its
   program. Nothing else changes, so `Exec` itself is untouched.
-* `Exec.slot`: `k` sessions arrive; on a busy engine the running iteration
-  then ends and the next one starts (`step`), on an idle one an iteration
-  starts if anything is ready (`afterEvent`). The slot's machine is again at
-  an iteration's start, or idle.
+* `Exec.slot`: `k` sessions arrive; on a busy engine the next event is then
+  handled (`step`), on an idle one an iteration starts if anything is ready
+  (`afterEvent`). For a program without delays the next event is the running
+  iteration's end, so the slot's machine is again at an iteration's start, or
+  idle; with delays a slot may end at a delay instead.
 * `Foster.Kernel.ofOutcomes`: the kernel of a finite random choice
   `k ∈ {0, …, K}` with probabilities `p`, and its expectation
   (`apply_ofOutcomes`).
@@ -27,13 +28,17 @@ namespace Exec
 
 variable (D : Deployment)
 
-/-- A session arrives now, with attributes `a`, ready to run `prog`. -/
+/-- A session arrives now, with attributes `a`, ready to run `prog`. On a
+busy engine "now" is the running iteration's start, so a session that
+arrives during an iteration is stamped (`now`) with its start: a response
+time read on this chain is up to one iteration longer. -/
 def inject (prog : Prog) (a : ℕ → ℕ) (m : Machine) : Machine :=
   { m with sess := m.sess.push ⟨m.sess.size, ⟨a, []⟩, 0, prog, [], .ready, 0, 0⟩
            ready := m.ready ++ [m.sess.size] }
 
-/-- One slot: `k` sessions arrive, then the engine moves to its next
-iteration (or starts one, if it was idle). -/
+/-- One slot: `k` sessions arrive, then the next event is handled (on a busy
+engine; for a program without delays, the iteration's end and the next
+iteration's start), or an iteration starts (on an idle one). -/
 def slot (prog : Prog) (a : ℕ → ℕ) (k : ℕ) (m : Machine) : Machine :=
   let m' := afterEvent D ((inject prog a)^[k] m)
   if m.iterEnd.isSome then step D m' else m'

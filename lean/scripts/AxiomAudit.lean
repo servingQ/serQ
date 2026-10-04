@@ -80,3 +80,4 @@ import Serq
 #print axioms SerqLang.Papers.DaiStable.drift
 #print axioms SerqLang.Papers.DaiStable.hitTime_le
 #print axioms SerqLang.Papers.DaiStable.returnTime_le
+#print axioms SerqLang.Papers.DaiStable.hit_tendsto
