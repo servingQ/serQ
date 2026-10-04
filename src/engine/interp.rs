@@ -2683,29 +2683,13 @@ impl<'p> Interp<'p> {
     // ---------------------------------------------------- step stage ----
 
     /// The batch as the budget sees it: every resident, decodes taking one
-    /// token each. Returns the context and the tokens the residents want.
-    fn pre_iteration(&mut self, st: usize, spec: &CStep) -> (Ctx, f64, f64, f64) {
+    /// token each. Returns the budget, the chunk and the tokens the
+    /// residents want.
+    fn pre_iteration(&mut self, st: usize, spec: &CStep) -> (f64, f64, f64) {
         let residents0 = self.residents(st);
-        // what `budget` and `chunk` see (`Moment::Budget`): the residents,
-        // how many decode, and the memory each kind holds; all of it before
-        // either expression is read, so `chunk` is read once with it
-        let mut pre = Ctx {
-            nres: residents0.len() as f64,
-            ..Default::default()
-        };
-        for &j in &residents0 {
-            let job = &self.stages[st].jobs[&j];
-            let mem = match (spec.memory, job.owner) {
-                (Some(pl), Some(sid)) => self.held_in(sid, pl),
-                _ => 0.0,
-            };
-            if job.mode == RunMode::Decode {
-                pre.ndec += 1.0;
-                pre.kvb += mem;
-            } else {
-                pre.kvp += mem;
-            }
-        }
+        // what `budget` and `chunk` see (`Moment::Budget`): the totals before
+        // either expression is read, so `chunk` is read once with them
+        let pre = self.resident_totals(st, spec.memory);
         let budget = self.eval(&spec.budget, &pre, Which::Session);
         let chunk = self.eval(&spec.chunk, &pre, Which::Session);
         let mut want = 0.0;
@@ -2719,7 +2703,32 @@ impl<'p> Interp<'p> {
                 job.work
             };
         }
-        (pre, budget, chunk, want)
+        (budget, chunk, want)
+    }
+
+    /// The residents as they stand: how many, how many decode, and the
+    /// memory each kind holds in the stage's `memory` pool (`residents`,
+    /// `decoders`, `kv_decode`, `kv_prefill`).
+    fn resident_totals(&self, st: usize, memory: Option<usize>) -> Ctx {
+        let residents = self.residents(st);
+        let mut t = Ctx {
+            nres: residents.len() as f64,
+            ..Default::default()
+        };
+        for &j in &residents {
+            let job = &self.stages[st].jobs[&j];
+            let mem = match (memory, job.owner) {
+                (Some(pl), Some(sid)) => self.held_in(sid, pl),
+                _ => 0.0,
+            };
+            if job.mode == RunMode::Decode {
+                t.ndec += 1.0;
+                t.kvb += mem;
+            } else {
+                t.kvp += mem;
+            }
+        }
+        t
     }
 
     fn start_iteration(&mut self, st: usize) {
@@ -2727,7 +2736,7 @@ impl<'p> Interp<'p> {
         let CStageKind::Step(spec) = &p.stages[st].kind else {
             unreachable!()
         };
-        let (pre, budget, chunk, _want) = self.pre_iteration(st, spec);
+        let (budget, chunk, _want) = self.pre_iteration(st, spec);
         if self.error.is_some() {
             return;
         }
@@ -2748,7 +2757,7 @@ impl<'p> Interp<'p> {
         let preempt0: u64 = self.pools.iter().map(|p| p.preemptions).sum();
         let mut attn = 0.0;
         loop {
-            let residents = self.serving_order(st, &spec.serve, &pre);
+            let residents = self.serving_order(st, spec);
             let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
                 // the running requests are served; admit waiting ones with
                 // the budget left, unless this iteration preempted
@@ -2764,6 +2773,11 @@ impl<'p> Interp<'p> {
                 break;
             };
             served.insert(id);
+            if let Some(only) = &spec.only {
+                if !self.serves(st, id, only, spec.memory) {
+                    continue;
+                }
+            }
             let (mode, remaining, growing, owner) = {
                 let j = &self.stages[st].jobs[&id];
                 (j.mode, j.work, j.growing, j.owner)
@@ -3000,35 +3014,26 @@ impl<'p> Interp<'p> {
         false
     }
 
-    /// Residents in the order the iteration serves them.
     /// Residents in the order the iteration serves them: admission order, or
     /// ascending `serve by` keys evaluated per resident (`decoding`,
-    /// `admission`, `remaining`, and the residents' variables of `pre`),
+    /// `admission`, `remaining`, and the residents' totals as they stand,
+    /// an admission or a preemption earlier in the iteration included),
     /// ties in admission order (a stable sort of the admission-ordered
     /// list; no keys is that list). `ExclusivePrefill` keeps admission order
     /// and stalls the decodes in the loop instead.
-    fn serving_order(&mut self, st: usize, serve: &CServe, pre: &Ctx) -> Vec<u64> {
+    fn serving_order(&mut self, st: usize, spec: &CStep) -> Vec<u64> {
         let mut r = self.residents(st);
-        let CServe::By(keys) = serve else {
+        let CServe::By(keys) = &spec.serve else {
             return r;
         };
         if keys.is_empty() {
             return r;
         }
+        let totals = self.resident_totals(st, spec.memory);
         let mut keyed: Vec<(Vec<f64>, u64)> = r
             .drain(..)
             .map(|id| {
-                let (owner, decoding, remaining) = {
-                    let j = &self.stages[st].jobs[&id];
-                    (j.owner, (j.mode == RunMode::Decode) as u8 as f64, j.work)
-                };
-                let ctx = Ctx {
-                    sid: owner,
-                    decoding,
-                    admission: owner.map_or(0.0, |s| self.sessions[s].adm_seq as f64),
-                    remaining,
-                    ..pre.clone()
-                };
+                let ctx = self.resident_ctx(st, id, &totals);
                 let k = keys
                     .iter()
                     .map(|e| self.eval(e, &ctx, Which::Session))
@@ -3044,6 +3049,27 @@ impl<'p> Interp<'p> {
                 .unwrap_or(Ordering::Equal)
         });
         keyed.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// What a serve key or `only` reads for one resident (`Moment::Serve`):
+    /// the residents' `totals` and the resident's own.
+    fn resident_ctx(&self, st: usize, id: u64, totals: &Ctx) -> Ctx {
+        let j = &self.stages[st].jobs[&id];
+        Ctx {
+            sid: j.owner,
+            decoding: (j.mode == RunMode::Decode) as u8 as f64,
+            admission: j.owner.map_or(0.0, |s| self.sessions[s].adm_seq as f64),
+            remaining: j.work,
+            ..totals.clone()
+        }
+    }
+
+    /// Whether `serve only (expr)` serves resident `id` this iteration, read
+    /// on the residents as they stand.
+    fn serves(&mut self, st: usize, id: u64, only: &CExpr, memory: Option<usize>) -> bool {
+        let totals = self.resident_totals(st, memory);
+        let ctx = self.resident_ctx(st, id, &totals);
+        self.eval(only, &ctx, Which::Session) != 0.0
     }
 
     fn residents(&self, st: usize) -> Vec<u64> {
@@ -3347,7 +3373,7 @@ impl<'p> Interp<'p> {
                     self.error = Some("budget_left needs a step stage".into());
                     return 0.0;
                 };
-                let (_, budget, _, want) = self.pre_iteration(s, spec);
+                let (budget, _, want) = self.pre_iteration(s, spec);
                 (budget - want).max(0.0)
             }
             Fun::EstLambda => {

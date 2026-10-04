@@ -1,0 +1,41 @@
+// FasterTransformer's scheduler as Dai, Deng, Li, Peng model it (arXiv
+// 2504.07347 §4): decode first, no mixed batching. While a request decodes,
+// an iteration batches only decodes and the prefills wait; with none
+// decoding, it batches only prefills. The deployment is the paper's basic
+// LLM queueing model (§3.1) at the operating point C of §6.2: CodeLlama-34B
+// TP1, t_b = 11.28 + 35.47 ceil(b/128) ms, k_max = 100, one request every
+// 467.5 ms with 290 prefill and 990 decode tokens.
+let bmax = 128;          // token budget b_max
+let kmax = 100;          // batch size limit k_max (§6)
+let c = 11.28e-3;        // s
+let a = 35.47e-3;        // s per step of b0 tokens
+let b0 = 128;
+let gap = 0.4675;        // fixed inter-arrival time (s)
+let vp = 290;
+let vd = 990;
+
+pool reqs { cap kmax; }
+
+stage engine : step {
+  budget bmax;
+  cost c + a * ceil(tokens / b0);
+  serve only (decoders > 0 ? decoding : !decoding);
+}
+
+workload {
+  arrive renewal(gap);
+  init { set t0 = now; }
+}
+
+session {
+  hold reqs (1) {
+    run engine prefill (vp);
+    run engine decode (vd);
+  }
+  observe response = now - t0;
+  end;
+}
+
+gauge pending = holders(reqs) + queued(reqs);
+
+run { horizon 500; warmup 0; seed 1; }

@@ -449,6 +449,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                     }
                     Serve::ExclusivePrefill => CServe::ExclusivePrefill,
                 },
+                only: sp.only.as_ref().map(|e| lk.expr(e)).transpose()?,
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
             }),
         };

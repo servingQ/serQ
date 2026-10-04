@@ -86,7 +86,8 @@ pub enum Moment {
     /// A step stage's `cost`: evaluated after the iteration is scheduled,
     /// from what it scheduled (`tokens`, `prefilled`, `attention` as well).
     Step,
-    /// A step stage's `serve by` keys: evaluated for one resident.
+    /// A step stage's `serve by` keys and `serve only` predicate:
+    /// evaluated for one resident.
     Serve,
     /// A `gauge`: evaluated on the state the deployment holds after every
     /// instant, with no session, job or resident, and held until the next
@@ -105,7 +106,7 @@ impl std::fmt::Display for Moment {
             Moment::Ps => "a ps stage's capacity",
             Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
             Moment::Step => "a step stage's cost, after the iteration",
-            Moment::Serve => "a step stage's serve keys",
+            Moment::Serve => "a step stage's serve keys or `only`",
             Moment::Gauge => "a gauge, read on the deployment's state with no session",
         })
     }
@@ -403,6 +404,17 @@ pub struct CStep {
     /// How the iteration serves its residents: an order, or the
     /// exclusive-prefill rule.
     pub serve: CServe,
+    /// Which residents the iteration serves (`serve only (expr)`), read at
+    /// `Moment::Serve` for each resident at its turn as a serve key is, on
+    /// the residents' totals as they stand: a resident it reads as 0 is not
+    /// served this iteration. It keeps what it holds and advances no
+    /// computed KV, as a displaced decode under `ExclusivePrefill` does;
+    /// `serve` orders the rest. None serves every resident. It reads
+    /// neither `now` nor `work(…)`: an engine whose residents it all
+    /// excludes waits for the next event, and the clock moving is none. Not
+    /// with `ExclusivePrefill`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only: Option<CExpr>,
     pub memory: Option<usize>,
 }
 
@@ -836,6 +848,32 @@ impl Program {
                             }
                         }
                     }
+                    if let Some(e) = &st.only {
+                        v.expr(e, Moment::Serve).map_err(at)?;
+                        if draws(e) {
+                            return Err(at(
+                                "a serve `only` may not draw (`~`): it is read for every \
+                                 resident at every iteration"
+                                    .into(),
+                            ));
+                        }
+                        if reads_clock(e) {
+                            return Err(at(
+                                "a serve `only` may not read `now` or `work(…)`: an engine \
+                                 whose residents it excludes waits for an event, and the \
+                                 clock moving is none"
+                                    .into(),
+                            ));
+                        }
+                        if matches!(st.serve, CServe::ExclusivePrefill) {
+                            return Err(at(
+                                "`only` with `ExclusivePrefill`: the exclusive rule admits a \
+                                 waiting prefill in place of the decodes it displaces, and \
+                                 what `only` would do to either is a third rule"
+                                    .into(),
+                            ));
+                        }
+                    }
                     if let Some(m) = st.memory {
                         v.pool(m)?;
                     }
@@ -922,6 +960,23 @@ fn draws(e: &CExpr) -> bool {
         CExpr::Unary(_, x) => draws(x),
         CExpr::Binary(_, a, b) => draws(a) || draws(b),
         CExpr::Cond(c, a, b) => draws(c) || draws(a) || draws(b),
+    }
+}
+
+/// Whether an expression reads a value that moves while no event happens
+/// (`now`, `work(…)`).
+fn reads_clock(e: &CExpr) -> bool {
+    match e {
+        CExpr::Ctx(CtxVar::Now) | CExpr::Call(Fun::Work, _) => true,
+        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => false,
+        CExpr::Sample(_, args) => args.iter().any(reads_clock),
+        CExpr::Call(_, args) => args.iter().any(|a| match a {
+            CArg::Expr(x) => reads_clock(x),
+            CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().is_some_and(|i| reads_clock(i)),
+        }),
+        CExpr::Unary(_, x) => reads_clock(x),
+        CExpr::Binary(_, a, b) => reads_clock(a) || reads_clock(b),
+        CExpr::Cond(c, a, b) => reads_clock(c) || reads_clock(a) || reads_clock(b),
     }
 }
 
