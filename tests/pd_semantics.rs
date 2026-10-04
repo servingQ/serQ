@@ -194,6 +194,31 @@ fn grow_and_growing_need_an_enclosing_hold() {
     check_source(src, &Overrides::default()).unwrap();
 }
 
+/// A hold a pool may preempt is admitted anew and reads its indices again:
+/// one that reads the clock held another member after the preemption (#317).
+#[test]
+fn a_preemptible_hold_reads_no_moving_index() {
+    let src = |preempt: &str| {
+        format!(
+            "pool kv {{ cap 128; block 16; preempt {preempt}; }}
+             pool aux[2] {{ cap 64; }}
+             stage engine : step {{ budget 128; chunk 128; cost 0.5; memory kv; }}
+             workload {{ arrive batch(4); }}
+             session {{
+               hold kv (16), aux[1 - min(1, floor(now))] (1) {{
+                 prefill 16 growing kv; decode 200 growing kv;
+               }}
+               end;
+             }}
+             run {{ horizon 500; }}"
+        )
+    };
+    let e = check_source(&src("lifo"), &Overrides::default()).unwrap_err();
+    assert!(e.contains("a preempted hold reads it again"), "{e}");
+    // a hold no pool preempts reads its index once
+    check_source(&src("none"), &Overrides::default()).unwrap();
+}
+
 /// A hold's index is read at admission, at a statement inside that acts on
 /// the hold, and after a preemption: the readings must name one member. A
 /// body that set `j` and then grew `kv[j]` grew another hold, or failed in

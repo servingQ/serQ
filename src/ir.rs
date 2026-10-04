@@ -908,26 +908,10 @@ impl Program {
                         }
                     }
                     held.extend(pools.iter().map(|(r, _, _)| {
-                        let moves = r.index.as_ref().and_then(|i| {
-                            i.any(&|x| match x {
-                                CExpr::Ctx(_) | CExpr::Sample(..) => true,
-                                // a function of its arguments alone does not move
-                                CExpr::Call(f, _) => !matches!(
-                                    f,
-                                    Fun::Min
-                                        | Fun::Max
-                                        | Fun::Abs
-                                        | Fun::Floor
-                                        | Fun::Ceil
-                                        | Fun::Sqrt
-                                        | Fun::Exp
-                                        | Fun::Ln
-                                        | Fun::Pow
-                                ),
-                                _ => false,
-                            })
-                            .then_some("the state or the clock")
-                        });
+                        let moves = r
+                            .index
+                            .as_ref()
+                            .and_then(|i| moves(i).then_some("the state or the clock"));
                         (r, moves)
                     }));
                     self.enclosed(*body, held, leased)?;
@@ -1478,6 +1462,29 @@ fn amount(e: &CExpr, what: &str) -> Result<(), String> {
     }
 }
 
+/// Whether an expression's value moves while a session holds still: it
+/// reads the clock, the context, the state or a draw. An index that does
+/// is not the same member when read again (#282, #317).
+fn moves(e: &CExpr) -> bool {
+    e.any(&|x| match x {
+        CExpr::Ctx(_) | CExpr::Sample(..) => true,
+        // a function of its arguments alone does not move
+        CExpr::Call(f, _) => !matches!(
+            f,
+            Fun::Min
+                | Fun::Max
+                | Fun::Abs
+                | Fun::Floor
+                | Fun::Ceil
+                | Fun::Sqrt
+                | Fun::Exp
+                | Fun::Ln
+                | Fun::Pow
+        ),
+        _ => false,
+    })
+}
+
 /// Whether a renewal gap reads only constants and draws: no attribute, no
 /// context variable, no pool or stage.
 fn arrival_expr_is_pure(e: &CExpr) -> bool {
@@ -1844,6 +1851,25 @@ impl Validator<'_> {
                 // (`grow kv` grew one and was given back twice, #309)
                 for (r, _, _) in pools {
                     self.cref(r, np, "pool", m)?;
+                }
+                // a hold a pool may preempt is admitted again, and reads its
+                // indices again then: they must name the members it held
+                let preemptible = pools.iter().any(|(r, _, _)| {
+                    self.p.pools[r.base..r.base + r.count]
+                        .iter()
+                        .any(|q| q.preempt != Preempt::None)
+                });
+                if preemptible
+                    && let Some((r, _, _)) = pools
+                        .iter()
+                        .find(|(r, _, _)| r.index.as_ref().is_some_and(|i| moves(i)))
+                {
+                    return Err(format!(
+                        "`hold {}`: the index reads the state or the clock, and a preempted \
+                         hold reads it again when it is admitted anew; name the member in an \
+                         attribute",
+                        self.p.show_pool_ref(r)
+                    ));
                 }
                 for (k, (r, _, _)) in pools.iter().enumerate() {
                     if pools[..k].iter().any(|(q, _, _)| q == r) {
