@@ -601,7 +601,7 @@ fn parse_with(
             line: 0,
             col: 0,
             msg: format!(
-                "unknown --def `{name}`\nhelp: --def replaces the body of a declared `def NAME(...) = expr;`; \
+                "unknown `def` override `{name}`\nhelp: an override replaces the body of a declared `def NAME(...) = expr;`; \
                  the program declares: {}",
                 if known.is_empty() {
                     "none".to_string()
@@ -2205,7 +2205,7 @@ impl Parser {
                 return self.err_at(
                     at,
                     format!(
-                        "--def {name}: `def {name}` is statements; --def replaces the body of an \
+                        "the `def` override `{name}`: `def {name}` is statements; an override replaces the body of an \
                          expression definition"
                     ),
                 );
@@ -2218,7 +2218,7 @@ impl Parser {
                 .map_err(|e| ParseError {
                     line,
                     col,
-                    msg: format!("--def {name}: {}", e.msg),
+                    msg: format!("the `def` override `{name}`: {}", e.msg),
                     origin: None,
                 })?
                 .into_iter()
@@ -2593,7 +2593,9 @@ impl Parser {
             {
                 return self.err_at(
                     at,
-                    format!("--set {name} affects an array size resolved during parsing"),
+                    format!(
+                        "the `let` override `{name}` affects an array size resolved during parsing"
+                    ),
                 );
             }
             let n = match self.const_value(&e) {

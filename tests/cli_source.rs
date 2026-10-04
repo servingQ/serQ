@@ -135,7 +135,7 @@ fn ambiguous_suggestions_and_override_spans_are_not_misleading() {
         ..Default::default()
     };
     let err = compile_source(PROGRAM, &ov).unwrap_err();
-    assert!(err.contains("--set rate"), "{err}");
+    assert!(err.contains("the `let` override `rate`"), "{err}");
     assert!(
         !err.contains("1 |"),
         "an override is not line 1 of the program: {err}"
@@ -247,11 +247,11 @@ fn a_constant_that_is_nan_is_refused_and_an_infinity_is_not() {
         );
         let mut ov = Overrides::default();
         ov.set("x", e).unwrap();
-        refused(src, &ov, "--set x: the value");
+        refused(src, &ov, "the `let` override `x`: the value");
     }
     let mut ov = Overrides::default();
     ov.set_num("x", f64::NAN).unwrap();
-    refused(src, &ov, "--set x: the value");
+    refused(src, &ov, "the `let` override `x`: the value");
     let mut ov = Overrides::default();
     ov.set_num("x", f64::INFINITY).unwrap();
     compile_source(src, &ov).expect("an infinity is `inf`");
@@ -304,9 +304,13 @@ fn a_def_given_from_outside_is_the_program_written_with_that_body() {
         };
         assert!(err.contains(want), "{err}");
     };
-    refused("nope", "1", "unknown --def `nope`");
+    refused("nope", "1", "unknown `def` override `nope`");
     refused("twice", "1", "`def twice` is statements");
-    refused("service", "~exp(", "invalid expression in --def");
+    refused(
+        "service",
+        "~exp(",
+        "invalid expression in the `def` override",
+    );
     refused("service", "zz", "unknown name `zz`");
     refused("not a name", "1", "");
 }

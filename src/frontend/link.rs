@@ -68,11 +68,12 @@ pub use crate::ir::{
 /// The linked program is the IR (`crate::ir::Program`); the old name stays.
 pub type Linked = crate::ir::Program;
 
-/// Overrides from the command line (`--set name=expr`).
+/// Overrides of a program's `let` constants and expression `def`s: the
+/// CLI's `--set` and `--def`, pyserq's `sets=` and `defs=`.
 #[derive(Clone, Debug, Default)]
 pub struct Overrides {
     pub lets: Vec<(String, Expr)>,
-    /// `--def name=expr`: the body of the expression definition `name`,
+    /// The body of the expression definition `name`,
     /// in place of the program's (a definition expands where it is used,
     /// so this is the program as if written with that body).
     pub defs: Vec<(String, String)>,
@@ -86,7 +87,7 @@ pub struct Overrides {
 }
 
 impl Overrides {
-    /// `--set name=expr`: the constant `name` is the expression `expr`.
+    /// The constant `name` is the expression `expr`.
     pub fn set(&mut self, name: &str, expr: &str) -> Result<(), String> {
         check_set_name(name)?;
         let e = crate::frontend::parser::parse_expr(expr)
@@ -95,13 +96,14 @@ impl Overrides {
         Ok(())
     }
 
-    /// `--def name=expr`: the expression definition `name` has the body
+    /// The expression definition `name` has the body
     /// `expr`, which may draw, read attributes and use the definitions
     /// before it, as the program's own body could.
     pub fn define(&mut self, name: &str, expr: &str) -> Result<(), String> {
         check_set_name(name)?;
-        crate::frontend::parser::parse_expr(expr)
-            .map_err(|e| format!("invalid expression in --def `{name} = {expr}`: {e}"))?;
+        crate::frontend::parser::parse_expr(expr).map_err(|e| {
+            format!("invalid expression in the `def` override `{name} = {expr}`: {e}")
+        })?;
         self.defs.retain(|(n, _)| n != name);
         self.defs.push((name.to_string(), expr.to_string()));
         Ok(())
@@ -257,7 +259,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         if !prog.lets.iter().any(|(declared, _)| declared == name) {
             let names: Vec<_> = prog.lets.iter().map(|(n, _)| n.as_str()).collect();
             return Err(LinkError::new(format!(
-                "unknown --set constant `{name}`\nhelp: --set overrides a declared `let`; available constants: {}",
+                "unknown `let` override `{name}`\nhelp: an override replaces a declared `let`; available constants: {}",
                 if names.is_empty() {
                     "(none)".into()
                 } else {
@@ -357,8 +359,8 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         };
         let v = lk.const_eval(e, &what).map_err(|mut error| {
             if overridden {
-                // These spans refer to the --set expression, not the program.
-                error.message = format!("--set {name}: {}", error.message);
+                // These spans refer to the override's expression, not the program.
+                error.message = format!("the `let` override `{name}`: {}", error.message);
                 error.span = None;
             }
             error
