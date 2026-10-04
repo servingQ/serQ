@@ -91,7 +91,9 @@ impl Ref {
 impl Expr {
     /// Whether `f` holds of this expression or of one in it: the operand of
     /// a `Located`, a reference's index and an aggregate's count and body
-    /// included (#280).
+    /// included (#280). Names are not resolved: an aggregate's index is not
+    /// shadowed, and a bare argument (a reference) is not an `Expr` here, so
+    /// a question about what a name reads is not this walk's.
     pub fn any(&self, f: &impl Fn(&Expr) -> bool) -> bool {
         f(self)
             || match self {

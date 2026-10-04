@@ -4002,13 +4002,13 @@ impl Parser {
         let binds = self.at_admission()?;
         if !binds.is_empty() {
             for (_, e, reserve) in &mut pools {
-                Expr::substitute(e, &binds);
+                e.substitute(&binds);
                 if let Some(f) = reserve {
-                    Expr::substitute(f, &binds);
+                    f.substitute(&binds);
                 }
             }
             if let Some(r) = &mut reuse {
-                Expr::substitute(r, &binds);
+                r.substitute(&binds);
             }
         }
         let bind_at = std::mem::take(&mut self.bind_at);
@@ -4040,14 +4040,14 @@ impl Parser {
             None
         };
         if let Some(c) = &mut cache {
-            Expr::substitute(c, &binds);
+            c.substitute(&binds);
         }
         // `lease P (t)`: the allocation on `P` outlives the scope, for the
         // session's transfer to take, for at most `t` seconds
         let lease = if self.eat_kw("lease") {
             let r = self.own_pool("lease")?;
             let mut t = self.paren_expr()?;
-            Expr::substitute(&mut t, &binds);
+            t.substitute(&binds);
             Some((r, t))
         } else {
             None
@@ -4100,7 +4100,7 @@ impl Parser {
                      so a name used twice would draw twice"
                 ));
             }
-            Expr::substitute(&mut e, &binds);
+            e.substitute(&binds);
             binds.push((name, e));
             if *self.peek() == Tok::Comma {
                 self.advance();
