@@ -7,17 +7,17 @@
 //! legitimate instance in `examples/`, so they are errors rather than
 //! warnings: a warning nobody acts on is worse than no check.
 
-use crate::ir::{CArg, CExpr, CStmt, Fun, Program};
+use crate::ir::{CExpr, CStmt, Fun, Program};
 
 type Result = std::result::Result<(), String>;
 
 /// Does this expression read live pool or stage state - something that
 /// changes while a session waits?
 fn reads_live_state(p: &Program, e: &CExpr, found: &mut Option<String>) -> bool {
-    match e {
-        CExpr::Call(f, args) => {
-            let live = matches!(
-                f,
+    let live = e.find(&|x| {
+        matches!(
+            x,
+            CExpr::Call(
                 Fun::CachedIn
                     | Fun::Used
                     | Fun::Free
@@ -30,48 +30,21 @@ fn reads_live_state(p: &Program, e: &CExpr, found: &mut Option<String>) -> bool 
                     | Fun::Price
                     | Fun::EstLambda
                     | Fun::EstRho
-                    | Fun::EstWait
-            );
-            if live && found.is_none() {
-                *found = Some(p.show_expr(e));
-            }
-            live || args.iter().any(|a| match a {
-                CArg::Expr(x) => reads_live_state(p, x, found),
-                CArg::Pool(r) | CArg::Stage(r) => r
-                    .index
-                    .as_ref()
-                    .is_some_and(|i| reads_live_state(p, i, found)),
-            })
-        }
-        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => false,
-        CExpr::Sample(_, a) => a.iter().any(|x| reads_live_state(p, x, found)),
-        CExpr::Unary(_, a) => reads_live_state(p, a, found),
-        CExpr::Binary(_, a, b) => reads_live_state(p, a, found) || reads_live_state(p, b, found),
-        CExpr::Cond(c, a, b) => {
-            reads_live_state(p, c, found)
-                || reads_live_state(p, a, found)
-                || reads_live_state(p, b, found)
-        }
+                    | Fun::EstWait,
+                _
+            )
+        )
+    });
+    if let Some(x) = live
+        && found.is_none()
+    {
+        *found = Some(p.show_expr(x));
     }
+    live.is_some()
 }
 
 fn mentions_attr(e: &CExpr, slot: usize) -> bool {
-    match e {
-        CExpr::Attr(s) => *s == slot,
-        CExpr::Num(_) | CExpr::Ctx(_) => false,
-        CExpr::Sample(_, a) => a.iter().any(|x| mentions_attr(x, slot)),
-        CExpr::Call(_, a) => a.iter().any(|x| match x {
-            CArg::Expr(x) => mentions_attr(x, slot),
-            CArg::Pool(r) | CArg::Stage(r) => {
-                r.index.as_ref().is_some_and(|i| mentions_attr(i, slot))
-            }
-        }),
-        CExpr::Unary(_, a) => mentions_attr(a, slot),
-        CExpr::Binary(_, a, b) => mentions_attr(a, slot) || mentions_attr(b, slot),
-        CExpr::Cond(c, a, b) => {
-            mentions_attr(c, slot) || mentions_attr(a, slot) || mentions_attr(b, slot)
-        }
-    }
+    e.any(&|x| matches!(x, CExpr::Attr(s) if *s == slot))
 }
 
 /// The first hold after `from` in `block` whose *header* reads `slot`, giving

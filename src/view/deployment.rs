@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ir::{CArg, CArrival, CExpr, CRef, CStageKind, CStmt, Program, RunMode, UnOp};
+use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, Program, RunMode, UnOp};
 use crate::view::figure::{
     Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
@@ -846,18 +846,7 @@ fn dedupe(frontier: &mut Vec<(At, Option<String>)>) {
 
 /// Does an expression read this attribute?
 fn reads_attr(e: &CExpr, slot: usize) -> bool {
-    match e {
-        CExpr::Attr(s) => *s == slot,
-        CExpr::Num(_) | CExpr::Ctx(_) => false,
-        CExpr::Sample(_, a) => a.iter().any(|x| reads_attr(x, slot)),
-        CExpr::Call(_, a) => a.iter().any(|x| match x {
-            CArg::Expr(x) => reads_attr(x, slot),
-            CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().is_some_and(|i| reads_attr(i, slot)),
-        }),
-        CExpr::Unary(_, a) => reads_attr(a, slot),
-        CExpr::Binary(_, a, b) => reads_attr(a, slot) || reads_attr(b, slot),
-        CExpr::Cond(c, a, b) => reads_attr(c, slot) || reads_attr(a, slot) || reads_attr(b, slot),
-    }
+    e.any(&|x| matches!(x, CExpr::Attr(s) if *s == slot))
 }
 
 fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>) {
