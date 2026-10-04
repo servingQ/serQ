@@ -10,8 +10,8 @@ hide:
 **serQ is a language in which an LLM serving deployment is a program.** Its
 memory pools, its engines, the traffic that arrives and the path every
 request takes through them are written down once. That one program is then
-simulated, checked against the real scheduler, proved about in Lean, and
-drawn.
+simulated, proved about in Lean, and drawn; the vLLM program is checked
+against the real scheduler request for request.
 
 ## Why serQ exists
 
@@ -23,8 +23,10 @@ and none of them can be checked against the others.
 serQ replaces the three with one program. Its definition is an intermediate
 representation, the [IR](ir.md): the simulator runs it, the Lean model is
 generated from it, and the oracle tests read it. The `.sq` text you write is
-one frontend that compiles to it. Because there is only one description,
-the simulation, the proofs and the figure cannot disagree with one another.
+one frontend that compiles to it. Because they read the same IR, a change to
+the program reaches the simulation, the Lean statements and the figure at
+once. That the interpreter and the Lean semantics agree is tested (the
+oracle scenarios, random differential runs), not proved.
 
 ## What you can do with it
 
@@ -49,9 +51,9 @@ the simulation, the proofs and the figure cannot disagree with one another.
 - **State claims and prove them**
 
     A `claim` is a proposition about every path of the program, written in
-    the program: the simulator checks it on the path it runs, and Lean
-    proves it about all of them. Three papers' propositions are proved this
-    way, and the memory invariant `allocated + cached ≤ cap` is a theorem
+    the program: the simulator checks it on the path it runs, and for a
+    program inside Lean's fragment a Lean proof covers every path. Three
+    papers' propositions are proved this way, and the memory invariant `allocated + cached ≤ cap` is a theorem
     of the pool model.
     [The Lean model](lean.md), [Claims](design/claims.md), [use cases](use-cases/index.md#formal-verification)
 

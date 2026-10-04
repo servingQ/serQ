@@ -1,6 +1,6 @@
 # Use cases
 
-Serving systems, workloads and scheduling papers written as serQ programs, in two kinds: programs that are run, and programs whose claims are proved.
+Serving systems, workloads and scheduling papers written as serQ programs, in two kinds: programs whose runs are the point, and programs whose claims are also proved.
 
 ## Simulation
 

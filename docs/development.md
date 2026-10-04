@@ -163,10 +163,10 @@ computes something else.
 Some link errors come from bugs this repository shipped: a hold header that
 reads a `set` bound before the session queued, a `branch` whose constant
 guard is a probability, a context variable read outside the moment that
-supplies it. `tests/lints.rs` holds them, and
-`no_false_positives_on_the_corpus` checks that none fires on a program in
-`examples/`, so a new program that trips one is either the bug it
-describes or a false positive to fix in the lint.
+supplies it. `tests/lints.rs` holds them, `no_false_positives_on_the_corpus`
+holds the reference programs to linking, and `make check` links every
+program in `examples/`, so a new program that trips one is either the bug
+it describes or a false positive to fix in the lint.
 
 ## In Lean
 

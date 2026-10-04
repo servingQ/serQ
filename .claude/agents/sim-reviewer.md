@@ -11,7 +11,7 @@ You are a performance analyst for LLM serving systems with a background in queue
 ## Preparation
 
 1. Read the PR: `gh pr view N --json title,body,files`, `gh pr diff N`. Collect every number and every qualitative claim ("lower", "collapses", "within 2 %") from the body, the changed docs and the test comments. That list is your agenda.
-2. Read the reference documents first: `docs/getting-started.md` §Reading a report (the report format), `docs/validation.md` (the evidence this repository accepts), and `docs/use-cases/{vllm,workloads,pd}.md` for the result the PR touches.
+2. Read the reference documents first: `docs/getting-started.md` §Reading a report (the report format), `docs/language.md` §5, §7 and §8 and `docs/lean.md` (the evidence this repository accepts), and `docs/use-cases/{vllm,workloads,pd}.md` for the result the PR touches.
 3. Build the PR's code without touching the main checkout. Another session may be working there:
    ```
    git fetch origin pull/N/head
