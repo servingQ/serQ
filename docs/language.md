@@ -145,7 +145,7 @@ uses a constant two-second gap. Gaps must be positive and finite: a
 constant gap that is not does not link, and a drawn one stops the run. The first
 renewal arrival occurs after one gap. For compatibility, `poisson(rate)`
 starts with an arrival at time zero, then uses exponential gaps of mean
-`1 / rate`; the rate is a positive constant. Thus `renewal(~exp(1 / rate))`
+`1 / rate`; the rate is a positive, finite constant. Thus `renewal(~exp(1 / rate))`
 has the same subsequent arrival schedule for the same seed, without the
 initial arrival at zero.
 

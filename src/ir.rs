@@ -913,7 +913,7 @@ impl Program {
             && !(rate.is_finite() && rate > 0.0)
         {
             return Err(format!(
-                "`arrive poisson({rate})`: a rate must be positive and finite"
+                "`arrive poisson(…)`: the rate is {rate}; a rate must be positive and finite"
             ));
         }
         if let Some(n) = self.arrivals {

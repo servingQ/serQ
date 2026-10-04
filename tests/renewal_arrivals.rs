@@ -172,7 +172,13 @@ fn a_renewal_gap_must_be_positive() {
 /// positive times: `poisson(-1)` ran backwards and never ended (#286).
 #[test]
 fn a_poisson_rate_must_be_positive() {
-    for rate in ["-1", "0", "inf", "0/0", "lam - 1"] {
+    for (rate, said) in [
+        ("-1", "the rate is -1;"),
+        ("0", "the rate is 0;"),
+        ("inf", "the rate is inf;"),
+        ("lam - 1", "the rate is 0;"),
+        ("0/0", "the poisson rate is NaN"),
+    ] {
         let src = format!(
             "let lam = 1; stage svc : delay;
              workload {{ arrive poisson({rate}); }}
@@ -180,9 +186,6 @@ fn a_poisson_rate_must_be_positive() {
              run {{ horizon 10; }}"
         );
         let e = serq::compile_source(&src, &Overrides::default()).unwrap_err();
-        assert!(
-            e.contains("rate must be positive") || e.contains("rate is NaN"),
-            "{rate}: {e}"
-        );
+        assert!(e.contains(said), "{rate}: {e}");
     }
 }
