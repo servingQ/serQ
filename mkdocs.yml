@@ -128,4 +128,5 @@ nav:
   - CLI Reference:
       - reference/cli.md
       - Drawing figures: draw.md
-  - Python (pyserq): python.md
+  - Python Reference:
+      - python.md
