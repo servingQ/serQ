@@ -23,7 +23,7 @@
 <path class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" d="M 174 158 L 174 176 A 11 4 0 0 0 196 176 L 196 158 Z"/>
 <ellipse class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="185" cy="158" rx="11" ry="4"/>
 <text x="206" y="164" text-anchor="start" font-size="10" fill="#1d2021">pool reqs</text>
-<text x="206" y="176" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 16</text>
+<text x="206" y="176" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 16 · admit via engine</text>
 <path class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" d="M 174 190 L 174 208 A 11 4 0 0 0 196 208 L 196 190 Z"/>
 <ellipse class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="185" cy="190" rx="11" ry="4"/>
 <text x="206" y="196" text-anchor="start" font-size="10" fill="#1d2021">pool kv</text>

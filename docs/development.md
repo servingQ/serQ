@@ -43,29 +43,34 @@ fixed ([different workloads](use-cases/workloads.md)).
 
 ### Read the report
 
-A run prints its run line and then three tables: the `observe`s, the stages
-and the pools, each column as wide as its widest entry:
+A run prints its run line and then its tables: the `observe`s, the stages,
+the step stages' iterations and the pools, each column as wide as its widest
+entry:
 
 ```
 $ serq run examples/multi-turn/vllm.sq --horizon 300 --warmup 30
-run: horizon 300 end 300 warmup 30 seed 1 events 166040 arrivals 95 ended 82 turns 821 mean live 8.390
+run: horizon 300 end 300 warmup 30 seed 1 events 134771 arrivals 95 ended 87 turns 697 mean live 6.618
 
 observe         count      mean    95% CI    cv2        p99
 --------------  -----  --------  --------  -----  ---------
-hit               821    0.8916   ±0.0221  0.122     1.0000
-prefill_tokens    821  702.2233  ±38.6706  0.994  2880.9830
-ttft              821    0.0145   ±0.0008  0.988     0.0582
-response          820    0.0628   ±0.0034  0.645     0.2365
+hit               697    0.8723   ±0.0223  0.147     1.0000
+prefill_tokens    697  722.9294  ±53.1813  0.986  2889.9272
+ttft              697    0.0151   ±0.0009  0.959     0.0578
+response          697    0.0600   ±0.0033  0.596     0.2257
 
 stage   number   util  done    thru    wait  service   iters
 ------  ------  -----  ----  ------  ------  -------  ------
-engine   0.191  0.172  1641  6.0778  0.0000   0.0314  165200
-tool     8.198  1.000   732  2.7111  0.0000   2.9894       0
+engine   0.153  0.140  1394  5.1630  0.0000   0.0297  134051
+tool     6.463  1.000   608  2.2519  0.0000   2.8874       0
+
+step    prefill only  decode only  mixed   idle  decodes  decode batch  decode step   itl p50   itl p99
+------  ------------  -----------  -----  -----  -------  ------------  -----------  --------  --------
+engine         0.033        0.103  0.005  0.860    0.116         1.075     0.000224  0.000211  0.000253
 
 pool    used    cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  ------  --------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    1561.4  143802.5  0.000    0.191     NaN     840        78    606064        0      0    0      0
-reqs     0.2       0.0  0.000    0.191  0.0000     840         0         0        0      0    0      0
+kv    1033.7  144253.9  0.000    0.153     NaN     719        70    500016        0      0    0      0
+reqs     0.2       0.0  0.002    0.153  0.0006     719         0         0        0      0    0      0
 ```
 
 The metrics are the program's own: `ttft` is whatever the `observe ttft = …`
@@ -97,11 +102,11 @@ done
 
 | `Lambda` | seed 1 TTFT (s) / preemptions | seed 2 | seed 3 |
 |---|---|---|---|
-| 0.3 | 0.017 / 0 | 0.017 / 0 | 0.014 / 0 |
-| 0.6 | 0.137 / 240 | **5.00 / 2 349** | 0.255 / 899 |
-| 0.9 | 26.6 / 235 | 28.1 / 236 | 23.4 / 737 |
+| 0.3 | 0.018 / 0 | 0.016 / 0 | 0.015 / 0 |
+| 0.6 | 0.131 / 87 | 0.579 / 185 | 0.089 / 34 |
+| 0.9 | 23.8 / 138 | 24.8 / 166 | 18.8 / 187 |
 
-At 0.6 the three seeds disagree by a factor of 36. The deployment is at its
+At 0.6 the three seeds disagree by a factor of 6. The deployment is at its
 cliff, and whether one run falls off depends on the draws. The report's 95 %
 CI is within one run and does not show this. Near a load where preemptions
 start, report the spread across seeds, not one seed's interval.
