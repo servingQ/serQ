@@ -599,7 +599,11 @@ cover; the KV of a transfer counts as computed from then on. `grow`,
 `growing`, `load` and `release` stand inside a hold of the same pool
 reference, index included, as the linker resolves it (`kv[k]` with `let k
 = 1` is `kv[1]`; `kv[i]` is not `kv[j]`), or `release` in a session that
-leases it; elsewhere the program does not link. The invariant
+leases it; elsewhere the program does not link. A hold's index is read at
+admission, at such a statement and after a preemption, and the readings
+must name one member: the hold's body does not change an attribute its
+index reads (`set`, `choose`, `turn`), and an index read again inside
+reads attributes and numbers, not the state or the clock. The invariant
 `allocated + cached ≤ cap` holds in every reachable configuration
 (`SerqLang.Step.invariant`). `end` releases every hold but *keeps* the
 session's cached prefixes: the cache does not know that a session has left
