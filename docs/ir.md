@@ -126,7 +126,8 @@ are a constant, rounded to blocks, fits some pool its reference may name
 (one that fits none is rejected whenever it is reached), that a `BudgetLeft` names step stages
 only (every member of the array it references), that a constant renewal
 gap is a positive time (the linker folds one) and a poisson rate a positive, finite
-number, and the
+number, that a constant amount (the work of a `Run`, the units of a `Hold`, a
+`Grow` or a `Load`) is not negative or NaN, and the
 flows: every stage array a `Run` holds with another (`also`) is a `ps` of
 a constant capacity, every run on such a *shared* stage is `Plain` with no
 `growing`, a run names each stage array once, and `share` is present

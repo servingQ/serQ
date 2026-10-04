@@ -1028,6 +1028,18 @@ fn constant(e: &CExpr) -> Option<f64> {
     }
 }
 
+/// An amount a statement names (units, tokens, seconds) is not negative,
+/// and not NaN: a constant one that is does not link; a computed one fails
+/// the run (#270).
+fn amount(e: &CExpr, what: &str) -> Result<(), String> {
+    match constant(e) {
+        Some(x) if x.is_nan() || x < 0.0 => Err(format!(
+            "`{what} ({x})`: an amount of units, tokens or seconds is a number, and not negative"
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn arrival_expr_is_pure(e: &CExpr) -> bool {
     match e {
         CExpr::Num(_) => true,
@@ -1108,6 +1120,15 @@ impl Validator<'_> {
             ));
         }
         if let Some(e) = &r.index {
+            if let Some(k) = constant(e)
+                && !(k >= 0.0 && k.fract() == 0.0 && k < r.count as f64)
+            {
+                return Err(format!(
+                    "{what} index {k}: a member of an array of {} is 0 to {}",
+                    r.count,
+                    r.count - 1
+                ));
+            }
             self.expr(e, m)?;
         }
         Ok(())
@@ -1290,6 +1311,7 @@ impl Validator<'_> {
                     self.cref(r, np, "pool", m)?;
                     self.expr(u, Moment::Admit)?;
                     no_draw(u, "units")?;
+                    amount(u, &format!("hold {}", self.p.pools[r.base].name))?;
                     if let Some(f) = reserve {
                         self.expr(f, Moment::Admit)?;
                         no_draw(f, "`reserve`")?;
@@ -1349,12 +1371,14 @@ impl Validator<'_> {
             }
             CStmt::Grow(r, e) => {
                 self.cref(r, np, "pool", m)?;
-                self.expr(e, m)
+                self.expr(e, m)?;
+                amount(e, &format!("grow {}", self.p.pools[r.base].name))
             }
             CStmt::Drop(r) | CStmt::Release(r) => self.cref(r, np, "pool", m),
             CStmt::Load(r, e) => {
                 self.cref(r, np, "pool", m)?;
-                self.expr(e, m)
+                self.expr(e, m)?;
+                amount(e, &format!("load {}", self.p.pools[r.base].name))
             }
             CStmt::Run {
                 stage,
@@ -1368,6 +1392,7 @@ impl Validator<'_> {
                     self.cref(r, ns, "stage", m)?;
                 }
                 self.expr(work, m)?;
+                amount(work, &format!("run {}", self.p.stages[stage.base].name))?;
                 if let Some(g) = growing {
                     self.cref(g, np, "pool", m)?;
                 }

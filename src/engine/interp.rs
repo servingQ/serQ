@@ -1249,9 +1249,16 @@ impl<'p> Interp<'p> {
                     });
                 }
                 CStmt::Choose { var, count, key } => {
-                    let n = self
-                        .eval(count, &Ctx::session(sid), Which::Session)
-                        .max(0.0) as usize;
+                    // a count of members, a whole number (#270)
+                    let x = self.eval(count, &Ctx::session(sid), Which::Session);
+                    if !(x >= 0.0 && x.fract() == 0.0) {
+                        self.error = Some(format!(
+                            "`choose … in ({})`: the count is {x}, not a whole number",
+                            self.p.show_expr(count)
+                        ));
+                        return;
+                    }
+                    let n = x as usize;
                     // ascending keys, lexicographic, ties to the smallest index
                     let mut best: Option<(Vec<f64>, usize)> = None;
                     for j in 0..n {
@@ -1280,13 +1287,13 @@ impl<'p> Interp<'p> {
                     let mut exprs = vec![];
                     let mut reserve = vec![];
                     for (r, e, f) in pools {
-                        let pl = self.pool_index(r, sid);
-                        let units = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
+                        let pl = self.session_index(r, sid);
+                        let units = self.amount(e, sid, &format!("hold {}", self.p.pools[pl].name));
                         ps.push((pl, units));
                         exprs.push(e);
                         reserve.push(f.as_ref());
                     }
-                    let lease = lease.as_ref().map(|(r, t)| (self.pool_index(r, sid), t));
+                    let lease = lease.as_ref().map(|(r, t)| (self.session_index(r, sid), t));
                     let n = ps.len();
                     let pending = Pending {
                         pools: ps,
@@ -1303,25 +1310,25 @@ impl<'p> Interp<'p> {
                     return;
                 }
                 CStmt::Grow(r, e) => {
-                    let pl = self.pool_index(r, sid);
-                    let units = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
+                    let pl = self.session_index(r, sid);
+                    let units = self.amount(e, sid, &format!("grow {}", self.p.pools[pl].name));
                     if !self.grow(sid, pl, units) {
                         return;
                     }
                 }
                 CStmt::Drop(r) => {
-                    let pl = self.pool_index(r, sid);
+                    let pl = self.session_index(r, sid);
                     let serial = self.sessions[sid].serial;
                     self.remove_entry(pl, serial);
                 }
                 CStmt::Release(r) => {
-                    let pl = self.pool_index(r, sid);
+                    let pl = self.session_index(r, sid);
                     self.release_early(sid, pl);
                     self.try_admit_all();
                 }
                 CStmt::Load(r, e) => {
-                    let pl = self.pool_index(r, sid);
-                    let n = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
+                    let pl = self.session_index(r, sid);
+                    let n = self.amount(e, sid, &format!("load {}", self.p.pools[pl].name));
                     self.load(sid, pl, n);
                 }
                 CStmt::Run {
@@ -1331,17 +1338,24 @@ impl<'p> Interp<'p> {
                     growing,
                     also,
                 } => {
-                    let st = self.stage_index(stage, sid);
-                    let w = self.eval(work, &Ctx::session(sid), Which::Session).max(0.0);
+                    let st = self.session_index(stage, sid);
+                    // the kernel's spelling: `decode on E (…)` is `run E decode (…)`
+                    let m = match mode {
+                        RunMode::Plain => "",
+                        RunMode::Prefill => " prefill",
+                        RunMode::Decode => " decode",
+                    };
+                    let what = format!("run {}{m}", self.p.stages[st].name);
+                    let w = self.amount(work, sid, &what);
                     if matches!(self.stages[st].kind, Kind::Shared { .. }) {
                         let mut stages = vec![st];
                         for r in also {
-                            stages.push(self.stage_index(r, sid));
+                            stages.push(self.session_index(r, sid));
                         }
                         self.start_flow(stages, Some(sid), w);
                         return;
                     }
-                    let g = growing.as_ref().map(|r| self.pool_index(r, sid));
+                    let g = growing.as_ref().map(|r| self.session_index(r, sid));
                     self.start_job(st, Some(sid), w, *mode, g);
                     return;
                 }
@@ -1349,34 +1363,26 @@ impl<'p> Interp<'p> {
         }
     }
 
-    fn pool_index(&mut self, r: &CRef, sid: usize) -> usize {
-        match &r.index {
-            None => r.base,
-            Some(e) => {
-                let i = self.eval(e, &Ctx::session(sid), Which::Session);
-                let i = i.max(0.0) as usize;
-                if i >= r.count {
-                    self.error = Some(format!("pool index {i} out of range (count {})", r.count));
-                    return r.base;
-                }
-                r.base + i
-            }
-        }
+    /// The member a session statement's pool or stage reference names.
+    fn session_index(&mut self, r: &CRef, sid: usize) -> usize {
+        self.ref_index(r, &Ctx::session(sid), Which::Session)
     }
 
-    fn stage_index(&mut self, r: &CRef, sid: usize) -> usize {
-        match &r.index {
-            None => r.base,
-            Some(e) => {
-                let i = self.eval(e, &Ctx::session(sid), Which::Session);
-                let i = i.max(0.0) as usize;
-                if i >= r.count {
-                    self.error = Some(format!("stage index {i} out of range (count {})", r.count));
-                    return r.base;
-                }
-                r.base + i
+    /// The amount a session statement names (`what`: its keyword and target), which
+    /// is a number of units, tokens or seconds: not NaN and not negative
+    /// beyond rounding (#270). On a program error, 0 and the error set.
+    fn amount(&mut self, e: &CExpr, sid: usize, what: &str) -> f64 {
+        let x = self.eval(e, &Ctx::session(sid), Which::Session);
+        if x.is_nan() || x < -1e-9 {
+            if self.error.is_none() {
+                self.error = Some(format!(
+                    "`{what} ({})`: the amount is {x}, not a number of units, tokens or seconds",
+                    self.p.show_expr(e)
+                ));
             }
+            return 0.0;
         }
+        x.max(0.0)
     }
 
     // --------------------------------------------------------- pools ----
@@ -1403,7 +1409,10 @@ impl<'p> Interp<'p> {
             let (pl, units) = pending.pools[k];
             // what admission waits for: the units, or the reservation above them
             let need = match pending.reserve[k] {
-                Some(f) => self.eval(f, &Ctx::session(sid), Which::Session).max(units),
+                Some(f) => {
+                    let what = format!("hold {} reserve", self.p.pools[pl].name);
+                    self.amount(f, sid, &what).max(units)
+                }
                 None => units,
             };
             if self.round_up(pl, need) > self.pools[pl].cap {
@@ -1470,10 +1479,14 @@ impl<'p> Interp<'p> {
             .expect("queued session has a hold");
         for k in 0..pending.pools.len() {
             let e = pending.exprs[k];
-            let u = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
+            let pl = pending.pools[k].0;
+            let u = self.amount(e, sid, &format!("hold {}", self.p.pools[pl].name));
             pending.pools[k].1 = u;
             pending.need[k] = match pending.reserve[k] {
-                Some(f) => self.eval(f, &Ctx::session(sid), Which::Session).max(u),
+                Some(f) => {
+                    let what = format!("hold {} reserve", self.p.pools[pl].name);
+                    self.amount(f, sid, &what).max(u)
+                }
                 None => u,
             };
         }
@@ -2166,8 +2179,9 @@ impl<'p> Interp<'p> {
             };
             let mut v = vec![];
             for (r, e, f) in pools {
-                let q = self.pool_index(r, victim);
-                let u = self.eval(e, &Ctx::session(victim), Which::Session).max(0.0);
+                let q = self.session_index(r, victim);
+                let what = format!("hold {}", self.p.pools[q].name);
+                let u = self.amount(e, victim, &what);
                 v.push((q, u, e, f.as_ref()));
             }
             v
@@ -2182,7 +2196,7 @@ impl<'p> Interp<'p> {
                 CStmt::Hold {
                     lease: Some((r, t)),
                     ..
-                } => Some((self.pool_index(r, victim), t)),
+                } => Some((self.session_index(r, victim), t)),
                 _ => None,
             }
         };
@@ -3254,12 +3268,21 @@ impl<'p> Interp<'p> {
         match &r.index {
             None => r.base,
             Some(e) => {
-                let i = self.eval(e, ctx, w).max(0.0) as usize;
-                if i >= r.count {
-                    self.error = Some(format!("index {i} out of range (count {})", r.count));
+                // a member is a whole number in range; anything else is the
+                // program's error, not a member it did not name (#270)
+                let x = self.eval(e, ctx, w);
+                if !(x >= 0.0 && x.fract() == 0.0 && x < r.count as f64) {
+                    if self.error.is_none() {
+                        self.error = Some(format!(
+                            "index `{}` is {x}: a member of an array of {} is 0 to {}",
+                            self.p.show_expr(e),
+                            r.count,
+                            r.count - 1
+                        ));
+                    }
                     return r.base;
                 }
-                r.base + i
+                r.base + x as usize
             }
         }
     }
