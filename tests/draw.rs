@@ -546,7 +546,8 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
 /// straight to the decoder (local); a request whose KV is already there
 /// skips both. The router decides before any station, so it is the
 /// decision every turn starts from: the session ends there when the prompt
-/// reaches `max_model_len`, and comes back there after a tool call.
+/// reaches `max_model_len`. Its coming back after a tool call is the
+/// workload's, and not drawn.
 #[test]
 fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let p = program("llmd_nixl_pull");
@@ -565,7 +566,10 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     assert!(net.has_edge(pf, d), "the KV is already on the decoder");
     assert!(net.has_edge(d, tool), "more");
     assert!(net.has_edge(d, End::Exit));
-    assert!(net.has_edge(tool, route), "next turn");
+    assert!(
+        !net.has_edge(tool, route),
+        "the next turn is the workload's"
+    );
     assert!(!net.has_edge(tool, pf) && !net.has_edge(tool, d));
     assert!(net.arrival.contains("Poisson"));
 }
@@ -620,10 +624,10 @@ fn has(net: &deployment::Net, p: &Program, from: End, to: &str) -> Option<deploy
 }
 
 /// A loop body that starts with a branch decides before its first station:
-/// one decision node, which every turn comes back to and which sends it down
-/// each arm with the arm's guard.
+/// one decision node, which sends a turn down each arm with the arm's guard.
+/// Nothing comes back to it: the next turn is the workload's.
 #[test]
-fn a_loop_that_decides_first_returns_to_its_decision() {
+fn a_loop_that_decides_first_starts_at_its_decision() {
     let (p, net) = shape(
         "loop { set a = ~bernoulli(0.5); branch (a) { run A (1); } else { run B (1); } run C (1); }",
     );
@@ -634,14 +638,15 @@ fn a_loop_that_decides_first_returns_to_its_decision() {
         assert_eq!(e.label.as_deref(), Some(label));
     }
     let c = End::Node(net.node_of(stage(&p, "C")).unwrap());
-    assert!(net.edges.iter().any(|e| e.from == c && e.to == d && e.back));
-    assert!(edge(&p, &net, "C", "A").is_none(), "not back to each arm");
+    assert!(!net.has_edge(c, d), "no way back");
+    assert!(edge(&p, &net, "C", "A").is_none());
+    assert!(net.edges.iter().all(|e| !e.back));
 }
 
 /// A loop whose body is a loop: the inner one decides, the outer one comes
-/// in through it.
+/// in through it, and neither draws a way back.
 #[test]
-fn a_nested_loop_returns_to_the_inner_decision() {
+fn a_nested_loop_comes_in_through_the_inner_decision() {
     let (p, net) = shape(
         "run C (1); loop { loop { set a = ~bernoulli(0.5); branch (a) { run A (1); } else { run B (1); } } }",
     );
@@ -656,7 +661,7 @@ fn a_nested_loop_returns_to_the_inner_decision() {
     for st in ["A", "B"] {
         assert!(has(&net, &p, d, st).is_some());
         let n = End::Node(net.node_of(stage(&p, st)).unwrap());
-        assert!(net.has_edge(n, d), "{st} returns");
+        assert!(!net.has_edge(n, d), "{st} does not return");
     }
     let c = End::Node(net.node_of(stage(&p, "C")).unwrap());
     assert!(net.has_edge(c, d));
@@ -664,7 +669,7 @@ fn a_nested_loop_returns_to_the_inner_decision() {
 
 /// An arm with no station of its own goes on to the station after the
 /// branch: the decision sends a turn to `A` or straight to `B`, and `B`
-/// comes back to the decision, not to itself.
+/// goes back neither to the decision nor to itself.
 #[test]
 fn a_loop_through_an_empty_arm() {
     let (p, net) =
@@ -673,12 +678,11 @@ fn a_loop_through_an_empty_arm() {
     assert!(has(&net, &p, d, "A").is_some());
     assert!(has(&net, &p, d, "B").is_some());
     let b = End::Node(net.node_of(stage(&p, "B")).unwrap());
-    assert!(net.has_edge(b, d));
+    assert!(!net.has_edge(b, d));
     assert!(edge(&p, &net, "B", "B").is_none());
 }
 
-/// A body that can end before its first station ends at its decision, on
-/// the first turn and every one after.
+/// A body that can end before its first station ends at its decision.
 #[test]
 fn a_loop_that_can_end_before_a_station() {
     let (p, net) =
@@ -687,7 +691,7 @@ fn a_loop_that_can_end_before_a_station() {
     assert!(has(&net, &p, d, "exit").is_some_and(|e| e.label.as_deref() == Some("c")));
     assert!(has(&net, &p, d, "A").is_some());
     let b = End::Node(net.node_of(stage(&p, "B")).unwrap());
-    assert!(net.has_edge(b, d));
+    assert!(!net.has_edge(b, d));
     assert!(edge(&p, &net, "arrival", "exit").is_none());
 }
 
@@ -786,13 +790,16 @@ fn a_decision_stays_before_its_stations() {
     }
 }
 
-/// A body that starts at one station needs no decision: it comes back to it.
+/// A body that starts at one station needs no decision, and the next turn,
+/// the workload's, draws no arrow back to it.
 #[test]
 fn a_loop_with_one_way_in_has_no_decision() {
     let (p, net) =
         shape("loop { run A (1); set c = ~bernoulli(0.5); branch (c) { end; } run B (1); }");
     assert!(decision(&net).is_none());
-    assert!(edge(&p, &net, "B", "A").is_some_and(|e| e.back));
+    assert!(edge(&p, &net, "B", "A").is_none());
+    assert!(edge(&p, &net, "A", "B").is_some());
+    assert!(edge(&p, &net, "A", "exit").is_some());
 }
 
 /// Every enclosure holds the stations it encloses, and enclosures either nest
@@ -984,21 +991,19 @@ fn docs_assets_are_current() {
     assert!(seen > 0, "no figures under docs/assets");
 }
 
-/// `routing.sq`'s next turn migrates or stays: back to the link, and
-/// straight back to a replica. `pd_tandem.sq`'s job re-enters down both
-/// arms of its `mode` branch; the projection is structural, so it draws
-/// both although `mode` is one constant in a run.
+/// `routing.sq`'s turn migrates or stays: to the link, or straight to a
+/// replica. `pd_tandem.sq`'s job goes down both arms of its `mode` branch;
+/// the projection is structural, so it draws both although `mode` is one
+/// constant in a run. Whether a session comes back for another turn - after
+/// `routing.sq`'s tool call, or round `pd_tandem.sq`'s closed loop - is the
+/// workload's, and no arrow returns to the decision.
 #[test]
-fn the_examples_return_to_their_decision() {
+fn the_examples_start_at_their_decision() {
     let p = program("routing");
     let net = deployment::project(&p);
     let d = decision(&net).expect("routing decides first");
     let tool = End::Node(net.node_of(stage(&p, "tool")).unwrap());
-    assert!(
-        net.edges
-            .iter()
-            .any(|e| e.from == tool && e.to == d && e.back)
-    );
+    assert!(!net.has_edge(tool, d));
     assert!(has(&net, &p, d, "link").is_some());
     assert!(has(&net, &p, d, "rep").is_some());
     let p = program("pd_tandem");
@@ -1009,10 +1014,7 @@ fn the_examples_return_to_their_decision() {
     }
     for st in ["agg", "decode"] {
         let n = End::Node(net.node_of(stage(&p, st)).unwrap());
-        assert!(
-            net.edges.iter().any(|e| e.from == n && e.to == d && e.back),
-            "{st}"
-        );
+        assert!(!net.has_edge(n, d), "{st}");
     }
 }
 

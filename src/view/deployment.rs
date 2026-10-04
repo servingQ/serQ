@@ -555,13 +555,18 @@ impl Walker<'_> {
                     self.arm = outer;
                 }
                 CStmt::Loop(body) => {
+                    // Every loop is the session's: a server cannot write
+                    // `end`, so a loop in one could never be left. Whether
+                    // the session comes back for another turn is the
+                    // workload's choice, not the deployment's, so the body
+                    // is walked once and its way back is not drawn.
+                    //
                     // A body that decides before its first station (several
                     // first stations, or an `end` before any) is a router at
                     // the top of every turn: one decision node the body
-                    // starts from and every pass returns to. A pass from a
-                    // mark at the body's start finds out what it reaches
-                    // first - a station, the one it was at included, or the
-                    // exit - and is undone whole.
+                    // starts from. A pass from a mark at the body's start
+                    // finds out what it reaches first - a station, the one
+                    // it was at included, or the exit - and is undone whole.
                     let saved = (
                         self.net.clone(),
                         self.frontier.clone(),
@@ -599,7 +604,6 @@ impl Walker<'_> {
                     if let Some(d) = known {
                         self.attach(d);
                         self.walk(body);
-                        self.attach(d);
                     } else if entries.len() > 1 {
                         // named by the `choose`s it makes before any station:
                         // the router's name is the gateway's, which is the
@@ -629,13 +633,7 @@ impl Walker<'_> {
                         self.decisions.push((body, d));
                         self.attach(d);
                         self.walk(body);
-                        self.attach(d);
                     } else {
-                        // The second pass starts where the first ended, so
-                        // every way back into the body is drawn, from every
-                        // arm, with the guard of the arm it takes; edges
-                        // already there are not drawn twice.
-                        self.walk(body);
                         self.walk(body);
                     }
                     self.frontier.clear();
