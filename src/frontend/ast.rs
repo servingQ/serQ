@@ -89,6 +89,81 @@ impl Ref {
 }
 
 impl Expr {
+    /// Whether `f` holds of this expression or of one in it: the operand of
+    /// a `Located`, a reference's index and an aggregate's count and body
+    /// included (#280).
+    pub fn any(&self, f: &impl Fn(&Expr) -> bool) -> bool {
+        f(self)
+            || match self {
+                Expr::Num(_) | Expr::Var(_) => false,
+                Expr::Located(_, x) | Expr::Unary(_, x) => x.any(f),
+                Expr::Sample(_, xs) => xs.iter().any(|x| x.any(f)),
+                Expr::Call(_, args) => args.iter().any(|a| match a {
+                    Arg::Expr(x) => x.any(f),
+                    Arg::Ref(r) => r.index.as_ref().is_some_and(|i| i.any(f)),
+                }),
+                Expr::Binary(_, a, b) | Expr::Over(_, _, a, b) => a.any(f) || b.any(f),
+                Expr::Cond(c, a, b) => c.any(f) || a.any(f) || b.any(f),
+            }
+    }
+
+    /// Replace every `Var(name)` of `binds` by its expression: a header
+    /// binding (`at admission (…)`), or an aggregate's index (`max j in n`)
+    /// by its number. A bare argument naming one is the binding, not a
+    /// reference; an inner aggregate's index is its own.
+    pub fn substitute(&mut self, binds: &[(String, Expr)]) {
+        match self {
+            Expr::Located(_, inner) => inner.substitute(binds),
+            Expr::Var(n) => {
+                if let Some((_, v)) = binds.iter().find(|(name, _)| name == n) {
+                    *self = v.clone();
+                }
+            }
+            Expr::Num(_) => {}
+            Expr::Sample(_, args) => args.iter_mut().for_each(|a| a.substitute(binds)),
+            Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
+                Arg::Expr(x) => x.substitute(binds),
+                Arg::Ref(r) => {
+                    // a bare identifier argument is parsed as a reference (it
+                    // may name a pool or a stage); when it names a binding it
+                    // is the binding, else `min(known, …)` would read the
+                    // attribute `known` and not the header's `known = …`
+                    if r.index.is_none()
+                        && let Some((_, v)) = binds.iter().find(|(name, _)| *name == r.name)
+                    {
+                        *a = Arg::Expr(v.clone());
+                    } else if let Some(i) = &mut r.index {
+                        i.substitute(binds);
+                    }
+                }
+            }),
+            Expr::Unary(_, a) => a.substitute(binds),
+            Expr::Binary(_, a, b) => {
+                a.substitute(binds);
+                b.substitute(binds);
+            }
+            Expr::Cond(c, a, b) => {
+                c.substitute(binds);
+                a.substitute(binds);
+                b.substitute(binds);
+            }
+            Expr::Over(_, j, n, body) => {
+                n.substitute(binds);
+                let inner: Vec<_> = binds
+                    .iter()
+                    .filter(|(name, _)| name != j)
+                    .cloned()
+                    .collect();
+                body.substitute(&inner);
+            }
+        }
+    }
+
+    /// Whether the expression draws (`~`) anywhere.
+    pub fn draws(&self) -> bool {
+        self.any(&|x| matches!(x, Expr::Sample(..)))
+    }
+
     fn same_syntax(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Located(_, a), b) => a.same_syntax(b),

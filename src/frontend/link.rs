@@ -641,18 +641,10 @@ fn member(base: usize, count: usize, i: usize, n: usize, who: &str, what: &str) 
 }
 
 fn collect_attrs(stmts: &[Stmt], lk: &mut Linker) {
-    for s in stmts {
-        match s {
-            Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => {
-                lk.attr(n);
-            }
-            Stmt::Hold { body, .. } | Stmt::Loop(body) => collect_attrs(body, lk),
-            Stmt::Branch(_, a, b) => {
-                collect_attrs(a, lk);
-                collect_attrs(b, lk);
-            }
-            _ => {}
-        }
+    let mut names = vec![];
+    crate::frontend::parser::assigned_in(stmts, &mut names);
+    for n in &names {
+        lk.attr(n);
     }
 }
 
@@ -795,7 +787,7 @@ impl Linker<'_> {
                 let folded = match i {
                     // already a number (`blocksize(p)` folds here, not in `eval_const`)
                     CExpr::Num(k) => Some(k),
-                    _ => (!has_draw(e)).then(|| self.eval_const(e).ok()).flatten(),
+                    _ => (!e.draws()).then(|| self.eval_const(e).ok()).flatten(),
                 };
                 self.over_terms.set(after);
                 if let Some(k) = folded
@@ -857,7 +849,7 @@ impl Linker<'_> {
         // the reference as any pool function's: an array is indexed, and the
         // index links (every member has the declaration's block)
         self.pool_ref(r)?;
-        if r.index.as_deref().is_some_and(has_draw) {
+        if r.index.as_deref().is_some_and(Expr::draws) {
             return Err(LinkError::new(
                 "`blocksize`'s index draws, and the folded number would drop the draw".into(),
             )
@@ -1277,56 +1269,9 @@ pub fn binop(op: BinOp, a: f64, b: f64) -> f64 {
     }
 }
 
-/// Does this expression draw?
-fn has_draw(e: &Expr) -> bool {
-    match e {
-        Expr::Located(_, inner) => has_draw(inner),
-        Expr::Sample(..) => true,
-        Expr::Num(_) | Expr::Var(_) => false,
-        Expr::Call(_, args) => args.iter().any(|a| match a {
-            Arg::Expr(x) => has_draw(x),
-            Arg::Ref(r) => r.index.as_deref().is_some_and(has_draw),
-        }),
-        Expr::Unary(_, a) => has_draw(a),
-        Expr::Binary(_, a, b) => has_draw(a) || has_draw(b),
-        Expr::Cond(c, a, b) => has_draw(c) || has_draw(a) || has_draw(b),
-        Expr::Over(_, _, n, e) => has_draw(n) || has_draw(e),
-    }
-}
-
 /// Replace the index `j` of an `Expr::Over` by the number `k`, in the
 /// body and in its references' indices; an inner `Over` of the same name
 /// keeps its own.
 pub(crate) fn bind_index(e: &mut Expr, j: &str, k: f64) {
-    match e {
-        Expr::Located(_, inner) => bind_index(inner, j, k),
-        Expr::Var(n) if n == j => *e = Expr::Num(k),
-        Expr::Num(_) | Expr::Var(_) => {}
-        Expr::Sample(_, args) => args.iter_mut().for_each(|a| bind_index(a, j, k)),
-        Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
-            Arg::Expr(x) => bind_index(x, j, k),
-            Arg::Ref(r) if r.index.is_none() && r.name == j => *a = Arg::Expr(Expr::Num(k)),
-            Arg::Ref(r) => {
-                if let Some(i) = &mut r.index {
-                    bind_index(i, j, k);
-                }
-            }
-        }),
-        Expr::Unary(_, a) => bind_index(a, j, k),
-        Expr::Binary(_, a, b) => {
-            bind_index(a, j, k);
-            bind_index(b, j, k);
-        }
-        Expr::Cond(c, a, b) => {
-            bind_index(c, j, k);
-            bind_index(a, j, k);
-            bind_index(b, j, k);
-        }
-        Expr::Over(_, i, n, body) => {
-            bind_index(n, j, k);
-            if i != j {
-                bind_index(body, j, k);
-            }
-        }
-    }
+    e.substitute(&[(j.to_string(), Expr::Num(k))]);
 }

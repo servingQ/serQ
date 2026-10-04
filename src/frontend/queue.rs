@@ -441,23 +441,6 @@ impl Ctx<'_> {
     }
 }
 
-/// Does this expression draw?
-fn has_sample(e: &Expr) -> bool {
-    match e {
-        Expr::Located(_, inner) => has_sample(inner),
-        Expr::Sample(..) => true,
-        Expr::Num(_) | Expr::Var(_) => false,
-        Expr::Call(_, args) => args.iter().any(|a| match a {
-            Arg::Expr(x) => has_sample(x),
-            Arg::Ref(r) => r.index.as_ref().is_some_and(|i| has_sample(i)),
-        }),
-        Expr::Unary(_, a) => has_sample(a),
-        Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
-        Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
-        Expr::Over(_, _, n, e) => has_sample(n) || has_sample(e),
-    }
-}
-
 /// Replace every `Call` in `stmts`, at any depth, by the entry's body. An
 /// entry may call another queue's entry (the decoder's `nic[self].transfer`),
 /// so the replacement is expanded too. Only a repeated entry on the active
@@ -627,7 +610,7 @@ fn call(
         );
     }
     for (p, a) in entry.params.iter().zip(args) {
-        if has_sample(a) {
+        if a.draws() {
             return err(
                 at,
                 format!(
