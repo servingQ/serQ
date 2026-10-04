@@ -53,8 +53,7 @@ fn pools_of(p: &Program, net: &deployment::Net, stage_name: &str) -> Vec<String>
 
 /// Each stage kind has its glyph: `mg1.sq` is one FIFO server, `ps.sq` one
 /// processor-sharing server, `llmd_nixl_pull.sq` has a step engine on each
-/// side and a processor-sharing NIC on each, and `routing.sq`, one session
-/// with no server apart, a delay for the tool call.
+/// side and a processor-sharing NIC on each, and a delay stage is a delay.
 #[test]
 fn stations_take_their_stage_kind() {
     let kinds = |name: &str| -> Vec<StationKind> {
@@ -80,11 +79,8 @@ fn stations_take_their_stage_kind() {
             .expect("stage is on the session");
         assert_eq!(net.nodes[i].kind, kind, "{name}");
     }
-    let p = program("routing");
-    let net = deployment::project(&p);
-    let i = net
-        .node_of(stage(&p, "tool"))
-        .expect("tool is on the session");
+    let (p, net) = shape("run A (1); end;");
+    let i = net.node_of(stage(&p, "A")).expect("A is on the session");
     assert_eq!(net.nodes[i].kind, StationKind::Delay);
 }
 
@@ -109,7 +105,7 @@ fn no_self_edges() {
 fn guard_chains_do_not_multiply_edges() {
     let p = program("routing");
     let net = deployment::project(&p);
-    assert_eq!(net.nodes.len(), 4, "the decision, link, rep[j], tool");
+    assert_eq!(net.nodes.len(), 3, "the decision, link, rep[j]");
     assert!(
         net.edges.len() <= 8,
         "{} edges is a blow-up",
@@ -306,17 +302,23 @@ fn cache_targets_follow_the_release_rule() {
     assert_eq!(cached, want);
 }
 
+/// A pool held across two stations, and one held inside it at the first.
+const ACROSS: &str = "pool live { cap 2; } pool kv { cap 9; }
+    stage A : fifo; stage B : fifo;
+    workload { arrive poisson(1); }
+    session { hold live (1) { hold kv (1) { run A (1); } run B (1); } end; }
+    run { horizon 10; }";
+
 /// Pools held around every visit to a stage, and only those.
 #[test]
 fn nested_holds_nest() {
     let p = program("replica");
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "engine"), ["live", "batch", "kv"]);
-    assert_eq!(
-        pools_of(&p, &net, "tool"),
-        ["live"],
-        "the tool call keeps its slot"
-    );
+    let p = compile(ACROSS);
+    let net = deployment::project(&p);
+    assert_eq!(pools_of(&p, &net, "A"), ["live", "kv"]);
+    assert_eq!(pools_of(&p, &net, "B"), ["live"], "outside the inner hold");
 }
 
 /// A pool held at one station alone is that station's: drawn in its frame,
@@ -342,15 +344,24 @@ fn pools_held_at_one_station_are_drawn_in_it() {
     assert_eq!(f.boxes(BoxStyle::Frame).len(), 1);
     assert_eq!(queues(&f), 0, "a frame draws no queue");
 
-    // `live` is held through the tool call; the hold that waits in it does
-    // so ahead of its box
+    // `replica.sq` serves a request inside the workload's `live`, and holds
+    // its `batch` and `kv` around the engine: all three at the engine alone
     let p = program("replica");
     let net = deployment::project(&p);
     let engine = net.node_of(stage(&p, "engine")).unwrap();
     assert_eq!(
         net.resident_pools(engine),
-        [pool(&p, "batch"), pool(&p, "kv")]
+        [pool(&p, "live"), pool(&p, "batch"), pool(&p, "kv")]
     );
+    let f = deployment::layout(&p, &net);
+    assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 0);
+
+    // `live` held across two stations is a box, and the hold that waits in
+    // it does so ahead of the box; `kv`, at `A` alone, is `A`'s
+    let p = compile(ACROSS);
+    let net = deployment::project(&p);
+    let a = net.node_of(stage(&p, "A")).unwrap();
+    assert_eq!(net.resident_pools(a), [pool(&p, "kv")]);
     let f = deployment::layout(&p, &net);
     assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 1, "live");
     assert_eq!(queues(&f), 1, "live's");
@@ -942,44 +953,12 @@ fn tikz_escapes_labels() {
     }
 }
 
-fn golden(name: &str, got: &str) {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/golden")
-        .join(name);
-    if std::env::var("SERQ_BLESS").is_ok() {
-        std::fs::write(&path, got).unwrap();
-        return;
-    }
-    let want = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("{}: {e}\nrun `make draw-golden`", path.display()));
-    assert!(
-        want == got,
-        "{name} changed; check the figure and run `make draw-golden`"
-    );
-}
-
-/// The writers' output, byte for byte. Deterministic: the layout takes no
-/// clock and no RNG.
-#[test]
-fn golden_files_are_current() {
-    let p = program("vllm");
-    golden(
-        "vllm.deployment.svg",
-        &serq::view::svg::render(&deployment::figure(&p)),
-    );
-    let p = program("llmd_nixl_pull");
-    golden(
-        "llmd_nixl_pull.deployment.svg",
-        &serq::view::svg::render(&deployment::figure(&p)),
-    );
-    docs_assets_are_current();
-}
-
 /// The figures the site shows are the program's figure, not a copy that
 /// once was: every `docs/assets/NAME.deployment.svg` is what `serq draw`
 /// makes of `examples/*/NAME.sq` or `docs/tutorial/programs/NAME.sq`
-/// now, and `make draw-golden` rewrites them with the goldens. A figure
-/// without its program is an error, not a keepsake.
+/// now, and `make draw-golden` rewrites them. A figure without its program
+/// is an error, not a keepsake.
+#[test]
 fn docs_assets_are_current() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut seen = 0;
@@ -1045,8 +1024,7 @@ fn the_examples_start_at_their_decision() {
     let p = program("routing");
     let net = deployment::project(&p);
     let d = decision(&net).expect("routing decides first");
-    let tool = End::Node(net.node_of(stage(&p, "tool")).unwrap());
-    assert!(!net.has_edge(tool, d));
+    assert!(net.node_of(stage(&p, "tool")).is_none(), "the workload's");
     assert!(has(&net, &p, d, "link").is_some());
     assert!(has(&net, &p, d, "rep").is_some());
     let p = program("pd_tandem");

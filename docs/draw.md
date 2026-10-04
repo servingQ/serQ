@@ -109,11 +109,11 @@ src/view/svg.rs        Figure -> String
 ```
 
 `Figure` is the test surface; no writer decides a coordinate. `tests/draw.rs`
-asserts on rectangles and on the projected `Net`, with golden files
-(`tests/golden/`, `make draw-golden`) guarding the writers; the figures the
+asserts on rectangles and on the projected `Net`. The figures the
 site shows (`docs/assets/NAME.deployment.svg`) must be what their program
-(the one `NAME.sq` under `examples/*/` or `docs/tutorial/programs/`) draws now, and
-`make draw-golden` rewrites them too. `make check` draws
+(the one `NAME.sq` under `examples/*/` or `docs/tutorial/programs/`) draws now, byte
+for byte, which also guards the SVG writer; `make draw-golden` rewrites
+them. `make check` draws
 every program in both formats, and every IR file in
 `tools/oracle/`.
 

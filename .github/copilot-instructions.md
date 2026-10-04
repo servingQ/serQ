@@ -10,7 +10,7 @@ serQ is a language in which an LLM serving deployment is a program. `docs/langua
 - An IR version bump moves `scripts/gen_lean_oracle.py` in the same PR (it pins the version and reads fields by name), with `lean/Serq/Oracle.lean` regenerated and `make lean` passing. Ask for it if the PR does not do it.
 - A new `CExpr` or `CStmt` variant drops out of the Lean fragment every oracle program that uses it, until the generator learns it (`gen_lean_oracle.py` raises `Fragment` on a construct it does not know). Say so when you see one.
 
-**Generated files move with their source.** `tools/oracle/*.ir.json` (`make oracle-ir`), `tests/golden/` and `docs/assets/*.deployment.svg` (`make draw-golden`) are committed. A change that alters one of them — the IR of an oracle program, a figure that `tests/draw.rs` pins (`vllm`, `llmd_nixl_pull`), or a figure the site shows — is incomplete without the regenerated file. Do not ask for regeneration a change does not affect.
+**Generated files move with their source.** `tools/oracle/*.ir.json` (`make oracle-ir`) and `docs/assets/*.deployment.svg` (`make draw-golden`) are committed. A change that alters one of them — the IR of an oracle program, or a figure the site shows — is incomplete without the regenerated file. Do not ask for regeneration a change does not affect.
 
 **Claims about vLLM cite the source.** Statements about what vLLM does are checked against `ref/vllm` (pinned by `scripts/fetch_vllm_ref.sh`) and cited as `file:line`, which `scripts/check_citations.py` verifies. Flag an uncited claim, or one that paraphrases the paper or docs instead of the code.
 
@@ -34,7 +34,7 @@ Ask them in this order and write down the answer to each, including "no finding"
 3. **Complexity did not grow.** Count what a reader must now know: the rules of `docs/language.md` §2 and §3, the fields and variants of `src/ir.rs`. A change that adds a rule must remove one or say which rule it replaces. A new IR field or variant is in the Lean fragment, or the change says it is outside it and why.
 4. **Intention could be plainer.** Every new name is read from the side it is written on (the session's side in a `session` block, the scheduler's in a `server` block or a pool option); an upstream name is used where the mechanism is upstream's and not otherwise; an error message says what was read, where, and where it exists. Propose the plainer spelling, not the observation that one might exist.
 5. **Evidence is the code, not the implementation.** A Before is copied from the repository, an After was run. A test's expected numbers are derived from the upstream code or the semantics by hand and the derivation is in the test's comment; a test that asserts what the implementation happens to do is not evidence. What is not verified is stated as such in the PR (an oracle path never exercised, a scenario that needs a machine the author lacks).
-6. **One change.** The PR does one thing and moves everything that thing touches: the spec, `docs/ir.md`, the tutorial, the editor grammars and `docs/hooks/serq_lexer.py`, the regenerated `tools/oracle/*.ir.json` and `tests/golden/`. Anything else in the diff is a separate PR.
+6. **One change.** The PR does one thing and moves everything that thing touches: the spec, `docs/ir.md`, the tutorial, the editor grammars and `docs/hooks/serq_lexer.py`, the regenerated `tools/oracle/*.ir.json` and `docs/assets/*.deployment.svg`. Anything else in the diff is a separate PR.
 
 ## Not worth a comment
 

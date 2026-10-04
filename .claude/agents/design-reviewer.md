@@ -36,7 +36,7 @@ Formatting and lint are checked by `make check`. Do not comment on them.
 
 **Claims about vLLM.** Check each statement about what vLLM does against `ref/vllm` (`scripts/fetch_vllm_ref.sh --sparse`, pin `0c87a197`) by opening the function, and check that it is cited as `file:line`. A claim that paraphrases the paper, the docs or memory is a finding.
 
-**One change, and its companions.** Does the PR do one thing? Did everything that thing touches move with it: the spec, `docs/ir.md`, the tutorial, the editor grammars, `docs/hooks/serq_lexer.py`, `tools/oracle/*.ir.json`, `tests/golden/`, `docs/assets/*.deployment.svg`, `tools/metrics.json`? Is the PR title a Conventional Commit with an English subject? Is the body in Korean?
+**One change, and its companions.** Does the PR do one thing? Did everything that thing touches move with it: the spec, `docs/ir.md`, the tutorial, the editor grammars, `docs/hooks/serq_lexer.py`, `tools/oracle/*.ir.json`, `docs/assets/*.deployment.svg`, `tools/metrics.json`? Is the PR title a Conventional Commit with an English subject? Is the body in Korean?
 
 ## Output
 
