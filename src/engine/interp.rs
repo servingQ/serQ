@@ -1538,12 +1538,20 @@ impl<'p> Interp<'p> {
     /// twice, which only the run can see (`kv[i], kv[j]` with i = j, #309).
     fn wanted(&mut self, pools: &'p [(CRef, CExpr, Option<CExpr>)], sid: usize) -> Vec<Wanted<'p>> {
         let mut out: Vec<Wanted<'p>> = vec![];
-        for (r, e, f) in pools {
+        for (k, (r, e, f)) in pools.iter().enumerate() {
             let pool = self.session_index(r, sid);
             let what = format!("hold {}", self.p.pools[pool].name);
-            if out.iter().any(|w| w.pool == pool) && self.error.is_none() {
+            if let Some(j) = out.iter().position(|w| w.pool == pool)
+                && self.error.is_none()
+            {
+                let member = match self.p.pools[pool].index {
+                    Some(i) => format!("{}[{i}]", self.p.pools[pool].name),
+                    None => self.p.pools[pool].name.clone(),
+                };
                 self.error = Some(format!(
-                    "`{what}`: the hold takes this member twice, its indices name the same one"
+                    "`{}` and `{}` name the same member, `{member}`: a hold takes each pool once",
+                    self.p.show_pool_ref(&pools[j].0),
+                    self.p.show_pool_ref(&pools[k].0)
                 ));
             }
             let units = self.amount(e, sid, &what);

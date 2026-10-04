@@ -147,6 +147,24 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         },
         "is reached twice: a program's blocks form a tree",
     );
+    // a hold over a pool that does not exist, twice: out of range first,
+    // not a panic naming it (#309)
+    refused(
+        &|q| {
+            let CStmt::Hold { pools, .. } = &mut q.blocks[q.session][0] else {
+                panic!("the session holds first")
+            };
+            let far = CRef {
+                base: 99,
+                count: 1,
+                index: None,
+            };
+            pools[0].0 = far.clone();
+            let again = pools[0].clone();
+            pools.push(again);
+        },
+        "pool reference 99..100 out of range",
+    );
     let run_d_as = |mode, growing: Option<CRef>| {
         let CStmt::Run {
             stage, work, also, ..

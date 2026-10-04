@@ -603,7 +603,9 @@ leases it; elsewhere the program does not link. A hold's index is read at
 admission, at such a statement and after a preemption, and the readings
 must name one member: the hold's body does not change an attribute its
 index reads (`set`, `choose`, `turn`), and an index read again inside
-reads attributes and numbers, not the state or the clock. The invariant
+reads attributes and numbers, not the state or the clock. A hold names each pool once: the same reference twice
+does not link, and two indices that name one member at run time fail the
+run. The invariant
 `allocated + cached ≤ cap` holds in every reachable configuration
 (`SerqLang.Step.invariant`). `end` releases every hold but *keeps* the
 session's cached prefixes: the cache does not know that a session has left
@@ -699,8 +701,7 @@ index. A pool's growers: the order they stalled, the head blocking the
 rest. Events at one instant: the order they were scheduled; sessions run
 in the order they became ready; jobs of a `ps` stage with equal finish
 tags finish in the order they started. Each pool has one queue, and a hold
-on several pools (each once: a pool twice does not link) waits in its first
-pool's; where the heads of two queues
+on several pools waits in its first pool's; where the heads of two queues
 both wait for room in one pool, or one stage serves several queues, the
 pool declared first is served first. A reader who finds an order not
 covered here has found a bug.

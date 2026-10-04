@@ -638,7 +638,7 @@ fn a_hold_takes_a_pool_once() {
         }
         run { horizon 1; }";
     let e = serq::compile_source(src, &Overrides::default()).unwrap_err();
-    assert!(e.contains("a hold takes pool `kv` twice"), "{e}");
+    assert!(e.contains("a hold takes `kv` twice"), "{e}");
     // indices the run sets to one member: only the run can tell
     let e = run_source(
         "pool kv[2] { cap 64; } stage d : delay;
@@ -649,5 +649,8 @@ fn a_hold_takes_a_pool_once() {
         None,
     )
     .unwrap_err();
-    assert!(e.contains("the hold takes this member twice"), "{e}");
+    assert!(
+        e.contains("`kv[i]` and `kv[j]` name the same member, `kv[1]`"),
+        "{e}"
+    );
 }
