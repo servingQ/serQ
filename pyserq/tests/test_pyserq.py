@@ -1,6 +1,7 @@
 """pyserq gives what the CLI gives: the same report for the same program,
 overrides and seed, and the samples `--dump` writes.
 
+    maturin develop -m pyserq/Cargo.toml      # pyserq from this checkout
     python pyserq/tests/test_pyserq.py        # with pyserq installed and target/release/serq built
 """
 
