@@ -205,8 +205,6 @@ def test_draw_is_serq_draw():
     # every example, both formats; a program split into a workload and a
     # server draws what one request runs, which a compiled Program does not say
     for f in sorted((ROOT / "examples").rglob("*.sq")):
-        if subprocess.run([CLI, "check", str(f)], capture_output=True).returncode:
-            continue
         for fmt in ["svg", "tikz"]:
             want = subprocess.run([CLI, "draw", str(f), "--format", fmt],
                                   capture_output=True, text=True, check=True).stdout
