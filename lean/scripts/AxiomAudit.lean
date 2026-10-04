@@ -72,3 +72,11 @@ import Serq
 #print axioms SerqLang.Foster.hitTime_eq
 #print axioms SerqLang.Foster.returnTime_le_of_drift
 #print axioms SerqLang.Foster.walk_hitTime_le
+-- a program with random arrivals as a Markov kernel, and Dai et al.'s Theorem 2(b) on it
+-- (Serq/Chain.lean, Serq/Papers/DaiStable.lean)
+#print axioms SerqLang.Foster.Kernel.apply_ofOutcomes
+#print axioms SerqLang.Papers.DaiStable.backlog_slot
+#print axioms SerqLang.Papers.DaiStable.backlog_lt_of_F
+#print axioms SerqLang.Papers.DaiStable.drift
+#print axioms SerqLang.Papers.DaiStable.hitTime_le
+#print axioms SerqLang.Papers.DaiStable.returnTime_le
