@@ -260,6 +260,14 @@ fn a_budget_does_not_read_budget_left() {
             "{budget}; {chunk}: {e}"
         );
     }
+    // the rule is the Budget moment's: a cost, a serve key and a hold's
+    // header read it and the run ends
+    let src = "pool kv { cap 64; }
+        stage e : step { budget 8; cost 1 + 0 * budget_left(e); serve by (budget_left(e)); memory kv; }
+        workload { arrive batch(2); }
+        session { hold kv (min(8, budget_left(e))) { run e prefill (4); } end; }
+        run { horizon 10; }";
+    run_source(src, &Overrides::default(), None).unwrap();
 }
 
 /// Inside a queue's entry an aggregate's index is the aggregate's, not a

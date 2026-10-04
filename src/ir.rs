@@ -1157,8 +1157,8 @@ impl Validator<'_> {
             // budget_left plans an iteration from a budget: a budget read
             // from it, this engine's or another's, plans from itself (#284)
             CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Budget => Err(
-                "a step's budget or chunk may not read `budget_left(…)`: budget_left is planned \
-                 from a budget, so the two would wait on each other"
+                "a step's budget or chunk may not read `budget_left(…)`: budget_left plans an \
+                 iteration from a step's budget, so a budget that reads it can read itself"
                     .into(),
             ),
             CExpr::Call(Fun::CachedIn, _) if m == Moment::Gauge => Err(
