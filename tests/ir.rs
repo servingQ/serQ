@@ -741,3 +741,24 @@ fn an_old_or_keyless_choose_is_refused_plainly() {
     let e = Program::from_json(&v.to_string()).unwrap_err();
     assert!(e.contains("no key"), "{e}");
 }
+
+/// An error `Program::validate` finds in a statement of a text program
+/// points at the statement, as a linker error does (#279).
+#[test]
+fn a_validate_error_points_at_the_statement() {
+    let src = "pool kv { cap 64; }
+stage d : delay;
+workload { arrive batch(1); }
+session {
+  run d (1);
+  load kv (1);
+  end;
+}
+run { horizon 10; }";
+    let e = compile_source(src, &Overrides::default()).unwrap_err();
+    assert!(
+        e.starts_with("6:8: session: `load kv` outside a hold of `kv`"),
+        "{e}"
+    );
+    assert!(e.contains("6 |   load kv (1);"), "{e}");
+}

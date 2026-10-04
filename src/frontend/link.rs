@@ -142,6 +142,9 @@ struct Linker<'a> {
     pools: HashMap<String, (usize, usize)>,
     stages: HashMap<String, (usize, usize)>,
     blocks: Vec<Vec<CStmt>>,
+    /// Per block, per statement: where the statement is in the text, as
+    /// far as a reference or an expression in it says (#279).
+    spans: Vec<Vec<Option<Span>>>,
     prog: &'a Program,
     /// Terms the program's aggregates have written out so far, nested ones
     /// included, against `MAX_OVER`.
@@ -240,6 +243,15 @@ pub const BUILTIN_ATTRS: [&str; 9] = [
 ];
 
 pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
+    link_located(prog, ov).map(|(p, _)| p)
+}
+
+/// Where each linked statement is in the text: per block, per statement.
+pub type Spans = Vec<Vec<Option<Span>>>;
+
+/// `link`, and where each statement of the IR came from, so that an error
+/// `Program::validate` finds in a statement can point at the text.
+pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> {
     for (name, _) in &ov.lets {
         if !prog.lets.iter().any(|(declared, _)| declared == name) {
             let names: Vec<_> = prog.lets.iter().map(|(n, _)| n.as_str()).collect();
@@ -261,6 +273,7 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         pools: HashMap::new(),
         stages: HashMap::new(),
         blocks: vec![],
+        spans: vec![],
         prog,
         over_terms: std::cell::Cell::new(0),
     };
@@ -621,7 +634,39 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         arrivals,
     };
     crate::frontend::lint::lint(&linked).map_err(LinkError::new)?;
-    Ok(linked)
+    Ok((linked, lk.spans))
+}
+
+/// Where a statement is: its first reference's, else its first located
+/// expression's.
+fn stmt_span(s: &Stmt) -> Option<Span> {
+    fn expr_span(e: &Expr) -> Option<Span> {
+        match e {
+            Expr::Located(span, _) => Some(*span),
+            Expr::Num(_) | Expr::Var(_) => None,
+            Expr::Unary(_, a) => expr_span(a),
+            Expr::Binary(_, a, b) | Expr::Over(_, _, a, b) => expr_span(a).or_else(|| expr_span(b)),
+            Expr::Cond(c, a, b) => expr_span(c)
+                .or_else(|| expr_span(a))
+                .or_else(|| expr_span(b)),
+            Expr::Sample(_, xs) => xs.iter().find_map(expr_span),
+            Expr::Call(_, args) => args.iter().find_map(|a| match a {
+                Arg::Expr(x) => expr_span(x),
+                Arg::Ref(r) => r.span,
+            }),
+        }
+    }
+    match s {
+        Stmt::Hold { pools, .. } => pools
+            .first()
+            .and_then(|(r, e, _)| r.span.or_else(|| expr_span(e))),
+        Stmt::Grow(r, e) | Stmt::Load(r, e) => r.span.or_else(|| expr_span(e)),
+        Stmt::Drop(r) | Stmt::Release(r) => r.span,
+        Stmt::Run { stage, work, .. } => stage.span.or_else(|| expr_span(work)),
+        Stmt::Set(_, e) | Stmt::Observe(_, e) | Stmt::Branch(e, _, _) => expr_span(e),
+        Stmt::Choose { count, .. } => expr_span(count),
+        _ => None,
+    }
 }
 
 /// Member `i` of an `n`-family's counterpart in a family of `count` from
@@ -1134,6 +1179,8 @@ impl Linker<'_> {
     fn block(&mut self, stmts: &[Stmt]) -> LResult<BlockId> {
         let id = self.blocks.len();
         self.blocks.push(vec![]);
+        self.spans.push(vec![]);
+        self.spans[id] = stmts.iter().map(stmt_span).collect();
         let mut out = vec![];
         for s in stmts {
             let cs = match s {

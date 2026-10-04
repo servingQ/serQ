@@ -134,10 +134,12 @@ fn a_context_variable_outside_its_moment_is_rejected() {
             hold reqs (1), kv (n) {{ prefill (n) growing kv; }} end; }}"
     );
     let e = check(&src).expect_err("rejected");
+    // the block's role, after the statement's place in the text (#279)
     assert!(
-        e.starts_with("session: "),
-        "names the block by its role: {e}"
+        e.starts_with("7:50: session: "),
+        "names the line and the block's role: {e}"
     );
+    assert!(e.contains("set x = tokens;\n"), "shows the line: {e}");
     assert!(e.contains("`tokens` is read in a session statement"), "{e}");
     assert!(e.contains("exists only in a step stage's cost"), "{e}");
     // every other moment refuses what it does not supply, and says where it
@@ -203,7 +205,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
             // an `init` statement is named as such
             let src = engine("", "", "").replace("init { set K = 0; }", "init { set K = age; }");
             let e = check(&src).expect_err("rejected");
-            assert!(e.starts_with("init: `age`"), "{e}");
+            assert!(e.contains(": init: `age`"), "{e}");
             continue;
         }
         let e = match check(&src) {

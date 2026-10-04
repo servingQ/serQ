@@ -64,14 +64,23 @@ fn overridden(ov: &Overrides) -> Vec<String> {
 
 /// Link a parsed program and check its IR.
 fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir::Program, String> {
-    let mut p = frontend::link::link(&prog, ov).map_err(|e| e.render_in(src, &prog.libs))?;
+    let (mut p, spans) =
+        frontend::link::link_located(&prog, ov).map_err(|e| e.render_in(src, &prog.libs))?;
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
     }
     // The linker resolves names; the IR's own check is what knows which
     // moment supplies which context variable (`age` in a session statement,
-    // `tokens` in a queue key), so a text program meets it too.
-    p.validate()?;
+    // `tokens` in a queue key), so a text program meets it too. An error
+    // about a statement points at it in the text (#279).
+    p.validate_located().map_err(|e| {
+        let span =
+            e.at.and_then(|(b, k)| spans.get(b)?.get(k).copied().flatten());
+        match span {
+            Some(span) => span.render_in(src, &prog.libs, &e.message),
+            None => e.message,
+        }
+    })?;
     Ok(p)
 }
 
