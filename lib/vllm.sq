@@ -9,6 +9,11 @@
 // (kv_cache_manager.py:289-300).
 def reusable(x, bs) = floor((x - 1) / bs) * bs;
 
+// `long_prefill_token_threshold` as a step stage's `chunk`: the cap `c`
+// holds only while more than one request is running or waiting for a slot
+// of `reqs`; a request alone takes the whole budget (scheduler.py:606-616).
+def long_prefill(reqs, c) = residents + queued(reqs) > 1 ? c : 0;
+
 // One request of `prompt` tokens that wants `o` back, sent at `t0`, through
 // vLLM's scheduler and one engine: a slot of `reqs` and the blocks of `kv`,
 // continuous batching with chunked prefill on `engine`.

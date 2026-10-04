@@ -33,7 +33,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from gen_lean_oracle import Fragment, Lean, affine, nat, one_ref, COST_VARS  # noqa: E402
+from gen_lean_oracle import Fragment, Lean, affine, chunk_rule, nat, one_ref, COST_VARS  # noqa: E402
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 CDIR = os.path.join(ROOT, "tools", "claims")
@@ -264,9 +264,11 @@ class Program:
                     raise Fragment(f"pool {p['name']}: one queue key")
                 key = f"some fun x => {self.lean.top(p['queue'][0])}"
             pools.append(f"⟨{nat(p['cap'], 'cap')}, {nat(p['block'] or 1, 'block')}, false, {key}⟩")
+        chunk, lift = chunk_rule(step["chunk"])
         return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
-                f"{nat(fold(step['chunk']), 'chunk')}, "
-                f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, {only}⟩")
+                f"{nat(chunk, 'chunk')}, "
+                f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, {only}, "
+                f"{'none' if lift is None else 'some ' + str(lift)}⟩")
 
     def grown_pools(self):
         out = set()

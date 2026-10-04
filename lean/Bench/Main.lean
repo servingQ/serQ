@@ -4,7 +4,7 @@ Run the executable semantics (`Serq.Exec`) of the vLLM replay program
 observations as CSV. A performance probe for "Lean core, Rust shell": the
 program is compiled in; the deployment and the sessions come from the file
 
-  {"pools": [[cap, block, viaEngine], ...], "budget": B, "chunk": c,
+  {"pools": [[cap, block, viaEngine], ...], "budget": B, "chunk": c, "chunkLift": p (optional),
    "memory": p, "cost": [c0, c_tok, c_pre, c_dec, c_kv, c_att2],
    "horizon": T, "turnSlot": t, "moreSlot": m, "computedSlot": c,
    "init": [[[slot, value], ...], ...], "sessions": [[[[slot, value], ...], ...], ...]}
@@ -62,9 +62,14 @@ def main (args : List String) : IO UInt32 := do
     | .error _ => pure #[(1 : Json), 0, 0, 0, 0, 0])
   let cs ← IO.ofExcept (costArr.toList.mapM natOf)
   let c := fun k => cs.getD k 0
+  -- the pool whose waiting requests count toward lifting the chunk cap
+  -- (`Deployment.chunkLift`); absent, the cap always holds
+  let chunkLift : Option ℕ := match j.getObjVal? "chunkLift" with
+    | .ok v => (natOf v).toOption
+    | .error _ => none
   let D : Deployment := ⟨pools, budget, chunk, memory,
     fun st => c 0 + c 1 * st.tokens + c 2 * st.prefilled + c 3 * st.decoders
-      + c 4 * st.kvDecode + c 5 * st.attention2, none⟩
+      + c 4 * st.kvDecode + c 5 * st.attention2, none, chunkLift⟩
   let computedSlot ← IO.ofExcept (natOf (j.getObjValD "computedSlot"))
   let w : Workload := ⟨init, sessions, some turnSlot, moreSlot, some computedSlot, none⟩
   let t0 ← IO.monoMsNow

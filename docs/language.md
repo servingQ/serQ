@@ -969,7 +969,7 @@ serQ began as the language of a lecture on serving queues; `docs/review.md`
 | `multi-turn/routing.sq` | four replicas, five routing policies | — |
 | `multi-turn/vllm.sq` | vLLM v1's engine (`lib/vllm.sq`) under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
 | `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |
-| `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle (§7), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
+| `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle (§7), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace (§8) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
 | `papers/*.sq` | three scheduling papers' serving systems | their claims, proved in Lean ([use cases](use-cases/index.md)) |
@@ -985,8 +985,8 @@ package at a pinned commit and runs serQ programs in its own checks.
 The table is `examples/replay/vllm_replay.sq` (and
 `examples/oracle/vllm_request.sq`, its one-request form) against vLLM's
 scheduler at the pinned revision (`ref/vllm` at 0c87a197; the A100 testbed
-runs vLLM 0.30.0, whose scheduler gives the same answers on the scenarios
-below). It is a correspondence under synchronous scheduling at that
+runs vLLM 0.30.0, whose scheduler gives the same answers on the first six
+scenarios below). It is a correspondence under synchronous scheduling at that
 revision, not to the latest vLLM ([the vLLM use case](use-cases/vllm.md)).
 `lib/vllm.sq`'s `vllm_request`, the engine of the workload examples, is a
 simpler one: it does not `reserve`, takes its hit from the cache alone
@@ -999,7 +999,7 @@ rather than from the previous prompt, and caches `prompt + o`.
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk` | `scheduler.py:612-616, 675-676, 1115-1128` |
+| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk long_prefill(reqs, c)`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
 | a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `prefill (known - c)`, `decode (o - 1 - (known - prompt))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |
@@ -1040,10 +1040,11 @@ request runs (`growing kv`).
    `scripts/check_oracle_gpu.py`), the serQ program (`tests/vllm_oracle.rs`)
    and the Lean executable semantics (`Serq/Oracle.lean`, one theorem per
    scenario, `decide +kernel`) give the same first-token step, last-token
-   step and preemption count for every request (6 scenarios:
+   step and preemption count for every request (7 scenarios:
    self-preemption, chunked prefill sharing the budget, the request cap,
    head-of-line blocking, the chunk cap, six mixed requests with staggered
-   arrivals on 39 blocks). None of them uses the prefix cache.
+   arrivals on 39 blocks, and the chunk cap lifted for a request alone; the
+   A100 engine ran the first six). None of them uses the prefix cache.
 2. *The prefix cache* (`tools/oracle/cache_trace.*`): three sessions of the
    short-context trace with prefix hits, replayed by the real scheduler and
    KV-cache manager (`tools/vllm_replay_oracle.py`), by

@@ -18,7 +18,9 @@
 //! in 1024-token chunks, later requests share what its last chunk leaves),
 //! `seqcap` (`max_num_seqs = 2` admits two of four), `hol` (FCFS with
 //! head-of-line blocking on memory), `mixed` (mixed lengths and arrivals
-//! on a small pool), `longchunk` (`long_prefill_token_threshold`).
+//! on a small pool), `longchunk` (`long_prefill_token_threshold`), `alone`
+//! (the cap is lifted while one request is eligible, scheduler.py:606-616:
+//! the first request takes the whole budget; CPU oracle only, no A100 run).
 
 use std::path::Path;
 
@@ -126,7 +128,15 @@ fn scenarios() -> Vec<String> {
     names.sort();
     assert_eq!(
         names,
-        ["chunked", "hol", "longchunk", "mixed", "preempt", "seqcap"],
+        [
+            "alone",
+            "chunked",
+            "hol",
+            "longchunk",
+            "mixed",
+            "preempt",
+            "seqcap"
+        ],
         "the oracle scenarios"
     );
     names

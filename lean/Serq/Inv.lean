@@ -458,7 +458,8 @@ theorem inv_startIteration {P : Prog} (m : Machine) (h : Inv P m) : Inv P (start
   unfold startIteration
   simp only
   split
-  · have h1 := inv_assign D m.preempts (m.jobs.length + 100000) { m with iter := [] } 0 D.budget h
+  · have h1 := inv_assign (iterDeployment D m) m.preempts (m.jobs.length + 100000)
+      { m with iter := [] } 0 D.budget h
     split
     · exact h1
     · exact h1

@@ -111,6 +111,13 @@ structure Deployment where
   /-- `serve only (p)`: a resident for which `p` is 0 gets no token in the
   iteration; `none` serves every resident -/
   only : Option (ServeEnv → ℕ)
+  /-- `some p`: the chunk cap holds only while the engine's jobs and the
+  requests waiting in pool `p` number more than one, and an iteration that
+  starts with one or none of them runs uncapped. This is the program's
+  `chunk (residents + queued(p) > 1 ? c : 0)`, vLLM's rule (scheduler.py
+  `long_prefill_token_threshold` when `num_eligible_reqs > 1`). `none`:
+  the cap always holds. -/
+  chunkLift : Option ℕ
 
 /-- What a claim over iterations reads (serQ `Moment::Iteration`): the
 iteration's start, the tokens the engine scheduled before it (`served`), its
@@ -1100,6 +1107,29 @@ def iterRec (m : Machine) (st : IterStats) : IterRec :=
     holders := (List.range D.pools.length).map fun p => (pst m p).holders.length,
     used := (List.range D.pools.length).map fun p => (pst m p).used }
 
+/-- The deployment an iteration starting in `m` runs: the chunk cap lifted
+when `chunkLift` names a pool and the engine's jobs and that pool's waiting
+requests number one or none, as they stand before the iteration (the
+interpreter reads `residents` and `queued` at the `Budget` moment). -/
+def iterDeployment (m : Machine) : Deployment :=
+  match D.chunkLift with
+  | some p => if m.jobs.length + (pst m p).queue.length ≤ 1 then { D with chunk := 0 } else D
+  | none => D
+
+/-- Without `chunkLift` an iteration runs `D` itself. -/
+theorem iterDeployment_of_none (h : D.chunkLift = none) (m : Machine) : iterDeployment D m = D := by
+  unfold iterDeployment; rw [h]
+
+/-- The iteration's deployment differs from `D` in its chunk cap only. -/
+theorem iterDeployment_pools (m : Machine) : (iterDeployment D m).pools = D.pools := by
+  unfold iterDeployment; split <;> (try split) <;> rfl
+
+theorem iterDeployment_only (m : Machine) : (iterDeployment D m).only = D.only := by
+  unfold iterDeployment; split <;> (try split) <;> rfl
+
+theorem iterDeployment_pdef (m : Machine) (p : ℕ) : pdef (iterDeployment D m) p = pdef D p := by
+  unfold pdef; rw [iterDeployment_pools]
+
 /-- Start an iteration on the idle engine. It lasts `cost` (at least one
 clock unit) if it serves a token or preempted; otherwise the engine stays
 idle until the next event. -/
@@ -1107,13 +1137,15 @@ def startIteration (m : Machine) : Machine :=
   let busy := !m.jobs.isEmpty ||
     (List.range D.pools.length).any fun p => (pdef D p).viaEngine && !(pst m p).queue.isEmpty
   if busy then
-    let m' := assign D (m.jobs.length + 100000) { m with iter := [] } 0 D.budget m.preempts
+    -- the chunk cap as it holds for this iteration, read before it starts
+    let Di := iterDeployment D m
+    let m' := assign Di (m.jobs.length + 100000) { m with iter := [] } 0 D.budget m.preempts
     if !m'.iter.isEmpty || m'.preempts ≠ m.preempts then
       let st := iterStats D m'
       { m' with iterEnd := some (m'.now + max 1 (D.cost st), m'.nextDelay)
                 nextDelay := m'.nextDelay + 1
                 served := m'.served + st.tokens
-                last := iterRec D m' st }
+                last := iterRec Di m' st }
     else { m' with iterEnd := none }
   else { m with iter := [], iterEnd := none }
 

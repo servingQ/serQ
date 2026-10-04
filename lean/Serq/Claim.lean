@@ -559,8 +559,10 @@ theorem startIteration_inv {T R : ℕ} (hb : RateBound D T R) (m : Machine) (h :
   unfold startIteration
   simp only
   split
-  · obtain ⟨hs, htok⟩ := assign_same D m.preempts (m.jobs.length + 100000) { m with iter := [] } 0 D.budget
-    set m' := assign D (m.jobs.length + 100000) { m with iter := [] } 0 D.budget m.preempts with hm'
+  · obtain ⟨hs, htok⟩ := assign_same (iterDeployment D m) m.preempts (m.jobs.length + 100000)
+      { m with iter := [] } 0 D.budget
+    set m' := assign (iterDeployment D m) (m.jobs.length + 100000) { m with iter := [] } 0 D.budget
+      m.preempts with hm'
     have hn : m'.now = m.now := hs.now
     have hsv : m'.served = m.served := hs.served
     have hie : m'.iterEnd = none := hs.iterEnd.trans hi
