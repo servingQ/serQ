@@ -405,7 +405,9 @@ transfer is outside the fragment until `Exec` gives a hold's pool
 its own release)
 with expressions built from integer constants, attributes, `Now`,
 `CachedIn`, `BudgetLeft`, `min`, `max`, `+`, `-` (truncated at 0), `*`,
-`floor(a / b)`, comparisons and conditionals. In a cost, a context
+`floor(a / b)`, `ceil(a / k)` with a constant `k`, comparisons, `!`, `&&`,
+`||` and conditionals; an expression of constants alone is folded first,
+as the interpreter computes it. In a cost, a context
 variable with a zero coefficient (the replay's cost at `a = b = 0`) is
 dropped. Its generator translates an IR file into Lean and
 fails on anything outside the fragment. The Lean `Branch` takes the first

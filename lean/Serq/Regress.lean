@@ -32,7 +32,7 @@ def chunkExpr : Prog := [route|
 
 /-- `serq run`: first, done per session, and 0 preemptions. -/
 theorem regress_chunk_expr :
-    let m := Exec.runW ⟨[⟨160, 16, false, none⟩, ⟨2, 1, true, none⟩], 32, 0, some 0, fun _ => 1, none, some fun c => if (if ((c.queued 1) + c.residents) > 2 then 1 else 0) ≠ 0 then 8 else 0⟩ 1000
+    let m := Exec.runW ⟨[⟨160, 16, false, none⟩, ⟨2, 1, true, none⟩], 32, 0, some 0, fun _ => 1, none, some fun c => if (((c.queued 1) + c.residents) > 2) then 8 else 0⟩ 1000
       ⟨[[(9, 40), (10, 4)], [(9, 40), (10, 6)], [(9, 40), (10, 2)]], [], none, 0, some 8, none⟩ chunkExpr
     ([observed m 0, observed m 1], m.preempts) =
     ([[(0, 5), (1, 5), (2, 11)], [(0, 9), (1, 11), (2, 13)]], 0) := by
