@@ -244,6 +244,25 @@ def test_errors_are_value_errors():
         raise AssertionError("no ValueError")
 
 
+def test_an_override_on_ir_says_what_it_overrides():
+    # IR has its constants folded and its definitions expanded; the refusal
+    # names the `let` or the `def`, not the CLI's flag
+    ir = Path(tempfile.mkdtemp(prefix="pyserq-")) / "mg1.json"
+    ir.write_text(pyserq.compile(MG1).to_json())
+    for call, what in [
+        (lambda: pyserq.compile(ir, sets={"lam": 1}), "a `let` override"),
+        (lambda: pyserq.compile(ir, defs={"service": "~exp(1)"}), "a `def` override"),
+        (lambda: pyserq.draw(ir, sets={"lam": 1}), "a `let` override"),
+        (lambda: pyserq.draw(ir, defs={"service": "~exp(1)"}), "a `def` override"),
+    ]:
+        try:
+            call()
+        except ValueError as e:
+            assert str(e).startswith(what) and "--" not in str(e), e
+            continue
+        raise AssertionError("no ValueError")
+
+
 def test_runs_in_threads_are_the_runs_alone():
     ps = [pyserq.compile(MG1, seed=s, horizon=1e6) for s in range(4)]
     t0 = time.time()

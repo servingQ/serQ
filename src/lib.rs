@@ -97,12 +97,16 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     if path.extension().is_some_and(|e| e == "json") {
         if !ov.lets.is_empty() {
-            return Err("--set applies to program text, not to IR (constants are folded)".into());
+            return Err("a `let` override applies to program text, not to IR \
+                 (an IR's constants are already folded)\n\
+                 help: override the program text (.sq) this IR was compiled from"
+                .into());
         }
         if !ov.defs.is_empty() {
-            return Err(
-                "--def applies to program text, not to IR (definitions are expanded)".into(),
-            );
+            return Err("a `def` override applies to program text, not to IR \
+                 (an IR's definitions are already expanded)\n\
+                 help: override the program text (.sq) this IR was compiled from"
+                .into());
         }
         let mut p = ir::Program::from_json(&text)?;
         if let Some(h) = ov.horizon {
