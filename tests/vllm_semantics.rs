@@ -321,14 +321,28 @@ fn chunked_prefill_takes_ceil_prompt_over_budget_steps() {
     assert_eq!(ttft, 3.0, "{}", r.text());
 }
 
-/// scheduler.py:612-616, 675-676: `long_prefill_token_threshold` caps one
-/// request's chunk only when it is not alone.
+/// scheduler.py:606-616, 675-676: `long_prefill_token_threshold` caps one
+/// request's chunk only when it is not alone. The program says so in its
+/// `chunk` (`lib/vllm.sq`'s `long_prefill`); a constant cap is not vLLM's.
 #[test]
 fn long_prefill_threshold_applies_only_with_company() {
-    let alone = run(&engine(1, "3000", "1", 1000, 16, 4096, 16, "chunk 1000;"));
-    assert_eq!(alone.observe("ttft").unwrap().samples[0], 3.0);
-    // serQ applies `chunk` unconditionally: the "alone" exception of vLLM
-    // (num_eligible_reqs > 1) is not modelled; document it.
+    let chunk = "chunk (residents + queued(reqs) > 1 ? 1000 : 0);";
+    // alone: uncapped, the whole 3000-token prompt in one 4096-token step
+    let alone = run(&engine(1, "3000", "1", 1000, 16, 4096, 16, chunk));
+    assert_eq!(
+        alone.observe("ttft").unwrap().samples,
+        vec![1.0],
+        "{}",
+        alone.text()
+    );
+    // with company: 1000 tokens each per step, three steps
+    let two = run(&engine(2, "3000", "1", 1000, 16, 4096, 16, chunk));
+    assert_eq!(
+        two.observe("ttft").unwrap().samples,
+        vec![3.0, 3.0],
+        "{}",
+        two.text()
+    );
 }
 
 /// kv_cache_manager.py:289-300, block_pool.py:776-805: a finished request's

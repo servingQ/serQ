@@ -18,18 +18,21 @@
 //! The scenario does not exercise the budget a served victim returns: the
 //! answer is the same without it.
 
-use serq::{Overrides, compile_source, program_path, run_ir};
+use serq::{Overrides, compile_source_at, program_path, run_ir};
 
-const ENGINE: &str = "stage engine : step { budget B; chunk chunk; cost 1; memory kv; }";
+const ENGINE: &str =
+    "stage engine : step { budget B; chunk long_prefill(reqs, chunk); cost 1; memory kv; }";
 
 #[test]
 fn a_served_resident_preempted_in_its_iteration_leaves_it() {
-    let src = std::fs::read_to_string(program_path("vllm_request")).unwrap();
+    let path = program_path("vllm_request");
+    let src = std::fs::read_to_string(&path).unwrap();
     assert!(src.contains(ENGINE), "the oracle program's engine moved");
-    // newest first; vLLM's chunk cap holds only with another request eligible
+    // newest first (the oracle program's chunk is vLLM's already: the cap
+    // holds only with another request eligible)
     let src = src.replace(
         ENGINE,
-        "stage engine : step { budget B; chunk (residents + queued(reqs) > 1 ? chunk : 0); \
+        "stage engine : step { budget B; chunk long_prefill(reqs, chunk); \
          cost 1; serve by (-admission); memory kv; }",
     );
     let mut ov = Overrides::default();
@@ -52,7 +55,7 @@ fn a_served_resident_preempted_in_its_iteration_leaves_it() {
         .iter()
         .map(|&(p, o, a)| vec![("prompt", p), ("o", o), ("arrive", a)])
         .collect();
-    let ir = compile_source(&src, &ov)
+    let ir = compile_source_at(&src, path.parent(), &ov)
         .unwrap()
         .with_sessions(&sessions)
         .unwrap();

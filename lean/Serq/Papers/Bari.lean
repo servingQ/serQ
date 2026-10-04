@@ -497,7 +497,8 @@ theorem rad_start (m : Machine) (h : R m) :
   have hR : R { m with iter := fillIter Dr (m.jobs.filter (serves Dr m)) 128 } :=
     R.mk' h.jobs h.nodup h.attr h.stack hT hS
   unfold startIteration
-  simp only
+  -- the deployment has no `chunkLift`: every iteration runs it as it is
+  simp only [iterDeployment_of_none _ (rfl : Claims.BariRad.deployment.chunkLift = none)]
   split
   · have hb : Claims.BariRad.deployment.budget = 128 := rfl
     rw [hb, ha]

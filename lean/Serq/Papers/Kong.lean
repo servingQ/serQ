@@ -44,7 +44,7 @@ def volE : Env → ℕ := fun x => x.attr 9 * x.attr 10 + (x.attr 10 * x.attr 10
 
 theorem prog_eq : Pk = .observe 0 (fun x => x.attr 10) (.observe 1 volE Hk) := rfl
 
-theorem deployment_eq : Dk = ⟨[⟨20000, 1, false, some volE⟩], 1000000, 0, none, fun _ => 1, none⟩ := rfl
+theorem deployment_eq : Dk = ⟨[⟨20000, 1, false, some volE⟩], 1000000, 0, none, fun _ => 1, none, none⟩ := rfl
 
 /-! ### One command -/
 
@@ -1813,6 +1813,8 @@ theorem start_bnd {w : Workload} {g : Ghost} {m : Machine} (hF : Fam w) (h : Set
       (pdef Claims.KongSvf.deployment p).viaEngine && !(pst m p).queue.isEmpty) = false := by
     simp [pdef, deployment_eq]
   unfold startIteration
+  -- the deployment has no `chunkLift`: every iteration runs it as it is
+  simp only [iterDeployment_of_none _ (rfl : Claims.KongSvf.deployment.chunkLift = none)]
   rw [hvia, Bool.or_false]
   by_cases hj : m.jobs = []
   · have hna : ¬ ∃ j < w.init.length, g.c j = .a := fun he => (jobs_nonempty_iff hI).mpr he hj

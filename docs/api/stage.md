@@ -124,7 +124,7 @@ From `examples/multi-turn/vllm.sq`:
 ```serq
 stage engine : step {
   budget B;
-  chunk chunk_cap;
+  chunk long_prefill(reqs, chunk_cap);
   cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
   memory kv;
 }
