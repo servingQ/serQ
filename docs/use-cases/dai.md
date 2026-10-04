@@ -107,7 +107,7 @@ def work_conserving : Prop :=
     - every state reaches every state (`irreducible`);
     - every state is positive recurrent (`positive_recurrent`).
 
-  This is Theorem 2(b) in the paper's own terms, from `Serq/Recurrence.lean`: Foster's drift to `F`, plus a positive chance of reaching one state from `F`, gives positive recurrence.
+  This is Theorem 2(b) for the chain whose state is the queue's content, which is the paper's chain, from `Serq/Recurrence.lean`: Foster's drift to `F`, plus a positive chance of reaching one state from `F`, gives positive recurrence. On the program's own machine chain (`DaiProgram`), whose states never repeat, the engine empties in bounded expected time from every state and again within one constant from every empty machine (`hit_idle_le`, `return_idle`).
 - **`not_work_conserving`** is a witness. Two requests arrive 467.5 ms apart, and after 12 events (at 0.935 s) the first decodes alone while the second's 290 prompt tokens wait: `demand = 291`, `tokens = 1`. The machine is computed in the kernel (`decide +kernel`).
 
 ## On the run
@@ -131,6 +131,7 @@ The interpreter finds FasterTransformer's witness at the same instant as the Lea
 
 ## What it leaves out
 
+- **The machine chain's own states.** They are transient: the clock and the ended sessions never repeat. Positive recurrence is proved for the job-list chain and, on the machine chain, for the event that the engine is empty. That the machine's job list has the job-list chain's law is the one-step `simulation` plus Dynkin's criterion, not a Lean theorem.
 - **Poisson arrivals in continuous time.** The kernel draws a finite number of arrivals at each iteration, at most 10 000, independently of the past: arrivals embedded at iteration ends, not `arrive poisson(λ)`. Outside `F` every iteration is full and lasts $t_{b_{\max}}$, so $E[k] = \lambda t_{b_{\max}}$ and the condition $1280\,E[k] < 128$ is the paper's $\lambda (v_p + v_d) < b_{\max}/t_{b_{\max}}$. The divergence above capacity also needs the strong law on the arrivals.
 - **Orca and vanilla vLLM.** Orca needs `serve by` and vanilla vLLM `exclusive prefill`, and the Lean fragment has neither. `Exec.work_conserving` would cover Orca once the fragment sorts residents by a key, since the fill conserves work in any order.
 - **§5 and §6.** Multi-class and DAG workloads are written with `branch with` and `choose`, but the fragment has one engine. Fork-join needs a statement that creates sessions. The batch-size limit of §6 is a pool `cap` the program can write, and its stability region is not claimed.

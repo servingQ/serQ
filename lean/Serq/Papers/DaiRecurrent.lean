@@ -323,21 +323,13 @@ theorem V_next_le (x : AState A) {k : ℕ} (hk : k ∈ Finset.range (K + 1)) :
     have : (0 : ℝ) ≤ 1280 * K := by positivity
     linarith
 
-theorem dapply_const (c : ℝ) (x : AState A) : (akernel A).apply (fun _ => c) x = c := by
-  rw [apply_akernel, sum_p_mul]
-
-theorem dapply_add (f g : AState A → ℝ) (x : AState A) :
-    (akernel A).apply (fun y => f y + g y) x = (akernel A).apply f x + (akernel A).apply g x := by
-  rw [apply_akernel, apply_akernel, apply_akernel, ← Finset.sum_add_distrib]
-  exact Finset.sum_congr rfl fun k _ => by ring
-
 theorem applyN_le : ∀ (n : ℕ) (x : AState A),
     (akernel A).applyN n (V A) x ≤ V A x + 1280 * K * n
   | 0, x => by simp [Kernel.applyN]
   | n + 1, x => by
     simp only [Kernel.applyN]
     have h1 := (akernel A).apply_mono (applyN_le n) x
-    rw [dapply_add, dapply_const] at h1
+    rw [Kernel.apply_add, Kernel.apply_const] at h1
     have h2 : (akernel A).apply (V A) x ≤ V A x + 1280 * K := by
       rw [apply_akernel]
       calc ∑ k ∈ Finset.range (K + 1), A.p k * V A (next A x k)
@@ -346,25 +338,10 @@ theorem applyN_le : ∀ (n : ℕ) (x : AState A),
         _ = V A x + 1280 * K := sum_p_mul A _
     push_cast; nlinarith
 
-theorem dreach_nonneg (T : AState A → Prop) [DecidablePred T] :
-    ∀ n x, 0 ≤ reach (akernel A) T n x
-  | 0, x => by unfold reach; split <;> norm_num
-  | n + 1, x => by
-    unfold reach; split
-    · norm_num
-    · exact (akernel A).apply_nonneg (dreach_nonneg T n) x
-
-theorem dreach_mem (T : AState A → Prop) [DecidablePred T] {x : AState A} (hx : T x) :
-    ∀ n, reach (akernel A) T n x = 1
-  | 0 => by simp [reach, hx]
-  | _ + 1 => by simp [reach, hx]
-
-/-- A term of the expectation bounds it from below. -/
+/-- One slot's term bounds the expectation from below. -/
 theorem le_apply (f : AState A → ℝ) (hf : ∀ y, 0 ≤ f y) (x : AState A) {k : ℕ} (hk : k ≤ K) :
-    A.p k * f (next A x k) ≤ (akernel A).apply f x := by
-  rw [apply_akernel]
-  exact Finset.single_le_sum (f := fun k => A.p k * f (next A x k))
-    (fun k _ => mul_nonneg (A.nonneg k) (hf _)) (Finset.mem_range.mpr (Nat.lt_succ_of_le hk))
+    A.p k * f (next A x k) ≤ (akernel A).apply f x :=
+  Kernel.le_apply_ofOutcomes _ _ _ _ _ f hf x hk
 
 /-- Without arrivals the engine drains: from backlog `b ≤ n`, the empty
 list within `n` slots with probability at least `p₀ⁿ`. -/
@@ -376,10 +353,10 @@ theorem drain (hA : 1280 * A.mean < 128) : ∀ (n : ℕ) (x : AState A), backlog
       have := backlog_pos (good A x) h
       omega
     have hx : x = nil A := Subtype.ext this
-    rw [dreach_mem A (· = nil A) hx]; simp
+    rw [reach_of_mem (akernel A) (· = nil A) hx]; simp
   | n + 1, x, hb => by
     by_cases hx : x = nil A
-    · rw [dreach_mem A (· = nil A) hx]
+    · rw [reach_of_mem (akernel A) (· = nil A) hx]
       exact pow_le_one₀ (A.nonneg 0) (p0_le_one A)
     · have hne : x.1 ≠ [] := fun h => hx (Subtype.ext h)
       have hp := p0_pos A hA
@@ -390,7 +367,7 @@ theorem drain (hA : 1280 * A.mean < 128) : ∀ (n : ℕ) (x : AState A), backlog
         have h2 := one_le_shares (good A x) hne
         omega
       have ih := drain hA n (next A x 0) hb'
-      have h3 := le_apply A (reach (akernel A) (· = nil A) n) (dreach_nonneg A _ n) x (Nat.zero_le K)
+      have h3 := le_apply A (reach (akernel A) (· = nil A) n) (reach_nonneg (akernel A) _ n) x (Nat.zero_le K)
       show A.p 0 ^ (n + 1) ≤ (if x = nil A then 1 else (akernel A).apply (reach (akernel A) (· = nil A) n) x)
       rw [if_neg hx, pow_succ]
       calc A.p 0 ^ n * A.p 0 ≤ reach (akernel A) (· = nil A) n (next A x 0) * A.p 0 :=
@@ -413,60 +390,21 @@ theorem hit_bound (hA : 1280 * A.mean < 128) : ∀ n x,
       have h2 := V_le_of_F A hx
       linarith)
 
-/-- `x` reaches `y` with positive probability. -/
-def Pos (x y : AState A) : Prop := ∃ n, 0 < reach (akernel A) (· = y) n x
-
-theorem pos_step {x y : AState A} {k : ℕ} (hk : k ≤ K) (hp : 0 < A.p k) (h : Pos A (next A x k) y) :
-    Pos A x y := by
-  obtain ⟨n, hn⟩ := h
-  refine ⟨n + 1, ?_⟩
-  by_cases hxy : x = y
-  · rw [dreach_mem A (· = y) hxy]; norm_num
-  · show 0 < (if x = y then 1 else (akernel A).apply (reach (akernel A) (· = y) n) x)
-    rw [if_neg hxy]
-    exact lt_of_lt_of_le (mul_pos hp hn) (le_apply A _ (dreach_nonneg A _ n) x hk)
-
-theorem pos_trans {x z y : AState A} (h1 : Pos A x z) (h2 : Pos A z y) : Pos A x y := by
-  obtain ⟨n, hn⟩ := h1
-  induction n generalizing x with
-  | zero =>
-    have : x = z := by
-      by_contra h
-      simp [reach, h] at hn
-    subst this; exact h2
-  | succ n ih =>
-    by_cases hxz : x = z
-    · subst hxz; exact h2
-    · have hn' : 0 < (akernel A).apply (reach (akernel A) (· = z) n) x := by
-        have : reach (akernel A) (· = z) (n + 1) x =
-            (akernel A).apply (reach (akernel A) (· = z) n) x := by simp [reach, hxz]
-        rw [← this]; exact hn
-      rw [apply_akernel] at hn'
-      obtain ⟨k, hk, hpos⟩ := Finset.exists_lt_of_sum_lt (f := fun _ => (0 : ℝ))
-        (by simpa using hn')
-      have hpk : 0 < A.p k := by
-        by_contra h
-        have : A.p k = 0 := le_antisymm (not_lt.mp h) (A.nonneg k)
-        rw [this, zero_mul] at hpos; exact lt_irrefl 0 hpos
-      have hr : 0 < reach (akernel A) (· = z) n (next A x k) := by
-        by_contra h
-        have : reach (akernel A) (· = z) n (next A x k) = 0 :=
-          le_antisymm (not_lt.mp h) (dreach_nonneg A _ n _)
-        rw [this, mul_zero] at hpos; exact lt_irrefl 0 hpos
-      exact pos_step A (Nat.lt_succ_iff.mp (Finset.mem_range.mp hk)) hpk (ih hr)
+/-- A slot of positive probability, then on. -/
+theorem reaches_step {x y : AState A} {k : ℕ} (hk : k ≤ K) (hp : 0 < A.p k)
+    (h : Reaches (akernel A) (next A x k) y) : Reaches (akernel A) x y :=
+  Reaches.step _ hp (fun f hf => le_apply A f hf x hk) h
 
 /-- The empty list reaches every state: along the arrivals that built it. -/
-theorem nil_pos : ∀ (js : List AJob) (h : AReach A js), Pos A (nil A) ⟨js, h⟩
-  | _, .nil => ⟨0, lt_of_lt_of_eq one_pos (dreach_mem A _ rfl 0).symm⟩
+theorem nil_reaches : ∀ (js : List AJob) (h : AReach A js), Reaches (akernel A) (nil A) ⟨js, h⟩
+  | _, .nil => Reaches.refl _ _
   | _, .step k hk hp h => by
-    refine pos_trans A (nil_pos _ h) (pos_step A hk hp ⟨0, ?_⟩)
+    refine (nil_reaches _ h).trans _ (reaches_step A hk hp ?_)
     have : next A ⟨_, h⟩ k = ⟨absSlot k _, .step k hk hp h⟩ := Subtype.ext (next_val A ⟨hk, hp⟩)
-    refine lt_of_lt_of_eq one_pos ?_
-    rw [this]
-    exact (dreach_mem A _ rfl 0).symm
+    rw [this]; exact Reaches.refl _ _
 
 /-- Every state reaches the empty list: by draining. -/
-theorem pos_nil (hA : 1280 * A.mean < 128) (x : AState A) : Pos A x (nil A) :=
+theorem reaches_nil (hA : 1280 * A.mean < 128) (x : AState A) : Reaches (akernel A) x (nil A) :=
   ⟨backlog x.1, lt_of_lt_of_le (pow_pos (p0_pos A hA) _) (drain A hA _ x le_rfl)⟩
 
 end Chain
@@ -480,14 +418,14 @@ theorem hit_nil_le {K : ℕ} (A : DaiStable.Arrivals K) (hA : 1280 * A.mean < 12
 /-- Every state reaches every state with positive probability. -/
 theorem irreducible {K : ℕ} (A : DaiStable.Arrivals K) (hA : 1280 * A.mean < 128) :
     Irreducible (akernel A) :=
-  fun x y => pos_trans A (pos_nil A hA x) (nil_pos A y.1 y.2)
+  fun x y => (reaches_nil A hA x).trans _ (nil_reaches A y.1 y.2)
 
 /-- Theorem 2(b): below capacity, every state of Sarathi's chain is positive
 recurrent. -/
 theorem positive_recurrent {K : ℕ} (A : DaiStable.Arrivals K) (hA : 1280 * A.mean < 128)
     (y : AState A) : PositiveRecurrent (akernel A) y := by
   obtain ⟨W, hW⟩ := hit_nil_le A hA
-  exact positiveRecurrent_of_hit (akernel A) (nil A) W hW y (nil_pos A y.1 y.2)
+  exact positiveRecurrent_of_hit (akernel A) (nil A) W hW y (nil_reaches A y.1 y.2)
 
 end DaiRecurrent
 end Papers

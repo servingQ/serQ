@@ -289,7 +289,7 @@ theorem sS_cases (js : List AJob) (hg : Good js) (hne : js ≠ []) :
     rw [hdm]
     have hex : ∃ j ∈ js, j.1 = .prefill := by
       by_contra hc
-      push_neg at hc
+      push Not at hc
       apply hm; right
       rw [hd, List.length_filter_eq_length_iff]
       intro j hj
@@ -447,31 +447,14 @@ theorem exists_empty (hA : A.load < 128) : ∃ o0, (o0 ≤ N ∧ 0 < A.p o0) ∧
 
 end Chain
 
-/-! ### Reaching a state -/
-
-section Reach
-
-variable {α : Type*} (K : Kernel α) (T : α → Prop) [DecidablePred T]
-
-theorem reach_nonneg_b : ∀ n x, 0 ≤ reach K T n x
-  | 0, x => by unfold reach; split_ifs <;> norm_num
-  | n + 1, x => by
-    unfold reach; split_ifs
-    · norm_num
-    · exact K.apply_nonneg (reach_nonneg_b n) x
-
-end Reach
-
 section Walks
 
 variable {N : ℕ} (A : BariStable.Arrivals N)
 
 /-- The term of one outcome is at most the expectation. -/
 theorem term_le_apply (f : AState A → ℝ) (hf : ∀ y, 0 ≤ f y) (x : AState A) {o : ℕ} (hoN : o ≤ N) :
-    A.p o * f (nxt A x o) ≤ (akernel A).apply f x := by
-  rw [apply_ak]
-  exact Finset.single_le_sum (f := fun o => A.p o * f (nxt A x o))
-    (fun o _ => mul_nonneg (A.nonneg o) (hf _)) (Finset.mem_range.mpr (Nat.lt_succ_of_le hoN))
+    A.p o * f (nxt A x o) ≤ (akernel A).apply f x :=
+  Kernel.le_apply_ofOutcomes _ _ _ _ _ f hf x hoN
 
 /-- From a state of backlog at most `n`, `n` slots without arrivals empty the
 engine. -/
@@ -504,52 +487,36 @@ theorem reach_drain {o0 : ℕ} (ho0 : o0 ≤ N ∧ 0 < A.p o0) (harr : A.arr o0 
       calc A.p o0 ^ (n + 1) = A.p o0 * A.p o0 ^ n := by ring
         _ ≤ A.p o0 * reach (akernel A) (· = nil A) n (nxt A x o0) :=
           mul_le_mul_of_nonneg_left ih (A.nonneg o0)
-        _ ≤ _ := term_le_apply A _ (reach_nonneg_b _ _ n) x ho0.1
+        _ ≤ _ := term_le_apply A _ (reach_nonneg _ _ n) x ho0.1
 
-/-- A path of outcomes of positive probability. -/
-inductive Walk : AState A → AState A → Prop
-  | refl (x : AState A) : Walk x x
-  | step {x y : AState A} (o : ℕ) : o ≤ N → 0 < A.p o → Walk (nxt A x o) y → Walk x y
-
-theorem Walk.trans {x y z : AState A} (h1 : Walk A x y) (h2 : Walk A y z) : Walk A x z := by
-  induction h1 with
-  | refl => exact h2
-  | step o hoN hp _ ih => exact .step o hoN hp (ih h2)
-
-theorem Walk.reach_pos {x y : AState A} (h : Walk A x y) : ∃ n, 0 < reach (akernel A) (· = y) n x := by
-  induction h with
-  | refl x => exact ⟨0, by simp [reach]⟩
-  | @step x y o hoN hp _ ih =>
-    obtain ⟨n, hn⟩ := ih
-    refine ⟨n + 1, ?_⟩
-    by_cases hxy : x = y
-    · simp [reach, hxy]
-    · simp only [reach, hxy, ↓reduceIte]
-      exact lt_of_lt_of_le (mul_pos hp hn) (term_le_apply A _ (reach_nonneg_b _ _ n) x hoN)
+/-- A slot of positive probability, then on. -/
+theorem reaches_step {x y : AState A} {o : ℕ} (hoN : o ≤ N) (hp : 0 < A.p o)
+    (h : Reaches (akernel A) (nxt A x o) y) : Reaches (akernel A) x y :=
+  Reaches.step _ hp (fun f hf => term_le_apply A f hf x hoN) h
 
 /-- The empty engine reaches every state of the chain. -/
-theorem walk_from_nil : ∀ (js : List AJob) (h : AReach A js), Walk A (nil A) ⟨js, h⟩ := by
+theorem walk_from_nil : ∀ (js : List AJob) (h : AReach A js), Reaches (akernel A) (nil A) ⟨js, h⟩ := by
   intro js h
   induction h with
-  | nil => exact .refl _
+  | nil => exact Reaches.refl _ _
   | @step js o hoN hp hjs ih =>
-    refine ih.trans A (.step o hoN hp ?_)
+    refine ih.trans _ (reaches_step A hoN hp ?_)
     have : nxt A ⟨js, hjs⟩ o = ⟨absSlot (A.arr o) js, .step o hoN hp hjs⟩ :=
       Subtype.ext (nxt_val A ⟨hoN, hp⟩)
-    rw [this]; exact .refl _
+    rw [this]; exact Reaches.refl _ _
 
 /-- Every state reaches the empty engine. -/
 theorem walk_to_nil {o0 : ℕ} (ho0 : o0 ≤ N ∧ 0 < A.p o0) (harr : A.arr o0 = []) :
-    ∀ n (x : AState A), backlog x.1 ≤ n → Walk A x (nil A)
+    ∀ n (x : AState A), backlog x.1 ≤ n → Reaches (akernel A) x (nil A)
   | 0, x, hx => by
     have hx0 : x = nil A := by
       by_contra hne
       have := backlog_pos x.1 (good_of_reach x.2) (ne_nil_of A hne)
       omega
-    rw [hx0]; exact .refl _
+    rw [hx0]; exact Reaches.refl _ _
   | n + 1, x, hx => by
     by_cases hxn : x = nil A
-    · rw [hxn]; exact .refl _
+    · rw [hxn]; exact Reaches.refl _ _
     · have hne := ne_nil_of A hxn
       have hb : backlog (nxt A x o0).1 ≤ n := by
         have h1 := absSlot_backlog (A.arr o0) x.1
@@ -558,7 +525,7 @@ theorem walk_to_nil {o0 : ℕ} (ho0 : o0 ≤ N ∧ 0 < A.p o0) (harr : A.arr o0 
         rw [nxt_val A ho0, harr]
         simp only [List.map_nil, List.sum_nil] at h1
         omega
-      exact .step o0 ho0.1 ho0.2 (walk_to_nil ho0 harr n _ hb)
+      exact reaches_step A ho0.1 ho0.2 (walk_to_nil ho0 harr n _ hb)
 
 end Walks
 
@@ -585,14 +552,14 @@ theorem irreducible {N : ℕ} (A : BariStable.Arrivals N) (hA : A.load < 128) :
     Irreducible (akernel A) := by
   obtain ⟨o0, ho0, harr⟩ := exists_empty A hA
   intro x y
-  exact ((walk_to_nil A ho0 harr _ x le_rfl).trans A (walk_from_nil A y.1 y.2)).reach_pos A
+  exact (walk_to_nil A ho0 harr _ x le_rfl).trans _ (walk_from_nil A y.1 y.2)
 
 /-- Theorem 2: below capacity, every state of RAD's chain is positive
 recurrent. -/
 theorem positive_recurrent {N : ℕ} (A : BariStable.Arrivals N) (hA : A.load < 128)
     (y : AState A) : PositiveRecurrent (akernel A) y := by
   obtain ⟨W, hW⟩ := hit_nil_le A hA
-  exact positiveRecurrent_of_hit (akernel A) (nil A) W hW y ((walk_from_nil A y.1 y.2).reach_pos A)
+  exact positiveRecurrent_of_hit (akernel A) (nil A) W hW y (walk_from_nil A y.1 y.2)
 
 end BariRecurrent
 end Papers

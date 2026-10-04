@@ -6,7 +6,8 @@ chain: positive recurrence, or an expectation over Poisson arrivals. Mathlib
 has neither Foster–Lyapunov nor fluid limits, and building a path measure for
 `Exec` is a project of its own. This design reaches the same statements by
 three steps, each of which is useful without the next, and a fourth that
-makes the result positive recurrence in the textbook sense (#305).
+gives positive recurrence: of the chain on job lists the program's job list
+follows, and of the empty engine on the program's own chain (#305).
 
 ## 1. Pathwise stability, as a claim
 
@@ -101,8 +102,7 @@ jobs, the batch is the greedy fill in admission order, a finished prefill
 returns as a decode behind the rest. `DaiSim.simulation` and
 `BariSim.simulation` prove that the projection of a machine to its job list
 commutes with a slot, for every machine the chain reaches: the machine
-chain is lumpable, and the empty list is one state. (Before the proofs, the
-two were run side by side over about 1 800 slots by `#eval`, and agreed.)
+chain is lumpable, and the empty list is one state.
 
 **From a set to a state** (`lean/Serq/Recurrence.lean`). If the chain drifts
 to `F`, and from every state of `F` reaches a target `T ⊆ F` within `L`
@@ -117,6 +117,11 @@ hitting time of `o` is bounded from everywhere; applied again with `F =
 {o, y}`, every state `o` reaches is positive recurrent
 (`positiveRecurrent_of_hit`).
 
+`PositiveRecurrent` is the first-step recursion of the expected return time,
+truncated and bounded in the truncation; that it is the path measure's
+`E_x[τ_x⁺]` is the minimal-solution argument of `Serq/Foster.lean`'s header,
+not a Lean theorem.
+
 For both papers the target is the empty list. Below capacity a slot brings
 no request with positive probability (for Dai `E[k] < 0.1`; for Bari every
 request brings at least 129 tokens, so `E[#requests] < 128/129`), and a slot
@@ -126,9 +131,38 @@ so `δ` is a power of the probability of an empty slot. The chain on job
 lists is then irreducible (every state drains to the empty list, which
 reaches every state by definition) and every state is positive recurrent:
 Dai et al.'s Theorem 2(b) (`DaiRecurrent.positive_recurrent`) and Bari et
-al.'s Theorem 2 (`BariRecurrent.positive_recurrent`).
+al.'s Theorem 2 (`BariRecurrent.positive_recurrent`), for the chain whose
+state is the queue's content, as the papers' chains are.
+
+**On the program's own chain** (`DaiProgram`, `BariProgram`). The machine
+chain never revisits a state, since it keeps the clock and every ended
+session, so its states are transient and positive recurrence is a property
+of what it lumps onto. What recurs on it is an event: the engine is empty,
+`σ m = []`. Every machine with an empty engine behaves alike from there (its
+job list follows the job-list chain from `[]`), and on the machine kernel
+itself the engine empties in bounded expected time from every state
+(`hit_idle_le`), and empties again within an expected time bounded by one
+constant from every machine whose engine is empty (`return_idle`): the
+empty machines are a positive recurrent atom. That the machine's job list
+has the job-list chain's law, step after step, is the one-step
+`simulation` and Dynkin's criterion, not a Lean theorem; `DaiProgram` and
+`BariProgram` do not need it, since they prove their bounds on the machine
+kernel directly.
 
 ## Self-critique
+
+- **A quotient of the machine states.** Rejected for step 4. Taking the
+  clock out (`docs/design/stochastic-model.md`, Proposition 4(iii)) leaves
+  the ended sessions, and a quotient that also forgets them and renames the
+  live ones is a type of its own, with every `Exec` operation proved to
+  respect it. The job list is that quotient's useful part, written as a
+  plain list function, and a one-step simulation is all that ties it to
+  `Exec`.
+- **"Irreducible, and a finite return time to a finite set, give positive
+  recurrence".** Not taken as the route. It needs the chain watched on the
+  finite set and a renewal identity; `hit_le_of_reach` gives the same
+  conclusion from the drift, a reach probability and the truncated
+  recursions alone, and needs `F` neither finite nor irreducible.
 
 - **Bounding `residents`.** Rejected as the claim. Theorem 2(b) is about
   the number of requests, but a decode takes one token per batch, so about a

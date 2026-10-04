@@ -101,3 +101,7 @@ import Serq
 #print axioms SerqLang.Papers.BariRecurrent.hit_nil_le
 #print axioms SerqLang.Papers.BariRecurrent.irreducible
 #print axioms SerqLang.Papers.BariRecurrent.positive_recurrent
+#print axioms SerqLang.Papers.DaiProgram.hit_idle_le
+#print axioms SerqLang.Papers.DaiProgram.return_idle
+#print axioms SerqLang.Papers.BariProgram.hit_idle_le
+#print axioms SerqLang.Papers.BariProgram.return_idle

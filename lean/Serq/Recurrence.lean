@@ -74,6 +74,13 @@ theorem reach_of_mem {x : α} (hx : T x) : ∀ n, reach K T n x = 1
   | 0 => by simp [reach, hx]
   | _ + 1 => by simp [reach, hx]
 
+theorem reach_nonneg : ∀ n x, 0 ≤ reach K T n x
+  | 0, x => by unfold reach; split <;> norm_num
+  | n + 1, x => by
+    unfold reach; split
+    · norm_num
+    · exact K.apply_nonneg (reach_nonneg n) x
+
 theorem reach_le_one : ∀ n x, reach K T n x ≤ 1
   | 0, x => by unfold reach; split <;> norm_num
   | n + 1, x => by
@@ -271,14 +278,66 @@ theorem hit_le_of_reach {F : α → Prop} [DecidablePred F] {V : α → ℝ} {ε
   have h3 : hit K F n x ≤ V x / ε := by rw [le_div_iff₀ hε]; linarith
   linarith
 
-/-- `x` is positive recurrent: the truncated expected return times to `x`,
-`E_x[min(τ_x⁺, n + 1)] = 1 + Σ_y P x y · E_y[min(τ_x, n)]`, are bounded. -/
+/-- `x` is positive recurrent: the truncated expected return times to `x`
+are bounded. The truncation is given by its first-step recursion,
+`1 + Σ_y P x y · E_y[min(τ_x, n)]`, which the path measure's
+`E_x[min(τ_x⁺, n + 1)]` satisfies (`Serq/Foster.lean`'s header); bounded in
+`n`, it says `E_x[τ_x⁺] < ∞`. -/
 def PositiveRecurrent [DecidableEq α] (x : α) : Prop :=
   ∃ C : ℝ, ∀ n, 1 + K.apply (hit K (· = x) n) x ≤ C
 
 /-- Every state reaches every state with positive probability. -/
 def Irreducible [DecidableEq α] : Prop :=
   ∀ x y : α, ∃ n, 0 < reach K (· = y) n x
+
+/-- `x` reaches `y` with positive probability. -/
+def Reaches [DecidableEq α] (x y : α) : Prop := ∃ n, 0 < reach K (· = y) n x
+
+theorem Reaches.refl [DecidableEq α] (x : α) : Reaches K x x :=
+  ⟨0, by rw [reach_of_mem K (· = x) rfl]; norm_num⟩
+
+/-- A step of weight `c > 0` to `z` (the expectation of every nonnegative
+function at `x` is at least `c` times its value at `z`), then on to `y`. -/
+theorem Reaches.step [DecidableEq α] {x z y : α} {c : ℝ} (hc : 0 < c)
+    (hle : ∀ f : α → ℝ, (∀ w, 0 ≤ f w) → c * f z ≤ K.apply f x) (h : Reaches K z y) :
+    Reaches K x y := by
+  obtain ⟨n, hn⟩ := h
+  refine ⟨n + 1, ?_⟩
+  by_cases hxy : x = y
+  · rw [reach_of_mem K (· = y) hxy]; norm_num
+  · show 0 < (if x = y then 1 else K.apply (reach K (· = y) n) x)
+    rw [if_neg hxy]
+    exact lt_of_lt_of_le (mul_pos hc hn) (hle _ (reach_nonneg K _ n))
+
+theorem Reaches.trans [DecidableEq α] {x z y : α} (h1 : Reaches K x z) (h2 : Reaches K z y) :
+    Reaches K x y := by
+  obtain ⟨n, hn⟩ := h1
+  induction n generalizing x with
+  | zero =>
+    have : x = z := by
+      by_contra h
+      simp [reach, h] at hn
+    subst this; exact h2
+  | succ n ih =>
+    by_cases hxz : x = z
+    · subst hxz; exact h2
+    · have hn' : 0 < K.apply (reach K (· = z) n) x := by
+        have : reach K (· = z) (n + 1) x = K.apply (reach K (· = z) n) x := by simp [reach, hxz]
+        rw [← this]; exact hn
+      unfold Kernel.apply at hn'
+      obtain ⟨w, hw, hpos⟩ := Finset.exists_lt_of_sum_lt (f := fun _ => (0 : ℝ)) (by simpa using hn')
+      have hP : 0 < K.P x w := by
+        by_contra h
+        have : K.P x w = 0 := le_antisymm (not_lt.mp h) (K.nonneg x w)
+        rw [this, zero_mul] at hpos; exact lt_irrefl 0 hpos
+      have hr : 0 < reach K (· = z) n w := by
+        by_contra h
+        have : reach K (· = z) n w = 0 := le_antisymm (not_lt.mp h) (reach_nonneg K _ n w)
+        rw [this, mul_zero] at hpos; exact lt_irrefl 0 hpos
+      refine Reaches.step K hP (fun f hf => ?_) (ih hr)
+      unfold Kernel.apply
+      exact Finset.single_le_sum (f := fun w => K.P x w * f w)
+        (fun w _ => mul_nonneg (K.nonneg x w) (hf w)) hw
 
 /-- If the expected hitting time of `o` is bounded from every state, every
 state `o` reaches with positive probability is positive recurrent. -/

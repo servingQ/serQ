@@ -93,6 +93,16 @@ theorem Kernel.apply_ofOutcomes {α : Type*} (K : ℕ) (p : ℕ → ℝ) (hp0 : 
   · ext k; simp
   · rw [(Finset.mem_filter.1 hk).2]
 
+/-- One outcome's term bounds the expectation of a nonnegative function from
+below. -/
+theorem Kernel.le_apply_ofOutcomes {α : Type*} (K : ℕ) (p : ℕ → ℝ) (hp0 : ∀ k, 0 ≤ p k)
+    (hp1 : ∑ k ∈ Finset.range (K + 1), p k = 1) (f : α → ℕ → α) (V : α → ℝ) (hV : ∀ y, 0 ≤ V y)
+    (x : α) {k : ℕ} (hk : k ≤ K) :
+    p k * V (f x k) ≤ (Kernel.ofOutcomes K p hp0 hp1 f).apply V x := by
+  rw [Kernel.apply_ofOutcomes]
+  exact Finset.single_le_sum (f := fun k => p k * V (f x k)) (fun k _ => mul_nonneg (hp0 k) (hV _))
+    (Finset.mem_range.mpr (Nat.lt_succ_of_le hk))
+
 end Foster
 
 end SerqLang
