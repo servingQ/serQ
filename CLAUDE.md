@@ -86,14 +86,44 @@ request descriptions are written in Korean. A nav title that contains `#`
 must be quoted in `mkdocs.yml`, or YAML reads it as a comment and the strict
 build aborts.
 
+## When a bug is found
+
+A fix is not done until two more questions are answered, in the pull request
+or in the comment that reports the fix:
+
+1. **Why did it happen?** Name the assumption that was wrong, not just the
+   line that was wrong. #263 had two bugs. In the first, a serve predicate
+   read the resident totals from before the iteration, so a request admitted
+   in that same iteration was judged by totals that left it out. In the
+   second, an engine whose residents `only` all excluded waited for an
+   event, and nothing re-read a predicate that depended on `now`.
+2. **Should the language have refused the program?** Ask whether the bad
+   state is reachable only by a class of programs that a check could
+   recognise before the run: in the linker or `Program::validate`, from what
+   an expression reads at its moment (`docs/ir.md`, Moments). If so, add the
+   check with its own test and its reason in the error message. A program
+   that can only stall, loop or read a value it cannot see should not link.
+   Examples: a serve key may not draw, and since #259 a hold's header may not either; `only` may not
+   read `now` or `work(…)` (#263); a `Loop` that can pass without letting
+   time pass is refused (11).
+   If no static check can tell, the run must still fail loudly (a run-time
+   error, a report note, a `stuck` counter), never silently. If the program
+   was right and the interpreter wrong, as in the first #263 bug, say that
+   no check applies and why.
+
+A stricter check does not bump `IR_VERSION` (`docs/ir.md` §Stability). The
+regression test reproduces the bug as it was found. A rule rejected on the
+way goes in the design document's self-critique.
+
 ## Reviewing a change
 
 `.github/copilot-instructions.md` is the review checklist, for Copilot and
 for anyone else: the IR rules, the four design criteria, and six questions
 answered in order (purpose kept, simpler possible, complexity not grown,
 intention plainer, evidence is the code, one change). A review that does not
-answer all six is not done. Comments are in Korean, short: the finding and
-the evidence.
+answer all six is not done. A review that finds a bug also asks the two
+questions of §When a bug is found. Comments are in Korean, short: the
+finding and the evidence.
 
 Copilot reviews a pull request; when its review limit is reached, the
 subagents in `.claude/agents/` review instead, at most two in parallel.
