@@ -928,8 +928,8 @@ impl<'p> Interp<'p> {
         }
         // The memory invariant, `allocated + cached <= cap` in every
         // reachable configuration (`SerqLang.Step.invariant` proves it for
-        // the pool relation; this checks the interpreter on every run of a
-        // debug build: the semantics tests, which `make check` runs so).
+        // the pool relation; this checks the interpreter on every debug run:
+        // `make check` runs the tests once more in a debug build).
         #[cfg(debug_assertions)]
         for (cp, pl) in self.p.pools.iter().zip(&self.pools) {
             debug_assert!(
@@ -970,9 +970,16 @@ impl<'p> Interp<'p> {
                 })
                 .sum();
             let cached: f64 = pl.entries.values().map(|e| e.size).sum();
+            // sums of fractional units drift with the pool's size, not with
+            // what is held at this instant
+            let scale = if pl.cap.is_finite() {
+                pl.cap
+            } else {
+                pl.used.max(pl.cached).max(held)
+            };
+            let tol = 1e-9 * scale.max(1.0);
             debug_assert!(
-                (pl.used - held).abs() <= 1e-6 * held.max(1.0)
-                    && (pl.cached - cached).abs() <= 1e-6 * cached.max(1.0),
+                (pl.used - held).abs() <= tol && (pl.cached - cached).abs() <= tol,
                 "pool `{}`: used {} against {held} held, cached {} against {cached} in entries, at t = {}",
                 cp.name,
                 pl.used,
