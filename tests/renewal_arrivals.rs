@@ -167,3 +167,25 @@ fn a_renewal_gap_must_be_positive() {
     let e = p.validate().unwrap_err();
     assert!(e.contains("an interarrival time must be positive"), "{e}");
 }
+
+/// A poisson rate that is not a positive number draws gaps that are not
+/// positive times: `poisson(-1)` ran backwards and never ended (#286).
+#[test]
+fn a_poisson_rate_must_be_positive() {
+    for (rate, said) in [
+        ("-1", "the rate is -1;"),
+        ("0", "the rate is 0;"),
+        ("inf", "the rate is inf;"),
+        ("lam - 1", "the rate is 0;"),
+        ("0/0", "the poisson rate is NaN"),
+    ] {
+        let src = format!(
+            "let lam = 1; stage svc : delay;
+             workload {{ arrive poisson({rate}); }}
+             session {{ run svc (1); end; }}
+             run {{ horizon 10; }}"
+        );
+        let e = serq::compile_source(&src, &Overrides::default()).unwrap_err();
+        assert!(e.contains(said), "{rate}: {e}");
+    }
+}

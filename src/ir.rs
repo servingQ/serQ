@@ -907,6 +907,15 @@ impl Program {
                 ));
             }
         }
+        // a rate that is not positive draws gaps that are not: time runs
+        // backwards and the run never ends (#286)
+        if let CArrival::Poisson(rate) = self.arrival
+            && !(rate.is_finite() && rate > 0.0)
+        {
+            return Err(format!(
+                "`arrive poisson(…)`: the rate is {rate}; a rate must be positive and finite"
+            ));
+        }
         if let Some(n) = self.arrivals {
             if n == 0 {
                 return Err("run: arrivals must be positive".into());
