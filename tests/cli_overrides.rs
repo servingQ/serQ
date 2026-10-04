@@ -106,3 +106,30 @@ fn arrival_override_also_applies_to_json_ir() {
         assert_eq!(json["arrivals"], 3);
     }
 }
+
+/// An override reaches program text; IR has its constants folded and its
+/// definitions expanded. The refusal speaks of the `let` or the `def`, not
+/// of a CLI flag: pyserq's `sets=` and `defs=` meet the same error.
+#[test]
+fn overrides_are_refused_on_ir_by_what_they_override() {
+    let f = Fixture::new();
+    let program = compile_source(
+        "let lam = 1; def law() = ~exp(1); workload { arrive poisson(lam); } \
+         session { set x = law(); end; } run { horizon 10; }",
+        &Overrides::default(),
+    )
+    .unwrap();
+    f.write("model.json", &program.to_json());
+    for command in ["run", "ir", "check", "draw"] {
+        failure(
+            &f.run(&[command, "model.json", "--set", "lam=2"]),
+            1,
+            &["a `let` override applies to program text, not to IR"],
+        );
+        failure(
+            &f.run(&[command, "model.json", "--def", "law=~exp(2)"]),
+            1,
+            &["a `def` override applies to program text, not to IR"],
+        );
+    }
+}
