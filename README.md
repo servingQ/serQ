@@ -1,19 +1,10 @@
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/serq-logo-dark.svg">
-    <img src="docs/assets/brand/serq-logo.svg" alt="serQ" width="300">
-  </picture>
-</h1>
+<h1><img src="docs/assets/brand/serq-logo-on-dark.svg" alt="serQ" width="300"></h1>
 
 *pronounced "ser-Q" — **se**rving + **Q**ueue*
 
 A language in which an LLM serving deployment is a program: memory pools,
 stages, a workload and the policy every session runs, written once and both
-simulated and formally checked against the real system. `examples/oracle/vllm_request.sq`
-and `examples/replay/vllm_replay.sq` reproduce the upstream vLLM v1 scheduler
-request for request on its oracle scenarios — the
-correspondence, cited `file:line` against `ref/vllm`, is
-[`docs/language.md` §7][language].
+simulated and formally checked against the real system.
 
 [![CI](https://github.com/servingQ/serQ/actions/workflows/ci.yml/badge.svg)](https://github.com/servingQ/serQ/actions/workflows/ci.yml)
 [![Docs](https://github.com/servingQ/serQ/actions/workflows/docs.yml/badge.svg)](https://servingq.github.io/serQ/)
@@ -59,14 +50,7 @@ Or install the CLI directly:
 cargo install --git https://github.com/servingQ/serQ --tag v0.1.2 --locked --root <dir>
 ```
 
-## Layout
-
-| | |
-|---|---|
-| `src/` | IR, text syntax (lexer/parser/AST), the linker, the interpreter, reporting, drawing |
-| `examples/` | example deployments by workload — `single-turn/`, `multi-turn/`, `subagent/`, `pd-disaggregation/`, `replay/` (trace replays, with their `data/`), `oracle/` (the vLLM scheduler oracle's program) |
-| `tools/` | the real vLLM v1 scheduler as an oracle, its recorded scenarios, the A100 cost-model sweeps |
-| `docs/` | [the IR definition][ir], [the text syntax and vLLM correspondence][language], the design record (`docs/review.md`, `docs/design/`) |
+Working on serQ itself, the gate is:
 
 ```
 make check   # fmt, clippy, tests, every program links and draws, the oracles agree
