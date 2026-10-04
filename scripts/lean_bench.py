@@ -102,6 +102,27 @@ def is_zero(e):
     return (op == "Mul" and (is_zero(a) or is_zero(b))) or (op == "Add" and is_zero(a) and is_zero(b))
 
 
+def chunk_of(e):
+    """A step's chunk as the bench takes it: a constant, or vLLM's rule
+    `residents + queued(p) > 1 ? c : 0` as the cap `c` and the pool `p`
+    (the bench's program is vLLM's; JSON carries no Lean function)."""
+    if "Num" in e:
+        return e["Num"], None
+    try:
+        test, then, other = e["Cond"]
+        op, lhs, one = test["Binary"]
+        plus, res, q = lhs["Binary"]
+        f, args = q["Call"]
+        ref = args[0]["Pool"]
+        ok = ((op, one, plus, res, other, f) == ("Gt", {"Num": 1.0}, "Add", {"Ctx": "Nres"}, {"Num": 0.0}, "Queued")
+              and "Num" in then and ref["count"] == 1 and ref.get("index") is None)
+    except (KeyError, TypeError, ValueError, IndexError):
+        ok = False
+    if not ok:
+        raise ValueError(f"the bench takes a constant chunk or vLLM's rule, not {e}")
+    return then["Num"], ref["base"]
+
+
 def write_workload(out, ir, cost):
     """The workload JSON of `serq-lean-bench` for the IR: pools, engine,
     the iteration cost as [c0, c_tok, c_pre, c_dec, c_kv, c_att2] (the IR's `cost` must be
@@ -117,12 +138,15 @@ def write_workload(out, ir, cost):
         "the workload's cost is not the IR's"
     nat = lambda v: int(v) if v == int(v) else (_ for _ in ()).throw(ValueError(f"{v} is not a natural number"))
     ss = ir["arrival"]["Sessions"]
-    w = {"pools": pools, "budget": nat(step["budget"]["Num"]), "chunk": nat(step["chunk"]["Num"]),
+    chunk, lift = chunk_of(step["chunk"])
+    w = {"pools": pools, "budget": nat(step["budget"]["Num"]), "chunk": nat(chunk),
          "horizon": nat(ir["horizon"]), "turnSlot": ir["slot_turn"], "moreSlot": ir["slot_more"],
          "computedSlot": ir["slot_computed"],
          "cost": cost, "memory": step["memory"],
          "init": [[[a, nat(v)] for a, v in s["attrs"]] for s in ss],
          "sessions": [[[[a, nat(v)] for a, v in t] for t in s["turns"]] for s in ss]}
+    if lift is not None:
+        w["chunkPool"] = lift
     (out / "workload.json").write_text(json.dumps(w))
 
 

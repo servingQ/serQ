@@ -37,7 +37,8 @@ The three papers' pages under [use cases](use-cases/index.md) walk through
 each proof.
 
 The fragment for claims also covers `serve only` (`Deployment.only`),
-vLLM's lifted chunk cap (`Deployment.chunkLift`),
+a step's `chunk` written over `residents` and `queued(p)`, such as vLLM's
+lifted cap (`Deployment.chunkAt`),
 `queue by` with one key (`PoolDef.key`) on a pool no run grows, and costs
 with terms `k * ceil(tokens / b)`.
 

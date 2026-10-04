@@ -1813,8 +1813,8 @@ theorem start_bnd {w : Workload} {g : Ghost} {m : Machine} (hF : Fam w) (h : Set
       (pdef Claims.KongSvf.deployment p).viaEngine && !(pst m p).queue.isEmpty) = false := by
     simp [pdef, deployment_eq]
   unfold startIteration
-  -- the deployment has no `chunkLift`: every iteration runs it as it is
-  simp only [iterDeployment_of_none _ (rfl : Claims.KongSvf.deployment.chunkLift = none)]
+  -- the deployment has no `chunkAt`: every iteration runs it as it is
+  simp only [iterDeployment_of_none _ (rfl : Claims.KongSvf.deployment.chunkAt = none)]
   rw [hvia, Bool.or_false]
   by_cases hj : m.jobs = []
   · have hna : ¬ ∃ j < w.init.length, g.c j = .a := fun he => (jobs_nonempty_iff hI).mpr he hj

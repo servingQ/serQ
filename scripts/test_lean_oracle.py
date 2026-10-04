@@ -119,16 +119,29 @@ class IterationCost(unittest.TestCase):
         ir, lean = generator.load("mixed")
         self.assertIn(f", some {ir['stages'][0]['kind']['Step']['memory']}, fun _ => 1, none, ", lean.deployment())
 
-    def test_the_chunk_is_a_constant_or_vllms_rule(self):
+    def test_the_chunk_is_a_constant_or_the_programs_expression(self):
         q = {"Call": ["Queued", [{"Pool": {"base": 0, "count": 1, "index": None}}]]}
         rule = {"Cond": [{"Binary": ["Gt", {"Binary": ["Add", {"Ctx": "Nres"}, q]}, {"Num": 1.0}]},
                          {"Num": 24.0}, {"Num": 0.0}]}
         self.assertEqual(generator.chunk_rule({"Num": 24.0}), (24.0, None))
-        self.assertEqual(generator.chunk_rule(rule), (24.0, 0))
-        # any other expression is outside the fragment
-        other = {"Cond": [{"Binary": ["Gt", {"Ctx": "Nres"}, {"Num": 1.0}]}, {"Num": 24.0}, {"Num": 0.0}]}
+        self.assertEqual(
+            generator.chunk_rule(rule),
+            (0, "some fun c => if (if (c.residents + (c.queued 0)) > 1 then 1 else 0) ≠ 0 then 24 else 0"))
+        # not only vLLM's shape: the operands swapped, another threshold
+        swapped = {"Cond": [{"Binary": ["Gt", {"Binary": ["Add", q, {"Ctx": "Nres"}]}, {"Num": 2.0}]},
+                            {"Num": 24.0}, {"Num": 0.0}]}
+        self.assertEqual(generator.chunk_rule(swapped)[1],
+                         "some fun c => if (if ((c.queued 0) + c.residents) > 2 then 1 else 0) ≠ 0 then 24 else 0")
+        # what an iteration's start does not supply is outside the fragment
         with self.assertRaises(generator.Fragment):
-            generator.chunk_rule(other)
+            generator.chunk_rule({"Ctx": "Ntok"})
+        # and so is a difference, which ℕ truncates where the interpreter does not
+        sub = {"Cond": [{"Binary": ["Sub", {"Ctx": "Nres"}, {"Num": 1.0}]}, {"Num": 24.0}, {"Num": 0.0}]}
+        with self.assertRaises(generator.Fragment):
+            generator.chunk_rule(sub)
+        # a rule whose outcomes are one constant is that constant
+        zero = {"Cond": [rule["Cond"][0], {"Num": 0.0}, {"Num": 0.0}]}
+        self.assertEqual(generator.chunk_rule(zero), (0.0, None))
 
     def test_attention_is_read_doubled_and_kv_decode_directly(self):
         e = {"Binary": ["Add", {"Num": 1.0},

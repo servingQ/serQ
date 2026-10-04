@@ -97,11 +97,19 @@ structure IterStats where
   kvDecode : ℕ
   attention2 : ℕ
 
+/-- What a step stage's `chunk` reads as an iteration starts (serQ's
+`Budget` moment): the engine's jobs (`residents`) and each pool's waiting
+requests (`queued p`). -/
+structure ChunkEnv where
+  residents : ℕ
+  queued : ℕ → ℕ
+
 /-- A deployment: pools, the step engine (stage 0) and a delay stage (1). -/
 structure Deployment where
   pools : List PoolDef
   budget : ℕ
-  /-- per-request chunk cap (`long_prefill_token_threshold`), 0 = none -/
+  /-- per-request chunk cap, 0 = none; the iteration's when `chunkAt` is
+  `none` -/
   chunk : ℕ
   /-- the engine's memory pool (`memory` of the step stage), if any -/
   memory : Option ℕ
@@ -111,13 +119,10 @@ structure Deployment where
   /-- `serve only (p)`: a resident for which `p` is 0 gets no token in the
   iteration; `none` serves every resident -/
   only : Option (ServeEnv → ℕ)
-  /-- `some p`: the chunk cap holds only while the engine's jobs and the
-  requests waiting in pool `p` number more than one, and an iteration that
-  starts with one or none of them runs uncapped. This is the program's
-  `chunk (residents + queued(p) > 1 ? c : 0)`, vLLM's rule (scheduler.py:606-616,
-  `long_prefill_token_threshold` when `num_eligible_reqs > 1`). `none`:
-  the cap always holds. -/
-  chunkLift : Option ℕ
+  /-- `some f`: the program's `chunk` expression, read as each iteration
+  starts; vLLM's `chunk (residents + queued(p) > 1 ? c : 0)` (scheduler.py:606-616)
+  is one. `none`: the constant `chunk`. -/
+  chunkAt : Option (ChunkEnv → ℕ)
 
 /-- What a claim over iterations reads (serQ `Moment::Iteration`): the
 iteration's start, the tokens the engine scheduled before it (`served`), its
@@ -1110,25 +1115,25 @@ def iterRec (m : Machine) (st : IterStats) : IterRec :=
     holders := (List.range D.pools.length).map fun p => (pst m p).holders.length,
     used := (List.range D.pools.length).map fun p => (pst m p).used }
 
-/-- The deployment an iteration starting in `m` runs: the chunk cap lifted
-when `chunkLift` names a pool and the engine's jobs and that pool's waiting
-requests number one or none, as they stand before the iteration (the
-interpreter reads `residents` and `queued` at the `Budget` moment). -/
+/-- The deployment an iteration starting in `m` runs: its chunk cap is
+`chunkAt` read on the engine's jobs and the pools' waiting requests as they
+stand before the iteration (the interpreter reads `residents` and `queued`
+at the `Budget` moment). -/
 def iterDeployment (m : Machine) : Deployment :=
-  match D.chunkLift with
-  | some p => if m.jobs.length + (pst m p).queue.length ≤ 1 then { D with chunk := 0 } else D
+  match D.chunkAt with
+  | some f => { D with chunk := f ⟨m.jobs.length, fun p => (pst m p).queue.length⟩ }
   | none => D
 
-/-- Without `chunkLift` an iteration runs `D` itself. -/
-theorem iterDeployment_of_none (h : D.chunkLift = none) (m : Machine) : iterDeployment D m = D := by
+/-- Without `chunkAt` an iteration runs `D` itself. -/
+theorem iterDeployment_of_none (h : D.chunkAt = none) (m : Machine) : iterDeployment D m = D := by
   unfold iterDeployment; rw [h]
 
 /-- The iteration's deployment differs from `D` in its chunk cap only. -/
 theorem iterDeployment_pools (m : Machine) : (iterDeployment D m).pools = D.pools := by
-  unfold iterDeployment; split <;> (try split) <;> rfl
+  unfold iterDeployment; split <;> rfl
 
 theorem iterDeployment_only (m : Machine) : (iterDeployment D m).only = D.only := by
-  unfold iterDeployment; split <;> (try split) <;> rfl
+  unfold iterDeployment; split <;> rfl
 
 theorem iterDeployment_pdef (m : Machine) (p : ℕ) : pdef (iterDeployment D m) p = pdef D p := by
   unfold pdef; rw [iterDeployment_pools]

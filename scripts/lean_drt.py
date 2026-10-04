@@ -44,7 +44,15 @@ def case(rng):
     ir["pools"][1]["cap"] = float(rng.randint(1, 64))
     step = ir["stages"][0]["kind"]["Step"]
     step["budget"] = {"Num": float(rng.choice([16, 64, 256, 512, 1024, 2048, rng.randint(1, 4096)]))}
-    step["chunk"] = {"Num": float(rng.choice([0, 0, 0, rng.randint(1, 512)]))}
+    cap = float(rng.choice([0, 0, 0, rng.randint(1, 512)]))
+    if cap and rng.random() < 0.5:
+        # vLLM's rule: the cap only while another request runs or waits for
+        # a slot of `reqs` (pool 1), as `lib/vllm.sq`'s `long_prefill` writes it
+        reqs = {"Call": ["Queued", [{"Pool": {"base": 1, "count": 1, "index": None}}]]}
+        test = {"Binary": ["Gt", {"Binary": ["Add", {"Ctx": "Nres"}, reqs]}, {"Num": 1.0}]}
+        step["chunk"] = {"Cond": [test, {"Num": cap}, {"Num": 0.0}]}
+    else:
+        step["chunk"] = {"Num": cap}
     if rng.random() < 0.5:
         cost = [1, 0, 0, 0, 0, 0]
     else:

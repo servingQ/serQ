@@ -1114,8 +1114,8 @@ theorem start_bnd {w : Workload} (hF : Fam w) {g : Ghost} {m : Machine} (hI : DI
   rw [hiter0] at hcons
   simp only [tokSum, List.map_nil, List.sum_nil, Nat.add_zero] at hcons
   unfold startIteration
-  -- the deployment has no `chunkLift`: every iteration runs it as it is
-  simp only [iterDeployment_of_none _ (rfl : Claims.DaiSarathi.deployment.chunkLift = none)]
+  -- the deployment has no `chunkAt`: every iteration runs it as it is
+  simp only [iterDeployment_of_none _ (rfl : Claims.DaiSarathi.deployment.chunkAt = none)]
   rw [hvia, Bool.or_false]
   by_cases hjs : m.jobs = []
   · have he0 : m.jobs.isEmpty = true := by simp [hjs]

@@ -249,7 +249,8 @@ fragment). In practice, a program is in it when:
   `prefilled` and `decoders` with natural coefficients and a constant term
   of at least 1 (`cost 1` is the step clock),
   serving its residents in admission order (no `serve` clause but the
-  default), its `chunk` a constant or `residents + queued(p) > 1 ? c : 0`,
+  default), its `chunk` a constant or an expression of `residents` and
+  `queued(p)` (vLLM's `residents + queued(p) > 1 ? c : 0`),
   and any other stage a `delay`;
 - the pools are LRU, and either admitted via the engine or the engine's
   memory with `preempt lifo`, with no queue key and no spill;
