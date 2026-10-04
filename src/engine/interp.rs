@@ -1281,7 +1281,7 @@ impl<'p> Interp<'p> {
                     let mut reserve = vec![];
                     for (r, e, f) in pools {
                         let pl = self.pool_index(r, sid);
-                        let units = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
+                        let units = self.amount(e, sid, "hold");
                         ps.push((pl, units));
                         exprs.push(e);
                         reserve.push(f.as_ref());
@@ -1304,7 +1304,7 @@ impl<'p> Interp<'p> {
                 }
                 CStmt::Grow(r, e) => {
                     let pl = self.pool_index(r, sid);
-                    let units = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
+                    let units = self.amount(e, sid, "grow");
                     if !self.grow(sid, pl, units) {
                         return;
                     }
@@ -1321,7 +1321,7 @@ impl<'p> Interp<'p> {
                 }
                 CStmt::Load(r, e) => {
                     let pl = self.pool_index(r, sid);
-                    let n = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
+                    let n = self.amount(e, sid, "load");
                     self.load(sid, pl, n);
                 }
                 CStmt::Run {
@@ -1332,7 +1332,7 @@ impl<'p> Interp<'p> {
                     also,
                 } => {
                     let st = self.stage_index(stage, sid);
-                    let w = self.eval(work, &Ctx::session(sid), Which::Session).max(0.0);
+                    let w = self.amount(work, sid, "run");
                     if matches!(self.stages[st].kind, Kind::Shared { .. }) {
                         let mut stages = vec![st];
                         for r in also {
@@ -1350,33 +1350,28 @@ impl<'p> Interp<'p> {
     }
 
     fn pool_index(&mut self, r: &CRef, sid: usize) -> usize {
-        match &r.index {
-            None => r.base,
-            Some(e) => {
-                let i = self.eval(e, &Ctx::session(sid), Which::Session);
-                let i = i.max(0.0) as usize;
-                if i >= r.count {
-                    self.error = Some(format!("pool index {i} out of range (count {})", r.count));
-                    return r.base;
-                }
-                r.base + i
-            }
-        }
+        self.ref_index(r, &Ctx::session(sid), Which::Session)
     }
 
     fn stage_index(&mut self, r: &CRef, sid: usize) -> usize {
-        match &r.index {
-            None => r.base,
-            Some(e) => {
-                let i = self.eval(e, &Ctx::session(sid), Which::Session);
-                let i = i.max(0.0) as usize;
-                if i >= r.count {
-                    self.error = Some(format!("stage index {i} out of range (count {})", r.count));
-                    return r.base;
-                }
-                r.base + i
+        self.ref_index(r, &Ctx::session(sid), Which::Session)
+    }
+
+    /// The amount a session statement names (`what`: its keyword), which
+    /// is a number of units, tokens or seconds: not NaN and not negative
+    /// beyond rounding (#270). On a program error, 0 and the error set.
+    fn amount(&mut self, e: &CExpr, sid: usize, what: &str) -> f64 {
+        let x = self.eval(e, &Ctx::session(sid), Which::Session);
+        if x.is_nan() || x < -1e-9 {
+            if self.error.is_none() {
+                self.error = Some(format!(
+                    "`{what} ({})`: the amount is {x}, not a number of units, tokens or seconds",
+                    self.p.show_expr(e)
+                ));
             }
+            return 0.0;
         }
+        x.max(0.0)
     }
 
     // --------------------------------------------------------- pools ----
@@ -1470,7 +1465,7 @@ impl<'p> Interp<'p> {
             .expect("queued session has a hold");
         for k in 0..pending.pools.len() {
             let e = pending.exprs[k];
-            let u = self.eval(e, &Ctx::session(sid), Which::Session).max(0.0);
+            let u = self.amount(e, sid, "hold");
             pending.pools[k].1 = u;
             pending.need[k] = match pending.reserve[k] {
                 Some(f) => self.eval(f, &Ctx::session(sid), Which::Session).max(u),
@@ -3254,12 +3249,21 @@ impl<'p> Interp<'p> {
         match &r.index {
             None => r.base,
             Some(e) => {
-                let i = self.eval(e, ctx, w).max(0.0) as usize;
-                if i >= r.count {
-                    self.error = Some(format!("index {i} out of range (count {})", r.count));
+                // a member is a whole number in range; anything else is the
+                // program's error, not a member it did not name (#270)
+                let x = self.eval(e, ctx, w);
+                if !(x >= 0.0 && x.fract() == 0.0 && x < r.count as f64) {
+                    if self.error.is_none() {
+                        self.error = Some(format!(
+                            "index `{}` is {x}: a member of an array of {} is 0 to {}",
+                            self.p.show_expr(e),
+                            r.count,
+                            r.count - 1
+                        ));
+                    }
                     return r.base;
                 }
-                r.base + i
+                r.base + x as usize
             }
         }
     }
