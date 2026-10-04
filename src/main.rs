@@ -246,7 +246,12 @@ fn main() {
     } else {
         file.parent()
     };
-    let mut prog = serq::load(file, &ov).unwrap_or_else(|e| fail(file, e));
+    let load = if cmd == "draw" {
+        serq::load_drawn
+    } else {
+        serq::load
+    };
+    let mut prog = load(file, &ov).unwrap_or_else(|e| fail(file, e));
     if inline {
         prog = serq::inline_trace(prog, base).unwrap_or_else(|e| fail(file, e));
     }

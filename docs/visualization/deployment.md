@@ -17,12 +17,19 @@ the link's latency are written on it.
 ## The flow is projected from the session program
 
 Pools and stages are declared; the arrows are not. `deployment::project`
-walks the session program carrying a hold stack:
+walks a program carrying a hold stack. `serq draw` gives it what one
+request runs when the program splits its session into a `workload` and a
+`server`: the server, or the gateway's `route` for `request gw;`. The
+workload's own statements are not drawn: its tool calls, its next turn,
+and the `end`s that close a session. Whether a session comes back, and
+when it stops, is the workload's choice, not the deployment's. A request
+arrives, runs what the server runs, and goes out. A program written as one
+`session`, with no server apart, is drawn whole.
 
 | | |
 |---|---|
-| **Nodes** | one per stage a `Run` reaches (`Node::stage` is `Some`); a stage array is one node labelled `[N]`. A loop that decides before its first station adds a decision ◇, a node with no stage (`Node::stage` is `None`, `kind` is `Decision`) |
-| **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a body that decides before its first station - several first stations, or an `end` before any - starts at a decision ◇, named by the `choose`s it makes, which an `end` before any station leaves from; the body is walked once). No arrow returns to a loop's start: every `loop` is the session's, since a server cannot write `end`, and whether the session comes back for another turn is the workload's choice, not the deployment's. An arrow forward past other stations, and an entry past the first, run in a lane below the row rather than through them |
+| **Nodes** | one per stage a `Run` reaches (`Node::stage` is `Some`); a stage array is one node labelled `[N]`. A block that decides before its first station (the drawn program, or a loop's body) adds a decision ◇, a node with no stage (`Node::stage` is `None`, `kind` is `Decision`) |
+| **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (the body is walked once). The drawn program or a loop body that decides before its first station - several first stations, or an `end` before any - starts at a decision ◇, named by the `choose`s it makes, which an `end` before any station leaves from. A way out is labelled `out`, with the guard of the arm it takes when it has one. No arrow returns to a loop's start: every `loop` is the session's, since a server cannot write `end`, and whether the session comes back for another turn is the workload's choice, not the deployment's. An arrow forward past other stations, and an entry past the first, run in a lane below the row rather than through them |
 | **Instance** | a `choose v` is a pick of an instance: the stages and pools the session then indexes by exactly `v` (`P[i]`, `P.nic[i]`, `P.kv[i]`) are one, drawn in a solid box named after its step engine (`prefill instance P[i]` when it only prefills). A choice of one station and nothing else is no box |
 | **Enclosure** | every `Run` is tagged with the `Hold`s around it; stations sharing a hold on pool `p` sit inside `p`'s dashed box. Inside an instance's box only its own pools are drawn, and none at the stations of a run between two instances: the run's arrow says what it moves |
 | **Frame** | A pool held at one station alone - every hold that takes it there reaches no other station - is that station's: the station is drawn in an unfilled frame with a row per such pool under its glyph, and no dashed box. An instance is a filled panel, so a frame inside one reads as the station's, not the pod's. A transfer between instances does not count: it holds the sender's pool and the receiver's, and its arrow says so (`P.kv[i] → D.kv[j]`), so each KV is its engine's |
@@ -45,8 +52,8 @@ Three things the walk deliberately does *not* do:
 
 That is `examples/multi-turn/vllm.sq`. Its request slot (`reqs`) and its
 KV blocks (`kv`) are held only at `engine`, so they are drawn in its frame.
-No arrow leads from `tool` back to `engine`: the next turn is the
-workload's, and the figure is the deployment's.
+The tool call and the next turn are the workload's, so the figure has
+neither: a request arrives at `engine` and goes out.
 
 ## Glyphs
 

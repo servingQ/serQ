@@ -267,11 +267,8 @@ struct Walker<'a> {
     instance_of_slot: Vec<(usize, usize)>,
     /// The flow just run, whose `load` and `release` follow it.
     last_flow: Option<usize>,
-    /// Per loop being probed, the ends its body first reaches.
+    /// Per block being probed, the ends it first reaches.
     probes: Vec<Vec<End>>,
-    /// The decision node of each loop body that has one, by body block: a
-    /// loop walked twice (inside another) has one decision, not two.
-    decisions: Vec<(usize, usize)>,
 }
 
 impl Walker<'_> {
@@ -560,82 +557,7 @@ impl Walker<'_> {
                     // the session comes back for another turn is the
                     // workload's choice, not the deployment's, so the body
                     // is walked once and its way back is not drawn.
-                    //
-                    // A body that decides before its first station (several
-                    // first stations, or an `end` before any) is a router at
-                    // the top of every turn: one decision node the body
-                    // starts from. A pass from a mark at the body's start
-                    // finds out what it reaches first - a station, the one
-                    // it was at included, or the exit - and is undone whole.
-                    let saved = (
-                        self.net.clone(),
-                        self.frontier.clone(),
-                        self.holds.clone(),
-                        self.pending.clone(),
-                        self.arm.clone(),
-                        self.chosen.clone(),
-                        self.instance_of_slot.clone(),
-                        self.last_flow,
-                        self.next_hold,
-                        self.decisions.clone(),
-                    );
-                    let k = self.probes.len();
-                    self.probes.push(vec![]);
-                    self.frontier = vec![(At::Probe(k), None)];
-                    self.walk(body);
-                    let entries = self.probes.pop().expect("pushed above");
-                    (
-                        self.net,
-                        self.frontier,
-                        self.holds,
-                        self.pending,
-                        self.arm,
-                        self.chosen,
-                        self.instance_of_slot,
-                        self.last_flow,
-                        self.next_hold,
-                        self.decisions,
-                    ) = saved;
-                    let known = self
-                        .decisions
-                        .iter()
-                        .find(|(b, _)| *b == body)
-                        .map(|&(_, d)| d);
-                    if let Some(d) = known {
-                        self.attach(d);
-                        self.walk(body);
-                    } else if entries.len() > 1 {
-                        // named by the `choose`s it makes before any station:
-                        // the router's name is the gateway's, which is the
-                        // parser's and not the IR's
-                        let mut slots = vec![];
-                        leading_chooses(self.p, body, &mut slots);
-                        let names: Vec<&str> = slots
-                            .iter()
-                            .map(|v| self.p.attrs.get(*v).map_or("?", String::as_str))
-                            .collect();
-                        let label = if names.is_empty() {
-                            String::new()
-                        } else {
-                            format!("choose {}", names.join(", "))
-                        };
-                        self.net.nodes.push(Node {
-                            stage: None,
-                            label,
-                            kind: StationKind::Decision,
-                            inner: String::new(),
-                            note: None,
-                            pools: vec![],
-                            work: String::new(),
-                            modes: vec![],
-                        });
-                        let d = self.net.nodes.len() - 1;
-                        self.decisions.push((body, d));
-                        self.attach(d);
-                        self.walk(body);
-                    } else {
-                        self.walk(body);
-                    }
+                    self.enter(body);
                     self.frontier.clear();
                     // A loop is left only by `end`, which already recorded it.
                 }
@@ -681,6 +603,71 @@ impl Walker<'_> {
                 CStmt::Grow(..) | CStmt::Drop(..) => {}
             }
         }
+    }
+
+    /// Walk a block that may decide before its first station: a loop's
+    /// body, or the program the view draws. One that does (several first
+    /// stations, or an `end` before any) is a router: one decision node the
+    /// block starts from. A pass from a mark at the block's start finds out
+    /// what it reaches first - a station, the one it was at included, or
+    /// the exit - and is undone whole.
+    fn enter(&mut self, body: usize) {
+        let saved = (
+            self.net.clone(),
+            self.frontier.clone(),
+            self.holds.clone(),
+            self.pending.clone(),
+            self.arm.clone(),
+            self.chosen.clone(),
+            self.instance_of_slot.clone(),
+            self.last_flow,
+            self.next_hold,
+        );
+        let k = self.probes.len();
+        self.probes.push(vec![]);
+        self.frontier = vec![(At::Probe(k), None)];
+        self.walk(body);
+        let entries = self.probes.pop().expect("pushed above");
+        (
+            self.net,
+            self.frontier,
+            self.holds,
+            self.pending,
+            self.arm,
+            self.chosen,
+            self.instance_of_slot,
+            self.last_flow,
+            self.next_hold,
+        ) = saved;
+        if entries.len() > 1 {
+            // named by the `choose`s it makes before any station: the
+            // router's name is the gateway's, which is the parser's and not
+            // the IR's
+            let mut slots = vec![];
+            leading_chooses(self.p, body, &mut slots);
+            let names: Vec<&str> = slots
+                .iter()
+                .map(|v| self.p.attrs.get(*v).map_or("?", String::as_str))
+                .collect();
+            let label = if names.is_empty() {
+                String::new()
+            } else {
+                format!("choose {}", names.join(", "))
+            };
+            self.net.nodes.push(Node {
+                stage: None,
+                label,
+                kind: StationKind::Decision,
+                inner: String::new(),
+                note: None,
+                pools: vec![],
+                work: String::new(),
+                modes: vec![],
+            });
+            let d = self.net.nodes.len() - 1;
+            self.attach(d);
+        }
+        self.walk(body);
     }
 }
 
@@ -796,9 +783,8 @@ pub fn project(p: &Program) -> Net {
         instance_of_slot: vec![],
         last_flow: None,
         probes: vec![],
-        decisions: vec![],
     };
-    w.walk(p.session);
+    w.enter(p.session);
     // Anything still on the frontier ran off the end of the session program.
     let frontier = std::mem::take(&mut w.frontier);
     for (from, label) in frontier {
@@ -1763,7 +1749,9 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             }
             (End::Node(i), End::Exit) => {
                 let r = rects[i];
-                let text = label.map_or("ends".into(), |l| format!("ends ({l})"));
+                // a request leaving the deployment, or a session that ends
+                // inside it: both go out, and only the second has a guard
+                let text = label.map_or("out".into(), |l| format!("out ({l})"));
                 if i + 1 == net.nodes.len() {
                     // The last station leaves to the right.
                     f.edge(

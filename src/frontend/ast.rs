@@ -331,6 +331,12 @@ pub struct Program {
     pub stages: Vec<StageDecl>,
     pub workload: Option<Workload>,
     pub session: Vec<Stmt>,
+    /// What one request runs, as the session runs it at its `request`: the
+    /// server, or a gateway's `route`, expanded like the session. Empty when
+    /// the program does not split its session into a workload and a server,
+    /// or requests more than one thing. The deployment view draws this; the
+    /// session is what runs.
+    pub request: Vec<Stmt>,
     pub run: RunOpts,
     /// `share maxmin;` or `share bottleneck;`
     pub share: Option<crate::ir::Share>,
@@ -481,6 +487,7 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
         block(&mut w.turn);
     }
     block(&mut p.session);
+    block(&mut p.request);
     p.run.horizon.iter_mut().for_each(expr);
     p.run.warmup.iter_mut().for_each(expr);
     p.run.seed.iter_mut().for_each(expr);

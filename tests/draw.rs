@@ -8,7 +8,7 @@
 use serq::ir::Program;
 use serq::view::deployment::{self, End};
 use serq::view::figure::{BoxStyle, Figure, StationKind};
-use serq::{Overrides, compile_source, compile_source_at, program_path};
+use serq::{Overrides, compile_drawn_source_at, compile_source, program_path};
 
 const PROGRAMS: [&str; 8] = [
     "mg1",
@@ -24,7 +24,7 @@ const PROGRAMS: [&str; 8] = [
 fn program(name: &str) -> Program {
     let path = program_path(name);
     let src = std::fs::read_to_string(&path).unwrap();
-    compile_source_at(&src, path.parent(), &Overrides::default())
+    compile_drawn_source_at(&src, path.parent(), &Overrides::default())
         .unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
@@ -52,8 +52,9 @@ fn pools_of(p: &Program, net: &deployment::Net, stage_name: &str) -> Vec<String>
 // --- the station kinds -----------------------------------------------------
 
 /// Each stage kind has its glyph: `mg1.sq` is one FIFO server, `ps.sq` one
-/// processor-sharing server, and `llmd_nixl_pull.sq` has a step engine on each
-/// side, a processor-sharing NIC on each and a delay for the tool call.
+/// processor-sharing server, `llmd_nixl_pull.sq` has a step engine on each
+/// side and a processor-sharing NIC on each, and `routing.sq`, one session
+/// with no server apart, a delay for the tool call.
 #[test]
 fn stations_take_their_stage_kind() {
     let kinds = |name: &str| -> Vec<StationKind> {
@@ -73,13 +74,18 @@ fn stations_take_their_stage_kind() {
         ("D", StationKind::Step),
         ("P.nic", StationKind::Ps),
         ("D.nic", StationKind::Ps),
-        ("tool", StationKind::Delay),
     ] {
         let i = net
             .node_of(stage(&p, name))
             .expect("stage is on the session");
         assert_eq!(net.nodes[i].kind, kind, "{name}");
     }
+    let p = program("routing");
+    let net = deployment::project(&p);
+    let i = net
+        .node_of(stage(&p, "tool"))
+        .expect("tool is on the session");
+    assert_eq!(net.nodes[i].kind, StationKind::Delay);
 }
 
 // --- the projection ---------------------------------------------------------
@@ -216,11 +222,11 @@ fn lanes_below_the_row_do_not_collide() {
     }
 }
 
-/// A session that opens with a branch has more than one entry station. A second
-/// arrow along the row would run through the first one, and a second copy of
-/// the arrival label would be drawn on top of the first.
+/// A session that opens with a branch decides before its first station, as
+/// a loop's body can: it starts at one decision, which sends it to either,
+/// so one arrival arrow and one arrival label are drawn.
 #[test]
-fn a_second_entry_point_does_not_overdraw_the_first() {
+fn a_session_that_decides_first_starts_at_a_decision() {
     let p = compile(
         r#"
         stage s1 : fifo; stage s2 : fifo;
@@ -230,10 +236,17 @@ fn a_second_entry_point_does_not_overdraw_the_first() {
         "#,
     );
     let net = deployment::project(&p);
-    assert_eq!(
-        net.edges.iter().filter(|e| e.from == End::Arrival).count(),
-        2
-    );
+    let d = decision(&net).expect("a decision");
+    let arrivals: Vec<_> = net
+        .edges
+        .iter()
+        .filter(|e| e.from == End::Arrival)
+        .collect();
+    assert_eq!(arrivals.len(), 1);
+    assert_eq!(arrivals[0].to, d);
+    for st in ["s1", "s2"] {
+        assert!(has(&net, &p, d, st).is_some(), "{st}");
+    }
     let f = deployment::layout(&p, &net);
     let labels = f
         .items
@@ -475,14 +488,11 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
         assert_eq!(pools_of(&p, &net, nic), ["P.kv", "D.kv"], "{nic}");
     }
     assert_eq!(pools_of(&p, &net, "D"), ["D.kv", "D.reqs"]);
-    assert!(pools_of(&p, &net, "tool").is_empty());
     let node = |name: &str| net.node_of(stage(&p, name)).unwrap();
-    let (pf, eg, ing, d, tool) = (
-        node("P"),
-        node("P.nic"),
-        node("D.nic"),
-        node("D"),
-        node("tool"),
+    let (pf, eg, ing, d) = (node("P"), node("P.nic"), node("D.nic"), node("D"));
+    assert!(
+        net.node_of(stage(&p, "tool")).is_none(),
+        "the tool call is the workload's"
     );
     assert_eq!(net.flows, vec![vec![eg, ing]]);
     let note = &net.flow_notes[0];
@@ -492,7 +502,6 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
     assert_eq!(net.instances.len(), 2);
     assert_eq!(net.instances[0].nodes, [pf, eg]);
     assert_eq!(net.instances[1].nodes, [ing, d]);
-    assert_eq!(net.instance_of(tool), None);
     for nic in [eg, ing] {
         assert!(net.drawn_pools(nic).is_empty());
     }
@@ -508,7 +517,6 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
     };
     assert!(inside(&pbox, pf) && inside(&pbox, eg) && !inside(&pbox, ing));
     assert!(inside(&dbox, ing) && inside(&dbox, d) && !inside(&dbox, eg));
-    assert!(!inside(&pbox, tool) && !inside(&dbox, tool));
     assert!(!pbox.overlaps(&dbox), "the read is between the boxes");
 }
 
@@ -545,33 +553,59 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
 /// wait (`ingress`'s `latency`, written on the read and not a station), or
 /// straight to the decoder (local); a request whose KV is already there
 /// skips both. The router decides before any station, so it is the
-/// decision every turn starts from: the session ends there when the prompt
-/// reaches `max_model_len`. Its coming back after a tool call is the
-/// workload's, and not drawn.
+/// decision a request starts from. The figure is what a request runs: the
+/// workload's `max_model_len` check, its tool call and its next turn are
+/// not drawn, and a request leaves from the decoder.
 #[test]
 fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
-    let (pf, eg, ing, d, tool) = (at("P"), at("P.nic"), at("D.nic"), at("D"), at("tool"));
+    let (pf, eg, ing, d) = (at("P"), at("P.nic"), at("D.nic"), at("D"));
     assert!(net.node_of(stage(&p, "D.nic.latency")).is_none());
+    assert!(net.node_of(stage(&p, "tool")).is_none());
     let route = decision(&net).expect("the router");
     assert!(net.has_edge(End::Arrival, route));
     assert!(net.has_edge(route, pf), "remote");
     assert!(net.has_edge(route, d), "local");
-    assert!(net.has_edge(route, End::Exit), "max_model_len");
+    assert!(
+        !net.has_edge(route, End::Exit),
+        "max_model_len is the workload's"
+    );
     assert!(net.has_edge(pf, eg));
     assert!(net.has_edge(ing, d));
     assert!(!net.has_edge(eg, ing), "held at once, not passed in turn");
     assert!(net.has_edge(pf, d), "the KV is already on the decoder");
-    assert!(net.has_edge(d, tool), "more");
-    assert!(net.has_edge(d, End::Exit));
-    assert!(
-        !net.has_edge(tool, route),
-        "the next turn is the workload's"
-    );
-    assert!(!net.has_edge(tool, pf) && !net.has_edge(tool, d));
+    let out: Vec<_> = net.edges.iter().filter(|e| e.to == End::Exit).collect();
+    assert_eq!(out.len(), 1);
+    assert_eq!((out[0].from, out[0].label.as_deref()), (d, None));
     assert!(net.arrival.contains("Poisson"));
+}
+
+/// `vllm.sq` splits its session into a workload and a server, and the
+/// figure is the server's: a request arrives at the engine and goes out.
+/// The tool call, the next turn and the session's `end` are the workload's.
+/// `vllm_replay.sq`'s server reads the workload's `prev`, which the figure
+/// declares and does not draw.
+#[test]
+fn a_split_program_is_drawn_as_its_server() {
+    let p = program("vllm");
+    let net = deployment::project(&p);
+    let engine = End::Node(net.node_of(stage(&p, "engine")).unwrap());
+    assert_eq!(net.nodes.len(), 1);
+    assert!(net.node_of(stage(&p, "tool")).is_none());
+    assert!(net.has_edge(End::Arrival, engine));
+    let out: Vec<_> = net.edges.iter().filter(|e| e.to == End::Exit).collect();
+    assert_eq!(out.len(), 1);
+    assert_eq!((out[0].from, out[0].label.as_deref()), (engine, None));
+    let p = program("vllm_replay");
+    let net = deployment::project(&p);
+    for st in ["front", "engine"] {
+        assert!(net.node_of(stage(&p, st)).is_some(), "{st}");
+    }
+    for st in ["gate", "tool"] {
+        assert!(net.node_of(stage(&p, st)).is_none(), "{st}");
+    }
 }
 
 // --- loops ------------------------------------------------------------------
@@ -973,7 +1007,7 @@ fn docs_assets_are_current() {
             .pop()
             .unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.sq"));
         let src = std::fs::read_to_string(&src_path).unwrap();
-        let p = serq::compile_file(&src, &src_path, &Overrides::default())
+        let p = serq::compile_drawn_file(&src, &src_path, &Overrides::default())
             .unwrap_or_else(|e| panic!("{}: {e}", src_path.display()));
         let got = serq::view::svg::render(&deployment::figure(&p));
         if std::env::var("SERQ_BLESS").is_ok() {
