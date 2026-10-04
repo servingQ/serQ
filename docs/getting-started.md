@@ -3,8 +3,8 @@
 ## Build
 
 serQ is one Rust crate, `serq`: a library (`serq`) and a CLI (`serq`).
-From Python, `pip install pyserq` (a binding of the same crate) gives the
-same compile, run and draw in process ([pyserq](python.md)).
+From Python, `pip install pyserq` (a binding of the crate) compiles, runs
+and draws a program in process ([pyserq](python.md)).
 
 ```bash
 git clone https://github.com/servingQ/serQ && cd serQ
