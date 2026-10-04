@@ -808,12 +808,7 @@ impl Linker<'_> {
                 Some(_) => format!("{}[…]", r.name),
             };
             let leased: &[Ref] = if or_leased { &self.leased } else { &[] };
-            let hint = if self
-                .held
-                .iter()
-                .chain(leased)
-                .any(|h| h.name == r.name)
-            {
+            let hint = if self.held.iter().chain(leased).any(|h| h.name == r.name) {
                 ": write the pool as the hold does, index included"
             } else if or_leased {
                 ": it takes an enclosing hold's allocation, or a lease of it"
