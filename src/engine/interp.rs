@@ -3582,8 +3582,9 @@ impl Ord for KeyOrd {
 /// Whether an eviction key reads only its entry, the clock and the stage
 /// estimates (no pool or queue state, which eviction changes, and no
 /// sampling, whose draws would be reordered).
-/// A draw in a reference's index counts: `est_wait(E[floor(~uniform(0, 2))])`
-/// draws (#273).
+/// A reference's index counts like any other operand: a draw or a pool
+/// read in it (`est_wait(E[floor(~uniform(0, 2))])`) makes the key dynamic
+/// (#273).
 fn static_key(e: &CExpr) -> bool {
     !e.any(&|x| match x {
         CExpr::Sample(..) => true,
@@ -3640,5 +3641,14 @@ mod tests {
         assert!(static_key(&est(Some(CExpr::Attr(0)))));
         let draw = CExpr::Sample(DistKind::Uniform, vec![CExpr::Num(0.0), CExpr::Num(2.0)]);
         assert!(!static_key(&est(Some(draw))));
+        let read = CExpr::Call(
+            Fun::Used,
+            vec![CArg::Pool(CRef {
+                base: 0,
+                count: 1,
+                index: None,
+            })],
+        );
+        assert!(!static_key(&est(Some(read))));
     }
 }
