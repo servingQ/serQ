@@ -18,6 +18,7 @@
     "cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);",
     "decode (o - 1 - (known - prompt)) growing kv;",
     "pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }",
+    "pool reqs { cap max_seqs; admit via engine; }",
     "prefill (known - c) growing kv;",
     "run { horizon 2000; warmup 200; seed 1; }",
     "set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);",

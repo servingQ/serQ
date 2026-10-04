@@ -115,15 +115,15 @@ arrival rate, so compare the rows within a pair, not across the table):
 
 | program | requests/s | hit rate | prefill tokens | TTFT (ms) | response (ms) | engine busy |
 |---|---|---|---|---|---|---|
-| `vllm_single_turn` | 2.98 | 0.00 | 2 004 | 43 | 96 | 0.23 |
-| `vllm_chat` | 1.61 | 0.80 | 221 | 4 | 67 | 0.10 |
-| `vllm` | 3.15 | 0.89 | 767 | 17 | 64 | 0.17 |
-| `vllm_subagents --set q=0` | 1.00 | 0.90 | 686 | 14 | 58 | 0.06 |
-| `vllm_subagents` | 3.70 | 0.69 | 2 002 | 53 | 113 | 0.28 |
+| `vllm_single_turn` | 2.98 | 0.00 | 1 994 | 43 | 94 | 0.22 |
+| `vllm_chat` | 1.56 | 0.78 | 258 | 5 | 66 | 0.10 |
+| `vllm` | 3.07 | 0.89 | 770 | 18 | 65 | 0.17 |
+| `vllm_subagents --set q=0` | 0.82 | 0.88 | 706 | 14 | 57 | 0.05 |
+| `vllm_subagents` | 3.65 | 0.70 | 1 823 | 45 | 100 | 0.27 |
 
-For the same parent arrival rate, delegation makes 3.7 times as many requests.
+For the same parent arrival rate, delegation makes 4.5 times as many requests.
 Each first request of a subagent is a full miss on the context it copied, so
-the mean prefill triples and TTFT rises from 14 ms to 53 ms. The prefill row
+the mean prefill is 2.6 times as large and TTFT rises from 14 ms to 45 ms. The prefill row
 is an upper bound: the real vLLM would hit on the shared prefix, since its
 cache is content-addressed (`kv_cache_utils.py:650-680`,
 `block_pool.py:197-223`), and this serQ program cannot.
