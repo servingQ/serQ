@@ -94,7 +94,7 @@ Theorem 1's bound for this program is $128/4640$ tokens per µs. With a mean of 
 
 ## What it leaves out
 
-- **Theorem 2, RAD's stability.** Positive recurrence of the regenerative process needs probability theory Mathlib lacks (Foster–Lyapunov, regenerative processes). The run is evidence, not proof.
+- **Theorem 2, RAD's stability.** Positive recurrence needs a Markov kernel of the program. Foster's criterion on such a kernel needs no path measure (`lean/Serq/Foster.lean`, `docs/design/stability.md`), and the step from `Exec` to the kernel is open (#305). RAD is not work-conserving in Dai et al.'s sense (Prefill Mode serves one chunk, Decode Mode leaves prefills waiting), so its drift is not the backlog's alone. The run is evidence, not proof.
 - **The cycle parameter $N$.** The program takes $N = \infty$. A finite $N$ ends a cycle by finishing the active requests, with batches that may not fill a tile, and the paper's tiling principle excepts them in the same way.
 - **Attention.** The cost omits (7)'s attention terms, whose coefficients are not integers in µs. The Lean fragment reads `attention` with even integer coefficients only.
 - **Several nodes.** The fragment has one engine. Theorem 1 for $g$ nodes is the sum of the per-node bound.
