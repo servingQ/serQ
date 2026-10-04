@@ -349,6 +349,14 @@ impl Report {
                         label(&p.name, p.index)
                     );
                 }
+                if p.rejected > 0 {
+                    let _ = writeln!(
+                        s,
+                        "rej: {} session(s) ended at pool `{}` asking for more than its cap",
+                        p.rejected,
+                        label(&p.name, p.index)
+                    );
+                }
             }
         }
         s

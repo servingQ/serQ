@@ -463,16 +463,20 @@ fn the_corpus_earns_one_note() {
     programs.sort();
     assert!(programs.len() >= 25, "{programs:?}");
     let mut noted = vec![];
+    // nor does any reject a session (the `rej:` note, #271)
+    let mut rejected = vec![];
     for p in &programs {
         let r = serq::run_file(p, &Overrides::default())
             .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+        let name = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
         for o in r.observes.iter().filter(|o| o.never_held()) {
-            noted.push((
-                p.strip_prefix(root).unwrap().to_string_lossy().into_owned(),
-                o.name.clone(),
-            ));
+            noted.push((name.clone(), o.name.clone()));
+        }
+        for q in r.pools.iter().filter(|q| q.rejected > 0) {
+            rejected.push((name.clone(), q.name.clone()));
         }
     }
+    assert_eq!(rejected, Vec::<(String, String)>::new());
     assert_eq!(
         noted,
         [(

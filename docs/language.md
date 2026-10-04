@@ -595,7 +595,9 @@ from the tail of the entry when the pool has `block b`; `evict lru` orders
 by release time and then release order, `evict by (k₁, …)` by the keys and
 then release order. A request that can never fit — its units, or its
 `reserve` when that is larger, above the cap, as they evaluate when the
-session joins the queue — is rejected: the session ends. vLLM never
+session joins the queue — is rejected: the session ends, and the report
+says how many did. One whose units or `reserve` are a constant does not
+link: it would be rejected whenever it is reached. vLLM never
 schedules a request it could never hold either, by another measure: it
 refuses a prompt longer than `max_model_len` (and, for generation, one of
 exactly that length) before scheduling (`input_processor.py:512-536`), and

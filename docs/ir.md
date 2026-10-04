@@ -121,7 +121,9 @@ every context variable is read at the moment that supplies it, that every
 non-constant or positive work, a `Hold` whose body does, or `End`;
 `docs/language.md` §3, Every instant settles), that a `Hold`'s units,
 `reserve` and `reuse` do not draw (they are re-read at every admission
-attempt; the rule of a queue key), that a `BudgetLeft` names step stages
+attempt; the rule of a queue key), that a `Hold` whose units or `reserve`
+are a constant, rounded to blocks, fits some pool its reference may name
+(one that fits none is rejected whenever it is reached), that a `BudgetLeft` names step stages
 only (every member of the array it references), that a constant renewal
 gap is a positive time (the linker folds one), and the
 flows: every stage array a `Run` holds with another (`also`) is a `ps` of
