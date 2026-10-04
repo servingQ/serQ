@@ -182,7 +182,7 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 17] = [
 
 /// The most terms the aggregates (`max j in n (e)`) of one program write
 /// out, nested ones included.
-const MAX_OVER: usize = 4096;
+pub(crate) const MAX_OVER: usize = 4096;
 
 /// Calls the linker folds to a constant from a declaration.
 pub const FOLDED: [&str; 1] = ["blocksize"];
@@ -1344,7 +1344,7 @@ fn has_draw(e: &Expr) -> bool {
 /// Replace the index `j` of an `Expr::Over` by the number `k`, in the
 /// body and in its references' indices; an inner `Over` of the same name
 /// keeps its own.
-fn bind_index(e: &mut Expr, j: &str, k: f64) {
+pub(crate) fn bind_index(e: &mut Expr, j: &str, k: f64) {
     match e {
         Expr::Located(_, inner) => bind_index(inner, j, k),
         Expr::Var(n) if n == j => *e = Expr::Num(k),

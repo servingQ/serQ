@@ -2635,40 +2635,72 @@ impl Parser {
     /// The value of a constant expression over numbers and `let` constants,
     /// if it is one.
     fn const_value(&self, e: &Expr) -> Option<f64> {
+        self.fold(e, &std::cell::Cell::new(0))
+    }
+
+    /// `const_value` with the terms its aggregates have written out so far:
+    /// nested ones multiply, and like the linker's (`over_terms`) the total
+    /// is bounded, or a nest of three would run for minutes. Past the bound
+    /// this is not a constant here, and the linker says why.
+    fn fold(&self, e: &Expr, terms: &std::cell::Cell<usize>) -> Option<f64> {
         Some(match e {
-            Expr::Located(_, inner) => self.const_value(inner)?,
+            Expr::Located(_, inner) => self.fold(inner, terms)?,
             Expr::Num(x) => *x,
             Expr::Var(n) if n == "inf" => f64::INFINITY,
             Expr::Var(n) => self.consts.iter().rev().find(|(c, _)| c == n)?.1,
-            Expr::Unary(UnOp::Neg, a) => -self.const_value(a)?,
+            Expr::Unary(UnOp::Neg, a) => -self.fold(a, terms)?,
             Expr::Unary(UnOp::Not, a) => {
-                if self.const_value(a)? != 0.0 {
+                if self.fold(a, terms)? != 0.0 {
                     0.0
                 } else {
                     1.0
                 }
             }
             Expr::Binary(op, a, b) => {
-                crate::frontend::link::binop(*op, self.const_value(a)?, self.const_value(b)?)
+                crate::frontend::link::binop(*op, self.fold(a, terms)?, self.fold(b, terms)?)
             }
             Expr::Cond(c, a, b) => {
-                if self.const_value(c)? != 0.0 {
-                    self.const_value(a)?
+                if self.fold(c, terms)? != 0.0 {
+                    self.fold(a, terms)?
                 } else {
-                    self.const_value(b)?
+                    self.fold(b, terms)?
                 }
             }
-            // the linker writes an aggregate out; the parser does not fold one
-            Expr::Over(..) => return None,
+            // folded as the linker writes it out, so that a `let` it folds
+            // sizes an array here too (#274)
+            Expr::Over(agg, j, n, body) => {
+                let count = self.fold(n, terms)?;
+                let total = terms.get() as f64 + count;
+                if !(count >= 1.0
+                    && count.fract() == 0.0
+                    && total <= crate::frontend::link::MAX_OVER as f64)
+                {
+                    return None;
+                }
+                terms.set(total as usize);
+                let mut acc: Option<f64> = None;
+                for k in 0..count as usize {
+                    let mut term = (**body).clone();
+                    crate::frontend::link::bind_index(&mut term, j, k as f64);
+                    let x = self.fold(&term, terms)?;
+                    acc = Some(match (acc, agg) {
+                        (None, _) => x,
+                        (Some(a), Agg::Sum) => a + x,
+                        (Some(a), Agg::Max) => a.max(x),
+                        (Some(a), Agg::Min) => a.min(x),
+                    });
+                }
+                acc?
+            }
             // the linker's constant functions, so that a `let` the linker
             // folds the parser folds too (`let N = min(2, 3); queue D[N]`)
             Expr::Call(f, args) => {
                 let xs = args
                     .iter()
                     .map(|a| match a {
-                        Arg::Expr(e) => self.const_value(e),
+                        Arg::Expr(e) => self.fold(e, terms),
                         Arg::Ref(r) if r.index.is_none() => {
-                            self.const_value(&Expr::Var(r.name.clone()))
+                            self.fold(&Expr::Var(r.name.clone()), terms)
                         }
                         Arg::Ref(_) => None,
                     })
