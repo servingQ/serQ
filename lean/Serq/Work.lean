@@ -181,5 +181,38 @@ theorem assign_eq_fillIter_only (m : Machine) (hq : engineQueuesEmpty D m)
         simp only [hsv, hs, Bool.not_false, ↓reduceIte]
         exact ih (idx + 1) left acc (by omega)
 
+/-- An entry of the greedy fill is a job's, at most what it wants. -/
+theorem mem_fillIter (D : Deployment) : ∀ (js : List Job) (left : ℕ) (e : ℕ × ℕ), e ∈ fillIter D js left →
+    ∃ j ∈ js, e.1 = j.owner ∧ 0 < e.2 ∧ e.2 ≤ wantOf D j
+  | [], _, _, h => by simp [fillIter] at h
+  | j :: js, left, e, h => by
+    unfold fillIter at h
+    split at h
+    · obtain ⟨j', hj', h'⟩ := mem_fillIter D js left e h
+      exact ⟨j', List.mem_cons_of_mem _ hj', h'⟩
+    · rename_i h0
+      split at h
+      · simp only [List.mem_singleton] at h
+        subst h
+        exact ⟨j, List.mem_cons_self, rfl, Nat.pos_of_ne_zero h0, min_le_left _ _⟩
+      · rcases List.mem_cons.mp h with rfl | h
+        · exact ⟨j, List.mem_cons_self, rfl, Nat.pos_of_ne_zero h0, min_le_left _ _⟩
+        · obtain ⟨j', hj', h'⟩ := mem_fillIter D js _ e h
+          exact ⟨j', List.mem_cons_of_mem _ hj', h'⟩
+
+/-- The fill of jobs that want one token each, fewer than the budget. -/
+theorem fillIter_ones (D : Deployment) : ∀ (js : List Job) (B : ℕ), (∀ j ∈ js, wantOf D j = 1) →
+    js.length < B → fillIter D js B = js.map fun j => (j.owner, 1)
+  | [], _, _, _ => rfl
+  | j :: js, B, h1, hl => by
+    have hj := h1 j List.mem_cons_self
+    simp only [List.length_cons] at hl
+    unfold fillIter
+    rw [hj, if_neg (by omega), if_neg (by omega)]
+    simp only [List.map_cons, List.cons.injEq]
+    rw [show min 1 B = 1 by omega]
+    exact ⟨rfl, fillIter_ones D js (B - 1) (fun j hj' => h1 j (List.mem_cons_of_mem _ hj')) (by omega)⟩
+
+
 end Exec
 end SerqLang

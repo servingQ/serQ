@@ -1505,6 +1505,328 @@ theorem sinv_pop_r1 {w : Workload} {g : Ghost} {m : Machine} (hI : SInv w g m) (
   simp only [hst', hp', hs'] at h1
   exact sinv_after_release hin hc hno _ _ (attr_match _ (g.set i .x) i hI.wl hcs h1)
 
+/-! ### Settling an instant -/
+
+/-- How much a request has left to do within an instant. -/
+def wt : Cat → ℕ
+  | .s0 => 4
+  | .q => 3
+  | .r2 => 2
+  | .r1 => 2
+  | .x => 1
+  | .a => 0
+  | .e => 0
+
+def mu (w : Workload) (g : Ghost) : ℕ := ∑ j ∈ Finset.range w.init.length, wt (g.c j)
+
+/-- Requests not yet admitted. -/
+def nu (w : Workload) (g : Ghost) : ℕ :=
+  ∑ j ∈ Finset.range w.init.length, if g.c j = .s0 ∨ g.c j = .q then 1 else 0
+
+theorem mu_le {w : Workload} {g g' : Ghost} (h : ∀ j < w.init.length, wt (g'.c j) ≤ wt (g.c j)) :
+    mu w g' ≤ mu w g :=
+  Finset.sum_le_sum fun j hj => h j (Finset.mem_range.mp hj)
+
+theorem mu_lt {w : Workload} {g g' : Ghost} (h : ∀ j < w.init.length, wt (g'.c j) ≤ wt (g.c j))
+    {i : ℕ} (hi : i < w.init.length) (hlt : wt (g'.c i) < wt (g.c i)) : mu w g' < mu w g :=
+  Finset.sum_lt_sum (fun j hj => h j (Finset.mem_range.mp hj)) ⟨i, Finset.mem_range.mpr hi, hlt⟩
+
+theorem mu_bound (w : Workload) (g : Ghost) : mu w g ≤ 4 * w.init.length := by
+  unfold mu
+  calc ∑ j ∈ Finset.range w.init.length, wt (g.c j) ≤ ∑ _j ∈ Finset.range w.init.length, 4 :=
+        Finset.sum_le_sum fun j _ => by cases g.c j <;> simp [wt]
+    _ = 4 * w.init.length := by simp [mul_comm]
+
+/-- Not yet admitted (`s0`, `q`) only from not yet admitted. -/
+def Unadm (g g' : Ghost) (n : ℕ) : Prop :=
+  ∀ j < n, (g'.c j = .s0 ∨ g'.c j = .q) → (g.c j = .s0 ∨ g.c j = .q)
+
+theorem nu_le {w : Workload} {g g' : Ghost} (h : Unadm g g' w.init.length) : nu w g' ≤ nu w g :=
+  Finset.sum_le_sum fun j hj => by
+    have := h j (Finset.mem_range.mp hj)
+    split_ifs <;> simp_all
+
+theorem nu_lt {w : Workload} {g g' : Ghost} (h : Unadm g g' w.init.length) {i : ℕ} (hi : i < w.init.length)
+    (h1 : g.c i = .q) (h2 : g'.c i = .r2) : nu w g' < nu w g :=
+  Finset.sum_lt_sum (fun j hj => by
+    have := h j (Finset.mem_range.mp hj)
+    split_ifs <;> simp_all) ⟨i, Finset.mem_range.mpr hi, by simp [h1, h2]⟩
+
+theorem nu_bound (w : Workload) (g : Ghost) : nu w g ≤ w.init.length := by
+  unfold nu
+  calc ∑ j ∈ Finset.range w.init.length, (if g.c j = .s0 ∨ g.c j = .q then 1 else 0)
+        ≤ ∑ _j ∈ Finset.range w.init.length, 1 := Finset.sum_le_sum fun j _ => by split_ifs <;> simp
+    _ = w.init.length := by simp
+
+/-- The family's facts the proof uses. -/
+structure Fam (w : Workload) : Prop where
+  len : w.init.length ≤ 500
+  cs : w.computedSlot = some 8
+  peak : ∀ i < w.init.length, pp w i ≤ 2500
+  out : ∀ i < w.init.length, 1 ≤ oo w i
+
+theorem sinv_drain {w : Workload} (hF : Fam w) :
+    ∀ (f : ℕ) (g : Ghost) (m : Machine), SInv w g m → (∀ j < w.init.length, g.c j ≠ .x) → mu w g < f →
+      ∃ g', SInv w g' (drain Dk f m) ∧ (drain Dk f m).ready = [] ∧ (∀ j < w.init.length, g'.c j ≠ .x) ∧
+        (∀ j < w.init.length, wt (g'.c j) ≤ wt (g.c j)) ∧ Unadm g g' w.init.length
+  | 0, _, _, _, _, h => absurd h (Nat.not_lt_zero _)
+  | f + 1, g, m, hI, hx, hmu => by
+    unfold drain
+    split
+    · rename_i hr
+      exact ⟨g, hI, hr, hx, fun _ _ => le_rfl, fun _ _ h => h⟩
+    · rename_i i rest hr
+      have hin : i < w.init.length := ((hI.readyMem i).mp (by rw [hr]; simp)).1
+      have hcat := ((hI.readyMem i).mp (by rw [hr]; simp)).2
+      -- the request's step, with what it does to the ghost
+      obtain ⟨g1, hI1, hx1, hwt1, hun1, hlt1⟩ : ∃ g1, SInv w g1 (exec Dk 10000 { m with ready := rest } i) ∧
+          (∀ j < w.init.length, g1.c j ≠ .x) ∧ (∀ j < w.init.length, wt (g1.c j) ≤ wt (g.c j)) ∧
+          Unadm g g1 w.init.length ∧ wt (g1.c i) < wt (g.c i) := by
+        rcases hcat with hc | hc | hc
+        · refine ⟨_, sinv_pop_s0 hI hr hc, fun j _ => ?_, fun j _ => ?_, fun j _ => ?_, ?_⟩
+          · simp only [Ghost.set_c]; split_ifs
+            · decide
+            · exact hx j ‹_›
+          · simp only [Ghost.set_c]; split_ifs with h
+            · subst h; rw [hc]; decide
+            · exact le_rfl
+          · simp only [Ghost.set_c]; split_ifs with h
+            · subst h; intro; exact Or.inl hc
+            · exact id
+          · simp [hc, wt]
+        · refine ⟨_, sinv_pop_r2 hI hF.out hr hc, fun j _ => ?_, fun j _ => ?_, fun j _ => ?_, ?_⟩
+          · simp only [Function.update_apply]; split_ifs
+            · decide
+            · exact hx j ‹_›
+          · simp only [Function.update_apply]; split_ifs with h
+            · subst h; rw [hc]; decide
+            · exact le_rfl
+          · simp only [Function.update_apply]; split_ifs with h
+            · intro h'; simp at h'
+            · exact id
+          · simp [hc, wt]
+        · obtain ⟨g1, hI1, hci, hj, -⟩ := sinv_pop_r1 hI hF.cs hr hc
+          refine ⟨g1, hI1, fun j hj' => ?_, fun j hj' => ?_, fun j hj' => ?_, by rw [hci, hc]; decide⟩
+          · by_cases hji : j = i
+            · rw [hji, hci]; decide
+            · rcases hj j hji with h | ⟨_, h⟩
+              · rw [h]; exact hx j hj'
+              · rw [h]; decide
+          · by_cases hji : j = i
+            · rw [hji, hci, hc]; decide
+            · rcases hj j hji with h | ⟨h1, h2⟩
+              · rw [h]
+              · rw [h1, h2]; decide
+          · by_cases hji : j = i
+            · rw [hji, hci]; intro h; simp at h
+            · rcases hj j hji with h | ⟨h1, h2⟩
+              · rw [h]; exact id
+              · intro _; exact Or.inr h1
+      have hmu1 : mu w g1 < mu w g := mu_lt hwt1 hin hlt1
+      obtain ⟨g2, hI2, hr2, hx2, hwt2, hun2⟩ := sinv_drain hF f g1 _ hI1 hx1 (by omega)
+      exact ⟨g2, hI2, hr2, hx2, fun j hj => (hwt2 j hj).trans (hwt1 j hj),
+        fun j hj h => hun1 j hj (hun2 j hj h)⟩
+
+theorem length_le_of_nodup_lt {l : List ℕ} (hn : l.Nodup) {n : ℕ} (h : ∀ x ∈ l, x < n) : l.length ≤ n := by
+  rw [← List.toFinset_card_of_nodup hn]
+  calc l.toFinset.card ≤ (Finset.range n).card :=
+        Finset.card_le_card fun x hx => Finset.mem_range.mpr (h x (List.mem_toFinset.mp hx))
+    _ = n := Finset.card_range n
+
+theorem queue_short {w : Workload} {g : Ghost} {m : Machine} (hI : SInv w g m) (hF : Fam w) :
+    (pst m 0).queue.length < 1000 := by
+  have := length_le_of_nodup_lt (queue_nodup hI) (n := w.init.length)
+    (fun x hx => ((hI.queueMem x).mp hx).1)
+  have := hF.len
+  omega
+
+theorem sinv_settleLoop {w : Workload} (hF : Fam w) :
+    ∀ (f : ℕ) (g : Ghost) (m : Machine), SInv w g m → (∀ j < w.init.length, g.c j ≠ .x) →
+      mu w g < 10000 → nu w g < f →
+      ∃ g', SInv w g' (settleLoop Dk f m) ∧ (settleLoop Dk f m).ready = [] ∧ Blocked w (settleLoop Dk f m) ∧
+        (∀ j < w.init.length, g'.c j = .q ∨ g'.c j = .a ∨ g'.c j = .e) ∧ Unadm g g' w.init.length
+  | 0, _, _, _, _, _, h => absurd h (Nat.not_lt_zero _)
+  | f + 1, g, m, hI, hx, hmu, hnu => by
+    unfold settleLoop
+    simp only
+    obtain ⟨g1, hI1, hr1, hx1, hwt1, hun1⟩ := sinv_drain hF 10000 g m hI hx hmu
+    have hno1 : ∀ j < w.init.length, g1.c j ≠ .s0 := fun j hj hc =>
+      by have := (hI1.readyMem j).mpr ⟨hj, Or.inl hc⟩; rw [hr1] at this; simp at this
+    rw [admitAll_k]
+    obtain ⟨g2, hadm, hI2, ⟨L, hL, hL0⟩, hblk⟩ := sinv_admitHeads w 1000 g1 _ hI1 hno1
+    have hun2 : Unadm g1 g2 w.init.length := fun j _ h => by
+      rcases hadm.1 j with h' | ⟨h', _⟩
+      · rw [← h']; exact h
+      · exact Or.inr h'
+    have hcat : ∀ j < w.init.length, g2.c j ≠ .s0 ∧ g2.c j ≠ .x ∧
+        (g2.c j = .r2 ∨ g2.c j = .r1 → j ∈ L) := by
+      intro j hj
+      refine ⟨fun hc => ?_, fun hc => ?_, fun hc => ?_⟩
+      · rcases hadm.1 j with h' | ⟨h', _⟩
+        · exact hno1 j hj (h' ▸ hc)
+        · rw [hc] at *; simp_all
+      · rcases hadm.1 j with h' | ⟨h', h''⟩
+        · exact hx1 j hj (h' ▸ hc)
+        · rw [hc] at h''; exact absurd h'' (by decide)
+      · have := (hI2.readyMem j).mpr ⟨hj, Or.inr hc⟩
+        rw [hL, hr1] at this; simpa using this
+    split
+    · rename_i hemp
+      have hrd : (admitHeads Dk 0 1000 (drain Dk 10000 m)).ready = [] := by simpa using hemp
+      refine ⟨g2, hI2, hrd, hblk (queue_short hI1 hF), fun j hj => ?_, fun j hj h => hun1 j hj (hun2 j hj h)⟩
+      have hLe : L = [] := by rw [hr1] at hL; simpa [hrd] using hL.symm
+      obtain ⟨h1, h2, h3⟩ := hcat j hj
+      cases hcj : g2.c j <;> simp_all
+    · rename_i hne
+      have hLne : L ≠ [] := by
+        intro hLe; rw [hLe, hr1] at hL; simp [hL] at hne
+      obtain ⟨j, hjL⟩ := List.exists_mem_of_ne_nil L hLne
+      have hj2 : j ∈ (admitHeads Dk 0 1000 (drain Dk 10000 m)).ready := by rw [hL]; simp [hjL]
+      obtain ⟨hjn, hjc⟩ := (hI2.readyMem j).mp hj2
+      have hq : g1.c j = .q ∧ g2.c j = .r2 := by
+        rcases hadm.1 j with h' | h'
+        · exfalso
+          have : j ∈ (drain Dk 10000 m).ready := (hI1.readyMem j).mpr ⟨hjn, h' ▸ hjc⟩
+          rw [hr1] at this; simp at this
+        · exact h'
+      have hnu2 : nu w g2 < nu w g1 := nu_lt hun2 hjn hq.1 hq.2
+      have hnu1 : nu w g1 ≤ nu w g := nu_le hun1
+      have hmu2 : mu w g2 ≤ mu w g1 := mu_le fun j hj => by
+        rcases hadm.1 j with h' | ⟨h', h''⟩
+        · rw [h']
+        · rw [h', h'']; decide
+      have hmu1 : mu w g1 ≤ mu w g := mu_le hwt1
+      obtain ⟨g3, hI3, hr3, hb3, hc3, hun3⟩ := sinv_settleLoop hF f g2 _ hI2
+        (fun j hj => (hcat j hj).2.1) (by omega) (by omega)
+      exact ⟨g3, hI3, hr3, hb3, hc3, fun j hj h => hun1 j hj (hun2 j hj (hun3 j hj h))⟩
+
+/-! ### Between instants -/
+
+/-- `SInv` reads only these fields. -/
+theorem SInv.congr {w : Workload} {g : Ghost} {m m' : Machine} (h : SInv w g m) (h1 : m'.wl = m.wl)
+    (h2 : m'.sess = m.sess) (h3 : m'.pools = m.pools) (h4 : m'.jobs = m.jobs) (h5 : m'.ready = m.ready)
+    (h6 : m'.obs = m.obs) (h7 : m'.now = m.now) (h8 : m'.delays = m.delays) : SInv w g m' := by
+  have hg : ∀ i, getS m' i = getS m i := fun i => by simp [getS, h2]
+  have hp : pst m' 0 = pst m 0 := by simp [pst, h3]
+  have hv : ∀ k, values m' k = values m k := fun k => by simp [values, h6]
+  exact
+    { wl := h1.trans h.wl
+      size := h2 ▸ h.size
+      shape := fun i hi => hg i ▸ h.shape i hi
+      serial := fun i hi => hg i ▸ h.serial i hi
+      attr9 := fun i hi => hg i ▸ h.attr9 i hi
+      attr10 := fun i hi => hg i ▸ h.attr10 i hi
+      pools := h3 ▸ h.pools
+      entries := hp ▸ h.entries
+      queue := hp ▸ h.queue
+      queueMem := fun i => hp ▸ h.queueMem i
+      holders := hp ▸ h.holders
+      holdersMem := fun i => hp ▸ h.holdersMem i
+      used := hp ▸ h.used
+      jobs := h4 ▸ h.jobs
+      jobsA := h4 ▸ h.jobsA
+      jobsNodup := h4 ▸ h.jobsNodup
+      leftPos := h.leftPos
+      ready := h5 ▸ h.ready
+      readyMem := h5 ▸ h.readyMem
+      s0 := h.s0
+      s0order := h.s0order
+      readyS0 := h5 ▸ h.readyS0
+      nowS0 := h7 ▸ h.nowS0
+      delays := h8.trans h.delays
+      obs0 := (hv 0) ▸ h.obs0
+      obs1 := (hv 1) ▸ h.obs1
+      obs2 := (hv 2) ▸ h.obs2
+      before := h.before
+      pot := h7 ▸ h.pot
+      cert := h7 ▸ h.cert
+      latE := h7 ▸ h.latE }
+
+/-- After an instant has settled: nobody is ready, every request waits,
+decodes or has ended, and if some request waits the active peaks exceed
+`M - P`. -/
+structure Settled (w : Workload) (g : Ghost) (m : Machine) : Prop where
+  inv : SInv w g m
+  ready : m.ready = []
+  cats : ∀ j < w.init.length, g.c j = .q ∨ g.c j = .a ∨ g.c j = .e
+  full : (∃ j < w.init.length, g.c j = .q) → 17501 ≤ (pst m 0).used
+
+/-- At an event boundary: settled, and the engine runs an iteration of one
+token for each decoding request, ending one clock unit from now, exactly
+when some request decodes. -/
+structure Bnd (w : Workload) (g : Ghost) (m : Machine) : Prop extends Settled w g m where
+  running : (∃ j < w.init.length, g.c j = .a) →
+    (∃ s, m.iterEnd = some (m.now + 1, s)) ∧ m.iter = m.jobs.map fun j => (j.owner, 1)
+  idle : (¬ ∃ j < w.init.length, g.c j = .a) → m.iterEnd = none
+
+theorem full_of_blocked {w : Workload} {g : Ghost} {m : Machine} (hI : SInv w g m) (hF : Fam w)
+    (hb : Blocked w m) : (∃ j < w.init.length, g.c j = .q) → 17501 ≤ (pst m 0).used := by
+  rintro ⟨j, hj, hcj⟩
+  have hjq : j ∈ (pst m 0).queue := (hI.queueMem j).mpr ⟨hj, hcj⟩
+  rcases hsel : argminKey (fun i => evalE m i volE) (pst m 0).queue with _ | h
+  · have := argminKey_none _ _ hsel; rw [this] at hjq; simp at hjq
+  · have := hb h hsel
+    have hhn := ((hI.queueMem h).mp (argminKey_mem _ _ h hsel)).1
+    have := hF.peak h hhn
+    omega
+
+theorem settle_settled {w : Workload} (hF : Fam w) {g : Ghost} {m : Machine} (hI : SInv w g m)
+    (hx : ∀ j < w.init.length, g.c j ≠ .x) :
+    ∃ g', Settled w g' (settle Dk m) ∧ Unadm g g' w.init.length := by
+  obtain ⟨g', hI', hr, hb, hc, hun⟩ := sinv_settleLoop hF 1000 g m hI hx
+    (by have := mu_bound w g; have := hF.len; omega) (by have := nu_bound w g; have := hF.len; omega)
+  exact ⟨g', ⟨hI', hr, hc, full_of_blocked hI' hF hb⟩, hun⟩
+
+theorem jobs_nonempty_iff {w : Workload} {g : Ghost} {m : Machine} (hI : SInv w g m) :
+    m.jobs ≠ [] ↔ ∃ j < w.init.length, g.c j = .a := by
+  constructor
+  · intro h
+    obtain ⟨jb, hjb⟩ := List.exists_mem_of_ne_nil _ h
+    exact ⟨jb.owner, (hI.jobs jb hjb).1, (hI.jobs jb hjb).2.1⟩
+  · rintro ⟨j, hj, hca⟩ he
+    obtain ⟨jb, hjb, -⟩ := hI.jobsA j hj hca
+    rw [he] at hjb; simp at hjb
+
+/-- The iteration starts: one token for every decoding request. -/
+theorem start_bnd {w : Workload} {g : Ghost} {m : Machine} (hF : Fam w) (h : Settled w g m)
+    (hie : m.iterEnd = none) : Bnd w g (startIteration Dk m) := by
+  have hI := h.inv
+  have hq : engineQueuesEmpty Dk m := fun p hp => by
+    exfalso; revert hp; rcases p with _ | p <;> simp [pdef, deployment_eq]
+  have hg : ∀ j ∈ m.jobs, j.growing = none := fun j hj => (hI.jobs j hj).2.2.2.1
+  have hbud : Claims.KongSvf.deployment.budget = 1000000 := rfl
+  have ha := assign_eq_fillIter Dk rfl m hq hg m.preempts (m.jobs.length + 100000) 0 1000000 [] (by omega)
+  simp only [List.drop_zero, List.nil_append] at ha
+  have hw1 : ∀ j ∈ m.jobs, wantOf Dk j = 1 := fun j hj => by
+    have h1 := hI.jobs j hj
+    have h2 := (hI.leftPos _ h1.1 h1.2.1).1
+    simp only [wantOf, h1.2.2.1, h1.2.2.2.2]; omega
+  have hlen : m.jobs.length < 1000000 := by
+    have := length_le_of_nodup_lt hI.jobsNodup (n := w.init.length) (fun x hx => by
+      obtain ⟨jb, hjb, rfl⟩ := List.mem_map.mp hx; exact (hI.jobs jb hjb).1)
+    simp only [List.length_map] at this
+    have := hF.len
+    omega
+  have hfill := fillIter_ones Dk m.jobs 1000000 hw1 hlen
+  have hvia : ((List.range Claims.KongSvf.deployment.pools.length).any fun p =>
+      (pdef Claims.KongSvf.deployment p).viaEngine && !(pst m p).queue.isEmpty) = false := by
+    simp [pdef, deployment_eq]
+  unfold startIteration
+  rw [hvia, Bool.or_false]
+  by_cases hj : m.jobs = []
+  · have hna : ¬ ∃ j < w.init.length, g.c j = .a := fun he => (jobs_nonempty_iff hI).mpr he hj
+    simp only [hj, List.isEmpty_nil, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
+    exact ⟨⟨hI.congr rfl rfl rfl hj.symm rfl rfl rfl rfl, h.ready, h.cats, h.full⟩,
+      fun he => absurd he hna, fun _ => rfl⟩
+  · have hya : ∃ j < w.init.length, g.c j = .a := (jobs_nonempty_iff hI).mp hj
+    have hne : (m.jobs.isEmpty) = false := by simpa using hj
+    simp only [hne, Bool.not_false, ↓reduceIte]
+    rw [hbud, ha, hfill]
+    have hne2 : (m.jobs.map fun j => (j.owner, 1)).isEmpty = false := by simpa using hj
+    simp only [hne2, Bool.not_false, Bool.true_or, ↓reduceIte]
+    refine ⟨⟨hI.congr rfl rfl rfl rfl rfl rfl rfl rfl, h.ready, h.cats, h.full⟩,
+      fun _ => ⟨⟨m.nextDelay, by simp [deployment_eq]⟩, rfl⟩, fun hn => absurd hya hn⟩
+
 end KongSvf
 end Papers
 end SerqLang
