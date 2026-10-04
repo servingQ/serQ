@@ -181,7 +181,9 @@ pub(crate) const MAX_OVER: usize = 4096;
 /// Calls the linker folds to a constant from a declaration.
 pub const FOLDED: [&str; 1] = ["blocksize"];
 
-/// The functions a call may name, as the linker resolves them below.
+/// The functions a call may name, as a constant the parser checks names
+/// against and `scripts/metrics.py` counts: the IR's `Fun::names`, which
+/// `tests/docs_lexer.rs` holds it to.
 pub const FUNCTIONS: [&str; 22] = [
     "min",
     "max",

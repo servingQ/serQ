@@ -630,6 +630,35 @@ impl Program {
     /// (a flow is not described by the `n` a capacity could read), each
     /// stage array once (an index is known only when the run starts), and
     /// the program names its `share`; every run on a shared stage is plain.
+    /// Every block the program reaches from `init`, `turn` and `session` is
+    /// reached once: the blocks form a tree, as the linker builds them, so
+    /// the walks over them (`enclosed`, `lets_time_pass`) end. IR from JSON
+    /// could otherwise point a body at its own ancestor (#272).
+    fn blocks_are_a_tree(&self) -> Result<(), String> {
+        let mut seen = vec![false; self.blocks.len()];
+        let mut todo = vec![self.init, self.turn, self.session];
+        while let Some(b) = todo.pop() {
+            let Some(was) = seen.get_mut(b) else {
+                return Err(format!("block {b} out of range"));
+            };
+            if *was {
+                return Err(format!(
+                    "block {b} is reached twice: a program's blocks form a tree, each the body \
+                     of one statement"
+                ));
+            }
+            *was = true;
+            for st in &self.blocks[b] {
+                match st {
+                    CStmt::Hold { body, .. } | CStmt::Loop(body) => todo.push(*body),
+                    CStmt::Branch(_, a, c) => todo.extend([*a, *c]),
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// `grow`, `load`, `release` and a `growing` run act on the innermost
     /// hold of their pool around them, as the reference is written, index
     /// included; `release` may instead end a lease of it; a hold leases
@@ -871,6 +900,7 @@ impl Program {
                 self.version
             ));
         }
+        self.blocks_are_a_tree()?;
         let v = Validator { p: self };
         for (i, b) in self.blocks.iter().enumerate() {
             // a text program has no block numbers: name the block by its role
@@ -1641,90 +1671,116 @@ pub enum ArgKind {
 
 use ArgKind::{Expr as E, Pool as P, Stage as S};
 
-/// Every function a call may name: its name in a program and its arguments.
-/// The linker resolves a call by it, and `Program::validate` checks one.
-const FUNS: [(Fun, &str, &[ArgKind]); 22] = [
-    (Fun::Min, "min", &[E, E]),
-    (Fun::Max, "max", &[E, E]),
-    (Fun::Abs, "abs", &[E]),
-    (Fun::Floor, "floor", &[E]),
-    (Fun::Ceil, "ceil", &[E]),
-    (Fun::Sqrt, "sqrt", &[E]),
-    (Fun::Exp, "exp", &[E]),
-    (Fun::Ln, "ln", &[E]),
-    (Fun::Pow, "pow", &[E, E]),
-    (Fun::Queue, "queue", &[S]),
-    (Fun::Busy, "busy", &[S]),
-    (Fun::Work, "work", &[S]),
-    (Fun::Used, "used", &[P]),
-    (Fun::Free, "free", &[P]),
-    (Fun::CachedIn, "cachedin", &[P]),
-    (Fun::Holders, "holders", &[P]),
-    (Fun::Queued, "queued", &[P]),
-    (Fun::Price, "price", &[S, E, E]),
-    (Fun::BudgetLeft, "budget_left", &[S]),
-    (Fun::EstLambda, "est_lambda", &[S]),
-    (Fun::EstRho, "est_rho", &[S]),
-    (Fun::EstWait, "est_wait", &[S]),
+/// Every function a call may name, for lookup by name; `Fun::entry` is
+/// the definition and a match, so a new `Fun` without one does not compile.
+const FUNS: [Fun; 22] = [
+    Fun::Min,
+    Fun::Max,
+    Fun::Abs,
+    Fun::Floor,
+    Fun::Ceil,
+    Fun::Sqrt,
+    Fun::Exp,
+    Fun::Ln,
+    Fun::Pow,
+    Fun::Queue,
+    Fun::Busy,
+    Fun::Work,
+    Fun::Used,
+    Fun::Free,
+    Fun::CachedIn,
+    Fun::Holders,
+    Fun::Queued,
+    Fun::Price,
+    Fun::BudgetLeft,
+    Fun::EstLambda,
+    Fun::EstRho,
+    Fun::EstWait,
 ];
 
 impl Fun {
-    fn entry(self) -> &'static (Fun, &'static str, &'static [ArgKind]) {
-        FUNS.iter()
-            .find(|(f, _, _)| *f == self)
-            .expect("every Fun is in FUNS")
+    /// The function's name in a program and the kind of each argument. The
+    /// linker resolves a call by it, and `Program::validate` checks one.
+    fn entry(self) -> (&'static str, &'static [ArgKind]) {
+        match self {
+            Fun::Min => ("min", &[E, E]),
+            Fun::Max => ("max", &[E, E]),
+            Fun::Abs => ("abs", &[E]),
+            Fun::Floor => ("floor", &[E]),
+            Fun::Ceil => ("ceil", &[E]),
+            Fun::Sqrt => ("sqrt", &[E]),
+            Fun::Exp => ("exp", &[E]),
+            Fun::Ln => ("ln", &[E]),
+            Fun::Pow => ("pow", &[E, E]),
+            Fun::Queue => ("queue", &[S]),
+            Fun::Busy => ("busy", &[S]),
+            Fun::Work => ("work", &[S]),
+            Fun::Used => ("used", &[P]),
+            Fun::Free => ("free", &[P]),
+            Fun::CachedIn => ("cachedin", &[P]),
+            Fun::Holders => ("holders", &[P]),
+            Fun::Queued => ("queued", &[P]),
+            Fun::Price => ("price", &[S, E, E]),
+            Fun::BudgetLeft => ("budget_left", &[S]),
+            Fun::EstLambda => ("est_lambda", &[S]),
+            Fun::EstRho => ("est_rho", &[S]),
+            Fun::EstWait => ("est_wait", &[S]),
+        }
     }
 
     pub fn name(self) -> &'static str {
-        self.entry().1
+        self.entry().0
     }
 
     /// The kind of each argument, in order.
     pub fn signature(self) -> &'static [ArgKind] {
-        self.entry().2
+        self.entry().1
     }
 
     pub fn from_name(name: &str) -> Option<Fun> {
-        FUNS.iter().find(|(_, n, _)| *n == name).map(|(f, _, _)| *f)
+        FUNS.into_iter().find(|f| f.name() == name)
     }
 
     /// The names a call may use, in the table's order.
     pub fn names() -> impl Iterator<Item = &'static str> {
-        FUNS.iter().map(|(_, n, _)| *n)
+        FUNS.into_iter().map(Fun::name)
     }
 }
 
-/// Every distribution a draw may name, and how many parameters it takes.
-const DISTS: [(DistKind, &str, usize); 6] = [
-    (DistKind::Exp, "exp", 1),
-    (DistKind::Det, "det", 1),
-    (DistKind::Uniform, "uniform", 2),
-    (DistKind::Erlang, "erlang", 2),
-    (DistKind::H2, "h2", 2),
-    (DistKind::Bernoulli, "bernoulli", 1),
+/// Every distribution a draw may name, for lookup by name; `DistKind::entry`
+/// is the definition.
+const DISTS: [DistKind; 6] = [
+    DistKind::Exp,
+    DistKind::Det,
+    DistKind::Uniform,
+    DistKind::Erlang,
+    DistKind::H2,
+    DistKind::Bernoulli,
 ];
 
 impl DistKind {
-    fn entry(self) -> &'static (DistKind, &'static str, usize) {
-        DISTS
-            .iter()
-            .find(|(d, _, _)| *d == self)
-            .expect("every DistKind is in DISTS")
+    /// The distribution's name in a program and how many parameters it takes.
+    fn entry(self) -> (&'static str, usize) {
+        match self {
+            DistKind::Exp => ("exp", 1),
+            DistKind::Det => ("det", 1),
+            DistKind::Uniform => ("uniform", 2),
+            DistKind::Erlang => ("erlang", 2),
+            DistKind::H2 => ("h2", 2),
+            DistKind::Bernoulli => ("bernoulli", 1),
+        }
     }
 
     pub fn name(self) -> &'static str {
-        self.entry().1
+        self.entry().0
     }
 
     pub fn arity(self) -> usize {
-        self.entry().2
+        self.entry().1
     }
 
     pub fn from_name(name: &str) -> Option<DistKind> {
-        DISTS
-            .iter()
-            .find(|(_, n, _)| *n == name)
-            .map(|(d, _, _)| *d)
+        DISTS.into_iter().find(|d| d.name() == name)
     }
 }
 

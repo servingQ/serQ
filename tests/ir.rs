@@ -131,6 +131,22 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         &|q| q.blocks[q.session].insert(0, CStmt::Grow(kv.clone(), CExpr::Num(8.0))),
         "`grow kv` outside a hold of `kv`",
     );
+    refused(
+        &|q| q.blocks[q.session].insert(0, CStmt::Load(kv.clone(), CExpr::Num(1.0))),
+        "`load kv` outside a hold of `kv`",
+    );
+    refused(
+        &|q| q.blocks[q.session].insert(0, CStmt::Release(kv.clone())),
+        "`release kv` outside a hold of `kv`",
+    );
+    // a body pointing at its own block: the walks over blocks would not end
+    refused(
+        &|q| {
+            let s = q.session;
+            q.blocks[s].insert(0, CStmt::Loop(s));
+        },
+        "is reached twice: a program's blocks form a tree",
+    );
     let run_d_as = |mode, growing: Option<CRef>| {
         let CStmt::Run {
             stage, work, also, ..
