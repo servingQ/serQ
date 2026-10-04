@@ -3582,36 +3582,30 @@ impl Ord for KeyOrd {
 /// Whether an eviction key reads only its entry, the clock and the stage
 /// estimates (no pool or queue state, which eviction changes, and no
 /// sampling, whose draws would be reordered).
+/// A reference's index counts like any other operand: a draw or a pool
+/// read in it (`est_wait(E[floor(~uniform(0, 2))])`) makes the key dynamic
+/// (#273).
 fn static_key(e: &CExpr) -> bool {
-    match e {
-        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => true,
-        CExpr::Sample(..) => false,
-        CExpr::Call(f, args) => {
-            let ok = matches!(
-                f,
-                Fun::Min
-                    | Fun::Max
-                    | Fun::Abs
-                    | Fun::Floor
-                    | Fun::Ceil
-                    | Fun::Sqrt
-                    | Fun::Exp
-                    | Fun::Ln
-                    | Fun::Pow
-                    | Fun::Price
-                    | Fun::EstLambda
-                    | Fun::EstRho
-                    | Fun::EstWait
-            );
-            ok && args.iter().all(|a| match a {
-                CArg::Expr(x) => static_key(x),
-                CArg::Pool(_) | CArg::Stage(_) => true,
-            })
-        }
-        CExpr::Unary(_, x) => static_key(x),
-        CExpr::Binary(_, a, b) => static_key(a) && static_key(b),
-        CExpr::Cond(c, a, b) => static_key(c) && static_key(a) && static_key(b),
-    }
+    !e.any(&|x| match x {
+        CExpr::Sample(..) => true,
+        CExpr::Call(f, _) => !matches!(
+            f,
+            Fun::Min
+                | Fun::Max
+                | Fun::Abs
+                | Fun::Floor
+                | Fun::Ceil
+                | Fun::Sqrt
+                | Fun::Exp
+                | Fun::Ln
+                | Fun::Pow
+                | Fun::Price
+                | Fun::EstLambda
+                | Fun::EstRho
+                | Fun::EstWait
+        ),
+        _ => false,
+    })
 }
 
 fn lex_less(a: &[f64], b: &[f64]) -> bool {
@@ -3623,4 +3617,38 @@ fn lex_less(a: &[f64], b: &[f64]) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A key that draws in a reference's index is not static: keying every
+    /// entry once would reorder its draws (#273).
+    #[test]
+    fn a_draw_in_an_index_makes_a_key_dynamic() {
+        let est = |index: Option<CExpr>| {
+            CExpr::Call(
+                Fun::EstWait,
+                vec![CArg::Stage(CRef {
+                    base: 0,
+                    count: 2,
+                    index: index.map(Box::new),
+                })],
+            )
+        };
+        assert!(static_key(&est(None)));
+        assert!(static_key(&est(Some(CExpr::Attr(0)))));
+        let draw = CExpr::Sample(DistKind::Uniform, vec![CExpr::Num(0.0), CExpr::Num(2.0)]);
+        assert!(!static_key(&est(Some(draw))));
+        let read = CExpr::Call(
+            Fun::Used,
+            vec![CArg::Pool(CRef {
+                base: 0,
+                count: 1,
+                index: None,
+            })],
+        );
+        assert!(!static_key(&est(Some(read))));
+    }
 }

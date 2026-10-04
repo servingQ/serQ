@@ -269,6 +269,33 @@ pub enum CExpr {
     Cond(Box<CExpr>, Box<CExpr>, Box<CExpr>),
 }
 
+impl CExpr {
+    /// The first expression, this one or one in it, of which `f` holds,
+    /// outermost first and then left to right; the index of a pool or
+    /// stage reference is in it (#273).
+    pub fn find(&self, f: &impl Fn(&CExpr) -> bool) -> Option<&CExpr> {
+        if f(self) {
+            return Some(self);
+        }
+        match self {
+            CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => None,
+            CExpr::Sample(_, xs) => xs.iter().find_map(|x| x.find(f)),
+            CExpr::Call(_, args) => args.iter().find_map(|a| match a {
+                CArg::Expr(x) => x.find(f),
+                CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().and_then(|i| i.find(f)),
+            }),
+            CExpr::Unary(_, x) => x.find(f),
+            CExpr::Binary(_, a, b) => a.find(f).or_else(|| b.find(f)),
+            CExpr::Cond(c, a, b) => c.find(f).or_else(|| a.find(f)).or_else(|| b.find(f)),
+        }
+    }
+
+    /// Whether `f` holds of this expression or of one in it.
+    pub fn any(&self, f: &impl Fn(&CExpr) -> bool) -> bool {
+        self.find(f).is_some()
+    }
+}
+
 /// An `f64` in JSON, infinities included: a number when finite, the string
 /// `"inf"` or `"-inf"` otherwise (JSON has no infinity, and serde_json
 /// writes `null`, which does not read back). Used for `CExpr::Num` and a
@@ -966,34 +993,13 @@ impl Program {
 
 /// Whether an expression samples a distribution anywhere.
 fn draws(e: &CExpr) -> bool {
-    match e {
-        CExpr::Sample(..) => true,
-        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => false,
-        CExpr::Call(_, args) => args.iter().any(|a| match a {
-            CArg::Expr(x) => draws(x),
-            CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().is_some_and(|i| draws(i)),
-        }),
-        CExpr::Unary(_, x) => draws(x),
-        CExpr::Binary(_, a, b) => draws(a) || draws(b),
-        CExpr::Cond(c, a, b) => draws(c) || draws(a) || draws(b),
-    }
+    e.any(&|x| matches!(x, CExpr::Sample(..)))
 }
 
 /// Whether an expression reads a value that moves while no event happens
 /// (`now`, `work(…)`).
 fn reads_clock(e: &CExpr) -> bool {
-    match e {
-        CExpr::Ctx(CtxVar::Now) | CExpr::Call(Fun::Work, _) => true,
-        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => false,
-        CExpr::Sample(_, args) => args.iter().any(reads_clock),
-        CExpr::Call(_, args) => args.iter().any(|a| match a {
-            CArg::Expr(x) => reads_clock(x),
-            CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().is_some_and(|i| reads_clock(i)),
-        }),
-        CExpr::Unary(_, x) => reads_clock(x),
-        CExpr::Binary(_, a, b) => reads_clock(a) || reads_clock(b),
-        CExpr::Cond(c, a, b) => reads_clock(c) || reads_clock(a) || reads_clock(b),
-    }
+    e.any(&|x| matches!(x, CExpr::Ctx(CtxVar::Now) | CExpr::Call(Fun::Work, _)))
 }
 
 /// The value of an expression of numbers and operators, if it is one.
@@ -1040,21 +1046,14 @@ fn amount(e: &CExpr, what: &str) -> Result<(), String> {
     }
 }
 
+/// Whether a renewal gap reads only constants and draws: no attribute, no
+/// context variable, no pool or stage.
 fn arrival_expr_is_pure(e: &CExpr) -> bool {
-    match e {
-        CExpr::Num(_) => true,
-        CExpr::Sample(_, args) => args.iter().all(arrival_expr_is_pure),
-        CExpr::Unary(_, x) => arrival_expr_is_pure(x),
-        CExpr::Binary(_, a, b) => arrival_expr_is_pure(a) && arrival_expr_is_pure(b),
-        CExpr::Cond(c, a, b) => {
-            arrival_expr_is_pure(c) && arrival_expr_is_pure(a) && arrival_expr_is_pure(b)
-        }
-        CExpr::Call(_, args) => args.iter().all(|arg| match arg {
-            CArg::Expr(x) => arrival_expr_is_pure(x),
-            CArg::Pool(_) | CArg::Stage(_) => false,
-        }),
-        CExpr::Attr(_) | CExpr::Ctx(_) => false,
-    }
+    !e.any(&|x| match x {
+        CExpr::Attr(_) | CExpr::Ctx(_) => true,
+        CExpr::Call(_, args) => args.iter().any(|a| !matches!(a, CArg::Expr(_))),
+        _ => false,
+    })
 }
 
 struct Validator<'a> {
