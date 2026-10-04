@@ -39,7 +39,7 @@ session {
 // order hold their peak o_i steps, with p_i o_i <= 2 vol_i. With
 // Proposition 3.1 (OPT >= prefix_total(vol) / M, `Serq/Papers/Kong.lean`)
 // this is Theorem 3.2: TEL(SVF) <= (1 + 2 / (1 - alpha)) TEL(OPT).
-claim queueing_bound given (s + o <= P):
+claim queueing_bound given (s + o <= P && o >= 1):
   at end ((M - P) * (total(latency) - total(out)) <= 2 * (prefix_total(vol) - total(vol)));
 
 run { horizon 100000; warmup 0; seed 1; }

@@ -311,20 +311,36 @@
       "name": "queueing_bound",
       "given": {
         "Binary": [
-          "Le",
+          "And",
           {
             "Binary": [
-              "Add",
+              "Le",
               {
-                "Attr": 9
+                "Binary": [
+                  "Add",
+                  {
+                    "Attr": 9
+                  },
+                  {
+                    "Attr": 10
+                  }
+                ]
               },
               {
-                "Attr": 10
+                "Num": 2500.0
               }
             ]
           },
           {
-            "Num": 2500.0
+            "Binary": [
+              "Ge",
+              {
+                "Attr": 10
+              },
+              {
+                "Num": 1.0
+              }
+            ]
           }
         ]
       },

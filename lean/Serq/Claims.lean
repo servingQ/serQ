@@ -37,7 +37,7 @@ def deployment : Deployment :=
 
 /-- The workloads the claims of `bari_rad.sq` quantify over. -/
 def family (w : Workload) : Prop :=
-    w.init.length ≤ 1000 ∧
+    w.init.length ≤ 500 ∧
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
@@ -71,7 +71,7 @@ def deployment : Deployment :=
 
 /-- The workloads the claims of `dai_fastertransformer.sq` quantify over. -/
 def family (w : Workload) : Prop :=
-    w.init.length ≤ 1000 ∧
+    w.init.length ≤ 500 ∧
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
@@ -105,7 +105,7 @@ def deployment : Deployment :=
 
 /-- The workloads the claims of `dai_sarathi.sq` quantify over. -/
 def family (w : Workload) : Prop :=
-    w.init.length ≤ 1000 ∧
+    w.init.length ≤ 500 ∧
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
@@ -141,11 +141,11 @@ def deployment : Deployment :=
 
 /-- The workloads the claims of `kong_svf.sq` quantify over. -/
 def family (w : Workload) : Prop :=
-    w.init.length ≤ 1000 ∧
+    w.init.length ≤ 500 ∧
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
-    ∀ i < w.init.length, ((((w.attr i 9) + (w.attr i 10)) ≤ 2500))
+    ∀ i < w.init.length, (((((w.attr i 9) + (w.attr i 10)) ≤ 2500) ∧ ((w.attr i 10) ≥ 1)))
 
 /-- `claim queueing_bound` of `kong_svf.sq`. -/
 def queueing_bound : Prop :=

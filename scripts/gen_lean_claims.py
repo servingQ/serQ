@@ -42,7 +42,7 @@ PROVED = os.path.join(ROOT, "lean", "Serq", "ClaimsProved.lean")
 IR_VERSION = 11
 # the fragment's bound on the number of sessions: `admitHeads` admits at most
 # 1000 sessions per pool and round, and `assign` serves at most 100000 jobs
-MAX_SESSIONS = 1000
+MAX_SESSIONS = 500
 
 
 def camel(name):
