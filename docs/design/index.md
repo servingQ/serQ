@@ -63,6 +63,7 @@ here. This directory is the record of **applying** them.
 | Document | What | Status |
 |---|---|---|
 | [Philosophy](philosophy.md) | What serQ is mathematically, and the principles by which its vocabulary grows | discussion of 2026-09-28 |
+| [The stochastic process](stochastic-model.md) | The deployment as a GSMP: state space, events, random inputs and kernel, copied from the interpreter; determinism, the memory invariant, the prefill queue as a FIFO queue in the decode batch's environment, Markov structure, a regeneration conjecture; the paper's queueing model as a projection and its three non-Markov gaps; a production deployment (clients, router, engines, links) as a composition; six things the definition found the language did not say, four of them rules now (every instant settles, an iteration with tokens lasts, per-session random streams, the memory invariant asserted) and two candidates (an observation channel, a shared iteration clock) | definition, 2026-10-03 |
 | [Frontend](frontend.md) | Model / instance split, effects and handlers, the admission block, trait vocabulary, units. With two self-critiques and a verdict table | sketch, before issues |
 | [IR v4](ir-v4.md) | Making the implicit static: moments, ownership, declared orders, integer ticks, the session automaton, step coalescing, progress checks | RFC #41 |
 | [Subagents](subagents.md) | A session that spawns sessions is not a tool call: endogenous arrivals, hold-and-wait, cross-session cache, `Spawn`/`Join` | review, for v4b |

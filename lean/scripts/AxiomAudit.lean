@@ -47,3 +47,6 @@ import Serq
 #print axioms SerqLang.Exec.fillAmounts_le_want
 #print axioms SerqLang.Exec.fillAmounts_sum
 #print axioms SerqLang.Exec.assign_iter_eq_fillIter
+-- dead cache entries are irrelevant to the live ones under LRU (Serq/Regen.lean)
+#print axioms SerqLang.Exec.makeRoom_fuel
+#print axioms SerqLang.Exec.makeRoom_dead_irrelevant

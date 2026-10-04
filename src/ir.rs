@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 /// 9 reevaluates lexicographic queue keys at selection and supplies `Waited`;
 /// 10 makes `Hold.cache` the clause that admits a hold to the prefix cache
 /// (a hold without it consumes nothing of the session's own entry).
-pub const IR_VERSION: u32 = 10;
+pub const IR_VERSION: u32 = 11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -1082,6 +1082,38 @@ impl Validator<'_> {
             }
         }
     }
+    /// Whether every path through block `b` reaches a statement that lets
+    /// time pass: a `run` (a constant zero work does not count; a computed
+    /// one is the run time's to catch), a `hold` whose body does, or `end`.
+    /// The condition under which a `loop` blocks on every pass
+    /// (`docs/design/stochastic-model.md`, Lemma 1). A `branch` counts when
+    /// both arms do; an inner `loop` is never left, so it counts when it does.
+    fn lets_time_pass(&self, b: BlockId) -> bool {
+        for s in &self.p.blocks[b] {
+            match s {
+                CStmt::End => return true,
+                CStmt::Run { work, .. } => {
+                    if !matches!(work, CExpr::Num(w) if *w <= 0.0) {
+                        return true;
+                    }
+                }
+                CStmt::Hold { body, .. } => {
+                    if self.lets_time_pass(*body) {
+                        return true;
+                    }
+                }
+                CStmt::Branch(_, a, c) => {
+                    if self.lets_time_pass(*a) && self.lets_time_pass(*c) {
+                        return true;
+                    }
+                }
+                CStmt::Loop(inner) => return self.lets_time_pass(*inner),
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn stmt(&self, s: &CStmt) -> Result<(), String> {
         let np = self.p.pools.len();
         let ns = self.p.stages.len();
@@ -1155,7 +1187,17 @@ impl Validator<'_> {
                 self.block(*a)?;
                 self.block(*b)
             }
-            CStmt::Loop(b) => self.block(*b),
+            CStmt::Loop(b) => {
+                self.block(*b)?;
+                if !self.lets_time_pass(*b) {
+                    return Err(
+                        "a `loop` must let time pass on every pass through its body: \
+                                a `run`, a `hold` whose body does, or `end` on every path"
+                            .into(),
+                    );
+                }
+                Ok(())
+            }
             CStmt::Choose { var, count, key } => {
                 self.attr(*var)?;
                 self.expr(count, m)?;

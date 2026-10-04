@@ -96,6 +96,7 @@ nav:
       - Design:
           - design/index.md
           - Philosophy: design/philosophy.md
+          - The stochastic process: design/stochastic-model.md
           - Frontend: design/frontend.md
           - Subagents: design/subagents.md
           - The KV transfer: design/pd-transfer.md
