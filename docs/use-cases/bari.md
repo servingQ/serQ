@@ -80,7 +80,7 @@ The arrival times are any natural numbers (the program's `poisson`), and the out
 - a state whose batch is not full, or whose engine is idle, has backlog below $128 \cdot 512$ (`backlog_lt_of_F`);
 - below capacity, mean tokens per slot below 128, the backlog drifts down by $\varepsilon = 128 - \text{load}$ outside that set (`drift`), and Foster's criterion bounds the expected number of slots to reach it by $\text{backlog}/\varepsilon$ (`hitTime_le`, finite by `hit_tendsto`), with a finite expected return time (`returnTime_le`).
 
-A full batch lasts $t_{Lin} + 128\,t_{nl} = 4640$ µs whatever its mode, so the load per slot is the paper's $\lambda \bar d$ per 4 640 µs, and the condition is Theorem 1's bound. Two examples check the theorem is not vacuous.
+`Arrivals` is any finite distribution of a slot's requests; two examples check the theorem is not vacuous.
 
 ## On the run
 
@@ -102,8 +102,9 @@ Theorem 1's bound for this program is $128/4640$ tokens per µs. With a mean of 
 
 ## What it leaves out
 
-- **Positive recurrence in the textbook sense, and Poisson in continuous time.** `BariStable` proves finite expected return times to a set of bounded backlog on the program's kernel, with arrivals drawn at each iteration (at most 10 000), as for Dai et al. The same gaps remain: the states keep the clock and the ended sessions, so the chain is not irreducible as it stands, and the step from finite return times to positive recurrence is not proved (`docs/design/stability.md`).
-- **The random planner over $g$ nodes.** The kernel is one node; Theorem 2's planner splits a Poisson stream uniformly, which gives each node a thinned stream of the same kind.
+- **Positive recurrence in the textbook sense.** `BariStable` proves finite expected return times to a set of bounded backlog on the program's kernel, as for Dai et al. The same gaps remain: the states keep the clock and the ended sessions, so the chain is not irreducible as it stands, and the step from finite return times to positive recurrence is not proved (`docs/design/stability.md`).
+- **Poisson in continuous time.** The kernel draws a slot's arrivals at each iteration, at most 10 000 (the proof's bound). Nothing in Lean ties the distribution to a rate. If a slot's arrivals are those of a Poisson stream of rate $\lambda$ over a full batch's $t_{Lin} + 128\,t_{nl} = 4640$ µs (truncated at 10 000), the load is $4640\,\lambda\,E[v_p + v_d]$ and `load < 128` is Theorem 1's bound; inside `F` slots are shorter, and that step is not proved.
+- **The random planner over $g$ nodes.** The kernel is one node. Uniform thinning gives each node a Poisson stream of rate $\lambda/g$, independent of the others; that this makes the $g$-node chain stable is not proved.
 - **The cycle parameter $N$.** The program takes $N = \infty$. A finite $N$ ends a cycle by finishing the active requests, with batches that may not fill a tile, and the paper's tiling principle excepts them in the same way.
 - **Attention.** The cost omits (7)'s attention terms, whose coefficients are not integers in µs. The Lean fragment reads `attention` with even integer coefficients only.
 - **Several nodes.** The fragment has one engine. Theorem 1 for $g$ nodes is the sum of the per-node bound.

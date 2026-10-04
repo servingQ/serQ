@@ -22,29 +22,6 @@ import Serq.Papers.DaiStable
 
 namespace SerqLang
 
-namespace Exec
-
-variable (D : Deployment)
-
-/-- One slot whose arrivals have attributes `as`, in order. -/
-def slotL (prog : Prog) (as : List (ℕ → ℕ)) (m : Machine) : Machine :=
-  let m' := afterEvent D (as.foldl (fun m a => inject prog a m) m)
-  if m.iterEnd.isSome then step D m' else m'
-
-/-- `slot` is `slotL` with `k` copies of the same attributes. -/
-theorem slot_eq_slotL (prog : Prog) (a : ℕ → ℕ) (k : ℕ) (m : Machine) :
-    slot D prog a k m = slotL D prog (List.replicate k a) m := by
-  have key : ∀ k (m : Machine), (inject prog a)^[k] m =
-      (List.replicate k a).foldl (fun m a => inject prog a m) m := by
-    intro k
-    induction k with
-    | zero => intro m; rfl
-    | succ k ih => intro m; rw [Function.iterate_succ_apply, ih, List.replicate_succ, List.foldl_cons]
-  unfold slot slotL
-  rw [key]
-
-end Exec
-
 namespace Papers
 namespace BariStable
 
@@ -94,7 +71,9 @@ def F (x : State) : Prop := x.1.iterEnd = none ∨ x.1.last.stats.tokens < 128
 instance : DecidablePred F := fun x => by unfold F; infer_instance
 
 /-- The arrival distribution: outcome `o ≤ N` has probability `p o` and
-brings the requests `arr o`. -/
+brings the requests `arr o`. At most 10 000 arrive in a slot, so that each
+becomes a job within its slot: that is the proof's bound (it follows one
+round of `Exec.drain`), not the paper's. -/
 structure Arrivals (N : ℕ) where
   p : ℕ → ℝ
   nonneg : ∀ o, 0 ≤ p o
@@ -917,16 +896,16 @@ theorem rad_full (m : Machine) (h : BariRad.R m) :
     tokSum (fillIter D (m.jobs.filter (serves D m)) 128) = 128 ∨
       ((∀ j ∈ m.jobs, j.mode = .decode) ∧
         tokSum (fillIter D (m.jobs.filter (serves D m)) 128) = m.jobs.length) := by
-  set F := m.jobs.filter (serves D m) with hF
-  have hFm : ∀ j ∈ F, j ∈ m.jobs := fun j hj => (List.mem_filter.mp hj).1
+  set S := m.jobs.filter (serves D m) with hS
+  have hFm : ∀ j ∈ S, j ∈ m.jobs := fun j hj => (List.mem_filter.mp hj).1
   by_cases hc : BariRad.decodeMode m
-  · have hdec : ∀ j ∈ F, j.mode = .decode := fun j hj =>
+  · have hdec : ∀ j ∈ S, j.mode = .decode := fun j hj =>
       ((BariRad.serves_rad m j).mp (List.mem_filter.mp hj).2).1 hc
-    have hw1 : ∀ j ∈ F, wantOf D j = 1 := fun j hj => by
+    have hw1 : ∀ j ∈ S, wantOf D j = 1 := fun j hj => by
       have := (h.jobs j (hFm j hj)).1
       simp only [wantOf, hdec j hj]; omega
-    have hFd : F = m.jobs.filter (·.mode = .decode) := by
-      rw [hF]
+    have hFd : S = m.jobs.filter (·.mode = .decode) := by
+      rw [hS]
       apply List.filter_congr
       intro j _
       have := BariRad.serves_rad m j
@@ -936,13 +915,13 @@ theorem rad_full (m : Machine) (h : BariRad.R m) :
         cases hs : serves D m j
         · rfl
         · exact absurd ((this.mp hs).1 hc) hd
-    have hsum : (F.map (wantOf D)).sum = F.length := by
+    have hsum : (S.map (wantOf D)).sum = S.length := by
       rw [List.map_congr_left hw1]; simp
     rw [tokSum_fillIter, hsum]
-    by_cases hl : 128 ≤ F.length
+    by_cases hl : 128 ≤ S.length
     · left; omega
     · right
-      have hlen : F.length = m.jobs.length := by
+      have hlen : S.length = m.jobs.length := by
         rcases hc with hc | hc
         · rw [hFd] at hl; omega
         · rw [hFd]; exact hc
@@ -952,18 +931,18 @@ theorem rad_full (m : Machine) (h : BariRad.R m) :
       have : j ∈ m.jobs.filter (fun j : Job => decide (j.mode = .decode)) := by rw [hall]; exact hj
       simpa using (List.mem_filter.mp this).2
   · left
-    have hpre : ∀ j ∈ F, j.mode = .prefill := fun j hj => by
+    have hpre : ∀ j ∈ S, j.mode = .prefill := fun j hj => by
       have h1 := ((BariRad.serves_rad m j).mp (List.mem_filter.mp hj).2).2 hc
       have h2 := (h.jobs j (hFm j hj)).2.2.2.1
       cases hm : j.mode <;> simp_all
-    have hne : F ≠ [] := by
+    have hne : S ≠ [] := by
       intro he
       apply hc
       right
       have : ∀ j ∈ m.jobs, j.mode = .decode := by
         intro j hj
         by_contra hd
-        have : j ∈ F := List.mem_filter.mpr ⟨hj, (BariRad.serves_rad m j).mpr ⟨fun h' => absurd h' hc, fun _ => hd⟩⟩
+        have : j ∈ S := List.mem_filter.mpr ⟨hj, (BariRad.serves_rad m j).mpr ⟨fun h' => absurd h' hc, fun _ => hd⟩⟩
         rw [he] at this; simp at this
       rw [List.filter_eq_self.mpr (by simpa using this)]
     obtain ⟨f, rest, hfr⟩ := List.exists_cons_of_ne_nil hne
@@ -974,7 +953,7 @@ theorem rad_full (m : Machine) (h : BariRad.R m) :
       have : 0 < c := by rcases Nat.eq_zero_or_pos c with rfl | h0 <;> simp_all
       simp only [wantOf, hp, D, Claims.BariRad.deployment]
       simp; rw [hcf]; omega
-    have hfill : fillIter D F 128 = [(f.owner, 128)] := by
+    have hfill : fillIter D S 128 = [(f.owner, 128)] := by
       rw [hfr]; unfold fillIter; rw [hwf]; simp
     rw [hfill]; simp [tokSum]
 
@@ -1011,6 +990,8 @@ theorem ci_start {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI L g
   have hb : D.budget = 128 := rfl
   have hR := ci_R hI (hI.iterNone hie)
   unfold startIteration
+  -- the deployment has no `chunkLift`: every iteration runs it as it is
+  simp only [iterDeployment_of_none _ (rfl : Claims.BariRad.deployment.chunkLift = none)]
   rw [hvia, Bool.or_false]
   by_cases hjs : m.jobs = []
   · have he0 : m.jobs.isEmpty = true := by simp [hjs]
@@ -1269,20 +1250,21 @@ theorem drift {N : ℕ} (A : Arrivals N) (hA : A.load < 128) :
       _ ≤ (backlog x.1 : ℝ) - ε A := by
           rw [A.sum_one]; unfold ε; linarith
 
-/-- Theorem 2: from every state, the expected number of slots until the
+/-- Theorem 2 (Foster's half): from every state, the expected number of slots until the
 batch is not full (or the engine idle) is at most `backlog / ε`. -/
 theorem hitTime_le {N : ℕ} (A : Arrivals N) (hA : A.load < 128) (x : State) :
     ε A * hitTime (kernel A) F x ≤ backlog x.1 :=
   Foster.hitTime_le (drift A hA) x
 
-/-- Theorem 2: from every state of `F`, the expected return time to `F` is
+/-- Theorem 2 (Foster's half): from every state of `F`, the expected return time to `F` is
 finite. -/
 theorem returnTime_le {N : ℕ} (A : Arrivals N) (hA : A.load < 128) (x : State) (hx : F x) :
     returnTime (kernel A) F x ≤ 1 + (kernel A).apply (fun y => (backlog y.1 : ℝ)) x / ε A :=
   Foster.returnTime_le_of_drift (drift A hA) x hx
 
 /-- The expected hitting time is finite: the truncated expectations are
-bounded and converge to `hitTime`. -/
+bounded and converge to `hitTime`. (`hitTime` is a supremum in ℝ, which
+would read 0 were they unbounded, so `hitTime_le` alone does not say this.) -/
 theorem hit_tendsto {N : ℕ} (A : Arrivals N) (hA : A.load < 128) (x : State) :
     Filter.Tendsto (fun n => hit (kernel A) F n x) Filter.atTop (nhds (hitTime (kernel A) F x)) :=
   Foster.hit_tendsto (drift A hA) x
