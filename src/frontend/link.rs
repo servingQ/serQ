@@ -638,7 +638,8 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
 }
 
 /// Where a statement is: its first reference's, else its first located
-/// expression's.
+/// expression's; a statement with neither (`loop`, `turn`, `end`, `set x =
+/// 1`) has none, and an error about it is shown without a line.
 fn stmt_span(s: &Stmt) -> Option<Span> {
     fn expr_span(e: &Expr) -> Option<Span> {
         match e {
@@ -1179,8 +1180,7 @@ impl Linker<'_> {
     fn block(&mut self, stmts: &[Stmt]) -> LResult<BlockId> {
         let id = self.blocks.len();
         self.blocks.push(vec![]);
-        self.spans.push(vec![]);
-        self.spans[id] = stmts.iter().map(stmt_span).collect();
+        self.spans.push(stmts.iter().map(stmt_span).collect());
         let mut out = vec![];
         for s in stmts {
             let cs = match s {

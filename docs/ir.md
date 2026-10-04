@@ -149,8 +149,10 @@ a constant capacity, every run on such a *shared* stage is `Plain` with no
 exactly when some `also` is non-empty (`Program::shared_stages`).
 `Program::from_json`, `run_ir` and the linker (`compile_source`) call it,
 so a text program meets the same check as IR from files and tools. An
-error about a statement says which (`Program::validate_located`: block and
-index), and the text frontend shows it at that statement's line.
+error from the checks of a block's statements says which statement
+(`Program::validate_located`: block and index), and the text frontend shows
+it at that statement's line; the flow and declaration checks have no
+statement to name.
 
 **Moments.** An expression is evaluated at one moment, fixed by
 its position in the IR, and a context variable exists at one of them:
