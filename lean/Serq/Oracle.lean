@@ -35,10 +35,10 @@ open Exec
 /-- The vLLM request program (serQ `examples/oracle/vllm_request.sq`), translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prompt, 10 = o, 11 = arrive, 12 = known. Observations: 0 = first, 1 = done. Pools: 0 = reqs, 1 = kv. Stages: 0 = engine, 1 = gate. -/
 def vllmRequest : Prog := [route|
   run 1 (x.attr 11);
-  hold 0 (1), 1 (min (if (if (x.attr 8) < (x.attr 9) then 1 else 0) ≠ 0 then (x.attr 9) else ((x.attr 8) + 1)) x.budgetLeft) fits (if (if (x.attr 8) < (x.attr 9) then 1 else 0) ≠ 0 then (x.attr 9) else ((x.attr 8) + 1)) {
-    set 12 = if (if (x.attr 8) < (x.attr 9) then 1 else 0) ≠ 0 then (x.attr 9) else ((x.attr 8) + 1);
+  hold 0 (1), 1 (min (if ((x.attr 8) < (x.attr 9)) then (x.attr 9) else ((x.attr 8) + 1)) x.budgetLeft) fits (if ((x.attr 8) < (x.attr 9)) then (x.attr 9) else ((x.attr 8) + 1)) {
+    set 12 = if ((x.attr 8) < (x.attr 9)) then (x.attr 9) else ((x.attr 8) + 1);
     run 0 prefill (x.attr 12) growing 1;
-    branch (if (x.attr 12) = (x.attr 9) then 1 else 0) {
+    branch (if ((x.attr 12) = (x.attr 9)) then 1 else 0) {
       observe 0 = x.now;
       done
     } else {
@@ -60,7 +60,7 @@ def outcome (D : Deployment) (horizon : ℕ) (w : Workload) :
 
 /-- serQ `tools/oracle/alone.ir.json`: 4 requests, 10 blocks of 16, budget 32, 8 slots, chunk 24; the deployment and the workload are the IR's. -/
 theorem vllm_alone :
-    outcome ⟨[⟨8, 1, true, none⟩, ⟨144, 16, false, none⟩], 32, 0, some 1, fun _ => 1, none, some fun c => if (if (c.residents + (c.queued 0)) > 1 then 1 else 0) ≠ 0 then 24 else 0⟩ 53
+    outcome ⟨[⟨8, 1, true, none⟩, ⟨144, 16, false, none⟩], 32, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 24 else 0⟩ 53
       ⟨[[(9, 60), (10, 12), (11, 1)], [(9, 60), (10, 24), (11, 4)], [(9, 60), (10, 12), (11, 0)], [(9, 30), (10, 6), (11, 1)]], [], none, 0, some 8, none⟩ =
     ([(0, 5), (1, 25), (2, 3), (3, 17)], [(0, 23), (1, 48), (2, 14), (3, 22)], 2) := by
   decide +kernel
@@ -81,7 +81,7 @@ theorem vllm_hol :
 
 /-- serQ `tools/oracle/longchunk.ir.json`: 2 requests, 1000 blocks of 16, budget 4096, 16 slots, chunk 1000; the deployment and the workload are the IR's. -/
 theorem vllm_longchunk :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 4096, 0, some 1, fun _ => 1, none, some fun c => if (if (c.residents + (c.queued 0)) > 1 then 1 else 0) ≠ 0 then 1000 else 0⟩ 9
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 4096, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 1000 else 0⟩ 9
       ⟨[[(9, 3000), (10, 2), (11, 0)], [(9, 3000), (10, 2), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 3), (1, 3)], [(0, 4), (1, 4)], 0) := by
   decide +kernel
@@ -118,16 +118,16 @@ def vllmTurn : Prog := [route|
   loop {
     set 11 = x.now;
     set 12 = x.attr 3;
-    run 1 (0 + (0 * (x.attr 12)));
-    set 13 = if (x.attr 7) ≠ 0 then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
-    hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16))) + (min ((if (if (x.attr 8) < (x.attr 12) then 1 else 0) ≠ 0 then (x.attr 12) else ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16)))) x.budgetLeft)) fits (if (if (x.attr 8) < (x.attr 12) then 1 else 0) ≠ 0 then (x.attr 12) else ((x.attr 8) + 1)) reuse (max (x.attr 13) (((x.attr 8) / 16) * 16)) {
-      set 14 = if (if (x.attr 8) < (x.attr 12) then 1 else 0) ≠ 0 then (x.attr 12) else ((x.attr 8) + 1);
+    run 1 (0);
+    set 13 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
+    hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16))) + (min ((if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16)))) x.budgetLeft)) fits (if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1)) reuse (max (x.attr 13) (((x.attr 8) / 16) * 16)) {
+      set 14 = if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1);
       set 15 = x.cached;
       observe 0 = x.attr 15;
       observe 1 = (x.attr 9) + (x.attr 10);
       observe 2 = x.attr 11;
       run 0 prefill ((x.attr 14) - (x.attr 15)) growing 0;
-      branch (if (x.attr 14) = (x.attr 12) then 1 else 0) {
+      branch (if ((x.attr 14) = (x.attr 12)) then 1 else 0) {
         observe 3 = x.now - (x.attr 11);
         done
       } else {

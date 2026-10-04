@@ -17,6 +17,7 @@ serQ tests run. The translation accepts the fragment of the IR that the
 executable semantics (lean/Serq/Exec.lean) covers and fails on anything else.
 `--check` fails if the committed file is stale."""
 import json
+import math
 import os
 import sys
 
@@ -61,7 +62,9 @@ def one_ref(r, what):
 
 def fold(e):
     """The value of an expression that does not depend on the session or the
-    context (constants, and products with a zero constant), else None."""
+    context, else None: constants, products with a zero constant, and the
+    arithmetic, division and rounding of constants (a difference stops at 0,
+    as ℕ does)."""
     if "Num" in e:
         return e["Num"]
     if "Binary" in e:
@@ -71,8 +74,117 @@ def fold(e):
             return 0.0
         if x is None or y is None:
             return None
-        return {"Add": x + y, "Sub": x - y, "Mul": x * y}.get(op)
+        if op == "Div":
+            return x / y if y != 0 else None
+        return {"Add": x + y, "Sub": max(x - y, 0), "Mul": x * y}.get(op)
+    if "Call" in e:
+        f, args = e["Call"]
+        vals = [fold(a["Expr"]) if "Expr" in a else None for a in args]
+        if any(v is None for v in vals):
+            return None
+        if f == "Ceil" and len(vals) == 1:
+            return float(math.ceil(vals[0]))
+        if f == "Floor" and len(vals) == 1:
+            return float(math.floor(vals[0]))
+        if f in ("Min", "Max") and len(vals) == 2:
+            return min(vals) if f == "Min" else max(vals)
     return None
+
+
+REL = {"Lt": "<", "Le": "≤", "Gt": ">", "Ge": "≥", "Eq": "=", "Ne": "≠"}
+ARITH = {"Add": "+", "Sub": "-", "Mul": "*"}
+
+
+def subtracts(e):
+    """Whether an expression has a difference anywhere in it."""
+    if isinstance(e, dict):
+        if "Binary" in e and e["Binary"][0] == "Sub":
+            return True
+        return any(subtracts(v) for v in e.values())
+    if isinstance(e, list):
+        return any(subtracts(v) for v in e)
+    return False
+
+
+class Expr:
+    """An IR expression as a Lean term over natural numbers: `nat` gives a
+    term of type ℕ (a boolean is 1 or 0), `prop` a proposition (the
+    expression is not 0). The arithmetic, comparisons, conditions and
+    rounding are the same at every moment; `leaf` translates what is
+    specific to one (an attribute, a context variable, an observable).
+    `sub=False` refuses a difference where ℕ, which stops at 0, would part
+    from the interpreter, which goes negative."""
+
+    def __init__(self, leaf, sub=True):
+        self.leaf, self.sub = leaf, sub
+
+    def nat(self, e):
+        if not self.sub and subtracts(e):
+            raise Fragment("a difference: ℕ stops at 0 where the interpreter goes negative")
+        v = fold(e)
+        if v is not None:
+            return str(nat(v, "constant"))
+        if "Binary" in e:
+            op, a, b = e["Binary"]
+            if op in ARITH:
+                return f"({self.nat(a)} {ARITH[op]} {self.nat(b)})"
+            if op in REL or op in ("And", "Or"):
+                return f"(if {self.prop(e)} then 1 else 0)"
+            raise Fragment(f"operator {op} (a division must be under floor, or exact between constants)")
+        if "Unary" in e:
+            op, a = e["Unary"]
+            if op == "Not":
+                return f"(if {self.prop(a)} then 0 else 1)"
+            raise Fragment(f"unary {op}")
+        if "Cond" in e:
+            c, a, b = e["Cond"]
+            return f"(if {self.prop(c)} then {self.nat(a)} else {self.nat(b)})"
+        if "Call" in e:
+            f, args = e["Call"]
+            if f == "Floor" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
+                op, a, b = args[0]["Expr"]["Binary"]
+                if op == "Div":
+                    return f"({self.nat(a)} / {self.nat(b)})"
+            if f == "Ceil" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
+                op, a, b = args[0]["Expr"]["Binary"]
+                if op == "Div" and fold(b) is not None:
+                    k = nat(fold(b), "ceil divisor")
+                    return f"(({self.nat(a)} + {k - 1}) / {k})"
+            if f in ("Min", "Max") and len(args) == 2 and all("Expr" in a for a in args):
+                return f"({f.lower()} {self.nat(args[0]['Expr'])} {self.nat(args[1]['Expr'])})"
+        return self.leaf(e)
+
+    def prop(self, e):
+        if "Binary" in e:
+            op, a, b = e["Binary"]
+            if op in REL:
+                return f"({self.nat(a)} {REL[op]} {self.nat(b)})"
+            if op == "And":
+                return f"({self.prop(a)} ∧ {self.prop(b)})"
+            if op == "Or":
+                return f"({self.prop(a)} ∨ {self.prop(b)})"
+        if "Unary" in e and e["Unary"][0] == "Not":
+            return f"(¬ {self.prop(e['Unary'][1])})"
+        return f"({self.nat(e)} ≠ 0)"
+
+    def top(self, e):
+        """An expression in statement position: drop one pair of outer parentheses."""
+        t = self.nat(e)
+        return t[1:-1] if t.startswith("(") and t.endswith(")") else t
+
+
+def chunk_leaf(e):
+    """What a step's `chunk` reads as an iteration starts (`Exec.ChunkEnv`)."""
+    if "Ctx" in e:
+        if e["Ctx"] == "Nres":
+            return "c.residents"
+        raise Fragment(f"chunk reads {e['Ctx']}: `residents` and `queued(p)` only")
+    if "Call" in e:
+        f, args = e["Call"]
+        if f == "Queued" and len(args) == 1 and "Pool" in args[0]:
+            return f"(c.queued {one_ref(args[0]['Pool'], 'queued')})"
+        raise Fragment(f"chunk calls {f}")
+    raise Fragment(f"chunk {e}")
 
 
 def chunk_rule(e):
@@ -88,48 +200,7 @@ def chunk_rule(e):
         c = a if a is not None and a == b else None
     if c is not None:
         return c, None
-    return 0, f"some fun c => {ChunkLean().top(e)}"
-
-
-class ChunkLean:
-    """A step's `chunk` as a Lean term over `c : Exec.ChunkEnv`."""
-
-    def expr(self, e):
-        v = fold(e)
-        if v is not None:
-            return str(nat(v, "chunk"))
-        if "Ctx" in e:
-            if e["Ctx"] == "Nres":
-                return "c.residents"
-            raise Fragment(f"chunk reads {e['Ctx']}: `residents` and `queued(p)` only")
-        if "Call" in e:
-            f, args = e["Call"]
-            if f == "Queued" and len(args) == 1 and "Pool" in args[0]:
-                return f"(c.queued {one_ref(args[0]['Pool'], 'queued')})"
-            if f in ("Min", "Max") and len(args) == 2 and all("Expr" in a for a in args):
-                return f"({f.lower()} {self.expr(args[0]['Expr'])} {self.expr(args[1]['Expr'])})"
-            raise Fragment(f"chunk calls {f}")
-        if "Binary" in e:
-            op, a, b = e["Binary"]
-            sym = {"Add": "+", "Mul": "*"}.get(op)
-            if sym:
-                return f"({self.expr(a)} {sym} {self.expr(b)})"
-            if op == "Sub":
-                # ℕ stops at 0 where the interpreter goes negative, and a
-                # comparison or a condition over the difference would differ
-                raise Fragment("chunk subtracts: ℕ truncates where the interpreter goes negative")
-            rel = {"Lt": "<", "Le": "≤", "Gt": ">", "Ge": "≥", "Eq": "=", "Ne": "≠"}.get(op)
-            if rel:
-                return f"(if {self.expr(a)} {rel} {self.expr(b)} then 1 else 0)"
-            raise Fragment(f"chunk operator {op}")
-        if "Cond" in e:
-            t, a, b = e["Cond"]
-            return f"(if {self.expr(t)} ≠ 0 then {self.expr(a)} else {self.expr(b)})"
-        raise Fragment(f"chunk {e}")
-
-    def top(self, e):
-        t = self.expr(e)
-        return t[1:-1] if t.startswith("(") and t.endswith(")") else t
+    return 0, f"some fun c => {Expr(chunk_leaf, sub=False).top(e)}"
 
 
 # the context variables an iteration cost may read, and the field of
@@ -206,14 +277,9 @@ class Lean:
         self.ir = ir
         self.builtin = {ir["slot_cached"]: "x.cached", ir["slot_serial"]: "x.serial"}
 
-    def arg(self, a):
-        if "Expr" not in a:
-            raise Fragment(f"argument {a}")
-        return self.expr(a["Expr"])
-
-    def expr(self, e):
-        if "Num" in e:
-            return str(nat(e["Num"], "constant"))
+    def leaf(self, e):
+        """What a session statement reads: attributes, `now`, the engine's
+        budget left and a pool's cached prefix."""
         if "Attr" in e:
             k = e["Attr"]
             return self.builtin.get(k, f"(x.attr {k})")
@@ -223,37 +289,21 @@ class Lean:
             raise Fragment(f"context variable {e['Ctx']}")
         if "Call" in e:
             f, args = e["Call"]
-            if f in ("Min", "Max") and len(args) == 2:
-                return f"({f.lower()} {self.arg(args[0])} {self.arg(args[1])})"
             if f == "BudgetLeft" and len(args) == 1 and "Stage" in args[0]:
                 if one_ref(args[0]["Stage"], "budget_left") != 0:
                     raise Fragment("budget_left of a stage other than the engine")
                 return "x.budgetLeft"
             if f == "CachedIn" and len(args) == 1 and "Pool" in args[0]:
                 return f"(x.cachedIn {one_ref(args[0]['Pool'], 'cachedin')})"
-            if f == "Floor" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
-                op, a, b = args[0]["Expr"]["Binary"]
-                if op == "Div":
-                    return f"({self.expr(a)} / {self.expr(b)})"
             raise Fragment(f"call {f}")
-        if "Binary" in e:
-            op, a, b = e["Binary"]
-            sym = {"Add": "+", "Sub": "-", "Mul": "*"}.get(op)
-            if sym:
-                return f"({self.expr(a)} {sym} {self.expr(b)})"
-            rel = {"Lt": "<", "Le": "≤", "Gt": ">", "Ge": "≥", "Eq": "=", "Ne": "≠"}.get(op)
-            if rel:
-                return f"(if {self.expr(a)} {rel} {self.expr(b)} then 1 else 0)"
-            raise Fragment(f"operator {op}")
-        if "Cond" in e:
-            c, a, b = e["Cond"]
-            return f"(if {self.expr(c)} ≠ 0 then {self.expr(a)} else {self.expr(b)})"
         raise Fragment(f"expression {e}")
+
+    def expr(self, e):
+        return Expr(self.leaf).nat(e)
 
     def top(self, e):
         """An expression in statement position: drop one pair of outer parentheses."""
-        t = self.expr(e)
-        return t[1:-1] if t.startswith("(") and t.endswith(")") else t
+        return Expr(self.leaf).top(e)
 
     def block(self, b, ind):
         pad = "  " * ind

@@ -33,7 +33,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from gen_lean_oracle import Fragment, Lean, affine, chunk_rule, nat, one_ref, COST_VARS  # noqa: E402
+from gen_lean_oracle import (  # noqa: E402
+    Expr, Fragment, Lean, affine, chunk_rule, fold, nat, one_ref, COST_VARS,
+)
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 CDIR = os.path.join(ROOT, "tools", "claims")
@@ -57,93 +59,6 @@ def has_sample(e):
     if isinstance(e, list):
         return any(has_sample(v) for v in e)
     return False
-
-
-def fold(e):
-    """The value of a constant expression, as a natural number when it is one."""
-    if "Num" in e:
-        return e["Num"]
-    if "Binary" in e:
-        op, a, b = e["Binary"]
-        x, y = fold(a), fold(b)
-        if x is None or y is None:
-            return None
-        if op == "Div":
-            return x / y if y != 0 else None
-        return {"Add": x + y, "Sub": max(x - y, 0), "Mul": x * y}.get(op)
-    if "Call" in e:
-        f, args = e["Call"]
-        vals = [fold(a["Expr"]) if "Expr" in a else None for a in args]
-        if any(v is None for v in vals):
-            return None
-        import math
-        if f == "Ceil" and len(vals) == 1:
-            return float(math.ceil(vals[0]))
-        if f == "Floor" and len(vals) == 1:
-            return float(math.floor(vals[0]))
-        if f in ("Min", "Max") and len(vals) == 2:
-            return min(vals) if f == "Min" else max(vals)
-    return None
-
-
-REL = {"Lt": "<", "Le": "≤", "Gt": ">", "Ge": "≥", "Eq": "=", "Ne": "≠"}
-ARITH = {"Add": "+", "Sub": "-", "Mul": "*"}
-
-
-class Expr:
-    """An IR expression as a Lean term over natural numbers: `nat` gives a
-    term of type ℕ (a boolean is 1 or 0), `prop` a proposition (the
-    expression is not 0). `leaf` translates what is specific to the moment."""
-
-    def __init__(self, leaf):
-        self.leaf = leaf
-
-    def nat(self, e):
-        v = fold(e)
-        if v is not None:
-            return str(nat(v, "constant"))
-        if "Binary" in e:
-            op, a, b = e["Binary"]
-            if op in ARITH:
-                return f"({self.nat(a)} {ARITH[op]} {self.nat(b)})"
-            if op in REL or op in ("And", "Or"):
-                return f"(if {self.prop(e)} then 1 else 0)"
-            raise Fragment(f"operator {op} (a division must be under floor, or exact between constants)")
-        if "Unary" in e:
-            op, a = e["Unary"]
-            if op == "Not":
-                return f"(if {self.prop(a)} then 0 else 1)"
-            raise Fragment(f"unary {op}")
-        if "Cond" in e:
-            c, a, b = e["Cond"]
-            return f"(if {self.prop(c)} then {self.nat(a)} else {self.nat(b)})"
-        if "Call" in e:
-            f, args = e["Call"]
-            if f == "Floor" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
-                op, a, b = args[0]["Expr"]["Binary"]
-                if op == "Div":
-                    return f"({self.nat(a)} / {self.nat(b)})"
-            if f == "Ceil" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
-                op, a, b = args[0]["Expr"]["Binary"]
-                if op == "Div" and fold(b) is not None:
-                    k = nat(fold(b), "ceil divisor")
-                    return f"(({self.nat(a)} + {k - 1}) / {k})"
-            if f in ("Min", "Max") and len(args) == 2:
-                return f"({f.lower()} {self.nat(args[0]['Expr'])} {self.nat(args[1]['Expr'])})"
-        return self.leaf(e)
-
-    def prop(self, e):
-        if "Binary" in e:
-            op, a, b = e["Binary"]
-            if op in REL:
-                return f"({self.nat(a)} {REL[op]} {self.nat(b)})"
-            if op == "And":
-                return f"({self.prop(a)} ∧ {self.prop(b)})"
-            if op == "Or":
-                return f"({self.prop(a)} ∨ {self.prop(b)})"
-        if "Unary" in e and e["Unary"][0] == "Not":
-            return f"(¬ {self.prop(e['Unary'][1])})"
-        return f"({self.nat(e)} ≠ 0)"
 
 
 def iter_leaf(e):

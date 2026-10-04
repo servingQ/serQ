@@ -126,12 +126,12 @@ class IterationCost(unittest.TestCase):
         self.assertEqual(generator.chunk_rule({"Num": 24.0}), (24.0, None))
         self.assertEqual(
             generator.chunk_rule(rule),
-            (0, "some fun c => if (if (c.residents + (c.queued 0)) > 1 then 1 else 0) ≠ 0 then 24 else 0"))
+            (0, "some fun c => if ((c.residents + (c.queued 0)) > 1) then 24 else 0"))
         # not only vLLM's shape: the operands swapped, another threshold
         swapped = {"Cond": [{"Binary": ["Gt", {"Binary": ["Add", q, {"Ctx": "Nres"}]}, {"Num": 2.0}]},
                             {"Num": 24.0}, {"Num": 0.0}]}
         self.assertEqual(generator.chunk_rule(swapped)[1],
-                         "some fun c => if (if ((c.queued 0) + c.residents) > 2 then 1 else 0) ≠ 0 then 24 else 0")
+                         "some fun c => if (((c.queued 0) + c.residents) > 2) then 24 else 0")
         # what an iteration's start does not supply is outside the fragment
         with self.assertRaises(generator.Fragment):
             generator.chunk_rule({"Ctx": "Ntok"})
