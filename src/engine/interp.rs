@@ -2956,7 +2956,7 @@ impl<'p> Interp<'p> {
                 // settled, below, for the residents still in it: a resident
                 // preempted later in this iteration keeps the position it had
                 // (vLLM advances `num_computed_tokens` after `schedule`,
-                // scheduler.py `_update_after_schedule`), and exclusive-prefill
+                // `_update_after_schedule`, scheduler.py:1584-1597), and exclusive-prefill
                 // decodes are candidates until waiting admission has finished.
             } else if mode == RunMode::Prefill {
                 attn_by.push((id, tokens * tokens / 2.0));

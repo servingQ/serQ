@@ -667,8 +667,11 @@ remaining run first is `serve by (remaining)`, the opposite `serve by
 (-remaining)`. One token to a decoding job, up to `chunk` to a prefilling
 one,
 until the budget is spent; a `growing` job first grows its hold to the
-position it will reach (block by block, preempting if needed); then the
-stage admits from the queues it serves. The iteration advances the clock by
+position it will reach (block by block, preempting if needed); a victim
+the iteration has already served leaves it and its tokens return to the
+budget (scheduler.py:779-797), and a grower that preempts itself ends the
+iteration's serving (scheduler.py:807-813); then the stage admits from the
+queues it serves. The iteration advances the clock by
 `C`, an expression in `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`; its
 tokens are applied when it ends. A run of zero work completes at once. An
 iteration that schedules no token is not an iteration, unless it preempted:
