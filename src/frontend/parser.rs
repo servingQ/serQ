@@ -624,74 +624,6 @@ pub fn parse_expr(src: &str) -> PResult<Expr> {
     Ok(e)
 }
 
-/// Replace every `Var(name)` of a header binding (`at admission (…)`,
-/// `where …`) by its expression.
-fn subst(e: &mut Expr, binds: &[(String, Expr)]) {
-    match e {
-        Expr::Located(_, inner) => subst(inner, binds),
-        Expr::Var(n) => {
-            if let Some((_, v)) = binds.iter().find(|(name, _)| name == n) {
-                *e = v.clone();
-            }
-        }
-        Expr::Num(_) => {}
-        Expr::Sample(_, args) => args.iter_mut().for_each(|a| subst(a, binds)),
-        Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
-            Arg::Expr(x) => subst(x, binds),
-            Arg::Ref(r) => {
-                // a bare identifier argument is parsed as a reference (it may
-                // name a pool or a stage); when it names a binding it is the
-                // binding, else `min(known, …)` would read the attribute
-                // `known` and not the header's `where known = …`
-                if r.index.is_none()
-                    && let Some((_, v)) = binds.iter().find(|(name, _)| *name == r.name)
-                {
-                    *a = Arg::Expr(v.clone());
-                } else if let Some(i) = &mut r.index {
-                    subst(i, binds);
-                }
-            }
-        }),
-        Expr::Unary(_, a) => subst(a, binds),
-        Expr::Binary(_, a, b) => {
-            subst(a, binds);
-            subst(b, binds);
-        }
-        Expr::Cond(c, a, b) => {
-            subst(c, binds);
-            subst(a, binds);
-            subst(b, binds);
-        }
-        Expr::Over(_, j, n, body) => {
-            subst(n, binds);
-            // the index is the body's own `j`
-            let inner: Vec<_> = binds
-                .iter()
-                .filter(|(name, _)| name != j)
-                .cloned()
-                .collect();
-            subst(body, &inner);
-        }
-    }
-}
-
-/// Does this expression draw?
-fn has_sample(e: &Expr) -> bool {
-    match e {
-        Expr::Located(_, inner) => has_sample(inner),
-        Expr::Sample(..) => true,
-        Expr::Num(_) | Expr::Var(_) => false,
-        Expr::Call(_, args) => args.iter().any(|a| match a {
-            Arg::Expr(x) => has_sample(x),
-            Arg::Ref(r) => r.index.as_ref().is_some_and(|i| has_sample(i)),
-        }),
-        Expr::Unary(_, a) => has_sample(a),
-        Expr::Binary(_, a, b) => has_sample(a) || has_sample(b),
-        Expr::Cond(c, a, b) => has_sample(c) || has_sample(a) || has_sample(b),
-        Expr::Over(_, _, n, e) => has_sample(n) || has_sample(e),
-    }
-}
-
 /// The names `set` or `choose` assigns anywhere in `stmts`.
 pub(crate) fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
     for s in stmts {
@@ -4070,13 +4002,13 @@ impl Parser {
         let binds = self.at_admission()?;
         if !binds.is_empty() {
             for (_, e, reserve) in &mut pools {
-                subst(e, &binds);
+                e.substitute(&binds);
                 if let Some(f) = reserve {
-                    subst(f, &binds);
+                    f.substitute(&binds);
                 }
             }
             if let Some(r) = &mut reuse {
-                subst(r, &binds);
+                r.substitute(&binds);
             }
         }
         let bind_at = std::mem::take(&mut self.bind_at);
@@ -4108,14 +4040,14 @@ impl Parser {
             None
         };
         if let Some(c) = &mut cache {
-            subst(c, &binds);
+            c.substitute(&binds);
         }
         // `lease P (t)`: the allocation on `P` outlives the scope, for the
         // session's transfer to take, for at most `t` seconds
         let lease = if self.eat_kw("lease") {
             let r = self.own_pool("lease")?;
             let mut t = self.paren_expr()?;
-            subst(&mut t, &binds);
+            t.substitute(&binds);
             Some((r, t))
         } else {
             None
@@ -4162,13 +4094,13 @@ impl Parser {
             }
             self.expect(&Tok::Assign)?;
             let mut e = self.expr()?;
-            if has_sample(&e) {
+            if e.draws() {
                 return self.err(format!(
                     "`{name}` draws a sample: a `{clause}` binding is substituted, \
                      so a name used twice would draw twice"
                 ));
             }
-            subst(&mut e, &binds);
+            e.substitute(&binds);
             binds.push((name, e));
             if *self.peek() == Tok::Comma {
                 self.advance();
