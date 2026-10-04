@@ -82,6 +82,8 @@ The arrival times are any natural numbers (the program's `poisson`), and the out
 
 `Arrivals` is any finite distribution of a slot's requests; two examples check the theorem is not vacuous.
 
+**Positive recurrence** (`lean/Serq/Papers/BariRecurrent.lean`). As for Dai et al., the machine chain projects exactly onto a chain on job lists (`BariSim.simulation`): each job's mode, left work and output, with `BariChain.absSlot` as one slot of RAD. There the empty list is one state. Every request brings at least 129 tokens, so below capacity a slot brings none with positive probability, and enough such slots drain any state of `F`. The chain on job lists is irreducible (`irreducible`), and every state is positive recurrent (`positive_recurrent`). That is Theorem 2 for one node.
+
 ## On the run
 
 `serq run`, seed 1, 100 s, at 20 and 30 requests per second:
@@ -102,7 +104,6 @@ Theorem 1's bound for this program is $128/4640$ tokens per µs. With a mean of 
 
 ## What it leaves out
 
-- **Positive recurrence in the textbook sense.** `BariStable` proves finite expected return times to a set of bounded backlog on the program's kernel, as for Dai et al. The same gaps remain: the states keep the clock and the ended sessions, so the chain is not irreducible as it stands, and the step from finite return times to positive recurrence is not proved (`docs/design/stability.md`).
 - **Poisson in continuous time.** The kernel draws a slot's arrivals at each iteration, at most 10 000 (the proof's bound). Nothing in Lean ties the distribution to a rate. If a slot's arrivals are those of a Poisson stream of rate $\lambda$ over a full batch's $t_{Lin} + 128\,t_{nl} = 4640$ µs (truncated at 10 000), the load is $4640\,\lambda\,E[v_p + v_d]$ and `load < 128` is Theorem 1's bound; inside `F` slots are shorter, and that step is not proved.
 - **The random planner over $g$ nodes.** The kernel is one node. Uniform thinning gives each node a Poisson stream of rate $\lambda/g$, independent of the others; that this makes the $g$-node chain stable is not proved.
 - **The cycle parameter $N$.** The program takes $N = \infty$. A finite $N$ ends a cycle by finishing the active requests, with batches that may not fill a tile, and the paper's tiling principle excepts them in the same way.

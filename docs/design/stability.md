@@ -5,12 +5,8 @@ al. Theorem 2, Kong et al. Theorems 3.4–3.5) are statements about a Markov
 chain: positive recurrence, or an expectation over Poisson arrivals. Mathlib
 has neither Foster–Lyapunov nor fluid limits, and building a path measure for
 `Exec` is a project of its own. This design reaches the same statements by
-three steps, each of which is useful without the next (#305).
-What the result does not yet say: the states keep the absolute clock and
-every ended session (`inject` appends, nothing removes), so `F` is an
-infinite set and the chain is not irreducible as it stands, and that finite
-return times to a small set make an irreducible chain positive recurrent is
-not proved.
+three steps, each of which is useful without the next, and a fourth that
+makes the result positive recurrence in the textbook sense (#305).
 
 ## 1. Pathwise stability, as a claim
 
@@ -88,6 +84,49 @@ is full unless every resident decodes and fewer than 128 do (`optimal_tiling`),
 and that is all the drift needs: the same `F`, the same Lyapunov function, the
 same proof shape. Kong 3.4–3.5 also need an expectation inequality (Harris),
 and are not done.
+
+## 4. Positive recurrence
+
+Step 3's states keep the absolute clock and every ended session (`inject`
+appends, nothing removes), so the chain never returns to a state, and a
+finite return time to the set `F` is not yet positive recurrence. Two
+things close the gap.
+
+**A chain on job lists, and the machine chain lumped onto it.** At a slot
+boundary all the engine's future depends on is its job list: each job's
+mode and left work in admission order (and, for RAD, the output a prefill
+will decode). `DaiChain.absSlot` and `BariChain.absSlot` are one slot on
+that list, written as plain list functions: new prefills join behind the
+jobs, the batch is the greedy fill in admission order, a finished prefill
+returns as a decode behind the rest. `DaiSim.simulation` and
+`BariSim.simulation` prove that the projection of a machine to its job list
+commutes with a slot, for every machine the chain reaches: the machine
+chain is lumpable, and the empty list is one state. (Before the proofs, the
+two were run side by side over about 1 800 slots by `#eval`, and agreed.)
+
+**From a set to a state** (`lean/Serq/Recurrence.lean`). If the chain drifts
+to `F`, and from every state of `F` reaches a target `T ⊆ F` within `L`
+steps with probability at least `δ`, then the expected hitting time of `T`
+is at most `V / ε + (L + B / ε) / δ`, `B` a bound on `P^L V` over `F`: each
+visit to `F` is a trial that costs at most `L` steps and an expected return,
+and succeeds with probability `δ` (`hit_le_of_reach`). The proof uses the
+chain killed at `T`, `hit (m + L) ≤ L + Q^L (hit m)` and `Q^L 1 = 1 − reach`,
+by induction on the truncation, so every bound holds uniformly in `n` and
+no supremum in ℝ is read. Applied with `T` one state `o`, the expected
+hitting time of `o` is bounded from everywhere; applied again with `F =
+{o, y}`, every state `o` reaches is positive recurrent
+(`positiveRecurrent_of_hit`).
+
+For both papers the target is the empty list. Below capacity a slot brings
+no request with positive probability (for Dai `E[k] < 0.1`; for Bari every
+request brings at least 129 tokens, so `E[#requests] < 128/129`), and a slot
+without arrivals serves at least one token while there is a job. From a
+state of `F`, whose backlog is bounded, enough empty slots drain the engine,
+so `δ` is a power of the probability of an empty slot. The chain on job
+lists is then irreducible (every state drains to the empty list, which
+reaches every state by definition) and every state is positive recurrent:
+Dai et al.'s Theorem 2(b) (`DaiRecurrent.positive_recurrent`) and Bari et
+al.'s Theorem 2 (`BariRecurrent.positive_recurrent`).
 
 ## Self-critique
 
