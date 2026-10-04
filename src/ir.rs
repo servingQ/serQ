@@ -664,53 +664,59 @@ impl Program {
     /// included; `release` may instead end a lease of it; a hold leases
     /// one of its own pools (#272). Holds nest as the blocks do.
     ///
-    /// A hold whose index reads an attribute its body sets is *stale* for
-    /// these: `hold kv[j] { set j = 1; grow kv[j] (…); }` reads `kv[j]` twice,
-    /// at admission and at the `grow`, and the two may name different pools
-    /// (#282). The interpreter would grow another hold, or none.
+    /// A hold's index is read at admission, again at every statement that
+    /// acts on the hold, and again when a preempted hold is admitted anew;
+    /// the readings must name one member (#282). So a hold's body may not
+    /// change an attribute its index reads (`set`, `choose`, `turn`, or a
+    /// hold inside it setting `cached` and `computed`), and an index read at
+    /// a statement inside reads only attributes and numbers, not the state
+    /// or the clock, which move between the readings.
     fn enclosed<'a>(
         &'a self,
         b: BlockId,
-        held: &mut Vec<(&'a CRef, Option<usize>)>,
+        held: &mut Vec<(&'a CRef, Option<&'static str>)>,
         leased: &[&'a CRef],
     ) -> Result<(), String> {
-        let need = |held: &[(&CRef, Option<usize>)], r: &CRef, what: &str, or_leased: bool| {
-            let name = &self.pools[r.base].name;
-            let shown = match &r.index {
-                None => name.clone(),
-                Some(_) => format!("{name}[…]"),
-            };
-            if let Some(&(_, stale)) = held.iter().rev().find(|(h, _)| *h == r) {
-                return match stale {
-                    None => Ok(()),
-                    Some(a) => Err(format!(
-                        "`{what} {shown}`: the hold of `{shown}` sets `{}` in its body, which \
-                         its index reads, so the two may name different pools; name the \
-                         member in an attribute the body does not set",
-                        self.attrs.get(a).map_or("?", |s| s.as_str())
-                    )),
+        let need =
+            |held: &[(&CRef, Option<&'static str>)], r: &CRef, what: &str, or_leased: bool| {
+                let name = &self.pools[r.base].name;
+                let shown = match &r.index {
+                    None => name.clone(),
+                    Some(_) => format!("{name}[…]"),
                 };
-            }
-            let leased: &[&CRef] = if or_leased { leased } else { &[] };
-            if leased.contains(&r) {
-                return Ok(());
-            }
-            let hint = if held
-                .iter()
-                .map(|(h, _)| h)
-                .chain(leased)
-                .any(|h| h.base == r.base)
-            {
-                ": write the pool as the hold does, index included"
-            } else if or_leased {
-                ": it takes an enclosing hold's allocation, or a lease of it"
-            } else {
-                ": it acts on an enclosing hold's allocation"
+                if let Some(&(h, moves)) = held.iter().rev().find(|(h, _)| *h == r) {
+                    return match moves {
+                        None => Ok(()),
+                        Some(read) => Err(format!(
+                            "`{what} {name}[{}]`: the hold's index reads {read}, which moves \
+                         between admission and this statement, so the two may name different \
+                         members; name the member in an attribute",
+                            h.index
+                                .as_ref()
+                                .map_or(String::new(), |i| self.show_expr(i))
+                        )),
+                    };
+                }
+                let leased: &[&CRef] = if or_leased { leased } else { &[] };
+                if leased.contains(&r) {
+                    return Ok(());
+                }
+                let hint = if held
+                    .iter()
+                    .map(|(h, _)| h)
+                    .chain(leased)
+                    .any(|h| h.base == r.base)
+                {
+                    ": write the pool as the hold does, index included"
+                } else if or_leased {
+                    ": it takes an enclosing hold's allocation, or a lease of it"
+                } else {
+                    ": it acts on an enclosing hold's allocation"
+                };
+                Err(format!(
+                    "`{what} {shown}` outside a hold of `{shown}`{hint}"
+                ))
             };
-            Err(format!(
-                "`{what} {shown}` outside a hold of `{shown}`{hint}"
-            ))
-        };
         for s in &self.blocks[b] {
             match s {
                 CStmt::Hold {
@@ -727,13 +733,44 @@ impl Program {
                     }
                     let depth = held.len();
                     let set = self.assigned(*body);
+                    for (r, _, _) in pools {
+                        let Some(i) = &r.index else { continue };
+                        if let Some(&a) = set
+                            .iter()
+                            .find(|&&a| i.any(&|x| matches!(x, CExpr::Attr(s) if *s == a)))
+                        {
+                            return Err(format!(
+                                "`hold {}[{}]`: its body changes `{}`, which the index reads, so \
+                                 the member read at admission, at a statement inside and after a \
+                                 preemption may differ; set it before the hold",
+                                self.pools[r.base].name,
+                                self.show_expr(i),
+                                self.attrs.get(a).map_or("?", |s| s.as_str())
+                            ));
+                        }
+                    }
                     held.extend(pools.iter().map(|(r, _, _)| {
-                        let stale = set.iter().copied().find(|a| {
-                            r.index
-                                .as_ref()
-                                .is_some_and(|i| i.any(&|x| matches!(x, CExpr::Attr(s) if s == a)))
+                        let moves = r.index.as_ref().and_then(|i| {
+                            i.any(&|x| match x {
+                                CExpr::Ctx(_) | CExpr::Sample(..) => true,
+                                // a function of its arguments alone does not move
+                                CExpr::Call(f, _) => !matches!(
+                                    f,
+                                    Fun::Min
+                                        | Fun::Max
+                                        | Fun::Abs
+                                        | Fun::Floor
+                                        | Fun::Ceil
+                                        | Fun::Sqrt
+                                        | Fun::Exp
+                                        | Fun::Ln
+                                        | Fun::Pow
+                                ),
+                                _ => false,
+                            })
+                            .then_some("the state or the clock")
                         });
-                        (r, stale)
+                        (r, moves)
                     }));
                     self.enclosed(*body, held, leased)?;
                     held.truncate(depth);
@@ -755,13 +792,20 @@ impl Program {
         Ok(())
     }
 
-    /// The attributes a block sets, in it or in a block in it.
+    /// The attributes a block may change, in it or in a block in it: what it
+    /// sets or chooses, every attribute at a `turn` (the workload's `turn`
+    /// block and the scheduler's marks), and `cached` and `computed` at a hold.
     fn assigned(&self, b: BlockId) -> Vec<usize> {
         let mut out = vec![];
         for s in &self.blocks[b] {
             match s {
                 CStmt::Set(a, _) | CStmt::Choose { var: a, .. } => out.push(*a),
-                CStmt::Hold { body, .. } | CStmt::Loop(body) => out.extend(self.assigned(*body)),
+                CStmt::Turn => out.extend(0..self.attrs.len()),
+                CStmt::Hold { body, .. } => {
+                    out.extend([self.slot_cached, self.slot_computed]);
+                    out.extend(self.assigned(*body));
+                }
+                CStmt::Loop(body) => out.extend(self.assigned(*body)),
                 CStmt::Branch(_, x, y) => {
                     out.extend(self.assigned(*x));
                     out.extend(self.assigned(*y));

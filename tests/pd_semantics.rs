@@ -194,16 +194,17 @@ fn grow_and_growing_need_an_enclosing_hold() {
     check_source(src, &Overrides::default()).unwrap();
 }
 
-/// `kv[j]` in a hold's body names the hold's pool only while `j` is what it
-/// was at admission: a body that sets `j` and then grows `kv[j]` grew another
-/// hold, or failed in the run, though it linked (#282).
+/// A hold's index is read at admission, at a statement inside that acts on
+/// the hold, and after a preemption: the readings must name one member. A
+/// body that set `j` and then grew `kv[j]` grew another hold, or failed in
+/// the run, though it linked (#282).
 #[test]
-fn a_hold_whose_body_sets_its_index_does_not_act_on_it() {
-    let run = |body: &str| {
+fn a_hold_whose_body_changes_its_index_does_not_link() {
+    let run = |workload: &str, hold: &str, body: &str| {
         let src = format!(
             "pool kv[2] {{ cap 4096; block 16; }} stage d : delay;
-             workload {{ arrive batch(2); init {{ set j = 0; }} }}
-             session {{ hold kv[1] (16) {{ hold kv[j] (16) {{ {body} run d (1); }} }} end; }}
+             workload {{ arrive batch(2); init {{ set j = 0; }} {workload} }}
+             session {{ hold kv[1] (16) {{ hold {hold} (16) {{ {body} run d (1); }} }} end; }}
              run {{ horizon 10; }}"
         );
         check_source(&src, &Overrides::default())
@@ -212,16 +213,29 @@ fn a_hold_whose_body_sets_its_index_does_not_act_on_it() {
         "set j = 1; grow kv[j] (16);",
         "branch (j == 0) { set j = 1; } grow kv[j] (16);",
         "grow kv[j] (16); choose j in 2 by (j);",
-        "set j = 1; release kv[j];",
+        "set j = 1;",
     ] {
-        let e = run(body).err().unwrap_or_else(|| panic!("`{body}` linked"));
+        let e = run("", "kv[j]", body)
+            .err()
+            .unwrap_or_else(|| panic!("`{body}` linked"));
         assert!(
-            e.contains("sets `j` in its body, which its index reads"),
+            e.contains("its body changes `j`, which the index reads"),
             "{body}: {e}"
         );
     }
-    // setting it is fine when nothing in the body acts on the pool again
-    run("set j = 1;").unwrap();
+    // a `turn` draws the workload's attributes anew
+    let e = run("turn { set j = 1; }", "kv[j]", "turn;").unwrap_err();
+    assert!(e.contains("its body changes `j`"), "{e}");
+    // an index read again at a statement inside reads attributes, not state
+    for index in ["used(kv[0]) > 0 ? 1 : 0", "now > 0.5 ? 1 : 0"] {
+        let hold = format!("kv[{index}]");
+        let e = run("", &hold, &format!("grow kv[{index}] (16);")).unwrap_err();
+        assert!(e.contains("reads the state or the clock"), "{index}: {e}");
+        // read once, at admission, it may
+        run("", &hold, "").unwrap();
+    }
+    // an index the body leaves alone links
+    run("", "kv[j]", "grow kv[j] (16);").unwrap();
 }
 
 /// The transfer: the source's lease outlives its scope, the KV is in both
