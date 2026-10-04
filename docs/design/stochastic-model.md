@@ -48,7 +48,7 @@ where $X$ is the state of the deployment, $\xi$ is the environment (the
 arrival instants with their marks, the end of each think time) and $\Phi$
 is a deterministic map. Given a realisation of $\xi$ the path is a fact,
 not a sample. That is the content of the oracle result
-(`docs/validation.md` §3): drive the real scheduler and the program with
+(`docs/language.md` §7): drive the real scheduler and the program with
 the same $\xi$, the 333-session trace, and the 3 321 first-token times
 agree because both are the same $\Phi$. In the paper's model the hit or
 miss of a turn is a Bernoulli variable with the policy's hit rate $h$; in
@@ -691,8 +691,8 @@ candidates for an issue with a Before/After.
    the (session, turn) pairs differ where 967 of 4 733 did). The price,
    paid: every number a seeded run prints moved. The tests compare against
    closed forms, confidence intervals and traces and did not; the figures
-   of `docs/` that quote seeded runs (`docs/validation.md`,
-   `docs/language.md` §5) are measurements of their date, and the
+   of `docs/` that quote seeded runs (`docs/language.md`
+   §5 and §8) are measurements of their date, and the
    companion repository's serQ-derived numbers move when it moves its pin.
    The IR's shape does not move but the meaning of `seed` does — it names
    a workload now, not a sequence of draws — so this opened IR version 11

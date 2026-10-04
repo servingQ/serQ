@@ -60,7 +60,7 @@ Replace `rbln` with `ascend`. Both use a finite batch of six requests and observ
 
 ### What has been verified
 
-The pages separate tagged-source findings, executable approximations, remaining gaps and proposed oracle scenarios. The examples have been checked and run. Vendor SDKs and hardware were not exercised, and no vendor differential tests were run. The existing [validation corpus](../validation.md) does not validate these vendor tags.
+The pages separate tagged-source findings, executable approximations, remaining gaps and proposed oracle scenarios. The examples have been checked and run. Vendor SDKs and hardware were not exercised, and no vendor differential tests were run. The existing [vLLM oracle corpus](../language.md#7-vllm-v1-as-a-serq-program) does not validate these vendor tags.
 
 Each vendor page records the limitations of its executable example.
 The [waiting-selection design](../design/waiting-selection.md) describes the

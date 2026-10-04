@@ -150,7 +150,23 @@ Put it in the `examples/` directory of its workload (`single-turn/`, `multi-turn
 in both formats. Add a row to [language](language.md) §5 saying what it
 models and what it is checked against, and a test that checks that claim.
 A program that cites vLLM cites it as `file.py:lines`, and
-`scripts/check_citations.py` holds the citation to the pinned source.
+`scripts/check_citations.py` holds the citation to the pinned source:
+`make check` resolves every cited range in the pinned `ref/vllm` and hashes
+its text (`tools/citations.json`), so a range that moved, a file that is
+gone or a citation nobody recorded fails the build. That check cannot see
+upstream move; `.github/workflows/citation-drift.yml` asks that daily, by
+looking for each range's pinned text in the same files at
+`vllm-project/vllm@main` (`scripts/check_citations.py --tip`). It gates no
+pull request: it says the cited code is gone, not that the scheduler now
+computes something else.
+
+Some link errors come from bugs this repository shipped: a hold header that
+reads a `set` bound before the session queued, a `branch` whose constant
+guard is a probability, a context variable read outside the moment that
+supplies it. `tests/lints.rs` holds them, and
+`no_false_positives_on_the_corpus` checks that none fires on a program in
+`examples/`, so a new program that trips one is either the bug it
+describes or a false positive to fix in the lint.
 
 ## In Lean
 
@@ -166,7 +182,7 @@ There are three kinds of result, and a program meets them differently:
 
 The first kind needs nothing from a program. It is about the pool model and
 the serving order, and it is not yet connected to the executable semantics
-that runs programs ([validation](validation.md), what is not proved). The
+that runs programs ([The Lean model](lean.md#what-is-not-covered-yet)). The
 second is how a specific program is checked. The third is written by hand in
 serving-queue-theory, so a change to the program it describes has to be
 repeated there when that repository moves its pin of this package.

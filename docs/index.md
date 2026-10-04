@@ -46,13 +46,6 @@ the simulation, the proofs and the figure cannot disagree with one another.
     constant or a law without editing the file, for sweeps.
     [Getting started](getting-started.md)
 
-- **Check it against the real scheduler**
-
-    The vLLM v1 program agrees with the scheduler at the pinned revision on
-    six deterministic scenarios, and on all 3 321 requests of a 333-session
-    trace: send time, first-token time and cached tokens.
-    [How serQ is checked](validation.md)
-
 - **Prove things about it**
 
     The same IR is a program in a Lean semantics. The memory invariant
@@ -115,12 +108,11 @@ is ordinary control flow: `branch`, `loop`, `end`.
 | see a real system written in it | [vLLM](use-cases/vllm.md), [vendor plugins](use-cases/index.md#vendor-plugins), [prefill/decode over NIXL](use-cases/pd.md) |
 | see one engine serve single-turn, chat and agent traffic | [Different workloads](use-cases/workloads.md) |
 | sweep a parameter, compare two designs, or take a program to Lean | [Working with a program](development.md) |
-| look something up | [Language reference](api/index.md), [Cheatsheet](reference/cheatsheet.md), [CLI](reference/cli.md), [Python](python.md) |
-| know why any of this should be believed | [How serQ is checked](validation.md) |
+| look something up | [API reference](api/index.md), [Cheatsheet](reference/cheatsheet.md), [CLI](reference/cli.md), [Python](python.md) |
 | know why the language is the way it is | [Design](design/index.md) |
 
 !!! note "The specification"
     [The language](language.md) and [The IR](ir.md) are the
     specification-grade documents: complete and dense. The tutorial is the
     way in, those are what you read afterwards, and the
-    [language reference](api/index.md) is where you look a construct up.
+    [API reference](api/index.md) is where you look a construct up.
