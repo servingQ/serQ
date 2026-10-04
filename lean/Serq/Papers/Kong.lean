@@ -508,6 +508,356 @@ theorem sinv_admit {w : Workload} {g : Ghost} {m : Machine} (hI : SInv w g m)
     · rw [if_pos hih] at hce; exact absurd hce (by decide)
     · rw [if_neg hih] at hce; exact hI.latE i hi hce
 
+/-- `g'` comes from `g` by admissions only. -/
+def Adm (g g' : Ghost) : Prop :=
+  (∀ i, g'.c i = g.c i ∨ (g.c i = .q ∧ g'.c i = .r2)) ∧ g'.left = g.left ∧ g'.lat = g.lat
+
+theorem Adm.refl (g : Ghost) : Adm g g := ⟨fun _ => Or.inl rfl, rfl, rfl⟩
+
+theorem Adm.trans {a b c : Ghost} (h1 : Adm a b) (h2 : Adm b c) : Adm a c := by
+  refine ⟨fun i => ?_, h2.2.1.trans h1.2.1, h2.2.2.trans h1.2.2⟩
+  rcases h2.1 i with h | ⟨hb, hc⟩ <;> rcases h1.1 i with h' | ⟨ha, hb'⟩
+  · exact Or.inl (h.trans h')
+  · exact Or.inr ⟨ha, h ▸ hb'⟩
+  · exact Or.inr ⟨h' ▸ hb, hc⟩
+  · rw [hb] at hb'; exact absurd hb' (by decide)
+
+/-- The pool admits nobody more: its least-volume waiting request does not fit. -/
+def Blocked (w : Workload) (m : Machine) : Prop :=
+  ∀ h, argminKey (fun i => evalE m i volE) (pst m 0).queue = some h → 20000 < (pst m 0).used + pp w h
+
+theorem sinv_admitHeads (w : Workload) : ∀ (f : ℕ) (g : Ghost) (m : Machine), SInv w g m →
+    (∀ i < w.init.length, g.c i ≠ .s0) →
+    ∃ g', Adm g g' ∧ SInv w g' (admitHeads Dk 0 f m) ∧
+      (∃ L, (admitHeads Dk 0 f m).ready = m.ready ++ L ∧ (L = [] → admitHeads Dk 0 f m = m)) ∧
+      ((pst m 0).queue.length < f → Blocked w (admitHeads Dk 0 f m))
+  | 0, g, m, hI, _ => ⟨g, Adm.refl g, hI, ⟨[], by simp [admitHeads], fun _ => rfl⟩, fun h => by omega⟩
+  | f + 1, g, m, hI, hno => by
+    unfold admitHeads
+    rw [selectHead_k]
+    rcases hsel : argminKey (fun i => evalE m i volE) (pst m 0).queue with _ | h
+    · simp only [Option.map_none]
+      refine ⟨g, Adm.refl g, hI, ⟨[], by simp, by simp⟩, fun _ h' hh => ?_⟩
+      rw [hsel] at hh; exact absurd hh (by simp)
+    · simp only [Option.map_some]
+      have hmq := argminKey_mem _ _ h hsel
+      obtain ⟨hhn, hhq⟩ := (hI.queueMem h).mp hmq
+      have hp : (getS m h).prog = Hk := by have := hI.shape h hhn; rw [hhq] at this; exact this.1
+      split
+      · rename_i hfit
+        have hfit' := (fits_k hI hhn hp).mp hfit
+        have hI1 := sinv_admit hI hno hsel hfit'
+        have hs0 : (getS m h).stack = [] := by have := hI.shape h hhn; rw [hhq] at this; exact this.2.1
+        have hM0e : (pst (setPool m 0 { pst m 0 with queue := (pst m 0).queue.erase h }) 0).entries = [] := by
+          rw [pst_setPool_self _ _ hI.pools]; exact hI.entries
+        have hadmeq := admit_eq (setPool m 0 { pst m 0 with queue := (pst m 0).queue.erase h }) h hp hs0 hM0e
+        set M1 := admit Dk (setPool m 0 { pst m 0 with queue := (pst m 0).queue.erase h }) h 0 with hM1
+        have hno1 : ∀ i < w.init.length, (Function.update g.c h .r2) i ≠ .s0 := by
+          intro i hi
+          by_cases hih : i = h
+          · subst hih; simp
+          · simp [Function.update, hih, hno i hi]
+        obtain ⟨g', hadm, hI', ⟨L, hL, _⟩, hblk⟩ := sinv_admitHeads w f _ M1 hI1 hno1
+        have hr1 : M1.ready = m.ready ++ [h] := by
+          rw [hadmeq]
+          rfl
+        have hq1 : (pst M1 0).queue.length + 1 = (pst m 0).queue.length := by
+          have hp1 : pst M1 0 = admPool (setPool m 0 { pst m 0 with queue := (pst m 0).queue.erase h }) h := by
+            rw [hadmeq]; exact pst_setPool_self _ _ (by simp [setPool, hI.pools])
+          rw [hp1]
+          simp only [admPool, pst_setPool_self _ _ hI.pools]
+          rw [List.length_erase_of_mem hmq]
+          have : 0 < (pst m 0).queue.length := List.length_pos_of_mem hmq
+          omega
+        refine ⟨g', ?_, hI', ⟨h :: L, by rw [hL, hr1]; simp, fun h' => by simp at h'⟩, fun hl => hblk (by omega)⟩
+        refine (show Adm g { g with c := Function.update g.c h .r2 } from ⟨fun i => ?_, rfl, rfl⟩).trans hadm
+        by_cases hih : i = h
+        · subst hih; exact Or.inr ⟨hhq, by simp⟩
+        · exact Or.inl (by simp [Function.update, hih])
+      · rename_i hfit
+        refine ⟨g, Adm.refl g, hI, ⟨[], by simp, fun _ => rfl⟩, fun _ h' hh => ?_⟩
+        rw [hsel] at hh
+        simp only [Option.some.injEq] at hh
+        subst hh
+        have := (fits_k hI hhn hp).not.mp hfit
+        omega
+
+theorem admitAll_k (m : Machine) : admitAll Dk m = admitHeads Dk 0 1000 m := by
+  simp [admitAll, deployment_eq, pdef]
+
+/-! ### The commands of a ready request -/
+
+/-- A filtered list over `range n` whose predicate becomes true at one more
+index `i < n`. -/
+theorem perm_filter_add {n i : ℕ} (hi : i < n) (p p' : ℕ → Bool) (f : ℕ → ℕ)
+    (hpi : p i = false) (hp'i : p' i = true) (hrest : ∀ j, j ≠ i → p' j = p j) :
+    (((List.range n).filter p').map f).Perm (f i :: ((List.range n).filter p).map f) := by
+  induction n with
+  | zero => omega
+  | succ n ih =>
+    simp only [List.range_succ, List.filter_append, List.map_append, List.filter_cons, List.filter_nil]
+    by_cases hin : i = n
+    · subst hin
+      have heq : (List.range i).filter p' = (List.range i).filter p := by
+        apply List.filter_congr
+        intro j hj
+        exact hrest j (by simp at hj; omega)
+      rw [heq, hp'i, hpi]
+      simp only [if_true, List.map_cons, List.map_nil, Bool.false_eq_true, if_false, List.append_nil]
+      exact List.perm_append_singleton _ _
+    · have hlt : i < n := by omega
+      rw [hrest n (Ne.symm hin)]
+      have := ih hlt
+      by_cases hpn : p n = true
+      · simp only [hpn, if_true, List.map_cons, List.map_nil]
+        exact (this.append_right _).trans (by simp)
+      · simp only [hpn, Bool.false_eq_true, if_false, List.map_nil, List.append_nil]
+        exact this
+
+theorem values_cons (m : Machine) (k i t v : ℕ) (name : ℕ) :
+    values { m with obs := (k, i, t, v) :: m.obs } name =
+      if k = name then v :: values m name else values m name := by
+  simp only [values, List.filter_cons]
+  split_ifs with h1 h2 h2 <;> simp_all
+
+/-- The update of a request's place. -/
+def Ghost.set (g : Ghost) (i : ℕ) (k : Cat) : Ghost := { g with c := Function.update g.c i k }
+
+@[simp] theorem Ghost.set_c (g : Ghost) (i : ℕ) (k : Cat) (j : ℕ) :
+    (g.set i k).c j = if j = i then k else g.c j := by
+  simp [Ghost.set, Function.update]
+
+@[simp] theorem Ghost.set_left (g : Ghost) (i : ℕ) (k : Cat) : (g.set i k).left = g.left := rfl
+@[simp] theorem Ghost.set_lat (g : Ghost) (i : ℕ) (k : Cat) : (g.set i k).lat = g.lat := rfl
+
+theorem rem_le (w : Workload) (g : Ghost) {i : ℕ} (hl : g.c i = .a → g.left i ≤ oo w i) : rem w g i ≤ oo w i := by
+  unfold rem; split <;> simp_all
+
+/-- An initial request observes its output length and volume and queues. -/
+theorem sinv_pop_s0 {w : Workload} {g : Ghost} {m : Machine} (hI : SInv w g m) {i : ℕ}
+    {rest : List ℕ} (hr : m.ready = i :: rest) (hc : g.c i = .s0) :
+    SInv w (g.set i .q) (exec Dk 10000 { m with ready := rest } i) := by
+  have hin : i < w.init.length := ((hI.readyMem i).mp (by rw [hr]; simp)).1
+  have hisz : i < m.sess.size := hI.size ▸ hin
+  have hsh := hI.shape i hin
+  rw [hc] at hsh
+  obtain ⟨hp, hs, hst⟩ := hsh
+  have hex : ∃ k < w.init.length, g.c k = .s0 := ⟨i, hin, hc⟩
+  have hnow := hI.nowS0 hex
+  set m0 : Machine := { m with ready := rest } with hm0
+  have hg0 : ∀ j, getS m0 j = getS m j := fun j => rfl
+  rw [show (10000 : ℕ) = 9997 + 3 from rfl]
+  rw [exec_observe Dk _ m0 i 0 (fun x => x.attr 10) (.observe 1 volE Hk) (by rw [hg0]; exact hst)
+    (by rw [hg0, hp, prog_eq])]
+  set m1 : Machine := { setS m0 i { getS m0 i with prog := .observe 1 volE Hk } with
+    obs := (0, (getS m0 i).serial, m0.now, evalE m0 i fun x => x.attr 10) :: m0.obs } with hm1
+  have hg1 : getS m1 i = { getS m i with prog := .observe 1 volE Hk } :=
+    getS_setS_self _ _ (by simpa [hm0] using hisz)
+  rw [exec_observe Dk _ m1 i 1 volE Hk (by rw [hg1]; exact hst) (by rw [hg1])]
+  set m2 : Machine := { setS m1 i { getS m1 i with prog := Hk } with
+    obs := (1, (getS m1 i).serial, m1.now, evalE m1 i volE) :: m1.obs } with hm2
+  have hg2 : getS m2 i = { getS m i with prog := Hk } := by
+    rw [show getS m2 i = { getS m1 i with prog := Hk } from getS_setS_self _ _ (by simpa [hm1, hm0] using hisz),
+      hg1]
+  rw [exec_hold Dk _ m2 i (by rw [hg2]; exact hst) (by rw [hg2])]
+  unfold enqueue
+  rw [hg2]
+  simp only [Hk, Bool.false_eq_true, ↓reduceIte]
+  set M2 := setPool m2 0 { pst m2 0 with queue := (pst m2 0).queue ++ [i] } with hM2
+  have hpl2 : m2.pools.length = 1 := by simp [hm2, hm1, hm0, hI.pools]
+  have hpst2 : pst m2 0 = pst m 0 := rfl
+  have hpst : pst (setS M2 i { getS M2 i with status := .queued }) 0 =
+      { pst m 0 with queue := (pst m 0).queue ++ [i] } := by
+    show pst M2 0 = _
+    exact pst_setPool_self _ _ hpl2
+  have hgM2 : ∀ j, getS M2 j = getS m2 j := fun j => rfl
+  have hget : ∀ j, getS (setS M2 i { getS M2 i with status := .queued }) j =
+      if j = i then { getS m i with prog := Hk, status := .queued } else getS m j := by
+    intro j
+    by_cases hj : j = i
+    · subst hj; simp only [if_true]
+      rw [getS_setS_self _ _ (by simpa [hM2, hm2, hm1, hm0] using hisz), hgM2, hg2]
+    · simp only [hj, if_false]
+      rw [getS_setS_ne _ _ (Ne.symm hj), hgM2]
+      show getS (setS m1 i _) j = _
+      rw [getS_setS_ne _ _ (Ne.symm hj)]
+      show getS (setS m0 i _) j = _
+      rw [getS_setS_ne _ _ (Ne.symm hj)]
+      exact hg0 j
+  have hser : (getS m i).serial = i := hI.serial i hin
+  have hobs : (setS M2 i { getS M2 i with status := .queued }).obs =
+      (1, i, 0, vv w i) :: (0, i, 0, oo w i) :: m.obs := by
+    show m2.obs = _
+    have h2 : m2.obs = (1, (getS m1 i).serial, m1.now, evalE m1 i volE) ::
+        (0, (getS m0 i).serial, m0.now, evalE m0 i fun x => x.attr 10) :: m.obs := rfl
+    have e1 : evalE m1 i volE = vv w i := by
+      simp only [evalE, env, hg1]; simp [volE, hI.attr9 i hin, hI.attr10 i hin, vv]
+    have e0 : evalE m0 i (fun x => x.attr 10) = oo w i := by
+      simp only [evalE, env, hg0]; simp [hI.attr10 i hin, oo]
+    have hn1 : m1.now = 0 := hnow
+    have hn0 : m0.now = 0 := hnow
+    rw [h2, e1, e0, hg1, hg0, hn1, hn0]
+    simp [hser]
+  set R := setS M2 i { getS M2 i with status := .queued } with hR
+  have hRsz : R.sess.size = w.init.length := by simp [hR, hM2, hm2, hm1, hm0, setS, setPool, hI.size]
+  have hRpl : R.pools.length = 1 := by simp [hR, hM2, setPool, hpl2]
+  have hc' : ∀ j, (g.set i .q).c j = if j = i then .q else g.c j := fun j => Ghost.set_c g i .q j
+  have hrem : ∀ j, rem w (g.set i .q) j = rem w g j := by
+    intro j
+    simp only [rem, hc']
+    split_ifs with hj
+    · subst hj; rw [hc]
+    · rfl
+  have hadm : ∀ now j, adm w (g.set i .q) now j = adm w g now j := by
+    intro now j; simp only [adm, hrem, hc']
+    split_ifs with hj
+    · subst hj; rw [hc]
+    · rfl
+  -- every request is initial or waiting
+  have hall : ∀ j < w.init.length, g.c j = .s0 ∨ g.c j = .q := hI.s0 hex
+  have hall' : ∀ j < w.init.length, (g.set i .q).c j = .s0 ∨ (g.set i .q).c j = .q := by
+    intro j hj; rw [hc']; split_ifs; · exact Or.inr rfl
+    · exact hall j hj
+  have hrs : rest.Pairwise (· < ·) := by
+    have := hI.readyS0 hex; rw [hr] at this; exact (List.pairwise_cons.mp this).2
+  have hirest : ∀ k ∈ rest, i < k := by
+    have := hI.readyS0 hex; rw [hr] at this; exact (List.pairwise_cons.mp this).1
+  have hrnd : i ∉ rest := by
+    have := hI.ready; rw [hr] at this; exact (List.nodup_cons.mp this).1
+  refine
+    { size := hRsz
+      shape := ?_
+      serial := ?_
+      attr9 := ?_
+      attr10 := ?_
+      pools := hRpl
+      entries := by rw [hpst]; exact hI.entries
+      queue := ?_
+      queueMem := ?_
+      holders := by rw [hpst]; exact hI.holders
+      holdersMem := ?_
+      used := by rw [hpst]; exact hI.used
+      jobs := ?_
+      jobsA := ?_
+      jobsNodup := hI.jobsNodup
+      leftPos := ?_
+      ready := by show rest.Nodup; have := hI.ready; rw [hr] at this; exact (List.nodup_cons.mp this).2
+      readyMem := ?_
+      s0 := fun _ => hall'
+      s0order := ?_
+      readyS0 := fun _ => hrs
+      nowS0 := fun _ => hnow
+      delays := hI.delays
+      obs0 := ?_
+      obs1 := ?_
+      obs2 := ?_
+      before := ?_
+      pot := ?_
+      cert := ?_
+      latE := ?_ }
+  · intro j hj
+    rw [hget, hc']
+    split_ifs with hji
+    · exact ⟨rfl, hs, rfl⟩
+    · exact hI.shape j hj
+  · intro j hj; rw [hget]; split_ifs with hji
+    · subst hji; exact hser
+    · exact hI.serial j hj
+  · intro j hj; rw [hget]; split_ifs with hji
+    · subst hji; exact hI.attr9 j hj
+    · exact hI.attr9 j hj
+  · intro j hj; rw [hget]; split_ifs with hji
+    · subst hji; exact hI.attr10 j hj
+    · exact hI.attr10 j hj
+  · rw [hpst]
+    refine List.pairwise_append.mpr ⟨hI.queue, List.pairwise_singleton _ _, ?_⟩
+    intro a ha b hb
+    simp at hb; subst hb
+    obtain ⟨han, haq⟩ := (hI.queueMem a).mp ha
+    exact hI.s0order a han b hin haq hc
+  · intro j
+    rw [hpst]
+    simp only [List.mem_append, List.mem_singleton, hI.queueMem, hc']
+    by_cases hji : j = i
+    · subst hji; simp [hin]
+    · simp [hji]
+  · intro j
+    rw [hpst, hI.holdersMem, hc']
+    by_cases hji : j = i
+    · subst hji; simp [holding, hc]
+    · simp [hji]
+  · intro jb hjb
+    obtain ⟨a1, a2, a3, a4, a5⟩ := hI.jobs jb hjb
+    have hne : jb.owner ≠ i := fun he => by rw [he, hc] at a2; exact absurd a2 (by decide)
+    exact ⟨a1, by rw [hc', if_neg hne]; exact a2, a3, a4, a5⟩
+  · intro j hj hca
+    rw [hc'] at hca
+    by_cases hji : j = i
+    · rw [if_pos hji] at hca; exact absurd hca (by decide)
+    · rw [if_neg hji] at hca; exact hI.jobsA j hj hca
+  · intro j hj hca
+    rw [hc'] at hca
+    by_cases hji : j = i
+    · rw [if_pos hji] at hca; exact absurd hca (by decide)
+    · rw [if_neg hji] at hca; exact hI.leftPos j hj hca
+  · intro j
+    show j ∈ rest ↔ _
+    rw [hc']
+    have := hI.readyMem j
+    rw [hr, List.mem_cons] at this
+    by_cases hji : j = i
+    · subst hji; simp [hrnd]
+    · simp only [hji, if_false, false_or] at this ⊢; exact this
+  · intro j hj k hk hcj hck
+    rw [hc'] at hcj hck
+    by_cases hki : k = i
+    · rw [if_pos hki] at hck; exact absurd hck (by decide)
+    · rw [if_neg hki] at hck
+      have hkr : k ∈ rest := by
+        have := (hI.readyMem k).mpr ⟨hk, Or.inl hck⟩
+        rw [hr] at this; rcases List.mem_cons.mp this with h' | h'
+        · exact absurd h' hki
+        · exact h'
+      by_cases hji : j = i
+      · subst hji; exact hirest k hkr
+      · rw [if_neg hji] at hcj; exact hI.s0order j hj k hk hcj hck
+  · rw [show values R 0 = oo w i :: values m 0 by
+      simp only [values, hobs, List.filter_cons]; simp]
+    exact (hI.obs0.cons _).trans (perm_filter_add hin (fun j => decide (g.c j ≠ .s0))
+      (fun j => decide ((g.set i .q).c j ≠ .s0)) (oo w) (by simp [hc]) (by simp)
+      (fun j hj => by simp [hj])).symm
+  · rw [show values R 1 = vv w i :: values m 1 by
+      simp only [values, hobs, List.filter_cons]; simp]
+    exact (hI.obs1.cons _).trans (perm_filter_add hin (fun j => decide (g.c j ≠ .s0))
+      (fun j => decide ((g.set i .q).c j ≠ .s0)) (vv w) (by simp [hc]) (by simp)
+      (fun j hj => by simp [hj])).symm
+  · rw [show values R 2 = values m 2 by simp only [values, hobs, List.filter_cons]; simp]
+    have : (List.range w.init.length).filter (fun j => (g.set i .q).c j = .e) =
+        (List.range w.init.length).filter (fun j => g.c j = .e) := by
+      apply List.filter_congr; intro j _; rw [hc']; split_ifs with hji
+      · subst hji; simp [hc]
+      · rfl
+    rw [this]; exact hI.obs2
+  · intro a ha j hj hcj hca hca0
+    rcases hall' a ha with h' | h'
+    · exact absurd h' hca0
+    · exact absurd h' hca
+  · intro j hj hcj
+    simp only [hrem]
+    show 17501 * m.now + _ ≤ _
+    rw [hnow, Nat.mul_zero, Nat.zero_add]
+    apply Finset.sum_le_sum
+    intro k hk
+    apply Nat.mul_le_mul_left
+    have hkn : k < w.init.length := by simp at hk; exact hk.1
+    exact rem_le w g fun h' => (hI.leftPos k hkn h').2
+  · intro a ha hca hca0
+    rcases hall' a ha with h' | h'
+    · exact absurd h' hca0
+    · exact absurd h' hca
+  · intro a ha hce
+    rcases hall' a ha with h' | h' <;> rw [h'] at hce <;> exact absurd hce (by decide)
+
 end KongSvf
 end Papers
 end SerqLang
