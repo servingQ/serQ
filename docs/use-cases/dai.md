@@ -104,7 +104,7 @@ not_work_conserving  some iteration   witnessed at 93500.0000 (1060 iterations)
 token_rate           every iteration  holds (1060 iterations)
 ```
 
-The interpreter finds FasterTransformer's witness at the same instant as the Lean proof, 93 500 units. The load is $\lambda(m_p + m_d) = 1280/46750$, exactly $b_{\max}/t_{b_{\max}} = 128/4675$, the boundary of Theorem 2.
+The interpreter finds FasterTransformer's witness at the same instant as the Lean proof, 93 500 units. A request alone takes 990 × 4675 units (46.3 s), so 50 s shows the claims and not the contrast. Over 1000 s (`--horizon 100000000`) Sarathi ends 2 038 of 2 139 requests with about 98 live on average, and FasterTransformer ends 21 with about 1 059 live: it diverges where Sarathi does not. The load is $\lambda(m_p + m_d) = 1280/46750$, exactly $b_{\max}/t_{b_{\max}} = 128/4675$, the boundary of Theorem 2.
 
 ## What it leaves out
 

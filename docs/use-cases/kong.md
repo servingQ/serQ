@@ -102,14 +102,16 @@ that is $\mathrm{CR} \le \frac{3M-P}{M-P} = 1 + \frac{2}{1-\alpha}$, for every p
 `serq run`, seed 1, 200 requests, $M = 20000$, $P = 2500$ ($\alpha = 0.125$, bound $1 + 2/0.875 = 3.29$):
 
 ```
-observe  count         mean       95% CI    cv2          p99
-out        200     252.8300     ±21.9455  0.324     496.0000
-vol        200  304613.7000  ±43356.3686  0.645  895093.0000
-latency    200    1144.9800    ±507.1623  0.860    3760.0000
+observe  count         mean    cv2          p99
+out        200     252.8300  0.324     496.0000
+vol        200  304613.7000  0.645  895093.0000
+latency    200    1144.9800  0.860    3760.0000
 
 claim           kind    result
 queueing_bound  at end  holds
 ```
+
+The report's confidence intervals are left out: the 200 requests arrive together and are served in volume order, so their latencies are not independent. On this run the claim holds with room: its left side is 46 % of its right side, and TEL(SVF) is 1.33 times the larger of the two lower bounds on OPT, against the bound 3.29.
 
 ## What it leaves out
 

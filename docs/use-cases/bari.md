@@ -36,7 +36,7 @@ The paper models a GPU's batch time from how matrix multiplications are tiled. A
 | Assumption 3 | `set vp = bcol * floor(~uniform(1, vpmax + 1));` |
 | $N = \infty$ | no cycle counter |
 
-A prefill completes only in Prefill Mode, which runs only while fewer than $b_{col}$ requests decode, so $\lvert D\rvert$ never exceeds $b_{col}$. That is Assumption 4's bound on the active requests, without a pool. An earlier version of the program held a slot of a pool `slots { cap bcol; }` per request. It gave identical numbers (23 112 iterations and 3 999 completed runs at 20 req/s), and it is not needed.
+A prefill completes only in Prefill Mode, which runs only while fewer than $b_{col}$ requests decode, so $\lvert D\rvert$ never exceeds $b_{col}$. That is Assumption 4's bound on the active requests, without a pool.
 
 ## The key propositions
 
