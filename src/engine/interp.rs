@@ -2249,9 +2249,15 @@ impl<'p> Interp<'p> {
         let slot_computed = self.p.slot_computed;
         self.sessions[victim].attrs[slot_computed] = computed;
         self.detach(victim);
-        // unwind holds inner to `hi` (nested holds), then `hi` itself
+        // unwind holds inner to `hi` (nested holds), then `hi` itself. A
+        // preempted hold caches what it computed, its position, not its
+        // allocation: the scope's end counts a hold without a `growing` run
+        // as having computed what it holds, but a preemption cuts the body
+        // short (vLLM caches the full blocks of `num_computed_tokens`,
+        // kv_cache_manager.py:602-606, and frees the rest)
         while self.sessions[victim].holds.len() > hi {
-            let h = self.sessions[victim].holds.pop().unwrap();
+            let mut h = self.sessions[victim].holds.pop().unwrap();
+            h.grown = true;
             self.release_hold(victim, &h);
             // pop frames down to and including that hold's frame
             while let Some(f) = self.sessions[victim].frames.pop() {
