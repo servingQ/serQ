@@ -239,6 +239,29 @@ fn a_gauge_does_not_plan_an_iteration() {
     assert!(link_error(src).contains("may not read `budget_left"));
 }
 
+/// Nor does a step's budget: `budget_left` plans from the budget, so a
+/// budget that reads it, its own engine's or another's, recursed until the
+/// stack overflowed (#284).
+#[test]
+fn a_budget_does_not_read_budget_left() {
+    for (budget, chunk) in [
+        ("128 + budget_left(e)", "0"),
+        ("128", "budget_left(e)"),
+        ("128 + budget_left(f)", "0"),
+    ] {
+        let src = format!(
+            "stage e : step {{ budget {budget}; chunk {chunk}; cost 1; }}
+             stage f : step {{ budget 64; cost 1; }}
+             session {{ run e prefill (1); end; }} run {{ horizon 1; }}"
+        );
+        let e = link_error(&src);
+        assert!(
+            e.contains("a step's budget or chunk may not read `budget_left"),
+            "{budget}; {chunk}: {e}"
+        );
+    }
+}
+
 /// Inside a queue's entry an aggregate's index is the aggregate's, not a
 /// session attribute the entry would read from outside, also where a bare
 /// `k` argument parses as a reference.

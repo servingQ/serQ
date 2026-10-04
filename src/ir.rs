@@ -1154,6 +1154,13 @@ impl Validator<'_> {
                  evaluates the stage's budget and may draw"
                     .into(),
             ),
+            // budget_left plans an iteration from a budget: a budget read
+            // from it, this engine's or another's, plans from itself (#284)
+            CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Budget => Err(
+                "a step's budget or chunk may not read `budget_left(…)`: budget_left is planned \
+                 from a budget, so the two would wait on each other"
+                    .into(),
+            ),
             CExpr::Call(Fun::CachedIn, _) if m == Moment::Gauge => Err(
                 "`cachedin` is the session's own cached prefix, and a gauge has no session".into(),
             ),
