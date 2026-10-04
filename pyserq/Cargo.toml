@@ -15,3 +15,7 @@ crate-type = ["cdylib"]
 serq = { path = "..", features = ["python"] }
 pyo3 = { workspace = true, features = ["extension-module", "abi3-py39"] }
 rand = { workspace = true }
+
+# pyserq is published by maturin (wheels.yml), not by dist
+[package.metadata.dist]
+dist = false
