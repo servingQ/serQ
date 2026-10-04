@@ -17,18 +17,7 @@
   "observes": [
     "response"
   ],
-  "pools": [
-    {
-      "name": "slots",
-      "cap": 128.0,
-      "block": null,
-      "evict": "Lru",
-      "preempt": "None",
-      "queue": null,
-      "spill": null,
-      "admit_via": null
-    }
-  ],
+  "pools": [],
   "stages": [
     {
       "name": "E",
@@ -91,14 +80,33 @@
             "Cond": [
               {
                 "Binary": [
-                  "Lt",
+                  "Or",
                   {
-                    "Ctx": "Ndec"
+                    "Binary": [
+                      "Ge",
+                      {
+                        "Ctx": "Ndec"
+                      },
+                      {
+                        "Num": 128.0
+                      }
+                    ]
                   },
                   {
-                    "Ctx": "Nres"
+                    "Binary": [
+                      "Eq",
+                      {
+                        "Ctx": "Ndec"
+                      },
+                      {
+                        "Ctx": "Nres"
+                      }
+                    ]
                   }
                 ]
+              },
+              {
+                "Ctx": "Decoding"
               },
               {
                 "Unary": [
@@ -107,9 +115,6 @@
                     "Ctx": "Decoding"
                   }
                 ]
-              },
-              {
-                "Ctx": "Decoding"
               }
             ]
           },
@@ -229,46 +234,6 @@
     [],
     [
       {
-        "Hold": {
-          "pools": [
-            [
-              {
-                "base": 0,
-                "count": 1,
-                "index": null
-              },
-              {
-                "Num": 1.0
-              },
-              null
-            ]
-          ],
-          "reuse": null,
-          "body": 3,
-          "cache": null,
-          "lease": null
-        }
-      },
-      {
-        "Observe": [
-          0,
-          {
-            "Binary": [
-              "Sub",
-              {
-                "Ctx": "Now"
-              },
-              {
-                "Attr": 9
-              }
-            ]
-          }
-        ]
-      },
-      "End"
-    ],
-    [
-      {
         "Run": {
           "stage": {
             "base": 0,
@@ -295,7 +260,24 @@
           },
           "growing": null
         }
-      }
+      },
+      {
+        "Observe": [
+          0,
+          {
+            "Binary": [
+              "Sub",
+              {
+                "Ctx": "Now"
+              },
+              {
+                "Attr": 9
+              }
+            ]
+          }
+        ]
+      },
+      "End"
     ]
   ],
   "horizon": 100000000.0,
@@ -420,37 +402,10 @@
             "Binary": [
               "Eq",
               {
-                "Binary": [
-                  "Sub",
-                  {
-                    "Binary": [
-                      "Add",
-                      {
-                        "Call": [
-                          "Queued",
-                          [
-                            {
-                              "Pool": {
-                                "base": 0,
-                                "count": 1,
-                                "index": null
-                              }
-                            }
-                          ]
-                        ]
-                      },
-                      {
-                        "Ctx": "Nres"
-                      }
-                    ]
-                  },
-                  {
-                    "Ctx": "Ndec"
-                  }
-                ]
+                "Ctx": "Ndec"
               },
               {
-                "Num": 0.0
+                "Ctx": "Nres"
               }
             ]
           }

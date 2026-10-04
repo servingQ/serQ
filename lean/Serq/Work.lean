@@ -126,5 +126,60 @@ theorem work_conserving (hD : D.only = none) (hv : ∀ p, (pdef D p).viaEngine =
     m hr
   exact this.2
 
+/-- **`assign` under `serve only` is the greedy fill of the residents it
+serves.** With no job growing and nobody waiting for the engine, the
+iteration from job `idx` on is `fillIter` of the jobs `serve only` lets
+take tokens (read on the residents as they stand, which the iteration does
+not change). -/
+theorem assign_eq_fillIter_only (m : Machine) (hq : engineQueuesEmpty D m)
+    (hg : ∀ j ∈ m.jobs, j.growing = none) (pre0 : ℕ) :
+    ∀ (f idx left : ℕ) (acc : List (ℕ × ℕ)), m.jobs.length - idx < f →
+      assign D f { m with iter := acc } idx left pre0
+        = { m with iter := acc ++ fillIter D ((m.jobs.drop idx).filter (serves D m)) left } := by
+  intro f
+  induction f with
+  | zero => intro idx left acc h; omega
+  | succ f ih =>
+    intro idx left acc hf
+    rw [assign]
+    simp only
+    cases hj : m.jobs[idx]? with
+    | none =>
+      have hlen : m.jobs.length ≤ idx := by
+        simpa [List.getElem?_eq_none_iff] using hj
+      have hdrop : m.jobs.drop idx = [] := List.drop_eq_nil_of_le hlen
+      simp only [hdrop, List.filter_nil, fillIter, List.append_nil]
+      split_ifs
+      · have := admitVia_empty D { m with iter := acc } left hq
+        rw [this]
+      · rfl
+    | some j =>
+      have hmem : j ∈ m.jobs := List.mem_of_getElem? hj
+      have hlen : idx < m.jobs.length := by
+        rcases List.getElem?_eq_some_iff.mp hj with ⟨hl, _⟩; exact hl
+      have hdrop : m.jobs.drop idx = j :: m.jobs.drop (idx + 1) := by
+        rw [List.drop_eq_getElem_cons hlen]
+        congr 1
+        rcases List.getElem?_eq_some_iff.mp hj with ⟨_, he⟩; exact he
+      rw [hdrop]
+      have hsv : serves D { m with iter := acc } j = serves D m j := rfl
+      by_cases hs : serves D m j = true
+      · rw [List.filter_cons_of_pos hs, fillIter]
+        simp only [hsv, hs, Bool.not_true, Bool.false_eq_true, ↓reduceIte, hg j hmem]
+        by_cases h0 : min (wantOf D j) left = 0
+        · rw [if_pos h0, if_pos h0]
+          exact ih (idx + 1) left acc (by omega)
+        · rw [if_neg h0, if_neg h0]
+          by_cases h1 : left - min (wantOf D j) left = 0
+          · rw [if_pos h1, if_pos h1]
+          · rw [if_neg h1, if_neg h1]
+            have := ih (idx + 1) (left - min (wantOf D j) left) (acc ++ [(j.owner, min (wantOf D j) left)])
+              (by omega)
+            rw [this]
+            simp
+      · rw [List.filter_cons_of_neg hs]
+        simp only [hsv, hs, Bool.not_false, ↓reduceIte]
+        exact ih (idx + 1) left acc (by omega)
+
 end Exec
 end SerqLang

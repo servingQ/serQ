@@ -27,16 +27,13 @@ namespace BariRad
 def prog : Prog := [route|
   run 1 (x.attr 12);
   set 9 = x.now;
-  hold 0 (1) {
-    run 0 prefill (x.attr 10);
-    run 0 decode (x.attr 11);
-    done
-  };
+  run 0 prefill (x.attr 10);
+  run 0 decode (x.attr 11);
   observe 0 = x.now - (x.attr 9);
   stop]
 
 def deployment : Deployment :=
-  ⟨[⟨128, 1, false, none⟩], 128, 128, none, fun st => 4000 * ((st.tokens + 127) / 128) + 5 * st.tokens, some fun e => (if (e.decoders < e.residents) then (if (e.decoding ≠ 0) then 0 else 1) else e.decoding)⟩
+  ⟨[], 128, 128, none, fun st => 4000 * ((st.tokens + 127) / 128) + 5 * st.tokens, some fun e => (if ((e.decoders ≥ 128) ∨ (e.decoders = e.residents)) then e.decoding else (if (e.decoding ≠ 0) then 0 else 1))⟩
 
 /-- The workloads the claims of `bari_rad.sq` quantify over. -/
 def family (w : Workload) : Prop :=
@@ -52,7 +49,7 @@ def token_rate : Prop :=
 
 /-- `claim optimal_tiling` of `bari_rad.sq`. -/
 def optimal_tiling : Prop :=
-  EveryIteration deployment family prog fun r => ((r.stats.tokens = 128) ∨ ((((r.queued.getD 0 0) + r.residents) - r.stats.decoders) = 0))
+  EveryIteration deployment family prog fun r => ((r.stats.tokens = 128) ∨ (r.stats.decoders = r.residents))
 
 end BariRad
 
