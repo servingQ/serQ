@@ -18,12 +18,13 @@ use crate::engine::dist::Dist;
 use crate::engine::report::*;
 use crate::engine::stats::*;
 
-/// The tolerance of a comparison of amounts that sums of floats produce
-/// (units, tokens, work): below it, two amounts are equal.
-const EPS: f64 = 1e-9;
 use crate::frontend::ast::{BinOp, Preempt, RunMode, UnOp};
 use crate::frontend::link::*;
 use crate::ir::trace::Corpus;
+
+/// The tolerance of a comparison of amounts that sums of floats produce
+/// (units, tokens, work): below it, two amounts are equal.
+const EPS: f64 = 1e-9;
 
 // ------------------------------------------------------------ events ----
 
@@ -502,8 +503,9 @@ pub struct Interp<'p> {
     admit_budget: Option<(usize, f64)>,
     next_dead: u64,
     next_lease: u64,
-    /// Whether a preemption happened since the step stage's iteration
-    /// began to be scheduled (vLLM's `preempted_reqs`, scheduler.py:869).
+    /// Whether a preemption happened since the iteration being scheduled
+    /// began (vLLM's `preempted_reqs`, scheduler.py:869): set by `preempt`,
+    /// cleared where `start_iteration` begins to serve its residents.
     preempted: bool,
     next_adm: u64,
     next_release: u64,
