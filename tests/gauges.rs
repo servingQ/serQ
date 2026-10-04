@@ -89,6 +89,28 @@ fn an_aggregate_is_written_out() {
     );
 }
 
+/// A `let` the linker folds is a constant everywhere, an array size
+/// included: the parser, which sizes arrays, folds an aggregate as the
+/// linker writes it out (#274).
+#[test]
+fn an_aggregate_let_sizes_an_array() {
+    for (n, size) in [
+        ("sum j in 2 (1)", 2),
+        ("max j in 3 (j)", 2),
+        ("min j in 2 (3 - j)", 2),
+    ] {
+        let src = format!(
+            "let N = {n};
+             stage s[N] : delay;
+             workload {{ arrive batch(1); }}
+             session {{ run s[0] (N); end; }}
+             run {{ horizon 10; }}"
+        );
+        let p = compile_source(&src, &Overrides::default()).unwrap_or_else(|e| panic!("{n}: {e}"));
+        assert_eq!(p.stages.len(), size, "{n}");
+    }
+}
+
 #[test]
 fn a_gauge_reads_only_the_deployment() {
     for (gauge, want) in [

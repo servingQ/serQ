@@ -2658,8 +2658,30 @@ impl Parser {
                     self.const_value(b)?
                 }
             }
-            // the linker writes an aggregate out; the parser does not fold one
-            Expr::Over(..) => return None,
+            // folded as the linker writes it out, so that a `let` it folds
+            // sizes an array here too (#274)
+            Expr::Over(agg, j, n, body) => {
+                let count = self.const_value(n)?;
+                if !(count >= 1.0
+                    && count.fract() == 0.0
+                    && count <= crate::frontend::link::MAX_OVER as f64)
+                {
+                    return None;
+                }
+                let mut acc: Option<f64> = None;
+                for k in 0..count as usize {
+                    let mut term = (**body).clone();
+                    crate::frontend::link::bind_index(&mut term, j, k as f64);
+                    let x = self.const_value(&term)?;
+                    acc = Some(match (acc, agg) {
+                        (None, _) => x,
+                        (Some(a), Agg::Sum) => a + x,
+                        (Some(a), Agg::Max) => a.max(x),
+                        (Some(a), Agg::Min) => a.min(x),
+                    });
+                }
+                acc?
+            }
             // the linker's constant functions, so that a `let` the linker
             // folds the parser folds too (`let N = min(2, 3); queue D[N]`)
             Expr::Call(f, args) => {
