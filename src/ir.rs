@@ -1137,15 +1137,30 @@ impl Validator<'_> {
             } => {
                 // the header is read when the scheduler admits; `cache` when
                 // the session releases
+                // and re-read at every admission attempt, so a draw there
+                // would be a different number each time the scheduler
+                // looked (the rule of a queue key)
+                let no_draw = |e: &CExpr, what: &str| {
+                    if draws(e) {
+                        Err(format!(
+                            "a hold's {what} may not draw; sample into an attribute first"
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                };
                 for (r, u, reserve) in pools {
                     self.cref(r, np, "pool", m)?;
                     self.expr(u, Moment::Admit)?;
+                    no_draw(u, "units")?;
                     if let Some(f) = reserve {
                         self.expr(f, Moment::Admit)?;
+                        no_draw(f, "`reserve`")?;
                     }
                 }
                 if let Some(e) = reuse {
                     self.expr(e, Moment::Admit)?;
+                    no_draw(e, "`reuse`")?;
                 }
                 if let Some(e) = cache {
                     self.expr(e, m)?;

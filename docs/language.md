@@ -540,7 +540,10 @@ pending at the same instant (a scheduler step sees every arrival up to it).
 joins the queue of `m₁`. The unit expressions are evaluated *when the
 session is admitted* (the lecture's `[Admit]` evaluates `c(x_r)` then;
 observables such as the cache or an engine's budget change while a
-session waits). The head of a queue is admitted when every pool of its hold
+session waits), and re-evaluated at every attempt, so the units, `reserve`
+and `reuse` may not draw: a draw there would be a different number each
+time the scheduler looked; sample into an attribute first, as for a queue
+key. The head of a queue is admitted when every pool of its hold
 has room for its `reserve` units next to the allocated units (`used + r ≤ cap`,
 `r = max(u, reserve)`; cached prefixes never block). `reserve` is the clause
 for "do not let me in until there is room for this", which is separate from
@@ -830,12 +833,11 @@ refuses a loop that does not (`loop { set w = w + 1; }`, or a `run` on one
 arm of a `branch` only). What the linker cannot see — a `run` whose
 computed work is 0 on every pass, a `hold` that fits, grows past its pool
 and preempts itself — the run time catches: a session that executes a
-million statements at one instant, or an instant in which the ready
-sessions are served a thousand times per live session without time
-passing, ends the run with an error naming the session. Before these two
-rules such a program ran forever. Likewise an iteration that schedules
-tokens lasts a positive time: a `cost` that evaluates to 0 on it is an
-error (the step that only preempted may cost 0, above).
+million statements without blocking, or that becomes ready a thousand
+times at one instant, ends the run with an error naming it. Likewise an
+iteration that schedules tokens lasts a positive time: a `cost` that
+evaluates to 0 on it is an error (the step that only preempted may cost 0,
+above).
 
 **Lints.** Linking rejects two programs that are well formed and almost
 certainly not what their author meant. A `set` that reads live pool or stage
