@@ -2859,7 +2859,9 @@ impl<'p> Interp<'p> {
             .iter()
             .any(|&j| self.stages[st].jobs[&j].mode == RunMode::Prefill);
         self.preempted = false;
-        let mut attn = 0.0;
+        // each served prefill's attention work, summed over those still in
+        // the batch when the iteration is costed
+        let mut attn_by: Vec<(u64, f64)> = vec![];
         loop {
             let residents = self.serving_order(st, spec);
             let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
@@ -2920,22 +2922,44 @@ impl<'p> Interp<'p> {
                     return;
                 }
                 let need = pos + tokens - alloc;
-                if need > EPS && !self.grow(sid, pl, need) {
-                    // preempted (lifo): no longer a resident; waiting
-                    // (none): stalls as a resident. Either way, no tokens
-                    continue;
+                let grew = need <= EPS || self.grow(sid, pl, need);
+                // The growth may have preempted a resident this iteration has
+                // already served: under `serve by` the latest admitted, the
+                // victim, need not be the last served. It leaves the batch
+                // and its tokens return to the budget (vLLM's PRIORITY path,
+                // scheduler.py:779-797, which keeps the victim apart from the
+                // visiting order as serQ does).
+                let jobs = &self.stages[st].jobs;
+                assign.retain(|&(j, t)| {
+                    let keep = jobs.contains_key(&j);
+                    if !keep {
+                        left += t;
+                    }
+                    keep
+                });
+                if !grew {
+                    // waiting (none): stalls as a resident, no tokens, and the
+                    // next resident is served
+                    if matches!(self.sessions[sid].status, Status::Growing(..)) {
+                        continue;
+                    }
+                    // preempted itself (lifo): vLLM stops serving the running
+                    // requests for this step (scheduler.py:807-813, `break`).
+                    // In admission order the grower is then the last resident
+                    // anyway; under `serve by` it need not be.
+                    break;
                 }
                 if mode == RunMode::Prefill {
-                    attn += tokens * (pos + tokens / 2.0);
+                    attn_by.push((id, tokens * (pos + tokens / 2.0)));
                 }
-                // Exclusive-prefill decodes are candidates until waiting
-                // admission has finished: replacing them must not publish
-                // computed KV for work that will never run.
-                if !exclusive {
-                    self.advance_pos(sid, pl, tokens);
-                }
+                // The computed position advances when the iteration is
+                // settled, below, for the residents still in it: a resident
+                // preempted later in this iteration keeps the position it had
+                // (vLLM advances `num_computed_tokens` after `schedule`,
+                // scheduler.py `_update_after_schedule`), and exclusive-prefill
+                // decodes are candidates until waiting admission has finished.
             } else if mode == RunMode::Prefill {
-                attn += tokens * tokens / 2.0;
+                attn_by.push((id, tokens * tokens / 2.0));
             }
             if exclusive && mode == RunMode::Prefill {
                 // Keep any allocation made for displaced decodes, as RBLN
@@ -2951,15 +2975,13 @@ impl<'p> Interp<'p> {
                 break;
             }
         }
-        if exclusive {
-            // Growth can preempt an earlier candidate. Only surviving,
-            // selected jobs advance their holds' computed positions.
-            assign.retain(|(id, _)| self.stages[st].jobs.contains_key(id));
-            for &(id, tokens) in &assign {
-                let j = &self.stages[st].jobs[&id];
-                if let (Some(pl), Some(sid)) = (j.growing, j.owner) {
-                    self.advance_pos(sid, pl, tokens);
-                }
+        // Growth can preempt an earlier candidate. Only surviving, selected
+        // jobs advance their holds' computed positions.
+        assign.retain(|(id, _)| self.stages[st].jobs.contains_key(id));
+        for &(id, tokens) in &assign {
+            let j = &self.stages[st].jobs[&id];
+            if let (Some(pl), Some(sid)) = (j.growing, j.owner) {
+                self.advance_pos(sid, pl, tokens);
             }
         }
         // An iteration that scheduled nothing is no iteration, unless it
@@ -2975,6 +2997,11 @@ impl<'p> Interp<'p> {
             return;
         }
         let ntok: f64 = assign.iter().map(|a| a.1).sum();
+        let attn: f64 = attn_by
+            .iter()
+            .filter(|(j, _)| assign.iter().any(|a| a.0 == *j))
+            .map(|(_, a)| a)
+            .sum();
         let mut ndec = 0.0;
         let mut npre = 0.0;
         let mut kvb = 0.0;
