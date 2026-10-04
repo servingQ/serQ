@@ -558,8 +558,8 @@ theorem startIteration_inv {T R : ℕ} (hb : RateBound D T R) (m : Machine) (h :
   unfold startIteration
   simp only
   split
-  · obtain ⟨hs, htok⟩ := assign_same D m.preempts 100000 { m with iter := [] } 0 D.budget
-    set m' := assign D 100000 { m with iter := [] } 0 D.budget m.preempts with hm'
+  · obtain ⟨hs, htok⟩ := assign_same D m.preempts (m.jobs.length + 100000) { m with iter := [] } 0 D.budget
+    set m' := assign D (m.jobs.length + 100000) { m with iter := [] } 0 D.budget m.preempts with hm'
     have hn : m'.now = m.now := hs.now
     have hsv : m'.served = m.served := hs.served
     have hie : m'.iterEnd = none := hs.iterEnd.trans hi
@@ -648,8 +648,8 @@ theorem step_inv {T R : ℕ} (hb : RateBound D T R) (m : Machine) (h : RateInv T
       rcases hwho with ⟨q', h'⟩ | ⟨d, hdm, hdt⟩
       · exact (h.running t q' h').1
       · exact hdt ▸ h.future d hdm
-    simp only
     apply afterEvent_inv D hb
+    unfold handle; simp only
     split
     · rename_i hit
       -- the iteration ends: its tokens were counted at its start
@@ -688,8 +688,8 @@ theorem reach_inv {T R : ℕ} (hb : RateBound D T R) {w : Workload} {P : Prog} {
   induction hr with
   | start =>
     apply afterEvent_inv D hb
-    exact ⟨List.Pairwise.nil, fun d hd => by simp at hd, fun e q he => by simp at he,
-      fun _ => by simp, by simp⟩
+    exact ⟨List.Pairwise.nil, fun d hd => by simp [Exec.initial] at hd, fun e q he => by simp [Exec.initial] at he,
+      fun _ => by simp [Exec.initial], by simp [Exec.initial]⟩
   | step _ ih => exact step_inv D hb _ ih
 
 /-- **The engine's token rate.** If every batch within the budget lasts at

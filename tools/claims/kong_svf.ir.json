@@ -1,0 +1,397 @@
+{
+  "version": 11,
+  "attrs": [
+    "cached",
+    "serial",
+    "turn_no",
+    "new",
+    "out",
+    "think",
+    "more",
+    "forced",
+    "computed",
+    "s",
+    "o"
+  ],
+  "observes": [
+    "out",
+    "vol",
+    "latency"
+  ],
+  "pools": [
+    {
+      "name": "kv",
+      "cap": 20000.0,
+      "block": null,
+      "evict": "Lru",
+      "preempt": "None",
+      "queue": [
+        {
+          "Binary": [
+            "Add",
+            {
+              "Binary": [
+                "Mul",
+                {
+                  "Attr": 9
+                },
+                {
+                  "Attr": 10
+                }
+              ]
+            },
+            {
+              "Call": [
+                "Floor",
+                [
+                  {
+                    "Expr": {
+                      "Binary": [
+                        "Div",
+                        {
+                          "Binary": [
+                            "Add",
+                            {
+                              "Binary": [
+                                "Mul",
+                                {
+                                  "Attr": 10
+                                },
+                                {
+                                  "Attr": 10
+                                }
+                              ]
+                            },
+                            {
+                              "Attr": 10
+                            }
+                          ]
+                        },
+                        {
+                          "Num": 2.0
+                        }
+                      ]
+                    }
+                  }
+                ]
+              ]
+            }
+          ]
+        }
+      ],
+      "spill": null,
+      "admit_via": null
+    }
+  ],
+  "stages": [
+    {
+      "name": "engine",
+      "kind": {
+        "Step": {
+          "budget": {
+            "Num": 1000000.0
+          },
+          "cost": {
+            "Num": 1.0
+          },
+          "chunk": {
+            "Num": 0.0
+          },
+          "serve": {
+            "By": []
+          },
+          "memory": null
+        }
+      }
+    }
+  ],
+  "arrival": {
+    "Batch": 200
+  },
+  "trace": null,
+  "trace_ordered": false,
+  "init": 0,
+  "turn": 1,
+  "session": 2,
+  "blocks": [
+    [
+      {
+        "Set": [
+          9,
+          {
+            "Call": [
+              "Floor",
+              [
+                {
+                  "Expr": {
+                    "Sample": [
+                      "Uniform",
+                      [
+                        {
+                          "Num": 100.0
+                        },
+                        {
+                          "Num": 2000.0
+                        }
+                      ]
+                    ]
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "Set": [
+          10,
+          {
+            "Call": [
+              "Floor",
+              [
+                {
+                  "Expr": {
+                    "Sample": [
+                      "Uniform",
+                      [
+                        {
+                          "Num": 10.0
+                        },
+                        {
+                          "Num": 500.0
+                        }
+                      ]
+                    ]
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      }
+    ],
+    [],
+    [
+      {
+        "Observe": [
+          0,
+          {
+            "Attr": 10
+          }
+        ]
+      },
+      {
+        "Observe": [
+          1,
+          {
+            "Binary": [
+              "Add",
+              {
+                "Binary": [
+                  "Mul",
+                  {
+                    "Attr": 9
+                  },
+                  {
+                    "Attr": 10
+                  }
+                ]
+              },
+              {
+                "Call": [
+                  "Floor",
+                  [
+                    {
+                      "Expr": {
+                        "Binary": [
+                          "Div",
+                          {
+                            "Binary": [
+                              "Add",
+                              {
+                                "Binary": [
+                                  "Mul",
+                                  {
+                                    "Attr": 10
+                                  },
+                                  {
+                                    "Attr": 10
+                                  }
+                                ]
+                              },
+                              {
+                                "Attr": 10
+                              }
+                            ]
+                          },
+                          {
+                            "Num": 2.0
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "Hold": {
+          "pools": [
+            [
+              {
+                "base": 0,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Attr": 9
+                  },
+                  {
+                    "Attr": 10
+                  }
+                ]
+              },
+              null
+            ]
+          ],
+          "reuse": null,
+          "body": 3,
+          "cache": null,
+          "lease": null
+        }
+      },
+      {
+        "Observe": [
+          2,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      },
+      "End"
+    ],
+    [
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Decode",
+          "work": {
+            "Attr": 10
+          },
+          "growing": null
+        }
+      }
+    ]
+  ],
+  "horizon": 100000.0,
+  "warmup": 0.0,
+  "seed": 1,
+  "slot_cached": 0,
+  "slot_serial": 1,
+  "slot_turn": 2,
+  "slot_new": 3,
+  "slot_out": 4,
+  "slot_think": 5,
+  "slot_more": 6,
+  "slot_forced": 7,
+  "slot_computed": 8,
+  "hidden": [],
+  "claims": [
+    {
+      "name": "queueing_bound",
+      "given": {
+        "Binary": [
+          "Le",
+          {
+            "Binary": [
+              "Add",
+              {
+                "Attr": 9
+              },
+              {
+                "Attr": 10
+              }
+            ]
+          },
+          {
+            "Num": 2500.0
+          }
+        ]
+      },
+      "kind": "AtEnd",
+      "expr": {
+        "Binary": [
+          "Le",
+          {
+            "Binary": [
+              "Mul",
+              {
+                "Binary": [
+                  "Sub",
+                  {
+                    "Num": 20000.0
+                  },
+                  {
+                    "Num": 2500.0
+                  }
+                ]
+              },
+              {
+                "Binary": [
+                  "Sub",
+                  {
+                    "Agg": [
+                      "Total",
+                      2
+                    ]
+                  },
+                  {
+                    "Agg": [
+                      "Total",
+                      0
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Binary": [
+              "Mul",
+              {
+                "Num": 2.0
+              },
+              {
+                "Binary": [
+                  "Sub",
+                  {
+                    "Agg": [
+                      "PrefixTotal",
+                      1
+                    ]
+                  },
+                  {
+                    "Agg": [
+                      "Total",
+                      1
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

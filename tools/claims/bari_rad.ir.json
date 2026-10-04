@@ -1,0 +1,461 @@
+{
+  "version": 11,
+  "attrs": [
+    "cached",
+    "serial",
+    "turn_no",
+    "new",
+    "out",
+    "think",
+    "more",
+    "forced",
+    "computed",
+    "t0",
+    "vp",
+    "vd"
+  ],
+  "observes": [
+    "response"
+  ],
+  "pools": [
+    {
+      "name": "slots",
+      "cap": 128.0,
+      "block": null,
+      "evict": "Lru",
+      "preempt": "None",
+      "queue": null,
+      "spill": null,
+      "admit_via": null
+    }
+  ],
+  "stages": [
+    {
+      "name": "E",
+      "kind": {
+        "Step": {
+          "budget": {
+            "Num": 128.0
+          },
+          "cost": {
+            "Binary": [
+              "Add",
+              {
+                "Binary": [
+                  "Mul",
+                  {
+                    "Num": 4000.0
+                  },
+                  {
+                    "Call": [
+                      "Ceil",
+                      [
+                        {
+                          "Expr": {
+                            "Binary": [
+                              "Div",
+                              {
+                                "Ctx": "Ntok"
+                              },
+                              {
+                                "Num": 128.0
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              },
+              {
+                "Binary": [
+                  "Mul",
+                  {
+                    "Num": 5.0
+                  },
+                  {
+                    "Ctx": "Ntok"
+                  }
+                ]
+              }
+            ]
+          },
+          "chunk": {
+            "Num": 128.0
+          },
+          "serve": {
+            "By": []
+          },
+          "only": {
+            "Cond": [
+              {
+                "Binary": [
+                  "Lt",
+                  {
+                    "Ctx": "Ndec"
+                  },
+                  {
+                    "Ctx": "Nres"
+                  }
+                ]
+              },
+              {
+                "Unary": [
+                  "Not",
+                  {
+                    "Ctx": "Decoding"
+                  }
+                ]
+              },
+              {
+                "Ctx": "Decoding"
+              }
+            ]
+          },
+          "memory": null
+        }
+      }
+    }
+  ],
+  "arrival": {
+    "Poisson": 0.00002
+  },
+  "trace": null,
+  "trace_ordered": false,
+  "init": 0,
+  "turn": 1,
+  "session": 2,
+  "blocks": [
+    [
+      {
+        "Set": [
+          9,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      },
+      {
+        "Set": [
+          10,
+          {
+            "Binary": [
+              "Mul",
+              {
+                "Num": 128.0
+              },
+              {
+                "Call": [
+                  "Floor",
+                  [
+                    {
+                      "Expr": {
+                        "Sample": [
+                          "Uniform",
+                          [
+                            {
+                              "Num": 1.0
+                            },
+                            {
+                              "Binary": [
+                                "Add",
+                                {
+                                  "Num": 8.0
+                                },
+                                {
+                                  "Num": 1.0
+                                }
+                              ]
+                            }
+                          ]
+                        ]
+                      }
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "Set": [
+          11,
+          {
+            "Call": [
+              "Min",
+              [
+                {
+                  "Expr": {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Call": [
+                          "Floor",
+                          [
+                            {
+                              "Expr": {
+                                "Sample": [
+                                  "Exp",
+                                  [
+                                    {
+                                      "Num": 200.0
+                                    }
+                                  ]
+                                ]
+                              }
+                            }
+                          ]
+                        ]
+                      },
+                      {
+                        "Num": 1.0
+                      }
+                    ]
+                  }
+                },
+                {
+                  "Expr": {
+                    "Num": 512.0
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      }
+    ],
+    [],
+    [
+      {
+        "Hold": {
+          "pools": [
+            [
+              {
+                "base": 0,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Num": 1.0
+              },
+              null
+            ]
+          ],
+          "reuse": null,
+          "body": 3,
+          "cache": null,
+          "lease": null
+        }
+      },
+      {
+        "Observe": [
+          0,
+          {
+            "Binary": [
+              "Sub",
+              {
+                "Ctx": "Now"
+              },
+              {
+                "Attr": 9
+              }
+            ]
+          }
+        ]
+      },
+      "End"
+    ],
+    [
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Prefill",
+          "work": {
+            "Attr": 10
+          },
+          "growing": null
+        }
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Decode",
+          "work": {
+            "Attr": 11
+          },
+          "growing": null
+        }
+      }
+    ]
+  ],
+  "horizon": 100000000.0,
+  "warmup": 0.0,
+  "seed": 1,
+  "slot_cached": 0,
+  "slot_serial": 1,
+  "slot_turn": 2,
+  "slot_new": 3,
+  "slot_out": 4,
+  "slot_think": 5,
+  "slot_more": 6,
+  "slot_forced": 7,
+  "slot_computed": 8,
+  "hidden": [],
+  "claims": [
+    {
+      "name": "token_rate",
+      "kind": {
+        "EveryIteration": 0
+      },
+      "expr": {
+        "Binary": [
+          "Le",
+          {
+            "Binary": [
+              "Mul",
+              {
+                "Ctx": "Served"
+              },
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Num": 4000.0
+                  },
+                  {
+                    "Binary": [
+                      "Mul",
+                      {
+                        "Num": 5.0
+                      },
+                      {
+                        "Num": 128.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Binary": [
+              "Mul",
+              {
+                "Num": 128.0
+              },
+              {
+                "Ctx": "Now"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "optimal_tiling",
+      "given": {
+        "Binary": [
+          "Eq",
+          {
+            "Attr": 10
+          },
+          {
+            "Binary": [
+              "Mul",
+              {
+                "Num": 128.0
+              },
+              {
+                "Call": [
+                  "Floor",
+                  [
+                    {
+                      "Expr": {
+                        "Binary": [
+                          "Div",
+                          {
+                            "Attr": 10
+                          },
+                          {
+                            "Num": 128.0
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "kind": {
+        "EveryIteration": 0
+      },
+      "expr": {
+        "Binary": [
+          "Or",
+          {
+            "Binary": [
+              "Eq",
+              {
+                "Ctx": "Ntok"
+              },
+              {
+                "Num": 128.0
+              }
+            ]
+          },
+          {
+            "Binary": [
+              "Eq",
+              {
+                "Binary": [
+                  "Sub",
+                  {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Call": [
+                          "Queued",
+                          [
+                            {
+                              "Pool": {
+                                "base": 0,
+                                "count": 1,
+                                "index": null
+                              }
+                            }
+                          ]
+                        ]
+                      },
+                      {
+                        "Ctx": "Nres"
+                      }
+                    ]
+                  },
+                  {
+                    "Ctx": "Ndec"
+                  }
+                ]
+              },
+              {
+                "Num": 0.0
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,275 @@
+{
+  "version": 11,
+  "attrs": [
+    "cached",
+    "serial",
+    "turn_no",
+    "new",
+    "out",
+    "think",
+    "more",
+    "forced",
+    "computed",
+    "t0"
+  ],
+  "observes": [
+    "response"
+  ],
+  "pools": [],
+  "stages": [
+    {
+      "name": "engine",
+      "kind": {
+        "Step": {
+          "budget": {
+            "Num": 128.0
+          },
+          "cost": {
+            "Binary": [
+              "Add",
+              {
+                "Num": 1128.0
+              },
+              {
+                "Binary": [
+                  "Mul",
+                  {
+                    "Num": 3547.0
+                  },
+                  {
+                    "Call": [
+                      "Ceil",
+                      [
+                        {
+                          "Expr": {
+                            "Binary": [
+                              "Div",
+                              {
+                                "Ctx": "Ntok"
+                              },
+                              {
+                                "Num": 128.0
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "chunk": {
+            "Num": 0.0
+          },
+          "serve": {
+            "By": []
+          },
+          "only": {
+            "Cond": [
+              {
+                "Binary": [
+                  "Gt",
+                  {
+                    "Ctx": "Ndec"
+                  },
+                  {
+                    "Num": 0.0
+                  }
+                ]
+              },
+              {
+                "Ctx": "Decoding"
+              },
+              {
+                "Unary": [
+                  "Not",
+                  {
+                    "Ctx": "Decoding"
+                  }
+                ]
+              }
+            ]
+          },
+          "memory": null
+        }
+      }
+    }
+  ],
+  "arrival": {
+    "Renewal": {
+      "Num": 46750.0
+    }
+  },
+  "trace": null,
+  "trace_ordered": false,
+  "init": 0,
+  "turn": 1,
+  "session": 2,
+  "blocks": [
+    [
+      {
+        "Set": [
+          9,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      }
+    ],
+    [],
+    [
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Prefill",
+          "work": {
+            "Num": 290.0
+          },
+          "growing": null
+        }
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Decode",
+          "work": {
+            "Num": 990.0
+          },
+          "growing": null
+        }
+      },
+      {
+        "Observe": [
+          0,
+          {
+            "Binary": [
+              "Sub",
+              {
+                "Ctx": "Now"
+              },
+              {
+                "Attr": 9
+              }
+            ]
+          }
+        ]
+      },
+      "End"
+    ]
+  ],
+  "horizon": 5000000.0,
+  "warmup": 0.0,
+  "seed": 1,
+  "slot_cached": 0,
+  "slot_serial": 1,
+  "slot_turn": 2,
+  "slot_new": 3,
+  "slot_out": 4,
+  "slot_think": 5,
+  "slot_more": 6,
+  "slot_forced": 7,
+  "slot_computed": 8,
+  "hidden": [],
+  "claims": [
+    {
+      "name": "not_work_conserving",
+      "kind": {
+        "SomeIteration": 0
+      },
+      "expr": {
+        "Binary": [
+          "And",
+          {
+            "Binary": [
+              "Ge",
+              {
+                "Ctx": "Demand"
+              },
+              {
+                "Num": 128.0
+              }
+            ]
+          },
+          {
+            "Binary": [
+              "Lt",
+              {
+                "Ctx": "Ntok"
+              },
+              {
+                "Num": 128.0
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "token_rate",
+      "kind": {
+        "EveryIteration": 0
+      },
+      "expr": {
+        "Binary": [
+          "Le",
+          {
+            "Binary": [
+              "Mul",
+              {
+                "Ctx": "Served"
+              },
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Num": 1128.0
+                  },
+                  {
+                    "Binary": [
+                      "Div",
+                      {
+                        "Binary": [
+                          "Mul",
+                          {
+                            "Num": 3547.0
+                          },
+                          {
+                            "Num": 128.0
+                          }
+                        ]
+                      },
+                      {
+                        "Num": 128.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "Binary": [
+              "Mul",
+              {
+                "Num": 128.0
+              },
+              {
+                "Ctx": "Now"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
