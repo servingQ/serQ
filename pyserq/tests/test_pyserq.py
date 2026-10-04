@@ -57,7 +57,8 @@ stage svc[2] : fifo;
 workload { arrive poisson(1.5); }
 session {
   choose j in 2 by (holders(kv[j]));
-  hold kv[j] (~uniform(1, 20)) { run svc[j] (~exp(0.5)); }
+  set u = ~uniform(1, 20);
+  hold kv[j] (u) { run svc[j] (~exp(0.5)); }
   end;
 }
 gauge spread = max k in 2 (used(kv[k])) - min k in 2 (used(kv[k]));
