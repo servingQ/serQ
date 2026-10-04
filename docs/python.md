@@ -56,6 +56,5 @@ the dev number without committing it.
 Or build it from a checkout: `pip install maturin && maturin develop -m pyserq/Cargo.toml`.
 
 `pyserq/tests/test_pyserq.py` checks that pyserq gives what the CLI gives: the
-same report for the same program, overrides and seed, the samples
-`--dump` writes, and the figure `serq draw` prints for every example. CI
-runs it.
+same report for the same program, overrides and seed, and the samples
+`--dump` writes. CI runs it.
