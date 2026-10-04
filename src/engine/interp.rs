@@ -671,6 +671,20 @@ impl<'p> Interp<'p> {
 
     // ------------------------------------------------------- running ----
 
+    /// The next renewal gap, or a program error when it is not a positive
+    /// time (a draw the linker could not see, #269).
+    fn renewal_gap(&mut self, e: &CExpr) -> Option<f64> {
+        let gap = self.eval(e, &Ctx::default(), Which::Arrival);
+        if gap.is_finite() && gap > 0.0 {
+            return Some(gap);
+        }
+        self.error = Some(format!(
+            "`arrive renewal({})`: the interarrival time is {gap}, not a positive time",
+            self.p.show_expr(e)
+        ));
+        None
+    }
+
     /// Run to the horizon and return the report.
     pub fn run(mut self) -> Result<Report, String> {
         let p = self.p;
@@ -680,12 +694,9 @@ impl<'p> Interp<'p> {
         match &p.arrival {
             CArrival::Poisson(_) => self.at(0.0, Ev::Arrive),
             CArrival::Renewal(e) => {
-                let gap = self.eval(e, &Ctx::default(), Which::Arrival);
-                assert!(
-                    gap.is_finite() && gap > 0.0,
-                    "renewal interarrival must be positive and finite"
-                );
-                self.at(gap, Ev::Arrive);
+                if let Some(gap) = self.renewal_gap(e) {
+                    self.at(gap, Ev::Arrive);
+                }
             }
             &CArrival::Closed(n) | &CArrival::Batch(n) => {
                 for _ in 0..n {
@@ -807,12 +818,9 @@ impl<'p> Interp<'p> {
                         self.at(self.now + gap, Ev::Arrive);
                     }
                     CArrival::Renewal(e) if self.may_schedule_open_arrival() => {
-                        let gap = self.eval(&e, &Ctx::default(), Which::Arrival);
-                        assert!(
-                            gap.is_finite() && gap > 0.0,
-                            "renewal interarrival must be positive and finite"
-                        );
-                        self.at(self.now + gap, Ev::Arrive);
+                        if let Some(gap) = self.renewal_gap(&e) {
+                            self.at(self.now + gap, Ev::Arrive);
+                        }
                     }
                     _ => {}
                 }

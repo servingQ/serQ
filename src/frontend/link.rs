@@ -477,7 +477,20 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         Some(w) => {
             let a = match &w.arrive {
                 Arrival::Poisson(e) => CArrival::Poisson(lk.const_eval(e, "the poisson rate")?),
-                Arrival::Renewal(e) => CArrival::Renewal(lk.expr(e)?),
+                Arrival::Renewal(e) => {
+                    // a constant gap is known now; a drawn one is the run's
+                    // to check (#269)
+                    if !has_draw(e)
+                        && let Ok(gap) = lk.eval_const(e)
+                        && !(gap.is_finite() && gap > 0.0)
+                    {
+                        return Err(LinkError::new(format!(
+                            "`arrive renewal(…)`: an interarrival time must be positive, \
+                             and this one is {gap}"
+                        )));
+                    }
+                    CArrival::Renewal(lk.expr(e)?)
+                }
                 Arrival::Closed(e) => {
                     CArrival::Closed(lk.const_eval(e, "the closed population")? as usize)
                 }
