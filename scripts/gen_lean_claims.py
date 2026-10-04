@@ -13,13 +13,13 @@ each program the generator writes, from that IR and nothing else:
   arrival time (attribute `arrive`), then the `init` block's sets that do
   not draw;
 - `deployment`: the step engine and the pools;
-- `family`: the workloads the claims quantify over. Every number of
+- `family_<claim>`: the workloads a claim quantifies over. Every number of
   sessions up to the fragment's bound; each session's drawn `init`
   attributes any natural numbers (a superset of their support, so a claim
   proved over it holds for the program's distribution); the arrival times
   any natural numbers under `poisson`, `(i + 1) * gap` under a constant
-  `renewal`, 0 under `batch`; and the conjunction of the claims' `given`
-  clauses for each session. An existential claim (`some iteration`) needs
+  `renewal`, 0 under `batch`; and the claim's own `given` for each
+  session (one family per claim: a `given` restricts its claim only). An existential claim (`some iteration`) needs
   the family to be the support exactly, so it is refused when `init` draws;
 - one `Prop` per claim, `Exec.EveryIteration`, `Exec.SomeIteration` or
   `Exec.AtEnd` of the claim's expression.
@@ -40,8 +40,8 @@ CDIR = os.path.join(ROOT, "tools", "claims")
 OUT = os.path.join(ROOT, "lean", "Serq", "Claims.lean")
 PROVED = os.path.join(ROOT, "lean", "Serq", "ClaimsProved.lean")
 IR_VERSION = 11
-# the fragment's bound on the number of sessions: `admitHeads` admits at most
-# 1000 sessions per pool and round, and `assign` serves at most 100000 jobs
+# the fragment's bound on the number of sessions, under which the fuel of
+# `settleLoop`, `drain` and `admitHeads` is shown to suffice (Serq/Papers/Kong.lean)
 MAX_SESSIONS = 500
 
 
@@ -333,10 +333,10 @@ class Program:
             if "SomeIteration" in k:
                 if self.drawn:
                     raise Fragment(f"{c['name']}: an existential claim over a workload that draws")
-                return f"SomeIteration deployment family prog fun r => {body}"
-            return f"EveryIteration deployment family prog fun r => {body}"
+                return f"SomeIteration deployment family_{c['name']} prog fun r => {body}"
+            return f"EveryIteration deployment family_{c['name']} prog fun r => {body}"
         if k == "AtEnd":
-            return f"AtEnd deployment family prog fun m => {Expr(end_leaf).prop(c['expr'])}"
+            return f"AtEnd deployment family_{c['name']} prog fun m => {Expr(end_leaf).prop(c['expr'])}"
         raise Fragment(f"claim kind {k}")
 
 
@@ -452,13 +452,13 @@ def prog : Prog := {p.prog()}
 
 def deployment : Deployment :=
   {p.deployment()}
-
-/-- The workloads the claims of `{name}.sq` quantify over. -/
-def family (w : Workload) : Prop :=
-    {p.family(claims)}
 ''')
         for c in claims:
             out.append(f'''
+/-- The workloads `claim {c["name"]}` quantifies over: its own `given` only. -/
+def family_{c["name"]} (w : Workload) : Prop :=
+    {p.family([c])}
+
 /-- `claim {c["name"]}` of `{name}.sq`. -/
 def {c["name"]} : Prop :=
   {p.claim(c)}

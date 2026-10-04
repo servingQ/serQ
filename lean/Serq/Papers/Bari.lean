@@ -361,7 +361,7 @@ theorem rad_handle (m : Machine) (t q : ℕ) (h : R m) : R (handle m t q) := by
       · exact h
     · exact h
 
-theorem rad_initial (w : Workload) (hw : Claims.BariRad.family w) :
+theorem rad_initial (w : Workload) (hw : Claims.BariRad.family_optimal_tiling w) :
     R (Exec.initial Dr w.init.length w.attr Pr w) := by
   refine R.mk' (fun j hj => by simp [Exec.initial] at hj) (by simp [Exec.initial])
     (fun s hs => ?_) (fun s hs => ?_) (fun e he => by simp [Exec.initial] at he)

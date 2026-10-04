@@ -333,12 +333,15 @@ fn claim_ir_files_are_current() {
 #[test]
 fn paper_claims_hold() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    for name in [
-        "dai_sarathi",
-        "dai_fastertransformer",
-        "bari_rad",
-        "kong_svf",
-    ] {
+    let mut names: Vec<_> = std::fs::read_dir(root.join("examples/papers"))
+        .unwrap()
+        .filter_map(|e| {
+            let p = e.unwrap().path();
+            (p.extension()? == "sq").then(|| p.file_stem().unwrap().to_string_lossy().into_owned())
+        })
+        .collect();
+    names.sort();
+    for name in names {
         let src = std::fs::read_to_string(root.join(format!("examples/papers/{name}.sq"))).unwrap();
         let r = run(&src);
         for c in &r.claims {

@@ -64,7 +64,7 @@ The generated statement (`lean/Serq/Claims.lean`):
 
 ```lean
 def queueing_bound : Prop :=
-  AtEnd deployment family prog fun m =>
+  AtEnd deployment family_queueing_bound prog fun m =>
     ((17500 * ((Exec.total m 2) - (Exec.total m 0))) ≤ (2 * ((Exec.prefixTotal (Exec.values m 1)) - (Exec.total m 1))))
 ```
 

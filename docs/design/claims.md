@@ -65,7 +65,7 @@ workloads, and one `Prop` per claim, as defined in `Serq/Claim.lean`:
 `Exec.start`. The family is the workload's support, widened where that is
 sound. There are up to 500 sessions. An attribute `init` draws is any
 natural number, and the arrival times under `poisson` are any. A constant
-`renewal` gives the program's times, and `given` restricts every session.
+`renewal` gives the program's times, and the claim's own `given` restricts every session. Each claim has its own family (`family_<claim>`), so one claim's `given` never restricts another's statement.
 Widening proves more, so it is sound for `every` and `at end`. A `some`
 claim needs the support itself, so the generator refuses one whose workload
 draws. The bound of 500 is where the fragment's fuel (`admitHeads`,

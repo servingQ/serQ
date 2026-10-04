@@ -35,21 +35,28 @@ def prog : Prog := [route|
 def deployment : Deployment :=
   ⟨[], 128, 128, none, fun st => 4000 * ((st.tokens + 127) / 128) + 5 * st.tokens, some fun e => (if ((e.decoders ≥ 128) ∨ (e.decoders = e.residents)) then e.decoding else (if (e.decoding ≠ 0) then 0 else 1))⟩
 
-/-- The workloads the claims of `bari_rad.sq` quantify over. -/
-def family (w : Workload) : Prop :=
+/-- The workloads `claim token_rate` quantifies over: its own `given` only. -/
+def family_token_rate (w : Workload) : Prop :=
+    w.init.length ≤ 500 ∧
+    w.turns = [] ∧
+    w.turnSlot = none ∧
+    w.computedSlot = some 8
+
+/-- `claim token_rate` of `bari_rad.sq`. -/
+def token_rate : Prop :=
+  EveryIteration deployment family_token_rate prog fun r => ((r.served * 4640) ≤ (128 * r.start))
+
+/-- The workloads `claim optimal_tiling` quantifies over: its own `given` only. -/
+def family_optimal_tiling (w : Workload) : Prop :=
     w.init.length ≤ 500 ∧
     w.turns = [] ∧
     w.turnSlot = none ∧
     w.computedSlot = some 8 ∧
     ∀ i < w.init.length, (((w.attr i 10) = (128 * ((w.attr i 10) / 128))))
 
-/-- `claim token_rate` of `bari_rad.sq`. -/
-def token_rate : Prop :=
-  EveryIteration deployment family prog fun r => ((r.served * 4640) ≤ (128 * r.start))
-
 /-- `claim optimal_tiling` of `bari_rad.sq`. -/
 def optimal_tiling : Prop :=
-  EveryIteration deployment family prog fun r => ((r.stats.tokens = 128) ∨ (r.stats.decoders = r.residents))
+  EveryIteration deployment family_optimal_tiling prog fun r => ((r.stats.tokens = 128) ∨ (r.stats.decoders = r.residents))
 
 end BariRad
 
@@ -69,8 +76,8 @@ def prog : Prog := [route|
 def deployment : Deployment :=
   ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), some fun e => (if (e.decoders > 0) then e.decoding else (if (e.decoding ≠ 0) then 0 else 1))⟩
 
-/-- The workloads the claims of `dai_fastertransformer.sq` quantify over. -/
-def family (w : Workload) : Prop :=
+/-- The workloads `claim not_work_conserving` quantifies over: its own `given` only. -/
+def family_not_work_conserving (w : Workload) : Prop :=
     w.init.length ≤ 500 ∧
     w.turns = [] ∧
     w.turnSlot = none ∧
@@ -79,11 +86,19 @@ def family (w : Workload) : Prop :=
 
 /-- `claim not_work_conserving` of `dai_fastertransformer.sq`. -/
 def not_work_conserving : Prop :=
-  SomeIteration deployment family prog fun r => ((r.demand ≥ 128) ∧ (r.stats.tokens < 128))
+  SomeIteration deployment family_not_work_conserving prog fun r => ((r.demand ≥ 128) ∧ (r.stats.tokens < 128))
+
+/-- The workloads `claim token_rate` quantifies over: its own `given` only. -/
+def family_token_rate (w : Workload) : Prop :=
+    w.init.length ≤ 500 ∧
+    w.turns = [] ∧
+    w.turnSlot = none ∧
+    w.computedSlot = some 8 ∧
+    ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
 
 /-- `claim token_rate` of `dai_fastertransformer.sq`. -/
 def token_rate : Prop :=
-  EveryIteration deployment family prog fun r => ((r.served * 4675) ≤ (128 * r.start))
+  EveryIteration deployment family_token_rate prog fun r => ((r.served * 4675) ≤ (128 * r.start))
 
 end DaiFastertransformer
 
@@ -103,8 +118,8 @@ def prog : Prog := [route|
 def deployment : Deployment :=
   ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), none⟩
 
-/-- The workloads the claims of `dai_sarathi.sq` quantify over. -/
-def family (w : Workload) : Prop :=
+/-- The workloads `claim work_conserving` quantifies over: its own `given` only. -/
+def family_work_conserving (w : Workload) : Prop :=
     w.init.length ≤ 500 ∧
     w.turns = [] ∧
     w.turnSlot = none ∧
@@ -113,11 +128,19 @@ def family (w : Workload) : Prop :=
 
 /-- `claim work_conserving` of `dai_sarathi.sq`. -/
 def work_conserving : Prop :=
-  EveryIteration deployment family prog fun r => ((r.demand < 128) ∨ (r.stats.tokens = 128))
+  EveryIteration deployment family_work_conserving prog fun r => ((r.demand < 128) ∨ (r.stats.tokens = 128))
+
+/-- The workloads `claim token_rate` quantifies over: its own `given` only. -/
+def family_token_rate (w : Workload) : Prop :=
+    w.init.length ≤ 500 ∧
+    w.turns = [] ∧
+    w.turnSlot = none ∧
+    w.computedSlot = some 8 ∧
+    ∀ i < w.init.length, w.attr i 10 = (i + 1) * 46750
 
 /-- `claim token_rate` of `dai_sarathi.sq`. -/
 def token_rate : Prop :=
-  EveryIteration deployment family prog fun r => ((r.served * 4675) ≤ (128 * r.start))
+  EveryIteration deployment family_token_rate prog fun r => ((r.served * 4675) ≤ (128 * r.start))
 
 end DaiSarathi
 
@@ -139,8 +162,8 @@ def prog : Prog := [route|
 def deployment : Deployment :=
   ⟨[⟨20000, 1, false, some fun x => ((x.attr 9) * (x.attr 10)) + ((((x.attr 10) * (x.attr 10)) + (x.attr 10)) / 2)⟩], 1000000, 0, none, fun _ => 1, none⟩
 
-/-- The workloads the claims of `kong_svf.sq` quantify over. -/
-def family (w : Workload) : Prop :=
+/-- The workloads `claim queueing_bound` quantifies over: its own `given` only. -/
+def family_queueing_bound (w : Workload) : Prop :=
     w.init.length ≤ 500 ∧
     w.turns = [] ∧
     w.turnSlot = none ∧
@@ -149,7 +172,7 @@ def family (w : Workload) : Prop :=
 
 /-- `claim queueing_bound` of `kong_svf.sq`. -/
 def queueing_bound : Prop :=
-  AtEnd deployment family prog fun m => ((17500 * ((Exec.total m 2) - (Exec.total m 0))) ≤ (2 * ((Exec.prefixTotal (Exec.values m 1)) - (Exec.total m 1))))
+  AtEnd deployment family_queueing_bound prog fun m => ((17500 * ((Exec.total m 2) - (Exec.total m 0))) ≤ (2 * ((Exec.prefixTotal (Exec.values m 1)) - (Exec.total m 1))))
 
 end KongSvf
 

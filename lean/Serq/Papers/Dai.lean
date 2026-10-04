@@ -55,7 +55,7 @@ and nothing grows, so each batch is `min b_max demand` (`Exec.work_conserving`).
 theorem work_conserving : Claims.DaiSarathi.work_conserving := by
   intro w hw m hr hs
   have := Exec.work_conserving Claims.DaiSarathi.deployment rfl (fun p => by
-      simp [pdef, Claims.DaiSarathi.deployment]) Claims.DaiSarathi.family
+      simp [pdef, Claims.DaiSarathi.deployment]) Claims.DaiSarathi.family_work_conserving
     Claims.DaiSarathi.prog (by decide) w hw m hr hs
   change m.last.stats.tokens = min 128 m.last.demand at this
   omega

@@ -61,12 +61,12 @@ claim optimal_tiling given (vp == bcol * floor(vp / bcol)):
 The generated statement (`lean/Serq/Claims.lean`):
 
 ```lean
-def family (w : Workload) : Prop :=
+def family_optimal_tiling (w : Workload) : Prop :=
     w.init.length ≤ 500 ∧ w.turns = [] ∧ w.turnSlot = none ∧ w.computedSlot = some 8 ∧
     ∀ i < w.init.length, (((w.attr i 10) = (128 * ((w.attr i 10) / 128))))
 
 def optimal_tiling : Prop :=
-  EveryIteration deployment family prog fun r => ((r.stats.tokens = 128) ∨ (r.stats.decoders = r.residents))
+  EveryIteration deployment family_optimal_tiling prog fun r => ((r.stats.tokens = 128) ∨ (r.stats.decoders = r.residents))
 ```
 
 The arrival times are any natural numbers (the program's `poisson`), and the output lengths any. The proofs are in `lean/Serq/Papers/Bari.lean`.

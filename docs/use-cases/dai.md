@@ -79,7 +79,7 @@ claim not_work_conserving: some iteration of engine (demand >= bmax && tokens < 
 
 ```lean
 def work_conserving : Prop :=
-  EveryIteration deployment family prog fun r => ((r.demand < 128) ∨ (r.stats.tokens = 128))
+  EveryIteration deployment family_work_conserving prog fun r => ((r.demand < 128) ∨ (r.stats.tokens = 128))
 ```
 
 `EveryIteration D W P q` says: for every workload `w` in the family `W` and every machine `m` reached by a run of `P` on `w`, event by event (`Exec.Reach`), if an iteration is running then its record satisfies `q`. The family is any number of sessions (up to 500) with the program's arrival times. `lean/Serq/ClaimsProved.lean`, also generated, checks that each claim has its proof in `lean/Serq/Papers/Dai.lean`.

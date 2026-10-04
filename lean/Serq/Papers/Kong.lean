@@ -2257,7 +2257,7 @@ theorem reach_bnd {w : Workload} (hF : Fam w) {m : Machine} (hr : Reach Dk w Pk 
 
 /-! ### The claim -/
 
-theorem fam_of_family {w : Workload} (hw : Claims.KongSvf.family w) : Fam w := by
+theorem fam_of_family {w : Workload} (hw : Claims.KongSvf.family_queueing_bound w) : Fam w := by
   obtain ⟨h1, -, -, h4, h5⟩ := hw
   exact ⟨h1, h4, fun i hi => (h5 i hi).1, fun i hi => (h5 i hi).2⟩
 
@@ -2348,7 +2348,7 @@ every path that ends, against every schedule of the same requests that is
 feasible in the paper's model (start times `x`, memory `s + t - x` per active
 request, at most `M` at every step), SVF's total latency is within
 `(3M - P) / (M - P) = 1 + 2 / (1 - α)` of the schedule's, `α = P / M`. -/
-theorem competitive_ratio {w : Workload} (hw : Claims.KongSvf.family w) {m : Machine}
+theorem competitive_ratio {w : Workload} (hw : Claims.KongSvf.family_queueing_bound w) {m : Machine}
     (hr : Reach Claims.KongSvf.deployment w Claims.KongSvf.prog m) (hend : Ended m)
     (x : ℕ → ℕ) (hx : KongMath.Feasible (ss w) (oo w) x w.init.length 20000) :
     (20000 - 2500) * Exec.total m 2 ≤ (3 * 20000 - 2500) * KongMath.TEL (oo w) x w.init.length := by
