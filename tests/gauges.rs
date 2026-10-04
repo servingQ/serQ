@@ -109,6 +109,14 @@ fn an_aggregate_let_sizes_an_array() {
         let p = compile_source(&src, &Overrides::default()).unwrap_or_else(|e| panic!("{n}: {e}"));
         assert_eq!(p.stages.len(), size, "{n}");
     }
+    // nested aggregates share the program's budget of terms, in the parser
+    // as in the linker: the parser folded 64³ terms, and a nest of three
+    // counts of 4096 ran for minutes before the linker could say so
+    let e = link_error(
+        "let N = sum i in 64 (sum j in 64 (sum k in 64 (0))) + 1;
+         session { end; } run { horizon 1; }",
+    );
+    assert!(e.contains("terms, at most 4096"), "{e}");
 }
 
 #[test]

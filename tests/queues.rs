@@ -73,6 +73,30 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
     );
 }
 
+/// A family sized by an aggregate `let` is the family of its value: the
+/// parser folds it as the linker writes it out (#274).
+#[test]
+fn a_queue_family_sized_by_an_aggregate() {
+    let queue = |n: &str| {
+        format!(
+            "let N = {n};
+             queue gw : gateway {{ route {{ E[j].decode (prompt); observe done = now; }} }}
+             queue E[N] : decode {{
+               pool kv {{ cap 100; block 16; admit via E; }}
+               serve step {{ cost 1; memory kv; }}
+               decode (prompt) {{ hold kv (prompt) {{ prefill (prompt) growing kv; }} }}
+             }}
+             {WORKLOAD}"
+        )
+    };
+    let ir = |src: &str| {
+        serq::compile_source(src, &Overrides::default())
+            .unwrap()
+            .to_json()
+    };
+    assert_eq!(ir(&queue("max i in 2 (i + 1)")), ir(&queue("2")));
+}
+
 /// `from P[i]` is the pool `P`'s entry leases; a link's `transfer … from … to
 /// (m)` is `run; load; release`, the time the link's own; an entry's `set` is
 /// the queue's attribute; `mark x` is `set Q.x = now`, read as `Q.x`.
