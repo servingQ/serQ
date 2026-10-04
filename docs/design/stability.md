@@ -6,6 +6,11 @@ chain: positive recurrence, or an expectation over Poisson arrivals. Mathlib
 has neither Foster–Lyapunov nor fluid limits, and building a path measure for
 `Exec` is a project of its own. This design reaches the same statements by
 three steps, each of which is useful without the next (#305).
+What the result does not yet say: the states keep the absolute clock and
+every ended session (`inject` appends, nothing removes), so `F` is an
+infinite set and the chain is not irreducible as it stands, and that finite
+return times to a small set make an irreducible chain positive recurrent is
+not proved.
 
 ## 1. Pathwise stability, as a claim
 
@@ -45,13 +50,39 @@ $\varepsilon h_n \le V$ by induction (`drift_bound`), hence a finite expected
 hitting time (`hitTime_le`) and a finite expected return time to $F$
 (`positive_recurrent_of_drift`).
 
-## 3. The bridge (open)
+## 3. The bridge
 
-A kernel of a program: one slot's arrivals injected into `Exec`, on states
-taken up to the absolute clock (`docs/design/stochastic-model.md`,
-Proposition 4(iii)). Step 1's potential is then the Lyapunov function of
-step 2, and Dai Theorem 2(b) and Bari Theorem 2 follow in their own form.
-Kong 3.4–3.5 also need an expectation inequality (Harris), and come last.
+`lean/Serq/Chain.lean` makes a program a kernel. A slot is one iteration of
+the engine: `k ≤ K` sessions arrive with probability `p k`
+(`Exec.inject` appends each, ready to run), and the engine moves to its next
+iteration (`Exec.slot`). `Exec` itself is unchanged. The states are the
+machines reached from the empty one, so a drift needs to hold only where the
+program can be.
+
+For Dai et al. (`lean/Serq/Papers/DaiStable.lean`) the Lyapunov function is
+the backlog, and `F` is the set where the batch is not full or the engine
+idle. Outside `F` a slot changes the backlog by exactly `1280 k − 128`, and
+inside it the backlog is below `128 · 1280` (work conservation). Below
+capacity Foster's criterion bounds the expected time to reach `F` by
+`backlog / ε`. The phase term of step 1 is not needed: random arrivals are
+counted per slot, not on a clock.
+
+At most 10 000 sessions arrive in a slot. That is the proof's bound, not the
+semantics': the proof follows one round of `Exec.drain`, which runs 10 000
+sessions. The fuel of an instant itself runs out near 10⁷ arrivals
+(`Exec.settle` repeats the round 1 000 times), and only beyond it would some
+arrivals still be ready, not yet jobs, when the slot ends, and the drift be
+false. The claims' families stop at 500 sessions for the same kind of
+reason.
+
+A slot is one iteration, not one unit of the paper's time, and an idle slot
+lets no time pass. The capacity condition `1280 · E[k] < 128` is still the
+paper's `λ (v_p + v_d) < b_max / t_{b_max}`: outside `F` every iteration is
+full and lasts `t_{b_max} = c + a`, so the arrivals in a slot are those of
+`t_{b_max}` units, `E[k] = λ t_{b_max}`.
+
+Bari Theorem 2 is next, with the arriving requests' lengths drawn too. Kong
+3.4–3.5 also need an expectation inequality (Harris).
 
 ## Self-critique
 
