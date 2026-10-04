@@ -575,7 +575,16 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     assert!(net.has_edge(pf, eg));
     assert!(net.has_edge(ing, d));
     assert!(!net.has_edge(eg, ing), "held at once, not passed in turn");
-    assert!(net.has_edge(pf, d), "the KV is already on the decoder");
+    // `branch (!transferred)` right after `set transferred = 0`: the read is
+    // skipped only when a preempted request runs its hold again, at D
+    assert!(!net.has_edge(pf, d), "a remote request always reads");
+    assert!(
+        net.edges
+            .iter()
+            .find(|e| e.from == pf && e.to == eg)
+            .is_some_and(|e| e.label.is_none()),
+        "a decided guard labels nothing"
+    );
     let out: Vec<_> = net.edges.iter().filter(|e| e.to == End::Exit).collect();
     assert_eq!(out.len(), 1);
     assert_eq!((out[0].from, out[0].label.as_deref()), (d, None));
@@ -1261,39 +1270,47 @@ fn a_flows_stations_are_neighbours_in_the_row() {
 }
 
 /// An arrow forward past other stations goes below the row, not through
-/// them: `llmd_nixl_pull.sq`'s `P -> D`, for a request whose KV is already
-/// on the decoder, passes `setup` and the two NICs.
+/// them: `llmd_nixl_pull.sq`'s router sends a local request straight to the
+/// decoder, past the prefiller and the two NICs.
 #[test]
 fn an_arrow_past_stations_goes_below_the_row() {
     let p = program("llmd_nixl_pull");
     let net = deployment::project(&p);
     let f = deployment::layout(&p, &net);
+    let End::Node(r) = decision(&net).expect("the router") else {
+        unreachable!()
+    };
     let (pf, d) = (
         net.node_of(stage(&p, "P")).unwrap(),
         net.node_of(stage(&p, "D")).unwrap(),
     );
-    let (rp, rd) = (f.stations()[pf].0, f.stations()[d].0);
+    let st = f.stations();
+    let (rr, rp, rd) = (st[r].0, st[pf].0, st[d].0);
     let row_bottom = rp.bottom();
     let through = f.items.iter().any(|it| match it {
         serq::view::figure::Item::Edge { pts, .. } => {
-            pts.len() == 2 && (pts[0].x - rp.right()).abs() < 1e-9 && (pts[1].x - rd.x).abs() < 1e-9
+            pts.len() == 2 && (pts[0].x - rr.right()).abs() < 1e-9 && (pts[1].x - rd.x).abs() < 1e-9
         }
         _ => false,
     });
-    assert!(!through, "no straight arrow from P to D along the row");
-    // leaving P's bottom at 0.625 and entering D's at 0.5, in a solid line:
-    // no other edge of the figure has those ends
+    assert!(
+        !through,
+        "no straight arrow from the router to D along the row"
+    );
+    // leaving the router's bottom and entering D's, in a solid line below
+    // the row
     let below = f.items.iter().any(|it| match it {
         serq::view::figure::Item::Edge { pts, style, .. } => {
             *style == serq::view::figure::EdgeStyle::Flow
                 && pts.len() == 4
-                && (pts[0].x - (rp.x + rp.w * 0.625)).abs() < 1e-9
+                && pts[0].x > rr.x
+                && pts[0].x < rr.right()
                 && pts[1].y > row_bottom
                 && (pts[3].x - (rd.x + rd.w * 0.5)).abs() < 1e-9
         }
         _ => false,
     });
-    assert!(below, "P -> D in a lane below");
+    assert!(below, "router -> D in a lane below");
 }
 
 /// The order a flow imposes decides which way an arrow points: `v -> u`

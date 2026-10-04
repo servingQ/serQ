@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ir::{CArg, CArrival, CExpr, CRef, CStageKind, CStmt, Program, RunMode};
+use crate::ir::{CArg, CArrival, CExpr, CRef, CStageKind, CStmt, Program, RunMode, UnOp};
 use crate::view::figure::{
     Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
@@ -269,6 +269,9 @@ struct Walker<'a> {
     last_flow: Option<usize>,
     /// Per block being probed, the ends it first reaches.
     probes: Vec<Vec<End>>,
+    /// Attributes this path has set to a constant, by slot. A guard that
+    /// reads only these is decided, and only its arm is drawn.
+    known: Vec<(usize, f64)>,
 }
 
 impl Walker<'_> {
@@ -526,6 +529,15 @@ impl Walker<'_> {
                     }
                 }
                 CStmt::Branch(c, t, e) => {
+                    // A guard this path has decided (`set transferred = 0;`
+                    // before `branch (!transferred)`) takes one arm. The
+                    // other is taken only when a hold is executed again
+                    // after a preemption, which returns to a station the
+                    // session is already at: no flow between stations.
+                    if let Some(v) = self.decided(&c) {
+                        self.walk(if v != 0.0 { t } else { e });
+                        continue;
+                    }
                     // The guard labels the first edge the arm takes. An arm
                     // with no station of its own contributes no label, which
                     // is what keeps a chain of guards from multiplying out.
@@ -536,15 +548,19 @@ impl Walker<'_> {
                     // after the branch a pool is held only where both arms
                     // still hold it
                     let held = self.holds.clone();
+                    let known = self.known.clone();
                     self.frontier = saved.clone();
                     self.arm = Some(self.p.show_guard(&c));
                     self.walk(t);
                     let then_out = std::mem::take(&mut self.frontier);
                     let then_held = std::mem::replace(&mut self.holds, held);
+                    let then_known = std::mem::replace(&mut self.known, known);
                     self.frontier = saved;
                     self.arm = Some("else".into());
                     self.walk(e);
                     self.holds.retain(|h| then_held.contains(h));
+                    // after the branch, what both arms leave the same
+                    self.known.retain(|k| then_known.contains(k));
                     let mut out = then_out;
                     out.append(&mut self.frontier);
                     dedupe(&mut out);
@@ -556,7 +572,9 @@ impl Walker<'_> {
                     // `end`, so a loop in one could never be left. Whether
                     // the session comes back for another turn is the
                     // workload's choice, not the deployment's, so the body
-                    // is walked once and its way back is not drawn.
+                    // is walked once and its way back is not drawn. What
+                    // was set before it holds on the first pass only.
+                    self.known.clear();
                     self.enter(body);
                     self.frontier.clear();
                     // A loop is left only by `end`, which already recorded it.
@@ -588,6 +606,7 @@ impl Walker<'_> {
                     let name = self.p.attrs.get(var).map_or("?", String::as_str);
                     let label = format!("choose {name} of {}", self.p.show_expr(&count));
                     self.pending.retain(|(v, _)| *v != var);
+                    self.known.retain(|&(s, _)| s != var);
                     self.pending.push((var, label.clone()));
                     if !self.chosen.iter().any(|(v, _)| *v == var) {
                         self.chosen.push((var, label));
@@ -599,10 +618,61 @@ impl Walker<'_> {
                         self.net.flow_notes[k].note_to(pool);
                     }
                 }
-                CStmt::Turn | CStmt::Set(..) | CStmt::Observe(..) => {}
+                CStmt::Set(slot, e) => {
+                    let v = self.value(&e).map(|(v, _)| v);
+                    self.known.retain(|&(s, _)| s != slot);
+                    if let Some(v) = v {
+                        self.known.push((slot, v));
+                    }
+                }
+                CStmt::Turn | CStmt::Observe(..) => {}
                 CStmt::Grow(..) | CStmt::Drop(..) => {}
             }
         }
+    }
+
+    /// The value of an expression that reads only constants and attributes
+    /// this path has set to constants, and whether it read an attribute. A
+    /// guard that reads none is not decided: a guard on a constant
+    /// (`mode == 0`) is the program's setting, which `--set` changes, and
+    /// the figure draws every setting.
+    fn value(&self, e: &CExpr) -> Option<(f64, bool)> {
+        fn eval(e: &CExpr, known: &[(usize, f64)], read: &mut bool) -> Option<f64> {
+            Some(match e {
+                CExpr::Num(x) => *x,
+                CExpr::Attr(s) => {
+                    *read = true;
+                    known.iter().find(|(k, _)| k == s)?.1
+                }
+                CExpr::Unary(op, a) => {
+                    let x = eval(a, known, read)?;
+                    match op {
+                        UnOp::Neg => -x,
+                        UnOp::Not => f64::from(x == 0.0),
+                    }
+                }
+                CExpr::Binary(op, a, b) => {
+                    crate::frontend::link::binop(*op, eval(a, known, read)?, eval(b, known, read)?)
+                }
+                CExpr::Cond(c, a, b) => {
+                    let (c, a, b) = (
+                        eval(c, known, read)?,
+                        eval(a, known, read)?,
+                        eval(b, known, read)?,
+                    );
+                    if c != 0.0 { a } else { b }
+                }
+                CExpr::Ctx(_) | CExpr::Sample(..) | CExpr::Call(..) => return None,
+            })
+        }
+        let mut read = false;
+        let v = eval(e, &self.known, &mut read)?;
+        Some((v, read))
+    }
+
+    /// A guard this path decides: one `value` knows, that reads an attribute.
+    fn decided(&self, e: &CExpr) -> Option<f64> {
+        self.value(e).and_then(|(v, read)| read.then_some(v))
     }
 
     /// Walk a block that may decide before its first station: a loop's
@@ -621,6 +691,7 @@ impl Walker<'_> {
             self.chosen.clone(),
             self.instance_of_slot.clone(),
             self.last_flow,
+            self.known.clone(),
             self.next_hold,
         );
         let k = self.probes.len();
@@ -637,6 +708,7 @@ impl Walker<'_> {
             self.chosen,
             self.instance_of_slot,
             self.last_flow,
+            self.known,
             self.next_hold,
         ) = saved;
         if entries.len() > 1 {
@@ -783,6 +855,7 @@ pub fn project(p: &Program) -> Net {
         instance_of_slot: vec![],
         last_flow: None,
         probes: vec![],
+        known: vec![],
     };
     w.enter(p.session);
     // Anything still on the frontier ran off the end of the session program.
