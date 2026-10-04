@@ -13,7 +13,8 @@ serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]... [--def name
 `FILE` is program text (`.sq`) or IR (`.json`), as for `run`, `check` and
 `ir`. Output goes to stdout unless `--out` names a file. `--set` and `--def` apply to
 program text and are rejected on `.json`, where the constants are already
-folded and the definitions expanded.
+folded and the definitions expanded. In Python, [`pyserq.draw`](python.md)
+returns the same text.
 
 ## 1. Why the figure is generated
 

@@ -1,6 +1,7 @@
 //! pyserq: serQ in Python. It shows what the IR is the definition of — a
 //! program and a run of it — and nothing of the text frontend: a program
-//! is compiled from a file or from text to its IR, and the IR is run.
+//! is compiled from a file or from text to its IR, and the IR is run. The
+//! deployment view of a program is drawn as `serq draw` draws it.
 //!
 //! ```python
 //! import pyserq
@@ -12,6 +13,7 @@
 //! g.mean, g.ci, g.min, g.max  # g.times, g.values: what `--dump` writes
 //! r.stage("svc").utilization; r.observes, r.gauges, r.stages, r.pools: all of them
 //! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
+//! pyserq.draw("examples/multi-turn/vllm.sq")  # what `serq draw` prints
 //! ```
 
 use std::collections::HashMap;
@@ -305,15 +307,7 @@ fn compile(
         trace: trace.map(|t| t.to_string_lossy().into_owned()),
         ..Default::default()
     };
-    for (name, v) in sets {
-        match v {
-            SetValue::Num(x) => ov.set_num(&name, x).map_err(PyValueError::new_err)?,
-            SetValue::Expr(e) => ov.set(&name, &e).map_err(PyValueError::new_err)?,
-        }
-    }
-    for (name, body) in defs {
-        ov.define(&name, &body).map_err(PyValueError::new_err)?;
-    }
+    overriding(&mut ov, sets, defs)?;
     let (ir, base) = match (&path, source) {
         (Some(p), None) => (serq::load(p, &ov), p.parent().map(Path::to_path_buf)),
         (None, Some(src)) => (serq::compile_source(src, &ov), None),
@@ -328,6 +322,62 @@ fn compile(
         ir: ir.map_err(PyValueError::new_err)?,
         base,
     })
+}
+
+/// `sets` and `defs` into `ov`, as `--set` and `--def`.
+fn overriding(
+    ov: &mut serq::Overrides,
+    sets: HashMap<String, SetValue>,
+    defs: HashMap<String, String>,
+) -> PyResult<()> {
+    for (name, v) in sets {
+        match v {
+            SetValue::Num(x) => ov.set_num(&name, x).map_err(PyValueError::new_err)?,
+            SetValue::Expr(e) => ov.set(&name, &e).map_err(PyValueError::new_err)?,
+        }
+    }
+    for (name, body) in defs {
+        ov.define(&name, &body).map_err(PyValueError::new_err)?;
+    }
+    Ok(())
+}
+
+/// `draw(path=None, *, source=None, sets={}, defs={}, format="tikz")`: the
+/// deployment view, as `serq draw` prints it. It takes the file or text and
+/// not a compiled `Program`: the view draws what one request runs, which
+/// program text compiled for the view says (`serq::load_drawn`), and a
+/// `Program` compiled to run has the whole session in its place.
+#[pyfunction]
+#[pyo3(signature = (path=None, *, source=None, sets=HashMap::new(), defs=HashMap::new(), format="tikz"))]
+fn draw(
+    path: Option<PathBuf>,
+    source: Option<&str>,
+    sets: HashMap<String, SetValue>,
+    defs: HashMap<String, String>,
+    format: &str,
+) -> PyResult<String> {
+    let render = match format {
+        "tikz" => serq::view::tikz::render,
+        "svg" => serq::view::svg::render,
+        f => {
+            return Err(PyValueError::new_err(format!(
+                "unknown format `{f}` (tikz, svg)"
+            )));
+        }
+    };
+    let mut ov = serq::Overrides::default();
+    overriding(&mut ov, sets, defs)?;
+    let ir = match (&path, source) {
+        (Some(p), None) => serq::load_drawn(p, &ov),
+        (None, Some(src)) => serq::compile_drawn_source_at(src, None, &ov),
+        _ => {
+            return Err(PyValueError::new_err(
+                "draw takes exactly one of a path and a source",
+            ));
+        }
+    }
+    .map_err(PyValueError::new_err)?;
+    Ok(render(&serq::view::deployment::figure(&ir)))
 }
 
 /// `run(program)`: run it. The run does not hold the GIL, so runs in
@@ -422,6 +472,7 @@ fn pyserq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(compile, m)?)?;
     m.add_function(wrap_pyfunction!(run, m)?)?;
     m.add_function(wrap_pyfunction!(read_trace, m)?)?;
+    m.add_function(wrap_pyfunction!(draw, m)?)?;
     m.add("IR_VERSION", serq::ir::IR_VERSION)?;
     m.add("REPORT_VERSION", serq::engine::report::REPORT_VERSION)?;
     m.add("__version__", serq::VERSION)?;

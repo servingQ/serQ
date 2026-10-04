@@ -16,6 +16,7 @@ g.mean, g.ci, g.min, g.max   # g.times, g.values: what `--dump` writes
 o.samples, o.times           # what `--dump` writes
 r.stage("svc").utilization   # r.observes, r.gauges, r.stages, r.pools: all of them
 pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
+pyserq.draw("examples/multi-turn/vllm.sq", format="svg")  # what `serq draw --format svg` prints
 ```
 
 | | |
@@ -31,6 +32,7 @@ pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a repla
 | `Report.observe(name)`, `.gauge(name)`, `.stage(name)`, `.stages_named(name)`, `.pool(name)`, `.pools_named(name)` | One by name, or `None`, as `serq::Report` has them; `stages_named` and `pools_named` give every member of an array, in index order (`index`). |
 | `Rng(seed)` | The generator a run draws from, rand 0.9's `StdRng` seeded by `seed_from_u64`: `next_u32()`, `next_u64()`, `random_f64()` in [0, 1), and `range_u64`, `range_u32`, `range_f64(low, high)`, both ends included. A run seeded `s` draws its arrivals from `Rng(s)`; a check that reproduces a run's draws uses it rather than a port of rand. An empty range raises `ValueError`. |
 | `read_trace(path)` | A trace's sessions, each a list of its turns `(new, out, think, forced)`: the corpus a replay draws its sessions from, read as a replay reads it. A relative path is read from the current directory. |
+| `draw(path=None, *, source=None, sets={}, defs={}, format="tikz")` | The [deployment view](visualization/index.md), as `serq draw` prints it: a string of TikZ or SVG (`IPython.display.SVG(...)` shows the latter in a notebook). It takes the file or text, not a `Program`: for a program split into a workload and a server it draws what one request runs, and a `Program` compiled to run has the whole session in its place. IR (`.json`) is drawn whole, and refuses `sets` and `defs`, as `serq draw` does. |
 | `IR_VERSION`, `REPORT_VERSION`, `__version__` | The IR it reads, the shape of the report (the field names of `Report.json()`, which `Report`, `Observe`, `Gauge`, `Stage` and `Pool` carry as attributes; a renamed, removed or retyped field bumps it, an added one does not, by the rules of the IR's Stability), and the serq version it is. |
 
 A program that does not compile or run raises `ValueError` with serQ's message; an argument of the wrong type (`seed=-1`, `sets={"x": None}`) raises `TypeError` or `OverflowError`, as Python does.
@@ -54,5 +56,6 @@ the dev number without committing it.
 Or build it from a checkout: `pip install maturin && maturin develop -m pyserq/Cargo.toml`.
 
 `pyserq/tests/test_pyserq.py` checks that pyserq gives what the CLI gives: the
-same report for the same program, overrides and seed, and the samples
-`--dump` writes. CI runs it.
+same report for the same program, overrides and seed, the samples
+`--dump` writes, and the figure `serq draw` prints for every example. CI
+runs it.
