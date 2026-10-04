@@ -73,6 +73,117 @@ fn ir_runs_like_text() {
     }
 }
 
+/// IR read from JSON or built by a tool meets the checks a text program
+/// meets in the linker: each of these used to panic the interpreter or stall
+/// it, since the linker was the only one to check them (#272).
+#[test]
+fn ir_that_skips_the_linker_meets_its_checks() {
+    use serq::ir::{CArg, CExpr, CRef, CStmt, DistKind, Fun};
+    let src = "pool kv { cap 64; }
+        stage engine : step { budget 8; cost 1; memory kv; }
+        stage d : delay;
+        workload { arrive batch(1); init { set x = 1; } }
+        session { hold kv (8) { run engine prefill (8) growing kv; } end; }
+        run { horizon 10; }";
+    let p = compile_source(src, &Overrides::default()).unwrap();
+    let d = p.stages.iter().position(|s| s.name == "d").unwrap();
+    let kv = CRef {
+        base: 0,
+        count: 1,
+        index: None,
+    };
+    let refused = |edit: &dyn Fn(&mut Program), said: &str| {
+        let mut bad = p.clone();
+        edit(&mut bad);
+        let e = bad.validate().unwrap_err();
+        assert!(e.contains(said), "{said}: {e}");
+    };
+    let run_d = CStmt::Run {
+        stage: CRef {
+            base: d,
+            count: 1,
+            index: None,
+        },
+        mode: serq::ir::RunMode::Plain,
+        work: CExpr::Num(1.0),
+        growing: None,
+        also: vec![],
+    };
+    refused(
+        &|q| q.blocks[q.init].push(run_d.clone()),
+        "init: workload blocks may only `set` and `observe`",
+    );
+    let set =
+        |e: CExpr| move |q: &mut Program| q.blocks[q.session].insert(0, CStmt::Set(0, e.clone()));
+    refused(
+        &set(CExpr::Call(Fun::Queue, vec![])),
+        "`queue` takes 1 argument(s), got 0",
+    );
+    refused(
+        &set(CExpr::Call(Fun::Queue, vec![CArg::Pool(kv.clone())])),
+        "`queue` expects a stage here",
+    );
+    refused(
+        &set(CExpr::Sample(DistKind::Uniform, vec![CExpr::Num(1.0)])),
+        "`~uniform` takes 2 argument(s), got 1",
+    );
+    refused(
+        &|q| q.blocks[q.session].insert(0, CStmt::Grow(kv.clone(), CExpr::Num(8.0))),
+        "`grow kv` outside a hold of `kv`",
+    );
+    refused(
+        &|q| q.blocks[q.session].insert(0, CStmt::Load(kv.clone(), CExpr::Num(1.0))),
+        "`load kv` outside a hold of `kv`",
+    );
+    refused(
+        &|q| q.blocks[q.session].insert(0, CStmt::Release(kv.clone())),
+        "`release kv` outside a hold of `kv`",
+    );
+    // a body pointing at its own block: the walks over blocks would not end
+    refused(
+        &|q| {
+            let s = q.session;
+            q.blocks[s].insert(0, CStmt::Loop(s));
+        },
+        "is reached twice: a program's blocks form a tree",
+    );
+    let run_d_as = |mode, growing: Option<CRef>| {
+        let CStmt::Run {
+            stage, work, also, ..
+        } = run_d.clone()
+        else {
+            unreachable!()
+        };
+        CStmt::Run {
+            stage,
+            mode,
+            work,
+            growing,
+            also,
+        }
+    };
+    let prefill_d = run_d_as(serq::ir::RunMode::Prefill, None);
+    refused(
+        &|q| q.blocks[q.session].insert(0, prefill_d.clone()),
+        "`prefill`/`decode` are required on a step stage",
+    );
+    // the hold's body: `run d (1) growing kv` inside `hold kv`
+    let growing_d = run_d_as(serq::ir::RunMode::Plain, Some(kv.clone()));
+    refused(
+        &|q| {
+            let body = q.blocks[q.session]
+                .iter()
+                .find_map(|s| match s {
+                    CStmt::Hold { body, .. } => Some(*body),
+                    _ => None,
+                })
+                .unwrap();
+            q.blocks[body].push(growing_d.clone());
+        },
+        "`growing` needs a step stage",
+    );
+}
+
 #[test]
 fn malformed_ir_is_rejected() {
     let src = std::fs::read_to_string(serq::program_path("mg1")).unwrap();

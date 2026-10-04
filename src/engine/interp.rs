@@ -3263,11 +3263,11 @@ impl<'p> Interp<'p> {
         };
         let stage = |s: &mut Self, i: usize| match &args[i] {
             CArg::Stage(r) => s.ref_index(r, ctx, w),
-            _ => unreachable!("linker checked"),
+            _ => unreachable!("Program::validate checks the arguments"),
         };
         let pool = |s: &mut Self, i: usize| match &args[i] {
             CArg::Pool(r) => s.ref_index(r, ctx, w),
-            _ => unreachable!("linker checked"),
+            _ => unreachable!("Program::validate checks the arguments"),
         };
         match f {
             Fun::Min => num(self, 0).min(num(self, 1)),

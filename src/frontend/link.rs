@@ -11,7 +11,7 @@ use std::fmt;
 
 use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
-use crate::ir::MAX_SESSIONS;
+use crate::ir::{ArgKind, MAX_SESSIONS};
 
 #[derive(Debug, Clone)]
 pub struct LinkError {
@@ -142,13 +142,6 @@ struct Linker<'a> {
     pools: HashMap<String, (usize, usize)>,
     stages: HashMap<String, (usize, usize)>,
     blocks: Vec<Vec<CStmt>>,
-    /// The pool references of the holds enclosing the statement being
-    /// linked, as written, for `release` and `load`, which act on an
-    /// enclosing hold: `hold kv[i]` encloses `release kv[i]`, not `kv[j]`.
-    held: Vec<Ref>,
-    /// Pool references some hold of the program leases, as written: a
-    /// `release` of one may stand outside any hold of it.
-    leased: Vec<Ref>,
     prog: &'a Program,
     /// Terms the program's aggregates have written out so far, nested ones
     /// included, against `MAX_OVER`.
@@ -188,7 +181,9 @@ pub(crate) const MAX_OVER: usize = 4096;
 /// Calls the linker folds to a constant from a declaration.
 pub const FOLDED: [&str; 1] = ["blocksize"];
 
-/// The functions a call may name, as the linker resolves them below.
+/// The functions a call may name, as a constant the parser checks names
+/// against and `scripts/metrics.py` counts: the IR's `Fun::names`, which
+/// `tests/docs_lexer.rs` holds it to.
 pub const FUNCTIONS: [&str; 22] = [
     "min",
     "max",
@@ -254,8 +249,6 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         pools: HashMap::new(),
         stages: HashMap::new(),
         blocks: vec![],
-        held: vec![],
-        leased: vec![],
         prog,
         over_terms: std::cell::Cell::new(0),
     };
@@ -285,7 +278,6 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
         collect_attrs(&w.turn, &mut lk);
     }
     collect_attrs(&prog.session, &mut lk);
-    collect_leases(&prog.session, &mut lk.leased);
     // A name the language supplies (a context variable, `inf`) is its own,
     // as it is for a body binding (`parser.rs`) and an aggregate's index
     // (`unroll`). A name resolves to an attribute first, then a `let`, then
@@ -502,9 +494,9 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
             )
         }
     };
-    let init = lk.block(&init, true)?;
-    let turn = lk.block(&turn, true)?;
-    let session = lk.block(&prog.session, false)?;
+    let init = lk.block(&init)?;
+    let turn = lk.block(&turn)?;
+    let session = lk.block(&prog.session)?;
     let horizon = match (&ov.horizon, &prog.run.horizon) {
         (Some(h), _) => *h,
         (None, Some(e)) => lk.const_eval(e, "the horizon")?,
@@ -603,28 +595,6 @@ fn member(base: usize, count: usize, i: usize, n: usize, who: &str, what: &str) 
             "`{who}`: `{what}` names a family of {count}, and `{who}` is a family of {n}: \
              one for one, or one for all"
         )))
-    }
-}
-
-/// Every pool reference a hold leases, anywhere in the session.
-fn collect_leases(stmts: &[Stmt], out: &mut Vec<Ref>) {
-    for s in stmts {
-        match s {
-            Stmt::Hold { body, lease, .. } => {
-                if let Some((r, _)) = lease
-                    && !out.iter().any(|held| held.same_target(r))
-                {
-                    out.push(r.clone());
-                }
-                collect_leases(body, out);
-            }
-            Stmt::Loop(body) => collect_leases(body, out),
-            Stmt::Branch(_, a, b) => {
-                collect_leases(a, out);
-                collect_leases(b, out);
-            }
-            _ => {}
-        }
     }
 }
 
@@ -800,35 +770,6 @@ impl Linker<'_> {
             }
         };
         Ok(CRef { base, count, index })
-    }
-
-    /// A pool reference a statement acts on through an enclosing hold
-    /// (`release`, `load`): the statement must be inside a hold that names
-    /// the pool the same way, index included, or it would look for a hold
-    /// the session may not have. A `release` may also take a lease, so it
-    /// stands anywhere when some hold leases the pool (`or_leased`).
-    fn enclosed_pool(&self, r: &Ref, what: &str, or_leased: bool) -> LResult<CRef> {
-        let cr = self.pool_ref(r)?;
-        if !self.held.iter().any(|held| held.same_target(r))
-            && !(or_leased && self.leased.iter().any(|leased| leased.same_target(r)))
-        {
-            let shown = match &r.index {
-                None => r.name.clone(),
-                Some(_) => format!("{}[…]", r.name),
-            };
-            let leased: &[Ref] = if or_leased { &self.leased } else { &[] };
-            let hint = if self.held.iter().chain(leased).any(|h| h.name == r.name) {
-                ": write the pool as the hold does, index included"
-            } else if or_leased {
-                ": it takes an enclosing hold's allocation, or a lease of it"
-            } else {
-                ": it acts on an enclosing hold's allocation"
-            };
-            return Err(LinkError::new(format!(
-                "`{what} {shown}` outside a hold of `{shown}`{hint}"
-            )));
-        }
-        Ok(cr)
     }
 
     fn pool_ref(&self, r: &Ref) -> LResult<CRef> {
@@ -1055,19 +996,10 @@ impl Linker<'_> {
                 }
             }
             Expr::Sample(d, args) => {
-                let kind = match d.as_str() {
-                    "exp" => DistKind::Exp,
-                    "det" => DistKind::Det,
-                    "uniform" => DistKind::Uniform,
-                    "erlang" => DistKind::Erlang,
-                    "h2" => DistKind::H2,
-                    "bernoulli" => DistKind::Bernoulli,
-                    _ => return Err(LinkError::new(format!("unknown distribution `{d}`"))),
+                let Some(kind) = DistKind::from_name(d) else {
+                    return Err(LinkError::new(format!("unknown distribution `{d}`")));
                 };
-                let want = match kind {
-                    DistKind::Exp | DistKind::Det | DistKind::Bernoulli => 1,
-                    DistKind::Uniform | DistKind::Erlang | DistKind::H2 => 2,
-                };
+                let want = kind.arity();
                 if args.len() != want {
                     return Err(LinkError::new(format!("`~{d}` takes {want} argument(s)")));
                 }
@@ -1078,31 +1010,10 @@ impl Linker<'_> {
             }
             Expr::Call(f, args) if f == "blocksize" => CExpr::Num(self.blocksize(args)?),
             Expr::Call(f, args) => {
-                let (fun, sig): (Fun, &[&str]) = match f.as_str() {
-                    "min" => (Fun::Min, &["e", "e"]),
-                    "max" => (Fun::Max, &["e", "e"]),
-                    "abs" => (Fun::Abs, &["e"]),
-                    "floor" => (Fun::Floor, &["e"]),
-                    "ceil" => (Fun::Ceil, &["e"]),
-                    "sqrt" => (Fun::Sqrt, &["e"]),
-                    "exp" => (Fun::Exp, &["e"]),
-                    "ln" => (Fun::Ln, &["e"]),
-                    "pow" => (Fun::Pow, &["e", "e"]),
-                    "queue" => (Fun::Queue, &["s"]),
-                    "busy" => (Fun::Busy, &["s"]),
-                    "work" => (Fun::Work, &["s"]),
-                    "used" => (Fun::Used, &["p"]),
-                    "free" => (Fun::Free, &["p"]),
-                    "cachedin" => (Fun::CachedIn, &["p"]),
-                    "holders" => (Fun::Holders, &["p"]),
-                    "queued" => (Fun::Queued, &["p"]),
-                    "price" => (Fun::Price, &["s", "e", "e"]),
-                    "budget_left" => (Fun::BudgetLeft, &["s"]),
-                    "est_lambda" => (Fun::EstLambda, &["s"]),
-                    "est_rho" => (Fun::EstRho, &["s"]),
-                    "est_wait" => (Fun::EstWait, &["s"]),
-                    _ => return Err(LinkError::new(format!("unknown function `{f}`"))),
+                let Some(fun) = Fun::from_name(f) else {
+                    return Err(LinkError::new(format!("unknown function `{f}`")));
                 };
+                let sig = fun.signature();
                 if args.len() != sig.len() {
                     return Err(LinkError::new(format!(
                         "`{f}` takes {} argument(s), got {}",
@@ -1113,15 +1024,15 @@ impl Linker<'_> {
                 let mut cargs = vec![];
                 for (a, kind) in args.iter().zip(sig) {
                     cargs.push(match (kind, a) {
-                        (&"e", Arg::Expr(e)) => CArg::Expr(self.expr(e)?),
-                        (&"e", Arg::Ref(r)) => CArg::Expr(
+                        (ArgKind::Expr, Arg::Expr(e)) => CArg::Expr(self.expr(e)?),
+                        (ArgKind::Expr, Arg::Ref(r)) => CArg::Expr(
                             self.expr(&Expr::Var(r.name.clone()))
                                 .map_err(|e| e.at(r.span))?,
                         ),
-                        (&"p", Arg::Ref(r)) => CArg::Pool(self.pool_ref(r)?),
-                        (&"s", Arg::Ref(r)) => CArg::Stage(self.stage_ref(r)?),
+                        (ArgKind::Pool, Arg::Ref(r)) => CArg::Pool(self.pool_ref(r)?),
+                        (ArgKind::Stage, Arg::Ref(r)) => CArg::Stage(self.stage_ref(r)?),
                         (k, _) => {
-                            let what = if *k == "p" { "pool" } else { "stage" };
+                            let what = if *k == ArgKind::Pool { "pool" } else { "stage" };
                             return Err(LinkError::new(format!(
                                 "`{f}` expects a {what} name here"
                             )));
@@ -1151,9 +1062,8 @@ impl Linker<'_> {
         self.observes.len() - 1
     }
 
-    /// Compile a block into the arena and return its id. `workload` blocks
-    /// may only assign and observe.
-    fn block(&mut self, stmts: &[Stmt], workload: bool) -> LResult<BlockId> {
+    /// Compile a block into the arena and return its id.
+    fn block(&mut self, stmts: &[Stmt]) -> LResult<BlockId> {
         let id = self.blocks.len();
         self.blocks.push(vec![]);
         let mut out = vec![];
@@ -1163,11 +1073,6 @@ impl Linker<'_> {
                 Stmt::Observe(n, e) => {
                     let e = self.expr(e)?;
                     CStmt::Observe(self.observe_slot(n), e)
-                }
-                _ if workload => {
-                    return Err(LinkError::new(
-                        "workload blocks may only `set` and `observe`".into(),
-                    ));
                 }
                 Stmt::Turn => CStmt::Turn,
                 Stmt::End => CStmt::End,
@@ -1190,7 +1095,6 @@ impl Linker<'_> {
                     cache,
                     lease,
                 } => {
-                    let pools_src = pools;
                     let pools = pools
                         .iter()
                         .map(|(r, e, f)| {
@@ -1203,23 +1107,10 @@ impl Linker<'_> {
                         .collect::<LResult<Vec<_>>>()?;
                     let reuse = reuse.as_ref().map(|c| self.expr(c)).transpose()?;
                     let cache = cache.as_ref().map(|c| self.expr(c)).transpose()?;
-                    let depth = self.held.len();
-                    for (r, _, _) in pools_src {
-                        self.held.push(r.clone());
-                    }
-                    let body = self.block(body, false)?;
-                    self.held.truncate(depth);
+                    let body = self.block(body)?;
                     let lease = match lease {
                         None => None,
-                        Some((r, t)) => {
-                            if !pools_src.iter().any(|(q, _, _)| q.same_target(r)) {
-                                return Err(LinkError::new(format!(
-                                    "`lease {}`: the hold does not take that pool (write it as the hold does, index included)",
-                                    r.name
-                                )));
-                            }
-                            Some((self.pool_ref(r)?, self.expr(t)?))
-                        }
+                        Some((r, t)) => Some((self.pool_ref(r)?, self.expr(t)?)),
                     };
                     CStmt::Hold {
                         pools,
@@ -1229,19 +1120,10 @@ impl Linker<'_> {
                         lease,
                     }
                 }
-                Stmt::Grow(r, e) => {
-                    let cr = self.enclosed_pool(r, "grow", false)?;
-                    CStmt::Grow(cr, self.expr(e)?)
-                }
+                Stmt::Grow(r, e) => CStmt::Grow(self.pool_ref(r)?, self.expr(e)?),
                 Stmt::Drop(r) => CStmt::Drop(self.pool_ref(r)?),
-                Stmt::Release(r) => {
-                    let cr = self.enclosed_pool(r, "release", true)?;
-                    CStmt::Release(cr)
-                }
-                Stmt::Load(r, e) => {
-                    let cr = self.enclosed_pool(r, "load", false)?;
-                    CStmt::Load(cr, self.expr(e)?)
-                }
+                Stmt::Release(r) => CStmt::Release(self.pool_ref(r)?),
+                Stmt::Load(r, e) => CStmt::Load(self.pool_ref(r)?, self.expr(e)?),
                 Stmt::Run {
                     stage,
                     mode,
@@ -1254,42 +1136,21 @@ impl Linker<'_> {
                         .iter()
                         .map(|r| self.stage_ref(r))
                         .collect::<LResult<Vec<_>>>()?;
-                    let is_step = matches!(
-                        self.prog.stages.iter().find(|s| {
-                            self.stages.get(&s.name).map(|b| b.0) == Some(stage.base)
-                        }),
-                        Some(StageDecl {
-                            kind: StageKind::Step(_),
-                            ..
-                        })
-                    );
-                    if is_step != (*mode != RunMode::Plain) {
-                        return Err(LinkError::new(
-                            "`prefill`/`decode` are required on a step stage and not allowed elsewhere"
-                                .into(),
-                        ));
-                    }
-                    if growing.is_some() && !is_step {
-                        return Err(LinkError::new("`growing` needs a step stage".into()));
-                    }
                     CStmt::Run {
                         stage,
                         mode: *mode,
                         work: self.expr(work)?,
-                        growing: growing
-                            .as_ref()
-                            .map(|g| self.enclosed_pool(g, "growing", false))
-                            .transpose()?,
+                        growing: growing.as_ref().map(|g| self.pool_ref(g)).transpose()?,
                         also,
                     }
                 }
                 Stmt::Branch(p, a, b) => {
                     let p = self.expr(p)?;
-                    let a = self.block(a, false)?;
-                    let b = self.block(b, false)?;
+                    let a = self.block(a)?;
+                    let b = self.block(b)?;
                     CStmt::Branch(p, a, b)
                 }
-                Stmt::Loop(b) => CStmt::Loop(self.block(b, false)?),
+                Stmt::Loop(b) => CStmt::Loop(self.block(b)?),
                 Stmt::Choose { var, count, key } => CStmt::Choose {
                     var: self.attr_index[var],
                     count: self.expr(count)?,

@@ -630,6 +630,102 @@ impl Program {
     /// (a flow is not described by the `n` a capacity could read), each
     /// stage array once (an index is known only when the run starts), and
     /// the program names its `share`; every run on a shared stage is plain.
+    /// Every block the program reaches from `init`, `turn` and `session` is
+    /// reached once: the blocks form a tree, as the linker builds them, so
+    /// the walks over them (`enclosed`, `lets_time_pass`) end. IR from JSON
+    /// could otherwise point a body at its own ancestor (#272).
+    fn blocks_are_a_tree(&self) -> Result<(), String> {
+        let mut seen = vec![false; self.blocks.len()];
+        let mut todo = vec![self.init, self.turn, self.session];
+        while let Some(b) = todo.pop() {
+            let Some(was) = seen.get_mut(b) else {
+                return Err(format!("block {b} out of range"));
+            };
+            if *was {
+                return Err(format!(
+                    "block {b} is reached twice: a program's blocks form a tree, each the body \
+                     of one statement"
+                ));
+            }
+            *was = true;
+            for st in &self.blocks[b] {
+                match st {
+                    CStmt::Hold { body, .. } | CStmt::Loop(body) => todo.push(*body),
+                    CStmt::Branch(_, a, c) => todo.extend([*a, *c]),
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `grow`, `load`, `release` and a `growing` run act on the innermost
+    /// hold of their pool around them, as the reference is written, index
+    /// included; `release` may instead end a lease of it; a hold leases
+    /// one of its own pools (#272). Holds nest as the blocks do.
+    fn enclosed<'a>(
+        &'a self,
+        b: BlockId,
+        held: &mut Vec<&'a CRef>,
+        leased: &[&'a CRef],
+    ) -> Result<(), String> {
+        let need = |held: &[&CRef], r: &CRef, what: &str, or_leased: bool| {
+            let leased: &[&CRef] = if or_leased { leased } else { &[] };
+            if held.iter().chain(leased).any(|h| *h == r) {
+                return Ok(());
+            }
+            let name = &self.pools[r.base].name;
+            let shown = match &r.index {
+                None => name.clone(),
+                Some(_) => format!("{name}[…]"),
+            };
+            let hint = if held.iter().chain(leased).any(|h| h.base == r.base) {
+                ": write the pool as the hold does, index included"
+            } else if or_leased {
+                ": it takes an enclosing hold's allocation, or a lease of it"
+            } else {
+                ": it acts on an enclosing hold's allocation"
+            };
+            Err(format!(
+                "`{what} {shown}` outside a hold of `{shown}`{hint}"
+            ))
+        };
+        for s in &self.blocks[b] {
+            match s {
+                CStmt::Hold {
+                    pools, body, lease, ..
+                } => {
+                    if let Some((r, _)) = lease
+                        && !pools.iter().any(|(q, _, _)| q == r)
+                    {
+                        return Err(format!(
+                            "`lease {}`: the hold does not take that pool (write it as the hold \
+                             does, index included)",
+                            self.pools[r.base].name
+                        ));
+                    }
+                    let depth = held.len();
+                    held.extend(pools.iter().map(|(r, _, _)| r));
+                    self.enclosed(*body, held, leased)?;
+                    held.truncate(depth);
+                }
+                CStmt::Grow(r, _) => need(held, r, "grow", false)?,
+                CStmt::Load(r, _) => need(held, r, "load", false)?,
+                CStmt::Release(r) => need(held, r, "release", true)?,
+                CStmt::Run {
+                    growing: Some(g), ..
+                } => need(held, g, "growing", false)?,
+                CStmt::Branch(_, a, c) => {
+                    self.enclosed(*a, held, leased)?;
+                    self.enclosed(*c, held, leased)?;
+                }
+                CStmt::Loop(x) => self.enclosed(*x, held, leased)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn validate_flows(&self) -> Result<(), String> {
         let shared = self.shared_stages();
         let any = shared.iter().any(|&x| x);
@@ -804,6 +900,7 @@ impl Program {
                 self.version
             ));
         }
+        self.blocks_are_a_tree()?;
         let v = Validator { p: self };
         for (i, b) in self.blocks.iter().enumerate() {
             // a text program has no block numbers: name the block by its role
@@ -826,6 +923,29 @@ impl Program {
         ] {
             v.block(blk).map_err(|e| format!("{k}: {e}"))?;
         }
+        // the workload draws marks; time passes in the session (#272)
+        for (k, blk) in [("init", self.init), ("turn", self.turn)] {
+            if self.blocks[blk]
+                .iter()
+                .any(|s| !matches!(s, CStmt::Set(..) | CStmt::Observe(..)))
+            {
+                return Err(format!("{k}: workload blocks may only `set` and `observe`"));
+            }
+        }
+        let leased: Vec<&CRef> = self
+            .blocks
+            .iter()
+            .flatten()
+            .filter_map(|s| match s {
+                CStmt::Hold {
+                    lease: Some((r, _)),
+                    ..
+                } => Some(r),
+                _ => None,
+            })
+            .collect();
+        self.enclosed(self.session, &mut vec![], &leased)
+            .map_err(|e| format!("session: {e}"))?;
         self.validate_flows()?;
         for p in &self.pools {
             let at = |e| format!("pool `{}`: {e}", p.name);
@@ -1207,8 +1327,42 @@ impl Validator<'_> {
                 }
                 Ok(())
             }
-            CExpr::Sample(_, xs) => xs.iter().try_for_each(|x| self.expr(x, m)),
+            CExpr::Sample(d, xs) => {
+                if xs.len() != d.arity() {
+                    return Err(format!(
+                        "`~{}` takes {} argument(s), got {}",
+                        d.name(),
+                        d.arity(),
+                        xs.len()
+                    ));
+                }
+                xs.iter().try_for_each(|x| self.expr(x, m))
+            }
             CExpr::Call(f, args) => {
+                let sig = f.signature();
+                if args.len() != sig.len() {
+                    return Err(format!(
+                        "`{}` takes {} argument(s), got {}",
+                        f.name(),
+                        sig.len(),
+                        args.len()
+                    ));
+                }
+                for (a, k) in args.iter().zip(sig) {
+                    let found = match a {
+                        CArg::Expr(_) => ArgKind::Expr,
+                        CArg::Pool(_) => ArgKind::Pool,
+                        CArg::Stage(_) => ArgKind::Stage,
+                    };
+                    if found != *k {
+                        let want = match k {
+                            ArgKind::Expr => "an expression",
+                            ArgKind::Pool => "a pool",
+                            ArgKind::Stage => "a stage",
+                        };
+                        return Err(format!("`{}` expects {want} here", f.name()));
+                    }
+                }
                 args.iter().try_for_each(|a| match a {
                     CArg::Expr(x) => self.expr(x, m),
                     CArg::Pool(r) => self.cref(r, self.p.pools.len(), "pool", m),
@@ -1394,12 +1548,26 @@ impl Validator<'_> {
             }
             CStmt::Run {
                 stage,
+                mode,
                 work,
                 growing,
                 also,
-                ..
             } => {
                 self.cref(stage, ns, "stage", m)?;
+                let step = |i: usize| matches!(self.p.stages[i].kind, CStageKind::Step(_));
+                let members = stage.base..stage.base + stage.count;
+                if members
+                    .clone()
+                    .any(|i| step(i) != (*mode != RunMode::Plain))
+                {
+                    return Err(
+                        "`prefill`/`decode` are required on a step stage and not allowed elsewhere"
+                            .into(),
+                    );
+                }
+                if growing.is_some() && !members.clone().all(step) {
+                    return Err("`growing` needs a step stage".into());
+                }
                 for r in also {
                     self.cref(r, ns, "stage", m)?;
                 }
@@ -1493,45 +1661,126 @@ impl BinOp {
     }
 }
 
+/// What a function takes in one argument position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArgKind {
+    Expr,
+    Pool,
+    Stage,
+}
+
+use ArgKind::{Expr as E, Pool as P, Stage as S};
+
+/// Every function a call may name, for lookup by name; `Fun::entry` is
+/// the definition and a match, so a new `Fun` without one does not compile.
+const FUNS: [Fun; 22] = [
+    Fun::Min,
+    Fun::Max,
+    Fun::Abs,
+    Fun::Floor,
+    Fun::Ceil,
+    Fun::Sqrt,
+    Fun::Exp,
+    Fun::Ln,
+    Fun::Pow,
+    Fun::Queue,
+    Fun::Busy,
+    Fun::Work,
+    Fun::Used,
+    Fun::Free,
+    Fun::CachedIn,
+    Fun::Holders,
+    Fun::Queued,
+    Fun::Price,
+    Fun::BudgetLeft,
+    Fun::EstLambda,
+    Fun::EstRho,
+    Fun::EstWait,
+];
+
 impl Fun {
-    fn name(self) -> &'static str {
+    /// The function's name in a program and the kind of each argument. The
+    /// linker resolves a call by it, and `Program::validate` checks one.
+    fn entry(self) -> (&'static str, &'static [ArgKind]) {
         match self {
-            Fun::Min => "min",
-            Fun::Max => "max",
-            Fun::Abs => "abs",
-            Fun::Floor => "floor",
-            Fun::Ceil => "ceil",
-            Fun::Sqrt => "sqrt",
-            Fun::Exp => "exp",
-            Fun::Ln => "ln",
-            Fun::Pow => "pow",
-            Fun::Queue => "queue",
-            Fun::Busy => "busy",
-            Fun::Work => "work",
-            Fun::Used => "used",
-            Fun::Free => "free",
-            Fun::CachedIn => "cachedin",
-            Fun::Holders => "holders",
-            Fun::Queued => "queued",
-            Fun::Price => "price",
-            Fun::BudgetLeft => "budget_left",
-            Fun::EstLambda => "est_lambda",
-            Fun::EstRho => "est_rho",
-            Fun::EstWait => "est_wait",
+            Fun::Min => ("min", &[E, E]),
+            Fun::Max => ("max", &[E, E]),
+            Fun::Abs => ("abs", &[E]),
+            Fun::Floor => ("floor", &[E]),
+            Fun::Ceil => ("ceil", &[E]),
+            Fun::Sqrt => ("sqrt", &[E]),
+            Fun::Exp => ("exp", &[E]),
+            Fun::Ln => ("ln", &[E]),
+            Fun::Pow => ("pow", &[E, E]),
+            Fun::Queue => ("queue", &[S]),
+            Fun::Busy => ("busy", &[S]),
+            Fun::Work => ("work", &[S]),
+            Fun::Used => ("used", &[P]),
+            Fun::Free => ("free", &[P]),
+            Fun::CachedIn => ("cachedin", &[P]),
+            Fun::Holders => ("holders", &[P]),
+            Fun::Queued => ("queued", &[P]),
+            Fun::Price => ("price", &[S, E, E]),
+            Fun::BudgetLeft => ("budget_left", &[S]),
+            Fun::EstLambda => ("est_lambda", &[S]),
+            Fun::EstRho => ("est_rho", &[S]),
+            Fun::EstWait => ("est_wait", &[S]),
         }
+    }
+
+    pub fn name(self) -> &'static str {
+        self.entry().0
+    }
+
+    /// The kind of each argument, in order.
+    pub fn signature(self) -> &'static [ArgKind] {
+        self.entry().1
+    }
+
+    pub fn from_name(name: &str) -> Option<Fun> {
+        FUNS.into_iter().find(|f| f.name() == name)
+    }
+
+    /// The names a call may use, in the table's order.
+    pub fn names() -> impl Iterator<Item = &'static str> {
+        FUNS.into_iter().map(Fun::name)
     }
 }
 
+/// Every distribution a draw may name, for lookup by name; `DistKind::entry`
+/// is the definition.
+const DISTS: [DistKind; 6] = [
+    DistKind::Exp,
+    DistKind::Det,
+    DistKind::Uniform,
+    DistKind::Erlang,
+    DistKind::H2,
+    DistKind::Bernoulli,
+];
+
 impl DistKind {
-    fn name(self) -> &'static str {
+    /// The distribution's name in a program and how many parameters it takes.
+    fn entry(self) -> (&'static str, usize) {
         match self {
-            DistKind::Exp => "exp",
-            DistKind::Det => "det",
-            DistKind::Uniform => "uniform",
-            DistKind::Erlang => "erlang",
-            DistKind::H2 => "h2",
-            DistKind::Bernoulli => "bernoulli",
+            DistKind::Exp => ("exp", 1),
+            DistKind::Det => ("det", 1),
+            DistKind::Uniform => ("uniform", 2),
+            DistKind::Erlang => ("erlang", 2),
+            DistKind::H2 => ("h2", 2),
+            DistKind::Bernoulli => ("bernoulli", 1),
         }
+    }
+
+    pub fn name(self) -> &'static str {
+        self.entry().0
+    }
+
+    pub fn arity(self) -> usize {
+        self.entry().1
+    }
+
+    pub fn from_name(name: &str) -> Option<DistKind> {
+        DISTS.into_iter().find(|d| d.name() == name)
     }
 }
 
