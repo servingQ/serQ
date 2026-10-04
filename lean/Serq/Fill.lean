@@ -142,6 +142,9 @@ theorem admitVia_empty (m : Machine) (left : ℕ) (h : engineQueuesEmpty D m) :
     · simp [hv]
   rw [this]
 
+theorem serves_of_none (hD : D.only = none) (m : Machine) (j : Job) : serves D m j = true := by
+  simp [serves, hD]
+
 theorem getS_setS_ne (m : Machine) {i k : ℕ} (s : Sess) (h : i ≠ k) :
     getS (setS m i s) k = getS m k := by
   simp only [getS, setS, Array.getD_eq_getD_getElem?, Array.getElem?_setIfInBounds_ne h]
@@ -151,7 +154,7 @@ for the engine, the owners of the jobs are distinct, and every growing job
 from `idx` on holds enough of its pool for the position it will reach, then
 the iteration `assign` builds is `fillIter` of the rest of the job list (with
 enough fuel): it advances the holds' positions but calls no `grow`. -/
-theorem assign_iter_eq_fillIter (pre0 : ℕ) :
+theorem assign_iter_eq_fillIter (hD : D.only = none) (pre0 : ℕ) :
     ∀ (f : ℕ) (M : Machine) (idx left : ℕ), engineQueuesEmpty D M →
       (M.jobs.map (·.owner)).Nodup →
       (∀ j ∈ M.jobs.drop idx, ∀ p, j.growing = some p →
@@ -185,7 +188,7 @@ theorem assign_iter_eq_fillIter (pre0 : ℕ) :
         intro j' hj' heq
         exact hsub.1 (heq ▸ List.mem_map.mpr ⟨j', hj', rfl⟩)
       rw [hdrop, fillIter]
-      simp only
+      simp only [serves_of_none D hD, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
       by_cases h0 : min (wantOf D j) left = 0
       · rw [if_pos h0, if_pos h0]
         exact ih M (idx + 1) left hq hnd hcov' (by omega)
@@ -225,7 +228,7 @@ theorem assign_iter_eq_fillIter (pre0 : ℕ) :
 /-- **`assign` is the greedy fill.** With no job growing and nobody waiting
 for the engine, the iteration `assign` builds from job `idx` on, with `left`
 tokens, is `fillIter` of the rest of the job list (with enough fuel). -/
-theorem assign_eq_fillIter (m : Machine) (hq : engineQueuesEmpty D m)
+theorem assign_eq_fillIter (hD : D.only = none) (m : Machine) (hq : engineQueuesEmpty D m)
     (hg : ∀ j ∈ m.jobs, j.growing = none) (pre0 : ℕ) :
     ∀ (f idx left : ℕ) (acc : List (ℕ × ℕ)), m.jobs.length - idx < f →
       assign D f { m with iter := acc } idx left pre0
@@ -257,7 +260,7 @@ theorem assign_eq_fillIter (m : Machine) (hq : engineQueuesEmpty D m)
       have hlen : idx < m.jobs.length := by
         rcases List.getElem?_eq_some_iff.mp hj with ⟨hl, _⟩; exact hl
       rw [hdrop, fillIter]
-      simp only [hg j hmem]
+      simp only [hg j hmem, serves_of_none D hD, Bool.not_true, Bool.false_eq_true, ↓reduceIte]
       by_cases h0 : min (wantOf D j) left = 0
       · rw [if_pos h0, if_pos h0]
         exact ih (idx + 1) left acc (by omega)

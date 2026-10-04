@@ -31,7 +31,7 @@ def listOf {α} (f : Json → Except String α) (j : Json) : Except String (List
 def poolOf (j : Json) : Except String PoolDef := do
   let a ← j.getArr?
   if h : a.size = 3 then
-    pure ⟨← natOf a[0], ← natOf a[1], (← natOf a[2]) ≠ 0⟩
+    pure ⟨← natOf a[0], ← natOf a[1], (← natOf a[2]) ≠ 0, none⟩
   else throw "pool"
 
 /-- Run every event up to `horizon`. -/
@@ -64,7 +64,7 @@ def main (args : List String) : IO UInt32 := do
   let c := fun k => cs.getD k 0
   let D : Deployment := ⟨pools, budget, chunk, memory,
     fun st => c 0 + c 1 * st.tokens + c 2 * st.prefilled + c 3 * st.decoders
-      + c 4 * st.kvDecode + c 5 * st.attention2⟩
+      + c 4 * st.kvDecode + c 5 * st.attention2, none⟩
   let computedSlot ← IO.ofExcept (natOf (j.getObjValD "computedSlot"))
   let w : Workload := ⟨init, sessions, some turnSlot, moreSlot, some computedSlot⟩
   let t0 ← IO.monoMsNow
