@@ -8,6 +8,8 @@ cd "$(dirname "$0")/.."
 echo "== oracle theorems current =="
 python3 scripts/gen_lean_oracle.py --check
 python3 scripts/test_lean_oracle.py
+echo "== claims of the paper programs current =="
+python3 scripts/gen_lean_claims.py --check
 
 cd lean
 echo "== lake build =="

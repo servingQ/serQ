@@ -1,7 +1,7 @@
 SHELL := /bin/bash
 export PATH := $(HOME)/.cargo/bin:$(PATH)
 
-.PHONY: check lean drt oracle-ir draw-golden citations citation-drift metrics
+.PHONY: check lean drt oracle-ir claims-ir draw-golden citations citation-drift metrics
 check:   ## fmt, clippy, tests, every program links, the oracles agree
 	scripts/check_rust.sh
 lean:              ## the Lean model (lean/, docs/lean.md): oracle theorems current, lake build, no sorry, axiom audit
@@ -14,6 +14,9 @@ oracle-ir:         ## regenerate tools/oracle/*.ir.json (vllm_request.sq per sce
 	SERQ_BLESS=1 cargo test --release --test vllm_oracle oracle_ir_files_are_current
 	SERQ_BLESS=1 cargo test --release --test vllm_cache cache_ir_file_is_current
 	python3 scripts/gen_lean_oracle.py
+claims-ir:         ## regenerate tools/claims/*.ir.json (examples/papers/*.sq) and the Lean statements of their claims
+	SERQ_BLESS=1 cargo test --release --test claims claim_ir_files_are_current
+	python3 scripts/gen_lean_claims.py
 draw-golden:       ## regenerate docs/assets/*.deployment.svg (serq draw)
 	SERQ_BLESS=1 cargo test --release --test draw docs_assets_are_current
 metrics:           ## regenerate tools/metrics.json (the language's size; make check fails when it moves unrecorded)

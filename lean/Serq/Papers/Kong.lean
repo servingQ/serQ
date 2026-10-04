@@ -2269,6 +2269,11 @@ theorem prefixSums_eq : ∀ l : List ℕ, Exec.prefixSums l = KongMath.prefixSum
 theorem prefixTotal_eq (l : List ℕ) : Exec.prefixTotal l = KongMath.prefixTotal l := by
   simp [Exec.prefixTotal, KongMath.prefixTotal, prefixSums_eq]
 
+/-- The interpreter's `prefix_total` on one case (`tests/claims.rs`):
+`1 + (1 + 2) + (1 + 2 + 3)`. -/
+example : Exec.prefixTotal [3, 1, 2] = 10 := by
+  rw [prefixTotal_eq, KongMath.prefixTotal_eq]; decide
+
 theorem prefixTotal_perm {l₁ l₂ : List ℕ} (h : l₁.Perm l₂) : Exec.prefixTotal l₁ = Exec.prefixTotal l₂ := by
   rw [prefixTotal_eq, prefixTotal_eq, KongMath.prefixTotal_eq, KongMath.prefixTotal_eq, h.sum_eq,
     KongMath.pmin_perm h]

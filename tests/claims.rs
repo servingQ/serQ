@@ -293,3 +293,61 @@ fn the_formatter_keeps_a_claim() {
     let src = engine("serve decode first;");
     assert_eq!(serq::frontend::fmt::format(&src).unwrap(), src);
 }
+
+/// The paper programs' IR, which `scripts/gen_lean_claims.py` reads to write
+/// their claims as Lean statements (`lean/Serq/Claims.lean`), is the IR of
+/// `examples/papers/*.sq` (`make claims-ir` rewrites it).
+#[test]
+fn claim_ir_files_are_current() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bless = std::env::var_os("SERQ_BLESS").is_some();
+    let mut names: Vec<_> = std::fs::read_dir(root.join("examples/papers"))
+        .unwrap()
+        .filter_map(|e| {
+            let p = e.unwrap().path();
+            (p.extension()? == "sq").then(|| p.file_stem().unwrap().to_string_lossy().into_owned())
+        })
+        .collect();
+    names.sort();
+    assert!(!names.is_empty());
+    for name in names {
+        let src = std::fs::read_to_string(root.join(format!("examples/papers/{name}.sq"))).unwrap();
+        let p: Program = compile_source(&src, &Overrides::default()).unwrap();
+        let want = p.to_json() + "\n";
+        let path = root.join(format!("tools/claims/{name}.ir.json"));
+        if bless {
+            std::fs::write(&path, &want).unwrap();
+        } else {
+            let have = std::fs::read_to_string(&path).unwrap_or_default();
+            assert!(
+                have == want,
+                "{} is stale: run `make claims-ir`",
+                path.display()
+            );
+        }
+    }
+}
+
+/// Every claim of the paper programs holds on the path the interpreter runs
+/// (the Lean proofs say it holds on every path).
+#[test]
+fn paper_claims_hold() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for name in [
+        "dai_sarathi",
+        "dai_fastertransformer",
+        "bari_rad",
+        "kong_svf",
+    ] {
+        let src = std::fs::read_to_string(root.join(format!("examples/papers/{name}.sq"))).unwrap();
+        let r = run(&src);
+        for c in &r.claims {
+            assert!(
+                matches!(c.result, ClaimResult::Holds | ClaimResult::Witnessed),
+                "{name}: claim {} is {:?}",
+                c.name,
+                c.result
+            );
+        }
+    }
+}

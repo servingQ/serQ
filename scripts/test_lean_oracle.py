@@ -117,7 +117,7 @@ class IterationCost(unittest.TestCase):
 
     def test_the_deployment_names_the_engine_memory(self):
         ir, lean = generator.load("mixed")
-        self.assertIn(f", some {ir['stages'][0]['kind']['Step']['memory']}, fun _ => 1⟩", lean.deployment())
+        self.assertIn(f", some {ir['stages'][0]['kind']['Step']['memory']}, fun _ => 1, none⟩", lean.deployment())
 
     def test_attention_is_read_doubled_and_kv_decode_directly(self):
         e = {"Binary": ["Add", {"Num": 1.0},

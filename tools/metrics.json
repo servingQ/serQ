@@ -15,6 +15,7 @@
     "at admission (known = computed < prompt ? prompt : computed + 1) {",
     "at admission (known = computed < prompt ? prompt : computed + 1,",
     "branch (known == prompt) { observe ttft = now - t0; }",
+    "cost c + a * ceil(tokens / b0);",
     "cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);",
     "decode (o - 1 - (known - prompt)) growing kv;",
     "pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }",
