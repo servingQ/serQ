@@ -118,6 +118,70 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     }
 }
 
+/// The program the deployment view draws, from program text: what one
+/// request runs (the `server`, or a gateway's `route`) in place of the
+/// session, when the program splits its session into a workload and a
+/// server. Whether a session comes back, and when it ends, is the
+/// workload's and not the deployment's. A program written as one session
+/// is drawn whole.
+pub fn compile_drawn_file(src: &str, path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
+    let prog = frontend::parser::parse_file_with(src, path, &ov.defs, &overridden(ov))
+        .map_err(|e| e.render(src))?;
+    finish(drawn(prog), src, ov)
+}
+
+/// `compile_drawn_file` for the text of a program file in `base`.
+pub fn compile_drawn_source_at(
+    src: &str,
+    base: Option<&Path>,
+    ov: &Overrides,
+) -> Result<ir::Program, String> {
+    let prog = frontend::parser::parse_at_with(src, base, &ov.defs, &overridden(ov))
+        .map_err(|e| e.render(src))?;
+    finish(drawn(prog), src, ov)
+}
+
+/// `load`, for the deployment view: program text is compiled with
+/// `compile_drawn_file`; IR, which has no workload and server apart, is
+/// drawn whole.
+pub fn load_drawn(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
+    if path.extension().is_some_and(|e| e == "json") {
+        return load(path, ov);
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    compile_drawn_file(&text, path, ov)
+}
+
+/// The request in place of the session. What the server reads of the
+/// workload's attributes (`prev`, the previous prompt) is declared ahead of
+/// it, set to `now`: a value the view cannot know, so a server guard on a
+/// workload attribute (`branch (first)`) draws both arms.
+fn drawn(mut prog: frontend::ast::Program) -> frontend::ast::Program {
+    use frontend::ast::{Expr, Stmt};
+    use frontend::parser::assigned_in;
+    if prog.request.is_empty() {
+        return prog;
+    }
+    let request = std::mem::take(&mut prog.request);
+    let (mut workload, mut own) = (vec![], vec![]);
+    assigned_in(&prog.session, &mut workload);
+    assigned_in(&request, &mut own);
+    let mut session: Vec<Stmt> = vec![];
+    for name in workload {
+        if !own.contains(&name)
+            && !session
+                .iter()
+                .any(|s| matches!(s, Stmt::Set(n, _) if *n == name))
+        {
+            session.push(Stmt::Set(name, Expr::Var("now".into())));
+        }
+    }
+    session.extend(request);
+    prog.session = session;
+    prog
+}
+
 /// Run an IR program. A relative trace path is resolved against `base`
 /// (the program file's directory), unless it was overridden.
 pub fn run_ir(p: &ir::Program, base: Option<&Path>) -> Result<Report, String> {

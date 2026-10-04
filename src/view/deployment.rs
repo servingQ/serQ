@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ir::{CArg, CArrival, CExpr, CRef, CStageKind, CStmt, Program, RunMode};
+use crate::ir::{CArg, CArrival, CExpr, CRef, CStageKind, CStmt, Program, RunMode, UnOp};
 use crate::view::figure::{
     Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
@@ -267,11 +267,14 @@ struct Walker<'a> {
     instance_of_slot: Vec<(usize, usize)>,
     /// The flow just run, whose `load` and `release` follow it.
     last_flow: Option<usize>,
-    /// Per loop being probed, the ends its body first reaches.
+    /// Per block being probed, the ends it first reaches.
     probes: Vec<Vec<End>>,
     /// The decision node of each loop body that has one, by body block: a
     /// loop walked twice (inside another) has one decision, not two.
     decisions: Vec<(usize, usize)>,
+    /// Attributes this path has set to a constant, by slot. A guard that
+    /// reads only these is decided, and only its arm is drawn.
+    known: Vec<(usize, f64)>,
 }
 
 impl Walker<'_> {
@@ -529,6 +532,21 @@ impl Walker<'_> {
                     }
                 }
                 CStmt::Branch(c, t, e) => {
+                    // A guard this path has decided (`set transferred = 0;`
+                    // before `branch (!transferred)`) takes one arm. The
+                    // other may still run, when a hold is executed again
+                    // after a preemption: one with a station of its own is
+                    // drawn, as any arm. One with none only skips stations,
+                    // and its edge would join the station before the guard
+                    // to the one after, which the session never travels:
+                    // the hold executed again starts where it was.
+                    if let Some(v) = self.decided(&c) {
+                        let (taken, other) = if v != 0.0 { (t, e) } else { (e, t) };
+                        if !reaches_a_station(self.p, other) {
+                            self.walk(taken);
+                            continue;
+                        }
+                    }
                     // The guard labels the first edge the arm takes. An arm
                     // with no station of its own contributes no label, which
                     // is what keeps a chain of guards from multiplying out.
@@ -539,15 +557,19 @@ impl Walker<'_> {
                     // after the branch a pool is held only where both arms
                     // still hold it
                     let held = self.holds.clone();
+                    let known = self.known.clone();
                     self.frontier = saved.clone();
                     self.arm = Some(self.p.show_guard(&c));
                     self.walk(t);
                     let then_out = std::mem::take(&mut self.frontier);
                     let then_held = std::mem::replace(&mut self.holds, held);
+                    let then_known = std::mem::replace(&mut self.known, known);
                     self.frontier = saved;
                     self.arm = Some("else".into());
                     self.walk(e);
                     self.holds.retain(|h| then_held.contains(h));
+                    // after the branch, what both arms leave the same
+                    self.known.retain(|k| then_known.contains(k));
                     let mut out = then_out;
                     out.append(&mut self.frontier);
                     dedupe(&mut out);
@@ -555,89 +577,16 @@ impl Walker<'_> {
                     self.arm = outer;
                 }
                 CStmt::Loop(body) => {
-                    // A body that decides before its first station (several
-                    // first stations, or an `end` before any) is a router at
-                    // the top of every turn: one decision node the body
-                    // starts from and every pass returns to. A pass from a
-                    // mark at the body's start finds out what it reaches
-                    // first - a station, the one it was at included, or the
-                    // exit - and is undone whole.
-                    let saved = (
-                        self.net.clone(),
-                        self.frontier.clone(),
-                        self.holds.clone(),
-                        self.pending.clone(),
-                        self.arm.clone(),
-                        self.chosen.clone(),
-                        self.instance_of_slot.clone(),
-                        self.last_flow,
-                        self.next_hold,
-                        self.decisions.clone(),
-                    );
-                    let k = self.probes.len();
-                    self.probes.push(vec![]);
-                    self.frontier = vec![(At::Probe(k), None)];
-                    self.walk(body);
-                    let entries = self.probes.pop().expect("pushed above");
-                    (
-                        self.net,
-                        self.frontier,
-                        self.holds,
-                        self.pending,
-                        self.arm,
-                        self.chosen,
-                        self.instance_of_slot,
-                        self.last_flow,
-                        self.next_hold,
-                        self.decisions,
-                    ) = saved;
-                    let known = self
-                        .decisions
-                        .iter()
-                        .find(|(b, _)| *b == body)
-                        .map(|&(_, d)| d);
-                    if let Some(d) = known {
-                        self.attach(d);
-                        self.walk(body);
-                        self.attach(d);
-                    } else if entries.len() > 1 {
-                        // named by the `choose`s it makes before any station:
-                        // the router's name is the gateway's, which is the
-                        // parser's and not the IR's
-                        let mut slots = vec![];
-                        leading_chooses(self.p, body, &mut slots);
-                        let names: Vec<&str> = slots
-                            .iter()
-                            .map(|v| self.p.attrs.get(*v).map_or("?", String::as_str))
-                            .collect();
-                        let label = if names.is_empty() {
-                            String::new()
-                        } else {
-                            format!("choose {}", names.join(", "))
-                        };
-                        self.net.nodes.push(Node {
-                            stage: None,
-                            label,
-                            kind: StationKind::Decision,
-                            inner: String::new(),
-                            note: None,
-                            pools: vec![],
-                            work: String::new(),
-                            modes: vec![],
-                        });
-                        let d = self.net.nodes.len() - 1;
-                        self.decisions.push((body, d));
-                        self.attach(d);
-                        self.walk(body);
-                        self.attach(d);
-                    } else {
-                        // The second pass starts where the first ended, so
-                        // every way back into the body is drawn, from every
-                        // arm, with the guard of the arm it takes; edges
-                        // already there are not drawn twice.
-                        self.walk(body);
-                        self.walk(body);
-                    }
+                    // Every loop is the session's: a server cannot write
+                    // `end`, so a loop in one could never be left, and the
+                    // request `serq draw` draws of a program with a server
+                    // has none. A program written as one session cannot
+                    // tell its workload from its deployment and is drawn
+                    // whole: its way back too, so that no station is a dead
+                    // end. What was set before it holds on the first pass
+                    // only.
+                    self.known.clear();
+                    self.enter(body, true);
                     self.frontier.clear();
                     // A loop is left only by `end`, which already recorded it.
                 }
@@ -668,6 +617,7 @@ impl Walker<'_> {
                     let name = self.p.attrs.get(var).map_or("?", String::as_str);
                     let label = format!("choose {name} of {}", self.p.show_expr(&count));
                     self.pending.retain(|(v, _)| *v != var);
+                    self.known.retain(|&(s, _)| s != var);
                     self.pending.push((var, label.clone()));
                     if !self.chosen.iter().any(|(v, _)| *v == var) {
                         self.chosen.push((var, label));
@@ -679,11 +629,174 @@ impl Walker<'_> {
                         self.net.flow_notes[k].note_to(pool);
                     }
                 }
-                CStmt::Turn | CStmt::Set(..) | CStmt::Observe(..) => {}
+                CStmt::Set(slot, e) => {
+                    let v = self.value(&e).map(|(v, _)| v);
+                    self.known.retain(|&(s, _)| s != slot);
+                    if let Some(v) = v {
+                        self.known.push((slot, v));
+                    }
+                }
+                // a turn draws the attributes of the `turn` block again
+                CStmt::Turn => self.known.clear(),
+                CStmt::Observe(..) => {}
                 CStmt::Grow(..) | CStmt::Drop(..) => {}
             }
         }
     }
+
+    /// The value of an expression that reads only constants and attributes
+    /// this path has set to constants, and whether it read an attribute. A
+    /// guard that reads none is not decided: a guard on a constant
+    /// (`mode == 0`) is the program's setting, which `--set` changes, and
+    /// the figure draws every setting.
+    fn value(&self, e: &CExpr) -> Option<(f64, bool)> {
+        fn eval(e: &CExpr, known: &[(usize, f64)], read: &mut bool) -> Option<f64> {
+            Some(match e {
+                CExpr::Num(x) => *x,
+                CExpr::Attr(s) => {
+                    *read = true;
+                    known.iter().find(|(k, _)| k == s)?.1
+                }
+                CExpr::Unary(op, a) => {
+                    let x = eval(a, known, read)?;
+                    match op {
+                        UnOp::Neg => -x,
+                        UnOp::Not => f64::from(x == 0.0),
+                    }
+                }
+                CExpr::Binary(op, a, b) => {
+                    crate::frontend::link::binop(*op, eval(a, known, read)?, eval(b, known, read)?)
+                }
+                CExpr::Cond(c, a, b) => {
+                    let (c, a, b) = (
+                        eval(c, known, read)?,
+                        eval(a, known, read)?,
+                        eval(b, known, read)?,
+                    );
+                    if c != 0.0 { a } else { b }
+                }
+                CExpr::Ctx(_) | CExpr::Sample(..) | CExpr::Call(..) => return None,
+            })
+        }
+        let mut read = false;
+        let v = eval(e, &self.known, &mut read)?;
+        Some((v, read))
+    }
+
+    /// A guard this path decides: one `value` knows, that reads an attribute.
+    fn decided(&self, e: &CExpr) -> Option<f64> {
+        self.value(e).and_then(|(v, read)| read.then_some(v))
+    }
+
+    /// Walk a block that may decide before its first station: a loop's
+    /// body, or the program the view draws. One that does (several first
+    /// stations, or an `end` before any) is a router: one decision node the
+    /// block starts from. A pass from a mark at the block's start finds out
+    /// what it reaches first - a station, the one it was at included, or
+    /// the exit - and is undone whole.
+    ///
+    /// A loop's body is entered `again`: its last stations lead back to the
+    /// decision, or a second pass from where the first ended draws every
+    /// way back to the station it starts at, from every arm, with the guard
+    /// of the arm it takes; edges already there are not drawn twice.
+    fn enter(&mut self, body: usize, again: bool) {
+        let saved = (
+            self.net.clone(),
+            self.frontier.clone(),
+            self.holds.clone(),
+            self.pending.clone(),
+            self.arm.clone(),
+            self.chosen.clone(),
+            self.instance_of_slot.clone(),
+            self.last_flow,
+            self.known.clone(),
+            self.next_hold,
+            self.decisions.clone(),
+        );
+        let k = self.probes.len();
+        self.probes.push(vec![]);
+        self.frontier = vec![(At::Probe(k), None)];
+        self.walk(body);
+        let entries = self.probes.pop().expect("pushed above");
+        (
+            self.net,
+            self.frontier,
+            self.holds,
+            self.pending,
+            self.arm,
+            self.chosen,
+            self.instance_of_slot,
+            self.last_flow,
+            self.known,
+            self.next_hold,
+            self.decisions,
+        ) = saved;
+        let known = self
+            .decisions
+            .iter()
+            .find(|(b, _)| *b == body)
+            .map(|&(_, d)| d);
+        if let Some(d) = known {
+            self.attach(d);
+            self.walk(body);
+            if again {
+                self.attach(d);
+            }
+            return;
+        }
+        if entries.len() > 1 {
+            // named by the `choose`s it makes before any station: the
+            // router's name is the gateway's, which is the parser's and not
+            // the IR's
+            let mut slots = vec![];
+            leading_chooses(self.p, body, &mut slots);
+            let names: Vec<&str> = slots
+                .iter()
+                .map(|v| self.p.attrs.get(*v).map_or("?", String::as_str))
+                .collect();
+            let label = if names.is_empty() {
+                String::new()
+            } else {
+                format!("choose {}", names.join(", "))
+            };
+            self.net.nodes.push(Node {
+                stage: None,
+                label,
+                kind: StationKind::Decision,
+                inner: String::new(),
+                note: None,
+                pools: vec![],
+                work: String::new(),
+                modes: vec![],
+            });
+            let d = self.net.nodes.len() - 1;
+            self.decisions.push((body, d));
+            self.attach(d);
+            self.walk(body);
+            if again {
+                self.attach(d);
+            }
+            return;
+        }
+        self.walk(body);
+        if again {
+            // a later turn: what the first pass set may have changed
+            self.known.clear();
+            self.walk(body);
+        }
+    }
+}
+
+/// Does a block run at any station, at any depth?
+fn reaches_a_station(p: &Program, block: usize) -> bool {
+    p.blocks.get(block).is_some_and(|stmts| {
+        stmts.iter().any(|s| match s {
+            CStmt::Run { .. } => true,
+            CStmt::Hold { body, .. } | CStmt::Loop(body) => reaches_a_station(p, *body),
+            CStmt::Branch(_, a, b) => reaches_a_station(p, *a) || reaches_a_station(p, *b),
+            _ => false,
+        })
+    })
 }
 
 /// The attributes a block `choose`s before any station, down every path,
@@ -799,8 +912,9 @@ pub fn project(p: &Program) -> Net {
         last_flow: None,
         probes: vec![],
         decisions: vec![],
+        known: vec![],
     };
-    w.walk(p.session);
+    w.enter(p.session, false);
     // Anything still on the frontier ran off the end of the session program.
     let frontier = std::mem::take(&mut w.frontier);
     for (from, label) in frontier {
@@ -1765,7 +1879,9 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             }
             (End::Node(i), End::Exit) => {
                 let r = rects[i];
-                let text = label.map_or("ends".into(), |l| format!("ends ({l})"));
+                // a request leaving the deployment, or a session that ends
+                // inside it: both go out, and only the second has a guard
+                let text = label.map_or("out".into(), |l| format!("out ({l})"));
                 if i + 1 == net.nodes.len() {
                     // The last station leaves to the right.
                     f.edge(

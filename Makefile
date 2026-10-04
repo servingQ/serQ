@@ -14,8 +14,8 @@ oracle-ir:         ## regenerate tools/oracle/*.ir.json (vllm_request.sq per sce
 	SERQ_BLESS=1 cargo test --release --test vllm_oracle oracle_ir_files_are_current
 	SERQ_BLESS=1 cargo test --release --test vllm_cache cache_ir_file_is_current
 	python3 scripts/gen_lean_oracle.py
-draw-golden:       ## regenerate tests/golden/*.svg and docs/assets/*.deployment.svg (serq draw)
-	SERQ_BLESS=1 cargo test --release --test draw golden_files_are_current
+draw-golden:       ## regenerate docs/assets/*.deployment.svg (serq draw)
+	SERQ_BLESS=1 cargo test --release --test draw docs_assets_are_current
 metrics:           ## regenerate tools/metrics.json (the language's size; make check fails when it moves unrecorded)
 	scripts/metrics.py --report
 citations:         ## re-hash tools/citations.json after re-pointing a citation

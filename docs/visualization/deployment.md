@@ -17,12 +17,20 @@ the link's latency are written on it.
 ## The flow is projected from the session program
 
 Pools and stages are declared; the arrows are not. `deployment::project`
-walks the session program carrying a hold stack:
+walks a program carrying a hold stack. `serq draw` gives it what one
+request runs when the program splits its session into a `workload` and a
+`server`: the server, or the gateway's `route` for `request gw;`. The
+workload's own statements are not drawn: its tool calls, its next turn,
+and the `end`s that close a session. Whether a session comes back, and
+when it stops, is the workload's choice, not the deployment's. A request
+arrives, runs what the server runs inside the holds the workload has
+around its `request`, and goes out. A program written as one `session`,
+with no server apart, is drawn whole.
 
 | | |
 |---|---|
-| **Nodes** | one per stage a `Run` reaches (`Node::stage` is `Some`); a stage array is one node labelled `[N]`. A loop that decides before its first station adds a decision ◇, a node with no stage (`Node::stage` is `None`, `kind` is `Decision`) |
-| **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a body that decides before its first station - several first stations, or an `end` before any - starts at a decision ◇, named by the `choose`s it makes, which every turn comes back to and which an `end` before any station leaves from; any other body is walked twice, so its last stations lead back to the station it starts at). An arrow forward past other stations, and an entry past the first, run in a lane below the row rather than through them |
+| **Nodes** | one per stage a `Run` reaches (`Node::stage` is `Some`); a stage array is one node labelled `[N]`. A block that decides before its first station (the drawn program, or a loop's body) adds a decision ◇, a node with no stage (`Node::stage` is `None`, `kind` is `Decision`) |
+| **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop`. The drawn program or a loop body that decides before its first station - several first stations, or an `end` before any - starts at a decision ◇, named by the `choose`s it makes, which an `end` before any station leaves from. A way out is labelled `out`, with the guard of the arm it takes when it has one. Every `loop` is the session's, since a server cannot write `end`: a program with a server is drawn as its request, which has none. A program written as one session is drawn whole, a loop's way back too, so that no station is a dead end. A guard that reads only attributes the path has set to constants, and no `turn` since, is decided; when its other arm has no station, only its arm is drawn: `branch (!transferred)` right after `set transferred = 0` reads, and skipping the read happens only when a preempted request runs its hold again, at the station it is already at. An other arm with a station is drawn. A guard on constants alone (`mode == 0`) is the program's setting, and both arms are drawn. An arrow forward past other stations, and an entry past the first, run in a lane below the row rather than through them |
 | **Instance** | a `choose v` is a pick of an instance: the stages and pools the session then indexes by exactly `v` (`P[i]`, `P.nic[i]`, `P.kv[i]`) are one, drawn in a solid box named after its step engine (`prefill instance P[i]` when it only prefills). A choice of one station and nothing else is no box |
 | **Enclosure** | every `Run` is tagged with the `Hold`s around it; stations sharing a hold on pool `p` sit inside `p`'s dashed box. Inside an instance's box only its own pools are drawn, and none at the stations of a run between two instances: the run's arrow says what it moves |
 | **Frame** | A pool held at one station alone - every hold that takes it there reaches no other station - is that station's: the station is drawn in an unfilled frame with a row per such pool under its glyph, and no dashed box. An instance is a filled panel, so a frame inside one reads as the station's, not the pod's. A transfer between instances does not count: it holds the sender's pool and the receiver's, and its arrow says so (`P.kv[i] → D.kv[j]`), so each KV is its engine's |
@@ -45,7 +53,8 @@ Three things the walk deliberately does *not* do:
 
 That is `examples/multi-turn/vllm.sq`. Its request slot (`reqs`) and its
 KV blocks (`kv`) are held only at `engine`, so they are drawn in its frame.
-The dashed arrow back to `engine` is the next turn, after the tool call.
+The tool call and the next turn are the workload's, so the figure has
+neither: a request arrives at `engine` and goes out.
 
 ## Glyphs
 
@@ -77,10 +86,10 @@ does keep about 7 units of `batch` cached.
 
 ![The paper's two-resource replica](../assets/replica.deployment.svg)
 
-`replica.sq` holds `live` across the whole program including the tool call, and
-`batch` and `kv` only around the engine. `live` is a dashed box around both
-stations; `batch` and `kv` are rows in `engine`'s frame, and `tool` is
-outside them.
+`replica.sq`'s workload holds `live` for a session's whole conversation,
+and its server holds `batch` and `kv` only around the engine. A request is
+served inside the workload's hold, so `live` is drawn too. All three are
+held at `engine` alone, so all three are rows in its frame.
 
 ## A program that holds nothing
 

@@ -684,7 +684,7 @@ fn has_sample(e: &Expr) -> bool {
 }
 
 /// The names `set` or `choose` assigns anywhere in `stmts`.
-fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
+pub(crate) fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
     for s in stmts {
         match s {
             Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => out.push(n.clone()),
@@ -1064,6 +1064,68 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
             .or_else(|| live_read(a, attrs, lets))
             .or_else(|| live_read(b, attrs, lets)),
         Expr::Over(_, _, n, e) => live_read(n, attrs, lets).or_else(|| live_read(e, attrs, lets)),
+    }
+}
+
+/// The distinct requests `stmts` makes, at any depth: `request;`, or a
+/// gateway's `route` (`request gw;`), each once.
+///
+/// A request is made inside the holds the workload's session has around it
+/// (`replica.sq`'s `hold live (1)`, a session's slot for its whole
+/// conversation): each site comes wrapped in them, outermost first, since
+/// the deployment holds them while it serves the request.
+fn request_sites(stmts: &[Stmt], holds: &[&Stmt], out: &mut Vec<Stmt>) {
+    // Two sites are one request when they name the same server or gateway
+    // inside holds of the same pools; the units held do not change what the
+    // figure draws, so `hold live (1)` and `hold live (2)` are one.
+    fn same(a: &Stmt, b: &Stmt) -> bool {
+        match (a, b) {
+            (Stmt::Request, Stmt::Request) => true,
+            (Stmt::Call { queue: a, .. }, Stmt::Call { queue: b, .. }) => a.same_target(b),
+            (
+                Stmt::Hold {
+                    pools: p, body: x, ..
+                },
+                Stmt::Hold {
+                    pools: q, body: y, ..
+                },
+            ) => {
+                p.len() == q.len()
+                    && p.iter().zip(q).all(|(a, b)| a.0.same_target(&b.0))
+                    && same(&x[0], &y[0])
+            }
+            _ => false,
+        }
+    }
+    for s in stmts {
+        match s {
+            Stmt::Call { verb, .. } if verb != "route" => {}
+            Stmt::Request | Stmt::Call { .. } => {
+                let mut site = s.clone();
+                for &h in holds.iter().rev() {
+                    let mut h = h.clone();
+                    let Stmt::Hold { body, .. } = &mut h else {
+                        unreachable!("only holds are pushed")
+                    };
+                    *body = vec![site];
+                    site = h;
+                }
+                if !out.iter().any(|o| same(o, &site)) {
+                    out.push(site);
+                }
+            }
+            Stmt::Hold { body, .. } => {
+                let mut inner = holds.to_vec();
+                inner.push(s);
+                request_sites(body, &inner, out);
+            }
+            Stmt::Loop(body) => request_sites(body, holds, out),
+            Stmt::Branch(_, a, b) => {
+                request_sites(a, holds, out);
+                request_sites(b, holds, out);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1716,6 +1778,15 @@ impl Parser {
             return self
                 .err("a program has one session: inside `workload` or at top level, not both");
         }
+        // what one request runs, before either side is expanded: the one
+        // thing every `request` of the workload's session names
+        let mut request = vec![];
+        if let Some((_, s)) = &self.wl_session {
+            request_sites(s, &[], &mut request);
+            if request.len() > 1 {
+                request.clear();
+            }
+        }
         // Queues first: every entry call in place, so the sides are plain
         // statements when they are put together.
         if !self.queues.is_empty() {
@@ -1788,6 +1859,7 @@ impl Parser {
                 expand(s)?;
             }
             expand(&mut prog.session)?;
+            expand(&mut request)?;
         }
         match (self.wl_session.take(), self.server.take()) {
             (None, None) => Ok(()),
@@ -1795,6 +1867,7 @@ impl Parser {
                 if self.requests.iter().any(|(_, target)| target.is_some()) =>
             {
                 prog.session = session;
+                prog.request = request;
                 Ok(())
             }
             (Some((at, _)), None) => self.err_at(
@@ -1813,7 +1886,9 @@ impl Parser {
                         "`server` is never requested: the workload's session has no `request;`",
                     );
                 }
+                splice(&mut request, &server);
                 prog.session = session;
+                prog.request = request;
                 Ok(())
             }
         }
@@ -4662,11 +4737,15 @@ mod tests {
         stage tool : delay;
     "#;
 
+    /// The same program runs: the same session. What one request runs, kept
+    /// for the deployment view, is not compared: one spelling splits the
+    /// session into a workload and a server, and the other does not.
     fn same(a: &str, b: &str) {
-        assert_eq!(
-            without_locations(parse(a).unwrap()),
-            without_locations(parse(b).unwrap())
-        );
+        let run = |s: &str| Program {
+            request: vec![],
+            ..without_locations(parse(s).unwrap())
+        };
+        assert_eq!(run(a), run(b));
     }
 
     #[test]

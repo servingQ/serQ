@@ -61,7 +61,16 @@ before an order serves only the residents for which `p` holds:
 `serve only (decoders > 0 ? decoding : !decoding)` is FasterTransformer's
 decode-only batches.
 
-## Three new pieces of the session program
+## Two sides: the workload and the server
+
+From this chapter the program is written from its two sides. The session
+inside `workload` is the conversation: a `request;` per turn, then the tool
+call and the next turn, or the end. `server` is what the engine does with
+one request, and the parser splices it in at `request;`, so the session
+that runs is the one of chapters 3 and 4. The split says which part is the
+deployment, and `serq draw` draws only that part.
+
+## Three new pieces of the server
 
 ```serq
 set hitmax = floor((prompt - 1) / bs) * bs;

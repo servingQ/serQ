@@ -35,12 +35,17 @@ It adds no a type to `src/ir.rs`, so `IR_VERSION` is unaffected.
 The program as a queueing network.
 
 Pools and stages are declared, but the arrows are not — the flow is a property
-of the session program. `deployment::project` walks it carrying a hold stack:
+of the session program. `deployment::project` walks it carrying a hold stack.
+When the program splits its session into a `workload` and a `server`, `serq
+draw` (`compile_drawn_file`) gives it what one request runs in place of the
+session: the server, or the gateway's `route`. The workload's tool calls,
+next turns and `end`s are its own choices, not the deployment's, and are not
+drawn. A program written as one `session` is drawn whole.
 
 | | |
 |---|---|
-| **Nodes** | one per stage a `Run` reaches (`Node::stage` is `Some`); a `CRef` with `count > 1` is one node labelled `[N]`. A loop that decides before its first station adds a decision ◇, a node with no stage (`Node::stage` is `None`, `kind` is `Decision`) |
-| **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop` (a body that decides before its first station - several first stations, or an `end` before any - starts at a decision ◇, named by the `choose`s it makes, which every turn comes back to and which an `end` before any station leaves from; any other body is walked twice, so its last stations lead back to the station it starts at). An arrow forward past other stations, and an entry past the first, run in a lane below the row rather than through them |
+| **Nodes** | one per stage a `Run` reaches (`Node::stage` is `Some`); a `CRef` with `count > 1` is one node labelled `[N]`. A block that decides before its first station (the drawn program, or a loop's body) adds a decision ◇, a node with no stage (`Node::stage` is `None`, `kind` is `Decision`) |
+| **Edges** | the successor relation on `Run`s in session order, threaded through `Branch` (both arms) and `Loop`. The drawn program or a loop body that decides before its first station - several first stations, or an `end` before any - starts at a decision ◇, named by the `choose`s it makes, which an `end` before any station leaves from. A way out is labelled `out`, with the guard of the arm it takes when it has one. Every `loop` is the session's, since a server cannot write `end`: a program with a server is drawn as its request, which has none. A program written as one session is drawn whole, a loop's way back too (its body is walked twice, or returns to its decision), so that no station is a dead end. A guard that reads only attributes the path has set to constants, and no `turn` since, is decided; when its other arm has no station, only its arm is drawn: `branch (!transferred)` right after `set transferred = 0` reads, and skipping the read happens only when a preempted request runs its hold again, at the station it is already at. An other arm with a station is drawn. A guard on constants alone (`mode == 0`) is the program's setting, and both arms are drawn. An arrow forward past other stations, and an entry past the first, run in a lane below the row rather than through them |
 | **Enclosure** | every `Run` is tagged with the `Hold`s around it; a group of stations sharing a hold on pool `p` becomes `p`'s dashed box: the units it holds there. A leased pool stays on the stations after its hold and a `Release` takes it off. A `choose` picks an instance, drawn as a solid box around what the session indexes by its variable; inside one only its own pools are boxed, and a run between two instances (`examples/pd-disaggregation/llmd_nixl_pull.sq`'s read) is an arrow between their boxes carrying what it moves and the link's `latency`, where pool boxes would cross. A hold whose units are the constant 0 only reserves (`reqs (0) reserve (1)`, a request parked without a running slot), occupies nothing, and draws no box. A pool held at one station alone - every hold that takes it there reaches no other station (`Net::resident_pools`, from the stations each `hold` reaches) - is that station's: the station is drawn in an unfilled frame with a row per such pool under its glyph, and no dashed box. An instance is a filled panel, so a frame inside one reads as the station's, not the pod's. A transfer between instances does not count: it holds the sender's pool and the receiver's, and its arrow says so (`P.kv[i] → D.kv[j]`), so each KV is its engine's |
 | **Edge labels** | a `Branch` guard, via `Program::show_expr` |
 | **Ends** | `CArrival` labels the in-arrow, `End` the out-arrow |
@@ -104,11 +109,11 @@ src/view/svg.rs        Figure -> String
 ```
 
 `Figure` is the test surface; no writer decides a coordinate. `tests/draw.rs`
-asserts on rectangles and on the projected `Net`, with golden files
-(`tests/golden/`, `make draw-golden`) guarding the writers; the figures the
+asserts on rectangles and on the projected `Net`. The figures the
 site shows (`docs/assets/NAME.deployment.svg`) must be what their program
-(the one `NAME.sq` under `examples/*/` or `docs/tutorial/programs/`) draws now, and
-`make draw-golden` rewrites them too. `make check` draws
+(the one `NAME.sq` under `examples/*/` or `docs/tutorial/programs/`) draws now, byte
+for byte, which also guards the SVG writer; `make draw-golden` rewrites
+them. `make check` draws
 every program in both formats, and every IR file in
 `tools/oracle/`.
 

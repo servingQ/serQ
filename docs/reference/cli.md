@@ -65,7 +65,7 @@ serq run examples/multi-turn/vllm.sq --json | jq '.pools[] | select(.name=="kv")
 |---|---|
 | `make check` | fmt, clippy, tests, every program links and draws, the oracles agree, IR files current |
 | `make oracle-ir` | regenerate `tools/oracle/*.ir.json` |
-| `make draw-golden` | regenerate `tests/golden/` |
+| `make draw-golden` | regenerate `docs/assets/*.deployment.svg` |
 
 ## Input errors
 

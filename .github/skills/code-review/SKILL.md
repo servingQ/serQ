@@ -55,7 +55,7 @@ consult `docs/review.md` and relevant `docs/design/` records when intent matters
   is unavailable, disclose that limitation. Preemption must preserve generated
   tokens when that is what the referenced scheduler does.
 - **Generated artifacts are part of the change.** Check affected
-  `tools/oracle/*.ir.json`, `tests/golden/`, examples, and tutorial programs.
+  `tools/oracle/*.ir.json`, `docs/assets/*.deployment.svg`, examples, and tutorial programs.
   Updated goldens alone do not establish that a semantic change is correct.
   For new language constructs, assess the documented criteria of unambiguity,
   intention-revealing syntax, expressible policy, and checkability against a
