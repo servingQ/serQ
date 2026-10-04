@@ -1534,22 +1534,36 @@ impl<'p> Interp<'p> {
     }
 
     /// The pools a hold statement asks for, its units evaluated now.
+    /// Two references whose indices name the same member are the one pool
+    /// twice, which only the run can see (`kv[i], kv[j]` with i = j, #309).
     fn wanted(&mut self, pools: &'p [(CRef, CExpr, Option<CExpr>)], sid: usize) -> Vec<Wanted<'p>> {
-        pools
-            .iter()
-            .map(|(r, e, f)| {
-                let pool = self.session_index(r, sid);
-                let what = format!("hold {}", self.p.pools[pool].name);
-                let units = self.amount(e, sid, &what);
-                Wanted {
-                    pool,
-                    units,
-                    expr: e,
-                    reserve: f.as_ref(),
-                    need: 0.0,
-                }
-            })
-            .collect()
+        let mut out: Vec<Wanted<'p>> = vec![];
+        for (k, (r, e, f)) in pools.iter().enumerate() {
+            let pool = self.session_index(r, sid);
+            let what = format!("hold {}", self.p.pools[pool].name);
+            if let Some(j) = out.iter().position(|w| w.pool == pool)
+                && self.error.is_none()
+            {
+                let member = match self.p.pools[pool].index {
+                    Some(i) => format!("{}[{i}]", self.p.pools[pool].name),
+                    None => self.p.pools[pool].name.clone(),
+                };
+                self.error = Some(format!(
+                    "`{}` and `{}` name the same member, `{member}`: a hold takes each pool once",
+                    self.p.show_pool_ref(&pools[j].0),
+                    self.p.show_pool_ref(&pools[k].0)
+                ));
+            }
+            let units = self.amount(e, sid, &what);
+            out.push(Wanted {
+                pool,
+                units,
+                expr: e,
+                reserve: f.as_ref(),
+                need: 0.0,
+            });
+        }
+        out
     }
 
     /// Put a hold request in its pool's queue. `front`: a preempted

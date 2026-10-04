@@ -603,7 +603,9 @@ leases it; elsewhere the program does not link. A hold's index is read at
 admission, at such a statement and after a preemption, and the readings
 must name one member: the hold's body does not change an attribute its
 index reads (`set`, `choose`, `turn`), and an index read again inside
-reads attributes and numbers, not the state or the clock. The invariant
+reads attributes and numbers, not the state or the clock. A hold names each pool once: the same reference twice
+does not link, and two indices that name one member at run time fail the
+run. The invariant
 `allocated + cached ≤ cap` holds in every reachable configuration
 (`SerqLang.Step.invariant`). `end` releases every hold but *keeps* the
 session's cached prefixes: the cache does not know that a session has left
