@@ -81,8 +81,13 @@ paper's `λ (v_p + v_d) < b_max / t_{b_max}`: outside `F` every iteration is
 full and lasts `t_{b_max} = c + a`, so the arrivals in a slot are those of
 `t_{b_max}` units, `E[k] = λ t_{b_max}`.
 
-Bari Theorem 2 is next, with the arriving requests' lengths drawn too. Kong
-3.4–3.5 also need an expectation inequality (Harris).
+For Bari et al. (`lean/Serq/Papers/BariStable.lean`) a slot's arrivals are a
+list of drawn (prompt, output) lengths (`Exec.slotL`; `slot` is the list of
+`k` copies). RAD is not work-conserving in Dai et al.'s sense, but its batch
+is full unless every resident decodes and fewer than 128 do (`optimal_tiling`),
+and that is all the drift needs: the same `F`, the same Lyapunov function, the
+same proof shape. Kong 3.4–3.5 also need an expectation inequality (Harris),
+and are not done.
 
 ## Self-critique
 

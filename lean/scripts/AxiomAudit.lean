@@ -81,3 +81,11 @@ import Serq
 #print axioms SerqLang.Papers.DaiStable.hitTime_le
 #print axioms SerqLang.Papers.DaiStable.returnTime_le
 #print axioms SerqLang.Papers.DaiStable.hit_tendsto
+-- Bari et al.'s Theorem 2 on the kernel (Serq/Papers/BariStable.lean)
+#print axioms SerqLang.Exec.slot_eq_slotL
+#print axioms SerqLang.Papers.BariStable.backlog_slot
+#print axioms SerqLang.Papers.BariStable.backlog_lt_of_F
+#print axioms SerqLang.Papers.BariStable.drift
+#print axioms SerqLang.Papers.BariStable.hitTime_le
+#print axioms SerqLang.Papers.BariStable.hit_tendsto
+#print axioms SerqLang.Papers.BariStable.returnTime_le

@@ -15,6 +15,8 @@ program reaches (`Foster.Kernel`), and Foster's criterion
   (`afterEvent`). For a program without delays the next event is the running
   iteration's end, so the slot's machine is again at an iteration's start, or
   idle; with delays a slot may end at a delay instead.
+* `Exec.slotL`: a slot whose arrivals each have their own attributes (drawn
+  lengths); `slot` is `slotL` with `k` copies of one (`slot_eq_slotL`).
 * `Foster.Kernel.ofOutcomes`: the kernel of a finite random choice
   `k ∈ {0, …, K}` with probabilities `p`, and its expectation
   (`apply_ofOutcomes`).
@@ -42,6 +44,23 @@ iteration's start), or an iteration starts (on an idle one). -/
 def slot (prog : Prog) (a : ℕ → ℕ) (k : ℕ) (m : Machine) : Machine :=
   let m' := afterEvent D ((inject prog a)^[k] m)
   if m.iterEnd.isSome then step D m' else m'
+
+/-- One slot whose arrivals have attributes `as`, in order. -/
+def slotL (prog : Prog) (as : List (ℕ → ℕ)) (m : Machine) : Machine :=
+  let m' := afterEvent D (as.foldl (fun m a => inject prog a m) m)
+  if m.iterEnd.isSome then step D m' else m'
+
+/-- `slot` is `slotL` with `k` copies of the same attributes. -/
+theorem slot_eq_slotL (prog : Prog) (a : ℕ → ℕ) (k : ℕ) (m : Machine) :
+    slot D prog a k m = slotL D prog (List.replicate k a) m := by
+  have key : ∀ k (m : Machine), (inject prog a)^[k] m =
+      (List.replicate k a).foldl (fun m a => inject prog a m) m := by
+    intro k
+    induction k with
+    | zero => intro m; rfl
+    | succ k ih => intro m; rw [Function.iterate_succ_apply, ih, List.replicate_succ, List.foldl_cons]
+  unfold slot slotL
+  rw [key]
 
 end Exec
 

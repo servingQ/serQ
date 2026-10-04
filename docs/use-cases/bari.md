@@ -74,6 +74,14 @@ The arrival times are any natural numbers (the program's `poisson`), and the out
 - **`token_rate`** is `Exec.served_rate` (as for Dai et al.), with `tiled_rate`: a batch of $b \le b_{col}$ tokens lasts $t_{Lin}\lceil b/b_{col}\rceil + t_{nl}\,b \ge b\,(t_{Lin}/b_{col} + t_{nl})$. Attention terms only lengthen a batch, so the bound holds with them too.
 - **`optimal_tiling`** uses `every_iteration_of` with an invariant `R` of the run. Every job at the engine has work left. A prefill's work is a multiple of 128: it starts at `vp`, and the program never sets `vp` (`RadOK`, read from the program through `Serq/Inv.lean`'s sub-program invariant). The jobs' owners are distinct and at the engine. An entry of the running batch is a full tile or a decode's token. The invariant is checked for each command a session can run (`rad_exec`), for settling an instant (`rad_settle`), and for the end of an iteration (`rad_handle`). There a prefill loses exactly one tile, so its work stays a multiple of 128. At an iteration's start, `assign_eq_fillIter_only` (`Serq/Work.lean`) says the batch is the greedy fill of the residents `serve only` admits, and `rad_batch` splits on the mode. In Decode Mode the batch is one token for each of up to 128 decodes: 128, or fewer when every resident decodes. In Prefill Mode it is one chunk of the oldest prefill, whose work is at least 128.
 
+**Theorem 2 for random arrivals** (`lean/Serq/Papers/BariStable.lean`) is a theorem on the program's Markov kernel (`Serq/Chain.lean`, [the design](../design/stability.md)), not a claim. In each slot, one iteration of the engine, the arrivals are a list of (prompt, output) lengths drawn from a finite distribution, prompts whole tiles of at most 1 024 and outputs at most 512 (`Fits`), as the program draws them. The backlog is the left work of every job plus the output a prefilling request will still decode. RAD's batch is full unless every resident decodes and fewer than 128 do, which is `optimal_tiling` again, now an invariant of the kernel's states. So:
+
+- a slot with a full batch changes the backlog by exactly the arrivals' tokens minus 128 (`backlog_slot`);
+- a state whose batch is not full, or whose engine is idle, has backlog below $128 \cdot 512$ (`backlog_lt_of_F`);
+- below capacity, mean tokens per slot below 128, the backlog drifts down by $\varepsilon = 128 - \text{load}$ outside that set (`drift`), and Foster's criterion bounds the expected number of slots to reach it by $\text{backlog}/\varepsilon$ (`hitTime_le`, finite by `hit_tendsto`), with a finite expected return time (`returnTime_le`).
+
+`Arrivals` is any finite distribution of a slot's requests; two examples check the theorem is not vacuous.
+
 ## On the run
 
 `serq run`, seed 1, 100 s, at 20 and 30 requests per second:
@@ -94,7 +102,9 @@ Theorem 1's bound for this program is $128/4640$ tokens per µs. With a mean of 
 
 ## What it leaves out
 
-- **Theorem 2, RAD's stability.** Positive recurrence needs a Markov kernel of the program. Foster's criterion on such a kernel needs no path measure (`lean/Serq/Foster.lean`, `docs/design/stability.md`), and the step from `Exec` to the kernel is open (#305). RAD is not work-conserving in Dai et al.'s sense (Prefill Mode serves one chunk, Decode Mode leaves prefills waiting), so its drift is not the backlog's alone. The run is evidence, not proof.
+- **Positive recurrence in the textbook sense.** `BariStable` proves finite expected return times to a set of bounded backlog on the program's kernel, as for Dai et al. The same gaps remain: the states keep the clock and the ended sessions, so the chain is not irreducible as it stands, and the step from finite return times to positive recurrence is not proved (`docs/design/stability.md`).
+- **Poisson in continuous time.** The kernel draws a slot's arrivals at each iteration, at most 10 000 (the proof's bound). Nothing in Lean ties the distribution to a rate. If a slot's arrivals are those of a Poisson stream of rate $\lambda$ over a full batch's $t_{Lin} + 128\,t_{nl} = 4640$ µs (truncated at 10 000), the load is $4640\,\lambda\,E[v_p + v_d]$ and `load < 128` is Theorem 1's bound; inside `F` slots are shorter, and that step is not proved.
+- **The random planner over $g$ nodes.** The kernel is one node. Uniform thinning gives each node a Poisson stream of rate $\lambda/g$, independent of the others; that this makes the $g$-node chain stable is not proved.
 - **The cycle parameter $N$.** The program takes $N = \infty$. A finite $N$ ends a cycle by finishing the active requests, with batches that may not fill a tile, and the paper's tiling principle excepts them in the same way.
 - **Attention.** The cost omits (7)'s attention terms, whose coefficients are not integers in µs. The Lean fragment reads `attention` with even integer coefficients only.
 - **Several nodes.** The fragment has one engine. Theorem 1 for $g$ nodes is the sum of the per-node bound.
