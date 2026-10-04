@@ -807,12 +807,8 @@ impl Linker<'_> {
                 None => r.name.clone(),
                 Some(_) => format!("{}[…]", r.name),
             };
-            let hint = if self
-                .held
-                .iter()
-                .chain(&self.leased)
-                .any(|h| h.name == r.name)
-            {
+            let leased: &[Ref] = if or_leased { &self.leased } else { &[] };
+            let hint = if self.held.iter().chain(leased).any(|h| h.name == r.name) {
                 ": write the pool as the hold does, index included"
             } else if or_leased {
                 ": it takes an enclosing hold's allocation, or a lease of it"
@@ -1211,7 +1207,10 @@ impl Linker<'_> {
                         lease,
                     }
                 }
-                Stmt::Grow(r, e) => CStmt::Grow(self.pool_ref(r)?, self.expr(e)?),
+                Stmt::Grow(r, e) => {
+                    let cr = self.enclosed_pool(r, "grow", false)?;
+                    CStmt::Grow(cr, self.expr(e)?)
+                }
                 Stmt::Drop(r) => CStmt::Drop(self.pool_ref(r)?),
                 Stmt::Release(r) => {
                     let cr = self.enclosed_pool(r, "release", true)?;
@@ -1255,7 +1254,10 @@ impl Linker<'_> {
                         stage,
                         mode: *mode,
                         work: self.expr(work)?,
-                        growing: growing.as_ref().map(|g| self.pool_ref(g)).transpose()?,
+                        growing: growing
+                            .as_ref()
+                            .map(|g| self.enclosed_pool(g, "growing", false))
+                            .transpose()?,
                         also,
                     }
                 }

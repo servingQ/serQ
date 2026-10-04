@@ -153,6 +153,47 @@ fn release_and_load_need_an_enclosing_hold() {
     }
 }
 
+/// `grow` and `growing` act on an enclosing hold's allocation as `load`
+/// does; outside one they used to link and fail only in the run (#267).
+#[test]
+fn grow_and_growing_need_an_enclosing_hold() {
+    for stmt in [
+        "grow kv (16);",
+        "hold q (1) { grow kv (16); }",
+        "run engine prefill (8) growing kv;",
+        "hold q (1) { run engine prefill (8) growing kv; }",
+    ] {
+        let src = format!(
+            "pool kv {{ cap 64; }} pool q {{ cap 10; }}
+             stage engine : step {{ budget 8; cost 1; memory kv; }}
+             workload {{ arrive batch(1); }}
+             session {{ {stmt} end; }} run {{ horizon 10; }}"
+        );
+        let e = check_source(&src, &Overrides::default())
+            .err()
+            .unwrap_or_else(|| panic!("`{stmt}` linked"));
+        assert!(e.contains("outside a hold of `kv`"), "{stmt}: {e}");
+    }
+    // a lease is not a hold: `grow` there is refused, and the hint does
+    // not blame the index, which is the same
+    let src = "pool kv { cap 64; } stage d : delay;
+         workload { arrive batch(1); }
+         session { hold kv (16) { run d (1); } lease kv (5); grow kv (16); end; }
+         run { horizon 10; }";
+    let e = check_source(src, &Overrides::default()).unwrap_err();
+    assert!(
+        e.contains("it acts on an enclosing hold's allocation"),
+        "{e}"
+    );
+    // inside one, both link
+    let src = "pool kv { cap 64; }
+         stage engine : step { budget 8; cost 1; memory kv; }
+         workload { arrive batch(1); }
+         session { hold kv (8) { grow kv (8); run engine prefill (8) growing kv; } end; }
+         run { horizon 10; }";
+    check_source(src, &Overrides::default()).unwrap();
+}
+
 /// The transfer: the source's lease outlives its scope, the KV is in both
 /// pools during the link run and in the destination alone after it. The source's next session (queued at
 /// 0.5) is admitted when the transfer ends (t = 2), the destination's

@@ -117,11 +117,12 @@ stmt     := turn ;                           -- next turn's attributes (workload
                  block [ cache ( expr ) ] [ lease POOL ( expr ) ] ;
                                              -- lease: that pool's allocation outlives the scope,
                                              -- until a release/transfer takes it, expr seconds, or the end
-          | grow POOL ( expr ) ;
+          | grow POOL ( expr ) ;             -- the enclosing hold's allocation on POOL grows
           | drop POOL ;                      -- discard the own cached prefix
           | release POOL ;                   -- give the enclosing hold's allocation on POOL back now, or end a lease of it
           | load POOL ( expr ) ;             -- the KV of expr tokens arrived: the enclosing hold's computed position advances
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
+                                             -- growing: inside a hold of POOL, which grows with the tokens
           | run STAGE , STAGE [, STAGE]* ( expr ) ;   -- one job holding every stage at once
           | branch ( expr ) block [ else block ]          -- a test
           | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
@@ -580,7 +581,10 @@ session's end, and `cache` applies then; a `release m` outside any hold on
 nothing (a hold re-executed after a preemption reaches the statement
 again). `load m (n)` advances the innermost
 enclosing hold's position on `m` by `n` tokens, which its allocation must
-cover; the KV of a transfer counts as computed from then on. The invariant
+cover; the KV of a transfer counts as computed from then on. `grow`,
+`growing`, `load` and `release` stand inside a hold of their pool written
+as the hold writes it, index included (`release` also in a session that
+leases it); elsewhere the program does not link. The invariant
 `allocated + cached ≤ cap` holds in every reachable configuration
 (`SerqLang.Step.invariant`). `end` releases every hold but *keeps* the
 session's cached prefixes: the cache does not know that a session has left
