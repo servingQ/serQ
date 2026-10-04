@@ -13,6 +13,11 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo clippy -p pyserq --locked -- -D warnings
 cargo test --release --locked
+# the semantics again with debug assertions, which check the pools' memory
+# invariant and conservation at every instant (src/engine/interp.rs, #277)
+cargo test --locked --quiet --test pool_semantics --test pd_semantics \
+  --test vllm_semantics --test vllm_oracle --test vllm_cache \
+  --test shared_stages --test exclusive_prefill --test serve_only
 cargo build --release --locked --quiet
 ./target/release/serq fmt --check examples/*/*.sq lib/*.sq docs/tutorial/programs/*.sq tests/lean-regress/*.sq
 # the interpreter's answers the Lean regressions state (lean/Serq/Regress.lean)

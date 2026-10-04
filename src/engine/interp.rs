@@ -928,8 +928,8 @@ impl<'p> Interp<'p> {
         }
         // The memory invariant, `allocated + cached <= cap` in every
         // reachable configuration (`SerqLang.Step.invariant` proves it for
-        // the pool relation; this checks the interpreter on every run of the
-        // tests, the oracle and the differential tests).
+        // the pool relation; this checks the interpreter on every run of a
+        // debug build: the semantics tests, which `make check` runs so).
         #[cfg(debug_assertions)]
         for (cp, pl) in self.p.pools.iter().zip(&self.pools) {
             debug_assert!(
@@ -939,6 +939,44 @@ impl<'p> Interp<'p> {
                 pl.used,
                 pl.cached,
                 pl.cap,
+                self.now
+            );
+        }
+        // Conservation (#277): a pool's `used` is what the sessions' holds
+        // and leases have allocated on it, and its `cached` the sizes of its
+        // entries. The counters are kept apart from those records, so an
+        // allocation released twice or never would otherwise pass unseen
+        // while the pool stays within its cap.
+        #[cfg(debug_assertions)]
+        for (k, (cp, pl)) in self.p.pools.iter().zip(&self.pools).enumerate() {
+            let held: f64 = self
+                .sessions
+                .iter()
+                .map(|s| {
+                    let holds: f64 = s
+                        .holds
+                        .iter()
+                        .flat_map(|h| &h.pools)
+                        .filter(|e| e.pool == k)
+                        .map(|e| e.alloc)
+                        .sum();
+                    let leases: f64 = s
+                        .leases
+                        .iter()
+                        .filter(|l| l.pool == k)
+                        .map(|l| l.alloc)
+                        .sum();
+                    holds + leases
+                })
+                .sum();
+            let cached: f64 = pl.entries.values().map(|e| e.size).sum();
+            debug_assert!(
+                (pl.used - held).abs() <= 1e-6 * held.max(1.0)
+                    && (pl.cached - cached).abs() <= 1e-6 * cached.max(1.0),
+                "pool `{}`: used {} against {held} held, cached {} against {cached} in entries, at t = {}",
+                cp.name,
+                pl.used,
+                pl.cached,
                 self.now
             );
         }
