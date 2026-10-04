@@ -1,7 +1,15 @@
 import Serq.Papers.Dai
 import Serq.Papers.DaiBounded
 import Serq.Papers.DaiStable
+import Serq.Papers.DaiChain
+import Serq.Papers.DaiSim
+import Serq.Papers.DaiRecurrent
+import Serq.Papers.DaiProgram
 import Serq.Papers.Bari
 import Serq.Papers.BariStable
+import Serq.Papers.BariChain
+import Serq.Papers.BariSim
+import Serq.Papers.BariRecurrent
+import Serq.Papers.BariProgram
 import Serq.Papers.KongMath
 import Serq.Papers.Kong

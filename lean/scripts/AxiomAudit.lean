@@ -89,3 +89,19 @@ import Serq
 #print axioms SerqLang.Papers.BariStable.hitTime_le
 #print axioms SerqLang.Papers.BariStable.hit_tendsto
 #print axioms SerqLang.Papers.BariStable.returnTime_le
+-- positive recurrence: from a set to a state, and the papers' chains on job lists
+-- (Serq/Recurrence.lean, Serq/Papers/{Dai,Bari}{Sim,Recurrent}.lean)
+#print axioms SerqLang.Foster.hit_le_of_reach
+#print axioms SerqLang.Foster.positiveRecurrent_of_hit
+#print axioms SerqLang.Papers.DaiSim.simulation
+#print axioms SerqLang.Papers.DaiRecurrent.hit_nil_le
+#print axioms SerqLang.Papers.DaiRecurrent.irreducible
+#print axioms SerqLang.Papers.DaiRecurrent.positive_recurrent
+#print axioms SerqLang.Papers.BariSim.simulation
+#print axioms SerqLang.Papers.BariRecurrent.hit_nil_le
+#print axioms SerqLang.Papers.BariRecurrent.irreducible
+#print axioms SerqLang.Papers.BariRecurrent.positive_recurrent
+#print axioms SerqLang.Papers.DaiProgram.hit_idle_le
+#print axioms SerqLang.Papers.DaiProgram.return_idle
+#print axioms SerqLang.Papers.BariProgram.hit_idle_le
+#print axioms SerqLang.Papers.BariProgram.return_idle
