@@ -1,3 +1,25 @@
+/* The brand: ink #10141F, paper #EEF1F6, amber #F2A33A (docs/assets/brand).
+ *
+ * The header carries the ink in both schemes, so one mark — the light one —
+ * serves both. Links stay teal: ink links would not stand out from the text
+ * on paper, nor from the page on slate. Amber is the hover, darkened on paper
+ * where the brand amber is too pale to read.
+ */
+:root {
+  --md-primary-fg-color: #10141F;
+  --md-primary-fg-color--light: #2B3245;
+  --md-primary-fg-color--dark: #0A0D14;
+  --md-accent-fg-color: #B86E0B;
+  --md-accent-fg-color--transparent: #B86E0B1A;
+  --md-typeset-a-color: #00796B;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-accent-fg-color: #F2A33A;
+  --md-accent-fg-color--transparent: #F2A33A1A;
+  --md-typeset-a-color: #4DB6AC;
+}
+
 /* serQ code blocks: four roles, four colours.
  *
  * Material gives a highlight palette of eight slots, and `Keyword`,

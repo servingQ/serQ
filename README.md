@@ -1,4 +1,9 @@
-# serQ
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/serq-logo-dark.svg">
+    <img src="docs/assets/brand/serq-logo.svg" alt="serQ" width="300">
+  </picture>
+</h1>
 
 *pronounced "ser-Q" — **se**rving + **Q**ueue*
 

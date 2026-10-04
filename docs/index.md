@@ -3,7 +3,7 @@ hide:
   - navigation
 ---
 
-# Welcome to serQ
+# ![serQ](assets/brand/serq-logo.svg#only-light){ width="300" } ![serQ](assets/brand/serq-logo-dark.svg#only-dark){ width="300" }
 
 *pronounced "ser-Q": **se**rving + **Q**ueue*
 
