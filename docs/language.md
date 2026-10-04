@@ -168,7 +168,8 @@ non-zero operand is true; only a `branch` guard is held to 0 or 1),
 `~h2(mean,cv2)`, `~bernoulli(p)`; `min`, `max`, `abs`, `floor`, `ceil`,
 `sqrt`, `exp`, `ln`, `pow`; observables `queue(s)`, `busy(s)`, `work(s)`,
 `used(p)`, `free(p)`, `cachedin(p)`, `holders(p)`, `queued(p)`,
-`budget_left(step)`, `blocksize(p)` (the pool's `block`, folded at link
+`budget_left(step)` (not in a step's `budget` or `chunk`: it plans an
+iteration from one), `blocksize(p)` (the pool's `block`, folded at link
 time), `price(s, s_hit, ds)` (the online price of a miss,
 `missPrice` with the stage's measured λ̂, ρ̂, Ŵ), `est_lambda(s)`,
 `est_rho(s)`, `est_wait(s)`; aggregates over an index, `max j in n (e)`,

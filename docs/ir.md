@@ -144,7 +144,7 @@ its position in the IR, and a context variable exists at one of them:
 | `Select` | a pool's queue keys, reevaluated for each waiting hold before every admission attempt | `Waited`, `Now` |
 | `Evict` | eviction keys, a spill's `work` and `when` | `Size`, `Age`, `Last`, `Queued`, `Now` |
 | `Ps` | a `ps` stage's capacity | `N`, `Now` |
-| `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
+| `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents (a `BudgetLeft` is rejected: it is planned from a budget) | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
 | `Step` | a step stage's `cost`, evaluated after the iteration is scheduled | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
 | `Serve` | a step stage's `serve by` keys and `only`, evaluated for one resident at its turn, the totals as the residents stand then (a session the iteration admitted included) | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` (`only` not `Now`) |
 | `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
