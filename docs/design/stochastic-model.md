@@ -692,7 +692,7 @@ candidates for an issue with a Before/After.
    paid: every number a seeded run prints moved. The tests compare against
    closed forms, confidence intervals and traces and did not; the figures
    of `docs/` that quote seeded runs (`docs/language.md`
-   §5 and §8) are measurements of their date, and the
+   §8) are measurements of their date, and the
    companion repository's serQ-derived numbers move when it moves its pin.
    The IR's shape does not move but the meaning of `seed` does — it names
    a workload now, not a sequence of draws — so this opened IR version 11

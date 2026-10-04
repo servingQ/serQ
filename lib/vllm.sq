@@ -1,7 +1,8 @@
 // vLLM v1 (ref/vllm at 0c87a197, `vllm/v1/core/sched/scheduler.py`,
 // `kv_cache_manager.py`, `block_pool.py`) as definitions a program uses:
 // `use "…/lib/vllm.sq";`. docs/language.md §7 has the line-by-line
-// correspondence.
+// correspondence, for `examples/replay/vllm_replay.sq`; this engine is a
+// simpler one, and §7 says how.
 
 // What a cache hit may cover of a request of x tokens: its full blocks of
 // `bs` tokens, and never the last token, which is computed for its logits

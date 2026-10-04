@@ -4,8 +4,9 @@
 
 A language in which an LLM serving deployment is a program: memory pools,
 stages, a workload and the policy every session runs, written once and both
-simulated and formally checked against the real system. `examples/multi-turn/vllm.sq`
-reproduces the upstream vLLM v1 scheduler request for request — the
+simulated and formally checked against the real system. `examples/oracle/vllm_request.sq`
+and `examples/replay/vllm_replay.sq` reproduce the upstream vLLM v1 scheduler
+request for request on its oracle scenarios — the
 correspondence, cited `file:line` against `ref/vllm`, is
 [`docs/language.md` §7][language].
 

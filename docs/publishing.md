@@ -4,9 +4,9 @@ This site is **public**, at <https://servingq.github.io/serQ/>, published from
 the public repository `servingQ/serQ` by `.github/workflows/docs.yml`.
 
 Anyone can read it, and search engines index it. That includes the pages that
-quote unpublished work: [The language](language.md) §5 and §8 carry the A100
-measurements, the pre-registered predictions of `data/exp/seq/prereg/` and
-the paper's replica. Treat anything
+quote unpublished work: [The language](language.md) §8 and
+[the cliff](tutorial/06-the-cliff.md) carry the A100 measurements and the
+pre-registered predictions. Treat anything
 you add here as published.
 
 ## How it works

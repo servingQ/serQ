@@ -17,9 +17,9 @@ in the last column, so the AST, the IR and the interpreter know nothing of it.
 ## `prefill`, `decode`, `tool`
 
 ```serq
-prefill [ '[' j ']' | on STAGE ] work [growing POOL];
-decode  [ '[' j ']' | on STAGE ] work [growing POOL];
-tool    [ '[' j ']' | on STAGE ] work;
+prefill [ '[' j ']' | on STAGE [, STAGE]* ] work [growing POOL];
+decode  [ '[' j ']' | on STAGE [, STAGE]* ] work [growing POOL];
+tool    [ '[' j ']' | on STAGE [, STAGE]* ] work;
 ```
 
 | Argument | Type | Description |
