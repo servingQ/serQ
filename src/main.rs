@@ -229,12 +229,12 @@ fn main() {
             "--inline-trace" => inline = true,
             "--format" => {
                 format = next(&mut i);
-                if !serq::view::FORMATS.contains(&format.as_str()) {
+                if !serq::view::format_names().contains(&format.as_str()) {
                     argument_error(
                         cmd,
                         format!(
                             "invalid --format `{format}`\nhelp: choose {}",
-                            serq::view::FORMATS.join(" or ")
+                            serq::view::format_names().join(" or ")
                         ),
                     );
                 }

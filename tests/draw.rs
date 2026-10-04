@@ -1027,7 +1027,10 @@ fn a_format_is_named_once() {
         serq::view::render(&f, "svg").unwrap(),
         serq::view::svg::render(&f)
     );
-    assert_eq!(serq::view::FORMATS, ["tikz", "svg"]);
+    // every name the CLI accepts has a writer
+    for name in serq::view::format_names() {
+        assert!(serq::view::render(&f, name).is_ok(), "{name}");
+    }
     assert_eq!(
         serq::view::render(&f, "png").unwrap_err(),
         "unknown format `png` (tikz, svg)"
