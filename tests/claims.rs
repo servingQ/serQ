@@ -169,6 +169,26 @@ fn served_and_demand_are_read_as_the_iteration_starts() {
     assert_eq!((two.result, two.checked), (ClaimResult::Holds, 2));
 }
 
+/// `arrived` is the sessions started by the iteration's start, one arriving
+/// at that instant included: a session of 3 tokens every 10 units, each
+/// served in the iteration that starts at its arrival, so at 20 two have
+/// arrived and `3 * arrived` is always what was served plus this batch.
+#[test]
+fn arrived_counts_the_sessions_started_by_the_iteration() {
+    let r = run("
+        stage engine : step { budget 4; cost 1; }
+        workload { arrive renewal(10); }
+        session { run engine prefill (3); end; }
+        run { horizon 55; }
+        claim at_20: some iteration of engine (now == 20 && arrived == 2);
+        claim balance: every iteration of engine (arrived * 3 == served + tokens);
+        claim clock: every iteration of engine (arrived * 10 == now);");
+    assert_eq!(result(&r, "at_20"), ClaimResult::Witnessed);
+    let b = r.claim("balance").unwrap();
+    assert_eq!((b.result, b.checked), (ClaimResult::Holds, 5));
+    assert_eq!(result(&r, "clock"), ClaimResult::Holds);
+}
+
 /// Each moment reads what it supplies, and a claim's name is its own.
 #[test]
 fn a_claim_reads_only_what_its_moment_supplies() {

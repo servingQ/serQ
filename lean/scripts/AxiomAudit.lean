@@ -66,9 +66,3 @@ import Serq
 #print axioms SerqLang.Papers.KongMath.opt_lower_bound
 #print axioms SerqLang.Papers.KongSvf.queueing_bound
 #print axioms SerqLang.Papers.KongSvf.competitive_ratio
--- Foster's criterion on a finite-support kernel, without measure theory (Serq/Foster.lean)
-#print axioms SerqLang.Foster.drift_bound
-#print axioms SerqLang.Foster.hitTime_le
-#print axioms SerqLang.Foster.hitTime_eq
-#print axioms SerqLang.Foster.positive_recurrent_of_drift
-#print axioms SerqLang.Foster.walk_hitTime_le

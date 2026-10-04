@@ -5,7 +5,8 @@
 bring one request's tokens (`W = 290 + 990`) per gap, which is exactly what
 the engine serves in that time when its batches are full (`W · t_{b_max} =
 b_max · gap`). Before every iteration the tokens that have arrived and not
-been served are at most `(b_max + 1) W`, however many requests arrive.
+been served are at most `(b_max + 1) W`, a bound that does not depend on
+how many requests arrive (the family allows up to 500).
 -/
 import Serq.Papers.Dai
 import Serq.Papers.Kong

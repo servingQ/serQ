@@ -211,7 +211,7 @@ evaluated. See [the language](../language.md), *Claims*.
 | `NAME` | identifier | Not another claim's. |
 | `given` | `expr`, at the `Given` moment | Read for each session once its `init` has run, from its attributes and the constants. A session that reads 0 puts the claim out of the run's scope. |
 | `STAGE` | a `step` stage | One stage, or an array's member by a constant index (`E[0]`). |
-| `expr` | `expr`, at the `Iteration` moment | The cost's variables, `demand`, `served`, `now`, and `queue`, `busy`, `used`, `free`, `holders`, `queued` by a number; not an attribute or a draw. |
+| `expr` | `expr`, at the `Iteration` moment | The cost's variables, `demand`, `served`, `arrived`, `now`, and `queue`, `busy`, `used`, `free`, `holders`, `queued` by a number; not an attribute or a draw. |
 | `expr` (`at end`) | `expr`, at the `End` moment | Constants, `now` and `total`, `count`, `largest`, `smallest`, `prefix_total` of an `observe`. |
 
 ## `run`

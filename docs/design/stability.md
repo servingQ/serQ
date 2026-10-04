@@ -35,7 +35,7 @@ none. Each case keeps $\Psi \le G (b_{\max}+1) W$.
 
 ## 2. Foster's criterion on a kernel
 
-`lean/Serq/Foster.lean` states a Markov chain by its kernel of finite support
+A separate change (`lean/Serq/Foster.lean`) states a Markov chain by its kernel of finite support
 and defines the expected hitting time of a set $F$ by its first-step
 recursion, truncated: $h_0 = 0$ and $h_{n+1}(x) = 1 + \sum_y P(x,y)\,h_n(y)$
 off $F$. The expected hitting time is the least nonnegative solution of that
@@ -63,8 +63,9 @@ Kong 3.4–3.5 also need an expectation inequality (Harris), and come last.
 - **`(vp + vd) * now <= (served + K) * gap`, without a new observable.**
   Rejected. It counts arrivals by the clock, so after the last arrival of a
   finite workload it keeps counting requests that never come. It held on
-  every run only by slack (the last request's decode ends within 129 gaps),
-  not by the argument, and the Lean families are finite.
+  every run only by slack (the last request ends about 101 gaps after it
+  arrives, inside the 129 the bound allows), not by the argument, and the
+  Lean families are finite.
 - **Rate stability by the strong law.** A weaker intermediate result,
   `served / now → load` almost surely, from Mathlib's
   `ProbabilityTheory.strong_law_ae` and a pathwise Lindley inequality. Not
