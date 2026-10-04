@@ -41,8 +41,8 @@ serve only ( expr ) [admission | by ( expr , ... ) | decode first] ;
   earlier in the iteration is not reconsidered.
 - `p` may not read
   `now` or `work(…)` either. An engine whose residents `p` all excludes runs
-  no iteration and waits for the next event, a session joining or leaving,
-  when `p` is read again. The clock moving is no event, so
+  no iteration and waits for the next event of any kind, when `p` is read
+  again. The clock moving is no event, so
   `serve only (now >= 5 || decoding)` would wait past t=5 for ever.
 - A resident `p` reads as 0 gets no token this iteration. It keeps what it
   holds and advances no computed KV, as a displaced decode does under

@@ -104,8 +104,9 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
 !!! warning "Read the interval, not the mean"
     `4.8040` is not 5, and it is not supposed to be. The interval is what makes
     the claim: `±0.2377` covers 5. A run whose interval does *not* cover the
-    closed form is a bug — in the program, or in serQ. That is exactly how
-    `examples/single-turn/mg1.sq`, `ps.sq` and `closed.sq` are checked in CI.
+    closed form is a bug — in the program, or in serQ. Check
+    `examples/single-turn/ps.sq` and `examples/multi-turn/closed.sq` against
+    theirs the same way; no test does it for you.
 
 ## What to try
 

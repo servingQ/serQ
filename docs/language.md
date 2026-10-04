@@ -106,13 +106,15 @@ serving  := prefill  [ '[' expr ']' | on STAGE [, STAGE]* ] expr [ growing POOL 
 ```
 
 **Arrivals and the run.** `arrive renewal(e)` draws or gives each gap,
-which must be positive and finite, and the first renewal arrival comes after
+which must be positive and finite (a constant gap that is not does not
+link; a drawn one stops the run), and the first renewal arrival comes after
 one gap; `poisson(rate)` (a positive, finite constant) arrives at time 0 and
 then after exponential gaps of mean `1 / rate`. `run { arrivals N; }` (or
 `--arrivals N`) runs exactly `N` open-workload arrivals and drains their
 sessions; failing to by `horizon`, or draining at or before `warmup`, is an
-error. A count is a whole number: `closed(n)` and `batch(n)` from 1 to a
-million sessions, `arrivals` from 1 and `seed` from 0, both up to 2⁵³. The
+error. A count is a whole number, or the program does not link: `closed(n)`
+and `batch(n)` from 1 to a million sessions, `arrivals` from 1 and `seed`
+from 0, both up to 2⁵³. The
 report keeps `horizon` as configured and gives the time the run ended as
 `end`; averages and rates are over `end - warmup`.
 ([Workload](api/workload.md), [A finite run](api/program.md#a-finite-run),
@@ -122,24 +124,30 @@ report keeps `horizon` as configured and gives the time the run ended as
 `c ? a : b` (a non-zero operand is true; only a `branch` guard is held to 0
 or 1); the draws `~exp`, `~det`, `~uniform`, `~erlang`, `~h2`,
 `~bernoulli`; functions, observables of pools and stages, and aggregates
-over an index (`max j in n (e)`, written out by the linker term by term).
-The catalogue is the API reference: [functions](api/functions.md),
+over an index, `max j in n (e)`, `min j in n (e)`, `sum j in n (e)`: `n` is
+a number, a constant's name or a parenthesised constant expression, `j` is
+a name the program does not already have, and the linker writes the terms
+out with `j` = 0 … n-1 (`max k in 2 (used(kv[k]))` is
+`max(used(kv[0]), used(kv[1]))`), at most 4 096 terms in a program, nested
+ones included. The catalogue is the API reference: [functions](api/functions.md),
 [distributions](api/distributions.md), [context
 variables](api/context.md), [attributes](api/attributes.md).
 
 The rules that are the language's, not the catalogue's:
 
-- A **context variable** exists at the one place it is supplied, and reading
-  it anywhere else is a link error, not a 0 (`set x = tokens;` in a session
-  does not link; `docs/ir.md`, Moments). `now` is everywhere; `size`, `age`,
+- A **context variable** exists only at the moments that supply it, and
+  reading it anywhere else is a link error, not a 0 (`set x = tokens;` in a
+  session does not link; `docs/ir.md`, Moments; the table is
+  [Context variables](api/context.md)). `now` is everywhere; `size`, `age`,
   `last`, `waiting` are an eviction key's or a spill predicate's; `waited`
   a pool's `queue by` keys'; `present` a `ps` capacity's; `residents`,
-  `decoders`, `kv_decode`, `kv_prefill` a step stage's budget, chunk and
-  cost (the residents before the iteration); `tokens`, `prefilled`,
-  `attention` its cost's (what the iteration scheduled); `decoding`,
-  `admission`, `remaining` its `serve by` keys' and `serve only`'s;
-  `demand`, `served` a claim over iterations'; `total(o)`, `count(o)`,
-  `largest(o)`, `smallest(o)`, `prefix_total(o)` a claim `at end`'s.
+  `decoders`, `kv_decode`, `kv_prefill` a step stage's budget, chunk, cost
+  and serve keys and a claim over its iterations; `tokens`, `prefilled`,
+  `attention` its cost's and that claim's (what the iteration scheduled);
+  `decoding`, `admission`, `remaining` its `serve by` keys' and `serve
+  only`'s; `demand`, `served` a claim over iterations'. The aggregates of a
+  run's observations, `total(o)`, `count(o)`, `largest(o)`, `smallest(o)`,
+  `prefix_total(o)`, are a claim `at end`'s.
   `budget_left(step)` plans an iteration and is not read in that step's own
   `budget` or `chunk`.
 - **Names** do not collide: session attributes, `let` constants and the
@@ -958,7 +966,7 @@ serQ began as the language of a lecture on serving queues; `docs/review.md`
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace (§8) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
 | `papers/*.sq` | three scheduling papers' serving systems | their claims, proved in Lean ([use cases](use-cases/index.md)) |
-| `single-turn/fastertransformer.sq`, `single-turn/separate_phases.sq`, `vendors/*.sq`, the other `pd-disaggregation/*.sq` | the [use cases](use-cases/index.md) that describe them | `make check` links and draws them |
+| `single-turn/fastertransformer.sq`, `single-turn/separate_phases.sq`, `single-turn/ascend_aging.sq`, `vendors/*.sq`, the other `pd-disaggregation/*.sq` | the [use cases](use-cases/index.md) that describe them | `make check` links and draws them |
 
 ## 6. Other consumers
 
@@ -1000,7 +1008,7 @@ window, priority scheduling and its victims, the deferred free of in-flight
 blocks, asynchronous scheduling (§8), and cross-session prefix sharing
 (cache entries are per session, §9).
 
-**Admission.** The header of the `hold` in `lib/vllm.sq`'s `vllm_request` (and in `vllm_replay.sq`) is the
+**Admission.** The header of the `hold` in `lib/vllm.sq`'s `vllm_request` is the
 prefix-cache lookup and the allocation of the first chunk, and both happen
 when the scheduler admits the request, not when it queues. `known` is
 every token the request has: the prompt, or after a preemption the tokens
@@ -1040,6 +1048,11 @@ request runs (`growing kv`).
    checks the excerpt of 2, and `scripts/lean_bench.py` checks that Lean
    and the interpreter agree on the full trace.
 
+The comparison is per request and per step, not of aggregates: an aggregate
+that matches can still be wrong for compensating reasons, and the search
+for the first step at which serQ and the scheduler disagree cannot be
+fooled that way.
+
 ## 8. vLLM on the A100 testbed
 
 `examples/replay/vllm_replay.sq` replays the short-context trace
@@ -1058,15 +1071,22 @@ a·prefilled + b·attention` with MAPE 2.7 % (decode), 5.6 % (prefill), 5.7 %
 **Two overhead constants.** What the served path adds (asynchronous
 scheduling overlaps CPU work with the GPU; the API server tokenises the
 text prompt) is two constants of the program, `c_it` = 4 ms per step and
-`c0` = 40 ms per request, fitted on two light-load runs.
+`c0` = 40 ms per request, fitted on two light-load runs. The light-load
+runs alone do not identify the split between the two (on a wider grid
+`c_it` = 0, `c0` = 60 ms fits them better and the loaded runs worse), so
+the pair is an effective calibration, not a decomposition of the served
+path.
 
 **Measured runs.** With these, the program predicted the served engine's
 mean TTFT and full-hit rate on held-out runs, including the 2.5 s spacing
 where the replica collapses (TTFT 39.1 s predicted, 34.6 s measured), and,
 before the run, that pinning a waiting request's prefix would keep the
-2.5 s replay from collapsing (0.888 s predicted, 0.878 s measured). The
-measured runs and their records are in `serving-queue-theory`, not in this
-repository; [the cliff](tutorial/06-the-cliff.md) tells the story.
+2.5 s replay from collapsing (0.888 s predicted, 0.878 s measured). Not
+every point was as close: at 3.0 s the program predicted 0.605 s against
+0.441 s measured. Each point is one run, and the unpinned 2.5 s run was
+measured on another day without the step tracer the pinned one carried.
+The scripts are in `serving-queue-theory` (`scripts/exp/`); the run records
+are not published. [The cliff](tutorial/06-the-cliff.md) tells the story.
 
 ## 9. Known limitations
 

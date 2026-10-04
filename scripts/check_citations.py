@@ -2,7 +2,7 @@
 """Check the `file.py:lines` citations of upstream vLLM against `ref/vllm`.
 
 `docs/language.md` §7 asserts a correspondence between vLLM's scheduler and
-`examples/multi-turn/vllm.sq`, and the evidence for each row is a citation into upstream
+`examples/replay/vllm_replay.sq`, and the evidence for each row is a citation into upstream
 source. Nothing checked them, so a citation could name a range that had moved,
 or a file that no longer existed, and the table would still read as proof.
 

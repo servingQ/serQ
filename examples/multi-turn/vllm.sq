@@ -11,8 +11,8 @@
 // never the whole prompt). A request grows one block at a time as it
 // decodes; when no block is free the most recently admitted request is
 // preempted (its blocks freed to the cache, it re-enters the waiting queue
-// at the head and recomputes what was lost). See docs/language.md
-// §"vLLM" for the line-by-line correspondence.
+// at the head and recomputes what was lost). See docs/language.md §7 for
+// the line-by-line correspondence and how this engine differs from it.
 use "../../lib/vllm.sq";
 
 let B = 8192;          // max_num_batched_tokens
