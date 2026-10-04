@@ -141,7 +141,8 @@ serving  := prefill  [ '[' expr ']' | on STAGE ] expr [ growing POOL ] ;
 ```
 
 `arrive renewal(~h2(mean, cv2));` supplies interarrival times; `renewal(2)`
-uses a constant two-second gap. Gaps must be positive and finite. The first
+uses a constant two-second gap. Gaps must be positive and finite: a
+constant gap that is not does not link, and a drawn one stops the run. The first
 renewal arrival occurs after one gap. For compatibility, `poisson(rate)`
 starts with an arrival at time zero, then uses exponential gaps of mean
 `1 / rate`. Thus `renewal(~exp(1 / rate))` has the same subsequent arrival
