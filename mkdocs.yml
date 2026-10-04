@@ -115,11 +115,10 @@ nav:
       - Tools:
           - CLI: reference/cli.md
           - Python (pyserq): python.md
-  - Validation:
-      - How serQ is checked: validation.md
-      - The Lean model: lean.md
+          - The Lean model: lean.md
   - Design:
       - design/index.md
+      - How serQ is checked: validation.md
       - Philosophy: design/philosophy.md
       - The stochastic process: design/stochastic-model.md
       - Frontend: design/frontend.md
