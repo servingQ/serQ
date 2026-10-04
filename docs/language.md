@@ -581,7 +581,10 @@ session's end, and `cache` applies then; a `release m` outside any hold on
 nothing (a hold re-executed after a preemption reaches the statement
 again). `load m (n)` advances the innermost
 enclosing hold's position on `m` by `n` tokens, which its allocation must
-cover; the KV of a transfer counts as computed from then on. The invariant
+cover; the KV of a transfer counts as computed from then on. `grow`,
+`growing`, `load` and `release` stand inside a hold of their pool written
+as the hold writes it, index included (`release` also in a session that
+leases it); elsewhere the program does not link. The invariant
 `allocated + cached ≤ cap` holds in every reachable configuration
 (`SerqLang.Step.invariant`). `end` releases every hold but *keeps* the
 session's cached prefixes: the cache does not know that a session has left

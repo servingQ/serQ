@@ -807,10 +807,11 @@ impl Linker<'_> {
                 None => r.name.clone(),
                 Some(_) => format!("{}[…]", r.name),
             };
+            let leased: &[Ref] = if or_leased { &self.leased } else { &[] };
             let hint = if self
                 .held
                 .iter()
-                .chain(&self.leased)
+                .chain(leased)
                 .any(|h| h.name == r.name)
             {
                 ": write the pool as the hold does, index included"

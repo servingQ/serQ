@@ -174,6 +174,14 @@ fn grow_and_growing_need_an_enclosing_hold() {
             .unwrap_or_else(|| panic!("`{stmt}` linked"));
         assert!(e.contains("outside a hold of `kv`"), "{stmt}: {e}");
     }
+    // a lease is not a hold: `grow` there is refused, and the hint does
+    // not blame the index, which is the same
+    let src = "pool kv { cap 64; } stage d : delay;
+         workload { arrive batch(1); }
+         session { hold kv (16) { run d (1); } lease kv (5); grow kv (16); end; }
+         run { horizon 10; }";
+    let e = check_source(src, &Overrides::default()).unwrap_err();
+    assert!(e.contains("it acts on an enclosing hold's allocation"), "{e}");
     // inside one, both link
     let src = "pool kv { cap 64; }
          stage engine : step { budget 8; cost 1; memory kv; }
