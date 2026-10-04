@@ -68,7 +68,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `attrs` | attribute names; an attribute is referenced by its index (slot) |
 | `observes` | observation names, by index |
 | `pools` | `CPool`: `name`, `index` (the member's index in an array declared `pool kv[N]`, a one-member array's too, and a queue family's, `queue D[1]` included; omitted for a single pool; a report label the run does not read), `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, `Lifo`), `queue` (`null` for FIFO, otherwise a nonempty list of pure selection keys), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
-| `stages` | `CStage`: `name`, `index` (as for `CPool`, `stage E[N]`), `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `only` (absent, or a `Serve`-moment predicate that may not draw: the residents it reads as 0 are not served that iteration, and `serve` orders the rest; not with `ExclusivePrefill`), `memory` (pool index) |
+| `stages` | `CStage`: `name`, `index` (as for `CPool`, `stage E[N]`), `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `only` (absent, or a `Serve`-moment predicate that may not draw or read `Now` or `work`: the residents it reads as 0 are not served that iteration, and `serve` orders the rest; not with `ExclusivePrefill`), `memory` (pool index) |
 | `arrival` | `Poisson(rate)`, `Renewal(gap expression)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
 | `init`, `turn`, `session` | block indices: the workload's `init` and `turn` blocks and the session program |
@@ -141,7 +141,7 @@ its position in the IR, and a context variable exists at one of them:
 | `Ps` | a `ps` stage's capacity | `N`, `Now` |
 | `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
 | `Step` | a step stage's `cost`, evaluated after the iteration is scheduled | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
-| `Serve` | a step stage's `serve by` keys and `only`, evaluated for one resident once the residents are known | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
+| `Serve` | a step stage's `serve by` keys and `only`, evaluated for one resident at its turn, the totals as the residents stand then (a session the iteration admitted included) | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` (`only` not `Now`) |
 | `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
 
 The index of a pool or stage reference (`CRef.index`) is evaluated with the
@@ -335,6 +335,12 @@ older reader that ignored the field would run every resident and print a
 different schedule, which is why the line in the release note says so. The
 Lean generator raises `Fragment` on a stage with `only`; no oracle program
 has one, so the oracle IR files and the Lean fragment are unchanged.
+With it, a serve key reads the totals (`Nres`, `Ndec`, `Kvb`, `Kvp`) as the
+residents stand when it is read, where it read them as they stood before
+the iteration: a session admitted in the iteration is counted. That is a
+change of meaning under the same shape, listed in the same message; no
+committed program has a key that reads a total, and none of their numbers
+moved.
 
 ## The Lean fragment
 

@@ -405,14 +405,14 @@ pub struct CStep {
     /// exclusive-prefill rule.
     pub serve: CServe,
     /// Which residents the iteration serves (`serve only (expr)`), read at
-    /// `Moment::Serve` for every resident as a serve key is: a resident it
-    /// reads as 0 is not served this iteration. It keeps what it holds and
-    /// advances no computed KV, as a displaced decode under
-    /// `ExclusivePrefill` does; `serve` orders the rest. None serves every
-    /// resident. A resident admitted from the stage's queue that it excludes
-    /// ends the iteration's admission: it takes no budget, so admitting on
-    /// would fill the pool with requests that do not run. Not with
-    /// `ExclusivePrefill`.
+    /// `Moment::Serve` for each resident at its turn as a serve key is, on
+    /// the residents' totals as they stand: a resident it reads as 0 is not
+    /// served this iteration. It keeps what it holds and advances no
+    /// computed KV, as a displaced decode under `ExclusivePrefill` does;
+    /// `serve` orders the rest. None serves every resident. It reads
+    /// neither `now` nor `work(…)`: an engine whose residents it all
+    /// excludes waits for the next event, and the clock moving is none. Not
+    /// with `ExclusivePrefill`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub only: Option<CExpr>,
     pub memory: Option<usize>,
@@ -857,6 +857,14 @@ impl Program {
                                     .into(),
                             ));
                         }
+                        if reads_clock(e) {
+                            return Err(at(
+                                "a serve `only` may not read `now` or `work(…)`: an engine \
+                                 whose residents it excludes waits for an event, and the \
+                                 clock moving is none"
+                                    .into(),
+                            ));
+                        }
                         if matches!(st.serve, CServe::ExclusivePrefill) {
                             return Err(at(
                                 "`only` with `ExclusivePrefill`: the exclusive rule admits a \
@@ -952,6 +960,23 @@ fn draws(e: &CExpr) -> bool {
         CExpr::Unary(_, x) => draws(x),
         CExpr::Binary(_, a, b) => draws(a) || draws(b),
         CExpr::Cond(c, a, b) => draws(c) || draws(a) || draws(b),
+    }
+}
+
+/// Whether an expression reads a value that moves while no event happens
+/// (`now`, `work(…)`).
+fn reads_clock(e: &CExpr) -> bool {
+    match e {
+        CExpr::Ctx(CtxVar::Now) | CExpr::Call(Fun::Work, _) => true,
+        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => false,
+        CExpr::Sample(_, args) => args.iter().any(reads_clock),
+        CExpr::Call(_, args) => args.iter().any(|a| match a {
+            CArg::Expr(x) => reads_clock(x),
+            CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().is_some_and(|i| reads_clock(i)),
+        }),
+        CExpr::Unary(_, x) => reads_clock(x),
+        CExpr::Binary(_, a, b) => reads_clock(a) || reads_clock(b),
+        CExpr::Cond(c, a, b) => reads_clock(c) || reads_clock(a) || reads_clock(b),
     }
 }
 

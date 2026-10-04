@@ -56,7 +56,10 @@ iteration serves its residents in: `serve admission` (vLLM's `running` list,
 the default), `serve by (keys)` (ascending keys per resident, from
 `decoding`, `admission` and `remaining`; `serve decode first` is
 `serve by (decoding ? 0 : 1)`), or `serve exclusive prefill` (a prefill
-chunk runs alone and stalls every decode, the RBLN stack).
+chunk runs alone and stalls every decode, the RBLN stack). `serve only (p)`
+before an order serves only the residents for which `p` holds:
+`serve only (decoders > 0 ? decoding : !decoding)` is FasterTransformer's
+decode-only batches.
 
 ## Three new pieces of the session program
 

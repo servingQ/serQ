@@ -123,16 +123,14 @@ fn only_selects_and_by_orders() {
     );
 }
 
-#[test]
-fn an_excluded_admission_ends_the_iterations_admission() {
-    // A decodes from t=1. B and C wait at t=1 in a queue the engine
-    // admits. B is admitted and excluded (A decodes), which ends the
-    // admission: C is admitted at t=2, not t=1 beside B.
-    let src = format!(
+/// A prefills 1 and decodes 2 from t=0; B and C wait from t=1 in a queue
+/// the engine admits, and do the same.
+fn admitted(serve: &str) -> String {
+    format!(
         r#"
         pool reqs {{ cap 4; admit via engine; }}
         stage gate : delay;
-        stage engine : step {{ budget 8; cost 1; {FT} }}
+        stage engine : step {{ budget 8; cost 1; {serve} }}
         workload {{ arrive batch(3); }}
         session {{
           run gate (serial > 0 ? 1 : 0);
@@ -145,10 +143,57 @@ fn an_excluded_admission_ends_the_iterations_admission() {
         }}
         run {{ horizon 20; }}
         "#
+    )
+}
+
+#[test]
+fn an_excluded_admission_waits_as_a_resident() {
+    // B and C are admitted at t=1, where A decodes: both are excluded, keep
+    // their slot of `reqs`, and prefill together at t=3, when A is done.
+    // How many are admitted is the pool's `cap`, not `only`'s.
+    let src = admitted(FT);
+    assert_eq!(
+        trace("admitted", &src),
+        [
+            "ITER 0.0000 0:0:p1",
+            "ITER 1.0000 0:0:d1",
+            "ITER 2.0000 0:0:d1",
+            "ITER 3.0000 1:0:p1 2:0:p1",
+            "ITER 4.0000 1:0:d1 2:0:d1",
+            "ITER 5.0000 1:0:d1 2:0:d1",
+        ]
     );
     let r = run_source(&src, &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 3);
-    assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 1.0, 2.0]);
+    assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 1.0, 1.0]);
+}
+
+#[test]
+fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
+    // `residents` and `decoders` are read on the residents as they stand: a
+    // session the iteration admits is one of them. All three arrive at an
+    // empty engine. Read on the residents before the admission, the opposite
+    // rule saw each as a prefill among none (0 < 0 is false), served it
+    // nothing, and the engine never ran.
+    let src = admitted("serve only (decoders < residents ? !decoding : decoding);")
+        .replace("run gate (serial > 0 ? 1 : 0);", "");
+    assert_eq!(
+        trace("admitted-opposite", &src),
+        [
+            "ITER 0.0000 0:0:p1 1:0:p1 2:0:p1",
+            "ITER 1.0000 0:0:d1 1:0:d1 2:0:d1",
+            "ITER 2.0000 0:0:d1 1:0:d1 2:0:d1",
+        ]
+    );
+    // A resident served earlier in the iteration is not reconsidered: at
+    // t=1 A's decode is served before B and C are admitted, and they join
+    // it. Displacing a served decode for a waiting prefill is
+    // `exclusive prefill`'s admission rule, which `only` does not have.
+    let src = admitted("serve only (decoders < residents ? !decoding : decoding);");
+    assert_eq!(
+        trace("admitted-joins", &src)[1],
+        "ITER 1.0000 0:0:d1 1:0:p1 2:0:p1"
+    );
 }
 
 #[test]
@@ -166,11 +211,34 @@ fn the_ir_runs_as_the_text_and_omits_an_absent_only() {
 }
 
 #[test]
+fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
+    // A alone is excluded from t=0: no iteration runs. B joins at t=2, and
+    // the next instant serves both.
+    let src = r#"
+        pool reqs { cap 4; }
+        stage gate : delay;
+        stage engine : step { budget 8; cost 1; serve only (residents > 1); }
+        workload { arrive batch(2); }
+        session {
+          run gate (2 * serial);
+          hold reqs (1) { run engine prefill (1); run engine decode (1); }
+          end;
+        }
+        run { horizon 20; }
+    "#;
+    assert_eq!(
+        trace("waits", src),
+        ["ITER 2.0000 0:0:p1 1:0:p1", "ITER 3.0000 0:0:d1 1:0:d1"]
+    );
+}
+
+#[test]
 fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
     for (serve, message) in [
         ("serve only (decoding) exclusive prefill;", "a third rule"),
         ("serve only (~exp(1) > 1);", "may not draw"),
         ("serve only (tokens > 0);", "tokens"),
+        ("serve only (now >= 5 || decoding);", "may not read `now`"),
     ] {
         let error = compile_source(&source(serve), &Overrides::default())
             .unwrap_err()

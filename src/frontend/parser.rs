@@ -2790,7 +2790,7 @@ impl Parser {
                             Serve::By(keys)
                         } else {
                             return self.err(format!(
-                                "`serve` takes `admission`, `decode first`, `exclusive prefill`, `by (keys)` or `only (expr)` and one of the orders, found {}",
+                                "`serve` takes `admission`, `decode first`, `by (keys)` or `exclusive prefill`, the first three after an optional `only (expr)`; found {}",
                                 self.peek()
                             ));
                         };

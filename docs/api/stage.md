@@ -105,11 +105,14 @@ fit, queue-head and no-admission-after-preemption gates still apply. This
 policy does not supply vendor PP caps or remote-KV admission rules. See
 [Separate prefill/decode batches](../design/exclusive-prefill.md).
 
-`only (p)` reads what a key reads, for every resident, and may not draw. A
-resident it excludes gets no token this iteration, keeps its allocation and
-advances no computed KV. A session admitted through `admit via` that it
-excludes ends the iteration's admission. `serve only (decoders > 0 ? decoding
-: !decoding);` is FasterTransformer's decode-only batches
+`only (p)` is read for each resident at its turn, from the variables a key
+reads, the totals as the residents stand at that read (a session the
+iteration admitted included). Unlike a key it may not read `now` or
+`work(…)`: an engine whose residents it all excludes waits for the next
+event, and the clock moving is none. It may not draw. A resident it
+excludes gets no token this iteration, keeps its allocation and advances no
+computed KV; an admitted session it excludes waits as such a resident.
+`serve only (decoders > 0 ? decoding : !decoding);` is FasterTransformer's decode-only batches
 ([FasterTransformer](../use-cases/fastertransformer.md)). `only` does not
 combine with `exclusive prefill`. See
 [Serving a subset](../design/serve-only.md).
