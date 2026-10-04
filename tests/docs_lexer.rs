@@ -120,3 +120,31 @@ fn the_function_list_is_every_function_the_linker_resolves() {
     let listed: BTreeSet<&str> = serq::frontend::link::FUNCTIONS.iter().copied().collect();
     assert_eq!(resolved, listed);
 }
+
+/// The names the language supplies - context variables, functions, a run's
+/// aggregates, folded calls and the attributes it sets - are coloured as
+/// what a program reads. Since #231 none of them can be a program's own, so
+/// the lexer has no reason to leave one plain.
+#[test]
+fn the_docs_lexer_knows_every_name_the_language_supplies() {
+    use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
+    let supplied = CONTEXT_VARS
+        .iter()
+        .map(|(n, _)| *n)
+        .chain(FUNCTIONS)
+        .chain(AGGREGATES.iter().map(|(n, _)| *n))
+        .chain(FOLDED)
+        // `new` and `out` stay plain: a program also names an `observe` so
+        .chain(
+            BUILTIN_ATTRS
+                .into_iter()
+                .filter(|a| !matches!(*a, "new" | "out")),
+        )
+        .chain(["inf"]);
+
+    let file = "docs/hooks/serq_lexer.py";
+    let text = read(file);
+    let quoted: BTreeSet<&str> = text.split('"').skip(1).step_by(2).collect();
+    let missing: Vec<&str> = supplied.filter(|w| !quoted.contains(w)).collect();
+    assert!(missing.is_empty(), "{file} does not colour {missing:?}");
+}

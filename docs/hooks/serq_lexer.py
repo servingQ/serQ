@@ -49,24 +49,33 @@ OPTIONS = (
 )
 
 # Observables and arithmetic: things a program reads rather than declares.
-# Short, ordinary words are left out on purpose: `size`, `age`, `last`,
-# `tokens`, `present`, `waiting`, `residents`, `decoders`, `prefilled`,
-# `attention` are context variables in the one place the semantics supplies
-# them and ordinary attribute names everywhere else (`out` and `new` are
-# attributes), and a lexer cannot tell. Colouring a program's own `tokens` as
-# a builtin is worse than leaving it plain.
+# A context variable's name is the language's everywhere in a program: since
+# #231 the linker refuses an attribute or a `let` that takes one, so `tokens`
+# is never a program's own and colouring it says something true.
 # Arithmetic is not a role: `min`, `floor` and `pow` are how a program
 # computes, not what it means, and they read as calls without help. Leaving
 # them plain is what lets the observable colour mean exactly one thing.
+# `tests/docs_lexer.rs` holds these lists to the linker's (`CONTEXT_VARS`,
+# `FUNCTIONS`, `AGGREGATES`, `FOLDED`, `BUILTIN_ATTRS`).
 ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow")
 
 BUILTINS = (
+    # functions
     "busy", "work", "used", "free", "cachedin", "holders", "queued",
-    "price", "budget_left", "est_lambda", "est_rho", "est_wait",
-    "now", "kv_decode", "kv_prefill",
-    "decoding", "admission", "remaining", "waited",
+    "price", "budget_left", "est_lambda", "est_rho", "est_wait", "blocksize",
+    # context variables
+    "now", "waited", "size", "age", "last", "waiting", "present", "tokens",
+    "decoders", "prefilled", "residents", "kv_decode", "kv_prefill",
+    "attention", "decoding", "admission", "remaining", "demand", "served",
+    "arrived", "inf",
+    # attributes the language sets (docs/api/attributes.md); `new` and `out`
+    # stay plain, as a program also names an `observe` so (`total(out)`)
     "cached", "serial", "turn_no", "think", "more", "forced", "computed",
 )
+
+# A run's aggregates, which a claim `at end` reads: `count` and `total` are
+# ordinary words, so they are coloured only as a call.
+AGGREGATES = ("total", "count", "largest", "smallest", "prefix_total")
 
 
 class SerqLexer(RegexLexer):
@@ -79,6 +88,10 @@ class SerqLexer(RegexLexer):
             (r"//.*?$", Comment.Single),
             (r"/\*", Comment.Multiline, "block-comment"),
             (r'"[^"]*"', String),
+            # the grammar blocks of docs/api quote a terminal, `'['`, and
+            # elide with `…`
+            (r"'[^'\n]*'", String.Char),
+            (r"…", Punctuation),
             # a distribution is written `~name(...)`, and the tilde is the
             # thing to see: it is where the randomness enters
             (r"(~)([a-z_][\w]*)", bygroups(String.Escape, String.Escape)),
@@ -91,11 +104,13 @@ class SerqLexer(RegexLexer):
             (words(STATEMENTS, suffix=r"\b"), Name.Function),   # what a session does
             (words(OPTIONS, suffix=r"\b"), Name.Builtin),       # the knobs
             (words(BUILTINS, suffix=r"\b"), Name.Variable),     # what a program reads
+            (words(AGGREGATES, suffix=r"(?=\s*\()"), Name.Variable),
             (words(ARITHMETIC, suffix=r"\b"), Name),            # how it computes
             (r"\d+\.?\d*([eE][-+]?\d+)?", Number),
             (r"[-+*/^<>=!&|?:]+", Operator),
-            (r"[{}()\[\],;]", Punctuation),
-            (r"[a-zA-Z_]\w*", Name),
+            (r"[{}()\[\],;.]", Punctuation),
+            # a placeholder may be Greek, `reuse (ρ)`
+            (r"[^\W\d]\w*", Name),
             (r"\s+", Text),
         ],
         "block-comment": [
