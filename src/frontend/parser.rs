@@ -100,7 +100,7 @@ impl fmt::Display for ParseError {
 
 impl ParseError {
     pub fn render(&self, source: &str) -> String {
-        // an error about the command line (`--def`) has no place in the text
+        // an error about an override (a `def`'s body) has no place in the text
         if self.line == 0 {
             return self.msg.clone();
         }
@@ -171,14 +171,14 @@ struct Parser {
     /// Each library's directory as the program named it, for display.
     lib_shown_dirs: Vec<PathBuf>,
     read: Vec<PathBuf>,
-    /// `--def name=expr`: the body an expression definition has instead of
+    /// The `def` overrides: the body an expression definition has instead of
     /// its own, and whether the program defined it.
     def_overrides: Vec<(String, String, bool)>,
     /// The queues declared so far; their entries are expanded in `assemble`.
     queues: Vec<QueueDecl>,
     /// `let` constants with a constant value, for a family's size.
     consts: Vec<(String, f64)>,
-    /// Constants whose values can change through --set, including dependents.
+    /// Constants whose values a `let` override can change, including dependents.
     structural_overrides: Vec<String>,
     /// The queue whose entry is being parsed.
     in_queue: Option<usize>,
@@ -538,8 +538,8 @@ pub fn parse_at(src: &str, base: Option<&Path>) -> PResult<Program> {
     parse_with(src, base, None, &[], &[])
 }
 
-/// `parse_at`, with the bodies `--def` gives expression definitions and
-/// the constants `--set` overrides, which may not size a queue family.
+/// `parse_at`, with the bodies `def` overrides give expression definitions
+/// and the constants `let` overrides replace, which may not size a queue family.
 pub fn parse_at_with(
     src: &str,
     base: Option<&Path>,
@@ -615,7 +615,7 @@ fn parse_with(
     Ok(prog)
 }
 
-/// Parse a standalone expression (used by `--set name=expr` on the CLI).
+/// Parse a standalone expression (an override's: `--set name=expr`, `sets=`).
 pub fn parse_expr(src: &str) -> PResult<Expr> {
     let toks = lex(src)?;
     let mut p = Parser::new(toks);

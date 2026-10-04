@@ -89,9 +89,10 @@ pub struct Overrides {
 impl Overrides {
     /// The constant `name` is the expression `expr`.
     pub fn set(&mut self, name: &str, expr: &str) -> Result<(), String> {
-        check_set_name(name)?;
-        let e = crate::frontend::parser::parse_expr(expr)
-            .map_err(|e| format!("invalid expression in set `{name} = {expr}`: {e}"))?;
+        check_override_name("let", name)?;
+        let e = crate::frontend::parser::parse_expr(expr).map_err(|e| {
+            format!("invalid expression in the `let` override `{name} = {expr}`: {e}")
+        })?;
         self.lets.push((name.to_string(), e));
         Ok(())
     }
@@ -100,7 +101,7 @@ impl Overrides {
     /// `expr`, which may draw, read attributes and use the definitions
     /// before it, as the program's own body could.
     pub fn define(&mut self, name: &str, expr: &str) -> Result<(), String> {
-        check_set_name(name)?;
+        check_override_name("def", name)?;
         crate::frontend::parser::parse_expr(expr).map_err(|e| {
             format!("invalid expression in the `def` override `{name} = {expr}`: {e}")
         })?;
@@ -113,13 +114,14 @@ impl Overrides {
     /// An infinity is `inf`, as `--set name=inf` writes it; NaN is refused
     /// when the program is linked, as any constant that is NaN.
     pub fn set_num(&mut self, name: &str, x: f64) -> Result<(), String> {
-        check_set_name(name)?;
+        check_override_name("let", name)?;
         self.lets.push((name.to_string(), Expr::Num(x)));
         Ok(())
     }
 }
 
-fn check_set_name(name: &str) -> Result<(), String> {
+/// An override's name is an identifier; `kind` is what it overrides.
+fn check_override_name(kind: &str, name: &str) -> Result<(), String> {
     let ok = !name.is_empty()
         && name.chars().enumerate().all(|(i, c)| {
             c == '_'
@@ -132,7 +134,9 @@ fn check_set_name(name: &str) -> Result<(), String> {
     if ok {
         Ok(())
     } else {
-        Err(format!("invalid set name `{name}`; expected an identifier"))
+        Err(format!(
+            "invalid `{kind}` override name `{name}`; expected an identifier"
+        ))
     }
 }
 
