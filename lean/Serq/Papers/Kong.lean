@@ -1450,6 +1450,61 @@ theorem sinv_finish {w : Workload} {g : Ghost} {m : Machine} (hI : SInv w g m) {
       have := hcx.1; rw [hremi] at this; omega
     · rw [if_neg hai] at hce; rw [hlat', if_neg hai]; exact hI.latE a ha hce
 
+theorem attr_match {w : Workload} (M1 : Machine) (g : Ghost) (i : ℕ) (hwl : M1.wl = w)
+    (hcs : w.computedSlot = some 8)
+    (h : SInv w g (setS M1 i { getS M1 i with attr := (getS M1 i).attr.upd 8 0 })) :
+    SInv w g (setS M1 i { getS M1 i with attr := match M1.wl.computedSlot with
+      | some c => (getS M1 i).attr.upd c 0
+      | none => (getS M1 i).attr }) := by
+  simp only [hwl, hcs]; exact h
+
+/-- After the release: the pool admits what now fits, then the request
+observes its latency and ends. -/
+theorem sinv_after_release {w : Workload} {g : Ghost} {i : ℕ} (hin : i < w.init.length) (hc : g.c i = .r1)
+    (hno : ∀ k < w.init.length, g.c k ≠ .s0) (M1 : Machine) (A : Attrs)
+    (h1 : SInv w (g.set i .x) (setS M1 i { getS M1 i with attr := A })) :
+    ∃ g', SInv w g' (exec Dk 9999 (setS (admitAll Dk (setS M1 i { getS M1 i with attr := A })) i
+        { getS (admitAll Dk (setS M1 i { getS M1 i with attr := A })) i with prog := Kk }) i) ∧ g'.c i = .e ∧
+      (∀ j, j ≠ i → g'.c j = g.c j ∨ (g.c j = .q ∧ g'.c j = .r2)) ∧ g'.left = g.left := by
+  rw [admitAll_k]
+  have hno1 : ∀ k < w.init.length, (g.set i .x).c k ≠ .s0 := by
+    intro k hk hck
+    rw [Ghost.set_c] at hck
+    split_ifs at hck
+    exact hno k hk hck
+  obtain ⟨g2, hadm, hI2, -, -⟩ := sinv_admitHeads w 1000 _ _ h1 hno1
+  have hc2 : g2.c i = .x := by
+    rcases hadm.1 i with h' | ⟨h', -⟩ <;> rw [Ghost.set_c, if_pos rfl] at h'
+    · exact h'
+    · exact absurd h' (by decide)
+  refine ⟨_, sinv_finish hI2 hin hc2, by simp, fun j hj => ?_, hadm.2.1⟩
+  simp only [Function.update, hj, dite_false]
+  rcases hadm.1 j with h' | ⟨h', h''⟩ <;> rw [Ghost.set_c, if_neg hj] at h'
+  · exact Or.inl h'
+  · exact Or.inr ⟨h', h''⟩
+
+/-- A finished request releases its peak, the pool admits what now fits, and
+the request observes its latency and ends. -/
+theorem sinv_pop_r1 {w : Workload} {g : Ghost} {m : Machine} (hI : SInv w g m) (hcs : w.computedSlot = some 8)
+    {i : ℕ} {rest : List ℕ} (hr : m.ready = i :: rest) (hc : g.c i = .r1) :
+    ∃ g', SInv w g' (exec Dk 10000 { m with ready := rest } i) ∧ g'.c i = .e ∧
+      (∀ j, j ≠ i → g'.c j = g.c j ∨ (g.c j = .q ∧ g'.c j = .r2)) ∧ g'.left = g.left := by
+  have hin : i < w.init.length := ((hI.readyMem i).mp (by rw [hr]; simp)).1
+  have hsh := hI.shape i hin
+  rw [hc] at hsh
+  obtain ⟨hp, hs, hst⟩ := hsh
+  have hno : ∀ k < w.init.length, g.c k ≠ .s0 := fun k hk hck => by
+    rcases hI.s0 ⟨k, hk, hck⟩ i hin with h' | h' <;> rw [hc] at h' <;> exact absurd h' (by decide)
+  have h1 := sinv_release hI hcs hr hc
+  simp only at h1
+  rw [show (10000 : ℕ) = 9999 + 1 from rfl, exec]
+  have hst' : (getS { m with ready := rest } i).status = .ready := hst
+  have hp' : (getS { m with ready := rest } i).prog = .done := hp
+  have hs' : (getS { m with ready := rest } i).stack = [fr w i] := hs
+  simp only [hst', hp', hs', fr, ne_eq, not_true_eq_false, if_false]
+  simp only [hst', hp', hs'] at h1
+  exact sinv_after_release hin hc hno _ _ (attr_match _ (g.set i .x) i hI.wl hcs h1)
+
 end KongSvf
 end Papers
 end SerqLang
