@@ -11,6 +11,7 @@ use std::fmt;
 
 use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
+use crate::ir::MAX_SESSIONS;
 
 #[derive(Debug, Clone)]
 pub struct LinkError {
@@ -485,9 +486,11 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
                     Err(_) => CArrival::Renewal(lk.expr(e)?),
                 },
                 Arrival::Closed(e) => {
-                    CArrival::Closed(lk.const_eval(e, "the closed population")? as usize)
+                    CArrival::Closed(lk.const_count(e, "the closed population", 1, MAX_SESSIONS)?)
                 }
-                Arrival::Batch(e) => CArrival::Batch(lk.const_eval(e, "the batch size")? as usize),
+                Arrival::Batch(e) => {
+                    CArrival::Batch(lk.const_count(e, "the batch size", 1, MAX_SESSIONS)?)
+                }
                 Arrival::None => CArrival::None,
             };
             (
@@ -514,12 +517,12 @@ pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     };
     let seed = match (&ov.seed, &prog.run.seed) {
         (Some(s), _) => *s,
-        (None, Some(e)) => lk.const_eval(e, "the seed")? as u64,
+        (None, Some(e)) => lk.const_count(e, "the seed", 0, 1 << 53)? as u64,
         (None, None) => 1,
     };
     let arrivals = match (ov.arrivals, &prog.run.arrivals) {
         (Some(n), _) => Some(n),
-        (None, Some(e)) => Some(lk.const_eval(e, "arrivals")? as usize),
+        (None, Some(e)) => Some(lk.const_count(e, "arrivals", 1, 1 << 53)?),
         (None, None) => None,
     };
     if warmup >= horizon {
@@ -895,6 +898,19 @@ impl Linker<'_> {
             .at(span));
         }
         Ok(v)
+    }
+
+    /// A constant that counts (sessions, arrivals): a whole number from `min`
+    /// to `max`. A cast would have made -1 a 0, 2.5 a 2 and 1e30 a run that
+    /// never starts (#289).
+    fn const_count(&self, e: &Expr, what: &str, min: usize, max: usize) -> LResult<usize> {
+        let v = self.const_eval(e, what)?;
+        if !(v.fract() == 0.0 && v >= min as f64 && v <= max as f64) {
+            return Err(LinkError::new(format!(
+                "{what} is {v}: a count is a whole number from {min} to {max}"
+            )));
+        }
+        Ok(v as usize)
     }
 
     /// Evaluate a constant expression (no attributes, no samples).

@@ -22,6 +22,10 @@ use serde::{Deserialize, Serialize};
 /// (a hold without it consumes nothing of the session's own entry).
 pub const IR_VERSION: u32 = 11;
 
+/// The most sessions a workload may start at once (`closed`, `batch`): each
+/// is a state of its own, made before the run begins.
+pub const MAX_SESSIONS: usize = 1_000_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
     Neg,
@@ -941,6 +945,15 @@ impl Program {
         {
             return Err(format!(
                 "`arrive poisson(…)`: the rate is {rate}; a rate must be positive and finite"
+            ));
+        }
+        // a workload starts its sessions before the run begins: a count is
+        // at least one and at most what can be made (#289)
+        if let CArrival::Closed(n) | CArrival::Batch(n) = self.arrival
+            && !(1..=MAX_SESSIONS).contains(&n)
+        {
+            return Err(format!(
+                "workload: {n} sessions: a closed population or a batch is from 1 to {MAX_SESSIONS}"
             ));
         }
         if let Some(n) = self.arrivals {

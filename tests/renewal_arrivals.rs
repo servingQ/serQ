@@ -189,3 +189,58 @@ fn a_poisson_rate_must_be_positive() {
         assert!(e.contains(said), "{rate}: {e}");
     }
 }
+
+/// A count is a whole number in range: a cast made `closed(-1)` no sessions,
+/// `batch(0.5)` none, `arrivals 2.5` two, and `batch(1e30)` a run that never
+/// started (#289).
+#[test]
+fn a_count_is_a_whole_number_in_range() {
+    for (workload, run, said) in [
+        ("closed(-1)", "", "the closed population is -1"),
+        ("closed(0)", "", "the closed population is 0"),
+        ("poisson(1)", "seed -1;", "the seed is -1"),
+        ("poisson(1)", "seed 2.5;", "the seed is 2.5"),
+        (
+            "poisson(1)",
+            "arrivals 1e30;",
+            "arrivals is 1000000000000000000000000000000",
+        ),
+        ("closed(2.5)", "", "the closed population is 2.5"),
+        ("batch(0)", "", "the batch size is 0"),
+        ("batch(0.5)", "", "the batch size is 0.5"),
+        (
+            "batch(1e30)",
+            "",
+            "the batch size is 1000000000000000000000000000000",
+        ),
+        ("poisson(1)", "arrivals 2.5;", "arrivals is 2.5"),
+        ("poisson(1)", "arrivals -1;", "arrivals is -1"),
+    ] {
+        let src = format!(
+            "stage svc : delay;
+             workload {{ arrive {workload}; }}
+             session {{ run svc (1); end; }}
+             run {{ horizon 10; {run} }}"
+        );
+        let e = serq::compile_source(&src, &Overrides::default()).unwrap_err();
+        assert!(
+            e.contains(said) && e.contains("a count is a whole number"),
+            "{workload} {run}: {e}"
+        );
+    }
+    // IR that bypasses the text meets the same bound
+    let mut p = serq::compile_source(
+        "stage svc : delay; workload { arrive batch(1); }
+         session { run svc (1); end; } run { horizon 10; }",
+        &Overrides::default(),
+    )
+    .unwrap();
+    for n in [0, serq::ir::MAX_SESSIONS + 1] {
+        p.arrival = serq::ir::CArrival::Batch(n);
+        let e = p.validate().unwrap_err();
+        assert!(
+            e.contains("a closed population or a batch is from 1 to"),
+            "{n}: {e}"
+        );
+    }
+}

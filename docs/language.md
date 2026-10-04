@@ -156,6 +156,11 @@ an error. Draining before or at `warmup` is also an error because the
 measurement interval would be empty. The CLI accepts `--arrivals N` for
 `run` and `ir`, overriding the source value.
 
+A count is a whole number: `closed(n)` and `batch(n)` from 1 to a million
+sessions (each a state made before the run begins), `arrivals N` and
+`seed` up to 2⁵³ (`arrivals` at least 1). Any other constant does not
+link; IR read from JSON meets the same bound on its sessions.
+
 Reports keep `horizon` as the configured deadline and expose the actual
 termination time as `end` in both text and JSON. Time averages and rates
 use `end - warmup`. Without an arrival limit, `end` equals `horizon`.
