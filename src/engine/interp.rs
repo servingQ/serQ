@@ -2253,12 +2253,16 @@ impl<'p> Interp<'p> {
         // preempted hold caches what it computed, its position, not its
         // allocation: the scope's end counts a hold without a `growing` run
         // as having computed what it holds, but a preemption cuts the body
-        // short (vLLM caches the full blocks of `num_computed_tokens`,
-        // kv_cache_manager.py:602-606, and frees the rest)
+        // short. vLLM caches what it schedules (kv_cache_manager.py:602-606)
+        // and counts it computed right after (`_update_after_schedule`,
+        // scheduler.py:1584-1597), and its victim, `running.pop()`, is one
+        // this step has not scheduled (scheduler.py:742-813): what stays
+        // cached is the full blocks of `num_computed_tokens`, the position
         while self.sessions[victim].holds.len() > hi {
-            let mut h = self.sessions[victim].holds.pop().unwrap();
-            h.grown = true;
-            self.release_hold(victim, &h);
+            let h = self.sessions[victim].holds.pop().unwrap();
+            for e in &h.pools {
+                self.release_units(victim, e.pool, e.alloc, e.pos, h.cache);
+            }
             // pop frames down to and including that hold's frame
             while let Some(f) = self.sessions[victim].frames.pop() {
                 if f.kind == FrameKind::Hold && f.block == h.body {

@@ -384,6 +384,12 @@ the iteration: a session admitted in the iteration is counted. That is a
 change of meaning under the same shape, listed in the same message; no
 committed program has a key that reads a total, and none of their numbers
 moved.
+11 also carries the preempted hold's cache (#326): a hold released by a
+preemption caches its position (`computed`), not its allocation, where it
+cached its allocation when no `growing` run or `load` had advanced it. Same
+shape, another meaning, in the same message; the oracle scenarios, the
+trace and the regressions never preempt such a hold, and none of their
+numbers moved.
 
 ## The Lean fragment
 

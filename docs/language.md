@@ -511,9 +511,7 @@ which is `reuse (0) cache (ℓ)` here. Other entries are evicted in the
 pool's order until allocations and cache fit; `u` units are allocated and
 the body runs. At the end of the body the units are released and
 `min(ℓ, computed)` units stay cached, rounded down to blocks (`computed`
-is the allocation, or the position a `growing` run or a `load` reached; a
-preempted hold caches its position, since the preemption cut its body
-short).
+is the allocation, or the position a `growing` run or a `load` reached).
 `release m` inside the body does the same for `m` alone, at that point:
 the innermost enclosing hold on `m` gives its allocation there back,
 caching per its clause, and holds `m` no longer. A hold's `lease m (t)`
@@ -586,7 +584,9 @@ preempted (vLLM `running[-1]`, `scheduler.py:742-813`: a holder away from
 the engine — a prefiller's finished request keeping its blocks leased, a
 decoder's request parked for a read — is in no `running` list; a pool that
 is no engine's memory preempts its most recently admitted holder): its job
-leaves its stage, its hold is released with its computed prefix cached, and
+leaves its stage, its hold is released with its computed prefix cached (its
+position: the cached prefix it consumed when no `growing` run or `load`
+advanced it, not its allocation), and
 it re-enters the head of the pool's queue with the hold statement to
 execute again. The grower
 itself can be the victim. The re-executed hold finds `computed` set to the

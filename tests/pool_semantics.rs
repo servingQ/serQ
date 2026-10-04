@@ -269,6 +269,9 @@ fn a_preempted_hold_caches_what_it_computed() {
     "#;
     let r = run(src);
     assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
+    // the scope's end keeps its rule: session 1, done, caches what it holds
+    // (the preemption cached nothing, so anything cached is from the end)
+    assert!(r.pool("kv").unwrap().mean_cached > 0.0, "{}", r.text());
     for name in ["cached_at_admission", "computed_at_admission"] {
         assert_eq!(
             r.observe(name).unwrap().samples,
