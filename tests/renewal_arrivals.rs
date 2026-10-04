@@ -161,4 +161,9 @@ fn a_renewal_gap_must_be_positive() {
         e.contains("`arrive renewal(~uniform(-1, 1))`: the interarrival time is -"),
         "{e}"
     );
+    // IR that bypasses the text: a literal gap is the IR's to refuse
+    let mut p = serq::compile_source(&src("2"), &Overrides::default()).unwrap();
+    p.arrival = serq::ir::CArrival::Renewal(serq::ir::CExpr::Num(0.0));
+    let e = p.validate().unwrap_err();
+    assert!(e.contains("an interarrival time must be positive"), "{e}");
 }

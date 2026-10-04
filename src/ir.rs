@@ -899,6 +899,13 @@ impl Program {
                     "renewal arrival may use only constants and sampled distributions".into(),
                 );
             }
+            if let CExpr::Num(gap) = e
+                && !(gap.is_finite() && *gap > 0.0)
+            {
+                return Err(format!(
+                    "`arrive renewal({gap})`: an interarrival time must be positive"
+                ));
+            }
         }
         if let Some(n) = self.arrivals {
             if n == 0 {
