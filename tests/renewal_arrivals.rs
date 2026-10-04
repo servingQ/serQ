@@ -134,3 +134,36 @@ fn renewal_validation_and_ir_version_prevent_ambiguous_inputs() {
             .contains(&format!("this interpreter reads {}", serq::ir::IR_VERSION))
     );
 }
+
+/// A gap that is not a positive time: a constant one does not link, and a
+/// drawn one is a program error in the run. Both used to panic the
+/// interpreter (#269).
+#[test]
+fn a_renewal_gap_must_be_positive() {
+    let src = |gap: &str| {
+        format!(
+            "let g = 0.5;
+             stage svc : delay;
+             workload {{ arrive renewal({gap}); }}
+             session {{ run svc (1); end; }}
+             run {{ horizon 10; }}"
+        )
+    };
+    for gap in ["0", "-1", "g - 2 * g"] {
+        let e = serq::compile_source(&src(gap), &Overrides::default()).unwrap_err();
+        assert!(
+            e.contains("an interarrival time must be positive"),
+            "{gap}: {e}"
+        );
+    }
+    let e = run_source(&src("~uniform(-1, 1)"), &Overrides::default(), None).unwrap_err();
+    assert!(
+        e.contains("`arrive renewal(~uniform(-1, 1))`: the interarrival time is -"),
+        "{e}"
+    );
+    // IR that bypasses the text: a literal gap is the IR's to refuse
+    let mut p = serq::compile_source(&src("2"), &Overrides::default()).unwrap();
+    p.arrival = serq::ir::CArrival::Renewal(serq::ir::CExpr::Num(0.0));
+    let e = p.validate().unwrap_err();
+    assert!(e.contains("an interarrival time must be positive"), "{e}");
+}
