@@ -122,6 +122,41 @@ fn malformed_ir_is_rejected() {
     assert!(Program::from_json(&j).is_err());
 }
 
+/// `budget_left` reads a step engine's token budget; a stage that has none
+/// used to link and fail in the run (#268). The check is the IR's, so IR
+/// that bypasses the text is refused too.
+#[test]
+fn budget_left_needs_a_step_stage() {
+    let src = "pool kv { cap 64; }
+        stage engine : step { budget 8; cost 1; memory kv; }
+        stage d : delay;
+        workload { arrive batch(1); }
+        session { set b = budget_left(d); run d (1); end; }
+        run { horizon 10; }";
+    let e = compile_source(src, &Overrides::default()).unwrap_err();
+    assert!(e.contains("`d` is not a step stage"), "{e}");
+    let ok = src.replace("budget_left(d)", "budget_left(engine)");
+    let mut p = compile_source(&ok, &Overrides::default()).unwrap();
+    // the same refusal from IR: point the call at the delay stage
+    use serq::ir::{CArg, CExpr, CStmt, Fun};
+    let d = p.stages.iter().position(|s| s.name == "d").unwrap();
+    let call = p
+        .blocks
+        .iter_mut()
+        .flatten()
+        .find_map(|s| match s {
+            CStmt::Set(_, CExpr::Call(Fun::BudgetLeft, args)) => Some(args),
+            _ => None,
+        })
+        .unwrap();
+    let CArg::Stage(r) = &mut call[0] else {
+        panic!("budget_left takes a stage")
+    };
+    r.base = d;
+    let e = p.validate().unwrap_err();
+    assert!(e.contains("`d` is not a step stage"), "{e}");
+}
+
 #[test]
 fn explicit_sessions_preset_attributes() {
     // two sessions with different service times through a delay stage

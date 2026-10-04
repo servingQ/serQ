@@ -1120,11 +1120,27 @@ impl Validator<'_> {
                 Ok(())
             }
             CExpr::Sample(_, xs) => xs.iter().try_for_each(|x| self.expr(x, m)),
-            CExpr::Call(_, args) => args.iter().try_for_each(|a| match a {
-                CArg::Expr(x) => self.expr(x, m),
-                CArg::Pool(r) => self.cref(r, self.p.pools.len(), "pool", m),
-                CArg::Stage(r) => self.cref(r, self.p.stages.len(), "stage", m),
-            }),
+            CExpr::Call(f, args) => {
+                args.iter().try_for_each(|a| match a {
+                    CArg::Expr(x) => self.expr(x, m),
+                    CArg::Pool(r) => self.cref(r, self.p.pools.len(), "pool", m),
+                    CArg::Stage(r) => self.cref(r, self.p.stages.len(), "stage", m),
+                })?;
+                // the token budget is a step engine's: on any other stage
+                // there is none to read (#268)
+                if let (Fun::BudgetLeft, [CArg::Stage(r)]) = (f, args.as_slice())
+                    && let Some(s) = self.p.stages[r.base..r.base + r.count]
+                        .iter()
+                        .find(|s| !matches!(s.kind, CStageKind::Step(_)))
+                {
+                    return Err(format!(
+                        "`budget_left({})`: `{}` is not a step stage; budget_left reads a \
+                         step engine's token budget",
+                        s.name, s.name
+                    ));
+                }
+                Ok(())
+            }
             CExpr::Unary(_, x) => self.expr(x, m),
             CExpr::Binary(_, a, b) => {
                 self.expr(a, m)?;
