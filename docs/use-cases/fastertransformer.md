@@ -66,4 +66,4 @@ The last row prefills whole prompts in one iteration, which approximates the lib
 
 - **The library's batch boundary.** In FasterTransformer, the caller decides which requests make up a batch, and the batch's prompts are prefilled whole. The whole-prompts row approximates that but does not model the caller. Whether the Triton backend batches this way is not checked here.
 - **Memory.** The paper's model has no KV cache, and neither does the program. `k_max = 100` is the only cap.
-- **Proof.** That the program is not work-conserving shows in one state of the run. It is not yet a Lean theorem: the Lean fragment serves every resident, and the generator raises `Fragment` on a stage with `only`. #257 tracks that.
+- **Proof.** That the program is not work-conserving is now a Lean theorem about `examples/papers/dai_fastertransformer.sq`, the basic model without `k_max` ([Dai et al.](dai.md)). This program, with `k_max`, is outside the claims' fragment only for its non-integer clock.

@@ -1012,6 +1012,21 @@ a `claims` array of `{name, kind, result, checked, failures, first, note}`
 (`docs/reference/cli.md`). A path that holds a claim is evidence, not a
 proof: the proof is the Lean statement's.
 
+For a program inside the Lean fragment, `scripts/gen_lean_claims.py`
+writes each claim as a statement about the executable semantics below
+(`lean/Serq/Claims.lean`): for every workload of the program's family
+(any number of sessions up to 500, a drawn attribute any natural number,
+the arrival times any under `poisson`, the program's under a constant
+`renewal`, the sessions that satisfy `given`), every machine of every path
+of the program satisfies the claim (`every iteration`), some machine of
+some path does (`some iteration`, whose workload must not draw), or every
+machine at which every session has ended does (`at end`). The proofs are
+Lean files, and the build fails when a claim has none or the program has
+changed what it claims (`lean/Serq/ClaimsProved.lean`). The programs under
+`examples/papers/` are written this way: three papers' propositions, each
+stated in the program that is the paper's serving system and proved about
+that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
+
 **Executable semantics in Lean.** `Serq/Exec.lean` defines the same rules
 for the fragment of pools and one step engine (values and time in ℕ), and
 moves time the way the interpreter does, from event to event, with the

@@ -10,6 +10,11 @@ Real serving systems and workloads written as serQ programs. Each page puts the 
 | [Different workloads](workloads.md) | One engine under single-turn, chat and subagent traffic |
 | [Prefill/decode over NIXL](pd.md) | llm-d's prefill/decode disaggregation with the KV transfer |
 | [FasterTransformer](fastertransformer.md) | Decode first, no mixed batching (`serve only`), unstable where Sarathi is stable |
+| [Throughput-optimal scheduling](dai.md) | Dai et al.: the engine's capacity, Sarathi's work conservation and FasterTransformer's failure, stated as claims and proved in Lean |
+| [RAD: optimal tiling](bari.md) | Bari et al.: the upper bound of Theorem 1 and RAD's full tiles, stated as claims and proved in Lean |
+| [Smallest Volume First](kong.md) | Kong et al.: SVF's waiting bound and its competitive ratio 1 + 2/(1 − α), proved in Lean over the program's runs |
+
+The last three pages follow one shape: the paper, its contributions, the serving system it assumes, that system as a serQ program, the paper's propositions, the propositions as `claim`s of the program, and the Lean proof of the claims about every path of the program.
 
 ## Vendor plugins
 
