@@ -184,6 +184,8 @@ pub struct StepSpec {
     pub chunk: Expr,
     /// The order the iteration serves its residents in (`serve …;`).
     pub serve: Serve,
+    /// `serve only (expr)`: the residents the iteration serves.
+    pub only: Option<Expr>,
     /// Pool whose holdings of the scheduled residents give `kv_decode`.
     pub memory: Option<Ref>,
 }
@@ -460,6 +462,7 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                 expr(&mut s.cost);
                 expr(&mut s.chunk);
                 s.memory.iter_mut().for_each(reference);
+                s.only.iter_mut().for_each(expr);
                 if let Serve::By(keys) = &mut s.serve {
                     keys.iter_mut().for_each(expr);
                 }

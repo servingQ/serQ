@@ -41,7 +41,7 @@ STATEMENTS = (
 OPTIONS = (
     "cap", "block", "evict", "lru", "preempt", "lifo", "none", "queue", "fifo",
     "admit", "via", "spill", "when", "ps", "delay", "step", "budget", "cost",
-    "chunk", "serve", "latency", "nic", "exclusive", "first", "memory", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden",
+    "chunk", "serve", "latency", "nic", "exclusive", "first", "only", "memory", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden",
     "batch", "trace", "ordered", "init", "horizon", "warmup", "seed",
     "share", "maxmin", "bottleneck",
 )

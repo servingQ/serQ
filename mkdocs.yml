@@ -89,6 +89,7 @@ nav:
           - Input shapes and padding: use-cases/input-shapes.md
           - Different workloads: use-cases/workloads.md
           - Prefill/decode over NIXL: use-cases/pd.md
+          - FasterTransformer: use-cases/fastertransformer.md
   - Developer Guide:
       - Development guide: development.md
       - How serQ is checked: validation.md
@@ -104,6 +105,7 @@ nav:
           - Bandwidth sharing: design/bandwidth-sharing.md
           - One admission: design/one-admission.md
           - Separate prefill/decode batches: design/exclusive-prefill.md
+          - Serving a subset: design/serve-only.md
           - Waiting selection: design/waiting-selection.md
           - Queues: design/queue.md
           - Explicit gateways: design/explicit-gateways.md

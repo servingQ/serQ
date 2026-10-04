@@ -21,8 +21,10 @@
 //! kind     := 'fifo' ('(' expr ')')? | 'ps' '(' expr ')' | 'delay'
 //!           | 'step' '{' stepopt* '}'
 //! stepopt  := 'budget' expr ';' | 'cost' expr ';' | 'chunk' expr ';'
-//!           | 'serve' ('admission' | 'decode' 'first' | 'exclusive' 'prefill'
-//!                     | 'by' '(' expr (',' expr)* ')') ';'
+//!           | 'serve' ('only' '(' expr ')')?
+//!                     ('admission' | 'decode' 'first' | 'exclusive' 'prefill'
+//!                     | 'by' '(' expr (',' expr)* ')') ';'   -- one of the two at least;
+//!                                                          -- not `only` with `exclusive prefill`
 //!           | 'memory' IDENT ';'
 //! wlitem   := 'arrive' ('poisson' '(' expr ')' | 'renewal' '(' expr ')' | 'closed' '(' expr ')' | 'batch' '(' expr ')' | 'none') ';'
 //!           | 'trace' STRING ('ordered')? ';' | 'init' block | 'turn' block
@@ -366,7 +368,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 88] = [
+pub const KEYWORDS: [&str; 89] = [
     "admission",
     "admit",
     "arrivals",
@@ -420,6 +422,7 @@ pub const KEYWORDS: [&str; 88] = [
     "none",
     "observe",
     "on",
+    "only",
     "ordered",
     "poisson",
     "pool",
@@ -1006,6 +1009,7 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
             StageKind::Step(sp) => {
                 out.extend([&sp.budget, &sp.cost, &sp.chunk]);
                 out.extend(sp.memory.iter().filter_map(|r| r.index.as_deref()));
+                out.extend(&sp.only);
                 if let Serve::By(keys) = &sp.serve {
                     out.extend(keys);
                 }
@@ -2732,6 +2736,7 @@ impl Parser {
                 cost: Expr::Num(0.0),
                 chunk: Expr::Num(0.0),
                 serve: Serve::Admission,
+                only: None,
                 memory: None,
             };
             let mut has_cost = false;
@@ -2752,6 +2757,20 @@ impl Parser {
                             );
                         }
                         has_serve = true;
+                        if self.eat_kw("only") {
+                            self.expect(&Tok::LParen)?;
+                            s.only = Some(self.expr()?);
+                            self.expect(&Tok::RParen)?;
+                            if *self.peek() == Tok::Semi {
+                                self.expect(&Tok::Semi)?;
+                                continue;
+                            }
+                            if self.is_kw("exclusive") {
+                                return self.err(
+                                    "`serve only (…) exclusive prefill`: the exclusive rule admits a waiting prefill in place of the decodes it displaces, and what `only` would do to either is a third rule",
+                                );
+                            }
+                        }
                         s.serve = if self.eat_kw("admission") {
                             Serve::Admission
                         } else if self.eat_kw("decode") {
@@ -2771,7 +2790,7 @@ impl Parser {
                             Serve::By(keys)
                         } else {
                             return self.err(format!(
-                                "`serve` takes `admission`, `decode first`, `exclusive prefill` or `by (keys)`, found {}",
+                                "`serve` takes `admission`, `decode first`, `exclusive prefill`, `by (keys)` or `only (expr)` and one of the orders, found {}",
                                 self.peek()
                             ));
                         };

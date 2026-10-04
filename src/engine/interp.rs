@@ -2747,6 +2747,11 @@ impl<'p> Interp<'p> {
             .any(|&j| self.stages[st].jobs[&j].mode == RunMode::Prefill);
         let preempt0: u64 = self.pools.iter().map(|p| p.preemptions).sum();
         let mut attn = 0.0;
+        // Whether waiting admission has begun, and whether a resident it
+        // added was one `serve only` excludes: that ends the admission
+        // (`CStep::only`).
+        let mut admitting = false;
+        let mut closed = false;
         loop {
             let residents = self.serving_order(st, &spec.serve, &pre);
             let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
@@ -2758,12 +2763,19 @@ impl<'p> Interp<'p> {
                 // them and uses the whole budget (RBLN guard D). Its hold
                 // must therefore see that budget, not the decode remainder.
                 let admit_left = if exclusive { budget } else { left };
-                if left > 0.0 && !preempted && self.admit_bound(st, admit_left) {
+                if left > 0.0 && !preempted && !closed && self.admit_bound(st, admit_left) {
+                    admitting = true;
                     continue;
                 }
                 break;
             };
             served.insert(id);
+            if let Some(only) = &spec.only {
+                if !self.serves(st, id, only, &pre) {
+                    closed |= admitting;
+                    continue;
+                }
+            }
             let (mode, remaining, growing, owner) = {
                 let j = &self.stages[st].jobs[&id];
                 (j.mode, j.work, j.growing, j.owner)
@@ -3018,17 +3030,7 @@ impl<'p> Interp<'p> {
         let mut keyed: Vec<(Vec<f64>, u64)> = r
             .drain(..)
             .map(|id| {
-                let (owner, decoding, remaining) = {
-                    let j = &self.stages[st].jobs[&id];
-                    (j.owner, (j.mode == RunMode::Decode) as u8 as f64, j.work)
-                };
-                let ctx = Ctx {
-                    sid: owner,
-                    decoding,
-                    admission: owner.map_or(0.0, |s| self.sessions[s].adm_seq as f64),
-                    remaining,
-                    ..pre.clone()
-                };
+                let ctx = self.resident_ctx(st, id, pre);
                 let k = keys
                     .iter()
                     .map(|e| self.eval(e, &ctx, Which::Session))
@@ -3044,6 +3046,25 @@ impl<'p> Interp<'p> {
                 .unwrap_or(Ordering::Equal)
         });
         keyed.into_iter().map(|(_, id)| id).collect()
+    }
+
+    /// What a serve key or `only` reads for one resident (`Moment::Serve`):
+    /// the residents' variables of `pre` and the resident's own.
+    fn resident_ctx(&self, st: usize, id: u64, pre: &Ctx) -> Ctx {
+        let j = &self.stages[st].jobs[&id];
+        Ctx {
+            sid: j.owner,
+            decoding: (j.mode == RunMode::Decode) as u8 as f64,
+            admission: j.owner.map_or(0.0, |s| self.sessions[s].adm_seq as f64),
+            remaining: j.work,
+            ..pre.clone()
+        }
+    }
+
+    /// Whether `serve only (expr)` serves resident `id` this iteration.
+    fn serves(&mut self, st: usize, id: u64, only: &CExpr, pre: &Ctx) -> bool {
+        let ctx = self.resident_ctx(st, id, pre);
+        self.eval(only, &ctx, Which::Session) != 0.0
     }
 
     fn residents(&self, st: usize) -> Vec<u64> {

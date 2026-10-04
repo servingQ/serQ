@@ -9,6 +9,7 @@ Real serving systems and workloads written as serQ programs. Each page puts the 
 | [Input shapes and padding](input-shapes.md) | How scheduler output becomes compiled device inputs, per vendor |
 | [Different workloads](workloads.md) | One engine under single-turn, chat and subagent traffic |
 | [Prefill/decode over NIXL](pd.md) | llm-d's prefill/decode disaggregation with the KV transfer |
+| [FasterTransformer](fastertransformer.md) | Decode first, no mixed batching (`serve only`), unstable where Sarathi is stable |
 
 ## Vendor plugins
 

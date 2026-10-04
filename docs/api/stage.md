@@ -61,6 +61,7 @@ step {
   cost expr;
   chunk expr;
   serve admission;  |  serve by (expr, …);  |  serve decode first;  |  serve exclusive prefill;
+  serve only (expr) [admission | by (expr, …) | decode first];
   memory POOL;
 }
 ```
@@ -77,7 +78,7 @@ that schedules no token is not one, unless it preempted.
 | `budget` | `expr` | `Budget` | `inf` | Tokens per iteration. Reads `residents`, `decoders`, `kv_decode`, `kv_prefill`. |
 | `cost` | `expr` | `Step` | required (a parse error without it) | Clock time of the iteration. Reads `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`. |
 | `chunk` | `expr` | `Budget` | `0` (no cap) | Cap on one request's prefill tokens in an iteration. |
-| `serve` | see below | `Serve` | `admission` | Resident order or an exclusive-prefill batch policy. At most once. |
+| `serve` | see below | `Serve` | `admission` | Which residents are served (`only`) and in what order, or an exclusive-prefill batch policy. At most once. |
 | `memory` | `pool` | | none | The pool whose holds give `kv_decode` and `kv_prefill`, and whose `preempt lifo` victims come from this stage. |
 
 ### `serve`
@@ -88,6 +89,7 @@ that schedules no token is not one, unless it preempted.
 | `by (k1, …)` | ascending keys per resident, ties by admission order | `By(keys)` |
 | `decode first` | decodes before prefills | `By([decoding ? 0 : 1])` |
 | `exclusive prefill` | one prefill alone, or a decode-only batch; a fitting waiting prefill displaces tentative resident decodes | `ExclusivePrefill` |
+| `only (p)` then an order | only the residents for which `p` is nonzero, in that order (`admission` when none is written) | `CStep.only = Some(p)` beside the order's `By` |
 
 Keys read `decoding`, `admission`, `remaining` and the totals `residents`,
 `decoders`, `kv_decode`, `kv_prefill`, and may not draw. `serve by (remaining)` is
@@ -102,6 +104,15 @@ During these admissions `budget_left` supplies the full budget. Ordinary
 fit, queue-head and no-admission-after-preemption gates still apply. This
 policy does not supply vendor PP caps or remote-KV admission rules. See
 [Separate prefill/decode batches](../design/exclusive-prefill.md).
+
+`only (p)` reads what a key reads, for every resident, and may not draw. A
+resident it excludes gets no token this iteration, keeps its allocation and
+advances no computed KV. A session admitted through `admit via` that it
+excludes ends the iteration's admission. `serve only (decoders > 0 ? decoding
+: !decoding);` is FasterTransformer's decode-only batches
+([FasterTransformer](../use-cases/fastertransformer.md)). `only` does not
+combine with `exclusive prefill`. See
+[Serving a subset](../design/serve-only.md).
 
 ### Example
 

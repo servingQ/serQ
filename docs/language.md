@@ -99,7 +99,8 @@ kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 
           | delay                            -- every job at rate 1, no waiting
           | step { budget expr ; cost expr ; [chunk expr ;]
                    [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
-                    | serve exclusive prefill ;]
+                    | serve exclusive prefill ;
+                    | serve only ( expr ) [admission | by ( expr , ... ) | decode first] ;]
                    [memory POOL ;] }
 wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
@@ -178,7 +179,7 @@ capacity), `residents`, `decoders`, `kv_decode`, `kv_prefill` (a step stage's bu
 cost: the residents before the iteration), `tokens`, `prefilled`, `attention` (its cost
 only: what the iteration scheduled; `attention = Σ n (K + n/2)` over the prefill
 chunks, `K` the position before the chunk), `decoding`, `admission`,
-`remaining` (a step stage's `serve by` keys, per resident; the keys read the
+`remaining` (a step stage's `serve by` keys and `serve only`, per resident; they read the
 residents' four as well). Each context variable exists at the one place named in
 its parenthesis (`now` everywhere), and reading it anywhere else is a link
 error rather than a 0: `set x = tokens;` in a session, or `evict by (tokens)`,
@@ -746,6 +747,22 @@ counterexample and validation. Without a per-request chunk cap, serving in
 admission order *is* serving decode-first (`SerqLang.Serve.serve_eq_decode_first`;
 a cap breaks it, `chunk_cap_breaks_shape`), which is why the paper's
 "prefill from the budget decode leaves" describes vLLM too.
+`serve only (p)` says which residents the iteration serves, where `by`
+says in what order: `p` is read for every resident at the moment a key is,
+from the same variables, and may not draw; a resident it reads as 0 gets no
+token this iteration, keeps what it holds and advances no computed KV, as a
+displaced decode does under `exclusive prefill`. The order that follows
+(`admission` when none is written) orders the rest. FasterTransformer as
+Dai et al. model it (decode first, no mixed batching) is
+`serve only (decoders > 0 ? decoding : !decoding);`, and its opposite,
+prefills alone while one is resident, is
+`serve only (decoders < residents ? !decoding : decoding);`. A waiting session
+admitted through `admit via` that `p` excludes ends that iteration's
+admission: it takes no budget, and admitting on would fill the pool with
+requests that do not run. `only` does not combine with `exclusive prefill`,
+whose waiting prefill displaces resident decodes: which of the two a
+predicate would exclude is a third rule. [Serving a subset](design/serve-only.md)
+states the case and the numbers.
 
 **`at admission`.** Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the

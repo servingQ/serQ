@@ -50,6 +50,7 @@ stage engine : step {
   cost <expr>;                // clock time per iteration (1: the step clock)
   chunk C;                    // cap on one request's prefill chunk (0: none)
   serve by (remaining);       // admission (default) | by (keys…) | decode first | exclusive prefill
+                              // | only (p) [order]: serve the residents where p holds
   memory kv;                  // the pool that gives kv_decode / kv_prefill
 }
 ```
@@ -115,7 +116,7 @@ Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 | `ps` capacity | `present` |
 | `step` budget and chunk | `residents` `decoders` `kv_decode` `kv_prefill` (the residents, before the iteration) |
 | `step` cost | `tokens` `decoders` `prefilled` `residents` `kv_decode` `kv_prefill` `attention` |
-| `step` `serve by` keys | `decoding` `admission` `remaining` (per resident), and `residents` `decoders` `kv_decode` `kv_prefill` |
+| `step` `serve by` keys and `serve only` | `decoding` `admission` `remaining` (per resident), and `residents` `decoders` `kv_decode` `kv_prefill` |
 
 **Built-in session attributes** `serial` `turn_no` `cached` `computed` (what a
 preempted hold had computed; 0 otherwise), and with a trace `new` `out`
