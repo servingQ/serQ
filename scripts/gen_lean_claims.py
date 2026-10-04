@@ -150,7 +150,7 @@ def iter_leaf(e):
     if "Ctx" in e:
         v = {"Ntok": "r.stats.tokens", "Npre": "r.stats.prefilled", "Ndec": "r.stats.decoders",
              "Kvb": "r.stats.kvDecode", "Nres": "r.residents", "Demand": "r.demand",
-             "Served": "r.served", "Now": "r.start"}.get(e["Ctx"])
+             "Served": "r.served", "Arrived": "r.arrived", "Now": "r.start"}.get(e["Ctx"])
         if v:
             return v
         raise Fragment(f"an iteration claim reads {e['Ctx']}")
@@ -315,6 +315,8 @@ class Program:
     def family(self, claims):
         conds = [f"w.init.length ≤ {MAX_SESSIONS}", "w.turns = []", "w.turnSlot = none",
                  f"w.computedSlot = some {self.ir['slot_computed']}"]
+        if self.akind != "Batch":
+            conds.append(f"w.arriveSlot = some {self.arr_slot}")
         g = self.given_expr(claims)
         per = [] if g == "True" else [f"({g})".replace("(a ", "(w.attr i ")]
         if self.gap() is not None:

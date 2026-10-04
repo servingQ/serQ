@@ -308,8 +308,8 @@ class Lean:
         init = "[" + ", ".join(pairs(s["attrs"]) for s in ss) + "]"
         if any(s.get("turns") for s in ss):
             turns = "[" + ", ".join("[" + ", ".join(pairs(t) for t in s.get("turns", [])) + "]" for s in ss) + "]"
-            return f"⟨{init}, {turns}, some {ir['slot_turn']}, {ir['slot_more']}, some {ir['slot_computed']}⟩"
-        return f"⟨{init}, [], none, 0, some {ir['slot_computed']}⟩"
+            return f"⟨{init}, {turns}, some {ir['slot_turn']}, {ir['slot_more']}, some {ir['slot_computed']}, none⟩"
+        return f"⟨{init}, [], none, 0, some {ir['slot_computed']}, none⟩"
 
 
 def load(name):

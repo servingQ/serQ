@@ -115,14 +115,16 @@ structure Deployment where
 /-- What a claim over iterations reads (serQ `Moment::Iteration`): the
 iteration's start, the tokens the engine scheduled before it (`served`), its
 `IterStats`, the residents after its batch was formed and what they could
-take with an unlimited budget (`demand`), and per pool the waiting sessions,
-the holders and the allocated units. -/
+take with an unlimited budget (`demand`), the sessions arrived by its start
+(`arrived`), and per pool the waiting sessions, the holders and the allocated
+units. -/
 structure IterRec where
   start : ℕ := 0
   served : ℕ := 0
   stats : IterStats := ⟨0, 0, 0, 0, 0⟩
   residents : ℕ := 0
   demand : ℕ := 0
+  arrived : ℕ := 0
   queued : List ℕ := []
   holders : List ℕ := []
   used : List ℕ := []
@@ -257,6 +259,9 @@ structure Workload where
   is preempted (what its re-execution resumes from) and to 0 when a hold
   completes, as in the interpreter -/
   computedSlot : Option ℕ := none
+  /-- the slot of each session's arrival time, if the sessions arrive over
+  time (a renewal or Poisson workload); `none` when they all start at 0 -/
+  arriveSlot : Option ℕ := none
 
 structure Job where
   owner : ℕ
@@ -271,7 +276,7 @@ structure PoolSt where
   queue : List ℕ
 
 structure Machine where
-  wl : Workload := ⟨[], [], none, 0, none⟩
+  wl : Workload := ⟨[], [], none, 0, none, none⟩
   now : ℕ
   sess : Array Sess
   pools : List PoolSt
@@ -1088,6 +1093,9 @@ the batch was formed. -/
 def iterRec (m : Machine) (st : IterStats) : IterRec :=
   { start := m.now, served := m.served, stats := st, residents := m.jobs.length,
     demand := (m.jobs.map (wantOf D)).sum,
+    arrived := match m.wl.arriveSlot with
+      | some k => (m.sess.toList.filter fun s => s.attr.base k ≤ m.now).length
+      | none => m.sess.size,
     queued := (List.range D.pools.length).map fun p => (pst m p).queue.length,
     holders := (List.range D.pools.length).map fun p => (pst m p).holders.length,
     used := (List.range D.pools.length).map fun p => (pst m p).used }
@@ -1167,7 +1175,7 @@ def runUntil (horizon : ℕ) : ℕ → Machine → Machine
     | none => m
 
 /-- `n` sessions with attributes `init i`, all ready to run `prog` at time 0. -/
-def initial (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload := ⟨[], [], none, 0, none⟩) : Machine :=
+def initial (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload := ⟨[], [], none, 0, none, none⟩) : Machine :=
   { wl := wl
     now := 0
     sess := ((List.range n).map fun i => ⟨i, ⟨init i, []⟩, 0, prog, [], .ready, 0, 0⟩).toArray
@@ -1177,7 +1185,7 @@ def initial (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload 
     ready := List.range n }
 
 /-- `n` sessions with attributes `init i`, all running `prog`, from time 0. -/
-def start (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload := ⟨[], [], none, 0, none⟩) : Machine :=
+def start (n : ℕ) (init : ℕ → ℕ → ℕ) (prog : Prog) (wl : Workload := ⟨[], [], none, 0, none, none⟩) : Machine :=
   afterEvent D (initial D n init prog wl)
 
 /-- Enough events for time `horizon`: at each instant every session ends at

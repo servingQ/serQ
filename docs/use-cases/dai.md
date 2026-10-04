@@ -1,6 +1,6 @@
 # Throughput-optimal scheduling (Dai et al.)
 
-Dai, Deng, Li, Peng, *Throughput-Optimal Scheduling Algorithms for LLM Inference and AI Agents* ([arXiv 2504.07347](https://arxiv.org/abs/2504.07347), v3, May 2026). This page writes the paper's serving system as a serQ program, states three of its propositions as claims of that program, and proves them in Lean about the program's paths. Issue #257.
+Dai, Deng, Li, Peng, *Throughput-Optimal Scheduling Algorithms for LLM Inference and AI Agents* ([arXiv 2504.07347](https://arxiv.org/abs/2504.07347), v3, May 2026). This page writes the paper's serving system as a serQ program, states four of its propositions as claims of that program, and proves them in Lean about the program's paths. Issue #257.
 
 ## The paper
 
@@ -55,6 +55,7 @@ stage engine : step {
 1. **Theorem 2(a), the rate.** Under any scheduler, at most $b_{\max}/t_{b_{\max}}$ tokens are served per unit of time. (The paper concludes divergence above that load by the strong law of large numbers on the arrivals; the pathwise content is the rate.)
 2. **(8)–(9) for Sarathi.** Every batch is full whenever the requests could fill it: if $\sum_i (p_i + \mathbf 1\{p_i = 0\}) \ge b_{\max}$ then the batch has $b_{\max}$ tokens.
 3. **§4 for FasterTransformer.** It is not work-conserving: some state has a batch below $b_{\max}$ although the requests could fill it.
+4. **Theorem 2(b), pathwise.** The paper proves that a work-conserving scheduler makes the Markov chain positive recurrent below capacity, for random arrivals. Its deterministic core is Lindley's argument: with arrivals one gap apart and the load at most $b_{\max}/t_{b_{\max}}$, the work that has arrived and not been served stays bounded on every path, by $(b_{\max}+1)(v_p+v_d)$ tokens, however many requests arrive. It holds at the boundary itself, where the program runs.
 
 ## The propositions in serQ
 
@@ -69,9 +70,12 @@ claim token_rate: every iteration of engine (served * (c + a * bmax / b0) <= bma
 
 // §4 (dai_fastertransformer.sq): FasterTransformer is not work-conserving.
 claim not_work_conserving: some iteration of engine (demand >= bmax && tokens < bmax);
+
+// Theorem 2(b), pathwise: arrived and unserved work stays below b_max + 1 requests' worth.
+claim bounded: every iteration of engine (arrived * (vp + vd) <= served + (bmax + 1) * (vp + vd));
 ```
 
-`demand` is the paper's $\sum_i (p_i + \mathbf 1\{p_i=0\})$: what the residents could take with an unlimited budget. `served` is the tokens of the earlier iterations and `now` the start of this one, so `token_rate` says the served tokens never exceed the rate $b_{\max}/t_{b_{\max}}$ times the elapsed time. `some iteration` claims existence: one workload of the program's family and one iteration of one of its paths.
+`demand` is the paper's $\sum_i (p_i + \mathbf 1\{p_i=0\})$: what the residents could take with an unlimited budget. `served` is the tokens of the earlier iterations and `now` the start of this one, so `token_rate` says the served tokens never exceed the rate $b_{\max}/t_{b_{\max}}$ times the elapsed time. `arrived` is the requests that have arrived by the iteration's start, so `arrived * (vp + vd) - served` is the backlog in tokens. `some iteration` claims existence: one workload of the program's family and one iteration of one of its paths.
 
 ## The proof in Lean
 
@@ -86,6 +90,12 @@ def work_conserving : Prop :=
 
 - **`token_rate`** holds for every program on this engine, so for every scheduler serQ can write. `Exec.served_rate` (`Serq/Claim.lean`) carries an invariant from event to event: the delays are sorted and in the future, the running iteration ends no earlier than now, and `served · T ≤ R · end` of the running iteration. It needs one fact about the deployment, that a batch of at most `budget` tokens lasts at least `T/R` per token. `staircase_rate` proves that for the staircase cost: $b \le b_{\max}$ and $b_0 \mid b_{\max}$ give $b\,(c + a\,b_{\max}/b_0) \le b_{\max}\,(c + a\lceil b/b_0\rceil)$.
 - **`work_conserving`** is `Exec.work_conserving` (`Serq/Work.lean`). `every_iteration_of` reduces a claim over every iteration to the iteration's start. There `Fill.assign_eq_fillIter` says the batch is the greedy fill of the residents, and `fillAmounts_sum` that the fill takes `min budget demand`. The fill lemma needs that no job grows a hold. `Serq/Inv.lean` proves that every session runs a sub-program of its program on every path, and Sarathi's program has no `growing`.
+- **`bounded`** (`lean/Serq/Papers/DaiBounded.lean`) is an invariant carried over every event. A ghost state places each request in its program: not yet arrived, prefilling, decoding, or ended, with the tokens its job has left. The invariant ties that ghost to the sessions, jobs and delays, and keeps the balance `1280 · arrived + batch = served + backlog`. On top of it is Lindley's potential, scaled by the gap $G = 46\,750$ to stay in ℕ: $\Psi = G \cdot \text{backlog} + 1280 \cdot (s \bmod G)$ at an iteration start $s$.
+    - A full batch lasts $\tau = 4675$ and serves 128 tokens, and $1280\,\tau = 128\,G$, so the phase it adds equals the work it removes, and $\Psi$ does not grow across it.
+    - A partial batch serves all its residents' demand (`work_conserving`), so fewer than 128 residents are left, each with fewer than 990 tokens.
+    - An idle engine has no backlog, and the next batch starts at one arrival.
+
+  Each case keeps $\Psi \le G\,(b_{\max}+1)\cdot 1280$, and the claim follows at every iteration start. The family again allows up to 500 sessions, and $500 \cdot 1280 > 165\,120$, so the bound is not the trivial one.
 - **`not_work_conserving`** is a witness. Two requests arrive 467.5 ms apart, and after 12 events (at 0.935 s) the first decodes alone while the second's 290 prompt tokens wait: `demand = 291`, `tokens = 1`. The machine is computed in the kernel (`decide +kernel`).
 
 ## On the run
@@ -96,6 +106,7 @@ def work_conserving : Prop :=
 claim            kind             result
 work_conserving  every iteration  holds (1060 iterations)
 token_rate       every iteration  holds (1060 iterations)
+bounded          every iteration  holds (1060 iterations)
 ```
 
 ```
@@ -104,10 +115,10 @@ not_work_conserving  some iteration   witnessed at 93500.0000 (1060 iterations)
 token_rate           every iteration  holds (1060 iterations)
 ```
 
-The interpreter finds FasterTransformer's witness at the same instant as the Lean proof, 93 500 units. A request alone takes 990 × 4675 units (46.3 s), so 50 s shows the claims and not the contrast. Over 1000 s (`--horizon 100000000`) Sarathi ends 2 038 of 2 139 requests with about 98 live on average, and FasterTransformer ends 21 with about 1 059 live: it diverges where Sarathi does not. The load is $\lambda(m_p + m_d) = 1280/46750$, exactly $b_{\max}/t_{b_{\max}} = 128/4675$, the boundary of Theorem 2.
+The interpreter finds FasterTransformer's witness at the same instant as the Lean proof, 93 500 units. A request alone takes 990 × 4675 units (46.3 s), so 50 s shows the claims and not the contrast. Over 1000 s (`--horizon 100000000`) Sarathi ends 2 038 of 2 139 requests with about 98 live on average, and FasterTransformer ends 21 with about 1 059 live: it diverges where Sarathi does not. Over that run Sarathi's backlog peaks between 40 000 and 60 000 tokens (the claim with those bounds in place of 165 120 fails and holds), about a third of the proved bound. The load is $\lambda(m_p + m_d) = 1280/46750$, exactly $b_{\max}/t_{b_{\max}} = 128/4675$, the boundary of Theorem 2.
 
 ## What it leaves out
 
-- **Theorem 2(b), stability.** Positive recurrence of the Markov chain needs Foster–Lyapunov or fluid limits, which Mathlib does not have. The pathwise bound proved here (`token_rate`) is its converse's core; the divergence itself also needs the strong law on the arrivals.
+- **Theorem 2(b) for random arrivals.** `bounded` is the deterministic case. Positive recurrence for Poisson arrivals needs a Markov kernel of the program. `lean/Serq/Foster.lean` proves Foster's criterion on such a kernel without a path measure, and the step from `Exec` to the kernel is open (#305). The divergence above capacity also needs the strong law on the arrivals.
 - **Orca and vanilla vLLM.** Orca needs `serve by` and vanilla vLLM `exclusive prefill`, and the Lean fragment has neither. `Exec.work_conserving` would cover Orca once the fragment sorts residents by a key, since the fill conserves work in any order.
 - **§5 and §6.** Multi-class and DAG workloads are written with `branch with` and `choose`, but the fragment has one engine. Fork-join needs a statement that creates sessions. The batch-size limit of §6 is a pool `cap` the program can write, and its stability region is not claimed.

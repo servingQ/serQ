@@ -107,7 +107,7 @@ runs identically (`tests/ir.rs`).
 
 `Num`, `Attr(slot)`, `Ctx(var)` (`Now`, `Waited`, `Size`, `Age`, `Last`, `Queued`,
 `N`, `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Decoding`,
-`Admission`, `Remaining`, `Demand`, `Served`: each exists at
+`Admission`, `Remaining`, `Demand`, `Served`, `Arrived`: each exists at
 one *moment*, below, and `Now` at every one), `Sample(dist, args)`,
 `Call(fun, args)` (arithmetic functions, pool and stage queries such as
 `CachedIn(pool)`, `BudgetLeft(stage)`), `Unary`, `Binary`, `Cond`, and

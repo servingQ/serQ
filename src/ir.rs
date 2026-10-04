@@ -204,6 +204,9 @@ pub enum CtxVar {
     /// Iteration claims: the tokens the stage scheduled in its earlier
     /// iterations, over the whole run.
     Served,
+    /// Iteration claims: the sessions the workload has started by the
+    /// iteration's start (an arrival at that instant included).
+    Arrived,
 }
 
 impl CtxVar {
@@ -229,6 +232,7 @@ impl CtxVar {
             CtxVar::Remaining => "remaining",
             CtxVar::Demand => "demand",
             CtxVar::Served => "served",
+            CtxVar::Arrived => "arrived",
         }
     }
 
@@ -253,7 +257,7 @@ impl CtxVar {
             ],
             CtxVar::Ntok | CtxVar::Npre | CtxVar::Attn => &[Moment::Step, Moment::Iteration],
             CtxVar::Decoding | CtxVar::Admission | CtxVar::Remaining => &[Moment::Serve],
-            CtxVar::Demand | CtxVar::Served => &[Moment::Iteration],
+            CtxVar::Demand | CtxVar::Served | CtxVar::Arrived => &[Moment::Iteration],
         }
     }
 }

@@ -368,7 +368,7 @@ theorem rad_initial (w : Workload) (hw : Claims.BariRad.family_optimal_tiling w)
     (fun e he => by simp [Exec.initial] at he)
   · simp only [Exec.initial, List.toList_toArray, List.mem_map, List.mem_range] at hs
     obtain ⟨i, hi, rfl⟩ := hs
-    have := hw.2.2.2.2 i hi
+    have := hw.2.2.2.2.2 i hi
     show 128 ∣ (⟨w.attr i, []⟩ : Attrs).get 10
     simp only [Attrs.get, List.getD_nil]
     exact ⟨_, this⟩
