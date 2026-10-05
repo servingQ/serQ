@@ -1,0 +1,62 @@
+// Hugging Face TGI v3 (ref/tgi at b4adbf2f) on one device, its default
+// path: flashinfer attention, block size 1, prefix caching and prefill
+// chunking on. Every forward is one mixed batch: the residents' decodes and
+// prefill chunks, then new requests FCFS into the prefill budget left, the
+// last one chunked. A request is admitted with blocks for its whole input
+// plus max_new_tokens, so nothing grows and nothing is preempted. The prefix
+// cache keeps the prompt only. docs/design/engine-neutrality.md cites the
+// source; what serQ cannot write is TGI's other path (no chunking), whose
+// new batches run as prefill-only forwards and are formed only when enough
+// requests wait or enough decode steps have passed.
+let B = 4096;          // max_batch_prefill_tokens
+let T = 200000;        // max_batch_total_tokens (set by warm-up; assumed)
+let mnt = 1024;        // the clients' max_new_tokens
+let a = 2e-5;          // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident context token (s)
+let Lambda = 0.3;      // sessions per second
+let p = 0.9;           // continue after a turn
+let Z = 3.0;           // tool time (s)
+
+pool kv { cap T; block 1; evict lru; preempt none; admit via engine; }
+
+stage engine : step {
+  budget B;
+  cost max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+  memory kv;
+}
+stage tool : delay;
+
+workload {
+  arrive poisson(Lambda);
+  hidden o;
+  init { set K = 0; }
+  turn {
+    set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+    set o = min(floor(~exp(300)) + 1, mnt);
+    set more = ~bernoulli(p);
+  }
+  session {
+    turn;
+    loop {
+      request;
+      set K = prompt + o;
+      branch (more) { tool (~exp(Z)); turn; } else { end; }
+    }
+  }
+}
+
+// The hit never covers the whole input; only the input is cached.
+server {
+  set t0 = now;
+  set prompt = K + n;
+  hold kv (prompt + mnt - 1) reuse (prompt - 1) {
+    set c = cached;
+    prefill on engine (prompt - c);
+    observe ttft = now - t0;
+    decode on engine (o - 1);
+  } cache (prompt);
+  observe response = now - t0;
+}
+
+run { horizon 2000; warmup 200; seed 1; }

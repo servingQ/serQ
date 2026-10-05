@@ -976,6 +976,7 @@ serQ began as the language of a lecture on serving queues; `docs/review.md`
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace (§8) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
 | `papers/*.sq` | three scheduling papers' serving systems | their claims, proved in Lean ([use cases](use-cases/index.md)) |
+| `engines/sglang.sq`, `engines/tensorrt_llm.sq`, `engines/tgi.sq` | SGLang, TensorRT-LLM and TGI with their defaults, as close as serQ writes them today ([engine neutrality](design/engine-neutrality.md)) | the source, read; `make check` links and draws them; no oracle |
 | `single-turn/fastertransformer.sq`, `single-turn/separate_phases.sq`, `single-turn/ascend_aging.sq`, `vendors/*.sq`, the other `pd-disaggregation/*.sq` | the [use cases](use-cases/index.md) that describe them | `make check` links and draws them |
 
 ## 6. Other consumers
