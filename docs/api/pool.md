@@ -24,6 +24,7 @@ queues the sessions that do not yet fit. Every option is optional.
 | [`preempt`](#preempt) | `none` \| `by (expr, …) [requeue head \| tail]` \| `lifo` | `none` | what a failed `grow` does: whom it preempts, and where the victim goes back |
 | [`queue`](#queue) | `fifo` \| `by (expr)` | `fifo` | admission order |
 | [`admit via`](#admit-via) | `stage` | none | the queue is served by a step stage |
+| [`reserve held`](#reserve-held) | — | off | a hold's unallocated `reserve` counts against later admissions |
 | [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
 
 The invariant `allocated + cached ≤ cap` holds in every reachable
@@ -135,6 +136,32 @@ This admits immediate requests, then aged long requests, then short requests,
 then other long requests. `serial` orders requests within a lane in this
 single-hold workload. [Waiting selection](../design/waiting-selection.md)
 records the exact scope and regression cases.
+
+## `reserve held`
+
+```serq
+reserve held;
+```
+
+Without it a hold's `reserve` is a test at admission alone: once admitted,
+the hold counts only what it allocated. With it, what the hold reserved and
+has not allocated (`max(0, reserve − allocation)`) counts against every later
+admission on the pool while the hold lasts, and the hold grows into its own: a
+later admission needs `used + Σ max(0, rᵢ − allocᵢ) + r ≤ cap`, a growth
+`used + (the other holds' outstanding) + d ≤ cap`. Each live hold counts once,
+nested holds and a hold beside a lease each their own; `r` is the units or
+`reserve` as evaluated at the hold's admission; a hold's reservation ends
+with it (its scope, `release`, a preemption), and a lease keeps none.
+Cached prefixes are evicted
+when units are allocated, not when they are reserved. TensorRT-LLM's
+`GUARANTEED_NO_EVICT` is `hold kv (prompt) reserve (prompt + max_tokens)` with
+`growing kv` on a pool `reserve held`: it admits a request only when what
+every running one may still need is left ([`capacityScheduler.cpp`
+L401-L445](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/capacityScheduler.cpp#L401-L445),
+what is still to come being `getRemainingBlocksToCompletion`,
+[`kvCacheManager.cpp` L3492-L3603](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/kvCacheManager.cpp#L3492-L3603)),
+and while every hold grows within its `reserve`, nothing is preempted;
+growth past it falls to the pool's `preempt`.
 
 ## `admit via`
 

@@ -589,6 +589,12 @@ pub struct CPool {
     pub queue: Option<Vec<CExpr>>,
     pub spill: Option<CSpill>,
     pub admit_via: Option<usize>,
+    /// `reserve held`: what a hold's `reserve` tested and it has not
+    /// allocated counts against every later admission while the hold lasts
+    /// (TensorRT-LLM's `GUARANTEED_NO_EVICT`), and the holder grows into
+    /// it. Without it a `reserve` is a test at admission alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reserve_held: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

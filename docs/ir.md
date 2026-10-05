@@ -67,7 +67,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `version` | `IR_VERSION`; a different version is rejected |
 | `attrs` | attribute names; an attribute is referenced by its index (slot) |
 | `observes` | observation names, by index |
-| `pools` | `CPool`: `name`, `index` (the member's index in an array declared `pool kv[N]`, a one-member array's too, and a queue family's, `queue D[1]` included; omitted for a single pool; a report label the run does not read), `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, or `By {keys, tail}`: the victim the candidate with the least keys, read at `Victim`, re-queued at the head or, with `tail`, at the back; `preempt lifo` is `By {keys: [-admission]}`), `queue` (`null` for FIFO, otherwise a nonempty list of pure selection keys), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
+| `pools` | `CPool`: `name`, `index` (the member's index in an array declared `pool kv[N]`, a one-member array's too, and a queue family's, `queue D[1]` included; omitted for a single pool; a report label the run does not read), `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, or `By {keys, tail}`: the victim the candidate with the least keys, read at `Victim`, re-queued at the head or, with `tail`, at the back; `preempt lifo` is `By {keys: [-admission]}`), `queue` (`null` for FIFO, otherwise a nonempty list of pure selection keys), `spill`, `admit_via` (stage whose scheduler admits waiting holders), `reserve_held` (omitted when false: `max(0, r − alloc)` of each live hold entry on the pool, `r` its units or `reserve` as evaluated at its admission, counts against later admissions and other holds' growth; it ends with the entry, at its scope's end, a `release` or a preemption, and a lease keeps none) |
 | `stages` | `CStage`: `name`, `index` (as for `CPool`, `stage E[N]`), `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `memory` (pool index), `iteration` (absent for vLLM's procedure, or a body of `CIter`: `Serve {only?, by?}` (read at `Serve`; `by` absent is the stage's order), `Admit {only?, gate?}` (`only` read at `Serve` for each newcomer, which it may leave unserved; `gate` read at `Plan` before each admission), `Branch(guard, then, else)` (guard at `Plan`, 1 or 0); not with `ExclusivePrefill`; a stage's `serve only (p)` is the body `[Serve {only: p}, Admit {only: p, gate: !preempted}]`; every path reaches a `Serve` or an `Admit`) |
 | `arrival` | `Poisson(rate)`, `Renewal(gap expression)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
@@ -412,6 +412,11 @@ and numbers are judged against the cap then; one that reads the
 deployment's state waits, where it was rejected, so an old reader would
 end sessions this version runs. A head still over a cap when the run ends
 is named (the pool report's `over_cap`, an added field).
+11 also carries `CPool.reserve_held` (`reserve held`), an added field
+omitted when false: absent, a pool runs as before; present, later
+admissions count the holds' unallocated reservations, which an old reader
+would not, so it goes in the coming tag's message. The Lean generators
+raise `Fragment` on it.
 11 also retypes `CPool.preempt` (#356): `Lifo` is gone, and `By {keys,
 tail}` says whom a growth that does not fit preempts and where the victim
 goes back; `preempt lifo` compiles to `By {keys: [-admission]}`, which

@@ -371,7 +371,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 100] = [
+pub const KEYWORDS: [&str; 101] = [
     "admission",
     "admit",
     "arrivals",
@@ -408,6 +408,7 @@ pub const KEYWORDS: [&str; 100] = [
     "given",
     "grow",
     "growing",
+    "held",
     "head",
     "hidden",
     "hold",
@@ -2730,6 +2731,7 @@ impl Parser {
             queue: QueueOrder::Fifo,
             spill: None,
             admit_via: None,
+            reserve_held: false,
         };
         while *self.peek() != Tok::RBrace {
             let key = self.ident()?;
@@ -2798,6 +2800,10 @@ impl Parser {
                         self.expect(&Tok::RParen)?;
                         QueueOrder::By(keys)
                     }
+                }
+                "reserve" => {
+                    self.expect_kw("held")?;
+                    d.reserve_held = true;
                 }
                 "admit" => {
                     self.expect_kw("via")?;

@@ -168,6 +168,8 @@ class Program:
         grown = self.grown_pools()
         pools = []
         for i, p in enumerate(ir["pools"]):
+            if p.get("reserve_held"):
+                raise Fragment(f"pool {p['name']}: reserve held")
             if p["evict"] != "Lru" or p["spill"] is not None or p["admit_via"] is not None:
                 raise Fragment(f"pool {p['name']}: LRU eviction, no spill, no admit via")
             if i in grown and (not is_lifo(p["preempt"]) or step["memory"] != i):

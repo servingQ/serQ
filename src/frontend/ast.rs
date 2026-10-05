@@ -247,6 +247,9 @@ pub struct PoolDecl {
     /// `admit via STAGE`: the queue is served by the stage's scheduler, at
     /// the start of its iterations, while the iteration has budget left.
     pub admit_via: Option<Ref>,
+    /// `reserve held`: a hold's unallocated reservation counts against
+    /// later admissions while it lasts.
+    pub reserve_held: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]

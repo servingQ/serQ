@@ -113,6 +113,10 @@ struct Held {
     /// Advanced by `growing` runs and `load`; starts at the consumed
     /// cached prefix.
     pos: f64,
+    /// The units the admission tested (`reserve`, or the units): under the
+    /// pool's `reserve held`, what it has not allocated of them counts
+    /// against every later admission while the hold lasts.
+    reserved: f64,
 }
 
 impl Held {
@@ -1026,6 +1030,24 @@ impl<'p> Interp<'p> {
                 self.now
             );
         }
+        // `reserve held`'s promise: what is allocated and what the live holds
+        // reserved and have not allocated fit the cap, so a hold growing
+        // within its reservation always finds room (#371).
+        #[cfg(debug_assertions)]
+        for (k, (cp, pl)) in self.p.pools.iter().zip(&self.pools).enumerate() {
+            if cp.reserve_held {
+                let out = self.outstanding(k, None);
+                debug_assert!(
+                    pl.used + out <= pl.cap + 1e-6,
+                    "pool `{}`: used {} + reserved {} > cap {} at t = {}",
+                    cp.name,
+                    pl.used,
+                    out,
+                    pl.cap,
+                    self.now
+                );
+            }
+        }
         // Conservation (#277): a pool's `used` is what the sessions' holds
         // and leases have allocated on it, and its `cached` the sizes of its
         // entries. The counters are kept apart from those records, so an
@@ -1566,7 +1588,40 @@ impl<'p> Interp<'p> {
     /// Whether `units` more fit pool `pl` beside what is allocated (the
     /// cache not counted: it is evicted to make room).
     fn fits(&self, pl: usize, units: f64) -> bool {
-        self.pools[pl].used + units <= self.pools[pl].cap + EPS
+        self.fits_for(pl, units, None)
+    }
+
+    /// Whether `units` more fit pool `pl`: next to what is allocated, and
+    /// under `reserve held` next to what the live holds' reservations have
+    /// not allocated yet, the one hold entry `own` (session, hold, pool
+    /// entry: a hold growing into its own reservation) left out.
+    fn fits_for(&self, pl: usize, units: f64, own: Option<(usize, usize, usize)>) -> bool {
+        let held = if self.p.pools[pl].reserve_held {
+            self.outstanding(pl, own)
+        } else {
+            0.0
+        };
+        self.pools[pl].used + held + units <= self.pools[pl].cap + EPS
+    }
+
+    /// What the live hold entries on `pl` reserved and have not allocated
+    /// (`reserve held`), each counted once, but `own`. Read from the
+    /// sessions' holds, not the pool's `holders`, which lists a session once
+    /// per admission and drops it whole at any release (the review of #371:
+    /// a nested hold was counted twice, and an outer one lost at the inner
+    /// one's end).
+    fn outstanding(&self, pl: usize, own: Option<(usize, usize, usize)>) -> f64 {
+        let mut sum = 0.0;
+        for (sid, s) in self.sessions.iter().enumerate() {
+            for (hi, h) in s.holds.iter().enumerate() {
+                for (k, e) in h.pools.iter().enumerate() {
+                    if e.pool == pl && own != Some((sid, hi, k)) {
+                        sum += (e.reserved - e.alloc).max(0.0);
+                    }
+                }
+            }
+        }
+        sum
     }
 
     fn round_up(&self, pl: usize, units: f64) -> f64 {
@@ -1832,6 +1887,9 @@ impl<'p> Interp<'p> {
                 pool: q,
                 alloc: need,
                 pos: own,
+                // what the admission tested, held against later ones under
+                // `reserve held`
+                reserved: self.round_up(q, w.need),
             });
         }
         let pl = first_pool(&pending);
@@ -1895,7 +1953,7 @@ impl<'p> Interp<'p> {
             }
         }
         debug_assert!(
-            self.fits(pl, need),
+            self.pools[pl].used + need <= self.pools[pl].cap + EPS,
             "make_room called without a passing guard"
         );
     }
@@ -2172,7 +2230,7 @@ impl<'p> Interp<'p> {
             return true;
         }
         loop {
-            if self.fits(pl, need) {
+            if self.fits_for(pl, need, Some((sid, hi, k))) {
                 self.make_room(pl, need);
                 self.pools[pl].used += need;
                 self.sessions[sid].holds[hi].pools[k].alloc += need;
@@ -2293,7 +2351,7 @@ impl<'p> Interp<'p> {
                 .expect("a growing session holds the pool");
             let alloc_now = self.sessions[sid].holds[hi].pools[k].alloc;
             let need = self.round_up(pl, alloc_now + units) - alloc_now;
-            if !self.fits(pl, need) {
+            if !self.fits_for(pl, need, Some((sid, hi, k))) {
                 break;
             }
             self.pools[pl].growers.pop_front();

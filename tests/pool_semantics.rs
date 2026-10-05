@@ -751,3 +751,83 @@ fn a_reserve_that_reads_the_state_waits_instead_of_being_rejected() {
         r.text()
     );
 }
+
+/// TensorRT-LLM's GUARANTEED_NO_EVICT admits a request only if the blocks
+/// every running request may still need are left
+/// (`capacityScheduler.cpp` L265-L305 at bf414e37): `reserve held`. Three
+/// requests reserve prompt + max_tokens = 10 and allocate the prompt, 4, on
+/// a pool of 20, then grow by 6. Tested once, all three are admitted
+/// (4 + 4 + 10 ≤ 20) and their growth preempts; held, the third waits for
+/// the first to finish and nothing is preempted.
+#[test]
+fn a_held_reservation_counts_against_later_admissions() {
+    let prog = |held: &str| {
+        format!(
+            r#"
+            pool reqs {{ cap 8; admit via engine; }}
+            pool kv {{ cap 20; preempt lifo; {held} }}
+            stage engine : step {{ budget 64; cost 1; memory kv; }}
+            workload {{ arrive batch(3); }}
+            session {{
+              hold reqs (1), kv (4) reserve (10) {{
+                observe admitted = now;
+                prefill on engine (4) growing kv;
+                decode on engine (6) growing kv;
+              }} cache (0);
+              end;
+            }}
+            run {{ horizon 100; warmup 0; seed 1; }}
+            "#
+        )
+    };
+    let once = run(&prog(""));
+    assert!(once.pool("kv").unwrap().preemptions > 0, "{}", once.text());
+    let held = run(&prog("reserve held;"));
+    assert_eq!(held.pool("kv").unwrap().preemptions, 0, "{}", held.text());
+    let admitted = &held.observe("admitted").unwrap().samples;
+    // the first two at 0; the third when the first leaves, after its prefill
+    // (1 iteration) and 6 decodes
+    assert_eq!(admitted, &[0.0, 0.0, 7.0], "{}", held.text());
+}
+
+/// Each live hold's reservation counts once, for as long as that hold
+/// lasts (the review of #371: counted by the pool's holders, a nested hold
+/// was counted twice, and the outer one lost when the inner one ended).
+/// Serial 0 holds 1 reserving 5, and inside it 1 reserving 5 again: 2
+/// allocated and 8 reserved on a pool of 12.
+#[test]
+fn a_held_reservation_is_each_live_hold_s() {
+    let prog = |after_inner: &str, second: u32| {
+        format!(
+            r#"
+            pool kv {{ cap 12; reserve held; }}
+            stage gate : delay;
+            workload {{ arrive batch(2); }}
+            session {{
+              run gate (serial);
+              branch (serial == 0) {{
+                hold kv (1) reserve (5) {{
+                  hold kv (1) reserve (5) {{ run gate (10); }}
+                  {after_inner}
+                }}
+              }}
+              branch (serial == 1) {{
+                hold kv ({second}) {{ observe admitted = now; run gate (1); }}
+              }}
+              end;
+            }}
+            run {{ horizon 100; warmup 0; seed 1; }}
+            "#
+        )
+    };
+    let admitted = |src: &str| {
+        let r = run(src);
+        r.observe("admitted").unwrap().samples.clone()
+    };
+    // 2 + 8 + 2 = 12: admitted on arrival, at 1
+    assert_eq!(admitted(&prog("", 2)), [1.0]);
+    // serial 0 starts at 0: the inner hold ends at 10, and the outer one
+    // still reserves 4 until 20 (counted by holders, it was lost at 10):
+    // 1 + 4 + 8 = 13 > 12 until then
+    assert_eq!(admitted(&prog("run gate (10);", 8)), [20.0]);
+}
