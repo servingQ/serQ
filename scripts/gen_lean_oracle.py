@@ -411,6 +411,8 @@ class Lean:
             raise Fragment("stages must be one step engine (stage 0) and delays")
         step = st[0]["kind"]["Step"]
         cost = cost_fn(step["cost"])
+        if step.get("granule") is not None:
+            raise Fragment("granule: the fragment gives a prefill any amount")
         if step["serve"] != {"By": []}:
             raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
         if step.get("iteration") is not None:

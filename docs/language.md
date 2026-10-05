@@ -64,7 +64,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
           | ps ( expr )                      -- throughput phi(present) shared equally; expr reads present
           | delay                            -- every job at rate 1, no waiting
-          | step { cost expr ; [budget expr ;] [chunk expr ;]     -- options in any order; budget inf by default
+          | step { cost expr ; [budget expr ;] [chunk expr ;] [granule c ;]     -- options in any order; budget inf by default
                    [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
                     | serve exclusive prefill ;
                     | serve only ( expr ) [admission | by ( expr , ... ) | decode first] ;]

@@ -3581,7 +3581,20 @@ impl<'p> Interp<'p> {
         } else {
             *left
         };
-        let tokens = if blocked { 0.0 } else { want.min(available) };
+        let mut tokens = if blocked { 0.0 } else { want.min(available) };
+        // `granule g`: a prefill short of its remainder takes a multiple of
+        // `g` (none under `inf`: whole or nothing)
+        if mode == RunMode::Prefill
+            && tokens < remaining
+            && let CStageKind::Step(spec) = &self.p.stages[st].kind
+            && let Some(CExpr::Num(g)) = &spec.granule
+        {
+            tokens = if g.is_finite() {
+                (tokens / g).floor() * g
+            } else {
+                0.0
+            };
+        }
         if tokens <= 0.0 {
             return Give::Skipped;
         }

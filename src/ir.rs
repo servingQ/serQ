@@ -618,6 +618,13 @@ pub struct CStep {
     pub budget: CExpr,
     pub cost: CExpr,
     pub chunk: CExpr,
+    /// `granule g`: a prefill gets the whole of what it has left, or a
+    /// multiple of `g` (rounded down; none when that is 0). `inf` schedules
+    /// a prefill whole or not at all (TensorRT-LLM without chunking), a
+    /// block size aligns its chunks. None is any amount, as `1` is.
+    /// A constant above 0, `inf` included.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granule: Option<CExpr>,
     /// How the iteration serves its residents: an order, or the
     /// exclusive-prefill rule.
     pub serve: CServe,
