@@ -186,7 +186,7 @@ struct Parser {
     entry_from: Option<String>,
     /// The verb of the relation that gave the program's `share`.
     relation_share: Option<&'static str>,
-    /// The queues that post the copies of a relation: one each.
+    /// The queues whose relation gives the wait before each copy they post.
     posters: Vec<String>,
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
@@ -4342,16 +4342,6 @@ impl Parser {
             .iter()
             .position(|d| d.name == *poster)
             .expect("checked above");
-        if self.posters.contains(poster) {
-            return self.err_at(
-                at,
-                format!(
-                    "{written}: `{poster}` posts the copies of another relation already, \
-                     and waits once before each: one relation per poster"
-                ),
-            );
-        }
-        self.posters.push(poster.clone());
         let latency = if self.eat_kw("latency") {
             let l_at = self.pos;
             let e = self.expr()?;
@@ -4366,6 +4356,17 @@ impl Parser {
             // stage of the side that posts, one per member
             let lname = format!("{poster}.{verb}.time");
             let sname = format!("{poster}.nic.latency");
+            // the wait is the poster's, one delay stage per poster
+            if self.posters.contains(poster) {
+                return self.err_at(
+                    l_at,
+                    format!(
+                        "{written}: `{poster}` waits before the copies of another relation \
+                         already, at `{sname}`: one `latency` per poster"
+                    ),
+                );
+            }
+            self.posters.push(poster.clone());
             self.consts.push((lname.clone(), v));
             prog.lets.push((lname.clone(), e));
             let count = self.queues[pi].count;

@@ -192,10 +192,10 @@ struct Pending<'p> {
 enum Leg {
     /// A session.
     No,
-    /// A leg of the session in this slot, which stays until the leg ends: a
-    /// session may not end before its legs,
+    /// A leg of the session in this slot. The slot stays until the leg
+    /// ends: a session may not end before its legs.
     Of(usize),
-    /// unless it was refused, which leaves them orphans.
+    /// A leg of a session that was refused and has ended.
     Orphan,
 }
 

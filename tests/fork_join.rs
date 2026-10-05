@@ -429,8 +429,8 @@ fn a_fork_needs_a_join() {
     );
 }
 
-/// The queue that posts the copies waits once before each: one relation,
-/// with a `latency` or without.
+/// The queue that posts the copies waits before each at its own delay
+/// stage: one relation per poster gives it a `latency`.
 #[test]
 fn a_queue_posts_the_copies_of_one_relation() {
     refused(
@@ -442,9 +442,9 @@ fn a_queue_posts_the_copies_of_one_relation() {
          queue E : decode { pool kv { cap 10; } serve step { cost 1; memory kv; } nic ps(1);
            decode (p) { hold kv (p) { prefill (p) growing kv; } }
            decode (p) from src { hold kv (p) { transfer (p) from src to kv (p); } } }
-         P push D share maxmin;
-         P push E share maxmin;
+         P push D latency 1 share maxmin;
+         P push E latency 1 share maxmin;
          workload { arrive batch(1); } session { end; } run { horizon 10; }",
-        "`P` posts the copies of another relation already",
+        "`P` waits before the copies of another relation already",
     );
 }

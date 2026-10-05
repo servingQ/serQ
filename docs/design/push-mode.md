@@ -117,8 +117,7 @@ with the same relation (criterion 2: the program states the opposite).
 **Checks.** At link time: a leg may not `turn`, `end`, fork or `join`; a
 leg acts on no hold around its fork; a `fork` stands in no hold that may be
 preempted (the hold would run again and fork a second leg); a `join` needs
-a fork in the program, and a fork a `join`; a queue posts the copies of one
-relation. At run time: a session may not end while a leg runs; a run that
+a fork in the program, and a fork a `join`; one `latency` per poster. At run time: a session may not end while a leg runs; a run that
 ends with sessions and legs that wait only for each other, one of them at
 a `join` and none for a lease that expires, is an error naming each. A
 leg's lease caches by the leg's attributes when it ends, after it has

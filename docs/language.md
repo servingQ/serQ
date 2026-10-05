@@ -443,8 +443,8 @@ stage `P.nic.latency`, indexed by the source member. A push says who moves
 the bytes, not when the decoder is asked for its blocks: that is the
 dispatch, written where it happens, with `fork` (below,
 `examples/pd-disaggregation/vllm_nixl_push.sq`). The wait is a delay, so a
-push and a pull of the same constants run the same numbers. A queue that
-posts copies does so for one relation.
+push and a pull of the same constants run the same numbers. A queue waits
+before the copies it posts for one relation: one `latency` per poster.
 
 `transfer on L[k], M[l] (n) from S to P (m)` names the stages itself, as
 a `server` does: link queues, or any `ps` stages. `latency x` on a link's
