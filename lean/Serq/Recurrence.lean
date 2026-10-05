@@ -161,12 +161,12 @@ theorem killN_integrable_of_le {f : α → ℝ} {c : ℝ} (hf0 : ∀ y, 0 ≤ f 
 
 variable {K} in
 /-- Killing keeps a function below `a · P^j V + b` if it starts below `a V + b`. -/
-theorem killN_le_applyN {V : α → ℝ} (hV : K.IntegrableN V) (hV0 : ∀ y, 0 ≤ V y) {a b : ℝ}
+theorem killN_le_affine {V : α → ℝ} (hV : K.IntegrableN V) (hV0 : ∀ y, 0 ≤ V y) {a b : ℝ}
     (ha : 0 ≤ a) (hb : 0 ≤ b) {f : α → ℝ} (hf0 : ∀ y, 0 ≤ f y) (hf : ∀ y, f y ≤ a * V y + b) :
     ∀ j, K.Integrable (killN K T j f) ∧ ∀ x, killN K T j f x ≤ a * K.applyN j V x + b
   | 0 => ⟨Kernel.Integrable.of_le (((hV 0).const_mul a).add (K.integrable_const b)) hf0 hf, hf⟩
   | j + 1 => by
-    obtain ⟨hI, hle⟩ := killN_le_applyN hV hV0 ha hb hf0 hf j
+    obtain ⟨hI, hle⟩ := killN_le_affine hV hV0 ha hb hf0 hf j
     have hle' : ∀ x, killN K T (j + 1) f x ≤ a * K.applyN (j + 1) V x + b := by
       intro x
       simp only [killN]
@@ -334,19 +334,19 @@ theorem hit_le_of_reach {F : α → Prop} [DecidablePred F] {V : α → ℝ} {ε
         have hind0 : ∀ y, (0 : ℝ) ≤ if T y then 0 else 1 := fun y => by split <;> norm_num
         have hind1 : ∀ y, (if T y then (0 : ℝ) else 1) ≤ 1 := fun y => by split <;> norm_num
         have hε' : 0 ≤ 1 / ε := by positivity
-        have hIV := killN_le_applyN T hV hD.nonneg hε' le_rfl
+        have hIV := killN_le_affine T hV hD.nonneg hε' le_rfl
           (fun y => mul_nonneg hε' (hD.nonneg y)) (fun y => by simp)
         have hII : ∀ j, K.Integrable (killN K T j fun y => M * if T y then 0 else 1) :=
           killN_integrable_of_le K T (c := M) (fun y => mul_nonneg hM0 (hind0 y))
             (fun y => by nlinarith [hind0 y, hind1 y])
-        have hIg := fun j => (killN_le_applyN T hV hD.nonneg hε' hM0
+        have hIg := fun j => (killN_le_affine T hV hD.nonneg hε' hM0
           (fun y => add_nonneg (mul_nonneg hε' (hD.nonneg y)) (mul_nonneg hM0 (hind0 y)))
           (fun y => by nlinarith [hind0 y, hind1 y]) j).1
         have h1 := hit_add_le K T L m z
         have h2 := killN_mono T (killN_integrable_of_le K T (hit_nonneg K T m) (hit_le_n K T m)) hIg hpt L z
         rw [killN_add T (fun j => (hIV j).1) hII, killN_const_mul, killN_const_mul, killN_out] at h2
         have h3 : killN K T L V z ≤ K.applyN L V z := by
-          simpa using (killN_le_applyN T hV hD.nonneg zero_le_one le_rfl hD.nonneg
+          simpa using (killN_le_affine T hV hD.nonneg zero_le_one le_rfl hD.nonneg
             (fun y => by simp) L).2 z
         have h4 := hB z hz
         have h5 := hreach z hz
@@ -358,6 +358,17 @@ theorem hit_le_of_reach {F : α → Prop} [DecidablePred F] {V : α → ℝ} {ε
   have hdec := hit_le_hit_add K hTF hM0 n (hF n) x
   have h2 := drift_bound hD n x
   have h3 : hit K F n x ≤ V x / ε := by rw [le_div_iff₀ hε]; linarith
+  linarith
+
+/-- A bound on the return time to `T` from one on the hitting times: if
+`hit ≤ a V + c` everywhere and `P V ≤ d` at `x`, the truncated return times
+from `x` are at most `1 + a d + c`. -/
+theorem return_le_of_hit_le {V : α → ℝ} (hV : K.Integrable V) {a c d : ℝ} (ha : 0 ≤ a)
+    (hh : ∀ n y, hit K T n y ≤ a * V y + c) {x : α} (hd : K.apply V x ≤ d) (n : ℕ) :
+    1 + K.apply (hit K T n) x ≤ 1 + a * d + c := by
+  have h1 := K.apply_mono (hit_integrable K T n) ((hV.const_mul a).add (K.integrable_const c)) (hh n) x
+  rw [K.apply_add (hV.const_mul a) (K.integrable_const c), K.apply_const, K.apply_const_mul] at h1
+  have := mul_le_mul_of_nonneg_left hd ha
   linarith
 
 /-- `x` is positive recurrent: the truncated expected return times to `x`

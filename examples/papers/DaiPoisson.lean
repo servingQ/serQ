@@ -370,20 +370,9 @@ theorem return_idle (lam : ℝ) (hlam : 0 ≤ lam) (hA : 1280 * (lam * 4675) < 1
     ∃ C : ℝ, ∀ n x, Idle x → 1 + (kernel lam hlam).apply (hit (kernel lam hlam) Idle n) x ≤ C := by
   obtain ⟨c, hc⟩ := hit_le lam hlam hA
   have hε : 0 < ε lam := (drift lam hlam hA).pos
-  have hVI := integrable lam hlam
-  refine ⟨1 + (1 / ε lam) * (1280 * (lam * 4675 + 1)) + c, fun n x hx => ?_⟩
-  have h1 : ∀ y, hit (kernel lam hlam) Idle n y ≤ (1 / ε lam) * V y + c := fun y => by
-    have := hc n y
-    rw [one_div, ← div_eq_inv_mul]; exact this
-  have h2 := (kernel lam hlam).apply_mono (hit_integrable _ _ n)
-    ((hVI.const_mul _).add ((kernel lam hlam).integrable_const c)) h1 x
-  rw [(kernel lam hlam).apply_add (hVI.const_mul _) ((kernel lam hlam).integrable_const c),
-    Kernel.apply_const, Kernel.apply_const_mul] at h2
-  have h3 := apply_V_le lam hlam x
-  rw [V_idle hx] at h3
-  have h4 : (1 / ε lam) * (kernel lam hlam).apply V x ≤ (1 / ε lam) * (1280 * (lam * 4675 + 1)) :=
-    mul_le_mul_of_nonneg_left (by linarith) (by positivity)
-  linarith
+  refine ⟨_, fun n x hx => return_le_of_hit_le (kernel lam hlam) Idle (integrable lam hlam)
+    (a := 1 / ε lam) (by positivity) (fun n y => by rw [one_div, ← div_eq_inv_mul]; exact hc n y)
+    (d := 1280 * (lam * 4675 + 1)) (by have := apply_V_le lam hlam x; rw [V_idle hx] at this; linarith) n⟩
 
 end DaiPoisson
 end Papers

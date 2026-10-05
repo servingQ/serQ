@@ -106,10 +106,15 @@ theorem hasSum_count (x : State) : HasSum (count lam x) 1 := by
   · exact hasSum_pois (by positivity)
   · exact hasSum_ite_eq 1 1
 
+omit hlam in
+/-- A slot's mean number of requests: `λ · dur` on a busy engine, one on an
+idle one. -/
+noncomputable def mean (lam : ℝ) (x : State) : ℝ :=
+  if x.1.iterEnd.isSome then lam * Slot.dur x.1 else 1
+
 theorem hasSum_count_mean (x : State) :
-    HasSum (fun k : ℕ => (k : ℝ) * count lam x k)
-      (if x.1.iterEnd.isSome then lam * Slot.dur x.1 else 1) := by
-  unfold count; split_ifs
+    HasSum (fun k : ℕ => (k : ℝ) * count lam x k) (mean lam x) := by
+  unfold count mean; split_ifs
   · exact hasSum_mul_pois (by positivity)
   · convert hasSum_ite_eq (1 : ℕ) (1 : ℝ) using 1
     funext k; split_ifs with h <;> simp [h]
@@ -138,7 +143,7 @@ theorem V_next (x : State) (s : Outcome (Fin n)) :
 /-- The expectation of `V` after a slot, term by term. -/
 theorem hasSum_V (x : State) :
     HasSum (fun s => compound (count lam x) X.q s * (V x + ∑ i, (((X.len (s.2 i)).1 + (X.len (s.2 i)).2 : ℕ) : ℝ)))
-      (V x + (if x.1.iterEnd.isSome then lam * Slot.dur x.1 else 1) * X.work) := by
+      (V x + mean lam x * X.work) := by
   have h1 := (hasSum_compound (count_nonneg hlam x) (hasSum_count hlam x) X.nonneg X.sum_one).mul_right (V x)
   have h2 := hasSum_compound_work (count_nonneg hlam x) (hasSum_count_mean hlam x) X.nonneg X.sum_one
     (fun t => (((X.len t).1 + (X.len t).2 : ℕ) : ℝ)) (fun t => Nat.cast_nonneg _)
@@ -173,7 +178,7 @@ theorem drift (hA : lam * 4640 * X.work < 128) : Drift (kernel X hlam) F V (ε X
       obtain ⟨hb1, -⟩ := hB.busy hbusy
       have : tokSum x.1.iter ≤ 128 := hB.tok; omega
     have hH := hasSum_V X hlam x
-    rw [if_pos hbusy, dur_full x hx] at hH
+    rw [mean, if_pos hbusy, dur_full x hx] at hH
     have hE : (kernel X hlam).apply V x = V x + lam * (4640 : ℕ) * X.work - 128 := by
       unfold Kernel.apply
       have h128' := (hasSum_compound (count_nonneg hlam x) (hasSum_count hlam x) X.nonneg X.sum_one).mul_right
@@ -266,17 +271,17 @@ theorem dur_le (x : State) : Slot.dur x.1 ≤ 4640 := by
     omega
 
 /-- No request. -/
-def none0 : Outcome (Fin n) := ⟨0, Fin.elim0⟩
+def noArrival : Outcome (Fin n) := ⟨0, Fin.elim0⟩
 
 omit hlam in
-theorem arrivals_none0 : arrivals X (none0 (n := n)) = [] := by simp [arrivals, none0]
+theorem arrivals_noArrival : arrivals X (noArrival (n := n)) = [] := by simp [arrivals, noArrival]
 
 /-- On a busy engine a slot brings no request with probability at least
 `e^{-4640 λ}`. -/
 theorem p0_ge {x : State} (hb : x.1.iterEnd.isSome = true) :
-    Real.exp (-(lam * 4640)) ≤ (kernel X hlam).p x none0 := by
+    Real.exp (-(lam * 4640)) ≤ (kernel X hlam).p x noArrival := by
   have hd : (Slot.dur x.1 : ℝ) ≤ 4640 := by exact_mod_cast dur_le x
-  simp only [kernel, compound, count, none0, hb, if_true, pois, Finset.univ_eq_empty,
+  simp only [kernel, compound, count, noArrival, hb, if_true, pois, Finset.univ_eq_empty,
     Finset.prod_empty, pow_zero, Nat.factorial_zero, Nat.cast_one, div_one, mul_one]
   exact Real.exp_le_exp.mpr (by nlinarith)
 
@@ -294,24 +299,24 @@ theorem drain : ∀ (j : ℕ) (x : State), backlog x.1 ≤ j →
     have hq1 : Real.exp (-(lam * 4640)) ≤ 1 := Real.exp_le_one_iff.mpr (by nlinarith)
     by_cases hx : Idle x
     · rw [reach_of_mem _ Idle hx]; exact pow_le_one₀ (Real.exp_nonneg _) hq1
-    · have hb' : backlog ((kernel X hlam).next x none0).1 ≤ j := by
-        show backlog (slot (arrivals X none0) x.1) ≤ j
+    · have hb' : backlog ((kernel X hlam).next x noArrival).1 ≤ j := by
+        show backlog (slot (arrivals X noArrival) x.1) ≤ j
         have h1 := BariRecurrent.absSlot_backlog [] (BariSim.σ x.1)
         rw [← BariSim.simulation x [] (by simp), ← BariProgram.backlog_eq,
           ← BariProgram.backlog_eq] at h1
         have h2 := (BariRecurrent.sS_cases _ (BariProgram.good_σ x.2) hx).1
-        rw [arrivals_none0]
+        rw [arrivals_noArrival]
         simp only [List.map_nil, List.sum_nil] at h1
         omega
       have ih := drain j _ hb'
-      have h3 := (kernel X hlam).le_apply (reach_integrable _ Idle j) (reach_nonneg _ Idle j) x none0
+      have h3 := (kernel X hlam).le_apply (reach_integrable _ Idle j) (reach_nonneg _ Idle j) x noArrival
       have h4 := p0_ge X hlam (busy_of_not_idle hx)
       show _ ≤ (if Idle x then 1 else (kernel X hlam).apply (reach (kernel X hlam) Idle j) x)
       rw [if_neg hx, pow_succ]
       calc Real.exp (-(lam * 4640)) ^ j * Real.exp (-(lam * 4640))
-          ≤ reach (kernel X hlam) Idle j ((kernel X hlam).next x none0) * (kernel X hlam).p x none0 :=
+          ≤ reach (kernel X hlam) Idle j ((kernel X hlam).next x noArrival) * (kernel X hlam).p x noArrival :=
             mul_le_mul ih h4 (Real.exp_nonneg _) (reach_nonneg _ _ _ _)
-        _ = (kernel X hlam).p x none0 * reach (kernel X hlam) Idle j ((kernel X hlam).next x none0) :=
+        _ = (kernel X hlam).p x noArrival * reach (kernel X hlam) Idle j ((kernel X hlam).next x noArrival) :=
             mul_comm _ _
         _ ≤ _ := h3
 
@@ -323,7 +328,7 @@ theorem work_nonneg : 0 ≤ X.work :=
 theorem apply_V_le (x : State) : (kernel X hlam).apply V x ≤ V x + (lam * 4640 + 1) * X.work := by
   have hH := hasSum_V X hlam x
   have h1 : (kernel X hlam).apply V x ≤
-      V x + (if x.1.iterEnd.isSome then lam * Slot.dur x.1 else 1) * X.work := by
+      V x + mean lam x * X.work := by
     unfold Kernel.apply
     rw [← hH.tsum_eq]
     refine (integrable X hlam x).tsum_le_tsum (fun s => mul_le_mul_of_nonneg_left ?_
@@ -333,8 +338,9 @@ theorem apply_V_le (x : State) : (kernel X hlam).apply V x ≤ V x + (lam * 4640
       split_ifs <;> positivity
     show V ⟨slot (arrivals X s) x.1, _⟩ ≤ _
     linarith
-  have h2 : (if x.1.iterEnd.isSome then lam * Slot.dur x.1 else 1) ≤ lam * 4640 + 1 := by
+  have h2 : mean lam x ≤ lam * 4640 + 1 := by
     have hd : (Slot.dur x.1 : ℝ) ≤ 4640 := by exact_mod_cast dur_le x
+    unfold mean
     split_ifs <;> nlinarith
   nlinarith [work_nonneg X]
 
@@ -367,24 +373,15 @@ theorem return_idle (hA : lam * 4640 * X.work < 128) :
     ∃ C : ℝ, ∀ j x, Idle x → 1 + (kernel X hlam).apply (hit (kernel X hlam) Idle j) x ≤ C := by
   obtain ⟨c, hc⟩ := hit_le X hlam hA
   have hε : 0 < ε X lam := (drift X hlam hA).pos
-  have hVI := integrable X hlam
-  refine ⟨1 + (1 / ε X lam) * ((lam * 4640 + 1) * X.work) + c, fun j x hx => ?_⟩
-  have h1 : ∀ y, hit (kernel X hlam) Idle j y ≤ (1 / ε X lam) * V y + c := fun y => by
-    have := hc j y
-    rw [one_div, ← div_eq_inv_mul]; exact this
-  have h2 := (kernel X hlam).apply_mono (hit_integrable _ _ j)
-    ((hVI.const_mul _).add ((kernel X hlam).integrable_const c)) h1 x
-  rw [(kernel X hlam).apply_add (hVI.const_mul _) ((kernel X hlam).integrable_const c),
-    Kernel.apply_const, Kernel.apply_const_mul] at h2
-  have h3 := apply_V_le X hlam x
-  have h0 : V x = 0 := by
-    unfold V
-    rw [BariProgram.backlog_eq, show BariSim.σ x.1 = [] from hx]
-    simp [BariChain.backlog]
-  rw [h0] at h3
-  have h4 : (1 / ε X lam) * (kernel X hlam).apply V x ≤ (1 / ε X lam) * ((lam * 4640 + 1) * X.work) :=
-    mul_le_mul_of_nonneg_left (by linarith) (by positivity)
-  linarith
+  refine ⟨_, fun j x hx => return_le_of_hit_le (kernel X hlam) Idle (integrable X hlam)
+    (a := 1 / ε X lam) (by positivity) (fun j y => by rw [one_div, ← div_eq_inv_mul]; exact hc j y)
+    (d := (lam * 4640 + 1) * X.work) (by
+      have h3 := apply_V_le X hlam x
+      have h0 : V x = 0 := by
+        unfold V
+        rw [BariProgram.backlog_eq, show BariSim.σ x.1 = [] from hx]
+        simp [BariChain.backlog]
+      linarith) j⟩
 
 end BariPoisson
 end Papers
