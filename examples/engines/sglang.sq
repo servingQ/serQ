@@ -59,16 +59,15 @@ workload {
 
 // A retracted request keeps its output tokens and recomputes them; only its
 // prompt stays in the cache (`fin` is 0 until the request finishes). The
-// reservation is capped at the pool: a `reserve` above the cap when the
-// session joins is a request that can never fit, and is rejected, where
-// SGLang's test, which grows with the load, only makes it wait.
+// reservation grows with the running requests, as SGLang's test does; above
+// the cap, the request waits for some to finish (#364).
 server {
   set t0 = now;
   set prompt = K + n;
   set fin = 0;
   hold reqs (1), kv (min(known, hit + budget_left(engine)))
-       reserve (min(tokens_cap, known - hit + min(M - (known - prompt), clip) + 1
-                                + ratio * min(M, clip) * holders(reqs)))
+       reserve (known - hit + min(M - (known - prompt), clip) + 1
+                + ratio * min(M, clip) * holders(reqs))
        at admission (known = computed < prompt ? prompt : computed + 1,
                      hit = min(cachedin(kv), known - 1)) {
     set c = min(cached, known - 1);

@@ -730,12 +730,23 @@ fn a_reserve_that_reads_the_state_waits_instead_of_being_rejected() {
         r.text()
     );
     assert_eq!(r.pool("kv").unwrap().rejected, 0);
+    // the third waited over the cap and was admitted: nothing is over at the end
+    assert!(r.pools.iter().all(|q| q.over_cap.is_none()), "{}", r.text());
     let r = run(&prog("9 + serial"));
     assert_eq!(r.pool("kv").unwrap().rejected, 1, "{}", r.text());
+    // the head waits in `reqs`'s queue (the hold's first pool) and asks `kv`,
+    // whose cap is 10, for 11: the note names the pool asked
     let r = run(&prog("11 + 0 * holders(reqs)"));
-    assert!(r.pool("reqs").unwrap().over_cap, "{}", r.text());
+    assert_eq!(
+        r.pool("kv").unwrap().over_cap,
+        Some(("reqs".to_string(), 11.0)),
+        "{}",
+        r.text()
+    );
+    assert!(r.pool("reqs").unwrap().over_cap.is_none());
     assert!(
-        r.text().contains("over: the head of pool `reqs`"),
+        r.text()
+            .contains("over: the head of pool `reqs`'s queue asks `kv` for 11"),
         "{}",
         r.text()
     );

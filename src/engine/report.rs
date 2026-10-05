@@ -133,10 +133,11 @@ pub struct PoolReport {
     /// Sessions preempted a second time without progress past their
     /// previous preemption: a livelock the run would otherwise hide.
     pub stuck: u64,
-    /// The run ended with the head of the queue asking for more than the
-    /// cap at its last try: a hold whose units or `reserve` read the
-    /// deployment's state, which joining the queue does not reject (#364).
-    pub over_cap: bool,
+    /// The run ended with the head of a queue asking this pool for more
+    /// than its cap: the queue's pool and what the head asks. A hold whose
+    /// units or `reserve` read the deployment's state is not rejected when
+    /// it joins the queue, and waits (#364).
+    pub over_cap: Option<(String, f64)>,
 }
 
 /// A `claim`: what the run found of it on the path it ran.
@@ -473,12 +474,12 @@ impl Report {
                         label(&p.name, p.index)
                     );
                 }
-                if p.over_cap {
+                if let Some((queue, need)) = &p.over_cap {
                     let _ = writeln!(
                         s,
-                        "over: the head of pool `{}`'s queue asked for more than its cap when \
-                         last tried, and waits (its hold reads the deployment's state, so \
-                         joining the queue did not reject it)",
+                        "over: the head of pool `{queue}`'s queue asks `{}` for {need}, above \
+                         its cap, when the run ends, and waits (its hold reads the \
+                         deployment's state, so joining the queue did not reject it)",
                         label(&p.name, p.index)
                     );
                 }
@@ -626,7 +627,11 @@ impl Report {
                 p.spills,
                 p.rejected,
                 p.stuck,
-                p.over_cap
+                match &p.over_cap {
+                    Some((queue, need)) =>
+                        format!("{{\"queue\":\"{queue}\",\"need\":{}}}", f(*need)),
+                    None => "null".into(),
+                }
             );
         }
         s.push_str("]}");

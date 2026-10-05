@@ -316,9 +316,6 @@ struct PoolState {
     /// Sessions preempted again without having advanced past the position
     /// of their previous preemption (a self-preemption livelock, typically).
     stuck: u64,
-    /// The head of the queue asked, at its last try, for more than a cap
-    /// (a reserve that reads the deployment's state, #364).
-    head_over_cap: bool,
 }
 
 // ------------------------------------------------------------ stages ----
@@ -662,7 +659,6 @@ impl<'p> Interp<'p> {
                 spills: 0,
                 rejected: 0,
                 stuck: 0,
-                head_over_cap: false,
             })
             .collect();
         let shared = p.shared_stages();
@@ -1634,11 +1630,11 @@ impl<'p> Interp<'p> {
             // attributes and numbers asks the same at every try: above the
             // cap, the request can never fit, and is rejected.
             let mut need: f64 = 0.0;
-            if !reads_state(w.expr) {
+            if !crate::ir::moves(w.expr) {
                 need = w.units;
             }
             if let Some(f) = w.reserve
-                && !reads_state(f)
+                && !crate::ir::moves(f)
             {
                 let what = format!("hold {} reserve", self.p.pools[pl].name);
                 need = need.max(self.amount(f, sid, &what));
@@ -1726,7 +1722,7 @@ impl<'p> Interp<'p> {
         }
         while let Some((index, sid)) = self.next_waiter(pl) {
             let pending = self.pending_now(sid);
-            if !self.head_fits(pl, &pending) {
+            if !self.fits_all(&pending) {
                 break;
             }
             self.pools[pl].queue.remove(index);
@@ -1734,22 +1730,41 @@ impl<'p> Interp<'p> {
         }
     }
 
-    /// Whether the head of pool `pl`'s queue, its hold evaluated now, fits
-    /// every pool it names. The guard counts only allocated units: cached
-    /// prefixes never block an admission (they are evicted as needed). A
-    /// head that asks for more than a cap now (a reserve that reads the
-    /// deployment's state, which the queue's entry did not reject) is
-    /// marked, so that one still waiting when the run ends is named.
-    fn head_fits(&mut self, pl: usize, pending: &Pending<'p>) -> bool {
-        let over = pending
-            .pools
-            .iter()
-            .any(|w| self.round_up(w.pool, w.need) > self.pools[w.pool].cap);
-        self.pools[pl].head_over_cap = over;
+    /// Whether a hold, evaluated now, fits every pool it names. The guard
+    /// counts only allocated units: cached prefixes never block an
+    /// admission (they are evicted as needed).
+    fn fits_all(&self, pending: &Pending<'p>) -> bool {
         pending
             .pools
             .iter()
             .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need)))
+    }
+
+    /// The pools whose cap the head of a queue, evaluated as the run ends,
+    /// asks more than: `(the pool asked, the queue's pool, what it asks)`.
+    /// A hold whose units or `reserve` read the deployment's state was not
+    /// rejected when it joined (#364); one that still cannot fit is named
+    /// here, whether or not an admission tried it.
+    fn heads_over_cap(&mut self) -> Vec<(usize, usize, f64)> {
+        let error = self.error.clone();
+        let mut over = vec![];
+        for q in 0..self.pools.len() {
+            if self.pools[q].queue.is_empty() {
+                continue;
+            }
+            let Some((_, sid)) = self.next_waiter(q) else {
+                continue;
+            };
+            let pending = self.pending_now(sid);
+            for w in &pending.pools {
+                if self.round_up(w.pool, w.need) > self.pools[w.pool].cap {
+                    over.push((w.pool, q, w.need));
+                }
+            }
+        }
+        // a read at the end is the report's, not the run's
+        self.error = error;
+        over
     }
 
     fn own_entry_size(&self, pl: usize, sid: usize) -> f64 {
@@ -3527,7 +3542,7 @@ impl<'p> Interp<'p> {
             };
             let pending = self.pending_now(sid);
             self.admit_budget = None;
-            if !self.head_fits(pl, &pending) {
+            if !self.fits_all(&pending) {
                 return false;
             }
             self.pools[pl].queue.remove(index);
@@ -4038,11 +4053,17 @@ impl<'p> Interp<'p> {
                 itl_p99: s.steps.itl.quantile(0.99),
             })
             .collect();
+        let over = self.heads_over_cap();
+        let label = |q: usize| match p.pools[q].index {
+            Some(i) => format!("{}[{i}]", p.pools[q].name),
+            None => p.pools[q].name.clone(),
+        };
         let pools = self
             .pools
             .iter()
             .zip(&p.pools)
-            .map(|(pl, cp)| PoolReport {
+            .enumerate()
+            .map(|(i, (pl, cp))| PoolReport {
                 name: cp.name.clone(),
                 index: cp.index,
                 mean_used: pl.used_avg.mean(now),
@@ -4057,7 +4078,10 @@ impl<'p> Interp<'p> {
                 spills: pl.spills,
                 rejected: pl.rejected,
                 stuck: pl.stuck,
-                over_cap: pl.head_over_cap && !pl.queue.is_empty(),
+                over_cap: over
+                    .iter()
+                    .find(|(asked, _, _)| *asked == i)
+                    .map(|&(_, q, need)| (label(q), need)),
             })
             .collect();
         Report {
@@ -4156,18 +4180,6 @@ impl Ord for KeyOrd {
         }
         self.0.len().cmp(&o.0.len())
     }
-}
-
-/// Whether an expression reads the deployment's state: a pool or stage query
-/// (`used`, `cachedin`, `budget_left`, …) or a context variable, the clock
-/// included. A hold's units that do not are a number per session, the same
-/// at every try.
-fn reads_state(e: &CExpr) -> bool {
-    e.any(&|x| match x {
-        CExpr::Ctx(_) => true,
-        CExpr::Call(f, _) => !f.is_arithmetic(),
-        _ => false,
-    })
 }
 
 /// Whether an eviction key reads only its entry, the clock and the stage
