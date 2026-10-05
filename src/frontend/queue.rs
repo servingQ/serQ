@@ -308,7 +308,7 @@ impl Ctx<'_> {
         let mut out = Vec::with_capacity(stmts.len());
         for s in stmts {
             match s {
-                Stmt::Run { stage, work, .. } if stage.name == PULL => out.extend(self.pull(work)?),
+                Stmt::Run { stage, work, .. } if stage.name == PULL => out.extend(self.copy(work)?),
                 _ => out.push(self.stmt(s)?),
             }
         }
@@ -318,7 +318,7 @@ impl Ctx<'_> {
     /// `transfer (n) from src to kv (m)` in an entry of a queue with a KV
     /// relation: the poster's wait, then one run over the source's NIC and
     /// the reader's (the `load` and `release` follow as written).
-    fn pull(&self, work: &Expr) -> Result<Vec<Stmt>, ExpandError> {
+    fn copy(&self, work: &Expr) -> Result<Vec<Stmt>, ExpandError> {
         let Some(Takes {
             source,
             latency,

@@ -132,7 +132,8 @@ and `growing` stand inside a `Hold` of an equal `CRef` (base, count and
 index expression; `Release` also where a hold leases it), and a hold leases
 one of its own pools, that a `Fork`'s body has no `Turn`, `End`, `Fork`
 or `Join` and acts on no hold around the fork (a leg holds nothing of the
-session's), that a `Join` stands in a program that forks, that a hold's body changes no attribute its index
+session's), that a `Fork` stands in no hold of a pool that may preempt, that
+a program with a `Fork` has a `Join` and one with a `Join` a `Fork`, that a hold's body changes no attribute its index
 reads and an index read again inside reads no state or clock, that a hold a
 pool may preempt reads no such index nor `cached`/`computed` (it is admitted
 anew), that the blocks reached from `init`, `turn` and `session` form a

@@ -442,8 +442,9 @@ worker posts the write, so the wait before each copy is `P`'s, the delay
 stage `P.nic.latency`, indexed by the source member. A push says who moves
 the bytes, not when the decoder is asked for its blocks: that is the
 dispatch, written where it happens, with `fork` (below,
-`examples/pd-disaggregation/vllm_nixl_push.sq`). A queue that posts copies
-does so for one relation.
+`examples/pd-disaggregation/vllm_nixl_push.sq`). The wait is a delay, so a
+push and a pull of the same constants run the same numbers. A queue that
+posts copies does so for one relation.
 
 `transfer on L[k], M[l] (n) from S to P (m)` names the stages itself, as
 a `server` does: link queues, or any `ps` stages. `latency x` on a link's
@@ -503,18 +504,20 @@ pending at the same instant (a scheduler step sees every arrival up to it).
 beside the session from the same instant, with a copy of the session's
 attributes, as vLLM's push proxy sends the prefill and the decode request
 of one request at once. The leg's holds are its own (it acts on none of
-the session's), its `set`s change only its copy, which ends with it, and
-its draws read a stream of its own; its observations are the program's. It
+the session's, and a `fork` stands in no hold that may be preempted, which
+would run again and fork twice), its `set`s change only its copy, which
+ends with it (a lease it leaves caches by that copy), and its draws read a
+stream of its own; its observations are the program's. It
 shares the session's cached prefix, which is the request's. When the leg
 ends, what it leases passes to the session, whose `release` (a
 `transfer … from`) takes it. `join;` waits until every leg the session has
 forked has ended, and passes at once when none runs. A leg may not
-`turn`, `end`, fork or `join`, and a session may not end while a leg runs
-(a run-time error). A hold that can never fit refuses the request: the
+`turn`, `end`, fork or `join`; a program that forks joins somewhere, and
+a session may not end while a leg runs (a run-time error). A hold that can never fit refuses the request: the
 session ends, a refused leg ends its session, and the legs of an ended
 session run on and give back what they lease. A run that ends with
-sessions and legs waiting only for each other, one at a `join`, is an
-error: the leg waits for memory a lease holds, and the lease's session
+sessions and legs waiting only for each other, one at a `join` and none for
+a lease that will expire, is an error: the leg waits for memory a lease holds, and the lease's session
 waits inside a hold the leg's session needs (a hold-and-wait cycle; a
 finite `lease` breaks it).
 

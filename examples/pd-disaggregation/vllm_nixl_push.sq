@@ -29,7 +29,7 @@
 // and the proxy's hops and the API server h per request).
 use "../../lib/vllm.sq";
 
-let concurrent = 1;    // 1: both legs at once (the push proxy); 0: the decode leg after the prefill
+let concurrent = 1;    // 1: both requests at once (the push proxy); 0: the decode request after the prefill's answer
 let spacing = 3.0;     // seconds between session arrivals
 let N = 96;            // sessions replayed (957 requests)
 let B = 8192;          // max_num_batched_tokens
@@ -45,7 +45,8 @@ let Bw = 99771;        // NIXL copy, tokens/s (fitted on 13 lone reads, 512-32 0
 let x0 = 0.010;        // s per copy (fitted)
 let h = 0.063;         // s per request outside the engines: proxy hops, API server (fitted, less one decode step)
 
-// The proxy: both legs at once, the decoder's answer streamed back.
+// The proxy: the prefill request as a leg beside the decode request, the
+// decoder's answer streamed back.
 queue gw : gateway {
   route {
     set t0 = now;
@@ -56,7 +57,7 @@ queue gw : gateway {
     } else {
       P.prefill (prompt);              // the sidecar's order: the prefill's answer first
     }
-    D.decode (prompt) from P;          // the decode leg; it waits for the prefill's KV inside
+    D.decode (prompt) from P;          // the decode request; it waits for the prefill's KV inside
     observe ttft = D.first_token - t0;
     observe parked = D.written - D.parked;   // how long the decoder's blocks waited for the KV
     observe sent = t0;
@@ -128,7 +129,7 @@ queue D : decode {
         // recomputed for its logits.
         mark parked;
         observe d_cached = c;
-        join;                                                     // the prefill leg has ended: its blocks are leased
+        join;                                                     // P's finished blocks meet the registration: the write can start (nixl/push_worker.py:254-264)
         transfer (prompt - c) from src to kv (prompt - 1 - c);   // P's WRITE over both NICs
         mark written;
         set transferred = 1;

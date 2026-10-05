@@ -292,7 +292,7 @@ fn a_session_may_not_end_before_its_legs() {
         r#"
         stage svc : delay;
         workload { arrive batch(1); }
-        session { fork { run svc (5); } run svc (1); end; }
+        session { set x = 0; fork { run svc (5); } run svc (1); branch (x) { join; } end; }
         run { horizon 100; }
     "#,
     );
@@ -342,5 +342,109 @@ fn a_leg_does_not_act_on_the_sessions_holds() {
          session { hold kv (1) { fork { grow kv (1); } join; } end; }
          run { horizon 10; }",
         "`grow kv` outside a hold of `kv`",
+    );
+}
+
+/// A leg's lease caches by the leg's attributes when it ends, after it has
+/// passed to the session: `cache (n)` reads the `n` the leg set.
+#[test]
+fn a_legs_lease_caches_by_the_legs_attributes() {
+    let r = run(r#"
+        pool kv { cap 100; }
+        stage svc : delay;
+        workload { arrive batch(1); }
+        session {
+          set n = 0;
+          fork { set n = 8; hold kv (8) { run svc (1); } cache (n) lease kv (inf); }
+          join;
+          release kv;
+          hold kv (8) { observe hit = cached; } cache (0);
+          end;
+        }
+        run { horizon 100; }
+    "#);
+    assert_eq!(samples(&r, "hit"), [8.0]);
+}
+
+/// Waiting for a lease that expires is not waiting for each other: the
+/// crossing legs of `legs_that_wait_for_each_other_fail_the_run` with a
+/// finite lease, at a horizon before it expires, end as a slow run.
+#[test]
+fn a_lease_that_expires_is_not_a_deadlock() {
+    let r = run(r#"
+        queue gw : gateway {
+          route {
+            fork { P.prefill (prompt); }
+            run gate (serial == 1 ? 1 : 0);
+            D.decode (prompt) from P;
+          }
+        }
+        queue P : prefill {
+          pool kv { cap 10; }
+          serve fifo;
+          nic ps(100);
+          prefill (p) { hold kv (p) { run (p); } cache (p) lease kv (50); }
+        }
+        queue D : decode {
+          pool kv { cap 10; }
+          serve step { cost 1; memory kv; }
+          nic ps(100);
+          decode (p) { hold kv (p) { prefill (p) growing kv; } }
+          decode (p) from src { hold kv (p) { join; transfer (p) from src to kv (p); } }
+        }
+        P push D share maxmin;
+        stage gate : delay;
+        workload {
+          arrive batch(2);
+          init { set prompt = 8; }
+          session { run gate (serial == 0 ? 0.5 : 0); request gw; end; }
+        }
+        run { horizon 30; }
+    "#);
+    assert_eq!(r.ended, 0);
+}
+
+/// A preempted hold runs again from its start: a `fork` inside one would
+/// send a second leg.
+#[test]
+fn a_fork_in_a_hold_that_may_be_preempted_is_refused() {
+    refused(
+        "pool kv { cap 10; preempt lifo; }
+         stage svc : delay;
+         workload { arrive batch(1); }
+         session { hold kv (1) { fork { run svc (1); } join; } end; }
+         run { horizon 10; }",
+        "`fork` inside a hold of `kv`, which may preempt it",
+    );
+}
+
+#[test]
+fn a_fork_needs_a_join() {
+    refused(
+        "stage svc : delay;
+         workload { arrive batch(1); }
+         session { fork { run svc (1); } run svc (2); end; }
+         run { horizon 10; }",
+        "a program that forks a leg and never joins",
+    );
+}
+
+/// The queue that posts the copies waits once before each: one relation,
+/// with a `latency` or without.
+#[test]
+fn a_queue_posts_the_copies_of_one_relation() {
+    refused(
+        "queue P : prefill { pool kv { cap 10; } serve fifo; nic ps(1);
+           prefill (p) { hold kv (p) { run (p); } cache (p) lease kv (inf); } }
+         queue D : decode { pool kv { cap 10; } serve step { cost 1; memory kv; } nic ps(1);
+           decode (p) { hold kv (p) { prefill (p) growing kv; } }
+           decode (p) from src { hold kv (p) { transfer (p) from src to kv (p); } } }
+         queue E : decode { pool kv { cap 10; } serve step { cost 1; memory kv; } nic ps(1);
+           decode (p) { hold kv (p) { prefill (p) growing kv; } }
+           decode (p) from src { hold kv (p) { transfer (p) from src to kv (p); } } }
+         P push D share maxmin;
+         P push E share maxmin;
+         workload { arrive batch(1); } session { end; } run { horizon 10; }",
+        "`P` posts the copies of another relation already",
     );
 }

@@ -1090,8 +1090,23 @@ impl Program {
                     self.enclosed(*c, held, leased)?;
                 }
                 CStmt::Loop(x) => self.enclosed(*x, held, leased)?,
-                // a leg holds nothing of the session's: its holds are its own
-                CStmt::Fork(x) => self.enclosed(*x, &mut vec![], leased)?,
+                CStmt::Fork(x) => {
+                    // a preempted hold runs again from its start, and would
+                    // fork a second leg; the proxy sends each leg once
+                    if let Some(q) = held
+                        .iter()
+                        .flat_map(|(r, _)| &self.pools[r.base..r.base + r.count])
+                        .find(|q| q.preempt != Preempt::None)
+                    {
+                        return Err(here(format!(
+                            "`fork` inside a hold of `{}`, which may preempt it: the hold runs \
+                             again from its start and forks a second leg; fork before the hold",
+                            q.name
+                        )));
+                    }
+                    // a leg holds nothing of the session's: its holds are its own
+                    self.enclosed(*x, &mut vec![], leased)?
+                }
                 _ => {}
             }
         }
@@ -2413,6 +2428,19 @@ impl Validator<'_> {
             }
             CStmt::Fork(b) => {
                 self.block(*b)?;
+                if !self
+                    .p
+                    .blocks
+                    .iter()
+                    .flatten()
+                    .any(|s| matches!(s, CStmt::Join))
+                {
+                    return Err(
+                        "a program that forks a leg and never joins: a session may not \
+                         end while its leg runs"
+                            .into(),
+                    );
+                }
                 if let Some(what) = self.leg_may_not(*b) {
                     return Err(format!(
                         "a `fork`'s leg may not {what}: a leg is a part of the request beside \

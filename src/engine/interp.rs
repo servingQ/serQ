@@ -151,6 +151,12 @@ struct Lease<'p> {
     alloc: f64,
     computed: f64,
     cache: Option<&'p CExpr>,
+    /// When it expires (`inf`: only a `release` or the end takes it).
+    expires: f64,
+    /// The attributes of the leg that leased it, which `cache` reads when
+    /// the lease ends: a leg's attributes are its own, and its lease passes
+    /// to the session when it ends.
+    attrs: Option<Vec<f64>>,
 }
 
 /// One pool a waiting hold asks for.
@@ -179,6 +185,18 @@ struct Pending<'p> {
     lease: Option<(usize, &'p CExpr)>,
     body: BlockId,
     queued_at: f64,
+}
+
+/// A session, or a leg of one (`fork`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Leg {
+    /// A session.
+    No,
+    /// A leg of the session in this slot, which stays until the leg ends: a
+    /// session may not end before its legs,
+    Of(usize),
+    /// unless it was refused, which leaves them orphans.
+    Orphan,
 }
 
 #[derive(Clone, Debug)]
@@ -223,11 +241,8 @@ struct Session<'p> {
     /// keeps becoming ready without time passing is a loop that never
     /// blocks (`READIES_PER_INSTANT`).
     readies: (f64, u64),
-    /// Whether this is a leg (`fork`), and the slot of the session that
-    /// forked it, which stays until the leg ends: a session may not end
-    /// before its legs, unless it was refused, which leaves them orphans.
-    leg: bool,
-    leg_of: Option<usize>,
+    /// Whether this is a leg (`fork`), and of which session.
+    leg: Leg,
     /// Legs forked and not yet ended, and forks so far (the key of a leg's
     /// stream).
     legs: u32,
@@ -1231,8 +1246,7 @@ impl<'p> Interp<'p> {
             rng: substream(self.p.seed, serial, 0, STREAM_SESSION),
             turn_count: 0,
             readies: (f64::NAN, 0),
-            leg: false,
-            leg_of: None,
+            leg: Leg::No,
             legs: 0,
             forks: 0,
         };
@@ -1355,7 +1369,7 @@ impl<'p> Interp<'p> {
         if self.sessions[sid].status == Status::Ended {
             return;
         }
-        if self.sessions[sid].leg {
+        if self.sessions[sid].leg != Leg::No {
             self.end_leg(sid);
             return;
         }
@@ -1422,8 +1436,7 @@ impl<'p> Interp<'p> {
             rng: substream(p.seed, s.serial, n, STREAM_LEG),
             turn_count: s.turn_count,
             readies: (f64::NAN, 0),
-            leg: true,
-            leg_of: Some(sid),
+            leg: Leg::Of(sid),
             legs: 0,
             forks: 0,
         };
@@ -1447,17 +1460,21 @@ impl<'p> Interp<'p> {
     /// they end (the prefiller frees blocks no registration will claim,
     /// nixl/push_scheduler.py:233-245).
     fn refuse(&mut self, sid: usize) {
-        let session = if self.sessions[sid].leg {
-            let parent = self.sessions[sid].leg_of;
-            self.end_leg(sid);
-            parent
-        } else {
-            Some(sid)
+        let session = match self.sessions[sid].leg {
+            Leg::No => Some(sid),
+            Leg::Of(parent) => {
+                self.end_leg(sid);
+                Some(parent)
+            }
+            Leg::Orphan => {
+                self.end_leg(sid);
+                None
+            }
         };
         if let Some(s) = session {
             for leg in self.sessions.iter_mut() {
-                if leg.leg && leg.leg_of == Some(s) && leg.status != Status::Ended {
-                    leg.leg_of = None;
+                if leg.leg == Leg::Of(s) && leg.status != Status::Ended {
+                    leg.leg = Leg::Orphan;
                 }
             }
             self.sessions[s].legs = 0;
@@ -1473,7 +1490,7 @@ impl<'p> Interp<'p> {
         while let Some(h) = self.sessions[sid].holds.pop() {
             self.release_hold(sid, &h);
         }
-        let Some(parent) = self.sessions[sid].leg_of else {
+        let Leg::Of(parent) = self.sessions[sid].leg else {
             while !self.sessions[sid].leases.is_empty() {
                 self.end_lease(sid, 0);
             }
@@ -1482,8 +1499,10 @@ impl<'p> Interp<'p> {
             self.free.push(sid);
             return;
         };
-        let leases = std::mem::take(&mut self.sessions[sid].leases);
-        for l in &leases {
+        let mut leases = std::mem::take(&mut self.sessions[sid].leases);
+        for l in &mut leases {
+            l.attrs
+                .get_or_insert_with(|| self.sessions[sid].attrs.clone());
             for h in self.pools[l.pool].holders.iter_mut().filter(|h| **h == sid) {
                 *h = parent;
             }
@@ -1510,7 +1529,7 @@ impl<'p> Interp<'p> {
             self.sessions
                 .iter()
                 .enumerate()
-                .filter(move |(_, x)| x.leg && x.leg_of == Some(s) && x.status != Status::Ended)
+                .filter(move |(_, x)| x.leg == Leg::Of(s) && x.status != Status::Ended)
                 .map(|(l, _)| l)
         };
         let mut stuck: Vec<bool> = self
@@ -1540,10 +1559,21 @@ impl<'p> Interp<'p> {
                             })
                             .map(|w| w.pool)
                             .collect();
+                        // a lease that expires frees its pool without an event
+                        // of theirs
+                        let expiring = |pl: usize| {
+                            self.sessions.iter().any(|x| {
+                                x.leases
+                                    .iter()
+                                    .any(|l| l.pool == pl && l.expires.is_finite())
+                            })
+                        };
                         !short.is_empty()
                             && short.iter().all(|&pl| {
                                 let holders = &self.pools[pl].holders;
-                                !holders.is_empty() && holders.iter().all(|&h| stuck[h])
+                                !holders.is_empty()
+                                    && holders.iter().all(|&h| stuck[h])
+                                    && !expiring(pl)
                             })
                     }
                     _ => false,
@@ -1563,7 +1593,7 @@ impl<'p> Interp<'p> {
     /// What a stuck session waits at, for an error.
     fn waiting_at(&self, s: usize) -> String {
         let x = &self.sessions[s];
-        let who = if x.leg {
+        let who = if x.leg != Leg::No {
             format!("a leg of session {}", x.serial)
         } else {
             format!("session {}", x.serial)
@@ -2355,6 +2385,8 @@ impl<'p> Interp<'p> {
                         alloc,
                         computed,
                         cache: h.cache,
+                        expires: self.now + t,
+                        attrs: None,
                     });
                     if t.is_finite() {
                         let serial = self.sessions[sid].serial;
@@ -2369,7 +2401,14 @@ impl<'p> Interp<'p> {
     /// A lease ends: the units go back, `cache` applies.
     fn end_lease(&mut self, sid: usize, i: usize) {
         let l = self.sessions[sid].leases.remove(i);
+        // a leg's lease caches by the leg's attributes, not the session's
+        let saved = l
+            .attrs
+            .map(|a| std::mem::replace(&mut self.sessions[sid].attrs, a));
         self.release_units(sid, l.pool, l.alloc, l.computed, l.cache);
+        if let Some(a) = saved {
+            self.sessions[sid].attrs = a;
+        }
     }
 
     /// Give `alloc` units of `q` back, keeping `min(cache, computed)` of them

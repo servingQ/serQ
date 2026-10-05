@@ -184,9 +184,10 @@ struct Parser {
     in_queue: Option<usize>,
     /// The `from` name of the entry being parsed.
     entry_from: Option<String>,
-    /// The program's `share` was given by a pull relation.
     /// The verb of the relation that gave the program's `share`.
     relation_share: Option<&'static str>,
+    /// The queues that post the copies of a relation: one each.
+    posters: Vec<String>,
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
@@ -1392,6 +1393,7 @@ impl Parser {
             in_queue: None,
             entry_from: None,
             relation_share: None,
+            posters: vec![],
             latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
@@ -4340,6 +4342,16 @@ impl Parser {
             .iter()
             .position(|d| d.name == *poster)
             .expect("checked above");
+        if self.posters.contains(poster) {
+            return self.err_at(
+                at,
+                format!(
+                    "{written}: `{poster}` posts the copies of another relation already, \
+                     and waits once before each: one relation per poster"
+                ),
+            );
+        }
+        self.posters.push(poster.clone());
         let latency = if self.eat_kw("latency") {
             let l_at = self.pos;
             let e = self.expr()?;
@@ -4354,15 +4366,6 @@ impl Parser {
             // stage of the side that posts, one per member
             let lname = format!("{poster}.{verb}.time");
             let sname = format!("{poster}.nic.latency");
-            if self.stages.iter().any(|(n, _)| *n == sname) {
-                return self.err_at(
-                    l_at,
-                    format!(
-                        "{written}: `{poster}` posts the copies of another relation \
-                         already, and waits once before each: one relation per poster"
-                    ),
-                );
-            }
             self.consts.push((lname.clone(), v));
             prog.lets.push((lname.clone(), e));
             let count = self.queues[pi].count;

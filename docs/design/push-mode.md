@@ -66,7 +66,7 @@ queue gw : gateway {
     } else {
       P.prefill (prompt);              // the sidecar's order: the prefill's answer first
     }
-    D.decode (prompt) from P;          // the decode leg; it waits for the prefill's KV inside
+    D.decode (prompt) from P;          // the decode request; it waits for the prefill's KV inside
     …
   }
 }
@@ -76,7 +76,7 @@ queue D : decode {
     hold kv (known) reserve (known), reqs (0) reserve (1) … {
       …
         mark parked;
-        join;                                                     // the prefill leg has ended: its blocks are leased
+        join;                                                     // P's finished blocks meet the registration: the write can start (nixl/push_worker.py:254-264)
         transfer (prompt - c) from src to kv (prompt - 1 - c);   // P's WRITE over both NICs
       …
     } cache (prompt + o);
@@ -115,15 +115,27 @@ with the same relation (criterion 2: the program states the opposite).
 | `transfer (n) from src to kv (m)` in `D[j]`, called `from P[i]` | `run P.nic.latency[i] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i];` |
 
 **Checks.** At link time: a leg may not `turn`, `end`, fork or `join`; a
-leg acts on no hold around its fork; a `join` needs a fork in the program;
-a queue posts the copies of one relation. At run time: a session may not
-end while a leg runs; a run that ends with sessions and legs that wait only
-for each other, one of them at a `join`, is an error naming each.
+leg acts on no hold around its fork; a `fork` stands in no hold that may be
+preempted (the hold would run again and fork a second leg); a `join` needs
+a fork in the program, and a fork a `join`; a queue posts the copies of one
+relation. At run time: a session may not end while a leg runs; a run that
+ends with sessions and legs that wait only for each other, one of them at
+a `join` and none for a lease that expires, is an error naming each. A
+leg's lease caches by the leg's attributes when it ends, after it has
+passed to the session.
+
+The latency stage is a delay, so a push and a pull of the same constants
+run the same numbers: the relation names who posts the copy, and the
+gateway's `fork` is what changes the schedule.
 
 ## What it earns
 
-The program is the proxy: one statement for the task it starts, one for the
-await, and the decoder's admission is the one the pull program has. On the
+The program is the proxy's task and the connector's rendezvous: one
+statement for the prefill request the proxy starts beside the decode
+request, one where the decoder's request waits for the prefiller's
+finished blocks (the proxy's own await, at the end of the stream, has
+nothing left to wait for by then), and the decoder's admission is the one
+the pull program has. On the
 A6000 testbed's trace (96 sessions, 957 requests, the constants fitted on
 lone requests; the program draws nothing, so every seed gives these
 numbers), at the replay's spacing of 3 s and at half of it:
@@ -197,7 +209,10 @@ read when its prefill leg ended. `D.parked` and `D.written` are the
 decoder's.
 
 **`join` has no handle.** A session with two kinds of legs that it joins
-at different places cannot say which; none of the programs does.
+at different places cannot say which; none of the programs does. The
+decoder's `join` waits for every leg its caller forked, so a gateway that
+forked a second leg for something else would make the decoder wait for it
+too.
 
 **No scheduler oracle.** As for the pull program: two schedulers and a fake
 connector would check the parked request's admission step and the write's

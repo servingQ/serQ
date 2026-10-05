@@ -851,7 +851,9 @@ fn leading_chooses(p: &Program, block: usize, out: &mut Vec<usize>) -> bool {
             }
             // a guard that walks the body: the chooses in it are collected
             // whether or not it reaches a station
-            CStmt::Hold { body, .. } | CStmt::Loop(body) if leading_chooses(p, *body, out) => {
+            CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::Fork(body)
+                if leading_chooses(p, *body, out) =>
+            {
                 return true;
             }
             _ => {}
