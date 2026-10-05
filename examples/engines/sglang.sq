@@ -6,27 +6,33 @@
 //   waiting request the budget and memory take, and runs it alone; with no
 //   prefill to run it runs the decode batch (the body);
 // - the admission test subtracts what every running request may still
-//   generate, scaled by `new_token_ratio`, which decays each decode step,
-//   jumps after a retraction and resets when the server goes idle (the
-//   register `ratio`);
+//   generate, scaled by `new_token_ratio` (the register `ratio`), which
+//   decays each decode step and is reset when the server is fully idle, no
+//   batch running and none waiting (`new_token_ratio_tracker.py`, reset at
+//   `scheduler.py` L4998 when `is_fully_idle`);
 // - a retraction takes, from the decode batch, the request with the fewest
 //   output tokens, then the longest prompt, and sends it to the back of the
 //   queue (`preempt by … requeue tail`).
 //
-// Where this program is not SGLang: the admission test sums one request's
-// estimate times the running count, where SGLang sums each request's own
-// remaining `max_new_tokens`; after a retraction the ratio is set to the
-// bound `20 / M` the survivors' outputs raise, which needs their sum; the
-// radix cache is shared across requests, and serQ's entries are a
-// session's own (#374).
+// Where this program is not SGLang:
+// - the admission test sums one request's estimate times the running
+//   count, where SGLang sums each request's own remaining `max_new_tokens`;
+// - after a retraction SGLang sets the ratio to (survivors' outputs +
+//   20 n) / (n M + 1); without the survivors' outputs the program sets
+//   its lower bound, so it admits more boldly than SGLang after one;
+// - SGLang retracts only in a decode batch; here a chunked prefill's growth
+//   may preempt too, and its iteration does not move the ratio;
+// - the radix cache is shared across requests, and serQ's entries are a
+//   session's own (#374).
 let B = 8192;           // chunked_prefill_size
 let max_run = 256;      // max_running_requests
 let tokens_cap = 60000; // max_total_num_tokens (page size 1)
 let M = 2048;           // the clients' max_new_tokens
 let clip = 4096;        // SGLANG_CLIP_MAX_NEW_TOKENS_ESTIMATION
 let r0 = 0.7;           // SGLANG_INIT_NEW_TOKEN_RATIO times schedule_conservativeness 1.0
-let r_min = 0.7 * 0.14; // times SGLANG_MIN_NEW_TOKEN_RATIO_FACTOR
-let r_decay = (0.7 - 0.7 * 0.14) / 600;   // over SGLANG_NEW_TOKEN_RATIO_DECAY_STEPS
+let r_min = r0 * 0.14;  // SGLANG_MIN_NEW_TOKEN_RATIO_FACTOR
+let r_decay = (r0 - r_min) / 600;   // SGLANG_NEW_TOKEN_RATIO_DECAY_STEPS
+let retract_steps = 20; // SGLANG_RETRACT_DECODE_STEPS
 let a = 2e-5;           // compute per scheduled token (s)
 let omega = 2e-4;       // weights read per iteration (s)
 let beta = 2e-9;        // KV read per iteration per resident context token (s)
@@ -42,14 +48,21 @@ stage engine : step {
   cost max(omega + beta * (kv_decode + kv_prefill), tokens * a);
   memory kv;
   state ratio = r0;
+  state backlog = 0;    // requests were waiting when the last iteration ended
   iteration {
-    branch (residents == 0) { set ratio = r0; }       // idle: reset
+    // fully idle since the last iteration: no batch, and none waited
+    branch (residents == 0 && backlog == 0) { set ratio = r0; }
     serve only (!decoding);                            // the chunked request
     admit;                                             // and new prefills, alone
     branch (tokens == 0) {                             // no prefill: a decode batch
       serve;
-      branch (preempted > 0) { set ratio = min(1, 20 / M); } else { set ratio = max(r_min, ratio - r_decay); }
+      branch (preempted > 0) {
+        set ratio = max(r_min, min(1, retract_steps / M));   // the bound, see above
+      } else {
+        set ratio = max(r_min, ratio - r_decay);
+      }
     }
+    set backlog = queued(reqs) > 0;
   }
 }
 stage tool : delay;

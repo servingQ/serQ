@@ -40,8 +40,12 @@ With them (`preempt by` #360, `iteration` #362 and #370, `state` #367,
 waits #369), `examples/engines/*.sq` write every row but three things:
 the cache shared across requests (#374), which every engine has and
 SGLang's LPM and TensorRT-LLM's prefix-aware skip read; a sum over the
-running requests in SGLang's admission test, which the program writes as
-one request's estimate times their count; and the overlap scheduler's
+running requests, in SGLang's admission test and in its ratio after a
+retraction ([`new_token_ratio_tracker.py`
+L41-L49](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/scheduler_components/new_token_ratio_tracker.py#L41-L49)),
+which the program writes as one request's estimate times their count and as a
+lower bound;
+and the overlap scheduler's
 one-iteration lag, which every engine here has, vLLM's included.
 
 ## Where the language is vLLM's

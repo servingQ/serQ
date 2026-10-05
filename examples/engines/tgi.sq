@@ -9,8 +9,10 @@
 // plus max_new_tokens, so nothing grows and nothing is preempted. The
 // prefix cache keeps the prompt only, a session's own here (#374). TGI's
 // other path (no chunking) forms a new batch only when enough requests wait
-// or enough decode steps have passed: a guard on `queued(kv)` and a counter
-// register, and `granule inf`.
+// or enough decode steps have passed, and prefills it in a forward of its
+// own: the body sketched in docs/design/engine-neutrality.md (a guard on
+// `queued(kv)`, a counter register, `serve` only when nothing was
+// admitted), with `granule inf`.
 let B = 4096;          // max_batch_prefill_tokens
 let T = 200000;        // max_batch_total_tokens (set by warm-up; assumed)
 let mnt = 1024;        // the clients' max_new_tokens

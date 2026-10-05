@@ -401,6 +401,11 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
     let base = "hold reqs (1) { prefill on b (2); }";
     // its pool's header and keys, a gauge
     assert!(ok("gauge g = go;", "hold reqs (1 + go) { prefill on b (2); }").is_ok());
+    // a hold whose first pool, where it waits, the stage admits, whatever
+    // else it holds (SGLang's `reqs` and `kv`); not one that waits elsewhere
+    assert!(ok("", "hold reqs (1), other (1 + go) { prefill on b (2); }").is_ok());
+    let e = ok("", "hold other (1), reqs (1 + go) { prefill on b (2); }").unwrap_err();
+    assert!(e.contains("`go` is stage `b`'s register"), "{e}");
     // a ps capacity, another stage, a hold on a pool admitted at settle time
     for (extra, hold) in [
         ("stage p : ps(1 + go);", base),
@@ -441,4 +446,33 @@ fn a_try_that_admitted_keeps_its_sets() {
     let r = run(src);
     assert!(r.pool("reqs").unwrap().admissions > 0, "{}", r.text());
     assert!(r.gauge("seen").unwrap().max >= 1.0, "{}", r.text());
+}
+
+/// A reserve that reads a register moves at the stage's iterations, so
+/// joining the queue does not judge it (the review of #377: a reserve of
+/// `prompt + r` with `r` 5000 at the join, lowered to 10 by the first
+/// iteration, rejected all 101 sessions).
+#[test]
+fn a_reserve_on_a_register_waits_for_the_iteration() {
+    let src = r#"
+        pool reqs { cap 16; admit via engine; }
+        pool kv { cap 1000; evict lru; }
+        stage engine : step {
+          budget 512; cost 0.001 + tokens * 1e-5; memory kv;
+          state r = 5000;
+          iteration { set r = 10; serve; admit; }
+        }
+        workload { arrive renewal(2); }
+        session {
+          hold reqs (1), kv (100) reserve (100 + r) {
+            prefill on engine (100);
+            decode on engine (9) growing kv;
+          }
+          end;
+        }
+        run { horizon 50; warmup 0; seed 1; }
+        "#;
+    let r = run(src);
+    assert_eq!(r.pool("kv").unwrap().rejected, 0, "{}", r.text());
+    assert!(r.pool("reqs").unwrap().admissions > 20, "{}", r.text());
 }

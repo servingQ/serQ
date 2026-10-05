@@ -1412,7 +1412,8 @@ impl Program {
             Err(format!(
                 "`{}` is stage `{owner}`'s register, and {place} would read it apart from \
                  `{owner}`'s iteration, in an order the declarations would decide; a register \
-                 is read by its stage, the pools it admits, a gauge or a claim",
+                 is read by its stage, the keys of a pool it admits, the header of a hold whose \
+                 first pool (where it waits) it admits, a gauge or a claim",
                 reg.name
             ))
         };
@@ -1481,11 +1482,12 @@ impl Program {
                     // a hold waits in its first pool's queue, and the stage
                     // that admits that queue reads its header (the other
                     // pools are only tested), so that is the stage whose
-                    // registers it may read
-                    let first: Vec<usize> = pools
-                        .first()
-                        .map(|(r, _, _)| (r.base..r.base + r.count).collect())
-                        .unwrap_or_default();
+                    // registers it may read (a hold has a pool: the parser
+                    // requires one)
+                    let Some((queue, _, _)) = pools.first() else {
+                        continue;
+                    };
+                    let first: Vec<usize> = (queue.base..queue.base + queue.count).collect();
                     let ok = |reg: usize| {
                         first
                             .iter()
@@ -1854,7 +1856,9 @@ fn amount(e: &CExpr, what: &str) -> Result<(), String> {
 /// that do ask for something else at the next try (#364).
 pub(crate) fn moves(e: &CExpr) -> bool {
     e.any(&|x| match x {
-        CExpr::Ctx(_) | CExpr::Sample(..) => true,
+        // a register moves at its stage's iterations (#377: read at the join,
+        // a reserve on one was judged on a value an iteration then lowered)
+        CExpr::Ctx(_) | CExpr::Reg(_) | CExpr::Sample(..) => true,
         // a function of its arguments alone does not move
         CExpr::Call(f, _) => !f.is_arithmetic(),
         _ => false,
