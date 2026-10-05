@@ -349,6 +349,8 @@ class Lean:
             if st == "Turn":
                 out.append(pad + "turn;")
                 continue
+            if st == "Join":
+                raise Fragment("statement Join (a request's legs)")
             (kind, v), = st.items()
             if kind == "Set":
                 slot, e = v

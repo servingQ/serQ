@@ -200,10 +200,12 @@ choose between them.
 
 ## Self-critique
 
-- **Push mode's concurrent legs are not written.** A session waits at one
-  pool at a time, so the decoder's admission is written after the prefill,
-  which is the serial dispatch. The exact form is a reservation the session
-  joins now and enters later:
+- **Push mode's concurrent legs were not written here.** A session waited
+  at one pool at a time, so the decoder's admission was written after the
+  prefill, which is the serial dispatch. [The push mode](push-mode.md)
+  writes them as two legs of the request (`fork`, `join`), not as the
+  reservation sketched here, which is a fork whose leg is one hold plus a
+  second meaning of hold:
 
   ```
   book kvD (prompt) reserve (prompt);            // join D's queue; the scheduler allocates when it gets there

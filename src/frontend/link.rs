@@ -1425,6 +1425,8 @@ impl Linker<'_> {
                     CStmt::Branch(p, a, b)
                 }
                 Stmt::Loop(b) => CStmt::Loop(self.block(b)?),
+                Stmt::Fork(b) => CStmt::Fork(self.block(b)?),
+                Stmt::Join => CStmt::Join,
                 Stmt::Choose { var, count, key } => CStmt::Choose {
                     var: self.attr_index[var],
                     count: self.expr(count)?,

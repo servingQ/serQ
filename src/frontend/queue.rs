@@ -72,10 +72,22 @@ pub struct QueueDecl {
     pub latency: Option<Expr>,
     /// `nic kind;`: the queue's NIC, the stage `Q.nic`.
     pub nic: bool,
-    /// `Q pull S latency x share …;`: the queue `S` its entries read the KV
-    /// from, and the wait before each read (the constant's name).
-    pub pulls: Option<(String, Option<Expr>)>,
+    /// `Q pull S …;` or `S push Q …;`: where its entries take the KV from.
+    pub takes: Option<Takes>,
     pub at: usize,
+}
+
+/// The KV relation of a reader: `D pull P latency x share s;` or
+/// `P push D latency x share s;`.
+#[derive(Clone, Debug)]
+pub struct Takes {
+    /// The queue the entries take the KV `from`.
+    pub source: String,
+    /// The wait before each copy (the constant's name), at the delay stage
+    /// `X.nic.latency` of the side that posts it: the reader in a pull, the
+    /// source in a push.
+    pub latency: Option<Expr>,
+    pub push: bool,
 }
 
 /// The stage a `transfer` without `on` names inside an entry of a queue
@@ -296,24 +308,30 @@ impl Ctx<'_> {
         let mut out = Vec::with_capacity(stmts.len());
         for s in stmts {
             match s {
-                Stmt::Run { stage, work, .. } if stage.name == PULL => out.extend(self.pull(work)?),
+                Stmt::Run { stage, work, .. } if stage.name == PULL => out.extend(self.copy(work)?),
                 _ => out.push(self.stmt(s)?),
             }
         }
         Ok(out)
     }
 
-    /// `transfer (n) from src to kv (m)` in an entry of a queue that pulls:
-    /// the reader's wait, then one run over the source's NIC and its own
-    /// (the `load` and `release` follow as written).
-    fn pull(&self, work: &Expr) -> Result<Vec<Stmt>, ExpandError> {
-        let Some((source, latency)) = &self.q.pulls else {
+    /// `transfer (n) from src to kv (m)` in an entry of a queue with a KV
+    /// relation: the poster's wait, then one run over the source's NIC and
+    /// the reader's (the `load` and `release` follow as written).
+    fn copy(&self, work: &Expr) -> Result<Vec<Stmt>, ExpandError> {
+        let Some(Takes {
+            source,
+            latency,
+            push,
+        }) = &self.q.takes
+        else {
             return err(
                 self.at,
                 format!(
-                    "`{}`'s `transfer` names no NIC and `{}` pulls from no queue: declare \
-                     `{} pull SOURCE share …;`, or write `transfer on …`",
-                    self.q.name, self.q.name, self.q.name
+                    "`{}`'s `transfer` names no NIC and `{}` pulls from no queue, nor is \
+                     pushed to: declare `{} pull SOURCE share …;` or `SOURCE push {} share …;`, \
+                     or write `transfer on …`",
+                    self.q.name, self.q.name, self.q.name, self.q.name
                 ),
             );
         };
@@ -325,8 +343,13 @@ impl Ctx<'_> {
             return err(
                 self.at,
                 format!(
-                    "`{}` pulls from `{source}`, and this entry was called `from {}`",
-                    self.q.name, src.name
+                    "{}, and this entry was called `from {}`",
+                    if *push {
+                        format!("`{source}` pushes to `{}`", self.q.name)
+                    } else {
+                        format!("`{}` pulls from `{source}`", self.q.name)
+                    },
+                    src.name
                 ),
             );
         }
@@ -338,8 +361,19 @@ impl Ctx<'_> {
         };
         let mut out = vec![];
         if let Some(l) = latency {
+            // the side that posts the copy waits: the reader's worker posts
+            // a READ, the source's a WRITE
+            let stage = if *push {
+                Ref {
+                    span: Some(self.at),
+                    name: format!("{source}.nic.latency"),
+                    index: src.index.clone(),
+                }
+            } else {
+                own(format!("{}.nic.latency", self.q.name))
+            };
             out.push(Stmt::Run {
-                stage: own(format!("{}.nic.latency", self.q.name)),
+                stage,
                 mode: crate::ir::RunMode::Plain,
                 work: l.clone(),
                 growing: None,
@@ -362,7 +396,7 @@ impl Ctx<'_> {
 
     fn stmt(&self, s: &Stmt) -> Result<Stmt, ExpandError> {
         Ok(match s {
-            Stmt::Turn | Stmt::End | Stmt::Request => s.clone(),
+            Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Join => s.clone(),
             Stmt::Set(n, e) => Stmt::Set(self.local(n), self.expr(e)?),
             Stmt::Observe(n, e) => Stmt::Observe(n.clone(), self.expr(e)?),
             Stmt::Mark(n) => Stmt::Set(format!("{}.{n}", self.q.name), Expr::Var("now".into())),
@@ -413,6 +447,7 @@ impl Ctx<'_> {
             },
             Stmt::Branch(p, a, b) => Stmt::Branch(self.expr(p)?, self.stmts(a)?, self.stmts(b)?),
             Stmt::Loop(b) => Stmt::Loop(self.stmts(b)?),
+            Stmt::Fork(b) => Stmt::Fork(self.stmts(b)?),
             Stmt::Choose { var, count, key } => Stmt::Choose {
                 var: self.local(var),
                 count: self.expr(count)?,
@@ -460,7 +495,7 @@ fn size(stmts: &[Stmt]) -> usize {
         .iter()
         .map(|s| {
             1 + match s {
-                Stmt::Hold { body, .. } | Stmt::Loop(body) => size(body),
+                Stmt::Hold { body, .. } | Stmt::Loop(body) | Stmt::Fork(body) => size(body),
                 Stmt::Branch(_, a, b) => size(a) + size(b),
                 _ => 0,
             }
@@ -518,7 +553,9 @@ fn expand_at(
                 out.extend(body);
                 continue;
             }
-            Stmt::Hold { body, .. } | Stmt::Loop(body) => expand_at(body, queues, stack, expanded)?,
+            Stmt::Hold { body, .. } | Stmt::Loop(body) | Stmt::Fork(body) => {
+                expand_at(body, queues, stack, expanded)?
+            }
             Stmt::Branch(_, a, b) => {
                 expand_at(a, queues, stack, expanded)?;
                 expand_at(b, queues, stack, expanded)?;

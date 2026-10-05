@@ -103,6 +103,7 @@ runs identically (`tests/ir.rs`).
 | `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
 | `Run {stage, mode, work, growing?, also?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed; `also` further stages the same job holds at once (a flow of `share`), omitted when empty |
 | `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}` (`key` a list, compared in order), `End` | control; `End` ends the session |
+| `Fork(body)`, `Join` | `Fork` runs `body` beside the session as a leg of the request: from now, with a copy of the attributes, its own holds and stream; the leases it leaves pass to the session when it ends. `Join` waits until every leg the session forked has ended |
 
 ### Expressions (`CExpr`)
 
@@ -129,7 +130,10 @@ and `Observe`, that a `Run`'s mode is `Prefill` or `Decode` exactly on a
 step stage and its `growing` only there, that `Grow`, `Load`, `Release`
 and `growing` stand inside a `Hold` of an equal `CRef` (base, count and
 index expression; `Release` also where a hold leases it), and a hold leases
-one of its own pools, that a hold's body changes no attribute its index
+one of its own pools, that a `Fork`'s body has no `Turn`, `End`, `Fork`
+or `Join` and acts on no hold around the fork (a leg holds nothing of the
+session's), that a `Fork` stands in no hold of a pool that may preempt, that
+a program with a `Fork` has a `Join` and one with a `Join` a `Fork`, that a hold's body changes no attribute its index
 reads and an index read again inside reads no state or clock, that a hold a
 pool may preempt reads no such index nor `cached`/`computed` (it is admitted
 anew), that the blocks reached from `init`, `turn` and `session` form a
@@ -430,6 +434,13 @@ candidates' admission order (the engine's serving order, or the order a
 pool that is no engine's memory admitted its holders), so that `lifo` and
 `By {keys: [-admission, …]}` pick one victim, and `decoding` is read there
 too.
+11 also carries `CStmt::Fork` and `CStmt::Join` (#368, `fork { … }` and
+`join;`): a request's legs, for NIXL's push mode, where the proxy sends the
+prefill and the decode request at once. Two new variants, which an older
+reader cannot run, so on a tagged version they would have opened a number;
+they go in the coming tag's message. A program without them serialises and
+runs as before. The Lean generators raise `Fragment` on both; no oracle
+program forks.
 11 also carries the preempted hold's cache (#326): a hold released by a
 preemption caches its position (`computed`), not its allocation, where it
 cached its allocation when no `growing` run or `load` had advanced it. Same

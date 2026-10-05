@@ -1,0 +1,174 @@
+// Prefill/decode disaggregation behind vLLM's push proxy: one prefill and
+// one decode instance that hand the KV over with the NIXL connector in its
+// push mode, on the A6000 testbed (Qwen3-8B, block 16, budget 8192), replaying
+// the short-context trace (ref/vllm at 0c87a197,
+// `vllm/distributed/kv_transfer/kv_connector/v1/nixl/`;
+// `examples/disaggregated/disaggregated_serving/disagg_proxy_pushconnector_demo.py`).
+//
+// One request: the proxy sends the prompt to the prefiller with max_tokens
+// = 1 and the decode request to the decoder at the same time, and streams
+// the decoder's answer (disagg_proxy_pushconnector_demo.py:227-279). The
+// decoder's scheduler takes the request when the whole prompt fits in its
+// blocks, parks it (WAITING_FOR_REMOTE_KVS) and registers the blocks with the
+// prefiller (nixl/push_scheduler.py:128-205); the prefiller's scheduler
+// frees the request's slot when the one token is sampled and keeps its
+// blocks leased (nixl/push_scheduler.py:207-294). Whichever of the two comes
+// second, the prefiller's worker then writes the KV into the decoder's
+// blocks (nixl/push_worker.py:254-264, 308-313, 714-722). The write done, the
+// prefiller frees the lease and the decoder's request queues once more for a
+// running slot and a token of budget, recomputes the last prompt token for
+// its logits, and decodes.
+//
+// `concurrent = 0` sends the decode request after the prefill's answer, as
+// llm-d's sidecar does for NIXL: the same push, without the decoder's blocks
+// waiting for the prefill.
+//
+// The constants are the testbed's (~/dev/trace/202609-a6000-pd-nixl/,
+// fitted on lone requests through the pull proxy: a prefill step costs
+// aP * prefilled + bP * attention, a decode step cD, a copy x0 + tokens / Bw,
+// and the proxy's hops and the API server h per request).
+use "../../lib/vllm.sq";
+
+let concurrent = 1;    // 1: both requests at once (the push proxy); 0: the decode request after the prefill's answer
+let spacing = 3.0;     // seconds between session arrivals
+let N = 96;            // sessions replayed (957 requests)
+let B = 8192;          // max_num_batched_tokens
+let max_seqsP = 16;    // max_num_seqs on the prefiller
+let max_seqsD = 64;    // max_num_seqs on the decoder
+let bs = 16;           // block_size
+let blocksP = 12034;   // GPU KV cache size: 192 544 tokens
+let blocksD = 11986;   // 191 776 tokens
+let aP = 1.192e-4;     // s per prefill token (fitted: 119 us)
+let bP = 7.06e-9;      // s per prefill token per context token (fitted)
+let cD = 0.024;        // s per decode step (fitted: 24 ms, one to four decoding requests)
+let Bw = 99771;        // NIXL copy, tokens/s (fitted on 13 lone reads, 512-32 000 tokens; rms 17 ms)
+let x0 = 0.010;        // s per copy (fitted)
+let h = 0.063;         // s per request outside the engines: proxy hops, API server (fitted, less one decode step)
+
+// The proxy: the prefill request as a leg beside the decode request, the
+// decoder's answer streamed back.
+queue gw : gateway {
+  route {
+    set t0 = now;
+    set prompt = new;
+    run front (h);
+    branch (concurrent) {
+      fork { P.prefill (prompt); }     // asyncio.create_task: the prefill leg runs beside
+    } else {
+      P.prefill (prompt);              // the sidecar's order: the prefill's answer first
+    }
+    D.decode (prompt) from P;          // the decode request; it waits for the prefill's KV inside
+    observe ttft = D.first_token - t0;
+    observe parked = D.written - D.parked;   // how long the decoder's blocks waited for the KV
+    observe sent = t0;
+    observe latency = now - t0;
+  }
+}
+
+// The prefill instance: the scheduler admits a request with a slot and the
+// blocks of its first chunk, and room for the whole prompt
+// (scheduler_reserve_full_isl). When the one token is sampled the slot goes
+// and the blocks stay leased for the write, renewed by the decoder's
+// heartbeats while it waits (nixl/base_scheduler.py:199-238), so in effect
+// until the write.
+queue P : prefill {
+  pool reqs { cap max_seqsP; admit via P; }
+  pool kv { cap blocksP * bs; block bs; evict lru; preempt lifo; }
+  serve step {
+    budget B;
+    cost aP * prefilled + bP * attention;
+    memory kv;
+  }
+  nic ps(Bw);                           // the pod's NIC: the writes out of it share it
+  prefill (prompt) {
+    hold reqs (1), kv (min(prompt, hit + budget_left(P))) reserve (prompt)
+         at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
+      set c = cached;
+      observe p_cached = c;
+      prefill (prompt - c) growing kv;      // chunked; one token is sampled and discarded
+    } cache (prompt) lease kv (inf);
+  }
+}
+
+// The decode instance. Its scheduler serves the requests whose KV has
+// arrived first (vLLM's `skipped_waiting`, scheduler.py:2383-2385), then
+// the new ones.
+queue D : decode {
+  pool reqs { cap max_seqsD; admit via D; }
+  pool kv { cap blocksD * bs; block bs; evict lru; preempt lifo; admit via D; }
+  serve step {
+    budget B;
+    cost cD + aP * prefilled + bP * attention;
+    memory kv;
+  }
+  nic ps(Bw);                           // the pod's NIC: the writes into it share it
+
+  // Every request has a remote prefill: this entry is never called.
+  decode (prompt) {
+    hold kv (prompt) reserve (prompt), reqs (1) {
+      prefill (prompt) growing kv;
+      decode (out - 1) growing kv;
+    } cache (prompt + out);
+  }
+
+  // With remote KV. The decode request is taken when the whole prompt fits
+  // the blocks, at a step with budget left and a running slot free - it
+  // takes neither (the request is parked, not running) - and reuses the
+  // full blocks it has of the prompt.
+  decode (prompt) from src {
+    set transferred = 0;   // one KV transfer per request
+    hold kv (known) reserve (known), reqs (0) reserve (1)
+         reuse (reusable(known, bs))
+         at admission (known = computed < prompt ? prompt : computed + 1) {
+      set c = cached;
+      branch (!transferred) {
+        // WAITING_FOR_REMOTE_KVS: the blocks are registered with the
+        // prefiller, which writes every block past the local hit once its
+        // own prefill has ended, through its NIC and this pod's at once; the
+        // write done, the prefiller's lease ends. The last prompt token is
+        // recomputed for its logits.
+        mark parked;
+        observe d_cached = c;
+        join;                                                     // P's finished blocks meet the registration: the write can start (nixl/push_worker.py:254-264)
+        transfer (prompt - c) from src to kv (prompt - 1 - c);   // P's WRITE over both NICs
+        mark written;
+        set transferred = 1;
+        set c = prompt - 1;
+      }
+      // Back in the waiting queue: a running slot and a token of budget.
+      hold reqs (1) {
+        prefill (known - c) growing kv;
+        branch (known == prompt) { mark first_token; }
+        decode (out - 1 - (known - prompt)) growing kv;
+      }
+    } cache (prompt + out);
+  }
+}
+
+// The prefiller's worker writes the KV (NIXL push): it posts the WRITE and
+// the decoder finds it done at a later step, a fixed wait per copy, and the
+// bytes cross the prefiller's NIC and the decoder's at once
+// (docs/design/bandwidth-sharing.md).
+P push D latency x0 share maxmin;
+
+stage front : delay;
+stage gate : delay;
+stage tool : delay;
+
+// The client: the trace's first N sessions, sent `spacing` apart; a turn is
+// sent `think` seconds after the previous one completes.
+workload {
+  arrive batch(N);
+  trace "../replay/data/short_base.csv" ordered;
+  hidden out;            // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+  session {
+    run gate (serial * spacing);
+    turn;
+    loop {
+      request gw;
+      branch (more) { tool think; turn; } else { end; }
+    }
+  }
+}
+
+run { horizon 3000; warmup 0; seed 1; }

@@ -249,6 +249,9 @@ struct Walker<'a> {
     net: Net,
     /// Ends the next station will be reached from, with the label of the path.
     frontier: Vec<(At, Option<String>)>,
+    /// The ends of the legs forked and not yet joined: the station after
+    /// the `join` is reached from them as well.
+    forked: Vec<(At, Option<String>)>,
     /// Pools held right now, outermost first, each with the hold that took
     /// it (a `release` takes one off before its hold ends) and whether it
     /// encloses: a hold of no units only reserves, and occupies nothing.
@@ -576,6 +579,24 @@ impl Walker<'_> {
                     self.frontier = out;
                     self.arm = outer;
                 }
+                CStmt::Fork(body) => {
+                    // The leg starts where the session is and runs beside
+                    // it: the session goes on from the same ends. A leg
+                    // holds nothing of the session's; what it leases stays
+                    // held after it, until the session's `release`.
+                    let saved = self.frontier.clone();
+                    let held = std::mem::take(&mut self.holds);
+                    self.walk(body);
+                    let leg = std::mem::replace(&mut self.frontier, saved);
+                    let leased = std::mem::replace(&mut self.holds, held);
+                    self.holds.extend(leased);
+                    self.forked.extend(leg);
+                }
+                CStmt::Join => {
+                    let mut ends = std::mem::take(&mut self.forked);
+                    self.frontier.append(&mut ends);
+                    dedupe(&mut self.frontier);
+                }
                 CStmt::Loop(body) => {
                     // Every loop is the session's: a server cannot write
                     // `end`, so a loop in one could never be left, and the
@@ -798,7 +819,9 @@ fn reaches_a_station(p: &Program, block: usize) -> bool {
     p.blocks.get(block).is_some_and(|stmts| {
         stmts.iter().any(|s| match s {
             CStmt::Run { .. } => true,
-            CStmt::Hold { body, .. } | CStmt::Loop(body) => reaches_a_station(p, *body),
+            CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::Fork(body) => {
+                reaches_a_station(p, *body)
+            }
             CStmt::Branch(_, a, b) => reaches_a_station(p, *a) || reaches_a_station(p, *b),
             _ => false,
         })
@@ -828,7 +851,9 @@ fn leading_chooses(p: &Program, block: usize, out: &mut Vec<usize>) -> bool {
             }
             // a guard that walks the body: the chooses in it are collected
             // whether or not it reaches a station
-            CStmt::Hold { body, .. } | CStmt::Loop(body) if leading_chooses(p, *body, out) => {
+            CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::Fork(body)
+                if leading_chooses(p, *body, out) =>
+            {
                 return true;
             }
             _ => {}
@@ -898,6 +923,7 @@ pub fn project(p: &Program) -> Net {
             ..Net::default()
         },
         frontier: vec![(At::End(End::Arrival), None)],
+        forked: vec![],
         holds: vec![],
         next_hold: 0,
         pending: vec![],
@@ -1272,6 +1298,8 @@ pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
                     walk(p, *e, stack, out);
                 }
                 CStmt::Loop(b) => walk(p, *b, stack, out),
+                // a leg's holds are its own
+                CStmt::Fork(b) => walk(p, *b, &mut vec![], out),
                 _ => {}
             }
         }

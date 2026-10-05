@@ -560,6 +560,16 @@ pub enum CStmt {
         key: Vec<CExpr>,
     },
     End,
+    /// Run the block beside the session, as a leg of the same request: it
+    /// starts now, with a copy of the session's attributes, at the same
+    /// time as the statements after the fork. vLLM's push proxy sends the
+    /// prefill and the decode request of one request at once this way. A
+    /// leg's holds are its own and its `set`s change only its copy, which
+    /// ends with it; the leases it leaves pass to the session when it ends.
+    /// A leg may not `turn`, `end`, fork or join.
+    Fork(BlockId),
+    /// Wait until every leg the session has forked has ended.
+    Join,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -927,7 +937,9 @@ impl Program {
             *was = true;
             for st in &self.blocks[b] {
                 match st {
-                    CStmt::Hold { body, .. } | CStmt::Loop(body) => todo.push(*body),
+                    CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::Fork(body) => {
+                        todo.push(*body)
+                    }
                     CStmt::Branch(_, a, c) => todo.extend([*a, *c]),
                     _ => {}
                 }
@@ -1078,6 +1090,23 @@ impl Program {
                     self.enclosed(*c, held, leased)?;
                 }
                 CStmt::Loop(x) => self.enclosed(*x, held, leased)?,
+                CStmt::Fork(x) => {
+                    // a preempted hold runs again from its start, and would
+                    // fork a second leg; the proxy sends each leg once
+                    if let Some(q) = held
+                        .iter()
+                        .flat_map(|(r, _)| &self.pools[r.base..r.base + r.count])
+                        .find(|q| q.preempt != Preempt::None)
+                    {
+                        return Err(here(format!(
+                            "`fork` inside a hold of `{}`, which may preempt it: the hold runs \
+                             again from its start and forks a second leg; fork before the hold",
+                            q.name
+                        )));
+                    }
+                    // a leg holds nothing of the session's: its holds are its own
+                    self.enclosed(*x, &mut vec![], leased)?
+                }
                 _ => {}
             }
         }
@@ -2397,7 +2426,57 @@ impl Validator<'_> {
                 }
                 key.iter().try_for_each(|k| self.expr(k, m))
             }
+            CStmt::Fork(b) => {
+                self.block(*b)?;
+                if !self
+                    .p
+                    .blocks
+                    .iter()
+                    .flatten()
+                    .any(|s| matches!(s, CStmt::Join))
+                {
+                    return Err(
+                        "a program that forks a leg and never joins: a session may not \
+                         end while its leg runs"
+                            .into(),
+                    );
+                }
+                if let Some(what) = self.leg_may_not(*b) {
+                    return Err(format!(
+                        "a `fork`'s leg may not {what}: a leg is a part of the request beside \
+                         it, and the session turns, ends, forks and joins"
+                    ));
+                }
+                Ok(())
+            }
+            CStmt::Join => {
+                if self
+                    .p
+                    .blocks
+                    .iter()
+                    .flatten()
+                    .any(|s| matches!(s, CStmt::Fork(_)))
+                {
+                    Ok(())
+                } else {
+                    Err("a `join` in a program that forks no leg waits for nothing".into())
+                }
+            }
         }
+    }
+
+    /// The first thing a leg's block does that only the session may: a
+    /// `turn`, an `end`, a `fork` or a `join`, in it or a block in it.
+    fn leg_may_not(&self, b: BlockId) -> Option<&'static str> {
+        self.p.blocks[b].iter().find_map(|s| match s {
+            CStmt::Turn => Some("`turn`"),
+            CStmt::End => Some("`end`"),
+            CStmt::Fork(_) => Some("fork"),
+            CStmt::Join => Some("`join`"),
+            CStmt::Hold { body, .. } | CStmt::Loop(body) => self.leg_may_not(*body),
+            CStmt::Branch(_, x, y) => self.leg_may_not(*x).or_else(|| self.leg_may_not(*y)),
+            _ => None,
+        })
     }
 }
 

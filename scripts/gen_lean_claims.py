@@ -202,7 +202,7 @@ class Program:
                     walk(v["body"])
                 if k == "Branch":
                     walk(v[1]); walk(v[2])
-                if k == "Loop":
+                if k in ("Loop", "Fork"):
                     walk(v)
         walk(self.ir["session"])
         return out
