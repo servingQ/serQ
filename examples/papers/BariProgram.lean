@@ -13,8 +13,8 @@ behaves alike: its job list follows `BariChain`'s chain from `[]`
   machine whose engine is empty (`return_idle`): the set of empty machines
   is a positive recurrent atom.
 -/
-import Serq.Papers.BariSim
-import Serq.Papers.BariRecurrent
+import papers.BariSim
+import papers.BariRecurrent
 
 namespace SerqLang
 namespace Papers

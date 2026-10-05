@@ -37,7 +37,7 @@ session {
 // Lemma A.2, summed over the requests: every step a request waits, the
 // active peaks exceed (1 - alpha) M, and the requests ahead of it in volume
 // order hold their peak o_i steps, with p_i o_i <= 2 vol_i. With
-// Proposition 3.1 (OPT >= prefix_total(vol) / M, `Serq/Papers/Kong.lean`)
+// Proposition 3.1 (OPT >= prefix_total(vol) / M, `examples/papers/Kong.lean`)
 // this is Theorem 3.2: TEL(SVF) <= (1 + 2 / (1 - alpha)) TEL(OPT).
 claim queueing_bound given (s + o <= P && o >= 1):
   at end ((M - P) * (total(latency) - total(out)) <= 2 * (prefix_total(vol) - total(vol)));

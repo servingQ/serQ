@@ -8,7 +8,7 @@ b_max · gap`). Before every iteration the tokens that have arrived and not
 been served are at most `(b_max + 1) W`, a bound that does not depend on
 how many requests arrive (the family allows up to 500).
 -/
-import Serq.Papers.Dai
+import papers.Dai
 import Serq.Steps
 
 namespace SerqLang

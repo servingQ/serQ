@@ -13,7 +13,7 @@ there is a job, so from a state of bounded backlog `b` the empty list is
 `b` arrival-free slots away (`Recurrence.hit_le_of_reach`).
 -/
 import Serq.Recurrence
-import Serq.Papers.DaiChain
+import papers.DaiChain
 
 namespace SerqLang
 namespace Papers

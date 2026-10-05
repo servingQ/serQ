@@ -4,11 +4,11 @@
 What the engine of `dai_sarathi.sq` holds at a slot boundary, with
 everything else forgotten: the list of its jobs, in admission order, each a
 mode and the tokens it has left. `absSlot` is one slot on that list. The
-machine chain of `Serq/Papers/DaiStable.lean` projects onto it
+machine chain of `examples/papers/DaiStable.lean` projects onto it
 (`DaiSim.simulation`), and on it the empty list is a single state, to which
 the chain returns (`DaiRecurrent`).
 -/
-import Serq.Papers.DaiStable
+import papers.DaiStable
 
 namespace SerqLang
 namespace Papers

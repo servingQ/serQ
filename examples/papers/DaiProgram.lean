@@ -13,8 +13,8 @@ behaves alike: its job list follows `DaiChain`'s chain from `[]`
   machine whose engine is empty (`return_idle`): the set of empty machines
   is a positive recurrent atom.
 -/
-import Serq.Papers.DaiSim
-import Serq.Papers.DaiRecurrent
+import papers.DaiSim
+import papers.DaiRecurrent
 
 namespace SerqLang
 namespace Papers

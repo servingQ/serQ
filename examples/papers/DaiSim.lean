@@ -7,7 +7,7 @@ for every machine the chain reaches. So the machine chain is lumpable onto
 `DaiChain`'s chain, and what that chain does (`DaiRecurrent`) the program
 does.
 -/
-import Serq.Papers.DaiChain
+import papers.DaiChain
 
 namespace SerqLang
 namespace Papers

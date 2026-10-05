@@ -7,7 +7,7 @@ program: its session program (after the workload's arrival delay and the
 `init` sets that do not draw), its deployment, the family of workloads its
 claims quantify over, and each claim as an `Exec.EveryIteration`,
 `Exec.SomeIteration` or `Exec.AtEnd` statement (`Serq/Claim.lean`). The
-proofs are in `Serq/Papers/`; `Serq/ClaimsProved.lean` checks that every
+proofs are in `examples/papers/`; `examples/papers/ClaimsProved.lean` checks that every
 claim has one.
 -/
 import Serq.Claim

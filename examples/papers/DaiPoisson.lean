@@ -22,7 +22,7 @@ distribution: the expected time to reach `F` is finite. Positive
 recurrence (`DaiRecurrent`) is not yet proved for this chain.
 -/
 import Serq.Poisson
-import Serq.Papers.DaiStable
+import papers.DaiStable
 
 namespace SerqLang
 namespace Papers

@@ -10,7 +10,7 @@ program's family: the machines a run reaches event by event (`Reach`), the
 iteration record a claim over iterations reads (`Machine.last`), and the
 observations a claim at the end aggregates. `scripts/gen_lean_claims.py`
 writes each claim of the programs under `examples/papers/` as such a
-statement (`Serq/Claims.lean`), and `Serq/Papers/` proves them.
+statement (`Serq/Claims.lean`), and `examples/papers/` proves them.
 
 The module also proves what every program satisfies, whatever its claims:
 

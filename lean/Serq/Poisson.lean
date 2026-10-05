@@ -5,8 +5,8 @@ Requests arriving as a Poisson stream of rate `λ` bring, during an
 iteration of `t` clock units, a Poisson number of requests of mean `λ t`
 (`pois`), and, when each request's type is drawn independently with
 probabilities `q`, a compound Poisson list. These are the arrival laws of
-the slot chains with continuous-time arrivals (`Serq/Papers/DaiPoisson.lean`,
-`Serq/Papers/BariPoisson.lean`); a slot's outcomes are then infinitely
+the slot chains with continuous-time arrivals (`examples/papers/DaiPoisson.lean`,
+`examples/papers/BariPoisson.lean`); a slot's outcomes are then infinitely
 many, which `Foster.Kernel` allows.
 
 * `hasSum_pois`, `hasSum_mul_pois`: the law sums to one, its mean is `λ t`;

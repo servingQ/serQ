@@ -26,7 +26,7 @@ started by the iteration's start (`CtxVar::Arrived`; in Lean
 backlog in tokens, which no earlier observable did: `residents` counts
 requests, not work, and `now` counts arrivals that may never come.
 
-The proof (`lean/Serq/Papers/DaiBounded.lean`) is an invariant over every
+The proof (`examples/papers/DaiBounded.lean`) is an invariant over every
 event, carrying Lindley's potential
 $\Psi = G \cdot \text{backlog} + W \cdot (s \bmod G)$ at an iteration start
 $s$, with $W$ a request's tokens and $G$ the gap. A full batch adds as much
@@ -61,7 +61,7 @@ iteration (`Exec.slot`). `Exec` itself is unchanged. The states are the
 machines reached from the empty one, so a drift needs to hold only where the
 program can be.
 
-For Dai et al. (`lean/Serq/Papers/DaiStable.lean`) the Lyapunov function is
+For Dai et al. (`examples/papers/DaiStable.lean`) the Lyapunov function is
 the backlog, and `F` is the set where the batch is not full or the engine
 idle. Outside `F` a slot changes the backlog by exactly `1280 k − 128`, and
 inside it the backlog is below `128 · 1280` (work conservation). Below
@@ -77,7 +77,7 @@ loop has no bound.
 
 A slot is one iteration, not one unit of the paper's time, and an idle slot
 lets no time pass. With arrivals in continuous time
-(`lean/Serq/Papers/DaiPoisson.lean`) the slot's law depends on the state: on
+(`examples/papers/DaiPoisson.lean`) the slot's law depends on the state: on
 a busy engine the arrivals are those of a Poisson stream of rate `λ` while
 the running iteration lasts, its `cost` (`Slot.Dur`), a Poisson number of
 mean `λ · cost`; on an idle engine the next arrival starts an iteration.
@@ -89,7 +89,7 @@ shorter, and Foster's criterion asks nothing of them. For Bari et al.
 list, whose work has mean `λ · 4640 · E[v_p + v_d]` (Wald's identity,
 `Poisson.hasSum_compound_work`).
 
-For Bari et al. (`lean/Serq/Papers/BariStable.lean`) a slot's arrivals are a
+For Bari et al. (`examples/papers/BariStable.lean`) a slot's arrivals are a
 list of drawn (prompt, output) lengths (`Exec.slotL`; `slot` is the list of
 `k` copies). RAD is not work-conserving in Dai et al.'s sense, but its batch
 is full unless every resident decodes and fewer than 128 do (`optimal_tiling`),
@@ -100,7 +100,7 @@ attributes 10 and 11), the prompt tile (1, or 128) and what the engine's
 batch is; each paper proves only its batch (`ci_start`). Kong 3.4–3.5 also need an expectation inequality (Harris),
 and are not done.
 
-Bari et al.'s random planner over `g` nodes (`lean/Serq/Papers/BariNodes.lean`)
+Bari et al.'s random planner over `g` nodes (`examples/papers/BariNodes.lean`)
 is a product chain: a state is every node's machine, and a slot draws the
 arrivals as above, routes each to a node uniformly, and runs one slot at
 every node with the requests routed to it. A request reaches node `i` with
