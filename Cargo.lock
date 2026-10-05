@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "pyserq"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "pyo3",
  "rand",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "serq"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "pyo3",
  "rand",
