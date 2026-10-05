@@ -172,7 +172,7 @@ Other engines' are other bodies:
 | SGLang (no mixed chunk): the chunked request and new prefills alone, a decode batch when no prefill forms | `iteration { serve only (!decoding); admit; branch (tokens == 0) { serve; } }` |
 | TensorRT-LLM `STATIC_BATCH`: admit only into an empty engine | `iteration { serve; branch (residents == 0) { admit; } }` |
 | FasterTransformer as Dai et al. model it | `iteration { branch (decoders > 0) { serve only (decoding); } else { serve; admit; } }` |
-| TGI with chunking: no admission in the forward after one that admitted | `state just = 0; iteration { serve; branch (just == 0) { admit; } set just = admitted > 0; }` |
+| TGI with chunking: no admission in the forward after one that admitted | `state just = 0; iteration { serve; branch (just == 0 \|\| residents == 0) { admit; } set just = admitted > 0; }` |
 
 #### Registers
 
@@ -186,8 +186,8 @@ sets are undone (a try that admitted keeps them, with the admission).
 
 A register is read where its stage orders the read: the stage's own
 budget, chunk, cost, serve keys and body, a claim over its iterations, the
-keys of a pool it admits (`admit via`) and the header of a hold on such
-pools, a gauge, a claim `at end`. Read elsewhere — another stage, a `ps`
+keys of a pool it admits (`admit via`) and the header of a hold whose
+first pool, where it waits, is such a pool, a gauge, a claim `at end`. Read elsewhere — another stage, a `ps`
 capacity, a pool admitted at settle time — the read and the set would fall
 at one instant in the order of the declarations, and the program does not
 link; nor does a session statement or a claim's `given` read one: a
@@ -201,6 +201,14 @@ SGLang resets `new_token_ratio` when the server goes idle
 which is no iteration. What reads the ratio is the next iteration's
 admission, so the body says it at its top:
 `branch (residents == 0) { set ratio = r0; }`.
+
+A guard on a register that only an iteration changes can keep an engine
+idle: TGI admits in a forward and not in the next, but `branch (just == 0)
+{ admit; }` alone never admits again once the batch empties, since the try
+that would set `just` back schedules nothing and its set is undone. TGI's
+loop reads the queue at once when no batch runs, and the body says so:
+`branch (just == 0 || residents == 0) { admit; }`. The run names an engine
+left so (`idle:`).
 
 ### Example
 

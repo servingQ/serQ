@@ -832,8 +832,9 @@ the stage a register its body sets (`set NAME = e;`) and the scheduler's
 expressions read, what an engine remembers between iterations (TGI admits
 in a forward and not in the next; SGLang's `new_token_ratio` decays); a set
 takes effect with its iteration (a try that schedules, preempts and admits
-nothing is undone), and a register is read only by its stage, the pools it
-admits, a gauge or a claim ([Stage](api/stage.md#registers)).
+nothing is undone), and a register is read only by its stage, the keys of a
+pool it admits, the header of a hold whose first pool it admits, a gauge
+or a claim ([Stage](api/stage.md#registers)).
 
 **`at admission`.** Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the
