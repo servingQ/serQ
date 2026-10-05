@@ -552,7 +552,12 @@ by release time and then release order, `evict by (k₁, …)` by the keys and
 then release order. A request that can never fit — its units, or its
 `reserve` when that is larger, above the cap, as they evaluate when the
 session joins the queue — is rejected: the session ends, and the report
-says how many did. One whose units or `reserve` are a constant does not
+says how many did. Only the parts that read attributes and numbers are
+judged then: a part that reads the deployment's state (a pool or stage
+query, the clock, `budget_left`) asks for something else at the next try,
+as SGLang's admission test grows with the running requests and shrinks
+when they leave, so it waits instead (#364); a head still asking for more
+than a cap when the run ends is named (`over:`). One whose units or `reserve` are a constant does not
 link: it would be rejected whenever it is reached. vLLM never
 schedules a request it could never hold either, by another measure: it
 refuses a prompt longer than `max_model_len` (and, for generation, one of

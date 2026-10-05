@@ -316,6 +316,9 @@ struct PoolState {
     /// Sessions preempted again without having advanced past the position
     /// of their previous preemption (a self-preemption livelock, typically).
     stuck: u64,
+    /// The head of the queue asked, at its last try, for more than a cap
+    /// (a reserve that reads the deployment's state, #364).
+    head_over_cap: bool,
 }
 
 // ------------------------------------------------------------ stages ----
@@ -659,6 +662,7 @@ impl<'p> Interp<'p> {
                 spills: 0,
                 rejected: 0,
                 stuck: 0,
+                head_over_cap: false,
             })
             .collect();
         let shared = p.shared_stages();
@@ -1622,14 +1626,23 @@ impl<'p> Interp<'p> {
     fn enqueue_hold(&mut self, sid: usize, pending: Pending<'p>, front: bool) -> bool {
         for w in &pending.pools {
             let pl = w.pool;
-            // what admission waits for: the units, or the reservation above them
-            let need = match w.reserve {
-                Some(f) => {
-                    let what = format!("hold {} reserve", self.p.pools[pl].name);
-                    self.amount(f, sid, &what).max(w.units)
-                }
-                None => w.units,
-            };
+            // What admission waits for is the units, or the reservation
+            // above them. A part that reads the deployment's state (a pool
+            // or stage query, the clock, `budget_left`) may ask for less
+            // later, so it is not judged now; one still over the cap when
+            // the run ends is named (`head_fits`, #364). A part of
+            // attributes and numbers asks the same at every try: above the
+            // cap, the request can never fit, and is rejected.
+            let mut need: f64 = 0.0;
+            if !reads_state(w.expr) {
+                need = w.units;
+            }
+            if let Some(f) = w.reserve
+                && !reads_state(f)
+            {
+                let what = format!("hold {} reserve", self.p.pools[pl].name);
+                need = need.max(self.amount(f, sid, &what));
+            }
             if self.round_up(pl, need) > self.pools[pl].cap {
                 self.pools[pl].rejected += 1;
                 self.end_session(sid);
@@ -1713,18 +1726,30 @@ impl<'p> Interp<'p> {
         }
         while let Some((index, sid)) = self.next_waiter(pl) {
             let pending = self.pending_now(sid);
-            // The guard counts only allocated units: cached prefixes never
-            // block an admission (they are evicted as needed).
-            let reserve = pending
-                .pools
-                .iter()
-                .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need)));
-            if !reserve {
+            if !self.head_fits(pl, &pending) {
                 break;
             }
             self.pools[pl].queue.remove(index);
             self.admit(sid, pending);
         }
+    }
+
+    /// Whether the head of pool `pl`'s queue, its hold evaluated now, fits
+    /// every pool it names. The guard counts only allocated units: cached
+    /// prefixes never block an admission (they are evicted as needed). A
+    /// head that asks for more than a cap now (a reserve that reads the
+    /// deployment's state, which the queue's entry did not reject) is
+    /// marked, so that one still waiting when the run ends is named.
+    fn head_fits(&mut self, pl: usize, pending: &Pending<'p>) -> bool {
+        let over = pending
+            .pools
+            .iter()
+            .any(|w| self.round_up(w.pool, w.need) > self.pools[w.pool].cap);
+        self.pools[pl].head_over_cap = over;
+        pending
+            .pools
+            .iter()
+            .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need)))
     }
 
     fn own_entry_size(&self, pl: usize, sid: usize) -> f64 {
@@ -3502,11 +3527,7 @@ impl<'p> Interp<'p> {
             };
             let pending = self.pending_now(sid);
             self.admit_budget = None;
-            let reserve = pending
-                .pools
-                .iter()
-                .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need)));
-            if !reserve {
+            if !self.head_fits(pl, &pending) {
                 return false;
             }
             self.pools[pl].queue.remove(index);
@@ -4036,6 +4057,7 @@ impl<'p> Interp<'p> {
                 spills: pl.spills,
                 rejected: pl.rejected,
                 stuck: pl.stuck,
+                over_cap: pl.head_over_cap && !pl.queue.is_empty(),
             })
             .collect();
         Report {
@@ -4134,6 +4156,18 @@ impl Ord for KeyOrd {
         }
         self.0.len().cmp(&o.0.len())
     }
+}
+
+/// Whether an expression reads the deployment's state: a pool or stage query
+/// (`used`, `cachedin`, `budget_left`, …) or a context variable, the clock
+/// included. A hold's units that do not are a number per session, the same
+/// at every try.
+fn reads_state(e: &CExpr) -> bool {
+    e.any(&|x| match x {
+        CExpr::Ctx(_) => true,
+        CExpr::Call(f, _) => !f.is_arithmetic(),
+        _ => false,
+    })
 }
 
 /// Whether an eviction key reads only its entry, the clock and the stage

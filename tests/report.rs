@@ -78,6 +78,7 @@ fn the_report_has_the_shape_its_version_names() {
             "mean_used",
             "mean_wait",
             "name",
+            "over_cap",
             "preemptions",
             "rejected",
             "spills",

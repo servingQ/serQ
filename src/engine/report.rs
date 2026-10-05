@@ -133,6 +133,10 @@ pub struct PoolReport {
     /// Sessions preempted a second time without progress past their
     /// previous preemption: a livelock the run would otherwise hide.
     pub stuck: u64,
+    /// The run ended with the head of the queue asking for more than the
+    /// cap at its last try: a hold whose units or `reserve` read the
+    /// deployment's state, which joining the queue does not reject (#364).
+    pub over_cap: bool,
 }
 
 /// A `claim`: what the run found of it on the path it ran.
@@ -469,6 +473,15 @@ impl Report {
                         label(&p.name, p.index)
                     );
                 }
+                if p.over_cap {
+                    let _ = writeln!(
+                        s,
+                        "over: the head of pool `{}`'s queue asked for more than its cap when \
+                         last tried, and waits (its hold reads the deployment's state, so \
+                         joining the queue did not reject it)",
+                        label(&p.name, p.index)
+                    );
+                }
             }
         }
         for st in self.stages.iter().filter(|st| st.idle_with_work) {
@@ -598,7 +611,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"over_cap\":{}}}",
                 p.name,
                 index(p.index),
                 f(p.mean_used),
@@ -612,7 +625,8 @@ impl Report {
                 p.preemptions,
                 p.spills,
                 p.rejected,
-                p.stuck
+                p.stuck,
+                p.over_cap
             );
         }
         s.push_str("]}");

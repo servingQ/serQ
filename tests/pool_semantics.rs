@@ -696,3 +696,47 @@ fn a_hold_takes_a_pool_once() {
         "{e}"
     );
 }
+
+/// A reserve that reads the deployment's state asks for more under load
+/// and less later; joining the queue under load does not reject it (#364:
+/// SGLang's admission test grows with the running requests, and a request
+/// waits). Three sessions on a pool of 10 reserving `4 + 4·holders`: the
+/// third joins with two holders (12 > 10) and is admitted when one leaves.
+/// One that reads no state and asks for more than the cap is rejected as
+/// before; one that reads state and never fits is named when the run ends.
+#[test]
+fn a_reserve_that_reads_the_state_waits_instead_of_being_rejected() {
+    let prog = |reserve: &str| {
+        format!(
+            r#"
+            pool reqs {{ cap 5; }}
+            pool kv {{ cap 10; }}
+            stage svc : delay;
+            workload {{ arrive batch(3); }}
+            session {{
+              hold reqs (1), kv (2) reserve ({reserve}) {{ run svc (1 + serial); }}
+              observe done = serial;
+              end;
+            }}
+            run {{ horizon 50; warmup 0; seed 1; }}
+            "#
+        )
+    };
+    let r = run(&prog("4 + 4 * holders(reqs)"));
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![0.0, 1.0, 2.0],
+        "{}",
+        r.text()
+    );
+    assert_eq!(r.pool("kv").unwrap().rejected, 0);
+    let r = run(&prog("9 + serial"));
+    assert_eq!(r.pool("kv").unwrap().rejected, 1, "{}", r.text());
+    let r = run(&prog("11 + 0 * holders(reqs)"));
+    assert!(r.pool("reqs").unwrap().over_cap, "{}", r.text());
+    assert!(
+        r.text().contains("over: the head of pool `reqs`"),
+        "{}",
+        r.text()
+    );
+}
