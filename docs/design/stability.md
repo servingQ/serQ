@@ -105,8 +105,10 @@ is a product chain: a state is every node's machine, and a slot draws the
 arrivals as above, routes each to a node uniformly, and runs one slot at
 every node with the requests routed to it. A request reaches node `i` with
 probability `1/g` (`mean_route`), so node `i`'s backlog has the drift
-`128 − load/g` outside its own `F` (`drift`), and each node is stable below
-`load < 128 g`. The nodes' slots are synchronised: one slot is one iteration
+`128 − load/g` outside its own `F` (`drift`). The routing does not read the
+state, so node `i` alone is `BariStable`'s chain with thinned arrivals
+(`marginal`), and its chain on job lists is positive recurrent below
+`load < 128 g` (`positive_recurrent`). The nodes' slots are synchronised: one slot is one iteration
 of every node, which is this model's, not the paper's.
 
 ## 4. Positive recurrence

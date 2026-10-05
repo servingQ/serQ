@@ -14,12 +14,16 @@ A request reaches node `i` with probability `1 / g` (`mean_route`), so the
 work node `i` receives has mean `load / g`. Outside `F` at node `i` its
 backlog drifts down by `128 − load / g` (`drift`), and Foster's criterion
 bounds the expected time until node `i`'s batch is not full by
-`backlog_i / (128 − load / g)` (`hitTime_le`): every node is stable when
-`load < 128 g`, the capacity of `g` nodes. Summed over the nodes, the total
-backlog drifts down by `128 g − load` while every batch is full
-(`drift_sum`): Theorem 1 for `g` nodes is the sum of the per-node bound.
+`backlog_i / (128 − load / g)` (`hitTime_le`) when `load < 128 g`, the
+capacity of `g` nodes. The routing does not read the state, so node `i`
+alone is `BariStable`'s chain with the requests routed to it (`marginal`,
+`thin`), of load `load / g` (`load_thin`), and `BariRecurrent` makes every
+node's chain on job lists positive recurrent (`positive_recurrent`): Theorem
+2 at each node. Summed over the nodes, the total backlog drifts down by
+`128 g − load` while every batch is full (`drift_sum`): the capacity of `g`
+nodes is the sum of the nodes'.
 -/
-import Serq.Papers.BariStable
+import Serq.Papers.BariRecurrent
 
 namespace SerqLang
 
@@ -27,28 +31,6 @@ namespace Papers
 namespace BariNodes
 
 open Foster BariStable
-
-/-! ### A kernel over a finite type of outcomes -/
-
-/-- The kernel of a random choice `k` of a finite type, with probabilities
-`p k`. -/
-noncomputable def ofFintype {α ι : Type*} [Fintype ι] (p : ι → ℝ) (hp0 : ∀ k, 0 ≤ p k)
-    (hp1 : ∑ k, p k = 1) (f : α → ι → α) : Kernel α ι where
-  p _ := p
-  next := f
-  nonneg _ := hp0
-  sum_one _ := hp1 ▸ hasSum_fintype p
-
-/-- The expectation under `ofFintype` is the weighted sum over the choices. -/
-theorem apply_ofFintype {α ι : Type*} [Fintype ι] (p : ι → ℝ) (hp0 : ∀ k, 0 ≤ p k)
-    (hp1 : ∑ k, p k = 1) (f : α → ι → α) (V : α → ℝ) (x : α) :
-    (ofFintype p hp0 hp1 f).apply V x = ∑ k, p k * V (f x k) :=
-  tsum_fintype _
-
-/-- Finitely many outcomes: every expectation converges. -/
-theorem integrable_ofFintype {α ι : Type*} [Fintype ι] (p : ι → ℝ) (hp0 : ∀ k, 0 ≤ p k)
-    (hp1 : ∑ k, p k = 1) (f : α → ι → α) (V : α → ℝ) : (ofFintype p hp0 hp1 f).Integrable V :=
-  fun _ => (hasSum_fintype _).summable
 
 /-! ### The random planner -/
 
@@ -156,7 +138,7 @@ theorem prob_sum {N g : ℕ} [NeZero g] (A : Arrivals N) : ∑ ω, prob A g ω =
 
 /-- The chain: arrivals drawn from `A`, each routed to a node uniformly. -/
 noncomputable def kernel {N g : ℕ} [NeZero g] (A : Arrivals N) : Kernel (State g) (Outcome A g) :=
-  ofFintype (prob A g) (prob_nonneg A) (prob_sum A) (step A)
+  Kernel.ofFintype (prob A g) (prob_nonneg A) (prob_sum A) (step A)
 
 /-- Node `i` is idle, or its batch is not full. -/
 def F {g : ℕ} (i : Fin g) (x : State g) : Prop := BariStable.F (x i)
@@ -173,7 +155,7 @@ noncomputable def ε {N : ℕ} (A : Arrivals N) (g : ℕ) : ℝ := 128 - A.load 
 mean `load / g`, less the 128 tokens of its full batch. -/
 theorem apply_V {N g : ℕ} [NeZero g] (A : Arrivals N) (i : Fin g) (x : State g) (hx : ¬ F i x) :
     (kernel A).apply (V i) x = V i x + A.load / g - 128 := by
-  rw [kernel, apply_ofFintype, Fintype.sum_sigma]
+  rw [kernel, Kernel.apply_ofFintype, Fintype.sum_sigma]
   have hg : (g : ℝ) ≠ 0 := Nat.cast_ne_zero.mpr (NeZero.ne g)
   have hstep : ∀ (o : Fin (N + 1)) (r : Fin (A.arr o).length → Fin g),
       prob A g ⟨o, r⟩ * V i (step A x ⟨o, r⟩) =
@@ -201,13 +183,13 @@ theorem apply_V {N g : ℕ} [NeZero g] (A : Arrivals N) (i : Fin g) (x : State g
 theorem drift {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 * g) (i : Fin g) :
     Drift (kernel A) (F i) (V i) (ε A g) where
   nonneg _ := Nat.cast_nonneg _
-  integrable := integrable_ofFintype _ _ _ _ _
+  integrable := Kernel.integrable_ofFintype _ _ _ _ _
   pos := by
     have hg : (0 : ℝ) < g := Nat.cast_pos.mpr (Nat.pos_of_ne_zero (NeZero.ne g))
     unfold ε; rw [sub_pos, div_lt_iff₀ hg]; linarith
   drift x hx := by rw [apply_V A i x hx, ε]; linarith
 
-/-- Theorem 2 at node `i`: from every state, the expected number of slots
+/-- Foster's drift at node `i`: from every state, the expected number of slots
 until node `i`'s batch is not full (or the node idle) is at most
 `backlog_i / ε`. -/
 theorem hitTime_le {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 * g) (i : Fin g)
@@ -220,12 +202,97 @@ theorem hit_tendsto {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 *
     Filter.Tendsto (fun n => hit (kernel A) (F i) n x) Filter.atTop (nhds (hitTime (kernel A) (F i) x)) :=
   Foster.hit_tendsto (drift A hA i) x
 
-/-- Theorem 2 at node `i`: from every state of `F i`, the expected return
+/-- Foster's drift at node `i`: from every state of `F i`, the expected return
 time to `F i` is finite. -/
 theorem returnTime_le {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 * g) (i : Fin g)
     (x : State g) (hx : F i x) :
     returnTime (kernel A) (F i) x ≤ 1 + (kernel A).apply (V i) x / ε A g :=
   Foster.returnTime_le_of_drift (drift A hA i) x hx
+
+/-! ### One node is `BariStable`'s chain, with thinned arrivals
+
+The routing does not read the state, and node `i`'s next machine reads only
+its own machine and the requests routed to it. So node `i` alone is a
+Markov chain: `BariStable`'s, whose slot brings `route (A.arr o) r i` with
+probability `prob A g ⟨o, r⟩` (`thin`, `marginal`), a load of `load / g`
+(`load_thin`). Below the capacity of `g` nodes, every node's chain on job
+lists is then positive recurrent (`positive_recurrent`), by `BariRecurrent`. -/
+
+theorem card_pos {N g : ℕ} [NeZero g] (A : Arrivals N) : 0 < Fintype.card (Outcome A g) :=
+  Fintype.card_pos_iff.mpr ⟨⟨0, fun _ => ⟨0, Nat.pos_of_ne_zero (NeZero.ne g)⟩⟩⟩
+
+/-- The outcomes numbered `0, …, card − 1`. -/
+noncomputable def enum {N g : ℕ} (A : Arrivals N) : Outcome A g ≃ Fin (Fintype.card (Outcome A g)) :=
+  Fintype.equivFin _
+
+/-- A sum over the numbered outcomes is the sum over the outcomes. -/
+theorem sum_enum {N g : ℕ} [NeZero g] (A : Arrivals N) (G : Outcome A g → ℝ) :
+    ∑ o ∈ Finset.range (Fintype.card (Outcome A g) - 1 + 1),
+      (if h : o < Fintype.card (Outcome A g) then G ((enum A).symm ⟨o, h⟩) else 0) = ∑ ω, G ω := by
+  rw [Nat.sub_add_cancel (card_pos A), Finset.sum_range]
+  simp only [Fin.is_lt, dif_pos, Fin.eta]
+  exact Equiv.sum_comp (enum A).symm G
+
+/-- Node `i`'s arrivals: outcome `ω` brings what it routes to `i`. -/
+noncomputable def thin {N g : ℕ} [NeZero g] (A : Arrivals N) (i : Fin g) :
+    Arrivals (Fintype.card (Outcome A g) - 1) where
+  p o := if h : o < Fintype.card (Outcome A g) then prob A g ((enum A).symm ⟨o, h⟩) else 0
+  nonneg o := by split_ifs; exacts [prob_nonneg A _, le_rfl]
+  sum_one := (sum_enum A (prob A g)).trans (prob_sum A)
+  arr o := if h : o < Fintype.card (Outcome A g) then
+    route (A.arr ((enum A).symm ⟨o, h⟩).1) ((enum A).symm ⟨o, h⟩).2 i else []
+  small o := by
+    split_ifs
+    · exact (route_length _ _ _).trans (A.small _)
+    · simp
+  fits o r hr := by
+    split_ifs at hr
+    · exact A.fits _ _ (mem_route hr)
+    · simp at hr
+
+/-- Node `i`'s load is the `g`-th part of the load. -/
+theorem load_thin {N g : ℕ} [NeZero g] (A : Arrivals N) (i : Fin g) :
+    (thin A i).load = A.load / g := by
+  have hg : (g : ℝ) ≠ 0 := Nat.cast_ne_zero.mpr (NeZero.ne g)
+  have h1 : (thin A i).load = ∑ ω, prob A g ω * (work (route (A.arr ω.1) ω.2 i) : ℝ) := by
+    rw [Arrivals.load, ← sum_enum A]
+    refine Finset.sum_congr rfl fun o _ => ?_
+    simp only [thin, Arrivals.work]
+    split_ifs <;> simp [work]
+  rw [h1, Fintype.sum_sigma, Arrivals.load, ← Fin.sum_univ_eq_sum_range (fun o => A.p o * A.work o) (N + 1),
+    Finset.sum_div]
+  refine Finset.sum_congr rfl fun o _ => ?_
+  have := mean_route (A.arr o) i
+  simp only [prob, Arrivals.work]
+  rw [show ∑ r : Fin (A.arr o).length → Fin g, A.p o / (g : ℝ) ^ (A.arr o).length *
+      (work (route (A.arr o) r i) : ℝ) =
+      A.p o * ∑ r : Fin (A.arr o).length → Fin g, (work (route (A.arr o) r i) : ℝ) / (g : ℝ) ^ (A.arr o).length by
+    rw [Finset.mul_sum]; exact Finset.sum_congr rfl fun r _ => by ring, this]
+  unfold work; ring
+
+/-- **Node `i` alone is a Markov chain**: the expectation of a function of
+node `i` after a slot is `BariStable`'s, with node `i`'s arrivals. -/
+theorem marginal {N g : ℕ} [NeZero g] (A : Arrivals N) (i : Fin g) (f : BariStable.State → ℝ)
+    (x : State g) : (kernel A).apply (fun y => f (y i)) x = (BariStable.kernel (thin A i)).apply f (x i) := by
+  have hE : (BariStable.kernel (thin A i)).apply f (x i) =
+      ∑ o ∈ Finset.range (Fintype.card (Outcome A g) - 1 + 1),
+        (thin A i).p o * f ⟨slot ((thin A i).arr o) (x i).1, Reach.slot _ ((thin A i).fits o) (x i).2⟩ :=
+    Kernel.apply_ofOutcomes _ _ _ _ _ _ _
+  rw [kernel, Kernel.apply_ofFintype, hE, ← sum_enum A]
+  refine Finset.sum_congr rfl fun o _ => ?_
+  by_cases h : o < Fintype.card (Outcome A g)
+  · simp only [thin, dif_pos h]; rfl
+  · rw [dif_neg h]
+    show 0 = (if h : o < Fintype.card (Outcome A g) then _ else 0) * _
+    rw [dif_neg h, zero_mul]
+
+/-- Theorem 2 at node `i`: below the capacity of `g` nodes, every state of
+node `i`'s chain on job lists is positive recurrent. -/
+theorem positive_recurrent {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 * g) (i : Fin g)
+    (y : BariChain.AState (thin A i)) : PositiveRecurrent (BariChain.akernel (thin A i)) y := by
+  have hg : (0 : ℝ) < g := Nat.cast_pos.mpr (Nat.pos_of_ne_zero (NeZero.ne g))
+  refine BariRecurrent.positive_recurrent _ ?_ y
+  rw [load_thin, div_lt_iff₀ hg]; linarith
 
 /-! ### The sum over the nodes -/
 
@@ -237,18 +304,18 @@ instance {g : ℕ} : DecidablePred (Fsome (g := g)) := fun x => by unfold Fsome;
 /-- The total backlog over the nodes. -/
 def Vsum {g : ℕ} (x : State g) : ℝ := ∑ i, V i x
 
-/-- Theorem 1 for `g` nodes is the sum of the per-node bound: while every
+/-- The capacity of `g` nodes is the sum of the nodes': while every
 batch is full, the total backlog drifts down by `128 g − load`. -/
 theorem drift_sum {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 * g) :
     Drift (kernel (g := g) A) Fsome Vsum (128 * g - A.load) where
   nonneg _ := Finset.sum_nonneg fun _ _ => Nat.cast_nonneg _
-  integrable := integrable_ofFintype _ _ _ _ _
+  integrable := Kernel.integrable_ofFintype _ _ _ _ _
   pos := by linarith
   drift x hx := by
     have hx' : ∀ i, ¬ F i x := fun i h => hx ⟨i, h⟩
     have hg : (g : ℝ) ≠ 0 := Nat.cast_ne_zero.mpr (NeZero.ne g)
     have : (kernel A).apply Vsum x = ∑ i, (kernel A).apply (V i) x := by
-      simp only [kernel, apply_ofFintype, Vsum, Finset.mul_sum]
+      simp only [kernel, Kernel.apply_ofFintype, Vsum, Finset.mul_sum]
       exact Finset.sum_comm
     rw [this, Finset.sum_congr rfl fun i _ => apply_V A i x (hx' i)]
     simp only [Finset.sum_sub_distrib, Finset.sum_add_distrib, Finset.sum_const, Finset.card_univ,
