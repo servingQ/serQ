@@ -765,15 +765,22 @@ fn iteration(lk: &Linker, stage: usize, body: &[IterStmt]) -> LResult<Vec<CIter>
                     iteration(lk, stage, b)?,
                 ),
                 IterStmt::Set(name, e) => {
+                    let here = lk
+                        .stages
+                        .iter()
+                        .find(|&(_, &(b, _))| b == stage)
+                        .map_or("?", |(n, _)| n.as_str());
                     let Some(&r) = lk.reg_index.get(name) else {
                         return Err(LinkError::new(format!(
-                            "`set {name}` in an iteration: not a register of this stage \
+                            "stage `{here}`: `set {name}` in its iteration: not one of its \
+                             registers; a body sets a register, not a session attribute \
                              (declare it with `state {name} = …;`)"
                         )));
                     };
                     if lk.registers[r].stage != stage {
                         return Err(LinkError::new(format!(
-                            "`set {name}` in an iteration: the register is another stage's; a \
+                            "stage `{here}`: `set {name}` in its iteration: the register is \
+                             another stage's; a \
                              body sets its own stage's"
                         )));
                     }

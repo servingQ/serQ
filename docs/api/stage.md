@@ -178,15 +178,27 @@ Other engines' are other bodies:
 sets with `set NAME = e;` and keeps from one iteration to the next: what an
 engine's scheduler remembers, such as TGI's count of decode steps since a
 new batch or SGLang's `new_token_ratio`. `c` is a constant; `e` is read as
-a guard is. A set takes effect with its iteration: a body that schedules
-nothing and preempts nothing has had no iteration, and its sets are undone.
-The scheduler's expressions read a register by name — a hold's header, a
-queue or eviction key, a stage's budget, cost or serve keys, a gauge, a
-claim — and a session statement and a claim's `given` do not: a register
-is the engine's, not the session's. Its name is its own (not an attribute,
-a constant, a name the language supplies, a pool, a stage or another
+a guard is. A set takes effect with its iteration: a try that schedules
+nothing, preempts nothing and admits nobody has been no iteration, and its
+sets are undone (a try that admitted keeps them, with the admission).
+
+A register is read where its stage orders the read: the stage's own
+budget, chunk, cost, serve keys and body, a claim over its iterations, the
+keys of a pool it admits (`admit via`) and the header of a hold on such
+pools, a gauge, a claim `at end`. Read elsewhere — another stage, a `ps`
+capacity, a pool admitted at settle time — the read and the set would fall
+at one instant in the order of the declarations, and the program does not
+link; nor does a session statement or a claim's `given` read one: a
+register is the engine's. Its name is its own (not an attribute, a
+constant, a name the language supplies, a pool, a stage or another
 register); a stage array has none (which member's would an expression
 read?), and a body sets only its own stage's.
+
+SGLang resets `new_token_ratio` when the server goes idle
+([`scheduler.py` L4998](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/scheduler.py#L4998)),
+which is no iteration. What reads the ratio is the next iteration's
+admission, so the body says it at its top:
+`branch (residents == 0) { set ratio = r0; }`.
 
 ### Example
 

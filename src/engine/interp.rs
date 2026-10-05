@@ -2966,6 +2966,7 @@ impl<'p> Interp<'p> {
         let mut attn_by: Vec<(u64, f64)> = vec![];
         // a body's `set`s take effect with its iteration (below)
         let regs_before = spec.iteration.as_ref().map(|_| self.regs.clone());
+        let mut admitted_any = false;
         if let Some(body) = &spec.iteration {
             let mut plan = Plan {
                 st,
@@ -2983,6 +2984,7 @@ impl<'p> Interp<'p> {
             }
             assign = plan.assign;
             attn_by = plan.attn_by;
+            admitted_any = plan.admitted > 0.0;
         } else {
             loop {
                 let residents = self.serving_order(st, spec);
@@ -3056,8 +3058,11 @@ impl<'p> Interp<'p> {
             // report names if none came (#263)
             let work = !self.residents(st).is_empty() || self.bound_waiting(st);
             self.stages[st].idle_with_work = work;
-            // no iteration: what its body set did not happen either
-            if let Some(regs) = regs_before {
+            // no iteration: what its body set did not happen either, unless
+            // the try admitted someone, which stays, and the sets with it
+            if let Some(regs) = regs_before
+                && !admitted_any
+            {
                 self.regs = regs;
             }
             return;
@@ -3415,12 +3420,8 @@ impl<'p> Interp<'p> {
         ctx.npre = plan
             .assign
             .iter()
-            .filter(|(j, _)| {
-                self.stages[plan.st]
-                    .jobs
-                    .get(j)
-                    .is_some_and(|job| job.mode == RunMode::Prefill)
-            })
+            // every job in `assign` is a resident: `give` drops a victim from it
+            .filter(|(j, _)| self.stages[plan.st].jobs[j].mode == RunMode::Prefill)
             .map(|a| a.1)
             .sum();
         ctx.admitted = plan.admitted;

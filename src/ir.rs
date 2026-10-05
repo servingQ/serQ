@@ -1356,6 +1356,124 @@ impl Program {
         Ok(())
     }
 
+    /// A register is read where its stage's iteration orders the read: in
+    /// the stage's own expressions (budget, chunk, cost, serve keys, its
+    /// body, a claim over its iterations), in those of a pool it admits
+    /// (`admit via`: queue, eviction and preempt keys, a spill, a hold's
+    /// header whose pools it admits), and in a gauge or a claim `at end`.
+    /// Elsewhere — another stage's, a `ps` capacity, a pool admitted at
+    /// settle time — the read and the set happen at one instant in an order
+    /// that is the order of the declarations, and the answer would be that
+    /// order's (#367).
+    fn registers_read_in_place(&self) -> Result<(), String> {
+        if self.registers.is_empty() {
+            return Ok(());
+        }
+        let read = |e: &CExpr, ok: &dyn Fn(usize) -> bool, place: &str| -> Result<(), String> {
+            let Some(CExpr::Reg(r)) = e.find(&|x| matches!(x, CExpr::Reg(r) if !ok(*r))) else {
+                return Ok(());
+            };
+            let reg = &self.registers[*r];
+            let owner = &self.stages[reg.stage].name;
+            Err(format!(
+                "`{}` is stage `{owner}`'s register, and {place} would read it apart from \
+                 `{owner}`'s iteration, in an order the declarations would decide; a register \
+                 is read by its stage, the pools it admits, a gauge or a claim",
+                reg.name
+            ))
+        };
+        let of = |stage: usize| move |r: usize| self.registers[r].stage == stage;
+        let admitted_by = |pool: usize| {
+            move |r: usize| self.pools[pool].admit_via == Some(self.registers[r].stage)
+        };
+        for (pi, p) in self.pools.iter().enumerate() {
+            let place = format!("pool `{}`'s keys", p.name);
+            let ok = admitted_by(pi);
+            let mut exprs: Vec<&CExpr> = vec![];
+            exprs.extend(p.queue.iter().flatten());
+            if let CEvict::By(keys) = &p.evict {
+                exprs.extend(keys);
+            }
+            if let Preempt::By { keys, .. } = &p.preempt {
+                exprs.extend(keys);
+            }
+            if let Some(s) = &p.spill {
+                exprs.extend([&s.work, &s.when]);
+            }
+            for e in exprs {
+                read(e, &ok, &place)?;
+            }
+        }
+        fn body_exprs<'a>(body: &'a [CIter], out: &mut Vec<&'a CExpr>) {
+            for s in body {
+                match s {
+                    CIter::Serve { only, by } => {
+                        out.extend(only.iter());
+                        out.extend(by.iter().flatten());
+                    }
+                    CIter::Admit { only, gate } => out.extend(only.iter().chain(gate.iter())),
+                    CIter::Branch(g, a, b) => {
+                        out.push(g);
+                        body_exprs(a, out);
+                        body_exprs(b, out);
+                    }
+                    CIter::Set(_, e) => out.push(e),
+                }
+            }
+        }
+        for (si, s) in self.stages.iter().enumerate() {
+            let place = format!("stage `{}`", s.name);
+            let ok = of(si);
+            match &s.kind {
+                CStageKind::Ps(e) => read(e, &|_| false, &format!("{place}'s capacity"))?,
+                CStageKind::Step(st) => {
+                    let mut exprs: Vec<&CExpr> = vec![&st.budget, &st.chunk, &st.cost];
+                    if let CServe::By(keys) = &st.serve {
+                        exprs.extend(keys);
+                    }
+                    exprs.extend(st.only.iter());
+                    if let Some(body) = &st.iteration {
+                        body_exprs(body, &mut exprs);
+                    }
+                    for e in exprs {
+                        read(e, &ok, &place)?;
+                    }
+                }
+                CStageKind::Fifo(_) | CStageKind::Delay => {}
+            }
+        }
+        for b in &self.blocks {
+            for s in b {
+                if let CStmt::Hold { pools, reuse, .. } = s {
+                    let members: Vec<usize> = pools
+                        .iter()
+                        .flat_map(|(r, _, _)| r.base..r.base + r.count)
+                        .collect();
+                    let ok = |reg: usize| {
+                        members
+                            .iter()
+                            .all(|&m| self.pools[m].admit_via == Some(self.registers[reg].stage))
+                    };
+                    for (_, units, reserve) in pools {
+                        read(units, &ok, "a hold's header")?;
+                        if let Some(r) = reserve {
+                            read(r, &ok, "a hold's header")?;
+                        }
+                    }
+                    if let Some(r) = reuse {
+                        read(r, &ok, "a hold's header")?;
+                    }
+                }
+            }
+        }
+        for c in &self.claims {
+            if let Some(st) = c.kind.stage() {
+                read(&c.expr, &of(st), &format!("claim `{}`", c.name))?;
+            }
+        }
+        Ok(())
+    }
+
     /// The checks of the declarations and the run.
     fn validate_declarations(&self) -> Result<(), String> {
         let v = Validator { p: self };
@@ -1487,6 +1605,7 @@ impl Program {
                 }
             }
         }
+        self.registers_read_in_place()?;
         for (k, r) in self.registers.iter().enumerate() {
             let at = |e: &str| format!("state `{}`: {e}", r.name);
             match self.stages.get(r.stage).map(|s| &s.kind) {
