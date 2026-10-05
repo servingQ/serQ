@@ -11,7 +11,7 @@ use std::fmt;
 
 use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
-use crate::ir::{ArgKind, MAX_SESSIONS};
+use crate::ir::{ArgKind, CIter, MAX_SESSIONS};
 
 #[derive(Debug, Clone)]
 pub struct LinkError {
@@ -163,7 +163,7 @@ struct Linker<'a> {
 /// rejects it, as it does a `let` and an attribute of one name): the
 /// expression that meant the context variable would read the attribute
 /// instead (#231).
-pub const CONTEXT_VARS: [(&str, CtxVar); 21] = [
+pub const CONTEXT_VARS: [(&str, CtxVar); 23] = [
     ("now", CtxVar::Now),
     ("waited", CtxVar::Waited),
     ("size", CtxVar::Size),
@@ -185,6 +185,8 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 21] = [
     ("demand", CtxVar::Demand),
     ("served", CtxVar::Served),
     ("arrived", CtxVar::Arrived),
+    ("admitted", CtxVar::Admitted),
+    ("preempted", CtxVar::Preempted),
 ];
 
 /// The most terms the aggregates (`max j in n (e)`) of one program write
@@ -468,22 +470,14 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 budget: lk.expr(&sp.budget)?,
                 cost: lk.expr(&sp.cost)?,
                 chunk: lk.expr(&sp.chunk)?,
-                serve: match &sp.serve {
-                    // no keys: every resident ties, and ties are admission order
-                    Serve::Admission => CServe::By(vec![]),
-                    // `decode first` is `by (decoding ? 0 : 1)`: the IR knows one form
-                    Serve::DecodeFirst => CServe::By(vec![CExpr::Cond(
-                        Box::new(CExpr::Ctx(CtxVar::Decoding)),
-                        Box::new(CExpr::Num(0.0)),
-                        Box::new(CExpr::Num(1.0)),
-                    )]),
-                    Serve::By(keys) => {
-                        CServe::By(keys.iter().map(|k| lk.expr(k)).collect::<Result<_, _>>()?)
-                    }
-                    Serve::ExclusivePrefill => CServe::ExclusivePrefill,
-                },
+                serve: serve(&lk, &sp.serve)?,
                 only: sp.only.as_ref().map(|e| lk.expr(e)).transpose()?,
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
+                iteration: sp
+                    .iteration
+                    .as_ref()
+                    .map(|body| iteration(&lk, body))
+                    .transpose()?,
             }),
         };
         let memory = match &s.kind {
@@ -683,6 +677,49 @@ fn stmt_span(s: &Stmt) -> Option<Span> {
         Stmt::Choose { count, .. } => expr_span(count),
         _ => None,
     }
+}
+
+/// A step stage's serving order. `admission` has no keys: every resident
+/// ties, and ties are admission order; `decode first` is `by (decoding ? 0
+/// : 1)`, so the IR knows one form.
+fn serve(lk: &Linker, s: &Serve) -> LResult<CServe> {
+    Ok(match s {
+        Serve::Admission => CServe::By(vec![]),
+        Serve::DecodeFirst => CServe::By(vec![CExpr::Cond(
+            Box::new(CExpr::Ctx(CtxVar::Decoding)),
+            Box::new(CExpr::Num(0.0)),
+            Box::new(CExpr::Num(1.0)),
+        )]),
+        Serve::By(keys) => CServe::By(keys.iter().map(|k| lk.expr(k)).collect::<Result<_, _>>()?),
+        Serve::ExclusivePrefill => CServe::ExclusivePrefill,
+    })
+}
+
+/// A step stage's `iteration` body.
+fn iteration(lk: &Linker, body: &[IterStmt]) -> LResult<Vec<CIter>> {
+    body.iter()
+        .map(|s| {
+            Ok(match s {
+                IterStmt::Serve { only, order } => CIter::Serve {
+                    only: only.as_ref().map(|e| lk.expr(e)).transpose()?,
+                    by: match order.as_ref().map(|o| serve(lk, o)).transpose()? {
+                        None => None,
+                        Some(CServe::By(keys)) => Some(keys),
+                        Some(CServe::ExclusivePrefill) => {
+                            unreachable!("the parser refuses `exclusive prefill` in a body")
+                        }
+                    },
+                },
+                IterStmt::Admit { only, gate } => CIter::Admit {
+                    only: only.as_ref().map(|e| lk.expr(e)).transpose()?,
+                    gate: gate.as_ref().map(|e| lk.expr(e)).transpose()?,
+                },
+                IterStmt::Branch(g, a, b) => {
+                    CIter::Branch(lk.expr(g)?, iteration(lk, a)?, iteration(lk, b)?)
+                }
+            })
+        })
+        .collect()
 }
 
 /// Member `i` of an `n`-family's counterpart in a family of `count` from

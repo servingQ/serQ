@@ -119,10 +119,10 @@ fn a_link_note_names_the_library() {
     let d = dir(
         "note",
         &[
-            ("lib.sq", "def take(n) {\n  set admitted = n;\n}\n"),
+            ("lib.sq", "def take(n) {\n  set granted = n;\n}\n"),
             (
                 "main.sq",
-                "use \"lib.sq\";\nsession { take(1); observe x = admittedd; end; }\n",
+                "use \"lib.sq\";\nsession { take(1); observe x = grantedd; end; }\n",
             ),
         ],
     );

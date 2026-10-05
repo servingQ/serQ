@@ -103,6 +103,10 @@ pub struct StageReport {
     pub mean_itl: f64,
     pub itl_p50: f64,
     pub itl_p99: f64,
+    /// Step stages: the run ended with the stage holding residents or a
+    /// waiting queue it serves, and its last try at an iteration scheduled
+    /// nothing (a body or `serve only` that served and admitted nobody).
+    pub idle_with_work: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -467,6 +471,15 @@ impl Report {
                 }
             }
         }
+        for st in self.stages.iter().filter(|st| st.idle_with_work) {
+            let _ = writeln!(
+                s,
+                "idle: stage `{}` ended with residents or waiting requests, its last iteration \
+                 scheduling nothing (a body or `serve only` that serves and admits nobody waits \
+                 for an event)",
+                label(&st.name, st.index)
+            );
+        }
         s
     }
 
@@ -556,7 +569,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{},\"prefill_only\":{},\"decode_only\":{},\"mixed\":{},\"mean_decodes\":{},\"mean_decode_batch\":{},\"mean_decode_step\":{},\"mean_itl\":{},\"itl_p50\":{},\"itl_p99\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{},\"prefill_only\":{},\"decode_only\":{},\"mixed\":{},\"mean_decodes\":{},\"mean_decode_batch\":{},\"mean_decode_step\":{},\"mean_itl\":{},\"itl_p50\":{},\"itl_p99\":{},\"idle_with_work\":{}}}",
                 st.name,
                 index(st.index),
                 f(st.mean_number),
@@ -574,7 +587,8 @@ impl Report {
                 f(st.mean_decode_step),
                 f(st.mean_itl),
                 f(st.itl_p50),
-                f(st.itl_p99)
+                f(st.itl_p99),
+                st.idle_with_work
             );
         }
         s.push_str("],\"pools\":[");

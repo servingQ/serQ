@@ -371,7 +371,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 98] = [
+pub const KEYWORDS: [&str; 99] = [
     "admission",
     "admit",
     "arrivals",
@@ -468,6 +468,7 @@ pub const KEYWORDS: [&str; 98] = [
     "via",
     "warmup",
     "when",
+    "while",
     "with",
     "workload",
 ];
@@ -2842,6 +2843,85 @@ impl Parser {
         })
     }
 
+    /// `{ stmt* }` of a step stage's `iteration`: `serve`, `admit` and
+    /// `branch`, and nothing else (no loop: an iteration ends).
+    fn iteration_body(&mut self) -> PResult<Vec<IterStmt>> {
+        self.expect(&Tok::LBrace)?;
+        let mut body = vec![];
+        while *self.peek() != Tok::RBrace {
+            body.push(self.iteration_stmt()?);
+        }
+        self.expect(&Tok::RBrace)?;
+        Ok(body)
+    }
+
+    fn iteration_stmt(&mut self) -> PResult<IterStmt> {
+        if self.eat_kw("serve") {
+            let mut only = None;
+            if self.eat_kw("only") {
+                self.expect(&Tok::LParen)?;
+                only = Some(self.expr()?);
+                self.expect(&Tok::RParen)?;
+            }
+            let order = if self.eat_kw("admission") {
+                Some(Serve::Admission)
+            } else if self.eat_kw("decode") {
+                self.expect_kw("first")?;
+                Some(Serve::DecodeFirst)
+            } else if self.eat_kw("by") {
+                self.expect(&Tok::LParen)?;
+                let mut keys = vec![self.expr()?];
+                while *self.peek() == Tok::Comma {
+                    self.expect(&Tok::Comma)?;
+                    keys.push(self.expr()?);
+                }
+                self.expect(&Tok::RParen)?;
+                Some(Serve::By(keys))
+            } else if self.is_kw("exclusive") {
+                return self.err(
+                    "`exclusive prefill` is a stage's rule (one prefill, the whole budget, \
+                     displacing the decodes already chosen), and a body cannot take back a serve: \
+                     write the rule on the stage without a body, or a body without the rule",
+                );
+            } else {
+                None
+            };
+            self.expect(&Tok::Semi)?;
+            Ok(IterStmt::Serve { only, order })
+        } else if self.eat_kw("admit") {
+            let mut only = None;
+            if self.eat_kw("only") {
+                self.expect(&Tok::LParen)?;
+                only = Some(self.expr()?);
+                self.expect(&Tok::RParen)?;
+            }
+            let mut gate = None;
+            if self.eat_kw("while") {
+                self.expect(&Tok::LParen)?;
+                gate = Some(self.expr()?);
+                self.expect(&Tok::RParen)?;
+            }
+            self.expect(&Tok::Semi)?;
+            Ok(IterStmt::Admit { only, gate })
+        } else if self.eat_kw("branch") {
+            self.expect(&Tok::LParen)?;
+            let guard = self.expr()?;
+            self.expect(&Tok::RParen)?;
+            let then = self.iteration_body()?;
+            let other = if self.eat_kw("else") {
+                self.iteration_body()?
+            } else {
+                vec![]
+            };
+            Ok(IterStmt::Branch(guard, then, other))
+        } else {
+            self.err(format!(
+                "an iteration takes `serve`, `admit` and `branch`; found {}",
+                self.peek()
+            ))
+        }
+    }
+
     /// A stage's kind, `fifo`, `ps (phi)`, `delay` or `step { … }`, with its
     /// closing semicolon (none after `step { … }`).
     fn stage_kind(&mut self) -> PResult<StageKind> {
@@ -2870,6 +2950,7 @@ impl Parser {
                 serve: Serve::Admission,
                 only: None,
                 memory: None,
+                iteration: None,
             };
             let mut has_cost = false;
             let mut has_serve = false;
@@ -2938,6 +3019,14 @@ impl Parser {
                         );
                     }
                     "memory" => s.memory = Some(self.bare_reference()?),
+                    "iteration" => {
+                        if s.iteration.is_some() {
+                            return self.err("`iteration` twice: a step stage has one iteration");
+                        }
+                        s.iteration = Some(self.iteration_body()?);
+                        // a block, like `step { … }`: no semicolon
+                        continue;
+                    }
                     other => return self.err(format!("unknown step option `{other}`")),
                 }
                 self.expect(&Tok::Semi)?;
