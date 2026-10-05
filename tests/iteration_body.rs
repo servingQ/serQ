@@ -11,7 +11,7 @@ fn run(src: &str) -> serq::Report {
 const VLLM: &str = "iteration { serve; admit while (!preempted); }";
 
 /// A stage without a body runs vLLM's procedure: every program of the
-/// corpus whose engines have no `exclusive prefill` and no `serve only`
+/// corpus whose engines have no `exclusive prefill`, no `serve only` and no body
 /// gives the same report with the procedure written as a body.
 #[test]
 fn the_vllm_body_is_the_procedure() {
@@ -27,6 +27,7 @@ fn the_vllm_body_is_the_procedure() {
             if !src.contains("step {")
                 || src.contains("serve exclusive")
                 || src.contains("serve only")
+                || src.contains("iteration {")
             {
                 continue;
             }

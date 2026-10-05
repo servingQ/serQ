@@ -1478,12 +1478,16 @@ impl Program {
         for b in &self.blocks {
             for s in b {
                 if let CStmt::Hold { pools, reuse, .. } = s {
-                    let members: Vec<usize> = pools
-                        .iter()
-                        .flat_map(|(r, _, _)| r.base..r.base + r.count)
-                        .collect();
+                    // a hold waits in its first pool's queue, and the stage
+                    // that admits that queue reads its header (the other
+                    // pools are only tested), so that is the stage whose
+                    // registers it may read
+                    let first: Vec<usize> = pools
+                        .first()
+                        .map(|(r, _, _)| (r.base..r.base + r.count).collect())
+                        .unwrap_or_default();
                     let ok = |reg: usize| {
-                        members
+                        first
                             .iter()
                             .all(|&m| self.pools[m].admit_via == Some(self.registers[reg].stage))
                     };
