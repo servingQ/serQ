@@ -66,7 +66,7 @@ import Serq
 #print axioms SerqLang.Papers.KongMath.opt_lower_bound
 #print axioms SerqLang.Papers.KongSvf.queueing_bound
 #print axioms SerqLang.Papers.KongSvf.competitive_ratio
--- Foster's criterion on a finite-support kernel, without measure theory (Serq/Foster.lean)
+-- Foster's criterion on a kernel of countably many outcomes, without measure theory (Serq/Foster.lean)
 #print axioms SerqLang.Foster.drift_bound
 #print axioms SerqLang.Foster.hitTime_le
 #print axioms SerqLang.Foster.hitTime_eq
@@ -105,3 +105,18 @@ import Serq
 #print axioms SerqLang.Papers.DaiProgram.return_idle
 #print axioms SerqLang.Papers.BariProgram.hit_idle_le
 #print axioms SerqLang.Papers.BariProgram.return_idle
+-- Poisson arrivals in continuous time (Serq/Poisson.lean, Serq/Slot.lean, Serq/Papers/{Dai,Bari}Poisson.lean)
+#print axioms SerqLang.Poisson.hasSum_mul_pois
+#print axioms SerqLang.Poisson.hasSum_compound
+#print axioms SerqLang.Poisson.hasSum_compound_work
+#print axioms SerqLang.Slot.slot_dur
+#print axioms SerqLang.Papers.DaiPoisson.dur_full
+#print axioms SerqLang.Papers.DaiPoisson.drift
+#print axioms SerqLang.Papers.DaiPoisson.hitTime_le
+#print axioms SerqLang.Papers.DaiPoisson.hit_tendsto
+#print axioms SerqLang.Papers.DaiPoisson.returnTime_le
+#print axioms SerqLang.Papers.BariPoisson.dur_full
+#print axioms SerqLang.Papers.BariPoisson.drift
+#print axioms SerqLang.Papers.BariPoisson.hitTime_le
+#print axioms SerqLang.Papers.BariPoisson.hit_tendsto
+#print axioms SerqLang.Papers.BariPoisson.returnTime_le

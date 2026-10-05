@@ -37,9 +37,14 @@ none. Each case keeps $\Psi \le G (b_{\max}+1) W$.
 
 ## 2. Foster's criterion on a kernel
 
-A separate change (`lean/Serq/Foster.lean`) states a Markov chain by its kernel of finite support
-and defines the expected hitting time of a set $F$ by its first-step
-recursion, truncated: $h_0 = 0$ and $h_{n+1}(x) = 1 + \sum_y P(x,y)\,h_n(y)$
+A separate change (`lean/Serq/Foster.lean`) states a Markov chain by its kernel:
+from $x$, outcome $i$ has probability $p(x,i)$ and leads to $\mathrm{next}(x,i)$.
+The outcomes may be infinitely many (a Poisson number of arrivals), so an
+expectation is a series, and comparing two of them asks that they converge
+(`Kernel.Integrable`; bounded functions, and every function when the outcomes
+are finitely many, do). The kernel
+defines the expected hitting time of a set $F$ by its first-step
+recursion, truncated: $h_0 = 0$ and $h_{n+1}(x) = 1 + \sum_i p(x,i)\,h_n(\mathrm{next}(x,i))$
 off $F$. The expected hitting time is the least nonnegative solution of that
 equation and the limit of the truncations, so no path measure is needed. A
 drift $\sum_y P(x,y) V(y) \le V(x) - \varepsilon$ off $F$ gives
@@ -64,19 +69,25 @@ capacity Foster's criterion bounds the expected time to reach `F` by
 `backlog / ε`. The phase term of step 1 is not needed: random arrivals are
 counted per slot, not on a clock.
 
-At most 10 000 sessions arrive in a slot. That is the proof's bound, not the
-semantics': the proof follows one round of `Exec.drain`, which runs 10 000
-sessions. The fuel of an instant itself runs out near 10⁷ arrivals
-(`Exec.settle` repeats the round 1 000 times), and only beyond it would some
-arrivals still be ready, not yet jobs, when the slot ends, and the drift be
-false. The claims' families stop at 500 sessions for the same kind of
-reason.
+Any number of sessions may arrive in a slot. `Exec.drain` runs one ready
+session per round, and its fuel is the ready list's length and 10 000 more
+for the sessions their commands make ready (`Exec.drainFuel`), so every
+arrival runs its commands within the instant, as in the interpreter, whose
+loop has no bound.
 
 A slot is one iteration, not one unit of the paper's time, and an idle slot
-lets no time pass. The capacity condition `1280 · E[k] < 128` is still the
-paper's `λ (v_p + v_d) < b_max / t_{b_max}`: outside `F` every iteration is
-full and lasts `t_{b_max} = c + a`, so the arrivals in a slot are those of
-`t_{b_max}` units, `E[k] = λ t_{b_max}`.
+lets no time pass. With arrivals in continuous time
+(`lean/Serq/Papers/DaiPoisson.lean`) the slot's law depends on the state: on
+a busy engine the arrivals are those of a Poisson stream of rate `λ` while
+the running iteration lasts, its `cost` (`Slot.Dur`), a Poisson number of
+mean `λ · cost`; on an idle engine the next arrival starts an iteration.
+Outside `F` every iteration is full and lasts `t_{b_max} = 4675`, so the
+drift is `128 − 1280 λ t_{b_max}`, and the capacity condition is the
+paper's `λ (v_p + v_d) < b_max / t_{b_max}` exactly. Inside `F` slots are
+shorter, and Foster's criterion asks nothing of them. For Bari et al.
+(`BariPoisson.lean`) each arrival also draws its type, a compound Poisson
+list, whose work has mean `λ · 4640 · E[v_p + v_d]` (Wald's identity,
+`Poisson.hasSum_compound_work`).
 
 For Bari et al. (`lean/Serq/Papers/BariStable.lean`) a slot's arrivals are a
 list of drawn (prompt, output) lengths (`Exec.slotL`; `slot` is the list of

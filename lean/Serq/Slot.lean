@@ -932,6 +932,56 @@ theorem slot_sb (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m : M
     rw [h2] at c5
     rw [WnC_congr s3, ← hiter, e2, WnC_congr c5, h5]
 
+/-- The running iteration lasts its cost: it ends `max 1 cost` after now. -/
+def Dur (D : Deployment) (m : Machine) : Prop :=
+  ∀ a q, m.iterEnd = some (a, q) → a = m.now + max 1 (D.cost m.last.stats)
+
+theorem startIteration_dur (D : Deployment) (m : Machine) : Dur D (startIteration D m) := by
+  intro a q h
+  unfold startIteration at h ⊢
+  simp only at h ⊢
+  split at h
+  · rename_i h1
+    rw [if_pos h1]
+    split at h
+    · rename_i h2
+      rw [if_pos h2]
+      simp only [Option.some.injEq, Prod.mk.injEq] at h
+      rw [← h.1]; rfl
+    · simp at h
+  · simp at h
+
+theorem afterEvent_dur (D : Deployment) (m : Machine) (h : (settle D m).iterEnd = none) :
+    Dur D (afterEvent D m) := by
+  unfold afterEvent
+  simp only [h, Option.isNone_none, Bool.true_and]
+  split
+  · exact startIteration_dur D _
+  · intro a q h'; rw [h] at h'; cases h'
+
+/-- **A slot ends** with an iteration that lasts its cost, or with an idle engine. -/
+theorem slot_dur (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB : SB M Busy L g m)
+    (as : List (ℕ → ℕ)) (hf : ∀ a ∈ as, M.Fits (M.len a)) : Dur M.D (slotL M.D (Q1 M) as m) := by
+  obtain ⟨L1, g1, h1, -, -, h4, -⟩ := ci_injects as hB.toCI hf
+  set m1 := as.foldl (fun m a => inject (Q1 M) a m) m with hm1
+  have hsl : slotL M.D (Q1 M) as m =
+      if m.iterEnd.isSome then step M.D (afterEvent M.D m1) else afterEvent M.D m1 := rfl
+  obtain ⟨g2, c1, c2, c3, -, -⟩ := settle_ci h1
+  rcases hie : m.iterEnd with _ | ⟨a, qa⟩
+  · rw [hsl, hie]
+    simp only [Option.isSome_none, Bool.false_eq_true, ↓reduceIte]
+    exact afterEvent_dur _ _ (c3.iterEnd.trans (h4.iterEnd.trans hie))
+  · have hie2 : (settle M.D m1).iterEnd = some (a, qa) := c3.iterEnd.trans (h4.iterEnd.trans hie)
+    have hstep : step M.D (settle M.D m1) = afterEvent M.D (handle (settle M.D m1) a qa) := by
+      unfold step
+      rw [show nextEvent (settle M.D m1) = some (a, qa) by simp [nextEvent, hie2, c1.delays]]
+    obtain ⟨e1, -, -, e4, -⟩ := ci_end c1 c2 hie2
+    obtain ⟨-, -, -, d3, -, -⟩ := settle_ci e1
+    rw [hsl, hie]
+    simp only [Option.isSome_some, ↓reduceIte]
+    rw [after_busy M.D m1 hie2, hstep]
+    exact afterEvent_dur _ _ (d3.iterEnd.trans e4)
+
 /-- The chain starts from no request. -/
 theorem empty_sb (L : ℕ → ℕ × ℕ) : SB M Busy L ⟨fun _ => .e, fun _ => 0⟩ (empty M) := by
   have hs : (empty M).sess.size = 0 := by simp [empty, Exec.initial]
