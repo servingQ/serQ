@@ -348,14 +348,15 @@ fails if a claim has no proof, or if a proof proves something else than
 what the program now claims.
 -/
 import Serq.Claims
-import papers.Dai
-import papers.DaiBounded
-import papers.Bari
-import papers.Kong
+{IMPORTS}
 
 namespace SerqLang
 namespace ClaimsProved
 ''']
+    papers = os.path.join(ROOT, "examples", "papers")
+    stems = sorted(f[:-len(".lean")] for f in os.listdir(papers)
+                   if f.endswith(".lean") and f != "ClaimsProved.lean")
+    proved[0] = proved[0].replace("{IMPORTS}", "\n".join(f"import papers.{s}" for s in stems))
     for name in names():
         ir = json.load(open(os.path.join(CDIR, name + ".ir.json")))
         p = Program(name, ir)

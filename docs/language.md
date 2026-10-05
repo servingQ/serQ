@@ -944,7 +944,7 @@ of the program satisfies the claim (`every iteration`), some machine of
 some path does (`some iteration`, whose workload must not draw), or every
 machine at which every session has ended does (`at end`). The proofs are
 Lean files, and the build fails when a claim has none or the program has
-changed what it claims (`lean/Serq/ClaimsProved.lean`). The programs under
+changed what it claims (`examples/papers/ClaimsProved.lean`). The programs under
 `examples/papers/` are written this way: three papers' propositions, each
 stated in the program that is the paper's serving system and proved about
 that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).

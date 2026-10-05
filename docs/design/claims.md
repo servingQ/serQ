@@ -72,7 +72,7 @@ claim needs the support itself, so the generator refuses one whose workload
 draws. The bound of 500 is where the fragment's fuel (`admitHeads`,
 `settleLoop`) is shown to suffice; `drain`'s grows with the ready list.
 
-`lean/Serq/ClaimsProved.lean` is also generated: one line per claim,
+`examples/papers/ClaimsProved.lean` is also generated: one line per claim,
 `example : Claims.P.c := Papers.P.c`. The build fails when a claim has no
 proof, or when the program now claims something its proof does not prove.
 

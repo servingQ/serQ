@@ -1,7 +1,11 @@
 # The Lean model
 
-`lean/` is a Lean 4 package (`Serq`, Mathlib `v4.34.0`) that gives serQ a
-formal semantics. The Rust interpreter is the reference implementation; the
+`lean/` is a Lean 4 package (Mathlib `v4.34.0`) that gives serQ a formal
+semantics. It has two libraries: `Serq`, the semantics and what the proofs
+share, under `lean/Serq/`; and `papers`, the proofs about the programs of
+`examples/papers/`, beside them (`examples/papers/Dai.lean` is the module
+`papers.Dai`, its namespace `SerqLang.Papers`). From the command line one
+file is checked with `cd lean && lake env lean ../examples/papers/Dai.lean`. The Rust interpreter is the reference implementation; the
 Lean package is the definition that theorems are about. Both are released
 together, so a release tag names one interpreter and one semantics.
 

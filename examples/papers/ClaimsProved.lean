@@ -7,10 +7,24 @@ fails if a claim has no proof, or if a proof proves something else than
 what the program now claims.
 -/
 import Serq.Claims
+import papers.Bari
+import papers.BariChain
+import papers.BariNodes
+import papers.BariPoisson
+import papers.BariProgram
+import papers.BariRecurrent
+import papers.BariSim
+import papers.BariStable
 import papers.Dai
 import papers.DaiBounded
-import papers.Bari
+import papers.DaiChain
+import papers.DaiPoisson
+import papers.DaiProgram
+import papers.DaiRecurrent
+import papers.DaiSim
+import papers.DaiStable
 import papers.Kong
+import papers.KongMath
 
 namespace SerqLang
 namespace ClaimsProved
