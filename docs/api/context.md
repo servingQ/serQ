@@ -20,6 +20,7 @@ read the attribute), and the linker rejects the program.
 | `Budget` | a step stage's `budget` and `chunk` | before the iteration, from the residents |
 | `Step` | a step stage's `cost` | after the iteration is scheduled |
 | `Serve` | a step stage's `serve by` keys | for one resident |
+| `Victim` | a pool's `preempt by` keys | for one candidate victim, when a growth does not fit |
 | `Given` | a claim's `given` | for each session, once its `init` has run |
 | `Iteration` | a claim over iterations | when an iteration starts, where the cost is read |
 | `End` | a claim `at end` | once, when the run ends |
@@ -42,9 +43,10 @@ read the attribute), and the linker rejects the program.
 | `tokens` | number | `Step`, `Iteration` | tokens scheduled this iteration |
 | `prefilled` | number | `Step`, `Iteration` | prefill tokens scheduled |
 | `attention` | number | `Step`, `Iteration` | attention work of the prefill chunks, `Σ n (K + n/2)`, `K` the position before a chunk (exact for `growing` runs) |
-| `decoding` | 0 / 1 | `Serve` | 1 if the resident is decoding, 0 if prefilling |
-| `admission` | number | `Serve` | the resident's admission sequence number (its place in vLLM's `running` list) |
+| `decoding` | 0 / 1 | `Serve`, `Victim` | 1 if the resident (or candidate) is decoding, 0 otherwise |
+| `admission` | number | `Serve`, `Victim` | the resident's admission sequence number (its place in vLLM's `running` list); at `Victim`, the candidate's place in the candidates' admission order |
 | `remaining` | number | `Serve` | tokens the resident's run has left |
+| `position` | number | `Victim` | the position the candidate's hold has computed on the pool: what `computed` becomes if it is the victim |
 | `demand` | number | `Iteration` | tokens the residents could take this iteration with no budget: `min(1, remaining)` per decode, the remaining work up to the `chunk` per prefill, over the residents after the batch is scheduled (those `serve only` leaves out included) |
 | `served` | number | `Iteration` | tokens the stage scheduled in its earlier iterations, from the start of the run |
 | `arrived` | number | `Iteration` | sessions the workload has started by the iteration's start, one arriving at that instant included |

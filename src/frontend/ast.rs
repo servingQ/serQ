@@ -9,7 +9,7 @@
 
 pub use crate::frontend::diagnostic::Span;
 
-pub use crate::ir::{BinOp, Preempt, RunMode, UnOp};
+pub use crate::ir::{BinOp, RunMode, UnOp};
 
 /// Expressions are evaluated to `f64`. Booleans are 0 / 1.
 #[derive(Clone, Debug, PartialEq)]
@@ -205,6 +205,17 @@ pub enum EvictOrder {
     By(Vec<Expr>),
 }
 
+/// What a growth that does not fit does (`preempt …`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreemptOrder {
+    /// `preempt none`: the grower waits.
+    None,
+    /// `preempt by (k, …) [requeue head | requeue tail]`: the candidate
+    /// with the least keys is the victim; `tail` re-queues it as a
+    /// newcomer. `preempt lifo` is `By { keys: [-admission], tail: false }`.
+    By { keys: Vec<Expr>, tail: bool },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueueOrder {
     Fifo,
@@ -230,7 +241,7 @@ pub struct PoolDecl {
     pub cap: Expr,
     pub block: Option<Expr>,
     pub evict: EvictOrder,
-    pub preempt: Preempt,
+    pub preempt: PreemptOrder,
     pub queue: QueueOrder,
     pub spill: Option<Spill>,
     /// `admit via STAGE`: the queue is served by the stage's scheduler, at

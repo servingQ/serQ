@@ -29,7 +29,7 @@ pool kv {
   cap 160000;                 // capacity in units (default: inf)
   block 16;                   // allocate and cache in blocks
   evict lru;                  // or: evict by (k1, k2, …)  ascending
-  preempt lifo;               // or: preempt none          what a failed grow does
+  preempt lifo;               // or: preempt none | preempt by (k1, …) [requeue tail]   whom a failed grow preempts
   queue fifo;                 // or: queue by (k1, …)     keys reevaluated at selection
   admit via engine;           // the queue is served by a step stage's scheduler
   spill tier via link (w) when (c);

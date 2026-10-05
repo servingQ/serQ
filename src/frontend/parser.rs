@@ -18,7 +18,7 @@
 //!           | IDENT ('(' IDENT (',' IDENT)* ')')? ('from' IDENT)? block   -- an entry (crate::frontend::queue)
 //! poolopt  := 'cap' expr ';' | 'block' expr ';'
 //!           | 'evict' ('lru' | 'by' '(' expr (',' expr)* ')') ';'
-//!           | 'preempt' ('lifo' | 'none') ';'
+//!           | 'preempt' ('lifo' | 'none' | 'by' '(' expr (',' expr)* ')' ('requeue' ('head' | 'tail'))?) ';'
 //!           | 'queue' ('fifo' | 'by' '(' expr (',' expr)* ')') ';'
 //!           | 'spill' IDENT 'via' IDENT '(' expr ')' 'when' '(' expr ')' ';'
 //! kind     := 'fifo' ('(' expr ')')? | 'ps' '(' expr ')' | 'delay'
@@ -371,7 +371,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 95] = [
+pub const KEYWORDS: [&str; 98] = [
     "admission",
     "admit",
     "arrivals",
@@ -408,6 +408,7 @@ pub const KEYWORDS: [&str; 95] = [
     "given",
     "grow",
     "growing",
+    "head",
     "hidden",
     "hold",
     "horizon",
@@ -440,6 +441,7 @@ pub const KEYWORDS: [&str; 95] = [
     "pull",
     "queue",
     "release",
+    "requeue",
     "renewal",
     "request",
     "reserve",
@@ -456,6 +458,7 @@ pub const KEYWORDS: [&str; 95] = [
     "stage",
     "step",
     "sum",
+    "tail",
     "to",
     "tool",
     "trace",
@@ -2721,7 +2724,7 @@ impl Parser {
             cap: Expr::Num(f64::INFINITY),
             block: None,
             evict: EvictOrder::Lru,
-            preempt: Preempt::None,
+            preempt: PreemptOrder::None,
             queue: QueueOrder::Fifo,
             spill: None,
             admit_via: None,
@@ -2748,10 +2751,35 @@ impl Parser {
                 }
                 "preempt" => {
                     d.preempt = if self.eat_kw("lifo") {
-                        Preempt::Lifo
+                        // the latest admitted, back at the head: vLLM's
+                        // `running[-1]` and `prepend_request`
+                        let admission = Expr::Var("admission".into());
+                        PreemptOrder::By {
+                            keys: vec![Expr::Unary(UnOp::Neg, Box::new(admission))],
+                            tail: false,
+                        }
+                    } else if self.eat_kw("by") {
+                        self.expect(&Tok::LParen)?;
+                        let mut keys = vec![self.expr()?];
+                        while *self.peek() == Tok::Comma {
+                            self.advance();
+                            keys.push(self.expr()?);
+                        }
+                        self.expect(&Tok::RParen)?;
+                        let tail = if self.eat_kw("requeue") {
+                            if self.eat_kw("tail") {
+                                true
+                            } else {
+                                self.expect_kw("head")?;
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        PreemptOrder::By { keys, tail }
                     } else {
                         self.expect_kw("none")?;
-                        Preempt::None
+                        PreemptOrder::None
                     }
                 }
                 "queue" => {

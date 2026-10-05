@@ -163,7 +163,7 @@ struct Linker<'a> {
 /// rejects it, as it does a `let` and an attribute of one name): the
 /// expression that meant the context variable would read the attribute
 /// instead (#231).
-pub const CONTEXT_VARS: [(&str, CtxVar); 20] = [
+pub const CONTEXT_VARS: [(&str, CtxVar); 21] = [
     ("now", CtxVar::Now),
     ("waited", CtxVar::Waited),
     ("size", CtxVar::Size),
@@ -181,6 +181,7 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 20] = [
     ("decoding", CtxVar::Decoding),
     ("admission", CtxVar::Admission),
     ("remaining", CtxVar::Remaining),
+    ("position", CtxVar::Position),
     ("demand", CtxVar::Demand),
     ("served", CtxVar::Served),
     ("arrived", CtxVar::Arrived),
@@ -403,6 +404,13 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 CEvict::By(keys.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?)
             }
         };
+        let preempt = match &p.preempt {
+            PreemptOrder::None => crate::ir::Preempt::None,
+            PreemptOrder::By { keys, tail } => crate::ir::Preempt::By {
+                keys: keys.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?,
+                tail: *tail,
+            },
+        };
         let queue = match &p.queue {
             QueueOrder::Fifo => None,
             QueueOrder::By(keys) => Some(keys.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?),
@@ -434,7 +442,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 cap,
                 block,
                 evict: evict.clone(),
-                preempt: p.preempt,
+                preempt: preempt.clone(),
                 queue: queue.clone(),
                 spill: spill.clone(),
             });

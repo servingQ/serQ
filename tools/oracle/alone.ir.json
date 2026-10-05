@@ -35,7 +35,20 @@
       "cap": 144.0,
       "block": 16.0,
       "evict": "Lru",
-      "preempt": "Lifo",
+      "preempt": {
+        "By": {
+          "keys": [
+            {
+              "Unary": [
+                "Neg",
+                {
+                  "Ctx": "Admission"
+                }
+              ]
+            }
+          ]
+        }
+      },
       "queue": null,
       "spill": null,
       "admit_via": null

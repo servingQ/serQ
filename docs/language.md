@@ -55,6 +55,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
           | preempt none ; | preempt lifo ;  -- what a failed growth does
+          | preempt by ( expr , ... ) [requeue head | requeue tail] ;   -- the victim: least keys
           | queue fifo ; | queue by ( expr (, expr)* ) ; -- waiting selection
           | admit via STAGE ;                -- the queue is served by a step stage's scheduler
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
@@ -145,7 +146,7 @@ The rules that are the language's, not the catalogue's:
   and serve keys and a claim over its iterations; `tokens`, `prefilled`,
   `attention` its cost's and that claim's (what the iteration scheduled);
   `decoding`, `admission`, `remaining` its `serve by` keys' and `serve
-  only`'s; `demand`, `served`, `arrived` a claim over iterations'. The aggregates of a
+  only`'s (`admission` a `preempt by` key's too, with `position`); `demand`, `served`, `arrived` a claim over iterations'. The aggregates of a
   run's observations, `total(o)`, `count(o)`, `largest(o)`, `smallest(o)`,
   `prefix_total(o)`, are a claim `at end`'s.
   `budget_left(step)` plans an iteration and is not read in that step's own
@@ -577,18 +578,30 @@ prefix is evictable: the *wait channel*.
 
 `grow m (d)` enlarges the innermost hold on `m` by `d` (rounded to
 blocks). If it does not fit: with `preempt none` the session waits and
-resumes where it was; with `preempt lifo` the holder that is a
-resident of the step stage the pool is the memory of and was admitted last
-— by the session's latest admission, the residents' serving order — is
-preempted (vLLM `running[-1]`, `scheduler.py:742-813`: a holder away from
-the engine — a prefiller's finished request keeping its blocks leased, a
-decoder's request parked for a read — is in no `running` list; a pool that
-is no engine's memory preempts its most recently admitted holder): its job
+resumes where it was; with `preempt by (k₁, …)` a candidate is
+preempted: the holders that are residents of the step stage the pool is the
+memory of (a holder away from the engine — a prefiller's finished request
+keeping its blocks leased, a decoder's request parked for a read — is in no
+`running` list, vLLM `scheduler.py:742-813`; for a pool that is no engine's
+memory, its holders in a scope), and of them the one with the least keys,
+read for each with its attributes, `decoding`, `position` (its hold's
+computed position on the pool) and `admission`, its place in the
+candidates' admission order — by the session's latest admission, the
+residents' serving order, or for a pool that is no engine's memory the
+order the pool admitted its holders — ties to the one admitted last; not
+`computed`, the position at the last preemption. `preempt lifo`
+is `preempt by (-admission)`, vLLM's `running[-1]`, and the parser writes
+it so; SGLang's retraction (from the decode batch, the fewest outputs, then
+the longest prompt) is
+`preempt by (1 - decoding, position - prompt, -prompt) requeue tail`. The victim's job
 leaves its stage, its hold is released with its computed prefix cached (its
 position: the cached prefix it consumed when no `growing` run or `load`
 advanced it, not its allocation), and
-it re-enters the head of the pool's queue with the hold statement to
-execute again. The grower
+it re-enters its queue with the hold statement to execute again: at the
+head (vLLM's `prepend_request`, `requeue head`, the default), or with
+`requeue tail` as a newcomer, at the back or where the queue's keys
+place it, `waited` from 0, in the queue of the hold's first pool
+(#356). The grower
 itself can be the victim. The re-executed hold finds `computed` set to the
 position the hold had computed (0 on a first execution and after a hold
 completes), so a program can resume rather than restart: vLLM's
@@ -620,11 +633,11 @@ structure happens to hold them in. A pool's queue:
 the keys (`queue by`), compared in order and reevaluated before every
 selection, then the order the sessions joined the queue (`fifo`
 is that order alone); a preempted session re-enters at the head, ahead of
-the key. Eviction: the keys (`evict by`) or the release time (`lru`), then
+the key, unless its pool says `requeue tail`. Eviction: the keys (`evict by`) or the release time (`lru`), then
 the order the entries were released. A step stage's residents: the
-`serve by` keys, then admission order. The preemption victim: the engine
-resident admitted last (for a pool that is no engine's memory, the holder
-admitted last). `choose`: the keys, in order, then the smallest
+`serve by` keys, then admission order. The preemption victim: the
+`preempt by` keys, then the candidate admitted last (for a pool that is
+no engine's memory, the holder the pool admitted last). `choose`: the keys, in order, then the smallest
 index. A pool's growers: the order they stalled, the head blocking the
 rest. Events at one instant: the order they were scheduled; sessions run
 in the order they became ready; jobs of a `ps` stage with equal finish
@@ -1022,9 +1035,11 @@ position (§3).
 
 Not modelled: the watermark (0 by default), the adaptive long-prefill
 threshold (off by default), encoder inputs, speculative decoding, sliding
-window, the PRIORITY policy's choice of victim (the largest `(priority,
-arrival_time)`; serQ's `preempt lifo` takes the latest admitted, as FCFS's
-`running[-1]`), the deferred free of in-flight
+window, the PRIORITY policy (its victim, the largest `(priority,
+arrival_time)`, `scheduler.py:761-765`, put back into a heap ordered by
+the same, `request_queue.py:159-164`, is `preempt by (-priority, -t0)
+requeue tail` beside `queue by (priority, t0)`, but no program here writes
+the policy and no oracle scenario checks it), the deferred free of in-flight
 blocks, asynchronous scheduling (§8), and cross-session prefix sharing
 (cache entries are per session, §9).
 

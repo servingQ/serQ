@@ -92,7 +92,8 @@ a value it takes from live pool or stage state is stale by admission, and
 linking rejects a header that reads one. Name the value with `at admission`
 instead.
 
-If the hold is preempted (`preempt lifo`) it re-enters the head of the queue
+If the hold is preempted (`preempt lifo`, or `preempt by`) it re-enters the
+head of the queue (or, under `requeue tail`, the queue as a newcomer)
 and the statement executes again with `computed` set to the position it had
 reached.
 

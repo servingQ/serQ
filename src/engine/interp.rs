@@ -18,9 +18,10 @@ use crate::engine::dist::Dist;
 use crate::engine::report::*;
 use crate::engine::stats::*;
 
-use crate::frontend::ast::{BinOp, Preempt, RunMode, UnOp};
+use crate::frontend::ast::{BinOp, RunMode, UnOp};
 use crate::frontend::link::*;
 use crate::ir::ClaimKind;
+use crate::ir::Preempt;
 use crate::ir::trace::Corpus;
 
 /// The tolerance of a comparison of amounts that sums of floats produce
@@ -474,6 +475,7 @@ struct Ctx {
     decoding: f64,
     admission: f64,
     remaining: f64,
+    position: f64,
     demand: f64,
     served: f64,
     arrived: f64,
@@ -2089,9 +2091,10 @@ impl<'p> Interp<'p> {
                 self.sessions[sid].holds[hi].pools[k].alloc += need;
                 return true;
             }
-            let victim = match self.p.pools[pl].preempt {
+            let p = self.p;
+            let victim = match &p.pools[pl].preempt {
                 Preempt::None => None,
-                Preempt::Lifo => self.lifo_victim(pl),
+                Preempt::By { keys, .. } => self.victim(pl, keys),
             };
             match victim {
                 Some(victim) => {
@@ -2114,20 +2117,21 @@ impl<'p> Interp<'p> {
         }
     }
 
-    /// vLLM's `running[-1]` (scheduler.py:742-813): among the holders of
-    /// `pl` that are residents of a step stage whose memory `pl` is, the one
-    /// admitted last - by the session's latest admission, which is the
-    /// residents' serving order (`running` is in order of scheduling, and a
-    /// request that queued once more for a slot after its KV arrived took
-    /// its place then, not when its blocks were allocated). A holder that
-    /// has left the engine is not preempted: a prefiller's finished request
-    /// keeps its blocks leased for the decoder's read and is in no `running`
-    /// list, and a decoder's request waiting for that read
-    /// (`WAITING_FOR_REMOTE_KVS`) holds its blocks and is not in `running`
-    /// either; with no resident holding the pool there is nobody to preempt
-    /// and the grower waits. A pool that is no engine's memory: its most
-    /// recently admitted holder.
-    fn lifo_victim(&self, pl: usize) -> Option<usize> {
+    /// Who a growth on `pl` may preempt, in admission order, so that the
+    /// last is vLLM's `running[-1]` (scheduler.py:742-813): the holders of
+    /// `pl` that are residents of a step stage whose memory `pl` is, by the
+    /// session's latest admission, which is the residents' serving order
+    /// (`running` is in order of scheduling, and a request that queued once
+    /// more for a slot after its KV arrived took its place then, not when
+    /// its blocks were allocated). A holder that has left the engine is not
+    /// a candidate: a prefiller's finished request keeps its blocks leased
+    /// for the decoder's read and is in no `running` list, and a decoder's
+    /// request waiting for that read (`WAITING_FOR_REMOTE_KVS`) holds its
+    /// blocks and is not in `running` either; with no resident holding the
+    /// pool there is nobody to preempt and the grower waits. A pool that is
+    /// no engine's memory: its holders that hold it in a scope (a lease is
+    /// not preempted), in the order the pool admitted them.
+    fn candidates(&self, pl: usize) -> Vec<usize> {
         let engines: Vec<usize> = self
             .p
             .stages
@@ -2136,23 +2140,59 @@ impl<'p> Interp<'p> {
             .filter(|(_, s)| matches!(&s.kind, CStageKind::Step(st) if st.memory == Some(pl)))
             .map(|(i, _)| i)
             .collect();
-        let holders = &self.pools[pl].holders;
+        let holders = self.pools[pl].holders.iter().copied();
         if engines.is_empty() {
-            // the last holder that holds the pool in a scope: a lease is
-            // not preempted
             return holders
-                .iter()
-                .copied()
-                .rev()
-                .find(|&s| self.sessions[s].innermost(pl).is_some());
+                .filter(|&s| self.sessions[s].innermost(pl).is_some())
+                .collect();
         }
-        holders
-            .iter()
-            .copied()
+        let mut c: Vec<usize> = holders
             .filter(|&s| {
                 matches!(self.sessions[s].status, Status::InStage(x, _) if engines.contains(&x))
             })
-            .max_by_key(|&s| self.sessions[s].adm_seq)
+            .collect();
+        c.sort_by_key(|&s| self.sessions[s].adm_seq);
+        c
+    }
+
+    /// `preempt by (keys)`: the candidate with the least keys, read for
+    /// each (`Moment::Victim`: its attributes, `admission`, its place in
+    /// the candidates' admission order, `decoding`, and its `position` on
+    /// `pl`), ties to the one admitted last. `admission` is the place, not
+    /// the session's sequence number, so that `preempt lifo`, `by
+    /// (-admission)`, is the last candidate on a pool that is no engine's
+    /// memory too, where the order is the pool's and a session's latest
+    /// admission may have been to another pool.
+    fn victim(&mut self, pl: usize, keys: &[CExpr]) -> Option<usize> {
+        let mut best: Option<(KeyOrd, usize)> = None;
+        for (place, s) in self.candidates(pl).into_iter().enumerate() {
+            let position = self.sessions[s]
+                .innermost(pl)
+                .map_or(0.0, |(hi, k)| self.sessions[s].holds[hi].pools[k].pos);
+            let decoding = match self.sessions[s].status {
+                Status::InStage(st, j) => self.stages[st]
+                    .jobs
+                    .get(&j)
+                    .is_some_and(|job| job.mode == RunMode::Decode),
+                _ => false,
+            };
+            let ctx = Ctx {
+                sid: Some(s),
+                admission: place as f64,
+                decoding: if decoding { 1.0 } else { 0.0 },
+                position,
+                ..Default::default()
+            };
+            let key = KeyOrd(
+                keys.iter()
+                    .map(|k| self.eval(k, &ctx, Which::Session))
+                    .collect(),
+            );
+            if best.as_ref().is_none_or(|(old, _)| key <= *old) {
+                best = Some((key, s));
+            }
+        }
+        best.map(|(_, s)| s)
     }
 
     fn retry_growers(&mut self, pl: usize) {
@@ -2316,7 +2356,10 @@ impl<'p> Interp<'p> {
             body,
             queued_at: self.now,
         };
-        self.enqueue_hold(victim, pending, true);
+        // back at the head (vLLM's `prepend_request`), or with `requeue
+        // tail` at the back, a newcomer to the queue's keys and `waited`
+        let tail = matches!(self.p.pools[pl].preempt, Preempt::By { tail: true, .. });
+        self.enqueue_hold(victim, pending, !tail);
     }
 
     // -------------------------------------------------------- stages ----
@@ -3372,6 +3415,7 @@ impl<'p> Interp<'p> {
                 CtxVar::Decoding => ctx.decoding,
                 CtxVar::Admission => ctx.admission,
                 CtxVar::Remaining => ctx.remaining,
+                CtxVar::Position => ctx.position,
                 CtxVar::Demand => ctx.demand,
                 CtxVar::Served => ctx.served,
                 CtxVar::Arrived => ctx.arrived,
