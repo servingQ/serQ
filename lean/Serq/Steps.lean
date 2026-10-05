@@ -340,6 +340,11 @@ theorem insertDelay_perm (d : ℕ × ℕ × ℕ) : ∀ l : List (ℕ × ℕ × �
 
 theorem shareOf_nil (i : ℕ) : shareOf [] i = 0 := rfl
 
+theorem shareOf_eq_zero {l : List (ℕ × ℕ)} {i : ℕ} (h : ∀ e ∈ l, e.1 ≠ i) : shareOf l i = 0 := by
+  unfold shareOf
+  rw [List.filter_eq_nil_iff.mpr fun e he => by simpa using h e he]
+  rfl
+
 theorem shareOf_cons (e : ℕ × ℕ) (l : List (ℕ × ℕ)) (i : ℕ) :
     shareOf (e :: l) i = (if e.1 = i then e.2 else 0) + shareOf l i := by
   unfold shareOf

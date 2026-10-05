@@ -54,7 +54,7 @@ theorem good_σ {m : Exec.Machine} (h : Reach m) : BariRecurrent.Good (BariSim.�
 
 /-- The machine's backlog is its job list's. -/
 theorem backlog_eq (m : Exec.Machine) : backlog m = BariChain.backlog (BariSim.σ m) := by
-  simp [backlog, BariChain.backlog, BariSim.σ, List.map_map, Function.comp_def]
+  simp [backlog, Slot.backlog, BariChain.backlog, BariSim.σ, List.map_map, Function.comp_def]
 
 /-- A slot changes the backlog by its arrivals less its batch. -/
 theorem backlog_nxt {N : ℕ} (A : Arrivals N) (x : State) (o : ℕ) :
@@ -86,8 +86,8 @@ theorem F_of_idle (x : State) (hx : Idle x) : F x := by
       refine Finset.sum_eq_zero fun i hi => ?_
       have hi' := Finset.mem_range.mp hi
       have hs := hB.share i hi'
-      have hnj : DaiSarathi.isJob (g.c i) = false := by
-        cases h : DaiSarathi.isJob (g.c i)
+      have hnj : Slot.isJob (g.c i) = false := by
+        cases h : Slot.isJob (g.c i)
         · rfl
         · obtain ⟨j, hj', -⟩ := hB.jobsP i hi' h
           rw [hj] at hj'; cases hj'
