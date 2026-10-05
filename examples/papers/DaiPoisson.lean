@@ -18,11 +18,14 @@ Outside `F` the batch is full, and a full batch lasts
 so `1280 λ t_{b_max} < 128` is Theorem 2(b)'s `λ (v_p + v_d) < b_max / t_{b_max}`
 exactly, with nothing assumed about slots inside `F`, which are shorter.
 This is the step of Theorem 2(b) that `DaiStable` proves for a fixed
-distribution: the expected time to reach `F` is finite. Positive
-recurrence (`DaiRecurrent`) is not yet proved for this chain.
+distribution: the expected time to reach `F` is finite.
+
+Then, as `DaiProgram` for a fixed distribution, the engine empties in
+bounded expected time from every state (`hit_idle_le`) and the empty
+machines are a positive recurrent atom (`return_idle`).
 -/
 import Serq.Poisson
-import papers.DaiStable
+import papers.DaiProgram
 
 namespace SerqLang
 namespace Papers
@@ -187,6 +190,200 @@ example : ¬ F ⟨slot 1 empty, .slot 1 .empty⟩ ∧ 1280 * ((1 / 100000 : ℝ)
   rcases hF with hF | hF
   · rw [hF] at h; exact absurd h.1 (by decide)
   · omega
+
+/-! ### The empty engine recurs
+
+The machine chain never revisits a state (`DaiProgram`); what recurs is the
+engine being empty. On a busy engine a slot brings no request with
+probability `e^{-λ · dur} ≥ e^{-λ t_{b_max}}` (`p0_ge`), and then serves at
+least one token, so from a state of backlog `b` the empty engine is `b`
+arrival-free slots away (`drain`). A slot adds `1280 · E[k] ≤ 1280 (λ
+t_{b_max} + 1)` tokens in expectation (`apply_V_le`), so the backlog's
+expectations after any number of slots converge. -/
+
+/-- The engine holds no job. -/
+def Idle (x : State) : Prop := DaiSim.σ x.1 = []
+
+instance : DecidablePred Idle := fun x => by unfold Idle; infer_instance
+
+theorem reach_inv {m : Machine} (h : Reach m) : DaiSim.Inv m := by
+  induction h with
+  | empty => exact DaiSim.empty_inv
+  | slot k _ ih => exact (DaiSim.slot_inv ih k).1
+
+/-- One slot on the job list (`DaiSim.simulation`). -/
+theorem σ_slot (x : State) (k : ℕ) :
+    DaiSim.σ (slot k x.1) = DaiChain.absSlot k (DaiSim.σ x.1) :=
+  (DaiSim.slot_inv (reach_inv x.2) k).2
+
+theorem good_σ {m : Machine} (h : Reach m) : DaiRecurrent.Good (DaiSim.σ m) := by
+  induction h with
+  | empty => rw [DaiSim.σ_empty]; intro j hj; simp at hj
+  | @slot m k hm ih =>
+    rw [σ_slot ⟨m, hm⟩ k]
+    exact DaiRecurrent.good_absSlot k ih
+
+theorem V_idle {x : State} (hx : Idle x) : V x = 0 := by
+  unfold V
+  rw [DaiProgram.backlog_σ, show DaiSim.σ x.1 = [] from hx]
+  simp [DaiChain.backlog]
+
+/-- An engine with a job is busy. -/
+theorem busy_of_not_idle {x : State} (hx : ¬ Idle x) : x.1.iterEnd.isSome = true := by
+  obtain ⟨L, g, hB⟩ := reach_sb x.2
+  rcases hie : x.1.iterEnd with _ | ⟨a, q⟩
+  · exact absurd (by unfold Idle DaiSim.σ; rw [hB.idle hie]; rfl) hx
+  · rfl
+
+/-- No iteration lasts longer than a full batch, `t_{b_max} = 4675`. -/
+theorem dur_le (x : State) : Slot.dur x.1 ≤ 4675 := by
+  obtain ⟨L, g, hB⟩ := reach_sb x.2
+  rcases hie : x.1.iterEnd with _ | ⟨a, q⟩
+  · simp [Slot.dur, hie]
+  · have hbusy : x.1.iterEnd.isSome = true := by rw [hie]; rfl
+    obtain ⟨hb1, -⟩ := hB.busy hbusy
+    have ht : x.1.last.stats.tokens ≤ 128 := by have : tokSum x.1.iter ≤ 128 := hB.tok; omega
+    have ha := reach_dur x.2 a q hie
+    simp only [Slot.dur, hie]
+    rw [ha]
+    simp only [D, Claims.DaiSarathi.deployment]
+    omega
+
+/-- On a busy engine a slot brings no request with probability at least
+`e^{-λ t_{b_max}}`. -/
+theorem p0_ge (lam : ℝ) (hlam : 0 ≤ lam) {x : State} (hb : x.1.iterEnd.isSome = true) :
+    Real.exp (-(lam * 4675)) ≤ (kernel lam hlam).p x 0 := by
+  have hd : (Slot.dur x.1 : ℝ) ≤ 4675 := by exact_mod_cast dur_le x
+  simp only [kernel, hb, if_true, pois, pow_zero, Nat.factorial_zero, Nat.cast_one, div_one, mul_one]
+  exact Real.exp_le_exp.mpr (by nlinarith)
+
+/-- Without arrivals the engine drains: from a backlog `≤ n`, it is empty
+within `n` slots with probability at least `e^{-λ t_{b_max} n}`. -/
+theorem drain (lam : ℝ) (hlam : 0 ≤ lam) : ∀ (n : ℕ) (x : State), backlog x.1 ≤ n →
+    Real.exp (-(lam * 4675)) ^ n ≤ reach (kernel lam hlam) Idle n x
+  | 0, x, hb => by
+    have hx : Idle x := by
+      by_contra h
+      have := DaiRecurrent.backlog_pos (good_σ x.2) h
+      rw [DaiProgram.backlog_σ] at hb; omega
+    rw [reach_of_mem _ Idle hx]; simp
+  | n + 1, x, hb => by
+    have hq1 : Real.exp (-(lam * 4675)) ≤ 1 := Real.exp_le_one_iff.mpr (by nlinarith)
+    by_cases hx : Idle x
+    · rw [reach_of_mem _ Idle hx]; exact pow_le_one₀ (Real.exp_nonneg _) hq1
+    · have hb' : backlog (slot 0 x.1) ≤ n := by
+        rw [DaiProgram.backlog_σ, σ_slot x 0]
+        have h1 := DaiRecurrent.backlog_absSlot 0 hx
+        have h2 := DaiRecurrent.one_le_shares (good_σ x.2) hx
+        rw [DaiProgram.backlog_σ] at hb
+        omega
+      have ih := drain lam hlam n ⟨slot 0 x.1, .slot 0 x.2⟩ hb'
+      have h3 := (kernel lam hlam).le_apply (reach_integrable _ Idle n) (reach_nonneg _ Idle n) x 0
+      have h4 := p0_ge lam hlam (busy_of_not_idle hx)
+      show _ ≤ (if Idle x then 1 else (kernel lam hlam).apply (reach (kernel lam hlam) Idle n) x)
+      rw [if_neg hx, pow_succ]
+      calc Real.exp (-(lam * 4675)) ^ n * Real.exp (-(lam * 4675))
+          ≤ reach (kernel lam hlam) Idle n ((kernel lam hlam).next x 0) * (kernel lam hlam).p x 0 :=
+            mul_le_mul ih h4 (Real.exp_nonneg _) (reach_nonneg _ _ _ _)
+        _ = (kernel lam hlam).p x 0 * reach (kernel lam hlam) Idle n ((kernel lam hlam).next x 0) :=
+            mul_comm _ _
+        _ ≤ _ := h3
+
+/-- A slot's mean number of arrivals: `λ · dur` on a busy engine, one on an
+idle one. -/
+noncomputable def mean (lam : ℝ) (x : State) : ℝ :=
+  if x.1.iterEnd.isSome then lam * Slot.dur x.1 else 1
+
+theorem hasSum_bound (lam : ℝ) (hlam : 0 ≤ lam) (x : State) :
+    HasSum (fun k : ℕ => (kernel lam hlam).p x k * (V x + 1280 * k)) (V x + 1280 * mean lam x) := by
+  by_cases hb : x.1.iterEnd.isSome = true
+  · have h0 : 0 ≤ lam * Slot.dur x.1 := by positivity
+    convert ((hasSum_pois h0).mul_right (V x)).add ((hasSum_mul_pois h0).mul_left 1280) using 1
+    · funext k; simp only [kernel, hb, if_true]; ring
+    · simp [mean, hb]
+  · convert hasSum_ite_eq (1 : ℕ) (V x + 1280) using 1
+    · funext k
+      simp only [kernel, hb, Bool.false_eq_true, if_false]
+      split_ifs with h <;> simp [h]
+    · simp [mean, hb]
+
+/-- A slot adds at most `1280 (λ t_{b_max} + 1)` tokens in expectation. -/
+theorem apply_V_le (lam : ℝ) (hlam : 0 ≤ lam) (x : State) :
+    (kernel lam hlam).apply V x ≤ V x + 1280 * (lam * 4675 + 1) := by
+  have h1 : (kernel lam hlam).apply V x ≤ V x + 1280 * mean lam x := by
+    unfold Kernel.apply
+    rw [← (hasSum_bound lam hlam x).tsum_eq]
+    exact (integrable lam hlam x).tsum_le_tsum
+      (fun k => mul_le_mul_of_nonneg_left (V_slot_le x k) ((kernel lam hlam).nonneg x k))
+      (hasSum_bound lam hlam x).summable
+  have h2 : mean lam x ≤ lam * 4675 + 1 := by
+    have hd : (Slot.dur x.1 : ℝ) ≤ 4675 := by exact_mod_cast dur_le x
+    unfold mean
+    split_ifs <;> nlinarith
+  linarith
+
+/-- `F`, or the engine empty. -/
+def G (x : State) : Prop := F x ∨ Idle x
+
+instance : DecidablePred G := fun x => by unfold G; infer_instance
+
+theorem driftG (lam : ℝ) (hlam : 0 ≤ lam) (hA : 1280 * (lam * 4675) < 128) :
+    Drift (kernel lam hlam) G V (ε lam) :=
+  let hD := drift lam hlam hA
+  ⟨hD.nonneg, hD.integrable, hD.pos, fun x hx => hD.drift x (fun h => hx (Or.inl h))⟩
+
+theorem backlog_le_of_G {x : State} (hx : G x) : backlog x.1 ≤ 128 * 1280 := by
+  rcases hx with h | h
+  · obtain ⟨L, g, hB⟩ := reach_sb x.2
+    exact (DaiStable.backlog_lt_of_sb hB h).le
+  · have := V_idle h
+    unfold V at this
+    have : backlog x.1 = 0 := by exact_mod_cast this
+    omega
+
+/-- The truncated hitting times of the empty engine, bounded. -/
+theorem hit_le (lam : ℝ) (hlam : 0 ≤ lam) (hA : 1280 * (lam * 4675) < 128) :
+    ∃ c : ℝ, ∀ n x, hit (kernel lam hlam) Idle n x ≤ V x / ε lam + c := by
+  have hV := (kernel lam hlam).applyN_le_of_apply_le (integrable lam hlam) (fun _ => Nat.cast_nonneg _)
+    (apply_V_le lam hlam)
+  exact ⟨_, hit_le_of_reach (kernel lam hlam) Idle (fun n => (hV n).1) (driftG lam hlam hA)
+    (fun _ h => Or.inr h) (L := 128 * 1280) (B := 128 * 1280 + 1280 * (lam * 4675 + 1) * (128 * 1280))
+    (pow_pos (Real.exp_pos _) _)
+    (fun x hx => drain lam hlam _ x (backlog_le_of_G hx))
+    (fun x hx => by
+      have h1 := (hV (128 * 1280)).2 x
+      have h2 : V x ≤ 128 * 1280 := by unfold V; exact_mod_cast backlog_le_of_G hx
+      push_cast at h1 ⊢
+      linarith)⟩
+
+/-- Below capacity, from every state the engine empties in bounded expected
+time. -/
+theorem hit_idle_le (lam : ℝ) (hlam : 0 ≤ lam) (hA : 1280 * (lam * 4675) < 128) :
+    ∃ W : State → ℝ, ∀ n x, hit (kernel lam hlam) Idle n x ≤ W x := by
+  obtain ⟨c, hc⟩ := hit_le lam hlam hA
+  exact ⟨_, hc⟩
+
+/-- Theorem 2(b) for Poisson arrivals: below capacity, from every machine
+with an empty engine the expected time until it is empty again is bounded by
+one constant, so the empty engine is a positive recurrent atom. -/
+theorem return_idle (lam : ℝ) (hlam : 0 ≤ lam) (hA : 1280 * (lam * 4675) < 128) :
+    ∃ C : ℝ, ∀ n x, Idle x → 1 + (kernel lam hlam).apply (hit (kernel lam hlam) Idle n) x ≤ C := by
+  obtain ⟨c, hc⟩ := hit_le lam hlam hA
+  have hε : 0 < ε lam := (drift lam hlam hA).pos
+  have hVI := integrable lam hlam
+  refine ⟨1 + (1 / ε lam) * (1280 * (lam * 4675 + 1)) + c, fun n x hx => ?_⟩
+  have h1 : ∀ y, hit (kernel lam hlam) Idle n y ≤ (1 / ε lam) * V y + c := fun y => by
+    have := hc n y
+    rw [one_div, ← div_eq_inv_mul]; exact this
+  have h2 := (kernel lam hlam).apply_mono (hit_integrable _ _ n)
+    ((hVI.const_mul _).add ((kernel lam hlam).integrable_const c)) h1 x
+  rw [(kernel lam hlam).apply_add (hVI.const_mul _) ((kernel lam hlam).integrable_const c),
+    Kernel.apply_const, Kernel.apply_const_mul] at h2
+  have h3 := apply_V_le lam hlam x
+  rw [V_idle hx] at h3
+  have h4 : (1 / ε lam) * (kernel lam hlam).apply V x ≤ (1 / ε lam) * (1280 * (lam * 4675 + 1)) :=
+    mul_le_mul_of_nonneg_left (by linarith) (by positivity)
+  linarith
 
 end DaiPoisson
 end Papers

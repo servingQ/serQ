@@ -151,8 +151,12 @@ import papers.KongPoisson
 #print axioms SerqLang.Papers.DaiPoisson.hitTime_le
 #print axioms SerqLang.Papers.DaiPoisson.hit_tendsto
 #print axioms SerqLang.Papers.DaiPoisson.returnTime_le
+#print axioms SerqLang.Papers.DaiPoisson.hit_idle_le
+#print axioms SerqLang.Papers.DaiPoisson.return_idle
 #print axioms SerqLang.Papers.BariPoisson.dur_full
 #print axioms SerqLang.Papers.BariPoisson.drift
 #print axioms SerqLang.Papers.BariPoisson.hitTime_le
 #print axioms SerqLang.Papers.BariPoisson.hit_tendsto
 #print axioms SerqLang.Papers.BariPoisson.returnTime_le
+#print axioms SerqLang.Papers.BariPoisson.hit_idle_le
+#print axioms SerqLang.Papers.BariPoisson.return_idle

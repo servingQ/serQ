@@ -560,7 +560,7 @@ recurrent. -/
 theorem positive_recurrent {N : ℕ} (A : BariStable.Arrivals N) (hA : A.load < 128)
     (y : AState A) : PositiveRecurrent (akernel A) y := by
   obtain ⟨W, hW⟩ := hit_nil_le A hA
-  exact positiveRecurrent_of_hit (akernel A) (fun _ => Kernel.integrable_ofOutcomes _ _ _ _ _ _) (nil A) W hW y (walk_from_nil A y.1 y.2)
+  exact positiveRecurrent_of_hit (akernel A) (nil A) (fun _ => Kernel.integrable_ofOutcomes _ _ _ _ _ _) hW y (walk_from_nil A y.1 y.2)
 
 end BariRecurrent
 end Papers

@@ -22,9 +22,13 @@ in `n` (so no supremum in ℝ is read where it might be junk).
   is bounded from everywhere, every state that `o` reaches is positive
   recurrent.
 
-The two theorems take expectations of unbounded functions after several
-steps, so they ask that every expectation converge (`Kernel.AllIntegrable`),
-as it does for finitely many outcomes (`Kernel.integrable_ofOutcomes`).
+The two theorems take the expectation of one unbounded function, the
+Lyapunov function `V` (the bound `W`), after several steps, so they ask that
+`P^n V` converge for every `n` (`Kernel.IntegrableN`). It does for finitely
+many outcomes (`Kernel.integrable_ofOutcomes`), and whenever a step adds at
+most a constant to `V` in expectation (`Kernel.integrableN_of_apply_le`), as a
+Poisson number of arrivals does. Every other function they take an
+expectation of is bounded.
 -/
 import Serq.Foster
 
@@ -39,8 +43,8 @@ noncomputable def Kernel.applyN (K : Kernel α ι) : ℕ → (α → ℝ) → α
 
 variable (K : Kernel α ι)
 
-/-- Every function's expectation converges. -/
-def Kernel.AllIntegrable : Prop := ∀ V : α → ℝ, K.Integrable V
+/-- `P^n V` converges for every `n`. -/
+def Kernel.IntegrableN (V : α → ℝ) : Prop := ∀ n, K.Integrable (K.applyN n V)
 
 variable (T : α → Prop) [DecidablePred T]
 
@@ -55,6 +59,39 @@ namespace Kernel
 theorem applyN_nonneg {V : α → ℝ} (h : ∀ y, 0 ≤ V y) : ∀ n x, 0 ≤ K.applyN n V x
   | 0, x => h x
   | n + 1, x => K.apply_nonneg (applyN_nonneg h n) x
+
+/-- A step that adds at most `c` to `V` in expectation: `P^n V ≤ V + c n`,
+and every `P^n V` converges. -/
+theorem applyN_le_of_apply_le {V : α → ℝ} {c : ℝ} (hV : K.Integrable V) (h0 : ∀ y, 0 ≤ V y)
+    (h : ∀ x, K.apply V x ≤ V x + c) :
+    ∀ n, K.Integrable (K.applyN n V) ∧ ∀ x, K.applyN n V x ≤ V x + c * n
+  | 0 => ⟨hV, fun x => by simp [applyN]⟩
+  | n + 1 => by
+    obtain ⟨hI, hle⟩ := applyN_le_of_apply_le hV h0 h n
+    have hle' : ∀ x, K.applyN (n + 1) V x ≤ V x + c * (n + 1 : ℕ) := fun x => by
+      have h1 := K.apply_mono hI (hV.add (K.integrable_const (c * n))) hle x
+      rw [K.apply_add hV (K.integrable_const _), K.apply_const] at h1
+      have := h x
+      show K.apply (K.applyN n V) x ≤ _
+      push_cast; linarith
+    exact ⟨Integrable.of_le (hV.add (K.integrable_const _)) (applyN_nonneg K h0 (n + 1)) hle', hle'⟩
+
+theorem integrableN_of_apply_le {V : α → ℝ} {c : ℝ} (hV : K.Integrable V) (h0 : ∀ y, 0 ≤ V y)
+    (h : ∀ x, K.apply V x ≤ V x + c) : K.IntegrableN V :=
+  fun n => (applyN_le_of_apply_le K hV h0 h n).1
+
+/-- Below a function whose `P^n` converge, `P^n` converge too. -/
+theorem IntegrableN.of_le {K : Kernel α ι} {V W : α → ℝ} (hW : K.IntegrableN W) (h0 : ∀ y, 0 ≤ V y)
+    (h : ∀ y, V y ≤ W y) : K.IntegrableN V := by
+  have key : ∀ n, K.Integrable (K.applyN n V) ∧ ∀ x, K.applyN n V x ≤ K.applyN n W x := by
+    intro n
+    induction n with
+    | zero => exact ⟨Integrable.of_le (hW 0) h0 h, h⟩
+    | succ n ih =>
+      have hle : ∀ x, K.applyN (n + 1) V x ≤ K.applyN (n + 1) W x :=
+        K.apply_mono ih.1 (hW n) ih.2
+      exact ⟨Integrable.of_le (hW (n + 1)) (applyN_nonneg K h0 (n + 1)) hle, hle⟩
+  exact fun n => (key n).1
 
 end Kernel
 
@@ -96,18 +133,67 @@ noncomputable def killN : ℕ → (α → ℝ) → α → ℝ
   | 0, f => f
   | j + 1, f => fun x => if T x then 0 else K.apply (killN j f) x
 
+theorem killN_nonneg {f : α → ℝ} (hf : ∀ y, 0 ≤ f y) : ∀ j x, 0 ≤ killN K T j f x
+  | 0, x => hf x
+  | j + 1, x => by
+    simp only [killN]
+    split
+    · exact le_rfl
+    · exact K.apply_nonneg (killN_nonneg hf j) x
+
+/-- Killing keeps a function between `0` and `c`. -/
+theorem killN_le {f : α → ℝ} {c : ℝ} (hf0 : ∀ y, 0 ≤ f y) (hf : ∀ y, f y ≤ c) :
+    ∀ j x, killN K T j f x ≤ c
+  | 0, x => hf x
+  | j + 1, x => by
+    simp only [killN]
+    split
+    · exact le_trans (hf0 x) (hf x)
+    · have hI := K.integrable_of_bdd c fun y => by
+        rw [abs_of_nonneg (killN_nonneg K T hf0 j y)]; exact killN_le hf0 hf j y
+      have := K.apply_mono hI (K.integrable_const c) (killN_le hf0 hf j) x
+      rwa [K.apply_const] at this
+
+theorem killN_integrable_of_le {f : α → ℝ} {c : ℝ} (hf0 : ∀ y, 0 ≤ f y) (hf : ∀ y, f y ≤ c)
+    (j : ℕ) : K.Integrable (killN K T j f) :=
+  K.integrable_of_bdd c fun y => by
+    rw [abs_of_nonneg (killN_nonneg K T hf0 j y)]; exact killN_le K T hf0 hf j y
+
 variable {K} in
-theorem killN_mono (hK : K.AllIntegrable) {f g : α → ℝ} (h : ∀ y, f y ≤ g y) :
+/-- Killing keeps a function below `a · P^j V + b` if it starts below `a V + b`. -/
+theorem killN_le_applyN {V : α → ℝ} (hV : K.IntegrableN V) (hV0 : ∀ y, 0 ≤ V y) {a b : ℝ}
+    (ha : 0 ≤ a) (hb : 0 ≤ b) {f : α → ℝ} (hf0 : ∀ y, 0 ≤ f y) (hf : ∀ y, f y ≤ a * V y + b) :
+    ∀ j, K.Integrable (killN K T j f) ∧ ∀ x, killN K T j f x ≤ a * K.applyN j V x + b
+  | 0 => ⟨Kernel.Integrable.of_le (((hV 0).const_mul a).add (K.integrable_const b)) hf0 hf, hf⟩
+  | j + 1 => by
+    obtain ⟨hI, hle⟩ := killN_le_applyN hV hV0 ha hb hf0 hf j
+    have hle' : ∀ x, killN K T (j + 1) f x ≤ a * K.applyN (j + 1) V x + b := by
+      intro x
+      simp only [killN]
+      split
+      · have := K.applyN_nonneg hV0 (j + 1) x
+        positivity
+      · have h1 := K.apply_mono hI (((hV j).const_mul a).add (K.integrable_const b)) hle x
+        rw [K.apply_add ((hV j).const_mul a) (K.integrable_const b), K.apply_const_mul,
+          K.apply_const] at h1
+        exact h1
+    exact ⟨Kernel.Integrable.of_le (((hV (j + 1)).const_mul a).add (K.integrable_const b))
+      (killN_nonneg K T hf0 (j + 1)) hle', hle'⟩
+
+variable {K} in
+theorem killN_mono {f g : α → ℝ} (hf : ∀ j, K.Integrable (killN K T j f))
+    (hg : ∀ j, K.Integrable (killN K T j g)) (h : ∀ y, f y ≤ g y) :
     ∀ j x, killN K T j f x ≤ killN K T j g x
   | 0, x => h x
   | j + 1, x => by
     simp only [killN]
     split
     · exact le_rfl
-    · exact K.apply_mono (hK _) (hK _) (killN_mono hK h j) x
+    · exact K.apply_mono (hf j) (hg j) (killN_mono hf hg h j) x
 
 variable {K} in
-theorem killN_add (hK : K.AllIntegrable) (f g : α → ℝ) : ∀ j x,
+theorem killN_add {f g : α → ℝ} (hf : ∀ j, K.Integrable (killN K T j f))
+    (hg : ∀ j, K.Integrable (killN K T j g)) : ∀ j x,
     killN K T j (fun y => f y + g y) x = killN K T j f x + killN K T j g x
   | 0, x => rfl
   | j + 1, x => by
@@ -115,8 +201,8 @@ theorem killN_add (hK : K.AllIntegrable) (f g : α → ℝ) : ∀ j x,
     split
     · simp
     · rw [show (killN K T j fun y => f y + g y) = fun y => killN K T j f y + killN K T j g y from
-          funext (killN_add hK f g j)]
-      exact K.apply_add (hK _) (hK _) x
+          funext (killN_add hf hg j)]
+      exact K.apply_add (hf j) (hg j) x
 
 theorem killN_const_mul (c : ℝ) (f : α → ℝ) : ∀ j x,
     killN K T j (fun y => c * f y) x = c * killN K T j f x
@@ -129,16 +215,6 @@ theorem killN_const_mul (c : ℝ) (f : α → ℝ) : ∀ j x,
           funext (killN_const_mul c f j)]
       exact K.apply_const_mul c _ x
 
-variable {K} in
-theorem killN_le_applyN (hK : K.AllIntegrable) {f : α → ℝ} (hf : ∀ y, 0 ≤ f y) :
-    ∀ j x, killN K T j f x ≤ K.applyN j f x
-  | 0, x => le_rfl
-  | j + 1, x => by
-    simp only [killN, Kernel.applyN]
-    split
-    · exact K.apply_nonneg (K.applyN_nonneg hf j) x
-    · exact K.apply_mono (hK _) (hK _) (killN_le_applyN hK hf j) x
-
 /-- Surviving `j` steps outside `T`, and still outside at step `j`. -/
 theorem killN_out : ∀ j x, killN K T j (fun y => if T y then 0 else 1) x = 1 - reach K T j x
   | 0, x => by simp only [killN, reach]; split <;> norm_num
@@ -150,18 +226,17 @@ theorem killN_out : ∀ j x, killN K T j (fun y => if T y then 0 else 1) x = 1 -
           funext (killN_out j)]
       exact K.apply_const_sub 1 (reach_integrable K T j) x
 
-variable {K} in
 /-- `E_x[min(τ_T, m + j)] ≤ j + E_x[E_{X_j}[min(τ_T, m)]; τ_T ≥ j]`. -/
-theorem hit_add_le (hK : K.AllIntegrable) :
-    ∀ (j m : ℕ) (x : α), hit K T (m + j) x ≤ j + killN K T j (hit K T m) x
+theorem hit_add_le : ∀ (j m : ℕ) (x : α), hit K T (m + j) x ≤ j + killN K T j (hit K T m) x
   | 0, m, x => by simp [killN]
   | j + 1, m, x => by
     rw [← Nat.add_assoc]
     simp only [hit, killN]
     split
     · positivity
-    · have h1 := K.apply_mono (hK _) (hK _) (hit_add_le hK j m) x
-      rw [K.apply_add (K.integrable_const _) (hK _), K.apply_const] at h1
+    · have hI := killN_integrable_of_le K T (hit_nonneg K T m) (hit_le_n K T m) j
+      have h1 := K.apply_mono (hit_integrable K T _) ((K.integrable_const _).add hI) (hit_add_le j m) x
+      rw [K.apply_add (K.integrable_const _) hI, K.apply_const] at h1
       push_cast; linarith
 
 variable {T}
@@ -206,8 +281,8 @@ variable (T)
 
 /-- Reaching a target from a set the chain keeps returning to: each visit to
 `F` reaches `T` within `L` steps with probability at least `δ`. -/
-theorem hit_le_of_reach (hK : K.AllIntegrable) {F : α → Prop} [DecidablePred F] {V : α → ℝ} {ε : ℝ}
-    (hD : Drift K F V ε) (hTF : ∀ x, T x → F x) {L : ℕ} {δ B : ℝ} (hδ : 0 < δ)
+theorem hit_le_of_reach {F : α → Prop} [DecidablePred F] {V : α → ℝ} {ε : ℝ}
+    (hV : K.IntegrableN V) (hD : Drift K F V ε) (hTF : ∀ x, T x → F x) {L : ℕ} {δ B : ℝ} (hδ : 0 < δ)
     (hreach : ∀ x, F x → δ ≤ reach K T L x) (hB : ∀ x, F x → K.applyN L V x ≤ B) :
     ∀ n x, hit K T n x ≤ V x / ε + (L + B / ε) / δ := by
   intro n x
@@ -256,10 +331,23 @@ theorem hit_le_of_reach (hK : K.AllIntegrable) {F : α → Prop} [DecidablePred 
             have h3 : hit K F m y ≤ (1 / ε) * V y := by
               rw [one_div, ← div_eq_inv_mul, le_div_iff₀ hε]; linarith
             linarith
-        have h1 := hit_add_le T hK L m z
-        have h2 := killN_mono T hK hpt L z
-        rw [killN_add T hK, killN_const_mul, killN_const_mul, killN_out] at h2
-        have h3 := killN_le_applyN T hK hD.nonneg L z
+        have hind0 : ∀ y, (0 : ℝ) ≤ if T y then 0 else 1 := fun y => by split <;> norm_num
+        have hind1 : ∀ y, (if T y then (0 : ℝ) else 1) ≤ 1 := fun y => by split <;> norm_num
+        have hε' : 0 ≤ 1 / ε := by positivity
+        have hIV := killN_le_applyN T hV hD.nonneg hε' le_rfl
+          (fun y => mul_nonneg hε' (hD.nonneg y)) (fun y => by simp)
+        have hII : ∀ j, K.Integrable (killN K T j fun y => M * if T y then 0 else 1) :=
+          killN_integrable_of_le K T (c := M) (fun y => mul_nonneg hM0 (hind0 y))
+            (fun y => by nlinarith [hind0 y, hind1 y])
+        have hIg := fun j => (killN_le_applyN T hV hD.nonneg hε' hM0
+          (fun y => add_nonneg (mul_nonneg hε' (hD.nonneg y)) (mul_nonneg hM0 (hind0 y)))
+          (fun y => by nlinarith [hind0 y, hind1 y]) j).1
+        have h1 := hit_add_le K T L m z
+        have h2 := killN_mono T (killN_integrable_of_le K T (hit_nonneg K T m) (hit_le_n K T m)) hIg hpt L z
+        rw [killN_add T (fun j => (hIV j).1) hII, killN_const_mul, killN_const_mul, killN_out] at h2
+        have h3 : killN K T L V z ≤ K.applyN L V z := by
+          simpa using (killN_le_applyN T hV hD.nonneg zero_le_one le_rfl hD.nonneg
+            (fun y => by simp) L).2 z
         have h4 := hB z hz
         have h5 := hreach z hz
         have h6 : (1 / ε) * killN K T L V z ≤ B / ε := by
@@ -338,7 +426,7 @@ theorem Reaches.trans [DecidableEq α] {x z y : α} (h1 : Reaches K x z) (h2 : R
 
 /-- If the expected hitting time of `o` is bounded from every state, every
 state `o` reaches with positive probability is positive recurrent. -/
-theorem positiveRecurrent_of_hit [DecidableEq α] (hK : K.AllIntegrable) (o : α) (W : α → ℝ)
+theorem positiveRecurrent_of_hit [DecidableEq α] (o : α) {W : α → ℝ} (hWI : K.IntegrableN W)
     (hW : ∀ n x, hit K (· = o) n x ≤ W x) (y : α) (hy : ∃ n, 0 < reach K (· = y) n o) :
     PositiveRecurrent K y := by
   classical
@@ -347,6 +435,8 @@ theorem positiveRecurrent_of_hit [DecidableEq α] (hK : K.AllIntegrable) (o : α
   have hbdd : ∀ x, BddAbove (Set.range fun n => hit K (· = o) n x) :=
     fun x => ⟨W x, by rintro _ ⟨n, rfl⟩; exact hW n x⟩
   have hV0 : ∀ x, 0 ≤ V x := fun x => le_trans (hit_nonneg K _ 0 x) (le_ciSup (hbdd x) 0)
+  have hVW : ∀ x, V x ≤ W x := fun x => ciSup_le fun n => hW n x
+  have hVI : K.Integrable V := Kernel.Integrable.of_le (hWI 0) hV0 hVW
   have htend : ∀ x, Filter.Tendsto (fun n => hit K (· = o) n x) Filter.atTop (nhds (V x)) :=
     fun x => tendsto_atTop_ciSup (hit_mono K _ x) (hbdd x)
   -- off `o`, `1 + P V ≤ V`
@@ -356,7 +446,7 @@ theorem positiveRecurrent_of_hit [DecidableEq α] (hK : K.AllIntegrable) (o : α
         (nhds (1 + K.apply V x)) := by
       refine Filter.Tendsto.const_add _ ?_
       unfold Kernel.apply
-      refine tendsto_tsum_of_dominated_convergence (hK W x) (fun i => (htend _).const_mul _)
+      refine tendsto_tsum_of_dominated_convergence (hWI 0 x) (fun i => (htend _).const_mul _)
         (Filter.Eventually.of_forall fun n i => ?_)
       rw [Real.norm_eq_abs, abs_mul, abs_of_nonneg (K.nonneg x i), abs_of_nonneg (hit_nonneg K _ n _)]
       exact mul_le_mul_of_nonneg_left (hW n _) (K.nonneg x i)
@@ -370,11 +460,11 @@ theorem positiveRecurrent_of_hit [DecidableEq α] (hK : K.AllIntegrable) (o : α
     linarith
   let F : α → Prop := fun x => x = o ∨ x = y
   have hD : Drift K F V 1 :=
-    ⟨hV0, hK V, one_pos, fun x hx => hdrift x (fun h => hx (Or.inl h))⟩
+    ⟨hV0, hVI, one_pos, fun x hx => hdrift x (fun h => hx (Or.inl h))⟩
   set δ := min (reach K (· = y) L o) 1 with hδdef
   have hδ : 0 < δ := lt_min hL one_pos
   set B := max (K.applyN L V o) (K.applyN L V y)
-  have hmain := hit_le_of_reach K (· = y) hK hD (fun x hx => Or.inr hx) (L := L) (δ := δ) (B := B) hδ
+  have hmain := hit_le_of_reach K (· = y) (hWI.of_le hV0 hVW) hD (fun x hx => Or.inr hx) (L := L) (δ := δ) (B := B) hδ
     (by
       rintro x (hx | hx) <;> rw [hx]
       · exact min_le_left _ _
@@ -386,8 +476,8 @@ theorem positiveRecurrent_of_hit [DecidableEq α] (hK : K.AllIntegrable) (o : α
   refine ⟨1 + K.apply V y + (L + B / 1) / δ, fun n => ?_⟩
   have h1 : ∀ z, hit K (· = y) n z ≤ V z + (L + B / 1) / δ := fun z => by
     simpa using hmain n z
-  have h2 := K.apply_mono (hit_integrable K _ n) (hK _) h1 y
-  rw [K.apply_add (hK V) (K.integrable_const _), K.apply_const] at h2
+  have h2 := K.apply_mono (hit_integrable K _ n) (hVI.add (K.integrable_const _)) h1 y
+  rw [K.apply_add hVI (K.integrable_const _), K.apply_const] at h2
   linarith
 
 end SerqLang.Foster

@@ -17,11 +17,12 @@ Outside `F` RAD's batch is full, and a full batch lasts
 so `λ · 4640 · E[v_p + v_d] < 128` is Theorem 1's bound, `λ E[v_p + v_d] <
 b_col / t_{batch}`, for one node, with nothing assumed about the shorter
 slots inside `F`. This is the step of Theorem 2 that `BariStable` proves for
-a fixed distribution; positive recurrence (`BariRecurrent`) is not yet
-proved for this chain.
+a fixed distribution. Then, as `BariProgram` for a fixed distribution, the
+engine empties in bounded expected time from every state (`hit_idle_le`)
+and the empty machines are a positive recurrent atom (`return_idle`).
 -/
 import Serq.Poisson
-import papers.BariStable
+import papers.BariProgram
 
 namespace SerqLang
 namespace Papers
@@ -229,6 +230,161 @@ request per 10 000 clock units is below the bound (`4640 · 129 / 10⁴ ≈ 60`)
 example : ∃ X : Mix 1, (1 / 10000 : ℝ) * 4640 * X.work < 128 :=
   ⟨⟨fun _ => (128, 1), fun _ => ⟨by decide, le_rfl, by decide, le_rfl, by decide⟩, fun _ => 1,
       fun _ => zero_le_one, by simp⟩, by simp [Mix.work]; norm_num⟩
+
+/-! ### The empty engine recurs
+
+As in `DaiPoisson`: what recurs is the engine being empty
+(`BariProgram.Idle`). On a busy engine a slot brings no request with
+probability `e^{-λ · dur} ≥ e^{-4640 λ}` (`p0_ge`) and then serves at least
+one token, so from a state of backlog `b` the empty engine is `b`
+arrival-free slots away (`drain`); a slot adds `(λ · 4640 + 1) E[v_p + v_d]`
+tokens at most in expectation (`apply_V_le`). -/
+
+open BariProgram (Idle)
+
+omit hlam in
+/-- An engine with a job is busy. -/
+theorem busy_of_not_idle {x : State} (hx : ¬ Idle x) : x.1.iterEnd.isSome = true := by
+  obtain ⟨L, g, hB⟩ := reach_sb x.2
+  rcases hie : x.1.iterEnd with _ | ⟨a, q⟩
+  · exact absurd (by unfold Idle BariSim.σ; rw [hB.idle hie]; rfl) hx
+  · rfl
+
+omit hlam in
+/-- No iteration lasts longer than a full batch, `4640`. -/
+theorem dur_le (x : State) : Slot.dur x.1 ≤ 4640 := by
+  obtain ⟨L, g, hB⟩ := reach_sb x.2
+  rcases hie : x.1.iterEnd with _ | ⟨a, q⟩
+  · simp [Slot.dur, hie]
+  · have hbusy : x.1.iterEnd.isSome = true := by rw [hie]; rfl
+    obtain ⟨hb1, -⟩ := hB.busy hbusy
+    have ht : x.1.last.stats.tokens ≤ 128 := by have : tokSum x.1.iter ≤ 128 := hB.tok; omega
+    have ha := reach_dur x.2 a q hie
+    simp only [Slot.dur, hie]
+    rw [ha]
+    simp only [D, Claims.BariRad.deployment]
+    omega
+
+/-- No request. -/
+def none0 : Outcome (Fin n) := ⟨0, Fin.elim0⟩
+
+omit hlam in
+theorem arrivals_none0 : arrivals X (none0 (n := n)) = [] := by simp [arrivals, none0]
+
+/-- On a busy engine a slot brings no request with probability at least
+`e^{-4640 λ}`. -/
+theorem p0_ge {x : State} (hb : x.1.iterEnd.isSome = true) :
+    Real.exp (-(lam * 4640)) ≤ (kernel X hlam).p x none0 := by
+  have hd : (Slot.dur x.1 : ℝ) ≤ 4640 := by exact_mod_cast dur_le x
+  simp only [kernel, compound, count, none0, hb, if_true, pois, Finset.univ_eq_empty,
+    Finset.prod_empty, pow_zero, Nat.factorial_zero, Nat.cast_one, div_one, mul_one]
+  exact Real.exp_le_exp.mpr (by nlinarith)
+
+/-- Without arrivals the engine drains: from a backlog `≤ j`, it is empty
+within `j` slots with probability at least `e^{-4640 λ j}`. -/
+theorem drain : ∀ (j : ℕ) (x : State), backlog x.1 ≤ j →
+    Real.exp (-(lam * 4640)) ^ j ≤ reach (kernel X hlam) Idle j x
+  | 0, x, hb => by
+    have hx : Idle x := by
+      by_contra h
+      have := BariRecurrent.backlog_pos _ (BariProgram.good_σ x.2) h
+      rw [BariProgram.backlog_eq] at hb; omega
+    rw [reach_of_mem _ Idle hx]; simp
+  | j + 1, x, hb => by
+    have hq1 : Real.exp (-(lam * 4640)) ≤ 1 := Real.exp_le_one_iff.mpr (by nlinarith)
+    by_cases hx : Idle x
+    · rw [reach_of_mem _ Idle hx]; exact pow_le_one₀ (Real.exp_nonneg _) hq1
+    · have hb' : backlog ((kernel X hlam).next x none0).1 ≤ j := by
+        show backlog (slot (arrivals X none0) x.1) ≤ j
+        have h1 := BariRecurrent.absSlot_backlog [] (BariSim.σ x.1)
+        rw [← BariSim.simulation x [] (by simp), ← BariProgram.backlog_eq,
+          ← BariProgram.backlog_eq] at h1
+        have h2 := (BariRecurrent.sS_cases _ (BariProgram.good_σ x.2) hx).1
+        rw [arrivals_none0]
+        simp only [List.map_nil, List.sum_nil] at h1
+        omega
+      have ih := drain j _ hb'
+      have h3 := (kernel X hlam).le_apply (reach_integrable _ Idle j) (reach_nonneg _ Idle j) x none0
+      have h4 := p0_ge X hlam (busy_of_not_idle hx)
+      show _ ≤ (if Idle x then 1 else (kernel X hlam).apply (reach (kernel X hlam) Idle j) x)
+      rw [if_neg hx, pow_succ]
+      calc Real.exp (-(lam * 4640)) ^ j * Real.exp (-(lam * 4640))
+          ≤ reach (kernel X hlam) Idle j ((kernel X hlam).next x none0) * (kernel X hlam).p x none0 :=
+            mul_le_mul ih h4 (Real.exp_nonneg _) (reach_nonneg _ _ _ _)
+        _ = (kernel X hlam).p x none0 * reach (kernel X hlam) Idle j ((kernel X hlam).next x none0) :=
+            mul_comm _ _
+        _ ≤ _ := h3
+
+omit hlam in
+theorem work_nonneg : 0 ≤ X.work :=
+  Finset.sum_nonneg fun t _ => mul_nonneg (X.nonneg t) (Nat.cast_nonneg _)
+
+/-- A slot adds at most `(λ · 4640 + 1) E[v_p + v_d]` tokens in expectation. -/
+theorem apply_V_le (x : State) : (kernel X hlam).apply V x ≤ V x + (lam * 4640 + 1) * X.work := by
+  have hH := hasSum_V X hlam x
+  have h1 : (kernel X hlam).apply V x ≤
+      V x + (if x.1.iterEnd.isSome then lam * Slot.dur x.1 else 1) * X.work := by
+    unfold Kernel.apply
+    rw [← hH.tsum_eq]
+    refine (integrable X hlam x).tsum_le_tsum (fun s => mul_le_mul_of_nonneg_left ?_
+      ((kernel X hlam).nonneg x s)) hH.summable
+    have := V_next X x s
+    have h0 : (0 : ℝ) ≤ if x.1.iterEnd.isSome then (tokSum x.1.iter : ℝ) else 0 := by
+      split_ifs <;> positivity
+    show V ⟨slot (arrivals X s) x.1, _⟩ ≤ _
+    linarith
+  have h2 : (if x.1.iterEnd.isSome then lam * Slot.dur x.1 else 1) ≤ lam * 4640 + 1 := by
+    have hd : (Slot.dur x.1 : ℝ) ≤ 4640 := by exact_mod_cast dur_le x
+    split_ifs <;> nlinarith
+  nlinarith [work_nonneg X]
+
+/-- The truncated hitting times of the empty engine, bounded. -/
+theorem hit_le (hA : lam * 4640 * X.work < 128) :
+    ∃ c : ℝ, ∀ j x, hit (kernel X hlam) Idle j x ≤ V x / ε X lam + c := by
+  have hV := (kernel X hlam).applyN_le_of_apply_le (integrable X hlam) (fun _ => Nat.cast_nonneg _)
+    (apply_V_le X hlam)
+  exact ⟨_, hit_le_of_reach (kernel X hlam) Idle (fun j => (hV j).1) (drift X hlam hA)
+    BariProgram.F_of_idle (L := 128 * 512) (B := 128 * 512 + (lam * 4640 + 1) * X.work * (128 * 512))
+    (pow_pos (Real.exp_pos _) _)
+    (fun x hx => drain X hlam _ x (backlog_lt_of_F x hx).le)
+    (fun x hx => by
+      have h1 := (hV (128 * 512)).2 x
+      have h2 : V x ≤ 128 * 512 := by unfold V; exact_mod_cast (backlog_lt_of_F x hx).le
+      push_cast at h1 ⊢
+      linarith)⟩
+
+/-- Below Theorem 1's bound, from every state the engine empties in bounded
+expected time. -/
+theorem hit_idle_le (hA : lam * 4640 * X.work < 128) :
+    ∃ W : State → ℝ, ∀ j x, hit (kernel X hlam) Idle j x ≤ W x := by
+  obtain ⟨c, hc⟩ := hit_le X hlam hA
+  exact ⟨_, hc⟩
+
+/-- Theorem 2 for Poisson arrivals: below Theorem 1's bound, from every
+machine with an empty engine the expected time until it is empty again is
+bounded by one constant, so the empty engine is a positive recurrent atom. -/
+theorem return_idle (hA : lam * 4640 * X.work < 128) :
+    ∃ C : ℝ, ∀ j x, Idle x → 1 + (kernel X hlam).apply (hit (kernel X hlam) Idle j) x ≤ C := by
+  obtain ⟨c, hc⟩ := hit_le X hlam hA
+  have hε : 0 < ε X lam := (drift X hlam hA).pos
+  have hVI := integrable X hlam
+  refine ⟨1 + (1 / ε X lam) * ((lam * 4640 + 1) * X.work) + c, fun j x hx => ?_⟩
+  have h1 : ∀ y, hit (kernel X hlam) Idle j y ≤ (1 / ε X lam) * V y + c := fun y => by
+    have := hc j y
+    rw [one_div, ← div_eq_inv_mul]; exact this
+  have h2 := (kernel X hlam).apply_mono (hit_integrable _ _ j)
+    ((hVI.const_mul _).add ((kernel X hlam).integrable_const c)) h1 x
+  rw [(kernel X hlam).apply_add (hVI.const_mul _) ((kernel X hlam).integrable_const c),
+    Kernel.apply_const, Kernel.apply_const_mul] at h2
+  have h3 := apply_V_le X hlam x
+  have h0 : V x = 0 := by
+    unfold V
+    rw [BariProgram.backlog_eq, show BariSim.σ x.1 = [] from hx]
+    simp [BariChain.backlog]
+  rw [h0] at h3
+  have h4 : (1 / ε X lam) * (kernel X hlam).apply V x ≤ (1 / ε X lam) * ((lam * 4640 + 1) * X.work) :=
+    mul_le_mul_of_nonneg_left (by linarith) (by positivity)
+  linarith
 
 end BariPoisson
 end Papers
