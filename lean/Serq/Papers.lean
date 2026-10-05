@@ -13,5 +13,6 @@ import Serq.Papers.BariSim
 import Serq.Papers.BariRecurrent
 import Serq.Papers.BariProgram
 import Serq.Papers.BariPoisson
+import Serq.Papers.BariNodes
 import Serq.Papers.KongMath
 import Serq.Papers.Kong

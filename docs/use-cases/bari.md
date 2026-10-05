@@ -82,6 +82,15 @@ The arrival times are any natural numbers (the program's `poisson`), and the out
 
 `Arrivals` is any finite distribution of a slot's requests; two examples check the theorem is not vacuous.
 
+**Theorem 2 for $g$ nodes with the random planner** (`lean/Serq/Papers/BariNodes.lean`). The state is every node's machine. In a slot the arrivals are drawn from the same `Arrivals`, each is sent to one of the $g$ nodes uniformly and independently (each routing of $n$ requests has probability $1/g^n$), and every node runs one slot of `bari_rad.sq` with the requests sent to it, in their order. So:
+
+- a request reaches node $i$ with probability $1/g$, and the work sent to node $i$ has mean $\text{load}/g$ (`mean_route`);
+- while node $i$'s batch is full, its backlog changes in expectation by $\text{load}/g - 128$ (`apply_V`);
+- below the capacity of $g$ nodes, $\text{load} < 128\,g$, node $i$'s backlog drifts down by $128 - \text{load}/g$ outside its own `F` (`drift`), and the expected number of slots until its batch is not full is at most $\text{backlog}_i/(128 - \text{load}/g)$ (`hitTime_le`, finite by `hit_tendsto`), with a finite expected return time (`returnTime_le`);
+- summed over the nodes, the total backlog drifts down by $128\,g - \text{load}$ while every batch is full (`drift_sum`): Theorem 1's bound for $g$ nodes is the sum of the per-node bound.
+
+An example gives a load of 129 tokens per slot, above one node's capacity and below two nodes'.
+
 **Positive recurrence** (`lean/Serq/Papers/BariRecurrent.lean`). As for Dai et al., the machine chain projects exactly onto a chain on job lists (`BariSim.simulation`): each job's mode, left work and output, with `BariChain.absSlot` as one slot of RAD. There the empty list is one state. Every request brings at least 129 tokens, so below capacity a slot brings none with positive probability, and enough such slots drain any state of `F`. The chain on job lists is irreducible (`irreducible`), and every state is positive recurrent (`positive_recurrent`): Theorem 2 for one node, for the chain whose state is the queue's content. On the program's own machine chain (`BariProgram`), whose states never repeat, the engine empties in bounded expected time from every state and again within one constant from every empty machine (`hit_idle_le`, `return_idle`).
 
 ## On the run
@@ -105,8 +114,8 @@ Theorem 1's bound for this program is $128/4640$ tokens per µs. With a mean of 
 ## What it leaves out
 
 - **The machine chain's own states.** They are transient: the clock and the ended sessions never repeat. Positive recurrence is proved for the job-list chain and, on the machine chain, for the event that the engine is empty.
-- **Poisson in continuous time: the drift, not yet recurrence.** `lean/Serq/Papers/BariPoisson.lean` proves Foster's drift to `F` for a Poisson stream of rate $\lambda$ whose requests draw their types independently, the step of Theorem 2 that `BariStable.lean` proves for a fixed distribution: a slot brings a compound Poisson list over the running iteration, and outside `F` the drift is $128 - 4640\,\lambda\,E[v_p + v_d]$, Theorem 1's bound. Positive recurrence is proved for finitely many arrivals per slot only, and the $g$-node chain draws its arrivals from a finite distribution.
-- **The random planner over $g$ nodes.** The kernel is one node. Uniform thinning gives each node a Poisson stream of rate $\lambda/g$, independent of the others; that this makes the $g$-node chain stable is not proved.
+- **Poisson in continuous time: the drift, not yet recurrence.** `lean/Serq/Papers/BariPoisson.lean` proves Foster's drift to `F` for a Poisson stream of rate $\lambda$ whose requests draw their types independently, the step of Theorem 2 that `BariStable.lean` proves for a fixed distribution: a slot brings a compound Poisson list over the running iteration, and outside `F` the drift is $128 - 4640\,\lambda\,E[v_p + v_d]$, Theorem 1's bound. Positive recurrence is proved for finitely many arrivals per slot only, and the $g$-node chain (`BariNodes`) draws its arrivals from a finite distribution.
+- **The $g$ nodes' clocks.** In `BariNodes` a slot is one iteration of every node, so the nodes' iterations are synchronised, and a node whose batch is not full still waits for the others' slot. Each node's hitting and return times to its own `F` are proved; positive recurrence of the $g$-node chain on job lists, and a time at which every node is in `F` at once, are not.
 - **The cycle parameter $N$.** The program takes $N = \infty$. A finite $N$ ends a cycle by finishing the active requests, with batches that may not fill a tile, and the paper's tiling principle excepts them in the same way.
 - **Attention.** The cost omits (7)'s attention terms, whose coefficients are not integers in µs. The Lean fragment reads `attention` with even integer coefficients only.
-- **Several nodes.** The fragment has one engine. Theorem 1 for $g$ nodes is the sum of the per-node bound.
+- **Several nodes in the program.** The fragment has one engine, so `bari_rad.sq` is one node; the $g$ nodes and the planner are written in Lean (`BariNodes`), not in serQ.
