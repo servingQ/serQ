@@ -618,6 +618,14 @@ pub struct CStep {
     pub budget: CExpr,
     pub cost: CExpr,
     pub chunk: CExpr,
+    /// `granule g`: a prefill gets the whole of what it has left, or a
+    /// multiple of `g` (rounded down; none when that is 0). `inf` schedules
+    /// a prefill whole or not at all (TensorRT-LLM without chunking), a
+    /// block size aligns its chunks. None is any amount (as `1` is, for
+    /// whole tokens). A prefill it refuses ends the iteration's admissions.
+    /// A constant above 0, `inf` included.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granule: Option<CExpr>,
     /// How the iteration serves its residents: an order, or the
     /// exclusive-prefill rule.
     pub serve: CServe,
@@ -1565,6 +1573,39 @@ impl Program {
                     v.expr(&st.budget, Moment::Budget).map_err(at)?;
                     v.expr(&st.chunk, Moment::Budget).map_err(at)?;
                     v.expr(&st.cost, Moment::Step).map_err(at)?;
+                    if let Some(g) = &st.granule {
+                        let g = match g {
+                            CExpr::Num(g) if *g > 0.0 => *g,
+                            _ => {
+                                return Err(at(format!(
+                                    "granule {}: a constant above 0, `inf` included",
+                                    self.show_expr(g)
+                                )));
+                            }
+                        };
+                        if matches!(st.serve, CServe::ExclusivePrefill) {
+                            return Err(at(
+                                "granule with serve exclusive prefill: a prefill the granule \
+                                 refuses would still block every decode, and the engine would \
+                                 stop"
+                                    .into(),
+                            ));
+                        }
+                        // a prefill longer than a constant chunk only ever gets
+                        // part of it, at most the chunk, which the granule must
+                        // allow (TensorRT-LLM refuses a chunk below its unit,
+                        // microBatchScheduler.cpp L278-L282); a prompt longer
+                        // than the budget is the workload's, as it is there
+                        if let Some(c) = constant(&st.chunk)
+                            && c > 0.0
+                            && g > c
+                        {
+                            return Err(at(format!(
+                                "granule {g} with chunk {c}: a prompt longer than the chunk \
+                                 would never get a token"
+                            )));
+                        }
+                    }
                     if let CServe::By(keys) = &st.serve {
                         for k in keys {
                             v.expr(k, Moment::Serve).map_err(at)?;

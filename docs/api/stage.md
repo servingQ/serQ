@@ -60,6 +60,7 @@ step {
   budget expr;
   cost expr;
   chunk expr;
+  granule c;               // a prefill gets all it has left or a multiple of c (inf: whole)
   serve admission;  |  serve by (expr, …);  |  serve decode first;  |  serve exclusive prefill;
   serve only (expr) [admission | by (expr, …) | decode first];
   memory POOL;
@@ -80,6 +81,7 @@ that schedules no token is not one, unless it preempted.
 | `budget` | `expr` | `Budget` | `inf` | Tokens per iteration. Reads `residents`, `decoders`, `kv_decode`, `kv_prefill`. |
 | `cost` | `expr` | `Step` | required (a parse error without it) | Clock time of the iteration. Reads `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`. |
 | `chunk` | `expr` | `Budget` | `0` (no cap) | Cap on one request's prefill tokens in an iteration. |
+| `granule` | constant | | none (any amount) | A prefill gets all it has left, or a multiple of it (after `chunk` caps it, rounded down; none when that is 0). `inf` schedules a prefill whole or not at all (TensorRT-LLM without chunking, [`microBatchScheduler.cpp` L416-L435](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/microBatchScheduler.cpp#L416-L435)), a block size aligns its chunks (TensorRT-LLM with chunking, [L228-L263](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/microBatchScheduler.cpp#L228-L263)). A constant above 0; not with `exclusive prefill`, and not above a constant `chunk`, where a longer prompt would never get a token. A prefill that gets none waits, a resident, for an iteration with room; the iteration serves the residents after it and admits no one more, as TensorRT-LLM without chunking stops its scan at the first context that does not fit ([L428-L431](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/microBatchScheduler.cpp#L428-L431)). |
 | `serve` | see below | `Serve` | `admission` | Which residents are served (`only`) and in what order, or an exclusive-prefill batch policy. At most once. |
 | `memory` | `pool` | | none | The pool whose holds give `kv_decode` and `kv_prefill`, and whose `preempt lifo` victims come from this stage. |
 | `iteration` | a body | `Serve`, `Plan` | vLLM's procedure | The iteration as the program writes it: whom it serves, in what order, and when it admits (below). Not with `exclusive prefill` or `only`. |
