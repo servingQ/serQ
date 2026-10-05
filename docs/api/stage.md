@@ -63,7 +63,8 @@ step {
   serve admission;  |  serve by (expr, …);  |  serve decode first;  |  serve exclusive prefill;
   serve only (expr) [admission | by (expr, …) | decode first];
   memory POOL;
-  iteration { stmt … }      // stmt: serve […]; | admit [while (expr)]; | branch (expr) { … } [else { … }]
+  state NAME = c;           // a register the body sets
+  iteration { stmt … }      // stmt: serve […]; | admit [while (expr)]; | branch (expr) { … } [else { … }] | set NAME = expr;
 }
 ```
 
@@ -139,6 +140,7 @@ iteration.
 | `serve [only (p)] [order]` | Gives the residents not yet served their tokens (one to a decode, up to `chunk` to a prefill, a `growing` job growing first) in the order (the stage's `serve` order when none), while budget is left. A resident `p` reads as 0 is skipped and stays unserved, for a later `serve`. A grower that preempts itself ends the statement. |
 | `admit [only (p)] [while (e)]` | Admits the head of the queues that name this stage in `admit via` and serves the newcomer, one at a time, while budget is left, the head fits and `e` (read before each) is 1. A newcomer `p` reads as 0 is admitted and waits unserved, so the stage's `serve only (p)` is the body `serve only (p); admit only (p) while (!preempted);`. |
 | `branch (e) { … } else { … }` | A test: the first body when `e` is 1, the second when it is 0. |
+| `set NAME = e` | Sets one of this stage's registers (`state NAME = c;`, below) to `e`, read as a guard is. |
 
 A guard and a `while` are read at the `Plan` moment: the residents' totals
 (`residents`, `decoders`, `kv_decode`, `kv_prefill`) as they stand, what the
@@ -168,6 +170,23 @@ Other engines' are other bodies:
 | SGLang (no mixed chunk): the chunked request and new prefills alone, a decode batch when no prefill forms | `iteration { serve only (!decoding); admit; branch (tokens == 0) { serve; } }` |
 | TensorRT-LLM `STATIC_BATCH`: admit only into an empty engine | `iteration { serve; branch (residents == 0) { admit; } }` |
 | FasterTransformer as Dai et al. model it | `iteration { branch (decoders > 0) { serve only (decoding); } else { serve; admit; } }` |
+| TGI with chunking: no admission in the forward after one that admitted | `state just = 0; iteration { serve; branch (just == 0) { admit; } set just = admitted > 0; }` |
+
+#### Registers
+
+`state NAME = c;` gives a stage with a body a register, a number its body
+sets with `set NAME = e;` and keeps from one iteration to the next: what an
+engine's scheduler remembers, such as TGI's count of decode steps since a
+new batch or SGLang's `new_token_ratio`. `c` is a constant; `e` is read as
+a guard is. A set takes effect with its iteration: a body that schedules
+nothing and preempts nothing has had no iteration, and its sets are undone.
+The scheduler's expressions read a register by name — a hold's header, a
+queue or eviction key, a stage's budget, cost or serve keys, a gauge, a
+claim — and a session statement and a claim's `given` do not: a register
+is the engine's, not the session's. Its name is its own (not an attribute,
+a constant, a name the language supplies, a pool, a stage or another
+register); a stage array has none (which member's would an expression
+read?), and a body sets only its own stage's.
 
 ### Example
 

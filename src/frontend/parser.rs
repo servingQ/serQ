@@ -371,7 +371,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 99] = [
+pub const KEYWORDS: [&str; 100] = [
     "admission",
     "admit",
     "arrivals",
@@ -456,6 +456,7 @@ pub const KEYWORDS: [&str; 99] = [
     "some",
     "spill",
     "stage",
+    "state",
     "step",
     "sum",
     "tail",
@@ -2914,9 +2915,15 @@ impl Parser {
                 vec![]
             };
             Ok(IterStmt::Branch(guard, then, other))
+        } else if self.eat_kw("set") {
+            let name = self.ident()?;
+            self.expect(&Tok::Assign)?;
+            let e = self.expr()?;
+            self.expect(&Tok::Semi)?;
+            Ok(IterStmt::Set(name, e))
         } else {
             self.err(format!(
-                "an iteration takes `serve`, `admit` and `branch`; found {}",
+                "an iteration takes `serve`, `admit`, `branch` and `set`; found {}",
                 self.peek()
             ))
         }
@@ -2951,6 +2958,7 @@ impl Parser {
                 only: None,
                 memory: None,
                 iteration: None,
+                state: vec![],
             };
             let mut has_cost = false;
             let mut has_serve = false;
@@ -3019,6 +3027,11 @@ impl Parser {
                         );
                     }
                     "memory" => s.memory = Some(self.bare_reference()?),
+                    "state" => {
+                        let name = self.ident()?;
+                        self.expect(&Tok::Assign)?;
+                        s.state.push((name, self.expr()?));
+                    }
                     "iteration" => {
                         if s.iteration.is_some() {
                             return self.err("`iteration` twice: a step stage has one iteration");

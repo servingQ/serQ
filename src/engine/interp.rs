@@ -612,6 +612,9 @@ pub struct Interp<'p> {
     /// How many residents the iteration being scheduled has preempted so far
     /// (`preempted` in an iteration body).
     preempted_now: f64,
+    /// The step stages' registers (`state`), as their iteration bodies last
+    /// set them.
+    regs: Vec<f64>,
     next_adm: u64,
     next_release: u64,
     arrivals: u64,
@@ -757,6 +760,7 @@ impl<'p> Interp<'p> {
             admit_budget: None,
             next_dead: 0,
             next_lease: 0,
+            regs: p.registers.iter().map(|r| r.init).collect(),
             preempted: false,
             preempted_now: 0.0,
             next_adm: 0,
@@ -2960,6 +2964,8 @@ impl<'p> Interp<'p> {
         // each served prefill's attention work, summed over those still in
         // the batch when the iteration is costed
         let mut attn_by: Vec<(u64, f64)> = vec![];
+        // a body's `set`s take effect with its iteration (below)
+        let regs_before = spec.iteration.as_ref().map(|_| self.regs.clone());
         if let Some(body) = &spec.iteration {
             let mut plan = Plan {
                 st,
@@ -3050,6 +3056,10 @@ impl<'p> Interp<'p> {
             // report names if none came (#263)
             let work = !self.residents(st).is_empty() || self.bound_waiting(st);
             self.stages[st].idle_with_work = work;
+            // no iteration: what its body set did not happen either
+            if let Some(regs) = regs_before {
+                self.regs = regs;
+            }
             return;
         }
         self.stages[st].idle_with_work = false;
@@ -3365,6 +3375,16 @@ impl<'p> Interp<'p> {
                     };
                     self.run_body(plan, taken);
                 }
+                CIter::Set(r, e) => {
+                    let v = self.plan_value(e, plan);
+                    if !v.is_finite() && self.error.is_none() {
+                        self.error = Some(format!(
+                            "stage `{}`: `set {}` read {v}; a register holds a finite number",
+                            self.p.stages[plan.st].name, self.p.registers[*r].name
+                        ));
+                    }
+                    self.regs[*r] = v;
+                }
             }
         }
     }
@@ -3373,17 +3393,7 @@ impl<'p> Interp<'p> {
     /// and what the iteration has done so far (`Moment::Plan`): 1 or 0, and
     /// anything else fails the run, as a session's `branch` does.
     fn guard(&mut self, e: &CExpr, plan: &Plan, what: &str) -> bool {
-        let mut ctx = self.resident_totals(plan.st, plan.spec.memory);
-        ctx.ntok = plan.assign.iter().map(|a| a.1).sum();
-        ctx.npre = plan
-            .assign
-            .iter()
-            .filter(|(j, _)| self.stages[plan.st].jobs[j].mode == RunMode::Prefill)
-            .map(|a| a.1)
-            .sum();
-        ctx.admitted = plan.admitted;
-        ctx.preempted = self.preempted_now;
-        let v = self.eval(e, &ctx, Which::Session);
+        let v = self.plan_value(e, plan);
         if v == 1.0 {
             true
         } else {
@@ -3395,6 +3405,27 @@ impl<'p> Interp<'p> {
             }
             false
         }
+    }
+
+    /// An expression of an iteration body (`Moment::Plan`), read on the
+    /// residents as they stand and what the iteration has done so far.
+    fn plan_value(&mut self, e: &CExpr, plan: &Plan) -> f64 {
+        let mut ctx = self.resident_totals(plan.st, plan.spec.memory);
+        ctx.ntok = plan.assign.iter().map(|a| a.1).sum();
+        ctx.npre = plan
+            .assign
+            .iter()
+            .filter(|(j, _)| {
+                self.stages[plan.st]
+                    .jobs
+                    .get(j)
+                    .is_some_and(|job| job.mode == RunMode::Prefill)
+            })
+            .map(|a| a.1)
+            .sum();
+        ctx.admitted = plan.admitted;
+        ctx.preempted = self.preempted_now;
+        self.eval(e, &ctx, Which::Session)
     }
 
     /// Read the claims over the iterations of stage `st` as an iteration
@@ -3642,6 +3673,7 @@ impl<'p> Interp<'p> {
     fn eval(&mut self, e: &CExpr, ctx: &Ctx, w: Which) -> f64 {
         match e {
             CExpr::Num(x) => *x,
+            CExpr::Reg(r) => self.regs[*r],
             CExpr::Attr(i) => match (&ctx.snap, ctx.sid) {
                 (Some(s), _) => s[*i],
                 (None, Some(sid)) => self.sessions[sid].attrs[*i],
@@ -4136,7 +4168,7 @@ fn static_key(e: &CExpr) -> bool {
 fn aggregates(e: &CExpr, out: &mut [bool]) {
     match e {
         CExpr::Agg(_, k) => out[*k] = true,
-        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => {}
+        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) | CExpr::Reg(_) => {}
         CExpr::Sample(_, xs) => xs.iter().for_each(|x| aggregates(x, out)),
         CExpr::Call(_, args) => {
             for a in args {

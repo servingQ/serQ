@@ -675,7 +675,11 @@ impl Walker<'_> {
                     );
                     if c != 0.0 { a } else { b }
                 }
-                CExpr::Ctx(_) | CExpr::Sample(..) | CExpr::Call(..) | CExpr::Agg(..) => {
+                CExpr::Ctx(_)
+                | CExpr::Sample(..)
+                | CExpr::Call(..)
+                | CExpr::Agg(..)
+                | CExpr::Reg(_) => {
                     return None;
                 }
             })

@@ -152,6 +152,9 @@ struct Linker<'a> {
     /// far as a reference or an expression in it says (#279).
     spans: Vec<Vec<Option<Span>>>,
     prog: &'a Program,
+    /// The step stages' registers (`state`), and their indices by name.
+    registers: Vec<crate::ir::Register>,
+    reg_index: HashMap<String, usize>,
     /// Terms the program's aggregates have written out so far, nested ones
     /// included, against `MAX_OVER`.
     over_terms: std::cell::Cell<usize>,
@@ -286,6 +289,8 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         spans: vec![],
         prog,
         over_terms: std::cell::Cell::new(0),
+        registers: vec![],
+        reg_index: HashMap::new(),
     };
     for a in BUILTIN_ATTRS {
         lk.attr(a);
@@ -383,6 +388,45 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             )));
         }
     }
+    // Registers: a step stage's `state`, before anything that may read one.
+    // A register's name is its own: not an attribute, a constant, a name
+    // the language supplies, a pool or stage, or another register.
+    let mut stage_base = 0;
+    for s in &prog.stages {
+        if let StageKind::Step(sp) = &s.kind {
+            for (name, init) in &sp.state {
+                if s.count != 1 {
+                    return Err(LinkError::new(format!(
+                        "stage `{}`: `state {name}` on a stage array; which member's register \
+                         an expression read would be a guess",
+                        s.name
+                    )));
+                }
+                let taken = lk.attr_index.contains_key(name)
+                    || lk.consts.contains_key(name)
+                    || CONTEXT_VARS.iter().any(|(n, _)| n == name)
+                    || name == "inf"
+                    || lk.pools.contains_key(name)
+                    || lk.stages.contains_key(name)
+                    || lk.reg_index.contains_key(name);
+                if taken {
+                    return Err(LinkError::new(format!(
+                        "stage `{}`: `state {name}`: the name is taken; a register's name is \
+                         its own",
+                        s.name
+                    )));
+                }
+                let init = lk.const_eval(init, &format!("`state {name}`"))?;
+                lk.reg_index.insert(name.clone(), lk.registers.len());
+                lk.registers.push(crate::ir::Register {
+                    name: name.clone(),
+                    stage: stage_base,
+                    init,
+                });
+            }
+        }
+        stage_base += s.count;
+    }
     // Pools.
     let mut pools = vec![];
     for p in &prog.pools {
@@ -476,7 +520,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 iteration: sp
                     .iteration
                     .as_ref()
-                    .map(|body| iteration(&lk, body))
+                    .map(|body| iteration(&lk, lk.stages[&s.name].0, body))
                     .transpose()?,
             }),
         };
@@ -614,6 +658,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     let linked = Linked {
         gauges,
         claims,
+        registers: lk.registers.clone(),
         version: IR_VERSION,
         hidden,
         share: prog.share,
@@ -696,7 +741,7 @@ fn serve(lk: &Linker, s: &Serve) -> LResult<CServe> {
 }
 
 /// A step stage's `iteration` body.
-fn iteration(lk: &Linker, body: &[IterStmt]) -> LResult<Vec<CIter>> {
+fn iteration(lk: &Linker, stage: usize, body: &[IterStmt]) -> LResult<Vec<CIter>> {
     body.iter()
         .map(|s| {
             Ok(match s {
@@ -714,8 +759,25 @@ fn iteration(lk: &Linker, body: &[IterStmt]) -> LResult<Vec<CIter>> {
                     only: only.as_ref().map(|e| lk.expr(e)).transpose()?,
                     gate: gate.as_ref().map(|e| lk.expr(e)).transpose()?,
                 },
-                IterStmt::Branch(g, a, b) => {
-                    CIter::Branch(lk.expr(g)?, iteration(lk, a)?, iteration(lk, b)?)
+                IterStmt::Branch(g, a, b) => CIter::Branch(
+                    lk.expr(g)?,
+                    iteration(lk, stage, a)?,
+                    iteration(lk, stage, b)?,
+                ),
+                IterStmt::Set(name, e) => {
+                    let Some(&r) = lk.reg_index.get(name) else {
+                        return Err(LinkError::new(format!(
+                            "`set {name}` in an iteration: not a register of this stage \
+                             (declare it with `state {name} = …;`)"
+                        )));
+                    };
+                    if lk.registers[r].stage != stage {
+                        return Err(LinkError::new(format!(
+                            "`set {name}` in an iteration: the register is another stage's; a \
+                             body sets its own stage's"
+                        )));
+                    }
+                    CIter::Set(r, lk.expr(e)?)
                 }
             })
         })
@@ -1128,6 +1190,8 @@ impl Linker<'_> {
                     CExpr::Attr(i)
                 } else if let Some(&v) = self.consts.get(n) {
                     CExpr::Num(v)
+                } else if let Some(&r) = self.reg_index.get(n) {
+                    CExpr::Reg(r)
                 } else {
                     if let Some(&(_, v)) = CONTEXT_VARS.iter().find(|(name, _)| name == n) {
                         CExpr::Ctx(v)
