@@ -34,6 +34,20 @@ the output length from the scheduler, and every engine here knows
 | **TensorRT-LLM**, `GUARANTEED_NO_EVICT` ([`llm_args.py` L3923-L3927](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/tensorrt_llm/llmapi/llm_args.py#L3923-L3927)) | Two levels as pool and budget, generation requests before contexts, FCFS | The reservation is held for the request's life, not tested once; no chunking (a context runs whole or waits); prefix-aware scheduling, on by default, skips a context whose first blocks a context admitted in the same pass will contribute, so FCFS is not strict ([`llm_args.py` L3946-L3948](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/tensorrt_llm/llmapi/llm_args.py#L3946-L3948), [`capacityScheduler.cpp` L367-L376](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/capacityScheduler.cpp#L367-L376); it needs the shared cache) |
 | **SGLang**, `fcfs`, no mixed chunk ([`schedule.py`](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/arg_groups/fields/schedule.py#L82-L98), [L202-L205](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/arg_groups/fields/schedule.py#L202-L205)) | FCFS, the chunked request, recomputation after retraction, a prompt-only cache after retraction | Several prefills in one prefill-only batch; the retraction victim and where it re-enters; `new_token_ratio`; the radix cache |
 
+The table is the language before the constructs this document proposes.
+With them (`preempt by` #360, `iteration` #362 and #370, `state` #367,
+`reserve held` #371, `granule` #373, and a state-reading `reserve` that
+waits #369), `examples/engines/*.sq` write every row but three things:
+the cache shared across requests (#374), which every engine has and
+SGLang's LPM and TensorRT-LLM's prefix-aware skip read; a sum over the
+running requests, in SGLang's admission test and in its ratio after a
+retraction ([`new_token_ratio_tracker.py`
+L41-L49](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/scheduler_components/new_token_ratio_tracker.py#L41-L49)),
+which the program writes as one request's estimate times their count and as a
+lower bound;
+and the overlap scheduler's
+one-iteration lag, which every engine here has, vLLM's included.
+
 ## Where the language is vLLM's
 
 A step stage's iteration is a fixed procedure in the interpreter,
@@ -189,7 +203,7 @@ both:
   load it exceeds the cap and the session is rejected, where SGLang only
   makes it wait. Since #364 the part that reads state is not judged at the
   join, and waits; `examples/engines/sglang.sq` reads the load uncapped.
-- `granule g` on a prefill run or on the stage: a grant is the whole
+- `granule g` on the stage (#373): a grant is the whole
   remainder or a multiple of `g` (V6). `g = 1` is today; `g = inf` is
   TensorRT-LLM's default.
 
@@ -242,3 +256,8 @@ in its own design.
   tree. `queue by (-cachedin(kv))` links but matches only a session's own
   prefix, so it is LPM for multi-turn reuse alone. Real LPM waits for the
   shared cache.
+- **`granule` per run.** A prefill run could carry its own granule,
+  `prefill on engine (n) granule g`. Rejected: TensorRT-LLM's chunk unit is
+  an engine setting, and a per-run one would write a scheduler rule on the
+  session's side, which reads none (`hidden`). The stage option is the
+  engine's, as `chunk` is.

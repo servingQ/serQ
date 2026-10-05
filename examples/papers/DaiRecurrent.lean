@@ -426,7 +426,7 @@ recurrent. -/
 theorem positive_recurrent {K : ℕ} (A : DaiStable.Arrivals K) (hA : 1280 * A.mean < 128)
     (y : AState A) : PositiveRecurrent (akernel A) y := by
   obtain ⟨W, hW⟩ := hit_nil_le A hA
-  exact positiveRecurrent_of_hit (akernel A) (fun _ => Kernel.integrable_ofOutcomes _ _ _ _ _ _) (nil A) W hW y (nil_reaches A y.1 y.2)
+  exact positiveRecurrent_of_hit (akernel A) (nil A) (fun _ => Kernel.integrable_ofOutcomes _ _ _ _ _ _) hW y (nil_reaches A y.1 y.2)
 
 end DaiRecurrent
 end Papers

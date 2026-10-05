@@ -60,6 +60,7 @@ step {
   budget expr;
   cost expr;
   chunk expr;
+  granule c;               // a prefill gets all it has left or a multiple of c (inf: whole)
   serve admission;  |  serve by (expr, …);  |  serve decode first;  |  serve exclusive prefill;
   serve only (expr) [admission | by (expr, …) | decode first];
   memory POOL;
@@ -80,6 +81,7 @@ that schedules no token is not one, unless it preempted.
 | `budget` | `expr` | `Budget` | `inf` | Tokens per iteration. Reads `residents`, `decoders`, `kv_decode`, `kv_prefill`. |
 | `cost` | `expr` | `Step` | required (a parse error without it) | Clock time of the iteration. Reads `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`. |
 | `chunk` | `expr` | `Budget` | `0` (no cap) | Cap on one request's prefill tokens in an iteration. |
+| `granule` | constant | | none (any amount) | A prefill gets all it has left, or a multiple of it (after `chunk` caps it, rounded down; none when that is 0). `inf` schedules a prefill whole or not at all (TensorRT-LLM without chunking, [`microBatchScheduler.cpp` L416-L435](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/microBatchScheduler.cpp#L416-L435)), a block size aligns its chunks (TensorRT-LLM with chunking, [L228-L263](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/microBatchScheduler.cpp#L228-L263)). A constant above 0; not with `exclusive prefill`, and not above a constant `chunk`, where a longer prompt would never get a token. A prefill that gets none waits, a resident, for an iteration with room; the iteration serves the residents after it and admits no one more, as TensorRT-LLM without chunking stops its scan at the first context that does not fit ([L428-L431](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/microBatchScheduler.cpp#L428-L431)). |
 | `serve` | see below | `Serve` | `admission` | Which residents are served (`only`) and in what order, or an exclusive-prefill batch policy. At most once. |
 | `memory` | `pool` | | none | The pool whose holds give `kv_decode` and `kv_prefill`, and whose `preempt lifo` victims come from this stage. |
 | `iteration` | a body | `Serve`, `Plan` | vLLM's procedure | The iteration as the program writes it: whom it serves, in what order, and when it admits (below). Not with `exclusive prefill` or `only`. |
@@ -170,7 +172,7 @@ Other engines' are other bodies:
 | SGLang (no mixed chunk): the chunked request and new prefills alone, a decode batch when no prefill forms | `iteration { serve only (!decoding); admit; branch (tokens == 0) { serve; } }` |
 | TensorRT-LLM `STATIC_BATCH`: admit only into an empty engine | `iteration { serve; branch (residents == 0) { admit; } }` |
 | FasterTransformer as Dai et al. model it | `iteration { branch (decoders > 0) { serve only (decoding); } else { serve; admit; } }` |
-| TGI with chunking: no admission in the forward after one that admitted | `state just = 0; iteration { serve; branch (just == 0) { admit; } set just = admitted > 0; }` |
+| TGI with chunking: no admission in the forward after one that admitted | `state just = 0; iteration { serve; branch (just == 0 \|\| residents == 0) { admit; } set just = admitted > 0; }` |
 
 #### Registers
 
@@ -184,8 +186,8 @@ sets are undone (a try that admitted keeps them, with the admission).
 
 A register is read where its stage orders the read: the stage's own
 budget, chunk, cost, serve keys and body, a claim over its iterations, the
-keys of a pool it admits (`admit via`) and the header of a hold on such
-pools, a gauge, a claim `at end`. Read elsewhere — another stage, a `ps`
+keys of a pool it admits (`admit via`) and the header of a hold whose
+first pool, where it waits, is such a pool, a gauge, a claim `at end`. Read elsewhere — another stage, a `ps`
 capacity, a pool admitted at settle time — the read and the set would fall
 at one instant in the order of the declarations, and the program does not
 link; nor does a session statement or a claim's `given` read one: a
@@ -199,6 +201,14 @@ SGLang resets `new_token_ratio` when the server goes idle
 which is no iteration. What reads the ratio is the next iteration's
 admission, so the body says it at its top:
 `branch (residents == 0) { set ratio = r0; }`.
+
+A guard on a register that only an iteration changes can keep an engine
+idle: TGI admits in a forward and not in the next, but `branch (just == 0)
+{ admit; }` alone never admits again once the batch empties, since the try
+that would set `just` back schedules nothing and its set is undone. TGI's
+loop reads the queue at once when no batch runs, and the body says so:
+`branch (just == 0 || residents == 0) { admit; }`. The run names an engine
+left so (`idle:`).
 
 ### Example
 

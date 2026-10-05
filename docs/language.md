@@ -64,7 +64,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
           | ps ( expr )                      -- throughput phi(present) shared equally; expr reads present
           | delay                            -- every job at rate 1, no waiting
-          | step { cost expr ; [budget expr ;] [chunk expr ;]     -- options in any order; budget inf by default
+          | step { cost expr ; [budget expr ;] [chunk expr ;] [granule c ;]     -- options in any order; budget inf by default
                    [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
                     | serve exclusive prefill ;
                     | serve only ( expr ) [admission | by ( expr , ... ) | decode first] ;]
@@ -734,7 +734,9 @@ every resident ties, and `decode first` is `by (decoding ? 0 : 1)`; of the
 orders, the IR knows only `by`. A scheduler that serves the shortest
 remaining run first is `serve by (remaining)`, the opposite `serve by
 (-remaining)`. One token to a decoding job, up to `chunk` to a prefilling
-one,
+one (with a `granule g`, short of its remainder, a multiple of `g`, none
+when that is 0: such a prefill is passed over, and the iteration admits no
+one after it),
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); a victim
 the iteration has already served leaves it and its tokens return to the
@@ -830,8 +832,9 @@ the stage a register its body sets (`set NAME = e;`) and the scheduler's
 expressions read, what an engine remembers between iterations (TGI admits
 in a forward and not in the next; SGLang's `new_token_ratio` decays); a set
 takes effect with its iteration (a try that schedules, preempts and admits
-nothing is undone), and a register is read only by its stage, the pools it
-admits, a gauge or a claim ([Stage](api/stage.md#registers)).
+nothing is undone), and a register is read only by its stage, the keys of a
+pool it admits, the header of a hold whose first pool it admits, a gauge
+or a claim ([Stage](api/stage.md#registers)).
 
 **`at admission`.** Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the

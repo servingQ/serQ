@@ -501,6 +501,8 @@ struct Plan<'p> {
     assign: Vec<(u64, f64)>,
     attn_by: Vec<(u64, f64)>,
     admitted: f64,
+    /// A prefill the `granule` refused: the iteration admits no one after.
+    refused: bool,
 }
 
 /// `exclusive prefill`'s rule, as `give` applies it: whether a prefill is
@@ -516,6 +518,11 @@ struct Exclusive {
 enum Give {
     /// No tokens: none wanted, none left, or a stalled grower.
     Skipped,
+    /// No tokens: a prefill the `granule` refuses what is left. The
+    /// iteration admits no one after it, as TensorRT-LLM's scan stops at
+    /// the first context that does not fit (`microBatchScheduler.cpp`
+    /// L428-L431 at bf414e37).
+    Refused,
     /// Its tokens, in this mode.
     Gave(RunMode),
     /// It preempted itself, or the run failed: serving stops here.
@@ -3352,6 +3359,7 @@ impl<'p> Interp<'p> {
                 assign: vec![],
                 attn_by: vec![],
                 admitted: 0.0,
+                refused: false,
             };
             self.run_body(&mut plan, body);
             if self.error.is_some() {
@@ -3361,6 +3369,8 @@ impl<'p> Interp<'p> {
             attn_by = plan.attn_by;
             admitted_any = plan.admitted > 0.0;
         } else {
+            // a prefill the granule refused ends the admissions
+            let mut refused = false;
             loop {
                 let residents = self.serving_order(st, spec);
                 let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
@@ -3372,7 +3382,7 @@ impl<'p> Interp<'p> {
                     // them and uses the whole budget (RBLN guard D). Its hold
                     // must therefore see that budget, not the decode remainder.
                     let admit_left = if exclusive { budget } else { left };
-                    if left > 0.0 && !preempted && self.admit_bound(st, admit_left) {
+                    if left > 0.0 && !preempted && !refused && self.admit_bound(st, admit_left) {
                         continue;
                     }
                     break;
@@ -3384,6 +3394,10 @@ impl<'p> Interp<'p> {
                 });
                 match self.give(st, id, chunk, rule, &mut left, &mut assign, &mut attn_by) {
                     Give::Skipped => continue,
+                    Give::Refused => {
+                        refused = true;
+                        continue;
+                    }
                     // preempted itself (lifo): vLLM stops serving the running
                     // requests for this step (scheduler.py:807-813, `break`).
                     // In admission order the grower is then the last resident
@@ -3581,7 +3595,23 @@ impl<'p> Interp<'p> {
         } else {
             *left
         };
-        let tokens = if blocked { 0.0 } else { want.min(available) };
+        let mut tokens = if blocked { 0.0 } else { want.min(available) };
+        // `granule g`: a prefill short of its remainder takes a multiple of
+        // `g` (none under `inf`: whole or nothing)
+        if mode == RunMode::Prefill
+            && tokens < remaining
+            && let CStageKind::Step(spec) = &self.p.stages[st].kind
+            && let Some(CExpr::Num(g)) = &spec.granule
+        {
+            tokens = if g.is_finite() {
+                (tokens / g).floor() * g
+            } else {
+                0.0
+            };
+            if tokens <= 0.0 {
+                return Give::Refused;
+            }
+        }
         if tokens <= 0.0 {
             return Give::Skipped;
         }
@@ -3691,13 +3721,15 @@ impl<'p> Interp<'p> {
                             &mut plan.assign,
                             &mut plan.attn_by,
                         );
-                        if matches!(given, Give::Stopped) {
-                            break;
+                        match given {
+                            Give::Stopped => break,
+                            Give::Refused => plan.refused = true,
+                            _ => {}
                         }
                     }
                 }
                 CIter::Admit { only, gate } => {
-                    'admit: while plan.left > 0.0 {
+                    'admit: while plan.left > 0.0 && !plan.refused {
                         if let Some(g) = gate
                             && !self.guard(g, plan, "an `admit`'s `while`")
                         {
@@ -3736,8 +3768,14 @@ impl<'p> Interp<'p> {
                                 &mut plan.assign,
                                 &mut plan.attn_by,
                             );
-                            if matches!(given, Give::Stopped) {
-                                break 'admit;
+                            match given {
+                                Give::Stopped => break 'admit,
+                                // the granule refused it: no one after it
+                                Give::Refused => {
+                                    plan.refused = true;
+                                    break 'admit;
+                                }
+                                _ => {}
                             }
                         }
                     }

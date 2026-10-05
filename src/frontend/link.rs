@@ -573,6 +573,20 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 budget: lk.expr(&sp.budget)?,
                 cost: lk.expr(&sp.cost)?,
                 chunk: lk.expr(&sp.chunk)?,
+                granule: match &sp.granule {
+                    None => None,
+                    Some(g) => {
+                        let v = lk.const_eval(g, &format!("stage `{}`: granule", s.name))?;
+                        if v.is_nan() || v <= 0.0 {
+                            return Err(LinkError::new(format!(
+                                "stage `{}`: granule {v}: a prefill takes a multiple of it, \
+                                 so it is above 0 (`inf` for whole or nothing)",
+                                s.name
+                            )));
+                        }
+                        Some(CExpr::Num(v))
+                    }
+                },
                 serve: serve(&lk, &sp.serve)?,
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
                 iteration: match (&sp.only, &sp.iteration) {

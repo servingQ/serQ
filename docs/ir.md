@@ -68,7 +68,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `attrs` | attribute names; an attribute is referenced by its index (slot) |
 | `observes` | observation names, by index |
 | `pools` | `CPool`: `name`, `index` (the member's index in an array declared `pool kv[N]`, a one-member array's too, and a queue family's, `queue D[1]` included; omitted for a single pool; a report label the run does not read), `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, or `By {keys, tail}`: the victim the candidate with the least keys, read at `Victim`, re-queued at the head or, with `tail`, at the back; `preempt lifo` is `By {keys: [-admission]}`), `queue` (`null` for FIFO, otherwise a nonempty list of pure selection keys), `spill`, `admit_via` (stage whose scheduler admits waiting holders), `reserve_held` (omitted when false: `max(0, r − alloc)` of each live hold entry on the pool, `r` its units or `reserve` as evaluated at its admission, counts against later admissions and other holds' growth; it ends with the entry, at its scope's end, a `release` or a preemption, and a lease keeps none) |
-| `stages` | `CStage`: `name`, `index` (as for `CPool`, `stage E[N]`), `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `memory` (pool index), `iteration` (absent for vLLM's procedure, or a body of `CIter`: `Serve {only?, by?}` (read at `Serve`; `by` absent is the stage's order), `Admit {only?, gate?}` (`only` read at `Serve` for each newcomer, which it may leave unserved; `gate` read at `Plan` before each admission), `Branch(guard, then, else)` (guard at `Plan`, 1 or 0); not with `ExclusivePrefill`; a stage's `serve only (p)` is the body `[Serve {only: p}, Admit {only: p, gate: !preempted}]`; every path reaches a `Serve` or an `Admit`) |
+| `stages` | `CStage`: `name`, `index` (as for `CPool`, `stage E[N]`), `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `granule` (absent, or a constant above 0, `inf` included: a prefill gets all it has left or a multiple of it), `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `memory` (pool index), `iteration` (absent for vLLM's procedure, or a body of `CIter`: `Serve {only?, by?}` (read at `Serve`; `by` absent is the stage's order), `Admit {only?, gate?}` (`only` read at `Serve` for each newcomer, which it may leave unserved; `gate` read at `Plan` before each admission), `Branch(guard, then, else)` (guard at `Plan`, 1 or 0); not with `ExclusivePrefill`; a stage's `serve only (p)` is the body `[Serve {only: p}, Admit {only: p, gate: !preempted}]`; every path reaches a `Serve` or an `Admit`) |
 | `arrival` | `Poisson(rate)`, `Renewal(gap expression)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
 | `init`, `turn`, `session` | block indices: the workload's `init` and `turn` blocks and the session program |
@@ -78,7 +78,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `share` | `MaxMin` or `Bottleneck`: how the flows of runs over several stages divide the stages' capacity; present exactly when some `Run` has a non-empty `also`, omitted otherwise |
 | `gauges` | `[{name, expr}]`: functions of the state whose time average the report gives, each read at the `Gauge` moment after every instant; omitted when empty. They read and do not act, so a reader that ignores them runs the same program |
 | `claims` | `[{name, given?, kind, expr}]`: propositions about every path, which the interpreter checks on the path it runs and the report states; omitted when empty. `kind` is `EveryIteration(stage)` or `SomeIteration(stage)` (a step stage's index; `expr` read at the `Iteration` moment) or `AtEnd` (`expr` read at the `End` moment); `given`, omitted when absent, is read at the `Given` moment for every session, and one that reads 0 puts the claim out of the run's scope. Claim names are distinct. They read and do not act, so a reader that ignores them runs the same program |
-| `registers` | `[{name, stage, init}]`: a step stage's `state`, the registers its `iteration` body sets (`CIter::Set(register, expr)`, read at `Plan`) and the scheduler's expressions read (`CExpr::Reg(register)`: in its stage's expressions and body, a claim over its iterations, the keys of a pool it admits and the header of a hold on such pools, a gauge or a claim `at end`; elsewhere the read would fall in an order of declarations, and the program is invalid); `stage` has a body and is no array member; `init` finite; a set takes effect with its iteration and is undone in a try that schedules, preempts and admits nothing; omitted when empty |
+| `registers` | `[{name, stage, init}]`: a step stage's `state`, the registers its `iteration` body sets (`CIter::Set(register, expr)`, read at `Plan`) and the scheduler's expressions read (`CExpr::Reg(register)`: in its stage's expressions and body, a claim over its iterations, the keys of a pool it admits and the header of a hold whose first pool (its queue) is such a pool, a gauge or a claim `at end`; elsewhere the read would fall in an order of declarations, and the program is invalid); `stage` has a body and is no array member; `init` finite; a set takes effect with its iteration and is undone in a try that schedules, preempts and admits nothing; omitted when empty |
 | `slot_cached`, `slot_serial`, … | slots of the built-in attributes (`cached`, `serial`, `turn_no`, `new`, `out`, `think`, `more`, `forced`, `computed`) |
 
 `Sessions`: all the sessions arrive at time 0; each one runs `init`, then
@@ -253,7 +253,7 @@ so a bump moves the generator and `lean/Serq/Oracle.lean` in the same change
   its pools and stages by number and acts on nothing, so a reader that drops
   it runs the same sessions to the same end. It adds the variants
   `CExpr::Agg`, `CtxVar::Demand` and `CtxVar::Served`, which only a claim
-  reads; IR 11 has no tag, so they go in the coming tag's message.
+  reads; they are listed in the `v0.1.3` tag message.
 - **Same shape, a stricter check: no bump.** An IR file that validated before
   and is rejected now was reading a context variable at a moment that never
   supplied it (Moments, above), or a new file lists in `hidden` an attribute
@@ -278,7 +278,7 @@ so a bump moves the generator and `lean/Serq/Oracle.lean` in the same change
 
 A version is a release, and the lines above decide one thing: whether a
 change to a *tagged* version opens the next number. While the version at
-`IR_VERSION` has no tag (11 has none yet; 10 in `v0.1.2` and `v0.1.1`, 9 in `v0.1.0` and `v0.1.0-rc7`, 8 in `v0.1.0-rc6`, 7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`,
+`IR_VERSION` has no tag (11 is in `v0.1.3`; 10 in `v0.1.2` and `v0.1.1`, 9 in `v0.1.0` and `v0.1.0-rc7`, 8 in `v0.1.0-rc6`, 7 in `v0.1.0-rc5`, 6 in `v0.1.0-rc4`,
 5 in `v0.1.0-rc1`;
 `v0.1.0-rc0` is 3), no line bumps; the
 change is listed in the coming tag's message, which is the release note,
@@ -398,10 +398,10 @@ IR). A removed field: the two paper programs' IR files changed
 shape, and the Lean claims generator reads that body as the fragment's
 `only`, so their statements in `lean/Serq/Claims.lean` are unchanged. What
 follows is the history of the field while it was one.
-11 also carried `CStep.only` (#261, `serve only (p)`), added while 11 is
+11 also carried `CStep.only` (#261, `serve only (p)`), added while 11 was
 untagged: a program without it serialises as before and runs as before, and
 one with it changes what the iteration serves, so on a tagged version it
-would have opened a number; it goes in the coming tag's message instead. An
+would have opened a number; it is listed in the `v0.1.3` tag message instead. An
 older reader that ignored the field would run every resident and print a
 different schedule, which is why the line in the release note says so. The
 Lean generator raises `Fragment` on a stage with `only`; no oracle program
@@ -421,8 +421,13 @@ is named (the pool report's `over_cap`, an added field).
 11 also carries `CPool.reserve_held` (`reserve held`), an added field
 omitted when false: absent, a pool runs as before; present, later
 admissions count the holds' unallocated reservations, which an old reader
-would not, so it goes in the coming tag's message. The Lean generators
+would not, so it is listed in the `v0.1.3` tag message. The Lean generators
 raise `Fragment` on it.
+11 also carries `CStep.granule` (`granule g`), an added field omitted when
+absent: absent, a prefill gets any amount, as before; present, it gets all
+it has left or a multiple of `g`, which an old reader would not do, so it
+is listed in the `v0.1.3` tag message. The Lean generators raise `Fragment` on
+it.
 11 also retypes `CPool.preempt` (#356): `Lifo` is gone, and `By {keys,
 tail}` says whom a growth that does not fit preempts and where the victim
 goes back; `preempt lifo` compiles to `By {keys: [-admission]}`, which
@@ -440,7 +445,7 @@ too.
 `join;`): a request's legs, for NIXL's push mode, where the proxy sends the
 prefill and the decode request at once. Two new variants, which an older
 reader cannot run, so on a tagged version they would have opened a number;
-they go in the coming tag's message. A program without them serialises and
+they are listed in the `v0.1.3` tag message. A program without them serialises and
 runs as before. The Lean generators raise `Fragment` on both; no oracle
 program forks.
 11 also carries the preempted hold's cache (#326): a hold released by a

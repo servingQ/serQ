@@ -51,6 +51,7 @@ stage engine : step {
   budget B;                   // tokens per iteration
   cost <expr>;                // clock time per iteration (1: the step clock)
   chunk C;                    // cap on one request's prefill chunk (0: none)
+  granule G;                  // a prefill gets all it has left or a multiple of G (inf: whole or nothing)
   serve by (remaining);       // admission (default) | by (keys…) | decode first | exclusive prefill
                               // | only (p) [order]: serve the residents where p holds
   memory kv;                  // the pool that gives kv_decode / kv_prefill

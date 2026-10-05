@@ -158,6 +158,8 @@ class Program:
         if not st or "Step" not in st[0]["kind"] or any(s["kind"] != "Delay" for s in st[1:]):
             raise Fragment("stages must be one step engine (stage 0) and delays")
         step = st[0]["kind"]["Step"]
+        if step.get("granule") is not None:
+            raise Fragment("granule: the fragment gives a prefill any amount")
         if step["serve"] not in ({"By": []}, "DecodeFirst"):
             raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order")
         only_expr = only_body(step.get("iteration"))

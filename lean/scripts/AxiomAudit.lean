@@ -125,6 +125,9 @@ import papers.KongPoisson
 #print axioms SerqLang.Papers.BariNodes.load_thin
 #print axioms SerqLang.Papers.BariNodes.marginal
 #print axioms SerqLang.Papers.BariNodes.positive_recurrent
+#print axioms SerqLang.Papers.BariNodes.driftQ
+#print axioms SerqLang.Papers.BariNodes.hit_idle_le
+#print axioms SerqLang.Papers.BariNodes.return_idle
 -- positive recurrence: from a set to a state, and the papers' chains on job lists
 -- (Serq/Recurrence.lean, examples/papers/{Dai,Bari}{Sim,Recurrent}.lean)
 #print axioms SerqLang.Foster.hit_le_of_reach
@@ -151,8 +154,12 @@ import papers.KongPoisson
 #print axioms SerqLang.Papers.DaiPoisson.hitTime_le
 #print axioms SerqLang.Papers.DaiPoisson.hit_tendsto
 #print axioms SerqLang.Papers.DaiPoisson.returnTime_le
+#print axioms SerqLang.Papers.DaiPoisson.hit_idle_le
+#print axioms SerqLang.Papers.DaiPoisson.return_idle
 #print axioms SerqLang.Papers.BariPoisson.dur_full
 #print axioms SerqLang.Papers.BariPoisson.drift
 #print axioms SerqLang.Papers.BariPoisson.hitTime_le
 #print axioms SerqLang.Papers.BariPoisson.hit_tendsto
 #print axioms SerqLang.Papers.BariPoisson.returnTime_le
+#print axioms SerqLang.Papers.BariPoisson.hit_idle_le
+#print axioms SerqLang.Papers.BariPoisson.return_idle

@@ -141,3 +141,4 @@ nav:
       - The push mode: design/push-mode.md
       - Engine neutrality: design/engine-neutrality.md
       - A serving specification language: design/serving-specification-language.md
+      - A shared prefix cache: design/shared-prefix-cache.md

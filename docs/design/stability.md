@@ -174,6 +174,37 @@ has the job-list chain's law, step after step, is the one-step
 `BariProgram` do not need it, since they prove their bounds on the machine
 kernel directly.
 
+**For Poisson arrivals** (`DaiPoisson`, `BariPoisson`). The same two bounds
+hold on the chains of §3 whose slots bring a Poisson number of requests.
+No iteration outlasts a full batch (`dur_le`), so a busy slot brings no
+request with probability `e^{-λ · dur} ≥ e^{-λ t_{b_max}}` (`p0_ge`), and
+`δ` is again a power of one probability. A slot adds at most `1280 (λ
+t_{b_max} + 1)` tokens in expectation (Bari: `(4640 λ + 1) E[v_p + v_d]`),
+so `P^n V` converges for every `n` (`Kernel.integrableN_of_apply_le`).
+`hit_le_of_reach` asks for that alone (`Kernel.IntegrableN V`): every other
+function it takes an expectation of is bounded. Below the paper's capacity
+the engine empties in bounded expected time (`hit_idle_le`) and the empty
+machines are a positive recurrent atom (`return_idle`). No chain on job
+lists is built for Poisson arrivals, so `positive_recurrent`, of every
+state, is proved for a fixed distribution only.
+
+**The `g` nodes at once** (`BariNodes`). The total backlog drifts down only
+while every batch is full (`drift_sum`), and the set where some node's
+batch is not full is unbounded, so it is no `F` for `hit_le_of_reach`. The
+squares are: outside node `i`'s `F` its square drifts by `−2 ε V_i` and a
+constant, inside it stays below a constant, so `Σ_i V_i²` drifts down by
+one outside the set where every backlog is at most `R` (`driftQ`), a set of
+bounded backlogs. From it, `R` slots without arrivals empty every node,
+and the states with every node empty are a positive recurrent atom
+(`return_idle`). This needs a slot without arrivals to have positive
+probability, which `load < 128 g` does not give for `g > 1`: one request in
+every slot is below two nodes' capacity, and after the first slot some node
+always holds the newest request (it brings at least 129 tokens, a node
+serves at most 128 a slot; an argument, not a Lean theorem). Poisson
+arrivals give it. Without it the positive recurrence of the chain as a
+whole is not proved: the state with every node empty is then not the atom
+to use.
+
 ## Self-critique
 
 - **A quotient of the machine states.** Rejected for step 4. Taking the

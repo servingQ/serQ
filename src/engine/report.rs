@@ -489,7 +489,8 @@ impl Report {
             let _ = writeln!(
                 s,
                 "idle: stage `{}` ended with residents or waiting requests, its last iteration \
-                 scheduling nothing (a body or `serve only` that serves and admits nobody waits \
+                 scheduling nothing (a body or `serve only` that serves and admits nobody, or a \
+                 `granule` that refuses every prefill, waits \
                  for an event)",
                 label(&st.name, st.index)
             );

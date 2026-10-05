@@ -273,6 +273,8 @@ pub struct StepSpec {
     /// Cap on one request's prefill chunk (`long_prefill_token_threshold`,
     /// 0 = none).
     pub chunk: Expr,
+    /// `granule g`: a prefill gets all it has left or a multiple of `g`.
+    pub granule: Option<Expr>,
     /// The order the iteration serves its residents in (`serve …;`).
     pub serve: Serve,
     /// `serve only (expr)`: the residents the iteration serves.
