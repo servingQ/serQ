@@ -186,11 +186,11 @@ theorem empty_inv : Inv BariStable.empty :=
   ⟨_, _, BariStable.empty_sb, fun j => by simp [getS, BariStable.empty, Slot.empty, Exec.initial],
     fun h => by simp [BariStable.empty, Slot.empty, Exec.initial] at h⟩
 
-theorem slot_inv {m : Machine} (h : Inv m) (rs : List (ℕ × ℕ)) (hl : rs.length ≤ 10000)
+theorem slot_inv {m : Machine} (h : Inv m) (rs : List (ℕ × ℕ))
     (hf : ∀ r ∈ rs, BariStable.Fits r) :
     Inv (BariStable.slot rs m) ∧ σ (BariStable.slot rs m) = absSlot rs (σ m) := by
   obtain ⟨L, g, hB, hA, hit⟩ := h
-  obtain ⟨L', g', hB', -⟩ := BariStable.slot_sb hB rs hl hf
+  obtain ⟨L', g', hB', -⟩ := BariStable.slot_sb hB rs hf
   obtain ⟨L1, g1, h1, -, -, h4, -⟩ := ci_injects (rs.map BariStable.attrs) hB.toCI (BariStable.fits_attrs hf)
   set m1 := injL Mb (rs.map BariStable.attrs) m with hm1
   change CI Mb L1 g1 m1 at h1
@@ -199,7 +199,6 @@ theorem slot_inv {m : Machine} (h : Inv m) (rs : List (ℕ × ℕ)) (hl : rs.len
   rw [← hm1] at i1 i2 i3 i4 i5 i6
   simp only [List.length_map] at i2 i3 i6
   have hr1 : m1.ready = List.range' m.sess.size rs.length := by rw [i2, hB.rdy, List.nil_append]
-  have hlen : m1.ready.length ≤ 10000 := by rw [hr1, List.length_range']; exact hl
   -- the new requests' lengths
   have hLn : ∀ t < rs.length, L1 (m.sess.size + t) = rs.getD t (0, 0) := by
     intro t ht
@@ -236,8 +235,8 @@ theorem slot_inv {m : Machine} (h : Inv m) (rs : List (ℕ × ℕ)) (hl : rs.len
     rw [i5 _ hj1] at e2
     simp only [Prod.mk.injEq, true_and]
     exact e1.symm.trans e2
-  obtain ⟨g2, c1, c2, c3, -, -⟩ := settle_ci h1 hlen
-  obtain ⟨sj, sA⟩ := settle_jobs h1 i4 hlen
+  obtain ⟨g2, c1, c2, c3, -, -⟩ := settle_ci h1
+  obtain ⟨sj, sA⟩ := settle_jobs h1 i4
   set m2 := settle Db m1 with hm2
   have hsl : BariStable.slot rs m =
       if m.iterEnd.isSome then step Db (afterEvent Db m1) else afterEvent Db m1 := rfl
@@ -269,8 +268,8 @@ theorem slot_inv {m : Machine} (h : Inv m) (rs : List (ℕ × ℕ)) (hl : rs.len
     obtain ⟨e1, e2, e3, e4, e5⟩ := ci_end c1 c2 hie2
     obtain ⟨hj, hrd, hAH⟩ := handle_facts hie2 c1.jobsNodup sA (fun j hj => (c1.jobs j hj).1)
     set H := handle m2 a qa with hH
-    obtain ⟨g4, d1, d2, d3, -, -⟩ := settle_ci e1 (e3.trans BariStable.M.small)
-    obtain ⟨sj2, sA2⟩ := settle_jobs e1 hAH (e3.trans BariStable.M.small)
+    obtain ⟨g4, d1, d2, d3, -, -⟩ := settle_ci e1
+    obtain ⟨sj2, sA2⟩ := settle_jobs e1 hAH
     set m3 := settle Db H with hm3
     have hie3 : m3.iterEnd = none := d3.iterEnd.trans e4
     have hpend3 : pendingBy m3 m3.now = false := by simp [pendingBy, nextEvent, hie3, d1.delays]
@@ -353,13 +352,13 @@ theorem slot_inv {m : Machine} (h : Inv m) (rs : List (ℕ × ℕ)) (hl : rs.len
 theorem reach_inv {m : Machine} (h : BariStable.Reach m) : Inv m := by
   induction h with
   | empty => exact empty_inv
-  | slot rs hl hf _ ih => exact (slot_inv ih rs hl hf).1
+  | slot rs hf _ ih => exact (slot_inv ih rs hf).1
 
 /-- The projection commutes with a slot. -/
-theorem simulation (x : BariStable.State) (rs : List (ℕ × ℕ)) (hl : rs.length ≤ 10000)
+theorem simulation (x : BariStable.State) (rs : List (ℕ × ℕ))
     (hf : ∀ r ∈ rs, BariStable.Fits r) :
     σ (BariStable.slot rs x.1) = absSlot rs (σ x.1) :=
-  (slot_inv (reach_inv x.2) rs hl hf).2
+  (slot_inv (reach_inv x.2) rs hf).2
 
 end BariSim
 end Papers

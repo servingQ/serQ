@@ -47,7 +47,6 @@ abbrev M : Slot.Model where
   u := 1
   fits r h := by subst h; exact ⟨by norm_num, one_dvd _, by norm_num⟩
   B := 128
-  small := by norm_num
 
 /-- What a session runs once it has arrived: `dai_sarathi.sq`'s session
 without its arrival delay (`run 1 (x.attr 10)`). -/
@@ -86,12 +85,8 @@ def F {K : ℕ} (x : State K) : Prop := x.1.iterEnd = none ∨ x.1.last.stats.to
 
 instance {K : ℕ} : DecidablePred (F (K := K)) := fun x => by unfold F; infer_instance
 
-/-- The arrival distribution: `p k` for `k ≤ K`. At most 10 000 arrive in a
-slot, so that each becomes a job within its slot: an instant's commands run
-with finite fuel (`Exec.settle`), as the claims' families stop at 500
-sessions. -/
+/-- The arrival distribution: `p k` for `k ≤ K`. -/
 structure Arrivals (K : ℕ) where
-  small : K ≤ 10000
   p : ℕ → ℝ
   nonneg : ∀ k, 0 ≤ p k
   sum_one : ∑ k ∈ Finset.range (K + 1), p k = 1
@@ -100,7 +95,7 @@ structure Arrivals (K : ℕ) where
 def Arrivals.mean {K : ℕ} (A : Arrivals K) : ℝ := ∑ k ∈ Finset.range (K + 1), A.p k * k
 
 /-- The chain: a slot with `k` arrivals, `k` drawn from `A`. -/
-noncomputable def kernel {K : ℕ} (A : Arrivals K) : Kernel (State K) :=
+noncomputable def kernel {K : ℕ} (A : Arrivals K) : Kernel (State K) ℕ :=
   Kernel.ofOutcomes K A.p A.nonneg A.sum_one fun x k =>
     if hk : k ≤ K then ⟨slot k x.1, Reach.slot k hk x.2⟩ else x
 
@@ -225,12 +220,11 @@ theorem ci_start : Starts M Busy := by
 /-! ### A slot -/
 
 /-- **A slot** keeps the invariant: `k` arrivals bring `1280 k` tokens. -/
-theorem slot_sb {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB : SB L g m) (k : ℕ) (hk : k ≤ 10000) :
+theorem slot_sb {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB : SB L g m) (k : ℕ) :
     ∃ L' g', SB L' g' (slot k m) ∧ (slot k m).sess.size = m.sess.size + k ∧
       WnC (m.sess.size + k) L' g' + (if m.iterEnd.isSome then tokSum m.iter else 0) =
         WnC m.sess.size L g + 1280 * k := by
-  obtain ⟨L', g', h1, h2, h3⟩ := Slot.slot_sb ci_start hB (List.replicate k (fun _ => 0)) (by simpa using hk)
-    (fun _ _ => rfl)
+  obtain ⟨L', g', h1, h2, h3⟩ := Slot.slot_sb ci_start hB (List.replicate k (fun _ => 0)) (fun _ _ => rfl)
   rw [← slot_eq, List.length_replicate] at *
   refine ⟨L', g', h1, h2, ?_⟩
   rw [h3]; simp [Model.work, M]; ring
@@ -239,12 +233,12 @@ theorem slot_sb {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB : SB L g 
 theorem empty_sb : SB (fun _ => (290, 990)) ⟨fun _ => .e, fun _ => 0⟩ empty := Slot.empty_sb _
 
 /-- **Every state of the chain is at a slot's end.** -/
-theorem reach_sb {K : ℕ} (hK : K ≤ 10000) {m : Machine} (h : Reach K m) : ∃ L g, SB L g m := by
+theorem reach_sb {K : ℕ} {m : Machine} (h : Reach K m) : ∃ L g, SB L g m := by
   induction h with
   | empty => exact ⟨_, _, empty_sb⟩
   | slot k hk _ ih =>
     obtain ⟨L, g, hB⟩ := ih
-    obtain ⟨L', g', h1, -⟩ := slot_sb hB k (hk.trans hK)
+    obtain ⟨L', g', h1, -⟩ := slot_sb hB k
     exact ⟨L', g', h1⟩
 
 /-- After settling, the backlog is at most the demand plus a decode for
@@ -274,14 +268,14 @@ theorem ci_wn_le {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L
 
 /-- A full batch serves 128 tokens and `k` arrivals bring `1280 k`: the
 backlog after the slot. -/
-theorem backlog_slot {K : ℕ} (hK : K ≤ 10000) (x : State K) (hx : ¬ F x) (k : ℕ) (hk : k ≤ K) :
+theorem backlog_slot {K : ℕ} (x : State K) (hx : ¬ F x) (k : ℕ) (hk : k ≤ K) :
     backlog (slot k x.1) + 128 = backlog x.1 + 1280 * k := by
-  obtain ⟨L, g, hB⟩ := reach_sb hK x.2
+  obtain ⟨L, g, hB⟩ := reach_sb x.2
   simp only [F, not_or, not_lt] at hx
   have hbusy : x.1.iterEnd.isSome = true := Option.isSome_iff_ne_none.mpr hx.1
   obtain ⟨hb1, -⟩ := hB.busy hbusy
   have h128 : tokSum x.1.iter = 128 := by have : tokSum x.1.iter ≤ 128 := hB.tok; omega
-  obtain ⟨L', g', s1, s2, s3⟩ := slot_sb hB k (hk.trans hK)
+  obtain ⟨L', g', s1, s2, s3⟩ := slot_sb hB k
   unfold backlog
   rw [ci_backlog s1.toCI s1.rdy, ci_backlog hB.toCI hB.rdy, s2]
   rw [if_pos hbusy, h128] at s3
@@ -290,9 +284,9 @@ theorem backlog_slot {K : ℕ} (hK : K ≤ 10000) (x : State K) (hx : ¬ F x) (k
 /-- `F` is small: a batch that is not full served every resident's demand
 (`Exec.work_conserving`), so fewer than 128 residents are left, each with
 less than one request's work. -/
-theorem backlog_lt_of_F {K : ℕ} (hK : K ≤ 10000) (x : State K) (hx : F x) :
+theorem backlog_lt_of_F {K : ℕ} (x : State K) (hx : F x) :
     backlog x.1 < 128 * 1280 := by
-  obtain ⟨L, g, hB⟩ := reach_sb hK x.2
+  obtain ⟨L, g, hB⟩ := reach_sb x.2
   rcases hie : x.1.iterEnd with _ | ⟨a, q⟩
   · simp [Slot.backlog, hB.idle hie]
   · have hbusy : x.1.iterEnd.isSome = true := by rw [hie]; rfl
@@ -312,6 +306,7 @@ theorem backlog_lt_of_F {K : ℕ} (hK : K ≤ 10000) (x : State K) (hx : F x) :
 theorem drift {K : ℕ} (A : Arrivals K) (hA : 1280 * A.mean < 128) :
     Drift (kernel A) F (fun x => (backlog x.1 : ℝ)) (ε A) where
   nonneg _ := Nat.cast_nonneg _
+  integrable := Kernel.integrable_ofOutcomes _ _ _ _ _ _
   pos := by unfold ε; linarith
   drift x hx := by
     rw [kernel, Kernel.apply_ofOutcomes]
@@ -325,7 +320,7 @@ theorem drift {K : ℕ} (A : Arrivals K) (hA : 1280 * A.mean < 128) :
               ⟨slot k x.1, Reach.slot k hk' x.2⟩ := dif_pos hk'
           refine (congrArg (fun y : State K => A.p k * (backlog y.1 : ℝ)) key).trans ?_
           show A.p k * (backlog (slot k x.1) : ℝ) = _
-          have h1 := backlog_slot A.small x hx k hk'
+          have h1 := backlog_slot x hx k hk'
           have h2 : (backlog (slot k x.1) : ℝ) + 128 = backlog x.1 + 1280 * k := by exact_mod_cast h1
           have h3 : (backlog (slot k x.1) : ℝ) = backlog x.1 + 1280 * k - 128 := by linarith
           rw [h3]; ring
@@ -370,7 +365,7 @@ example : ¬ F (K := 1) ⟨slot 1 empty, Reach.slot 1 le_rfl .empty⟩ := by
 /-- … and the load condition can hold: one arrival in a slot with
 probability 1/20 is 64 tokens per slot. -/
 example : ∃ A : Arrivals 1, 1280 * A.mean < 128 :=
-  ⟨⟨le_of_lt (by norm_num), fun k => if k = 0 then 19 / 20 else if k = 1 then 1 / 20 else 0,
+  ⟨⟨fun k => if k = 0 then 19 / 20 else if k = 1 then 1 / 20 else 0,
       fun k => by split_ifs <;> norm_num,
       by simp [Finset.sum_range_succ]; norm_num⟩,
     by simp [Arrivals.mean, Finset.sum_range_succ]; norm_num⟩

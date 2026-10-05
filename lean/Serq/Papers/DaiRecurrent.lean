@@ -284,6 +284,7 @@ theorem p0_le_one : A.p 0 ≤ 1 := by
 
 theorem drift (hA : 1280 * A.mean < 128) : Drift (akernel A) (F A) (V A) (ε A) where
   nonneg x := Nat.cast_nonneg _
+  integrable := Kernel.integrable_ofOutcomes _ _ _ _ _ _
   pos := by unfold ε; linarith
   drift x hx := by
     rw [apply_akernel, Finset.sum_congr rfl fun k hk => term_off_F A hx hk]
@@ -328,8 +329,8 @@ theorem applyN_le : ∀ (n : ℕ) (x : AState A),
   | 0, x => by simp [Kernel.applyN]
   | n + 1, x => by
     simp only [Kernel.applyN]
-    have h1 := (akernel A).apply_mono (applyN_le n) x
-    rw [Kernel.apply_add, Kernel.apply_const] at h1
+    have h1 := (akernel A).apply_mono (Kernel.integrable_ofOutcomes _ _ _ _ _ _) (Kernel.integrable_ofOutcomes _ _ _ _ _ _) (applyN_le n) x
+    rw [(akernel A).apply_add (Kernel.integrable_ofOutcomes _ _ _ _ _ _) (Kernel.integrable_ofOutcomes _ _ _ _ _ _), Kernel.apply_const] at h1
     have h2 : (akernel A).apply (V A) x ≤ V A x + 1280 * K := by
       rw [apply_akernel]
       calc ∑ k ∈ Finset.range (K + 1), A.p k * V A (next A x k)
@@ -379,7 +380,7 @@ theorem hit_bound (hA : 1280 * A.mean < 128) : ∀ n x,
     hit (akernel A) (· = nil A) n x ≤
       V A x / ε A + ((128 * 1280 : ℕ) + (128 * 1280 + 1280 * K * (128 * 1280 : ℕ)) / ε A) /
         A.p 0 ^ (128 * 1280) :=
-  hit_le_of_reach (akernel A) (· = nil A) (drift A hA)
+  hit_le_of_reach (akernel A) (· = nil A) (fun _ => Kernel.integrable_ofOutcomes _ _ _ _ _ _) (drift A hA)
     (fun x hx => Or.inl (by rw [hx]; rfl)) (pow_pos (p0_pos A hA) _)
     (fun x hx => drain A hA _ x (by
       have := V_le_of_F A hx
@@ -393,7 +394,7 @@ theorem hit_bound (hA : 1280 * A.mean < 128) : ∀ n x,
 /-- A slot of positive probability, then on. -/
 theorem reaches_step {x y : AState A} {k : ℕ} (hk : k ≤ K) (hp : 0 < A.p k)
     (h : Reaches (akernel A) (next A x k) y) : Reaches (akernel A) x y :=
-  Reaches.step _ hp (fun f hf => le_apply A f hf x hk) h
+  Reaches.step _ hp (fun f hf _ => le_apply A f hf x hk) h
 
 /-- The empty list reaches every state: along the arrivals that built it. -/
 theorem nil_reaches : ∀ (js : List AJob) (h : AReach A js), Reaches (akernel A) (nil A) ⟨js, h⟩
@@ -425,7 +426,7 @@ recurrent. -/
 theorem positive_recurrent {K : ℕ} (A : DaiStable.Arrivals K) (hA : 1280 * A.mean < 128)
     (y : AState A) : PositiveRecurrent (akernel A) y := by
   obtain ⟨W, hW⟩ := hit_nil_le A hA
-  exact positiveRecurrent_of_hit (akernel A) (nil A) W hW y (nil_reaches A y.1 y.2)
+  exact positiveRecurrent_of_hit (akernel A) (fun _ => Kernel.integrable_ofOutcomes _ _ _ _ _ _) (nil A) W hW y (nil_reaches A y.1 y.2)
 
 end DaiRecurrent
 end Papers

@@ -918,12 +918,19 @@ def drain : ℕ → Machine → Machine
     | [] => m
     | i :: rest => drain f (exec D 10000 { m with ready := rest } i)
 
+/-- The rounds `drain` is given: one per session ready when it starts, and
+10 000 for the sessions their commands make ready. It grows with the ready
+list, so that however many sessions are ready at once each runs its
+commands before the pools admit, as in the interpreter's `settle`, which
+drains the ready list to the end before `try_admit`. -/
+def drainFuel (m : Machine) : ℕ := m.ready.length + 10000
+
 /-- Run every ready session, then admit at every pool not served by the
 engine, until nothing is ready (the interpreter's `settle`). -/
 def settleLoop : ℕ → Machine → Machine
   | 0, m => m
   | f + 1, m =>
-    let m := admitAll D (drain D 10000 m)
+    let m := admitAll D (drain D (drainFuel m) m)
     if m.ready.isEmpty then m else settleLoop f m
 
 def settle (m : Machine) : Machine := settleLoop D 1000 m
@@ -1026,7 +1033,8 @@ def admitVia (m : Machine) (left : ℕ) : Machine × Bool :=
     | i :: q =>
       if fitsAll D m (holdNeeds m i left (getS m i).prog) then
         let m := setPool m p { pst m p with queue := q }
-        (drain D 10000 (admit D m i left), true)
+        let m := admit D m i left
+        (drain D (drainFuel m) m, true)
       else (m, false)
     | [] => (m, false)
 

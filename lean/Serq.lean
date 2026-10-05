@@ -30,6 +30,7 @@ import Serq.Claim
 import Serq.Inv
 import Serq.Steps
 import Serq.Slot
+import Serq.Poisson
 import Serq.Work
 import Serq.Claims
 import Serq.Papers

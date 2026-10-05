@@ -66,32 +66,36 @@ end Exec
 
 namespace Foster
 
-open Classical in
 /-- The kernel of a random choice among `f x 0, …, f x K`, with probabilities
 `p 0, …, p K`. -/
 noncomputable def Kernel.ofOutcomes {α : Type*} (K : ℕ) (p : ℕ → ℝ) (hp0 : ∀ k, 0 ≤ p k)
-    (hp1 : ∑ k ∈ Finset.range (K + 1), p k = 1) (f : α → ℕ → α) : Kernel α where
-  supp x := (Finset.range (K + 1)).image (f x)
-  P x y := ∑ k ∈ (Finset.range (K + 1)).filter (fun k => f x k = y), p k
-  nonneg _ _ := Finset.sum_nonneg fun k _ => hp0 k
-  sum_one x := by
-    rw [Finset.sum_fiberwise_of_maps_to (fun k hk => Finset.mem_image_of_mem (f x) hk)]
-    exact hp1
+    (hp1 : ∑ k ∈ Finset.range (K + 1), p k = 1) (f : α → ℕ → α) : Kernel α ℕ where
+  p _ k := if k ≤ K then p k else 0
+  next := f
+  nonneg _ k := by split_ifs <;> simp [hp0]
+  sum_one _ := by
+    have h : HasSum (fun k : ℕ => if k ≤ K then p k else 0)
+        (∑ k ∈ Finset.range (K + 1), if k ≤ K then p k else 0) :=
+      hasSum_sum_of_ne_finset_zero fun k hk => by
+        rw [Finset.mem_range] at hk; rw [if_neg (by omega)]
+    rwa [Finset.sum_congr rfl fun k hk => if_pos (Nat.lt_succ_iff.mp (Finset.mem_range.mp hk)), hp1] at h
 
 /-- The expectation under `ofOutcomes` is the weighted sum over the choices. -/
 theorem Kernel.apply_ofOutcomes {α : Type*} (K : ℕ) (p : ℕ → ℝ) (hp0 : ∀ k, 0 ≤ p k)
     (hp1 : ∑ k ∈ Finset.range (K + 1), p k = 1) (f : α → ℕ → α) (V : α → ℝ) (x : α) :
     (Kernel.ofOutcomes K p hp0 hp1 f).apply V x = ∑ k ∈ Finset.range (K + 1), p k * V (f x k) := by
-  classical
   unfold Kernel.apply Kernel.ofOutcomes
-  simp only
-  rw [← Finset.sum_fiberwise_of_maps_to (g := f x) (t := (Finset.range (K + 1)).image (f x))
-    (fun k hk => Finset.mem_image_of_mem (f x) hk)]
-  refine Finset.sum_congr rfl fun y _ => ?_
-  rw [Finset.sum_mul]
-  refine Finset.sum_congr ?_ fun k hk => ?_
-  · ext k; simp
-  · rw [(Finset.mem_filter.1 hk).2]
+  rw [tsum_eq_sum (s := Finset.range (K + 1)) fun k hk => by
+    rw [Finset.mem_range] at hk; simp only; rw [if_neg (by omega), zero_mul]]
+  exact Finset.sum_congr rfl fun k hk => by
+    simp only; rw [if_pos (Nat.lt_succ_iff.mp (Finset.mem_range.mp hk))]
+
+/-- Finitely many outcomes: every expectation converges. -/
+theorem Kernel.integrable_ofOutcomes {α : Type*} (K : ℕ) (p : ℕ → ℝ) (hp0 : ∀ k, 0 ≤ p k)
+    (hp1 : ∑ k ∈ Finset.range (K + 1), p k = 1) (f : α → ℕ → α) (V : α → ℝ) :
+    (Kernel.ofOutcomes K p hp0 hp1 f).Integrable V := fun x =>
+  summable_of_ne_finset_zero (s := Finset.range (K + 1)) fun k hk => by
+    rw [Finset.mem_range] at hk; simp only [Kernel.ofOutcomes]; rw [if_neg (by omega), zero_mul]
 
 /-- One outcome's term bounds the expectation of a nonnegative function from
 below. -/

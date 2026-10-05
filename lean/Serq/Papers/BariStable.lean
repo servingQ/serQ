@@ -46,7 +46,6 @@ abbrev M : Slot.Model where
   u := 128
   fits _ h := ⟨by have := h.2.1; omega, h.1, h.2.2.2.1⟩
   B := 128
-  small := by norm_num
 
 /-- What a request runs once it has arrived: `bari_rad.sq`'s session without
 its arrival delay. -/
@@ -68,11 +67,10 @@ def empty : Machine := Slot.empty M
 /-- One slot whose arrivals have the (prompt, output) lengths `rs`. -/
 def slot (rs : List (ℕ × ℕ)) (m : Machine) : Machine := Exec.slotL D (Q1 M) (rs.map attrs) m
 
-/-- The machines reached from `empty` by slots of at most 10 000 fitting
-arrivals. -/
+/-- The machines reached from `empty` by slots of fitting arrivals. -/
 inductive Reach : Machine → Prop
   | empty : Reach empty
-  | slot {m : Machine} (rs : List (ℕ × ℕ)) : rs.length ≤ 10000 → (∀ r ∈ rs, Fits r) →
+  | slot {m : Machine} (rs : List (ℕ × ℕ)) : (∀ r ∈ rs, Fits r) →
       Reach m → Reach (slot rs m)
 
 /-- The chain's states. -/
@@ -88,9 +86,8 @@ def F (x : State) : Prop := x.1.iterEnd = none ∨ x.1.last.stats.tokens < 128
 instance : DecidablePred F := fun x => by unfold F; infer_instance
 
 /-- The arrival distribution: outcome `o ≤ N` has probability `p o` and
-brings the requests `arr o`. At most 10 000 arrive in a slot, so that each
-becomes a job within its slot: that is the proof's bound (it follows one
-round of `Exec.drain`), not the paper's. -/
+brings the requests `arr o`, at most 10 000 (a bound on a slot's work that
+`BariRecurrent` uses; nothing in a slot needs it). -/
 structure Arrivals (N : ℕ) where
   p : ℕ → ℝ
   nonneg : ∀ o, 0 ≤ p o
@@ -106,9 +103,9 @@ def Arrivals.work {N : ℕ} (A : Arrivals N) (o : ℕ) : ℕ := ((A.arr o).map f
 def Arrivals.load {N : ℕ} (A : Arrivals N) : ℝ := ∑ o ∈ Finset.range (N + 1), A.p o * A.work o
 
 /-- The chain: a slot with the arrivals of outcome `o`, drawn from `A`. -/
-noncomputable def kernel {N : ℕ} (A : Arrivals N) : Kernel State :=
+noncomputable def kernel {N : ℕ} (A : Arrivals N) : Kernel State ℕ :=
   Kernel.ofOutcomes N A.p A.nonneg A.sum_one fun x o =>
-    ⟨slot (A.arr o) x.1, Reach.slot _ (A.small o) (A.fits o) x.2⟩
+    ⟨slot (A.arr o) x.1, Reach.slot _ (A.fits o) x.2⟩
 
 /-- The drift: `ε = 128 − load`. -/
 def ε {N : ℕ} (A : Arrivals N) : ℝ := 128 - A.load
@@ -335,11 +332,11 @@ theorem work_attrs (rs : List (ℕ × ℕ)) : ((rs.map attrs).map M.work).sum = 
 
 /-- **A slot** keeps the invariant. -/
 theorem slot_sb {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB : SB L g m) (rs : List (ℕ × ℕ))
-    (hl : rs.length ≤ 10000) (hf : ∀ r ∈ rs, Fits r) :
+    (hf : ∀ r ∈ rs, Fits r) :
     ∃ L' g', SB L' g' (slot rs m) ∧ (slot rs m).sess.size = m.sess.size + rs.length ∧
       WnC (m.sess.size + rs.length) L' g' + (if m.iterEnd.isSome then tokSum m.iter else 0) =
         WnC m.sess.size L g + (rs.map fun r => r.1 + r.2).sum := by
-  obtain ⟨L', g', h1, h2, h3⟩ := Slot.slot_sb ci_start hB (rs.map attrs) (by simpa using hl) (fits_attrs hf)
+  obtain ⟨L', g', h1, h2, h3⟩ := Slot.slot_sb ci_start hB (rs.map attrs) (fits_attrs hf)
   rw [List.length_map, work_attrs] at *
   exact ⟨L', g', h1, h2, h3⟩
 
@@ -350,14 +347,14 @@ theorem empty_sb : SB (fun _ => (128, 1)) ⟨fun _ => .e, fun _ => 0⟩ empty :=
 theorem reach_sb {m : Machine} (h : Reach m) : ∃ L g, SB L g m := by
   induction h with
   | empty => exact ⟨_, _, empty_sb⟩
-  | slot rs hl hf _ ih =>
+  | slot rs hf _ ih =>
     obtain ⟨L, g, hB⟩ := ih
-    obtain ⟨L', g', h1, -⟩ := slot_sb hB rs hl hf
+    obtain ⟨L', g', h1, -⟩ := slot_sb hB rs hf
     exact ⟨L', g', h1⟩
 
 /-- A full batch serves 128 tokens and the arrivals bring their prompts and
 outputs: the backlog after the slot. -/
-theorem backlog_slot (x : State) (hx : ¬ F x) (rs : List (ℕ × ℕ)) (hl : rs.length ≤ 10000)
+theorem backlog_slot (x : State) (hx : ¬ F x) (rs : List (ℕ × ℕ))
     (hf : ∀ r ∈ rs, Fits r) :
     backlog (slot rs x.1) + 128 = backlog x.1 + (rs.map fun r => r.1 + r.2).sum := by
   obtain ⟨L, g, hB⟩ := reach_sb x.2
@@ -365,7 +362,7 @@ theorem backlog_slot (x : State) (hx : ¬ F x) (rs : List (ℕ × ℕ)) (hl : rs
   have hbusy : x.1.iterEnd.isSome = true := Option.isSome_iff_ne_none.mpr hx.1
   obtain ⟨hb1, -⟩ := hB.busy hbusy
   have h128 : tokSum x.1.iter = 128 := by have : tokSum x.1.iter ≤ 128 := hB.tok; omega
-  have := Slot.backlog_slot ci_start hB hbusy (rs.map attrs) (by simpa using hl) (fits_attrs hf)
+  have := Slot.backlog_slot ci_start hB hbusy (rs.map attrs) (fits_attrs hf)
   rw [h128, work_attrs] at this
   exact this
 
@@ -408,6 +405,7 @@ theorem backlog_lt_of_F (x : State) (hx : F x) : backlog x.1 < 128 * 512 := by
 theorem drift {N : ℕ} (A : Arrivals N) (hA : A.load < 128) :
     Drift (kernel A) F (fun x => (backlog x.1 : ℝ)) (ε A) where
   nonneg _ := Nat.cast_nonneg _
+  integrable := Kernel.integrable_ofOutcomes _ _ _ _ _ _
   pos := by unfold ε; linarith
   drift x hx := by
     -- the expectation over the outcomes (a `rw` cannot abstract a `State` behind the
@@ -419,7 +417,7 @@ theorem drift {N : ℕ} (A : Arrivals N) (hA : A.load < 128) :
     calc _ = ∑ o ∈ Finset.range (N + 1),
             (A.p o * backlog x.1 + A.p o * A.work o - 128 * A.p o) := by
           refine Finset.sum_congr rfl fun o _ => ?_
-          have h1 := backlog_slot x hx (A.arr o) (A.small o) (A.fits o)
+          have h1 := backlog_slot x hx (A.arr o) (A.fits o)
           have h2 : (backlog (slot (A.arr o) x.1) : ℝ) + 128 = backlog x.1 + A.work o := by
             unfold Arrivals.work; exact_mod_cast h1
           have h3 : (backlog (slot (A.arr o) x.1) : ℝ) = backlog x.1 + A.work o - 128 := by linarith
@@ -453,7 +451,7 @@ theorem hit_tendsto {N : ℕ} (A : Arrivals N) (hA : A.load < 128) (x : State) :
 /-- The theorem is not vacuous: one request of one tile makes a full batch
 (Prefill Mode, a chunk of 128), a state outside `F`. -/
 example : ¬ F ⟨slot [(128, 1)] empty,
-    Reach.slot _ (by decide) (by intro r hr; simp at hr; subst hr; exact ⟨by decide, le_rfl, by decide, le_rfl, by decide⟩) .empty⟩ := by
+    Reach.slot _ (by intro r hr; simp at hr; subst hr; exact ⟨by decide, le_rfl, by decide, le_rfl, by decide⟩) .empty⟩ := by
   have h : (slot [(128, 1)] empty).iterEnd.isSome = true ∧
       (slot [(128, 1)] empty).last.stats.tokens = 128 := by
     decide +kernel
