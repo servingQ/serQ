@@ -78,6 +78,11 @@ has the table. `tests/serve_only.rs` checks the schedule on a unit clock.
 
 ## The price
 
+Since #355 the construct is no field: `serve only (p)` is the iteration
+body `serve only (p); admit only (p) while (!preempted);`, which the linker
+writes, and which runs the same (`tests/iteration_body.rs`). What follows
+is the price as it was paid.
+
 - IR: one field, `CStep.only: Option<CExpr>`, omitted when absent, so every
   existing IR file is unchanged, the seven oracle files included. It changes
   what a program does, so on a tagged version it would have opened 12. 11

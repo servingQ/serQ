@@ -724,7 +724,8 @@ a per-request chunk cap, serving in admission order *is* serving
 decode-first (`SerqLang.Serve.serve_eq_decode_first`; a cap breaks it,
 `chunk_cap_breaks_shape`).
 `serve only (p)` says which residents the iteration serves; `by` says in
-what order:
+what order (it is the iteration body `serve only (p); admit only (p) while
+(!preempted);`, below, which the linker writes):
 
 - `p` is read for each resident when its turn comes, from the variables a
   key reads, and may not draw or read `now` or `work(…)`.

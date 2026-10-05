@@ -66,33 +66,77 @@
           "serve": {
             "By": []
           },
-          "only": {
-            "Cond": [
-              {
-                "Binary": [
-                  "Gt",
-                  {
-                    "Ctx": "Ndec"
-                  },
-                  {
-                    "Num": 0.0
-                  }
-                ]
-              },
-              {
-                "Ctx": "Decoding"
-              },
-              {
-                "Unary": [
-                  "Not",
-                  {
-                    "Ctx": "Decoding"
-                  }
-                ]
+          "memory": null,
+          "iteration": [
+            {
+              "Serve": {
+                "only": {
+                  "Cond": [
+                    {
+                      "Binary": [
+                        "Gt",
+                        {
+                          "Ctx": "Ndec"
+                        },
+                        {
+                          "Num": 0.0
+                        }
+                      ]
+                    },
+                    {
+                      "Ctx": "Decoding"
+                    },
+                    {
+                      "Unary": [
+                        "Not",
+                        {
+                          "Ctx": "Decoding"
+                        }
+                      ]
+                    }
+                  ]
+                }
               }
-            ]
-          },
-          "memory": null
+            },
+            {
+              "Admit": {
+                "only": {
+                  "Cond": [
+                    {
+                      "Binary": [
+                        "Gt",
+                        {
+                          "Ctx": "Ndec"
+                        },
+                        {
+                          "Num": 0.0
+                        }
+                      ]
+                    },
+                    {
+                      "Ctx": "Decoding"
+                    },
+                    {
+                      "Unary": [
+                        "Not",
+                        {
+                          "Ctx": "Decoding"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "gate": {
+                  "Unary": [
+                    "Not",
+                    {
+                      "Ctx": "Preempted"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
         }
       }
     }

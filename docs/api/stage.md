@@ -92,7 +92,7 @@ that schedules no token is not one, unless it preempted.
 | `by (k1, …)` | ascending keys per resident, ties by admission order | `By(keys)` |
 | `decode first` | decodes before prefills | `By([decoding ? 0 : 1])` |
 | `exclusive prefill` | one prefill alone, or a decode-only batch; a fitting waiting prefill displaces tentative resident decodes | `ExclusivePrefill` |
-| `only (p)` then an order | only the residents for which `p` is nonzero, in that order (`admission` when none is written) | `CStep.only = Some(p)` beside the order's `By` |
+| `only (p)` then an order | only the residents for which `p` is nonzero, in that order (`admission` when none is written) | the body `serve only (p); admit only (p) while (!preempted);`, beside the order's `By` (the linker writes it) |
 
 Keys read `decoding`, `admission`, `remaining` and the totals `residents`,
 `decoders`, `kv_decode`, `kv_prefill`, and may not draw. `serve by (remaining)` is

@@ -515,13 +515,41 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 cost: lk.expr(&sp.cost)?,
                 chunk: lk.expr(&sp.chunk)?,
                 serve: serve(&lk, &sp.serve)?,
-                only: sp.only.as_ref().map(|e| lk.expr(e)).transpose()?,
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
-                iteration: sp
-                    .iteration
-                    .as_ref()
-                    .map(|body| iteration(&lk, lk.stages[&s.name].0, body))
-                    .transpose()?,
+                iteration: match (&sp.only, &sp.iteration) {
+                    (None, body) => body
+                        .as_ref()
+                        .map(|b| iteration(&lk, lk.stages[&s.name].0, b))
+                        .transpose()?,
+                    // `serve only (p)` is the body that serves only `p` and
+                    // admits while the iteration has not preempted, each
+                    // newcomer `p` excludes waiting unserved (#355)
+                    (Some(p), None) => {
+                        let p = lk.expr(p)?;
+                        Some(vec![
+                            CIter::Serve {
+                                only: Some(p.clone()),
+                                by: None,
+                            },
+                            CIter::Admit {
+                                only: Some(p),
+                                gate: Some(CExpr::Unary(
+                                    UnOp::Not,
+                                    Box::new(CExpr::Ctx(CtxVar::Preempted)),
+                                )),
+                            },
+                        ])
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(LinkError::new(format!(
+                            "stage `{}`: `serve only` and an `iteration` body: the stage's \
+                             `serve only (p)` is a body, `serve only (p); admit only (p) while \
+                             (!preempted);`, so the two would be two bodies; write `only` in \
+                             the body",
+                            s.name
+                        )));
+                    }
+                },
             }),
         };
         let memory = match &s.kind {

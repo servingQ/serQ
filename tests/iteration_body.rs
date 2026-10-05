@@ -143,8 +143,8 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
     assert!(
         err("iteration { serve; admit while (budget_left(engine) > 0); }").contains("budget_left")
     );
-    assert!(err("serve only (decoding); iteration { serve; admit; }").contains("second"));
-    assert!(err("serve exclusive prefill; iteration { serve; admit; }").contains("second"));
+    assert!(err("serve only (decoding); iteration { serve; admit; }").contains("two bodies"));
+    assert!(err("serve exclusive prefill; iteration { serve; admit; }").contains("takes back"));
     // `admitted` and `preempted` are a body's
     let src = prog("iteration { serve; admit; }").replace(
         "prefill on engine (2);",

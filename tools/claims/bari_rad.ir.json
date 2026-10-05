@@ -76,49 +76,109 @@
           "serve": {
             "By": []
           },
-          "only": {
-            "Cond": [
-              {
-                "Binary": [
-                  "Or",
-                  {
-                    "Binary": [
-                      "Ge",
-                      {
-                        "Ctx": "Ndec"
-                      },
-                      {
-                        "Num": 128.0
-                      }
-                    ]
-                  },
-                  {
-                    "Binary": [
-                      "Eq",
-                      {
-                        "Ctx": "Ndec"
-                      },
-                      {
-                        "Ctx": "Nres"
-                      }
-                    ]
-                  }
-                ]
-              },
-              {
-                "Ctx": "Decoding"
-              },
-              {
-                "Unary": [
-                  "Not",
-                  {
-                    "Ctx": "Decoding"
-                  }
-                ]
+          "memory": null,
+          "iteration": [
+            {
+              "Serve": {
+                "only": {
+                  "Cond": [
+                    {
+                      "Binary": [
+                        "Or",
+                        {
+                          "Binary": [
+                            "Ge",
+                            {
+                              "Ctx": "Ndec"
+                            },
+                            {
+                              "Num": 128.0
+                            }
+                          ]
+                        },
+                        {
+                          "Binary": [
+                            "Eq",
+                            {
+                              "Ctx": "Ndec"
+                            },
+                            {
+                              "Ctx": "Nres"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "Ctx": "Decoding"
+                    },
+                    {
+                      "Unary": [
+                        "Not",
+                        {
+                          "Ctx": "Decoding"
+                        }
+                      ]
+                    }
+                  ]
+                }
               }
-            ]
-          },
-          "memory": null
+            },
+            {
+              "Admit": {
+                "only": {
+                  "Cond": [
+                    {
+                      "Binary": [
+                        "Or",
+                        {
+                          "Binary": [
+                            "Ge",
+                            {
+                              "Ctx": "Ndec"
+                            },
+                            {
+                              "Num": 128.0
+                            }
+                          ]
+                        },
+                        {
+                          "Binary": [
+                            "Eq",
+                            {
+                              "Ctx": "Ndec"
+                            },
+                            {
+                              "Ctx": "Nres"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "Ctx": "Decoding"
+                    },
+                    {
+                      "Unary": [
+                        "Not",
+                        {
+                          "Ctx": "Decoding"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "gate": {
+                  "Unary": [
+                    "Not",
+                    {
+                      "Ctx": "Preempted"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
         }
       }
     }

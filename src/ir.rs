@@ -605,24 +605,15 @@ pub struct CStep {
     /// How the iteration serves its residents: an order, or the
     /// exclusive-prefill rule.
     pub serve: CServe,
-    /// Which residents the iteration serves (`serve only (expr)`), read at
-    /// `Moment::Serve` for each resident at its turn as a serve key is, on
-    /// the residents' totals as they stand: a resident it reads as 0 is not
-    /// served this iteration. It keeps what it holds and advances no
-    /// computed KV, as a displaced decode under `ExclusivePrefill` does;
-    /// `serve` orders the rest. None serves every resident. It reads
-    /// neither `now` nor `work(…)`: an engine whose residents it all
-    /// excludes waits for the next event, and the clock moving is none. Not
-    /// with `ExclusivePrefill`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub only: Option<CExpr>,
     pub memory: Option<usize>,
     /// The iteration as the program writes it (`iteration { … }`): which
     /// residents are served, in what order, and when the waiting are
     /// admitted, in the order the statements run. None is vLLM's procedure,
     /// `serve` then the waiting admitted while the iteration has not
-    /// preempted, with `serve` and `only` above. A body serves by its own
-    /// statements: not with `ExclusivePrefill` or `only`.
+    /// preempted, in the order above. Not with `ExclusivePrefill`, a rule a
+    /// body cannot write (it takes back decodes already chosen). A stage's
+    /// `serve only (p)` is the body `[Serve {only: p}, Admit {only: p, gate:
+    /// !preempted}]`, which the linker writes (#355).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iteration: Option<Vec<CIter>>,
 }
@@ -1431,7 +1422,6 @@ impl Program {
                     if let CServe::By(keys) = &st.serve {
                         exprs.extend(keys);
                     }
-                    exprs.extend(st.only.iter());
                     if let Some(body) = &st.iteration {
                         body_exprs(body, &mut exprs);
                     }
@@ -1553,39 +1543,12 @@ impl Program {
                             }
                         }
                     }
-                    if let Some(e) = &st.only {
-                        v.expr(e, Moment::Serve).map_err(at)?;
-                        if draws(e) {
-                            return Err(at(
-                                "a serve `only` may not draw (`~`): it is read for every \
-                                 resident at every iteration"
-                                    .into(),
-                            ));
-                        }
-                        if reads_clock(e) {
-                            return Err(at(
-                                "a serve `only` may not read `now` or `work(…)`: an engine \
-                                 whose residents it excludes waits for an event, and the \
-                                 clock moving is none"
-                                    .into(),
-                            ));
-                        }
+                    if let Some(body) = &st.iteration {
                         if matches!(st.serve, CServe::ExclusivePrefill) {
                             return Err(at(
-                                "`only` with `ExclusivePrefill`: the exclusive rule admits a \
-                                 waiting prefill in place of the decodes it displaces, and \
-                                 what `only` would do to either is a third rule"
-                                    .into(),
-                            ));
-                        }
-                    }
-                    if let Some(body) = &st.iteration {
-                        if matches!(st.serve, CServe::ExclusivePrefill) || st.only.is_some() {
-                            return Err(at(
-                                "an `iteration` body with `serve exclusive prefill` or `serve \
-                                 only`: the body says which residents are served and when the \
-                                 waiting are admitted, and the stage option would be a second \
-                                 answer; write it in the body"
+                                "an `iteration` body with `serve exclusive prefill`: the rule \
+                                 takes back decodes already chosen, which a body cannot, and \
+                                 the two would answer one question twice"
                                     .into(),
                             ));
                         }

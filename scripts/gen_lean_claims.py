@@ -34,7 +34,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from gen_lean_oracle import (  # noqa: E402
-    Expr, Fragment, Lean, affine, chunk_rule, fold, nat, one_ref, COST_VARS, is_lifo,
+    Expr, Fragment, Lean, affine, chunk_rule, fold, nat, one_ref, COST_VARS, is_lifo, only_body,
 )
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -160,12 +160,11 @@ class Program:
         step = st[0]["kind"]["Step"]
         if step["serve"] not in ({"By": []}, "DecodeFirst"):
             raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order")
-        if step.get("iteration") is not None:
-            raise Fragment("iteration: the fragment runs vLLM's procedure, not a body")
+        only_expr = only_body(step.get("iteration"))
         cost = cost_fn(step["cost"])
         only = "none"
-        if step.get("only") is not None:
-            only = f"some fun e => {Expr(serve_leaf).nat(step['only'])}"
+        if only_expr is not None:
+            only = f"some fun e => {Expr(serve_leaf).nat(only_expr)}"
         grown = self.grown_pools()
         pools = []
         for i, p in enumerate(ir["pools"]):
