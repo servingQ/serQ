@@ -1,0 +1,83 @@
+// SGLang (ref/sglang at b792228b) on one device, its defaults: FCFS, no
+// mixed chunk, prefill first. The closest program serQ writes today;
+// docs/design/engine-neutrality.md cites the source rule by rule and says
+// where this program is not SGLang:
+//
+// - SGLang forms a prefill batch of every waiting request the budget and
+//   memory take, and runs it alone; `serve exclusive prefill` runs one;
+// - the admission test subtracts what every running request may still
+//   generate, scaled by `new_token_ratio`, a ratio the scheduler decays
+//   every decode step and raises after a retraction; here the ratio is a
+//   constant and the sum is `holders(reqs)` times one request's estimate;
+// - a retraction takes the request with the fewest output tokens (then the
+//   longest prompt) and sends it to the back of the queue; `preempt lifo`
+//   takes the latest admitted and puts it at the head;
+// - the radix cache is shared across requests; serQ's entries are a
+//   session's own.
+let B = 8192;           // chunked_prefill_size
+let max_run = 256;      // max_running_requests
+let tokens_cap = 60000; // max_total_num_tokens (page size 1)
+let M = 2048;           // the clients' max_new_tokens
+let clip = 4096;        // SGLANG_CLIP_MAX_NEW_TOKENS_ESTIMATION
+let ratio = 0.7;        // new_token_ratio at its initial value, frozen
+let a = 2e-5;           // compute per scheduled token (s)
+let omega = 2e-4;       // weights read per iteration (s)
+let beta = 2e-9;        // KV read per iteration per resident context token (s)
+let Lambda = 0.5;       // sessions per second
+let p = 0.9;            // continue after a turn
+let Z = 3.0;            // tool time (s)
+
+pool reqs { cap max_run; admit via engine; }
+pool kv { cap tokens_cap; evict lru; preempt lifo; }
+
+stage engine : step {
+  budget B;
+  serve exclusive prefill;
+  cost max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+  memory kv;
+}
+stage tool : delay;
+
+workload {
+  arrive poisson(Lambda);
+  hidden o;
+  init { set K = 0; }
+  turn {
+    set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+    set o = min(M, floor(~exp(200)) + 1);
+    set more = ~bernoulli(p);
+  }
+  session {
+    turn;
+    loop {
+      request;
+      set K = prompt + o;
+      branch (more) { tool (~exp(Z)); turn; } else { end; }
+    }
+  }
+}
+
+// A retracted request keeps its output tokens and recomputes them; only its
+// prompt stays in the cache (`fin` is 0 until the request finishes). The
+// reservation is capped at the pool: a `reserve` above the cap when the
+// session joins is a request that can never fit, and is rejected, where
+// SGLang's test, which grows with the load, only makes it wait.
+server {
+  set t0 = now;
+  set prompt = K + n;
+  set fin = 0;
+  hold reqs (1), kv (min(known, hit + budget_left(engine)))
+       reserve (min(tokens_cap, known - hit + min(M - (known - prompt), clip) + 1
+                                + ratio * min(M, clip) * holders(reqs)))
+       at admission (known = computed < prompt ? prompt : computed + 1,
+                     hit = min(cachedin(kv), known - 1)) {
+    set c = min(cached, known - 1);
+    prefill on engine (known - c) growing kv;
+    branch (known == prompt) { observe ttft = now - t0; }
+    decode on engine (o - 1 - (known - prompt)) growing kv;
+    set fin = 1;
+  } cache (fin == 1 ? prompt + o : prompt);
+  observe response = now - t0;
+}
+
+run { horizon 2000; warmup 200; seed 1; }
