@@ -150,7 +150,7 @@ iteration {
 }
 
 // TGI, no chunking: a new batch when enough wait or enough steps passed,
-// prefilled in its own forward (`state` is the part #362 leaves out)
+// prefilled in its own forward
 state since = 0;
 iteration {
   branch (queued(reqs) >= floor(ratio * residents) || since >= max_wait) { admit; }
@@ -166,8 +166,8 @@ iteration { branch (decoders > 0) { serve only (decoding); } else { serve; admit
 
 `exclusive prefill` and `serve only` become bodies, and V1 and V2 go with
 them: neither is a rule any more, and the opposite of each is a program.
-`state` (V7) is a stage's register, read like a constant and written only
-in its own `iteration`; SGLang's ratio is one, written after a retraction
+`state` (V7, #367) is a stage's register, written only in its own `iteration`
+and read by that stage and the pools it admits; SGLang's ratio is one, written after a retraction
 from the residents' totals.
 
 The memory-side rules are the pool's in both designs, and are options in

@@ -267,3 +267,168 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
     let e = run_source(src, &Overrides::default(), None).unwrap_err();
     assert!(e.contains("a test is 1 or 0"), "{e}");
 }
+
+/// TGI with chunking admits in a forward and not in the next one
+/// (`backend.rs` L221-L236, L285-L288 at b4adbf2f): a register remembers
+/// whether the last iteration admitted. One request arrives each second,
+/// an iteration lasts one: without the register each is admitted at once,
+/// with it every other one waits a second.
+#[test]
+fn a_register_remembers_the_last_iteration() {
+    let prog = |body: &str| {
+        format!(
+            r#"
+            pool reqs {{ cap 64; admit via engine; }}
+            stage engine : step {{ budget 64; cost 1; {body} }}
+            workload {{ arrive renewal(1); }}
+            session {{
+              set t0 = now;
+              hold reqs (1) {{
+                observe wait = now - t0;
+                prefill on engine (1);
+                decode on engine (30);
+              }}
+              end;
+            }}
+            run {{ horizon 40; warmup 0; seed 1; }}
+            "#
+        )
+    };
+    let wait = |body: &str| {
+        let r = run(&prog(body));
+        r.observe("wait").unwrap().samples.clone()
+    };
+    let every = wait("");
+    assert!(every.iter().all(|&w| w == 0.0), "{every:?}");
+    let alternate = wait(
+        "state just = 0; \
+         iteration { serve; branch (just == 0) { admit; } set just = admitted > 0; }",
+    );
+    // the first arrives at 1 and is admitted (`just` 1); the one of 2 waits,
+    // since that iteration does not admit (`just` 0); at 3 it is admitted
+    // with the one of 3, and so on: by session 0, 1, 0, 1, …
+    assert_eq!(
+        alternate[..7],
+        [0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+        "{alternate:?}"
+    );
+}
+
+/// A register's `set` takes effect with its iteration: an engine whose
+/// body schedules nothing has had no iteration, and the count of
+/// iterations a register keeps is the stage's.
+#[test]
+fn a_set_in_an_iteration_that_is_none_is_undone() {
+    let src = r#"
+        pool reqs { cap 1; admit via engine; }
+        stage engine : step {
+          budget 4; cost 1;
+          state n = 0;
+          iteration { set n = n + 1; serve only (decoding); admit while (residents == 0); }
+        }
+        workload { arrive renewal(1); }
+        session { hold reqs (1) { prefill on engine (100); } end; }
+        gauge count = n;
+        run { horizon 30; warmup 0; seed 1; }
+        "#;
+    let r = run(src);
+    // the first session is admitted and gets 4 tokens; after that its
+    // prefill is excluded and nothing else may be admitted: every later
+    // arrival is an event and a try, and none is an iteration
+    assert_eq!(r.gauge("count").unwrap().max, 1.0, "{}", r.text());
+}
+
+#[test]
+fn a_register_is_the_stage_s_own() {
+    let prog = |stage: &str, session: &str| {
+        format!(
+            r#"
+            pool reqs {{ cap 8; admit via engine; }}
+            stage engine : step {{ budget 8; cost 1; {stage} }}
+            stage other : step {{ budget 8; cost 1; state r = 0; iteration {{ serve; admit; }} }}
+            workload {{ arrive batch(1); }}
+            session {{ hold reqs (1) {{ prefill on engine (2); }} {session} end; }}
+            run {{ horizon 20; }}
+            "#
+        )
+    };
+    let err = |stage: &str, session: &str| {
+        compile_source(&prog(stage, session), &Overrides::default())
+            .err()
+            .unwrap_or_else(|| panic!("`{stage}` `{session}` linked"))
+    };
+    let body = "state k = 0; iteration { serve; admit; set k = k + 1; }";
+    assert!(compile_source(&prog(body, ""), &Overrides::default()).is_ok());
+    assert!(err("state k = 0;", "").contains("nothing sets"));
+    assert!(err("iteration { serve; admit; set r = 1; }", "").contains("another stage"));
+    assert!(err(body, "set x = k;").contains("register"));
+    assert!(err("state cached = 0; iteration { serve; admit; }", "").contains("taken"));
+    assert!(err("state k = 0; iteration { serve; admit; set k = now; }", "").contains("now"));
+}
+
+/// A register is read where its stage orders the read. Read by another
+/// stage, a `ps` capacity, or a hold its stage does not admit, the read and
+/// the set fall at one instant in the order of the declarations, and the
+/// review of #367 found the answer moving with that order; such a program
+/// does not link. A stage array has no register, and a claim's `given` is
+/// the session's.
+#[test]
+fn a_register_is_read_where_its_stage_orders_the_read() {
+    let prog = |extra: &str, hold: &str| {
+        format!(
+            r#"
+            pool reqs {{ cap 8; admit via b; }}
+            pool other {{ cap 8; }}
+            stage b : step {{ budget 8; cost 1; state go = 0; iteration {{ serve; admit; set go = 1; }} }}
+            {extra}
+            workload {{ arrive batch(1); }}
+            session {{ {hold} end; }}
+            run {{ horizon 20; }}
+            "#
+        )
+    };
+    let ok = |extra: &str, hold: &str| compile_source(&prog(extra, hold), &Overrides::default());
+    let base = "hold reqs (1) { prefill on b (2); }";
+    // its pool's header and keys, a gauge
+    assert!(ok("gauge g = go;", "hold reqs (1 + go) { prefill on b (2); }").is_ok());
+    // a ps capacity, another stage, a hold on a pool admitted at settle time
+    for (extra, hold) in [
+        ("stage p : ps(1 + go);", base),
+        (
+            "stage a : step { budget 8; cost 1; serve only (go == 1); }",
+            base,
+        ),
+        ("", "hold other (1 + go) { run b prefill (2); }"),
+    ] {
+        let e = ok(extra, hold)
+            .err()
+            .unwrap_or_else(|| panic!("{extra} {hold} linked"));
+        assert!(e.contains("`go` is stage `b`'s register"), "{e}");
+    }
+    let arr = "stage c[2] : step { budget 8; cost 1; state q = 0; iteration { serve; admit; } }";
+    assert!(ok(arr, base).unwrap_err().contains("stage array"));
+    let given = "claim c given (go == 0): at end (1);";
+    assert!(ok(given, base).is_err());
+}
+
+/// A try that admitted is kept with its sets, though it scheduled nothing
+/// (the newcomer excluded): the admission stays, and so does what the body
+/// set.
+#[test]
+fn a_try_that_admitted_keeps_its_sets() {
+    let src = r#"
+        pool reqs { cap 4; admit via engine; }
+        stage engine : step {
+          budget 8; cost 1;
+          state k = 0;
+          iteration { serve only (decoding); set k = k + 1; admit only (decoding); }
+        }
+        workload { arrive batch(2); }
+        session { hold reqs (1) { prefill on engine (2); } end; }
+        gauge seen = k;
+        run { horizon 10; warmup 0; seed 1; }
+        "#;
+    let r = run(src);
+    assert!(r.pool("reqs").unwrap().admissions > 0, "{}", r.text());
+    assert!(r.gauge("seen").unwrap().max >= 1.0, "{}", r.text());
+}

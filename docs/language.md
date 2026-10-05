@@ -66,10 +66,11 @@ kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 
                    [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
                     | serve exclusive prefill ;
                     | serve only ( expr ) [admission | by ( expr , ... ) | decode first] ;]
-                   [memory POOL ;] [iteration { istmt* }] }
+                   [memory POOL ;] [state NAME = expr ;]* [iteration { istmt* }] }
 istmt    := serve [only ( expr )] [admission | by ( expr , ... ) | decode first] ;   -- the residents not yet served
           | admit [while ( expr )] ;           -- the waiting, one at a time, each served
           | branch ( expr ) { istmt* } [else { istmt* }]
+          | set NAME = expr ;                  -- one of the stage's registers (`state NAME = c ;` among its options)
 wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
           | init block | turn block          -- only set / observe
@@ -773,7 +774,13 @@ A body with a path that neither serves nor admits, or a guard that reads
 `now`, does not link (an engine that schedules nothing waits for an event,
 and the clock moving is none); that is necessary, not sufficient, and an
 engine the linker could not see stall is named in the report when the run
-ends with its work unscheduled (`idle: stage …`).
+ends with its work unscheduled (`idle: stage …`). `state NAME = c;` gives
+the stage a register its body sets (`set NAME = e;`) and the scheduler's
+expressions read, what an engine remembers between iterations (TGI admits
+in a forward and not in the next; SGLang's `new_token_ratio` decays); a set
+takes effect with its iteration (a try that schedules, preempts and admits
+nothing is undone), and a register is read only by its stage, the pools it
+admits, a gauge or a claim ([Stage](api/stage.md#registers)).
 
 **`at admission`.** Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the

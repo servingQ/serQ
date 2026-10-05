@@ -278,6 +278,8 @@ pub struct StepSpec {
     pub memory: Option<Ref>,
     /// `iteration { … }`: the iteration as the program writes it.
     pub iteration: Option<Vec<IterStmt>>,
+    /// `state NAME = c;`: the stage's registers and their first values.
+    pub state: Vec<(String, Expr)>,
 }
 
 /// A statement of a step stage's `iteration` body.
@@ -295,6 +297,8 @@ pub enum IterStmt {
     },
     /// `branch (e) { … } [else { … }]`
     Branch(Expr, Vec<IterStmt>, Vec<IterStmt>),
+    /// `set NAME = e;`: one of the stage's registers.
+    Set(String, Expr),
 }
 
 /// `serve` of a step stage: one order, where two booleans (`exclusive

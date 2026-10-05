@@ -390,6 +390,10 @@ pub enum CExpr {
     /// An aggregate of every value the run observed under an observation
     /// (its index), warm-up included: read only at `Moment::End`.
     Agg(Agg, usize),
+    /// A step stage's register (`Program::registers`, its index): the value
+    /// its iteration body last set. Not a session's: not read in a session
+    /// statement or a claim's `given`.
+    Reg(usize),
 }
 
 /// The aggregates of a run's observations a claim `at end` reads.
@@ -448,7 +452,7 @@ impl CExpr {
             return Some(self);
         }
         match self {
-            CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) | CExpr::Agg(..) => None,
+            CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) | CExpr::Agg(..) | CExpr::Reg(_) => None,
             CExpr::Sample(_, xs) => xs.iter().find_map(|x| x.find(f)),
             CExpr::Call(_, args) => args.iter().find_map(|a| match a {
                 CArg::Expr(x) => x.find(f),
@@ -653,6 +657,11 @@ pub enum CIter {
     /// A test read at `Moment::Plan`: the first body when 1, the second
     /// when 0.
     Branch(CExpr, Vec<CIter>, Vec<CIter>),
+    /// Set a register of this stage (`Program::registers`) to an expression
+    /// read at `Moment::Plan`. It takes effect with the iteration: an
+    /// iteration that schedules nothing and preempts nothing is none, and
+    /// its sets are undone.
+    Set(usize, CExpr),
 }
 
 /// A step stage's serving policy: resident order (`By(keys)`) or the rule
@@ -781,6 +790,20 @@ pub struct Program {
     /// same program (`docs/ir.md`, Stability).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub claims: Vec<Claim>,
+    /// `state NAME = c;` of the step stages: registers a stage's iteration
+    /// body sets and the scheduler's expressions read (`CExpr::Reg`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub registers: Vec<Register>,
+}
+
+/// A step stage's register: its name, the stage whose body sets it, and its
+/// value before the first iteration.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Register {
+    pub name: String,
+    pub stage: usize,
+    #[serde(with = "real")]
+    pub init: f64,
 }
 
 /// A gauge: a name and an expression evaluated at `Moment::Gauge`.
@@ -1333,6 +1356,124 @@ impl Program {
         Ok(())
     }
 
+    /// A register is read where its stage's iteration orders the read: in
+    /// the stage's own expressions (budget, chunk, cost, serve keys, its
+    /// body, a claim over its iterations), in those of a pool it admits
+    /// (`admit via`: queue, eviction and preempt keys, a spill, a hold's
+    /// header whose pools it admits), and in a gauge or a claim `at end`.
+    /// Elsewhere — another stage's, a `ps` capacity, a pool admitted at
+    /// settle time — the read and the set happen at one instant in an order
+    /// that is the order of the declarations, and the answer would be that
+    /// order's (#367).
+    fn registers_read_in_place(&self) -> Result<(), String> {
+        if self.registers.is_empty() {
+            return Ok(());
+        }
+        let read = |e: &CExpr, ok: &dyn Fn(usize) -> bool, place: &str| -> Result<(), String> {
+            let Some(CExpr::Reg(r)) = e.find(&|x| matches!(x, CExpr::Reg(r) if !ok(*r))) else {
+                return Ok(());
+            };
+            let reg = &self.registers[*r];
+            let owner = &self.stages[reg.stage].name;
+            Err(format!(
+                "`{}` is stage `{owner}`'s register, and {place} would read it apart from \
+                 `{owner}`'s iteration, in an order the declarations would decide; a register \
+                 is read by its stage, the pools it admits, a gauge or a claim",
+                reg.name
+            ))
+        };
+        let of = |stage: usize| move |r: usize| self.registers[r].stage == stage;
+        let admitted_by = |pool: usize| {
+            move |r: usize| self.pools[pool].admit_via == Some(self.registers[r].stage)
+        };
+        for (pi, p) in self.pools.iter().enumerate() {
+            let place = format!("pool `{}`'s keys", p.name);
+            let ok = admitted_by(pi);
+            let mut exprs: Vec<&CExpr> = vec![];
+            exprs.extend(p.queue.iter().flatten());
+            if let CEvict::By(keys) = &p.evict {
+                exprs.extend(keys);
+            }
+            if let Preempt::By { keys, .. } = &p.preempt {
+                exprs.extend(keys);
+            }
+            if let Some(s) = &p.spill {
+                exprs.extend([&s.work, &s.when]);
+            }
+            for e in exprs {
+                read(e, &ok, &place)?;
+            }
+        }
+        fn body_exprs<'a>(body: &'a [CIter], out: &mut Vec<&'a CExpr>) {
+            for s in body {
+                match s {
+                    CIter::Serve { only, by } => {
+                        out.extend(only.iter());
+                        out.extend(by.iter().flatten());
+                    }
+                    CIter::Admit { only, gate } => out.extend(only.iter().chain(gate.iter())),
+                    CIter::Branch(g, a, b) => {
+                        out.push(g);
+                        body_exprs(a, out);
+                        body_exprs(b, out);
+                    }
+                    CIter::Set(_, e) => out.push(e),
+                }
+            }
+        }
+        for (si, s) in self.stages.iter().enumerate() {
+            let place = format!("stage `{}`", s.name);
+            let ok = of(si);
+            match &s.kind {
+                CStageKind::Ps(e) => read(e, &|_| false, &format!("{place}'s capacity"))?,
+                CStageKind::Step(st) => {
+                    let mut exprs: Vec<&CExpr> = vec![&st.budget, &st.chunk, &st.cost];
+                    if let CServe::By(keys) = &st.serve {
+                        exprs.extend(keys);
+                    }
+                    exprs.extend(st.only.iter());
+                    if let Some(body) = &st.iteration {
+                        body_exprs(body, &mut exprs);
+                    }
+                    for e in exprs {
+                        read(e, &ok, &place)?;
+                    }
+                }
+                CStageKind::Fifo(_) | CStageKind::Delay => {}
+            }
+        }
+        for b in &self.blocks {
+            for s in b {
+                if let CStmt::Hold { pools, reuse, .. } = s {
+                    let members: Vec<usize> = pools
+                        .iter()
+                        .flat_map(|(r, _, _)| r.base..r.base + r.count)
+                        .collect();
+                    let ok = |reg: usize| {
+                        members
+                            .iter()
+                            .all(|&m| self.pools[m].admit_via == Some(self.registers[reg].stage))
+                    };
+                    for (_, units, reserve) in pools {
+                        read(units, &ok, "a hold's header")?;
+                        if let Some(r) = reserve {
+                            read(r, &ok, "a hold's header")?;
+                        }
+                    }
+                    if let Some(r) = reuse {
+                        read(r, &ok, "a hold's header")?;
+                    }
+                }
+            }
+        }
+        for c in &self.claims {
+            if let Some(st) = c.kind.stage() {
+                read(&c.expr, &of(st), &format!("claim `{}`", c.name))?;
+            }
+        }
+        Ok(())
+    }
+
     /// The checks of the declarations and the run.
     fn validate_declarations(&self) -> Result<(), String> {
         let v = Validator { p: self };
@@ -1464,6 +1605,25 @@ impl Program {
                 }
             }
         }
+        self.registers_read_in_place()?;
+        for (k, r) in self.registers.iter().enumerate() {
+            let at = |e: &str| format!("state `{}`: {e}", r.name);
+            match self.stages.get(r.stage).map(|s| &s.kind) {
+                Some(CStageKind::Step(st)) if st.iteration.is_some() => {}
+                Some(CStageKind::Step(_)) => {
+                    return Err(at(
+                        "a register of a stage without an `iteration` body, which nothing sets",
+                    ));
+                }
+                _ => return Err(at("a register belongs to a step stage")),
+            }
+            if !r.init.is_finite() {
+                return Err(at("its first value is a finite number"));
+            }
+            if self.registers[..k].iter().any(|q| q.name == r.name) {
+                return Err(at("declared twice"));
+            }
+        }
         for (k, g) in self.gauges.iter().enumerate() {
             let at = |e| format!("gauge `{}`: {e}", g.name);
             v.expr(&g.expr, Moment::Gauge).map_err(at)?;
@@ -1586,6 +1746,7 @@ fn always_serves(body: &[CIter]) -> bool {
     body.iter().any(|s| match s {
         CIter::Serve { .. } | CIter::Admit { .. } => true,
         CIter::Branch(_, a, b) => always_serves(a) && always_serves(b),
+        CIter::Set(..) => false,
     })
 }
 
@@ -1746,6 +1907,18 @@ impl Validator<'_> {
                     plan(g, "a `branch` in an iteration")?;
                     self.iteration(st, a)?;
                     self.iteration(st, b)?;
+                }
+                CIter::Set(r, e) => {
+                    let Some(reg) = self.p.registers.get(*r) else {
+                        return Err(format!("register {r} out of range"));
+                    };
+                    if reg.stage != st {
+                        return Err(format!(
+                            "`set {}`: the register is stage `{}`'s; a body sets its own stage's",
+                            reg.name, self.p.stages[reg.stage].name
+                        ));
+                    }
+                    plan(e, &format!("`set {}`", reg.name))?;
                 }
             }
         }
@@ -1944,6 +2117,21 @@ impl Validator<'_> {
                     ));
                 }
                 self.observe(*k)
+            }
+            CExpr::Reg(r) => {
+                if *r >= self.p.registers.len() {
+                    return Err(format!("register {r} out of range"));
+                }
+                // a register is the scheduler's: a session and a claim's
+                // `given` read the session's
+                if matches!(m, Moment::Session | Moment::Given) {
+                    return Err(format!(
+                        "`{}` is a step stage's register (`state`), which the scheduler reads; \
+                         it is read in {m}",
+                        self.p.registers[*r].name
+                    ));
+                }
+                Ok(())
             }
             CExpr::Attr(a) => {
                 self.attr(*a)?;
@@ -2600,6 +2788,9 @@ impl Program {
             CExpr::Agg(a, k) => {
                 let name = self.observes.get(*k).map_or("?", String::as_str);
                 let _ = write!(out, "{}({name})", a.name());
+            }
+            CExpr::Reg(r) => {
+                out.push_str(self.registers.get(*r).map_or("?", |g| g.name.as_str()));
             }
             CExpr::Unary(op, a) => {
                 let wrap = min > prec::UNARY;

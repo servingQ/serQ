@@ -78,6 +78,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `share` | `MaxMin` or `Bottleneck`: how the flows of runs over several stages divide the stages' capacity; present exactly when some `Run` has a non-empty `also`, omitted otherwise |
 | `gauges` | `[{name, expr}]`: functions of the state whose time average the report gives, each read at the `Gauge` moment after every instant; omitted when empty. They read and do not act, so a reader that ignores them runs the same program |
 | `claims` | `[{name, given?, kind, expr}]`: propositions about every path, which the interpreter checks on the path it runs and the report states; omitted when empty. `kind` is `EveryIteration(stage)` or `SomeIteration(stage)` (a step stage's index; `expr` read at the `Iteration` moment) or `AtEnd` (`expr` read at the `End` moment); `given`, omitted when absent, is read at the `Given` moment for every session, and one that reads 0 puts the claim out of the run's scope. Claim names are distinct. They read and do not act, so a reader that ignores them runs the same program |
+| `registers` | `[{name, stage, init}]`: a step stage's `state`, the registers its `iteration` body sets (`CIter::Set(register, expr)`, read at `Plan`) and the scheduler's expressions read (`CExpr::Reg(register)`: in its stage's expressions and body, a claim over its iterations, the keys of a pool it admits and the header of a hold on such pools, a gauge or a claim `at end`; elsewhere the read would fall in an order of declarations, and the program is invalid); `stage` has a body and is no array member; `init` finite; a set takes effect with its iteration and is undone in a try that schedules, preempts and admits nothing; omitted when empty |
 | `slot_cached`, `slot_serial`, … | slots of the built-in attributes (`cached`, `serial`, `turn_no`, `new`, `out`, `think`, `more`, `forced`, `computed`) |
 
 `Sessions`: all the sessions arrive at time 0; each one runs `init`, then
@@ -378,7 +379,10 @@ runs vLLM's procedure, which is the body `[Serve {}, Admit {gate:
 what the iteration serves and admits, so an older reader that ignored it
 would print another schedule, and on a tagged version it would have
 opened a number. The Lean generators raise `Fragment` on a stage with a
-body; no oracle program has one.
+body; no oracle program has one. It also carries `Program.registers`,
+`CExpr::Reg` and `CIter::Set` (`state`, a stage's memory between
+iterations): absent, nothing changes; a new `CExpr` variant drops a
+program that reads one out of the Lean fragment, as its body already does.
 11 also carries `CStep.only` (#261, `serve only (p)`), added while 11 is
 untagged: a program without it serialises as before and runs as before, and
 one with it changes what the iteration serves, so on a tagged version it
