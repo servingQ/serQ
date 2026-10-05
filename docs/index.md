@@ -11,7 +11,10 @@ hide:
 memory pools, its engines, the traffic that arrives and the path every
 request takes through them are written down once. That one program is then
 simulated, proved about in Lean, and drawn; the vLLM program is checked
-against the real scheduler request for request.
+against the real scheduler request for request. It is a serving
+specification language: the deployment is the circuit and the workload its
+testbench, and what P4 is to a packet switch, serQ is meant to be to a
+serving engine ([the design](design/serving-specification-language.md)).
 
 ## Why serQ exists
 

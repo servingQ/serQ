@@ -3,9 +3,14 @@
 and print, per request, the step of its first token and of its finish, and
 the number of preemptions: the oracle for `tests/vllm_oracle.rs`.
 
-Usage: vllm_oracle.py SCENARIO.json  (see the Rust test for the format)
-Runs inside the testbed venv (`~/vllm-rbln-dynkv/.venv`), whose rbln
-platform plugin forces a 512-token block size.
+Usage: vllm_oracle.py SCENARIO.json [TARGET.json]  (see the Rust test for
+the format). Runs inside the testbed venv (`~/vllm-rbln-dynkv/.venv`), whose
+rbln platform plugin forces a 512-token block size.
+
+TARGET.json is what `serq target` printed for the scenario's program. Its
+configuration must be the scenario's, and when it names the programmable
+scheduler (`scheduler_cls`, `tools/serq_vllm.py`) the scheduler is that
+class with the program's serve keys: the oracle of `tests/vllm_target_oracle.rs`.
 """
 import json
 import os
@@ -20,7 +25,7 @@ from vllm.v1.outputs import ModelRunnerOutput  # noqa: E402
 from vllm.v1.request import RequestStatus  # noqa: E402
 
 
-def run(sc):
+def run(sc, target=None):
     s = create_scheduler(
         max_num_batched_tokens=sc["budget"],
         max_num_seqs=sc["max_seqs"],
@@ -30,6 +35,24 @@ def run(sc):
         long_prefill_token_threshold=sc.get("chunk", 0),
         max_model_len=sc.get("max_model_len", 8192),
     )
+    if target is not None:
+        c = target["config"]
+        want = {
+            "max_num_batched_tokens": sc["budget"],
+            "max_num_seqs": sc["max_seqs"],
+            "block_size": sc["block_size"],
+            "num_gpu_blocks": sc["num_blocks"],
+            "long_prefill_token_threshold": sc.get("chunk", 0),
+            "enable_prefix_caching": sc.get("prefix_caching", False),
+        }
+        for k, v in want.items():
+            if c[k] != v:
+                sys.exit(f"target {k} = {c[k]}, the scenario's is {v}")
+        if c.get("scheduler_cls") == "serq_vllm.SerqScheduler":
+            from serq_vllm import SerqScheduler
+
+            s.__class__ = SerqScheduler
+            s.serq_init(target["serve_by"])
     reqs = []
     for i, r in enumerate(sc["requests"]):
         (req,) = create_requests(
@@ -98,4 +121,5 @@ def run(sc):
 
 if __name__ == "__main__":
     sc = json.load(open(sys.argv[1]))
-    print(json.dumps(run(sc)))
+    target = json.load(open(sys.argv[2])) if len(sys.argv) > 2 else None
+    print(json.dumps(run(sc, target)))
