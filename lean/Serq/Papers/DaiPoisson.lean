@@ -1,5 +1,5 @@
 /-
-# Dai et al., Theorem 2(b), for Poisson arrivals in continuous time
+# Dai et al.: Foster's drift for Poisson arrivals in continuous time
 
 `DaiStable` draws a slot's arrivals from a distribution fixed in advance.
 Here they are those of a Poisson stream of rate `λ` per clock unit: on a busy
@@ -17,6 +17,9 @@ Outside `F` the batch is full, and a full batch lasts
 
 so `1280 λ t_{b_max} < 128` is Theorem 2(b)'s `λ (v_p + v_d) < b_max / t_{b_max}`
 exactly, with nothing assumed about slots inside `F`, which are shorter.
+This is the step of Theorem 2(b) that `DaiStable` proves for a fixed
+distribution: the expected time to reach `F` is finite. Positive
+recurrence (`DaiRecurrent`) is not yet proved for this chain.
 -/
 import Serq.Poisson
 import Serq.Papers.DaiStable
@@ -52,19 +55,13 @@ theorem reach_dur {m : Machine} (h : Reach m) : Slot.Dur D m := by
     rw [slot_eq]
     exact Slot.slot_dur ci_start hB _ fun _ _ => rfl
 
-/-- How long the running iteration lasts; 0 on an idle engine. -/
-def dur (m : Machine) : ℕ :=
-  match m.iterEnd with
-  | some (a, _) => a - m.now
-  | none => 0
-
 /-- The engine is idle, or its batch is not full. -/
 def F (x : State) : Prop := x.1.iterEnd = none ∨ x.1.last.stats.tokens < 128
 
 instance : DecidablePred F := fun x => by unfold F; infer_instance
 
 /-- A full batch lasts `t_{b_max} = 4675`. -/
-theorem dur_full (x : State) (hx : ¬ F x) : dur x.1 = 4675 := by
+theorem dur_full (x : State) (hx : ¬ F x) : Slot.dur x.1 = 4675 := by
   obtain ⟨L, g, hB⟩ := reach_sb x.2
   simp only [F, not_or, not_lt] at hx
   obtain ⟨⟨a, q⟩, hie⟩ := Option.ne_none_iff_exists'.mp hx.1
@@ -72,7 +69,7 @@ theorem dur_full (x : State) (hx : ¬ F x) : dur x.1 = 4675 := by
   obtain ⟨hb1, -⟩ := hB.busy hbusy
   have htok : x.1.last.stats.tokens = 128 := by have : tokSum x.1.iter ≤ 128 := hB.tok; omega
   have ha := reach_dur x.2 a q hie
-  simp only [dur, hie]
+  simp only [Slot.dur, hie]
   rw [ha]
   simp [D, Claims.DaiSarathi.deployment, htok]
 
@@ -89,7 +86,7 @@ theorem backlog_slot {m : Machine} (h : Reach m) (k : ℕ) :
 /-- The chain: on a busy engine, the arrivals of a Poisson stream of rate
 `λ` while the iteration lasts; on an idle one, the next arrival. -/
 noncomputable def kernel (lam : ℝ) (hlam : 0 ≤ lam) : Kernel State ℕ where
-  p x k := if x.1.iterEnd.isSome then pois (lam * dur x.1) k else if k = 1 then 1 else 0
+  p x k := if x.1.iterEnd.isSome then pois (lam * Slot.dur x.1) k else if k = 1 then 1 else 0
   next x k := ⟨slot k x.1, .slot k x.2⟩
   nonneg x k := by
     split_ifs
@@ -115,7 +112,7 @@ theorem integrable (lam : ℝ) (hlam : 0 ≤ lam) : (kernel lam hlam).Integrable
     (fun k => mul_le_mul_of_nonneg_left (V_slot_le x k) ((kernel lam hlam).nonneg x k)) ?_
   show Summable fun k => (kernel lam hlam).p x k * (V x + 1280 * k)
   by_cases hb : x.1.iterEnd.isSome = true
-  · have h0 : 0 ≤ lam * dur x.1 := by positivity
+  · have h0 : 0 ≤ lam * Slot.dur x.1 := by positivity
     refine (((hasSum_pois h0).mul_right (V x)).add ((hasSum_mul_pois h0).mul_left 1280)).summable.congr
       fun k => ?_
     simp only [kernel, hb, if_true]; ring
@@ -161,7 +158,7 @@ theorem drift (lam : ℝ) (hlam : 0 ≤ lam) (hA : 1280 * (lam * 4675) < 128) :
     rw [happ, hH.tsum_eq]
     unfold ε; linarith
 
-/-- Theorem 2(b) for Poisson arrivals: from every state, the expected number
+/-- Foster's drift for Poisson arrivals: from every state, the expected number
 of slots until the batch is not full (or the engine idle) is at most
 `backlog / ε`. -/
 theorem hitTime_le (lam : ℝ) (hlam : 0 ≤ lam) (hA : 1280 * (lam * 4675) < 128) (x : State) :

@@ -1,5 +1,5 @@
 /-
-# Bari et al., Theorem 2, for Poisson arrivals in continuous time
+# Bari et al.: Foster's drift for Poisson arrivals in continuous time
 
 `BariStable` draws a slot's arrivals from a distribution fixed in advance.
 Here requests arrive as a Poisson stream of rate `λ` per clock unit, each
@@ -16,7 +16,9 @@ Outside `F` RAD's batch is full, and a full batch lasts
 
 so `λ · 4640 · E[v_p + v_d] < 128` is Theorem 1's bound, `λ E[v_p + v_d] <
 b_col / t_{batch}`, for one node, with nothing assumed about the shorter
-slots inside `F`.
+slots inside `F`. This is the step of Theorem 2 that `BariStable` proves for
+a fixed distribution; positive recurrence (`BariRecurrent`) is not yet
+proved for this chain.
 -/
 import Serq.Poisson
 import Serq.Papers.BariStable
@@ -61,14 +63,8 @@ theorem reach_dur {m : Machine} (h : Reach m) : Slot.Dur D m := by
     obtain ⟨L, g, hB⟩ := reach_sb hm
     exact Slot.slot_dur ci_start hB _ (fits_attrs hf)
 
-/-- How long the running iteration lasts; 0 on an idle engine. -/
-def dur (m : Machine) : ℕ :=
-  match m.iterEnd with
-  | some (a, _) => a - m.now
-  | none => 0
-
 /-- A full batch lasts `4640`. -/
-theorem dur_full (x : State) (hx : ¬ F x) : dur x.1 = 4640 := by
+theorem dur_full (x : State) (hx : ¬ F x) : Slot.dur x.1 = 4640 := by
   obtain ⟨L, g, hB⟩ := reach_sb x.2
   simp only [F, not_or, not_lt] at hx
   obtain ⟨⟨a, q⟩, hie⟩ := Option.ne_none_iff_exists'.mp hx.1
@@ -76,7 +72,7 @@ theorem dur_full (x : State) (hx : ¬ F x) : dur x.1 = 4640 := by
   obtain ⟨hb1, -⟩ := hB.busy hbusy
   have htok : x.1.last.stats.tokens = 128 := by have : tokSum x.1.iter ≤ 128 := hB.tok; omega
   have ha := reach_dur x.2 a q hie
-  simp only [dur, hie]
+  simp only [Slot.dur, hie]
   rw [ha]
   simp [D, Claims.BariRad.deployment, htok]
 
@@ -93,7 +89,7 @@ theorem backlog_slot' {m : Machine} (h : Reach m) (rs : List (ℕ × ℕ)) (hf :
 /-- How many requests a slot brings: Poisson of mean `λ · dur` on a busy
 engine, one on an idle one. -/
 noncomputable def count (lam : ℝ) (x : State) : ℕ → ℝ :=
-  if x.1.iterEnd.isSome then pois (lam * dur x.1) else fun k => if k = 1 then 1 else 0
+  if x.1.iterEnd.isSome then pois (lam * Slot.dur x.1) else fun k => if k = 1 then 1 else 0
 
 variable {lam : ℝ} (hlam : 0 ≤ lam)
 include hlam
@@ -111,7 +107,7 @@ theorem hasSum_count (x : State) : HasSum (count lam x) 1 := by
 
 theorem hasSum_count_mean (x : State) :
     HasSum (fun k : ℕ => (k : ℝ) * count lam x k)
-      (if x.1.iterEnd.isSome then lam * dur x.1 else 1) := by
+      (if x.1.iterEnd.isSome then lam * Slot.dur x.1 else 1) := by
   unfold count; split_ifs
   · exact hasSum_mul_pois (by positivity)
   · convert hasSum_ite_eq (1 : ℕ) (1 : ℝ) using 1
@@ -141,7 +137,7 @@ theorem V_next (x : State) (s : Outcome (Fin n)) :
 /-- The expectation of `V` after a slot, term by term. -/
 theorem hasSum_V (x : State) :
     HasSum (fun s => compound (count lam x) X.q s * (V x + ∑ i, (((X.len (s.2 i)).1 + (X.len (s.2 i)).2 : ℕ) : ℝ)))
-      (V x + (if x.1.iterEnd.isSome then lam * dur x.1 else 1) * X.work) := by
+      (V x + (if x.1.iterEnd.isSome then lam * Slot.dur x.1 else 1) * X.work) := by
   have h1 := (hasSum_compound (count_nonneg hlam x) (hasSum_count hlam x) X.nonneg X.sum_one).mul_right (V x)
   have h2 := hasSum_compound_work (count_nonneg hlam x) (hasSum_count_mean hlam x) X.nonneg X.sum_one
     (fun t => (((X.len t).1 + (X.len t).2 : ℕ) : ℝ)) (fun t => Nat.cast_nonneg _)
@@ -196,7 +192,7 @@ theorem drift (hA : lam * 4640 * X.work < 128) : Drift (kernel X hlam) F V (ε X
     rw [hE]
     unfold ε; push_cast; linarith
 
-/-- Theorem 2 for Poisson arrivals: from every state, the expected number of
+/-- Foster's drift for Poisson arrivals: from every state, the expected number of
 slots until the batch is not full (or the engine idle) is at most
 `backlog / ε`. -/
 theorem hitTime_le (hA : lam * 4640 * X.work < 128) (x : State) :
@@ -214,7 +210,21 @@ theorem returnTime_le (hA : lam * 4640 * X.work < 128) (x : State) (hx : F x) :
     returnTime (kernel X hlam) F x ≤ 1 + (kernel X hlam).apply V x / ε X lam :=
   Foster.returnTime_le_of_drift (drift X hlam hA) x hx
 
-/-- Not vacuous: one type, a tile of prompt and one output token, at one
+/-- Not vacuous: one request of one tile makes a full batch, a state
+outside `F` … -/
+example : ¬ F ⟨slot [(128, 1)] empty,
+    Reach.slot _ (by intro r hr; simp at hr; subst hr; exact ⟨by decide, le_rfl, by decide, le_rfl, by decide⟩)
+      .empty⟩ := by
+  have h : (slot [(128, 1)] empty).iterEnd.isSome = true ∧
+      (slot [(128, 1)] empty).last.stats.tokens = 128 := by
+    decide +kernel
+  intro hF
+  change (slot [(128, 1)] empty).iterEnd = none ∨ (slot [(128, 1)] empty).last.stats.tokens < 128 at hF
+  rcases hF with hF | hF
+  · rw [hF] at h; exact absurd h.1 (by decide)
+  · omega
+
+/-- … and one type, a tile of prompt and one output token, at one
 request per 10 000 clock units is below the bound (`4640 · 129 / 10⁴ ≈ 60`). -/
 example : ∃ X : Mix 1, (1 / 10000 : ℝ) * 4640 * X.work < 128 :=
   ⟨⟨fun _ => (128, 1), fun _ => ⟨by decide, le_rfl, by decide, le_rfl, by decide⟩, fun _ => 1,

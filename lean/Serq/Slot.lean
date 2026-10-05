@@ -932,6 +932,12 @@ theorem slot_sb (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m : M
     rw [h2] at c5
     rw [WnC_congr s3, ← hiter, e2, WnC_congr c5, h5]
 
+/-- How long the running iteration lasts; 0 on an idle engine. -/
+def dur (m : Machine) : ℕ :=
+  match m.iterEnd with
+  | some (a, _) => a - m.now
+  | none => 0
+
 /-- The running iteration lasts its cost: it ends `max 1 cost` after now. -/
 def Dur (D : Deployment) (m : Machine) : Prop :=
   ∀ a q, m.iterEnd = some (a, q) → a = m.now + max 1 (D.cost m.last.stats)

@@ -918,10 +918,11 @@ def drain : ℕ → Machine → Machine
     | [] => m
     | i :: rest => drain f (exec D 10000 { m with ready := rest } i)
 
-/-- The rounds `drain` is given: one per ready session, and 10 000 for the
-sessions their commands make ready. It grows with the ready list, so that
-however many sessions arrive at once each runs its commands in the instant
-(the interpreter's loop has no bound). -/
+/-- The rounds `drain` is given: one per session ready when it starts, and
+10 000 for the sessions their commands make ready. It grows with the ready
+list, so that however many sessions are ready at once each runs its
+commands before the pools admit, as in the interpreter's `settle`, which
+drains the ready list to the end before `try_admit`. -/
 def drainFuel (m : Machine) : ℕ := m.ready.length + 10000
 
 /-- Run every ready session, then admit at every pool not served by the
