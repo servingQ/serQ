@@ -205,7 +205,11 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
 }
 
 /// The stage's `serve only (p)` is the body `serve only (p); admit only (p)
-/// while (!preempted);`: a newcomer `p` excludes is admitted and waits.
+/// while (!preempted);`: the linker writes the one as the other, so the
+/// two compile to one IR. That the body runs as the stage option ran,
+/// before it was lowered, was shown on these three programs in #362; paths
+/// they do not take (a preemption beside `only`, `only` with `serve by`)
+/// were compared by reading the code, not by a run.
 #[test]
 fn a_stage_only_is_a_body() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -232,9 +236,12 @@ fn a_stage_only_is_a_body() {
             &format!("iteration {{ serve only ({p}); admit only ({p}) while (!preempted); }}"),
         );
         let ov = Overrides::default();
-        let a = run_source(&src, &ov, path.parent()).unwrap();
-        let b = run_source(&body, &ov, path.parent()).unwrap();
-        assert_eq!(a.text(), b.text(), "{file}");
+        let ir = |s: &str| {
+            serq::compile_file(s, &path, &ov)
+                .unwrap_or_else(|e| panic!("{file}: {e}"))
+                .to_json()
+        };
+        assert_eq!(ir(&src), ir(&body), "{file}");
     }
 }
 
@@ -360,6 +367,8 @@ fn a_register_is_the_stage_s_own() {
     let body = "state k = 0; iteration { serve; admit; set k = k + 1; }";
     assert!(compile_source(&prog(body, ""), &Overrides::default()).is_ok());
     assert!(err("state k = 0;", "").contains("nothing sets"));
+    // a stage `serve only` is a body, but none that sets the register
+    assert!(err("state k = 0; serve only (decoding);", "").contains("nothing sets"));
     assert!(err("iteration { serve; admit; set r = 1; }", "").contains("another stage"));
     assert!(err(body, "set x = k;").contains("register"));
     assert!(err("state cached = 0; iteration { serve; admit; }", "").contains("taken"));

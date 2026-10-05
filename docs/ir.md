@@ -378,15 +378,17 @@ runs vLLM's procedure, which is the body `[Serve {}, Admit {gate:
 !preempted}]` (every example runs the same both ways); present, it changes
 what the iteration serves and admits, so an older reader that ignored it
 would print another schedule, and on a tagged version it would have
-opened a number. The Lean generators raise `Fragment` on a stage with a
-body; no oracle program has one. It also carries `Program.registers`,
+opened a number. The oracle generator raises `Fragment` on a stage with a
+body, and the claims generator accepts only the one a stage's `serve only`
+writes (`only_body`); no oracle program has one. It also carries `Program.registers`,
 `CExpr::Reg` and `CIter::Set` (`state`, a stage's memory between
 iterations): absent, nothing changes; a new `CExpr` variant drops a
 program that reads one out of the Lean fragment, as its body already does.
 11 no longer carries `CStep.only` (#355): the stage's `serve only (p)` is
 the body `[Serve {only: p}, Admit {only: p, gate: !preempted}]`, which the
-linker writes, and which runs as `only` ran (`tests/iteration_body.rs`,
-three examples). A removed field: the two paper programs' IR files changed
+linker writes, and which ran as `only` ran on the three examples that had
+one (#362; now `tests/iteration_body.rs` checks that the two compile to one
+IR). A removed field: the two paper programs' IR files changed
 shape, and the Lean claims generator reads that body as the fragment's
 `only`, so their statements in `lean/Serq/Claims.lean` are unchanged. What
 follows is the history of the field while it was one.

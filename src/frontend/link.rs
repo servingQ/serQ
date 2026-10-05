@@ -524,6 +524,13 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                     // `serve only (p)` is the body that serves only `p` and
                     // admits while the iteration has not preempted, each
                     // newcomer `p` excludes waiting unserved (#355)
+                    (Some(_), None) if !sp.state.is_empty() => {
+                        return Err(LinkError::new(format!(
+                            "stage `{}`: `state` beside `serve only` and no `iteration` body: \
+                             nothing sets the register; write the body, with its `set`",
+                            s.name
+                        )));
+                    }
                     (Some(p), None) => {
                         let p = lk.expr(p)?;
                         Some(vec![

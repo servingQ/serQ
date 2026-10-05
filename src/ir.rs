@@ -1831,13 +1831,17 @@ impl Validator<'_> {
         let served = |e: &CExpr| -> Result<(), String> {
             self.expr(e, Moment::Serve)?;
             if draws(e) {
-                return Err("a `serve` key or an `only` in an iteration may not draw (`~`)".into());
+                return Err(
+                    "a serve key or `only` may not draw (`~`): it is read for every \
+                            resident at every iteration"
+                        .into(),
+                );
             }
             if reads_clock(e) {
                 return Err(
-                    "a `serve` key or an `only` in an iteration may not read `now` or \
-                            `work(…)`: an engine whose body schedules nothing waits for an \
-                            event, and the clock moving is none"
+                    "a serve key or `only` may not read `now` or `work(…)`: an engine \
+                            whose residents it all excludes waits for an event, and the clock \
+                            moving is none"
                         .into(),
                 );
             }
