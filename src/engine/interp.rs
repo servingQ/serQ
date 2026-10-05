@@ -1030,6 +1030,24 @@ impl<'p> Interp<'p> {
                 self.now
             );
         }
+        // `reserve held`'s promise: what is allocated and what the live holds
+        // reserved and have not allocated fit the cap, so a hold growing
+        // within its reservation always finds room (#371).
+        #[cfg(debug_assertions)]
+        for (k, (cp, pl)) in self.p.pools.iter().zip(&self.pools).enumerate() {
+            if cp.reserve_held {
+                let out = self.outstanding(k, None);
+                debug_assert!(
+                    pl.used + out <= pl.cap + 1e-6,
+                    "pool `{}`: used {} + reserved {} > cap {} at t = {}",
+                    cp.name,
+                    pl.used,
+                    out,
+                    pl.cap,
+                    self.now
+                );
+            }
+        }
         // Conservation (#277): a pool's `used` is what the sessions' holds
         // and leases have allocated on it, and its `cached` the sizes of its
         // entries. The counters are kept apart from those records, so an
@@ -1574,10 +1592,10 @@ impl<'p> Interp<'p> {
     }
 
     /// Whether `units` more fit pool `pl`: next to what is allocated, and
-    /// under `reserve held` next to what the holds' reservations have not
-    /// allocated yet, the one of `own` (a holder growing into its own
-    /// reservation) left out.
-    fn fits_for(&self, pl: usize, units: f64, own: Option<usize>) -> bool {
+    /// under `reserve held` next to what the live holds' reservations have
+    /// not allocated yet, the one hold entry `own` (session, hold, pool
+    /// entry: a hold growing into its own reservation) left out.
+    fn fits_for(&self, pl: usize, units: f64, own: Option<(usize, usize, usize)>) -> bool {
         let held = if self.p.pools[pl].reserve_held {
             self.outstanding(pl, own)
         } else {
@@ -1586,18 +1604,24 @@ impl<'p> Interp<'p> {
         self.pools[pl].used + held + units <= self.pools[pl].cap + EPS
     }
 
-    /// What the holds on `pl` reserved and have not allocated (`reserve
-    /// held`), but `own`'s.
-    fn outstanding(&self, pl: usize, own: Option<usize>) -> f64 {
-        self.pools[pl]
-            .holders
-            .iter()
-            .filter(|&&s| Some(s) != own)
-            .flat_map(|&s| self.sessions[s].holds.iter())
-            .flat_map(|h| h.pools.iter())
-            .filter(|e| e.pool == pl)
-            .map(|e| (e.reserved - e.alloc).max(0.0))
-            .sum()
+    /// What the live hold entries on `pl` reserved and have not allocated
+    /// (`reserve held`), each counted once, but `own`. Read from the
+    /// sessions' holds, not the pool's `holders`, which lists a session once
+    /// per admission and drops it whole at any release (the review of #371:
+    /// a nested hold was counted twice, and an outer one lost at the inner
+    /// one's end).
+    fn outstanding(&self, pl: usize, own: Option<(usize, usize, usize)>) -> f64 {
+        let mut sum = 0.0;
+        for (sid, s) in self.sessions.iter().enumerate() {
+            for (hi, h) in s.holds.iter().enumerate() {
+                for (k, e) in h.pools.iter().enumerate() {
+                    if e.pool == pl && own != Some((sid, hi, k)) {
+                        sum += (e.reserved - e.alloc).max(0.0);
+                    }
+                }
+            }
+        }
+        sum
     }
 
     fn round_up(&self, pl: usize, units: f64) -> f64 {
@@ -2206,7 +2230,7 @@ impl<'p> Interp<'p> {
             return true;
         }
         loop {
-            if self.fits_for(pl, need, Some(sid)) {
+            if self.fits_for(pl, need, Some((sid, hi, k))) {
                 self.make_room(pl, need);
                 self.pools[pl].used += need;
                 self.sessions[sid].holds[hi].pools[k].alloc += need;
@@ -2327,7 +2351,7 @@ impl<'p> Interp<'p> {
                 .expect("a growing session holds the pool");
             let alloc_now = self.sessions[sid].holds[hi].pools[k].alloc;
             let need = self.round_up(pl, alloc_now + units) - alloc_now;
-            if !self.fits_for(pl, need, Some(sid)) {
+            if !self.fits_for(pl, need, Some((sid, hi, k))) {
                 break;
             }
             self.pools[pl].growers.pop_front();
