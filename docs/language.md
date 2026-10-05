@@ -734,7 +734,9 @@ every resident ties, and `decode first` is `by (decoding ? 0 : 1)`; of the
 orders, the IR knows only `by`. A scheduler that serves the shortest
 remaining run first is `serve by (remaining)`, the opposite `serve by
 (-remaining)`. One token to a decoding job, up to `chunk` to a prefilling
-one,
+one (with a `granule g`, short of its remainder, a multiple of `g`, none
+when that is 0: such a prefill is passed over, and the iteration admits no
+one after it),
 until the budget is spent; a `growing` job first grows its hold to the
 position it will reach (block by block, preempting if needed); a victim
 the iteration has already served leaves it and its tokens return to the

@@ -373,7 +373,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 104] = [
+pub const KEYWORDS: [&str; 105] = [
     "admission",
     "admit",
     "arrivals",

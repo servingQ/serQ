@@ -189,7 +189,7 @@ both:
   load it exceeds the cap and the session is rejected, where SGLang only
   makes it wait. Since #364 the part that reads state is not judged at the
   join, and waits; `examples/engines/sglang.sq` reads the load uncapped.
-- `granule g` on a prefill run or on the stage: a grant is the whole
+- `granule g` on the stage (#373): a grant is the whole
   remainder or a multiple of `g` (V6). `g = 1` is today; `g = inf` is
   TensorRT-LLM's default.
 
@@ -242,3 +242,8 @@ in its own design.
   tree. `queue by (-cachedin(kv))` links but matches only a session's own
   prefix, so it is LPM for multi-turn reuse alone. Real LPM waits for the
   shared cache.
+- **`granule` per run.** A prefill run could carry its own granule,
+  `prefill on engine (n) granule g`. Rejected: TensorRT-LLM's chunk unit is
+  an engine setting, and a per-run one would write a scheduler rule on the
+  session's side, which reads none (`hidden`). The stage option is the
+  engine's, as `chunk` is.
