@@ -24,6 +24,7 @@ import papers.DaiSim
 import papers.DaiStable
 import papers.Kong
 import papers.KongMath
+import papers.KongPoisson
 
 -- syntax and pool semantics (Serq/Core.lean)
 #print axioms SerqLang.Step.invariant
@@ -85,6 +86,11 @@ import papers.KongMath
 #print axioms SerqLang.Papers.KongMath.opt_lower_bound
 #print axioms SerqLang.Papers.KongSvf.queueing_bound
 #print axioms SerqLang.Papers.KongSvf.competitive_ratio
+#print axioms SerqLang.Papers.KongPoisson.harris
+#print axioms SerqLang.Papers.KongPoisson.wait_bound
+#print axioms SerqLang.Papers.KongPoisson.penalty
+#print axioms SerqLang.Papers.KongPoisson.svf_poisson
+#print axioms SerqLang.Papers.KongPoisson.svf_1bit_poisson
 -- Foster's criterion on a kernel of countably many outcomes, without measure theory (Serq/Foster.lean)
 #print axioms SerqLang.Foster.drift_bound
 #print axioms SerqLang.Foster.hitTime_le

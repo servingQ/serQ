@@ -25,6 +25,7 @@ import papers.DaiSim
 import papers.DaiStable
 import papers.Kong
 import papers.KongMath
+import papers.KongPoisson
 
 namespace SerqLang
 namespace ClaimsProved
