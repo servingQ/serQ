@@ -3043,11 +3043,6 @@ impl<'p> Interp<'p> {
                     break;
                 };
                 served.insert(id);
-                if let Some(only) = &spec.only {
-                    if !self.serves(st, id, only, spec.memory) {
-                        continue;
-                    }
-                }
                 let rule = exclusive.then_some(Exclusive {
                     resident_prefill,
                     budget,

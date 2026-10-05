@@ -753,8 +753,10 @@ the served decode back is `exclusive prefill`'s admission rule. That rule
 is why `only` does not combine with `exclusive prefill`: which of the two a
 predicate would exclude would be a third rule.
 [Serving a subset](design/serve-only.md) states the case and the numbers.
+A stage's `serve only (p)` is the iteration body `serve only (p); admit only
+(p) while (!preempted);` (below), which the linker writes.
 
-**The iteration as a program.** Everything above is one procedure, vLLM's
+**The iteration as a program.** Everything above but `serve only` is one procedure, vLLM's
 `schedule()`: serve the residents, then, unless the iteration preempted
 (`scheduler.py:869`), admit the waiting with the budget left. `iteration { … }`
 on a step stage writes the iteration instead (#355), from three statements

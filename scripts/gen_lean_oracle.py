@@ -61,6 +61,26 @@ def is_lifo(preempt):
     return by is not None and by.get("keys") == LIFO_KEYS and not by.get("tail", False)
 
 
+NOT_PREEMPTED = {"Unary": ["Not", {"Ctx": "Preempted"}]}
+
+
+def only_body(body):
+    """The `p` of a step stage's body, when the body is the stage's `serve
+    only (p)` (`[Serve {only: p}, Admit {only: p, gate: !preempted}]`, which
+    the linker writes), the fragment's `only`; None for no body. Any other
+    body is outside the fragment."""
+    if body is None:
+        return None
+    if (len(body) == 2 and "Serve" in body[0] and "Admit" in body[1]
+            and body[0]["Serve"].get("by") is None
+            and body[0]["Serve"].get("only") is not None
+            and body[1]["Admit"].get("only") == body[0]["Serve"]["only"]
+            and body[1]["Admit"].get("gate") == NOT_PREEMPTED):
+        return body[0]["Serve"]["only"]
+    raise Fragment("iteration: the fragment runs vLLM's procedure or a stage's `serve only`, "
+                   "not another body")
+
+
 def nat(v, what):
     if not (isinstance(v, (int, float)) and v >= 0 and float(v).is_integer()):
         raise Fragment(f"{what}: {v} is not a natural number")
@@ -391,10 +411,9 @@ class Lean:
         cost = cost_fn(step["cost"])
         if step["serve"] != {"By": []}:
             raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
-        if step.get("only") is not None:
-            raise Fragment("serve only: the fragment serves every resident")
         if step.get("iteration") is not None:
-            raise Fragment("iteration: the fragment runs vLLM's procedure, not a body")
+            raise Fragment("iteration: the oracle fragment runs vLLM's procedure, not a body "
+                           "(a stage's `serve only` is one)")
         pools = []
         for i, p in enumerate(ir["pools"]):
             if p["evict"] != "Lru" or p["queue"] is not None or p["spill"] is not None:

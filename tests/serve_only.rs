@@ -245,7 +245,8 @@ fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
             .to_string();
         assert!(error.contains(message), "{serve}: {error}");
     }
-    // the IR refuses what the parser does
+    // the IR refuses what the parser does: `only` is a body, which the
+    // exclusive rule cannot sit beside
     let mut p = compile_source(&source(FT), &Overrides::default()).unwrap();
     let serq::ir::CStageKind::Step(st) = &mut p.stages[1].kind else {
         panic!("engine is a step stage")
@@ -254,6 +255,6 @@ fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
     assert!(
         Program::from_json(&p.to_json())
             .unwrap_err()
-            .contains("a third rule")
+            .contains("takes back")
     );
 }
