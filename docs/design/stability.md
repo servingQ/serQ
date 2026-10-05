@@ -188,6 +188,19 @@ machines are a positive recurrent atom (`return_idle`). No chain on job
 lists is built for Poisson arrivals, so `positive_recurrent`, of every
 state, is proved for a fixed distribution only.
 
+**The `g` nodes at once** (`BariNodes`). The total backlog drifts down only
+while every batch is full (`drift_sum`), and the set where some node's
+batch is not full is unbounded, so it is no `F` for `hit_le_of_reach`. The
+squares are: outside node `i`'s `F` its square drifts by `−2 ε V_i` and a
+constant, inside it stays below a constant, so `Σ_i V_i²` drifts down by
+one outside the set where every backlog is at most `R` (`driftQ`), a set of
+bounded backlogs. From it, `R` slots without arrivals empty every node,
+and the states with every node empty are a positive recurrent atom
+(`return_idle`). This needs a slot without arrivals to have positive
+probability, which `load < 128 g` does not give for `g > 1`: one request in
+every slot is below two nodes' capacity, and after the first slot some node
+always holds the newest request. Poisson arrivals give it.
+
 ## Self-critique
 
 - **A quotient of the machine states.** Rejected for step 4. Taking the
