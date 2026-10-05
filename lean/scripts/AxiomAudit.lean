@@ -89,6 +89,17 @@ import Serq
 #print axioms SerqLang.Papers.BariStable.hitTime_le
 #print axioms SerqLang.Papers.BariStable.hit_tendsto
 #print axioms SerqLang.Papers.BariStable.returnTime_le
+-- Bari et al.'s Theorem 2 over g nodes with the random planner (Serq/Papers/BariNodes.lean)
+#print axioms SerqLang.Papers.BariNodes.mean_route
+#print axioms SerqLang.Papers.BariNodes.apply_V
+#print axioms SerqLang.Papers.BariNodes.drift
+#print axioms SerqLang.Papers.BariNodes.hitTime_le
+#print axioms SerqLang.Papers.BariNodes.hit_tendsto
+#print axioms SerqLang.Papers.BariNodes.returnTime_le
+#print axioms SerqLang.Papers.BariNodes.drift_sum
+#print axioms SerqLang.Papers.BariNodes.load_thin
+#print axioms SerqLang.Papers.BariNodes.marginal
+#print axioms SerqLang.Papers.BariNodes.positive_recurrent
 -- positive recurrence: from a set to a state, and the papers' chains on job lists
 -- (Serq/Recurrence.lean, Serq/Papers/{Dai,Bari}{Sim,Recurrent}.lean)
 #print axioms SerqLang.Foster.hit_le_of_reach

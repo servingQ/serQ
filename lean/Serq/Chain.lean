@@ -17,6 +17,8 @@ program reaches (`Foster.Kernel`), and Foster's criterion
   idle; with delays a slot may end at a delay instead.
 * `Exec.slotL`: a slot whose arrivals each have their own attributes (drawn
   lengths); `slot` is `slotL` with `k` copies of one (`slot_eq_slotL`).
+* `Foster.Kernel.ofFintype`: the kernel of a random choice in a finite type
+  (`BariNodes`' routings).
 * `Foster.Kernel.ofOutcomes`: the kernel of a finite random choice
   `k ∈ {0, …, K}` with probabilities `p`, and its expectation
   (`apply_ofOutcomes`).
@@ -106,6 +108,26 @@ theorem Kernel.le_apply_ofOutcomes {α : Type*} (K : ℕ) (p : ℕ → ℝ) (hp0
   rw [Kernel.apply_ofOutcomes]
   exact Finset.single_le_sum (f := fun k => p k * V (f x k)) (fun k _ => mul_nonneg (hp0 k) (hV _))
     (Finset.mem_range.mpr (Nat.lt_succ_of_le hk))
+
+/-- The kernel of a random choice `k` of a finite type, with probabilities
+`p k`. -/
+noncomputable def Kernel.ofFintype {α ι : Type*} [Fintype ι] (p : ι → ℝ) (hp0 : ∀ k, 0 ≤ p k)
+    (hp1 : ∑ k, p k = 1) (f : α → ι → α) : Kernel α ι where
+  p _ := p
+  next := f
+  nonneg _ := hp0
+  sum_one _ := hp1 ▸ hasSum_fintype p
+
+/-- The expectation under `ofFintype` is the weighted sum over the choices. -/
+theorem Kernel.apply_ofFintype {α ι : Type*} [Fintype ι] (p : ι → ℝ) (hp0 : ∀ k, 0 ≤ p k)
+    (hp1 : ∑ k, p k = 1) (f : α → ι → α) (V : α → ℝ) (x : α) :
+    (Kernel.ofFintype p hp0 hp1 f).apply V x = ∑ k, p k * V (f x k) :=
+  tsum_fintype _
+
+/-- Finitely many outcomes: every expectation converges. -/
+theorem Kernel.integrable_ofFintype {α ι : Type*} [Fintype ι] (p : ι → ℝ) (hp0 : ∀ k, 0 ≤ p k)
+    (hp1 : ∑ k, p k = 1) (f : α → ι → α) (V : α → ℝ) : (Kernel.ofFintype p hp0 hp1 f).Integrable V :=
+  fun _ => (hasSum_fintype _).summable
 
 end Foster
 
