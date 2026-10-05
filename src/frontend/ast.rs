@@ -212,8 +212,8 @@ pub enum PreemptOrder {
     None,
     /// `preempt by (k, …) [requeue head | requeue tail]`: the candidate
     /// with the least keys is the victim; `tail` re-queues it as a
-    /// newcomer. `preempt lifo` is `By([-admission], false)`.
-    By(Vec<Expr>, bool),
+    /// newcomer. `preempt lifo` is `By { keys: [-admission], tail: false }`.
+    By { keys: Vec<Expr>, tail: bool },
 }
 
 #[derive(Clone, Debug, PartialEq)]

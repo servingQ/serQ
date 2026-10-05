@@ -2754,7 +2754,10 @@ impl Parser {
                         // the latest admitted, back at the head: vLLM's
                         // `running[-1]` and `prepend_request`
                         let admission = Expr::Var("admission".into());
-                        PreemptOrder::By(vec![Expr::Unary(UnOp::Neg, Box::new(admission))], false)
+                        PreemptOrder::By {
+                            keys: vec![Expr::Unary(UnOp::Neg, Box::new(admission))],
+                            tail: false,
+                        }
                     } else if self.eat_kw("by") {
                         self.expect(&Tok::LParen)?;
                         let mut keys = vec![self.expr()?];
@@ -2773,7 +2776,7 @@ impl Parser {
                         } else {
                             false
                         };
-                        PreemptOrder::By(keys, tail)
+                        PreemptOrder::By { keys, tail }
                     } else {
                         self.expect_kw("none")?;
                         PreemptOrder::None

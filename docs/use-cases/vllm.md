@@ -28,7 +28,7 @@ The program shares its request definition with the other existing workloads:
 |---|---|---|
 | Token budget and chunked prefill | `step { budget …; chunk …; }` | Resident selection then waiting admission is a specific policy |
 | Request slots and KV space | `hold`, admission bindings, `reserve`, `growing` | Match all tagged fit/lookahead conditions with an oracle |
-| FCFS/priority | Queue order and `preempt lifo` | Priority victim selection is not the LIFO mechanism |
+| FCFS/priority | Queue order and `preempt lifo`; PRIORITY is `preempt by (-priority, -t0) requeue tail` beside `queue by (priority, t0)` | No oracle scenario checks the PRIORITY victim |
 | Shared prefix | `cachedin`, `reuse`, `cache` | Cache identity is session-based, not content-key shared objects |
 | Local decode preemption | `computed`-aware `known` in `vllm_request` | Latest-tag recovery paths need differential validation |
 | Async and speculative execution | Cost expressions, explicit leases/transfers | In-flight scheduler state and proposed/accepted progress remain absent |

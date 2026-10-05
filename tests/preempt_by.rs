@@ -143,3 +143,93 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
             .contains("position")
     );
 }
+
+/// On a pool that is no engine's memory the candidates are its holders in
+/// the order the pool admitted them, and `admission` is the place in that
+/// order: `lifo` and `by (-admission)` with any further key pick the same
+/// victim, though serial 0's latest admission is to another pool (B). The
+/// reviewer's case of #360, where the two picked different victims.
+#[test]
+fn lifo_is_by_minus_admission_on_a_pool_no_engine_reads() {
+    let prog = |preempt: &str| {
+        format!(
+            r#"
+            pool a {{ cap 10; {preempt} }}
+            pool b {{ cap 10; }}
+            stage svc : delay;
+            workload {{ arrive batch(2); }}
+            session {{
+              branch (serial == 0) {{
+                hold a (4) {{
+                  run svc (1);
+                  hold b (1) {{ run svc (1); grow a (4); run svc (1); }}
+                }}
+              }} else {{
+                run svc (0.5);
+                hold a (4) {{ observe s1 = computed; run svc (5); }}
+              }}
+              end;
+            }}
+            run {{ horizon 50; warmup 0; seed 1; }}
+            "#
+        )
+    };
+    let report = |p: &str| {
+        let r = run(&prog(p));
+        let pool = r.pool("a").unwrap();
+        (
+            pool.preemptions,
+            pool.stuck,
+            r.observe("s1").unwrap().samples.clone(),
+        )
+    };
+    let lifo = report("preempt lifo;");
+    // serial 1, the pool's last, is the victim; read by the session's
+    // latest admission it would be serial 0, which preempts itself for
+    // ever (`stuck`)
+    assert!(lifo.0 > 0 && lifo.1 == 0, "{lifo:?}");
+    assert_eq!(report("preempt by (-admission, 0);"), lifo);
+    assert_eq!(report("preempt by (-admission) requeue head;"), lifo);
+}
+
+/// `requeue tail` puts the victim back as a newcomer: under `queue by`
+/// its keys place it, ahead of a waiting session with a larger key.
+#[test]
+fn a_tail_victim_is_ordered_by_the_queue_keys() {
+    let src = r#"
+        pool reqs { cap 2; admit via engine; queue by (rank); }
+        pool kv { cap 24; preempt by (-admission) requeue tail; }
+        stage engine : step { budget 64; cost 1; memory kv; }
+        workload { arrive batch(3); }
+        session {
+          set rank = serial == 2 ? 9 : serial;
+          hold reqs (1), kv (4) {
+            observe admitted = serial;
+            prefill on engine (4) growing kv;
+            decode on engine (10) growing kv;
+          } cache (0);
+          end;
+        }
+        run { horizon 200; warmup 0; seed 1; }
+        "#;
+    let r = run(src);
+    let admitted = &r.observe("admitted").unwrap().samples;
+    // serial 1 (rank 1) is the victim; at the tail of a keyed queue its key
+    // puts it ahead of serial 2 (rank 9)
+    assert_eq!(
+        admitted[..4],
+        [0.0, 1.0, 1.0, 2.0],
+        "{admitted:?}\n{}",
+        r.text()
+    );
+}
+
+/// A prefilling candidate reads `decoding` as 0: SGLang retracts from the
+/// decode batch, so its order puts the decodes first.
+#[test]
+fn a_preempt_key_reads_decoding_and_not_computed() {
+    let base = three("preempt by (1 - decoding, position - prompt, -prompt);");
+    assert!(compile_source(&base, &Overrides::default()).is_ok());
+    let err = compile_source(&three("preempt by (computed);"), &Overrides::default()).unwrap_err();
+    assert!(err.contains("`position`"), "{err}");
+}

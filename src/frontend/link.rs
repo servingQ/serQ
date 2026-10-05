@@ -406,7 +406,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         };
         let preempt = match &p.preempt {
             PreemptOrder::None => crate::ir::Preempt::None,
-            PreemptOrder::By(keys, tail) => crate::ir::Preempt::By {
+            PreemptOrder::By { keys, tail } => crate::ir::Preempt::By {
                 keys: keys.iter().map(|k| lk.expr(k)).collect::<LResult<_>>()?,
                 tail: *tail,
             },

@@ -82,21 +82,25 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 | Form | Behaviour |
 |---|---|
 | `none` | The session waits and resumes where it was. |
-| `by (k, …)` | A candidate is preempted: the one with the least keys, compared in order, ties to the one admitted last. The candidates are the holders that are residents of the step stage this pool is the memory of (for a pool that is no engine's memory, the holders that hold it in a scope; a lease is not preempted). The victim's job leaves the stage, its hold is released with the computed prefix cached, and it re-enters its queue to execute its hold again with `computed` set: at the head with `requeue head` (the default), at the tail as a newcomer with `requeue tail` (`waited` from 0, ordered by the queue's keys). The grower can be its own victim. |
+| `by (k, …)` | A candidate is preempted: the one with the least keys, compared in order, ties to the one admitted last. The candidates are the holders that are residents of the step stage this pool is the memory of (for a pool that is no engine's memory, the holders that hold it in a scope; a lease is not preempted). The victim's job leaves the stage, its hold is released with the computed prefix cached, and it re-enters its queue to execute its hold again with `computed` set: at the head with `requeue head` (the default), or with `requeue tail` as a newcomer: at the back of a FIFO queue, placed by the keys of a `queue by` (`waited` from 0). The queue is the hold's first pool's, which need not be this one. The grower can be its own victim. |
 | `lifo` | `by (-admission)`: the latest admitted, back at the head (vLLM's `running[-1]` and `prepend_request`). The parser writes it so. |
 
 Keys are read at the `Victim` moment, for each candidate: its visible
-attributes, `admission` and `position` (the position its hold has computed on
-the pool, [context variables](context.md)), constants, `now` and pool and
-stage queries. A key may not draw or read `budget_left(…)`. The keys are
-the program's, so its engine's rule is written there:
+attributes, `admission` (its place in the candidates' admission order: the
+engine's serving order, or the order the pool admitted its holders),
+`decoding` (1 for a decoding resident) and `position` (the position its hold
+has computed on the pool, [context variables](context.md)), constants, `now`
+and pool and stage queries. A key may not draw, read `budget_left(…)`, or
+read `computed`, which is the position at the session's last preemption,
+not where the candidate is now. The keys are the program's, so its
+engine's rule is written there:
 
 | Engine | Victim |
 |---|---|
 | vLLM, FCFS | `preempt lifo;` |
-| vLLM, PRIORITY (the largest `(priority, arrival)`) | `preempt by (-priority, -t0);` |
-| SGLang (fewest outputs, then the longest prompt; back of the queue) | `preempt by (position - prompt, -prompt) requeue tail;` |
-| TensorRT-LLM `MAX_UTILIZATION` (the last started, by arrival) | `preempt by (-t0);` |
+| vLLM, PRIORITY: the largest `(priority, arrival)`, back into a queue ordered by them (`scheduler.py:761-765`, `request_queue.py:159-164`) | `preempt by (-priority, -t0) requeue tail;` beside `queue by (priority, t0);` |
+| SGLang: from the decode batch, the fewest outputs, then the longest prompt; to the back of the queue | `preempt by (1 - decoding, position - prompt, -prompt) requeue tail;` |
+| TensorRT-LLM `MAX_UTILIZATION`: the last started, by arrival | `preempt by (-t0);` |
 
 (`t0`, `priority`, `prompt` are attributes the program sets.)
 

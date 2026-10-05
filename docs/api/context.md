@@ -43,8 +43,8 @@ read the attribute), and the linker rejects the program.
 | `tokens` | number | `Step`, `Iteration` | tokens scheduled this iteration |
 | `prefilled` | number | `Step`, `Iteration` | prefill tokens scheduled |
 | `attention` | number | `Step`, `Iteration` | attention work of the prefill chunks, `Σ n (K + n/2)`, `K` the position before a chunk (exact for `growing` runs) |
-| `decoding` | 0 / 1 | `Serve` | 1 if the resident is decoding, 0 if prefilling |
-| `admission` | number | `Serve`, `Victim` | the resident's (or candidate's) admission sequence number (its place in vLLM's `running` list) |
+| `decoding` | 0 / 1 | `Serve`, `Victim` | 1 if the resident (or candidate) is decoding, 0 otherwise |
+| `admission` | number | `Serve`, `Victim` | the resident's admission sequence number (its place in vLLM's `running` list); at `Victim`, the candidate's place in the candidates' admission order |
 | `remaining` | number | `Serve` | tokens the resident's run has left |
 | `position` | number | `Victim` | the position the candidate's hold has computed on the pool: what `computed` becomes if it is the victim |
 | `demand` | number | `Iteration` | tokens the residents could take this iteration with no budget: `min(1, remaining)` per decode, the remaining work up to the `chunk` per prefill, over the residents after the batch is scheduled (those `serve only` leaves out included) |

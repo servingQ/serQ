@@ -294,7 +294,8 @@ impl CtxVar {
                 Moment::Iteration,
             ],
             CtxVar::Ntok | CtxVar::Npre | CtxVar::Attn => &[Moment::Step, Moment::Iteration],
-            CtxVar::Decoding | CtxVar::Remaining => &[Moment::Serve],
+            CtxVar::Remaining => &[Moment::Serve],
+            CtxVar::Decoding => &[Moment::Serve, Moment::Victim],
             CtxVar::Admission => &[Moment::Serve, Moment::Victim],
             CtxVar::Position => &[Moment::Victim],
             CtxVar::Demand | CtxVar::Served | CtxVar::Arrived => &[Moment::Iteration],
@@ -1306,6 +1307,14 @@ impl Program {
                         return Err(at(
                             "a preempt key may not draw (`~`): it is read for every candidate \
                              at every growth that does not fit; sample into an attribute first"
+                                .to_string(),
+                        ));
+                    }
+                    if key.any(&|x| matches!(x, CExpr::Attr(a) if *a == self.slot_computed)) {
+                        return Err(at(
+                            "a preempt key reads `computed`, the position at the session's last \
+                             preemption (0 for one never preempted); a preempt key reads \
+                             `position`, where the candidate is now"
                                 .to_string(),
                         ));
                     }

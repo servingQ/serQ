@@ -392,7 +392,11 @@ have opened a number; the oracle IR files and the regressions changed
 shape and not one number, and the Lean generators read the `lifo` form as
 `Exec.victim` and raise `Fragment` on any other. The moment `Victim` and
 the context variable `position` (the candidate's computed position) come
-with it.
+with it; at `Victim`, `admission` is the candidate's place in the
+candidates' admission order (the engine's serving order, or the order a
+pool that is no engine's memory admitted its holders), so that `lifo` and
+`By {keys: [-admission, …]}` pick one victim, and `decoding` is read there
+too.
 11 also carries the preempted hold's cache (#326): a hold released by a
 preemption caches its position (`computed`), not its allocation, where it
 cached its allocation when no `growing` run or `load` had advanced it. Same

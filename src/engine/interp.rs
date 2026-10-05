@@ -2094,7 +2094,6 @@ impl<'p> Interp<'p> {
             let p = self.p;
             let victim = match &p.pools[pl].preempt {
                 Preempt::None => None,
-                lifo if lifo.is_lifo() => self.candidates(pl).last().copied(),
                 Preempt::By { keys, .. } => self.victim(pl, keys),
             };
             match victim {
@@ -2157,17 +2156,30 @@ impl<'p> Interp<'p> {
     }
 
     /// `preempt by (keys)`: the candidate with the least keys, read for
-    /// each (`Moment::Victim`: its attributes, `admission` and its
-    /// `position` on `pl`), ties to the one admitted last, as `lifo`.
+    /// each (`Moment::Victim`: its attributes, `admission`, its place in
+    /// the candidates' admission order, `decoding`, and its `position` on
+    /// `pl`), ties to the one admitted last. `admission` is the place, not
+    /// the session's sequence number, so that `preempt lifo`, `by
+    /// (-admission)`, is the last candidate on a pool that is no engine's
+    /// memory too, where the order is the pool's and a session's latest
+    /// admission may have been to another pool.
     fn victim(&mut self, pl: usize, keys: &[CExpr]) -> Option<usize> {
         let mut best: Option<(KeyOrd, usize)> = None;
-        for s in self.candidates(pl) {
+        for (place, s) in self.candidates(pl).into_iter().enumerate() {
             let position = self.sessions[s]
                 .innermost(pl)
                 .map_or(0.0, |(hi, k)| self.sessions[s].holds[hi].pools[k].pos);
+            let decoding = match self.sessions[s].status {
+                Status::InStage(st, j) => self.stages[st]
+                    .jobs
+                    .get(&j)
+                    .is_some_and(|job| job.mode == RunMode::Decode),
+                _ => false,
+            };
             let ctx = Ctx {
                 sid: Some(s),
-                admission: self.sessions[s].adm_seq as f64,
+                admission: place as f64,
+                decoding: if decoding { 1.0 } else { 0.0 },
                 position,
                 ..Default::default()
             };

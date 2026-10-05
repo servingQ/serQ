@@ -584,18 +584,23 @@ memory of (a holder away from the engine — a prefiller's finished request
 keeping its blocks leased, a decoder's request parked for a read — is in no
 `running` list, vLLM `scheduler.py:742-813`; for a pool that is no engine's
 memory, its holders in a scope), and of them the one with the least keys,
-read for each with its attributes, `admission` and `position` (its hold's
-computed position on the pool), ties to the one admitted last — by the
-session's latest admission, the residents' serving order. `preempt lifo`
+read for each with its attributes, `decoding`, `position` (its hold's
+computed position on the pool) and `admission`, its place in the
+candidates' admission order — by the session's latest admission, the
+residents' serving order, or for a pool that is no engine's memory the
+order the pool admitted its holders — ties to the one admitted last; not
+`computed`, the position at the last preemption. `preempt lifo`
 is `preempt by (-admission)`, vLLM's `running[-1]`, and the parser writes
-it so; SGLang's retraction (fewest outputs, then the longest prompt) is
-`preempt by (position - prompt, -prompt) requeue tail`. The victim's job
+it so; SGLang's retraction (from the decode batch, the fewest outputs, then
+the longest prompt) is
+`preempt by (1 - decoding, position - prompt, -prompt) requeue tail`. The victim's job
 leaves its stage, its hold is released with its computed prefix cached (its
 position: the cached prefix it consumed when no `growing` run or `load`
 advanced it, not its allocation), and
 it re-enters its queue with the hold statement to execute again: at the
 head (vLLM's `prepend_request`, `requeue head`, the default), or with
-`requeue tail` at the back, a newcomer to the queue's keys and `waited`
+`requeue tail` as a newcomer, at the back or where the queue's keys
+place it, `waited` from 0, in the queue of the hold's first pool
 (#356). The grower
 itself can be the victim. The re-executed hold finds `computed` set to the
 position the hold had computed (0 on a first execution and after a hold
@@ -1031,8 +1036,10 @@ position (§3).
 Not modelled: the watermark (0 by default), the adaptive long-prefill
 threshold (off by default), encoder inputs, speculative decoding, sliding
 window, the PRIORITY policy (its victim, the largest `(priority,
-arrival_time)`, is `preempt by (-priority, -t0)`, but no program here
-writes the policy and no oracle scenario checks it), the deferred free of in-flight
+arrival_time)`, `scheduler.py:761-765`, put back into a heap ordered by
+the same, `request_queue.py:159-164`, is `preempt by (-priority, -t0)
+requeue tail` beside `queue by (priority, t0)`, but no program here writes
+the policy and no oracle scenario checks it), the deferred free of in-flight
 blocks, asynchronous scheduling (§8), and cross-session prefix sharing
 (cache entries are per session, §9).
 

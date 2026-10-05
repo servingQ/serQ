@@ -51,7 +51,14 @@ class Fragment(Exception):
 # `preempt lifo`, which the parser writes as `preempt by (-admission)`: the
 # latest admitted resident, back at the head (`Exec.victim`). The fragment
 # knows no other victim order and no `requeue tail`.
-LIFO = {"By": {"keys": [{"Unary": ["Neg", {"Ctx": "Admission"}]}]}}
+LIFO_KEYS = [{"Unary": ["Neg", {"Ctx": "Admission"}]}]
+
+
+def is_lifo(preempt):
+    """Whether a pool's `preempt` is `lifo`: the keys `[-admission]`, back
+    at the head (`tail` absent or false)."""
+    by = preempt.get("By") if isinstance(preempt, dict) else None
+    return by is not None and by.get("keys") == LIFO_KEYS and not by.get("tail", False)
 
 
 def nat(v, what):
@@ -393,7 +400,7 @@ class Lean:
             via = p["admit_via"] is not None
             if via and p["admit_via"] != 0:
                 raise Fragment(f"pool {p['name']}: admitted by a stage other than the engine")
-            if p["preempt"] != ("None" if via else LIFO):
+            if not (p["preempt"] == "None" if via else is_lifo(p["preempt"])):
                 raise Fragment(f"pool {p['name']}: preemption {p['preempt']}")
             if not via and step["memory"] != i:
                 raise Fragment(f"pool {p['name']}: not the engine's memory")
