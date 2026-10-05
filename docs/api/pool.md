@@ -21,7 +21,7 @@ queues the sessions that do not yet fit. Every option is optional.
 | [`cap`](#cap) | `const` | `inf` | capacity in units |
 | [`block`](#block) | `const` | none | allocation and caching granularity |
 | [`evict`](#evict) | `lru` \| `by (expr, …)` | `lru` | which cache entry goes first |
-| [`preempt`](#preempt) | `none` \| `lifo` | `none` | what a failed `grow` does |
+| [`preempt`](#preempt) | `none` \| `by (expr, …) [requeue head \| tail]` \| `lifo` | `none` | what a failed `grow` does: whom it preempts, and where the victim goes back |
 | [`queue`](#queue) | `fifo` \| `by (expr)` | `fifo` | admission order |
 | [`admit via`](#admit-via) | `stage` | none | the queue is served by a step stage |
 | [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
@@ -73,6 +73,7 @@ last release after it has ended. The smallest key goes first.
 
 ```serq
 preempt none;
+preempt by (key, …) [requeue head | requeue tail];
 preempt lifo;
 ```
 
@@ -81,7 +82,23 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 | Form | Behaviour |
 |---|---|
 | `none` | The session waits and resumes where it was. |
-| `lifo` | The most recently admitted holder that is a resident of the step stage this pool is the memory of is preempted (vLLM's `running[-1]`). Its job leaves the stage, its hold is released with the computed prefix cached, and it re-enters the head of the queue to execute its hold again with `computed` set. The grower can be its own victim. |
+| `by (k, …)` | A candidate is preempted: the one with the least keys, compared in order, ties to the one admitted last. The candidates are the holders that are residents of the step stage this pool is the memory of (for a pool that is no engine's memory, the holders that hold it in a scope; a lease is not preempted). The victim's job leaves the stage, its hold is released with the computed prefix cached, and it re-enters its queue to execute its hold again with `computed` set: at the head with `requeue head` (the default), at the tail as a newcomer with `requeue tail` (`waited` from 0, ordered by the queue's keys). The grower can be its own victim. |
+| `lifo` | `by (-admission)`: the latest admitted, back at the head (vLLM's `running[-1]` and `prepend_request`). The parser writes it so. |
+
+Keys are read at the `Victim` moment, for each candidate: its visible
+attributes, `admission` and `position` (the position its hold has computed on
+the pool, [context variables](context.md)), constants, `now` and pool and
+stage queries. A key may not draw or read `budget_left(…)`. The keys are
+the program's, so its engine's rule is written there:
+
+| Engine | Victim |
+|---|---|
+| vLLM, FCFS | `preempt lifo;` |
+| vLLM, PRIORITY (the largest `(priority, arrival)`) | `preempt by (-priority, -t0);` |
+| SGLang (fewest outputs, then the longest prompt; back of the queue) | `preempt by (position - prompt, -prompt) requeue tail;` |
+| TensorRT-LLM `MAX_UTILIZATION` (the last started, by arrival) | `preempt by (-t0);` |
+
+(`t0`, `priority`, `prompt` are attributes the program sets.)
 
 ## `queue`
 
@@ -96,7 +113,8 @@ a list of one. `waited` supplies seconds since the current hold entered the
 queue; it resets on re-entry. Keys may read visible session attributes,
 `now` and pool/stage queries, and may not draw.
 
-A preempted hold re-enters at the head, ahead of policy keys. Only the selected
+A preempted hold re-enters at the head, ahead of policy keys, unless its pool
+says `requeue tail`. Only the selected
 hold is tried: failure to fit blocks the rest. FIFO keeps enqueue order.
 Selection occurs at admission attempts; there is no implicit aging timer.
 For a stage-bound pool, `budget_left(stage)` reads the budget remaining for

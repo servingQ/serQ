@@ -72,12 +72,42 @@ pub enum BinOp {
     Or,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Preempt {
     /// A failed growth waits.
     None,
-    /// A failed growth preempts the most recently admitted holder (vLLM).
-    Lifo,
+    /// A failed growth preempts the candidate with the least `keys`
+    /// (ascending, read at `Moment::Victim`; ties to the latest admitted),
+    /// and the victim's hold re-enters its queue at the head, or at the
+    /// tail as a newcomer when `tail`. The candidates are the residents of
+    /// the step stage the pool is the memory of, or, for a pool that is no
+    /// engine's memory, the sessions that hold it in a scope. `preempt
+    /// lifo` is `By { keys: [-admission], tail: false }` (vLLM's
+    /// `running[-1]`, re-queued with `prepend_request`).
+    By {
+        keys: Vec<CExpr>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        tail: bool,
+    },
+}
+
+impl Preempt {
+    /// `preempt lifo`: the latest admitted, re-queued at the head.
+    pub fn lifo() -> Self {
+        Preempt::By {
+            keys: vec![CExpr::Unary(
+                UnOp::Neg,
+                Box::new(CExpr::Ctx(CtxVar::Admission)),
+            )],
+            tail: false,
+        }
+    }
+
+    /// Whether this is `preempt lifo`, the only preemption the Lean
+    /// fragment knows.
+    pub fn is_lifo(&self) -> bool {
+        *self == Preempt::lifo()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,6 +146,9 @@ pub enum Moment {
     /// A step stage's `serve by` keys and `serve only` predicate:
     /// evaluated for one resident.
     Serve,
+    /// A pool's `preempt by` keys: evaluated for one candidate victim when
+    /// a growth does not fit.
+    Victim,
     /// A `gauge`: evaluated on the state the deployment holds after every
     /// instant, with no session, job or resident, and held until the next
     /// one, so neither `now` nor `work(…)`, which move in between, nor
@@ -148,6 +181,7 @@ impl std::fmt::Display for Moment {
             Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
             Moment::Step => "a step stage's cost, after the iteration",
             Moment::Serve => "a step stage's serve keys or `only`",
+            Moment::Victim => "a pool's preempt keys, read for each candidate victim",
             Moment::Gauge => "a gauge, read on the deployment's state with no session",
             Moment::Given => "a claim's `given`, read on one session's attributes",
             Moment::Iteration => "a claim over iterations, read when an iteration starts",
@@ -195,6 +229,9 @@ pub enum CtxVar {
     Admission,
     /// Serve keys: tokens the resident's run has left.
     Remaining,
+    /// Preempt keys: the position the candidate's hold has computed on the
+    /// pool, which `computed` becomes if it is the victim.
+    Position,
     /// Iteration claims: the tokens the stage's residents could take in
     /// this iteration if the budget were unlimited (`min(1, remaining)` for
     /// a decode, the remaining work up to the chunk for a prefill), summed
@@ -230,6 +267,7 @@ impl CtxVar {
             CtxVar::Decoding => "decoding",
             CtxVar::Admission => "admission",
             CtxVar::Remaining => "remaining",
+            CtxVar::Position => "position",
             CtxVar::Demand => "demand",
             CtxVar::Served => "served",
             CtxVar::Arrived => "arrived",
@@ -256,7 +294,9 @@ impl CtxVar {
                 Moment::Iteration,
             ],
             CtxVar::Ntok | CtxVar::Npre | CtxVar::Attn => &[Moment::Step, Moment::Iteration],
-            CtxVar::Decoding | CtxVar::Admission | CtxVar::Remaining => &[Moment::Serve],
+            CtxVar::Decoding | CtxVar::Remaining => &[Moment::Serve],
+            CtxVar::Admission => &[Moment::Serve, Moment::Victim],
+            CtxVar::Position => &[Moment::Victim],
             CtxVar::Demand | CtxVar::Served | CtxVar::Arrived => &[Moment::Iteration],
         }
     }
@@ -1256,6 +1296,21 @@ impl Program {
                     }
                 }
             }
+            if let Preempt::By { keys, .. } = &p.preempt {
+                if keys.is_empty() {
+                    return Err(at("preempt by needs at least one key".to_string()));
+                }
+                for key in keys {
+                    v.expr(key, Moment::Victim).map_err(at)?;
+                    if draws(key) {
+                        return Err(at(
+                            "a preempt key may not draw (`~`): it is read for every candidate \
+                             at every growth that does not fit; sample into an attribute first"
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
             if let CEvict::By(keys) = &p.evict {
                 for e in keys {
                     v.expr(e, Moment::Evict).map_err(at)?;
@@ -1663,6 +1718,11 @@ impl Validator<'_> {
             CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Budget => Err(
                 "a step's budget or chunk may not read `budget_left(…)`: budget_left plans an \
                  iteration from a step's budget, so a budget that reads it can read itself"
+                    .into(),
+            ),
+            CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Victim => Err(
+                "a preempt key may not read `budget_left(…)`: a victim is chosen while the \
+                 iteration that would answer it is being planned"
                     .into(),
             ),
             CExpr::Call(Fun::CachedIn, _) if m == Moment::Gauge => Err(

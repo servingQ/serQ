@@ -179,7 +179,20 @@
    "cap": 160.0,
    "evict": "Lru",
    "name": "kv",
-   "preempt": "Lifo",
+   "preempt": {
+    "By": {
+     "keys": [
+      {
+       "Unary": [
+        "Neg",
+        {
+         "Ctx": "Admission"
+        }
+       ]
+      }
+     ]
+    }
+   },
    "queue": null,
    "spill": null
   },

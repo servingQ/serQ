@@ -48,6 +48,12 @@ class Fragment(Exception):
     """An IR construct outside the Lean executable fragment."""
 
 
+# `preempt lifo`, which the parser writes as `preempt by (-admission)`: the
+# latest admitted resident, back at the head (`Exec.victim`). The fragment
+# knows no other victim order and no `requeue tail`.
+LIFO = {"By": {"keys": [{"Unary": ["Neg", {"Ctx": "Admission"}]}]}}
+
+
 def nat(v, what):
     if not (isinstance(v, (int, float)) and v >= 0 and float(v).is_integer()):
         raise Fragment(f"{what}: {v} is not a natural number")
@@ -387,7 +393,7 @@ class Lean:
             via = p["admit_via"] is not None
             if via and p["admit_via"] != 0:
                 raise Fragment(f"pool {p['name']}: admitted by a stage other than the engine")
-            if p["preempt"] != ("None" if via else "Lifo"):
+            if p["preempt"] != ("None" if via else LIFO):
                 raise Fragment(f"pool {p['name']}: preemption {p['preempt']}")
             if not via and step["memory"] != i:
                 raise Fragment(f"pool {p['name']}: not the engine's memory")

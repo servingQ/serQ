@@ -1998,8 +1998,17 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
             )),
         }
     }
-    if pool.preempt == crate::ir::Preempt::Lifo {
-        parts.push("preempt lifo".into());
+    match &pool.preempt {
+        crate::ir::Preempt::None => {}
+        lifo if lifo.is_lifo() => parts.push("preempt lifo".into()),
+        crate::ir::Preempt::By { keys, tail } => parts.push(format!(
+            "preempt by ({}){}",
+            keys.iter()
+                .map(|k| p.show_expr(k))
+                .collect::<Vec<_>>()
+                .join(", "),
+            if *tail { " requeue tail" } else { "" }
+        )),
     }
     if let Some(s) = pool.admit_via {
         parts.push(format!("admit via {}", p.stages[s].name));

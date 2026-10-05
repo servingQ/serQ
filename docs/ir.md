@@ -67,7 +67,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `version` | `IR_VERSION`; a different version is rejected |
 | `attrs` | attribute names; an attribute is referenced by its index (slot) |
 | `observes` | observation names, by index |
-| `pools` | `CPool`: `name`, `index` (the member's index in an array declared `pool kv[N]`, a one-member array's too, and a queue family's, `queue D[1]` included; omitted for a single pool; a report label the run does not read), `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, `Lifo`), `queue` (`null` for FIFO, otherwise a nonempty list of pure selection keys), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
+| `pools` | `CPool`: `name`, `index` (the member's index in an array declared `pool kv[N]`, a one-member array's too, and a queue family's, `queue D[1]` included; omitted for a single pool; a report label the run does not read), `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, or `By {keys, tail}`: the victim the candidate with the least keys, read at `Victim`, re-queued at the head or, with `tail`, at the back; `preempt lifo` is `By {keys: [-admission]}`), `queue` (`null` for FIFO, otherwise a nonempty list of pure selection keys), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
 | `stages` | `CStage`: `name`, `index` (as for `CPool`, `stage E[N]`), `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `only` (absent, or a `Serve`-moment predicate that may not draw or read `Now` or `work`: the residents it reads as 0 are not served that iteration, and `serve` orders the rest; not with `ExclusivePrefill`), `memory` (pool index) |
 | `arrival` | `Poisson(rate)`, `Renewal(gap expression)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
@@ -384,6 +384,15 @@ the iteration: a session admitted in the iteration is counted. That is a
 change of meaning under the same shape, listed in the same message; no
 committed program has a key that reads a total, and none of their numbers
 moved.
+11 also retypes `CPool.preempt` (#356): `Lifo` is gone, and `By {keys,
+tail}` says whom a growth that does not fit preempts and where the victim
+goes back; `preempt lifo` compiles to `By {keys: [-admission]}`, which
+runs as `Lifo` ran. A removed variant, so on a tagged version it would
+have opened a number; the oracle IR files and the regressions changed
+shape and not one number, and the Lean generators read the `lifo` form as
+`Exec.victim` and raise `Fragment` on any other. The moment `Victim` and
+the context variable `position` (the candidate's computed position) come
+with it.
 11 also carries the preempted hold's cache (#326): a hold released by a
 preemption caches its position (`computed`), not its allocation, where it
 cached its allocation when no `growing` run or `load` had advanced it. Same

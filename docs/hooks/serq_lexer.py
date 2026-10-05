@@ -39,7 +39,7 @@ STATEMENTS = (
 
 # Pool and stage options, and workload forms.
 OPTIONS = (
-    "cap", "block", "evict", "lru", "preempt", "lifo", "none", "queue", "fifo",
+    "cap", "block", "evict", "lru", "preempt", "lifo", "requeue", "head", "tail", "none", "queue", "fifo",
     "admit", "via", "spill", "when", "ps", "delay", "step", "budget", "cost",
     "chunk", "serve", "latency", "nic", "exclusive", "first", "only", "memory", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden",
     "batch", "trace", "ordered", "init", "horizon", "warmup", "seed",

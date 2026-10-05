@@ -34,7 +34,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from gen_lean_oracle import (  # noqa: E402
-    Expr, Fragment, Lean, affine, chunk_rule, fold, nat, one_ref, COST_VARS,
+    Expr, Fragment, Lean, affine, chunk_rule, fold, nat, one_ref, COST_VARS, LIFO,
 )
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -169,7 +169,7 @@ class Program:
         for i, p in enumerate(ir["pools"]):
             if p["evict"] != "Lru" or p["spill"] is not None or p["admit_via"] is not None:
                 raise Fragment(f"pool {p['name']}: LRU eviction, no spill, no admit via")
-            if i in grown and (p["preempt"] != "Lifo" or step["memory"] != i):
+            if i in grown and (p["preempt"] != LIFO or step["memory"] != i):
                 raise Fragment(f"pool {p['name']}: a grown pool is the engine's memory under preempt lifo")
             key = "none"
             if p["queue"] is not None:
