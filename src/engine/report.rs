@@ -133,6 +133,11 @@ pub struct PoolReport {
     /// Sessions preempted a second time without progress past their
     /// previous preemption: a livelock the run would otherwise hide.
     pub stuck: u64,
+    /// The run ended with the head of a queue asking this pool for more
+    /// than its cap: the queue's pool and what the head asks. A hold whose
+    /// units or `reserve` read the deployment's state is not rejected when
+    /// it joins the queue, and waits (#364).
+    pub over_cap: Option<(String, f64)>,
 }
 
 /// A `claim`: what the run found of it on the path it ran.
@@ -469,6 +474,15 @@ impl Report {
                         label(&p.name, p.index)
                     );
                 }
+                if let Some((queue, need)) = &p.over_cap {
+                    let _ = writeln!(
+                        s,
+                        "over: the head of pool `{queue}`'s queue asks `{}` for {need}, above \
+                         its cap, when the run ends, and waits (its hold reads the \
+                         deployment's state, so joining the queue did not reject it)",
+                        label(&p.name, p.index)
+                    );
+                }
             }
         }
         for st in self.stages.iter().filter(|st| st.idle_with_work) {
@@ -598,7 +612,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"over_cap\":{}}}",
                 p.name,
                 index(p.index),
                 f(p.mean_used),
@@ -612,7 +626,12 @@ impl Report {
                 p.preemptions,
                 p.spills,
                 p.rejected,
-                p.stuck
+                p.stuck,
+                match &p.over_cap {
+                    Some((queue, need)) =>
+                        format!("{{\"queue\":\"{queue}\",\"need\":{}}}", f(*need)),
+                    None => "null".into(),
+                }
             );
         }
         s.push_str("]}");

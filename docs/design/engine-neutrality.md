@@ -187,7 +187,8 @@ both:
   Written today as a `reserve` that reads `holders(reqs)`, the test is
   judged once more when the session joins the queue, against the cap: under
   load it exceeds the cap and the session is rejected, where SGLang only
-  makes it wait (#364). `examples/engines/sglang.sq` caps it at the pool.
+  makes it wait. Since #364 the part that reads state is not judged at the
+  join, and waits; `examples/engines/sglang.sq` reads the load uncapped.
 - `granule g` on a prefill run or on the stage: a grant is the whole
   remainder or a multiple of `g` (V6). `g = 1` is today; `g = inf` is
   TensorRT-LLM's default.

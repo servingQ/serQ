@@ -397,6 +397,12 @@ the iteration: a session admitted in the iteration is counted. That is a
 change of meaning under the same shape, listed in the same message; no
 committed program has a key that reads a total, and none of their numbers
 moved.
+11 also changes what a `Hold` does when a session joins a queue (#364),
+with no change of shape: only units and a `reserve` that read attributes
+and numbers are judged against the cap then; one that reads the
+deployment's state waits, where it was rejected, so an old reader would
+end sessions this version runs. A head still over a cap when the run ends
+is named (the pool report's `over_cap`, an added field).
 11 also retypes `CPool.preempt` (#356): `Lifo` is gone, and `By {keys,
 tail}` says whom a growth that does not fit preempts and where the victim
 goes back; `preempt lifo` compiles to `By {keys: [-admission]}`, which

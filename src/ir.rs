@@ -1807,23 +1807,13 @@ fn amount(e: &CExpr, what: &str) -> Result<(), String> {
 
 /// Whether an expression's value moves while a session holds still: it
 /// reads the clock, the context, the state or a draw. An index that does
-/// is not the same member when read again (#282, #317).
-fn moves(e: &CExpr) -> bool {
+/// is not the same member when read again (#282, #317), and a hold's units
+/// that do ask for something else at the next try (#364).
+pub(crate) fn moves(e: &CExpr) -> bool {
     e.any(&|x| match x {
         CExpr::Ctx(_) | CExpr::Sample(..) => true,
         // a function of its arguments alone does not move
-        CExpr::Call(f, _) => !matches!(
-            f,
-            Fun::Min
-                | Fun::Max
-                | Fun::Abs
-                | Fun::Floor
-                | Fun::Ceil
-                | Fun::Sqrt
-                | Fun::Exp
-                | Fun::Ln
-                | Fun::Pow
-        ),
+        CExpr::Call(f, _) => !f.is_arithmetic(),
         _ => false,
     })
 }

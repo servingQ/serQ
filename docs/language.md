@@ -552,7 +552,15 @@ by release time and then release order, `evict by (k₁, …)` by the keys and
 then release order. A request that can never fit — its units, or its
 `reserve` when that is larger, above the cap, as they evaluate when the
 session joins the queue — is rejected: the session ends, and the report
-says how many did. One whose units or `reserve` are a constant does not
+says how many did. Each of the units and the `reserve` that reads only
+attributes and numbers is judged then; one that reads the deployment's
+state (a pool or stage query, the clock, `budget_left`) asks for something
+else at the next try, as SGLang's admission test grows with the running
+requests and shrinks when they leave
+([`schedule_policy.py` L694-L698](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/schedule_policy.py#L694-L698)),
+so it is judged at every try and waits (#364); a queue's head that, read as
+the run ends, still asks a pool for more than its cap is named (`over:`,
+the pool report's `over_cap`). One whose units or `reserve` are a constant does not
 link: it would be rejected whenever it is reached. vLLM never
 schedules a request it could never hold either, by another measure: it
 refuses a prompt longer than `max_model_len` (and, for generation, one of
