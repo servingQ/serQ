@@ -138,4 +138,5 @@ nav:
       - Queues: design/queue.md
       - Explicit gateways: design/explicit-gateways.md
       - The pull relation: design/pull-relation.md
+      - The push mode: design/push-mode.md
       - Engine neutrality: design/engine-neutrality.md

@@ -185,7 +185,8 @@ struct Parser {
     /// The `from` name of the entry being parsed.
     entry_from: Option<String>,
     /// The program's `share` was given by a pull relation.
-    relation_share: bool,
+    /// The verb of the relation that gave the program's `share`.
+    relation_share: Option<&'static str>,
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
@@ -371,7 +372,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 101] = [
+pub const KEYWORDS: [&str; 104] = [
     "admission",
     "admit",
     "arrivals",
@@ -403,6 +404,7 @@ pub const KEYWORDS: [&str; 101] = [
     "fifo",
     "first",
     "fits",
+    "fork",
     "from",
     "gauge",
     "given",
@@ -416,6 +418,7 @@ pub const KEYWORDS: [&str; 101] = [
     "in",
     "init",
     "iteration",
+    "join",
     "latency",
     "lease",
     "let",
@@ -440,6 +443,7 @@ pub const KEYWORDS: [&str; 101] = [
     "prefill",
     "ps",
     "pull",
+    "push",
     "queue",
     "release",
     "requeue",
@@ -635,7 +639,7 @@ pub(crate) fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
     for s in stmts {
         match s {
             Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => out.push(n.clone()),
-            Stmt::Hold { body, .. } | Stmt::Loop(body) => assigned_in(body, out),
+            Stmt::Hold { body, .. } | Stmt::Loop(body) | Stmt::Fork(body) => assigned_in(body, out),
             Stmt::Branch(_, a, b) => {
                 assigned_in(a, out);
                 assigned_in(b, out);
@@ -824,7 +828,7 @@ fn ref_reads(r: &Ref, n: &str) -> bool {
 fn stmt_reads(s: &Stmt, n: &str) -> bool {
     let block = |b: &[Stmt]| b.iter().any(|s| stmt_reads(s, n));
     match s {
-        Stmt::Turn | Stmt::Request | Stmt::End => false,
+        Stmt::Turn | Stmt::Request | Stmt::End | Stmt::Join => false,
         Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
         Stmt::Hold { body, .. } => {
             // a nested hold that binds `n` itself gives its body its own `n`
@@ -845,7 +849,7 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
                 || growing.as_ref().is_some_and(|g| ref_reads(g, n))
         }
         Stmt::Branch(c, a, b) => expr_reads(c, n) || block(a) || block(b),
-        Stmt::Loop(b) => block(b),
+        Stmt::Loop(b) | Stmt::Fork(b) => block(b),
         Stmt::Choose { count, key, .. } => {
             expr_reads(count, n) || key.iter().any(|k| expr_reads(k, n))
         }
@@ -916,7 +920,7 @@ fn stray_read(stmts: &[Stmt], bound: &[String], scope: &[String]) -> Option<Stri
             Stmt::Branch(c, a, b) => outside(s, &|_, n| expr_reads(c, n))
                 .or_else(|| stray_read(a, bound, scope))
                 .or_else(|| stray_read(b, bound, scope)),
-            Stmt::Loop(b) => stray_read(b, bound, scope),
+            Stmt::Loop(b) | Stmt::Fork(b) => stray_read(b, bound, scope),
             // the binding's own `set`, at the top of its hold's body
             Stmt::Set(v, _) if bound.contains(v) && scope.contains(v) => None,
             _ => outside(s, &stmt_reads),
@@ -1068,7 +1072,7 @@ fn request_sites(stmts: &[Stmt], holds: &[&Stmt], out: &mut Vec<Stmt>) {
                 inner.push(s);
                 request_sites(body, &inner, out);
             }
-            Stmt::Loop(body) => request_sites(body, holds, out),
+            Stmt::Loop(body) | Stmt::Fork(body) => request_sites(body, holds, out),
             Stmt::Branch(_, a, b) => {
                 request_sites(a, holds, out);
                 request_sites(b, holds, out);
@@ -1090,7 +1094,9 @@ fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
                 out.extend(server.iter().cloned());
                 continue;
             }
-            Stmt::Hold { body, .. } | Stmt::Loop(body) => n += splice(body, server),
+            Stmt::Hold { body, .. } | Stmt::Loop(body) | Stmt::Fork(body) => {
+                n += splice(body, server)
+            }
             Stmt::Branch(_, a, b) => {
                 n += splice(a, server);
                 n += splice(b, server);
@@ -1206,7 +1212,7 @@ fn collect_entry(
                 }
                 collect_entry(body, locals, marks, leased);
             }
-            Stmt::Loop(body) => collect_entry(body, locals, marks, leased),
+            Stmt::Loop(body) | Stmt::Fork(body) => collect_entry(body, locals, marks, leased),
             Stmt::Branch(_, a, b) => {
                 collect_entry(a, locals, marks, leased);
                 collect_entry(b, locals, marks, leased);
@@ -1234,7 +1240,7 @@ fn split_reads<'a>(
     };
     for s in stmts {
         match s {
-            Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Mark(_) => {}
+            Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Mark(_) | Stmt::Join => {}
             Stmt::Set(_, e) | Stmt::Observe(_, e) => bodies.push(e),
             Stmt::Grow(r, e) | Stmt::Load(r, e) => {
                 index(r, indices);
@@ -1286,7 +1292,7 @@ fn split_reads<'a>(
                 split_reads(a, headers, bodies, indices);
                 split_reads(b, headers, bodies, indices);
             }
-            Stmt::Loop(b) => split_reads(b, headers, bodies, indices),
+            Stmt::Loop(b) | Stmt::Fork(b) => split_reads(b, headers, bodies, indices),
             Stmt::Choose { count, key, .. } => {
                 bodies.push(count);
                 bodies.extend(key);
@@ -1349,7 +1355,7 @@ fn pools_named<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Ref>) {
                 pools_named(a, out);
                 pools_named(b, out);
             }
-            Stmt::Loop(b) => pools_named(b, out),
+            Stmt::Loop(b) | Stmt::Fork(b) => pools_named(b, out),
             Stmt::Call {
                 to: Some((r, _)), ..
             } => out.push(r),
@@ -1385,7 +1391,7 @@ impl Parser {
             structural_overrides: vec![],
             in_queue: None,
             entry_from: None,
-            relation_share: false,
+            relation_share: None,
             latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
@@ -1660,18 +1666,18 @@ impl Parser {
                 self.side = Side::Session;
                 self.server = Some((at, body));
             } else if matches!(self.peek(), Tok::Ident(_))
-                && *self.peek_at(1) == Tok::Ident("pull".into())
+                && (*self.peek_at(1) == Tok::Ident("pull".into())
+                    || *self.peek_at(1) == Tok::Ident("push".into()))
             {
-                self.pull_relation(&mut prog)?;
+                self.copy_relation(&mut prog)?;
             } else if self.is_kw("share") {
                 let at = self.pos;
                 self.advance();
                 if let Some(first) = self.share_at {
                     let line = self.toks[first].line;
-                    let what = if self.relation_share {
-                        "the pull relation on line"
-                    } else {
-                        "the first is on line"
+                    let what = match self.relation_share {
+                        Some(verb) => format!("the {verb} relation on line"),
+                        None => "the first is on line".into(),
                     };
                     return self.err_at(at, format!("`share` is given twice: {what} {line}"));
                 }
@@ -3140,7 +3146,7 @@ impl Parser {
             marks: vec![],
             latency: None,
             nic: false,
-            pulls: None,
+            takes: None,
             at,
         });
         let qi = self.queues.len() - 1;
@@ -4059,6 +4065,17 @@ impl Parser {
                 self.advance();
                 Ok(Stmt::Loop(self.block()?))
             }
+            // `fork { … }`: the block runs beside the session, a leg of the
+            // same request; `join;` waits for every leg forked so far
+            "fork" => {
+                self.advance();
+                Ok(Stmt::Fork(self.block()?))
+            }
+            "join" => {
+                self.advance();
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Join)
+            }
             "choose" => {
                 self.advance();
                 let var = self.definition()?;
@@ -4266,71 +4283,95 @@ impl Parser {
     /// `D pull P latency x share maxmin;`: the KV the entries of `D` take
     /// `from P` is read by `D`, over `P`'s NIC and `D`'s at once, after `D`
     /// waits `x`; concurrent reads divide the two NICs by the policy, which
-    /// is the program's `share`.
-    fn pull_relation(&mut self, prog: &mut Program) -> PResult<()> {
+    /// is the program's `share`. `P push D latency x share maxmin;`: the
+    /// same copy over the same two NICs, written by `P` (NIXL's push mode),
+    /// so the wait `x` before each write is `P`'s.
+    fn copy_relation(&mut self, prog: &mut Program) -> PResult<()> {
         let at = self.pos;
         let span = Some(self.span());
-        let puller = self.ident()?;
-        self.advance(); // `pull`
+        let first = self.ident()?;
+        let push = *self.peek() == Tok::Ident("push".into());
+        let verb = if push { "push" } else { "pull" };
+        self.advance(); // `pull` or `push`
         let s_at = self.pos;
-        let source = self.ident()?;
-        for (q, q_at) in [(&puller, at), (&source, s_at)] {
+        let second = self.ident()?;
+        let (reader, source) = if push {
+            (second.clone(), first.clone())
+        } else {
+            (first.clone(), second.clone())
+        };
+        let written = format!("`{first} {verb} {second}`");
+        let copies = if push { "writes" } else { "reads" };
+        for (q, q_at) in [(&first, at), (&second, s_at)] {
             let Some(d) = self.queues.iter().find(|d| d.name == *q) else {
-                return self.err_at(
-                    q_at,
-                    format!("`{puller} pull {source}`: no queue `{q}` is declared above"),
-                );
+                return self.err_at(q_at, format!("{written}: no queue `{q}` is declared above"));
             };
             if !d.nic {
                 return self.err_at(
                     q_at,
                     format!(
-                        "`{puller} pull {source}`: queue `{q}` has no `nic`; a read runs over \
+                        "{written}: queue `{q}` has no `nic`; a copy runs over \
                          the source's NIC and the reader's"
                     ),
                 );
             }
         }
-        if puller == source {
-            return self.err_at(
-                s_at,
-                format!("`{puller} pull {source}`: a queue reads from another"),
-            );
+        if reader == source {
+            return self.err_at(s_at, format!("{written}: a queue copies the KV to another"));
         }
         let qi = self
             .queues
             .iter()
-            .position(|d| d.name == puller)
+            .position(|d| d.name == reader)
             .expect("checked above");
-        if let Some((other, _)) = &self.queues[qi].pulls {
+        if let Some(r) = &self.queues[qi].takes {
             return self.err_at(
                 at,
-                format!("`{puller}` pulls from `{other}` already: one relation per reader"),
+                format!(
+                    "`{reader}` takes the KV from `{}` already: one relation per reader",
+                    r.source
+                ),
             );
         }
+        // the side that posts the copy waits before each one
+        let poster = if push { &source } else { &reader };
+        let pi = self
+            .queues
+            .iter()
+            .position(|d| d.name == *poster)
+            .expect("checked above");
         let latency = if self.eat_kw("latency") {
             let l_at = self.pos;
             let e = self.expr()?;
             let Some(v) = self.const_value(&e) else {
                 return self.err_at(
                     l_at,
-                    "`latency` is a number or a constant over `let`s: the reader's fixed wait \
-                     before each read",
+                    "`latency` is a number or a constant over `let`s: the fixed wait of the \
+                     side that posts each copy",
                 );
             };
             // a constant of its own (see the link's `latency`), and a delay
-            // stage of the reader's, one per member
-            let lname = format!("{puller}.pull.time");
+            // stage of the side that posts, one per member
+            let lname = format!("{poster}.{verb}.time");
+            let sname = format!("{poster}.nic.latency");
+            if self.stages.iter().any(|(n, _)| *n == sname) {
+                return self.err_at(
+                    l_at,
+                    format!(
+                        "{written}: `{poster}` posts the copies of another relation \
+                         already, and waits once before each: one relation per poster"
+                    ),
+                );
+            }
             self.consts.push((lname.clone(), v));
             prog.lets.push((lname.clone(), e));
-            let count = self.queues[qi].count;
-            let sname = format!("{puller}.nic.latency");
+            let count = self.queues[pi].count;
             self.stages.push((sname.clone(), false));
             prog.stages.push(StageDecl {
                 span,
                 name: sname,
                 count,
-                array: self.queues[qi].family,
+                array: self.queues[pi].family,
                 kind: StageKind::Delay,
             });
             Some(Expr::Var(lname))
@@ -4340,7 +4381,7 @@ impl Parser {
         // the policy is the relation's: written here, not left to a default
         if !self.eat_kw("share") {
             return self.err(format!(
-                "`{puller} pull {source}` names how concurrent reads divide the NICs: \
+                "{written} names how concurrent {copies} divide the NICs: \
                  `share maxmin` or `share bottleneck`, found {}",
                 self.peek()
             ));
@@ -4364,7 +4405,7 @@ impl Parser {
                      `share` names the same",
                 );
             }
-            Some(_) if !self.relation_share => {
+            Some(_) if self.relation_share.is_none() => {
                 return self.err_at(
                     at,
                     "`share` is declared on its own and on the relation: the relation names it",
@@ -4373,9 +4414,13 @@ impl Parser {
             _ => {}
         }
         prog.share = Some(policy);
-        self.relation_share = true;
+        self.relation_share = Some(verb);
         self.share_at.get_or_insert(at);
-        self.queues[qi].pulls = Some((source, latency));
+        self.queues[qi].takes = Some(queue::Takes {
+            source,
+            latency,
+            push,
+        });
         Ok(())
     }
 

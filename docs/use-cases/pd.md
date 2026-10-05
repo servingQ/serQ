@@ -149,11 +149,14 @@ D[j].decode (prompt) from P[i];     // hold kv (known) reserve (known), reqs (0)
                                     // } cache (prompt + o);
 ```
 
-The relation has no `push` yet: the push a reader expects is vLLM's proxy,
-where the decoder allocates during the prefill, and that needs a
-reservation the language does not have (below). Push through the llm-d
-sidecar (serial dispatch) can be written with link queues and `transfer
-on`, the same three lines with two differences a reader can see: the copy is the prefiller's WRITE
+Push is `P push D latency x0 share maxmin;` with the decoder's entry
+joining the prefill leg before the copy
+(`examples/pd-disaggregation/vllm_nixl_push.sq`, [the push
+mode](../design/push-mode.md)): vLLM's proxy forks the prefill leg, so the
+decoder allocates during the prefill. Push through the llm-d sidecar
+(serial dispatch) is the same program without the fork, and can also be
+written with link queues and `transfer on`, the same three lines with two
+differences a reader can see: the copy is the prefiller's WRITE
 (`nixl/push_worker.py:714-722`), which crosses the same two NICs but is
 posted by the prefiller's worker, so the latency is `egress`'s; and it
 starts one notification after the decoder's admission (the registration,
@@ -177,23 +180,17 @@ decoders, where the router sends the reads (the prefill profile prefers the
 pod that has the prefix, so one prefiller's egress carries most of them),
 and the sharing policy.
 
-Push with the two legs dispatched at once (vLLM's own push proxy) is the
-form the language cannot yet write: the decoder's admission would have to
-be requested when the request arrives, while the session is still queued
-at the prefiller, so the write can start the moment the prefill ends. A
-session waits at one pool at a time, so the program above writes the
-decoder's admission after the prefill. The difference is bounded: under
-decoder memory pressure both forms lease at the prefiller, since the write
-cannot start before the decoder has allocated; without it, the concurrent
-form takes the decoder's blocks a prefill earlier and saves one decoder
-step of latency. The reservation that would write it exactly is sketched in
-[The KV transfer](../design/pd-transfer.md):
-
-```
-book kvD[j] (prompt) reserve (prompt);                      // join the decoder's queue now, not written yet
-hold reqsP[i] (1), kvP[i] (…) … { … } cache (prompt) lease kvP[i] (inf);
-hold kvD[j] { transfer on egress[i], ingress[j] (…) from kvP[i] to kvD[j] (…); … }   // open the booking, waiting if it is not granted
-```
+Push with the two legs dispatched at once (vLLM's own push proxy) is
+`fork { P[i].prefill (prompt); }` before the decode request, and `join;` in
+the decoder's entry before the copy: the decoder's admission is requested
+when the request arrives, while the prefill leg is still queued at the
+prefiller, and the write starts when both have happened
+(`examples/pd-disaggregation/vllm_nixl_push.sq`, [the push
+mode](../design/push-mode.md)). Under decoder memory pressure both forms
+lease at the prefiller, since the write cannot start before the decoder
+has allocated; without it, the concurrent form takes the decoder's blocks a
+prefill earlier. On the A6000 trace the decoder's blocks wait 0.95 s for the
+KV instead of 0.03 s and the first token comes no sooner.
 
 **Not modelled**: the lease's expiry and the decoder's heartbeats (the
 lease is granted at `nixl/pull_scheduler.py:248-269`, reaped at

@@ -43,6 +43,7 @@ item     := let NAME = expr ;
           | run { ( horizon | warmup | seed | arrivals ) expr ; ... }   -- any of them, in any order
           | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
           | QUEUE pull QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the reader, its source, the read (below, *Queues*)
+          | QUEUE push QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the source, its reader, the write
           | gauge NAME = expr ;              -- the time average of a function of the state (Gauges)
           | claim NAME [given ( expr )] : every iteration of STAGE ( expr ) ;   -- a proposition about every path (Claims)
           | claim NAME [given ( expr )] : some iteration of STAGE ( expr ) ;
@@ -98,6 +99,8 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | branch ( expr ) block [ else block ]          -- a test
           | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
           | loop block
+          | fork block                       -- the block runs beside the session: a leg of the request
+          | join ;                           -- wait until every leg forked so far has ended
           | choose NAME in expr by ( expr , ... ) ; -- NAME := argmin over 0..n, keys in order
           | end ;
           | QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
@@ -433,6 +436,15 @@ an entry of `D` called `from` another queue is an error, and so is a
 `transfer` without `on` in a queue that pulls from none. A program with a
 relation does not also write `share` on its own.
 
+`P push D latency x0 share maxmin;` is the same copy written by the other
+side (NIXL push): the bytes cross the same two NICs, and the source's
+worker posts the write, so the wait before each copy is `P`'s, the delay
+stage `P.nic.latency`, indexed by the source member. A push says who moves
+the bytes, not when the decoder is asked for its blocks: that is the
+dispatch, written where it happens, with `fork` (below,
+`examples/pd-disaggregation/vllm_nixl_push.sq`). A queue that posts copies
+does so for one relation.
+
 `transfer on L[k], M[l] (n) from S to P (m)` names the stages itself, as
 a `server` does: link queues, or any `ps` stages. `latency x` on a link's
 `serve` is the wait before such a transfer: a delay stage
@@ -469,7 +481,7 @@ forms; the client's `tool` is a stage, not a queue.
 
 **Configuration.** Time; the live sessions with their attributes,
 continuation (a stack of block frames), status (ready, queued at a pool,
-at a stage, waiting to grow, ended), active holds and leases (allocations
+at a stage, waiting to grow, at a `join`, ended), active holds and leases (allocations
 kept past their scope, with an expiry); for each pool its
 capacity, the allocations of its holders (in admission order), its cache
 (entries of units, release time and release order, per session or dead),
@@ -486,6 +498,25 @@ retries growers and admissions at every pool not served by a stage, until
 nothing changes; then it starts an iteration on every idle step stage that
 has residents or a waiting queue it serves, provided no other event is
 pending at the same instant (a scheduler step sees every arrival up to it).
+
+**Legs.** `fork { body }` starts a *leg* of the request: the body runs
+beside the session from the same instant, with a copy of the session's
+attributes, as vLLM's push proxy sends the prefill and the decode request
+of one request at once. The leg's holds are its own (it acts on none of
+the session's), its `set`s change only its copy, which ends with it, and
+its draws read a stream of its own; its observations are the program's. It
+shares the session's cached prefix, which is the request's. When the leg
+ends, what it leases passes to the session, whose `release` (a
+`transfer … from`) takes it. `join;` waits until every leg the session has
+forked has ended, and passes at once when none runs. A leg may not
+`turn`, `end`, fork or `join`, and a session may not end while a leg runs
+(a run-time error). A hold that can never fit refuses the request: the
+session ends, a refused leg ends its session, and the legs of an ended
+session run on and give back what they lease. A run that ends with
+sessions and legs waiting only for each other, one at a `join`, is an
+error: the leg waits for memory a lease holds, and the lease's session
+waits inside a hold the leg's session needs (a hold-and-wait cycle; a
+finite `lease` breaks it).
 
 **Pools.** `hold m₁(u₁) reserve(r₁), m₂(u₂) … reuse(ρ) { body } cache(ℓ)`
 joins the queue of `m₁`. The unit expressions are evaluated *when the
@@ -1046,6 +1077,7 @@ serQ began as the language of a lecture on serving queues; `docs/review.md`
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle (§7), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace (§8) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
+| `pd-disaggregation/vllm_nixl_push.sq` | vLLM's push proxy in front of one prefill and one decode instance with the NIXL connector's push mode, on the A6000 testbed, replaying the short-context trace ([the push mode](design/push-mode.md)) | the source (vLLM at 0c87a197), `tests/fork_join.rs`; no scheduler oracle |
 | `papers/*.sq` | three scheduling papers' serving systems | their claims, proved in Lean ([use cases](use-cases/index.md)) |
 | `engines/sglang.sq`, `engines/tensorrt_llm.sq`, `engines/tgi.sq` | SGLang, TensorRT-LLM and TGI with their defaults, as close as serQ writes them today ([engine neutrality](design/engine-neutrality.md)) | the source, read; `make check` links and draws them; no oracle |
 | `single-turn/fastertransformer.sq`, `single-turn/separate_phases.sq`, `single-turn/ascend_aging.sq`, `vendors/*.sq`, the other `pd-disaggregation/*.sq` | the [use cases](use-cases/index.md) that describe them | `make check` links and draws them |
@@ -1191,10 +1223,11 @@ are not published. [The cliff](tutorial/06-the-cliff.md) tells the story.
   step stage is the natural extension).
 * Cache entries are per session; cross-session prefix sharing (a common
   system prompt) needs a content-addressed cache.
-* A session is one sequence of statements, so it waits at one pool at a
-  time: NIXL's push mode, where the decoder allocates during the prefill,
-  needs a reservation a session joins now and enters later
-  ([the KV transfer](design/pd-transfer.md)).
+* A leg's lease does not expire when its session is slow to ask for it:
+  vLLM's prefiller frees a pushed request's blocks after its lease
+  duration when no decoder has registered, and the request fails; the
+  program's lease is one number, and a copy after it reads nothing
+  ([the push mode](design/push-mode.md)).
 * A lease's bound is one number; the heartbeat that renews it is not a
   construct ([the KV transfer](design/pd-transfer.md)).
 * One eviction order per pool; a priced order uses `price(stage, …)` with

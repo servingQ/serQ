@@ -410,6 +410,11 @@ pub enum Stmt {
         key: Vec<Expr>,
     },
     End,
+    /// `fork { … }`: the block runs beside the session, as a leg of the
+    /// same request (`CStmt::Fork`).
+    Fork(Vec<Stmt>),
+    /// `join;`: wait until every leg forked so far has ended.
+    Join,
     /// `Q[i].verb (args) [from S[k]] [to P (m)];`: a queue's entry. Parse-time
     /// only: `assemble` puts the entry's body in its place (`crate::frontend::queue`),
     /// so the linker never sees one.
@@ -563,7 +568,7 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                     block(a);
                     block(b);
                 }
-                Stmt::Loop(b) => block(b),
+                Stmt::Loop(b) | Stmt::Fork(b) => block(b),
                 Stmt::Choose { count, key, .. } => {
                     expr(count);
                     key.iter_mut().for_each(expr);

@@ -111,17 +111,17 @@ not replace it, and `--set` still reaches the expression.
 
 ## Self-critique
 
-**No `push`.** `P push D` would read as the push a reader expects, vLLM's
+**No `push` here.** `P push D` would read as the push a reader expects, vLLM's
 proxy, which sends the prefill and the decode request at once
 (`disagg_proxy_pushconnector_demo.py:227-270`), so that the decoder
 allocates during the prefill and the prefiller writes as soon as it has
 both the finished request and the decoder's registration
-(`nixl/push_scheduler.py:207-294`). That needs a reservation the language does not
-have ([The KV transfer](pd-transfer.md)). The push this model can write
-today is llm-d's serial one, which differs from pull only in whose worker
-waits; under the word `push` it would mean less than it says (criterion 0).
-Serial push is still written with link queues and `transfer on`
-([the P/D use case](../use-cases/pd.md), *The two modes in the program*).
+(`nixl/push_scheduler.py:207-294`). Without a way to write the two legs,
+the push this model could write was llm-d's serial one, which differs from
+pull only in whose worker waits; under the word `push` it would have meant
+less than it says (criterion 0). [The push mode](push-mode.md) adds the
+legs (`fork`, `join`) and then the relation, which says who moves the
+bytes while the gateway says when the decoder is asked.
 
 **One policy per program.** The IR's `share` is the program's, so every
 relation names the same. NVLink one way and RDMA another is a policy per

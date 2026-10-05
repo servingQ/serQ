@@ -67,7 +67,7 @@ here. This directory is the record of **applying** them.
 | [Frontend](frontend.md) | Model / instance split, effects and handlers, the admission block, trait vocabulary, units. With two self-critiques and a verdict table | sketch, before issues |
 | [IR v4](ir-v4.md) | Making the implicit static: moments, ownership, declared orders, integer ticks, the session automaton, step coalescing, progress checks | RFC #41 |
 | [Subagents](subagents.md) | A session that spawns sessions is not a tool call: endogenous arrivals, hold-and-wait, cross-session cache, `Spawn`/`Join` | review, for v4b |
-| [The KV transfer](pd-transfer.md) | Prefill/decode disaggregation as llm-d and the NIXL connector do it, in pull and push mode; `release`, `load`, `transfer … from … to …`; the reservation push mode still wants | IR v5, with `examples/pd-disaggregation/llmd_pd.sq` |
+| [The KV transfer](pd-transfer.md) | Prefill/decode disaggregation as llm-d and the NIXL connector do it, in pull and push mode; `release`, `load`, `transfer … from … to …` | IR v5, with `examples/pd-disaggregation/llmd_pd.sq` |
 | [Renewal arrivals](renewal-arrivals.md) | Finite open runs, execution deadlines, report times and first-arrival compatibility | IR v6, #108 |
 | [Bandwidth sharing](bandwidth-sharing.md) | A transfer holds the sender's and the receiver's link at once: `Run.also`, `share maxmin` or `bottleneck`, the flow solver | RFC #118, design before implementation |
 | [One admission](one-admission.md) | One spelling for one admission: `hold … at admission (…) … cache`; `enter`, `admit if … fit where` and `keep` retired, the serving name moved into a `def` | #136 |
@@ -77,6 +77,7 @@ here. This directory is the record of **applying** them.
 | [Queues](queue.md) | gateway, prefill, link and decode as roles of one `queue` that owns its pools, its stage and the entries holding a request's admission, allocation and service; what an entry may read; parse-time sugar; a link whose `serve` is its cost | RFC #72, with `examples/pd-disaggregation/llmd_nixl_pull.sq` |
 | [Explicit gateways](explicit-gateways.md) | `request gw;` selects a gateway by name; predefined vocabulary and the proposed import boundary | PR #87 follow-up |
 | [The pull relation](pull-relation.md) | A pod owns its `nic`; `D pull P latency x share s;` is a transfer's topology, mode and policy in one line, and a `transfer` without `on` its read | #200, parse-time sugar |
+| [The push mode](push-mode.md) | A request's legs: `fork { … }` and `join;` for NIXL's push mode, where the proxy sends the prefill and the decode request at once; `P push D latency x share s;`; why not a reservation | #368, IR 11 (untagged) |
 | [Engine neutrality](engine-neutrality.md) | SGLang, TensorRT-LLM and TGI read from their source and written as serQ programs (`examples/engines/`); seven rules of the step iteration that are vLLM's, which engine contradicts each; a parameter per rule against the iteration as a program body; the price | survey and proposal, 2026-10-05 |
 
 A new design document adds a row to this table.

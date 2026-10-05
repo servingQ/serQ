@@ -101,6 +101,8 @@ enum Status {
     /// A failed `grow` waiting for room (pool policy `none`); resumes at
     /// the stage job it was in, if any.
     Growing(usize, f64, Option<(usize, u64)>),
+    /// At a `join`, until the legs the session forked have ended.
+    Joining,
     Ended,
 }
 
@@ -221,6 +223,15 @@ struct Session<'p> {
     /// keeps becoming ready without time passing is a loop that never
     /// blocks (`READIES_PER_INSTANT`).
     readies: (f64, u64),
+    /// Whether this is a leg (`fork`), and the slot of the session that
+    /// forked it, which stays until the leg ends: a session may not end
+    /// before its legs, unless it was refused, which leaves them orphans.
+    leg: bool,
+    leg_of: Option<usize>,
+    /// Legs forked and not yet ended, and forks so far (the key of a leg's
+    /// stream).
+    legs: u32,
+    forks: u64,
 }
 
 impl Session<'_> {
@@ -251,6 +262,7 @@ fn substream(seed: u64, serial: u64, turn: u64, kind: u64) -> StdRng {
 /// Kinds of a session's streams (`substream`).
 const STREAM_WORKLOAD: u64 = 1;
 const STREAM_SESSION: u64 = 2;
+const STREAM_LEG: u64 = 3;
 
 /// Statements a session may execute without blocking before the run is an
 /// error: a loop that never reaches a `run`, a `hold` that waits, or `end`
@@ -874,6 +886,20 @@ impl<'p> Interp<'p> {
         if let Some(error) = self.error.take() {
             return Err(error);
         }
+        let stuck = self.waiting_for_each_other();
+        if stuck
+            .iter()
+            .any(|&s| self.sessions[s].status == Status::Joining)
+        {
+            let who: Vec<String> = stuck.iter().map(|&s| self.waiting_at(s)).collect();
+            return Err(format!(
+                "the run ends with sessions that wait for each other: {}. A leg waits for \
+                 memory that a lease holds until its session's copy, and the session waits \
+                 for the leg inside a hold another leg needs: a hold-and-wait cycle, which a \
+                 finite `lease` (the prefiller's lease expiry) breaks",
+                who.join("; ")
+            ));
+        }
         if let Some(n) = p.arrivals {
             if self.arrivals < n as u64 {
                 return Err(format!(
@@ -959,10 +985,18 @@ impl<'p> Interp<'p> {
             Ev::Finish { stage, job, epoch } => self.on_finish(stage, job, epoch),
             Ev::IterEnd { stage, epoch } => self.on_iter_end(stage, epoch),
             Ev::LeaseEnd { sid, serial, id } => {
-                if self.sessions[sid].serial == serial
-                    && let Some(i) = self.sessions[sid].leases.iter().position(|l| l.id == id)
-                {
-                    self.end_lease(sid, i);
+                // a leg's lease has passed to its session when the leg ended
+                let owner = std::iter::once(sid)
+                    .chain(self.by_serial.get(&serial).copied())
+                    .find_map(|s| {
+                        let ss = &self.sessions[s];
+                        (ss.serial == serial)
+                            .then(|| ss.leases.iter().position(|l| l.id == id))
+                            .flatten()
+                            .map(|i| (s, i))
+                    });
+                if let Some((s, i)) = owner {
+                    self.end_lease(s, i);
                     self.try_admit_all();
                 }
             }
@@ -1197,6 +1231,10 @@ impl<'p> Interp<'p> {
             rng: substream(self.p.seed, serial, 0, STREAM_SESSION),
             turn_count: 0,
             readies: (f64::NAN, 0),
+            leg: false,
+            leg_of: None,
+            legs: 0,
+            forks: 0,
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -1317,6 +1355,17 @@ impl<'p> Interp<'p> {
         if self.sessions[sid].status == Status::Ended {
             return;
         }
+        if self.sessions[sid].leg {
+            self.end_leg(sid);
+            return;
+        }
+        if self.sessions[sid].legs > 0 {
+            self.error = Some(format!(
+                "session {} ends at t = {} while a leg it forked runs: `join` before the end",
+                self.sessions[sid].serial, self.now
+            ));
+            return;
+        }
         self.detach(sid);
         while let Some(h) = self.sessions[sid].holds.pop() {
             self.release_hold(sid, &h);
@@ -1343,6 +1392,188 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// `fork`: a leg of the session, ready now, with a copy of its
+    /// attributes and a stream of its own.
+    fn fork(&mut self, sid: usize, body: BlockId) {
+        let p = self.p;
+        let s = &mut self.sessions[sid];
+        let n = s.forks;
+        s.forks += 1;
+        s.legs += 1;
+        let leg = Session {
+            serial: s.serial,
+            attrs: s.attrs.clone(),
+            frames: vec![Frame {
+                block: body,
+                pc: 0,
+                kind: FrameKind::Plain,
+            }],
+            status: Status::Ready,
+            holds: vec![],
+            pending: None,
+            trace: None,
+            script: None,
+            adm_seq: u64::MAX,
+            preempt_pos: HashMap::new(),
+            stuck: false,
+            leases: vec![],
+            last_token: None,
+            rng_wl: s.rng_wl.clone(),
+            rng: substream(p.seed, s.serial, n, STREAM_LEG),
+            turn_count: s.turn_count,
+            readies: (f64::NAN, 0),
+            leg: true,
+            leg_of: Some(sid),
+            legs: 0,
+            forks: 0,
+        };
+        let lid = match self.free.pop() {
+            Some(i) => {
+                self.sessions[i] = leg;
+                i
+            }
+            None => {
+                self.sessions.push(leg);
+                self.sessions.len() - 1
+            }
+        };
+        self.ready.push_back(lid);
+    }
+
+    /// A hold that can never fit refuses the request: the session ends,
+    /// and so does the session of a refused leg. The legs of an ended
+    /// session run on as orphans (vLLM's push proxy awaits the prefill leg
+    /// whatever the decode leg's fate) and give back what they lease when
+    /// they end (the prefiller frees blocks no registration will claim,
+    /// nixl/push_scheduler.py:233-245).
+    fn refuse(&mut self, sid: usize) {
+        let session = if self.sessions[sid].leg {
+            let parent = self.sessions[sid].leg_of;
+            self.end_leg(sid);
+            parent
+        } else {
+            Some(sid)
+        };
+        if let Some(s) = session {
+            for leg in self.sessions.iter_mut() {
+                if leg.leg && leg.leg_of == Some(s) && leg.status != Status::Ended {
+                    leg.leg_of = None;
+                }
+            }
+            self.sessions[s].legs = 0;
+            self.end_session(s);
+        }
+    }
+
+    /// A leg reached the end of its block: what it leased passes to its
+    /// session, and a session waiting at a `join` for its last leg goes on.
+    /// An orphan's leases end with it.
+    fn end_leg(&mut self, sid: usize) {
+        self.detach(sid);
+        while let Some(h) = self.sessions[sid].holds.pop() {
+            self.release_hold(sid, &h);
+        }
+        let Some(parent) = self.sessions[sid].leg_of else {
+            while !self.sessions[sid].leases.is_empty() {
+                self.end_lease(sid, 0);
+            }
+            self.sessions[sid].status = Status::Ended;
+            self.sessions[sid].frames.clear();
+            self.free.push(sid);
+            return;
+        };
+        let leases = std::mem::take(&mut self.sessions[sid].leases);
+        for l in &leases {
+            for h in self.pools[l.pool].holders.iter_mut().filter(|h| **h == sid) {
+                *h = parent;
+            }
+        }
+        self.sessions[parent].leases.extend(leases);
+        self.sessions[sid].status = Status::Ended;
+        self.sessions[sid].frames.clear();
+        self.free.push(sid);
+        let ps = &mut self.sessions[parent];
+        ps.legs -= 1;
+        if ps.legs == 0 && ps.status == Status::Joining {
+            ps.status = Status::Ready;
+            self.ready.push_back(parent);
+        }
+    }
+
+    /// The sessions and legs that wait for each other and nothing else: a
+    /// hold that does not fit a pool every holder of which is one of them
+    /// (a lease's holder is its session), and a `join` whose live legs all
+    /// are. No event will release what they wait for.
+    fn waiting_for_each_other(&self) -> Vec<usize> {
+        let n = self.sessions.len();
+        let live_legs = |s: usize| {
+            self.sessions
+                .iter()
+                .enumerate()
+                .filter(move |(_, x)| x.leg && x.leg_of == Some(s) && x.status != Status::Ended)
+                .map(|(l, _)| l)
+        };
+        let mut stuck: Vec<bool> = self
+            .sessions
+            .iter()
+            .map(|x| matches!(x.status, Status::Queued(_) | Status::Joining))
+            .collect();
+        loop {
+            let mut changed = false;
+            for s in 0..n {
+                if !stuck[s] {
+                    continue;
+                }
+                let keep = match &self.sessions[s].status {
+                    Status::Joining => {
+                        live_legs(s).next().is_some() && live_legs(s).all(|l| stuck[l])
+                    }
+                    Status::Queued(_) => {
+                        let pending = self.sessions[s].pending.as_ref().expect("queued");
+                        let short: Vec<usize> = pending
+                            .pools
+                            .iter()
+                            // `need` as admission last read it, or the units
+                            // as the hold asked for them
+                            .filter(|w| {
+                                !self.fits(w.pool, self.round_up(w.pool, w.need.max(w.units)))
+                            })
+                            .map(|w| w.pool)
+                            .collect();
+                        !short.is_empty()
+                            && short.iter().all(|&pl| {
+                                let holders = &self.pools[pl].holders;
+                                !holders.is_empty() && holders.iter().all(|&h| stuck[h])
+                            })
+                    }
+                    _ => false,
+                };
+                if !keep {
+                    stuck[s] = false;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        (0..n).filter(|&s| stuck[s]).collect()
+    }
+
+    /// What a stuck session waits at, for an error.
+    fn waiting_at(&self, s: usize) -> String {
+        let x = &self.sessions[s];
+        let who = if x.leg {
+            format!("a leg of session {}", x.serial)
+        } else {
+            format!("session {}", x.serial)
+        };
+        match x.status {
+            Status::Queued(pl) => format!("{who} waits at `{}`", self.p.pools[pl].name),
+            _ => format!("{who} waits at a `join`"),
+        }
+    }
+
     /// Take the session out of whatever it is waiting for or running at.
     fn detach(&mut self, sid: usize) {
         match self.sessions[sid].status.clone() {
@@ -1357,7 +1588,7 @@ impl<'p> Interp<'p> {
                     self.remove_job(st, j);
                 }
             }
-            Status::Ready | Status::Ended => {}
+            Status::Ready | Status::Joining | Status::Ended => {}
         }
         self.sessions[sid].status = Status::Ready;
     }
@@ -1430,6 +1661,13 @@ impl<'p> Interp<'p> {
                 CStmt::End => {
                     self.end_session(sid);
                     return;
+                }
+                CStmt::Fork(b) => self.fork(sid, *b),
+                CStmt::Join => {
+                    if self.sessions[sid].legs > 0 {
+                        self.sessions[sid].status = Status::Joining;
+                        return;
+                    }
                 }
                 CStmt::Loop(b) => self.sessions[sid].frames.push(Frame {
                     block: *b,
@@ -1696,7 +1934,7 @@ impl<'p> Interp<'p> {
             }
             if self.round_up(pl, need) > self.pools[pl].cap {
                 self.pools[pl].rejected += 1;
-                self.end_session(sid);
+                self.refuse(sid);
                 return false;
             }
         }
