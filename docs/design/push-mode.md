@@ -125,23 +125,36 @@ for each other, one of them at a `join`, is an error naming each.
 The program is the proxy: one statement for the task it starts, one for the
 await, and the decoder's admission is the one the pull program has. On the
 A6000 testbed's trace (96 sessions, 957 requests, the constants fitted on
-lone requests), seed 1:
+lone requests; the program draws nothing, so every seed gives these
+numbers), at the replay's spacing of 3 s and at half of it:
 
-| | concurrent | serial |
-|---|---|---|
-| TTFT mean (s) | 1.040 | 0.994 |
-| the decoder's blocks waiting for the KV, mean (s) | 0.946 | 0.031 |
-| `D.kv` used, mean (tokens of 191 776) | 2 337 | 254 |
+| | concurrent, 3 s | serial, 3 s | concurrent, 1.5 s | serial, 1.5 s |
+|---|---|---|---|---|
+| TTFT mean (s) | 1.04 | 0.99 | 34.6 | 33.6 |
+| the decoder's blocks waiting for the KV, mean (s) | 0.95 | 0.03 | 18.2 | 0.08 |
+| requests holding `D.kv`, time average | 0.33 | 0.04 | 5.85 | 0.05 |
+| requests queued at `D.kv`, time average | 0.00 | 0.00 | 5.18 | 0.00 |
 
-The decoder holds its blocks nine times as long and the first token does
-not come sooner: at this load the decoder admits at once, so the overlap
-saves nothing. The measured push run on the same trace
-(`tools/a6000/push1x1_s3_*.jsonl`, the push proxy) collapsed: TTFT 95 s,
-`D.kv` 94 % used, the prefiller's queue at 97 on average. The program does
-not collapse, and does not with a 1 s write either (TTFT 2.35 s): the
-concurrent legs and the write time alone do not explain the measurement,
-whose prefiller queued with its blocks 23 % used. What does is outside the
-program, and is not found yet.
+The time averages are over the 3 000 s horizon, most of which is empty
+after the last request; their ratios are what to read. Holding the
+decoder's blocks during the prefill does not bring the first token sooner:
+when the decoder admits at once the prefill is the critical path, and when
+the prefiller is the bottleneck the decoder waits for it either way. The
+TTFT differences between the two forms are the schedule perturbed, not an
+effect: request for request the median difference is 0, and its sign
+changes with the spacing. What the concurrent form changes is the
+decoder's memory: at 1.5 s it fills with requests waiting for their KV and
+new ones queue behind them.
+
+The measured push run (`tools/a6000/push1x1_s3_*.jsonl`, the push proxy)
+collapsed: TTFT 95 s, the decoder's KV 94 % used, the prefiller's queue at
+97 on average. It is not a run at the replay's load: the proxy, the
+prefiller and the decoder each logged 1 944 requests where the replay sent
+971 (957 and 14 probes; the pull run's proxy logged 971), from a second
+client the records do not name. At about that load (1.5 s) the program
+shows the same shape, a prefiller that cannot keep up and a decoder full of
+parked requests, at a smaller TTFT; whether it gives the measured numbers
+needs a run whose load is known.
 
 ## Self-critique
 
