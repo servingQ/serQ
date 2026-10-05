@@ -28,7 +28,7 @@ job is, and here we follow the list itself. No pool admits, so every
 session keeps admission number 0 (`A0`) and a `run` on the engine appends
 its job. A job's output is its request's `L i`, slot 11 of its session. -/
 
-open DaiSarathi (Ghost Cat isJob isReady shareOf)
+open DaiSarathi (Ghost Cat isJob isReady)
 open BariStable (Q1 Q2 Q3 Q4)
 
 local notation "Db" => BariStable.D
@@ -38,7 +38,7 @@ def A0 (m : Machine) : Prop := ∀ j, (getS m j).admSeq = 0
 
 theorem A0_setS {m : Machine} (hA : A0 m) {i : ℕ} (s : Sess) (hs : s.admSeq = 0) (hi : i < m.sess.size) :
     A0 (setS m i s) := fun j => by
-  rw [DaiSarathi.getS_setS m s hi]
+  rw [Exec.getS_setS m s hi]
   split_ifs
   · exact hs
   · exact hA j
@@ -65,16 +65,16 @@ theorem exec_r1_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : Ba
   set m0 : Machine := { m with ready := rest } with hm0
   have hg0 : ∀ j, getS m0 j = getS m j := fun _ => rfl
   rw [show (10000 : ℕ) = 9998 + 1 + 1 from rfl,
-    DaiSarathi.exec_set Db _ m0 i 9 (fun x => x.now) Q2 (by rw [hg0]; exact hst) (by rw [hg0, hp]; rfl)]
+    Exec.exec_set Db _ m0 i 9 (fun x => x.now) Q2 (by rw [hg0]; exact hst) (by rw [hg0, hp]; rfl)]
   set s1 : Sess := { getS m0 i with attr := (getS m0 i).attr.upd 9 (evalE m0 i fun x => x.now), prog := Q2 }
     with hs1
   set m1 := setS m0 i s1 with hm1
   have hA1 : A0 m1 := A0_setS (fun j => hA j) s1 (hA i) (by simpa using hin)
-  have hg1 : getS m1 i = s1 := KongSvf.getS_setS_self m0 s1 (by simpa using hin)
+  have hg1 : getS m1 i = s1 := Exec.getS_setS_self m0 s1 (by simpa using hin)
   have hev : evalE m1 i (fun x => x.attr 10) = (L i).1 := by
     show (getS m1 i).attr.get 10 = _
-    rw [hg1]; exact (DaiSarathi.attr_upd10 _ _ _ (by decide)).trans h10
-  rw [KongSvf.exec_runEngine Db 9998 m1 i .prefill (fun x => x.attr 10) Q3 (by rw [hg1]; exact hst)
+    rw [hg1]; exact (Attrs.get_upd_ne _ _ (by decide)).trans h10
+  rw [Exec.exec_runEngine Db 9998 m1 i .prefill (fun x => x.attr 10) Q3 (by rw [hg1]; exact hst)
     (by rw [hg1]; rfl) (by rw [hev]; have := hfit.2.1; omega)]
   rw [span_all _ _ fun j _ => by simp [hA1 j.owner, hA1 i]]
   refine ⟨?_, fun j => ?_⟩
@@ -98,7 +98,7 @@ theorem exec_r3_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : Ba
   have hA0 : A0 m0 := fun j => hA j
   have hev : evalE m0 i (fun x => x.attr 11) = (L i).2 := h11
   rw [show (10000 : ℕ) = 9999 + 1 from rfl,
-    KongSvf.exec_runEngine Db 9999 m0 i .decode (fun x => x.attr 11) Q4 (by rw [hg0]; exact hst)
+    Exec.exec_runEngine Db 9999 m0 i .decode (fun x => x.attr 11) Q4 (by rw [hg0]; exact hst)
       (by rw [hg0, hp]; rfl) (by rw [hev]; have := hfit.2.2.2.1; omega)]
   rw [span_all _ _ fun j _ => by simp [hA0 j.owner, hA0 i]]
   refine ⟨?_, fun j => ?_⟩
@@ -119,16 +119,16 @@ theorem exec_r4_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : Ba
   set m0 : Machine := { m with ready := rest } with hm0
   have hg0 : ∀ j, getS m0 j = getS m j := fun _ => rfl
   rw [show (10000 : ℕ) = 9998 + 1 + 1 from rfl,
-    KongSvf.exec_observe Db _ m0 i 0 (fun x => x.now - x.attr 9) .stop (by rw [hg0]; exact hst)
+    Exec.exec_observe Db _ m0 i 0 (fun x => x.now - x.attr 9) .stop (by rw [hg0]; exact hst)
       (by rw [hg0, hp]; rfl)]
   set m1 : Machine := { setS m0 i { getS m0 i with prog := .stop } with
     obs := (0, (getS m0 i).serial, m0.now, evalE m0 i fun x => x.now - x.attr 9) :: m0.obs } with hm1
   have hg1 : getS m1 i = { getS m0 i with prog := .stop } :=
-    KongSvf.getS_setS_self m0 _ (by simpa using hin)
+    Exec.getS_setS_self m0 _ (by simpa using hin)
   have hA1 : A0 m1 := fun j => by
     show (getS (setS m0 i { getS m0 i with prog := .stop }) j).admSeq = 0
     exact A0_setS (m := m0) (fun j => hA j) { getS m0 i with prog := .stop } (hA i) (by simpa using hin) j
-  rw [KongSvf.exec_stop Db _ m1 i (by rw [hg1]; exact hst) (by rw [hg1]) (by rw [hg1]; exact hstk)]
+  rw [Exec.exec_stop Db _ m1 i (by rw [hg1]; exact hst) (by rw [hg1]) (by rw [hg1]; exact hstk)]
   exact ⟨rfl, A0_setS hA1 _ (hA1 i) (by simpa [hm1, hm0] using hin)⟩
 
 /-- The job a ready request adds to the list when it runs. -/
@@ -320,7 +320,7 @@ theorem handle_facts {m : Machine} {a qa : ℕ} (hie : m.iterEnd = some (a, qa))
   set done := (jobs'.filter (·.left = 0)).map (·.owner) with hdone
   set M1 : Machine := { m with now := a, iterEnd := none, jobs := jobs'.filter (·.left ≠ 0), iter := [] }
     with hM1
-  have hH : handle m a qa = KongSvf.readyAll done M1 := by
+  have hH : handle m a qa = Exec.readyAll done M1 := by
     unfold handle
     simp only [hie, if_true]
     rfl
@@ -331,7 +331,7 @@ theorem handle_facts {m : Machine} {a qa : ℕ} (hie : m.iterEnd = some (a, qa))
     obtain ⟨x, hx, rfl⟩ := List.mem_map.mp hi
     obtain ⟨x0, hx0, rfl⟩ := List.mem_map.mp (List.mem_filter.mp hx).1
     exact hb x0 hx0
-  obtain ⟨f1, f2, -, -, -, -, -, -, -, -, f11⟩ := KongSvf.readyAll_fields done M1 hdn hdb
+  obtain ⟨f1, f2, -, -, -, -, -, -, -, -, f11⟩ := Exec.readyAll_fields done M1 hdn hdb
   rw [hH]
   refine ⟨f2, f1, fun j => ?_⟩
   rw [f11]
@@ -350,7 +350,7 @@ theorem σ_eq {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : BariStabl
 
 theorem shareOf_fill_out (js : List Job) (B o : ℕ) (h : o ∉ js.map (·.owner)) :
     shareOf (fillIter Db js B) o = 0 := by
-  have h1 := DaiSarathi.shareOf_fillIter Db js B o
+  have h1 := Exec.shareOf_fillIter Db js B o
   have h2 : js.filter (fun j => decide (j.owner = o)) = [] := by
     rw [List.filter_eq_nil_iff]
     intro x hx
@@ -400,14 +400,14 @@ theorem fill_sub (q : Job → Bool) (dm : Bool) (out : Job → ℕ) : ∀ (js : 
         by_cases h1 : B - min (wantOf Db j) B = 0
         · rw [if_pos h1, h1, ← ih 0, fillIter_zero]
           congr 1
-          · simp [DaiSarathi.shareOf_cons, DaiSarathi.shareOf_nil]
+          · simp [Exec.shareOf_cons, Exec.shareOf_nil]
           · refine List.map_congr_left fun x hx => ?_
-            simp [DaiSarathi.shareOf_cons, hne x hx, DaiSarathi.shareOf_nil]
+            simp [Exec.shareOf_cons, hne x hx, Exec.shareOf_nil]
         · rw [if_neg h1, ← ih (B - min (wantOf Db j) B)]
           congr 1
-          · simp [DaiSarathi.shareOf_cons, hout]
+          · simp [Exec.shareOf_cons, hout]
           · refine List.map_congr_left fun x hx => ?_
-            simp [DaiSarathi.shareOf_cons, hne x hx]
+            simp [Exec.shareOf_cons, hne x hx]
     · rw [if_neg hq]
       rw [List.filter_cons_of_neg hq, hout, Nat.zero_min, Nat.sub_zero, Nat.sub_zero, ← ih B]
 
@@ -470,7 +470,7 @@ theorem slot_inv {m : Machine} (h : Inv m) (rs : List (ℕ × ℕ)) (hl : rs.len
   obtain ⟨L1, g1, h1, -, -, h4, -⟩ := BariStable.ci_injects rs hB.toCI hf
   set m1 := injL rs m with hm1
   change BariStable.CI L1 g1 m1 at h1
-  change DaiSarathi.Keeps m1 m at h4
+  change Exec.Keeps m1 m at h4
   obtain ⟨i1, i2, i3, i4, i5, i6⟩ := injects_facts rs m hA
   rw [← hm1] at i1 i2 i3 i4 i5 i6
   have hr1 : m1.ready = List.range' m.sess.size rs.length := by rw [i2, hB.rdy, List.nil_append]
