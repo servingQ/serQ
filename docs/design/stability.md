@@ -174,6 +174,20 @@ has the job-list chain's law, step after step, is the one-step
 `BariProgram` do not need it, since they prove their bounds on the machine
 kernel directly.
 
+**For Poisson arrivals** (`DaiPoisson`, `BariPoisson`). The same two bounds
+hold on the chains of §3 whose slots bring a Poisson number of requests.
+No iteration outlasts a full batch (`dur_le`), so a busy slot brings no
+request with probability `e^{-λ · dur} ≥ e^{-λ t_{b_max}}` (`p0_ge`), and
+`δ` is again a power of one probability. A slot adds at most `1280 (λ
+t_{b_max} + 1)` tokens in expectation (Bari: `(4640 λ + 1) E[v_p + v_d]`),
+so `P^n V` converges for every `n` (`Kernel.integrableN_of_apply_le`).
+`hit_le_of_reach` asks for that alone (`Kernel.IntegrableN V`): every other
+function it takes an expectation of is bounded. Below the paper's capacity
+the engine empties in bounded expected time (`hit_idle_le`) and the empty
+machines are a positive recurrent atom (`return_idle`). No chain on job
+lists is built for Poisson arrivals, so `positive_recurrent`, of every
+state, is proved for a fixed distribution only.
+
 ## Self-critique
 
 - **A quotient of the machine states.** Rejected for step 4. Taking the

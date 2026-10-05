@@ -100,6 +100,11 @@ theorem apply_mono {V W : α → ℝ} (hV : K.Integrable V) (hW : K.Integrable W
 theorem apply_nonneg {V : α → ℝ} (h : ∀ y, 0 ≤ V y) (x : α) : 0 ≤ K.apply V x :=
   tsum_nonneg fun i => mul_nonneg (K.nonneg x i) (h _)
 
+/-- One outcome's term bounds the expectation of a nonnegative function. -/
+theorem le_apply {V : α → ℝ} (hV : K.Integrable V) (h : ∀ y, 0 ≤ V y) (x : α) (i : ι) :
+    K.p x i * V (K.next x i) ≤ K.apply V x :=
+  (hV x).le_tsum i fun j _ => mul_nonneg (K.nonneg x j) (h _)
+
 theorem apply_const_mul (c : ℝ) (V : α → ℝ) (x : α) :
     K.apply (fun y => c * V y) x = c * K.apply V x := by
   unfold apply

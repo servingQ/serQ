@@ -284,23 +284,26 @@ theorem backlog_slot {K : ℕ} (x : State K) (hx : ¬ F x) (k : ℕ) (hk : k ≤
 /-- `F` is small: a batch that is not full served every resident's demand
 (`Exec.work_conserving`), so fewer than 128 residents are left, each with
 less than one request's work. -/
-theorem backlog_lt_of_F {K : ℕ} (x : State K) (hx : F x) :
-    backlog x.1 < 128 * 1280 := by
-  obtain ⟨L, g, hB⟩ := reach_sb x.2
-  rcases hie : x.1.iterEnd with _ | ⟨a, q⟩
+theorem backlog_lt_of_sb {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB : SB L g m)
+    (hx : m.iterEnd = none ∨ m.last.stats.tokens < 128) : backlog m < 128 * 1280 := by
+  rcases hie : m.iterEnd with _ | ⟨a, q⟩
   · simp [Slot.backlog, hB.idle hie]
-  · have hbusy : x.1.iterEnd.isSome = true := by rw [hie]; rfl
-    have htok : x.1.last.stats.tokens < 128 := by
+  · have hbusy : m.iterEnd.isSome = true := by rw [hie]; rfl
+    have htok : m.last.stats.tokens < 128 := by
       rcases hx with hx | hx
       · rw [hie] at hx; simp at hx
       · exact hx
     obtain ⟨hb1, hb2⟩ := hB.busy hbusy
     obtain ⟨hW1, hW2⟩ := ci_wn_le hB.toCI hB.rdy
-    have hS : ∑ i ∈ Finset.range x.1.sess.size, wantG g i < 128 := by
+    have hS : ∑ i ∈ Finset.range m.sess.size, wantG g i < 128 := by
       rw [hb1] at htok; rw [hb2] at htok; omega
     unfold backlog
     rw [ci_backlog hB.toCI hB.rdy]
     omega
+
+theorem backlog_lt_of_F {K : ℕ} (x : State K) (hx : F x) : backlog x.1 < 128 * 1280 := by
+  obtain ⟨L, g, hB⟩ := reach_sb x.2
+  exact backlog_lt_of_sb hB hx
 
 /-- Foster's drift condition, below capacity. -/
 theorem drift {K : ℕ} (A : Arrivals K) (hA : 1280 * A.mean < 128) :
