@@ -203,9 +203,11 @@ def test_rng_is_the_stream_a_run_draws_from():
 
 
 def test_draw_is_serq_draw():
-    # every example, both formats; a program split into a workload and a
-    # server draws what one request runs, which a compiled Program does not say
-    for f in sorted((ROOT / "examples").rglob("*.sq")):
+    # Every example program, both formats, as in scripts/check_rust.sh.
+    # Nested instances/ files only bind values; they are not programs.
+    # A program split into a workload and a server draws what one request
+    # runs, which a compiled Program does not say.
+    for f in sorted((ROOT / "examples").glob("*/*.sq")):
         for fmt in ["svg", "tikz"]:
             want = subprocess.run([CLI, "draw", str(f), "--format", fmt],
                                   capture_output=True, text=True, check=True).stdout
