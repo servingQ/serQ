@@ -79,5 +79,6 @@ here. This directory is the record of **applying** them.
 | [The pull relation](pull-relation.md) | A pod owns its `nic`; `D pull P latency x share s;` is a transfer's topology, mode and policy in one line, and a `transfer` without `on` its read | #200, parse-time sugar |
 | [The push mode](push-mode.md) | A request's legs: `fork { … }` and `join;` for NIXL's push mode, where the proxy sends the prefill and the decode request at once; `P push D latency x share s;`; why not a reservation | #368, IR 11 (untagged) |
 | [Engine neutrality](engine-neutrality.md) | SGLang, TensorRT-LLM and TGI read from their source and written as serQ programs (`examples/engines/`); seven rules of the step iteration that are vLLM's, which engine contradicts each; a parameter per rule against the iteration as a program body; the price | survey and proposal, 2026-10-05 |
+| [A shared prefix cache](shared-prefix-cache.md) | Cached KV shared across sessions, as every engine surveyed shares it: a hold names its prefix as a chain of keyed segments, the pool's cache is a trie of them, eviction takes leaves; the per-session cache is the one-segment case; LPM and agent workloads; `cache P (ℓ)` first (#366) | RFC, 2026-10-05 |
 
 A new design document adds a row to this table.

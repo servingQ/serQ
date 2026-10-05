@@ -140,3 +140,4 @@ nav:
       - The pull relation: design/pull-relation.md
       - The push mode: design/push-mode.md
       - Engine neutrality: design/engine-neutrality.md
+      - A shared prefix cache: design/shared-prefix-cache.md
