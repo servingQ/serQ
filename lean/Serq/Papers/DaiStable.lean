@@ -93,7 +93,7 @@ each session's place in the program and the tokens its job has left. Every
 session has arrived, so none is at its first command or in its arrival
 delay, and the chain has no delays at all. -/
 
-open DaiSarathi (Cat Ghost rem fresh isReady isJob Shape shareOf P1 P2 P3 P4 Keeps wantG)
+open DaiSarathi (Cat Ghost rem fresh isReady isJob Shape P1 P2 P3 P4 wantG)
 
 theorem arrived_eq_P1 : arrived = P1 := rfl
 
@@ -258,12 +258,12 @@ theorem ci_r1 {g : Ghost} {m : Machine} (hI : CI g m) {i : ℕ} {rest : List ℕ
   set m0 : Machine := { m with ready := rest } with hm0
   have hg0 : ∀ j, getS m0 j = getS m j := fun _ => rfl
   rw [show (10000 : ℕ) = 9998 + 1 + 1 from rfl,
-    DaiSarathi.exec_set D _ m0 i 9 (fun x => x.now) P2 (by rw [hg0]; exact hst) (by rw [hg0, hp]; rfl)]
+    Exec.exec_set D _ m0 i 9 (fun x => x.now) P2 (by rw [hg0]; exact hst) (by rw [hg0, hp]; rfl)]
   set s1 : Sess := { getS m0 i with attr := (getS m0 i).attr.upd 9 (evalE m0 i fun x => x.now), prog := P2 }
     with hs1
   set m1 := setS m0 i s1 with hm1
-  have hg1 : getS m1 i = s1 := KongSvf.getS_setS_self m0 s1 (by simpa using hisz)
-  obtain ⟨a, b, hab, he⟩ := DaiSarathi.exec_runEngine' D 9998 m1 i .prefill (fun _ => 290) P3
+  have hg1 : getS m1 i = s1 := Exec.getS_setS_self m0 s1 (by simpa using hisz)
+  obtain ⟨a, b, hab, he⟩ := Exec.exec_runEngine' D 9998 m1 i .prefill (fun _ => 290) P3
     (by rw [hg1]; exact hst) (by rw [hg1]; rfl) (by simp [evalE])
   rw [he]
   have hev : evalE m1 i (fun _ => 290) = 290 := rfl
@@ -273,10 +273,10 @@ theorem ci_r1 {g : Ghost} {m : Machine} (hI : CI g m) {i : ℕ} {rest : List ℕ
     _ s2 a b hab (by simp [hm1, hm0]) (fun j => ?_) rfl rfl rfl rfl rfl ?_, rfl, ⟨rfl, rfl, rfl, rfl, rfl⟩,
     by simp [hm1, hm0]⟩
   · show getS (setS m1 i s2) j = _
-    rw [DaiSarathi.getS_setS m1 s2 (by simpa [hm1, hm0] using hisz)]
+    rw [Exec.getS_setS m1 s2 (by simpa [hm1, hm0] using hisz)]
     split_ifs with h
     · rfl
-    · rw [hm1, DaiSarathi.getS_setS m0 s1 (by simpa [hm0] using hisz), if_neg h]; rfl
+    · rw [hm1, Exec.getS_setS m0 s1 (by simpa [hm0] using hisz), if_neg h]; rfl
   · rw [hs2, hg1, hs1]
     exact ⟨⟨rfl, rfl⟩, hstk⟩
 
@@ -294,7 +294,7 @@ theorem ci_r3 {g : Ghost} {m : Machine} (hI : CI g m) {i : ℕ} {rest : List ℕ
   obtain ⟨hp, hst⟩ := hsh
   set m0 : Machine := { m with ready := rest } with hm0
   have hg0 : ∀ j, getS m0 j = getS m j := fun _ => rfl
-  obtain ⟨a, b, hab, he⟩ := DaiSarathi.exec_runEngine' D 9999 m0 i .decode (fun _ => 990) P4
+  obtain ⟨a, b, hab, he⟩ := Exec.exec_runEngine' D 9999 m0 i .decode (fun _ => 990) P4
     (by rw [hg0]; exact hst) (by rw [hg0, hp]; rfl) (by simp [evalE])
   rw [show (10000 : ℕ) = 9999 + 1 from rfl, he]
   have hev : evalE m0 i (fun _ => 990) = 990 := rfl
@@ -304,7 +304,7 @@ theorem ci_r3 {g : Ghost} {m : Machine} (hI : CI g m) {i : ℕ} {rest : List ℕ
     _ s2 a b hab (by simp [hm0]) (fun j => ?_) rfl rfl rfl rfl rfl ?_, rfl, ⟨rfl, rfl, rfl, rfl, rfl⟩,
     by simp [hm0]⟩
   · show getS (setS m0 i s2) j = _
-    rw [DaiSarathi.getS_setS m0 s2 (by simpa [hm0] using hisz)]; rfl
+    rw [Exec.getS_setS m0 s2 (by simpa [hm0] using hisz)]; rfl
   · rw [hs2, hg0]
     exact ⟨⟨rfl, rfl⟩, hstk⟩
 
@@ -323,21 +323,21 @@ theorem ci_r4 {g : Ghost} {m : Machine} (hI : CI g m) {i : ℕ} {rest : List ℕ
   set m0 : Machine := { m with ready := rest } with hm0
   have hg0 : ∀ j, getS m0 j = getS m j := fun _ => rfl
   rw [show (10000 : ℕ) = 9998 + 1 + 1 from rfl,
-    KongSvf.exec_observe D _ m0 i 0 (fun x => x.now - x.attr 9) .stop (by rw [hg0]; exact hst)
+    Exec.exec_observe D _ m0 i 0 (fun x => x.now - x.attr 9) .stop (by rw [hg0]; exact hst)
       (by rw [hg0, hp]; rfl)]
   set m1 : Machine := { setS m0 i { getS m0 i with prog := .stop } with
     obs := (0, (getS m0 i).serial, m0.now, evalE m0 i fun x => x.now - x.attr 9) :: m0.obs } with hm1
   have hg1 : getS m1 i = { getS m0 i with prog := .stop } :=
-    KongSvf.getS_setS_self m0 _ (by simpa using hisz)
-  rw [KongSvf.exec_stop D _ m1 i (by rw [hg1]; exact hst) (by rw [hg1]) (by rw [hg1]; exact hstk)]
+    Exec.getS_setS_self m0 _ (by simpa using hisz)
+  rw [Exec.exec_stop D _ m1 i (by rw [hg1]; exact hst) (by rw [hg1]) (by rw [hg1]; exact hstk)]
   set s' : Sess := { getS m1 i with status := .ended, stack := [] } with hs'
   have hget : ∀ j, getS (setS m1 i s') j = if j = i then s' else getS m j := by
     intro j
-    rw [DaiSarathi.getS_setS m1 s' (by simpa [hm1, hm0] using hisz)]
+    rw [Exec.getS_setS m1 s' (by simpa [hm1, hm0] using hisz)]
     split_ifs with h
     · rfl
     · show getS (setS m0 i _) j = _
-      rw [DaiSarathi.getS_setS m0 _ (by simpa [hm0] using hisz), if_neg h]; rfl
+      rw [Exec.getS_setS m0 _ (by simpa [hm0] using hisz), if_neg h]; rfl
   have hgc : ∀ j, (g.set i .e 0).c j = if j = i then .e else g.c j := DaiSarathi.Ghost.set_c g i .e 0
   have hgl : ∀ j, (g.set i .e 0).left j = if j = i then 0 else g.left j := DaiSarathi.Ghost.set_left g i .e 0
   have hown := hI.owner_ne (i := i) (by rw [hc]; rfl)
@@ -423,12 +423,12 @@ theorem drain_ci : ∀ (f : ℕ) (g : Ghost) (m : Machine), CI g m → m.ready.l
       (drain D f m).sess.size = m.sess.size ∧ SameR m.sess.size g g'
   | 0, g, m, hI, hf => by
     have hr : m.ready = [] := List.eq_nil_of_length_eq_zero (by omega)
-    exact ⟨g, hI, by simp [drain, hr], DaiSarathi.Keeps.refl m, rfl, SameR.refl _ g⟩
+    exact ⟨g, hI, by simp [drain, hr], Exec.Keeps.refl m, rfl, SameR.refl _ g⟩
   | f + 1, g, m, hI, hf => by
     unfold drain
     split
     · rename_i hr
-      exact ⟨g, hI, hr, DaiSarathi.Keeps.refl m, rfl, SameR.refl _ g⟩
+      exact ⟨g, hI, hr, Exec.Keeps.refl m, rfl, SameR.refl _ g⟩
     · rename_i i rest hr
       have hlen : rest.length ≤ f := by rw [hr] at hf; simpa using hf
       obtain ⟨hin, hcr⟩ := hI.lt_of_ready hr
@@ -573,7 +573,7 @@ theorem ci_injects {g : Ghost} {m : Machine} (hI : CI g m) : ∀ k, ∃ g',
       ((inject arrived (fun _ => 0))^[k] m).ready.length = m.ready.length + k ∧
       Keeps ((inject arrived (fun _ => 0))^[k] m) m ∧
       WnC (m.sess.size + k) g' = WnC m.sess.size g + 1280 * k
-  | 0 => ⟨g, hI, rfl, rfl, DaiSarathi.Keeps.refl m, by simp⟩
+  | 0 => ⟨g, hI, rfl, rfl, Exec.Keeps.refl m, by simp⟩
   | k + 1 => by
     obtain ⟨g1, h1, h2, h3, h4, h5⟩ := ci_injects hI k
     rw [Function.iterate_succ_apply']
@@ -624,7 +624,7 @@ theorem ci_end {g : Ghost} {m : Machine} (hI : CI g m) (hr : m.ready = []) {a qa
       · simp [isJob, hf]; omega
   have hWn : WnC n g' + tokSum it = WnC n g := by
     unfold WnC
-    rw [← DaiSarathi.sum_shareOf n it hI.iterOwn, ← Finset.sum_add_distrib]
+    rw [← Exec.sum_shareOf n it hI.iterOwn, ← Finset.sum_add_distrib]
     exact Finset.sum_congr rfl fun j hj => hrem j (Finset.mem_range.mp hj)
   -- the machine
   set M0 : Machine := { m with now := a, iterEnd := none } with hM0
@@ -637,7 +637,7 @@ theorem ci_end {g : Ghost} {m : Machine} (hI : CI g m) (hr : m.ready = []) {a qa
     · rintro ⟨x0, hx0, rfl⟩; exact ⟨x0, hx0, rfl⟩
   set done := (jobs'.filter (·.left = 0)).map (·.owner) with hdone
   set M1 : Machine := { M0 with jobs := jobs'.filter (·.left ≠ 0), iter := [] } with hM1
-  have hH : handle m a qa = KongSvf.readyAll done M1 := by
+  have hH : handle m a qa = Exec.readyAll done M1 := by
     unfold handle
     simp only [hie, if_true]
     rfl
@@ -661,8 +661,8 @@ theorem ci_end {g : Ghost} {m : Machine} (hI : CI g m) (hr : m.ready = []) {a qa
     refine List.Nodup.sublist ((List.filter_sublist).map _) ?_
     simpa [hjobs', List.map_map, Function.comp_def] using hI.jobsNodup
   have hdb : ∀ i ∈ done, i < M1.sess.size := fun i hi => ((hmemd i).mp hi).1
-  obtain ⟨f1, f2, -, -, -, f6, -, f8, f9, f10, f11⟩ := KongSvf.readyAll_fields done M1 hdn hdb
-  set R := KongSvf.readyAll done M1 with hR
+  obtain ⟨f1, f2, -, -, -, f6, -, f8, f9, f10, f11⟩ := Exec.readyAll_fields done M1 hdn hdb
+  set R := Exec.readyAll done M1 with hR
   have hgetR : ∀ j, getS R j = if j ∈ done then { getS m j with status := .ready } else getS m j := f11
   have hfinc : ∀ j < n, j ∈ done → (g.c j = .p ∧ g'.c j = .r3) ∨ (g.c j = .d ∧ g'.c j = .r4) := by
     intro j hj hd
@@ -677,7 +677,7 @@ theorem ci_end {g : Ghost} {m : Machine} (hI : CI g m) (hr : m.ready = []) {a qa
   have hRie : R.iterEnd = none := f9
   have hRsz : R.sess.size = n := f10
   have hlen : done.length ≤ tokSum it := by
-    rw [← List.toFinset_card_of_nodup hdn, ← DaiSarathi.sum_shareOf n it hI.iterOwn]
+    rw [← List.toFinset_card_of_nodup hdn, ← Exec.sum_shareOf n it hI.iterOwn]
     calc done.toFinset.card = ∑ j ∈ done.toFinset, 1 := by simp
       _ ≤ ∑ j ∈ done.toFinset, shareOf it j := Finset.sum_le_sum fun j hj => by
           obtain ⟨hj1, hjj, hl⟩ := (hmemd j).mp (List.mem_toFinset.mp hj)
@@ -841,7 +841,7 @@ theorem ci_start {g : Ghost} {m : Machine} (hI : CI g m) (hr : m.ready = []) :
       rcases h2 with ⟨hc, -⟩ | ⟨hc, -⟩
       · simp [wantG, hc]; exact (hI.leftP _ h1 hc).1
       · simp [wantG, hc]
-    have hne : it ≠ [] := by rw [hit, hjs']; exact DaiSarathi.fillIter_ne_nil D j0 js 128 hw0 (by norm_num)
+    have hne : it ≠ [] := by rw [hit, hjs']; exact Exec.fillIter_ne_nil D j0 js 128 hw0 (by norm_num)
     have hne' : it.isEmpty = false := by simpa using hne
     simp only [hne', Bool.not_false, Bool.true_or, ↓reduceIte]
     have hk : tokSum it = min 128 (∑ i ∈ Finset.range m.sess.size, wantG g i) := by
@@ -851,11 +851,11 @@ theorem ci_start {g : Ghost} {m : Machine} (hI : CI g m) (hr : m.ready = []) :
       exact ⟨j, hj, h1⟩
     have hsh : ∀ i < m.sess.size, shareOf it i ≤ if isJob (g.c i) then g.left i else 0 := by
       intro i hi
-      have h1 := DaiSarathi.shareOf_fillIter D m.jobs 128 i
+      have h1 := Exec.shareOf_fillIter D m.jobs 128 i
       by_cases hj : isJob (g.c i) = true
       · rw [if_pos hj]
         obtain ⟨j, hjm, rfl⟩ := hI.jobsP i hi hj
-        rw [DaiSarathi.filter_owner_eq hI.jobsNodup hjm] at h1
+        rw [Exec.filter_owner_eq hI.jobsNodup hjm] at h1
         simp only [List.map_cons, List.map_nil, List.sum_cons, List.sum_nil, Nat.add_zero] at h1
         rw [ci_want_job hI hjm] at h1
         refine h1.trans ?_

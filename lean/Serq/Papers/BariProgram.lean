@@ -82,7 +82,7 @@ theorem F_of_idle (x : State) (hx : Idle x) : F x := by
     obtain ⟨hb1, -⟩ := hB.busy hbusy
     rw [hb1]
     have h0 : Exec.tokSum x.1.iter = 0 := by
-      rw [← DaiSarathi.sum_shareOf x.1.sess.size x.1.iter hB.iterOwn]
+      rw [← Exec.sum_shareOf x.1.sess.size x.1.iter hB.iterOwn]
       refine Finset.sum_eq_zero fun i hi => ?_
       have hi' := Finset.mem_range.mp hi
       have hs := hB.share i hi'
