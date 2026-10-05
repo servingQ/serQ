@@ -25,7 +25,8 @@ nodes is the sum of the nodes'. The squared backlogs drift down outside a
 bounded set (`driftQ`), and when a slot brings no request with positive
 probability, every node empties at once in bounded expected time and the
 states with every node empty are a positive recurrent atom of the `g`-node
-chain (`hit_idle_le`, `return_idle`): Theorem 2 for the chain as a whole.
+chain (`hit_idle_le`, `return_idle`): Theorem 2 for the chain as a whole,
+under that premise, which the paper does not have.
 -/
 import papers.BariProgram
 
@@ -586,13 +587,14 @@ theorem hit_idle_le {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 *
   obtain ⟨c, hc⟩ := hit_le A hA hp harr
   exact ⟨_, hc⟩
 
-/-- Theorem 2 for the `g`-node chain as a whole: under the same premises,
+/-- Theorem 2 for the `g`-node chain as a whole, under a premise the paper
+does not have (a slot brings no request with positive probability):
 from every state with every node empty the expected time until every node
 is empty again is bounded by one constant, so the states with every node
 empty are a positive recurrent atom. -/
 theorem return_idle {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 * g)
     {o0 : Fin (N + 1)} (hp : 0 < A.p o0) (harr : A.arr o0 = []) :
-    ∃ C : ℝ, ∀ n (x : State g), AllIdle x → 1 + (kernel A).apply (hit (kernel A) AllIdle n) x ≤ C := by
+    ∃ K : ℝ, ∀ n (x : State g), AllIdle x → 1 + (kernel A).apply (hit (kernel A) AllIdle n) x ≤ K := by
   obtain ⟨c, hc⟩ := hit_le A hA hp harr
   refine ⟨_, fun n x hx => return_le_of_hit_le (kernel A) AllIdle (Kernel.integrable_ofFintype _ _ _ _ _)
     (V := Q) (a := 1) (c := c) zero_le_one (fun n y => by linarith [hc n y]) (d := g * 15360000 ^ 2) ?_ n⟩
@@ -603,27 +605,35 @@ theorem return_idle {N g : ℕ} [NeZero g] (A : Arrivals N) (hA : A.load < 128 *
 
 /-! ### Not vacuous -/
 
-/-- The premise is not implied by the capacity: one request in every slot
-is below two nodes' capacity, and no slot is empty. -/
-example : ∃ A : Arrivals 0, A.load < 128 * (2 : ℕ) ∧ ∀ o : Fin 1, A.arr o ≠ [] :=
-  ⟨⟨fun o => if o = 0 then 1 else 0,
-      fun o => by split_ifs <;> norm_num,
-      by simp,
-      fun _ => [(128, 1)],
-      fun _ => by simp,
-      fun _ r hr => by simp at hr; subst hr; exact ⟨by decide, le_rfl, by decide, le_rfl, by decide⟩⟩,
-    by simp [Arrivals.load, Arrivals.work]; norm_num, fun _ => by simp⟩
-
 /-- A load above one node's capacity and below two nodes': one request of a
-tile and one output token in every slot, 129 tokens. -/
-example : ∃ A : Arrivals 0, 128 < A.load ∧ A.load < 128 * (2 : ℕ) :=
+tile and one output token in every slot, 129 tokens. No slot is empty, so
+the capacity does not give `return_idle`'s premise. -/
+example : ∃ A : Arrivals 0, 128 < A.load ∧ A.load < 128 * (2 : ℕ) ∧ ∀ o : Fin 1, A.arr o ≠ [] :=
   ⟨⟨fun o => if o = 0 then 1 else 0,
       fun o => by split_ifs <;> norm_num,
       by simp,
       fun _ => [(128, 1)],
       fun _ => by simp,
       fun _ r hr => by simp at hr; subst hr; exact ⟨by decide, le_rfl, by decide, le_rfl, by decide⟩⟩,
-    by simp [Arrivals.load, Arrivals.work]; norm_num⟩
+    by simp [Arrivals.load, Arrivals.work]; norm_num, by simp [Arrivals.load, Arrivals.work]; norm_num,
+    fun _ => by simp⟩
+
+/-- The same load with the premise: no request or two, each with
+probability one half. -/
+example : ∃ A : Arrivals 1, 128 < A.load ∧ A.load < 128 * (2 : ℕ) ∧
+    ∃ o0 : Fin 2, 0 < A.p o0 ∧ A.arr o0 = [] :=
+  ⟨⟨fun o => if o ≤ 1 then 1 / 2 else 0,
+      fun o => by split_ifs <;> norm_num,
+      by simp [Finset.sum_range_succ]; norm_num,
+      fun o => if o = 0 then [] else [(128, 1), (128, 1)],
+      fun o => by split_ifs <;> simp,
+      fun o r hr => by
+        split_ifs at hr
+        · simp at hr
+        · simp at hr; subst hr; exact ⟨by decide, le_rfl, by decide, le_rfl, by decide⟩⟩,
+    by simp [Arrivals.load, Arrivals.work, Finset.sum_range_succ]; norm_num,
+    by simp [Arrivals.load, Arrivals.work, Finset.sum_range_succ]; norm_num,
+    ⟨0, by simp, by simp⟩⟩
 
 end BariNodes
 end Papers

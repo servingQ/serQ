@@ -199,7 +199,11 @@ and the states with every node empty are a positive recurrent atom
 (`return_idle`). This needs a slot without arrivals to have positive
 probability, which `load < 128 g` does not give for `g > 1`: one request in
 every slot is below two nodes' capacity, and after the first slot some node
-always holds the newest request. Poisson arrivals give it.
+always holds the newest request (it brings at least 129 tokens, a node
+serves at most 128 a slot; an argument, not a Lean theorem). Poisson
+arrivals give it. Without it the positive recurrence of the chain as a
+whole is not proved: the state with every node empty is then not the atom
+to use.
 
 ## Self-critique
 
