@@ -1,7 +1,7 @@
 /-
 # Lemmas about single steps of the executable semantics
 
-What the proofs of the paper programs (`Serq/Papers/`) need about one
+What the proofs of the paper programs (`examples/papers/`) need about one
 command or one bookkeeping operation of `Serq/Exec.lean`, independently of
 the program: how `exec` runs `set`, `observe`, `run` and `stop`, what
 `setS`, `setPool` and `readyAll` leave alone, what a step of one ready

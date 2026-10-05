@@ -18,7 +18,7 @@ certificate `(M - P + 1) W_j ≤ Σ_{i ≺ j} p_i o_i`.
 import Serq.Steps
 import Serq.Work
 import Serq.Claims
-import Serq.Papers.KongMath
+import papers.KongMath
 
 
 namespace SerqLang

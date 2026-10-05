@@ -19,7 +19,7 @@ if grep -q "declaration uses 'sorry'" build.log; then
 fi
 echo "== serq-lean-bench (the executable the bench and DRT run) =="
 lake build serq-lean-bench 2>&1 | tail -1
-if grep -rn --include='*.lean' -E '\bsorry\b' Serq Serq.lean Bench; then
+if grep -rn --include='*.lean' -E '\bsorry\b' Serq Serq.lean Bench ../examples/papers; then
   echo "FAIL: literal 'sorry' found in sources"; exit 1
 fi
 

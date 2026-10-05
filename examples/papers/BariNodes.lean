@@ -3,7 +3,7 @@
 
 The paper's planner sends each request to one of `g` nodes, uniformly and
 independently of the others. Here `g` nodes each run `bari_rad.sq`
-(`Serq/Papers/BariStable.lean`), and a slot is one iteration of every node:
+(`examples/papers/BariStable.lean`), and a slot is one iteration of every node:
 the arrivals `A.arr o` of outcome `o` are drawn as there, each is routed to a
 node uniformly (`r : Fin n → Fin g`, probability `A.p o / g ^ n`), and node
 `i` runs `BariStable.slot` on the requests routed to it, in their order
@@ -23,7 +23,7 @@ node's chain on job lists positive recurrent (`positive_recurrent`): Theorem
 `128 g − load` while every batch is full (`drift_sum`): the capacity of `g`
 nodes is the sum of the nodes'.
 -/
-import Serq.Papers.BariRecurrent
+import papers.BariRecurrent
 
 namespace SerqLang
 

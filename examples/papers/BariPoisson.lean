@@ -21,7 +21,7 @@ a fixed distribution; positive recurrence (`BariRecurrent`) is not yet
 proved for this chain.
 -/
 import Serq.Poisson
-import Serq.Papers.BariStable
+import papers.BariStable
 
 namespace SerqLang
 namespace Papers

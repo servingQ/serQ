@@ -19,7 +19,7 @@ with each request's lengths read from slots 10 and 11 and prompts in tiles
 of 128; what is RAD's own is its batch (`ci_start`).
 -/
 import Serq.Slot
-import Serq.Papers.Bari
+import papers.Bari
 
 namespace SerqLang
 
@@ -120,7 +120,7 @@ def Busy (_ : ℕ → ℕ × ℕ) (_ : Ghost) (m : Machine) : Prop :=
 /-- The invariant of a slot's end. -/
 abbrev SB := Slot.SB M Busy
 
-/-- RAD's invariant `R` (`Serq/Papers/Bari.lean`) holds on an idle machine. -/
+/-- RAD's invariant `R` (`examples/papers/Bari.lean`) holds on an idle machine. -/
 theorem ci_R {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hit : m.iter = []) : BariRad.R m := by
   refine BariRad.R.mk' (fun j hj => ?_) hI.jobsNodup (fun s hs => ?_) (fun s hs => ?_)
     (fun e he => by rw [hit] at he; simp at he) (fun e he => by rw [hit] at he; simp at he)

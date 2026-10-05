@@ -14,7 +14,7 @@ while there is a job, so from a state of bounded backlog the empty list is
 a bounded number of arrival-free slots away (`Recurrence.hit_le_of_reach`).
 -/
 import Serq.Recurrence
-import Serq.Papers.BariChain
+import papers.BariChain
 
 namespace SerqLang
 namespace Papers

@@ -5,6 +5,25 @@ axioms (`propext`, `Classical.choice`, `Quot.sound`) appears, in particular
 `sorryAx` (an unfinished proof) or a custom axiom.
 -/
 import Serq
+import papers.Bari
+import papers.BariChain
+import papers.BariNodes
+import papers.BariPoisson
+import papers.BariProgram
+import papers.BariRecurrent
+import papers.BariSim
+import papers.BariStable
+import papers.ClaimsProved
+import papers.Dai
+import papers.DaiBounded
+import papers.DaiChain
+import papers.DaiPoisson
+import papers.DaiProgram
+import papers.DaiRecurrent
+import papers.DaiSim
+import papers.DaiStable
+import papers.Kong
+import papers.KongMath
 
 -- syntax and pool semantics (Serq/Core.lean)
 #print axioms SerqLang.Step.invariant
@@ -51,7 +70,7 @@ import Serq
 #print axioms SerqLang.Exec.makeRoom_fuel
 #print axioms SerqLang.Exec.makeRoom_dead_irrelevant
 -- claims: what every path keeps, and the paper programs' claims (Serq/Claim.lean, Serq/Inv.lean,
--- Serq/Work.lean, Serq/Papers/)
+-- Serq/Work.lean, examples/papers/)
 #print axioms SerqLang.Exec.served_rate
 #print axioms SerqLang.Exec.reach_sub
 #print axioms SerqLang.Exec.work_conserving
@@ -73,7 +92,7 @@ import Serq
 #print axioms SerqLang.Foster.returnTime_le_of_drift
 #print axioms SerqLang.Foster.walk_hitTime_le
 -- a program with random arrivals as a Markov kernel, and Dai et al.'s Theorem 2(b) on it
--- (Serq/Chain.lean, Serq/Papers/DaiStable.lean)
+-- (Serq/Chain.lean, examples/papers/DaiStable.lean)
 #print axioms SerqLang.Foster.Kernel.apply_ofOutcomes
 #print axioms SerqLang.Papers.DaiStable.backlog_slot
 #print axioms SerqLang.Papers.DaiStable.backlog_lt_of_F
@@ -81,7 +100,7 @@ import Serq
 #print axioms SerqLang.Papers.DaiStable.hitTime_le
 #print axioms SerqLang.Papers.DaiStable.returnTime_le
 #print axioms SerqLang.Papers.DaiStable.hit_tendsto
--- Bari et al.'s Theorem 2 on the kernel (Serq/Papers/BariStable.lean)
+-- Bari et al.'s Theorem 2 on the kernel (examples/papers/BariStable.lean)
 #print axioms SerqLang.Exec.slot_eq_slotL
 #print axioms SerqLang.Papers.BariStable.backlog_slot
 #print axioms SerqLang.Papers.BariStable.backlog_lt_of_F
@@ -89,7 +108,7 @@ import Serq
 #print axioms SerqLang.Papers.BariStable.hitTime_le
 #print axioms SerqLang.Papers.BariStable.hit_tendsto
 #print axioms SerqLang.Papers.BariStable.returnTime_le
--- Bari et al.'s Theorem 2 over g nodes with the random planner (Serq/Papers/BariNodes.lean)
+-- Bari et al.'s Theorem 2 over g nodes with the random planner (examples/papers/BariNodes.lean)
 #print axioms SerqLang.Papers.BariNodes.mean_route
 #print axioms SerqLang.Papers.BariNodes.apply_V
 #print axioms SerqLang.Papers.BariNodes.drift
@@ -101,7 +120,7 @@ import Serq
 #print axioms SerqLang.Papers.BariNodes.marginal
 #print axioms SerqLang.Papers.BariNodes.positive_recurrent
 -- positive recurrence: from a set to a state, and the papers' chains on job lists
--- (Serq/Recurrence.lean, Serq/Papers/{Dai,Bari}{Sim,Recurrent}.lean)
+-- (Serq/Recurrence.lean, examples/papers/{Dai,Bari}{Sim,Recurrent}.lean)
 #print axioms SerqLang.Foster.hit_le_of_reach
 #print axioms SerqLang.Foster.positiveRecurrent_of_hit
 #print axioms SerqLang.Papers.DaiSim.simulation
@@ -116,7 +135,7 @@ import Serq
 #print axioms SerqLang.Papers.DaiProgram.return_idle
 #print axioms SerqLang.Papers.BariProgram.hit_idle_le
 #print axioms SerqLang.Papers.BariProgram.return_idle
--- Poisson arrivals in continuous time (Serq/Poisson.lean, Serq/Slot.lean, Serq/Papers/{Dai,Bari}Poisson.lean)
+-- Poisson arrivals in continuous time (Serq/Poisson.lean, Serq/Slot.lean, examples/papers/{Dai,Bari}Poisson.lean)
 #print axioms SerqLang.Poisson.hasSum_mul_pois
 #print axioms SerqLang.Poisson.hasSum_compound
 #print axioms SerqLang.Poisson.hasSum_compound_work

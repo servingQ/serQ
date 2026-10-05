@@ -4,11 +4,11 @@
 What the engine of `bari_rad.sq` holds at a slot boundary, with everything
 else forgotten: its jobs in admission order, each a mode, the tokens it has
 left and the output it decodes once its prompt is done. `absSlot` is one
-slot on that list. The machine chain of `Serq/Papers/BariStable.lean`
+slot on that list. The machine chain of `examples/papers/BariStable.lean`
 projects onto it (`BariSim.simulation`), and on it the empty list is a
 single state, to which the chain returns (`BariRecurrent`).
 -/
-import Serq.Papers.BariStable
+import papers.BariStable
 
 namespace SerqLang
 namespace Papers

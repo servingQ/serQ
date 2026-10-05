@@ -7,7 +7,7 @@ every machine the chain reaches. So the machine chain is lumpable onto
 `BariChain`'s chain, and what that chain does (`BariRecurrent`) the program
 does.
 -/
-import Serq.Papers.BariChain
+import papers.BariChain
 
 namespace SerqLang
 namespace Papers

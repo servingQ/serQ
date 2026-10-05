@@ -68,7 +68,7 @@ def queueing_bound : Prop :=
     ((17500 * ((Exec.total m 2) - (Exec.total m 0))) ≤ (2 * ((Exec.prefixTotal (Exec.values m 1)) - (Exec.total m 1))))
 ```
 
-For every number of requests up to 500, every $(s_i, o_i)$ with $s_i + o_i \le 2500$ and $o_i \ge 1$, and every machine of every path at which every session has ended, the inequality holds. The proof is `lean/Serq/Papers/Kong.lean`. It is the paper's proof, made an invariant of the executable semantics.
+For every number of requests up to 500, every $(s_i, o_i)$ with $s_i + o_i \le 2500$ and $o_i \ge 1$, and every machine of every path at which every session has ended, the inequality holds. The proof is `examples/papers/Kong.lean`. It is the paper's proof, made an invariant of the executable semantics.
 
 **A ghost state.** Each request has a place: before its first command, waiting, admitted, decoding, finished, released, ended. A ghost also keeps the decode work left and the observed latency. `SInv` relates the ghost to the machine: each session's program, stack and status in its place, the pool's queue and holders, the jobs, the ready list, and the observations as a permutation of the expected ones.
 
@@ -91,7 +91,7 @@ with $\mathit{rem}_i$ the work request $i$ has left ($o_i$ while waiting). When 
 
 **The end.** `reach_bnd` gives the invariant at every machine of every path. When every session has ended, the certificates are $17501\,(\mathit{lat}_j - o_j) \le \sum_{i \prec j} p_i o_i$. With $p_i o_i + o_i \le 2\,\mathrm{vol}_i$ (`vol_bound`) and $\sum_j \sum_{i \prec j} \mathrm{vol}_i = \sum_{\text{pairs}} \min = \mathtt{prefix\_total} - \mathtt{total}$ (`sum_prec`, `prefixTotal_eq`), the claim follows (`queueing_bound`).
 
-**Theorem 3.2** (`competitive_ratio`). `lean/Serq/Papers/KongMath.lean` proves Proposition 3.1 for every schedule feasible in the paper's model (start times $x_i$, memory $s_i + t - x_i$ per active request, at most $M$ at every step): `opt_lower_bound`. It also proves the composition: from the claim, $M\cdot\mathrm{TEL}(\sigma) \ge \mathtt{prefix\_total}$ and $\mathrm{TEL}(\sigma) \ge \sum o$,
+**Theorem 3.2** (`competitive_ratio`). `examples/papers/KongMath.lean` proves Proposition 3.1 for every schedule feasible in the paper's model (start times $x_i$, memory $s_i + t - x_i$ per active request, at most $M$ at every step): `opt_lower_bound`. It also proves the composition: from the claim, $M\cdot\mathrm{TEL}(\sigma) \ge \mathtt{prefix\_total}$ and $\mathrm{TEL}(\sigma) \ge \sum o$,
 
 $$(M - P)\,\mathrm{TEL}(\mathrm{SVF}) \;\le\; (3M - P)\,\mathrm{TEL}(\sigma),$$
 

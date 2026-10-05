@@ -1,5 +1,5 @@
 name = "Serq"
-defaultTargets = ["Serq"]
+defaultTargets = ["Serq", "papers"]
 
 [leanOptions]
 autoImplicit = false
@@ -13,6 +13,13 @@ rev = "v4.34.0"
 
 [[lean_lib]]
 name = "Serq"
+
+# the proofs about the paper programs, beside them in examples/papers/
+[[lean_lib]]
+name = "papers"
+srcDir = "../examples"
+roots = []
+globs = ["papers.+"]
 
 # performance probe: the executable semantics on a workload from a JSON file
 [[lean_exe]]
