@@ -638,9 +638,15 @@ pub enum CIter {
         by: Option<Vec<CExpr>>,
     },
     /// Admit the head of the queues the stage serves (`admit via`) and serve
-    /// each newcomer, one at a time, while budget is left, the head fits and
-    /// `gate` (read at `Moment::Plan` before each) is not 0.
+    /// each newcomer that `only` (read at `Moment::Serve`) does not read as
+    /// 0, one at a time, while budget is left, the head fits and `gate`
+    /// (read at `Moment::Plan` before each) is 1. A newcomer `only`
+    /// excludes is admitted and left unserved, as the stage's `serve only`
+    /// leaves it: `serve only (p)` on the stage is the body `serve only (p);
+    /// admit only (p) while (!preempted);`.
     Admit {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        only: Option<CExpr>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         gate: Option<CExpr>,
     },
@@ -1384,7 +1390,7 @@ impl Program {
                 v.stage(s)?;
             }
         }
-        for s in &self.stages {
+        for (si, s) in self.stages.iter().enumerate() {
             let at = |e| format!("stage `{}`: {e}", s.name);
             match &s.kind {
                 CStageKind::Fifo(_) | CStageKind::Delay => {}
@@ -1442,7 +1448,7 @@ impl Program {
                                     .into(),
                             ));
                         }
-                        v.iteration(body).map_err(at)?;
+                        v.iteration(si, body).map_err(at)?;
                         if !always_serves(body) {
                             return Err(at(
                                 "an `iteration` body with a path that neither serves nor admits: \
@@ -1676,12 +1682,13 @@ struct Validator<'a> {
 }
 
 impl Validator<'_> {
-    /// A step stage's iteration body: `serve`'s `only` and keys are read as a
-    /// serve key is, a guard and an `admit`'s `while` as the iteration is
-    /// planned; none draws, and a guard reads neither the clock nor a plan
-    /// of its own (`budget_left`): an engine whose body schedules nothing
-    /// waits for an event, and the clock moving is none (#263).
-    fn iteration(&self, body: &[CIter]) -> Result<(), String> {
+    /// A step stage's iteration body: `serve`'s and `admit`'s `only` and
+    /// keys are read as a serve key is, a guard and an `admit`'s `while` as
+    /// the iteration is planned; none draws or reads the clock (an engine
+    /// whose body schedules nothing waits for an event, and the clock moving
+    /// is none, #263), and a guard does not read this stage's
+    /// `budget_left`, which plans the iteration the body is planning.
+    fn iteration(&self, st: usize, body: &[CIter]) -> Result<(), String> {
         let plan = |e: &CExpr, what: &str| -> Result<(), String> {
             self.expr(e, Moment::Plan)?;
             if draws(e) {
@@ -1695,41 +1702,50 @@ impl Validator<'_> {
                      nothing waits for an event, and the clock moving is none"
                 ));
             }
-            if e.any(&|x| matches!(x, CExpr::Call(Fun::BudgetLeft, _))) {
+            let own = |r: &CRef| (r.base..r.base + r.count).contains(&st);
+            if e.any(&|x| {
+                matches!(x, CExpr::Call(Fun::BudgetLeft, a)
+                    if matches!(a.as_slice(), [CArg::Stage(r)] if own(r)))
+            }) {
                 return Err(format!(
-                    "{what} may not read `budget_left(…)`: it plans an iteration, and the body \
-                     is the plan"
+                    "{what} may not read this stage's `budget_left(…)`: it plans an \
+                     iteration, and the body is the plan"
                 ));
+            }
+            Ok(())
+        };
+        let served = |e: &CExpr| -> Result<(), String> {
+            self.expr(e, Moment::Serve)?;
+            if draws(e) {
+                return Err("a `serve` key or an `only` in an iteration may not draw (`~`)".into());
+            }
+            if reads_clock(e) {
+                return Err(
+                    "a `serve` key or an `only` in an iteration may not read `now` or \
+                            `work(…)`: an engine whose body schedules nothing waits for an \
+                            event, and the clock moving is none"
+                        .into(),
+                );
             }
             Ok(())
         };
         for s in body {
             match s {
                 CIter::Serve { only, by } => {
-                    for e in only.iter().chain(by.iter().flatten()) {
-                        self.expr(e, Moment::Serve)?;
-                        if draws(e) {
-                            return Err(
-                                "a `serve` key or `only` in an iteration may not draw (`~`)".into(),
-                            );
-                        }
-                        if reads_clock(e) {
-                            return Err("a `serve` key or `only` in an iteration may not read \
-                                        `now` or `work(…)`: an engine whose body schedules \
-                                        nothing waits for an event, and the clock moving is none"
-                                .into());
-                        }
-                    }
+                    only.iter()
+                        .chain(by.iter().flatten())
+                        .try_for_each(served)?;
                 }
-                CIter::Admit { gate } => {
+                CIter::Admit { only, gate } => {
+                    only.iter().try_for_each(served)?;
                     if let Some(g) = gate {
                         plan(g, "an `admit`'s `while`")?;
                     }
                 }
                 CIter::Branch(g, a, b) => {
                     plan(g, "a `branch` in an iteration")?;
-                    self.iteration(a)?;
-                    self.iteration(b)?;
+                    self.iteration(st, a)?;
+                    self.iteration(st, b)?;
                 }
             }
         }

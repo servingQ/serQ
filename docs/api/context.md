@@ -43,7 +43,7 @@ read the attribute), and the linker rejects the program.
 | `kv_prefill` | number | `Budget`, `Step`, `Serve`, `Plan`, `Iteration` | the same, by the prefill residents |
 | `tokens` | number | `Step`, `Plan`, `Iteration` | tokens scheduled this iteration (in a body, so far) |
 | `admitted` | number | `Plan` | sessions the iteration has admitted so far |
-| `preempted` | number | `Plan` | 1 once the iteration has preempted a resident, else 0 |
+| `preempted` | number | `Plan` | the residents the iteration has preempted so far |
 | `prefilled` | number | `Step`, `Plan`, `Iteration` | prefill tokens scheduled (in a body, so far) |
 | `attention` | number | `Step`, `Iteration` | attention work of the prefill chunks, `Σ n (K + n/2)`, `K` the position before a chunk (exact for `growing` runs) |
 | `decoding` | 0 / 1 | `Serve`, `Victim` | 1 if the resident (or candidate) is decoding, 0 otherwise |

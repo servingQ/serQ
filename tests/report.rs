@@ -49,6 +49,7 @@ fn the_report_has_the_shape_its_version_names() {
         vec![
             "completed",
             "decode_only",
+            "idle_with_work",
             "index",
             "iterations",
             "itl_p50",
@@ -463,7 +464,8 @@ fn the_corpus_earns_one_note() {
     programs.sort();
     assert!(programs.len() >= 25, "{programs:?}");
     let mut noted = vec![];
-    // nor does any reject a session (the `rej:` note, #271)
+    // nor does any reject a session (the `rej:` note, #271), nor end with an
+    // engine idle with work (the `idle:` note, #355)
     let mut rejected = vec![];
     for p in &programs {
         let r = serq::run_file(p, &Overrides::default())
@@ -471,6 +473,9 @@ fn the_corpus_earns_one_note() {
         let name = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
         for o in r.observes.iter().filter(|o| o.never_held()) {
             noted.push((name.clone(), o.name.clone()));
+        }
+        for s in r.stages.iter().filter(|s| s.idle_with_work) {
+            rejected.push((name.clone(), format!("idle {}", s.name)));
         }
         for q in r.pools.iter().filter(|q| q.rejected > 0) {
             rejected.push((name.clone(), q.name.clone()));

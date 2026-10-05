@@ -288,8 +288,11 @@ pub enum IterStmt {
         only: Option<Expr>,
         order: Option<Serve>,
     },
-    /// `admit [while (e)];`
-    Admit { gate: Option<Expr> },
+    /// `admit [only (p)] [while (e)];`
+    Admit {
+        only: Option<Expr>,
+        gate: Option<Expr>,
+    },
     /// `branch (e) { … } [else { … }]`
     Branch(Expr, Vec<IterStmt>, Vec<IterStmt>),
 }

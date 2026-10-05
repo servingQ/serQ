@@ -746,25 +746,34 @@ predicate would exclude would be a third rule.
 [Serving a subset](design/serve-only.md) states the case and the numbers.
 
 **The iteration as a program.** Everything above is one procedure, vLLM's
-`schedule()`: serve the residents, then, unless the iteration preempted,
-admit the waiting with the budget left. `iteration { … }` on a step stage
-writes the iteration instead (#355), from three statements run once each in
-order: `serve [only (p)] [order]` gives the residents not yet served their
-tokens, skipping and leaving unserved those `p` excludes; `admit [while
-(e)]` admits the heads of the queues the stage serves one at a time, each
-served at once, while budget is left, the head fits and `e` is 1; and
-`branch (e) { … } else { … }`. A guard and a `while` read the residents'
-totals, what the iteration has scheduled so far (`tokens`, `prefilled`),
-`admitted` and `preempted`. The procedure above is the body `serve; admit
-while (!preempted);`, and every example runs the same written either way
-(`tests/iteration_body.rs`). SGLang's default, prefills alone in one batch
-and a decode batch only when none forms, is `serve only (!decoding); admit;
-branch (tokens == 0) { serve; }`, which `exclusive prefill` (one prefill)
-and `serve only` (decided before the admission) cannot say. A body does not
-combine with `exclusive prefill` or `only`, which would answer the same
-question twice; a body with a path that neither serves nor admits, or a
-guard that reads `now`, does not link (an engine that schedules nothing
-waits for an event, and the clock moving is none).
+`schedule()`: serve the residents, then, unless the iteration preempted
+(`scheduler.py:869`), admit the waiting with the budget left. `iteration { … }`
+on a step stage writes the iteration instead (#355), from three statements
+run once each in order: `serve [only (p)] [order]` gives the residents not
+yet served their tokens, skipping and leaving unserved those `p` excludes;
+`admit [only (p)] [while (e)]` admits the heads of the queues the stage
+serves one at a time, each served at once unless `p` excludes it, while
+budget is left, the head fits and `e` is 1; and `branch (e) { … } else { …
+}`. A guard and a `while` read the residents' totals, what the iteration
+has scheduled so far (`tokens`, `prefilled`), `admitted` and `preempted`
+(counts). The procedure above is the body `serve; admit while
+(!preempted);`, and every example runs the same written either way; the
+stage's `serve only (p)` is `serve only (p); admit only (p) while
+(!preempted);` (`tests/iteration_body.rs`). SGLang's default, prefills
+alone in one batch and a decode batch only when none forms
+([`scheduler.py` L3754-L3756](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/scheduler.py#L3754-L3756)),
+is `serve only (!decoding); admit; branch (tokens == 0) { serve; }`, which
+`exclusive prefill` (one prefill) and `serve only` (decided before the
+admission) cannot say; TensorRT-LLM's `STATIC_BATCH`, admitting only into an
+empty engine
+([`capacityScheduler.cpp` L307-L309](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/capacityScheduler.cpp#L307-L309)),
+is `serve; branch (residents == 0) { admit; }`. A body does not combine with
+`exclusive prefill` or `only`, which would answer the same question twice.
+A body with a path that neither serves nor admits, or a guard that reads
+`now`, does not link (an engine that schedules nothing waits for an event,
+and the clock moving is none); that is necessary, not sufficient, and an
+engine the linker could not see stall is named in the report when the run
+ends with its work unscheduled (`idle: stage …`).
 
 **`at admission`.** Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the

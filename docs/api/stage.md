@@ -124,7 +124,7 @@ combine with `exclusive prefill`. See
 ```serq
 iteration {
   serve [only (p)] [admission | by (k, …) | decode first];
-  admit [while (e)];
+  admit [only (p)] [while (e)];
   branch (e) { … } [else { … }]
 }
 ```
@@ -137,17 +137,22 @@ iteration.
 | Statement | What it does |
 |---|---|
 | `serve [only (p)] [order]` | Gives the residents not yet served their tokens (one to a decode, up to `chunk` to a prefill, a `growing` job growing first) in the order (the stage's `serve` order when none), while budget is left. A resident `p` reads as 0 is skipped and stays unserved, for a later `serve`. A grower that preempts itself ends the statement. |
-| `admit [while (e)]` | Admits the head of the queues that name this stage in `admit via` and serves the newcomer, one at a time, while budget is left, the head fits and `e` (read before each) is 1. |
+| `admit [only (p)] [while (e)]` | Admits the head of the queues that name this stage in `admit via` and serves the newcomer, one at a time, while budget is left, the head fits and `e` (read before each) is 1. A newcomer `p` reads as 0 is admitted and waits unserved, so the stage's `serve only (p)` is the body `serve only (p); admit only (p) while (!preempted);`. |
 | `branch (e) { … } else { … }` | A test: the first body when `e` is 1, the second when it is 0. |
 
 A guard and a `while` are read at the `Plan` moment: the residents' totals
 (`residents`, `decoders`, `kv_decode`, `kv_prefill`) as they stand, what the
 iteration has scheduled so far (`tokens`, `prefilled`), `admitted` (the
-sessions it has admitted) and `preempted` (1 once it has preempted), pool
+sessions it has admitted) and `preempted` (the residents it has preempted), pool
 and stage queries and constants; neither draws, reads `now`, `work(…)` or
-`budget_left(…)`. `only` and keys read what a `serve` key reads. A body with
+this stage's `budget_left(…)`. `only` and keys read what a `serve` key reads. A body with
 a path that neither serves nor admits does not link: an engine that took it
-would schedule nothing and wait for an event that may never come.
+would schedule nothing and wait for an event that may never come. The rule
+is necessary, not sufficient: `admit while (tokens > 0)` reaches an `admit`
+and never admits into an empty engine. What the linker cannot see the report
+says: an engine that ends the run with residents or a waiting queue and a
+last try that scheduled nothing is named (`idle: stage …`, the stage's
+`idle_with_work`).
 
 A stage without a body runs vLLM's procedure, which is this body
 (`tests/iteration_body.rs` runs every example both ways):

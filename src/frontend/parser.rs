@@ -2843,8 +2843,6 @@ impl Parser {
         })
     }
 
-    /// A stage's kind, `fifo`, `ps (phi)`, `delay` or `step { … }`, with its
-    /// closing semicolon (none after `step { … }`).
     /// `{ stmt* }` of a step stage's `iteration`: `serve`, `admit` and
     /// `branch`, and nothing else (no loop: an iteration ends).
     fn iteration_body(&mut self) -> PResult<Vec<IterStmt>> {
@@ -2881,8 +2879,9 @@ impl Parser {
                 Some(Serve::By(keys))
             } else if self.is_kw("exclusive") {
                 return self.err(
-                    "`exclusive prefill` is a stage's rule, not a body's: in a body, serve the \
-                     prefills alone with `serve only (!decoding)` and branch on what it served",
+                    "`exclusive prefill` is a stage's rule (one prefill, the whole budget, \
+                     displacing the decodes already chosen), and a body cannot take back a serve: \
+                     write the rule on the stage without a body, or a body without the rule",
                 );
             } else {
                 None
@@ -2890,6 +2889,12 @@ impl Parser {
             self.expect(&Tok::Semi)?;
             Ok(IterStmt::Serve { only, order })
         } else if self.eat_kw("admit") {
+            let mut only = None;
+            if self.eat_kw("only") {
+                self.expect(&Tok::LParen)?;
+                only = Some(self.expr()?);
+                self.expect(&Tok::RParen)?;
+            }
             let mut gate = None;
             if self.eat_kw("while") {
                 self.expect(&Tok::LParen)?;
@@ -2897,7 +2902,7 @@ impl Parser {
                 self.expect(&Tok::RParen)?;
             }
             self.expect(&Tok::Semi)?;
-            Ok(IterStmt::Admit { gate })
+            Ok(IterStmt::Admit { only, gate })
         } else if self.eat_kw("branch") {
             self.expect(&Tok::LParen)?;
             let guard = self.expr()?;
@@ -2917,6 +2922,8 @@ impl Parser {
         }
     }
 
+    /// A stage's kind, `fifo`, `ps (phi)`, `delay` or `step { … }`, with its
+    /// closing semicolon (none after `step { … }`).
     fn stage_kind(&mut self) -> PResult<StageKind> {
         let kind = if self.eat_kw("fifo") {
             if *self.peek() == Tok::LParen {

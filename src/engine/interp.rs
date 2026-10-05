@@ -395,6 +395,10 @@ struct StageState {
     wait: Welford,
     service: Welford,
     iterations: u64,
+    /// A step stage whose last try at an iteration scheduled nothing while it
+    /// had residents or a waiting queue it serves, and none since: an engine
+    /// waiting for an event that may not come (#263).
+    idle_with_work: bool,
     steps: StepStats,
 }
 
@@ -468,10 +472,11 @@ struct Plan<'p> {
     admitted: f64,
 }
 
-/// `exclusive prefill`'s rule, as `give` applies it; off in a body.
+/// `exclusive prefill`'s rule, as `give` applies it: whether a prefill is
+/// resident as the iteration starts, and the whole budget a selected
+/// prefill takes.
 #[derive(Clone, Copy)]
-struct Alone {
-    exclusive: bool,
+struct Exclusive {
     resident_prefill: bool,
     budget: f64,
 }
@@ -604,6 +609,9 @@ pub struct Interp<'p> {
     /// began (vLLM's `preempted_reqs`, scheduler.py:869): set by `preempt`,
     /// cleared where `start_iteration` begins to serve its residents.
     preempted: bool,
+    /// How many residents the iteration being scheduled has preempted so far
+    /// (`preempted` in an iteration body).
+    preempted_now: f64,
     next_adm: u64,
     next_release: u64,
     arrivals: u64,
@@ -686,6 +694,7 @@ impl<'p> Interp<'p> {
                 wait: Welford::new(),
                 service: Welford::new(),
                 iterations: 0,
+                idle_with_work: false,
                 steps: StepStats::new(),
             })
             .collect();
@@ -749,6 +758,7 @@ impl<'p> Interp<'p> {
             next_dead: 0,
             next_lease: 0,
             preempted: false,
+            preempted_now: 0.0,
             next_adm: 0,
             next_release: 0,
             arrivals: 0,
@@ -2381,6 +2391,7 @@ impl<'p> Interp<'p> {
         let (cache, reuse) = cache;
         self.pools[pl].preemptions += 1;
         self.preempted = true;
+        self.preempted_now += 1.0;
         let pending = Pending {
             pools: h_pools,
             reuse,
@@ -2945,6 +2956,7 @@ impl<'p> Interp<'p> {
             .iter()
             .any(|&j| self.stages[st].jobs[&j].mode == RunMode::Prefill);
         self.preempted = false;
+        self.preempted_now = 0.0;
         // each served prefill's attention work, summed over those still in
         // the batch when the iteration is costed
         let mut attn_by: Vec<(u64, f64)> = vec![];
@@ -2988,11 +3000,10 @@ impl<'p> Interp<'p> {
                         continue;
                     }
                 }
-                let rule = Alone {
-                    exclusive,
+                let rule = exclusive.then_some(Exclusive {
                     resident_prefill,
                     budget,
-                };
+                });
                 match self.give(st, id, chunk, rule, &mut left, &mut assign, &mut attn_by) {
                     Give::Skipped => continue,
                     // preempted itself (lifo): vLLM stops serving the running
@@ -3035,8 +3046,13 @@ impl<'p> Interp<'p> {
         // no event to wake it.
         let preempted = self.preempted;
         if assign.is_empty() && !preempted {
+            // work it did not schedule: waiting for an event, which the
+            // report names if none came (#263)
+            let work = !self.residents(st).is_empty() || self.bound_waiting(st);
+            self.stages[st].idle_with_work = work;
             return;
         }
+        self.stages[st].idle_with_work = false;
         let ntok: f64 = assign.iter().map(|a| a.1).sum();
         let attn: f64 = attn_by
             .iter()
@@ -3152,7 +3168,7 @@ impl<'p> Interp<'p> {
         st: usize,
         id: u64,
         chunk: f64,
-        rule: Alone,
+        rule: Option<Exclusive>,
         left: &mut f64,
         assign: &mut Vec<(u64, f64)>,
         attn_by: &mut Vec<(u64, f64)>,
@@ -3172,9 +3188,11 @@ impl<'p> Interp<'p> {
             }
             RunMode::Plain => unreachable!(),
         };
-        let blocked = rule.exclusive && rule.resident_prefill && mode == RunMode::Decode;
-        let available = if rule.exclusive && mode == RunMode::Prefill {
-            rule.budget
+        let blocked = rule.is_some_and(|r| r.resident_prefill) && mode == RunMode::Decode;
+        let available = if let Some(r) = rule
+            && mode == RunMode::Prefill
+        {
+            r.budget
         } else {
             *left
         };
@@ -3231,11 +3249,13 @@ impl<'p> Interp<'p> {
         } else if mode == RunMode::Prefill {
             attn_by.push((id, tokens * tokens / 2.0));
         }
-        if rule.exclusive && mode == RunMode::Prefill {
+        if let Some(r) = rule
+            && mode == RunMode::Prefill
+        {
             // Keep any allocation made for displaced decodes, as RBLN
             // keeps pending runner block deltas; cancel only their work.
             assign.clear();
-            *left = rule.budget;
+            *left = r.budget;
         }
         assign.push((id, tokens));
         *left -= tokens;
@@ -3246,11 +3266,6 @@ impl<'p> Interp<'p> {
     /// iteration being planned. Each statement runs once where it is
     /// written; a resident is served at most once in the iteration.
     fn run_body(&mut self, plan: &mut Plan<'p>, body: &'p [CIter]) {
-        let none = Alone {
-            exclusive: false,
-            resident_prefill: false,
-            budget: 0.0,
-        };
         for s in body {
             if self.error.is_some() {
                 return;
@@ -3286,7 +3301,7 @@ impl<'p> Interp<'p> {
                             plan.st,
                             id,
                             plan.chunk,
-                            none,
+                            None,
                             &mut plan.left,
                             &mut plan.assign,
                             &mut plan.attn_by,
@@ -3296,10 +3311,10 @@ impl<'p> Interp<'p> {
                         }
                     }
                 }
-                CIter::Admit { gate } => {
+                CIter::Admit { only, gate } => {
                     'admit: while plan.left > 0.0 {
                         if let Some(g) = gate
-                            && !self.test(g, plan, "an `admit`'s `while`")
+                            && !self.guard(g, plan, "an `admit`'s `while`")
                         {
                             break;
                         }
@@ -3319,12 +3334,19 @@ impl<'p> Interp<'p> {
                             if plan.left <= 0.0 {
                                 break 'admit;
                             }
+                            // one `only` excludes is admitted and waits,
+                            // unserved, as under the stage's `serve only`
+                            if let Some(p) = only
+                                && !self.serves(plan.st, id, p, plan.spec.memory)
+                            {
+                                continue;
+                            }
                             plan.served.insert(id);
                             let given = self.give(
                                 plan.st,
                                 id,
                                 plan.chunk,
-                                none,
+                                None,
                                 &mut plan.left,
                                 &mut plan.assign,
                                 &mut plan.attn_by,
@@ -3336,7 +3358,7 @@ impl<'p> Interp<'p> {
                     }
                 }
                 CIter::Branch(g, a, b) => {
-                    let taken = if self.test(g, plan, "a `branch` in an iteration") {
+                    let taken = if self.guard(g, plan, "a `branch` in an iteration") {
                         a
                     } else {
                         b
@@ -3350,7 +3372,7 @@ impl<'p> Interp<'p> {
     /// A guard of an iteration body, read on the residents as they stand
     /// and what the iteration has done so far (`Moment::Plan`): 1 or 0, and
     /// anything else fails the run, as a session's `branch` does.
-    fn test(&mut self, e: &CExpr, plan: &Plan, what: &str) -> bool {
+    fn guard(&mut self, e: &CExpr, plan: &Plan, what: &str) -> bool {
         let mut ctx = self.resident_totals(plan.st, plan.spec.memory);
         ctx.ntok = plan.assign.iter().map(|a| a.1).sum();
         ctx.npre = plan
@@ -3360,7 +3382,7 @@ impl<'p> Interp<'p> {
             .map(|a| a.1)
             .sum();
         ctx.admitted = plan.admitted;
-        ctx.preempted = if self.preempted { 1.0 } else { 0.0 };
+        ctx.preempted = self.preempted_now;
         let v = self.eval(e, &ctx, Which::Session);
         if v == 1.0 {
             true
@@ -3950,6 +3972,7 @@ impl<'p> Interp<'p> {
                 mean_wait: s.wait.mean(),
                 mean_service: s.service.mean(),
                 iterations: s.iterations,
+                idle_with_work: s.idle_with_work,
                 prefill_only: s.steps.prefill_only.mean(now),
                 decode_only: s.steps.decode_only.mean(now),
                 mixed: s.steps.mixed.mean(now),

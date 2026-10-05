@@ -679,9 +679,6 @@ fn stmt_span(s: &Stmt) -> Option<Span> {
     }
 }
 
-/// Member `i` of an `n`-family's counterpart in a family of `count` from
-/// `base`: element for element when the counts match, the one member when
-/// there is one, and an error otherwise.
 /// A step stage's serving order. `admission` has no keys: every resident
 /// ties, and ties are admission order; `decode first` is `by (decoding ? 0
 /// : 1)`, so the IR knows one form.
@@ -713,7 +710,8 @@ fn iteration(lk: &Linker, body: &[IterStmt]) -> LResult<Vec<CIter>> {
                         }
                     },
                 },
-                IterStmt::Admit { gate } => CIter::Admit {
+                IterStmt::Admit { only, gate } => CIter::Admit {
+                    only: only.as_ref().map(|e| lk.expr(e)).transpose()?,
                     gate: gate.as_ref().map(|e| lk.expr(e)).transpose()?,
                 },
                 IterStmt::Branch(g, a, b) => {
@@ -724,6 +722,9 @@ fn iteration(lk: &Linker, body: &[IterStmt]) -> LResult<Vec<CIter>> {
         .collect()
 }
 
+/// Member `i` of an `n`-family's counterpart in a family of `count` from
+/// `base`: element for element when the counts match, the one member when
+/// there is one, and an error otherwise.
 fn member(base: usize, count: usize, i: usize, n: usize, who: &str, what: &str) -> LResult<usize> {
     if count == n {
         Ok(base + i)
