@@ -149,6 +149,10 @@ pub enum Moment {
     /// A pool's `preempt by` keys: evaluated for one candidate victim when
     /// a growth does not fit.
     Victim,
+    /// A step stage's iteration body: a `branch` guard or an `admit`'s
+    /// `while`, read as the iteration is planned, from the residents and
+    /// what the iteration has done so far.
+    Plan,
     /// A `gauge`: evaluated on the state the deployment holds after every
     /// instant, with no session, job or resident, and held until the next
     /// one, so neither `now` nor `work(…)`, which move in between, nor
@@ -182,6 +186,7 @@ impl std::fmt::Display for Moment {
             Moment::Step => "a step stage's cost, after the iteration",
             Moment::Serve => "a step stage's serve keys or `only`",
             Moment::Victim => "a pool's preempt keys, read for each candidate victim",
+            Moment::Plan => "a step stage's iteration body, read as the iteration is planned",
             Moment::Gauge => "a gauge, read on the deployment's state with no session",
             Moment::Given => "a claim's `given`, read on one session's attributes",
             Moment::Iteration => "a claim over iterations, read when an iteration starts",
@@ -232,6 +237,10 @@ pub enum CtxVar {
     /// Preempt keys: the position the candidate's hold has computed on the
     /// pool, which `computed` becomes if it is the victim.
     Position,
+    /// Iteration body: the sessions this iteration has admitted so far.
+    Admitted,
+    /// Iteration body: 1 if this iteration has preempted a resident.
+    Preempted,
     /// Iteration claims: the tokens the stage's residents could take in
     /// this iteration if the budget were unlimited (`min(1, remaining)` for
     /// a decode, the remaining work up to the chunk for a prefill), summed
@@ -268,6 +277,8 @@ impl CtxVar {
             CtxVar::Admission => "admission",
             CtxVar::Remaining => "remaining",
             CtxVar::Position => "position",
+            CtxVar::Admitted => "admitted",
+            CtxVar::Preempted => "preempted",
             CtxVar::Demand => "demand",
             CtxVar::Served => "served",
             CtxVar::Arrived => "arrived",
@@ -291,9 +302,13 @@ impl CtxVar {
                 Moment::Budget,
                 Moment::Step,
                 Moment::Serve,
+                Moment::Plan,
                 Moment::Iteration,
             ],
-            CtxVar::Ntok | CtxVar::Npre | CtxVar::Attn => &[Moment::Step, Moment::Iteration],
+            // in a body, what the iteration has scheduled so far
+            CtxVar::Ntok | CtxVar::Npre => &[Moment::Step, Moment::Plan, Moment::Iteration],
+            CtxVar::Attn => &[Moment::Step, Moment::Iteration],
+            CtxVar::Admitted | CtxVar::Preempted => &[Moment::Plan],
             CtxVar::Remaining => &[Moment::Serve],
             CtxVar::Decoding => &[Moment::Serve, Moment::Victim],
             CtxVar::Admission => &[Moment::Serve, Moment::Victim],
@@ -598,6 +613,40 @@ pub struct CStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub only: Option<CExpr>,
     pub memory: Option<usize>,
+    /// The iteration as the program writes it (`iteration { … }`): which
+    /// residents are served, in what order, and when the waiting are
+    /// admitted, in the order the statements run. None is vLLM's procedure,
+    /// `serve` then the waiting admitted while the iteration has not
+    /// preempted, with `serve` and `only` above. A body serves by its own
+    /// statements: not with `ExclusivePrefill` or `only`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iteration: Option<Vec<CIter>>,
+}
+
+/// A statement of a step stage's iteration body. Each runs once where it is
+/// written; the body has no loop, so an iteration ends.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CIter {
+    /// Serve the residents this iteration has not served yet, in `by`'s
+    /// order (the stage's `serve` order when None), skipping those `only`
+    /// reads as 0, which a later `Serve` may serve, while budget is left.
+    /// Both are read at `Moment::Serve`.
+    Serve {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        only: Option<CExpr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<Vec<CExpr>>,
+    },
+    /// Admit the head of the queues the stage serves (`admit via`) and serve
+    /// each newcomer, one at a time, while budget is left, the head fits and
+    /// `gate` (read at `Moment::Plan` before each) is not 0.
+    Admit {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gate: Option<CExpr>,
+    },
+    /// A test read at `Moment::Plan`: the first body when 1, the second
+    /// when 0.
+    Branch(CExpr, Vec<CIter>, Vec<CIter>),
 }
 
 /// A step stage's serving policy: resident order (`By(keys)`) or the rule
@@ -1383,6 +1432,26 @@ impl Program {
                             ));
                         }
                     }
+                    if let Some(body) = &st.iteration {
+                        if matches!(st.serve, CServe::ExclusivePrefill) || st.only.is_some() {
+                            return Err(at(
+                                "an `iteration` body with `serve exclusive prefill` or `serve \
+                                 only`: the body says which residents are served and when the \
+                                 waiting are admitted, and the stage option would be a second \
+                                 answer; write it in the body"
+                                    .into(),
+                            ));
+                        }
+                        v.iteration(body).map_err(at)?;
+                        if !always_serves(body) {
+                            return Err(at(
+                                "an `iteration` body with a path that neither serves nor admits: \
+                                 an engine whose body takes that path schedules nothing, and \
+                                 waits for an event that may never come"
+                                    .into(),
+                            ));
+                        }
+                    }
                     if let Some(m) = st.memory {
                         v.pool(m)?;
                     }
@@ -1505,6 +1574,15 @@ impl Program {
     }
 }
 
+/// Whether every path through an iteration body reaches a `serve` or an
+/// `admit`.
+fn always_serves(body: &[CIter]) -> bool {
+    body.iter().any(|s| match s {
+        CIter::Serve { .. } | CIter::Admit { .. } => true,
+        CIter::Branch(_, a, b) => always_serves(a) && always_serves(b),
+    })
+}
+
 /// Whether an expression samples a distribution anywhere.
 fn draws(e: &CExpr) -> bool {
     e.any(&|x| matches!(x, CExpr::Sample(..)))
@@ -1598,6 +1676,66 @@ struct Validator<'a> {
 }
 
 impl Validator<'_> {
+    /// A step stage's iteration body: `serve`'s `only` and keys are read as a
+    /// serve key is, a guard and an `admit`'s `while` as the iteration is
+    /// planned; none draws, and a guard reads neither the clock nor a plan
+    /// of its own (`budget_left`): an engine whose body schedules nothing
+    /// waits for an event, and the clock moving is none (#263).
+    fn iteration(&self, body: &[CIter]) -> Result<(), String> {
+        let plan = |e: &CExpr, what: &str| -> Result<(), String> {
+            self.expr(e, Moment::Plan)?;
+            if draws(e) {
+                return Err(format!(
+                    "{what} may not draw (`~`): it is read at every iteration"
+                ));
+            }
+            if reads_clock(e) {
+                return Err(format!(
+                    "{what} may not read `now` or `work(…)`: an engine whose body schedules \
+                     nothing waits for an event, and the clock moving is none"
+                ));
+            }
+            if e.any(&|x| matches!(x, CExpr::Call(Fun::BudgetLeft, _))) {
+                return Err(format!(
+                    "{what} may not read `budget_left(…)`: it plans an iteration, and the body \
+                     is the plan"
+                ));
+            }
+            Ok(())
+        };
+        for s in body {
+            match s {
+                CIter::Serve { only, by } => {
+                    for e in only.iter().chain(by.iter().flatten()) {
+                        self.expr(e, Moment::Serve)?;
+                        if draws(e) {
+                            return Err(
+                                "a `serve` key or `only` in an iteration may not draw (`~`)".into(),
+                            );
+                        }
+                        if reads_clock(e) {
+                            return Err("a `serve` key or `only` in an iteration may not read \
+                                        `now` or `work(…)`: an engine whose body schedules \
+                                        nothing waits for an event, and the clock moving is none"
+                                .into());
+                        }
+                    }
+                }
+                CIter::Admit { gate } => {
+                    if let Some(g) = gate {
+                        plan(g, "an `admit`'s `while`")?;
+                    }
+                }
+                CIter::Branch(g, a, b) => {
+                    plan(g, "a `branch` in an iteration")?;
+                    self.iteration(a)?;
+                    self.iteration(b)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn block(&self, b: BlockId) -> Result<(), String> {
         if b < self.p.blocks.len() {
             Ok(())

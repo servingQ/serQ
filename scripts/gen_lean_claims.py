@@ -160,6 +160,8 @@ class Program:
         step = st[0]["kind"]["Step"]
         if step["serve"] not in ({"By": []}, "DecodeFirst"):
             raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order")
+        if step.get("iteration") is not None:
+            raise Fragment("iteration: the fragment runs vLLM's procedure, not a body")
         cost = cost_fn(step["cost"])
         only = "none"
         if step.get("only") is not None:

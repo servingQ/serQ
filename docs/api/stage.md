@@ -63,6 +63,7 @@ step {
   serve admission;  |  serve by (expr, …);  |  serve decode first;  |  serve exclusive prefill;
   serve only (expr) [admission | by (expr, …) | decode first];
   memory POOL;
+  iteration { stmt … }      // stmt: serve […]; | admit [while (expr)]; | branch (expr) { … } [else { … }]
 }
 ```
 
@@ -80,6 +81,7 @@ that schedules no token is not one, unless it preempted.
 | `chunk` | `expr` | `Budget` | `0` (no cap) | Cap on one request's prefill tokens in an iteration. |
 | `serve` | see below | `Serve` | `admission` | Which residents are served (`only`) and in what order, or an exclusive-prefill batch policy. At most once. |
 | `memory` | `pool` | | none | The pool whose holds give `kv_decode` and `kv_prefill`, and whose `preempt lifo` victims come from this stage. |
+| `iteration` | a body | `Serve`, `Plan` | vLLM's procedure | The iteration as the program writes it: whom it serves, in what order, and when it admits (below). Not with `exclusive prefill` or `only`. |
 
 ### `serve`
 
@@ -116,6 +118,51 @@ computed KV; an admitted session it excludes waits as such a resident.
 ([FasterTransformer](../use-cases/fastertransformer.md)). `only` does not
 combine with `exclusive prefill`. See
 [Serving a subset](../design/serve-only.md).
+
+### `iteration`
+
+```serq
+iteration {
+  serve [only (p)] [admission | by (k, …) | decode first];
+  admit [while (e)];
+  branch (e) { … } [else { … }]
+}
+```
+
+The iteration as the program writes it, in place of the procedure a stage
+without one runs. The statements run once each, in order; a body has no
+loop, so an iteration ends. A resident is served at most once per
+iteration.
+
+| Statement | What it does |
+|---|---|
+| `serve [only (p)] [order]` | Gives the residents not yet served their tokens (one to a decode, up to `chunk` to a prefill, a `growing` job growing first) in the order (the stage's `serve` order when none), while budget is left. A resident `p` reads as 0 is skipped and stays unserved, for a later `serve`. A grower that preempts itself ends the statement. |
+| `admit [while (e)]` | Admits the head of the queues that name this stage in `admit via` and serves the newcomer, one at a time, while budget is left, the head fits and `e` (read before each) is 1. |
+| `branch (e) { … } else { … }` | A test: the first body when `e` is 1, the second when it is 0. |
+
+A guard and a `while` are read at the `Plan` moment: the residents' totals
+(`residents`, `decoders`, `kv_decode`, `kv_prefill`) as they stand, what the
+iteration has scheduled so far (`tokens`, `prefilled`), `admitted` (the
+sessions it has admitted) and `preempted` (1 once it has preempted), pool
+and stage queries and constants; neither draws, reads `now`, `work(…)` or
+`budget_left(…)`. `only` and keys read what a `serve` key reads. A body with
+a path that neither serves nor admits does not link: an engine that took it
+would schedule nothing and wait for an event that may never come.
+
+A stage without a body runs vLLM's procedure, which is this body
+(`tests/iteration_body.rs` runs every example both ways):
+
+```serq
+iteration { serve; admit while (!preempted); }
+```
+
+Other engines' are other bodies:
+
+| Engine | Body |
+|---|---|
+| SGLang (no mixed chunk): the chunked request and new prefills alone, a decode batch when no prefill forms | `iteration { serve only (!decoding); admit; branch (tokens == 0) { serve; } }` |
+| TensorRT-LLM `STATIC_BATCH`: admit only into an empty engine | `iteration { serve; branch (residents == 0) { admit; } }` |
+| FasterTransformer as Dai et al. model it | `iteration { branch (decoders > 0) { serve only (decoding); } else { serve; admit; } }` |
 
 ### Example
 

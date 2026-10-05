@@ -21,6 +21,7 @@ read the attribute), and the linker rejects the program.
 | `Step` | a step stage's `cost` | after the iteration is scheduled |
 | `Serve` | a step stage's `serve by` keys | for one resident |
 | `Victim` | a pool's `preempt by` keys | for one candidate victim, when a growth does not fit |
+| `Plan` | a step stage's `iteration` body: a `branch` guard, an `admit`'s `while` | as the iteration is planned, from the residents and what it has done so far |
 | `Given` | a claim's `given` | for each session, once its `init` has run |
 | `Iteration` | a claim over iterations | when an iteration starts, where the cost is read |
 | `End` | a claim `at end` | once, when the run ends |
@@ -36,12 +37,14 @@ read the attribute), and the linker rejects the program.
 | `last` | number | `Evict` | time the entry was released |
 | `waiting` | 0 / 1 | `Evict` | 1 if the entry's session waits in a pool queue |
 | `present` | number | `Ps` | jobs present |
-| `residents` | number | `Budget`, `Step`, `Serve`, `Iteration` | residents, scheduled or not |
-| `decoders` | number | `Budget`, `Step`, `Serve`, `Iteration` | decode residents |
-| `kv_decode` | number | `Budget`, `Step`, `Serve`, `Iteration` | memory held in the stage's `memory` pool by the decode residents (0 without `memory`) |
-| `kv_prefill` | number | `Budget`, `Step`, `Serve`, `Iteration` | the same, by the prefill residents |
-| `tokens` | number | `Step`, `Iteration` | tokens scheduled this iteration |
-| `prefilled` | number | `Step`, `Iteration` | prefill tokens scheduled |
+| `residents` | number | `Budget`, `Step`, `Serve`, `Plan`, `Iteration` | residents, scheduled or not |
+| `decoders` | number | `Budget`, `Step`, `Serve`, `Plan`, `Iteration` | decode residents |
+| `kv_decode` | number | `Budget`, `Step`, `Serve`, `Plan`, `Iteration` | memory held in the stage's `memory` pool by the decode residents (0 without `memory`) |
+| `kv_prefill` | number | `Budget`, `Step`, `Serve`, `Plan`, `Iteration` | the same, by the prefill residents |
+| `tokens` | number | `Step`, `Plan`, `Iteration` | tokens scheduled this iteration (in a body, so far) |
+| `admitted` | number | `Plan` | sessions the iteration has admitted so far |
+| `preempted` | number | `Plan` | 1 once the iteration has preempted a resident, else 0 |
+| `prefilled` | number | `Step`, `Plan`, `Iteration` | prefill tokens scheduled (in a body, so far) |
 | `attention` | number | `Step`, `Iteration` | attention work of the prefill chunks, `Σ n (K + n/2)`, `K` the position before a chunk (exact for `growing` runs) |
 | `decoding` | 0 / 1 | `Serve`, `Victim` | 1 if the resident (or candidate) is decoding, 0 otherwise |
 | `admission` | number | `Serve`, `Victim` | the resident's admission sequence number (its place in vLLM's `running` list); at `Victim`, the candidate's place in the candidates' admission order |

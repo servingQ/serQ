@@ -276,6 +276,22 @@ pub struct StepSpec {
     pub only: Option<Expr>,
     /// Pool whose holdings of the scheduled residents give `kv_decode`.
     pub memory: Option<Ref>,
+    /// `iteration { … }`: the iteration as the program writes it.
+    pub iteration: Option<Vec<IterStmt>>,
+}
+
+/// A statement of a step stage's `iteration` body.
+#[derive(Clone, Debug, PartialEq)]
+pub enum IterStmt {
+    /// `serve [only (p)] [admission | decode first | by (k, …)];`
+    Serve {
+        only: Option<Expr>,
+        order: Option<Serve>,
+    },
+    /// `admit [while (e)];`
+    Admit { gate: Option<Expr> },
+    /// `branch (e) { … } [else { … }]`
+    Branch(Expr, Vec<IterStmt>, Vec<IterStmt>),
 }
 
 /// `serve` of a step stage: one order, where two booleans (`exclusive

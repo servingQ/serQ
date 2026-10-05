@@ -393,6 +393,8 @@ class Lean:
             raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
         if step.get("only") is not None:
             raise Fragment("serve only: the fragment serves every resident")
+        if step.get("iteration") is not None:
+            raise Fragment("iteration: the fragment runs vLLM's procedure, not a body")
         pools = []
         for i, p in enumerate(ir["pools"]):
             if p["evict"] != "Lru" or p["queue"] is not None or p["spill"] is not None:

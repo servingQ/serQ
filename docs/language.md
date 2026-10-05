@@ -66,7 +66,10 @@ kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 
                    [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
                     | serve exclusive prefill ;
                     | serve only ( expr ) [admission | by ( expr , ... ) | decode first] ;]
-                   [memory POOL ;] }
+                   [memory POOL ;] [iteration { istmt* }] }
+istmt    := serve [only ( expr )] [admission | by ( expr , ... ) | decode first] ;   -- the residents not yet served
+          | admit [while ( expr )] ;           -- the waiting, one at a time, each served
+          | branch ( expr ) { istmt* } [else { istmt* }]
 wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
           | init block | turn block          -- only set / observe
@@ -146,7 +149,8 @@ The rules that are the language's, not the catalogue's:
   and serve keys and a claim over its iterations; `tokens`, `prefilled`,
   `attention` its cost's and that claim's (what the iteration scheduled);
   `decoding`, `admission`, `remaining` its `serve by` keys' and `serve
-  only`'s (`admission` a `preempt by` key's too, with `position`); `demand`, `served`, `arrived` a claim over iterations'. The aggregates of a
+  only`'s (`admission` a `preempt by` key's too, with `position`); `admitted`, `preempted` an `iteration` body's guards', which also
+  read the totals and, so far, `tokens` and `prefilled`; `demand`, `served`, `arrived` a claim over iterations'. The aggregates of a
   run's observations, `total(o)`, `count(o)`, `largest(o)`, `smallest(o)`,
   `prefix_total(o)`, are a claim `at end`'s.
   `budget_left(step)` plans an iteration and is not read in that step's own
@@ -740,6 +744,27 @@ the served decode back is `exclusive prefill`'s admission rule. That rule
 is why `only` does not combine with `exclusive prefill`: which of the two a
 predicate would exclude would be a third rule.
 [Serving a subset](design/serve-only.md) states the case and the numbers.
+
+**The iteration as a program.** Everything above is one procedure, vLLM's
+`schedule()`: serve the residents, then, unless the iteration preempted,
+admit the waiting with the budget left. `iteration { … }` on a step stage
+writes the iteration instead (#355), from three statements run once each in
+order: `serve [only (p)] [order]` gives the residents not yet served their
+tokens, skipping and leaving unserved those `p` excludes; `admit [while
+(e)]` admits the heads of the queues the stage serves one at a time, each
+served at once, while budget is left, the head fits and `e` is 1; and
+`branch (e) { … } else { … }`. A guard and a `while` read the residents'
+totals, what the iteration has scheduled so far (`tokens`, `prefilled`),
+`admitted` and `preempted`. The procedure above is the body `serve; admit
+while (!preempted);`, and every example runs the same written either way
+(`tests/iteration_body.rs`). SGLang's default, prefills alone in one batch
+and a decode batch only when none forms, is `serve only (!decoding); admit;
+branch (tokens == 0) { serve; }`, which `exclusive prefill` (one prefill)
+and `serve only` (decided before the admission) cannot say. A body does not
+combine with `exclusive prefill` or `only`, which would answer the same
+question twice; a body with a path that neither serves nor admits, or a
+guard that reads `now`, does not link (an engine that schedules nothing
+waits for an event, and the clock moving is none).
 
 **`at admission`.** Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the

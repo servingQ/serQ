@@ -20,9 +20,9 @@ use crate::engine::stats::*;
 
 use crate::frontend::ast::{BinOp, RunMode, UnOp};
 use crate::frontend::link::*;
-use crate::ir::ClaimKind;
 use crate::ir::Preempt;
 use crate::ir::trace::Corpus;
+use crate::ir::{CIter, ClaimKind};
 
 /// The tolerance of a comparison of amounts that sums of floats produce
 /// (units, tokens, work): below it, two amounts are equal.
@@ -455,6 +455,37 @@ enum Which {
     Evict,
 }
 
+/// An iteration being planned by a step stage's body: what it has served
+/// and scheduled so far, and the budget left.
+struct Plan<'p> {
+    st: usize,
+    spec: &'p CStep,
+    chunk: f64,
+    left: f64,
+    served: BTreeSet<u64>,
+    assign: Vec<(u64, f64)>,
+    attn_by: Vec<(u64, f64)>,
+    admitted: f64,
+}
+
+/// `exclusive prefill`'s rule, as `give` applies it; off in a body.
+#[derive(Clone, Copy)]
+struct Alone {
+    exclusive: bool,
+    resident_prefill: bool,
+    budget: f64,
+}
+
+/// What giving a resident its tokens came to.
+enum Give {
+    /// No tokens: none wanted, none left, or a stalled grower.
+    Skipped,
+    /// Its tokens, in this mode.
+    Gave(RunMode),
+    /// It preempted itself, or the run failed: serving stops here.
+    Stopped,
+}
+
 #[derive(Clone, Default)]
 struct Ctx {
     sid: Option<usize>,
@@ -476,6 +507,8 @@ struct Ctx {
     admission: f64,
     remaining: f64,
     position: f64,
+    admitted: f64,
+    preempted: f64,
     demand: f64,
     served: f64,
     arrived: f64,
@@ -2915,117 +2948,72 @@ impl<'p> Interp<'p> {
         // each served prefill's attention work, summed over those still in
         // the batch when the iteration is costed
         let mut attn_by: Vec<(u64, f64)> = vec![];
-        loop {
-            let residents = self.serving_order(st, spec);
-            let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
-                // the running requests are served; admit waiting ones with
-                // the budget left, unless this iteration preempted
-                // (scheduler.py:869, `if not preempted_reqs`)
-                let preempted = self.preempted;
-                // A local prefill admitted after tentative decodes replaces
-                // them and uses the whole budget (RBLN guard D). Its hold
-                // must therefore see that budget, not the decode remainder.
-                let admit_left = if exclusive { budget } else { left };
-                if left > 0.0 && !preempted && self.admit_bound(st, admit_left) {
-                    continue;
-                }
-                break;
+        if let Some(body) = &spec.iteration {
+            let mut plan = Plan {
+                st,
+                spec,
+                chunk,
+                left: budget,
+                served: BTreeSet::new(),
+                assign: vec![],
+                attn_by: vec![],
+                admitted: 0.0,
             };
-            served.insert(id);
-            if let Some(only) = &spec.only {
-                if !self.serves(st, id, only, spec.memory) {
-                    continue;
-                }
+            self.run_body(&mut plan, body);
+            if self.error.is_some() {
+                return;
             }
-            let (mode, remaining, growing, owner) = {
-                let j = &self.stages[st].jobs[&id];
-                (j.mode, j.work, j.growing, j.owner)
-            };
-            let want = match mode {
-                RunMode::Decode => 1.0f64.min(remaining),
-                RunMode::Prefill => {
-                    if chunk > 0.0 {
-                        remaining.min(chunk)
-                    } else {
-                        remaining
-                    }
-                }
-                RunMode::Plain => unreachable!(),
-            };
-            let blocked = exclusive && resident_prefill && mode == RunMode::Decode;
-            let available = if exclusive && mode == RunMode::Prefill {
-                budget
-            } else {
-                left
-            };
-            let tokens = if blocked { 0.0 } else { want.min(available) };
-            if tokens <= 0.0 {
-                continue;
-            }
-            // growth before the tokens are committed: the hold must cover
-            // the sequence position after this iteration (vLLM
-            // `allocate_slots`), block by block
-            if let (Some(pl), Some(sid)) = (growing, owner) {
-                if matches!(self.sessions[sid].status, Status::Growing(..)) {
-                    // stalled from an earlier iteration: no tokens
-                    continue;
-                }
-                let (alloc, pos) = self.hold_alloc_pos(sid, pl);
-                if self.error.is_some() {
-                    return;
-                }
-                let need = pos + tokens - alloc;
-                let grew = need <= EPS || self.grow(sid, pl, need);
-                // The growth may have preempted a resident this iteration has
-                // already served: under `serve by` the latest admitted, the
-                // victim, need not be the last served. It leaves the batch
-                // and its tokens return to the budget (vLLM's PRIORITY path,
-                // scheduler.py:779-797, which keeps the victim apart from the
-                // visiting order as serQ does).
-                let jobs = &self.stages[st].jobs;
-                assign.retain(|&(j, t)| {
-                    let keep = jobs.contains_key(&j);
-                    if !keep {
-                        left += t;
-                    }
-                    keep
-                });
-                if !grew {
-                    // waiting (none): stalls as a resident, no tokens, and the
-                    // next resident is served
-                    if matches!(self.sessions[sid].status, Status::Growing(..)) {
+            assign = plan.assign;
+            attn_by = plan.attn_by;
+        } else {
+            loop {
+                let residents = self.serving_order(st, spec);
+                let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
+                    // the running requests are served; admit waiting ones with
+                    // the budget left, unless this iteration preempted
+                    // (scheduler.py:869, `if not preempted_reqs`)
+                    let preempted = self.preempted;
+                    // A local prefill admitted after tentative decodes replaces
+                    // them and uses the whole budget (RBLN guard D). Its hold
+                    // must therefore see that budget, not the decode remainder.
+                    let admit_left = if exclusive { budget } else { left };
+                    if left > 0.0 && !preempted && self.admit_bound(st, admit_left) {
                         continue;
                     }
+                    break;
+                };
+                served.insert(id);
+                if let Some(only) = &spec.only {
+                    if !self.serves(st, id, only, spec.memory) {
+                        continue;
+                    }
+                }
+                let rule = Alone {
+                    exclusive,
+                    resident_prefill,
+                    budget,
+                };
+                match self.give(st, id, chunk, rule, &mut left, &mut assign, &mut attn_by) {
+                    Give::Skipped => continue,
                     // preempted itself (lifo): vLLM stops serving the running
                     // requests for this step (scheduler.py:807-813, `break`).
                     // In admission order the grower is then the last resident
                     // anyway; under `serve by` it need not be.
-                    break;
+                    Give::Stopped => {
+                        if self.error.is_some() {
+                            return;
+                        }
+                        break;
+                    }
+                    Give::Gave(mode) => {
+                        if left <= 0.0 || (exclusive && mode == RunMode::Prefill) {
+                            // A selected prefill is a lone batch. In particular do
+                            // not admit another waiting request with its leftover
+                            // budget.
+                            break;
+                        }
+                    }
                 }
-                if mode == RunMode::Prefill {
-                    attn_by.push((id, tokens * (pos + tokens / 2.0)));
-                }
-                // The computed position advances when the iteration is
-                // settled, below, for the residents still in it: a resident
-                // preempted later in this iteration keeps the position it had
-                // (vLLM advances `num_computed_tokens` after `schedule`,
-                // `_update_after_schedule`, scheduler.py:1584-1597), and exclusive-prefill
-                // decodes are candidates until waiting admission has finished.
-            } else if mode == RunMode::Prefill {
-                attn_by.push((id, tokens * tokens / 2.0));
-            }
-            if exclusive && mode == RunMode::Prefill {
-                // Keep any allocation made for displaced decodes, as RBLN
-                // keeps pending runner block deltas; cancel only their work.
-                assign.clear();
-                left = budget;
-            }
-            assign.push((id, tokens));
-            left -= tokens;
-            if left <= 0.0 || (exclusive && mode == RunMode::Prefill) {
-                // A selected prefill is a lone batch. In particular do not
-                // admit another waiting request with its leftover budget.
-                break;
             }
         }
         // Growth can preempt an earlier candidate. Only surviving, selected
@@ -3152,6 +3140,241 @@ impl<'p> Interp<'p> {
         );
     }
 
+    /// Give resident `id` its tokens in the iteration being planned: one for
+    /// a decode, up to `chunk` for a prefill, no more than is `left`; a
+    /// `growing` job first grows its hold to the position it will reach,
+    /// which may preempt. `rule` is `exclusive prefill`'s, under which a
+    /// prefill takes the whole budget and the decodes it displaces give
+    /// theirs back.
+    #[allow(clippy::too_many_arguments)]
+    fn give(
+        &mut self,
+        st: usize,
+        id: u64,
+        chunk: f64,
+        rule: Alone,
+        left: &mut f64,
+        assign: &mut Vec<(u64, f64)>,
+        attn_by: &mut Vec<(u64, f64)>,
+    ) -> Give {
+        let (mode, remaining, growing, owner) = {
+            let j = &self.stages[st].jobs[&id];
+            (j.mode, j.work, j.growing, j.owner)
+        };
+        let want = match mode {
+            RunMode::Decode => 1.0f64.min(remaining),
+            RunMode::Prefill => {
+                if chunk > 0.0 {
+                    remaining.min(chunk)
+                } else {
+                    remaining
+                }
+            }
+            RunMode::Plain => unreachable!(),
+        };
+        let blocked = rule.exclusive && rule.resident_prefill && mode == RunMode::Decode;
+        let available = if rule.exclusive && mode == RunMode::Prefill {
+            rule.budget
+        } else {
+            *left
+        };
+        let tokens = if blocked { 0.0 } else { want.min(available) };
+        if tokens <= 0.0 {
+            return Give::Skipped;
+        }
+        // growth before the tokens are committed: the hold must cover
+        // the sequence position after this iteration (vLLM
+        // `allocate_slots`), block by block
+        if let (Some(pl), Some(sid)) = (growing, owner) {
+            if matches!(self.sessions[sid].status, Status::Growing(..)) {
+                // stalled from an earlier iteration: no tokens
+                return Give::Skipped;
+            }
+            let (alloc, pos) = self.hold_alloc_pos(sid, pl);
+            if self.error.is_some() {
+                return Give::Stopped;
+            }
+            let need = pos + tokens - alloc;
+            let grew = need <= EPS || self.grow(sid, pl, need);
+            // The growth may have preempted a resident this iteration has
+            // already served: under `serve by` the latest admitted, the
+            // victim, need not be the last served. It leaves the batch
+            // and its tokens return to the budget (vLLM's PRIORITY path,
+            // scheduler.py:779-797, which keeps the victim apart from the
+            // visiting order as serQ does).
+            let jobs = &self.stages[st].jobs;
+            assign.retain(|&(j, t)| {
+                let keep = jobs.contains_key(&j);
+                if !keep {
+                    *left += t;
+                }
+                keep
+            });
+            if !grew {
+                // waiting (none): stalls as a resident, no tokens, and the
+                // next resident is served
+                if matches!(self.sessions[sid].status, Status::Growing(..)) {
+                    return Give::Skipped;
+                }
+                // preempted itself
+                return Give::Stopped;
+            }
+            if mode == RunMode::Prefill {
+                attn_by.push((id, tokens * (pos + tokens / 2.0)));
+            }
+            // The computed position advances when the iteration is
+            // settled, below, for the residents still in it: a resident
+            // preempted later in this iteration keeps the position it had
+            // (vLLM advances `num_computed_tokens` after `schedule`,
+            // `_update_after_schedule`, scheduler.py:1584-1597), and exclusive-prefill
+            // decodes are candidates until waiting admission has finished.
+        } else if mode == RunMode::Prefill {
+            attn_by.push((id, tokens * tokens / 2.0));
+        }
+        if rule.exclusive && mode == RunMode::Prefill {
+            // Keep any allocation made for displaced decodes, as RBLN
+            // keeps pending runner block deltas; cancel only their work.
+            assign.clear();
+            *left = rule.budget;
+        }
+        assign.push((id, tokens));
+        *left -= tokens;
+        Give::Gave(mode)
+    }
+
+    /// Run a step stage's iteration body (`iteration { … }`) on the
+    /// iteration being planned. Each statement runs once where it is
+    /// written; a resident is served at most once in the iteration.
+    fn run_body(&mut self, plan: &mut Plan<'p>, body: &'p [CIter]) {
+        let none = Alone {
+            exclusive: false,
+            resident_prefill: false,
+            budget: 0.0,
+        };
+        for s in body {
+            if self.error.is_some() {
+                return;
+            }
+            match s {
+                CIter::Serve { only, by } => {
+                    let keys = match by {
+                        Some(keys) => keys.as_slice(),
+                        None => match &plan.spec.serve {
+                            CServe::By(keys) => keys.as_slice(),
+                            CServe::ExclusivePrefill => unreachable!("refused with a body"),
+                        },
+                    };
+                    // the residents `only` reads as 0 here: unserved, a
+                    // later `serve` may take them
+                    let mut skipped: BTreeSet<u64> = BTreeSet::new();
+                    while plan.left > 0.0 {
+                        let order = self.order_by(plan.st, keys, plan.spec.memory);
+                        let Some(id) = order
+                            .into_iter()
+                            .find(|j| !plan.served.contains(j) && !skipped.contains(j))
+                        else {
+                            break;
+                        };
+                        if let Some(p) = only
+                            && !self.serves(plan.st, id, p, plan.spec.memory)
+                        {
+                            skipped.insert(id);
+                            continue;
+                        }
+                        plan.served.insert(id);
+                        let given = self.give(
+                            plan.st,
+                            id,
+                            plan.chunk,
+                            none,
+                            &mut plan.left,
+                            &mut plan.assign,
+                            &mut plan.attn_by,
+                        );
+                        if matches!(given, Give::Stopped) {
+                            break;
+                        }
+                    }
+                }
+                CIter::Admit { gate } => {
+                    'admit: while plan.left > 0.0 {
+                        if let Some(g) = gate
+                            && !self.test(g, plan, "an `admit`'s `while`")
+                        {
+                            break;
+                        }
+                        let before: BTreeSet<u64> = self.residents(plan.st).into_iter().collect();
+                        if !self.admit_bound(plan.st, plan.left) {
+                            break;
+                        }
+                        plan.admitted += 1.0;
+                        // the newcomer, in the stage's order: what it brought
+                        // to the engine, served now with the budget left
+                        let newcomers: Vec<u64> = self
+                            .serving_order(plan.st, plan.spec)
+                            .into_iter()
+                            .filter(|j| !before.contains(j) && !plan.served.contains(j))
+                            .collect();
+                        for id in newcomers {
+                            if plan.left <= 0.0 {
+                                break 'admit;
+                            }
+                            plan.served.insert(id);
+                            let given = self.give(
+                                plan.st,
+                                id,
+                                plan.chunk,
+                                none,
+                                &mut plan.left,
+                                &mut plan.assign,
+                                &mut plan.attn_by,
+                            );
+                            if matches!(given, Give::Stopped) {
+                                break 'admit;
+                            }
+                        }
+                    }
+                }
+                CIter::Branch(g, a, b) => {
+                    let taken = if self.test(g, plan, "a `branch` in an iteration") {
+                        a
+                    } else {
+                        b
+                    };
+                    self.run_body(plan, taken);
+                }
+            }
+        }
+    }
+
+    /// A guard of an iteration body, read on the residents as they stand
+    /// and what the iteration has done so far (`Moment::Plan`): 1 or 0, and
+    /// anything else fails the run, as a session's `branch` does.
+    fn test(&mut self, e: &CExpr, plan: &Plan, what: &str) -> bool {
+        let mut ctx = self.resident_totals(plan.st, plan.spec.memory);
+        ctx.ntok = plan.assign.iter().map(|a| a.1).sum();
+        ctx.npre = plan
+            .assign
+            .iter()
+            .filter(|(j, _)| self.stages[plan.st].jobs[j].mode == RunMode::Prefill)
+            .map(|a| a.1)
+            .sum();
+        ctx.admitted = plan.admitted;
+        ctx.preempted = if self.preempted { 1.0 } else { 0.0 };
+        let v = self.eval(e, &ctx, Which::Session);
+        if v == 1.0 {
+            true
+        } else {
+            if v != 0.0 && self.error.is_none() {
+                self.error = Some(format!(
+                    "stage `{}`: {what} read {v}; a test is 1 or 0",
+                    self.p.stages[plan.st].name
+                ));
+            }
+            false
+        }
+    }
+
     /// Read the claims over the iterations of stage `st` as an iteration
     /// starts, with the cost's context `ctx`, `demand` (what the residents
     /// could take in it, `chunk` capping a prefill's), `served` and `arrived`.
@@ -3254,14 +3477,19 @@ impl<'p> Interp<'p> {
     /// list; no keys is that list). `ExclusivePrefill` keeps admission order
     /// and stalls the decodes in the loop instead.
     fn serving_order(&mut self, st: usize, spec: &CStep) -> Vec<u64> {
+        match &spec.serve {
+            CServe::By(keys) => self.order_by(st, keys, spec.memory),
+            CServe::ExclusivePrefill => self.residents(st),
+        }
+    }
+
+    /// The residents in ascending `keys`, ties in admission order.
+    fn order_by(&mut self, st: usize, keys: &[CExpr], memory: Option<usize>) -> Vec<u64> {
         let mut r = self.residents(st);
-        let CServe::By(keys) = &spec.serve else {
-            return r;
-        };
         if keys.is_empty() {
             return r;
         }
-        let totals = self.resident_totals(st, spec.memory);
+        let totals = self.resident_totals(st, memory);
         let mut keyed: Vec<(Vec<f64>, u64)> = r
             .drain(..)
             .map(|id| {
@@ -3416,6 +3644,8 @@ impl<'p> Interp<'p> {
                 CtxVar::Admission => ctx.admission,
                 CtxVar::Remaining => ctx.remaining,
                 CtxVar::Position => ctx.position,
+                CtxVar::Admitted => ctx.admitted,
+                CtxVar::Preempted => ctx.preempted,
                 CtxVar::Demand => ctx.demand,
                 CtxVar::Served => ctx.served,
                 CtxVar::Arrived => ctx.arrived,

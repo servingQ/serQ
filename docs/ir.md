@@ -68,7 +68,7 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 | `attrs` | attribute names; an attribute is referenced by its index (slot) |
 | `observes` | observation names, by index |
 | `pools` | `CPool`: `name`, `index` (the member's index in an array declared `pool kv[N]`, a one-member array's too, and a queue family's, `queue D[1]` included; omitted for a single pool; a report label the run does not read), `cap` (units), `block` (allocation granularity), `evict` (`Lru` or `By([key exprs])`), `preempt` (`None`, or `By {keys, tail}`: the victim the candidate with the least keys, read at `Victim`, re-queued at the head or, with `tail`, at the back; `preempt lifo` is `By {keys: [-admission]}`), `queue` (`null` for FIFO, otherwise a nonempty list of pure selection keys), `spill`, `admit_via` (stage whose scheduler admits waiting holders) |
-| `stages` | `CStage`: `name`, `index` (as for `CPool`, `stage E[N]`), `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `only` (absent, or a `Serve`-moment predicate that may not draw or read `Now` or `work`: the residents it reads as 0 are not served that iteration, and `serve` orders the rest; not with `ExclusivePrefill`), `memory` (pool index) |
+| `stages` | `CStage`: `name`, `index` (as for `CPool`, `stage E[N]`), `kind`: `Fifo(servers)`, `Ps(capacity expr)`, `Delay`, `Step(CStep)` with `budget`, `cost`, `chunk`, `serve` (how the iteration serves its residents, said once: an order, `By([key exprs])` (keys at the `Serve` moment, ties in admission order; no keys is admission order, `serve admission`; `decode first` is `By([decoding ? 0 : 1])`; a key may not draw), or the rule `ExclusivePrefill`, which is not an order and so cannot be combined with one), `only` (absent, or a `Serve`-moment predicate that may not draw or read `Now` or `work`: the residents it reads as 0 are not served that iteration, and `serve` orders the rest; not with `ExclusivePrefill`), `memory` (pool index), `iteration` (absent for vLLM's procedure, or a body of `CIter`: `Serve {only?, by?}` (read at `Serve`; `by` absent is the stage's order), `Admit {gate?}` (`gate` read at `Plan` before each admission), `Branch(guard, then, else)` (guard at `Plan`, 1 or 0); not with `ExclusivePrefill` or `only`; every path reaches a `Serve` or an `Admit`) |
 | `arrival` | `Poisson(rate)`, `Renewal(gap expression)`, `Closed(n)`, `Batch(n)`, `Sessions([{attrs: [[slot, value], …]}])`, `None` |
 | `trace`, `trace_ordered` | a trace corpus the workload draws turns from (path, resolved against the program's directory unless overridden) |
 | `init`, `turn`, `session` | block indices: the workload's `init` and `turn` blocks and the session program |
@@ -370,6 +370,15 @@ refuses a `Loop` that can pass without letting time pass, and the run time
 refuses an instant that does not settle and an iteration with tokens at
 cost 0 (`docs/language.md` §3, Every instant settles).
 
+11 also carries `CStep.iteration` (#355, `iteration { … }`), the
+iteration as a body of `CIter`, with the moment `Plan` and the context
+variables `admitted` and `preempted`. Absent, it serialises as before and
+runs vLLM's procedure, which is the body `[Serve {}, Admit {gate:
+!preempted}]` (every example runs the same both ways); present, it changes
+what the iteration serves and admits, so an older reader that ignored it
+would print another schedule, and on a tagged version it would have
+opened a number. The Lean generators raise `Fragment` on a stage with a
+body; no oracle program has one.
 11 also carries `CStep.only` (#261, `serve only (p)`), added while 11 is
 untagged: a program without it serialises as before and runs as before, and
 one with it changes what the iteration serves, so on a tagged version it
