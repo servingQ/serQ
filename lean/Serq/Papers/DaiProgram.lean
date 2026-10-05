@@ -34,11 +34,11 @@ theorem backlog_σ (m : Exec.Machine) : backlog m = DaiChain.backlog (DaiSim.σ 
   simp [backlog, Slot.backlog, DaiChain.backlog, DaiSim.σ, Function.comp_def]
 
 /-- Every reached machine's job list is one the list chain can hold. -/
-theorem good_σ {K : ℕ} (hK : K ≤ 10000) : ∀ {m : Exec.Machine}, Reach K m → DaiRecurrent.Good (DaiSim.σ m)
+theorem good_σ {K : ℕ} : ∀ {m : Exec.Machine}, Reach K m → DaiRecurrent.Good (DaiSim.σ m)
   | _, .empty => by rw [DaiSim.σ_empty]; intro j hj; simp at hj
   | _, .slot k hk h => by
-    rw [DaiSim.simulation hK ⟨_, h⟩ k hk]
-    exact DaiRecurrent.good_absSlot k (good_σ hK h)
+    rw [DaiSim.simulation ⟨_, h⟩ k hk]
+    exact DaiRecurrent.good_absSlot k (good_σ h)
 
 section Chain
 
@@ -70,7 +70,7 @@ theorem backlog_next_le (x : State K) (k : ℕ) :
   · rename_i hk
     have h1 : backlog (nxt x k hk).1 ≤ backlog x.1 + 1280 * K := by
       show backlog (slot k x.1) ≤ _
-      rw [backlog_σ, backlog_σ, DaiSim.simulation A.small x k hk]
+      rw [backlog_σ, backlog_σ, DaiSim.simulation x k hk]
       by_cases h0 : DaiSim.σ x.1 = []
       · rw [h0, DaiRecurrent.backlog_absSlot_nil]
         simp [DaiChain.backlog]; omega
@@ -84,8 +84,8 @@ theorem applyN_le : ∀ (n : ℕ) (x : State K),
   | 0, x => by simp [Kernel.applyN]
   | n + 1, x => by
     simp only [Kernel.applyN]
-    have h1 := (kernel A).apply_mono (applyN_le n) x
-    rw [Kernel.apply_add, Kernel.apply_const] at h1
+    have h1 := (kernel A).apply_mono (Kernel.integrable_ofOutcomes _ _ _ _ _ _) (Kernel.integrable_ofOutcomes _ _ _ _ _ _) (applyN_le n) x
+    rw [(kernel A).apply_add (Kernel.integrable_ofOutcomes _ _ _ _ _ _) (Kernel.integrable_ofOutcomes _ _ _ _ _ _), Kernel.apply_const] at h1
     have h2 : (kernel A).apply (fun y => (backlog y.1 : ℝ)) x ≤ backlog x.1 + 1280 * K := by
       rw [apply_kernel]
       calc ∑ k ∈ Finset.range (K + 1), A.p k * (backlog (if hk : k ≤ K then nxt x k hk else x).1 : ℝ)
@@ -101,7 +101,7 @@ theorem drain (hA : 1280 * A.mean < 128) : ∀ (n : ℕ) (x : State K), backlog 
   | 0, x, hb => by
     have hx : Idle x := by
       by_contra h
-      have := DaiRecurrent.backlog_pos (good_σ A.small x.2) h
+      have := DaiRecurrent.backlog_pos (good_σ x.2) h
       rw [backlog_σ] at hb; omega
     rw [reach_of_mem (kernel A) Idle hx]; simp
   | n + 1, x, hb => by
@@ -110,9 +110,9 @@ theorem drain (hA : 1280 * A.mean < 128) : ∀ (n : ℕ) (x : State K), backlog 
       exact pow_le_one₀ (A.nonneg 0) (DaiRecurrent.p0_le_one A)
     · have hb' : backlog (nxt x 0 (Nat.zero_le K)).1 ≤ n := by
         show backlog (slot 0 x.1) ≤ n
-        rw [backlog_σ, DaiSim.simulation A.small x 0 (Nat.zero_le K)]
+        rw [backlog_σ, DaiSim.simulation x 0 (Nat.zero_le K)]
         have h1 := DaiRecurrent.backlog_absSlot 0 hx
-        have h2 := DaiRecurrent.one_le_shares (good_σ A.small x.2) hx
+        have h2 := DaiRecurrent.one_le_shares (good_σ x.2) hx
         rw [backlog_σ] at hb
         omega
       have ih := drain hA n _ hb'
@@ -132,19 +132,19 @@ instance : DecidablePred (G (K := K)) := fun x => by unfold G; infer_instance
 theorem driftG (hA : 1280 * A.mean < 128) :
     Drift (kernel A) G (fun x => (backlog x.1 : ℝ)) (ε A) :=
   let hD := DaiStable.drift A hA
-  ⟨hD.nonneg, hD.pos, fun x hx => hD.drift x (fun h => hx (Or.inl h))⟩
+  ⟨hD.nonneg, hD.integrable, hD.pos, fun x hx => hD.drift x (fun h => hx (Or.inl h))⟩
 
 include A in
 theorem backlog_le_of_G {x : State K} (hx : G x) : backlog x.1 ≤ 128 * 1280 := by
   rcases hx with h | h
-  · exact (backlog_lt_of_F A.small x h).le
+  · exact (backlog_lt_of_F x h).le
   · rw [backlog_σ, show DaiSim.σ x.1 = [] from h]; simp [DaiChain.backlog]
 
 /-- The truncated hitting times of `Idle`, bounded. -/
 theorem hit_bound (hA : 1280 * A.mean < 128) : ∀ n x,
     hit (kernel A) Idle n x ≤ (backlog x.1 : ℝ) / ε A +
       ((128 * 1280 : ℕ) + (128 * 1280 + 1280 * K * (128 * 1280 : ℕ)) / ε A) / A.p 0 ^ (128 * 1280) :=
-  hit_le_of_reach (kernel A) Idle (driftG A hA) (fun _ h => Or.inr h)
+  hit_le_of_reach (kernel A) Idle (fun _ => Kernel.integrable_ofOutcomes _ _ _ _ _ _) (driftG A hA) (fun _ h => Or.inr h)
     (pow_pos (DaiRecurrent.p0_pos A hA) _)
     (fun x hx => drain A hA _ x (backlog_le_of_G A hx))
     (fun x hx => by
@@ -170,8 +170,8 @@ theorem return_idle {K : ℕ} (A : Arrivals K) (hA : 1280 * A.mean < 128) :
   have h1 : ∀ y, hit (kernel A) Idle n y ≤ (1 / ε A) * (backlog y.1 : ℝ) + M := fun y => by
     have := hit_bound A hA n y
     rw [one_div, ← div_eq_inv_mul]; exact this
-  have h2 := (kernel A).apply_mono h1 x
-  rw [Kernel.apply_add, Kernel.apply_const, Kernel.apply_const_mul] at h2
+  have h2 := (kernel A).apply_mono (Kernel.integrable_ofOutcomes _ _ _ _ _ _) (Kernel.integrable_ofOutcomes _ _ _ _ _ _) h1 x
+  rw [(kernel A).apply_add (Kernel.integrable_ofOutcomes _ _ _ _ _ _) (Kernel.integrable_ofOutcomes _ _ _ _ _ _), Kernel.apply_const, Kernel.apply_const_mul] at h2
   have h3 := applyN_le A 1 x
   simp only [Kernel.applyN] at h3
   have h0 : (backlog x.1 : ℝ) = 0 := by

@@ -290,10 +290,10 @@ theorem rad_settle (m : Machine) (hI : Inv Pr m) (h : R m) : R (settle Dr m) := 
     intro m hI h
     unfold settleLoop
     simp only [admitAll_rad]
-    have h1 := rad_drain 10000 m hI h
+    have h1 := rad_drain (drainFuel m) m hI h
     split
     · exact h1
-    · exact ih _ (inv_drain Dr 10000 m hI) h1
+    · exact ih _ (inv_drain Dr _ m hI) h1
 
 theorem R.upd_free {m : Machine} (h : R m) (i : ℕ) (s : Sess) (hj : ∀ j ∈ m.jobs, j.owner ≠ i)
     (he : m.iter = []) (ha : 128 ∣ s.attr.get 10) (hk : s.stack = []) : R (setS m i s) := by

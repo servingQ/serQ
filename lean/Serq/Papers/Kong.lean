@@ -1474,7 +1474,7 @@ theorem sinv_settleLoop {w : Workload} (hF : Fam w) :
   | f + 1, g, m, hI, hx, hmu, hnu => by
     unfold settleLoop
     simp only
-    obtain ⟨g1, hI1, hr1, hx1, hwt1, hun1⟩ := sinv_drain hF 10000 g m hI hx hmu
+    obtain ⟨g1, hI1, hr1, hx1, hwt1, hun1⟩ := sinv_drain hF (drainFuel m) g m hI hx (by unfold drainFuel; omega)
     have hno1 : ∀ j < w.init.length, g1.c j ≠ .s0 := fun j hj hc =>
       by have := (hI1.readyMem j).mpr ⟨hj, Or.inl hc⟩; rw [hr1] at this; simp at this
     rw [admitAll_k]
@@ -1497,7 +1497,7 @@ theorem sinv_settleLoop {w : Workload} (hF : Fam w) :
         rw [hL, hr1] at this; simpa using this
     split
     · rename_i hemp
-      have hrd : (admitHeads Dk 0 1000 (drain Dk 10000 m)).ready = [] := by simpa using hemp
+      have hrd : (admitHeads Dk 0 1000 (drain Dk (drainFuel m) m)).ready = [] := by simpa using hemp
       refine ⟨g2, hI2, hrd, hblk (queue_short hI1 hF), fun j hj => ?_, fun j hj h => hun1 j hj (hun2 j hj h)⟩
       have hLe : L = [] := by rw [hr1] at hL; simpa [hrd] using hL.symm
       obtain ⟨h1, h2, h3⟩ := hcat j hj
@@ -1506,12 +1506,12 @@ theorem sinv_settleLoop {w : Workload} (hF : Fam w) :
       have hLne : L ≠ [] := by
         intro hLe; rw [hLe, hr1] at hL; simp [hL] at hne
       obtain ⟨j, hjL⟩ := List.exists_mem_of_ne_nil L hLne
-      have hj2 : j ∈ (admitHeads Dk 0 1000 (drain Dk 10000 m)).ready := by rw [hL]; simp [hjL]
+      have hj2 : j ∈ (admitHeads Dk 0 1000 (drain Dk (drainFuel m) m)).ready := by rw [hL]; simp [hjL]
       obtain ⟨hjn, hjc⟩ := (hI2.readyMem j).mp hj2
       have hq : g1.c j = .q ∧ g2.c j = .r2 := by
         rcases hadm.1 j with h' | h'
         · exfalso
-          have : j ∈ (drain Dk 10000 m).ready := (hI1.readyMem j).mpr ⟨hjn, h' ▸ hjc⟩
+          have : j ∈ (drain Dk (drainFuel m) m).ready := (hI1.readyMem j).mpr ⟨hjn, h' ▸ hjc⟩
           rw [hr1] at this; simp at this
         · exact h'
       have hnu2 : nu w g2 < nu w g1 := nu_lt hun2 hjn hq.1 hq.2

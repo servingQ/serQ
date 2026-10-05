@@ -740,8 +740,8 @@ theorem settle_dinv {w : Workload} (harr : ∀ i < w.init.length, 0 < arr w i) (
     ∃ g', DInv w g' (settle Dd m) ∧ (settle Dd m).ready = [] ∧ Keeps (settle Dd m) m ∧
       Same3 w.init.length g g' ∧
       ((∀ j < w.init.length, g.c j ≠ .s0) → (settle Dd m).delays = m.delays ∧ (settle Dd m).nextDelay = m.nextDelay) := by
-  obtain ⟨g', h1, h2, h3, h4, h5⟩ := drain_dinv harr 10000 g m hI (by have := hI.ready_short; omega)
-  have hs : settle Dd m = drain Dd 10000 m := by
+  obtain ⟨g', h1, h2, h3, h4, h5⟩ := drain_dinv harr (drainFuel m) g m hI (by unfold drainFuel; omega)
+  have hs : settle Dd m = drain Dd (drainFuel m) m := by
     unfold settle
     rw [show (1000 : ℕ) = 999 + 1 from rfl, settleLoop]
     simp only [admitAll_dai, h2, List.isEmpty_nil, ↓reduceIte]

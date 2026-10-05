@@ -63,7 +63,7 @@ instance {N : ℕ} (A : BariStable.Arrivals N) : DecidableEq (AState A) :=
 def nil {N : ℕ} (A : BariStable.Arrivals N) : AState A := ⟨[], .nil⟩
 
 /-- The chain: a slot with the arrivals of outcome `o`, drawn from `A`. -/
-noncomputable def akernel {N : ℕ} (A : BariStable.Arrivals N) : Kernel (AState A) :=
+noncomputable def akernel {N : ℕ} (A : BariStable.Arrivals N) : Kernel (AState A) ℕ :=
   Kernel.ofOutcomes N A.p A.nonneg A.sum_one fun x o =>
     if h : o ≤ N ∧ 0 < A.p o then ⟨absSlot (A.arr o) x.1, .step o h.1 h.2 x.2⟩ else x
 

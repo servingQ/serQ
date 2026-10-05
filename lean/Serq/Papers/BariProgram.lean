@@ -31,7 +31,7 @@ instance : DecidablePred Idle := fun x => by unfold Idle; infer_instance
 
 /-- The state after a slot with the arrivals of outcome `o`. -/
 def nxtS {N : ℕ} (A : Arrivals N) (x : State) (o : ℕ) : State :=
-  ⟨slot (A.arr o) x.1, Reach.slot _ (A.small o) (A.fits o) x.2⟩
+  ⟨slot (A.arr o) x.1, Reach.slot _ (A.fits o) x.2⟩
 
 theorem apply_k {N : ℕ} (A : Arrivals N) (V : State → ℝ) (x : State) :
     (kernel A).apply V x = ∑ o ∈ Finset.range (N + 1), A.p o * V (nxtS A x o) :=
@@ -40,15 +40,15 @@ theorem apply_k {N : ℕ} (A : Arrivals N) (V : State → ℝ) (x : State) :
 /-- One slot on the job list. -/
 theorem σ_nxt {N : ℕ} (A : Arrivals N) (x : State) (o : ℕ) :
     BariSim.σ (nxtS A x o).1 = BariChain.absSlot (A.arr o) (BariSim.σ x.1) :=
-  BariSim.simulation x (A.arr o) (A.small o) (A.fits o)
+  BariSim.simulation x (A.arr o) (A.fits o)
 
 /-- The job list of every machine the chain reaches is one `BariChain` can hold. -/
 theorem good_σ {m : Exec.Machine} (h : Reach m) : BariRecurrent.Good (BariSim.σ m) := by
   induction h with
   | empty => rw [BariSim.σ_empty]; intro j hj; cases hj
-  | @slot m rs hl hf hm ih =>
+  | @slot m rs hf hm ih =>
     have e : BariSim.σ (slot rs m) = BariChain.absSlot rs (BariSim.σ m) :=
-      BariSim.simulation ⟨m, hm⟩ rs hl hf
+      BariSim.simulation ⟨m, hm⟩ rs hf
     rw [e]
     exact BariRecurrent.good_absSlot rs _ ih hf
 
@@ -152,7 +152,7 @@ theorem hit_le {N : ℕ} (A : Arrivals N) (hA : A.load < 128) :
     ∃ c : ℝ, ∀ n x, hit (kernel A) Idle n x ≤ backlog x.1 / ε A + c := by
   obtain ⟨o0, ho0, harr⟩ := BariRecurrent.exists_empty A hA
   have hδ : 0 < A.p o0 ^ 65536 := pow_pos ho0.2 _
-  refine ⟨_, hit_le_of_reach (kernel A) Idle (drift A hA) F_of_idle (L := 65536)
+  refine ⟨_, hit_le_of_reach (kernel A) Idle (fun _ => Kernel.integrable_ofOutcomes _ _ _ _ _ _) (drift A hA) F_of_idle (L := 65536)
     (B := 128 * 512 + 15360000 * 65536) hδ
     (fun x hx => reach_idle A ho0 harr 65536 x (le_trans (backlog_lt_of_F x hx).le (by norm_num)))
     (fun x hx => ?_)⟩

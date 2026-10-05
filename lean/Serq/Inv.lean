@@ -292,7 +292,7 @@ theorem inv_settleLoop {P : Prog} : ∀ (f : ℕ) (m : Machine), Inv P m → Inv
   | f + 1, m, h => by
     unfold settleLoop
     simp only
-    have h1 := inv_admitAll D _ (inv_drain D 10000 m h)
+    have h1 := inv_admitAll D _ (inv_drain D (drainFuel m) m h)
     split
     · exact h1
     · exact inv_settleLoop f _ h1
@@ -398,7 +398,7 @@ theorem inv_admitVia {P : Prog} (m : Machine) (left : ℕ) (h : Inv P m) : Inv P
   · exact h
   · split
     · split
-      · exact inv_drain D 10000 _ (inv_admit D _ _ _ (inv_setPool h _ _))
+      · exact inv_drain D _ _ (inv_admit D _ _ _ (inv_setPool h _ _))
       · exact h
     · exact h
 

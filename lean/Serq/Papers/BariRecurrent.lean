@@ -379,6 +379,7 @@ theorem backlog_nxt (x : AState A) (o : ℕ) (h : o ≤ N ∧ 0 < A.p o) :
 
 theorem drift_b (hA : A.load < 128) : Drift (akernel A) (FS A) (Vb A) (εb A) where
   nonneg x := Nat.cast_nonneg _
+  integrable := Kernel.integrable_ofOutcomes _ _ _ _ _ _
   pos := by unfold εb; linarith
   drift x hx := by
     have hS : sS x.1 = 128 :=
@@ -492,7 +493,7 @@ theorem reach_drain {o0 : ℕ} (ho0 : o0 ≤ N ∧ 0 < A.p o0) (harr : A.arr o0 
 /-- A slot of positive probability, then on. -/
 theorem reaches_step {x y : AState A} {o : ℕ} (hoN : o ≤ N) (hp : 0 < A.p o)
     (h : Reaches (akernel A) (nxt A x o) y) : Reaches (akernel A) x y :=
-  Reaches.step _ hp (fun f hf => term_le_apply A f hf x hoN) h
+  Reaches.step _ hp (fun f hf _ => term_le_apply A f hf x hoN) h
 
 /-- The empty engine reaches every state of the chain. -/
 theorem walk_from_nil : ∀ (js : List AJob) (h : AReach A js), Reaches (akernel A) (nil A) ⟨js, h⟩ := by
@@ -538,7 +539,7 @@ theorem hit_nil_le {N : ℕ} (A : BariStable.Arrivals N) (hA : A.load < 128) :
     ∃ W : AState A → ℝ, ∀ n x, hit (akernel A) (· = nil A) n x ≤ W x := by
   obtain ⟨o0, ho0, harr⟩ := exists_empty A hA
   have hδ : 0 < A.p o0 ^ 65536 := pow_pos ho0.2 _
-  refine ⟨_, hit_le_of_reach (akernel A) (· = nil A) (drift_b A hA)
+  refine ⟨_, hit_le_of_reach (akernel A) (· = nil A) (fun _ => Kernel.integrable_ofOutcomes _ _ _ _ _ _) (drift_b A hA)
     (fun x hx => Or.inl (by subst hx; rfl)) (L := 65536) (B := 512 * 127 + 15360000 * 65536) hδ
     (fun x hx => reach_drain A ho0 harr 65536 x (le_trans (FS_backlog A x hx) (by norm_num)))
     (fun x hx => ?_)⟩
@@ -559,7 +560,7 @@ recurrent. -/
 theorem positive_recurrent {N : ℕ} (A : BariStable.Arrivals N) (hA : A.load < 128)
     (y : AState A) : PositiveRecurrent (akernel A) y := by
   obtain ⟨W, hW⟩ := hit_nil_le A hA
-  exact positiveRecurrent_of_hit (akernel A) (nil A) W hW y (walk_from_nil A y.1 y.2)
+  exact positiveRecurrent_of_hit (akernel A) (fun _ => Kernel.integrable_ofOutcomes _ _ _ _ _ _) (nil A) W hW y (walk_from_nil A y.1 y.2)
 
 end BariRecurrent
 end Papers

@@ -38,8 +38,6 @@ structure Model where
   u : ℕ
   fits : ∀ r, Fits r → 1 ≤ r.1 ∧ u ∣ r.1 ∧ 1 ≤ r.2
   B : ℕ
-  /-- The requests an iteration finishes become a job each within its instant. -/
-  small : B ≤ 10000
 
 variable (M : Model)
 
@@ -516,17 +514,17 @@ theorem drain_ci {L : ℕ → ℕ × ℕ} : ∀ (f : ℕ) (g : Ghost) (m : Machi
       rw [hz1] at hs2
       exact ⟨g2, hI2, hr2, hk1.trans hk2, hz2.trans hz1, hs1.trans hs2⟩
 
-theorem settle_eq_drain {m : Machine} (h : (drain M.D 10000 m).ready = []) :
-    settle M.D m = drain M.D 10000 m := by
+theorem settle_eq_drain {m : Machine} (h : (drain M.D (drainFuel m) m).ready = []) :
+    settle M.D m = drain M.D (drainFuel m) m := by
   unfold settle
   rw [show (1000 : ℕ) = 999 + 1 from rfl, settleLoop]
   simp only [M.admit, h, List.isEmpty_nil, ↓reduceIte]
 
-/-- **Settling an instant** of at most 10 000 ready requests. -/
-theorem settle_ci {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hf : m.ready.length ≤ 10000) :
+/-- **Settling an instant**: every ready request runs, however many. -/
+theorem settle_ci {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) :
     ∃ g', CI M L g' (settle M.D m) ∧ (settle M.D m).ready = [] ∧ Keeps (settle M.D m) m ∧
       (settle M.D m).sess.size = m.sess.size ∧ SameR m.sess.size L g g' := by
-  obtain ⟨g', h1, h2, h3, h4, h5⟩ := drain_ci 10000 g m hI hf
+  obtain ⟨g', h1, h2, h3, h4, h5⟩ := drain_ci (drainFuel m) g m hI (by unfold drainFuel; omega)
   rw [settle_eq_drain h2]
   exact ⟨g', h1, h2, h3, h4, h5⟩
 
@@ -877,10 +875,10 @@ variable {Busy : (ℕ → ℕ × ℕ) → Ghost → Machine → Prop}
 
 /-- After an event on an idle engine: settle, then start an iteration. -/
 theorem ci_after_idle (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m)
-    (hf : m.ready.length ≤ 10000) (hie : m.iterEnd = none) :
+    (hie : m.iterEnd = none) :
     ∃ g', SB M Busy L g' (afterEvent M.D m) ∧ (afterEvent M.D m).sess.size = m.sess.size ∧
       SameR m.sess.size L g g' := by
-  obtain ⟨g', h1, h2, h3, h4, h5⟩ := settle_ci hI hf
+  obtain ⟨g', h1, h2, h3, h4, h5⟩ := settle_ci hI
   have hie' : (settle M.D m).iterEnd = none := h3.iterEnd.trans hie
   have hpend : pendingBy (settle M.D m) (settle M.D m).now = false := by
     simp [pendingBy, nextEvent, hie', h1.delays]
@@ -897,25 +895,24 @@ theorem after_busy (D : Deployment) (m : Machine) {a q : ℕ} (h : (settle D m).
 /-- **A slot**: the arrivals, then the running iteration (if any) ends and
 the next one starts. -/
 theorem slot_sb (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB : SB M Busy L g m)
-    (as : List (ℕ → ℕ)) (hl : as.length ≤ 10000) (hf : ∀ a ∈ as, M.Fits (M.len a)) :
+    (as : List (ℕ → ℕ)) (hf : ∀ a ∈ as, M.Fits (M.len a)) :
     ∃ L' g', SB M Busy L' g' (slotL M.D (Q1 M) as m) ∧ (slotL M.D (Q1 M) as m).sess.size = m.sess.size + as.length ∧
       WnC (m.sess.size + as.length) L' g' + (if m.iterEnd.isSome then tokSum m.iter else 0) =
         WnC m.sess.size L g + (as.map M.work).sum := by
   obtain ⟨L1, g1, h1, h2, h3, h4, h5⟩ := ci_injects as hB.toCI hf
   set m1 := as.foldl (fun m a => inject (Q1 M) a m) m with hm1
-  have hlen : m1.ready.length ≤ 10000 := by rw [h3, hB.rdy]; simpa using hl
   have hsl : slotL M.D (Q1 M) as m =
       if m.iterEnd.isSome then step M.D (afterEvent M.D m1) else afterEvent M.D m1 := rfl
   rcases hie : m.iterEnd with _ | ⟨a, qa⟩
   · have hie1 : m1.iterEnd = none := h4.iterEnd.trans hie
-    obtain ⟨g2, s1, s2, s3⟩ := ci_after_idle hS h1 hlen hie1
+    obtain ⟨g2, s1, s2, s3⟩ := ci_after_idle hS h1 hie1
     rw [hsl, hie]
     simp only [Option.isSome_none, Bool.false_eq_true, ↓reduceIte, Nat.add_zero]
     refine ⟨L1, g2, s1, by rw [s2, h2], ?_⟩
     rw [h2] at s3
     rw [WnC_congr s3, h5]
   · have hie1 : m1.iterEnd = some (a, qa) := h4.iterEnd.trans hie
-    obtain ⟨g2, c1, c2, c3, c4, c5⟩ := settle_ci h1 hlen
+    obtain ⟨g2, c1, c2, c3, c4, c5⟩ := settle_ci h1
     set m2 := settle M.D m1 with hm2
     have hie2 : m2.iterEnd = some (a, qa) := c3.iterEnd.trans hie1
     have hA : afterEvent M.D m1 = m2 := after_busy M.D m1 hie2
@@ -923,7 +920,7 @@ theorem slot_sb (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m : M
       unfold step
       rw [show nextEvent m2 = some (a, qa) by simp [nextEvent, hie2, c1.delays]]
     obtain ⟨e1, e2, e3, e4, e5⟩ := ci_end c1 c2 hie2
-    obtain ⟨g4, s1, s2, s3⟩ := ci_after_idle hS e1 (e3.trans M.small) e4
+    obtain ⟨g4, s1, s2, s3⟩ := ci_after_idle hS e1 e4
     rw [hsl, hie]
     simp only [Option.isSome_some, ↓reduceIte]
     rw [hA, hstep]
@@ -973,10 +970,10 @@ theorem ci_backlog {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M
 
 /-- The backlog after a slot whose running batch served `b` tokens. -/
 theorem backlog_slot (hS : Starts M Busy) {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hB : SB M Busy L g m)
-    (hbusy : m.iterEnd.isSome = true) (as : List (ℕ → ℕ)) (hl : as.length ≤ 10000)
+    (hbusy : m.iterEnd.isSome = true) (as : List (ℕ → ℕ))
     (hf : ∀ a ∈ as, M.Fits (M.len a)) :
     backlog M (slotL M.D (Q1 M) as m) + tokSum m.iter = backlog M m + (as.map M.work).sum := by
-  obtain ⟨L', g', s1, s2, s3⟩ := slot_sb hS hB as hl hf
+  obtain ⟨L', g', s1, s2, s3⟩ := slot_sb hS hB as hf
   rw [ci_backlog s1.toCI s1.rdy, ci_backlog hB.toCI hB.rdy, s2]
   rw [if_pos hbusy] at s3
   exact s3
@@ -1137,13 +1134,13 @@ theorem drain_jobs {L : ℕ → ℕ × ℕ} : ∀ (f : ℕ) (g : Ghost) (m : Mac
         have hji : j ≠ i := fun h => hir (h ▸ hj)
         simp only [contrib, hc1 j hji]
 
-/-- **Settling an instant** of at most 10 000 ready requests. -/
-theorem settle_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hA : A0 m)
-    (hf : m.ready.length ≤ 10000) :
+/-- **Settling an instant**: the ready requests' jobs join the list. -/
+theorem settle_jobs {L : ℕ → ℕ × ℕ} {g : Ghost} {m : Machine} (hI : CI M L g m) (hA : A0 m) :
     (settle M.D m).jobs = m.jobs ++ m.ready.flatMap (contrib L g) ∧ A0 (settle M.D m) := by
-  obtain ⟨g', h1, h2, -⟩ := drain_ci 10000 g m hI hf
+  have hf : m.ready.length ≤ drainFuel m := by unfold drainFuel; omega
+  obtain ⟨g', h1, h2, -⟩ := drain_ci _ g m hI hf
   rw [settle_eq_drain h2]
-  exact drain_jobs 10000 g m hI hA hf
+  exact drain_jobs _ g m hI hA hf
 
 /-- The machine after a slot's arrivals, of attributes `as`. -/
 def injL (M : Model) (as : List (ℕ → ℕ)) (m : Machine) : Machine := as.foldl (fun m a => inject (Q1 M) a m) m

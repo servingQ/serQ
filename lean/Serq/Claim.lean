@@ -297,8 +297,8 @@ theorem same_settleLoop : ∀ (f : ℕ) (m : Machine), Same m (settleLoop D f m)
   | f + 1, m => by
     unfold settleLoop
     simp only
-    have h : Same m (admitAll D (drain D 10000 m)) :=
-      (same_drain D 10000 m).trans (Same.of_key (key_admitAll D _))
+    have h : Same m (admitAll D (drain D (drainFuel m) m)) :=
+      (same_drain D _ m).trans (Same.of_key (key_admitAll D _))
     split
     · exact h
     · exact h.trans (same_settleLoop f _)
@@ -424,7 +424,7 @@ theorem admitVia_same (m : Machine) (left : ℕ) : Same m (admitVia D m left).1 
   · exact Same.refl m
   · split
     · split
-      · exact Same.key_trans (same_drain D 10000 _) (by rw [key_admit, key_setPool])
+      · exact Same.key_trans (same_drain D _ _) (by rw [key_admit, key_setPool])
       · exact Same.refl m
     · exact Same.refl m
 

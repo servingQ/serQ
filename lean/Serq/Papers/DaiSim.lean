@@ -132,10 +132,10 @@ theorem empty_inv : Inv DaiStable.empty :=
   ⟨_, _, DaiStable.empty_sb, fun j => by simp [getS, DaiStable.empty, Slot.empty, Exec.initial],
     fun h => by simp [DaiStable.empty, Slot.empty, Exec.initial] at h⟩
 
-theorem slot_inv {m : Machine} (h : Inv m) (k : ℕ) (hk : k ≤ 10000) :
+theorem slot_inv {m : Machine} (h : Inv m) (k : ℕ) :
     Inv (DaiStable.slot k m) ∧ σ (DaiStable.slot k m) = absSlot k (σ m) := by
   obtain ⟨L, g, hB, hA, hit⟩ := h
-  obtain ⟨L', g', hB', -⟩ := DaiStable.slot_sb hB k hk
+  obtain ⟨L', g', hB', -⟩ := DaiStable.slot_sb hB k
   obtain ⟨L1, g1, h1, -, -, h4, -⟩ := ci_injects (List.replicate k (fun _ => 0)) hB.toCI (fun _ _ => rfl)
   set m1 := injL Md (List.replicate k (fun _ => 0)) m with hm1
   change CI Md L1 g1 m1 at h1
@@ -144,7 +144,6 @@ theorem slot_inv {m : Machine} (h : Inv m) (k : ℕ) (hk : k ≤ 10000) :
   rw [← hm1] at i1 i2 i3 i4 i6
   simp only [List.length_replicate] at i2 i3 i6
   have hr1 : m1.ready = List.range' m.sess.size k := by rw [i2, hB.rdy, List.nil_append]
-  have hlen : m1.ready.length ≤ 10000 := by rw [hr1, List.length_range']; exact hk
   have hnew : m1.ready.flatMap (contrib L1 g1) =
       (List.range' m.sess.size k).map fun j => (⟨j, .prefill, 290, none⟩ : Job) := by
     rw [hr1]
@@ -158,8 +157,8 @@ theorem slot_inv {m : Machine} (h : Inv m) (k : ℕ) (hk : k ≤ 10000) :
   have hσnew : ((List.range' m.sess.size k).map fun j => (⟨j, .prefill, 290, none⟩ : Job)).map
       (fun j => (j.mode, j.left)) = List.replicate k (.prefill, 290) := by
     simp [List.map_map, Function.comp_def, List.map_const']
-  obtain ⟨g2, c1, c2, c3, -, -⟩ := settle_ci h1 hlen
-  obtain ⟨sj, sA⟩ := settle_jobs h1 i4 hlen
+  obtain ⟨g2, c1, c2, c3, -, -⟩ := settle_ci h1
+  obtain ⟨sj, sA⟩ := settle_jobs h1 i4
   set m2 := settle Dd m1 with hm2
   have hsl : DaiStable.slot k m =
       if m.iterEnd.isSome then step Dd (afterEvent Dd m1) else afterEvent Dd m1 := by
@@ -192,8 +191,8 @@ theorem slot_inv {m : Machine} (h : Inv m) (k : ℕ) (hk : k ≤ 10000) :
     obtain ⟨e1, e2, e3, e4, e5⟩ := ci_end c1 c2 hie2
     obtain ⟨hj, hrd, hAH⟩ := handle_facts hie2 c1.jobsNodup sA (fun j hj => (c1.jobs j hj).1)
     set H := handle m2 a qa with hH
-    obtain ⟨g4, d1, d2, d3, -, -⟩ := settle_ci e1 (e3.trans DaiStable.M.small)
-    obtain ⟨sj2, sA2⟩ := settle_jobs e1 hAH (e3.trans DaiStable.M.small)
+    obtain ⟨g4, d1, d2, d3, -, -⟩ := settle_ci e1
+    obtain ⟨sj2, sA2⟩ := settle_jobs e1 hAH
     set m3 := settle Dd H with hm3
     have hie3 : m3.iterEnd = none := d3.iterEnd.trans e4
     have hpend3 : pendingBy m3 m3.now = false := by simp [pendingBy, nextEvent, hie3, d1.delays]
@@ -268,15 +267,15 @@ theorem slot_inv {m : Machine} (h : Inv m) (k : ℕ) (hk : k ≤ 10000) :
       simp [Bool.and_comm]
 
 /-- Every state of the chain carries the invariant. -/
-theorem reach_inv {K : ℕ} (hK : K ≤ 10000) {m : Machine} (h : DaiStable.Reach K m) : Inv m := by
+theorem reach_inv {K : ℕ} {m : Machine} (h : DaiStable.Reach K m) : Inv m := by
   induction h with
   | empty => exact empty_inv
-  | slot k hk _ ih => exact (slot_inv ih k (hk.trans hK)).1
+  | slot k hk _ ih => exact (slot_inv ih k).1
 
 /-- The projection commutes with a slot. -/
-theorem simulation {K : ℕ} (hK : K ≤ 10000) (x : DaiStable.State K) (k : ℕ) (hk : k ≤ K) :
+theorem simulation {K : ℕ} (x : DaiStable.State K) (k : ℕ) (hk : k ≤ K) :
     σ (DaiStable.slot k x.1) = absSlot k (σ x.1) :=
-  (slot_inv (reach_inv hK x.2) k (hk.trans hK)).2
+  (slot_inv (reach_inv x.2) k).2
 
 end DaiSim
 end Papers

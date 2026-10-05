@@ -59,7 +59,7 @@ def nil {K : ℕ} (A : DaiStable.Arrivals K) : AState A := ⟨[], .nil⟩
 
 /-- The chain: a slot with `k` arrivals, `k` drawn from `A` (an outcome of
 probability 0 leaves the state, never taken). -/
-noncomputable def akernel {K : ℕ} (A : DaiStable.Arrivals K) : Kernel (AState A) :=
+noncomputable def akernel {K : ℕ} (A : DaiStable.Arrivals K) : Kernel (AState A) ℕ :=
   Kernel.ofOutcomes K A.p A.nonneg A.sum_one fun x k =>
     if h : k ≤ K ∧ 0 < A.p k then ⟨absSlot k x.1, .step k h.1 h.2 x.2⟩ else x
 
