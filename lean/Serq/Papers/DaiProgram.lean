@@ -31,7 +31,7 @@ instance {K : ℕ} : DecidablePred (Idle (K := K)) := fun x => by unfold Idle; i
 
 /-- The machine's backlog is its job list's. -/
 theorem backlog_σ (m : Exec.Machine) : backlog m = DaiChain.backlog (DaiSim.σ m) := by
-  simp [backlog, DaiChain.backlog, DaiSim.σ, Function.comp_def]
+  simp [backlog, Slot.backlog, DaiChain.backlog, DaiSim.σ, Function.comp_def]
 
 /-- Every reached machine's job list is one the list chain can hold. -/
 theorem good_σ {K : ℕ} (hK : K ≤ 10000) : ∀ {m : Exec.Machine}, Reach K m → DaiRecurrent.Good (DaiSim.σ m)

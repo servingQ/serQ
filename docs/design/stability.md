@@ -83,7 +83,10 @@ list of drawn (prompt, output) lengths (`Exec.slotL`; `slot` is the list of
 `k` copies). RAD is not work-conserving in Dai et al.'s sense, but its batch
 is full unless every resident decodes and fewer than 128 do (`optimal_tiling`),
 and that is all the drift needs: the same `F`, the same Lyapunov function, the
-same proof shape. Kong 3.4–3.5 also need an expectation inequality (Harris),
+same proof. The invariant of a slot's end is one (`lean/Serq/Slot.lean`),
+parameterised by where a request's lengths come from (constants, or
+attributes 10 and 11), the prompt tile (1, or 128) and what the engine's
+batch is; each paper proves only its batch (`ci_start`). Kong 3.4–3.5 also need an expectation inequality (Harris),
 and are not done.
 
 ## 4. Positive recurrence
