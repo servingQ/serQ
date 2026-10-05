@@ -2017,6 +2017,9 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
     if let Some(s) = pool.admit_via {
         parts.push(format!("admit via {}", p.stages[s].name));
     }
+    if pool.reserve_held {
+        parts.push("reserve held".into());
+    }
     parts
 }
 

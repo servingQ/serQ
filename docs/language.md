@@ -58,6 +58,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | preempt by ( expr , ... ) [requeue head | requeue tail] ;   -- the victim: least keys
           | queue fifo ; | queue by ( expr (, expr)* ) ; -- waiting selection
           | admit via STAGE ;                -- the queue is served by a step stage's scheduler
+          | reserve held ;                   -- a hold's unallocated reservation counts against later admissions
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
           | ps ( expr )                      -- throughput phi(present) shared equally; expr reads present
@@ -497,7 +498,13 @@ has room for its `reserve` units next to the allocated units (`used + r ≤ cap`
 `r = max(u, reserve)`; cached prefixes never block). `reserve` is the clause
 for "do not let me in until there is room for this", which is separate from
 how much the hold then takes; vLLM spells the same rule
-`scheduler_reserve_full_isl`; the first that does not
+`scheduler_reserve_full_isl`. On a pool marked `reserve held`, what a
+hold reserved and has not allocated stays reserved while it lasts: a later
+admission needs `used + Σ max(0, rᵢ − allocᵢ) + r ≤ cap`, and the holder
+grows into its own (TensorRT-LLM's `GUARANTEED_NO_EVICT`, which subtracts
+what every running request may still need,
+[`capacityScheduler.cpp` L265-L305](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/capacityScheduler.cpp#L265-L305));
+cached prefixes still never block. The first that does not
 fit blocks the rest (head-of-line blocking). The `cache` clause is what
 makes a hold take part in the prefix cache. With it, on admission the
 session consumes at most `ρ` units of its own cached prefix (`cached :=`

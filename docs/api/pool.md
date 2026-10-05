@@ -24,6 +24,7 @@ queues the sessions that do not yet fit. Every option is optional.
 | [`preempt`](#preempt) | `none` \| `by (expr, …) [requeue head \| tail]` \| `lifo` | `none` | what a failed `grow` does: whom it preempts, and where the victim goes back |
 | [`queue`](#queue) | `fifo` \| `by (expr)` | `fifo` | admission order |
 | [`admit via`](#admit-via) | `stage` | none | the queue is served by a step stage |
+| [`reserve held`](#reserve-held) | — | off | a hold's unallocated `reserve` counts against later admissions |
 | [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
 
 The invariant `allocated + cached ≤ cap` holds in every reachable
@@ -135,6 +136,23 @@ This admits immediate requests, then aged long requests, then short requests,
 then other long requests. `serial` orders requests within a lane in this
 single-hold workload. [Waiting selection](../design/waiting-selection.md)
 records the exact scope and regression cases.
+
+## `reserve held`
+
+```serq
+reserve held;
+```
+
+Without it a hold's `reserve` is a test at admission alone: once admitted,
+the hold counts only what it allocated. With it, what the hold reserved and
+has not allocated (`max(0, reserve − allocation)`) counts against every later
+admission on the pool while the hold lasts, and the holder grows into it: a
+later admission needs `used + Σ max(0, rᵢ − allocᵢ) + r ≤ cap`, a growth
+`used + (the others' outstanding) + d ≤ cap`. Cached prefixes are evicted
+when units are allocated, not when they are reserved. TensorRT-LLM's
+`GUARANTEED_NO_EVICT` is `hold kv (prompt) reserve (prompt + max_tokens)` with
+`growing kv` on a pool `reserve held`: it admits a request only when what
+every running one may still need is left, and never preempts.
 
 ## `admit via`
 

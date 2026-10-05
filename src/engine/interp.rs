@@ -113,6 +113,10 @@ struct Held {
     /// Advanced by `growing` runs and `load`; starts at the consumed
     /// cached prefix.
     pos: f64,
+    /// The units the admission tested (`reserve`, or the units): under the
+    /// pool's `reserve held`, what it has not allocated of them counts
+    /// against every later admission while the hold lasts.
+    reserved: f64,
 }
 
 impl Held {
@@ -1566,7 +1570,34 @@ impl<'p> Interp<'p> {
     /// Whether `units` more fit pool `pl` beside what is allocated (the
     /// cache not counted: it is evicted to make room).
     fn fits(&self, pl: usize, units: f64) -> bool {
-        self.pools[pl].used + units <= self.pools[pl].cap + EPS
+        self.fits_for(pl, units, None)
+    }
+
+    /// Whether `units` more fit pool `pl`: next to what is allocated, and
+    /// under `reserve held` next to what the holds' reservations have not
+    /// allocated yet, the one of `own` (a holder growing into its own
+    /// reservation) left out.
+    fn fits_for(&self, pl: usize, units: f64, own: Option<usize>) -> bool {
+        let held = if self.p.pools[pl].reserve_held {
+            self.outstanding(pl, own)
+        } else {
+            0.0
+        };
+        self.pools[pl].used + held + units <= self.pools[pl].cap + EPS
+    }
+
+    /// What the holds on `pl` reserved and have not allocated (`reserve
+    /// held`), but `own`'s.
+    fn outstanding(&self, pl: usize, own: Option<usize>) -> f64 {
+        self.pools[pl]
+            .holders
+            .iter()
+            .filter(|&&s| Some(s) != own)
+            .flat_map(|&s| self.sessions[s].holds.iter())
+            .flat_map(|h| h.pools.iter())
+            .filter(|e| e.pool == pl)
+            .map(|e| (e.reserved - e.alloc).max(0.0))
+            .sum()
     }
 
     fn round_up(&self, pl: usize, units: f64) -> f64 {
@@ -1832,6 +1863,9 @@ impl<'p> Interp<'p> {
                 pool: q,
                 alloc: need,
                 pos: own,
+                // what the admission tested, held against later ones under
+                // `reserve held`
+                reserved: self.round_up(q, w.need),
             });
         }
         let pl = first_pool(&pending);
@@ -1895,7 +1929,7 @@ impl<'p> Interp<'p> {
             }
         }
         debug_assert!(
-            self.fits(pl, need),
+            self.pools[pl].used + need <= self.pools[pl].cap + EPS,
             "make_room called without a passing guard"
         );
     }
@@ -2172,7 +2206,7 @@ impl<'p> Interp<'p> {
             return true;
         }
         loop {
-            if self.fits(pl, need) {
+            if self.fits_for(pl, need, Some(sid)) {
                 self.make_room(pl, need);
                 self.pools[pl].used += need;
                 self.sessions[sid].holds[hi].pools[k].alloc += need;
@@ -2293,7 +2327,7 @@ impl<'p> Interp<'p> {
                 .expect("a growing session holds the pool");
             let alloc_now = self.sessions[sid].holds[hi].pools[k].alloc;
             let need = self.round_up(pl, alloc_now + units) - alloc_now;
-            if !self.fits(pl, need) {
+            if !self.fits_for(pl, need, Some(sid)) {
                 break;
             }
             self.pools[pl].growers.pop_front();

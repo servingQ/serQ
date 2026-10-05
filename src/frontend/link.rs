@@ -491,6 +491,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 preempt: preempt.clone(),
                 queue: queue.clone(),
                 spill: spill.clone(),
+                reserve_held: p.reserve_held,
             });
         }
     }
