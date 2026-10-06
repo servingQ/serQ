@@ -257,3 +257,26 @@ branch directions, the rejected disclosure, and the allowed case where
 both arms depend on the same hidden input. Aggregate bodies are not assumed
 to execute; that conservative boundary avoids treating a zero-term
 aggregate as evidence of a read.
+
+
+## Re-review: division in guards
+
+The `alone` session wrapped in `while (floor(prompt / 0) == 0)` completed
+no requests in Rust but four in Lean. The assumption that boolean results
+without subtraction preserve arithmetic meaning was wrong: Nat division
+by zero is zero, while Rust produces infinity or NaN. This is a valid Rust
+comparison, so no linker or IR validation rule should reject the program.
+
+The translation boundary now requires every divisor in a `While` guard
+and its transitive attribute assignments to fold to a positive natural
+constant. It checks before constant folding, which could otherwise erase
+`0 * floor(prompt / 0)`. Tests retain the review's exact wrapper, a dynamic
+divisor, a two-hop alias, and the zero-product case, alongside accepted
+literal and folded positive divisors. The prefix-cache oracle is unchanged.
+This stricter translation check does not change IR meaning or its version.
+
+Rejecting only literal zero was rejected: a preset or assignment can make
+a dynamic divisor zero. Proving positivity of mutable attributes would
+require range analysis beyond this fragment; even a dynamic divisor that
+stays positive is conservatively rejected. The existing general arithmetic
+and `Branch` limitations remain outside this focused `While` check.

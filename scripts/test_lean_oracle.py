@@ -136,6 +136,44 @@ class Sessions(unittest.TestCase):
                 with self.assertRaisesRegex(generator.Fragment, "while guard depends on subtraction"):
                     generator.Lean(ir).block(ir["session"], 0)
 
+    def test_review_zero_division_guard_and_aliases_are_outside_the_fragment(self):
+        # Review regression: positive prompt / 0 is infinity in Rust, so
+        # floor(prompt / 0) == 0 is false. Nat division by 0 is 0, so Lean
+        # used to execute the original alone body and complete four requests.
+        for source in ("zero", "dynamic", "alias", "folded product"):
+            with self.subTest(source=source):
+                ir, _ = generator.load("alone")
+                body = len(ir["blocks"])
+                ir["blocks"].append(ir["blocks"][ir["session"]])
+                prompt = {"Attr": ir["attrs"].index("prompt")}
+                divisor = {"Attr": ir["slot_more"]} if source == "dynamic" else {"Num": 0}
+                operand = {"Call": ["Floor", [{"Expr": {"Binary": ["Div", prompt, divisor]}}]]}
+                stmts = []
+                if source == "alias":
+                    first, second = len(ir["attrs"]), len(ir["attrs"]) + 1
+                    ir["attrs"].extend(["quotient", "alias"])
+                    stmts = [{"Set": [first, operand]}, {"Set": [second, {"Attr": first}]}]
+                    operand = {"Attr": second}
+                elif source == "folded product":
+                    # 0 * infinity is NaN, not 0: check before constant folding.
+                    operand = {"Binary": ["Mul", {"Num": 0}, operand]}
+                guard = {"Binary": ["Eq", operand, {"Num": 0}]}
+                ir["blocks"][ir["session"]] = stmts + [{"While": [guard, body]}, "End"]
+                with self.assertRaisesRegex(generator.Fragment, "while guard depends on division"):
+                    generator.Lean(ir).block(ir["session"], 0)
+
+    def test_while_keeps_division_by_positive_natural_constants(self):
+        ir, _ = generator.load("alone")
+        body = len(ir["blocks"])
+        ir["blocks"].append(ir["blocks"][ir["session"]])
+        prompt = {"Attr": ir["attrs"].index("prompt")}
+        for divisor in [{"Num": 2}, {"Binary": ["Add", {"Num": 1}, {"Num": 1}]}]:
+            with self.subTest(divisor=divisor):
+                quotient = {"Call": ["Floor", [{"Expr": {"Binary": ["Div", prompt, divisor]}}]]}
+                ir["blocks"][ir["session"]] = [
+                    {"While": [{"Binary": ["Eq", quotient, {"Num": 0}]}, body]}, "End"]
+                self.assertIn(" / 2", generator.Lean(ir).block(ir["session"], 0))
+
     def test_more_cannot_bypass_guard_validation_through_writes_or_presets(self):
         original, _ = generator.load("cache_trace")
         slot = original["slot_more"]

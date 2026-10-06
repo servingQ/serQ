@@ -132,7 +132,7 @@ See [Workload](api/workload.md) and [A finite run](api/program.md#a-finite-run).
 ### Expressions
 
 Arithmetic, comparisons (0/1), `&&`, `||`, `!` and
-`c ? a : b` (a non-zero operand is true; only a `branch` guard is held to 0
+`c ? a : b` (a non-zero operand is true; `branch` and `while` guards are held to 0
 or 1); the draws `~exp`, `~det`, `~uniform`, `~erlang`, `~h2`,
 `~bernoulli`; functions, observables of pools and stages, and aggregates
 over an index, `max j in n (e)`, `min j in n (e)`, `sum j in n (e)`: `n` is

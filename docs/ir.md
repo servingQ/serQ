@@ -302,6 +302,10 @@ Other guards are outside the fragment, including mutable attribute guards.
 A `While` guard and the transitive assignments of attributes it reads may
 not contain subtraction. A 0/1 result alone does not ensure that a comparison
 agrees when natural subtraction truncates a negative intermediate value.
+Every division in the guard or those assignments must have a divisor that
+folds to a positive natural constant. This excludes dynamic divisors, even
+ones that stay positive: Lean division by zero returns zero, unlike Rust's
+infinity or NaN. These checks inspect expressions before constant folding.
 This preserves the prefix-cache oracle without translating an invalid guard
 into a successful Lean execution. For `Branch`, correspondence remains
 restricted to executions with valid 0/1 guards.

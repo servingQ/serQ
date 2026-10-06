@@ -141,6 +141,21 @@ def subtracts(e):
     return False
 
 
+def unsafe_division(e):
+    """A divisor without a positive constant natural value is not proven
+    safe in Nat: Rust yields infinity/NaN at zero, whereas Nat yields 0."""
+    if isinstance(e, dict):
+        if "Binary" in e and e["Binary"][0] == "Div":
+            divisor = fold(e["Binary"][2])
+            if (divisor is None or not math.isfinite(divisor)
+                    or divisor <= 0 or not float(divisor).is_integer()):
+                return True
+        return any(unsafe_division(v) for v in e.values())
+    if isinstance(e, list):
+        return any(unsafe_division(v) for v in e)
+    return False
+
+
 class Expr:
     """An IR expression as a Lean term over natural numbers: `nat` gives a
     term of type ℕ (a boolean is 1 or 0), `prop` a proposition (the
@@ -398,6 +413,9 @@ class Lean:
             if subtracts(value):
                 raise Fragment("while guard depends on subtraction: Lean naturals truncate "
                                "at 0 where Rust can go negative")
+            if unsafe_division(value):
+                raise Fragment("while guard depends on division without a positive constant "
+                               "natural divisor: Lean division by 0 differs from Rust")
             for slot in attributes(value):
                 if slot not in seen:
                     seen.add(slot)
