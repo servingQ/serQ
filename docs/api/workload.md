@@ -6,7 +6,7 @@ workload {
   trace "file.csv" [ordered];
   init block
   turn block
-  session block
+  [session block]
   hidden NAME [, NAME]*;
 }
 ```
@@ -20,7 +20,7 @@ only `set` and `observe`. Random draws in the workload use their own stream.
 | [`trace`](#trace) | Supply session turns from a CSV corpus. |
 | [`init`](#init) | Initialize a session once at arrival. |
 | [`turn`](#turn) | Set attributes whenever the session executes `turn;`. |
-| [`session`](#session) | Define the client side of a two-sided program. |
+| [`session`](#session) | Describe how completed turns lead to the next; default: one turn. |
 | [`hidden`](#hidden) | Restrict scheduler access to future attributes. |
 
 ## `arrive`
@@ -85,7 +85,8 @@ Moment `Session`.
 
 ## `session`
 
-The session's side of a [two-sided program](program.md#server). See
+Optional: describes the sequence of turns and the time between them.
+Without it, each arriving session makes one turn and finishes. See
 [Program](program.md#session).
 
 ## `hidden`
@@ -141,7 +142,6 @@ fn main() {
     session {
       loop {
         turn;
-        request;
         set rounds = rounds - 1;
         branch (rounds == 0) { end; }
       }

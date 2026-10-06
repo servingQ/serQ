@@ -68,6 +68,28 @@ class FragmentBoundaries(unittest.TestCase):
 
 
 
+class Sessions(unittest.TestCase):
+    def test_while_keeps_its_continuation(self):
+        ir, _ = generator.load("mixed")
+        ir = copy.deepcopy(ir)
+        body = len(ir["blocks"])
+        ir["blocks"].append(["Turn"])
+        ir["blocks"][ir["session"]] = [
+            {"While": [{"Num": 0}, body]},
+            {"Observe": [0, {"Num": 7}]}, "End"]
+        text = generator.Lean(ir).block(ir["session"], 0)
+        self.assertIn("while (0) {\n  turn;\n  done\n};\nobserve 0 = 7;\nstop", text)
+
+    def test_claim_empty_turns_refuse_counter_observations(self):
+        import gen_lean_claims as claims
+        ir = json.loads((Path(generator.ROOT) / "tools/claims/bari_rad.ir.json").read_text())
+        prog = claims.Program("bari_rad", ir)
+        self.assertNotIn("  turn;", prog.prog())
+        ir["blocks"][ir["session"]].append({"Observe": [0, {"Attr": ir["slot_turn"]}]})
+        with self.assertRaisesRegex(generator.Fragment, "turn_no"):
+            claims.Program("counter", ir)
+
+
 class IterationCost(unittest.TestCase):
     def test_the_step_clock_is_the_constant_one(self):
         ir, _ = generator.load("mixed")

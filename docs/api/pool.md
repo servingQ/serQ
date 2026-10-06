@@ -214,7 +214,6 @@ fn main() {
   stage svc : delay;
   workload {
     arrive batch(3);
-    session { request; end; }
   }
   server {
     set t0 = now;

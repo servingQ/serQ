@@ -19,7 +19,7 @@ const STUCK: &str = r#"
         pool kv { cap 160; block 16; evict lru; preempt lifo; }
         stage engine : step { budget 1000; chunk 0; cost 1; memory kv; }
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -68,7 +68,7 @@ fn a_program_that_does_not_load_exits_1() {
     std::fs::write(
         &file,
         common::main_source(
-        "stage svc : delay;\nworkload { session { request; end; \n} }\nserver { run nowhere (1);\n}\n\n",
+        "stage svc : delay;\nworkload { session { turn; end; \n} }\nserver { run nowhere (1);\n}\n\n",
         ),
     )
     .unwrap();
@@ -91,7 +91,7 @@ fn a_runtime_guard_error_exits_1_without_a_panic() {
         &file,
         common::main_source(
             "stage svc : delay; workload { arrive batch(1); init { set c = 5; set K = 10; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { branch (c / K) { run svc (1); }

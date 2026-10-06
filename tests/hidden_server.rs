@@ -13,7 +13,7 @@ fn program(server: &str) -> String {
         stage E : step {{ cost 1; memory kv; }}
         workload {{ arrive batch(1); hidden o;
           init {{ set prompt = 32; set o = 4; }}
-          session {{ request; end; }} }}
+          session {{ turn; end; }} }}
         server {{ {server} }}
         "
     )

@@ -85,3 +85,5 @@ here. This directory is the record of **applying** them.
 | [Braced definitions](braced-definitions.md) | One braced spelling for expression and statement definitions; unchanged expansion and IR | implemented |
 
 A new design document adds a row to this table.
+
+- [Sessions describe completed turns](session-turns.md): optional single-turn sessions, server-independent continuation, and conditional loops.

@@ -17,6 +17,16 @@ theorem getS_setS_self (m : Machine) {i : ℕ} (s : Sess) (hi : i < m.sess.size)
     getS (setS m i s) i = s := by
   simp [getS, setS, Array.getD_eq_getD_getElem?, hi]
 
+/-- An empty turn in the claim fragment only advances the program counter.
+The claim generator checks that the IR has no turn block, trace, or reads of
+`turn_no`; its workload family fixes these two fields. -/
+theorem exec_empty_turn (D : Deployment) (f : ℕ) (m : Machine) (i : ℕ) (k : Prog)
+    (hs : (getS m i).status = .ready) (hp : (getS m i).prog = .turn k)
+    (ht : m.wl.turns = []) (hc : m.wl.turnSlot = none) :
+    exec D (f + 1) m i = exec D f (setS m i { getS m i with prog := k }) i := by
+  rw [exec]
+  simp [hs, hp, ht, hc]
+
 theorem exec_observe (D : Deployment) (f : ℕ) (m : Machine) (i n : ℕ) (e : Env → ℕ) (k : Prog)
     (hs : (getS m i).status = .ready) (hp : (getS m i).prog = .observe n e k) :
     exec D (f + 1) m i = exec D f { setS m i { getS m i with prog := k } with

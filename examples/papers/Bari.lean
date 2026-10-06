@@ -87,6 +87,8 @@ theorem radOK_sub {q : Prog} (h : Sub Pr q) : RadOK q := by
   | no _ ih => exact ih.elim
   | branchK _ ih => exact ih.elim
   | loopBody _ ih => exact ih.elim
+  | whileBody _ ih => exact ih.elim
+  | whileK _ ih => exact ih.elim
 
 /-- Session `i` of an array, as `getS` reads it. -/
 def sg (ss : Array Sess) (i : ℕ) : Sess := ss.getD i ⟨i, ⟨fun _ => 0, []⟩, 0, .stop, [], .ended, 0, 0⟩
@@ -200,6 +202,7 @@ theorem rad_exec : ∀ (f : ℕ) (m : Machine) (i : ℕ), Inv Pr m → R m → R
         refine h.upd i _ hne ?_ (h.attr_get i) hstk
         simpa using hne
       · rename_i p a b k hp; rw [hp] at hrad; exact hrad.elim
+      · rename_i p b k hp; rw [hp] at hrad; exact hrad.elim
       · rename_i b hp; rw [hp] at hrad; exact hrad.elim
       · rename_i st md w g k hp
         rw [hp] at hrad

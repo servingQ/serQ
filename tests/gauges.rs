@@ -9,7 +9,7 @@ const DEPLOYMENT: &str = "
         pool kv[2] { cap 100; }
         stage svc[2] : fifo;
         workload { arrive poisson(1.5);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -128,7 +128,7 @@ fn an_aggregate_let_sizes_an_array() {
             "let N = {n};
         stage s[N] : delay;
         workload {{ arrive batch(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ run s[0] (N);
@@ -144,7 +144,7 @@ fn an_aggregate_let_sizes_an_array() {
     // counts of 4096 ran for minutes before the linker could say so
     let e = link_error(
         "let N = sum i in 64 (sum j in 64 (sum k in 64 (0))) + 1;
-        workload { session { request; end;
+        workload { session { turn; end;
         } }
         server {
         } ",
@@ -283,7 +283,7 @@ fn a_gauge_reads_the_end_of_an_instant() {
         pool kv { cap 10; }
         stage gate : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -307,7 +307,7 @@ fn a_gauge_reads_the_end_of_an_instant() {
 #[test]
 fn a_gauge_does_not_plan_an_iteration() {
     let src = "stage e : step { budget ~uniform(1, 2); cost 1; }
-        workload { session { request; end;
+        workload { session { turn; end;
         } }
         server { run e prefill (1);
         }
@@ -328,7 +328,7 @@ fn a_budget_does_not_read_budget_left() {
         let src = format!(
             "stage e : step {{ budget {budget}; chunk {chunk}; cost 1; }}
         stage f : step {{ budget 64; cost 1; }}
-        workload {{ session {{ request; end;
+        workload {{ session {{ turn; end;
         }} }}
         server {{ run e prefill (1);
         }} "
@@ -344,7 +344,7 @@ fn a_budget_does_not_read_budget_left() {
     let src = "pool kv { cap 64; }
         stage e : step { budget 8; cost 1 + 0 * budget_left(e); serve by (budget_left(e)); memory kv; }
         workload { arrive batch(2);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (min(8, budget_left(e))) { run e prefill (4); }
@@ -363,7 +363,7 @@ fn an_aggregate_in_a_queue_entry_reads_its_own_index() {
           prefill (prompt) { run (sum k in 2 (max(k, 1)) * prompt); }
         }
         queue gw : gateway { route { engine.prefill (1); } }
-        workload { arrive batch(1); session { request gw; end; } }
+        workload { arrive batch(1); session { turn; end; } } server { gw.route(); }
         ";
     let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
     assert!((r.stage("engine").unwrap().mean_service - 2.0).abs() < 1e-12);

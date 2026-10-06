@@ -34,6 +34,7 @@ import papers.KongPoisson
 #print axioms SerqLang.serialRate_sum
 #print axioms SerqLang.admit_guard_units_only
 -- executable semantics and the vLLM scheduler scenarios (Serq/Exec.lean, Serq/Oracle.lean, generated)
+#print axioms SerqLang.Exec.exec_empty_turn
 #print axioms SerqLang.Exec.makeRoom_used
 #print axioms SerqLang.Exec.makeRoom_room
 #print axioms SerqLang.Exec.evictOne_lt

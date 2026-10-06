@@ -26,7 +26,9 @@ conditions with CLI flags, Python arguments or an explicit instance file;
 `run STAGE (work);` in the model performs stage work.
 Keep workload behavior separate from serving policy: put the client's
 `session` inside `workload`, and request handling in `server` or a named gateway.
-The session calls the handler with `request;` or `request NAME;`.
+Omit `session` for one turn. A multi-turn session uses `turn;` and states how
+the next turn follows its response. Route to a gateway in the server with
+`gw.route();`.
 
 Current syntax requires `pool`, `stage`, and other deployment declarations
 inside `main`, even when their settings are fixed. Group them together before

@@ -46,8 +46,8 @@ order and selection; see the [stage reference](../api/stage.md).
 
 ## The workload and the server
 
-The `session` inside `workload` describes the conversation: a `request;`
-per turn, followed by a tool call or the end of the session. The `server`
+The `session` inside `workload` describes the conversation: each `turn;`
+waits for a response before the client decides whether to continue. The `server`
 block describes how each request is served. The deployment figure shows
 the server side.
 

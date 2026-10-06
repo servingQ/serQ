@@ -37,7 +37,7 @@ fn a_leg_runs_beside_the_session_and_join_waits_for_it() {
         r#"
         stage svc : delay;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -65,7 +65,7 @@ fn a_join_after_the_legs_end_passes() {
         r#"
         stage svc : delay;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -91,7 +91,7 @@ fn a_leg_sets_its_own_copy() {
         r#"
         stage svc : delay;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -120,7 +120,7 @@ fn a_leg_is_not_a_session() {
         r#"
         stage svc : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -147,7 +147,7 @@ fn a_legs_lease_passes_to_its_session() {
         pool kv { cap 10; }
         stage svc : delay;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -177,7 +177,7 @@ fn a_leg_shares_the_sessions_cache() {
         pool kv { cap 100; }
         stage svc : delay;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -231,7 +231,7 @@ fn the_decode_leg_holds_its_blocks_during_the_prefill() {
           }}
         }}
         P push D latency 1 share maxmin;
-        workload {{ arrive batch(1); init {{ set prompt = 10; }} session {{ request gw; end; }} }}
+        workload {{ arrive batch(1); init {{ set prompt = 10; }} session {{ turn; end; }} }} server {{ gw.route(); }}
 
     "#
         )
@@ -279,8 +279,8 @@ fn legs_that_wait_for_each_other_fail_the_run() {
         workload {
           arrive batch(2);
           init { set prompt = 8; }
-          session { run gate (serial == 0 ? 0.5 : 0); request gw; end; }
-        }
+          session { run gate (serial == 0 ? 0.5 : 0); turn; end; }
+        } server { gw.route(); }
 
     "#,
     );
@@ -302,7 +302,7 @@ fn a_refused_leg_or_session_ends_the_request() {
         pool b {{ cap 10; }}
         stage svc : delay;
         workload {{ arrive batch(1);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -340,7 +340,7 @@ fn a_session_may_not_end_before_its_legs() {
         r#"
         stage svc : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { set x = 0; fork { run svc (5); } run svc (1); branch (x) { join; }
@@ -364,7 +364,7 @@ fn a_leg_may_only_run_the_request() {
             &format!(
                 "stage svc : delay;
         workload {{ arrive batch(1); session {{
-            fork {{ run svc (1); {stmt} }} join; request; end;
+            fork {{ run svc (1); {stmt} }} join; turn; end;
         }} }}
         server {{}}
         "
@@ -379,7 +379,7 @@ fn a_join_needs_a_fork() {
     refused(
         "stage svc : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run svc (1); join;
@@ -397,7 +397,7 @@ fn a_leg_does_not_act_on_the_sessions_holds() {
         "pool kv { cap 10; }
         stage svc : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (1) { fork { grow kv (1); } join; }
@@ -416,7 +416,7 @@ fn a_legs_lease_caches_by_the_legs_attributes() {
         pool kv { cap 100; }
         stage svc : delay;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -467,8 +467,8 @@ fn a_lease_that_expires_is_not_a_deadlock() {
         workload {
           arrive batch(2);
           init { set prompt = 8; }
-          session { run gate (serial == 0 ? 0.5 : 0); request gw; end; }
-        }
+          session { run gate (serial == 0 ? 0.5 : 0); turn; end; }
+        } server { gw.route(); }
 
     "#,
         &common::horizon(30.0),
@@ -484,7 +484,7 @@ fn a_fork_in_a_hold_that_may_be_preempted_is_refused() {
         "pool kv { cap 10; preempt lifo; }
         stage svc : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (1) { fork { run svc (1); } join; }
@@ -499,7 +499,7 @@ fn a_fork_needs_a_join() {
     refused(
         "stage svc : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { fork { run svc (1); } run svc (2);
@@ -525,7 +525,7 @@ fn a_queue_posts_the_copies_of_one_relation() {
         P push D latency 1 share maxmin;
         P push E latency 1 share maxmin;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         } server {
         } ",

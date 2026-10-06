@@ -40,8 +40,8 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # (per-session random streams), which the fragment never reads: its
 # programs draw nothing, so a 10 file and an 11 file translate alike. The
 # pinned corpus (IR 11) is FIFO and stays inside the fragment.
-IR_VERSION = 11
-SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, IR_VERSION)
+IR_VERSION = 12
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, IR_VERSION)
 
 
 class Fragment(Exception):
@@ -312,6 +312,7 @@ class Lean:
 
     def __init__(self, ir):
         self.ir = ir
+        self.empty_turns = False
         self.builtin = {ir["slot_cached"]: "x.cached", ir["slot_serial"]: "x.serial"}
 
     def leaf(self, e):
@@ -347,6 +348,8 @@ class Lean:
                 out.append(pad + "stop")
                 return "\n".join(out)
             if st == "Turn":
+                if self.empty_turns:
+                    continue
                 out.append(pad + "turn;")
                 continue
             if st == "Join":
@@ -393,6 +396,11 @@ class Lean:
                 out.append(self.block(t, ind + 1))
                 out.append(f"{pad}}} else {{")
                 out.append(self.block(f, ind + 1))
+                out.append(f"{pad}}};")
+            elif kind == "While":
+                c, body = v
+                out.append(f"{pad}while ({self.top(c)}) {{")
+                out.append(self.block(body, ind + 1))
                 out.append(f"{pad}}};")
             elif kind == "Loop":
                 out.append(f"{pad}loop {{")

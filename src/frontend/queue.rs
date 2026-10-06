@@ -447,6 +447,7 @@ impl Ctx<'_> {
             },
             Stmt::Branch(p, a, b) => Stmt::Branch(self.expr(p)?, self.stmts(a)?, self.stmts(b)?),
             Stmt::Loop(b) => Stmt::Loop(self.stmts(b)?),
+            Stmt::While(c, b) => Stmt::While(self.expr(c)?, self.stmts(b)?),
             Stmt::Fork(b) => Stmt::Fork(self.stmts(b)?),
             Stmt::Choose { var, count, key } => Stmt::Choose {
                 var: self.local(var),
@@ -495,7 +496,10 @@ fn size(stmts: &[Stmt]) -> usize {
         .iter()
         .map(|s| {
             1 + match s {
-                Stmt::Hold { body, .. } | Stmt::Loop(body) | Stmt::Fork(body) => size(body),
+                Stmt::Hold { body, .. }
+                | Stmt::Loop(body)
+                | Stmt::While(_, body)
+                | Stmt::Fork(body) => size(body),
                 Stmt::Branch(_, a, b) => size(a) + size(b),
                 _ => 0,
             }
@@ -553,9 +557,10 @@ fn expand_at(
                 out.extend(body);
                 continue;
             }
-            Stmt::Hold { body, .. } | Stmt::Loop(body) | Stmt::Fork(body) => {
-                expand_at(body, queues, stack, expanded)?
-            }
+            Stmt::Hold { body, .. }
+            | Stmt::Loop(body)
+            | Stmt::While(_, body)
+            | Stmt::Fork(body) => expand_at(body, queues, stack, expanded)?,
             Stmt::Branch(_, a, b) => {
                 expand_at(a, queues, stack, expanded)?;
                 expand_at(b, queues, stack, expanded)?;

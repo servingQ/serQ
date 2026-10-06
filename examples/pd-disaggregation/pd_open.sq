@@ -25,7 +25,6 @@ fn main() {
 
   workload {
     arrive poisson(Lambda);
-    session { request; end; }
   }
 
   server {

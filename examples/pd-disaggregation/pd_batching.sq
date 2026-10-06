@@ -187,8 +187,8 @@ fn main() {
       set n = prompt_len();
       set o = output();
     }
-    session { turn; request gw; end; }
   }
 
+  server { gw.route(); }
 
 }

@@ -17,7 +17,7 @@ let a = 3547;
 let b0 = 128;
 stage engine : step { budget bmax; cost c + a * ceil(tokens / b0); SERVE }
 workload { arrive renewal(46750); init { set t0 = now; }
-  session { request; end;
+  session { turn; end;
   }
 }
 server { run engine prefill (290); run engine decode (990); observe response = now - t0;
@@ -106,7 +106,7 @@ fn an_engine_that_serves_one_kind_fails_them() {
 const BATCH: &str = "
         stage engine : step { budget 4; cost 1; }
         workload { arrive batch(3); init { set n = serial == 0 ? 3 : serial; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run engine prefill (n); observe x = n;
@@ -206,7 +206,7 @@ fn arrived_counts_the_sessions_started_by_the_iteration() {
         "
         stage engine : step { budget 4; cost 1; }
         workload { arrive renewal(10);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run engine prefill (3);
@@ -299,7 +299,7 @@ fn a_claim_over_a_member_of_an_array() {
     let src = "
         stage engine[2] : step { budget 4; cost 1; }
         workload { arrive batch(2);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run engine[serial] prefill (3);

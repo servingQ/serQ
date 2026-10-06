@@ -31,7 +31,7 @@ serq run examples/single-turn/mg1.sq --horizon 250000 --warmup 25000 --seed 1
 ```
 
 ```text
-run: horizon 250000 end 250000 warmup 25000 seed 1 events 397862 arrivals 198931 ended 179177 turns 0 mean live 3.899
+run: horizon 250000 end 250000 warmup 25000 seed 1 events 397862 arrivals 198931 ended 179177 turns 179176 mean live 3.899
 
 observe   count    mean   95% CI    cv2      p99
 -------  ------  ------  -------  -----  -------
@@ -61,9 +61,10 @@ run: horizon 250000 end 250000 warmup 25000 seed 1 events 397862 arrivals 198931
 
 `horizon` is simulated time, `warmup` excludes the initial period from
 measured statistics, and `seed` initializes the random streams. `events`
-and `arrivals` count the whole run; `ended` and `turns` count completions and
-turns after warm-up. `turns` is 0 here because `mg1.sq` has no `turn`
-statement: each session is one request.
+and `arrivals` count the whole run; `ended` counts sessions that finish
+after warm-up, and `turns` counts turns started after warm-up. Each arrival
+in this single-turn workload starts one turn automatically. The counts can
+differ because starts and completions cross the measurement boundaries.
 
 ### `observe`
 

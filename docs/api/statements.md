@@ -11,7 +11,7 @@ The [serving vocabulary](serving.md) provides shorthand for these statements.
 |---|---|
 | [`set`](#set) | assigns a session attribute |
 | [`observe`](#observe) | records a sample |
-| [`turn`](#turn) | draws the next turn's attributes |
+| [`turn`](#turn) | draws attributes and waits for the turn's response |
 | [`hold`](#hold) | takes units of pools for the scope of a block |
 | [`grow`](#grow) | enlarges the innermost hold |
 | [`drop`](#drop) | discards the session's cached prefix |
@@ -19,6 +19,7 @@ The [serving vocabulary](serving.md) provides shorthand for these statements.
 | [`load`](#load) | the KV of some tokens arrived from outside |
 | [`run`](#run) | spends work at a stage |
 | [`branch`](#branch) | a test or a draw |
+| [`while`](#while) | repeats while a condition holds |
 | [`loop`](#loop) | repeats a block |
 | [`choose`](#choose) | picks an index by the smallest key |
 | [`end`](#end) | ends the session |
@@ -52,8 +53,9 @@ was expected to occur before interpreting its summary.
 turn;
 ```
 
-Runs the workload's `turn` block, or with a `trace` loads the next turn's
-attributes and sets `more`.
+Loads the next trace turn (if present), then runs the workload's `turn`
+block. The server handles that turn; the next session statement waits
+for its response. Allowed only in a workload's `session`.
 
 ## `hold`
 
@@ -206,6 +208,19 @@ Any other value of `test` (a fraction, a count, a negative, NaN) is a run-time
 error, and a constant strictly between 0 and 1 is refused at link time as a
 draw written as a test.
 
+## `while`
+
+```serq
+while (condition) { … }
+```
+
+Tests the condition before each pass. It must be exactly 0 or 1; any other
+value is a validation error when constant and a run-time error otherwise. Zero skips the body and continues after the loop.
+A draw is explicit, for example `while (~bernoulli(p)) { … }`.
+Every path through the body must let time pass or end the session, just as
+for `loop`. An inner conditional loop may execute zero times, so it cannot
+by itself establish progress for an outer loop.
+
 ## `loop`
 
 ```serq
@@ -248,7 +263,6 @@ fn main() {
   stage svc : fifo;
   workload {
     arrive batch(2);
-    session { request; end; }
   }
   server {
     set t0 = now;

@@ -15,7 +15,6 @@ fn main() {
     arrive batch(2);
     init { set d = 0; }
 
-    session { request; end; }
   }
 
   server {

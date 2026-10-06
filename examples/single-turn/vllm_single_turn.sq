@@ -41,7 +41,6 @@ fn main() {
       set n = ceil(~uniform(1000, 3000));
       set o = floor(~exp(200)) + 1;
     }
-    session { turn; request; end; }
   }
   // --8<-- [end:workload]
 

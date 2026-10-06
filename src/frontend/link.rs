@@ -1079,6 +1079,15 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                 }
                 // twice: a `set` late in the body reaches its start the next
                 // time round; and the body may not run at all
+                Stmt::While(c, body) => {
+                    check(c, "while", t)?;
+                    let before = t.clone();
+                    walk(body, t)?;
+                    join(t, &before);
+                    check(c, "while", t)?;
+                    walk(body, t)?;
+                    join(t, &before);
+                }
                 Stmt::Loop(body) => {
                     let before = t.clone();
                     walk(body, t)?;
@@ -1708,6 +1717,7 @@ impl Linker<'_> {
                     CStmt::Branch(p, a, b)
                 }
                 Stmt::Loop(b) => CStmt::Loop(self.block(b)?),
+                Stmt::While(c, b) => CStmt::While(self.expr(c)?, self.block(b)?),
                 Stmt::Fork(b) => CStmt::Fork(self.block(b)?),
                 Stmt::Join => CStmt::Join,
                 Stmt::Choose { var, count, key } => CStmt::Choose {

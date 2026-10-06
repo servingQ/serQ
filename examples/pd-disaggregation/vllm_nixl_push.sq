@@ -165,12 +165,13 @@ fn main() {
     session {
       run gate (serial * spacing);
       turn;
-      loop {
-        request gw;
-        branch (more) { tool think; turn; } else { end; }
+      while (more) {
+        tool think;
+        turn;
       }
     }
   }
 
+  server { gw.route(); }
 
 }

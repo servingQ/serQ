@@ -6,7 +6,7 @@ fn deterministic_renewal_arrivals_follow_the_supplied_gap() {
     let src = r#"
         stage svc : fifo;
         workload { arrive renewal(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -38,7 +38,7 @@ fn hyperexponential_renewal_arrivals_have_the_configured_mean_rate() {
     let src = r#"
         stage svc : fifo;
         workload { arrive renewal(~h2(1, 4));
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run svc (0);
@@ -64,7 +64,7 @@ fn open_arrival_limit_drains_within_the_horizon() {
     let src = r#"
         stage svc : fifo;
         workload { arrive poisson(1000);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -123,7 +123,7 @@ fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
         ),
     ] {
         let src = format!(
-            "stage svc : fifo; workload {{ arrive renewal(2); session {{ request; {session} }} }} server {{}}"
+            "stage svc : fifo; workload {{ arrive renewal(2); session {{ turn; {session} }} }} server {{}}"
         );
         let error = {
             let mut options = common::horizon(10.0);
@@ -137,7 +137,7 @@ fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
 #[test]
 fn finite_arrivals_can_finish_exactly_at_the_deadline() {
     // Arrivals at 2, 4, 6 and one second of service finish at 3, 5, 7.
-    let src = "stage svc : fifo; workload { arrive renewal(2); \n  session { request; end; \n  }\n} server { run svc (1);\n} ";
+    let src = "stage svc : fifo; workload { arrive renewal(2); \n  session { turn; end; \n  }\n} server { run svc (1);\n} ";
     let report = run_source(
         &common::main_source(src),
         &Overrides {
@@ -157,7 +157,7 @@ fn poisson_retains_its_initial_arrival_and_renewal_waits_for_a_gap() {
     let run = |arrival: &str| {
         run_source(
             &common::main_source(
-            &format!("workload {{ arrive {arrival}; \n  session {{ request; end; \n  }}\n}} server {{ observe arrival = now;\n}} ")),
+            &format!("workload {{ arrive {arrival}; \n  session {{ turn; end; \n  }}\n}} server {{ observe arrival = now;\n}} ")),
             &Overrides { seed: Some(1), ..common::horizon(10.0) }, None,
         ).unwrap()
     };
@@ -172,11 +172,11 @@ fn poisson_retains_its_initial_arrival_and_renewal_waits_for_a_gap() {
 #[test]
 fn renewal_validation_and_ir_version_prevent_ambiguous_inputs() {
     for gap in ["now", "serial"] {
-        let src = format!("workload {{ arrive renewal({gap}); }} ");
+        let src = format!("workload {{ arrive renewal({gap}); }} server {{}} ");
         assert!(serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).is_err());
     }
     let mut program = serq::compile_source(
-        &common::main_source("workload { arrive renewal(2); } "),
+        &common::main_source("workload { arrive renewal(2); } server {} "),
         &common::horizon(10.0),
     )
     .unwrap();
@@ -199,7 +199,7 @@ fn a_renewal_gap_must_be_positive() {
             "let g = 0.5;
         stage svc : delay;
         workload {{ arrive renewal({gap});
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ run svc (1);
@@ -247,7 +247,7 @@ fn a_poisson_rate_must_be_positive() {
         let src = format!(
             "let lam = 1; stage svc : delay;
         workload {{ arrive poisson({rate});
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ run svc (1);
@@ -278,7 +278,7 @@ fn a_count_is_a_whole_number_in_range() {
     ] {
         let src = format!(
             "stage svc : delay;
-             workload {{ arrive {workload}; session {{ request; end; }} }}
+             workload {{ arrive {workload}; session {{ turn; end; }} }}
              server {{ run svc (1); }}"
         );
         let e =
@@ -306,7 +306,7 @@ fn a_count_is_a_whole_number_in_range() {
     let mut p = serq::compile_source(
         &common::main_source(
             "stage svc : delay; workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run svc (1);

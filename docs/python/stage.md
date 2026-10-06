@@ -48,7 +48,6 @@ fn main() {
   stage svc[2] : fifo;
   workload {
     arrive batch(1);
-    session { request; end; }
   }
   server {
     run svc[1] (2);

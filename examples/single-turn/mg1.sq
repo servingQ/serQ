@@ -28,7 +28,6 @@ fn main() {
       set s = service();
     }
 
-    session { request; end; }
   }
 
   server {
