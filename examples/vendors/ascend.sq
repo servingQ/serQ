@@ -7,14 +7,6 @@ def waiting_class(urgent, prompt, elapsed) {
 }
 
 fn main() {
-  pool reqs {
-    cap 1;
-    queue by (waiting_class(immediate, prompt, waited));
-    admit via engine;
-  }
-  pool kv { cap 4096; block 16; }
-  stage engine : step { budget 128; chunk 128; cost 0.001; memory kv; }
-  stage delay : delay;
   workload {
     arrive batch(6);
     turn {
@@ -23,6 +15,14 @@ fn main() {
       set out = serial == 0 ? 4 : 1;
     }
   }
+  pool reqs {
+    cap 1;
+    queue by (waiting_class(immediate, prompt, waited));
+    admit via engine;
+  }
+  pool kv { cap 4096; block 16; }
+  stage engine : step { budget 128; chunk 128; cost 0.001; memory kv; }
+  stage delay : delay;
   server {
     run delay (cost(delay, serial == 2 ? 0.001 : serial == 3 ? 0.002 : serial >= 4 ? 0.003 : 0));
     hold reqs (cost(reqs, 1)), kv (cost(kv, prompt + out)) {
@@ -33,5 +33,4 @@ fn main() {
     }
     observe response = now;
   }
-
 }
