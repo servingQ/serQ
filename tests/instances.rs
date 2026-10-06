@@ -81,7 +81,7 @@ fn an_instance_changes_values_not_structure() {
             "pool kv { cap 1; }",
             "an instance binds values: found `pool`",
         ),
-        ("def twice(x) = 2 * x;", "found `def`"),
+        ("def twice(x) { 2 * x }", "found `def`"),
         ("use \"lib.sq\";", "found `use`"),
         (
             "let rate = 1; let rate = 2;",

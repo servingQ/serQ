@@ -242,7 +242,7 @@ fn main() {
                     argument_error(
                         cmd,
                         format!(
-                            "{e}\nhelp: use --def name=expr with a declared `def name(...) = expr;`"
+                            "{e}\nhelp: use --def name=expr with a declared `def name(...) {{ expr }}`"
                         ),
                     )
                 });

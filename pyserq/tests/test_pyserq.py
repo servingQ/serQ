@@ -175,7 +175,7 @@ def test_an_infinity_is_inf():
 
 
 def test_defs_is_the_program_written_with_that_body():
-    src = ("fn main() { def service() = ~exp(1);\nstage svc : fifo;\nworkload { arrive poisson(0.5); session { request; end; } }\n"
+    src = ("fn main() { def service() { ~exp(1) }\nstage svc : fifo;\nworkload { arrive poisson(0.5); session { request; end; } }\n"
            "server { run svc (service()); observe s = now; }\nrun { horizon 1000; seed 2; } }\n")
     given = pyserq.compile(source=src, defs={"service": "~erlang(4, 1)"})
     written = pyserq.compile(source=src.replace("~exp(1)", "~erlang(4, 1)"))
