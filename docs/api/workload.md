@@ -14,6 +14,15 @@ workload {
 How sessions arrive and what each turn brings. `init` and `turn` blocks may
 only `set` and `observe`. Random draws in the workload use their own stream.
 
+| Clause | Description |
+|---|---|
+| [`arrive`](#arrive) | Choose the arrival process. Default: `none`. |
+| [`trace`](#trace) | Supply session turns from a CSV corpus. |
+| [`init`](#init) | Initialize a session once at arrival. |
+| [`turn`](#turn) | Set attributes whenever the session executes `turn;`. |
+| [`session`](#session) | Define the client side of a two-sided program. |
+| [`hidden`](#hidden) | Restrict scheduler access to future attributes. |
+
 ## `arrive`
 
 | Form | Argument | Sessions arrive |
@@ -119,3 +128,33 @@ header is read at admission, where the attribute itself stays refused even
 after a run (the moment rule above). The workload's statements are the
 client's and are not checked. A program written as one `session` has no
 server to check.
+
+## Examples
+
+A complete program:
+
+```serq
+fn main() {
+  stage svc : delay;
+  workload {
+    arrive batch(2);
+    init { set rounds = 2; }
+    turn { set duration = ~uniform(1, 2); }
+  }
+  session {
+    loop {
+      turn;
+      run svc (duration);
+      observe elapsed = now;
+      set rounds = rounds - 1;
+      branch (rounds == 0) { end; }
+    }
+  }
+  run { horizon 10; seed 10; }
+}
+```
+
+## See also
+
+[Distributions](distributions.md), [attributes](attributes.md),
+[run settings](program.md#run), [`pyserq.read_trace`](../python/read-trace.md).

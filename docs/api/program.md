@@ -14,6 +14,23 @@ There are no arguments or return value on `main`; use `std/args` for inputs.
 Items are read in order and declarations come first: a [serving form](serving.md)
 finds its stage among the stages declared above it.
 
+| Declaration | Description |
+|---|---|
+| `fn main()` | Construct the deployment, workload and run configuration. |
+| [`let`](#let) | Declare a constant. |
+| [`args.number`](#stdargs) | Declare a numeric program input. |
+| [`def`](#def) | Define a reusable expression or statement body. |
+| [`use`](#use) | Import a library relative to a source file. |
+| [`pool`](#pool) | Declare resource capacity, cache and admission policy. |
+| [`stage`](#stage) | Declare a server or step engine. |
+| [`workload`](#workload) | Define arrivals and request attributes. |
+| [`session`](#session) | Define the request's sequence of actions. |
+| [`server`](#server) | Define the scheduler side of a two-sided program. |
+| [`share`](#share) | Select rate sharing for flows across stages. |
+| [`gauge`](#gauge) | Measure a function of deployment state over time. |
+| [`claim`](#claim) | State a property of the program's paths. |
+| [`run`](#run) | Set horizon, warm-up, seed and arrival limit. |
+
 ## `let`
 
 ```serq
@@ -311,3 +328,29 @@ run { horizon 1e5; warmup 0; arrivals 1000; }
 !!! note
     The `run` *statement* ([`run STAGE …`](statements.md#run)) and the `run`
     *block* here are unrelated constructs that share a keyword.
+
+## Examples
+
+A complete program:
+
+```serq
+fn main() {
+  let duration = 2;
+  stage svc : fifo;
+  workload { arrive batch(2); }
+  session {
+    set t0 = now;
+    run svc (duration);
+    observe latency = now - t0;
+    end;
+  }
+  gauge jobs = queue(svc);
+  claim done : at end (count(latency) == 2);
+  run { horizon 10; seed 1; }
+}
+```
+
+## See also
+
+[Pools](pool.md), [stages](stage.md), [workloads](workload.md),
+[`pyserq.compile`](../python/compile.md).
