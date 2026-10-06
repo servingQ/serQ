@@ -28,7 +28,7 @@ queues the sessions that do not yet fit. Every option is optional.
 | [`reserve held`](#reserve-held) | — | off | a hold's unallocated `reserve` counts against later admissions |
 | [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
 
-The pool maintains `allocated + cached ≤ cap`. If either `units` or `reserve` is independent of deployment state and
+If either `units` or `reserve` is independent of deployment state and
 exceeds capacity after block rounding, the hold is rejected and its session ends. State-dependent demand waits for admission and is reported as
 [`over_cap`](../reference/cli.md#pool-statistics) if it still exceeds capacity
 at the end of the run.

@@ -9,13 +9,9 @@ A release tag identifies both implementations.
 
 | Result | Scope | Example |
 |---|---|---|
-| A property of the semantics | All transitions covered by the theorem's hypotheses | The pool model preserves `allocated + cached ≤ cap` (`SerqLang.Step.invariant`) |
 | A scenario's outcome | One program and an explicit workload | Generated oracle theorems in `lean/Serq/Oracle.lean` |
 | A program claim | All paths in the claim's workload family satisfying its assumptions | Claims and proofs for the [paper examples](use-cases/index.md#formal-verification) |
 | A stochastic result | A separately defined arrival law and the theorem's assumptions | Stability and recurrence results in the Dai and Bari examples |
-
-The pool invariant is a theorem of the pool model. It is not an end-to-end
-correctness proof for the Rust interpreter.
 
 ## Claims
 
@@ -121,7 +117,7 @@ are rejected rather than silently omitted.
 
 | Topic | Source |
 |---|---|
-| Pool semantics and memory invariant | `lean/Serq/Core.lean` |
+| Pool semantics | `lean/Serq/Core.lean` |
 | Executable semantics | `lean/Serq/Exec.lean` |
 | Claims and reachable states | `lean/Serq/Claim.lean`, `lean/Serq/Inv.lean` |
 | Serving order and work conservation | `lean/Serq/Serve.lean`, `lean/Serq/Fill.lean`, `lean/Serq/Work.lean` |

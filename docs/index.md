@@ -20,14 +20,7 @@ serving model step by step in the [tutorial](tutorial/index.md).
 
 <div class="grid cards" markdown>
 
-- **Write a deployment**
-
-    Pools of KV blocks or request slots, step engines with a token budget
-    and a cost model, a workload of sessions and turns, and the policy a
-    request runs. The [tutorial](tutorial/index.md) builds one up in six
-    runnable programs.
-
-- **Simulate it**
+- **Simulation**
 
     `serq run` executes the program as a discrete-event simulation and
     reports each stage's throughput, utilisation and waits, an engine's
@@ -36,24 +29,20 @@ serving model step by step in the [tutorial](tutorial/index.md).
     constant or a law without editing the file, for sweeps.
     [Getting started](getting-started.md), [use cases](use-cases/index.md#simulation)
 
-- **State claims and prove them**
+- **Formal verification**
 
-    Write a `claim` in the program and check it on a simulated run.
-    For supported programs, Lean proofs establish claims over all paths
-    covered by their assumptions. The interpreter and Lean semantics are
-    tested for agreement; their equivalence is not proved.
+    Write claims in a program and prove them about its Lean model, under
+    explicit assumptions. For supported programs and claims, Lean statements
+    are generated from the IR; their proofs are written separately and
+    checked by Lean. The simulator also checks claims on the path it runs.
+    The interpreter and Lean semantics are tested for agreement; their
+    equivalence is not proved.
     [The Lean model](lean.md), [formal verification examples](use-cases/index.md#formal-verification)
 
-- **Draw it**
+- **Deployment visualization**
 
     `serq draw` renders the program as a queueing network, in TikZ or SVG.
     Regenerate the figure when the program changes.
     [Visualization](visualization/index.md)
-
-- **Use it from Python**
-
-    `pip install pyserq` gives you compile, run and draw in process, with
-    the report as Python objects.
-    [pyserq](python.md)
 
 </div>
