@@ -56,5 +56,5 @@ fn main() {
   claim optimal_tiling given (vp == bcol * floor(vp / bcol)):
     every iteration of E (tokens == bcol || decoders == residents);
 
-  run { horizon 100000000; warmup 0; seed 1; }
+
 }

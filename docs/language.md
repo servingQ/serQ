@@ -38,7 +38,6 @@ item     := let NAME = expr ;
           | workload { wlitem* }
           | server block                      -- request handling; the session lives inside workload
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
-          | run { ( horizon | warmup | seed | arrivals ) expr ; ... }   -- any of them, in any order
           | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
           | QUEUE pull QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the reader, its source, the read (below, *Queues*)
           | QUEUE push QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the source, its reader, the write
@@ -114,16 +113,19 @@ serving  := prefill  [ '[' expr ']' | on STAGE [, STAGE]* ] expr [ growing POOL 
 
 ### Arrivals and the run
 
+A model defines the deployment and workload. Execution settings are supplied by
+the CLI flags, an explicit instance file, or the host API; `run { ... }` is
+not a model declaration. The resolved IR includes the execution settings.
+
 `arrive renewal(e)` draws or gives each gap,
 which must be positive and finite (a constant gap that is not does not
 link; a drawn one stops the run), and the first renewal arrival comes after
 one gap; `poisson(rate)` (a positive, finite constant) arrives at time 0 and
-then after exponential gaps of mean `1 / rate`. `run { arrivals N; }` (or
-`--arrivals N`) runs exactly `N` open-workload arrivals and drains their
+then after exponential gaps of mean `1 / rate`. `--arrivals N` runs exactly `N` open-workload arrivals and drains their
 sessions; failing to by `horizon`, or draining at or before `warmup`, is an
 error. A count is a whole number, or the program does not link: `closed(n)`
-and `batch(n)` from 1 to a million sessions, `arrivals` from 1 and `seed`
-from 0, both up to 2⁵³. The
+and `batch(n)` from 1 to a million sessions. The external `arrivals` setting
+is a positive integer and `seed` is a nonnegative integer. The
 report keeps `horizon` as configured and gives the time the run ended as
 `end`; averages and rates are over `end - warmup`.
 See [Workload](api/workload.md) and [A finite run](api/program.md#a-finite-run).
@@ -157,7 +159,7 @@ The rules that are the language's, not the catalogue's:
   apart, so `set present = …` does not link (a `ps` capacity reading
   `present` would read the attribute).
 - **Constants** (a `let`, a `cap`, a `block`, a `fifo` count, the arrival
-  rate or population, the `run` block) are numbers or `inf`; one that
+  rate or population) are numbers or `inf`; one that
   evaluates to NaN does not link.
 - **Attributes.** Every name a `set` or a `choose` assigns is a session
   attribute. The built-in ones are `serial`, `turn_no`, `cached` (the prefix
@@ -168,7 +170,7 @@ The rules that are the language's, not the catalogue's:
 ### Entry point and external inputs
 
 Source programs declare exactly one `fn main()`. It constructs the deployment
-and run configuration once; each arriving session executes its session body.
+once; each arriving session executes its session body. Execution settings are supplied externally.
 Only imports, definitions and fixed constants may precede `main`. Declarations
 after it and nested or duplicate entry points are refused. Libraries provide
 definitions and imports, never an executable entry point.
@@ -964,7 +966,7 @@ A claim over iterations holds, or fails at the start of its first failing
 iteration; a `some` claim is witnessed at the first iteration that
 satisfies it, or not witnessed. A claim `at end` holds or fails, and is
 not evaluated when sessions are still live at the end, since the run did
-not reach the end the claim is about (`run { arrivals N; }` drains them).
+not reach the end the claim is about (`--arrivals N` drains them).
 A claim a session put out of scope says which session; the JSON fields are
 in the [CLI reference](reference/cli.md). A path that holds a claim is
 evidence, not a proof: the proof is the Lean statement's.

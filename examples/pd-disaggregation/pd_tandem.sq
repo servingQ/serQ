@@ -49,5 +49,5 @@ fn main() {
     }
   }
 
-  run { horizon 20000; warmup 2000; seed 1; }
+
 }

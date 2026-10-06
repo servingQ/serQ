@@ -53,7 +53,6 @@ fn main() {
   server {
     run svc (2);
   }
-  run { horizon 10; }
 }
 """, format="svg")
 Path("deployment.svg").write_text(svg, encoding="utf-8")

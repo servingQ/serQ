@@ -1,0 +1,2 @@
+// Execution settings for kong_svf.sq. Pass explicitly with --instance.
+run { horizon 100000; warmup 0; seed 1; }

@@ -4,7 +4,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use serq::{Overrides, compile_source, compile_source_at};
+use serq::{compile_source, compile_source_at};
 
 /// A fresh directory with these files in it.
 fn dir(name: &str, files: &[(&str, &str)]) -> PathBuf {
@@ -20,14 +20,14 @@ fn dir(name: &str, files: &[(&str, &str)]) -> PathBuf {
 
 fn compile(d: &Path, main: &str) -> Result<serq::Program, String> {
     let src = std::fs::read_to_string(d.join(main)).unwrap();
-    compile_source_at(&common::main_source(&src), Some(d), &Overrides::default())
+    compile_source_at(&common::main_source(&src), Some(d), &common::horizon(10.0))
 }
 
 const PROGRAM: &str = "pool kv { cap 100; }
 stage engine : step { cost 1; }
 workload { arrive batch(1); init { set k = 3; } session { request; end; } }
 server { take(twice(k)); }
-run { horizon 10; }
+
 ";
 
 #[test]
@@ -53,7 +53,7 @@ fn a_program_uses_the_definitions_of_a_library() {
             "server { take(twice(k)); }",
             "server { hold kv (2 * k) { prefill on engine (2 * k) growing kv; } }",
         )),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     assert_eq!(used.to_json(), written.to_json());
@@ -145,7 +145,7 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
             ("lib/a.sq", "use \"../main.sq\";\ndef twice(x) { 2 * x }\n"),
             (
                 "main.sq",
-                "use \"lib/a.sq\";\nstage svc : fifo;\nworkload { session { request; end; \n} }\nserver { run svc (twice(1));\n}\nrun { horizon 10; }\n",
+                "use \"lib/a.sq\";\nstage svc : fifo;\nworkload { session { request; end; \n} }\nserver { run svc (twice(1));\n}\n\n",
             ),
             // two libraries that use each other: the order of their definitions
             // is what is wrong, and the error says so
@@ -159,12 +159,12 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
         common::main_source(&std::fs::read_to_string(&main).unwrap()),
     )
     .unwrap();
-    serq::load(&main, &Overrides::default()).unwrap();
+    serq::load(&main, &common::horizon(10.0)).unwrap();
     let lib = d.join("lib/a2.sq");
     let e = serq::compile_file(
         &common::main_source(&std::fs::read_to_string(&lib).unwrap()),
         &lib,
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap_err();
     assert!(
@@ -182,17 +182,17 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
 fn blocksize_is_the_pools_block() {
     let src = |pool: &str, e: &str| {
         format!(
-            "{pool}\nstage svc : delay;\nworkload {{ session {{ request; end; \n}} }}\nserver {{ observe b = {e};\n}}\nrun {{ horizon 1; }}\n"
+            "{pool}\nstage svc : delay;\nworkload {{ session {{ request; end; \n}} }}\nserver {{ observe b = {e};\n}}\n\n"
         )
     };
     let p = compile_source(
         &common::main_source(&src("pool kv[2] { cap 64; block 16; }", "blocksize(kv[1])")),
-        &Overrides::default(),
+        &common::horizon(1.0),
     )
     .unwrap();
     let q = compile_source(
         &common::main_source(&src("pool kv[2] { cap 64; block 16; }", "16")),
-        &Overrides::default(),
+        &common::horizon(1.0),
     )
     .unwrap();
     assert_eq!(p.to_json(), q.to_json());
@@ -230,7 +230,7 @@ fn blocksize_is_the_pools_block() {
         ),
     ] {
         let e =
-            compile_source(&common::main_source(&src(pool, e)), &Overrides::default()).unwrap_err();
+            compile_source(&common::main_source(&src(pool, e)), &common::horizon(1.0)).unwrap_err();
         assert!(e.contains(want), "{e}");
     }
 }
@@ -239,7 +239,7 @@ fn blocksize_is_the_pools_block() {
 fn blocksize_is_not_a_constant() {
     let e = compile_source(&common::main_source(
         "pool kv { cap 64; block 16; }\nlet b = blocksize(kv);\nstage svc : delay;\nworkload { session { request; end; \n} }\nserver {\n}\n"),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap_err();
     assert!(e.contains("`blocksize` is not a constant"), "{e}");
@@ -247,7 +247,7 @@ fn blocksize_is_not_a_constant() {
         &common::main_source(
         "def f(blocksize) { blocksize + 1 }\nstage svc : delay;\nworkload { session { request; end; \n} }\nserver {\n}\n",
         ),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap_err();
     assert!(e.contains("a word of the language"), "{e}");
@@ -259,7 +259,7 @@ fn a_use_needs_a_file() {
         &common::main_source(
             "use \"lib.sq\";\nworkload { session { request; end; \n} }\nserver {\n}\n",
         ),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap_err();
     assert!(e.contains("given as text"), "{e}");

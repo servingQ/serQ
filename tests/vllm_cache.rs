@@ -25,7 +25,7 @@ fn dir() -> std::path::PathBuf {
 fn cache_ir() -> Program {
     let mut ov = Overrides {
         trace: Some(dir().join("cache_trace.csv").display().to_string()),
-        ..Default::default()
+        ..common::example_options("vllm_replay")
     };
     for (k, v) in [
         ("N", "3"),

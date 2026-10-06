@@ -5,8 +5,8 @@ mod common;
 
 use serq::{Overrides, compile_source, run_source};
 
-fn run(src: &str) -> serq::Report {
-    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
+fn run(src: &str, options: &Overrides) -> serq::Report {
+    run_source(&common::main_source(src), options, None).unwrap()
 }
 
 /// vLLM's procedure, written out.
@@ -34,7 +34,7 @@ fn the_vllm_body_is_the_procedure() {
                 continue;
             }
             let body = src.replace("step {", &format!("step {{ {VLLM} "));
-            let ov = Overrides::default();
+            let ov = common::horizon(20.0);
             let base = path.parent();
             let a = run_source(&common::main_source(&src), &ov, base)
                 .unwrap_or_else(|e| panic!("{path:?}: {e}"));
@@ -72,19 +72,33 @@ fn several_prefills_run_alone_in_one_iteration() {
             decode on engine (2) growing kv;
           }}
         }}
-        run {{ horizon 20; warmup 0; seed 1; }}
+
 "#
         )
     };
     let sglang = "iteration { serve only (!decoding); admit; branch (tokens == 0) { serve; } }";
-    let r = run(&prog(sglang));
+    let r = run(
+        &prog(sglang),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(20.0)
+        },
+    );
     assert_eq!(
         r.observe("ttft").unwrap().samples,
         vec![1.0, 1.0, 1.0],
         "{}",
         r.text()
     );
-    let r = run(&prog("serve exclusive prefill;"));
+    let r = run(
+        &prog("serve exclusive prefill;"),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(20.0)
+        },
+    );
     assert_eq!(
         r.observe("ttft").unwrap().samples,
         vec![1.0, 2.0, 3.0],
@@ -119,9 +133,16 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
             decode on engine (4);
           }
         }
-        run { horizon 50; warmup 0; seed 1; }
+
 "#;
-    let r = run(src);
+    let r = run(
+        src,
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(50.0)
+        },
+    );
     let start = &r.observe("start").unwrap().samples;
     // the first two at 0; they prefill 1 and decode 4, one token an
     // iteration of cost 1, so the engine is empty at 5, and the two that
@@ -142,12 +163,12 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
         }}
         server {{ hold reqs (1) {{ prefill on engine (2); }}
         }}
-        run {{ horizon 20; }}
+
 "#
         )
     };
     let err = |body: &str| {
-        compile_source(&common::main_source(&prog(body)), &Overrides::default())
+        compile_source(&common::main_source(&prog(body)), &common::horizon(20.0))
             .err()
             .unwrap_or_else(|| panic!("`{body}` linked"))
     };
@@ -167,7 +188,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
         "prefill on engine (2);",
         "prefill on engine (2); set x = admitted;",
     );
-    assert!(compile_source(&common::main_source(&src), &Overrides::default()).is_err());
+    assert!(compile_source(&common::main_source(&src), &common::horizon(20.0)).is_err());
 }
 
 /// The procedure and its body agree where serving is by keys and
@@ -203,12 +224,26 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
             decode on engine (6 + serial - 3 * floor(serial / 3)) growing kv;
           }}
         }}
-        run {{ horizon 120; warmup 0; seed 1; }}
+
 "#
                 )
             };
-            let a = run(&prog(""));
-            let b = run(&prog(VLLM));
+            let a = run(
+                &prog(""),
+                &Overrides {
+                    warmup: Some(0.0),
+                    seed: Some(1),
+                    ..common::horizon(120.0)
+                },
+            );
+            let b = run(
+                &prog(VLLM),
+                &Overrides {
+                    warmup: Some(0.0),
+                    seed: Some(1),
+                    ..common::horizon(120.0)
+                },
+            );
             if kv == 24 {
                 assert!(
                     a.pool("kv").unwrap().preemptions > 0,
@@ -256,7 +291,7 @@ fn a_stage_only_is_a_body() {
             &stage,
             &format!("iteration {{ serve only ({p}); admit only ({p}) while (!preempted); }}"),
         );
-        let ov = Overrides::default();
+        let ov = common::horizon(20.0);
         let ir = |s: &str| {
             serq::compile_file(&common::main_source(s), &path, &ov)
                 .unwrap_or_else(|e| panic!("{file}: {e}"))
@@ -279,9 +314,16 @@ fn an_engine_idle_with_work_is_named() {
         }
         server { hold reqs (1) { prefill on engine (2); }
         }
-        run { horizon 20; warmup 0; seed 1; }
+
 "#;
-    let r = run(src);
+    let r = run(
+        src,
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(20.0)
+        },
+    );
     assert!(r.stages[0].idle_with_work, "{}", r.text());
     assert!(r.text().contains("idle: stage `engine`"), "{}", r.text());
 }
@@ -298,9 +340,18 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
         }
         server { hold reqs (1) { prefill on engine (2); }
         }
-        run { horizon 20; warmup 0; seed 1; }
+
 "#;
-    let e = run_source(&common::main_source(src), &Overrides::default(), None).unwrap_err();
+    let e = run_source(
+        &common::main_source(src),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(20.0)
+        },
+        None,
+    )
+    .unwrap_err();
     assert!(e.contains("a test is 1 or 0"), "{e}");
 }
 
@@ -330,12 +381,19 @@ fn a_register_remembers_the_last_iteration() {
             decode on engine (30);
           }}
         }}
-        run {{ horizon 40; warmup 0; seed 1; }}
+
 "#
         )
     };
     let wait = |body: &str| {
-        let r = run(&prog(body));
+        let r = run(
+            &prog(body),
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(40.0)
+            },
+        );
         r.observe("wait").unwrap().samples.clone()
     };
     let every = wait("");
@@ -373,9 +431,16 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
         server { hold reqs (1) { prefill on engine (100); }
         }
         gauge count = n;
-        run { horizon 30; warmup 0; seed 1; }
+
 "#;
-    let r = run(src);
+    let r = run(
+        src,
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(30.0)
+        },
+    );
     // the first session is admitted and gets 4 tokens; after that its
     // prefill is excluded and nothing else may be admitted: every later
     // arrival is an event and a try, and none is an iteration
@@ -396,20 +461,26 @@ fn a_register_is_the_stage_s_own() {
         }}
         server {{ hold reqs (1) {{ prefill on engine (2); }} {session}
         }}
-        run {{ horizon 20; }}
+
 "#
         )
     };
     let err = |stage: &str, session: &str| {
         compile_source(
             &common::main_source(&prog(stage, session)),
-            &Overrides::default(),
+            &common::horizon(20.0),
         )
         .err()
         .unwrap_or_else(|| panic!("`{stage}` `{session}` linked"))
     };
     let body = "state k = 0; iteration { serve; admit; set k = k + 1; }";
-    assert!(compile_source(&common::main_source(&prog(body, "")), &Overrides::default()).is_ok());
+    assert!(
+        compile_source(
+            &common::main_source(&prog(body, "")),
+            &common::horizon(20.0)
+        )
+        .is_ok()
+    );
     assert!(err("state k = 0;", "").contains("nothing sets"));
     // a stage `serve only` is a body, but none that sets the register
     assert!(err("state k = 0; serve only (decoding);", "").contains("nothing sets"));
@@ -440,14 +511,14 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
         }}
         server {{ {hold}
         }}
-        run {{ horizon 20; }}
+
 "#
         )
     };
     let ok = |extra: &str, hold: &str| {
         compile_source(
             &common::main_source(&prog(extra, hold)),
-            &Overrides::default(),
+            &common::horizon(20.0),
         )
     };
     let base = "hold reqs (1) { prefill on b (2); }";
@@ -497,9 +568,16 @@ fn a_try_that_admitted_keeps_its_sets() {
         server { hold reqs (1) { prefill on engine (2); }
         }
         gauge seen = k;
-        run { horizon 10; warmup 0; seed 1; }
+
 "#;
-    let r = run(src);
+    let r = run(
+        src,
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(10.0)
+        },
+    );
     assert!(r.pool("reqs").unwrap().admissions > 0, "{}", r.text());
     assert!(r.gauge("seen").unwrap().max >= 1.0, "{}", r.text());
 }
@@ -530,9 +608,16 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
             decode on engine (9) growing kv;
           }
         }
-        run { horizon 50; warmup 0; seed 1; }
+
 "#;
-    let r = run(src);
+    let r = run(
+        src,
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(50.0)
+        },
+    );
     assert_eq!(r.pool("kv").unwrap().rejected, 0, "{}", r.text());
     assert!(r.pool("reqs").unwrap().admissions > 20, "{}", r.text());
 }

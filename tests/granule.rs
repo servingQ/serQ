@@ -31,7 +31,7 @@ fn prog(granule: &str) -> String {
             observe ttft = now - t0;
           }}
         }}
-        run {{ horizon 20; warmup 0; seed 1; }}
+
 "#
     )
 }
@@ -39,7 +39,7 @@ fn prog(granule: &str) -> String {
 fn ttft(granule: &str) -> Vec<f64> {
     let r = run_source(
         &common::main_source(&prog(granule)),
-        &Overrides::default(),
+        &common::horizon(20.0),
         None,
     )
     .unwrap();
@@ -59,7 +59,7 @@ fn a_prefill_takes_its_whole_remainder_or_a_multiple_of_the_granule() {
 #[test]
 fn a_granule_is_above_zero() {
     for g in ["granule 0;", "granule -1;"] {
-        let e = compile_source(&common::main_source(&prog(g)), &Overrides::default()).unwrap_err();
+        let e = compile_source(&common::main_source(&prog(g)), &common::horizon(20.0)).unwrap_err();
         assert!(e.contains("above 0"), "{g}: {e}");
     }
 }
@@ -76,7 +76,7 @@ fn a_granule_that_could_never_be_given_does_not_link() {
         ("chunk 3; granule 4;", "chunk"),
     ] {
         let src = prog(opts);
-        let e = compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
+        let e = compile_source(&common::main_source(&src), &common::horizon(20.0)).unwrap_err();
         assert!(e.contains(message), "{opts}: {e}");
     }
     // above the budget is allowed: a prompt that fits the budget is run
@@ -84,7 +84,7 @@ fn a_granule_that_could_never_be_given_does_not_link() {
     assert!(
         compile_source(
             &common::main_source(&prog("granule 16;")),
-            &Overrides::default()
+            &common::horizon(20.0)
         )
         .is_ok()
     );
@@ -108,9 +108,18 @@ fn the_chunk_caps_and_the_granule_rounds() {
           set t0 = now;
           hold reqs (1) { prefill on engine (10); observe ttft = now - t0; }
         }
-        run { horizon 20; warmup 0; seed 1; }
+
 "#;
-    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+    let r = run_source(
+        &common::main_source(src),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(20.0)
+        },
+        None,
+    )
+    .unwrap();
     // 4 at the first, 6 at the second (the whole remainder, not capped
     // below the chunk): done at 2
     assert_eq!(r.observe("ttft").unwrap().samples, [2.0]);
@@ -140,9 +149,18 @@ fn a_refused_prefill_ends_the_admissions() {
             prefill on engine (6) growing kv;
           }
         }
-        run { horizon 20; warmup 0; seed 1; }
+
 "#;
-    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+    let r = run_source(
+        &common::main_source(src),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(20.0)
+        },
+        None,
+    )
+    .unwrap();
     let admitted = &r.observe("admitted").unwrap().samples;
     assert_eq!(
         admitted.iter().filter(|&&t| t == 0.0).count(),

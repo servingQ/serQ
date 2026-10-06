@@ -129,7 +129,7 @@ program above does not establish either Poisson result.
 Run the default 200-request burst with seed 1:
 
 ```bash
-serq run examples/papers/kong_svf.sq
+serq run examples/papers/kong_svf.sq --instance examples/papers/instances/kong_svf/default.sq
 ```
 
 Selected report columns ($M=20\,000$, $P=2\,500$):

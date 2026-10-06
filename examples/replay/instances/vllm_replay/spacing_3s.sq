@@ -1,3 +1,5 @@
 // The 3.0 s run of docs/language.md §8: sessions 3 s apart, the rest of
 // the A100 deployment as vllm_replay.sq states it.
 let spacing = 3.0;
+
+run { horizon 6000; warmup 0; seed 1; }

@@ -30,7 +30,7 @@ const STUCK: &str = r#"
             run engine decode (100) growing kv;
           }
         }
-        run { horizon 400; }
+
 "#;
 
 #[test]
@@ -39,11 +39,22 @@ fn a_stuck_run_prints_its_report_and_exits_0() {
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("stuck.sq");
     std::fs::write(&file, common::main_source(STUCK)).unwrap();
-    let out = serq().arg("run").arg(&file).output().unwrap();
+    let out = serq()
+        .arg("run")
+        .arg(&file)
+        .args(["--horizon", "400"])
+        .output()
+        .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{text}");
     assert!(text.contains("stuck: 1 session(s)"), "{text}");
-    let out = serq().arg("run").arg(&file).arg("--json").output().unwrap();
+    let out = serq()
+        .arg("run")
+        .arg(&file)
+        .args(["--horizon", "400"])
+        .arg("--json")
+        .output()
+        .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{text}");
     assert!(text.contains("\"stuck\":1"), "{text}");
@@ -57,11 +68,16 @@ fn a_program_that_does_not_load_exits_1() {
     std::fs::write(
         &file,
         common::main_source(
-        "stage svc : delay;\nworkload { session { request; end; \n} }\nserver { run nowhere (1);\n}\nrun { horizon 1; }\n",
+        "stage svc : delay;\nworkload { session { request; end; \n} }\nserver { run nowhere (1);\n}\n\n",
         ),
     )
     .unwrap();
-    let out = serq().arg("run").arg(&file).output().unwrap();
+    let out = serq()
+        .arg("run")
+        .arg(&file)
+        .args(["--horizon", "400"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("nowhere"));
 }
@@ -79,12 +95,17 @@ fn a_runtime_guard_error_exits_1_without_a_panic() {
           }
         }
         server { branch (c / K) { run svc (1); }
-        } run { horizon 10; }
+        }
 ",
         ),
     )
     .unwrap();
-    let out = serq().arg("run").arg(&file).output().unwrap();
+    let out = serq()
+        .arg("run")
+        .arg(&file)
+        .args(["--horizon", "400"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(out.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&out.stderr);

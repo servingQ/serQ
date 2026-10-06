@@ -1,0 +1,2 @@
+// Execution settings for closed.sq. Pass explicitly with --instance.
+run { horizon 200000; warmup 20000; seed 1; }

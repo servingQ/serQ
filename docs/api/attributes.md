@@ -46,8 +46,13 @@ fn main() {
     observe request_id = serial;
     observe current_turn = turn_no;
   }
-  run { horizon 10; }
 }
+```
+
+Save as `model.sq`, then run:
+
+```sh
+serq run model.sq --horizon 10
 ```
 
 ## See also

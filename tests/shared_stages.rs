@@ -7,8 +7,8 @@ mod common;
 
 use serq::{Overrides, check_source, run_source};
 
-fn run(src: &str) -> serq::Report {
-    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
+fn run(src: &str, options: &Overrides) -> serq::Report {
+    run_source(&common::main_source(src), options, None).unwrap()
 }
 
 fn at(r: &serq::Report, name: &str) -> Vec<f64> {
@@ -50,15 +50,19 @@ fn two_reads_share_the_senders_link() {
             run D[j] (1);
           }}
         }}
-        run {{ horizon 10; }}"
+        "
         );
-        close(&at(&run(&src), "transferred"), &[3.0, 3.0]);
+        close(
+            &at(&run(&src, &common::horizon(10.0)), "transferred"),
+            &[3.0, 3.0],
+        );
     }
 }
 
 fn three(share: &str, horizon: f64) -> serq::Report {
-    run(&format!(
-        "stage A : ps(1); stage B : ps(2);
+    run(
+        &format!(
+            "stage A : ps(1); stage B : ps(2);
         share {share};
         workload {{ arrive batch(3);
           session {{ request;
@@ -71,8 +75,10 @@ fn three(share: &str, horizon: f64) -> serq::Report {
           branch (serial == 1) {{ run A (1); observe f2 = now; }}
           branch (serial == 2) {{ run B (1); observe f3 = now; }}
         }}
-        run {{ horizon {horizon}; }}"
-    ))
+        "
+        ),
+        &common::horizon(horizon),
+    )
 }
 
 /// Three flows of work 1 from t = 0: `A` (capacity 1) carries f1 and f2,
@@ -124,12 +130,12 @@ fn a_ps_stage_nobody_shares_is_unchanged() {
         }
         server { run A (1); observe done = now;
         }
-        run { horizon 5; }";
-    close(&at(&run(src), "done"), &[2.0, 2.0]);
+        ";
+    close(&at(&run(src, &common::horizon(5.0)), "done"), &[2.0, 2.0]);
 }
 
 fn err(src: &str) -> String {
-    check_source(&common::main_source(src), &Overrides::default()).expect_err("rejected")
+    check_source(&common::main_source(src), &common::horizon(10.0)).expect_err("rejected")
 }
 
 const HEAD: &str = "stage A : ps(1); stage B : ps(2); stage C : fifo; stage E[2] : ps(1);
@@ -139,11 +145,11 @@ const HEAD_WORKLOAD: &str = "arrive batch(1);";
 #[test]
 fn a_run_over_several_stages_needs_the_programs_share() {
     let e = err(&format!(
-        "{HEAD} workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run A, B (1);\n}} run {{ horizon 1; }}"
+        "{HEAD} workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run A, B (1);\n}} "
     ));
     assert!(e.contains("needs the program's `share`"), "{e}");
     let e = err(&format!(
-        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run A (1);\n}} run {{ horizon 1; }}"
+        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run A (1);\n}} "
     ));
     assert!(
         e.contains("`share` without a run over several stages"),
@@ -154,7 +160,7 @@ fn a_run_over_several_stages_needs_the_programs_share() {
 #[test]
 fn a_shared_stage_is_ps_of_a_constant() {
     let e = err(&format!(
-        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run A, C (1);\n}} run {{ horizon 1; }}"
+        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run A, C (1);\n}} "
     ));
     assert!(e.contains("stage `C`"), "{e}");
     assert!(e.contains("constant"), "{e}");
@@ -165,7 +171,7 @@ fn a_shared_stage_is_ps_of_a_constant() {
           }
         }
         server { run A, N (1);
-        } run { horizon 1; }",
+        } ",
     );
     assert!(e.contains("stage `N`"), "{e}");
 }
@@ -175,7 +181,7 @@ fn a_shared_stage_is_ps_of_a_constant() {
 #[test]
 fn a_run_names_each_stage_array_once() {
     let e = err(&format!(
-        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run E[0], E[1] (1);\n}} run {{ horizon 1; }}"
+        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run E[0], E[1] (1);\n}} "
     ));
     assert!(e.contains("named twice"), "{e}");
 }
@@ -190,9 +196,9 @@ fn transfer_on_several_stages_is_sugar() {
     let head_workload = "arrive batch(1);";
     let ir = |body: &str| {
         let src = format!(
-            "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold q (1) {{ hold p (1) {{ {body} }} }}\n}} run {{ horizon 5; }}"
+            "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold q (1) {{ hold p (1) {{ {body} }} }}\n}} "
         );
-        serq::compile_source(&common::main_source(&src), &Overrides::default())
+        serq::compile_source(&common::main_source(&src), &common::horizon(5.0))
             .unwrap()
             .to_json()
     };
@@ -229,10 +235,29 @@ fn a_seed_reproduces_a_run_with_flows() {
           run E[i], F, I[j] (~exp(0.3));
           observe left = work(F);
         }
-        run { horizon 200; warmup 20; seed 3; }";
-    let a = run(src).json();
+        ";
+    let a = run(
+        src,
+        &Overrides {
+            warmup: Some(20.0),
+            seed: Some(3),
+            ..common::horizon(200.0)
+        },
+    )
+    .json();
     for _ in 0..4 {
-        assert_eq!(run(src).json(), a);
+        assert_eq!(
+            run(
+                src,
+                &Overrides {
+                    warmup: Some(20.0),
+                    seed: Some(3),
+                    ..common::horizon(200.0)
+                }
+            )
+            .json(),
+            a
+        );
     }
 }
 
@@ -244,7 +269,7 @@ fn a_shared_stage_has_a_capacity_above_zero() {
           }
         }
         server { run A, Z (1);
-        } run { horizon 1; }");
+        } ");
     assert!(e.contains("above 0"), "{e}");
 }
 
@@ -258,7 +283,7 @@ fn share_is_given_once() {
           }
         }
         server { run A, B (1);
-        } run { horizon 1; }");
+        } ");
     assert!(
         e.contains("`share` is given twice: the first is on line 2"),
         "{e}"

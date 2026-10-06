@@ -85,5 +85,5 @@ fn main() {
     observe response = now - t0;
   }
 
-  run { horizon 2000; warmup 200; seed 1; }
+
 }

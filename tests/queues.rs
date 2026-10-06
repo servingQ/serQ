@@ -13,10 +13,10 @@ use serq::{
 /// Compile both; the queue program's IR with `renames` applied to its JSON
 /// is the flat program's IR.
 fn same_ir(queues: &str, flat: &str, renames: &[(&str, &str)]) {
-    let q = compile_source(&common::main_source(queues), &Overrides::default())
+    let q = compile_source(&common::main_source(queues), &common::horizon(100.0))
         .unwrap_or_else(|e| panic!("queues: {e}\n{queues}"))
         .to_json();
-    let f = compile_source(&common::main_source(flat), &Overrides::default())
+    let f = compile_source(&common::main_source(flat), &common::horizon(100.0))
         .unwrap_or_else(|e| panic!("flat: {e}\n{flat}"))
         .to_json();
     let mut q = q;
@@ -29,7 +29,7 @@ fn same_ir(queues: &str, flat: &str, renames: &[(&str, &str)]) {
 fn refused(src: &str, needle: &str) {
     let e = match parse(&common::main_source(src)) {
         Err(e) => e.to_string(),
-        Ok(p) => match serq::frontend::link::link(&p, &Overrides::default()) {
+        Ok(p) => match serq::frontend::link::link(&p, &common::horizon(100.0)) {
             Err(e) => e.to_string(),
             Ok(_) => panic!("accepted:\n{src}"),
         },
@@ -37,7 +37,7 @@ fn refused(src: &str, needle: &str) {
     assert!(e.contains(needle), "{src}\n  {e}");
 }
 
-const WORKLOAD: &str = "workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request gw; end; } } run { horizon 100; }";
+const WORKLOAD: &str = "workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request gw; end; } } ";
 
 /// The engine's admission, allocation and service inside the queue; the
 /// named request selects the gateway's `route`; the family's size is a constant.
@@ -92,7 +92,7 @@ fn a_queue_family_sized_by_an_aggregate() {
         )
     };
     let ir = |src: &str| {
-        serq::compile_source(&common::main_source(src), &Overrides::default())
+        serq::compile_source(&common::main_source(src), &common::horizon(100.0))
             .unwrap()
             .to_json()
     };
@@ -132,7 +132,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
       }
       queue nic[ND] : link { serve ps(1); transfer (n) { run (n / Bw); } }
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request gw; end; } }
-      run { horizon 100; }";
+      ";
     let flat = "
         let ND = 2; let Bw = 1000;
         pool kvP { cap 1000; }
@@ -152,7 +152,7 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
           observe ttft = first - t0;
         }
         workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request; end; } }
-        run { horizon 100; }";
+        ";
     same_ir(
         queues,
         flat,
@@ -199,7 +199,7 @@ fn a_read_over_both_links_is_the_flat_read() {
       }
       share maxmin;
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request gw; end; } }
-      run { horizon 100; }";
+      ";
     let flat = "
         let NP = 2; let ND = 2;
         stage egress[2] : ps(100);
@@ -219,7 +219,7 @@ fn a_read_over_both_links_is_the_flat_read() {
           }
         }
         workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
-        run { horizon 100; }";
+        ";
     same_ir(queues, flat, &[("P.kv", "kvP"), ("D.kv", "kvD")]);
 }
 
@@ -253,7 +253,7 @@ fn a_link_latency_is_a_wait_before_the_read() {
       }
       share maxmin;
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request gw; end; } }
-      run { horizon 100; }";
+      ";
     let flat = "
         let x0 = 0.5; let x1 = 0.25;
         stage egress[2] : ps(100);
@@ -275,7 +275,7 @@ fn a_link_latency_is_a_wait_before_the_read() {
           }
         }
         workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
-        run { horizon 100; }";
+        ";
     same_ir(
         queues,
         flat,
@@ -314,7 +314,7 @@ fn a_latency_is_the_links_constant() {
       }}
       share maxmin;
       workload {{ arrive batch(1); init {{ set prompt = 32; }} session {{ request gw; end; }} }}
-      run {{ horizon 100; }}"
+      "
         )
     };
     let wait = |src: &str, ov: &Overrides| -> String {
@@ -326,14 +326,14 @@ fn a_latency_is_the_links_constant() {
         ir
     };
     // the entry's parameter `x` is not the constant `x`
-    let named = wait(&program("x", "x"), &Overrides::default());
-    let other = wait(&program("x", "y"), &Overrides::default());
+    let named = wait(&program("x", "x"), &common::horizon(100.0));
+    let other = wait(&program("x", "y"), &common::horizon(100.0));
     assert_eq!(named, other.replace("\"y\"", "\"x\""));
     assert!(named.contains("0.5"), "waits 0.5, the constant");
     // --set reaches the latency
     let ov = Overrides {
         lets: vec![("x".into(), parse_expr("0.125").unwrap())],
-        ..Default::default()
+        ..common::horizon(100.0)
     };
     assert!(wait(&program("x", "y"), &ov).contains("0.125"));
     for bad in ["~exp(1)", "work(egress)"] {
@@ -358,9 +358,9 @@ fn a_keyword_named_attribute_is_a_read() {
         }} }}
         server {{ set {word} = 1; f(get()); run s (1);
         }}
-        run {{ horizon 1; }}"
+        "
         );
-        let e = compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
+        let e = compile_source(&common::main_source(&src), &common::horizon(1.0)).unwrap_err();
         assert!(
             e.contains(&format!("reads `{word}`, which `f` assigns")),
             "{e}"
@@ -378,7 +378,7 @@ fn a_latency_belongs_to_a_link() {
         "`latency` belongs to the `serve` of a queue that plays `link`",
     );
     refused(
-        "stage s : ps(1) latency 1; workload { session { request; end; \n} }\nserver { run s (1);\n} run { horizon 1; }",
+        "stage s : ps(1) latency 1; workload { session { request; end; \n} }\nserver { run s (1);\n} ",
         "`latency` belongs to the `serve` of a queue that plays `link`",
     );
     refused(
@@ -410,7 +410,7 @@ fn a_link_has_a_cost() {
         decode (p) { hold kv (p) { prefill (p) growing kv; } }
         decode (p) from src { hold kv (p) { BODY } } }
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } session { request gw; end; } }
-      run { horizon 1; }";
+      ";
     refused(
         &calls.replace("BODY", "nic.transfer (p) from src to kv (p);"),
         "its `serve` is its cost: `transfer on nic[…] (n) from S to P (m);`",
@@ -438,7 +438,7 @@ fn an_admission_binding_sees_the_entry_only() {
          queue E : decode { pool kv { cap 100; } serve step { cost 1; memory kv; }
            decode (prompt) { hold kv (x) at admission (x = prompt + t0) { prefill (1) growing kv; } } }
          workload { arrive batch(1); init { set prompt = 3; } session { request gw; end; } }
-         run { horizon 10; }",
+         ",
         "the header reads `t0`",
     );
 }
@@ -501,7 +501,8 @@ fn an_entry_sees_its_parameters_and_its_queue() {
 
 #[test]
 fn roles_and_entries_agree() {
-    let rest = "workload { arrive batch(1); init { set prompt = 1; } session { request gw; end; } } run { horizon 1; }";
+    let rest =
+        "workload { arrive batch(1); init { set prompt = 1; } session { request gw; end; } } ";
     refused(
         &format!("queue gw : gateway {{ route {{ }} }} queue P : prefill {{ serve fifo; }} {rest}"),
         "plays `prefill` and has no `prefill` entry",
@@ -546,7 +547,7 @@ fn a_call_is_checked_against_the_entry() {
     let program = |route: &str| {
         format!(
             "queue gw : gateway {{ route {{ {route} }} }} {decls}
-             workload {{ arrive batch(1); init {{ set prompt = 1; set j = 0; }} session {{ request gw; end; }} }} run {{ horizon 1; }}"
+             workload {{ arrive batch(1); init {{ set prompt = 1; set j = 0; }} session {{ request gw; end; }} }} "
         )
     };
     refused(&program("D.decode (prompt);"), "is a family of 2; index it");
@@ -568,19 +569,19 @@ fn a_call_is_checked_against_the_entry() {
     refused(&program("X.decode (prompt);"), "no queue `X` is declared");
     // `self` is a member's word
     refused(
-        "stage s : fifo; workload { session { request; end; \n} }\nserver { observe s = self;\n} run { horizon 1; }",
+        "stage s : fifo; workload { session { request; end; \n} }\nserver { observe s = self;\n} ",
         "`self` is a queue entry's word",
     );
     refused(
         "queue gw : gateway { route { observe s = self; } } stage s : fifo;
-         workload { arrive batch(1); session { request gw; end; } } run { horizon 1; }",
+         workload { arrive batch(1); session { request gw; end; } } ",
         "not a family",
     );
 }
 
 #[test]
 fn a_family_size_is_a_constant() {
-    let rest = "queue gw : gateway { route { E[j].decode (1); } } workload { arrive batch(1); init { set j = 0; } session { request gw; end; } } run { horizon 1; }";
+    let rest = "queue gw : gateway { route { E[j].decode (1); } } workload { arrive batch(1); init { set j = 0; } session { request gw; end; } } ";
     let decl = |n: &str| {
         format!(
             "use \"std/args\"; let N = args.number(\"N\", 2); queue E[{n}] : decode {{ pool kv {{ cap 10; }} serve step {{ cost 1; memory kv; }} decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }} }} {rest}"
@@ -590,7 +591,7 @@ fn a_family_size_is_a_constant() {
     assert!(parse(&common::main_source(&decl("N + 1"))).is_ok());
     // a family of one is still called by index: a program reads the same at N = 1
     let one = parse(&common::main_source(&decl("N - 1"))).unwrap();
-    assert!(serq::frontend::link::link(&one, &Overrides::default()).is_ok());
+    assert!(serq::frontend::link::link(&one, &common::horizon(1.0)).is_ok());
     // and only by index: one call, one spelling, whatever N is
     refused(
         &decl("N - 1").replace("E[j].decode", "E.decode"),
@@ -611,7 +612,7 @@ fn requests_select_named_gateways_in_nested_sessions_and_before_declarations() {
       queue unused : gateway { route { observe unused = 99; } }
       queue first : gateway { route { observe selected = 1; } }
       queue second : gateway { route { observe selected = 2; } }
-      run { horizon 1; }";
+      ";
     let flat = "
         workload { arrive batch(1);
           session { loop { request; end; }
@@ -619,7 +620,7 @@ fn requests_select_named_gateways_in_nested_sessions_and_before_declarations() {
         }
         server { branch (1) { observe selected = 2; } else { observe selected = 1; }
         }
-        run { horizon 1; }";
+        ";
     same_ir(queues, flat, &[]);
     same_ir(&queues.replace("second", "router"), flat, &[]);
 }
@@ -667,14 +668,14 @@ fn named_gateways_and_anonymous_servers_have_distinct_requests() {
         "queue gw : gateway { route { observe selected = 2; } }
         server { observe selected = 1; }
         workload { arrive batch(1); session { request; request gw; end; } }
-        run { horizon 1; }",
+        ",
         "workload { arrive batch(1);
           session { request; end;
           }
         }
         server { observe selected = 1; observe selected = 2;
         }
-        run { horizon 1; }",
+        ",
         &[],
     );
 }
@@ -687,7 +688,7 @@ fn call_indices_obey_entry_read_boundaries() {
          queue E : prefill {{ serve fifo; prefill (p) {{ {call} }} }}
          queue F[2] : prefill {{ serve fifo; prefill (p) {{ }} }}
          workload {{ arrive batch(1); init {{ set j = 0; }} session {{ request gw; end; }} }}
-         run {{ horizon 1; }}"
+         "
         )
     };
     for (call, needle) in [
@@ -732,7 +733,7 @@ fn an_expansion_is_bounded() {
     refused(
         &format!(
             "queue gw : gateway {{ route {{ Q0.prefill (prompt); }} }} {decls}
-             workload {{ arrive batch(1); init {{ set prompt = 1; }} session {{ request gw; end; }} }} run {{ horizon 1; }}"
+             workload {{ arrive batch(1); init {{ set prompt = 1; }} session {{ request gw; end; }} }} "
         ),
         "the queue calls expand to more than",
     );
@@ -749,7 +750,7 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
              queue E : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
                decode (p) {{ hold kv (p) {{ prefill (p) growing kv; decode (out) growing kv; }} }} }}
              workload {{ arrive batch(1); {hidden} init {{ set prompt = 3; set out = 2; }} session {{ request gw; end; }} }}
-             run {{ horizon 10; }}"
+             "
         )
     };
     refused(
@@ -758,7 +759,7 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
     );
     compile_source(
         &common::main_source(&program("hidden out;")),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
 }
@@ -774,13 +775,13 @@ fn a_def_captures_what_the_gateway_it_requests_assigns() {
              queue dirty : gateway {{ route {{ set x = now; E.decode (prompt); }} }}
              queue E : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
                decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }} }}
-             workload {{ arrive batch(1); hidden o; init {{ set prompt = 3; set o = 2; }} session {{ set x = 1; {session} end; }} }} run {{ horizon 10; }}"
+             workload {{ arrive batch(1); hidden o; init {{ set prompt = 3; set o = 2; }} session {{ set x = 1; {session} end; }} }} "
         )
     };
     let go = "def go(x) { request clean; observe b = x; }";
     compile_source(
         &common::main_source(&program(go, "go(x);")),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     let go = "def go(x) { request dirty; observe b = x; }";
@@ -789,7 +790,7 @@ fn a_def_captures_what_the_gateway_it_requests_assigns() {
     let send = "def send(g, x) { request g; observe b = x; }";
     compile_source(
         &common::main_source(&program(send, "send(clean, x);")),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     refused(
@@ -804,7 +805,7 @@ fn a_def_captures_what_the_gateway_it_requests_assigns() {
     let ask = "def ask(g) { request g; } def go(x) { ask(clean); observe b = x; }";
     compile_source(
         &common::main_source(&program(ask, "go(x);")),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     let ask = "def ask(g) { request g; } def go(x) { ask(dirty); observe b = x; }";
@@ -813,7 +814,7 @@ fn a_def_captures_what_the_gateway_it_requests_assigns() {
     let ask = "def ask(g) { request g; } def go(g, x) { ask(g); observe b = x; }";
     compile_source(
         &common::main_source(&program(ask, "go(clean, x);")),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     refused(
@@ -824,7 +825,7 @@ fn a_def_captures_what_the_gateway_it_requests_assigns() {
     let ask = "def ask() { request clean; } def go(x) { ask(); observe b = x; }";
     compile_source(
         &common::main_source(&program(ask, "go(x);")),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
 }
@@ -835,7 +836,7 @@ fn a_def_captures_what_the_gateway_it_requests_assigns() {
 fn the_contract_holds_at_every_edge() {
     let wl = |session: &str| {
         format!(
-            "workload {{ arrive batch(1); hidden o; init {{ set prompt = 3; set o = 2; }} session {{ {session} }} }} run {{ horizon 10; }}"
+            "workload {{ arrive batch(1); hidden o; init {{ set prompt = 3; set o = 2; }} session {{ {session} }} }} "
         )
     };
     let engine = "queue E : decode { pool kv { cap 100; } serve step { cost 1; memory kv; }
@@ -861,7 +862,7 @@ fn the_contract_holds_at_every_edge() {
              {}",
             wl("request gw; end;")
         )),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     // 3. a role's entry has the role's parameters
@@ -914,7 +915,7 @@ fn the_contract_holds_at_every_edge() {
 /// The fourth review of #87.
 #[test]
 fn the_contract_holds_at_four_more_edges() {
-    let wl = "workload { arrive batch(1); hidden o; init { set prompt = 3; set o = 2; } session { request gw; end; } } run { horizon 10; }";
+    let wl = "workload { arrive batch(1); hidden o; init { set prompt = 3; set o = 2; } session { request gw; end; } } ";
     let engine = |body: &str| {
         format!(
             "queue E[2] : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
@@ -927,7 +928,7 @@ fn the_contract_holds_at_four_more_edges() {
             "queue gw : gateway {{ route {{ E[0].decode (prompt); observe r = E.result; }} }} {} {wl}",
             engine("hold kv (p) { prefill (p) growing kv; } set result = 7;")
         )),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     // `Q[i].x` is refused in a function's argument too
@@ -1002,7 +1003,7 @@ fn a_pull_relation_is_the_flat_read() {
       }
       D pull P latency x0 share maxmin;
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request gw; end; } }
-      run { horizon 100; }";
+      ";
     let flat = "
         let x0 = 0.5;
         pool kvP[2] { cap 1000; }
@@ -1022,7 +1023,7 @@ fn a_pull_relation_is_the_flat_read() {
           }
         }
         workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
-        run { horizon 100; }";
+        ";
     same_ir(
         queues,
         flat,
@@ -1052,12 +1053,12 @@ fn a_pull_relation_says_what_it_couples() {
                decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }}
                decode (p) from src {{ hold kv (p) {{ transfer (p) from src to kv (p); }} }} }}
              {rel}
-             workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ request gw; end; }} }} run {{ horizon 10; }}"
+             workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ request gw; end; }} }} "
         )
     };
     compile_source(
         &common::main_source(&program("nic ps(1);", "D pull P share maxmin;", "P")),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     refused(
@@ -1102,7 +1103,7 @@ fn a_pull_relation_says_what_it_couples() {
 /// What the review of the rebased #87 found an entry could still reach.
 #[test]
 fn an_entry_reaches_only_its_own() {
-    let wl = "workload { arrive batch(1); hidden o, src; init { set prompt = 3; set o = 2; set src = 7; } session { request gw; end; } } run { horizon 10; }";
+    let wl = "workload { arrive batch(1); hidden o, src; init { set prompt = 3; set o = 2; set src = 7; } session { request gw; end; } } ";
     // the `from` name is a number only in an index, whatever `hidden` says
     refused(
         &format!(
@@ -1193,14 +1194,14 @@ fn each_overload_substitutes_only_its_own_locals() {
          }
          workload { arrive batch(1); hidden x; init { set x = 3; }
            session { request gw; end; } }
-         run { horizon 1; }",
+         ",
         "stage D : fifo;
         workload { arrive batch(1); hidden x; init { set x = 3; }
           session { request; end;
           }
         }
         server { observe seen = x;
-        } run { horizon 1; }",
+        } ",
         &[],
     );
 }
@@ -1211,13 +1212,13 @@ fn array_sizes_reject_direct_and_indirect_overrides() {
       queue D[M] : decode { serve fifo; decode (p) { } }
       queue gw : gateway { route { D[2].decode (1); } }
       workload { arrive batch(1); session { request gw; end; } }
-      run { horizon 1; }";
+      ";
     // N directly sizes D and M indirectly sizes it; both reads are checked.
     for src in [src.to_string(), src.replace("D[M]", "D[N]")] {
         let name = "N";
         let ov = Overrides {
             lets: vec![(name.into(), parse_expr("4").unwrap())],
-            ..Overrides::default()
+            ..common::horizon(1.0)
         };
         let err = compile_source(&common::main_source(&src), &ov).unwrap_err();
         assert!(
@@ -1240,8 +1241,8 @@ fn long_acyclic_delegation_succeeds_and_cycles_fail() {
             "queue Q{i} : prefill {{ serve fifo; prefill (p) {{ {body} }} }}\n"
         ));
     }
-    src.push_str("workload { arrive batch(1); session { request gw; end; } } run { horizon 1; }");
-    compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
+    src.push_str("workload { arrive batch(1); session { request gw; end; } } ");
+    compile_source(&common::main_source(&src), &common::horizon(1.0)).unwrap();
     let cycle = src.replace("observe done = p;", "Q0.prefill (p);");
     refused(&cycle, "entries call each other in a cycle");
 }
@@ -1251,7 +1252,7 @@ fn expansion_errors_point_to_the_call() {
     let src = "queue gw : gateway { route {\n  D.decode ();\n} }
 queue D : decode { serve fifo; decode (p) { } }
 workload { arrive batch(1); session { request gw; end; } }
-run { horizon 1; }";
+";
     let err = parse(&common::main_source(src)).unwrap_err();
     assert_eq!((err.line, err.col), (2, 3));
     assert!(err.msg.contains("takes 1 argument(s), got 0"), "{err}");

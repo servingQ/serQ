@@ -7,8 +7,8 @@ mod common;
 
 use serq::{Overrides, check_source, run_source};
 
-fn run(src: &str) -> serq::Report {
-    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
+fn run(src: &str, options: &Overrides) -> serq::Report {
+    run_source(&common::main_source(src), options, None).unwrap()
 }
 
 fn samples(r: &serq::Report, name: &str) -> Vec<f64> {
@@ -41,9 +41,9 @@ fn release_frees_the_pool_before_the_scope_ends() {
           }
           observe free_at_end = free(kv);
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     // session 0 at 0; session 1 arrives at 1 and is admitted at the release
     // (not at 6): the pool is free for it and taken by it at once
     assert_eq!(samples(&r, "admitted"), [0.0, 0.0]);
@@ -70,9 +70,9 @@ fn release_caches_per_the_hold_clause() {
           hold kv (8) { run svc (1); release kv; run svc (1); } cache (8);
           hold kv (8) { observe hit = cached; } cache (0);
         }
-        run { horizon 100; }
+
 "#;
-    assert_eq!(samples(&run(src), "hit"), [8.0]);
+    assert_eq!(samples(&run(src, &common::horizon(100.0)), "hit"), [8.0]);
 }
 
 /// A hold on two pools gives one back early and keeps the other to its end:
@@ -101,9 +101,9 @@ fn a_hold_on_two_pools_releases_one_of_them() {
             observe kv_used = used(kv);
           }
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     assert_eq!(
         samples(&r, "got_slot"),
         [0.0, 1.0],
@@ -134,10 +134,10 @@ fn load_advances_the_computed_position() {
           hold kv (40) { run svc (1); load kv (30); } cache (40);
           hold kv (40) { observe hit = cached; } cache (0);
         }
-        run { horizon 100; }
+
 "#;
     // nothing was computed before the load: 30 of the 40 are cached
-    assert_eq!(samples(&run(src), "hit"), [30.0]);
+    assert_eq!(samples(&run(src, &common::horizon(100.0)), "hit"), [30.0]);
 }
 
 /// A load past the allocation is a program error, said at the statement.
@@ -152,9 +152,9 @@ fn load_must_fit_the_allocation() {
         }
         server { hold kv (10) { load kv (11); }
         }
-        run { horizon 10; }
+
 "#;
-    let msg = run_source(&common::main_source(src), &Overrides::default(), None).unwrap_err();
+    let msg = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap_err();
     assert!(msg.contains("must fit the allocation"), "{msg}");
 }
 
@@ -170,9 +170,9 @@ fn release_and_load_need_an_enclosing_hold() {
           }}
         }}
         server {{ {stmt}
-        }} run {{ horizon 10; }}"
+        }} "
         );
-        let e = check_source(&common::main_source(&src), &Overrides::default())
+        let e = check_source(&common::main_source(&src), &common::horizon(10.0))
             .err()
             .unwrap_or_else(|| panic!("`{stmt}` linked"));
         assert!(e.contains("outside a hold of `kv`"), "{stmt}: {e}");
@@ -197,9 +197,9 @@ fn grow_and_growing_need_an_enclosing_hold() {
           }}
         }}
         server {{ {stmt}
-        }} run {{ horizon 10; }}"
+        }} "
         );
-        let e = check_source(&common::main_source(&src), &Overrides::default())
+        let e = check_source(&common::main_source(&src), &common::horizon(10.0))
             .err()
             .unwrap_or_else(|| panic!("`{stmt}` linked"));
         assert!(e.contains("outside a hold of `kv`"), "{stmt}: {e}");
@@ -213,8 +213,8 @@ fn grow_and_growing_need_an_enclosing_hold() {
         }
         server { hold kv (16) { run d (1); } lease kv (5); grow kv (16);
         }
-        run { horizon 10; }";
-    let e = check_source(&common::main_source(src), &Overrides::default()).unwrap_err();
+        ";
+    let e = check_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     assert!(
         e.contains("it acts on an enclosing hold's allocation"),
         "{e}"
@@ -228,8 +228,8 @@ fn grow_and_growing_need_an_enclosing_hold() {
         }
         server { hold kv (8) { grow kv (8); run engine prefill (8) growing kv; }
         }
-        run { horizon 10; }";
-    check_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    check_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
 }
 
 /// A hold a pool may preempt is admitted anew and reads its indices again:
@@ -252,17 +252,17 @@ fn a_preemptible_hold_reads_no_moving_index() {
             prefill 16 growing kv; decode 200 growing kv;
           }}
         }}
-        run {{ horizon 500; }}"
+        "
         )
     };
-    let e = check_source(&common::main_source(&src("lifo")), &Overrides::default()).unwrap_err();
+    let e = check_source(&common::main_source(&src("lifo")), &common::horizon(500.0)).unwrap_err();
     assert!(e.contains("`kv` may preempt it"), "{e}");
     // `computed`, which the preemption sets before the hold is admitted anew
     let e = check_source(
         &common::main_source(
             &src("lifo").replace("aux[1 - min(1, floor(now))]", "aux[min(1, computed)]"),
         ),
-        &Overrides::default(),
+        &common::horizon(500.0),
     )
     .unwrap_err();
     assert!(e.contains("`kv` may preempt it"), "{e}");
@@ -272,10 +272,10 @@ fn a_preemptible_hold_reads_no_moving_index() {
         "hold kv (16) { hold aux[1 - min(1, floor(now))] (1) {",
     );
     let nested = nested.replace("decode 200 growing kv;", "decode 200 growing kv; }");
-    let e = check_source(&common::main_source(&nested), &Overrides::default()).unwrap_err();
+    let e = check_source(&common::main_source(&nested), &common::horizon(500.0)).unwrap_err();
     assert!(e.contains("`kv` may preempt it"), "{e}");
     // a hold no pool preempts reads its index once
-    check_source(&common::main_source(&src("none")), &Overrides::default()).unwrap();
+    check_source(&common::main_source(&src("none")), &common::horizon(500.0)).unwrap();
 }
 
 /// A hold's index is read at admission, at a statement inside that acts on
@@ -294,9 +294,9 @@ fn a_hold_whose_body_changes_its_index_does_not_link() {
           }}
         }}
         server {{}}
-        run {{ horizon 10; }}"
+        "
         );
-        check_source(&common::main_source(&src), &Overrides::default())
+        check_source(&common::main_source(&src), &common::horizon(10.0))
     };
     for body in [
         "set j = 1; grow kv[j] (16);",
@@ -359,9 +359,9 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
           branch (kind == 1) { run gate (0.5); hold memP (10) { observe p_admitted = now; } }
           branch (kind == 2) { run gate (1.5); hold memD (10) { observe d_admitted = now; } }
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     // the source is free the moment the link run ends (the waiting session
     // holds it now, alone), the destination is held on
     assert_eq!(samples(&r, "p_holders"), [1.0]);
@@ -380,7 +380,7 @@ fn transfer_from_to_is_sugar_for_three_statements() {
         }
         server { hold memP (10) { hold memD (10) { transfer (1) from memP to memD (9); } }
         }
-        run { horizon 10; }";
+        ";
     let b = "pool memP { cap 10; } pool memD { cap 10; } stage link : delay;
         workload { arrive batch(1);
           session { request; end;
@@ -388,9 +388,9 @@ fn transfer_from_to_is_sugar_for_three_statements() {
         }
         server { hold memP (10) { hold memD (10) { run link (1); load memD (9); release memP; } }
         }
-        run { horizon 10; }";
+        ";
     let ir = |s: &str| {
-        serq::compile_source(&common::main_source(s), &Overrides::default())
+        serq::compile_source(&common::main_source(s), &common::horizon(10.0))
             .unwrap()
             .to_json()
     };
@@ -425,7 +425,7 @@ fn decode_pressure_backs_into_the_prefill_pool() {
             decode (10);
           }
         }
-        run { horizon 15; }
+
 "#;
     let store_and_forward = r#"
         pool memP { cap 20; }
@@ -445,16 +445,16 @@ fn decode_pressure_backs_into_the_prefill_pool() {
           hold memP (10) { prefill (0.1); observe prefilled = serial; run link (0.1); }
           hold memD (10) { decode (10); }
         }
-        run { horizon 15; }
+
 "#;
     // one decode of 10 s fits the decoder; by t = 15 one has finished and a
     // second is running. NIXL: the prefiller's two slots are taken by the
     // request decoding (its lease ended) ... no: by the requests waiting for
     // the decoder with their blocks leased, so only what the decoder drained
     // got prefilled.
-    let r = run(nixl);
+    let r = run(nixl, &common::horizon(15.0));
     let n = samples(&r, "prefilled").len();
-    let s = run(store_and_forward);
+    let s = run(store_and_forward, &common::horizon(15.0));
     let m = samples(&s, "prefilled").len();
     assert_eq!(m, 6, "store-and-forward prefills everything at once");
     assert!(
@@ -487,9 +487,9 @@ fn a_re_executed_hold_releases_nothing_twice() {
             }
           }
         }
-        run { horizon 30; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(30.0));
     let free = samples(&r, "p_free");
     assert!(free.len() > 1, "the hold was re-executed: {free:?}");
     assert!(free.iter().all(|&f| f == 100.0), "{free:?}");
@@ -522,15 +522,15 @@ fn an_engine_serves_its_queues_in_declaration_order() {
           branch (serial == 1) {{ hold a (1) {{ run engine decode (1); }} }}
           branch (serial == 2) {{ hold b (1) {{ observe b_admitted = now; run engine decode (1); }} }}
         }}
-        run {{ horizon 200; }}
+
 "#
         )
     };
     // `a` first: its head (session 1, no room until 50) blocks `b`'s
-    let r = run(&program("a", "b"));
+    let r = run(&program("a", "b"), &common::horizon(200.0));
     assert_eq!(samples(&r, "b_admitted"), [50.0], "{}", r.text());
     // `b` first: session 2 is admitted by the step that starts as it queues
-    let r = run(&program("b", "a"));
+    let r = run(&program("b", "a"), &common::horizon(200.0));
     assert_eq!(samples(&r, "b_admitted"), [2.0], "{}", r.text());
 }
 
@@ -558,7 +558,7 @@ fn the_pd_program_survives_decoder_memory_pressure() {
         ],
         horizon: Some(400.0),
         warmup: Some(50.0),
-        ..Default::default()
+        ..common::horizon(100.0)
     };
     let path = serq::program_path("llmd_nixl_pull");
     let r = run_source(&common::main_source(&src), &ov, path.parent()).unwrap();
@@ -591,7 +591,7 @@ fn a_local_prefill_does_not_block_an_arrived_transfer() {
         horizon: Some(800.0),
         warmup: Some(50.0),
         seed: Some(20),
-        ..Default::default()
+        ..common::horizon(100.0)
     };
     let r = run_source(&common::main_source(&src), &ov, path.parent()).unwrap();
     assert!(r.mean_live < 30.0, "{}", r.text());
@@ -610,24 +610,24 @@ fn release_and_load_name_the_pool_as_the_hold_does() {
           }}
         }}
         server {{ {body}
-        }} run {{ horizon 10; }}"
+        }} "
         )
     };
     let e = check_source(
         &common::main_source(&program("hold q[0] (1) { load q[1] (1); }")),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .expect_err("linked");
     assert!(e.contains("index included"), "{e}");
     let e = check_source(
         &common::main_source(&program("hold q[j] (1) { release q[0]; }")),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .expect_err("linked");
     assert!(e.contains("index included"), "{e}");
     check_source(
         &common::main_source(&program("hold q[j] (1) { run svc (1); release q[j]; }")),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .expect("links");
 }
@@ -655,9 +655,9 @@ fn a_grow_with_nobody_to_preempt_waits() {
             else { run svc (5); }
           }
         }
-        run { horizon 50; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(50.0));
     assert_eq!(samples(&r, "grew"), [5.0], "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().preemptions, 0, "{}", r.text());
 }
@@ -688,9 +688,9 @@ fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
             hold kv (10) { observe admitted = now; }
           }
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     assert_eq!(
         samples(&r, "leased"),
         [10.0],
@@ -724,9 +724,9 @@ fn a_lease_ends_with_the_session() {
             hold kv (10) { observe admitted = now; }
           }
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     assert_eq!(samples(&r, "admitted"), [2.0], "{}", r.text());
 }
 
@@ -755,9 +755,9 @@ fn a_lease_is_not_a_preemption_victim() {
             observe released = now;
           }
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     // session 0 needs 15 of 20 at t = 1 and again at 2; session 1's lease
     // holds 10 and is not the victim: the only holder in a scope is the
     // grower, which preempts itself twice, re-enters at once (5 fit) and
@@ -776,8 +776,8 @@ fn a_lease_names_a_pool_of_the_hold() {
           }
         }
         server { hold a (1) { run svc (1); } lease b (1);
-        } run { horizon 10; }";
-    let e = check_source(&common::main_source(bad), &Overrides::default()).expect_err("linked");
+        } ";
+    let e = check_source(&common::main_source(bad), &common::horizon(10.0)).expect_err("linked");
     assert!(e.contains("does not take that pool"), "{e}");
     // and a `release` of a leased pool links outside any hold of it
     let ok = "pool a { cap 1; } stage svc : delay;
@@ -786,6 +786,6 @@ fn a_lease_names_a_pool_of_the_hold() {
           }
         }
         server { hold a (1) { run svc (1); } lease a (1); run svc (1); release a;
-        } run { horizon 10; }";
-    check_source(&common::main_source(ok), &Overrides::default()).expect("links");
+        } ";
+    check_source(&common::main_source(ok), &common::horizon(10.0)).expect("links");
 }

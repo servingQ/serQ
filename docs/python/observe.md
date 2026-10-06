@@ -43,10 +43,9 @@ fn main() {
     observe latency = now - t0;
   }
   gauge occupied = used(slots);
-  run { horizon 10; }
 }
 """
-report = pyserq.run(pyserq.compile(source=source))
+report = pyserq.run(pyserq.compile(source=source, horizon=10))
 observation = report.observe("latency")
 assert observation is not None
 records = list(zip(

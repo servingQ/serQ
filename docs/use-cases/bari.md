@@ -132,8 +132,8 @@ machine chain, not recurrence of every state of a Poisson job-list chain.
 Run for 100 s with seed 1, at 20 and 30 requests per second:
 
 ```bash
-serq run examples/papers/bari_rad.sq
-serq run examples/papers/bari_rad.sq --set rate=0.00003
+serq run examples/papers/bari_rad.sq --instance examples/papers/instances/bari_rad/default.sq
+serq run examples/papers/bari_rad.sq --instance examples/papers/instances/bari_rad/default.sq --set rate=0.00003
 ```
 
 Claim-table excerpts, 20 requests/s first:

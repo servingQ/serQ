@@ -85,3 +85,5 @@ here. This directory is the record of **applying** them.
 | [Braced definitions](braced-definitions.md) | One braced spelling for expression and statement definitions; unchanged expansion and IR | implemented |
 
 A new design document adds a row to this table.
+
+- [Separate the model from execution settings](execution-settings.md).

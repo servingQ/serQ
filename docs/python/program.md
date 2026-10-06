@@ -53,9 +53,8 @@ fn main() {
     run svc (2);
     observe elapsed = now;
   }
-  run { horizon 10; }
 }
-""")
+""", horizon=10)
 restored = pyserq.Program.from_json(program.to_json())
 assert pyserq.run(restored).json() == pyserq.run(program).json()
 ```

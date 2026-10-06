@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub const PROGRAM: &str = "use \"std/args\"; let rate = args.number(\"rate\", 1);\nstage svc : fifo;\nworkload { arrive batch(1); session { request; end; } }\nserver { run svc (rate); }\nrun { horizon 10; warmup 0; seed 1; }\n";
+pub const PROGRAM: &str = "use \"std/args\"; let rate = args.number(\"rate\", 1);\nstage svc : fifo;\nworkload { arrive batch(1); session { request; end; } }\nserver { run svc (rate); }\n\n";
 
 pub struct Fixture(pub PathBuf);
 
@@ -59,4 +59,28 @@ pub fn main_source(body: &str) -> String {
     } else {
         format!("fn main() {{ {body}\n}}")
     }
+}
+
+/// Execution conditions belong to the test, separately from its model text.
+pub fn horizon(horizon: f64) -> serq::Overrides {
+    serq::Overrides {
+        horizon: Some(horizon),
+        ..Default::default()
+    }
+}
+
+/// Load the example's explicitly selected experiment, as `--instance` does.
+pub fn example_options(name: &str) -> serq::Overrides {
+    let path = serq::program_path(name);
+    let instance = path
+        .parent()
+        .unwrap()
+        .join("instances")
+        .join(name)
+        .join("default.sq");
+    let mut options = serq::Overrides::default();
+    options
+        .instance(&std::fs::read_to_string(instance).unwrap())
+        .unwrap();
+    options
 }

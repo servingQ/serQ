@@ -27,5 +27,5 @@ fn main() {
     observe sojourn = now - t0;
   }
 
-  run { horizon 250000; warmup 25000; seed 1; }
+
 }

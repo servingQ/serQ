@@ -14,5 +14,5 @@ fn main() {
     run worker (service_time(units));
     observe elapsed = now;
   }
-  run { horizon 10; seed 1; }
+
 }

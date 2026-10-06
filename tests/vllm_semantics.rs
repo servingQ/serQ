@@ -45,13 +45,13 @@ fn engine(
           observe done = now - t0;
           observe order = serial;
         }}
-        run {{ horizon 1000; }}
+
 "#
     )
 }
 
-fn run(src: &str) -> serq::Report {
-    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
+fn run(src: &str, options: &Overrides) -> serq::Report {
+    run_source(&common::main_source(src), options, None).unwrap()
 }
 
 /// scheduler.py:742-813 (`test_preempt_during_execution`): two 80-token
@@ -60,16 +60,10 @@ fn run(src: &str) -> serq::Report {
 /// preempted (`self.running[-1]`), freeing its blocks; it resumes after.
 #[test]
 fn growth_preempts_the_last_admitted_request() {
-    let r = run(&engine(
-        2,
-        "80",
-        "serial == 0 ? 20 : 3",
-        10,
-        16,
-        100,
-        16,
-        "",
-    ));
+    let r = run(
+        &engine(2, "80", "serial == 0 ? 20 : 3", 10, 16, 100, 16, ""),
+        &common::horizon(1000.0),
+    );
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 1, "{}", r.text());
     let done = &r.observe("done").unwrap().samples;
@@ -120,9 +114,9 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
           observe done = now;
           observe order = serial;
         }
-        run { horizon 1000; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(1000.0));
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 1, "{}", r.text());
     assert_eq!(kv.stuck, 0, "{}", r.text());
@@ -171,9 +165,9 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
           }
           observe done = now;
         }
-        run { horizon 200; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(200.0));
     assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
     // first execution, then the re-execution after A frees its blocks at 20
     assert_eq!(
@@ -217,10 +211,10 @@ fn serve_by_orders_residents_by_the_declared_keys() {
           observe done = now;
           observe order = serial;
         }}
-        run {{ horizon 100; }}"
+        "
         )
     };
-    let r = run(&prog("serve admission;"));
+    let r = run(&prog("serve admission;"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
     assert_eq!(
         r.observe("done").unwrap().samples,
@@ -228,7 +222,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
         "{}",
         r.text()
     );
-    let r = run(&prog("serve by (remaining);"));
+    let r = run(&prog("serve by (remaining);"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![1.0, 0.0]);
     assert_eq!(
         r.observe("done").unwrap().samples,
@@ -238,19 +232,19 @@ fn serve_by_orders_residents_by_the_declared_keys() {
     );
     // ties fall to admission order: a constant key is admission order, and
     // a second key decides where the first is equal
-    let r = run(&prog("serve by (1);"));
+    let r = run(&prog("serve by (1);"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
     assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
-    let r = run(&prog("serve by (1, remaining);"));
+    let r = run(&prog("serve by (1, remaining);"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![1.0, 0.0]);
     assert_eq!(r.observe("done").unwrap().samples, vec![4.0, 13.0]);
     // and the opposite order is a program too
-    let r = run(&prog("serve by (-remaining);"));
+    let r = run(&prog("serve by (-remaining);"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
     assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
     // `decode first` and its expansion are the same program
     let ir = |s: &str| {
-        serq::compile_source(&common::main_source(&prog(s)), &Overrides::default())
+        serq::compile_source(&common::main_source(&prog(s)), &common::horizon(100.0))
             .unwrap()
             .to_json()
     };
@@ -261,7 +255,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
     // a serve key is read at its own moment only
     let e = serq::compile_source(
         &common::main_source(&prog("serve by (tokens);")),
-        &Overrides::default(),
+        &common::horizon(100.0),
     )
     .unwrap_err();
     assert!(
@@ -300,9 +294,9 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
           observe done = now;
           observe order = serial;
         }
-        run { horizon 50; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(50.0));
     assert_eq!(
         r.observe("order").unwrap().samples,
         vec![1.0, 0.0],
@@ -325,7 +319,7 @@ fn admission_is_fcfs_with_head_of_line_blocking() {
     // blocks: 10 of 16 = 160 tokens. r0: 96 (6 blocks), r1: 96 (does not fit
     // with r0), r2: 16 (would fit). r2 must wait behind r1.
     let src = engine(3, "serial == 2 ? 16 : 96", "2", 10, 16, 1000, 16, "");
-    let r = run(&src);
+    let r = run(&src, &common::horizon(1000.0));
     let adm = &r.observe("admitted").unwrap().samples;
     let order = &r.observe("who_admitted").unwrap().samples;
     // observations are in admission order; find r2
@@ -342,7 +336,10 @@ fn admission_is_fcfs_with_head_of_line_blocking() {
 /// steps; the first token is out at the end of the last chunk.
 #[test]
 fn chunked_prefill_takes_ceil_prompt_over_budget_steps() {
-    let r = run(&engine(1, "3000", "1", 1000, 16, 1024, 16, ""));
+    let r = run(
+        &engine(1, "3000", "1", 1000, 16, 1024, 16, ""),
+        &common::horizon(1000.0),
+    );
     let ttft = r.observe("ttft").unwrap().samples[0];
     assert_eq!(ttft, 3.0, "{}", r.text());
 }
@@ -354,7 +351,10 @@ fn chunked_prefill_takes_ceil_prompt_over_budget_steps() {
 fn long_prefill_threshold_applies_only_with_company() {
     let chunk = "chunk (residents + queued(reqs) > 1 ? 1000 : 0);";
     // alone: uncapped, the whole 3000-token prompt in one 4096-token step
-    let alone = run(&engine(1, "3000", "1", 1000, 16, 4096, 16, chunk));
+    let alone = run(
+        &engine(1, "3000", "1", 1000, 16, 4096, 16, chunk),
+        &common::horizon(1000.0),
+    );
     assert_eq!(
         alone.observe("ttft").unwrap().samples,
         vec![1.0],
@@ -362,7 +362,10 @@ fn long_prefill_threshold_applies_only_with_company() {
         alone.text()
     );
     // with company: 1000 tokens each per step, three steps
-    let two = run(&engine(2, "3000", "1", 1000, 16, 4096, 16, chunk));
+    let two = run(
+        &engine(2, "3000", "1", 1000, 16, 4096, 16, chunk),
+        &common::horizon(1000.0),
+    );
     assert_eq!(
         two.observe("ttft").unwrap().samples,
         vec![3.0, 3.0],
@@ -402,9 +405,9 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
           set K = prompt + 10;
           set turns = turns + 1;
         }
-        run { horizon 1000; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(1000.0));
     let seen = &r.observe("cached_seen").unwrap().samples;
     let pre = &r.observe("prefill_tokens").unwrap().samples;
     // turn 1: nothing cached, prefill 100; context after = 110 -> 6 full
@@ -448,9 +451,9 @@ fn lru_eviction_drops_tail_blocks_first() {
           set K = prompt;
           set turns = turns + 1;
         }
-        run { horizon 1000; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(1000.0));
     let c0 = &r.observe("cached0").unwrap().samples;
     assert_eq!(c0, &[0.0, 128.0], "{}", r.text());
     // 2 blocks of session 0 for session 1's turn, then session 1's 12 blocks
@@ -468,26 +471,32 @@ fn exclusive_prefill_stalls_decodes() {
         let done = &r.observe("done").unwrap().samples;
         done[order.iter().position(|&s| s == who).unwrap()]
     };
-    let shared = run(&engine(
-        2,
-        "serial == 0 ? 1 : 2048",
-        "serial == 0 ? 10 : 1",
-        1000,
-        16,
-        1024,
-        16,
-        "",
-    ));
-    let excl = run(&engine(
-        2,
-        "serial == 0 ? 1 : 2048",
-        "serial == 0 ? 10 : 1",
-        1000,
-        16,
-        1024,
-        16,
-        "serve exclusive prefill;",
-    ));
+    let shared = run(
+        &engine(
+            2,
+            "serial == 0 ? 1 : 2048",
+            "serial == 0 ? 10 : 1",
+            1000,
+            16,
+            1024,
+            16,
+            "",
+        ),
+        &common::horizon(1000.0),
+    );
+    let excl = run(
+        &engine(
+            2,
+            "serial == 0 ? 1 : 2048",
+            "serial == 0 ? 10 : 1",
+            1000,
+            16,
+            1024,
+            16,
+            "serve exclusive prefill;",
+        ),
+        &common::horizon(1000.0),
+    );
     // request 0: 1 prefill step + 9 decode steps = 10 when sharing; with
     // exclusive prefill it waits for request 1's two chunks: 12
     assert_eq!(done_of(&shared, 0.0), 10.0, "{}", shared.text());
@@ -497,7 +506,10 @@ fn exclusive_prefill_stalls_decodes() {
 /// scheduler.py:877-879: `max_num_seqs` caps the running set.
 #[test]
 fn request_cap_is_a_slot_pool() {
-    let r = run(&engine(4, "16", "5", 1000, 16, 8192, 2, ""));
+    let r = run(
+        &engine(4, "16", "5", 1000, 16, 8192, 2, ""),
+        &common::horizon(1000.0),
+    );
     let adm = &r.observe("admitted").unwrap().samples;
     let mut a = adm.clone();
     a.sort_by(f64::total_cmp);

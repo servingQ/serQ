@@ -2,11 +2,11 @@
 
 ```
 program := (let | def | use)* fn main() { item* }
-item    := let | def | use | pool | stage | queue | workload | server | share | run | gauge | claim
+item    := let | def | use | pool | stage | queue | workload | server | share | gauge | claim
 ```
 
-`fn main()` is the single execution entry point: it constructs the deployment,
-workload and run configuration. The session body then runs for each arrival.
+`fn main()` is the single execution entry point: it constructs the deployment and
+workload. The session body then runs for each arrival.
 Top-level constants and definitions do not execute a simulation. Libraries
 contain definitions and imports, and cannot declare a `main` or a deployment.
 There are no arguments or return value on `main`; use `std/args` for inputs.
@@ -16,7 +16,7 @@ finds its stage among the stages declared above it.
 
 | Declaration | Description |
 |---|---|
-| `fn main()` | Construct the deployment, workload and run configuration. |
+| `fn main()` | Construct the deployment and workload. |
 | [`let`](#let) | Declare a constant. |
 | [`args.number`](#stdargs) | Declare a numeric program input. |
 | [`def`](#def) | Define a reusable expression or statement body. |
@@ -29,7 +29,6 @@ finds its stage among the stages declared above it.
 | [`share`](#share) | Select rate sharing for flows across stages. |
 | [`gauge`](#gauge) | Measure a function of deployment state over time. |
 | [`claim`](#claim) | State a property of the program's paths. |
-| [`run`](#run) | Set horizon, warm-up, seed and arrival limit. |
 
 ## `let`
 
@@ -58,7 +57,6 @@ fn main() {
   server {
     run svc (1);
     }
-  run { horizon 10; }
 }
 ```
 
@@ -70,7 +68,7 @@ constants. Values are numbers (including `inf`), never NaN. Strings,
 positional arguments and implicit access to the host environment are not
 part of this numeric library.
 
-`serq run model.sq -- --arrival_rate 0.5` supplies the value. The separator
+`serq run model.sq --horizon 10 -- --arrival_rate 0.5` supplies the value. The separator
 keeps the program's options apart from the interpreter's `--seed`,
 `--horizon`, and other run settings. `--arrival_rate=0.5` works too;
 repeated options use the last value. Unknown names, missing values and
@@ -86,27 +84,30 @@ is refused, including through a derived constant.
 
 ### Instances
 
-An instance gives a program's declared inputs their values and its run its
-options, in a file of its own, and changes nothing else:
+An instance supplies the model's declared inputs and its execution conditions.
+It may contain `let NAME = expr;` for inputs declared with `args.number` and
+one `run` configuration block with numeric values. It cannot declare pools,
+stages, workloads or definitions. The configuration block belongs only to
+an instance; a model's `run STAGE (work);` performs stage work.
 
 ```serq
-// The 3.0 s run of docs/language.md §8: sessions 3 s apart, the rest of
-// the A100 deployment as vllm_replay.sq states it.
+// experiment.sq
 let spacing = 3.0;
+run { horizon 6000; warmup 0; seed 2; }
 ```
 
-`serq run examples/replay/vllm_replay.sq --instance
-examples/replay/instances/vllm_replay/spacing_3s.sq` is the run `--set
-spacing=3.0` gives, and an instance with `run { seed 2; }` added the one
-`--set spacing=3.0 --seed 2` gives: an instance is the `--set`s
-and run flags it writes, so its program has the IR they give. It may hold
-only `let` bindings of inputs the program declares with `args.number`, each once, and one
-`run` block whose options are numbers. Pools, stages, the workload and
-definitions are the program's, which is what keeps every instance of a
-program the same system with other numbers
-([the design](https://github.com/servingQ/serQ/blob/main/docs/design/serving-specification-language.md#4-parameters-and-a-control-plane-the-modelinstance-split)).
-`examples/<dir>/instances/<program>/` holds instances of
-`examples/<dir>/<program>.sq`, and the tests link each with its program.
+```sh
+serq run examples/replay/vllm_replay.sq --instance experiment.sq
+```
+
+This supplies the same inputs and execution conditions as
+`--set spacing=3.0 --horizon 6000 --warmup 0 --seed 2`. Flags and instances
+apply in command-line order; later values win.
+
+`examples/<dir>/instances/<program>/default.sq` records the example's
+execution conditions. Select it explicitly; settings files are never
+auto-loaded. Other files in that directory describe named experiments
+for the same model. Each instance is tested with its model.
 
 ## `def`
 
@@ -305,22 +306,31 @@ A simulation result alone is not a proof over all paths. See
 | `expr` | `expr`, at the `Iteration` moment | The cost's variables, `demand`, `served`, `arrived`, `now`, and `queue`, `busy`, `used`, `free`, `holders`, `queued` by a number; not an attribute or a draw. |
 | `expr` (`at end`) | `expr`, at the `End` moment | Constants, `now` and `total`, `count`, `largest`, `smallest`, `prefix_total` of an `observe`. |
 
-## `run`
+## Execution settings {#run}
 
-```serq
-run { horizon expr; warmup expr; seed expr; arrivals expr; }
+Supply execution settings through [CLI flags](../reference/cli.md), an
+explicit [instance](#instances), or [`pyserq.compile`](../python/compile.md).
+They are not declarations inside `fn main()`. In a model, `run STAGE (work);`
+performs work on a stage.
+
+```sh
+serq run model.sq --horizon 10 --warmup 0 --seed 1
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `horizon` | `const` | required | End of the simulation, in the program's clock unit. |
-| `warmup` | `const` | `0` | Measured statistics exclude earlier samples; claims still include them. Must be below `horizon`. |
-| `seed` | `const` | `1` | Seed of the random streams. Arrivals, the workload, the session, eviction and trace sampling each draw from their own. |
-| `arrivals` | `const`, a positive integer | none | Stop after exactly this many arrivals and run until their sessions have all ended. Only with an open workload (`poisson` or `renewal`). |
+| `horizon` | number | required | End of the simulation, in the program's clock unit. |
+| `warmup` | number | `0` | Measured statistics exclude earlier samples; claims still include them. Must be below `horizon`. |
+| `seed` | number | `1` | Seed of the random streams. Arrivals, the workload, the session, eviction and trace sampling each draw from their own. |
+| `arrivals` | positive integer | none | Stop after exactly this many arrivals and run until their sessions have all ended. Only with an open workload (`poisson` or `renewal`). |
 
-`--horizon`, `--warmup`, `--seed` and `--arrivals` override them ([CLI](../reference/cli.md)).
+A source model requires an explicit horizon for execution or IR export.
+`check`, `draw`, `target` and `fmt` do not require execution settings.
+A serialized IR already contains them; flags can replace them when loading it.
 
 ### A finite run
+
+For example: `serq run model.sq --horizon 1e5 --arrivals 1000`.
 
 Without `arrivals` the run ends at `horizon`. With it, the run ends when the
 `N`-th session has arrived and every session has ended, and `horizon` is the
@@ -332,12 +342,7 @@ run ended as `end`, and its rates and time averages are over `end − warmup`.
 ```serq
 workload {
     arrive renewal(~h2(2, 4)); … }
-run { horizon 1e5; warmup 0; arrivals 1000; }
 ```
-
-!!! note
-    The `run` *statement* ([`run STAGE …`](statements.md#run)) and the `run`
-    *block* here are unrelated constructs that share a keyword.
 
 ## Examples
 
@@ -358,8 +363,13 @@ fn main() {
   }
   gauge jobs = queue(svc);
   claim done : at end (count(latency) == 2);
-  run { horizon 10; seed 1; }
 }
+```
+
+Save as `model.sq`, then run:
+
+```sh
+serq run model.sq --horizon 10 --seed 1
 ```
 
 ## See also

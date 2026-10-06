@@ -172,5 +172,5 @@ fn main() {
     }
   }
 
-  run { horizon 3000; warmup 0; seed 1; }
+
 }

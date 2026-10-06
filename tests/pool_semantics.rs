@@ -6,8 +6,8 @@ mod common;
 
 use serq::{Overrides, run_source};
 
-fn run(src: &str) -> serq::Report {
-    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
+fn run(src: &str, options: &Overrides) -> serq::Report {
+    run_source(&common::main_source(src), options, None).unwrap()
 }
 
 /// Three sessions with contexts 10, 20, 30 on a pool of 55: the third
@@ -41,10 +41,10 @@ fn eviction_order_is_the_declared_key() {
             hold kv (c) {{ observe hit = cached >= c; run svc (0.1); }} cache (c);
           }}
         }}
-        run {{ horizon 100; }}
+
 "#
         );
-        let r = run(&src);
+        let r = run(&src, &common::horizon(100.0));
         let hits = &r.observe("hit").unwrap().samples;
         assert_eq!(hits, &want_hit, "{order}\n{}", r.text());
     }
@@ -93,10 +93,10 @@ fn queued_sessions_are_evicted_after_suspended_ones() {
             hold slot (1) {{ run gate (2); }}               // blocks the slot t = 2..4
           }}
         }}
-        run {{ horizon 100; }}
+
 "#
         );
-        let r = run(&src);
+        let r = run(&src, &common::horizon(100.0));
         assert_eq!(
             r.observe("hit0").unwrap().samples,
             vec![want0],
@@ -135,9 +135,9 @@ fn block_pools_round_and_evict_by_block() {
           run gate (10);
           branch (serial == 0) { hold kv (55) { observe cached0 = cached; run svc (0.1); } cache (0); }
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     assert_eq!(
         r.observe("used").unwrap().samples,
         vec![60.0, 70.0],
@@ -176,9 +176,9 @@ fn spill_to_a_tier_and_fetch_back() {
             hold kv (c) { run svc (0.1); }
           }
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     assert_eq!(
         r.observe("in_tier").unwrap().samples,
         vec![20.0],
@@ -220,13 +220,13 @@ fn a_spill_predicate_sees_whether_the_session_is_queued() {
           branch (serial == 1) {{ run gate (0.5); hold kv (24) {{ run svc (10); }} }}
           branch (serial == 2) {{ run gate (1.2); hold kv (6) {{ run svc (1); }} }}
         }}
-        run {{ horizon 100; }}"
+        "
         )
     };
-    let r = run(&prog("waiting"));
+    let r = run(&prog("waiting"), &common::horizon(100.0));
     assert_eq!(r.pool("kv").unwrap().spills, 1, "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().evicted_entries, 1, "{}", r.text());
-    let r = run(&prog("!waiting"));
+    let r = run(&prog("!waiting"), &common::horizon(100.0));
     assert_eq!(r.pool("kv").unwrap().spills, 0, "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().evicted_entries, 1, "{}", r.text());
 }
@@ -253,9 +253,9 @@ fn grow_waits_under_preempt_none() {
           }
           observe done = now;
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     // s0 asks for 30 more at t = 5 while s1 holds 50 until t = 6: waits 1
     assert_eq!(
         r.observe("waited").unwrap().samples,
@@ -295,9 +295,16 @@ fn a_preempted_hold_caches_what_it_computed() {
             } cache (12);
           }
         }
-        run { horizon 100; warmup 0; seed 1; }
+
 "#;
-    let r = run(src);
+    let r = run(
+        src,
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(100.0)
+        },
+    );
     assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
     // the scope's end keeps its rule: session 1, done, caches what it holds
     // (the preemption cached nothing, so anything cached is from the end)
@@ -327,9 +334,9 @@ fn priority_queue_orders_admissions() {
         server {
           hold kv (10) { observe order = serial; run svc (1); }
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     assert_eq!(
         r.observe("order").unwrap().samples,
         vec![2.0, 1.0, 0.0],
@@ -351,9 +358,9 @@ fn oversized_requests_are_rejected() {
         }
         server { hold kv (serial == 0 ? 20 : 5) { run svc (1); } observe done = serial;
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     assert_eq!(r.observe("done").unwrap().samples, vec![1.0]);
     assert_eq!(r.pool("kv").unwrap().rejected, 1);
 }
@@ -373,9 +380,9 @@ fn an_oversized_reservation_is_rejected() {
         }
         server { hold kv (1) reserve (serial == 0 ? 20 : 1) { run svc (1); } observe done = serial;
         }
-        run { horizon 100; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     assert_eq!(r.observe("done").unwrap().samples, vec![1.0, 2.0]);
     assert_eq!(r.pool("kv").unwrap().rejected, 1);
 }
@@ -403,9 +410,9 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
         }}
         server {{ {hold} {{ run d (1); }}
         }}
-        run {{ horizon 10; }}"
+        "
         );
-        let e = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap_err();
+        let e = run_source(&common::main_source(&src), &common::horizon(10.0), None).unwrap_err();
         let said = if hold.contains("serial") {
             "more than the cap of every member (`kv2`: 10)"
         } else {
@@ -422,9 +429,9 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
         }
         server { hold kv (9) { run d (1); }
         }
-        run { horizon 10; }",
+        ",
         ),
-        &Overrides::default(),
+        &common::horizon(10.0),
         None,
     )
     .unwrap_err();
@@ -434,14 +441,17 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
     );
     // units the program computes are the run's: the session ends, counted
     // in `rej`, and the report says so
-    let r = run("pool kv { cap 10; } stage d : delay;
+    let r = run(
+        "pool kv { cap 10; } stage d : delay;
         workload { arrive batch(2); init { set u = 5 + 10 * serial; }
           session { request; end;
           }
         }
         server { hold kv (u) { run d (1); }
         }
-        run { horizon 10; }");
+        ",
+        &common::horizon(10.0),
+    );
     assert_eq!(r.pool("kv").unwrap().rejected, 1, "{}", r.text());
     assert!(
         r.text()
@@ -484,9 +494,9 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
             run engine decode (100) growing kv;
           }
         }
-        run { horizon 400; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(400.0));
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 6, "{}", r.text());
     assert_eq!(kv.admissions, 7, "{}", r.text());
@@ -521,9 +531,9 @@ fn a_zero_cost_preempting_step_does_not_hang() {
             run engine decode (100) growing kv;
           }
         }
-        run { horizon 400; }
+
 "#;
-    let r = run(src);
+    let r = run(src, &common::horizon(400.0));
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 2, "{}", r.text());
     assert_eq!(kv.stuck, 1, "{}", r.text());
@@ -540,13 +550,13 @@ const GUARD: &str = "
         }
         server { branch (GUARD) { run svc (1); }
         }
-        run { horizon 10; }";
+        ";
 
 #[test]
 fn a_computed_fraction_is_not_a_draw() {
     let error = run_source(
         &common::main_source(&GUARD.replace("GUARD", "c / K")),
-        &Overrides::default(),
+        &common::horizon(100.0),
         None,
     )
     .unwrap_err();
@@ -557,7 +567,7 @@ fn a_computed_fraction_is_not_a_draw() {
 fn a_nan_guard_is_an_error() {
     let error = run_source(
         &common::main_source(&GUARD.replace("GUARD", "0 / 0")),
-        &Overrides::default(),
+        &common::horizon(100.0),
         None,
     )
     .unwrap_err();
@@ -568,7 +578,7 @@ fn a_nan_guard_is_an_error() {
 fn a_negative_guard_is_an_error() {
     let error = run_source(
         &common::main_source(&GUARD.replace("GUARD", "0 - 1")),
-        &Overrides::default(),
+        &common::horizon(100.0),
         None,
     )
     .unwrap_err();
@@ -577,8 +587,11 @@ fn a_negative_guard_is_an_error() {
 
 #[test]
 fn a_boolean_guard_and_a_declared_draw_run() {
-    run(&GUARD.replace("GUARD", "c < K"));
-    run(&GUARD.replace("branch (GUARD)", "branch with (c / K)"));
+    run(&GUARD.replace("GUARD", "c < K"), &common::horizon(100.0));
+    run(
+        &GUARD.replace("branch (GUARD)", "branch with (c / K)"),
+        &common::horizon(100.0),
+    );
 }
 
 /// #230: a hold without a `cache` clause takes no part in the prefix
@@ -617,10 +630,17 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
         }}
         server {{ loop {{ run think (1); {wrap} }}
         }}
-        run {{ horizon 20; warmup 0; seed 1; }}
+
 "#
         );
-        let r = run(&src);
+        let r = run(
+            &src,
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(20.0)
+            },
+        );
         let hits = &r.observe("hit").unwrap().samples;
         assert!(hits.len() >= 10, "{wrap}\n{}", r.text());
         assert_eq!(hits[0], 0.0, "the first turn is cold: {wrap}");
@@ -647,9 +667,9 @@ fn bad_amounts_and_indices_fail_the_run() {
         }}
         server {{ {stmt}
         }}
-        run {{ horizon 10; }}"
+        "
         );
-        run_source(&common::main_source(&src), &Overrides::default(), None).unwrap_err()
+        run_source(&common::main_source(&src), &common::horizon(10.0), None).unwrap_err()
     };
     for (stmt, said) in [
         ("run d (z / z);", "`run d (z / z)`: the amount is NaN"),
@@ -700,10 +720,10 @@ fn bad_amounts_and_indices_fail_the_run() {
         }}
         server {{ {stmt}
         }}
-        run {{ horizon 10; }}"
+        "
         );
         let e =
-            serq::compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
+            serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap_err();
         assert!(
             e.contains(said) && e.contains("is a number, and not negative"),
             "{stmt}: {e}"
@@ -717,9 +737,9 @@ fn bad_amounts_and_indices_fail_the_run() {
           }
         }
         server { run a[0] (1);
-        } run { horizon 10; }",
+        } ",
         ),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     let serq::ir::CStmt::Run { stage, .. } = &mut p.blocks[p.session][0] else {
@@ -741,9 +761,9 @@ fn bad_amounts_and_indices_fail_the_run() {
         }
         server { hold kv (8) { run eng decode (z - 1); }
         }
-        run { horizon 10; }",
+        ",
         ),
-        &Overrides::default(),
+        &common::horizon(10.0),
         None,
     )
     .unwrap_err();
@@ -752,14 +772,17 @@ fn bad_amounts_and_indices_fail_the_run() {
         "{e}"
     );
     // zero is an amount: a run of no work, a hold of nothing
-    let r = run("pool kv { cap 64; } stage d : delay;
+    let r = run(
+        "pool kv { cap 64; } stage d : delay;
         workload { arrive batch(1); init { set z = 0; }
           session { request; end;
           }
         }
         server { run d (z); hold kv (z) { run d (1); }
         }
-        run { horizon 10; }");
+        ",
+        &common::horizon(10.0),
+    );
     assert_eq!(r.ended, 1, "{}", r.text());
 }
 
@@ -779,8 +802,8 @@ fn a_hold_takes_a_pool_once() {
           set prompt = 64;
           hold kv (16), kv (16) { prefill prompt growing kv; decode 40 growing kv; }
         }
-        run { horizon 1; }";
-    let e = serq::compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
+        ";
+    let e = serq::compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap_err();
     assert!(e.contains("a hold takes `kv` twice"), "{e}");
     // indices the run sets to one member: only the run can tell
     let e = run_source(
@@ -792,9 +815,9 @@ fn a_hold_takes_a_pool_once() {
         }
         server { hold kv[i] (1), kv[j] (1) { run d (1); }
         }
-        run { horizon 10; }",
+        ",
         ),
-        &Overrides::default(),
+        &common::horizon(1.0),
         None,
     )
     .unwrap_err();
@@ -829,11 +852,18 @@ fn a_reserve_that_reads_the_state_waits_instead_of_being_rejected() {
           hold reqs (1), kv (2) reserve ({reserve}) {{ run svc (1 + serial); }}
           observe done = serial;
         }}
-        run {{ horizon 50; warmup 0; seed 1; }}
+
 "#
         )
     };
-    let r = run(&prog("4 + 4 * holders(reqs)"));
+    let r = run(
+        &prog("4 + 4 * holders(reqs)"),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(50.0)
+        },
+    );
     assert_eq!(
         r.observe("done").unwrap().samples,
         vec![0.0, 1.0, 2.0],
@@ -843,11 +873,25 @@ fn a_reserve_that_reads_the_state_waits_instead_of_being_rejected() {
     assert_eq!(r.pool("kv").unwrap().rejected, 0);
     // the third waited over the cap and was admitted: nothing is over at the end
     assert!(r.pools.iter().all(|q| q.over_cap.is_none()), "{}", r.text());
-    let r = run(&prog("9 + serial"));
+    let r = run(
+        &prog("9 + serial"),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(50.0)
+        },
+    );
     assert_eq!(r.pool("kv").unwrap().rejected, 1, "{}", r.text());
     // the head waits in `reqs`'s queue (the hold's first pool) and asks `kv`,
     // whose cap is 10, for 11: the note names the pool asked
-    let r = run(&prog("11 + 0 * holders(reqs)"));
+    let r = run(
+        &prog("11 + 0 * holders(reqs)"),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(50.0)
+        },
+    );
     assert_eq!(
         r.pool("kv").unwrap().over_cap,
         Some(("reqs".to_string(), 11.0)),
@@ -891,13 +935,27 @@ fn a_held_reservation_counts_against_later_admissions() {
             decode on engine (6) growing kv;
           }} cache (0);
         }}
-        run {{ horizon 100; warmup 0; seed 1; }}
+
 "#
         )
     };
-    let once = run(&prog(""));
+    let once = run(
+        &prog(""),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(100.0)
+        },
+    );
     assert!(once.pool("kv").unwrap().preemptions > 0, "{}", once.text());
-    let held = run(&prog("reserve held;"));
+    let held = run(
+        &prog("reserve held;"),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(100.0)
+        },
+    );
     assert_eq!(held.pool("kv").unwrap().preemptions, 0, "{}", held.text());
     let admitted = &held.observe("admitted").unwrap().samples;
     // the first two at 0; the third when the first leaves, after its prefill
@@ -935,12 +993,19 @@ fn a_held_reservation_is_each_live_hold_s() {
             hold kv ({second}) {{ observe admitted = now; run gate (1); }}
           }}
         }}
-        run {{ horizon 100; warmup 0; seed 1; }}
+
 "#
         )
     };
     let admitted = |src: &str| {
-        let r = run(src);
+        let r = run(
+            src,
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(100.0)
+            },
+        );
         r.observe("admitted").unwrap().samples.clone()
     };
     // 2 + 8 + 2 = 12: admitted on arrival, at 1

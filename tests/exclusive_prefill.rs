@@ -5,7 +5,7 @@
 
 mod common;
 
-use serq::{Overrides, Program, compile_source, run_ir, run_source};
+use serq::{Program, compile_source, run_ir, run_source};
 use std::path::Path;
 use std::process::Command;
 
@@ -36,7 +36,7 @@ fn source(policy: &str, slot_cap: usize, kv_cap: usize) -> String {
           observe done = now;
           observe who = serial;
         }}
-        run {{ horizon 20; }}
+
 "#
     )
 }
@@ -48,7 +48,7 @@ fn trace(name: &str, src: &str) -> Vec<String> {
     std::fs::write(&path, common::main_source(src)).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_serq"))
         .env("SERQ_TRACE_ITER", "1")
-        .args(["run", path.to_str().unwrap(), "--json"])
+        .args(["run", path.to_str().unwrap(), "--horizon", "20", "--json"])
         .output()
         .unwrap();
     let stderr = String::from_utf8(out.stderr).unwrap();
@@ -78,8 +78,8 @@ fn waiting_prefill_replaces_decodes_and_gets_the_full_budget() {
             "ITER 3.0000 0:0:d1",
         ]
     );
-    let r = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
-    let json = compile_source(&common::main_source(&src), &Overrides::default())
+    let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
+    let json = compile_source(&common::main_source(&src), &common::horizon(20.0))
         .unwrap()
         .to_json();
     let from_ir = run_ir(&Program::from_json(&json).unwrap(), None);
@@ -156,9 +156,9 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
             run engine decode (1) growing kv;
           }
         }
-        run { horizon 20; }
+
 "#;
-    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &common::horizon(20.0), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 2.0, 4.0]);
     assert_eq!(r.stage("engine").unwrap().iterations, 7);
@@ -190,9 +190,9 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
           }
           observe done = now;
         }
-        run { horizon 10; }
+
 "#;
-    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 0.0, 2.0]);
     assert_eq!(r.observe("done").unwrap().samples, [2.0, 2.0, 4.0]);
@@ -233,9 +233,9 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
           observe cached_extent = cachedin(kv);
           observe done = now;
         }
-        run { horizon 20; }
+
 "#;
-    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &common::horizon(20.0), None).unwrap();
     assert_eq!(r.ended, 2, "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);
     assert_eq!(r.observe("admitted_b").unwrap().samples, [1.0, 5.0]);

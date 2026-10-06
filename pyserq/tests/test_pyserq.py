@@ -27,7 +27,7 @@ REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
 ARRAYS = """fn main() { pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
 workload { arrive poisson(1); session { request; end; } }
 server { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } }
-run { horizon 100; } }"""
+ }"""
 
 
 def cli(path, *args):
@@ -44,8 +44,8 @@ def cli_source(src, *args):
 
 
 def test_a_file_with_numbers_and_a_seed():
-    r = pyserq.run(pyserq.compile(MG1, sets={"lam": 0.8, "law": 1}, seed=10))
-    want, dump = cli(MG1, "--set", "lam=0.8", "--set", "law=1", "--seed", "10")
+    r = pyserq.run(pyserq.compile(MG1, sets={"lam": 0.8, "law": 1}, seed=10, horizon=250000, warmup=25000))
+    want, dump = cli(MG1, "--set", "lam=0.8", "--set", "law=1", "--seed", "10", '--horizon', '250000', '--warmup', '25000')
     assert json.loads(r.json()) == want
     for name in want["observes"]:
         o = r.observes[name]
@@ -63,14 +63,14 @@ server {
   hold kv[j] (u) { run svc[j] (~exp(0.5)); }
 }
 gauge spread = max k in 2 (used(kv[k])) - min k in 2 (used(kv[k]));
-run { horizon 2000; warmup 100; seed 3; }
+
 }
 """
 
 
 def test_a_gauge_is_its_json_and_its_dump():
-    r = pyserq.run(pyserq.compile(source=GAUGED))
-    want, dump = cli_source(GAUGED)
+    r = pyserq.run(pyserq.compile(source=GAUGED, horizon=2000, warmup=100, seed=3))
+    want, dump = cli_source(GAUGED, '--horizon', '2000', '--warmup', '100', '--seed', '3')
     assert json.loads(r.json()) == want
     g = r.gauge("spread")
     assert list(r.gauges) == ["spread"] and g.name == "spread"
@@ -94,11 +94,11 @@ LOOKUPS = {"json", "observes", "gauges", "stages", "pools", "observe", "gauge", 
 
 
 def test_the_report_is_its_json_by_name():
-    arrays = pyserq.run(pyserq.compile(source=ARRAYS))
+    arrays = pyserq.run(pyserq.compile(source=ARRAYS, horizon=100))
     assert [p.index for p in arrays.pools_named("kv")] == [0, 1] and arrays.pool("reqs").index is None
     for r in [pyserq.run(pyserq.compile(MG1, seed=4, horizon=20000.0, warmup=1000.0)),
               arrays,
-              pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}))]:
+              pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}, horizon=6000))]:
         js = json.loads(r.json())
         scalars = {k: v for k, v in js.items() if k not in ("observes", "gauges", "stages", "pools")}
         # every field, both ways: nothing JSON has is missing, nothing it lacks is added
@@ -139,15 +139,15 @@ def test_program_text_with_run_options():
 
 
 def test_a_trace_read_next_to_the_program_and_an_expression():
-    r = pyserq.run(pyserq.compile(REPLAY, sets={"N": 40, "spacing": "2 * 1.75"}))
-    want, _ = cli(REPLAY, "--set", "N=40", "--set", "spacing=2 * 1.75")
+    r = pyserq.run(pyserq.compile(REPLAY, sets={"N": 40, "spacing": "2 * 1.75"}, horizon=6000))
+    want, _ = cli(REPLAY, "--set", "N=40", "--set", "spacing=2 * 1.75", '--horizon', '6000')
     assert json.loads(r.json()) == want
 
 
 def test_a_trace_given_as_a_path():
     trace = REPLAY.parent / "data" / "short_base.csv"
-    r = pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}, trace=trace))
-    want, _ = cli(REPLAY, "--set", "N=40", "--trace", str(trace))
+    r = pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}, trace=trace, horizon=6000))
+    want, _ = cli(REPLAY, "--set", "N=40", "--trace", str(trace), '--horizon', '6000')
     assert json.loads(r.json()) == want
     assert pyserq.REPORT_VERSION >= 1
 
@@ -162,7 +162,7 @@ def test_a_trace_read_as_a_replay_reads_it():
 
 
 def test_the_ir_round_trips():
-    p = pyserq.compile(MG1)
+    p = pyserq.compile(MG1, horizon=250000, warmup=25000)
     ir = json.loads(p.to_json())
     assert ir["version"] == pyserq.IR_VERSION
     q = pyserq.Program.from_json(p.to_json())
@@ -171,24 +171,24 @@ def test_the_ir_round_trips():
 
 def test_an_infinity_is_inf():
     for x, e in [(math.inf, "inf"), (-math.inf, "-inf")]:
-        assert pyserq.compile(MG1, sets={"cv2": x}).to_json() == pyserq.compile(MG1, sets={"cv2": e}).to_json()
+        assert pyserq.compile(MG1, sets={"cv2": x}, horizon=250000, warmup=25000).to_json() == pyserq.compile(MG1, sets={"cv2": e}, horizon=250000, warmup=25000).to_json()
 
 
 def test_defs_is_the_program_written_with_that_body():
     src = ("fn main() { def service() { ~exp(1) }\nstage svc : fifo;\nworkload { arrive poisson(0.5); session { request; end; } }\n"
-           "server { run svc (service()); observe s = now; }\nrun { horizon 1000; seed 2; } }\n")
-    given = pyserq.compile(source=src, defs={"service": "~erlang(4, 1)"})
-    written = pyserq.compile(source=src.replace("~exp(1)", "~erlang(4, 1)"))
-    assert given.to_json() == written.to_json() != pyserq.compile(source=src).to_json()
-    want, _ = cli_source(src, "--def", "service=~erlang(4, 1)")
+           "server { run svc (service()); observe s = now; }\n }\n")
+    given = pyserq.compile(source=src, defs={"service": "~erlang(4, 1)"}, horizon=1000, seed=2)
+    written = pyserq.compile(source=src.replace("~exp(1)", "~erlang(4, 1)"), horizon=1000, seed=2)
+    assert given.to_json() == written.to_json() != pyserq.compile(source=src, horizon=1000, seed=2).to_json()
+    want, _ = cli_source(src, "--def", "service=~erlang(4, 1)", '--horizon', '1000', '--seed', '2')
     assert json.loads(pyserq.run(given).json()) == want
 
 
 def test_rng_is_the_stream_a_run_draws_from():
     # the arrivals of a run seeded 11 are the gaps Rng(11) draws, exactly
     src = ("fn main() { let lam = 0.5;\nworkload { arrive poisson(lam); session { request; end; } }\n"
-           "server { observe t = now; }\nrun { horizon 100; warmup 0; seed 11; } }\n")
-    got = pyserq.run(pyserq.compile(source=src)).observe("t").samples
+           "server { observe t = now; }\n }\n")
+    got = pyserq.run(pyserq.compile(source=src, horizon=100, warmup=0, seed=11)).observe("t").samples
     rng, t, want = pyserq.Rng(11), 0.0, []
     while t < 100:
         want.append(t)
@@ -217,24 +217,24 @@ def test_draw_is_serq_draw():
     assert pyserq.draw(MG1, sets={"lam": 0.8}, defs={"service": "~exp(1)"}) == want
     assert pyserq.draw(source=MG1.read_text()) == pyserq.draw(MG1)
     ir = Path(tempfile.mkdtemp(prefix="pyserq-")) / "mg1.json"
-    ir.write_text(pyserq.compile(MG1).to_json())
+    ir.write_text(pyserq.compile(MG1, horizon=250000, warmup=25000).to_json())
     assert pyserq.draw(ir) == subprocess.run([CLI, "draw", str(ir)], capture_output=True, text=True, check=True).stdout
 
 
 def test_errors_are_value_errors():
     for call in [
         lambda: pyserq.compile(ROOT / "nowhere.sq"),
-        lambda: pyserq.compile(source="fn main() { workload { session { request; end; } } server { run nowhere (1); } }"),
-        lambda: pyserq.compile(MG1, sets={"nope": 1}),
-        lambda: pyserq.compile(MG1, source="x"),
-        lambda: pyserq.compile(MG1, sets={"lam": float("nan")}),
-        lambda: pyserq.compile(MG1, sets={"not a name": 1}),
+        lambda: pyserq.compile(source="fn main() { workload { session { request; end; } } server { run nowhere (1); } }", horizon=10),
+        lambda: pyserq.compile(MG1, sets={"nope": 1}, horizon=250000, warmup=25000),
+        lambda: pyserq.compile(MG1, source="x", horizon=10),
+        lambda: pyserq.compile(MG1, sets={"lam": float("nan")}, horizon=250000, warmup=25000),
+        lambda: pyserq.compile(MG1, sets={"not a name": 1}, horizon=250000, warmup=25000),
         lambda: pyserq.compile(),
         lambda: pyserq.read_trace(ROOT / "nowhere.csv"),
         lambda: pyserq.read_trace(MG1),
         lambda: pyserq.Rng(1).range_u64(5, 4),
         lambda: pyserq.Rng(1).range_f64(0.0, math.inf),
-        lambda: pyserq.compile(MG1, defs={"nope": "1"}),
+        lambda: pyserq.compile(MG1, defs={"nope": "1"}, horizon=250000, warmup=25000),
         lambda: pyserq.draw(MG1, format="png"),
         lambda: pyserq.draw(),
         lambda: pyserq.draw(MG1, sets={"nope": 1}),
@@ -250,7 +250,7 @@ def test_an_override_on_ir_says_what_it_overrides():
     # IR has its constants folded and its definitions expanded; the refusal
     # names the `let` or the `def`, not the CLI's flag
     ir = Path(tempfile.mkdtemp(prefix="pyserq-")) / "mg1.json"
-    ir.write_text(pyserq.compile(MG1).to_json())
+    ir.write_text(pyserq.compile(MG1, horizon=250000, warmup=25000).to_json())
     for call, what in [
         (lambda: pyserq.compile(ir, sets={"lam": 1}), "a program argument"),
         (lambda: pyserq.compile(ir, defs={"service": "~exp(1)"}), "a `def` override"),
@@ -269,12 +269,12 @@ def test_an_override_error_names_the_let_or_def():
     # sets= and defs= meet the library's errors; they speak of what is
     # overridden, not of the CLI's --set and --def
     for call, what in [
-        (lambda: pyserq.compile(MG1, sets={"nope": 1}), "unknown program argument `nope`"),
-        (lambda: pyserq.compile(MG1, sets={"x y": 1}), "invalid argument name `x y`"),
-        (lambda: pyserq.compile(MG1, sets={"lam": "~"}), "invalid expression for program argument"),
-        (lambda: pyserq.compile(MG1, defs={"nope": "1"}), "unknown `def` override `nope`"),
-        (lambda: pyserq.compile(MG1, defs={"x y": "1"}), "invalid `def` override name `x y`"),
-        (lambda: pyserq.compile(MG1, defs={"service": "~exp("}), "invalid expression in the `def` override"),
+        (lambda: pyserq.compile(MG1, sets={"nope": 1}, horizon=250000, warmup=25000), "unknown program argument `nope`"),
+        (lambda: pyserq.compile(MG1, sets={"x y": 1}, horizon=250000, warmup=25000), "invalid argument name `x y`"),
+        (lambda: pyserq.compile(MG1, sets={"lam": "~"}, horizon=250000, warmup=25000), "invalid expression for program argument"),
+        (lambda: pyserq.compile(MG1, defs={"nope": "1"}, horizon=250000, warmup=25000), "unknown `def` override `nope`"),
+        (lambda: pyserq.compile(MG1, defs={"x y": "1"}, horizon=250000, warmup=25000), "invalid `def` override name `x y`"),
+        (lambda: pyserq.compile(MG1, defs={"service": "~exp("}, horizon=250000, warmup=25000), "invalid expression in the `def` override"),
     ]:
         try:
             call()
@@ -285,7 +285,7 @@ def test_an_override_error_names_the_let_or_def():
 
 
 def test_runs_in_threads_are_the_runs_alone():
-    ps = [pyserq.compile(MG1, seed=s, horizon=1e6) for s in range(4)]
+    ps = [pyserq.compile(MG1, seed=s, horizon=1e6, warmup=25000) for s in range(4)]
     t0 = time.time()
     alone = [pyserq.run(p).json() for p in ps]
     serial = time.time() - t0
@@ -302,17 +302,34 @@ let fixed = 2;
 fn main() {
   let rate = args.number("arrival_rate", 0.5);
   workload { arrive poisson(rate * fixed); }
-  run { horizon 1; }
+
 }'''
-    p = pyserq.compile(source=src, sets={"arrival_rate": 3})
+    p = pyserq.compile(source=src, sets={"arrival_rate": 3}, horizon=1)
     assert json.loads(p.to_json())["arrival"] == {"Poisson": 6.0}
     for name in ["fixed", "rate"]:
         try:
-            pyserq.compile(source=src, sets={name: 3})
+            pyserq.compile(source=src, sets={name: 3}, horizon=1)
         except ValueError as e:
             assert "unknown program argument" in str(e), e
         else:
             raise AssertionError(f"private constant {name} was replaced")
+
+
+def test_execution_settings_belong_to_the_invocation():
+    for source, kwargs, message in [
+        (ARRAYS, {}, "no horizon"),
+        (ARRAYS.replace("fn main() {", "fn main() { run { horizon 100; }", 1),
+         {"horizon": 100}, "execution settings do not belong in a model"),
+    ]:
+        try:
+            pyserq.compile(source=source, **kwargs)
+        except ValueError as e:
+            assert message in str(e), e
+        else:
+            raise AssertionError("accepted missing or in-model execution settings")
+    p = pyserq.compile(source=ARRAYS, horizon=100, seed=7)
+    restored = pyserq.Program.from_json(p.to_json())
+    assert pyserq.run(restored).json() == pyserq.run(p).json()
 
 
 def test_one_version():

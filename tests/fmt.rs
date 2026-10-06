@@ -1,8 +1,8 @@
 mod common;
 
 use common::{Fixture, failure};
+use serq::compile_source;
 use serq::frontend::fmt::format;
-use serq::{Overrides, compile_source};
 
 #[test]
 fn formatting_preserves_program_and_comments_and_is_idempotent() {
@@ -19,7 +19,7 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
             prefill (1) growing kv;\n\
           } cache (1);\n\
         }\n\
-        run { horizon 1; }\n";
+        \n";
     let formatted = format(&common::main_source(source)).unwrap();
     assert!(
         formatted.contains(
@@ -30,10 +30,10 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
     assert!(formatted.contains("let B=10;         // token budget"));
     assert!(formatted.contains("// a paragraph\n\n"));
     assert_eq!(format(&common::main_source(&formatted)).unwrap(), formatted);
-    let before = compile_source(&common::main_source(source), &Overrides::default())
+    let before = compile_source(&common::main_source(source), &common::horizon(1.0))
         .unwrap()
         .to_json();
-    let after = compile_source(&common::main_source(&formatted), &Overrides::default())
+    let after = compile_source(&common::main_source(&formatted), &common::horizon(1.0))
         .unwrap()
         .to_json();
     assert_eq!(after, before);
@@ -45,7 +45,7 @@ fn cli_check_and_write_are_consistent() {
     fixture.write(
         "model.sq",
         &common::main_source(
-        "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (1);\n}\nrun {horizon 1;}\n"),
+        "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (1);\n}\n\n"),
     );
     failure(
         &fixture.run(&["fmt", "--check", "model.sq"]),
@@ -70,7 +70,8 @@ fn cli_check_and_write_are_consistent() {
 #[test]
 fn invalid_batch_leaves_every_file_untouched() {
     let fixture = Fixture::new();
-    let original = "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (1);\n}\nrun {horizon 1;}\n";
+    let original =
+        "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (1);\n}\n\n";
     fixture.write("good.sq", &common::main_source(original));
     fixture.write(
         "bad.sq",

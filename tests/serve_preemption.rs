@@ -20,7 +20,7 @@
 
 mod common;
 
-use serq::{Overrides, compile_source_at, program_path, run_ir};
+use serq::{compile_source_at, program_path, run_ir};
 
 const ENGINE: &str =
     "stage engine : step { budget B; chunk long_prefill(reqs, chunk); cost 1; memory kv; }";
@@ -37,7 +37,7 @@ fn a_served_resident_preempted_in_its_iteration_leaves_it() {
         "stage engine : step { budget B; chunk long_prefill(reqs, chunk); \
          cost 1; serve by (-admission); memory kv; }",
     );
-    let mut ov = Overrides::default();
+    let mut ov = common::example_options("vllm_request");
     for (k, v) in [
         ("bs", 16.0),
         ("B", 32.0),

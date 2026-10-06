@@ -42,7 +42,7 @@ remain after the session ends, until they are evicted.
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/04-cache.sq
+serq run docs/tutorial/programs/04-cache.sq --instance docs/tutorial/programs/instances/04-cache/default.sq
 ```
 
 ```text
@@ -72,7 +72,7 @@ evicted.
 
 ```bash
 for C in 2e5 6e4 4e4 3e4 2e4 1.5e4 1e4; do
-  serq run docs/tutorial/programs/04-cache.sq --set C=$C --json
+  serq run docs/tutorial/programs/04-cache.sq --instance docs/tutorial/programs/instances/04-cache/default.sq --set C=$C --json
 done
 ```
 

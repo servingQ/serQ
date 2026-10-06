@@ -1,0 +1,2 @@
+// Execution settings for preempt_delay.sq. Pass explicitly with --instance.
+run { horizon 1000; }

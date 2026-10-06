@@ -9,7 +9,14 @@ fn misspelled_and_empty_override_names_do_not_produce_ir() {
     f.write("model.sq", &common::main_source(PROGRAM));
     for name in ["raet", "Rate", ""] {
         failure(
-            &f.run(&["ir", "model.sq", "--set", &format!("{name}=2")]),
+            &f.run(&[
+                "ir",
+                "model.sq",
+                "--horizon",
+                "10",
+                "--set",
+                &format!("{name}=2"),
+            ]),
             if name.is_empty() { 2 } else { 1 },
             // an empty name is the CLI's argument error; a misspelled one
             // the linker's, which speaks of the `let` it overrides
@@ -21,7 +28,7 @@ fn misspelled_and_empty_override_names_do_not_produce_ir() {
         );
     }
     failure(
-        &f.run(&["ir", "model.sq", "--set", "raet=2"]),
+        &f.run(&["ir", "model.sq", "--horizon", "10", "--set", "raet=2"]),
         1,
         &[
             "unknown program argument `raet`",
@@ -32,19 +39,28 @@ fn misspelled_and_empty_override_names_do_not_produce_ir() {
 
 #[test]
 fn overrides_keep_last_value_and_declaration_order() {
-    let src = "use \"std/args\"; let rate = args.number(\"rate\", 1); let doubled = rate * 2; workload { arrive poisson(doubled); } run { horizon 10; }";
+    let src = "use \"std/args\"; let rate = args.number(\"rate\", 1); let doubled = rate * 2; workload { arrive poisson(doubled); } ";
     let ov = Overrides {
         lets: vec![
             ("rate".into(), parser::parse_expr("2").unwrap()),
             ("rate".into(), parser::parse_expr("3").unwrap()),
         ],
-        ..Default::default()
+        ..common::horizon(10.0)
     };
     let p = compile_source(&common::main_source(src), &ov).unwrap();
     assert_eq!(p.arrival, serq::ir::CArrival::Poisson(6.0));
     let f = Fixture::new();
     f.write("model.sq", &common::main_source(src));
-    let out = f.run(&["ir", "model.sq", "--set", "rate=2", "--set", "rate=3"]);
+    let out = f.run(&[
+        "ir",
+        "model.sq",
+        "--horizon",
+        "10",
+        "--set",
+        "rate=2",
+        "--set",
+        "rate=3",
+    ]);
     assert!(out.status.success());
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(json["arrival"]["Poisson"], 6.0);
@@ -54,9 +70,9 @@ fn overrides_keep_last_value_and_declaration_order() {
 fn sdk_cannot_inject_an_undeclared_constant() {
     let ov = Overrides {
         lets: vec![("outside".into(), parser::parse_expr("1").unwrap())],
-        ..Default::default()
+        ..common::horizon(10.0)
     };
-    let err = compile_source(&common::main_source("run { horizon outside; }"), &ov).unwrap_err();
+    let err = compile_source(&common::main_source(""), &ov).unwrap_err();
     assert!(err.contains("unknown program argument `outside`"));
     assert!(err.contains("available arguments: (none)"));
 }
@@ -67,11 +83,11 @@ fn arrival_override_applies_to_run_and_ir() {
     f.write(
         "model.sq",
         &common::main_source(
-        "workload { arrive renewal(2); \n  session { request; end; \n  }\n} server {\n} run { horizon 10; arrivals 1; }",
+            "workload { arrive renewal(2); \n  session { request; end; \n  }\n} server {\n} ",
         ),
     );
     for command in ["run", "ir"] {
-        let mut args = vec![command, "model.sq", "--arrivals", "3"];
+        let mut args = vec![command, "model.sq", "--horizon", "10", "--arrivals", "3"];
         if command == "run" {
             args.push("--json");
         }
@@ -98,9 +114,12 @@ fn arrival_override_also_applies_to_json_ir() {
     let f = Fixture::new();
     let program = compile_source(
         &common::main_source(
-        "workload { arrive renewal(2); \n  session { request; end; \n  }\n} server {\n} run { horizon 10; arrivals 1; }",
+            "workload { arrive renewal(2); \n  session { request; end; \n  }\n} server {\n} ",
         ),
-        &Overrides::default(),
+        &Overrides {
+            arrivals: Some(1),
+            ..common::horizon(10.0)
+        },
     )
     .unwrap();
     f.write("model.json", &program.to_json());
@@ -132,9 +151,9 @@ fn overrides_are_refused_on_ir_by_what_they_override() {
           session { request; end;
           }
         } server { set x = law();
-        } run { horizon 10; }",
+        } ",
         ),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     f.write("model.json", &program.to_json());

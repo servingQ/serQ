@@ -45,5 +45,5 @@ fn main() {
     observe output_tokens = o;
   }
 
-  run { horizon 300; warmup 30; seed 1; }
+
 }

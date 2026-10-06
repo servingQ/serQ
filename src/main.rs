@@ -267,6 +267,13 @@ fn main() {
         }
         i += 1;
     }
+    // Checking and target extraction do not execute or export this IR.
+    if matches!(cmd, "check" | "target")
+        && ov.horizon.is_none()
+        && !file.extension().is_some_and(|e| e == "json")
+    {
+        ov.horizon = Some(f64::MAX);
+    }
     let base = if ov.trace.is_some() {
         None
     } else {

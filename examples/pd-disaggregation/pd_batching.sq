@@ -190,5 +190,5 @@ fn main() {
     session { turn; request gw; end; }
   }
 
-  run { horizon 300; warmup 30; seed 1; }
+
 }

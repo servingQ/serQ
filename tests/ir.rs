@@ -27,7 +27,7 @@ fn short() -> Overrides {
         horizon: Some(60.0),
         warmup: Some(0.0),
         seed: Some(3),
-        ..Default::default()
+        ..common::horizon(10.0)
     }
 }
 
@@ -38,7 +38,7 @@ fn json_round_trip_is_exact() {
         let p = compile_source_at(
             &common::main_source(&src),
             path.parent(),
-            &Overrides::default(),
+            &common::example_options(path.file_stem().unwrap().to_str().unwrap()),
         )
         .unwrap();
         let j = p.to_json();
@@ -60,8 +60,8 @@ fn a_folded_constant_survives_the_round_trip() {
         }
         server { run svc (~exp(1));
         }
-        run { horizon 10; }";
-    let j = compile_source(&common::main_source(src), &Overrides::default())
+        ";
+    let j = compile_source(&common::main_source(src), &common::horizon(10.0))
         .unwrap()
         .to_json();
     assert!(
@@ -101,8 +101,8 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         }
         server { hold kv (8) { run engine prefill (8) growing kv; }
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let d = p.stages.iter().position(|s| s.name == "d").unwrap();
     let kv = CRef {
         base: 0,
@@ -222,7 +222,7 @@ fn ir_that_skips_the_linker_meets_its_checks() {
 #[test]
 fn malformed_ir_is_rejected() {
     let src = std::fs::read_to_string(serq::program_path("mg1")).unwrap();
-    let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap();
     let mut bad = p.clone();
     bad.version = 0;
     assert!(bad.validate().unwrap_err().contains("version"));
@@ -282,17 +282,17 @@ fn budget_left_needs_a_step_stage() {
         }
         server { set b = budget_left(d); run d (1);
         }
-        run { horizon 10; }";
-    let e = compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
+        ";
+    let e = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("`budget_left(d)`: `d` is a delay stage"), "{e}");
     // an array is named as one
     let fam = src
         .replace("stage d : delay;", "stage d : delay; stage F[2] : fifo;")
         .replace("budget_left(d)", "budget_left(F[serial])");
-    let e = compile_source(&common::main_source(&fam), &Overrides::default()).unwrap_err();
+    let e = compile_source(&common::main_source(&fam), &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("a member of `F` is a fifo stage"), "{e}");
     let ok = src.replace("budget_left(d)", "budget_left(engine)");
-    let mut p = compile_source(&common::main_source(&ok), &Overrides::default()).unwrap();
+    let mut p = compile_source(&common::main_source(&ok), &common::horizon(10.0)).unwrap();
     // the same refusal from IR: point the call at the delay stage
     use serq::ir::{CArg, CExpr, CStmt, Fun};
     let d = p.stages.iter().position(|s| s.name == "d").unwrap();
@@ -324,9 +324,9 @@ fn explicit_sessions_preset_attributes() {
         }
         server { run d (w); observe done = now;
         }
-        run { horizon 100; }
+
 "#;
-    let p = compile_source(&common::main_source(src), &Overrides::default())
+    let p = compile_source(&common::main_source(src), &common::horizon(100.0))
         .unwrap()
         .with_sessions(&[vec![("w", 5.0)], vec![("w", 2.0)]])
         .unwrap();
@@ -339,7 +339,7 @@ fn explicit_sessions_preset_attributes() {
     };
     assert_eq!(by_serial, vec![(0, 5.0), (1, 2.0)]);
     assert!(
-        compile_source(&common::main_source(src), &Overrides::default())
+        compile_source(&common::main_source(src), &common::horizon(100.0))
             .unwrap()
             .with_sessions(&[vec![("nope", 1.0)]])
             .is_err()
@@ -355,7 +355,7 @@ fn inlined_trace_runs_like_the_corpus() {
     let src = std::fs::read_to_string(&path).unwrap();
     let ov = Overrides {
         horizon: Some(1500.0),
-        ..Default::default()
+        ..common::horizon(10.0)
     };
     let p = compile_source(&common::main_source(&src), &ov).unwrap();
     let base = path.parent();
@@ -380,7 +380,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
         stage decode : ps(min(present, 4));
         stage tool : delay;
 
-        run { horizon 100; seed 1; }
+
     "#;
     let deployment_workload = r#"arrive poisson(0.5);
           init { set K = 0; }
@@ -413,8 +413,22 @@ fn serving_forms_compile_to_the_kernel_ir() {
           set K = T;
         }}"
     );
-    let a = compile_source(&common::main_source(&serving), &Overrides::default()).unwrap();
-    let b = compile_source(&common::main_source(&kernel), &Overrides::default()).unwrap();
+    let a = compile_source(
+        &common::main_source(&serving),
+        &Overrides {
+            seed: Some(1),
+            ..common::horizon(100.0)
+        },
+    )
+    .unwrap();
+    let b = compile_source(
+        &common::main_source(&kernel),
+        &Overrides {
+            seed: Some(1),
+            ..common::horizon(100.0)
+        },
+    )
+    .unwrap();
     assert_eq!(a.to_json(), b.to_json());
 }
 
@@ -426,7 +440,7 @@ fn serving_forms_compile_to_the_kernel_ir() {
 fn branch_with_is_sugar_for_bernoulli() {
     let head = "stage tool : delay;
 
-        run { horizon 2000; warmup 200; seed 1; }";
+        ";
     let head_workload = "arrive poisson(0.5); turn { set Z = ~exp(3); }";
     let sugar = format!(
         "{head} workload {{ {head_workload} session {{ turn; loop {{ branch with (0.8) {{ request; turn; }} else {{ end; }} }} \n}} }}\nserver {{ run tool (Z);\n}}"
@@ -434,7 +448,11 @@ fn branch_with_is_sugar_for_bernoulli() {
     let explicit = format!(
         "{head} workload {{ {head_workload} session {{ turn; loop {{ branch (~bernoulli(0.8)) {{ request; turn; }} else {{ end; }} }} \n}} }}\nserver {{ run tool (Z);\n}}"
     );
-    let ov = serq::Overrides::default();
+    let ov = Overrides {
+        warmup: Some(200.0),
+        seed: Some(1),
+        ..common::horizon(2000.0)
+    };
     let a = serq::compile_source(&common::main_source(&sugar), &ov).expect("the sugar compiles");
     let b = serq::compile_source(&common::main_source(&explicit), &ov)
         .expect("the explicit form compiles");
@@ -467,8 +485,8 @@ fn a_draw_is_labelled_w_p() {
         }
         server { run svc (1);
         }
-        run { horizon 100; }";
-    let p = serq::compile_source(&common::main_source(src), &serq::Overrides::default()).unwrap();
+        ";
+    let p = serq::compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let svg = serq::view::svg::render(&serq::view::deployment::figure(&p));
     assert!(
         svg.contains("w.p. 0.8"),
@@ -491,7 +509,7 @@ fn at_admission_is_substituted_into_the_header() {
         pool reqs { cap 8; }
         stage engine : step { budget 512; cost 1e-3; memory kv; }
 
-        run { horizon 500; }";
+        ";
     let head_workload = "arrive poisson(0.3); init { set K = 0; }
                    turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     let bound = format!(
@@ -515,7 +533,7 @@ fn at_admission_is_substituted_into_the_header() {
           set K = prompt + o;
         }}"
     );
-    let ov = serq::Overrides::default();
+    let ov = common::horizon(500.0);
     let a = serq::compile_source(&common::main_source(&bound), &ov).expect("the clause compiles");
     let b = serq::compile_source(&common::main_source(&inlined), &ov)
         .expect("the inlined form compiles");
@@ -536,7 +554,7 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
         pool reqs { cap 8; }
         stage engine : step { budget 512; cost 1e-3; memory kv; }
 
-        run { horizon 500; }";
+        ";
     let head_workload = "arrive poisson(0.3); init { set K = 0; }
                    turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     let bound = format!(
@@ -557,7 +575,7 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
           }} cache (prompt + o);
         }}"
     );
-    let ov = serq::Overrides::default();
+    let ov = common::horizon(500.0);
     let a = serq::compile_source(&common::main_source(&bound), &ov).expect("the clause compiles");
     let b = serq::compile_source(&common::main_source(&inlined), &ov)
         .expect("the inlined form compiles");
@@ -579,8 +597,8 @@ fn at_admission_rejects_a_draw() {
         }
         server { hold kv (x) at admission (x = ~exp(3)) { run s (1); }
         }
-        run { horizon 10; }";
-    let e = serq::compile_source(&common::main_source(src), &serq::Overrides::default())
+        ";
+    let e = serq::compile_source(&common::main_source(src), &common::horizon(10.0))
         .expect_err("rejected");
     assert!(e.contains("draws a sample"), "{e}");
 }
@@ -590,7 +608,7 @@ fn at_admission_rejects_a_draw() {
 fn at_admission_bindings_are_sequential() {
     let head = "pool kv { cap 1000; } stage s : fifo;
 
-        run { horizon 10; }";
+        ";
     let head_workload = "arrive poisson(1); init { set n = 10; }";
     let steps = format!(
         "{head} workload {{ {head_workload} session {{ request; end;
@@ -602,7 +620,7 @@ fn at_admission_bindings_are_sequential() {
     let flat = format!(
         "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold kv (n / 2 + 1) {{ run s (1); }}\n}}"
     );
-    let ov = serq::Overrides::default();
+    let ov = common::horizon(10.0);
     assert_eq!(
         serq::compile_source(&common::main_source(&steps), &ov)
             .unwrap()
@@ -624,8 +642,8 @@ fn fits_says_it_is_now_reserve() {
         }
         server { hold kv (1) fits (2) { run s (1); }
         }
-        run { horizon 10; }";
-    let e = serq::compile_source(&common::main_source(src), &serq::Overrides::default())
+        ";
+    let e = serq::compile_source(&common::main_source(src), &common::horizon(10.0))
         .expect_err("rejected");
     assert!(e.contains("`fits` is now `reserve`"), "{e}");
 }
@@ -642,8 +660,8 @@ fn admit_as_a_statement_says_what_to_write() {
         }
         server { admit kv (1) { run s (1); }
         }
-        run { horizon 10; }";
-    let e = serq::compile_source(&common::main_source(src), &serq::Overrides::default())
+        ";
+    let e = serq::compile_source(&common::main_source(src), &common::horizon(10.0))
         .expect_err("rejected");
     assert!(e.contains("is now `hold … at admission"), "{e}");
     assert!(
@@ -661,7 +679,7 @@ fn the_request_boundary_does_not_change_the_session_ir() {
         pool reqs { cap 8; }
         stage engine : step { budget 512; cost 1e-3; memory kv; }
         stage tool : delay;
-        run { horizon 500; seed 1; }";
+        ";
     let client = "arrive poisson(0.3); init { set K = 0; }
         turn { set n = ~exp(500); set o = ~exp(200) + 1; set more = ~bernoulli(0.9); }";
     let split = format!(
@@ -712,7 +730,10 @@ fn the_request_boundary_does_not_change_the_session_ir() {
           set K = prompt + o;
         }}"
     );
-    let ov = serq::Overrides::default();
+    let ov = Overrides {
+        seed: Some(1),
+        ..common::horizon(500.0)
+    };
     let a = serq::compile_source(&common::main_source(&split), &ov).expect("the two sides compile");
     let b = serq::compile_source(&common::main_source(&flat), &ov)
         .expect("the moved context update compiles");
@@ -730,7 +751,7 @@ fn enter_is_hold_and_admit_via_survives() {
     let head = "pool kv { cap 1000; } pool reqs { cap 4; admit via engine; }
         stage engine : step { budget 64; cost 1; memory kv; }
 
-        run { horizon 20; }";
+        ";
     let head_workload = "arrive poisson(1); init { set n = 10; }";
     let sugar = format!(
         "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold reqs (1), kv (n) {{ prefill (n) growing kv; }} cache (n);\n}}"
@@ -738,7 +759,7 @@ fn enter_is_hold_and_admit_via_survives() {
     let kernel = format!(
         "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold reqs (1), kv (n) {{ run engine prefill (n) growing kv; }} cache (n);\n}}"
     );
-    let ov = serq::Overrides::default();
+    let ov = common::horizon(20.0);
     assert_eq!(
         serq::compile_source(&common::main_source(&sugar), &ov)
             .unwrap()
@@ -780,9 +801,9 @@ fn choose_compares_its_keys_in_order() {
         }}
         server {{ choose j in 4 by ({by}); observe j = j;
         }}
-        run {{ horizon 1; }}"
+        "
         );
-        let r = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
+        let r = run_source(&common::main_source(&src), &common::horizon(1.0), None).unwrap();
         r.observe("j").unwrap().samples[0]
     };
     // the first key ties 1 and 3; the second picks 3
@@ -805,8 +826,8 @@ fn an_old_or_keyless_choose_is_refused_plainly() {
           }
         }
         server { choose j in 2 by (-j);
-        } run { horizon 1; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        } ";
+    let p = compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap();
     let json = p.to_json();
     let old = json
         .replacen(
@@ -853,8 +874,8 @@ fn a_validate_error_points_at_the_statement() {
           run d (1);
           load kv (1);
         }
-        run { horizon 10; }";
-    let e = compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
+        ";
+    let e = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     assert!(
         e.starts_with("11:16: session: `load kv` outside a hold of `kv`"),
         "{e}"

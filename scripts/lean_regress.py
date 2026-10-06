@@ -22,7 +22,7 @@ SERQ = ROOT / "target" / "release" / "serq"
 
 
 def ir_of(sq):
-    ir = json.loads(subprocess.run([str(SERQ), "ir", str(sq)], capture_output=True, text=True, check=True).stdout)
+    ir = json.loads(subprocess.run([str(SERQ), "ir", str(sq), "--instance", str(sq.parent / "instances" / sq.stem / "default.sq")], capture_output=True, text=True, check=True).stdout)
     sessions = json.load(open(sq.with_suffix(".sessions.json")))
     slot = {n: i for i, n in enumerate(ir["attrs"])}
     ir["arrival"] = {"Sessions": [{"attrs": [[slot[k], float(v)] for k, v in s.items()], "turns": []}

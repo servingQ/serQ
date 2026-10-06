@@ -1,0 +1,2 @@
+// Execution settings for pd_ps.sq. Pass explicitly with --instance.
+run { horizon 300; warmup 30; seed 1; }

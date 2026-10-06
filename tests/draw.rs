@@ -10,7 +10,7 @@ mod common;
 use serq::ir::Program;
 use serq::view::deployment::{self, End};
 use serq::view::figure::{BoxStyle, Figure, StationKind};
-use serq::{Overrides, compile_drawn_source_at, compile_source, program_path};
+use serq::{compile_drawn_source_at, compile_source, program_path};
 
 const PROGRAMS: [&str; 8] = [
     "mg1",
@@ -26,7 +26,7 @@ const PROGRAMS: [&str; 8] = [
 fn program(name: &str) -> Program {
     let path = program_path(name);
     let src = std::fs::read_to_string(&path).unwrap();
-    compile_drawn_source_at(&src, path.parent(), &Overrides::default())
+    compile_drawn_source_at(&src, path.parent(), &common::horizon(10.0))
         .unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
@@ -137,7 +137,7 @@ fn choose_annotates_the_station_it_selects() {
 }
 
 fn compile(src: &str) -> Program {
-    compile_source(&common::main_source(src), &Overrides::default()).expect("the fixture compiles")
+    compile_source(&common::main_source(src), &common::horizon(10.0)).expect("the fixture compiles")
 }
 
 /// `grow` advances the *innermost* hold holding the pool, so a `growing` run
@@ -160,7 +160,7 @@ fn growing_is_found_through_nested_holds() {
             hold gate (1) { run engine prefill (n) growing kv; }
           } cache (n + o);
         }
-        run { horizon 200; }
+
 "#,
     );
     let net = deployment::project(&p);
@@ -185,7 +185,7 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
           run s3 (1);
           hold kv (1) { run s4 (1); run s5 (1); }
         }
-        run { horizon 100; }
+
 "#,
     );
     let net = deployment::project(&p);
@@ -242,7 +242,7 @@ fn a_session_that_decides_first_starts_at_a_decision() {
         }
         server { branch (a) { run s1 (1); } else { run s2 (1); }
         }
-        run { horizon 100; }
+
 "#,
     );
     let net = deployment::project(&p);
@@ -281,7 +281,7 @@ fn negative_constants_reparse() {
         }
         server { observe o = k ^ a; run s (1);
         }
-        run { horizon 10; }
+
 "#,
     );
     let printed = p
@@ -329,7 +329,7 @@ const ACROSS: &str = "pool live { cap 2; } pool kv { cap 9; }
         }
         server { hold live (1) { hold kv (1) { run A (1); } run B (1); }
         }
-        run { horizon 10; }";
+        ";
 
 /// Pools held around every visit to a stage, and only those.
 #[test]
@@ -420,7 +420,7 @@ fn separate_holds_side_by_side_are_two_frames() {
         }
         server { hold a (1) { run s1 (1); } hold a (1) { run s2 (1); }
         }
-        run { horizon 100; }
+
 "#,
     );
     let net = deployment::project(&p);
@@ -445,7 +445,7 @@ fn a_hold_across_stations_is_no_stations_own() {
         }
         server { run s1 (1); run s2 (1); hold a (1) { run s1 (1); run s3 (1); run s2 (1); }
         }
-        run { horizon 100; }
+
 "#,
     );
     let net = deployment::project(&p);
@@ -487,7 +487,7 @@ fn a_release_in_one_arm_does_not_reach_the_other() {
         }
         server { hold p (1) { branch (c) { release p; run s1 (1); } else { run s2 (1); } run s3 (1); }
         }
-        run { horizon 10; }",
+        ",
     );
     let net = deployment::project(&p);
     assert!(pools_of(&p, &net, "s1").is_empty());
@@ -507,7 +507,7 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
         }
         server { hold p (1) { run s1 (1); } lease p (inf); run s2 (1); release p; run s3 (1);
         }
-        run { horizon 10; }",
+        ",
     );
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "s1"), ["p"]);
@@ -576,9 +576,9 @@ fn pools_at(src: &str, stage_name: &str) -> Vec<String> {
           }}
         }}
         server {{ {src}
-        }} run {{ horizon 1; }}"
+        }} "
     );
-    let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(&src), &common::horizon(1.0)).unwrap();
     let net = deployment::project(&p);
     pools_of(&p, &net, stage_name)
 }
@@ -695,9 +695,9 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
               branch with (0.5) { run tool (1); } else { end; } } }
         }
         server { branch (first) { run big (n); } else { run small (n); } }
-        run { horizon 100; }";
+        ";
     let p =
-        compile_drawn_source_at(&common::main_source(src), None, &Overrides::default()).unwrap();
+        compile_drawn_source_at(&common::main_source(src), None, &common::horizon(100.0)).unwrap();
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["big", "small"]);
 }
@@ -714,7 +714,7 @@ fn a_turn_forgets_what_the_path_set() {
         }
         server { branch (n > 0) { run A (n); } else { run B (1); }
         }
-        run { horizon 100; }",
+        ",
     );
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["A", "B"]);
@@ -736,7 +736,7 @@ fn a_decided_guard_drops_only_an_arm_with_no_station() {
         }}
         server {{ set x = 0; hold kv (1) {{ run A (1); {arms} set x = 1; run C (1); }}
         }}
-        run {{ horizon 100; }}"
+        "
         ))
     };
     let p = program("branch (!x) { run B (1); }");
@@ -761,7 +761,7 @@ fn a_guard_on_constants_draws_both_arms() {
         }
         server { branch (mode == 0) { run A (1); } else { run B (1); }
         }
-        run { horizon 100; }",
+        ",
     );
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["A", "B"]);
@@ -775,9 +775,9 @@ fn shape(session: &str) -> (Program, deployment::Net) {
         "stage A : delay; stage B : delay; stage C : delay;
         workload {{ arrive poisson(1); session {{ request; {session} }} }}
         server {{}}
-        run {{ horizon 1; }}"
+        "
     );
-    let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(&src), &common::horizon(1.0)).unwrap();
     let net = deployment::project(&p);
     (p, net)
 }
@@ -938,8 +938,8 @@ fn the_looking_pass_leaves_nothing() {
           run x, y (1);
           run A (1);
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     assert_eq!(net.flows.len(), 1);
     assert_eq!(net.flow_notes.len(), 1);
@@ -970,8 +970,8 @@ fn a_decision_stays_before_its_stations() {
             branch (c) { hold kv[i] (1) { run B[i] (1); } } else { hold kv[i] (1) { run C[i] (1); } }
           }
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     let End::Node(d) = decision(&net).expect("a decision") else {
         unreachable!()
@@ -1162,7 +1162,7 @@ fn docs_assets_are_current() {
             .pop()
             .unwrap_or_else(|| panic!("docs/assets/{name} has no program: {stem}.sq"));
         let src = std::fs::read_to_string(&src_path).unwrap();
-        let p = serq::compile_drawn_file(&src, &src_path, &Overrides::default())
+        let p = serq::compile_drawn_file(&src, &src_path, &common::horizon(10.0))
             .unwrap_or_else(|e| panic!("{}: {e}", src_path.display()));
         let got = serq::view::svg::render(&deployment::figure(&p));
         if std::env::var("SERQ_BLESS").is_ok() {
@@ -1231,8 +1231,8 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
             run D[j] (1);
           }
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
     let (pf, eg, ing, d) = (at("P"), at("egress"), at("ingress"), at("D"));
@@ -1266,8 +1266,8 @@ fn only_a_links_latency_folds_into_the_transfer() {
           hold kvP (10) { run P (1); } lease kvP (inf);
           hold kvD (10) { run wait (1); transfer on egress, ingress (1) from kvP to kvD (10); run D (1); }
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     assert!(net.node_of(stage(&p, "wait")).is_some());
     assert!(net.flow_notes[0].latency.is_empty());
@@ -1292,8 +1292,8 @@ fn a_run_from_an_unboxed_choice_does_not_span() {
           choose j in 2 by (0);
           hold kv[j] (10) { run nic[i], ing[j] (1); run D[j] (1); }
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     let ing = net.node_of(stage(&p, "ing")).unwrap();
     assert_eq!(
@@ -1329,8 +1329,8 @@ fn a_latency_before_two_transfers_stays_a_station() {
             else { transfer on b, L (1) from kvP to kvD (10); }
           }
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     assert!(net.node_of(stage(&p, "L.latency")).is_some());
     assert_eq!(net.flows.len(), 2);
@@ -1363,8 +1363,8 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
             hold q2 (1) { transfer on a, b (1) from p2 to q2 (1); }
           }
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     assert_eq!(net.flows.len(), 1);
     let n = &net.flow_notes[0];
@@ -1384,8 +1384,8 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
           hold kP (1) { run P (1); } lease kP (inf);
           hold kD (1) { transfer on A, B (1) from kP to kD (1); }
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     assert_eq!(
         net.flow_notes[0].latency,
@@ -1408,8 +1408,8 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
           hold kv[j] (1) { run B[j] (1); }
           run a[i], b[j], c[i] (1);
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     assert!(!net.spans(&net.flows[0]));
 }
@@ -1427,8 +1427,8 @@ fn a_flows_stations_are_neighbours_in_the_row() {
         }
         server { run ingress (1); run D (1); run egress, ingress (1);
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
     let (eg, ing, d) = (at("egress"), at("ingress"), at("D"));
@@ -1507,8 +1507,8 @@ fn a_reordered_arrow_is_drawn_the_way_it_points() {
         }
         server { run a (1); run v (1); run u (1); run v (1); run a, u (1);
         }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
     let (u, v) = (at("u"), at("v"));
@@ -1553,7 +1553,7 @@ fn labels_do_not_overlap() {
         let name = path.strip_prefix(root).unwrap().display().to_string();
         let src = std::fs::read_to_string(path).unwrap();
         let p =
-            serq::compile_file(&common::main_source(&src), path, &Overrides::default()).unwrap();
+            serq::compile_file(&common::main_source(&src), path, &common::horizon(10.0)).unwrap();
         let f = deployment::figure(&p);
         let boxes: Vec<(f64, f64, f64, &str)> = f
             .items

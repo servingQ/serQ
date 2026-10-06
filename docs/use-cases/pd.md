@@ -131,7 +131,7 @@ memory is available.
 ## Run the example
 
 ```bash
-serq run examples/pd-disaggregation/llmd_nixl_pull.sq --json
+serq run examples/pd-disaggregation/llmd_nixl_pull.sq --instance examples/pd-disaggregation/instances/llmd_nixl_pull/default.sq --json
 ```
 
 At the defaults (seed 1, horizon 2 000 s, warm-up 200 s), the run gives:

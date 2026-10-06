@@ -23,8 +23,8 @@ fn the_report_has_the_shape_its_version_names() {
         server { hold kv (1) { run svc (~exp(0.5)); } observe x = now;
         }
         gauge g = used(kv);
-        run { horizon 100; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let j: serde_json::Value = serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
     let shape = (
         keys(&j),
@@ -116,8 +116,8 @@ fn an_array_member_is_reported_with_its_index() {
         }
         server { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } }
         }
-        run { horizon 100; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let r = run_ir(&p, None).unwrap();
     let j: serde_json::Value = serde_json::from_str(&r.json()).unwrap();
     let rows = |k: &str| -> Vec<(String, serde_json::Value)> {
@@ -181,9 +181,17 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
             branch (serial == 0) {{ decode (3) growing kv; }}
           }}
         }}
-        run {{ horizon 20; warmup 0; seed 1; }}"
+        "
         );
-        let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
+        let p = compile_source(
+            &common::main_source(&src),
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(20.0)
+            },
+        )
+        .unwrap();
         let r = run_ir(&p, None).unwrap();
         let s = r.stage("engine").unwrap().clone();
         (s.mean_itl, s.itl_p99)
@@ -218,9 +226,17 @@ fn a_gap_holds_the_transfer_between_two_engines() {
           {recompute}
           decode on d (2);
         }}
-        run {{ horizon 20; warmup 0; seed 1; }}"
+        "
         );
-        let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
+        let p = compile_source(
+            &common::main_source(&src),
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(20.0)
+            },
+        )
+        .unwrap();
         let r = run_ir(&p, None).unwrap();
         let (p, d) = (r.stage("p").unwrap(), r.stage("d").unwrap());
         assert!(p.mean_itl.is_nan(), "a first token has no gap");
@@ -259,8 +275,17 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
           observe span = now - first;
           observe gaps = o - 1;
         }
-        run { horizon 1e6; warmup 0; seed 1; arrivals 8000; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(
+        &common::main_source(src),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            arrivals: Some(8000),
+            ..common::horizon(1e6)
+        },
+    )
+    .unwrap();
     let r = run_ir(&p, None).unwrap();
     assert!(
         r.pool("kv").unwrap().preemptions > 0,
@@ -288,8 +313,8 @@ fn a_one_member_array_keeps_its_index() {
         }
         server { hold reqs (1) { hold kv[0] (1) { run svc[0] (~exp(2)); } }
         }
-        run { horizon 100; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let r = run_ir(&p, None).unwrap();
     assert_eq!(r.pools_named("kv")[0].index, Some(0));
     assert_eq!(r.pools_named("reqs")[0].index, None);
@@ -311,8 +336,8 @@ fn a_queue_family_of_one_is_reported_by_index() {
           decode (p) { hold kv (p) { prefill (p) growing kv; } }
         }
         workload { arrive batch(1); init { set prompt = 4; } session { request gw; end; } }
-        run { horizon 10; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let r = run_ir(&p, None).unwrap();
     assert_eq!(r.pools_named("D.kv")[0].index, Some(0));
     assert_eq!(r.stages_named("D")[0].index, Some(0));
@@ -341,11 +366,19 @@ fn a_step_stage_reports_what_its_iterations_carried() {
             branch (serial == 0) {{ decode (2) growing kv; }}
           }}
         }}
-        run {{ horizon 20; warmup 0; seed 1; }}"
+        "
         )
     };
     let stage = |serve: &str| {
-        let p = compile_source(&common::main_source(&src(serve)), &Overrides::default()).unwrap();
+        let p = compile_source(
+            &common::main_source(&src(serve)),
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(20.0)
+            },
+        )
+        .unwrap();
         let r = run_ir(&p, None).unwrap();
         let s = r.stage("engine").unwrap().clone();
         (
@@ -368,8 +401,8 @@ fn a_step_stage_reports_what_its_iterations_carried() {
 #[test]
 fn the_report_records_the_serq_version() {
     let p = compile_source(&common::main_source(
-        "stage svc : delay; workload { arrive batch(1); \n  session { request; end; \n  }\n} server { run svc (1);\n} run { horizon 2; }"),
-        &Overrides::default(),
+        "stage svc : delay; workload { arrive batch(1); \n  session { request; end; \n  }\n} server { run svc (1);\n} "),
+        &common::horizon(2.0),
     )
     .unwrap();
     let j: serde_json::Value = serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
@@ -396,7 +429,7 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
         defs: vec![("prompt_len".into(), "2000".into())],
         warmup: Some(0.0),
         arrivals: Some(4000),
-        ..Default::default()
+        ..common::example_options("pd_batching")
     };
     let src = include_str!("../examples/pd-disaggregation/pd_batching.sq");
     let p = compile_source(&common::main_source(src), &ov).unwrap();
@@ -454,9 +487,9 @@ fn a_test_observe_that_never_held_is_noted() {
           branch (serial < 20) { observe mixed = serial < 0; } else { observe mixed = 0; }
           branch (serial < 10) { observe few = serial > 100; }
         }
-        run { horizon 100; }";
+        ";
     let r = run_ir(
-        &compile_source(&common::main_source(src), &Overrides::default()).unwrap(),
+        &compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap(),
         None,
     )
     .unwrap();
@@ -507,7 +540,7 @@ fn the_corpus_earns_one_note() {
     // engine idle with work (the `idle:` note, #355)
     let mut rejected = vec![];
     for p in &programs {
-        let r = serq::run_file(p, &Overrides::default())
+        let r = serq::run_file(p, &common::horizon(100.0))
             .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         let name = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
         for o in r.observes.iter().filter(|o| o.never_held()) {

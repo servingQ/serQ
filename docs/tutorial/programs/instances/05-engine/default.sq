@@ -1,0 +1,2 @@
+// Execution settings for 05-engine.sq. Pass explicitly with --instance.
+run { horizon 20000; warmup 2000; seed 1; }

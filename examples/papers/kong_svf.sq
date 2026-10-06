@@ -45,5 +45,5 @@ fn main() {
   claim queueing_bound given (s + o <= P && o >= 1):
     at end ((M - P) * (total(latency) - total(out)) <= 2 * (prefix_total(vol) - total(vol)));
 
-  run { horizon 100000; warmup 0; seed 1; }
+
 }

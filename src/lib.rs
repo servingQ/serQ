@@ -58,6 +58,15 @@ pub fn compile_source_at(
     finish(prog, src, ov)
 }
 
+/// Static inspection needs a valid IR but does not choose an experiment's duration.
+/// This placeholder is used only by drawing; executing/exporting IR requires a horizon.
+fn inspection_options(ov: &Overrides) -> Overrides {
+    Overrides {
+        horizon: ov.horizon.or(Some(f64::MAX)),
+        ..ov.clone()
+    }
+}
+
 /// The supplied inputs, which the parser checks cannot change an array size.
 fn overridden(ov: &Overrides) -> Vec<String> {
     ov.lets.iter().map(|(name, _)| name.clone()).collect()
@@ -139,7 +148,7 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 pub fn compile_drawn_file(src: &str, path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     let prog = frontend::parser::parse_file_with(src, path, &ov.defs, &overridden(ov))
         .map_err(|e| e.render(src))?;
-    finish(drawn(prog), src, ov)
+    finish(drawn(prog), src, &inspection_options(ov))
 }
 
 /// `compile_drawn_file` for the text of a program file in `base`.
@@ -150,7 +159,7 @@ pub fn compile_drawn_source_at(
 ) -> Result<ir::Program, String> {
     let prog = frontend::parser::parse_at_with(src, base, &ov.defs, &overridden(ov))
         .map_err(|e| e.render(src))?;
-    finish(drawn(prog), src, ov)
+    finish(drawn(prog), src, &inspection_options(ov))
 }
 
 /// `load`, for the deployment view: program text is compiled with
@@ -269,14 +278,24 @@ pub fn program_path(name: &str) -> std::path::PathBuf {
 }
 
 /// Convenience for tests: run `examples/*/<name>.sq` with overrides given
-/// as `name=expr` strings.
+/// as `name=expr` strings, explicitly selecting its `instances/<name>/default.sq`.
 pub fn run_program(name: &str, sets: &[&str], seed: Option<u64>, horizon: Option<f64>) -> Report {
     let path = program_path(name);
-    let mut ov = Overrides {
-        seed,
-        horizon,
-        ..Default::default()
-    };
+    let mut ov = Overrides::default();
+    let instance = path
+        .parent()
+        .unwrap()
+        .join("instances")
+        .join(name)
+        .join("default.sq");
+    ov.instance(&std::fs::read_to_string(&instance).expect("example execution settings"))
+        .expect("valid example execution settings");
+    if let Some(seed) = seed {
+        ov.seed = Some(seed);
+    }
+    if let Some(horizon) = horizon {
+        ov.horizon = Some(horizon);
+    }
     for s in sets {
         let (k, v) = s.split_once('=').expect("name=expr");
         let e = frontend::parser::parse_expr(v).expect("override expression");

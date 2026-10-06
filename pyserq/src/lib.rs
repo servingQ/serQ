@@ -5,11 +5,11 @@
 //!
 //! ```python
 //! import pyserq
-//! p = pyserq.compile("examples/single-turn/mg1.sq", sets={"lam": 0.8}, seed=10)
+//! p = pyserq.compile("examples/single-turn/mg1.sq", sets={"lam": 0.8}, seed=10, horizon=250000, warmup=25000)
 //! r = pyserq.run(p)            # the GIL is released while it runs
 //! r.json()                     # what `serq run --json` prints
 //! o = r.observe("sojourn")    # o.mean, o.ci, ...; o.samples, o.times: what `--dump` writes
-//! g = pyserq.run(pyserq.compile("examples/pd-disaggregation/llmd_nixl_pull.sq")).gauge("load_spread")
+//! g = pyserq.run(pyserq.compile("examples/pd-disaggregation/llmd_nixl_pull.sq", horizon=2000, warmup=200)).gauge("load_spread")
 //! g.mean, g.ci, g.min, g.max  # g.times, g.values: what `--dump` writes
 //! r.stage("svc").utilization; r.observes, r.gauges, r.stages, r.pools: all of them
 //! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
@@ -284,7 +284,8 @@ enum SetValue {
 
 /// `compile(path=None, *, source=None, sets={}, defs={}, seed=None,
 /// horizon=None, warmup=None, arrivals=None, trace=None)`: a program file or
-/// program text to its IR, with the overrides of `serq run` (`sets` supply
+/// program text to its IR. Source models require `horizon`; settings are supplied
+/// here, separately from the model, with the options of `serq run` (`sets` supply
 /// inputs declared with `args.number`, `defs` the bodies of expression definitions, by name).
 #[pyfunction]
 #[pyo3(signature = (path=None, *, source=None, sets=HashMap::new(), defs=HashMap::new(), seed=None, horizon=None, warmup=None, arrivals=None, trace=None))]

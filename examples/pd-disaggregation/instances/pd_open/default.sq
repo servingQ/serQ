@@ -1,0 +1,2 @@
+// Execution settings for pd_open.sq. Pass explicitly with --instance.
+run { horizon 20000; warmup 2000; seed 1; }

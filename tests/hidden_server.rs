@@ -5,7 +5,7 @@
 
 mod common;
 
-use serq::{Overrides, compile_source};
+use serq::compile_source;
 
 fn program(server: &str) -> String {
     format!(
@@ -15,14 +15,14 @@ fn program(server: &str) -> String {
           init {{ set prompt = 32; set o = 4; }}
           session {{ request; end; }} }}
         server {{ {server} }}
-        run {{ horizon 100; }}"
+        "
     )
 }
 
 fn refused(server: &str, fragments: &[&str]) {
     let err = compile_source(
         &common::main_source(&program(server)),
-        &Overrides::default(),
+        &common::horizon(100.0),
     )
     .unwrap_err();
     for f in fragments {
@@ -34,7 +34,7 @@ fn refused(server: &str, fragments: &[&str]) {
 fn the_server_may_run_cache_and_observe_by_a_hidden_attribute() {
     let ok = "hold kv (prompt) { prefill (prompt) growing kv; decode (o - 1) growing kv; } cache (prompt + o);
               observe length = o;";
-    compile_source(&common::main_source(&program(ok)), &Overrides::default()).unwrap();
+    compile_source(&common::main_source(&program(ok)), &common::horizon(100.0)).unwrap();
 }
 
 #[test]
@@ -85,8 +85,8 @@ fn a_top_level_session_cannot_bypass_the_server_check() {
                stage E : step { cost 1; memory kv; }
                workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } }
                session { branch (o > 2) { hold kv (prompt) { prefill (prompt) growing kv; } } else { } end; }
-               run { horizon 100; }";
-    let err = compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
+               ";
+    let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
     assert!(err.contains("`session` belongs inside `workload`"), "{err}");
     refused(
         "branch (o > 2) { hold kv (prompt) { prefill (prompt) growing kv; } } else { }",
@@ -103,7 +103,11 @@ fn a_run_reveals_what_its_work_reads() {
                  hold kv (prompt) { prefill (prompt) growing kv; decode (o - 1) growing kv; } cache (prompt + o);
                  branch (long) { observe was_long = 1; } else { observe was_long = 0; }
                  branch (o > 3) { observe longer = 1; } else { }";
-    compile_source(&common::main_source(&program(after)), &Overrides::default()).unwrap();
+    compile_source(
+        &common::main_source(&program(after)),
+        &common::horizon(100.0),
+    )
+    .unwrap();
     // before the run ends, inside the hold, it is still hidden
     refused(
         "hold kv (prompt) { prefill (prompt) growing kv;

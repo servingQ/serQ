@@ -4,7 +4,7 @@
 
 mod common;
 use common::{Fixture, PROGRAM, failure};
-use serq::{Overrides, compile_source};
+use serq::compile_source;
 
 #[test]
 fn an_instance_is_the_sets_and_flags_it_writes() {
@@ -14,7 +14,7 @@ fn an_instance_is_the_sets_and_flags_it_writes() {
         "fast.sq",
         "let rate = 0.5;\nrun { horizon 20; warmup 2; seed 7; }\n",
     );
-    let by_instance = f.run(&["ir", "model.sq", "--instance", "fast.sq"]);
+    let by_instance = f.run(&["ir", "model.sq", "--horizon", "10", "--instance", "fast.sq"]);
     let by_flags = f.run(&[
         "ir",
         "model.sq",
@@ -53,18 +53,36 @@ fn the_later_of_an_instance_and_a_flag_wins() {
         serde_json::from_slice(&out.stdout).unwrap()
     };
     assert_eq!(
-        seed(&["ir", "model.sq", "--instance", "i.sq", "--seed", "9"])["seed"],
+        seed(&[
+            "ir",
+            "model.sq",
+            "--horizon",
+            "10",
+            "--instance",
+            "i.sq",
+            "--seed",
+            "9"
+        ])["seed"],
         9
     );
     assert_eq!(
-        seed(&["ir", "model.sq", "--seed", "9", "--instance", "i.sq"])["seed"],
+        seed(&[
+            "ir",
+            "model.sq",
+            "--horizon",
+            "10",
+            "--seed",
+            "9",
+            "--instance",
+            "i.sq"
+        ])["seed"],
         5
     );
-    let mut ov = Overrides::default();
+    let mut ov = common::horizon(10.0);
     ov.instance("let rate = 2;").unwrap();
     ov.set("rate", "3").unwrap();
     let p = compile_source(&common::main_source(PROGRAM), &ov).unwrap();
-    let mut by_set = Overrides::default();
+    let mut by_set = common::horizon(10.0);
     by_set.set("rate", "3").unwrap();
     assert_eq!(
         p.to_json(),
@@ -101,7 +119,7 @@ fn an_instance_changes_values_not_structure() {
             "the instance's horizon 0 is not a finite positive number",
         ),
     ] {
-        let err = Overrides::default().instance(text).unwrap_err();
+        let err = common::horizon(10.0).instance(text).unwrap_err();
         assert!(err.contains(fragment), "{text}: {err}");
     }
 }
@@ -151,7 +169,7 @@ fn example_instances_link_with_their_programs() {
                 .with_extension("sq");
             for instance in std::fs::read_dir(&program).unwrap() {
                 let instance = instance.unwrap().path();
-                let mut ov = Overrides::default();
+                let mut ov = serq::Overrides::default();
                 ov.instance(&std::fs::read_to_string(&instance).unwrap())
                     .unwrap_or_else(|e| panic!("{}: {e}", instance.display()));
                 serq::load(&source, &ov).unwrap_or_else(|e| panic!("{}: {e}", instance.display()));
