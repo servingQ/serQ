@@ -8,7 +8,7 @@
 //! p = pyserq.compile("examples/single-turn/mg1.sq", sets={"lam": 0.8}, seed=10, horizon=250000, warmup=25000)
 //! r = pyserq.run(p)            # the GIL is released while it runs
 //! r.json()                     # what `serq run --json` prints
-//! o = r.observe("sojourn")    # o.mean, o.ci, ...; o.samples, o.times: what `--dump` writes
+//! o = r.observe("response")    # o.mean, o.ci, ...; o.samples, o.times: what `--dump` writes
 //! g = pyserq.run(pyserq.compile("examples/pd-disaggregation/llmd_nixl_pull.sq", horizon=2000, warmup=200)).gauge("load_spread")
 //! g.mean, g.ci, g.min, g.max  # g.times, g.values: what `--dump` writes
 //! r.stage("svc").utilization; r.observes, r.gauges, r.stages, r.pools: all of them

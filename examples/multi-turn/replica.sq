@@ -23,7 +23,7 @@ let beta = 2e-9;     // KV read per iteration per context token (s)
 
 fn main() {
   pool live { cap cap; }
-  pool batch { cap B; }
+  pool reqs { cap B; }
   pool kv { cap C; evict by (waiting, size); }
 
   stage engine : step {
@@ -72,7 +72,7 @@ fn main() {
   // the replica: one turn's prefill and decode
   server {
     set t0 = now;
-    hold batch (1), kv (K + n + o) {
+    hold reqs (1), kv (K + n + o) {
       set hit = !cold && cached >= K;
       // prefill work in tokens: the overhead and the attention term are
       // converted at the compute rate 1/a

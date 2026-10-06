@@ -75,7 +75,7 @@ than assuming every cached pool represents KV memory.
 ![The paper's two-resource replica](../assets/replica.deployment.svg)
 
 `replica.sq`'s workload holds `live` for a session's whole conversation,
-and its server holds `batch` and `kv` only around the engine. A request is
+and its server holds `reqs` and `kv` only around the engine. A request is
 served inside the workload's hold, so `live` is drawn too. All three are
 held at `engine` alone, so all three are rows in its frame.
 

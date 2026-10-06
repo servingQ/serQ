@@ -83,7 +83,7 @@ fn cache_trace_matches_the_real_scheduler() {
     let (sent, ttft, lat, cached) = (
         get("sent"),
         get("ttft"),
-        get("latency"),
+        get("response"),
         get("cached_tokens"),
     );
     let want = std::fs::read_to_string(dir().join("cache_trace.out.csv")).unwrap();

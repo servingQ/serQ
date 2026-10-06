@@ -16,7 +16,7 @@
   "observes": [
     "out",
     "vol",
-    "latency"
+    "response"
   ],
   "pools": [
     {

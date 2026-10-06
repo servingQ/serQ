@@ -94,7 +94,7 @@ fn main() {
     set home = j;
     branch (!first) {
       observe response = now - t0;
-      observe hitrate = S == hit;
+      observe hit = S == hit;
       observe context = K;
     }
     observe service = S;

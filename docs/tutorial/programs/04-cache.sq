@@ -46,7 +46,7 @@ fn main() {
       run engine ((hit ? a * n : a * (K + n)) + d * o);
     } cache (K + n + o);
     observe response = now - t0;
-    branch (K > 0) { observe hitrate = hit; }
+    branch (K > 0) { observe hit = hit; }
   }
 
 
