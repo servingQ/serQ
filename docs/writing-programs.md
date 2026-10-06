@@ -1,6 +1,6 @@
 # Writing readable programs
 
-Separate reusable definitions from the configuration of one experiment.
+Separate reusable definitions, model configuration and execution conditions.
 A reader should find the serving policy, resources and request flow without
 having to trace unrelated setup. These are writing conventions; the
 [language specification](language.md#entry-point-and-external-inputs) defines valid syntax.
@@ -18,10 +18,12 @@ Use plain `let` for fixed values; expose only intended experiment parameters.
 Pass dependencies as `def` parameters when that makes reuse clearer.
 Avoid extra parameters or wrappers whose only purpose is moving text outside.
 
-## Make the experiment easy to scan
+## Make the model easy to scan
 
 Inside `main`, group inputs and derived settings, resource declarations,
-request behavior, and finally `run` settings in that order where dependencies allow.
+and request behavior in that order where dependencies allow. Supply execution
+conditions with CLI flags, Python arguments or an explicit instance file;
+`run STAGE (work);` in the model performs stage work.
 Keep workload behavior separate from serving policy: put the client's
 `session` inside `workload`, and request handling in `server` or a named gateway.
 The session calls the handler with `request;` or `request NAME;`.
@@ -29,7 +31,7 @@ The session calls the handler with `request;` or `request NAME;`.
 Current syntax requires `pool`, `stage`, and other deployment declarations
 inside `main`, even when their settings are fixed. Group them together before
 the workload. Do not enforce a rule that `main` contains only `workload`,
-`server`, and `run`; input-dependent configuration belongs there too.
+and `server`; input-dependent configuration belongs there too.
 Imported libraries contain `def` and `use`, not concrete resource declarations.
 
 ## Name the policy and keep its evidence nearby
@@ -43,7 +45,9 @@ Comments should explain assumptions and source correspondence, not repeat syntax
 
 See [`examples/vendors/ascend.sq`](https://github.com/servingQ/serQ/blob/main/examples/vendors/ascend.sq):
 its fixed thresholds and `waiting_class` definition precede `main`, while
-resources, workload, request handler and run settings form the experiment inside it.
+resources, workload and request handler form the model inside it. Its execution
+conditions are in `examples/vendors/instances/ascend/default.sq`, selected
+explicitly with `--instance`.
 When reorganizing a program, preserve its linked IR and observed behavior.
 Run `serq check` and inspect `serq draw`, then compare a repeatable run before
 and after. Use the repository's `make check` gate for committed changes.
