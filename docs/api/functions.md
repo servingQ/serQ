@@ -353,7 +353,7 @@ A complete program using arithmetic, live state and end-of-run aggregates:
 
 ```serq
 fn main() {
-  pool slots { cap 2; }
+  pool reqs { cap 2; }
   stage svc : fifo;
   workload {
     arrive batch(3);
@@ -361,14 +361,14 @@ fn main() {
   }
   server {
     set t0 = now;
-    hold slots (1) {
-      observe allocated = used(slots);
+    hold reqs (1) {
+      observe allocated = used(reqs);
       run svc (ceil(1.2));
     }
-    observe latency = now - t0;
+    observe response = now - t0;
   }
-  claim completed : at end (count(latency) == 3);
-  claim elapsed : at end (largest(latency) == 6);
+  claim completed : at end (count(response) == 3);
+  claim elapsed : at end (largest(response) == 6);
 }
 ```
 

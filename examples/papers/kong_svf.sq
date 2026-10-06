@@ -34,7 +34,7 @@ fn main() {
     hold kv (s + o) {
       run engine decode (o);
     }
-    observe latency = now;
+    observe response = now;
   }
 
   // Lemma A.2, summed over the requests: every step a request waits, the
@@ -43,7 +43,7 @@ fn main() {
   // Proposition 3.1 (OPT >= prefix_total(vol) / M, `examples/papers/Kong.lean`)
   // this is Theorem 3.2: TEL(SVF) <= (1 + 2 / (1 - alpha)) TEL(OPT).
   claim queueing_bound given (s + o <= P && o >= 1):
-    at end ((M - P) * (total(latency) - total(out)) <= 2 * (prefix_total(vol) - total(vol)));
+    at end ((M - P) * (total(response) - total(out)) <= 2 * (prefix_total(vol) - total(vol)));
 
 
 }

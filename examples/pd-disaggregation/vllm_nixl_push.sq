@@ -62,7 +62,7 @@ fn main() {
       observe ttft = D.first_token - t0;
       observe parked = D.written - D.parked;   // how long the decoder's blocks waited for the KV
       observe sent = t0;
-      observe latency = now - t0;
+      observe response = now - t0;
     }
   }
 

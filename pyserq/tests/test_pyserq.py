@@ -128,7 +128,7 @@ def test_the_report_is_its_json_by_name():
         assert r.observe("nope") is None and r.stage("nope") is None and r.pool("nope") is None
         assert r.gauge("nope") is None
     assert type(r.pools[0]).__module__ == "pyserq" and type(r.observe("ttft")).__module__ == "pyserq"
-    assert pyserq.run(pyserq.compile(MG1, horizon=5.0, warmup=0.0)).observe("sojourn").ci == math.inf
+    assert pyserq.run(pyserq.compile(MG1, horizon=5.0, warmup=0.0)).observe("response").ci == math.inf
 
 
 def test_program_text_with_run_options():

@@ -23,7 +23,7 @@
     "prefix",
     "sent",
     "ttft",
-    "latency"
+    "response"
   ],
   "pools": [
     {

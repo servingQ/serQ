@@ -358,10 +358,10 @@ fn main() {
   server {
     set t0 = now;
     run svc (duration);
-    observe latency = now - t0;
+    observe response = now - t0;
   }
   gauge jobs = queue(svc);
-  claim done : at end (count(latency) == 2);
+  claim done : at end (count(response) == 2);
 }
 ```
 

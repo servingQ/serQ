@@ -304,7 +304,7 @@ fn negative_constants_reparse() {
 
 /// `release_hold` caches the growing run's position when a hold grew, and the
 /// allocation otherwise, so a hold with `growing` caches in that pool alone.
-/// `replica.sq` has no `growing` and really does keep a unit of `batch`.
+/// `replica.sq` has no `growing` and really does keep a unit of `reqs`.
 #[test]
 fn cache_targets_follow_the_release_rule() {
     let p = program("vllm");
@@ -315,7 +315,7 @@ fn cache_targets_follow_the_release_rule() {
     let net = deployment::project(&p);
     let mut cached = net.cached.clone();
     cached.sort_unstable();
-    let mut want = vec![pool(&p, "batch"), pool(&p, "kv")];
+    let mut want = vec![pool(&p, "reqs"), pool(&p, "kv")];
     want.sort_unstable();
     assert_eq!(cached, want);
 }
@@ -336,7 +336,7 @@ const ACROSS: &str = "pool live { cap 2; } pool kv { cap 9; }
 fn nested_holds_nest() {
     let p = program("replica");
     let net = deployment::project(&p);
-    assert_eq!(pools_of(&p, &net, "engine"), ["live", "batch", "kv"]);
+    assert_eq!(pools_of(&p, &net, "engine"), ["live", "reqs", "kv"]);
     let p = compile(ACROSS);
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "A"), ["live", "kv"]);
@@ -367,13 +367,13 @@ fn pools_held_at_one_station_are_drawn_in_it() {
     assert_eq!(queues(&f), 0, "a frame draws no queue");
 
     // `replica.sq` serves a request inside the workload's `live`, and holds
-    // its `batch` and `kv` around the engine: all three at the engine alone
+    // its `reqs` and `kv` around the engine: all three at the engine alone
     let p = program("replica");
     let net = deployment::project(&p);
     let engine = net.node_of(stage(&p, "engine")).unwrap();
     assert_eq!(
         net.resident_pools(engine),
-        [pool(&p, "live"), pool(&p, "batch"), pool(&p, "kv")]
+        [pool(&p, "live"), pool(&p, "reqs"), pool(&p, "kv")]
     );
     let f = deployment::layout(&p, &net);
     assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 0);
