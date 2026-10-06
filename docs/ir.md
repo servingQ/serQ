@@ -197,7 +197,9 @@ may not read it.
 An attribute listed in `hidden` may be read at `Session` only; at every
 other moment it is what the scheduler would be peeking at. The field is a
 check, not a semantics: a program that validates runs the same with or
-without it, so the Lean generator does not read it.
+without it, so the Lean generator does not read it. The IR does not tell
+the server's session statements from the workload's, so the rule for the
+server's (`docs/api/workload.md`, `hidden`) is the linker's, on the text.
 
 Before this check the variable read as 0 anywhere else and the program ran
 (`age` in a session statement, `tokens` in a queue key); the doc comment said

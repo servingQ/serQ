@@ -876,7 +876,13 @@ scheduler.py:2426). `hidden o;` in the workload says so: a hidden attribute
 is read in a session statement, a run or a hold's `cache`, and is a link
 error wherever the scheduler reads ([Workload](api/workload.md) has the
 positions). An attribute the scheduler itself sets (`cached`, `computed`)
-cannot be hidden. The vLLM programs hide `o` (`out` in the replay).
+cannot be hidden. A session statement is the scheduler's too when it is
+the server's: there a hidden attribute may be run by, cached by and
+observed. A branch, choice or allocation on it, directly or through an
+attribute the server set from it, is a link error until a run whose work
+reads it has ended, since that run's end is the EOS that reveals it
+([Workload](api/workload.md), `hidden`). The vLLM programs hide `o` (`out`
+in the replay).
 
 **`hold` and `admit via`.** An admission is the `hold` statement on
 either side (§2, the two sides). `admit` is the name of the *pool option*
@@ -1112,7 +1118,7 @@ rather than from the previous prompt, and caches `prompt + o`.
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk long_prefill(reqs, c)`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's | `scheduler.py:606-616, 675-676, 1115-1128` |
+| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk long_prefill(reqs, c)`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
 | a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `prefill (known - c)`, `decode (o - 1 - (known - prompt))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |

@@ -7,7 +7,7 @@
     Design discussion: [RFC #1](https://github.com/servingQ/serQ/issues/1).
 
 ```
-serq draw FILE [--format tikz|svg] [--out PATH] [--set name=expr]... [--def name=expr]...
+serq draw FILE [--format tikz|svg] [--out PATH] [--instance F] [--set name=expr]... [--def name=expr]...
 ```
 
 `FILE` is program text (`.sq`) or IR (`.json`), as for the other commands.

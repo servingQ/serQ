@@ -1,0 +1,28 @@
+{
+  "config": {
+    "block_size": 16,
+    "enable_prefix_caching": false,
+    "long_prefill_token_threshold": 48,
+    "max_num_batched_tokens": 64,
+    "max_num_seqs": 8,
+    "num_gpu_blocks": 1000,
+    "scheduler_cls": "serq_vllm.SerqScheduler"
+  },
+  "engine": "engine",
+  "serve_by": [
+    {
+      "Cond": [
+        {
+          "Ctx": "Decoding"
+        },
+        {
+          "Num": 1.0
+        },
+        {
+          "Num": 0.0
+        }
+      ]
+    }
+  ],
+  "target": "vllm"
+}

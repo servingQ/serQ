@@ -110,6 +110,64 @@ impl Overrides {
         Ok(())
     }
 
+    /// `--instance FILE`, whose text is `src`: each `let` of the instance is
+    /// a `--set` of that constant, and each option of its `run` block the
+    /// flag of the same name, in the order they are written, so a later
+    /// `--set` or flag wins over the instance as it would over an earlier
+    /// one. An instance changes values, never structure, so the program it
+    /// gives is one `--set`s could give, and the IR does not know it.
+    pub fn instance(&mut self, src: &str) -> Result<(), String> {
+        let (lets, run) =
+            crate::frontend::parser::parse_instance(src).map_err(|e| e.render(src))?;
+        self.lets.extend(lets);
+        let number = |key: &str, e: Option<Expr>| -> Result<Option<f64>, String> {
+            let Some(mut e) = e else { return Ok(None) };
+            while let Expr::Located(_, inner) = e {
+                e = *inner;
+            }
+            match e {
+                Expr::Num(x) => Ok(Some(x)),
+                _ => Err(format!(
+                    "the instance's run option `{key}` is not a number\nhelp: write the value \
+                     (`{key} 2000;`): an instance's run block is what the run flags would say"
+                )),
+            }
+        };
+        if let Some(x) = number("horizon", run.horizon)? {
+            if !(x.is_finite() && x > 0.0) {
+                return Err(format!(
+                    "the instance's horizon {x} is not a finite positive number"
+                ));
+            }
+            self.horizon = Some(x);
+        }
+        if let Some(x) = number("warmup", run.warmup)? {
+            if !(x.is_finite() && x >= 0.0) {
+                return Err(format!(
+                    "the instance's warmup {x} is not a finite nonnegative number"
+                ));
+            }
+            self.warmup = Some(x);
+        }
+        if let Some(x) = number("seed", run.seed)? {
+            if !(x >= 0.0 && x.fract() == 0.0 && x <= u64::MAX as f64) {
+                return Err(format!(
+                    "the instance's seed {x} is not an unsigned integer"
+                ));
+            }
+            self.seed = Some(x as u64);
+        }
+        if let Some(x) = number("arrivals", run.arrivals)? {
+            if !(x >= 1.0 && x.fract() == 0.0 && x <= usize::MAX as f64) {
+                return Err(format!(
+                    "the instance's arrivals {x} is not a positive integer"
+                ));
+            }
+            self.arrivals = Some(x as usize);
+        }
+        Ok(())
+    }
+
     /// The constant `name` is the number `x`, exactly (no text round trip).
     /// An infinity is `inf`, as `--set name=inf` writes it; NaN is refused
     /// when the program is linked, as any constant that is NaN.
@@ -664,6 +722,9 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             }
         }
     }
+    if let Some(w) = prog.workload.as_ref() {
+        hidden_in_server(&prog.request, &w.hidden)?;
+    }
     let mut gauges = vec![];
     for (name, e) in &prog.gauges {
         let expr = lk.expr(e).map_err(|mut err| {
@@ -839,6 +900,212 @@ fn iteration(lk: &Linker, stage: usize, body: &[IterStmt]) -> LResult<Vec<CIter>
             })
         })
         .collect()
+}
+
+/// A hidden attribute is the target's until a run reveals it: the server
+/// may run work by it (the model ends a decode, not the scheduler), cache by
+/// it at release, and observe it, but a decision on it before it is
+/// revealed is the scheduler reading what it cannot see. A run whose work
+/// reads it reveals it when the run ends (the end of a decode is the EOS
+/// the scheduler sees), and from there on the server may decide on it.
+/// `Program::validate` refuses a hidden read at every moment but `Session`;
+/// the server's own session statements are the rest of the scheduler,
+/// which the IR does not tell from the workload's, so they are checked
+/// here, on the server as the parser expanded it. An attribute the server
+/// sets from a hidden one is hidden until each hidden one it was set from
+/// is revealed. Paths join conservatively: after a branch an attribute is
+/// revealed only if both arms reveal it, and a loop's body may not run.
+fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
+    /// `(name, None)` is a hidden attribute itself; `(name, Some(from))`
+    /// one the server set from the hidden attributes `from`.
+    type Taint = Vec<(String, Option<Vec<String>>)>;
+    fn reads<'a>(
+        e: &Expr,
+        tainted: &'a [(String, Option<Vec<String>>)],
+    ) -> Vec<&'a (String, Option<Vec<String>>)> {
+        let (mut vars, mut refs) = (vec![], vec![]);
+        crate::frontend::parser::names(e, &mut vars, &mut refs);
+        refs.iter()
+            .filter_map(|r| r.index.as_deref())
+            .for_each(|i| {
+                crate::frontend::parser::names(i, &mut vars, &mut vec![]);
+            });
+        tainted.iter().filter(|(n, _)| vars.contains(n)).collect()
+    }
+    /// The hidden attributes behind what `e` reads.
+    fn origins(e: &Expr, t: &Taint) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        for (n, from) in reads(e, t) {
+            for h in from.clone().unwrap_or_else(|| vec![n.clone()]) {
+                if !out.contains(&h) {
+                    out.push(h);
+                }
+            }
+        }
+        out
+    }
+    /// `h` is revealed: it, and what was set from it alone, are visible.
+    fn reveal(t: &mut Taint, h: &str) {
+        t.retain_mut(|(n, from)| match from {
+            None => n != h,
+            Some(from) => {
+                from.retain(|x| x != h);
+                !from.is_empty()
+            }
+        });
+    }
+    /// Hidden after either of two paths: the union.
+    fn join(a: &mut Taint, b: &Taint) {
+        for e in b {
+            match a.iter_mut().find(|(n, _)| *n == e.0) {
+                None => a.push(e.clone()),
+                Some((_, Some(from))) => {
+                    if let Some(more) = &e.1 {
+                        for h in more {
+                            if !from.contains(h) {
+                                from.push(h.clone());
+                            }
+                        }
+                    }
+                }
+                Some(_) => {}
+            }
+        }
+    }
+    fn refuse(e: &Expr, what: &str, found: &(String, Option<Vec<String>>)) -> LinkError {
+        let (name, from) = found;
+        let why = match from {
+            None => format!("`{name}` is hidden from the scheduler"),
+            Some(h) => format!(
+                "`{name}` is set from the hidden `{}` in the server",
+                h.join("`, `")
+            ),
+        };
+        let span = match e {
+            Expr::Located(span, _) => Some(*span),
+            _ => None,
+        };
+        LinkError::new(format!(
+            "{why}, but the server's {what} reads it before a run reveals it\nhelp: the server \
+             may run work by a hidden attribute (`decode (o)`: the model ends the run), cache by \
+             it at release and observe it, and decide on it once that run has ended; before, a \
+             decision on it is the scheduler reading what it cannot see"
+        ))
+        .at(span)
+    }
+    fn index(r: &Ref) -> Option<&Expr> {
+        r.index.as_deref()
+    }
+    fn walk(stmts: &[Stmt], t: &mut Taint) -> LResult<()> {
+        let check =
+            |e: &Expr, what: &str, t: &[(String, Option<Vec<String>>)]| match reads(e, t).first() {
+                Some(found) => Err(refuse(e, what, found)),
+                None => Ok(()),
+            };
+        for s in stmts {
+            match s {
+                Stmt::Set(n, e) => {
+                    // a later `set` of a visible value makes it visible again
+                    let from = origins(e, t);
+                    t.retain(|(m, _)| m != n);
+                    if !from.is_empty() {
+                        t.push((n.clone(), Some(from)));
+                    }
+                }
+                Stmt::Observe(..) | Stmt::Drop(_) | Stmt::Release(_) | Stmt::End | Stmt::Turn => {}
+                Stmt::Run {
+                    stage,
+                    work,
+                    growing,
+                    also,
+                    ..
+                } => {
+                    for r in std::iter::once(stage).chain(growing).chain(also) {
+                        if let Some(i) = index(r) {
+                            check(i, "choice of a stage or pool", t)?;
+                        }
+                    }
+                    // the run's end reveals the hidden attributes its work reads
+                    for h in origins(work, t) {
+                        reveal(t, &h);
+                    }
+                }
+                Stmt::Hold {
+                    pools,
+                    reuse,
+                    body,
+                    cache: _,
+                    lease,
+                } => {
+                    // the header is read at admission, where `Program::validate`
+                    // refuses the hidden attribute itself; what the server set from
+                    // it is left here
+                    let derived: Vec<_> = t
+                        .iter()
+                        .filter(|(_, from)| from.is_some())
+                        .cloned()
+                        .collect();
+                    for (r, units, reserve) in pools {
+                        if let Some(i) = index(r) {
+                            check(i, "choice of a pool", t)?;
+                        }
+                        check(units, "admission", &derived)?;
+                        if let Some(e) = reserve {
+                            check(e, "admission", &derived)?;
+                        }
+                    }
+                    if let Some(e) = reuse {
+                        check(e, "admission", &derived)?;
+                    }
+                    if let Some((_, e)) = lease {
+                        check(e, "lease", t)?;
+                    }
+                    walk(body, t)?;
+                }
+                Stmt::Grow(r, e) | Stmt::Load(r, e) => {
+                    if let Some(i) = index(r) {
+                        check(i, "choice of a pool", t)?;
+                    }
+                    check(e, "allocation", t)?;
+                }
+                Stmt::Branch(c, a, b) => {
+                    check(c, "branch", t)?;
+                    let mut other = t.clone();
+                    walk(a, t)?;
+                    walk(b, &mut other)?;
+                    join(t, &other);
+                }
+                // twice: a `set` late in the body reaches its start the next
+                // time round; and the body may not run at all
+                Stmt::Loop(body) => {
+                    let before = t.clone();
+                    walk(body, t)?;
+                    join(t, &before);
+                    walk(body, t)?;
+                    join(t, &before);
+                }
+                Stmt::Choose { count, key, .. } => {
+                    check(count, "choice", t)?;
+                    for k in key {
+                        check(k, "choice", t)?;
+                    }
+                }
+                // a leg runs on a copy of the attributes: what it sets or
+                // reveals stays in it
+                Stmt::Fork(body) => {
+                    let mut leg = t.clone();
+                    walk(body, &mut leg)?;
+                }
+                Stmt::Request | Stmt::Call { .. } | Stmt::Mark(_) | Stmt::Join => {}
+            }
+        }
+        Ok(())
+    }
+    if hidden.is_empty() {
+        return Ok(());
+    }
+    let mut tainted: Taint = hidden.iter().map(|h| (h.clone(), None)).collect();
+    walk(server, &mut tainted)
 }
 
 /// Member `i` of an `n`-family's counterpart in a family of `count` from

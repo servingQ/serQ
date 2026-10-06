@@ -54,6 +54,7 @@ PATHS = {
     "block_pool.py": "vllm/v1/core/block_pool.py",
     "kv_cache_utils.py": "vllm/v1/core/kv_cache_utils.py",
     "sched/utils.py": "vllm/v1/core/sched/utils.py",
+    "sched/interface.py": "vllm/v1/core/sched/interface.py",
     "input_processor.py": "vllm/v1/engine/input_processor.py",
     "nixl/push_worker.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/push_worker.py",
     "config/scheduler.py": "vllm/config/scheduler.py",

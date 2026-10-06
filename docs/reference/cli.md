@@ -1,12 +1,13 @@
 # CLI reference
 
 ```
-serq run   FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set name=expr]...
+serq run   FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--set name=expr]...
                     [--def name=expr]... [--trace F] [--json] [--dump DIR]
-serq check FILE [--set name=expr]... [--def name=expr]...
-serq ir    FILE [--set name=expr]... [--def name=expr]... [--seed N] [--horizon T] [--warmup T]
+serq check FILE [--instance F] [--set name=expr]... [--def name=expr]...
+serq ir    FILE [--instance F] [--set name=expr]... [--def name=expr]... [--seed N] [--horizon T] [--warmup T]
                     [--arrivals N] [--trace F] [--inline-trace]
-serq draw  FILE [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH]   (experimental)
+serq draw  FILE [--instance F] [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH]   (experimental)
+serq target FILE [--instance F] [--set name=expr]... [--def name=expr]...
 serq fmt   [--check] FILE...
 serq --version
 ```
@@ -21,6 +22,7 @@ serq --version
 | `check` | parse, resolve every name and fold the constants; print a summary. This is what `make check` runs over every program |
 | `ir` | print the program's [IR](../ir.md) as JSON |
 | `draw` | render the program as a figure ([visualization](../visualization/index.md)) |
+| `target` | synthesise the program for [vLLM's scheduler](#the-vllm-target): print the configuration that runs it, or refuse with the construct vLLM cannot run (exit 1) |
 | `fmt` | format one or more `.sq` files in place; comments, blank lines, number spellings, and aligned trailing comments are preserved |
 | `--version` (or `-V`) | print `serq X.Y.Z`, the interpreter's version, for the record of a run; `run --json` writes the same as `serq_version` |
 
@@ -33,6 +35,7 @@ serq --version
 | `--warmup T` | run, ir | seconds discarded before anything is recorded |
 | `--arrivals N` | run, ir | stop after `N` arrivals and drain their sessions, overriding the `run` block's `arrivals` ([a finite run](../api/program.md#a-finite-run)); open workloads only |
 | `--set name=expr` | all | override a declared `let` constant (unknown names are errors; the last override of a name wins). Rejected if the constant, directly or through another `let`, sets a queue family's size. **Rejected on `.json`**: an IR's constants are already folded |
+| `--instance F` | all | read an [instance](../api/program.md#instances) from `F`: each of its `let`s is a `--set` of that constant and each option of its `run` block the flag of the same name, applied where the flag stands, so a later `--set` or flag wins over the instance and the instance over an earlier one. Anything else in `F` (a pool, a `def`, a `use`, a second `run`) is an error |
 | `--def name=expr` | all | replace the body of a declared expression [`def`](../api/program.md#def), which then expands at each use as if written so: a distribution, a policy key or a law per class passed in as a parameter (`--def service='~erlang(4, 1)'`). The body may draw and read what the program's body could; the definition keeps its parameters. Unknown names and statement definitions are errors; the last override of a name wins. **Rejected on `.json`**: an IR's definitions are already expanded |
 | `--trace F` | run, ir | replace the program's trace corpus |
 | `--inline-trace` | ir | turn the trace file into the sessions' turns, as `CArrival::Sessions` data |
@@ -59,6 +62,61 @@ serq run examples/multi-turn/vllm.sq --json | jq '.pools[] | select(.name=="kv")
 | `claims[]` | present when the program has a `claim`: `name`, `kind` (`every_iteration`, `some_iteration`, `at_end`), `result` (`holds`, `fails`, `witnessed`, `not_witnessed`, `not_evaluated`, `out_of_scope`), `checked` (iterations read, or 1 for a claim read at the end), `failures` (of those, the ones that read 0), `first` (the first failure, or a `some` claim's first witness; `null` when none), `note` (the sessions live at the end, or the session that failed `given`; `null` otherwise). The whole run, warm-up included |
 | `stages[]` | `name`, `index` (the member's index in a stage array, `null` for a single stage), `mean_number`, `utilization`, `completed`, `throughput`, `mean_wait`, `mean_service`, `iterations`, and for a step stage: `prefill_only`, `decode_only`, `mixed` (fractions of the measured time an iteration of prefill only, decodes only, or both was running; the rest is idle), `mean_decodes` (time-average decodes in the running iteration, 0 while none runs), `mean_decode_batch` and `mean_decode_step` (the decodes and the duration of an iteration that carried a decode, averaged over those started after warm-up: the batch a decode is in and the step it waits for), `mean_itl`, `itl_p50`, `itl_p99` (the gaps between a turn's successive tokens, a session's tokens with the same `turn_no`, that end on the stage after warm-up, wherever the earlier token was: a transfer between a prefill engine's first token and a decode engine's second is in the gap, and so is a preemption; a prefill's end is the next token after a decode or after a preemption on the previous token's stage, otherwise the first, replacing any before it, so a decoder's recompute replaces a prefiller's dropped token; a turn's gaps add up to its last token less its first; the quantiles are within 0.5 %, exact for a single value, the mean exact); 0 for the fractions and `mean_decodes`, `null` for the others, on other stages. An iteration that only preempted counts as idle; `utilization` is the time with a job present, which differs from `1 - idle` while residents stall. `iterations` counts the whole run, warm-up included. `idle_with_work` (a step stage's) is true when the run ended with the stage holding residents or a waiting queue it serves and its last try at an iteration scheduling nothing; the text report names it (`idle: stage …`) |
 | `pools[]` | `name`, `index` (the member's index in a pool array, `null` for a single pool), `mean_used`, `mean_cached`, `mean_queue`, `mean_holders`, `mean_wait`, `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected`, `stuck` (sessions preempted again without progress since their previous preemption), `over_cap` (`null`, or `{queue, need}`: read as the run ends, the head of `queue`'s queue asks this pool for `need`, above its cap; a hold whose units or `reserve` read the deployment's state is not rejected when it joins, and waits; the text report says `over:`) |
+
+## The vLLM target
+
+`serq target` treats vLLM v1's own scheduler as a fixed-function
+architecture ([the design](../design/serving-specification-language.md), §5).
+Its configuration can change values, but its policy is fixed. One step
+engine serves its running requests in admission order. The request slots
+are capped. The KV blocks have an LRU prefix cache and LIFO preemption, and
+admission is first come, first served. A program on that architecture
+compiles to the configuration that makes vLLM run it:
+
+```bash
+serq target examples/multi-turn/vllm.sq
+```
+
+```json
+{"target": "vllm", "engine": "engine",
+ "config": {"max_num_batched_tokens": 8192, "max_num_seqs": 16, "block_size": 16,
+            "num_gpu_blocks": 10001, "long_prefill_token_threshold": 0,
+            "enable_prefix_caching": true}}
+```
+
+`num_gpu_blocks` counts vLLM's null block, which the KV pool leaves out. A
+cache clause on the KV pool is the prefix cache. The stages' `cost` is not
+read, because vLLM runs the model. A program with another policy is
+refused, and the error names the construct:
+
+- an `iteration` body other than vLLM's, `iteration { serve; admit while
+  (!preempted); }` (a stage without one is vLLM's), and so `serve only` and
+  a register;
+- `serve exclusive prefill`, or `serve by` keys that read anything but
+  `decoding`, `admission`, numbers and arithmetic on them;
+- a selection key, an eviction key or a spill on a pool, a `preempt` other
+  than `lifo` (the latest admitted, re-queued at the head), or `reserve
+  held`;
+- a `fifo` or `ps` stage, or a request's legs (`fork`);
+- a pool count other than two;
+- a constant chunk cap: vLLM lifts the cap for a request alone
+  (`scheduler.py:606-616`), so the program writes
+  `chunk long_prefill(reqs, c)` from `lib/vllm.sq`, or `chunk 0`.
+
+`serve by` keys that vLLM's scheduler can observe are the programmable
+part. The configuration then also names `scheduler_cls:
+serq_vllm.SerqScheduler` (`tools/serq_vllm.py`), and `serve_by` carries
+the keys as IR. That scheduler is vLLM's own, except that each step's
+running loop visits requests in the program's order. The preemption victim
+is still the latest admission, so vLLM picks it apart from the visiting
+order. `tests/vllm_target_oracle.rs` compares it with the interpreter on
+the scenarios of `tools/oracle/serve/`, once their oracle answers have been
+recorded on a vLLM host.
+
+`tests/target.rs` checks the result against the oracle. Each oracle
+scenario's program compiles to the configuration that the oracle drove the
+real scheduler with, and `tests/vllm_oracle.rs` checks that the scheduler,
+so configured, decides as the program does.
 
 ## Make targets
 
