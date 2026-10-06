@@ -340,6 +340,39 @@ class Lean:
         """An expression in statement position: drop one pair of outer parentheses."""
         return Expr(self.leaf).top(e)
 
+    def boolean_guard(self, e):
+        """Only translate guards whose range is 0/1: Exec has no runtime
+        error for Rust's invalid-guard case. This is deliberately conservative,
+        not a general dataflow proof for mutable attributes."""
+        if "Num" in e:
+            return e["Num"] in (0, 1)
+        if "Binary" in e:
+            return e["Binary"][0] in (*REL, "And", "Or")
+        if "Unary" in e:
+            return e["Unary"][0] == "Not"
+        if "Cond" in e:
+            return all(self.boolean_guard(x) for x in e["Cond"][1:])
+        if e != {"Attr": self.ir["slot_more"]}:
+            return False
+        # The trace sets more to 0/1, but source assignments and explicit
+        # session/turn presets can overwrite it. Inspect all of them, even
+        # in a nested body or before the first Turn.
+        slot = self.ir["slot_more"]
+        if any(slot == self.ir[k] for k in
+               ("slot_cached", "slot_serial", "slot_turn", "slot_computed")):
+            return False
+        arrival = self.ir["arrival"]
+        sessions = arrival.get("Sessions") if isinstance(arrival, dict) else None
+        if not sessions or self.ir["trace"] is not None:
+            return False
+        if any(isinstance(st, dict) and "Set" in st and st["Set"][0] == slot
+               for block in self.ir["blocks"] for st in block):
+            return False
+        return all(value in (0, 1)
+                   for session in sessions
+                   for attrs in [session["attrs"], *session.get("turns", [])]
+                   for key, value in attrs if key == slot)
+
     def block(self, b, ind):
         pad = "  " * ind
         out = []
@@ -399,6 +432,9 @@ class Lean:
                 out.append(f"{pad}}};")
             elif kind == "While":
                 c, body = v
+                if not self.boolean_guard(c):
+                    raise Fragment("while guard is not guaranteed to be 0 or 1; "
+                                   "the Lean fragment does not model invalid-guard errors")
                 out.append(f"{pad}while ({self.top(c)}) {{")
                 out.append(self.block(body, ind + 1))
                 out.append(f"{pad}}};")

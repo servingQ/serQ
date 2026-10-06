@@ -80,6 +80,57 @@ class Sessions(unittest.TestCase):
         text = generator.Lean(ir).block(ir["session"], 0)
         self.assertIn("while (0) {\n  turn;\n  done\n};\nobserve 0 = 7;\nstop", text)
 
+    def test_review_nonboolean_dynamic_guard_is_outside_the_fragment(self):
+        # Reproduce the review: this valid IR reaches guard=2 at runtime.
+        # Rust errors; the old translator instead let Lean serve all requests.
+        ir, _ = generator.load("alone")
+        body = len(ir["blocks"])
+        ir["blocks"].append(ir["blocks"][ir["session"]])
+        slot = ir["attrs"].index("prompt")
+        ir["blocks"][ir["session"]] = [
+            {"Set": [slot, {"Num": 2}]},
+            {"While": [{"Attr": slot}, body]}, "End"]
+        with self.assertRaisesRegex(generator.Fragment, "while guard.*0 or 1"):
+            generator.Lean(ir).block(ir["session"], 0)
+
+    def test_boolean_guard_forms_keep_the_cache_oracle_in_the_fragment(self):
+        ir, lean = generator.load("cache_trace")
+        self.assertIn("while", lean.block(ir["session"], 0))
+        body = len(ir["blocks"])
+        ir["blocks"].append(ir["blocks"][ir["session"]])
+        for guard in [
+            {"Num": 0}, {"Num": 1},
+            {"Binary": ["Lt", {"Attr": ir["slot_turn"]}, {"Num": 3}]},
+            {"Unary": ["Not", {"Attr": ir["slot_more"]}]},
+            {"Cond": [{"Attr": ir["slot_turn"]}, {"Num": 1}, {"Num": 0}]},
+        ]:
+            with self.subTest(guard=guard):
+                ir["blocks"][ir["session"]] = [{"While": [guard, body]}, "End"]
+                self.assertIn("while", generator.Lean(ir).block(ir["session"], 0))
+        for guard in [{"Num": 2},
+                      {"Cond": [{"Num": 1}, {"Num": 0}, {"Num": 2}]}]:
+            ir["blocks"][ir["session"]] = [{"While": [guard, body]}, "End"]
+            with self.assertRaisesRegex(generator.Fragment, "while guard.*0 or 1"):
+                generator.Lean(ir).block(ir["session"], 0)
+
+    def test_more_cannot_bypass_guard_validation_through_writes_or_presets(self):
+        original, _ = generator.load("cache_trace")
+        slot = original["slot_more"]
+        for source in ("session preset", "turn preset", "nested assignment"):
+            with self.subTest(source=source):
+                ir = copy.deepcopy(original)
+                if source == "session preset":
+                    ir["arrival"]["Sessions"][0]["attrs"].append([slot, 2])
+                elif source == "turn preset":
+                    ir["arrival"]["Sessions"][0]["turns"][0].append([slot, 2])
+                else:
+                    body = len(ir["blocks"])
+                    ir["blocks"].append([{"Set": [slot, {"Num": 2}]}])
+                    ir["blocks"][ir["session"]].insert(
+                        0, {"Branch": [{"Num": 1}, body, body]})
+                with self.assertRaisesRegex(generator.Fragment, "while guard.*0 or 1"):
+                    generator.Lean(ir).block(ir["session"], 0)
+
     def test_claim_empty_turns_refuse_counter_observations(self):
         import gen_lean_claims as claims
         ir = json.loads((Path(generator.ROOT) / "tools/claims/bari_rad.ir.json").read_text())

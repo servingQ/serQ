@@ -92,7 +92,8 @@ users do not need to spell this kernel termination instruction.
 The Lean route has `whileLoop guard body continuation`. It reuses the
 sequence frame to retest after the body, and its continuation is a subprogram
 in the reachability invariant. The oracle generator translates `While`;
-the prefix-cache oracle now exercises it. Oracle request times and cached
+the prefix-cache oracle now exercises it. Translation requires a guard whose
+range is guaranteed to be 0/1; other guards are outside the Lean fragment. Oracle request times and cached
 prefix expectations remain the checked-in upstream answers.
 
 The claim fragment has no trace or turn block and does not track the turn
@@ -184,3 +185,27 @@ run: horizon 250000 end 250000 warmup 25000 seed 1 events 397862 arrivals 198931
 
 The measured queueing observations are unchanged. The counter records turns
 started after warm-up; completions can cross the measurement boundaries.
+
+
+## Review: conditional-loop translation boundary
+
+The initial Lean implementation reused `branch`'s nonzero test, assuming
+that every generated `while` condition would be 0/1. The generator did not
+check that assumption. Wrapping the `alone` oracle's session in
+`Set(prompt, 2); While(Attr(prompt), body); End` made Rust report an invalid
+guard while Lean executed the body and recorded completions.
+
+The IR correctly allows a dynamic guard: its value is generally unknown
+until execution, where Rust fails loudly. No additional source/IR rejection
+is appropriate. The Lean generator now refuses guards without a 0/1 range
+check. It accepts literal booleans, comparisons, logical expressions,
+conditionals with boolean outcomes, and read-only trace `more` after checking
+all session and turn presets. Any assignment to `more` is conservatively
+refused; proving mutable attributes boolean would require dataflow analysis.
+
+The regression reproduces the review's complete IR wrapper and also covers
+an overwritten `more`, including nested assignments and nonboolean presets.
+The existing prefix-cache oracle remains in the fragment. Adding an error
+state throughout the Lean machine was rejected for this fix: the current
+fragment deliberately excludes runtime-error behavior, so the translation
+boundary is the place to enforce this restriction.

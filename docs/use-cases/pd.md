@@ -40,7 +40,7 @@ the decode entry. The router reads the model's actual cache state rather
 than a delayed or approximate cache index.
 
 The model uses `thr = 1` for always-remote prefill and larger thresholds to
-keep short uncached suffixes on the decoder. The workload's `max_model_len`
+keep short uncached suffixes on the decoder. The server's `max_model_len`
 check and the gateway's output cap limit request length.
 
 ### Scheduler correspondence

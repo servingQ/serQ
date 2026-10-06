@@ -105,6 +105,11 @@ are rejected rather than silently omitted.
   twice its value, so its IR coefficient must be even. Fractional
   coefficients and costs reading `residents`, `kv_prefill` or `now` are
   rejected.
+- A `while` guard must be a literal 0/1, a comparison or logical expression,
+  a conditional with such results, or the read-only `more` attribute of an
+  explicit-session workload whose presets for `more` are all 0/1. Assignments to `more`
+  and other bare attribute guards are rejected. Rust reports invalid guards
+  at runtime; Lean's executable model has no corresponding error state.
 - The claims fragment also supports `serve only`, a chunk expression over
   `residents` and `queued(p)`, one queue key on a pool that no run grows,
   and cost terms of the form `k * ceil(tokens / b)`.
