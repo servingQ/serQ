@@ -9,79 +9,81 @@
 // granularity. Sessions: two classes (agents, one-shot documents); at most
 // `cap` live sessions (the rest wait to enter), batch cap `B`, a KV pool of
 // `C` tokens with shortest-first eviction (tool calls before waiting turns).
-let Lambda = 0.28;   // sessions per second
-let cap = 24;        // live sessions (entry queue beyond)
-let B = 8;           // batch cap (prefilling and decoding turns)
-let C = 6e5;         // KV pool, tokens
-let maxctx = C / 2;
-let s0 = 0.005;      // per-turn overhead (s)
-let a = 2e-5;        // prefill compute per token (s)
-let b = 2e-9;        // prefill attention per token per context token (s)
-let omega = 2e-4;    // weights read per iteration (s)
-let beta = 2e-9;     // KV read per iteration per context token (s)
+fn main() {
+  let Lambda = 0.28;   // sessions per second
+  let cap = 24;        // live sessions (entry queue beyond)
+  let B = 8;           // batch cap (prefilling and decoding turns)
+  let C = 6e5;         // KV pool, tokens
+  let maxctx = C / 2;
+  let s0 = 0.005;      // per-turn overhead (s)
+  let a = 2e-5;        // prefill compute per token (s)
+  let b = 2e-9;        // prefill attention per token per context token (s)
+  let omega = 2e-4;    // weights read per iteration (s)
+  let beta = 2e-9;     // KV read per iteration per context token (s)
 
-pool live { cap cap; }
-pool batch { cap B; }
-pool kv { cap C; evict by (waiting, size); }
+  pool live { cap cap; }
+  pool batch { cap B; }
+  pool kv { cap C; evict by (waiting, size); }
 
-stage engine : step {
-  budget max(decoders, (omega + beta * kv_decode) / a);    // fill the memory time
-  cost max(omega + beta * kv_decode, tokens * a);
-  serve decode first;                            // prefill in what decode leaves
-  memory kv;
-}
-stage tool : delay;
-
-workload {
-  arrive poisson(Lambda);
-  init {
-    set doc = ~bernoulli(0.5);          // class: 0 agent, 1 document
-    set K = 0;
-    set cold = 1;
-    set p = doc ? 0.3 : 0.95;
-    set Z = doc ? 2 : 6;
+  stage engine : step {
+    budget max(decoders, (omega + beta * kv_decode) / a);    // fill the memory time
+    cost max(omega + beta * kv_decode, tokens * a);
+    serve decode first;                            // prefill in what decode leaves
+    memory kv;
   }
-  turn {
-    set n = cold ? (doc ? ~uniform(15000, 30000) : ~uniform(4000, 8000))
-                 : (doc ? ~exp(500) : ~exp(800));
-    set o = ~exp(300);
-  }
-  // A session waits to enter and then holds a live slot for its whole
-  // conversation. libqueuingsim frees a finished session's KV: `drop kv;`
-  // before every `end;`
-  session {
-    set t_arr = now;
-    hold live (1) {
-      observe entry_wait = now - t_arr;
-      loop {
-        turn;
-        request;
-        set K = K + n + o;
-        set cold = 0;
-        branch (K > maxctx) { drop kv; end; }
-        // whether the session continues is decided when the tool returns
-        run tool (~exp(Z));
-        branch with (p) { } else { drop kv; end; }
+  stage tool : delay;
+
+  workload {
+    arrive poisson(Lambda);
+    init {
+      set doc = ~bernoulli(0.5);          // class: 0 agent, 1 document
+      set K = 0;
+      set cold = 1;
+      set p = doc ? 0.3 : 0.95;
+      set Z = doc ? 2 : 6;
+    }
+    turn {
+      set n = cold ? (doc ? ~uniform(15000, 30000) : ~uniform(4000, 8000))
+                   : (doc ? ~exp(500) : ~exp(800));
+      set o = ~exp(300);
+    }
+    // A session waits to enter and then holds a live slot for its whole
+    // conversation. libqueuingsim frees a finished session's KV: `drop kv;`
+    // before every `end;`
+    session {
+      set t_arr = now;
+      hold live (1) {
+        observe entry_wait = now - t_arr;
+        loop {
+          turn;
+          request;
+          set K = K + n + o;
+          set cold = 0;
+          branch (K > maxctx) { drop kv; end; }
+          // whether the session continues is decided when the tool returns
+          run tool (~exp(Z));
+          branch with (p) { } else { drop kv; end; }
+        }
       }
     }
   }
-}
 
-// the replica: one turn's prefill and decode
-server {
-  set t0 = now;
-  hold batch (1), kv (K + n + o) {
-    set hit = !cold && cached >= K;
-    // prefill work in tokens: the overhead and the attention term are
-    // converted at the compute rate 1/a
-    set P = s0 / a + (hit ? n + (b / a) * n * (K + n / 2)
-                          : (K + n) + (b / a) * (K + n) * (K + n) / 2);
-    run engine prefill (P);
-    observe ttft = now - t0;
-    run engine decode (o);
-  } cache (K + n + o);
-  observe response = now - t0;
-  branch (!cold) { observe hit = hit; }
-}
+  // the replica: one turn's prefill and decode
+  server {
+    set t0 = now;
+    hold batch (1), kv (K + n + o) {
+      set hit = !cold && cached >= K;
+      // prefill work in tokens: the overhead and the attention term are
+      // converted at the compute rate 1/a
+      set P = s0 / a + (hit ? n + (b / a) * n * (K + n / 2)
+                            : (K + n) + (b / a) * (K + n) * (K + n) / 2);
+      run engine prefill (P);
+      observe ttft = now - t0;
+      run engine decode (o);
+    } cache (K + n + o);
+    observe response = now - t0;
+    branch (!cold) { observe hit = hit; }
+  }
 
-run { horizon 3000; warmup 500; seed 1; }
+  run { horizon 3000; warmup 500; seed 1; }
+}

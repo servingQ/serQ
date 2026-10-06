@@ -3,6 +3,8 @@
 //! `ref/vllm/vllm/v1/core/sched/scheduler.py` (line numbers at commit
 //! 0c87a197). Iteration cost is 1, so times are scheduler steps.
 
+mod common;
+
 use serq::{Overrides, run_source};
 
 /// `n` requests present at t = 0 (closed population, one turn each), with
@@ -45,7 +47,7 @@ fn engine(
 }
 
 fn run(src: &str) -> serq::Report {
-    run_source(src, &Overrides::default(), None).unwrap()
+    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
 }
 
 /// scheduler.py:742-813 (`test_preempt_during_execution`): two 80-token
@@ -232,7 +234,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
     assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
     // `decode first` and its expansion are the same program
     let ir = |s: &str| {
-        serq::compile_source(&prog(s), &Overrides::default())
+        serq::compile_source(&common::main_source(&prog(s)), &Overrides::default())
             .unwrap()
             .to_json()
     };
@@ -241,7 +243,11 @@ fn serve_by_orders_residents_by_the_declared_keys() {
         ir("serve by (decoding ? 0 : 1);")
     );
     // a serve key is read at its own moment only
-    let e = serq::compile_source(&prog("serve by (tokens);"), &Overrides::default()).unwrap_err();
+    let e = serq::compile_source(
+        &common::main_source(&prog("serve by (tokens);")),
+        &Overrides::default(),
+    )
+    .unwrap_err();
     assert!(
         e.contains("`tokens` is read in a step stage's serve keys"),
         "{e}"

@@ -22,6 +22,8 @@
 //! (the cap is lifted while one request is eligible, scheduler.py:606-616:
 //! the first request takes the whole budget; CPU oracle only, no A100 run).
 
+mod common;
+
 use std::path::Path;
 
 use serde_json::Value;
@@ -71,7 +73,7 @@ fn oracle_ir(name: &str) -> serq::Program {
         })
         .collect();
     // its `use` reads the library next to the program
-    compile_source_at(&src, path.parent(), &ov)
+    compile_source_at(&common::main_source(&src), path.parent(), &ov)
         .unwrap()
         .with_sessions(&sessions)
         .unwrap()

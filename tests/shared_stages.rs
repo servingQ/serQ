@@ -3,10 +3,12 @@
 //! expected values are derived by hand in `docs/design/bandwidth-sharing.md`
 //! §Expected values; each test's comment repeats the derivation.
 
+mod common;
+
 use serq::{Overrides, check_source, run_source};
 
 fn run(src: &str) -> serq::Report {
-    run_source(src, &Overrides::default(), None).unwrap()
+    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
 }
 
 fn at(r: &serq::Report, name: &str) -> Vec<f64> {
@@ -115,7 +117,7 @@ fn a_ps_stage_nobody_shares_is_unchanged() {
 }
 
 fn err(src: &str) -> String {
-    check_source(src, &Overrides::default()).expect_err("rejected")
+    check_source(&common::main_source(src), &Overrides::default()).expect_err("rejected")
 }
 
 const HEAD: &str = "stage A : ps(1); stage B : ps(2); stage C : fifo; stage E[2] : ps(1);
@@ -172,7 +174,7 @@ fn transfer_on_several_stages_is_sugar() {
         let src = format!(
             "{head} session {{ hold q (1) {{ hold p (1) {{ {body} }} }} end; }} run {{ horizon 5; }}"
         );
-        serq::compile_source(&src, &Overrides::default())
+        serq::compile_source(&common::main_source(&src), &Overrides::default())
             .unwrap()
             .to_json()
     };

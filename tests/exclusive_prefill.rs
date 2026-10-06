@@ -3,6 +3,8 @@
 //! 440-451, 651-663, 863-890). We exercise the serQ mechanism, not the vendor
 //! runtime or PP/remote-KV policies. Unit step costs make the schedule explicit.
 
+mod common;
+
 use serq::{Overrides, Program, compile_source, run_ir, run_source};
 use std::path::Path;
 use std::process::Command;
@@ -39,7 +41,7 @@ fn trace(name: &str, src: &str) -> Vec<String> {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("exclusive-prefill");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{name}.sq"));
-    std::fs::write(&path, src).unwrap();
+    std::fs::write(&path, common::main_source(src)).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_serq"))
         .env("SERQ_TRACE_ITER", "1")
         .args(["run", path.to_str().unwrap(), "--json"])
@@ -72,8 +74,8 @@ fn waiting_prefill_replaces_decodes_and_gets_the_full_budget() {
             "ITER 3.0000 0:0:d1",
         ]
     );
-    let r = run_source(&src, &Overrides::default(), None).unwrap();
-    let json = compile_source(&src, &Overrides::default())
+    let r = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
+    let json = compile_source(&common::main_source(&src), &Overrides::default())
         .unwrap()
         .to_json();
     let from_ir = run_ir(&Program::from_json(&json).unwrap(), None);
@@ -148,7 +150,7 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
         }
         run { horizon 20; }
     "#;
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 2.0, 4.0]);
     assert_eq!(r.stage("engine").unwrap().iterations, 7);
@@ -178,7 +180,7 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
         }
         run { horizon 10; }
     "#;
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 0.0, 2.0]);
     assert_eq!(r.observe("done").unwrap().samples, [2.0, 2.0, 4.0]);
@@ -217,7 +219,7 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
         }
         run { horizon 20; }
     "#;
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 2, "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);
     assert_eq!(r.observe("admitted_b").unwrap().samples, [1.0, 5.0]);

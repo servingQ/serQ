@@ -6,7 +6,7 @@ use serq::{Overrides, compile_source};
 #[test]
 fn misspelled_and_empty_override_names_do_not_produce_ir() {
     let f = Fixture::new();
-    f.write("model.sq", PROGRAM);
+    f.write("model.sq", &common::main_source(PROGRAM));
     for name in ["raet", "Rate", ""] {
         failure(
             &f.run(&["ir", "model.sq", "--set", &format!("{name}=2")]),
@@ -16,20 +16,23 @@ fn misspelled_and_empty_override_names_do_not_produce_ir() {
             &[if name.is_empty() {
                 "--set"
             } else {
-                "`let` override"
+                "program argument"
             }],
         );
     }
     failure(
         &f.run(&["ir", "model.sq", "--set", "raet=2"]),
         1,
-        &["unknown `let` override `raet`", "available constants: rate"],
+        &[
+            "unknown program argument `raet`",
+            "available arguments: rate",
+        ],
     );
 }
 
 #[test]
 fn overrides_keep_last_value_and_declaration_order() {
-    let src = "let rate = 1; let doubled = rate * 2; workload { arrive poisson(doubled); } run { horizon 10; }";
+    let src = "use \"std/args\"; let rate = args.number(\"rate\", 1); let doubled = rate * 2; workload { arrive poisson(doubled); } run { horizon 10; }";
     let ov = Overrides {
         lets: vec![
             ("rate".into(), parser::parse_expr("2").unwrap()),
@@ -37,10 +40,10 @@ fn overrides_keep_last_value_and_declaration_order() {
         ],
         ..Default::default()
     };
-    let p = compile_source(src, &ov).unwrap();
+    let p = compile_source(&common::main_source(src), &ov).unwrap();
     assert_eq!(p.arrival, serq::ir::CArrival::Poisson(6.0));
     let f = Fixture::new();
-    f.write("model.sq", src);
+    f.write("model.sq", &common::main_source(src));
     let out = f.run(&["ir", "model.sq", "--set", "rate=2", "--set", "rate=3"]);
     assert!(out.status.success());
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -53,9 +56,9 @@ fn sdk_cannot_inject_an_undeclared_constant() {
         lets: vec![("outside".into(), parser::parse_expr("1").unwrap())],
         ..Default::default()
     };
-    let err = compile_source("run { horizon outside; }", &ov).unwrap_err();
-    assert!(err.contains("unknown `let` override `outside`"));
-    assert!(err.contains("available constants: (none)"));
+    let err = compile_source(&common::main_source("run { horizon outside; }"), &ov).unwrap_err();
+    assert!(err.contains("unknown program argument `outside`"));
+    assert!(err.contains("available arguments: (none)"));
 }
 
 #[test]
@@ -63,7 +66,9 @@ fn arrival_override_applies_to_run_and_ir() {
     let f = Fixture::new();
     f.write(
         "model.sq",
-        "workload { arrive renewal(2); } session { end; } run { horizon 10; arrivals 1; }",
+        &common::main_source(
+            "workload { arrive renewal(2); } session { end; } run { horizon 10; arrivals 1; }",
+        ),
     );
     for command in ["run", "ir"] {
         let mut args = vec![command, "model.sq", "--arrivals", "3"];
@@ -92,7 +97,9 @@ fn arrival_override_applies_to_run_and_ir() {
 fn arrival_override_also_applies_to_json_ir() {
     let f = Fixture::new();
     let program = compile_source(
-        "workload { arrive renewal(2); } session { end; } run { horizon 10; arrivals 1; }",
+        &common::main_source(
+            "workload { arrive renewal(2); } session { end; } run { horizon 10; arrivals 1; }",
+        ),
         &Overrides::default(),
     )
     .unwrap();
@@ -120,8 +127,10 @@ fn arrival_override_also_applies_to_json_ir() {
 fn overrides_are_refused_on_ir_by_what_they_override() {
     let f = Fixture::new();
     let program = compile_source(
-        "let lam = 1; def law() = ~exp(1); workload { arrive poisson(lam); } \
+        &common::main_source(
+            "let lam = 1; def law() = ~exp(1); workload { arrive poisson(lam); } \
          session { set x = law(); end; } run { horizon 10; }",
+        ),
         &Overrides::default(),
     )
     .unwrap();
@@ -130,7 +139,7 @@ fn overrides_are_refused_on_ir_by_what_they_override() {
         failure(
             &f.run(&[command, "model.json", "--set", "lam=2"]),
             1,
-            &["a `let` override applies to program text, not to IR"],
+            &["a program argument applies to program text, not to IR"],
         );
         failure(
             &f.run(&[command, "model.json", "--def", "law=~exp(2)"]),

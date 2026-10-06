@@ -8,16 +8,18 @@
 //! had made before it, so two deployments under one seed compared
 //! different workloads.
 
+mod common;
+
 use std::collections::BTreeMap;
 
 use serq::{Overrides, compile_source, run_source};
 
 fn check(src: &str) -> Result<(), String> {
-    compile_source(src, &Overrides::default()).map(|_| ())
+    compile_source(&common::main_source(src), &Overrides::default()).map(|_| ())
 }
 
 fn run(src: &str) -> Result<serq::Report, String> {
-    run_source(src, &Overrides::default(), None)
+    run_source(&common::main_source(src), &Overrides::default(), None)
 }
 
 const TOOL: &str = "stage tool : delay;\nworkload { arrive batch(1); init { set w = 0; } }\n";

@@ -2,6 +2,8 @@
 //! IR that survives a JSON round trip unchanged, runs to the same report
 //! from IR as from text, and malformed IR is rejected on load.
 
+mod common;
+
 use std::path::Path;
 
 use serq::{Overrides, Program, compile_source, compile_source_at, run_ir, run_source};
@@ -33,7 +35,12 @@ fn short() -> Overrides {
 fn json_round_trip_is_exact() {
     for path in programs() {
         let src = std::fs::read_to_string(&path).unwrap();
-        let p = compile_source_at(&src, path.parent(), &Overrides::default()).unwrap();
+        let p = compile_source_at(
+            &common::main_source(&src),
+            path.parent(),
+            &Overrides::default(),
+        )
+        .unwrap();
         let j = p.to_json();
         let q = Program::from_json(&j).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         assert_eq!(j, q.to_json(), "{}", path.display());
@@ -50,7 +57,7 @@ fn a_folded_constant_survives_the_round_trip() {
         workload { arrive poisson(rate); }
         session { run svc (~exp(1)); end; }
         run { horizon 10; }";
-    let j = compile_source(src, &Overrides::default())
+    let j = compile_source(&common::main_source(src), &Overrides::default())
         .unwrap()
         .to_json();
     assert!(
@@ -65,8 +72,10 @@ fn ir_runs_like_text() {
     for path in programs() {
         let src = std::fs::read_to_string(&path).unwrap();
         let base = path.parent();
-        let from_text = run_source(&src, &short(), base).unwrap().text();
-        let p = compile_source_at(&src, base, &short()).unwrap();
+        let from_text = run_source(&common::main_source(&src), &short(), base)
+            .unwrap()
+            .text();
+        let p = compile_source_at(&common::main_source(&src), base, &short()).unwrap();
         let q = Program::from_json(&p.to_json()).unwrap();
         let from_ir = run_ir(&q, base).unwrap().text();
         assert_eq!(from_text, from_ir, "{}", path.display());
@@ -85,7 +94,7 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         workload { arrive batch(1); init { set x = 1; } }
         session { hold kv (8) { run engine prefill (8) growing kv; } end; }
         run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let d = p.stages.iter().position(|s| s.name == "d").unwrap();
     let kv = CRef {
         base: 0,
@@ -205,7 +214,7 @@ fn ir_that_skips_the_linker_meets_its_checks() {
 #[test]
 fn malformed_ir_is_rejected() {
     let src = std::fs::read_to_string(serq::program_path("mg1")).unwrap();
-    let p = compile_source(&src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
     let mut bad = p.clone();
     bad.version = 0;
     assert!(bad.validate().unwrap_err().contains("version"));
@@ -262,16 +271,16 @@ fn budget_left_needs_a_step_stage() {
         workload { arrive batch(1); }
         session { set b = budget_left(d); run d (1); end; }
         run { horizon 10; }";
-    let e = compile_source(src, &Overrides::default()).unwrap_err();
+    let e = compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
     assert!(e.contains("`budget_left(d)`: `d` is a delay stage"), "{e}");
     // an array is named as one
     let fam = src
         .replace("stage d : delay;", "stage d : delay; stage F[2] : fifo;")
         .replace("budget_left(d)", "budget_left(F[serial])");
-    let e = compile_source(&fam, &Overrides::default()).unwrap_err();
+    let e = compile_source(&common::main_source(&fam), &Overrides::default()).unwrap_err();
     assert!(e.contains("a member of `F` is a fifo stage"), "{e}");
     let ok = src.replace("budget_left(d)", "budget_left(engine)");
-    let mut p = compile_source(&ok, &Overrides::default()).unwrap();
+    let mut p = compile_source(&common::main_source(&ok), &Overrides::default()).unwrap();
     // the same refusal from IR: point the call at the delay stage
     use serq::ir::{CArg, CExpr, CStmt, Fun};
     let d = p.stages.iter().position(|s| s.name == "d").unwrap();
@@ -301,7 +310,7 @@ fn explicit_sessions_preset_attributes() {
         session { run d (w); observe done = now; end; }
         run { horizon 100; }
     "#;
-    let p = compile_source(src, &Overrides::default())
+    let p = compile_source(&common::main_source(src), &Overrides::default())
         .unwrap()
         .with_sessions(&[vec![("w", 5.0)], vec![("w", 2.0)]])
         .unwrap();
@@ -314,7 +323,7 @@ fn explicit_sessions_preset_attributes() {
     };
     assert_eq!(by_serial, vec![(0, 5.0), (1, 2.0)]);
     assert!(
-        compile_source(src, &Overrides::default())
+        compile_source(&common::main_source(src), &Overrides::default())
             .unwrap()
             .with_sessions(&[vec![("nope", 1.0)]])
             .is_err()
@@ -332,7 +341,7 @@ fn inlined_trace_runs_like_the_corpus() {
         horizon: Some(1500.0),
         ..Default::default()
     };
-    let p = compile_source(&src, &ov).unwrap();
+    let p = compile_source(&common::main_source(&src), &ov).unwrap();
     let base = path.parent();
     let from_trace = run_ir(&p, base).unwrap().text();
     let inlined = serq::inline_trace(p, base).unwrap();
@@ -383,8 +392,8 @@ fn serving_forms_compile_to_the_kernel_ir() {
             }}
         }}"
     );
-    let a = compile_source(&serving, &Overrides::default()).unwrap();
-    let b = compile_source(&kernel, &Overrides::default()).unwrap();
+    let a = compile_source(&common::main_source(&serving), &Overrides::default()).unwrap();
+    let b = compile_source(&common::main_source(&kernel), &Overrides::default()).unwrap();
     assert_eq!(a.to_json(), b.to_json());
 }
 
@@ -404,8 +413,9 @@ fn branch_with_is_sugar_for_bernoulli() {
         "{head} session {{ turn; loop {{ branch (~bernoulli(0.8)) {{ run tool (Z); turn; }} else {{ end; }} }} }}"
     );
     let ov = serq::Overrides::default();
-    let a = serq::compile_source(&sugar, &ov).expect("the sugar compiles");
-    let b = serq::compile_source(&explicit, &ov).expect("the explicit form compiles");
+    let a = serq::compile_source(&common::main_source(&sugar), &ov).expect("the sugar compiles");
+    let b = serq::compile_source(&common::main_source(&explicit), &ov)
+        .expect("the explicit form compiles");
     assert_eq!(
         a.to_json(),
         b.to_json(),
@@ -417,8 +427,8 @@ fn branch_with_is_sugar_for_bernoulli() {
     // "no reported number moved" check that justified the rewrite cannot be
     // written any more - it was run once, over all sixteen programs, before
     // the lint existed.
-    let one = serq::run_source(&sugar, &ov, None).expect("runs");
-    let two = serq::run_source(&explicit, &ov, None).expect("runs");
+    let one = serq::run_source(&common::main_source(&sugar), &ov, None).expect("runs");
+    let two = serq::run_source(&common::main_source(&explicit), &ov, None).expect("runs");
     assert_eq!(one.text(), two.text(), "the sugar must not move a run");
 }
 
@@ -432,7 +442,7 @@ fn a_draw_is_labelled_w_p() {
         workload { arrive poisson(0.5); turn { set Z = ~exp(3); } }
         session { turn; loop { run svc (1); branch with (0.8) { run tool (Z); turn; } else { end; } } }
         run { horizon 100; }";
-    let p = serq::compile_source(src, &serq::Overrides::default()).unwrap();
+    let p = serq::compile_source(&common::main_source(src), &serq::Overrides::default()).unwrap();
     let svg = serq::view::svg::render(&serq::view::deployment::figure(&p));
     assert!(
         svg.contains("w.p. 0.8"),
@@ -473,8 +483,9 @@ fn at_admission_is_substituted_into_the_header() {
           set K = prompt + o; end; }} }}"
     );
     let ov = serq::Overrides::default();
-    let a = serq::compile_source(&bound, &ov).expect("the clause compiles");
-    let b = serq::compile_source(&inlined, &ov).expect("the inlined form compiles");
+    let a = serq::compile_source(&common::main_source(&bound), &ov).expect("the clause compiles");
+    let b = serq::compile_source(&common::main_source(&inlined), &ov)
+        .expect("the inlined form compiles");
     assert_eq!(
         a.to_json(),
         b.to_json(),
@@ -507,8 +518,9 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
           }} cache (prompt + o); end; }}"
     );
     let ov = serq::Overrides::default();
-    let a = serq::compile_source(&bound, &ov).expect("the clause compiles");
-    let b = serq::compile_source(&inlined, &ov).expect("the inlined form compiles");
+    let a = serq::compile_source(&common::main_source(&bound), &ov).expect("the clause compiles");
+    let b = serq::compile_source(&common::main_source(&inlined), &ov)
+        .expect("the inlined form compiles");
     assert_eq!(
         a.to_json(),
         b.to_json(),
@@ -524,7 +536,8 @@ fn at_admission_rejects_a_draw() {
         workload { arrive poisson(1); }
         session { hold kv (x) at admission (x = ~exp(3)) { run s (1); } end; }
         run { horizon 10; }";
-    let e = serq::compile_source(src, &serq::Overrides::default()).expect_err("rejected");
+    let e = serq::compile_source(&common::main_source(src), &serq::Overrides::default())
+        .expect_err("rejected");
     assert!(e.contains("draws a sample"), "{e}");
 }
 
@@ -541,8 +554,12 @@ fn at_admission_bindings_are_sequential() {
     let flat = format!("{head} session {{ hold kv (n / 2 + 1) {{ run s (1); }} end; }}");
     let ov = serq::Overrides::default();
     assert_eq!(
-        serq::compile_source(&steps, &ov).unwrap().to_json(),
-        serq::compile_source(&flat, &ov).unwrap().to_json()
+        serq::compile_source(&common::main_source(&steps), &ov)
+            .unwrap()
+            .to_json(),
+        serq::compile_source(&common::main_source(&flat), &ov)
+            .unwrap()
+            .to_json()
     );
 }
 
@@ -554,7 +571,8 @@ fn fits_says_it_is_now_reserve() {
         workload { arrive poisson(1); }
         session { hold kv (1) fits (2) { run s (1); } end; }
         run { horizon 10; }";
-    let e = serq::compile_source(src, &serq::Overrides::default()).expect_err("rejected");
+    let e = serq::compile_source(&common::main_source(src), &serq::Overrides::default())
+        .expect_err("rejected");
     assert!(e.contains("`fits` is now `reserve`"), "{e}");
 }
 
@@ -567,7 +585,8 @@ fn admit_as_a_statement_says_what_to_write() {
         workload { arrive poisson(1); }
         session { admit kv (1) { run s (1); } end; }
         run { horizon 10; }";
-    let e = serq::compile_source(src, &serq::Overrides::default()).expect_err("rejected");
+    let e = serq::compile_source(&common::main_source(src), &serq::Overrides::default())
+        .expect_err("rejected");
     assert!(e.contains("is now `hold … at admission"), "{e}");
     assert!(
         e.contains("admit via"),
@@ -632,12 +651,13 @@ fn the_two_sides_compile_to_the_session_ir() {
         }}"
     );
     let ov = serq::Overrides::default();
-    let a = serq::compile_source(&split, &ov).expect("the two sides compile");
-    let b = serq::compile_source(&flat, &ov).expect("the session block compiles");
+    let a = serq::compile_source(&common::main_source(&split), &ov).expect("the two sides compile");
+    let b =
+        serq::compile_source(&common::main_source(&flat), &ov).expect("the session block compiles");
     assert_eq!(a.to_json(), b.to_json(), "one session, one IR");
     // and the same run: nothing downstream of the parser can tell
-    let ra = serq::run_source(&split, &ov, None).unwrap();
-    let rb = serq::run_source(&flat, &ov, None).unwrap();
+    let ra = serq::run_source(&common::main_source(&split), &ov, None).unwrap();
+    let rb = serq::run_source(&common::main_source(&flat), &ov, None).unwrap();
     assert_eq!(ra.json(), rb.json());
 }
 
@@ -657,8 +677,12 @@ fn enter_is_hold_and_admit_via_survives() {
     );
     let ov = serq::Overrides::default();
     assert_eq!(
-        serq::compile_source(&sugar, &ov).unwrap().to_json(),
-        serq::compile_source(&kernel, &ov).unwrap().to_json()
+        serq::compile_source(&common::main_source(&sugar), &ov)
+            .unwrap()
+            .to_json(),
+        serq::compile_source(&common::main_source(&kernel), &ov)
+            .unwrap()
+            .to_json()
     );
 }
 
@@ -691,7 +715,7 @@ fn choose_compares_its_keys_in_order() {
              session {{ choose j in 4 by ({by}); observe j = j; end; }}
              run {{ horizon 1; }}"
         );
-        let r = run_source(&src, &Overrides::default(), None).unwrap();
+        let r = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
         r.observe("j").unwrap().samples[0]
     };
     // the first key ties 1 and 3; the second picks 3
@@ -711,7 +735,7 @@ fn choose_compares_its_keys_in_order() {
 fn an_old_or_keyless_choose_is_refused_plainly() {
     let src = "stage s : delay; workload { arrive batch(1); }
         session { choose j in 2 by (-j); end; } run { horizon 1; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let json = p.to_json();
     let old = json
         .replacen(
@@ -755,7 +779,7 @@ session {
   end;
 }
 run { horizon 10; }";
-    let e = compile_source(src, &Overrides::default()).unwrap_err();
+    let e = compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
     assert!(
         e.starts_with("6:8: session: `load kv` outside a hold of `kv`"),
         "{e}"

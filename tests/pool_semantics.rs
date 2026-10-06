@@ -2,10 +2,12 @@
 //! eviction orders, block-level caches, spilling to a tier, growth with
 //! and without preemption, priority queues.
 
+mod common;
+
 use serq::{Overrides, run_source};
 
 fn run(src: &str) -> serq::Report {
-    run_source(src, &Overrides::default(), None).unwrap()
+    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
 }
 
 /// Three sessions with contexts 10, 20, 30 on a pool of 55: the third
@@ -359,7 +361,7 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
              session {{ {hold} {{ run d (1); }} end; }}
              run {{ horizon 10; }}"
         );
-        let e = run_source(&src, &Overrides::default(), None).unwrap_err();
+        let e = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap_err();
         let said = if hold.contains("serial") {
             "more than the cap of every member (`kv2`: 10)"
         } else {
@@ -368,10 +370,12 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
         assert!(e.contains(said), "{hold}: {e}");
     }
     let e = run_source(
-        "pool kv { cap 10; block 4; } stage d : delay;
+        &common::main_source(
+            "pool kv { cap 10; block 4; } stage d : delay;
          workload { arrive batch(1); }
          session { hold kv (9) { run d (1); } end; }
          run { horizon 10; }",
+        ),
         &Overrides::default(),
         None,
     )
@@ -477,7 +481,7 @@ const GUARD: &str = "
 #[test]
 fn a_computed_fraction_is_not_a_draw() {
     let error = run_source(
-        &GUARD.replace("GUARD", "c / K"),
+        &common::main_source(&GUARD.replace("GUARD", "c / K")),
         &Overrides::default(),
         None,
     )
@@ -488,7 +492,7 @@ fn a_computed_fraction_is_not_a_draw() {
 #[test]
 fn a_nan_guard_is_an_error() {
     let error = run_source(
-        &GUARD.replace("GUARD", "0 / 0"),
+        &common::main_source(&GUARD.replace("GUARD", "0 / 0")),
         &Overrides::default(),
         None,
     )
@@ -499,7 +503,7 @@ fn a_nan_guard_is_an_error() {
 #[test]
 fn a_negative_guard_is_an_error() {
     let error = run_source(
-        &GUARD.replace("GUARD", "0 - 1"),
+        &common::main_source(&GUARD.replace("GUARD", "0 - 1")),
         &Overrides::default(),
         None,
     )
@@ -573,7 +577,7 @@ fn bad_amounts_and_indices_fail_the_run() {
              session {{ {stmt} end; }}
              run {{ horizon 10; }}"
         );
-        run_source(&src, &Overrides::default(), None).unwrap_err()
+        run_source(&common::main_source(&src), &Overrides::default(), None).unwrap_err()
     };
     for (stmt, said) in [
         ("run d (z / z);", "`run d (z / z)`: the amount is NaN"),
@@ -622,7 +626,8 @@ fn bad_amounts_and_indices_fail_the_run() {
              session {{ {stmt} end; }}
              run {{ horizon 10; }}"
         );
-        let e = serq::compile_source(&src, &Overrides::default()).unwrap_err();
+        let e =
+            serq::compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
         assert!(
             e.contains(said) && e.contains("is a number, and not negative"),
             "{stmt}: {e}"
@@ -630,8 +635,10 @@ fn bad_amounts_and_indices_fail_the_run() {
     }
     // a constant index names a member, in IR as in text
     let mut p = serq::compile_source(
-        "stage a[2] : delay; workload { arrive batch(1); }
+        &common::main_source(
+            "stage a[2] : delay; workload { arrive batch(1); }
          session { run a[0] (1); end; } run { horizon 10; }",
+        ),
         &Overrides::default(),
     )
     .unwrap();
@@ -646,10 +653,12 @@ fn bad_amounts_and_indices_fail_the_run() {
     );
     // a decode is named as the kernel writes it (`decode on E (…)`)
     let e = run_source(
-        "pool kv { cap 64; } stage eng : step { budget 8; cost 1; memory kv; }
+        &common::main_source(
+            "pool kv { cap 64; } stage eng : step { budget 8; cost 1; memory kv; }
          workload { arrive batch(1); init { set z = 0; } }
          session { hold kv (8) { run eng decode (z - 1); } end; }
          run { horizon 10; }",
+        ),
         &Overrides::default(),
         None,
     )
@@ -679,14 +688,16 @@ fn a_hold_takes_a_pool_once() {
           end;
         }
         run { horizon 1; }";
-    let e = serq::compile_source(src, &Overrides::default()).unwrap_err();
+    let e = serq::compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
     assert!(e.contains("a hold takes `kv` twice"), "{e}");
     // indices the run sets to one member: only the run can tell
     let e = run_source(
-        "pool kv[2] { cap 64; } stage d : delay;
+        &common::main_source(
+            "pool kv[2] { cap 64; } stage d : delay;
          workload { arrive batch(1); init { set i = 1; set j = 1; } }
          session { hold kv[i] (1), kv[j] (1) { run d (1); } end; }
          run { horizon 10; }",
+        ),
         &Overrides::default(),
         None,
     )

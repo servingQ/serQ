@@ -2,6 +2,8 @@
 //! renamed, removed or retyped field is a change of `REPORT_VERSION`, an
 //! added one is recorded here (`docs/ir.md`, Stability).
 
+mod common;
+
 use serq::engine::report::REPORT_VERSION;
 use serq::{Overrides, compile_source, run_ir};
 
@@ -18,7 +20,7 @@ fn the_report_has_the_shape_its_version_names() {
         session { hold kv (1) { run svc (~exp(0.5)); } observe x = now; end; }
         gauge g = used(kv);
         run { horizon 100; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let j: serde_json::Value = serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
     let shape = (
         keys(&j),
@@ -107,7 +109,7 @@ fn an_array_member_is_reported_with_its_index() {
         workload { arrive poisson(1); }
         session { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } end; }
         run { horizon 100; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let r = run_ir(&p, None).unwrap();
     let j: serde_json::Value = serde_json::from_str(&r.json()).unwrap();
     let rows = |k: &str| -> Vec<(String, serde_json::Value)> {
@@ -169,7 +171,7 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
              }}
              run {{ horizon 20; warmup 0; seed 1; }}"
         );
-        let p = compile_source(&src, &Overrides::default()).unwrap();
+        let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
         let r = run_ir(&p, None).unwrap();
         let s = r.stage("engine").unwrap().clone();
         (s.mean_itl, s.itl_p99)
@@ -202,7 +204,7 @@ fn a_gap_holds_the_transfer_between_two_engines() {
              }}
              run {{ horizon 20; warmup 0; seed 1; }}"
         );
-        let p = compile_source(&src, &Overrides::default()).unwrap();
+        let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
         let r = run_ir(&p, None).unwrap();
         let (p, d) = (r.stage("p").unwrap(), r.stage("d").unwrap());
         assert!(p.mean_itl.is_nan(), "a first token has no gap");
@@ -238,7 +240,7 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
           end;
         }
         run { horizon 1e6; warmup 0; seed 1; arrivals 8000; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let r = run_ir(&p, None).unwrap();
     assert!(
         r.pool("kv").unwrap().preemptions > 0,
@@ -263,7 +265,7 @@ fn a_one_member_array_keeps_its_index() {
         workload { arrive poisson(1); }
         session { hold reqs (1) { hold kv[0] (1) { run svc[0] (~exp(2)); } } end; }
         run { horizon 100; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let r = run_ir(&p, None).unwrap();
     assert_eq!(r.pools_named("kv")[0].index, Some(0));
     assert_eq!(r.pools_named("reqs")[0].index, None);
@@ -286,7 +288,7 @@ fn a_queue_family_of_one_is_reported_by_index() {
         }
         workload { arrive batch(1); init { set prompt = 4; } session { request gw; end; } }
         run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let r = run_ir(&p, None).unwrap();
     assert_eq!(r.pools_named("D.kv")[0].index, Some(0));
     assert_eq!(r.stages_named("D")[0].index, Some(0));
@@ -315,7 +317,7 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         )
     };
     let stage = |serve: &str| {
-        let p = compile_source(&src(serve), &Overrides::default()).unwrap();
+        let p = compile_source(&common::main_source(&src(serve)), &Overrides::default()).unwrap();
         let r = run_ir(&p, None).unwrap();
         let s = r.stage("engine").unwrap().clone();
         (
@@ -337,8 +339,8 @@ fn a_step_stage_reports_what_its_iterations_carried() {
 /// #232: the report says which serq produced it.
 #[test]
 fn the_report_records_the_serq_version() {
-    let p = compile_source(
-        "stage svc : delay; workload { arrive batch(1); } session { run svc (1); end; } run { horizon 2; }",
+    let p = compile_source(&common::main_source(
+        "stage svc : delay; workload { arrive batch(1); } session { run svc (1); end; } run { horizon 2; }"),
         &Overrides::default(),
     )
     .unwrap();
@@ -369,7 +371,7 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
         ..Default::default()
     };
     let src = include_str!("../examples/pd-disaggregation/pd_batching.sq");
-    let p = compile_source(src, &ov).unwrap();
+    let p = compile_source(&common::main_source(src), &ov).unwrap();
     let r = run_ir(&p, None).unwrap();
     assert!(
         r.pool("D.kv").unwrap().preemptions > 0,
@@ -421,7 +423,11 @@ fn a_test_observe_that_never_held_is_noted() {
           end;
         }
         run { horizon 100; }";
-    let r = run_ir(&compile_source(src, &Overrides::default()).unwrap(), None).unwrap();
+    let r = run_ir(
+        &compile_source(&common::main_source(src), &Overrides::default()).unwrap(),
+        None,
+    )
+    .unwrap();
     assert_eq!(r.observe("never").unwrap().count, 40);
     assert_eq!(r.observe("few").unwrap().count, 10);
     let t = r.text();

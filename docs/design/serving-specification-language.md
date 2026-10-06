@@ -306,7 +306,7 @@ them.
   manifest (Kubernetes, Helm, TOSCA), the opposite of a program whose
   policies execute. The HDL picture explains the structure (above). It is
   not the name.
-- **Not a `param` keyword.** The [frontend sketch](frontend.md) declares
+- **Not a `param` keyword (superseded by [explicit entry points and inputs](entrypoint-and-args.md)).** The [frontend sketch](frontend.md) declares
   parameters with `param` and types. Every top-level `let` is already
   overridable, so `param B = 8192;` next to `let B = 8192;` would be two
   spellings of one meaning (criterion 0). Making `let` a fixed definition

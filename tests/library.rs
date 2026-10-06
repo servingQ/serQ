@@ -1,5 +1,7 @@
 //! `use "path";`: a program's definitions read from a library file.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use serq::{Overrides, compile_source, compile_source_at};
@@ -18,7 +20,7 @@ fn dir(name: &str, files: &[(&str, &str)]) -> PathBuf {
 
 fn compile(d: &Path, main: &str) -> Result<serq::Program, String> {
     let src = std::fs::read_to_string(d.join(main)).unwrap();
-    compile_source_at(&src, Some(d), &Overrides::default())
+    compile_source_at(&common::main_source(&src), Some(d), &Overrides::default())
 }
 
 const PROGRAM: &str = "pool kv { cap 100; }
@@ -47,10 +49,10 @@ fn a_program_uses_the_definitions_of_a_library() {
     // a library `use`s the files next to it, and one read twice is read once
     let used = compile(&d, "main.sq").unwrap();
     let written = compile_source(
-        &PROGRAM.replace(
+        &common::main_source(&PROGRAM.replace(
             "server { take(twice(k)); }",
             "server { hold kv (2 * k) { prefill on engine (2 * k) growing kv; } }",
-        ),
+        )),
         &Overrides::default(),
     )
     .unwrap();
@@ -147,10 +149,15 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
         ],
     );
     let main = d.join("main.sq");
+    std::fs::write(
+        &main,
+        common::main_source(&std::fs::read_to_string(&main).unwrap()),
+    )
+    .unwrap();
     serq::load(&main, &Overrides::default()).unwrap();
     let lib = d.join("lib/a2.sq");
     let e = serq::compile_file(
-        &std::fs::read_to_string(&lib).unwrap(),
+        &common::main_source(&std::fs::read_to_string(&lib).unwrap()),
         &lib,
         &Overrides::default(),
     )
@@ -159,7 +166,10 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
         e.contains("`give` uses `take`, which is defined after it"),
         "{e}"
     );
-    let f = serq::frontend::fmt::format_file(&std::fs::read_to_string(&main).unwrap(), &main);
+    let f = serq::frontend::fmt::format_file(
+        &common::main_source(&std::fs::read_to_string(&main).unwrap()),
+        &main,
+    );
     assert!(f.is_ok(), "{f:?}");
 }
 
@@ -171,12 +181,12 @@ fn blocksize_is_the_pools_block() {
         )
     };
     let p = compile_source(
-        &src("pool kv[2] { cap 64; block 16; }", "blocksize(kv[1])"),
+        &common::main_source(&src("pool kv[2] { cap 64; block 16; }", "blocksize(kv[1])")),
         &Overrides::default(),
     )
     .unwrap();
     let q = compile_source(
-        &src("pool kv[2] { cap 64; block 16; }", "16"),
+        &common::main_source(&src("pool kv[2] { cap 64; block 16; }", "16")),
         &Overrides::default(),
     )
     .unwrap();
@@ -214,21 +224,24 @@ fn blocksize_is_the_pools_block() {
             "index draws",
         ),
     ] {
-        let e = compile_source(&src(pool, e), &Overrides::default()).unwrap_err();
+        let e =
+            compile_source(&common::main_source(&src(pool, e)), &Overrides::default()).unwrap_err();
         assert!(e.contains(want), "{e}");
     }
 }
 
 #[test]
 fn blocksize_is_not_a_constant() {
-    let e = compile_source(
-        "pool kv { cap 64; block 16; }\nlet b = blocksize(kv);\nstage svc : delay;\nsession { end; }\n",
+    let e = compile_source(&common::main_source(
+        "pool kv { cap 64; block 16; }\nlet b = blocksize(kv);\nstage svc : delay;\nsession { end; }\n"),
         &Overrides::default(),
     )
     .unwrap_err();
     assert!(e.contains("`blocksize` is not a constant"), "{e}");
     let e = compile_source(
-        "def f(blocksize) = blocksize + 1;\nstage svc : delay;\nsession { end; }\n",
+        &common::main_source(
+            "def f(blocksize) = blocksize + 1;\nstage svc : delay;\nsession { end; }\n",
+        ),
         &Overrides::default(),
     )
     .unwrap_err();
@@ -237,8 +250,11 @@ fn blocksize_is_not_a_constant() {
 
 #[test]
 fn a_use_needs_a_file() {
-    let e =
-        compile_source("use \"lib.sq\";\nsession { end; }\n", &Overrides::default()).unwrap_err();
+    let e = compile_source(
+        &common::main_source("use \"lib.sq\";\nsession { end; }\n"),
+        &Overrides::default(),
+    )
+    .unwrap_err();
     assert!(e.contains("given as text"), "{e}");
     let d = dir(
         "missing",

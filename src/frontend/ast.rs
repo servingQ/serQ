@@ -443,6 +443,10 @@ pub struct RunOpts {
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Program {
+    /// The source declares its executable entry point. Libraries have none.
+    pub has_main: bool,
+    /// (external argument name, local binding), declared through std/args.
+    pub inputs: Vec<(String, String)>,
     /// Locations of constants and assigned attributes, for diagnostic notes.
     pub definitions: Vec<(String, Span)>,
     /// The libraries `use` read, for the spans that point into them.

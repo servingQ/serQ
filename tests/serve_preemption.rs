@@ -18,6 +18,8 @@
 //! The scenario does not exercise the budget a served victim returns: the
 //! answer is the same without it.
 
+mod common;
+
 use serq::{Overrides, compile_source_at, program_path, run_ir};
 
 const ENGINE: &str =
@@ -55,7 +57,7 @@ fn a_served_resident_preempted_in_its_iteration_leaves_it() {
         .iter()
         .map(|&(p, o, a)| vec![("prompt", p), ("o", o), ("arrive", a)])
         .collect();
-    let ir = compile_source_at(&src, path.parent(), &ov)
+    let ir = compile_source_at(&common::main_source(&src), path.parent(), &ov)
         .unwrap()
         .with_sessions(&sessions)
         .unwrap();

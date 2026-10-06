@@ -88,7 +88,7 @@ fn invalid_arguments_are_diagnosed_before_file_io() {
 #[test]
 fn supported_options_still_work() {
     let f = Fixture::new();
-    f.write("model.sq", PROGRAM);
+    f.write("model.sq", &common::main_source(PROGRAM));
     for args in [
         vec![
             "run",

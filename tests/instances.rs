@@ -9,7 +9,7 @@ use serq::{Overrides, compile_source};
 #[test]
 fn an_instance_is_the_sets_and_flags_it_writes() {
     let f = Fixture::new();
-    f.write("model.sq", PROGRAM);
+    f.write("model.sq", &common::main_source(PROGRAM));
     f.write(
         "fast.sq",
         "let rate = 0.5;\nrun { horizon 20; warmup 2; seed 7; }\n",
@@ -41,7 +41,7 @@ fn an_instance_is_the_sets_and_flags_it_writes() {
 #[test]
 fn the_later_of_an_instance_and_a_flag_wins() {
     let f = Fixture::new();
-    f.write("model.sq", PROGRAM);
+    f.write("model.sq", &common::main_source(PROGRAM));
     f.write("i.sq", "let rate = 2;\nrun { seed 5; }\n");
     let seed = |args: &[&str]| -> serde_json::Value {
         let out = f.run(args);
@@ -63,12 +63,14 @@ fn the_later_of_an_instance_and_a_flag_wins() {
     let mut ov = Overrides::default();
     ov.instance("let rate = 2;").unwrap();
     ov.set("rate", "3").unwrap();
-    let p = compile_source(PROGRAM, &ov).unwrap();
+    let p = compile_source(&common::main_source(PROGRAM), &ov).unwrap();
     let mut by_set = Overrides::default();
     by_set.set("rate", "3").unwrap();
     assert_eq!(
         p.to_json(),
-        compile_source(PROGRAM, &by_set).unwrap().to_json()
+        compile_source(&common::main_source(PROGRAM), &by_set)
+            .unwrap()
+            .to_json()
     );
 }
 
@@ -107,12 +109,15 @@ fn an_instance_changes_values_not_structure() {
 #[test]
 fn an_instance_names_only_declared_constants() {
     let f = Fixture::new();
-    f.write("model.sq", PROGRAM);
+    f.write("model.sq", &common::main_source(PROGRAM));
     f.write("typo.sq", "let raet = 2;\n");
     failure(
         &f.run(&["check", "model.sq", "--instance", "typo.sq"]),
         1,
-        &["unknown `let` override `raet`", "available constants: rate"],
+        &[
+            "unknown program argument `raet`",
+            "available arguments: rate",
+        ],
     );
     failure(
         &f.run(&["check", "model.sq", "--instance", "missing.sq"]),

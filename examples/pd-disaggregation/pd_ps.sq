@@ -11,33 +11,37 @@
 // engine does not give its decodes a constant fraction of its time, and a
 // decode step does not slow down in proportion to the decodes it carries.
 // pd_batching.sq runs the steps; this program is what they are compared to.
-let N = 4;             // colocated engines
-let f = 0.25;          // fraction of an engine's time its decodes get
-let mode = 1;          // 0 colocated, 1 split
-let Lambda = 15.0;     // requests per second (load Lambda E[o - 1] tok / (N f) = 0.6)
-let tok = 2e-4;        // time of one decode token at a whole engine (s)
+use "std/args";
 
-// the law, by name (`--def output='201'`)
-def output() = floor(~exp(200)) + 2;
+fn main() {
+  let N = 4;             // colocated engines
+  let f = 0.25;          // fraction of an engine's time its decodes get
+  let mode = args.number("mode", 1);          // 0 colocated, 1 split
+  let Lambda = args.number("Lambda", 15.0);     // requests per second (load Lambda E[o - 1] tok / (N f) = 0.6)
+  let tok = 2e-4;        // time of one decode token at a whole engine (s)
 
-stage colo[N] : ps(f);
-stage dec : ps(N * f);
+  // the law, by name (`--def output='201'`)
+  def output() = floor(~exp(200)) + 2;
 
-workload {
-  arrive poisson(Lambda);
-  init {
-    set o = output();
-    set k = floor(~uniform(0, N));   // a Poisson stream split at random is Poisson
+  stage colo[N] : ps(f);
+  stage dec : ps(N * f);
+
+  workload {
+    arrive poisson(Lambda);
+    init {
+      set o = output();
+      set k = floor(~uniform(0, N));   // a Poisson stream split at random is Poisson
+    }
   }
-}
 
-session {
-  set t0 = now;
-  branch (mode == 0) { run colo[k] ((o - 1) * tok); } else { run dec ((o - 1) * tok); }
-  observe decode_time = now - t0;
-  observe tpot = (now - t0) / (o - 1);
-  observe output_tokens = o;
-  end;
-}
+  session {
+    set t0 = now;
+    branch (mode == 0) { run colo[k] ((o - 1) * tok); } else { run dec ((o - 1) * tok); }
+    observe decode_time = now - t0;
+    observe tpot = (now - t0) / (o - 1);
+    observe output_tokens = o;
+    end;
+  }
 
-run { horizon 300; warmup 30; seed 1; }
+  run { horizon 300; warmup 30; seed 1; }
+}

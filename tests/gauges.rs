@@ -1,6 +1,8 @@
 //! `gauge NAME = e;`: the time average of a function of the deployment's
 //! state, and `max j in n (e)` / `min` / `sum`, which the linker writes out.
 
+mod common;
+
 use serq::{Overrides, compile_source, run_source};
 
 const DEPLOYMENT: &str = "
@@ -18,7 +20,7 @@ const DEPLOYMENT: &str = "
 
 fn run(gauges: &str) -> serq::Report {
     run_source(
-        &format!("{DEPLOYMENT}{gauges}"),
+        &common::main_source(&format!("{DEPLOYMENT}{gauges}")),
         &Overrides::default(),
         None,
     )
@@ -26,7 +28,7 @@ fn run(gauges: &str) -> serq::Report {
 }
 
 fn link_error(src: &str) -> String {
-    compile_source(src, &Overrides::default())
+    compile_source(&common::main_source(src), &Overrides::default())
         .unwrap_err()
         .to_string()
 }
@@ -76,7 +78,11 @@ fn the_spread_is_read_at_one_moment() {
 #[test]
 fn an_aggregate_is_written_out() {
     let ir = |g: &str| {
-        let p = compile_source(&format!("{DEPLOYMENT}{g}"), &Overrides::default()).unwrap();
+        let p = compile_source(
+            &common::main_source(&format!("{DEPLOYMENT}{g}")),
+            &Overrides::default(),
+        )
+        .unwrap();
         serde_json::to_value(&p.gauges).unwrap()
     };
     assert_eq!(
@@ -106,7 +112,8 @@ fn an_aggregate_let_sizes_an_array() {
              session {{ run s[0] (N); end; }}
              run {{ horizon 10; }}"
         );
-        let p = compile_source(&src, &Overrides::default()).unwrap_or_else(|e| panic!("{n}: {e}"));
+        let p = compile_source(&common::main_source(&src), &Overrides::default())
+            .unwrap_or_else(|e| panic!("{n}: {e}"));
         assert_eq!(p.stages.len(), size, "{n}");
     }
     // nested aggregates share the program's budget of terms, in the parser
@@ -225,7 +232,9 @@ fn a_gauges_index_is_a_number() {
     assert!(e.contains("index is a number in range"), "{e}");
     // a constant expression is folded to one
     let p = compile_source(
-        &format!("{DEPLOYMENT} let N = 2; gauge x = used(kv[N - 1]);"),
+        &common::main_source(&format!(
+            "{DEPLOYMENT} let N = 2; gauge x = used(kv[N - 1]);"
+        )),
         &Overrides::default(),
     )
     .unwrap();
@@ -251,7 +260,7 @@ fn a_gauge_reads_the_end_of_an_instant() {
         }
         gauge n = holders(kv);
         run { horizon 3; }";
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     // [0, 1): session 0 holds; at 1 it releases and session 1 takes, and
     // in between the instant has two holders, which no gauge reads
     let n = r.gauge("n").unwrap();
@@ -297,7 +306,7 @@ fn a_budget_does_not_read_budget_left() {
         workload { arrive batch(2); }
         session { hold kv (min(8, budget_left(e))) { run e prefill (4); } end; }
         run { horizon 10; }";
-    run_source(src, &Overrides::default(), None).unwrap();
+    run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
 }
 
 /// Inside a queue's entry an aggregate's index is the aggregate's, not a
@@ -312,6 +321,6 @@ fn an_aggregate_in_a_queue_entry_reads_its_own_index() {
         queue gw : gateway { route { engine.prefill (1); } }
         workload { arrive batch(1); session { request gw; end; } }
         run { horizon 10; }";
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert!((r.stage("engine").unwrap().mean_service - 2.0).abs() < 1e-12);
 }

@@ -1,10 +1,12 @@
 //! A step stage's iteration as the program writes it (`iteration { … }`,
 //! #355): `serve`, `admit` and `branch`, run once each where written.
 
+mod common;
+
 use serq::{Overrides, compile_source, run_source};
 
 fn run(src: &str) -> serq::Report {
-    run_source(src, &Overrides::default(), None).unwrap()
+    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
 }
 
 /// vLLM's procedure, written out.
@@ -34,8 +36,10 @@ fn the_vllm_body_is_the_procedure() {
             let body = src.replace("step {", &format!("step {{ {VLLM} "));
             let ov = Overrides::default();
             let base = path.parent();
-            let a = run_source(&src, &ov, base).unwrap_or_else(|e| panic!("{path:?}: {e}"));
-            let b = run_source(&body, &ov, base).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+            let a = run_source(&common::main_source(&src), &ov, base)
+                .unwrap_or_else(|e| panic!("{path:?}: {e}"));
+            let b = run_source(&common::main_source(&body), &ov, base)
+                .unwrap_or_else(|e| panic!("{path:?}: {e}"));
             assert_eq!(a.text(), b.text(), "{}", path.display());
             checked += 1;
         }
@@ -131,7 +135,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
         )
     };
     let err = |body: &str| {
-        compile_source(&prog(body), &Overrides::default())
+        compile_source(&common::main_source(&prog(body)), &Overrides::default())
             .err()
             .unwrap_or_else(|| panic!("`{body}` linked"))
     };
@@ -151,7 +155,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
         "prefill on engine (2);",
         "prefill on engine (2); set x = admitted;",
     );
-    assert!(compile_source(&src, &Overrides::default()).is_err());
+    assert!(compile_source(&common::main_source(&src), &Overrides::default()).is_err());
 }
 
 /// The procedure and its body agree where serving is by keys and
@@ -238,7 +242,7 @@ fn a_stage_only_is_a_body() {
         );
         let ov = Overrides::default();
         let ir = |s: &str| {
-            serq::compile_file(s, &path, &ov)
+            serq::compile_file(&common::main_source(s), &path, &ov)
                 .unwrap_or_else(|e| panic!("{file}: {e}"))
                 .to_json()
         };
@@ -272,7 +276,7 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
         session { hold reqs (1) { prefill on engine (2); } end; }
         run { horizon 20; warmup 0; seed 1; }
         "#;
-    let e = run_source(src, &Overrides::default(), None).unwrap_err();
+    let e = run_source(&common::main_source(src), &Overrides::default(), None).unwrap_err();
     assert!(e.contains("a test is 1 or 0"), "{e}");
 }
 
@@ -361,12 +365,15 @@ fn a_register_is_the_stage_s_own() {
         )
     };
     let err = |stage: &str, session: &str| {
-        compile_source(&prog(stage, session), &Overrides::default())
-            .err()
-            .unwrap_or_else(|| panic!("`{stage}` `{session}` linked"))
+        compile_source(
+            &common::main_source(&prog(stage, session)),
+            &Overrides::default(),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("`{stage}` `{session}` linked"))
     };
     let body = "state k = 0; iteration { serve; admit; set k = k + 1; }";
-    assert!(compile_source(&prog(body, ""), &Overrides::default()).is_ok());
+    assert!(compile_source(&common::main_source(&prog(body, "")), &Overrides::default()).is_ok());
     assert!(err("state k = 0;", "").contains("nothing sets"));
     // a stage `serve only` is a body, but none that sets the register
     assert!(err("state k = 0; serve only (decoding);", "").contains("nothing sets"));
@@ -397,7 +404,12 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
             "#
         )
     };
-    let ok = |extra: &str, hold: &str| compile_source(&prog(extra, hold), &Overrides::default());
+    let ok = |extra: &str, hold: &str| {
+        compile_source(
+            &common::main_source(&prog(extra, hold)),
+            &Overrides::default(),
+        )
+    };
     let base = "hold reqs (1) { prefill on b (2); }";
     // its pool's header and keys, a gauge
     assert!(ok("gauge g = go;", "hold reqs (1 + go) { prefill on b (2); }").is_ok());

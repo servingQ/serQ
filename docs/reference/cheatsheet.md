@@ -6,20 +6,25 @@ argument rules and [The language](../language.md) for complete semantics.
 ## Shape of a program
 
 ```serq
-let NAME = expr;                    // constants, overridable with --set
+let NAME = expr;                    // fixed constants
 def NAME(x, …) = expr;              // a name for an expression, expanded where it is used
 def NAME(x, …) { … }                // a name for statements: NAME(a, …);
 use "file.sq";                     // the defs of a library, relative to this file
 
-pool NAME [ '[' N ']' ] { … }       // a counted resource
-stage NAME [ '[' N ']' ] : kind;    // where time passes
+use "std/args";
+fn main() {
+  let RATE = args.number("rate", 0.3); // explicit external input
 
-workload { … }                      // how sessions arrive and turns evolve
-session { … }                      // what every session does
-share maxmin;                       // or bottleneck: how a run over several stages divides them
-run { horizon …; warmup …; seed …; arrivals …; }
-gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
-claim NAME: every iteration of E (demand < B || tokens == B);   // checked on the run; also `some iteration of`, `at end`
+  pool NAME [ '[' N ']' ] { … }       // a counted resource
+  stage NAME [ '[' N ']' ] : kind;    // where time passes
+
+  workload { … }                      // how sessions arrive and turns evolve
+  session { … }                      // what every session does
+  share maxmin;                       // or bottleneck: how a run over several stages divides them
+  run { horizon …; warmup …; seed …; arrivals …; }
+  gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
+  claim NAME: every iteration of E (demand < B || tokens == B);   // checked on the run; also `some iteration of`, `at end`
+}
 ```
 
 ## Pools

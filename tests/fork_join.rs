@@ -2,21 +2,24 @@
 //! (vLLM's push proxy sends the prefill and the decode request at once),
 //! and the session waits for its legs where it joins.
 
+mod common;
+
 use serq::{Overrides, check_source, run_source};
 
 fn run(src: &str) -> serq::Report {
-    run_source(src, &Overrides::default(), None).unwrap_or_else(|e| panic!("{e}\n{src}"))
+    run_source(&common::main_source(src), &Overrides::default(), None)
+        .unwrap_or_else(|e| panic!("{e}\n{src}"))
 }
 
 fn fails(src: &str) -> String {
-    match run_source(src, &Overrides::default(), None) {
+    match run_source(&common::main_source(src), &Overrides::default(), None) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("ran:\n{src}"),
     }
 }
 
 fn refused(src: &str, needle: &str) {
-    let e = match check_source(src, &Overrides::default()) {
+    let e = match check_source(&common::main_source(src), &Overrides::default()) {
         Err(e) => e.to_string(),
         Ok(_) => panic!("accepted:\n{src}"),
     };

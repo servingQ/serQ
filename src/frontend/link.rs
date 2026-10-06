@@ -68,7 +68,7 @@ pub use crate::ir::{
 /// The linked program is the IR (`crate::ir::Program`); the old name stays.
 pub type Linked = crate::ir::Program;
 
-/// Overrides of a program's `let` constants and expression `def`s: the
+/// Values for a program's declared inputs and replacement expression `def`s: the
 /// CLI's `--set` and `--def`, pyserq's `sets=` and `defs=`.
 #[derive(Clone, Debug, Default)]
 pub struct Overrides {
@@ -87,11 +87,11 @@ pub struct Overrides {
 }
 
 impl Overrides {
-    /// The constant `name` is the expression `expr`.
+    /// Supply declared input `name` with the constant expression `expr`.
     pub fn set(&mut self, name: &str, expr: &str) -> Result<(), String> {
-        check_override_name("let", name)?;
+        crate::frontend::args::check_name(name)?;
         let e = crate::frontend::parser::parse_expr(expr).map_err(|e| {
-            format!("invalid expression in the `let` override `{name} = {expr}`: {e}")
+            format!("invalid expression for program argument `{name} = {expr}`: {e}")
         })?;
         self.lets.push((name.to_string(), e));
         Ok(())
@@ -111,7 +111,7 @@ impl Overrides {
     }
 
     /// `--instance FILE`, whose text is `src`: each `let` of the instance is
-    /// a `--set` of that constant, and each option of its `run` block the
+    /// a `--set` of that declared input, and each option of its `run` block the
     /// flag of the same name, in the order they are written, so a later
     /// `--set` or flag wins over the instance as it would over an earlier
     /// one. An instance changes values, never structure, so the program it
@@ -168,11 +168,11 @@ impl Overrides {
         Ok(())
     }
 
-    /// The constant `name` is the number `x`, exactly (no text round trip).
+    /// Supply declared input `name` with `x`, exactly (no text round trip).
     /// An infinity is `inf`, as `--set name=inf` writes it; NaN is refused
     /// when the program is linked, as any constant that is NaN.
     pub fn set_num(&mut self, name: &str, x: f64) -> Result<(), String> {
-        check_override_name("let", name)?;
+        crate::frontend::args::check_name(name)?;
         self.lets.push((name.to_string(), Expr::Num(x)));
         Ok(())
     }
@@ -323,11 +323,16 @@ pub type Spans = Vec<Vec<Option<Span>>>;
 /// `link`, and where each statement of the IR came from, so that an error
 /// `Program::validate` finds in a statement can point at the text.
 pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> {
+    if !prog.has_main {
+        return Err(LinkError::new(
+            "missing `fn main()`: a library's definitions do not execute by themselves".into(),
+        ));
+    }
     for (name, _) in &ov.lets {
-        if !prog.lets.iter().any(|(declared, _)| declared == name) {
-            let names: Vec<_> = prog.lets.iter().map(|(n, _)| n.as_str()).collect();
+        if !prog.inputs.iter().any(|(declared, _)| declared == name) {
+            let names: Vec<_> = prog.inputs.iter().map(|(n, _)| n.as_str()).collect();
             return Err(LinkError::new(format!(
-                "unknown `let` override `{name}`\nhelp: an override replaces a declared `let`; available constants: {}",
+                "unknown program argument `{name}`\nhelp: only inputs declared with `args.number` can be supplied; available arguments: {}",
                 if names.is_empty() {
                     "(none)".into()
                 } else {
@@ -412,14 +417,19 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             )));
         }
     }
-    // Constants, in order; an override replaces the value of a `let`.
+    // Constants, in order; supplied inputs replace only their declared defaults.
     for (name, e) in &prog.lets {
-        let overridden = ov.lets.iter().any(|(n, _)| n == name);
+        let input = prog
+            .inputs
+            .iter()
+            .find(|(_, binding)| binding == name)
+            .map(|(key, _)| key);
+        let overridden = ov.lets.iter().any(|(n, _)| Some(n) == input);
         let e = ov
             .lets
             .iter()
             .rev()
-            .find(|(n, _)| n == name)
+            .find(|(n, _)| Some(n) == input)
             .map(|(_, e)| e)
             .unwrap_or(e);
         let what = if overridden {
@@ -430,7 +440,11 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         let v = lk.const_eval(e, &what).map_err(|mut error| {
             if overridden {
                 // These spans refer to the override's expression, not the program.
-                error.message = format!("the `let` override `{name}`: {}", error.message);
+                error.message = format!(
+                    "the program argument `{}`: {}",
+                    input.unwrap_or(name),
+                    error.message
+                );
                 error.span = None;
             }
             error

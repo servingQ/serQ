@@ -1,6 +1,8 @@
 //! Ascend-style FCFS lanes and aging, selected on the admission clock.
 //! Expected orders below follow the tagged queue's immediate/aged-long/short/
 //! long precedence, not observed interpreter output.
+
+mod common;
 use serq::ir::{CExpr, CtxVar, DistKind};
 use serq::{Overrides, Program, compile_source, run_ir, run_source};
 
@@ -49,7 +51,7 @@ fn immediate_then_aged_long_then_short_at_both_admission_paths() {
     let key = "immediate ? 0 : prompt > 128 && waited >= 3 ? 1 : prompt <= 128 ? 2 : 3, serial";
     for bound in [false, true] {
         let src = aging_source(bound, key);
-        let r = run_source(&src, &Overrides::default(), None).unwrap();
+        let r = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
         assert_eq!(r.ended, 6);
         assert_eq!(
             r.observe("selected").unwrap().samples,
@@ -59,7 +61,7 @@ fn immediate_then_aged_long_then_short_at_both_admission_paths() {
             r.observe("admitted").unwrap().samples,
             [0., 4., 5., 6., 7., 8.]
         );
-        let p = compile_source(&src, &Overrides::default()).unwrap();
+        let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
         let q = Program::from_json(&p.to_json()).unwrap();
         assert_eq!(r.text(), run_ir(&q, None).unwrap().text());
     }
@@ -74,7 +76,7 @@ fn existing_single_key_is_recomputed_without_another_enqueue() {
         false,
         "immediate ? 0 : prompt > 128 && now - queued >= 3 ? 1 : prompt <= 128 ? 2 : 3",
     );
-    let r = run_source(&src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
     assert_eq!(
         r.observe("selected").unwrap().samples,
         [0., 4., 1., 5., 2., 3.]
@@ -106,7 +108,7 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
         }
         run { horizon 10; }
     "#;
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 4);
     assert_eq!(r.observe("selected").unwrap().samples, [0., 1., 3., 2.]);
     assert_eq!(r.observe("admitted").unwrap().samples, [0., 1., 1., 2.]);
@@ -128,7 +130,7 @@ fn lexicographic_keys_preserve_enqueue_order_for_equal_keys() {
         }
         run { horizon 10; }
     "#;
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.observe("selected").unwrap().samples, [0., 2., 1., 3.]);
 }
 
@@ -142,13 +144,13 @@ fn selection_rejects_random_hidden_and_wrong_moment_keys_in_source_and_ir() {
         let src = format!(
             "pool reqs {{ cap 1; queue by ({key}); }} workload {{ hidden secret; init {{ set secret = 1; }} }} session {{ end; }} run {{ horizon 1; }}"
         );
-        let error = compile_source(&src, &Overrides::default())
+        let error = compile_source(&common::main_source(&src), &Overrides::default())
             .unwrap_err()
             .to_string();
         assert!(error.contains(message), "{key}: {error}");
     }
     let src = "pool reqs { cap 1; queue by (waited); } session { end; } run { horizon 1; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let mut bad = p.clone();
     bad.pools[0].queue = Some(vec![]);
     assert!(
@@ -179,7 +181,7 @@ fn selection_rejects_random_hidden_and_wrong_moment_keys_in_source_and_ir() {
     );
     assert!(
         compile_source(
-            "session { observe x = waited; end; } run { horizon 1; }",
+            &common::main_source("session { observe x = waited; end; } run { horizon 1; }"),
             &Overrides::default()
         )
         .unwrap_err()
@@ -209,7 +211,7 @@ fn a_selected_request_that_cannot_fit_still_blocks_lower_priority_requests() {
         }
         run { horizon 10; }
     "#;
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.observe("selected").unwrap().samples, [0., 1., 2.]);
     assert_eq!(r.observe("admitted").unwrap().samples, [0., 4., 4.]);
 }
@@ -243,7 +245,7 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         }
         run { horizon 20; }
     "#;
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);
     assert_eq!(r.observe("selected").unwrap().samples, [1., 0., 0., 2.]);
@@ -256,7 +258,7 @@ fn the_program_can_disable_aging_and_keep_short_request_precedence() {
     // precede both longs even after the longs have waited three seconds.
     for bound in [false, true] {
         let src = aging_source(bound, "immediate ? 0 : prompt <= 128 ? 1 : 2");
-        let r = run_source(&src, &Overrides::default(), None).unwrap();
+        let r = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
         assert_eq!(
             r.observe("selected").unwrap().samples,
             [0., 4., 2., 3., 1., 5.]

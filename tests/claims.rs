@@ -2,6 +2,8 @@
 //! S (e);`, `… at end (e);`: propositions about every path, which the
 //! interpreter checks on the path it runs.
 
+mod common;
+
 use serq::engine::report::ClaimResult;
 use serq::{Overrides, Program, compile_source, run_source};
 
@@ -28,11 +30,11 @@ fn engine(serve: &str) -> String {
 }
 
 fn run(src: &str) -> serq::Report {
-    run_source(src, &Overrides::default(), None).unwrap()
+    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
 }
 
 fn link_error(src: &str) -> String {
-    compile_source(src, &Overrides::default()).unwrap_err()
+    compile_source(&common::main_source(src), &Overrides::default()).unwrap_err()
 }
 
 fn result(r: &serq::Report, name: &str) -> ClaimResult {
@@ -268,7 +270,7 @@ fn a_claim_over_a_member_of_an_array() {
         session { run engine[serial] prefill (3); end; }
         claim one: every iteration of engine[1] (tokens == 3);
         run { horizon 100; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     assert_eq!(p.claims[0].kind, serq::ir::ClaimKind::EveryIteration(1));
     let r = run(src);
     let one = r.claim("one").unwrap();
@@ -283,7 +285,7 @@ fn the_ir_keeps_the_claims() {
         "{BATCH} claim small given (n <= 3): some iteration of engine (demand > served);
          claim p: at end (prefix_total(x) == 10);"
     );
-    let p = compile_source(&src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
     assert_eq!(p.claims.len(), 2);
     let back = Program::from_json(&p.to_json()).unwrap();
     assert_eq!(back.claims, p.claims);
@@ -299,7 +301,7 @@ fn the_ir_keeps_the_claims() {
         serde_json::json!("Served")
     );
 
-    let none = compile_source(BATCH, &Overrides::default()).unwrap();
+    let none = compile_source(&common::main_source(BATCH), &Overrides::default()).unwrap();
     let j: serde_json::Value = serde_json::from_str(&none.to_json()).unwrap();
     assert!(j.get("claims").is_none());
     let r: serde_json::Value = serde_json::from_str(&run(BATCH).json()).unwrap();
@@ -311,7 +313,16 @@ fn the_ir_keeps_the_claims() {
 #[test]
 fn the_formatter_keeps_a_claim() {
     let src = engine("serve decode first;");
-    assert_eq!(serq::frontend::fmt::format(&src).unwrap(), src);
+    let formatted = serq::frontend::fmt::format(&common::main_source(&src)).unwrap();
+    assert!(formatted.contains("claim work_conserving:"));
+    assert_eq!(
+        compile_source(&formatted, &Overrides::default())
+            .unwrap()
+            .to_json(),
+        compile_source(&common::main_source(&src), &Overrides::default())
+            .unwrap()
+            .to_json()
+    );
 }
 
 /// The paper programs' IR, which `scripts/gen_lean_claims.py` reads to write
@@ -332,7 +343,7 @@ fn claim_ir_files_are_current() {
     assert!(!names.is_empty());
     for name in names {
         let src = std::fs::read_to_string(root.join(format!("examples/papers/{name}.sq"))).unwrap();
-        let p: Program = compile_source(&src, &Overrides::default()).unwrap();
+        let p: Program = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
         let want = p.to_json() + "\n";
         let path = root.join(format!("tools/claims/{name}.ir.json"));
         if bless {

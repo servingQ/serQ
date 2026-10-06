@@ -17,16 +17,20 @@ use serq::frontend::parser;
 fn usage(cmd: &str) -> &'static str {
     match cmd {
         "run" => {
-            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--set name=expr]... [--def name=expr]... [--trace F] [--json] [--dump DIR]"
+            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--set name=expr]... [--def name=expr]... [--trace F] [--json] [--dump DIR] [-- --name value ...]"
         }
-        "check" => "serq check FILE [--instance F] [--set name=expr]... [--def name=expr]...",
+        "check" => {
+            "serq check FILE [--instance F] [--set name=expr]... [--def name=expr]... [-- --name value ...]"
+        }
         "ir" => {
-            "serq ir FILE [--instance F] [--set name=expr]... [--def name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]"
+            "serq ir FILE [--instance F] [--set name=expr]... [--def name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [-- --name value ...]"
         }
         "draw" => {
-            "serq draw FILE [--instance F] [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH]"
+            "serq draw FILE [--instance F] [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH] [-- --name value ...]"
         }
-        "target" => "serq target FILE [--instance F] [--set name=expr]... [--def name=expr]...",
+        "target" => {
+            "serq target FILE [--instance F] [--set name=expr]... [--def name=expr]... [-- --name value ...]"
+        }
         "fmt" => "serq fmt [--check] FILE...",
         _ => "serq <run|check|ir|draw|target|fmt> FILE [OPTIONS] | serq --version",
     }
@@ -138,6 +142,16 @@ fn main() {
     let mut i = 2;
     while i < args.len() {
         let flag = args[i].as_str();
+        if flag == "--" {
+            let values = serq::frontend::args::numbers(&args[i + 1..])
+                .unwrap_or_else(|e| argument_error(cmd, e));
+            ov.lets.extend(
+                values
+                    .into_iter()
+                    .map(|(n, v)| (n, serq::frontend::ast::Expr::Num(v))),
+            );
+            break;
+        }
         let allowed: &[&str] = match flag {
             "--set" | "--def" | "--instance" => &["run", "check", "ir", "draw", "target"],
             "--seed" | "--horizon" | "--warmup" | "--arrivals" | "--trace" => &["run", "ir"],
@@ -201,7 +215,7 @@ fn main() {
                     argument_error(
                         cmd,
                         format!(
-                            "invalid --set name `{name}`; expected an identifier\nhelp: use --set name=expr with a declared let name"
+                            "invalid --set name `{name}`; expected an identifier\nhelp: use --set name=expr with an input declared by args.number"
                         ),
                     );
                 }

@@ -3,6 +3,8 @@
 //! stages and a server compiles to, up to the names the queue gives its
 //! pools (`Q.p`), its stage (`Q`) and its entries' attributes (`Q.x`).
 
+mod common;
+
 use serq::{
     Overrides, compile_source,
     frontend::parser::{parse, parse_expr},
@@ -11,10 +13,10 @@ use serq::{
 /// Compile both; the queue program's IR with `renames` applied to its JSON
 /// is the flat program's IR.
 fn same_ir(queues: &str, flat: &str, renames: &[(&str, &str)]) {
-    let q = compile_source(queues, &Overrides::default())
+    let q = compile_source(&common::main_source(queues), &Overrides::default())
         .unwrap_or_else(|e| panic!("queues: {e}\n{queues}"))
         .to_json();
-    let f = compile_source(flat, &Overrides::default())
+    let f = compile_source(&common::main_source(flat), &Overrides::default())
         .unwrap_or_else(|e| panic!("flat: {e}\n{flat}"))
         .to_json();
     let mut q = q;
@@ -25,7 +27,7 @@ fn same_ir(queues: &str, flat: &str, renames: &[(&str, &str)]) {
 }
 
 fn refused(src: &str, needle: &str) {
-    let e = match parse(src) {
+    let e = match parse(&common::main_source(src)) {
         Err(e) => e.to_string(),
         Ok(p) => match serq::frontend::link::link(&p, &Overrides::default()) {
             Err(e) => e.to_string(),
@@ -43,7 +45,7 @@ const WORKLOAD: &str = "workload { arrive batch(1); hidden o; init { set prompt 
 fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
     same_ir(
         &format!(
-            "let N = 2;
+            "use \"std/args\"; let N = args.number(\"N\", 2);
              queue gw : gateway {{ route {{ E[j].decode (prompt); observe done = now; }} }}
              queue E[N] : decode {{
                pool kv {{ cap 100; block 16; admit via E; }}
@@ -57,7 +59,7 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
              {WORKLOAD}"
         ),
         &format!(
-            "let N = 2;
+            "use \"std/args\"; let N = args.number(\"N\", 2);
              pool kv[2] {{ cap 100; block 16; admit via E; }}
              stage E[2] : step {{ cost 1; memory kv; }}
              server {{
@@ -79,7 +81,7 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
 fn a_queue_family_sized_by_an_aggregate() {
     let queue = |n: &str| {
         format!(
-            "let N = {n};
+            "use \"std/args\"; let N = args.number(\"N\", {n});
              queue gw : gateway {{ route {{ E[j].decode (prompt); observe done = now; }} }}
              queue E[N] : decode {{
                pool kv {{ cap 100; block 16; admit via E; }}
@@ -90,7 +92,7 @@ fn a_queue_family_sized_by_an_aggregate() {
         )
     };
     let ir = |src: &str| {
-        serq::compile_source(src, &Overrides::default())
+        serq::compile_source(&common::main_source(src), &Overrides::default())
             .unwrap()
             .to_json()
     };
@@ -293,7 +295,7 @@ fn a_link_latency_is_a_wait_before_the_read() {
 fn a_latency_is_the_links_constant() {
     let program = |latency: &str, param: &str| {
         format!(
-            "let x = 0.5;
+            "use \"std/args\"; let x = args.number(\"x\", 0.5);
       queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (32) from P; }} }}
       queue egress : link {{ serve ps(100); }}
       queue ingress : link {{ serve ps(200) latency {latency}; }}
@@ -316,7 +318,8 @@ fn a_latency_is_the_links_constant() {
         )
     };
     let wait = |src: &str, ov: &Overrides| -> String {
-        let p = compile_source(src, ov).unwrap_or_else(|e| panic!("{e}\n{src}"));
+        let p =
+            compile_source(&common::main_source(src), ov).unwrap_or_else(|e| panic!("{e}\n{src}"));
         let ir = p.to_json();
         let at = ir.find("\"Delay\"").map(|_| ()).is_some();
         assert!(at, "a delay stage");
@@ -354,7 +357,7 @@ fn a_keyword_named_attribute_is_a_read() {
              session {{ set {word} = 1; f(get()); run s (1); end; }}
              run {{ horizon 1; }}"
         );
-        let e = compile_source(&src, &Overrides::default()).unwrap_err();
+        let e = compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
         assert!(
             e.contains(&format!("reads `{word}`, which `f` assigns")),
             "{e}"
@@ -461,10 +464,10 @@ fn an_entry_sees_its_parameters_and_its_queue() {
         "reads `t0`, a session attribute set outside the queue",
     );
     assert!(
-        parse(&program(
+        parse(&common::main_source(&program(
             "hold kv (prompt) { prefill (1) growing kv; decode (o - 1) growing kv; }",
             ""
-        ))
+        )))
         .is_ok(),
         "`o` is hidden, so the body may read it"
     );
@@ -577,13 +580,13 @@ fn a_family_size_is_a_constant() {
     let rest = "queue gw : gateway { route { E[j].decode (1); } } workload { arrive batch(1); init { set j = 0; } session { request gw; end; } } run { horizon 1; }";
     let decl = |n: &str| {
         format!(
-            "let N = 2; queue E[{n}] : decode {{ pool kv {{ cap 10; }} serve step {{ cost 1; memory kv; }} decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }} }} {rest}"
+            "use \"std/args\"; let N = args.number(\"N\", 2); queue E[{n}] : decode {{ pool kv {{ cap 10; }} serve step {{ cost 1; memory kv; }} decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }} }} {rest}"
         )
     };
-    assert!(parse(&decl("N")).is_ok());
-    assert!(parse(&decl("N + 1")).is_ok());
+    assert!(parse(&common::main_source(&decl("N"))).is_ok());
+    assert!(parse(&common::main_source(&decl("N + 1"))).is_ok());
     // a family of one is still called by index: a program reads the same at N = 1
-    let one = parse(&decl("N - 1")).unwrap();
+    let one = parse(&common::main_source(&decl("N - 1"))).unwrap();
     assert!(serq::frontend::link::link(&one, &Overrides::default()).is_ok());
     // and only by index: one call, one spelling, whatever N is
     refused(
@@ -741,7 +744,11 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
         &program(""),
         "reads `out`, a session attribute set outside the queue",
     );
-    compile_source(&program("hidden out;"), &Overrides::default()).unwrap();
+    compile_source(
+        &common::main_source(&program("hidden out;")),
+        &Overrides::default(),
+    )
+    .unwrap();
 }
 
 /// #203: a `def` that says `request gw;` captures what `gw`'s `route`
@@ -759,12 +766,20 @@ fn a_def_captures_what_the_gateway_it_requests_assigns() {
         )
     };
     let go = "def go(x) { request clean; observe b = x; }";
-    compile_source(&program(go, "go(x);"), &Overrides::default()).unwrap();
+    compile_source(
+        &common::main_source(&program(go, "go(x);")),
+        &Overrides::default(),
+    )
+    .unwrap();
     let go = "def go(x) { request dirty; observe b = x; }";
     refused(&program(go, "go(x);"), "an argument of `go` reads `x`");
     // a gateway a parameter names is the argument's
     let send = "def send(g, x) { request g; observe b = x; }";
-    compile_source(&program(send, "send(clean, x);"), &Overrides::default()).unwrap();
+    compile_source(
+        &common::main_source(&program(send, "send(clean, x);")),
+        &Overrides::default(),
+    )
+    .unwrap();
     refused(
         &program(send, "send(dirty, x);"),
         "an argument of `send` reads `x`",
@@ -775,19 +790,31 @@ fn a_def_captures_what_the_gateway_it_requests_assigns() {
     );
     // through a definition the body passes a gateway to, that gateway
     let ask = "def ask(g) { request g; } def go(x) { ask(clean); observe b = x; }";
-    compile_source(&program(ask, "go(x);"), &Overrides::default()).unwrap();
+    compile_source(
+        &common::main_source(&program(ask, "go(x);")),
+        &Overrides::default(),
+    )
+    .unwrap();
     let ask = "def ask(g) { request g; } def go(x) { ask(dirty); observe b = x; }";
     refused(&program(ask, "go(x);"), "an argument of `go` reads `x`");
     // and one it passes its own parameter to, the argument's
     let ask = "def ask(g) { request g; } def go(g, x) { ask(g); observe b = x; }";
-    compile_source(&program(ask, "go(clean, x);"), &Overrides::default()).unwrap();
+    compile_source(
+        &common::main_source(&program(ask, "go(clean, x);")),
+        &Overrides::default(),
+    )
+    .unwrap();
     refused(
         &program(ask, "go(dirty, x);"),
         "an argument of `go` reads `x`",
     );
     // and through one that names its gateway, that one
     let ask = "def ask() { request clean; } def go(x) { ask(); observe b = x; }";
-    compile_source(&program(ask, "go(x);"), &Overrides::default()).unwrap();
+    compile_source(
+        &common::main_source(&program(ask, "go(x);")),
+        &Overrides::default(),
+    )
+    .unwrap();
 }
 
 /// The third review of #87: six ways a program still got past the queue's
@@ -814,14 +841,14 @@ fn the_contract_holds_at_every_edge() {
     );
     // 2. a family's size folds as the linker folds a constant
     compile_source(
-        &format!(
-            "let N = min(2, 3);
+        &common::main_source(&format!(
+            "use \"std/args\"; let N = args.number(\"N\", min(2, 3));
              queue gw : gateway {{ route {{ E[N - 1].decode (prompt); }} }}
              queue E[N] : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
                decode (p) {{ hold kv (p + N) {{ prefill (p) growing kv; }} }} }}
              {}",
             wl("request gw; end;")
-        ),
+        )),
         &Overrides::default(),
     )
     .unwrap();
@@ -883,11 +910,11 @@ fn the_contract_holds_at_four_more_edges() {
         )
     };
     // an entry's `set` is read from outside as `Q.x`
-    compile_source(
+    compile_source(&common::main_source(
         &format!(
             "queue gw : gateway {{ route {{ E[0].decode (prompt); observe r = E.result; }} }} {} {wl}",
             engine("hold kv (p) { prefill (p) growing kv; } set result = 7;")
-        ),
+        )),
         &Overrides::default(),
     )
     .unwrap();
@@ -1017,7 +1044,7 @@ fn a_pull_relation_says_what_it_couples() {
         )
     };
     compile_source(
-        &program("nic ps(1);", "D pull P share maxmin;", "P"),
+        &common::main_source(&program("nic ps(1);", "D pull P share maxmin;", "P")),
         &Overrides::default(),
     )
     .unwrap();
@@ -1164,17 +1191,19 @@ fn each_overload_substitutes_only_its_own_locals() {
 
 #[test]
 fn array_sizes_reject_direct_and_indirect_overrides() {
-    let src = "let N = 2; let M = N + 1;
+    let src = "use \"std/args\"; let N = args.number(\"N\", 2); let M = N + 1;
       queue D[M] : decode { serve fifo; decode (p) { } }
       queue gw : gateway { route { D[2].decode (1); } }
       workload { arrive batch(1); session { request gw; end; } }
       run { horizon 1; }";
-    for name in ["N", "M"] {
+    // N directly sizes D and M indirectly sizes it; both reads are checked.
+    for src in [src.to_string(), src.replace("D[M]", "D[N]")] {
+        let name = "N";
         let ov = Overrides {
             lets: vec![(name.into(), parse_expr("4").unwrap())],
             ..Overrides::default()
         };
-        let err = compile_source(src, &ov).unwrap_err();
+        let err = compile_source(&common::main_source(&src), &ov).unwrap_err();
         assert!(
             err.contains("affects an array size resolved during parsing"),
             "{err}"
@@ -1196,7 +1225,7 @@ fn long_acyclic_delegation_succeeds_and_cycles_fail() {
         ));
     }
     src.push_str("workload { arrive batch(1); session { request gw; end; } } run { horizon 1; }");
-    compile_source(&src, &Overrides::default()).unwrap();
+    compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
     let cycle = src.replace("observe done = p;", "Q0.prefill (p);");
     refused(&cycle, "entries call each other in a cycle");
 }
@@ -1207,7 +1236,7 @@ fn expansion_errors_point_to_the_call() {
 queue D : decode { serve fifo; decode (p) { } }
 workload { arrive batch(1); session { request gw; end; } }
 run { horizon 1; }";
-    let err = parse(src).unwrap_err();
+    let err = parse(&common::main_source(src)).unwrap_err();
     assert_eq!((err.line, err.col), (2, 3));
     assert!(err.msg.contains("takes 1 argument(s), got 0"), "{err}");
 }

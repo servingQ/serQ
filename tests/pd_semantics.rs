@@ -3,10 +3,12 @@
 //! a prefill/decode program state: the decoder's queue backs up into the
 //! prefiller's memory.
 
+mod common;
+
 use serq::{Overrides, check_source, run_source};
 
 fn run(src: &str) -> serq::Report {
-    run_source(src, &Overrides::default(), None).unwrap()
+    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
 }
 
 fn samples(r: &serq::Report, name: &str) -> Vec<f64> {
@@ -132,7 +134,7 @@ fn load_must_fit_the_allocation() {
         session { hold kv (10) { load kv (11); } end; }
         run { horizon 10; }
     "#;
-    let msg = run_source(src, &Overrides::default(), None).unwrap_err();
+    let msg = run_source(&common::main_source(src), &Overrides::default(), None).unwrap_err();
     assert!(msg.contains("must fit the allocation"), "{msg}");
 }
 
@@ -146,7 +148,7 @@ fn release_and_load_need_an_enclosing_hold() {
              workload {{ arrive batch(1); }}
              session {{ {stmt} end; }} run {{ horizon 10; }}"
         );
-        let e = check_source(&src, &Overrides::default())
+        let e = check_source(&common::main_source(&src), &Overrides::default())
             .err()
             .unwrap_or_else(|| panic!("`{stmt}` linked"));
         assert!(e.contains("outside a hold of `kv`"), "{stmt}: {e}");
@@ -169,7 +171,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
              workload {{ arrive batch(1); }}
              session {{ {stmt} end; }} run {{ horizon 10; }}"
         );
-        let e = check_source(&src, &Overrides::default())
+        let e = check_source(&common::main_source(&src), &Overrides::default())
             .err()
             .unwrap_or_else(|| panic!("`{stmt}` linked"));
         assert!(e.contains("outside a hold of `kv`"), "{stmt}: {e}");
@@ -180,7 +182,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
          workload { arrive batch(1); }
          session { hold kv (16) { run d (1); } lease kv (5); grow kv (16); end; }
          run { horizon 10; }";
-    let e = check_source(src, &Overrides::default()).unwrap_err();
+    let e = check_source(&common::main_source(src), &Overrides::default()).unwrap_err();
     assert!(
         e.contains("it acts on an enclosing hold's allocation"),
         "{e}"
@@ -191,7 +193,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
          workload { arrive batch(1); }
          session { hold kv (8) { grow kv (8); run engine prefill (8) growing kv; } end; }
          run { horizon 10; }";
-    check_source(src, &Overrides::default()).unwrap();
+    check_source(&common::main_source(src), &Overrides::default()).unwrap();
 }
 
 /// A hold a pool may preempt is admitted anew and reads its indices again:
@@ -213,11 +215,13 @@ fn a_preemptible_hold_reads_no_moving_index() {
              run {{ horizon 500; }}"
         )
     };
-    let e = check_source(&src("lifo"), &Overrides::default()).unwrap_err();
+    let e = check_source(&common::main_source(&src("lifo")), &Overrides::default()).unwrap_err();
     assert!(e.contains("`kv` may preempt it"), "{e}");
     // `computed`, which the preemption sets before the hold is admitted anew
     let e = check_source(
-        &src("lifo").replace("aux[1 - min(1, floor(now))]", "aux[min(1, computed)]"),
+        &common::main_source(
+            &src("lifo").replace("aux[1 - min(1, floor(now))]", "aux[min(1, computed)]"),
+        ),
         &Overrides::default(),
     )
     .unwrap_err();
@@ -233,10 +237,10 @@ fn a_preemptible_hold_reads_no_moving_index() {
         "decode 200 growing kv;
                } }",
     );
-    let e = check_source(&nested, &Overrides::default()).unwrap_err();
+    let e = check_source(&common::main_source(&nested), &Overrides::default()).unwrap_err();
     assert!(e.contains("`kv` may preempt it"), "{e}");
     // a hold no pool preempts reads its index once
-    check_source(&src("none"), &Overrides::default()).unwrap();
+    check_source(&common::main_source(&src("none")), &Overrides::default()).unwrap();
 }
 
 /// A hold's index is read at admission, at a statement inside that acts on
@@ -252,7 +256,7 @@ fn a_hold_whose_body_changes_its_index_does_not_link() {
              session {{ hold kv[1] (16) {{ hold {hold} (16) {{ {body} run d (1); }} }} end; }}
              run {{ horizon 10; }}"
         );
-        check_source(&src, &Overrides::default())
+        check_source(&common::main_source(&src), &Overrides::default())
     };
     for body in [
         "set j = 1; grow kv[j] (16);",
@@ -334,7 +338,7 @@ fn transfer_from_to_is_sugar_for_three_statements() {
              session { hold memP (10) { hold memD (10) { run link (1); load memD (9); release memP; } } end; }
              run { horizon 10; }";
     let ir = |s: &str| {
-        serq::compile_source(s, &Overrides::default())
+        serq::compile_source(&common::main_source(s), &Overrides::default())
             .unwrap()
             .to_json()
     };
@@ -489,7 +493,7 @@ fn the_pd_program_survives_decoder_memory_pressure() {
         ..Default::default()
     };
     let path = serq::program_path("llmd_nixl_pull");
-    let r = run_source(&src, &ov, path.parent()).unwrap();
+    let r = run_source(&common::main_source(&src), &ov, path.parent()).unwrap();
     assert!(r.pool("D.kv").unwrap().preemptions > 0, "{}", r.text());
     assert!(
         r.observe("lease").unwrap().samples.len() > 100,
@@ -521,7 +525,7 @@ fn a_local_prefill_does_not_block_an_arrived_transfer() {
         seed: Some(20),
         ..Default::default()
     };
-    let r = run_source(&src, &ov, path.parent()).unwrap();
+    let r = run_source(&common::main_source(&src), &ov, path.parent()).unwrap();
     assert!(r.mean_live < 30.0, "{}", r.text());
 }
 
@@ -538,19 +542,19 @@ fn release_and_load_name_the_pool_as_the_hold_does() {
         )
     };
     let e = check_source(
-        &program("hold q[0] (1) { load q[1] (1); }"),
+        &common::main_source(&program("hold q[0] (1) { load q[1] (1); }")),
         &Overrides::default(),
     )
     .expect_err("linked");
     assert!(e.contains("index included"), "{e}");
     let e = check_source(
-        &program("hold q[j] (1) { release q[0]; }"),
+        &common::main_source(&program("hold q[j] (1) { release q[0]; }")),
         &Overrides::default(),
     )
     .expect_err("linked");
     assert!(e.contains("index included"), "{e}");
     check_source(
-        &program("hold q[j] (1) { run svc (1); release q[j]; }"),
+        &common::main_source(&program("hold q[j] (1) { run svc (1); release q[j]; }")),
         &Overrides::default(),
     )
     .expect("links");
@@ -681,11 +685,11 @@ fn a_lease_names_a_pool_of_the_hold() {
     let bad = "pool a { cap 1; } pool b { cap 1; } stage svc : delay;
                workload { arrive batch(1); }
                session { hold a (1) { run svc (1); } lease b (1); end; } run { horizon 10; }";
-    let e = check_source(bad, &Overrides::default()).expect_err("linked");
+    let e = check_source(&common::main_source(bad), &Overrides::default()).expect_err("linked");
     assert!(e.contains("does not take that pool"), "{e}");
     // and a `release` of a leased pool links outside any hold of it
     let ok = "pool a { cap 1; } stage svc : delay;
               workload { arrive batch(1); }
               session { hold a (1) { run svc (1); } lease a (1); run svc (1); release a; end; } run { horizon 10; }";
-    check_source(ok, &Overrides::default()).expect("links");
+    check_source(&common::main_source(ok), &Overrides::default()).expect("links");
 }

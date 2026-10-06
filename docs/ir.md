@@ -299,3 +299,11 @@ one queue key on a pool that no run grows, and supported tiled costs. See
 [the Lean guide](lean.md#what-is-not-covered-yet) for these restrictions.
 Arbitrary iteration bodies, registers, `reserve_held`, `granule` and
 preemption policies other than LIFO are not translated.
+
+### Source entry points and inputs
+
+The `.sq` frontend requires `fn main()` for an executable source program.
+`std/args` resolves declared inputs before constructing this IR. Neither the
+entry-point wrapper nor the input library adds a runtime node or field;
+plain constants remain folded, and an IR program never reads host arguments.
+This source-language change does not change `IR_VERSION` or IR meaning.
