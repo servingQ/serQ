@@ -1,48 +1,89 @@
-# Python: pyserq
+# Python Reference
 
-`pyserq` compiles and runs serQ programs in Python. Compile a file or source
-text into a `Program`, then run it to get a `Report`.
+`pyserq` compiles, simulates and draws serQ programs in Python. It uses the
+same interpreter as the CLI and returns objects for inspecting a run.
 
 ## Install
 
 ```bash
-pip install pyserq           # release
-pip install --pre pyserq     # include development releases
+pip install pyserq
 ```
+
+Requires Python 3.9 or newer. To include development releases, use
+`pip install --pre pyserq`.
 
 ## Run a program
 
 ```python
 import pyserq
 
-p = pyserq.compile("examples/single-turn/mg1.sq", sets={"lam": 0.8, "law": 1}, seed=10)
-r = pyserq.run(p)            # the GIL is released while it runs
-r.json()                     # what `serq run --json` prints
-o = r.observe("sojourn")     # o.mean, o.ci, o.p99, ...
-g = pyserq.run(pyserq.compile("examples/pd-disaggregation/llmd_nixl_pull.sq")).gauge("load_spread")
-g.mean, g.ci, g.min, g.max   # g.times, g.values: what `--dump` writes
-o.samples, o.times           # what `--dump` writes
-r.stage("svc").utilization   # r.observes, r.gauges, r.stages, r.pools: all of them
-pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
-pyserq.draw("examples/multi-turn/vllm.sq", format="svg")  # what `serq draw --format svg` prints
+source = """
+fn main() {
+  pool slots { cap 2; }
+  stage svc : fifo;
+  workload { arrive batch(4); }
+  session {
+    set t0 = now;
+    hold slots (1) { run svc (2); }
+    observe latency = now - t0;
+    end;
+  }
+  gauge occupied = used(slots);
+  run { horizon 10; }
+}
+"""
+report = pyserq.run(pyserq.compile(source=source))
+latency = report.observe("latency")
+assert latency is not None
+print(latency.mean)
 ```
 
 ## API
 
-| Member | Behavior |
-|---|---|
-| `compile(path=None, *, source=None, sets={}, defs={}, seed, horizon, warmup, arrivals, trace)` | A program file or text to its IR, with the overrides of `serq run`. Keys in `sets` must name inputs declared by `args.number`, never plain `let` constants. A number in `sets` is that number (an infinity is `inf`; NaN is refused); a string is an expression. `defs` is `--def`: the body of an expression `def`, by name (`defs={"service": "~erlang(4, 1)"}`). A relative trace is read next to the program file for `compile(path)`, and from the current directory with `trace=`, `source=` or `Program.from_json`, as `serq run` does. |
-| `Program.to_json()`, `Program.from_json(s)` | The IR as JSON (`serq ir`), and back. |
-| `run(program)` | A run. Runs in threads proceed in parallel. |
-| `Report.json()` | The summary `serq run --json` prints. |
-| `Report.serq_version`, `.horizon`, `.end`, `.warmup`, `.seed`, `.events`, `.arrivals`, `.ended`, `.turns`, `.mean_live` | The summary's fields, by the same names. A field JSON writes as `null` is the number the run computed, which is not finite (NaN, or ±inf). |
-| `Report.observes` | The observations by name (a new dict on each access, in the program's order), each an `Observe`: `name`, `count`, `mean`, `ci` (batch-means 95 % half-width, +inf below 40 samples), `cv2`, `p99` as in the summary, and its samples `samples`, `times`, `sessions`, `turns` as `--dump` writes them (each access makes a new list: bind it once). |
-| `Report.stages`, `Report.pools` | One `Stage` or `Pool` per row of the summary, with its fields by the same names. |
-| `Report.gauges` | The gauges by name (a new dict on each access, in the program's order), each a `Gauge`: `name`, `mean` (time average over `[warmup, end]`), `ci` (batch-means 95 % half-width over 20 windows), `min`, `max` (held for a positive time) as in the summary, and its change points `times`, `values` as `--dump` writes them (`gauge/NAME.csv`). |
-| `Report.observe(name)`, `.gauge(name)`, `.stage(name)`, `.stages_named(name)`, `.pool(name)`, `.pools_named(name)` | One by name, or `None`, as `serq::Report` has them; `stages_named` and `pools_named` give every member of an array, in index order (`index`). |
-| `Rng(seed)` | The generator a run draws from, rand 0.9's `StdRng` seeded by `seed_from_u64`: `next_u32()`, `next_u64()`, `random_f64()` in [0, 1), and `range_u64`, `range_u32`, `range_f64(low, high)`, both ends included. A run seeded `s` draws its arrivals from `Rng(s)`; a check that reproduces a run's draws uses it rather than a port of rand. An empty range raises `ValueError`. |
-| `read_trace(path)` | A trace's sessions, each a list of its turns `(new, out, think, forced)`: the corpus a replay draws its sessions from, read as a replay reads it. A relative path is read from the current directory. |
-| `draw(path=None, *, source=None, sets={}, defs={}, format="tikz")` | The [deployment view](visualization/index.md), as `serq draw` prints it: a string of TikZ or SVG (`IPython.display.SVG(...)` shows the latter in a notebook). It takes the file or text (text given as `source=` can import `std/args`; for relative file libraries, give the program path), not a `Program`: for a program split into a workload and a server it draws what one request runs, and a `Program` compiled to run has the whole session in its place. IR (`.json`) is drawn whole, and refuses `sets` and `defs`, as `serq draw` does. |
-| `IR_VERSION`, `REPORT_VERSION`, `__version__` | The IR it reads, the shape of the report (the field names of `Report.json()`, which `Report`, `Observe`, `Gauge`, `Stage` and `Pool` carry as attributes; a renamed, removed or retyped field bumps it, an added one does not, by the rules of the IR's Stability), and the serq version it is. |
+### Compilation and execution
 
-A program that does not compile or run raises `ValueError` with serQ's message; an argument of the wrong type (`seed=-1`, `sets={"x": None}`) raises `TypeError` or `OverflowError`, as Python does.
+| Function or class | Description |
+|---|---|
+| [`pyserq.compile`](python/compile.md) | Compile a file or source text with parameter and run overrides. |
+| [`pyserq.Program`](python/program.md) | A compiled program; serialize or load its IR. |
+| [`pyserq.run`](python/run.md) | Simulate a compiled program and return a report. |
+
+### Results
+
+| Class | Description |
+|---|---|
+| [`pyserq.Report`](python/report.md) | Run metadata, named lookups and JSON output. |
+| [`pyserq.Observe`](python/observe.md) | Sample statistics and per-session records. |
+| [`pyserq.Gauge`](python/gauge.md) | Time-weighted statistics and change points. |
+| [`pyserq.Stage`](python/stage.md) | Queue, service, iteration and inter-token statistics. |
+| [`pyserq.Pool`](python/pool.md) | Allocation, cache, admission and preemption statistics. |
+
+### Visualization and inputs
+
+| Function or class | Description |
+|---|---|
+| [`pyserq.draw`](python/draw.md) | Render a deployment as TikZ or SVG. |
+| [`pyserq.read_trace`](python/read-trace.md) | Read a replay CSV into sessions and turns. |
+| [`pyserq.Rng`](python/rng.md) | Draw from the interpreter's random-number generator. |
+
+## Version constants
+
+| Name | Type | Meaning |
+|---|---|---|
+| `pyserq.__version__` | `str` | Version of the installed serQ implementation. |
+| `pyserq.IR_VERSION` | `int` | IR version accepted by this build. See [IR stability](ir.md#stability). |
+| `pyserq.REPORT_VERSION` | `int` | Schema version of [`Report.json()`](python/report.md#json). |
+
+## Errors and types
+
+Compilation, validation, trace-loading and simulation errors raise
+`ValueError` with serQ's diagnostic. Wrong Python argument types raise
+`TypeError`; integers outside the accepted unsigned range raise
+`OverflowError`. Individual entries describe additional conditions.
+
+Signatures below use Python type notation to describe accepted values and
+returns. A `*` marks keyword-only arguments. `None` for a compile override
+keeps the program's setting; it does not select a new default.
+
+For language syntax, see the [language API](api/index.md). For command-line
+options and report definitions, see the [CLI reference](reference/cli.md).

@@ -65,3 +65,29 @@ residents, while `residents` counts all residents.
 
 [`hidden`](workload.md#hidden) attributes are legal at `Session` and in a
 claim's `Given` condition. Scheduler expressions cannot read them.
+
+## Examples
+
+A complete program:
+
+```serq
+fn main() {
+  stage engine : step {
+    budget 8;
+    cost 1 + 0.1 * tokens;
+    serve by (remaining);
+  }
+  workload { arrive batch(2); }
+  session {
+    run engine prefill (8);
+    observe finished = now;
+    end;
+  }
+  run { horizon 10; }
+}
+```
+
+## See also
+
+[Functions](functions.md), [attributes](attributes.md),
+[hidden attributes](workload.md#hidden).

@@ -79,3 +79,27 @@ hold kv (known) reserve (known), reqs (0) reserve (1) … {
   …
 } cache (prompt + o);
 ```
+
+## Examples
+
+A complete program:
+
+```serq
+fn main() {
+  stage engine : step { budget 8; cost 1; }
+  stage tool : delay;
+  workload { arrive batch(1); }
+  session {
+    prefill (8);
+    decode (2);
+    tool (3);
+    observe finished = now;
+    end;
+  }
+  run { horizon 10; }
+}
+```
+
+## See also
+
+[Statements](statements.md), [stages](stage.md), [workloads](workload.md).

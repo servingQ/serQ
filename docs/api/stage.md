@@ -229,3 +229,26 @@ stage engine : step {
   memory kv;
 }
 ```
+
+## Examples
+
+A complete program:
+
+```serq
+fn main() {
+  stage engine : step { budget 8; cost 1; }
+  workload { arrive batch(2); }
+  session {
+    run engine prefill (8);
+    run engine decode (2);
+    observe finished = now;
+    end;
+  }
+  run { horizon 10; }
+}
+```
+
+## See also
+
+[`run`](statements.md#run), [context variables](context.md),
+[`pyserq.Stage`](../python/stage.md).

@@ -125,3 +125,17 @@ nav:
       - reference/cli.md
   - Python Reference:
       - python.md
+      - Compilation and execution:
+          - pyserq.compile: python/compile.md
+          - pyserq.Program: python/program.md
+          - pyserq.run: python/run.md
+      - Results:
+          - pyserq.Report: python/report.md
+          - pyserq.Observe: python/observe.md
+          - pyserq.Gauge: python/gauge.md
+          - pyserq.Stage: python/stage.md
+          - pyserq.Pool: python/pool.md
+      - Visualization and inputs:
+          - pyserq.draw: python/draw.md
+          - pyserq.read_trace: python/read-trace.md
+          - pyserq.Rng: python/rng.md

@@ -203,3 +203,27 @@ spill TIER via LINK (work) when (pred);
 | `LINK` | `stage` | | The stage the write takes time on. |
 | `work` | `expr` | `Evict` | Work the write puts on `LINK`. |
 | `pred` | `expr` | `Evict` | The prefix is spilled when this is non-zero. May read `size`. |
+
+## Examples
+
+A complete program:
+
+```serq
+fn main() {
+  pool slots { cap 2; }
+  stage svc : delay;
+  workload { arrive batch(3); }
+  session {
+    set t0 = now;
+    hold slots (1) { run svc (2); }
+    observe latency = now - t0;
+    end;
+  }
+  run { horizon 10; }
+}
+```
+
+## See also
+
+[`hold`](statements.md#hold), [pool queries](functions.md#pool),
+[`pyserq.Pool`](../python/pool.md).

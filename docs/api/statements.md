@@ -237,3 +237,26 @@ end;
 ```
 
 The session leaves. It releases every hold but keeps its cached prefixes.
+
+## Examples
+
+A complete program:
+
+```serq
+fn main() {
+  pool slots { cap 1; }
+  stage svc : fifo;
+  workload { arrive batch(2); }
+  session {
+    set t0 = now;
+    hold slots (1) { run svc (2); }
+    observe latency = now - t0;
+    end;
+  }
+  run { horizon 10; }
+}
+```
+
+## See also
+
+[Serving vocabulary](serving.md), [pools](pool.md), [stages](stage.md).

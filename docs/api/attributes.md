@@ -29,3 +29,27 @@ With a [`trace`](workload.md#trace), `turn;` also sets:
 
 A program that resumes after a preemption reads `computed`; one that
 recomputes from the prompt alone does not read it.
+
+## Examples
+
+A complete program:
+
+```serq
+fn main() {
+  stage svc : delay;
+  workload { arrive batch(2); }
+  session {
+    turn;
+    run svc (1);
+    observe request_id = serial;
+    observe current_turn = turn_no;
+    end;
+  }
+  run { horizon 10; }
+}
+```
+
+## See also
+
+[Context variables](context.md), [trace workloads](workload.md#trace),
+[`set`](statements.md#set).
