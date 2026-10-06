@@ -42,6 +42,27 @@ Prefer serving concepts such as `waiting_class` over names describing an
 expression's mechanics. Keep scheduling choices explicit in the program.
 Extract a `def` when its name explains a policy or avoids meaningful duplication;
 keep a short expression inline when a separate definition obscures its use.
+
+Use the same names for the same roles across examples and documentation:
+
+| Role | Name |
+|---|---|
+| Pool limiting concurrent requests | `reqs` (capacity in request slots) |
+| KV memory pool | `kv` |
+| Generic service stage | `svc` |
+| LLM inference stage | `engine` |
+| Request response time, including queueing and service | `response` |
+| Cache-hit indicator (0 or 1) | `hit` (its mean is the hit rate) |
+
+These are naming conventions, not reserved names. Use `response` for the
+observation called sojourn time in queueing theory or end-to-end latency in
+serving. State where its clock starts and ends. A `hit` predicate and its
+sampled population must remain explicit: full-prefix reuse and any prefix
+reuse are different measurements even when both report a hit rate.
+Keep different roles distinct: `mem` is generic memory, `live` limits whole
+sessions, and `reqs` limits requests within them. `latency` on a link is a
+language construct for a transfer's fixed delay.
+
 State units beside settings when the name alone does not make them clear.
 Comments should explain assumptions and source correspondence, not repeat syntax.
 

@@ -686,7 +686,7 @@ def gen_cache():
     keys = sorted(rows)
     horizon = max(r[2] for r in rows.values()) + 5
     ob = {n: i for i, n in enumerate(ir["observes"])}
-    for n in ("sent", "ttft", "latency", "cached_tokens"):
+    for n in ("sent", "ttft", "response", "cached_tokens"):
         if n not in ob:
             raise Fragment(f"cache_trace: no observation `{n}`")
 
@@ -702,7 +702,7 @@ send step, time to first token, latency, cached tokens at admission. -/
 theorem vllm_cache_trace :
     let m := Exec.runW {lean.deployment()} {horizon}
       {lean.workload()} vllmTurn
-    (observed m {ob["sent"]}, observed m {ob["ttft"]}, observed m {ob["latency"]}, observed m {ob["cached_tokens"]}) =
+    (observed m {ob["sent"]}, observed m {ob["ttft"]}, observed m {ob["response"]}, observed m {ob["cached_tokens"]}) =
       ({col(lambda r: r[0])},
        {col(lambda r: r[1] - r[0])},
        {col(lambda r: r[2] - r[0])},

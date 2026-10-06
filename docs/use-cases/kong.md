@@ -28,7 +28,7 @@ The model of §3:
 | a request holds its peak $s + o$ from admission | `hold kv (s + o) { ... }` |
 | one decode token per step, every active request | `budget 1000000; cost 1;` and `run engine decode (o);` |
 | burst arrivals | `arrive batch(N);` |
-| $\mathrm{vol}_i$, $o_i$, TEL | `observe vol`, `observe out`, `observe latency = now;` |
+| $\mathrm{vol}_i$, $o_i$, TEL | `observe vol`, `observe out`, `observe response = now;` |
 | $\alpha = P/M$ | `let P = 2500;` and `given (s + o <= P ...)` |
 
 The program admits a request when its peak fits next to the active requests' *peaks*. The paper's forward-looking check admits it when the active requests' future memory leaves room for its peak, which never refuses more. The proof of Theorem 3.2 uses one fact about admission: while request $j$ waits, the active peaks exceed $(1-\alpha)M$. Both rules give it. With the peak held from admission, the memory the program reports is the peaks' sum, not the trapezoid's.
@@ -78,10 +78,10 @@ The first is a claim of the program, about its own runs:
 
 ```serq
 claim queueing_bound given (s + o <= P && o >= 1):
-  at end ((M - P) * (total(latency) - total(out)) <= 2 * (prefix_total(vol) - total(vol)));
+  at end ((M - P) * (total(response) - total(out)) <= 2 * (prefix_total(vol) - total(vol)));
 ```
 
-`total(latency) - total(out)` is $\sum_j W_j$. Every request arrives at 0, so its latency is its waiting time plus its $o_j$ steps. `prefix_total(vol)` is $\sum_k \sum_{i \le k} \mathrm{vol}_{(i)}$, the volumes sorted ascending, and `prefix_total(vol) - total(vol)` is $\sum_j \sum_{i \prec j} \mathrm{vol}_i$. `given` is the paper's hypothesis $p_i \le \alpha M$, with $o \ge 1$. The second and third propositions are about OPT, a schedule no program runs, so they are Lean theorems that take the claim as their premise.
+`total(response) - total(out)` is $\sum_j W_j$. Every request arrives at 0, so its latency is its waiting time plus its $o_j$ steps. `prefix_total(vol)` is $\sum_k \sum_{i \le k} \mathrm{vol}_{(i)}$, the volumes sorted ascending, and `prefix_total(vol) - total(vol)` is $\sum_j \sum_{i \prec j} \mathrm{vol}_i$. `given` is the paper's hypothesis $p_i \le \alpha M$, with $o \ge 1$. The second and third propositions are about OPT, a schedule no program runs, so they are Lean theorems that take the claim as their premise.
 
 ## The proof in Lean
 
@@ -135,10 +135,10 @@ serq run examples/papers/kong_svf.sq --horizon 100000 --warmup 0 --seed 1
 Selected report columns ($M=20\,000$, $P=2\,500$):
 
 ```
-observe  count         mean    cv2          p99
-out        200     252.8300  0.324     496.0000
-vol        200  304613.7000  0.645  895093.0000
-latency    200    1144.9800  0.860    3760.0000
+observe   count         mean    cv2          p99
+out         200     252.8300  0.324     496.0000
+vol         200  304613.7000  0.645  895093.0000
+response    200    1144.9800  0.860    3760.0000
 
 claim           kind    result
 queueing_bound  at end  holds

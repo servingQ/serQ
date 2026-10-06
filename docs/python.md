@@ -19,7 +19,7 @@ import pyserq
 
 source = """
 fn main() {
-  pool slots { cap 2; }
+  pool reqs { cap 2; }
   stage svc : fifo;
   workload {
     arrive batch(4);
@@ -27,16 +27,16 @@ fn main() {
   }
   server {
     set t0 = now;
-    hold slots (1) { run svc (2); }
-    observe latency = now - t0;
+    hold reqs (1) { run svc (2); }
+    observe response = now - t0;
   }
-  gauge occupied = used(slots);
+  gauge occupied = used(reqs);
 }
 """
 report = pyserq.run(pyserq.compile(source=source, horizon=10))
-latency = report.observe("latency")
-assert latency is not None
-print(latency.mean)
+response = report.observe("response")
+assert response is not None
+print(response.mean)
 ```
 
 ## API

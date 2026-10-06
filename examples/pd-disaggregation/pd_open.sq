@@ -39,7 +39,7 @@ fn main() {
       run link (kv / bnet);
       run decode (sd / gD);
     }
-    observe latency = now - t0;
+    observe response = now - t0;
   }
 
 

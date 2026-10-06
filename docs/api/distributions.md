@@ -120,7 +120,7 @@ fn main() {
   server {
     set t0 = now;
     run svc (~erlang(4, 1));
-    observe latency = now - t0;
+    observe response = now - t0;
   }
 }
 ```
