@@ -85,6 +85,7 @@ here. This directory is the record of **applying** them.
 | [Braced definitions](braced-definitions.md) | One braced spelling for expression and statement definitions; unchanged expansion and IR | implemented |
 
 | [Sizes and costs](size-and-cost.md) | Workload-owned request sizes, explicit resource costs, and IR validation without a new request execution frame | IR 12 |
+| [Prefill and decode are a run's mode](run-modes.md) | `prefill W;` and `decode W;` removed; `run E prefill (…)` names the engine; unchanged IR | implemented |
 
 A new design document adds a row to this table.
 

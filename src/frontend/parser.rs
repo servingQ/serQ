@@ -387,21 +387,18 @@ enum Side {
 }
 
 /// A serving form: a statement that desugars to `run` on the stage that
-/// plays the role.
+/// plays the role. Prefill and decode are not among them: on a step engine
+/// they are the run's mode, written `run E prefill (…)`.
 #[derive(Clone, Copy, PartialEq)]
 enum Role {
-    Prefill,
     Transfer,
-    Decode,
     Tool,
 }
 
 impl Role {
     fn of(kw: &str) -> Option<Role> {
         match kw {
-            "prefill" => Some(Role::Prefill),
             "transfer" => Some(Role::Transfer),
-            "decode" => Some(Role::Decode),
             "tool" => Some(Role::Tool),
             _ => None,
         }
@@ -409,9 +406,7 @@ impl Role {
 
     fn keyword(self) -> &'static str {
         match self {
-            Role::Prefill => "prefill",
             Role::Transfer => "transfer",
-            Role::Decode => "decode",
             Role::Tool => "tool",
         }
     }
@@ -419,19 +414,8 @@ impl Role {
     /// The stage names that play the role by default.
     fn names(self) -> &'static [&'static str] {
         match self {
-            Role::Prefill => &["prefill"],
             Role::Transfer => &["link", "transfer"],
-            Role::Decode => &["decode"],
             Role::Tool => &["tool"],
-        }
-    }
-
-    /// The run mode on a step engine, for the roles an engine plays.
-    fn step_mode(self) -> Option<RunMode> {
-        match self {
-            Role::Prefill => Some(RunMode::Prefill),
-            Role::Decode => Some(RunMode::Decode),
-            Role::Transfer | Role::Tool => None,
         }
     }
 }
@@ -3731,6 +3715,16 @@ impl Parser {
             out.extend(self.serving(role)?);
             return Ok(());
         }
+        if let Tok::Ident(s) = self.peek()
+            && (s == "prefill" || s == "decode")
+            && *self.peek_at(1) != Tok::Dot
+        {
+            let s = s.clone();
+            return self.err(format!(
+                "`{s} W;` is gone: prefill and decode are the mode of a run on a step engine\n\
+                 help: write `run E {s} (cost(E, W));` on the step engine `E`, or `run S (cost(S, W));` on another stage"
+            ));
+        }
         if self.is_kw("Size") || self.is_kw("Cost") {
             return self.typed_declaration(out);
         }
@@ -4538,14 +4532,7 @@ impl Parser {
             let name = self.role_stage(role, at)?;
             Ref { span, name, index }
         };
-        let is_step = self
-            .stages
-            .iter()
-            .any(|(n, step)| *n == stage.name && *step);
-        let mode = match role.step_mode() {
-            Some(m) if is_step => m,
-            _ => RunMode::Plain,
-        };
+        let mode = RunMode::Plain;
         let raw_work = self.expr()?;
         let resources: Vec<_> = std::iter::once(&stage)
             .chain(also.iter())
@@ -4691,20 +4678,12 @@ impl Parser {
     /// name, else (for `prefill` and `decode`) the step engine; exactly one.
     fn role_stage(&self, role: Role, at: usize) -> PResult<String> {
         let kw = role.keyword();
-        let mut found: Vec<&str> = self
+        let found: Vec<&str> = self
             .stages
             .iter()
             .filter(|(n, _)| role.names().contains(&n.as_str()))
             .map(|(n, _)| n.as_str())
             .collect();
-        if found.is_empty() && role.step_mode().is_some() {
-            found = self
-                .stages
-                .iter()
-                .filter(|(_, step)| *step)
-                .map(|(n, _)| n.as_str())
-                .collect();
-        }
         match found.len() {
             1 => Ok(found[0].to_string()),
             0 => {
@@ -4714,15 +4693,10 @@ impl Parser {
                     .map(|n| format!("`{n}`"))
                     .collect::<Vec<_>>()
                     .join(" or ");
-                let engine = if role.step_mode().is_some() {
-                    ", declare a `step` engine"
-                } else {
-                    ""
-                };
                 self.err_at(
                     at,
                     format!(
-                        "no stage declared above plays `{kw}`: name a stage {names}{engine}, or write `{kw} on STAGE (...)`"
+                        "no stage declared above plays `{kw}`: name a stage {names}, or write `{kw} on STAGE (...)`"
                     ),
                 )
             }
@@ -5114,9 +5088,7 @@ mod tests {
 
         }} }}
         server {{
-          hold kv (cost(kv, K)) {{ prefill S; }} cache (cost(kv, K)) lease kv (inf);
           hold kvD (cost(kvD, K)) {{ transfer X from kv to kvD (K); }}
-          hold kv (cost(kv, K)) reserve (cost(kv, F)) reuse (cost(kv, R)) {{ decode D; }}
         }}"
             ),
             &format!(
@@ -5125,53 +5097,42 @@ mod tests {
 
         }} }}
         server {{
-          hold kv (cost(kv, K)) {{ run prefill (cost(prefill, S)); }} cache (cost(kv, K)) lease kv (inf);
           hold kvD (cost(kvD, K)) {{ run link (cost(link, X)); load kvD (cost(kvD, K)); release kv; }}
-          hold kv (cost(kv, K)) reserve (cost(kv, F)) reuse (cost(kv, R)) {{ run decode (cost(decode, D)); }}
         }}"
             ),
         );
     }
 
     #[test]
-    fn serving_forms_on_a_step_engine() {
-        same(
-            &format!(
-                "{ENGINE} workload {{ session {{ turn;
-
-        }} }}
-        server {{
-          hold kv (cost(kv, c)) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} cache (cost(kv, c));
-          tool (~exp(Z));
-        }}"
-            ),
-            &format!(
-                "{ENGINE} workload {{ session {{ turn;
-
-        }} }}
-        server {{
-          hold kv (cost(kv, c)) {{ run engine prefill (cost(engine, n)) growing kv; run engine decode (cost(engine, o - 1)) growing kv; }} cache (cost(kv, c));
-          run tool (cost(tool, ~exp(Z)));
-        }}"
-            ),
-        );
+    fn prefill_and_decode_are_the_mode_of_a_run() {
+        // a word that named the stage and the mode at once: the run says both
+        for (form, kw) in [
+            ("prefill (n) growing kv;", "prefill"),
+            ("decode on engine (o);", "decode"),
+        ] {
+            let e = parse(&main_source(&format!(
+                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) {{ {form} }}\n}}"
+            )))
+            .unwrap_err();
+            assert!(e.msg.contains(&format!("`{kw} W;` is gone")), "{e}");
+            assert!(
+                e.msg.contains(&format!("`run E {kw} (cost(E, W));`")),
+                "{e}"
+            );
+        }
     }
 
     #[test]
     fn serving_forms_name_their_stage_explicitly() {
         // the role's stage array, indexed
         same(
-            "stage prefill[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(prefill[j])); prefill[j] S;\n}",
-            "stage prefill[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(prefill[j])); run prefill[j] (cost(prefill, S));\n}",
+            "stage tool[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(tool[j])); tool[j] S;\n}",
+            "stage tool[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(tool[j])); run tool[j] (cost(tool, S));\n}",
         );
-        // any stage, with the mode a step engine needs
+        // any stage
         same(
-            &format!(
-                "{ENGINE} stage rep[2] : fifo; workload {{ session {{ turn; \n}} }}\nserver {{ prefill on rep[1] S; decode on engine (D);\n}}"
-            ),
-            &format!(
-                "{ENGINE} stage rep[2] : fifo; workload {{ session {{ turn; \n}} }}\nserver {{ run rep[1] (cost(rep, S)); run engine decode (cost(engine, D));\n}}"
-            ),
+            "stage rep[2] : fifo; workload { session { turn; \n} }\nserver { tool on rep[1] S;\n}",
+            "stage rep[2] : fifo; workload { session { turn; \n} }\nserver { run rep[1] (cost(rep, S));\n}",
         );
         // a stage named `transfer` plays transfer
         same(
@@ -5200,7 +5161,7 @@ mod tests {
         }} }}
         server {{
           hold kv (cost(kv, known)) at admission (known = computed < p ? p : computed + 1) {{
-            prefill (known - cached) growing kv;
+            run engine prefill (cost(engine, known - cached)) growing kv;
           }}
         }}"
             ),
@@ -5366,11 +5327,10 @@ mod tests {
         }}"
             ),
         );
-        // statements, with references for pools and stages; the use is
-        // parsed where it stands, so a serving form finds its stage there
+        // statements, with references for pools and stages
         same(
             "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
-        def put(p, s, n) { hold p (cost(p, n)) { prefill on s (n) growing p; } cache (cost(p, n)); }
+        def put(p, s, n) { hold p (cost(p, n)) { run s prefill (cost(s, n)) growing p; } cache (cost(p, n)); }
         workload { session { turn; end;
         } }
         server { choose j in 2 by (used(kv[j])); put(kv[j], E[j], k + 1);
@@ -5382,19 +5342,19 @@ mod tests {
         } }
         server {
           choose j in 2 by (used(kv[j]));
-          hold kv[j] (cost(kv[j], (k + 1))) { run E[j] prefill (cost(E, (k + 1))) growing kv[j]; } cache (cost(kv[j], (k + 1)));
+          hold kv[j] (cost(kv[j], (k + 1))) { run E[j] prefill (cost(E[j], (k + 1))) growing kv[j]; } cache (cost(kv[j], (k + 1)));
         }",
         );
         // the side is the use's: a `hold` in a server
         same(
             &format!(
-                "{ENGINE} def take(n) {{ hold kv (cost(kv, n)) {{ prefill (n) growing kv; }} }}
+                "{ENGINE} def take(n) {{ hold kv (cost(kv, n)) {{ run engine prefill (cost(engine, n)) growing kv; }} }}
         workload {{ session {{ turn; end; }} }}
         server {{ take(4); }}"
             ),
             &format!(
                 "{ENGINE} workload {{ session {{ turn; end; }} }}
-        server {{ hold kv (cost(kv, 4)) {{ prefill (4) growing kv; }} }}"
+        server {{ hold kv (cost(kv, 4)) {{ run engine prefill (cost(engine, 4)) growing kv; }} }}"
             ),
         );
     }
@@ -5634,19 +5594,23 @@ mod tests {
     #[test]
     fn serving_forms_need_exactly_one_stage() {
         let e = parse(&main_source(
-            "stage svc : fifo; workload { session { turn; \n} }\nserver { prefill S;\n}",
+            "stage svc : fifo; workload { session { turn; \n} }\nserver { tool S;\n}",
         ))
         .unwrap_err();
         assert!(
-            e.msg.contains("no stage declared above plays `prefill`"),
+            e.msg.contains("no stage declared above plays `tool`"),
             "{e}"
         );
         assert_eq!((e.line, e.col), (3, 10));
         let e =
-            parse(&main_source("stage a : step { cost 1; } stage b : step { cost 1; } workload { session { turn; \n} }\nserver { decode D;\n}",
+            parse(&main_source("pool a { cap 1; } pool b { cap 1; } stage link : fifo; stage transfer : fifo; workload { session { turn; \n} }\nserver { transfer X from a to b (1);\n}",
         ))
                 .unwrap_err();
-        assert!(e.msg.contains("several stages play `decode` (a, b)"), "{e}");
+        assert!(
+            e.msg
+                .contains("several stages play `transfer` (link, transfer)"),
+            "{e}"
+        );
         let e = parse(&main_source("stage engine : step { cost 1; } workload { session { turn; \n} }\nserver { transfer X;\n}",
         )).unwrap_err();
         assert!(
@@ -5690,8 +5654,8 @@ mod tests {
           set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
           at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            prefill (prompt - cached) growing kv;
-            decode (o - 1) growing kv;
+            run engine prefill (cost(engine, prompt - cached)) growing kv;
+            run engine decode (cost(engine, o - 1)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
         }}"
             ),
@@ -5709,8 +5673,8 @@ mod tests {
           set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
           at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            prefill (prompt - cached) growing kv;
-            decode (o - 1) growing kv;
+            run engine prefill (cost(engine, prompt - cached)) growing kv;
+            run engine decode (cost(engine, o - 1)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
           set K = prompt + o;
         }}"

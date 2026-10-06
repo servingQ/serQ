@@ -16,7 +16,7 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
           hold kv (cost(kv, 1))\n\
           at admission (hit = 1,\n\
           value = hit + 1) {\n\
-            prefill (1) growing kv;\n\
+            run engine prefill (cost(engine, 1)) growing kv;\n\
           } cache (cost(kv, 1));\n\
         }\n\
         \n";

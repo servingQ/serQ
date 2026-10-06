@@ -87,9 +87,9 @@ fn main() {
       observe cached_tokens = c;
       observe prefix = prev + prevout;
       observe sent = t0;
-      prefill (known - c) growing kv;
+      run engine prefill (cost(engine, known - c)) growing kv;
       branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
-      decode (out - 1 - (known - prompt)) growing kv;
+      run engine decode (cost(engine, out - 1 - (known - prompt))) growing kv;
     } cache (cost(reqs, kv, prompt + out - 1));   // every computed token, full blocks (kv_cache_manager.py:602)
     observe response = now - t0;
   }

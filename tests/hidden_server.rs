@@ -32,7 +32,7 @@ fn refused(server: &str, fragments: &[&str]) {
 
 #[test]
 fn the_server_may_run_cache_and_observe_by_a_hidden_attribute() {
-    let ok = "hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; decode (o - 1) growing kv; } cache (cost(kv, prompt + o));
+    let ok = "hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; run E decode (cost(E, o - 1)) growing kv; } cache (cost(kv, prompt + o));
               observe length = o;";
     compile_source(&common::main_source(&program(ok)), &common::horizon(100.0)).unwrap();
 }
@@ -40,14 +40,14 @@ fn the_server_may_run_cache_and_observe_by_a_hidden_attribute() {
 #[test]
 fn the_server_may_not_decide_on_a_hidden_attribute() {
     refused(
-        "branch (o > 2) { hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; } } else { observe skipped = 1; }",
+        "branch (o > 2) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { observe skipped = 1; }",
         &[
             "`o` is hidden from the scheduler, but the server's branch reads it",
             "decode (o)",
         ],
     );
     refused(
-        "choose j in 2 by (o); hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; }",
+        "choose j in 2 by (o); hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; }",
         &["server's choice reads it"],
     );
 }
@@ -57,11 +57,11 @@ fn the_server_may_not_decide_on_a_hidden_attribute() {
 #[test]
 fn what_the_server_sets_from_a_hidden_attribute_is_hidden() {
     refused(
-        "set long = o > 2; hold kv (cost(kv, long ? prompt : 16)) { prefill (prompt) growing kv; }",
+        "set long = o > 2; hold kv (cost(kv, long ? prompt : 16)) { run E prefill (cost(E, prompt)) growing kv; }",
         &["`long` is set from the hidden `o` in the server, but the server's admission reads it"],
     );
     refused(
-        "set a = o; set b = a + 1; hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; grow kv (cost(kv, b)); }",
+        "set a = o; set b = a + 1; hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; grow kv (cost(kv, b)); }",
         &["`b` is set from the hidden `o`", "allocation"],
     );
 }
@@ -72,7 +72,7 @@ fn a_loop_carries_what_it_sets_round_to_its_start() {
     refused(
         "set n = 0;
          loop { branch (n > 3) { observe long = 1; } else { }
-                hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; }
+                hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; }
                 set n = o; }",
         &["`n` is set from the hidden `o`", "branch"],
     );
@@ -84,12 +84,12 @@ fn a_top_level_session_cannot_bypass_the_server_check() {
     let src = "pool kv { cap 1000; block 16; }
                stage E : step { cost 1; memory kv; }
                workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } }
-               session { branch (o > 2) { hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; } } else { } end; }
+               session { branch (o > 2) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { } end; }
                ";
     let err = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap_err();
     assert!(err.contains("`session` belongs inside `workload`"), "{err}");
     refused(
-        "branch (o > 2) { hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; } } else { }",
+        "branch (o > 2) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { }",
         &["hidden from the scheduler"],
     );
 }
@@ -100,7 +100,7 @@ fn a_top_level_session_cannot_bypass_the_server_check() {
 #[test]
 fn a_run_reveals_what_its_work_reads() {
     let after = "set long = o > 2;
-                 hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; decode (o - 1) growing kv; } cache (cost(kv, prompt + o));
+                 hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; run E decode (cost(E, o - 1)) growing kv; } cache (cost(kv, prompt + o));
                  branch (long) { observe was_long = 1; } else { observe was_long = 0; }
                  branch (o > 3) { observe longer = 1; } else { }";
     compile_source(
@@ -110,8 +110,8 @@ fn a_run_reveals_what_its_work_reads() {
     .unwrap();
     // before the run ends, inside the hold, it is still hidden
     refused(
-        "hold kv (cost(kv, prompt)) { prefill (prompt) growing kv;
-                            branch (o > 2) { decode (o - 1) growing kv; } else { decode (1) growing kv; } }",
+        "hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv;
+                            branch (o > 2) { run E decode (cost(E, o - 1)) growing kv; } else { run E decode (cost(E, 1)) growing kv; } }",
         &["`o` is hidden from the scheduler, but the server's branch reads it before a run reveals it"],
     );
 }
@@ -121,8 +121,8 @@ fn a_run_reveals_what_its_work_reads() {
 fn a_reveal_on_one_arm_only_does_not_reveal() {
     refused(
         "hold kv (cost(kv, prompt)) {
-           prefill (prompt) growing kv;
-           branch (prompt > 10) { decode (o - 1) growing kv; } else { decode (1) growing kv; }
+           run E prefill (cost(E, prompt)) growing kv;
+           branch (prompt > 10) { run E decode (cost(E, o - 1)) growing kv; } else { run E decode (cost(E, 1)) growing kv; }
          }
          branch (o > 2) { observe long = 1; } else { }",
         &["`o` is hidden from the scheduler", "branch"],
@@ -155,7 +155,7 @@ fn hidden_values_propagate_through_every_loop_pass() {
             .map(|i| format!("set x{i} = x{}; ", i + 1))
             .collect::<String>();
         chain.push_str(&format!("set x{} = o;", depth - 1));
-        let work = "hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; }";
+        let work = "hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; }";
         refused(
             &format!("{init} while (x0 == 0) {{ {work} {chain} }}"),
             &["`x0` is set from the hidden `o`", "server's while reads it"],
@@ -169,7 +169,7 @@ fn hidden_values_propagate_through_every_loop_pass() {
         );
         // A run revealing o before the decision makes the same chain legal.
         let safe = format!(
-            "hold kv (cost(kv, prompt)) {{ prefill (prompt) growing kv; decode (o) growing kv; }}
+            "hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, prompt)) growing kv; run E decode (cost(E, o)) growing kv; }}
           {init} while (x0 == 0) {{ {work} {chain} }}"
         );
         compile_source(

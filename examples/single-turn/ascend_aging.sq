@@ -29,8 +29,8 @@ fn main() {
     hold reqs (cost(reqs, 1)), kv (cost(kv, prompt + out)) {
       observe selected = serial;
       observe admitted = now;
-      prefill prompt;
-      decode out;
+      run engine prefill (cost(engine, prompt));
+      run engine decode (cost(engine, out));
     }
     observe response = now;
   }

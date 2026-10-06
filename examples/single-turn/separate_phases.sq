@@ -22,9 +22,9 @@ fn main() {
     set t0 = now;
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
          at admission (left = budget_left(engine)) {
-      prefill prompt growing kv;
+      run engine prefill (cost(engine, prompt)) growing kv;
       observe ttft = now - t0;
-      branch (serial == 0) { decode (2) growing kv; }
+      branch (serial == 0) { run engine decode (cost(engine, 2)) growing kv; }
     }
     observe response = now - t0;
   }

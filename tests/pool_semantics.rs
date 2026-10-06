@@ -611,7 +611,7 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
     let request =
         "hold kv (cost(kv, min(cachedin(kv), 992) + 8)) at admission (hit = min(cachedin(kv), 992)) {
                      observe hit = cached > 0;
-                     prefill on engine (1000 - cached) growing kv;
+                     run engine prefill (cost(engine, 1000 - cached)) growing kv;
                    } cache (cost(kv, 1000));";
     for (wrap, want_hit) in [
         (request.to_string(), 1.0),
@@ -824,7 +824,7 @@ fn a_hold_takes_a_pool_once() {
         }
         server {
           set prompt = 64;
-          hold kv (cost(kv, 16)), kv (cost(kv, 16)) { prefill prompt growing kv; decode 40 growing kv; }
+          hold kv (cost(kv, 16)), kv (cost(kv, 16)) { run engine prefill (cost(engine, prompt)) growing kv; run engine decode (cost(engine, 40)) growing kv; }
         }
         ";
     let e = serq::compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap_err();
@@ -955,8 +955,8 @@ fn a_held_reservation_counts_against_later_admissions() {
         server {{
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) reserve (cost(kv, 10)) {{
             observe admitted = now;
-            prefill on engine (4) growing kv;
-            decode on engine (6) growing kv;
+            run engine prefill (cost(engine, 4)) growing kv;
+            run engine decode (cost(engine, 6)) growing kv;
           }} cache (cost(reqs, kv, 0));
         }}
 

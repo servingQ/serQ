@@ -52,7 +52,7 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
                serve step {{ cost 1; memory kv; }}
                decode (prompt) {{
                  hold kv (cost(kv, min(prompt, budget_left(E)))) reserve (cost(kv, prompt)) {{
-                   prefill (prompt) growing kv; decode (o - 1) growing kv;
+                   run E prefill (cost(E, prompt)) growing kv; run E decode (cost(E, o - 1)) growing kv;
                  }} cache (cost(kv, prompt + o));
                }}
              }}
@@ -64,7 +64,7 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
              stage E[2] : step {{ cost 1; memory kv; }}
              server {{
                hold kv[j] (cost(kv, min(prompt, budget_left(E[j])))) reserve (cost(kv, prompt)) {{
-                 prefill on E[j] (prompt) growing kv[j]; decode on E[j] (o - 1) growing kv[j];
+                 run E[j] prefill (cost(E, prompt)) growing kv[j]; run E[j] decode (cost(E, o - 1)) growing kv[j];
                }} cache (cost(kv, prompt + o));
                observe done = now;
              }}
@@ -86,7 +86,7 @@ fn a_queue_family_sized_by_an_aggregate() {
              queue E[N] : decode {{
                pool kv {{ cap 100; block 16; admit via E; }}
                serve step {{ cost 1; memory kv; }}
-               decode (prompt) {{ hold kv (cost(kv, prompt)) {{ prefill (prompt) growing kv; }} }}
+               decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, prompt)) growing kv; }} }}
              }}
              {WORKLOAD}"
         )
@@ -120,13 +120,13 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
       queue D[ND] : decode {
         pool kv { cap 1000; block 16; }
         serve step { cost 1; memory kv; }
-        decode (prompt) { hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; mark first; } }
+        decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; mark first; } }
         decode (prompt) from src {
           set c = 0;
           hold kv (cost(kv, prompt)) {
             nic[self].transfer (prompt - c) from src to kv (prompt - 1);
-            prefill (1) growing kv; mark first;
-            decode (o - 1) growing kv;
+            run D prefill (cost(D, 1)) growing kv; mark first;
+            run D decode (cost(D, o - 1)) growing kv;
           }
         }
       }
@@ -146,8 +146,8 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
           set c = 0;
           hold kvD[j] (cost(kvD, prompt)) {
             transfer on nic[j] ((prompt - c) / Bw) from kvP to kvD[j] (prompt - 1);
-            prefill on D[j] (1) growing kvD[j]; set first = now;
-            decode on D[j] (o - 1) growing kvD[j];
+            run D[j] prefill (cost(D, 1)) growing kvD[j]; set first = now;
+            run D[j] decode (cost(D, o - 1)) growing kvD[j];
           }
           observe ttft = first - t0;
         }
@@ -188,12 +188,12 @@ fn a_read_over_both_links_is_the_flat_read() {
       queue D[ND] : decode {
         pool kv { cap 1000; block 16; }
         serve step { cost 1; memory kv; }
-        decode (prompt) { hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; } }
+        decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; } }
         decode (prompt) from src {
           hold kv (cost(kv, prompt)) {
             run setup (cost(setup, 1));
             transfer on egress[src], ingress[self] (prompt) from src to kv (prompt - 1);
-            decode (o - 1) growing kv;
+            run D decode (cost(D, o - 1)) growing kv;
           }
         }
       }
@@ -215,7 +215,7 @@ fn a_read_over_both_links_is_the_flat_read() {
           hold kvD[j] (cost(kvD, prompt)) {
             run setup (cost(setup, 1));
             transfer on egress[i], ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
-            decode on D[j] (o - 1) growing kvD[j];
+            run D[j] decode (cost(D, o - 1)) growing kvD[j];
           }
         }
         workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } }
@@ -243,11 +243,11 @@ fn a_link_latency_is_a_wait_before_the_read() {
       queue D[2] : decode {
         pool kv { cap 1000; block 16; }
         serve step { cost 1; memory kv; }
-        decode (prompt) { hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; } }
+        decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; } }
         decode (prompt) from src {
           hold kv (cost(kv, prompt)) {
             transfer on egress[src], ingress[self] (prompt) from src to kv (prompt - 1);
-            decode (o - 1) growing kv;
+            run D decode (cost(D, o - 1)) growing kv;
           }
         }
       }
@@ -271,7 +271,7 @@ fn a_link_latency_is_a_wait_before_the_read() {
             run egressL[i] (cost(egressL, x1));
             run ingressL[j] (cost(ingressL, x0));
             transfer on egress[i], ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
-            decode on D[j] (o - 1) growing kvD[j];
+            run D[j] decode (cost(D, o - 1)) growing kvD[j];
           }
         }
         workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } }
@@ -307,7 +307,7 @@ fn a_latency_is_the_links_constant() {
       queue D : decode {{
         pool kv {{ cap 1000; }}
         serve step {{ cost 1; memory kv; }}
-        decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }}
+        decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
         decode ({param}) from src {{
           hold kv (cost(kv, {param})) {{ transfer on egress, ingress ({param}) from src to kv ({param} - 1); }}
         }}
@@ -407,7 +407,7 @@ fn a_link_has_a_cost() {
       queue nic : link { serve ps(1); }
       queue P : prefill { pool kv { cap 100; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
       queue D : decode { pool kv { cap 100; } serve step { cost 1; memory kv; }
-        decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
+        decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         decode (p) from src { hold kv (cost(kv, p)) { BODY } } }
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } session { turn; end; } } server { gw.route(); }
       ";
@@ -436,7 +436,7 @@ fn an_admission_binding_sees_the_entry_only() {
     refused(
         "queue gw : gateway { route { set t0 = now; E.decode (prompt); } }
          queue E : decode { pool kv { cap 100; } serve step { cost 1; memory kv; }
-           decode (prompt) { hold kv (cost(kv, x)) at admission (x = prompt + t0) { prefill (1) growing kv; } } }
+           decode (prompt) { hold kv (cost(kv, x)) at admission (x = prompt + t0) { run E prefill (cost(E, 1)) growing kv; } } }
          workload { arrive batch(1); init { set prompt = 3; } session { turn; end; } } server { gw.route(); }
          ",
         "the header reads `t0`",
@@ -455,7 +455,7 @@ fn an_entry_sees_its_parameters_and_its_queue() {
     // the header: parameters, own pools and stage, constants
     refused(
         &program(
-            "hold kv (cost(kv, prompt + t0)) { prefill (1) growing kv; }",
+            "hold kv (cost(kv, prompt + t0)) { run E prefill (cost(E, 1)) growing kv; }",
             "",
         ),
         "the header reads `t0`",
@@ -464,14 +464,14 @@ fn an_entry_sees_its_parameters_and_its_queue() {
     // another attribute of the session
     refused(
         &program(
-            "hold kv (cost(kv, prompt)) { prefill (1) growing kv; observe w = now - t0; }",
+            "hold kv (cost(kv, prompt)) { run E prefill (cost(E, 1)) growing kv; observe w = now - t0; }",
             "",
         ),
         "reads `t0`, a session attribute set outside the queue",
     );
     assert!(
         parse(&common::main_source(&program(
-            "hold kv (cost(kv, prompt)) { prefill (1) growing kv; decode (o - 1) growing kv; }",
+            "hold kv (cost(kv, prompt)) { run E prefill (cost(E, 1)) growing kv; run E decode (cost(E, o - 1)) growing kv; }",
             ""
         )))
         .is_ok(),
@@ -480,7 +480,7 @@ fn an_entry_sees_its_parameters_and_its_queue() {
     // another queue's pool
     refused(
         &program(
-            "hold kv (cost(kv, prompt)) { prefill (1) growing kv; observe q = holders(gw.kv); }",
+            "hold kv (cost(kv, prompt)) { run E prefill (cost(E, 1)) growing kv; observe q = holders(gw.kv); }",
             "",
         ),
         "not a pool or stage of `E`",
@@ -488,14 +488,14 @@ fn an_entry_sees_its_parameters_and_its_queue() {
     // its own pool is nobody else's
     refused(
         &program(
-            "hold kv (cost(kv, prompt)) { prefill (1) growing kv; }",
+            "hold kv (cost(kv, prompt)) { run E prefill (cost(E, 1)) growing kv; }",
             "grow E.kv (cost(E.kv, 1));",
         ),
         "only `E`'s entries hold it",
     );
     refused(
         &program(
-            "hold kv (cost(kv, prompt)) { prefill (1) growing kv; }",
+            "hold kv (cost(kv, prompt)) { run E prefill (cost(E, 1)) growing kv; }",
             "observe x = E.late;",
         ),
         "no entry of `E` marks or sets `late`",
@@ -544,8 +544,8 @@ fn a_call_is_checked_against_the_entry() {
     let decls = "
       queue P : prefill { pool kv { cap 10; } serve fifo; prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)); } }
       queue D[2] : decode { pool kv { cap 10; } serve step { cost 1; memory kv; }
-        decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
-        decode (p) from src { hold kv (cost(kv, p)) { prefill (p) growing kv; } } }";
+        decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
+        decode (p) from src { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } } }";
     let program = |route: &str| {
         format!(
             "queue gw : gateway {{ route {{ {route} }} }} {decls}
@@ -586,7 +586,7 @@ fn a_family_size_is_a_constant() {
     let rest = "queue gw : gateway { route { E[j].decode (1); } } workload { arrive batch(1); init { set j = 0; } session { turn; end; } } server { gw.route(); } ";
     let decl = |n: &str| {
         format!(
-            "use \"std/args\"; let N = args.number(\"N\", 2); queue E[{n}] : decode {{ pool kv {{ cap 10; }} serve step {{ cost 1; memory kv; }} decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }} }} {rest}"
+            "use \"std/args\"; let N = args.number(\"N\", 2); queue E[{n}] : decode {{ pool kv {{ cap 10; }} serve step {{ cost 1; memory kv; }} decode (p) {{ hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; }} }} }} {rest}"
         )
     };
     assert!(parse(&common::main_source(&decl("N"))).is_ok());
@@ -708,7 +708,7 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
         format!(
             "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
              queue E : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
-               decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; decode (out) growing kv; }} }} }}
+               decode (p) {{ hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; run E decode (cost(E, out)) growing kv; }} }} }}
              workload {{ arrive batch(1); {hidden} init {{ set prompt = 3; set out = 2; }} session {{ turn; end; }} }} server {{ gw.route(); }}
              "
         )
@@ -762,7 +762,7 @@ fn the_contract_holds_at_every_edge() {
         )
     };
     let engine = "queue E : decode { pool kv { cap 100; } serve step { cost 1; memory kv; }
-                    decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } } }";
+                    decode (p) { hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; } } }";
     // 1. what a named gateway assigns is what a request assigns: an argument
     //    that reads it would read the new value
     refused(
@@ -780,7 +780,7 @@ fn the_contract_holds_at_every_edge() {
             "use \"std/args\"; let N = args.number(\"N\", min(2, 3));
              queue gw : gateway {{ route {{ E[N - 1].decode (prompt); }} }}
              queue E[N] : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
-               decode (p) {{ hold kv (cost(kv, p + N)) {{ prefill (p) growing kv; }} }} }}
+               decode (p) {{ hold kv (cost(kv, p + N)) {{ run E prefill (cost(E, p)) growing kv; }} }} }}
              {}",
             wl("turn; end;")
         )),
@@ -825,7 +825,7 @@ fn the_contract_holds_at_every_edge() {
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo;
                prefill (p) {{ branch (p > 1) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} else {{ run (cost(P, p)); }} }} }}
              queue D : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
-               decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }}
+               decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from src {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from src to kv (p); }} }} }}
              {}",
             wl("turn; end;")
@@ -848,7 +848,7 @@ fn the_contract_holds_at_four_more_edges() {
     compile_source(&common::main_source(
         &format!(
             "queue gw : gateway {{ route {{ E[0].decode (prompt); observe r = E.result; }} }} {} {wl}",
-            engine("hold kv (cost(kv, p)) { prefill (p) growing kv; } set result = 7;")
+            engine("hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; } set result = 7;")
         )),
         &common::horizon(10.0),
     )
@@ -857,7 +857,7 @@ fn the_contract_holds_at_four_more_edges() {
     refused(
         &format!(
             "queue gw : gateway {{ route {{ E[0].decode (prompt); observe r = min(E[missing].done, 0); }} }} {} {wl}",
-            engine("hold kv (cost(kv, p)) { prefill (p) growing kv; mark done; }")
+            engine("hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; mark done; }")
         ),
         "write `E.done`",
     );
@@ -865,7 +865,7 @@ fn the_contract_holds_at_four_more_edges() {
     refused(
         &format!(
             "let n = 5; queue gw : gateway {{ route {{ E[0].decode (prompt); }} }} {} {wl}",
-            engine("hold kv (cost(kv, n)) { prefill (p) growing kv; } set n = 1;")
+            engine("hold kv (cost(kv, n)) { run E prefill (cost(E, p)) growing kv; } set n = 1;")
         ),
         "sets `n`, a `let` constant",
     );
@@ -876,7 +876,7 @@ fn the_contract_holds_at_four_more_edges() {
              queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P.kv; }} }}
              queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
              queue D : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
-               decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }}
+               decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from src {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from src to kv (p); }} }} }}
              {wl}"
         ),
@@ -887,7 +887,7 @@ fn the_contract_holds_at_four_more_edges() {
         &format!(
             "queue gw : gateway {{ route {{ E[0].decode (prompt); }} }}
              queue E[3] : decode {{ pool kv[2] {{ cap 100; }} serve step {{ cost 1; memory kv; }}
-               decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }} }} {wl}"
+               decode (p) {{ hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; }} }} }} {wl}"
         ),
         "a queue's pool is the member's",
     );
@@ -915,11 +915,11 @@ fn a_pull_relation_is_the_flat_read() {
         pool kv { cap 1000; block 16; }
         serve step { cost 1; memory kv; }
         nic ps(200);
-        decode (prompt) { hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; } }
+        decode (prompt) { hold kv (cost(kv, prompt)) { run D prefill (cost(D, prompt)) growing kv; } }
         decode (prompt) from src {
           hold kv (cost(kv, prompt)) {
             transfer (prompt) from src to kv (prompt - 1);
-            decode (o - 1) growing kv;
+            run D decode (cost(D, o - 1)) growing kv;
           }
         }
       }
@@ -941,7 +941,7 @@ fn a_pull_relation_is_the_flat_read() {
           hold kvD[j] (cost(kvD, prompt)) {
             run wait[j] (cost(wait, x0));
             transfer on nicP[i], nicD[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
-            decode on D[j] (o - 1) growing kvD[j];
+            run D[j] decode (cost(D, o - 1)) growing kvD[j];
           }
         }
         workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } }
@@ -972,7 +972,7 @@ fn a_pull_relation_says_what_it_couples() {
              queue Q : prefill {{ pool kv {{ cap 100; }} serve fifo; nic ps(1);
                prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(Q, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
              queue D : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }} nic ps(1);
-               decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }}
+               decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from src {{ hold kv (cost(kv, p)) {{ transfer (p) from src to kv (p); }} }} }}
              {rel}
              workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
@@ -1033,7 +1033,7 @@ fn an_entry_reaches_only_its_own() {
              queue gw : gateway {{ route {{ P[0].prefill (prompt); D.decode (prompt) from P[0]; }} }}
              queue P[2] : prefill {{ pool kv {{ cap 100; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
              queue D : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
-               decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }}
+               decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from src {{ observe x = src; hold kv (cost(kv, p)) {{ transfer on nic (p) from src to kv (p); }} }} }}
              {wl}"
         ),
@@ -1045,7 +1045,7 @@ fn an_entry_reaches_only_its_own() {
             "queue gw : gateway {{ route {{ A.prefill (prompt); B.decode (prompt); }} }}
              queue A : prefill {{ serve fifo; prefill (p) {{ run (cost(A, p)); mark secret; }} }}
              queue B : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
-               decode (p) {{ observe leaked = A.secret; hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }} }}
+               decode (p) {{ observe leaked = A.secret; hold kv (cost(kv, p)) {{ run B prefill (cost(B, p)) growing kv; }} }} }}
              {wl}"
         ),
         "reads `A.secret`, another queue's",
@@ -1065,7 +1065,7 @@ fn an_entry_reaches_only_its_own() {
         &format!(
             "queue gw : gateway {{ route {{ set t0 = now; D[0].decode (prompt); observe t = D[missing].first_token - t0; }} }}
              queue D[2] : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
-               decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; mark first_token; }} }} }}
+               decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; mark first_token; }} }} }}
              {wl}"
         ),
         "write `Q.x`",
@@ -1076,10 +1076,10 @@ fn an_entry_reaches_only_its_own() {
             "stage nic : delay;
              queue gw : gateway {{ route {{ branch (prompt > 5) {{ P.prefill (prompt); }} else {{ P.decode (prompt); }} D.decode (prompt) from P; }} }}
              queue P : prefill, decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
-               prefill (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} cache (cost(kv, p)) lease kv (inf); }}
-               decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }} }}
+               prefill (p) {{ hold kv (cost(kv, p)) {{ run P prefill (cost(P, p)) growing kv; }} cache (cost(kv, p)) lease kv (inf); }}
+               decode (p) {{ hold kv (cost(kv, p)) {{ run P prefill (cost(P, p)) growing kv; }} }} }}
              queue D : decode {{ pool kv {{ cap 100; }} serve step {{ cost 1; memory kv; }}
-               decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }}
+               decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
                decode (p) from src {{ hold kv (cost(kv, p)) {{ transfer on nic (p) from src to kv (p); }} }} }}
              {wl}"
         ),
@@ -1090,7 +1090,7 @@ fn an_entry_reaches_only_its_own() {
         &format!(
             "queue gw : gateway {{ route {{ E.prefill (prompt); }} }}
              queue E : prefill {{ serve step {{ cost 1; memory kv; }} pool kv {{ cap 10; }}
-               prefill (p) {{ hold kv (cost(kv, 1)) {{ prefill (p) growing kv; }} }} }}
+               prefill (p) {{ hold kv (cost(kv, 1)) {{ run E prefill (cost(E, p)) growing kv; }} }} }}
              {wl}"
         ),
         "declares its pools first",

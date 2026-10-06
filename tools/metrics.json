@@ -25,8 +25,10 @@
     "pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }",
     "pool kv { cap blocksD * bs; block bs; evict lru; preempt lifo; admit via D; }",
     "pool reqs { cap max_seqs; admit via engine; }",
-    "prefill (known - c) growing kv;",
+    "run D prefill (cost(D, known - c)) growing kv;",
+    "run engine decode (cost(engine, o - 1 - (known - prompt))) growing kv;",
     "run engine decode (cost(engine, vd));",
+    "run engine prefill (cost(engine, known - c)) growing kv;",
     "run engine prefill (cost(engine, vp));",
     "set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));",
     "vllm_request(reqs, kv, engine, prompt, o, t0);"

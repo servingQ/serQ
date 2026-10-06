@@ -253,7 +253,7 @@ fn a_preemptible_hold_reads_no_moving_index() {
         }}
         server {{
           hold kv (cost(kv, 16)), aux[1 - min(1, floor(now))] (cost(aux, 1)) {{
-            prefill 16 growing kv; decode 200 growing kv;
+            run engine prefill (cost(engine, 16)) growing kv; run engine decode (cost(engine, 200)) growing kv;
           }}
         }}
         "
@@ -275,7 +275,10 @@ fn a_preemptible_hold_reads_no_moving_index() {
         "hold kv (cost(kv, 16)), aux[1 - min(1, floor(now))] (cost(aux, 1)) {",
         "hold kv (cost(kv, 16)) { hold aux[1 - min(1, floor(now))] (cost(aux, 1)) {",
     );
-    let nested = nested.replace("decode 200 growing kv;", "decode 200 growing kv; }");
+    let nested = nested.replace(
+        "run engine decode (cost(engine, 200)) growing kv;",
+        "run engine decode (cost(engine, 200)) growing kv; }",
+    );
     let e = check_source(&common::main_source(&nested), &common::horizon(500.0)).unwrap_err();
     assert!(e.contains("`kv` may preempt it"), "{e}");
     // a hold no pool preempts reads its index once
@@ -352,12 +355,12 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
         }
         server {
           branch (kind == 0) {
-            hold memP (cost(memP, 10)) { prefill (1); } lease memP (inf);
+            hold memP (cost(memP, 10)) { run prefill (cost(prefill, 1)); } lease memP (inf);
             hold memD (cost(memD, 10)) {
               transfer (1) from memP to memD (10);
               observe p_holders = holders(memP);
               observe d_used = used(memD);
-              decode (1);
+              run decode (cost(decode, 1));
             }
           }
           branch (kind == 1) { run gate (cost(gate, 0.5)); hold memP (cost(memP, 10)) { observe p_admitted = now; } }
@@ -423,10 +426,10 @@ fn decode_pressure_backs_into_the_prefill_pool() {
         }
         server {
           run gate (cost(gate, serial * 0.01));
-          hold memP (cost(memP, 10)) { prefill (0.1); observe prefilled = serial; } lease memP (inf);
+          hold memP (cost(memP, 10)) { run prefill (cost(prefill, 0.1)); observe prefilled = serial; } lease memP (inf);
           hold memD (cost(memD, 10)) {
             transfer (0.1) from memP to memD (10);
-            decode (10);
+            run decode (cost(decode, 10));
           }
         }
 
@@ -446,8 +449,8 @@ fn decode_pressure_backs_into_the_prefill_pool() {
         }
         server {
           run gate (cost(gate, serial * 0.01));
-          hold memP (cost(memP, 10)) { prefill (0.1); observe prefilled = serial; run link (cost(link, 0.1)); }
-          hold memD (cost(memD, 10)) { decode (10); }
+          hold memP (cost(memP, 10)) { run prefill (cost(prefill, 0.1)); observe prefilled = serial; run link (cost(link, 0.1)); }
+          hold memD (cost(memD, 10)) { run decode (cost(decode, 10)); }
         }
 
 "#;

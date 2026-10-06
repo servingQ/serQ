@@ -54,8 +54,8 @@ MODES = {
 }
 # What the prefill pods compute of a prompt, which the program does not
 # observe: the decode pods' own prefill is `local_tokens`.
-P_TOKENS = ("      prefill (prompt - c) growing kv;      // chunked; one token is sampled and discarded",
-            "      observe p_tokens = prompt - c;\n      prefill (prompt - c) growing kv;      // chunked; one token is sampled and discarded")
+P_TOKENS = ("        run P prefill (cost(P, prompt - c)) growing kv;      // chunked; one token is sampled and discarded",
+            "        observe p_tokens = prompt - c;\n        run P prefill (cost(P, prompt - c)) growing kv;      // chunked; one token is sampled and discarded")
 OPEN = [1, 2, 3]          # sessions per second
 CLOSED = [20, 40, 60]     # users
 
