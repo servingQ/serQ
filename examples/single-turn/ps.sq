@@ -1,11 +1,12 @@
 // M/G/1 processor sharing (paper `prop:decode`, insensitivity): the mean
 // number in the station is rho/(1-rho) whatever the service law.
-fn main() {
-  let lam = 0.7;
-  let mean_s = 1.0;
-  let cv2 = 9.0;
-  let law = 1;
 
+let lam = 0.7;
+let mean_s = 1.0;
+let cv2 = 9.0;
+let law = 1;
+
+fn main() {
   stage svc : ps(1);
 
   workload {

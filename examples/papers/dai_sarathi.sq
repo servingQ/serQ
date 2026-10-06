@@ -5,15 +5,16 @@
 // limit: CodeLlama-34B TP1, t_b = 11.28 + 35.47 ceil(b/128) ms, one request
 // every 467.5 ms with 290 prefill and 990 decode tokens. Time is in units of
 // 10 µs, so that every number of the model is an integer.
-fn main() {
-  let bmax = 128;          // token budget b_max
-  let c = 1128;            // t_b = c + a ceil(b / b0), 10 µs
-  let a = 3547;
-  let b0 = 128;            // b0 divides b_max (the paper's Assumption 1)
-  let gap = 46750;         // one arrival every 467.5 ms
-  let vp = 290;
-  let vd = 990;
 
+let bmax = 128;          // token budget b_max
+let c = 1128;            // t_b = c + a ceil(b / b0), 10 µs
+let a = 3547;
+let b0 = 128;            // b0 divides b_max (the paper's Assumption 1)
+let gap = 46750;         // one arrival every 467.5 ms
+let vp = 290;
+let vd = 990;
+
+fn main() {
   stage engine : step {
     budget bmax;
     cost c + a * ceil(tokens / b0);

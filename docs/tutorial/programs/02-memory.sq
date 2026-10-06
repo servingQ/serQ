@@ -3,9 +3,10 @@
 // units is. A request holds the units it needs for as long as it runs.
 use "std/args";
 
+let Lambda = 0.8;
+let S = 1.0;
+
 fn main() {
-  let Lambda = 0.8;
-  let S = 1.0;
   let C = args.number("C", 10);           // memory units
 
   pool mem { cap C; }

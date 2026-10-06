@@ -19,21 +19,22 @@
 // this program is strict FCFS; the overlap scheduler schedules iteration
 // n+1 before it reads n's samples, so a request that stops at n is in
 // n+1's batch, which `decode (o)` stands for.
+
+def reusable(x, bs) = floor((x - 1) / bs) * bs;
+
+let B = 8192;            // max_num_tokens
+let max_batch = 2048;    // max_batch_size
+let blocks = 10000;      // KV blocks
+let bs = 32;             // tokens_per_block
+let mt = 1024;           // max_tokens, known to the scheduler
+let a = 2e-5;            // compute per scheduled token (s)
+let omega = 2e-4;        // weights read per iteration (s)
+let beta = 2e-9;         // KV read per iteration per resident context token (s)
+let Lambda = 0.3;        // sessions per second
+let p = 0.9;             // continue after a turn
+let Z = 3.0;             // tool time (s)
+
 fn main() {
-  def reusable(x, bs) = floor((x - 1) / bs) * bs;
-
-  let B = 8192;            // max_num_tokens
-  let max_batch = 2048;    // max_batch_size
-  let blocks = 10000;      // KV blocks
-  let bs = 32;             // tokens_per_block
-  let mt = 1024;           // max_tokens, known to the scheduler
-  let a = 2e-5;            // compute per scheduled token (s)
-  let omega = 2e-4;        // weights read per iteration (s)
-  let beta = 2e-9;         // KV read per iteration per resident context token (s)
-  let Lambda = 0.3;        // sessions per second
-  let p = 0.9;             // continue after a turn
-  let Z = 3.0;             // tool time (s)
-
   pool kv { cap blocks * bs; block bs; evict lru; preempt none; reserve held; }
   pool reqs { cap max_batch; admit via engine; }
 

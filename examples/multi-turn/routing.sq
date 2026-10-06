@@ -9,26 +9,27 @@
 //          2 least loaded, fetch over the link when cheaper than a recompute
 //          3 myopic: min_j W_j + S_j
 //          4 lookahead: min_j W_j + S_j with migrate-or-recompute off home
+
+let J = 4;
+let rate = 0.9;      // sessions per second
+let hot = 0.5;
+let policy = 0;
+let s0 = 0.005;
+let a = 2e-5;
+let b = 2e-9;
+let d = 2e-4;
+let p = 0.9;
+let Z = 2.0;
+let bw = 2e6;        // migration link, tokens/s
+let dv = 0.0;        // decode KV-read cost, seconds/token^2
+
+// the laws, by name (`--def new_tokens='~erlang(2, 500)'`)
+def initial_tokens() = ~uniform(5000, 15000);
+def new_tokens() = ~exp(500);
+def output_tokens() = ~exp(200);
+def tool_time() = ~exp(Z);
+
 fn main() {
-  let J = 4;
-  let rate = 0.9;      // sessions per second
-  let hot = 0.5;
-  let policy = 0;
-  let s0 = 0.005;
-  let a = 2e-5;
-  let b = 2e-9;
-  let d = 2e-4;
-  let p = 0.9;
-  let Z = 2.0;
-  let bw = 2e6;        // migration link, tokens/s
-  let dv = 0.0;        // decode KV-read cost, seconds/token^2
-
-  // the laws, by name (`--def new_tokens='~erlang(2, 500)'`)
-  def initial_tokens() = ~uniform(5000, 15000);
-  def new_tokens() = ~exp(500);
-  def output_tokens() = ~exp(200);
-  def tool_time() = ~exp(Z);
-
   stage rep[4] : fifo;
   stage link : fifo;
   stage tool : delay;

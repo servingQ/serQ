@@ -5,11 +5,12 @@
 // to the active peaks, so nothing is ever preempted. Smallest Volume First
 // admits the waiting request of least volume vol_i = s_i o_i + (o_i^2 + o_i)/2.
 // Time is in steps.
-fn main() {
-  let N = 200;
-  let M = 20000;           // memory, tokens
-  let P = 2500;            // the largest peak s + o; alpha = P / M
 
+let N = 200;
+let M = 20000;           // memory, tokens
+let P = 2500;            // the largest peak s + o; alpha = P / M
+
+fn main() {
   pool kv { cap M; queue by (s * o + floor((o * o + o) / 2)); }
 
   stage engine : step {

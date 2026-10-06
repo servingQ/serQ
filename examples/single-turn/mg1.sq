@@ -4,12 +4,13 @@
 // `cv2`), or by any law given as `--def service=...`.
 use "std/args";
 
+let mean_s = 1.0;
+let servers = 1;
+
 fn main() {
   let lam = args.number("lam", 0.8);
-  let mean_s = 1.0;
   let cv2 = args.number("cv2", 4.0);
   let law = args.number("law", 1);
-  let servers = 1;
 
   def service() = law == 0 ? mean_s
                 : law == 1 ? ~exp(mean_s)

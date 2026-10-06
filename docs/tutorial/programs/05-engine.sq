@@ -6,16 +6,17 @@
 // whatever budget is left. Prefill and decode share the same iteration.
 use "std/args";
 
+let B = 2048;          // token budget per iteration (max_num_batched_tokens)
+let bs = 16;           // tokens per block
+let alpha = 2e-5;      // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident token (s)
+let p = 0.8;
+
 fn main() {
-  let B = 2048;          // token budget per iteration (max_num_batched_tokens)
   let max_seqs = args.number("max_seqs", 16);     // how many requests may run at once
   let blocks = args.number("blocks", 4000);     // KV blocks
-  let bs = 16;           // tokens per block
-  let alpha = 2e-5;      // compute per scheduled token (s)
-  let omega = 2e-4;      // weights read per iteration (s)
-  let beta = 2e-9;       // KV read per iteration per resident token (s)
   let Lambda = args.number("Lambda", 0.5);
-  let p = 0.8;
   let Z = args.number("Z", 3.0);
 
   pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }

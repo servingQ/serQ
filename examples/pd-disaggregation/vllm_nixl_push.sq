@@ -29,23 +29,23 @@
 // and the proxy's hops and the API server h per request).
 use "../../lib/vllm.sq";
 
-fn main() {
-  let concurrent = 1;    // 1: both requests at once (the push proxy); 0: the decode request after the prefill's answer
-  let spacing = 3.0;     // seconds between session arrivals
-  let N = 96;            // sessions replayed (957 requests)
-  let B = 8192;          // max_num_batched_tokens
-  let max_seqsP = 16;    // max_num_seqs on the prefiller
-  let max_seqsD = 64;    // max_num_seqs on the decoder
-  let bs = 16;           // block_size
-  let blocksP = 12034;   // GPU KV cache size: 192 544 tokens
-  let blocksD = 11986;   // 191 776 tokens
-  let aP = 1.192e-4;     // s per prefill token (fitted: 119 us)
-  let bP = 7.06e-9;      // s per prefill token per context token (fitted)
-  let cD = 0.024;        // s per decode step (fitted: 24 ms, one to four decoding requests)
-  let Bw = 99771;        // NIXL copy, tokens/s (fitted on 13 lone reads, 512-32 000 tokens; rms 17 ms)
-  let x0 = 0.010;        // s per copy (fitted)
-  let h = 0.063;         // s per request outside the engines: proxy hops, API server (fitted, less one decode step)
+let concurrent = 1;    // 1: both requests at once (the push proxy); 0: the decode request after the prefill's answer
+let spacing = 3.0;     // seconds between session arrivals
+let N = 96;            // sessions replayed (957 requests)
+let B = 8192;          // max_num_batched_tokens
+let max_seqsP = 16;    // max_num_seqs on the prefiller
+let max_seqsD = 64;    // max_num_seqs on the decoder
+let bs = 16;           // block_size
+let blocksP = 12034;   // GPU KV cache size: 192 544 tokens
+let blocksD = 11986;   // 191 776 tokens
+let aP = 1.192e-4;     // s per prefill token (fitted: 119 us)
+let bP = 7.06e-9;      // s per prefill token per context token (fitted)
+let cD = 0.024;        // s per decode step (fitted: 24 ms, one to four decoding requests)
+let Bw = 99771;        // NIXL copy, tokens/s (fitted on 13 lone reads, 512-32 000 tokens; rms 17 ms)
+let x0 = 0.010;        // s per copy (fitted)
+let h = 0.063;         // s per request outside the engines: proxy hops, API server (fitted, less one decode step)
 
+fn main() {
   // The proxy: the prefill request as a leg beside the decode request, the
   // decoder's answer streamed back.
   queue gw : gateway {
