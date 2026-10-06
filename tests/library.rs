@@ -306,7 +306,7 @@ def take(n) { hold kv (n) { prefill on engine (n) growing kv; } }
         &common::main_source(
             &format!("{source}{PROGRAM}").replace("take(twice(k));", "idle(); take(twice(k));"),
         ),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     let written = compile_source(
@@ -314,7 +314,7 @@ def take(n) { hold kv (n) { prefill on engine (n) growing kv; } }
             "take(twice(k));",
             "hold kv (k > 0 ? (k * 2) : 0) { prefill on engine (k > 0 ? (k * 2) : 0) growing kv; }",
         )),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     assert_eq!(used.to_json(), written.to_json());
@@ -337,12 +337,12 @@ fn definitions_reject_legacy_syntax_and_mixed_bodies() {
         let source = format!(
             "{definition}\nfn main() {{ workload {{ session {{ request; end; }} }} server {{}} }}"
         );
-        let error = compile_source(&source, &Overrides::default()).unwrap_err();
+        let error = compile_source(&source, &common::horizon(10.0)).unwrap_err();
         assert!(error.contains(expected), "{error}");
     }
     let source = common::main_source(
         "def f(x) { x; } workload { session { request; end; } } server { set y = f(1); }",
     );
-    let error = compile_source(&source, &Overrides::default()).unwrap_err();
+    let error = compile_source(&source, &common::horizon(10.0)).unwrap_err();
     assert!(error.contains("not an expression"), "{error}");
 }

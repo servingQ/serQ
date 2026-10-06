@@ -90,7 +90,7 @@ fn invalid_batch_leaves_every_file_untouched() {
 
 #[test]
 fn braced_definitions_format_and_preserve_expansion() {
-    let source = "def twice(x){\n// value\nx * 2\n}\ndef record(x){observe value = x;}\nfn main(){\nworkload { session { request; end; } }\nserver { record(twice(3)); }\nrun { horizon 1; }\n}\n";
+    let source = "def twice(x){\n// value\nx * 2\n}\ndef record(x){observe value = x;}\nfn main(){\nworkload { session { request; end; } }\nserver { record(twice(3)); }\n}\n";
     let formatted = format(source).unwrap();
     assert!(
         formatted.contains("def twice(x) {\n  // value\n  x * 2\n}"),
@@ -98,10 +98,10 @@ fn braced_definitions_format_and_preserve_expansion() {
     );
     assert_eq!(format(&formatted).unwrap(), formatted);
     assert_eq!(
-        compile_source(source, &Overrides::default())
+        compile_source(source, &common::horizon(10.0))
             .unwrap()
             .to_json(),
-        compile_source(&formatted, &Overrides::default())
+        compile_source(&formatted, &common::horizon(10.0))
             .unwrap()
             .to_json(),
     );
