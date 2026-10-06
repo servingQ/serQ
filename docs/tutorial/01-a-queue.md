@@ -28,7 +28,7 @@ no waiting at all) and `step`, the LLM engine, which arrives in
 ```serq
 workload {
   arrive poisson(Lambda);
-  turn { set work_size = ~exp(1); }
+  turn { Size work_size = ~exp(1); }
 }
 ```
 
@@ -44,7 +44,7 @@ and finishes. The `server` below handles that turn.
 
 ```serq
 server {
-  set s = cost(svc, S * work_size);
+  Cost s = cost(svc, S * work_size);
   set t0 = now;
   run svc (s);
   observe response = now - t0;

@@ -207,6 +207,7 @@ struct Linker<'a> {
     stages: HashMap<String, (usize, usize)>,
     blocks: Vec<Vec<CStmt>>,
     sides: Vec<Vec<crate::ir::Side>>,
+    declarations: Vec<(usize, DeclaredType)>,
     side: crate::ir::Side,
     /// Per block, per statement: where the statement is in the text, as
     /// far as a reference or an expression in it says (#279).
@@ -353,6 +354,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         stages: HashMap::new(),
         blocks: vec![],
         sides: vec![],
+        declarations: vec![],
         side: crate::ir::Side::Workload,
         spans: vec![],
         prog,
@@ -807,7 +809,31 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         seed,
         arrivals,
     };
+    for (name, _) in &prog.cost_records {
+        if linked.attrs.iter().any(|n| n == name)
+            || linked.pools.iter().any(|p| p.name == *name)
+            || linked.stages.iter().any(|s| s.name == *name)
+            || prog.lets.iter().any(|(n, _)| n == name)
+        {
+            return Err(LinkError::new(format!(
+                "Cost record `{name}` conflicts with a scalar attribute, constant, or resource; give it a separate name"
+            )));
+        }
+    }
     linked.infer_types().map_err(LinkError::new)?;
+    for (slot, declared) in lk.declarations {
+        let actual = &linked.attr_types[slot];
+        let matches = match declared {
+            DeclaredType::Size => *actual == crate::ir::ValueType::Size,
+            DeclaredType::Cost => matches!(actual, crate::ir::ValueType::Cost(_)),
+        };
+        if !matches {
+            return Err(LinkError::new(format!(
+                "`{}` is declared {declared:?} but its assignments do not have that type; a Cost needs a named resource conversion",
+                linked.attrs[slot]
+            )));
+        }
+    }
     crate::frontend::lint::lint(&linked).map_err(LinkError::new)?;
     Ok((linked, lk.spans))
 }
@@ -1156,7 +1182,12 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                     let mut leg = t.clone();
                     walk(body, &mut leg)?;
                 }
-                Stmt::Side(_) | Stmt::Request | Stmt::Call { .. } | Stmt::Mark(_) | Stmt::Join => {}
+                Stmt::Declare(..)
+                | Stmt::Side(_)
+                | Stmt::Request
+                | Stmt::Call { .. }
+                | Stmt::Mark(_)
+                | Stmt::Join => {}
             }
         }
         Ok(())
@@ -1773,6 +1804,10 @@ impl Linker<'_> {
         let mut side_stack = vec![];
         let mut out = vec![];
         for s in stmts {
+            if let Stmt::Declare(name, kind) = s {
+                self.declarations.push((self.attr_index[name], *kind));
+                continue;
+            }
             if let Stmt::Side(side) = s {
                 match side {
                     crate::ir::Side::Server => {
@@ -1795,7 +1830,7 @@ impl Linker<'_> {
                 }
                 Stmt::Turn => CStmt::Turn,
                 Stmt::End => CStmt::End,
-                Stmt::Side(_) => unreachable!(),
+                Stmt::Declare(..) | Stmt::Side(_) => unreachable!(),
                 Stmt::Request => {
                     return Err(LinkError::new(
                         "`request` survived parsing: the parser splices the server in its place"

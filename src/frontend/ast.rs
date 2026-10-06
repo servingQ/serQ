@@ -377,10 +377,18 @@ pub struct Workload {
     pub hidden: Vec<String>,
 }
 
+/// Source declarations are checked by the linker and erased before execution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeclaredType {
+    Size,
+    Cost,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt {
     /// Parse-time boundary, retained as per-statement authority in the IR.
     Side(crate::ir::Side),
+    Declare(String, DeclaredType),
     /// Draw the next turn's attributes from the workload.
     Turn,
     /// Internal marker after a source `turn;`: splice the `server` block.
@@ -469,6 +477,8 @@ pub struct Program {
     pub inputs: Vec<(String, usize)>,
     /// Locations of constants and assigned attributes, for diagnostic notes.
     pub definitions: Vec<(String, Span)>,
+    /// Composite Cost names and resource fields; source-only namespace data.
+    pub cost_records: Vec<(String, Vec<String>)>,
     /// The libraries `use` read, for the spans that point into them.
     pub libs: Vec<crate::frontend::diagnostic::Source>,
     pub lets: Vec<(String, Expr)>,

@@ -72,10 +72,13 @@ istmt    := serve [only ( expr )] [admission | by ( expr , ... ) | decode first]
           | set NAME = expr ;                  -- one of the stage's registers (`state NAME = c ;` among its options)
 wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
-          | init block | turn block          -- only set / observe
+          | init block | turn block          -- Size / set / observe
           | session block                    -- optional: the sequence of completed turns
           | hidden NAME [, NAME]* ;           -- the scheduler may not read these
 stmt     := turn ;                           -- draw attributes, submit, wait for the response (session only)
+          | Size NAME = expr ;                -- workload request quantity
+          | Cost NAME = expr ;                -- expression must have a resource Cost type
+          | Cost NAME = { RESOURCE : expr [, RESOURCE : expr]* } ;
           | set NAME = expr ;
           | observe NAME = expr ;
           | hold POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]*
@@ -193,6 +196,12 @@ for the full input contract. Syntax snippets elsewhere may show just a main
 body or one of its nested blocks.
 
 ### The serving vocabulary
+
+`Size` and `Cost` declarations state attribute types explicitly. A composite
+Cost evaluates each field once in written order and stores a separate cost
+for that resource; `processing.mem` and `processing.svc` are scalar fields.
+The source lowers to existing assignments and conversions, with no new
+execution scope. See [attribute types](api/attributes.md#sizes-values-and-costs).
 
 The statements above are about resources: `hold` a pool, `run` a stage.
 The serving forms name the request's lifecycle instead (prefill, KV

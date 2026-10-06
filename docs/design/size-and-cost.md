@@ -202,3 +202,54 @@ The prefill/decode example returns a separate `accepted` server result when
 a prompt is too long; the client's `while (more && accepted)` decides
 whether to continue. This preserves the workload-owned `more` instead of
 letting the server overwrite it.
+
+## Explicit declarations and composite costs
+
+The source can state its types directly:
+
+```serq
+Size items = 3;
+Cost duration = cost(svc, 2 * items);
+Cost processing = { mem: items, svc: 2 * items };
+hold mem(processing.mem) { run svc(processing.svc); }
+```
+
+This excerpt uses the existing pool `mem` and stage `svc`. The runnable
+second tutorial uses the same shape. A composite Cost contains independent
+resource amounts. It differs from `CostTarget::Joint`, which applies one
+common scalar amount to several resources, as needed by common cache/reuse
+clauses or shared flows. Each composite field lowers to a resource-specific
+scalar slot and conversion. Existing `set` inference remains available.
+Explicit declarations are checked against inferred types, and conflicting
+Size/Cost assignments remain invalid in source and JSON.
+
+Declaration evaluates each field once in written order. Primitive statements
+consume stored fields at their existing moments, and release/lease policy
+remains in their scopes. The record does not acquire memory or schedule work
+by itself. Plain FIFO/PS/delay work retains its existing seconds convention;
+step-stage fields hold token work and iteration formulas determine elapsed
+time. One Cost can describe
+several pools and stages without treating those quantities as interchangeable.
+
+Records use the existing flat session storage. Whole-record aliasing,
+arithmetic, nested records and independent lexical lifetimes are not added.
+Scalar field aliases retain the existing cost types. Record names cannot
+also name scalars, constants or resources; repeated declarations retain the
+same resource fields and order. Queue-local names are qualified by their
+queue, while gateways keep the server's namespace. Member selection stays
+at the consuming primitive, so resource field keys are unindexed families.
+
+A review found that the initial parser map confused equal local record names
+in different queues and accepted a record root that also named a scalar.
+The wrong assumption was that dotted generated names alone gave the record
+a namespace. Queue qualification and source root collision checks now reject
+the ambiguity before execution. Another review found that an own local Cost
+field in an admission header was reported as another queue's field. Dots no
+longer imply external ownership in that diagnostic. The existing admission
+rule still rejects body-local values; authors keep the conversion in the
+header or pass an ordinary quantity. No runtime or IR restriction is needed.
+
+Verification compares independent memory/time amounts, JSON round trips,
+common pool scope release, declaration-time snapshots and written-order
+sampling against an explicitly expanded scalar program. Type/side errors,
+conditional initialization and namespace collisions have regressions.

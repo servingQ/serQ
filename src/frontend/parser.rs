@@ -134,6 +134,8 @@ struct Parser {
     /// serving forms resolve their stage against.
     stages: Vec<(String, bool)>,
     definitions: Vec<(String, Span)>,
+    /// Composite costs lower to named scalar fields in declaration order.
+    cost_records: std::collections::BTreeMap<String, Vec<String>>,
     /// Which side the statement being parsed is on.
     side: Side,
     /// The workload's `session` block and the `server` block, each with the
@@ -179,6 +181,7 @@ struct Parser {
     in_queue: Option<usize>,
     /// The `from` name of the entry being parsed.
     entry_from: Option<String>,
+    entry_gateway: bool,
     /// The verb of the relation that gave the program's `share`.
     relation_share: Option<&'static str>,
     /// The queues whose relation gives the wait before each copy they post.
@@ -186,7 +189,7 @@ struct Parser {
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
-    dotted_reads: Vec<(usize, String)>,
+    dotted_reads: Vec<(usize, String, Option<String>)>,
     /// `Q[i].x` references, checked once the queues are known: `x` must be
     /// a pool of `Q`.
     indexed_dotted: Vec<(usize, String)>,
@@ -264,7 +267,9 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 106] = [
+pub const KEYWORDS: [&str; 108] = [
+    "Cost",
+    "Size",
     "admission",
     "admit",
     "arrivals",
@@ -709,7 +714,9 @@ fn ref_reads(r: &Ref, n: &str) -> bool {
 fn stmt_reads(s: &Stmt, n: &str) -> bool {
     let block = |b: &[Stmt]| b.iter().any(|s| stmt_reads(s, n));
     match s {
-        Stmt::Side(_) | Stmt::Turn | Stmt::Request | Stmt::End | Stmt::Join => false,
+        Stmt::Declare(..) | Stmt::Side(_) | Stmt::Turn | Stmt::Request | Stmt::End | Stmt::Join => {
+            false
+        }
         Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
         Stmt::Hold { body, .. } => {
             // a nested hold that binds `n` itself gives its body its own `n`
@@ -1128,8 +1135,13 @@ fn split_reads<'a>(
     };
     for s in stmts {
         match s {
-            Stmt::Side(_) | Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Mark(_) | Stmt::Join => {
-            }
+            Stmt::Declare(..)
+            | Stmt::Side(_)
+            | Stmt::Turn
+            | Stmt::End
+            | Stmt::Request
+            | Stmt::Mark(_)
+            | Stmt::Join => {}
             Stmt::Set(_, e) | Stmt::Observe(_, e) => bodies.push(e),
             Stmt::Grow(r, e) | Stmt::Load(r, e) => {
                 index(r, indices);
@@ -1266,6 +1278,7 @@ impl Parser {
             pos: 0,
             stages: vec![],
             definitions: vec![],
+            cost_records: Default::default(),
             side: Side::Session,
             wl_session: None,
             server: None,
@@ -1286,6 +1299,7 @@ impl Parser {
             structural_overrides: vec![],
             in_queue: None,
             entry_from: None,
+            entry_gateway: false,
             relation_share: None,
             posters: vec![],
             latency_ok: false,
@@ -1359,6 +1373,15 @@ impl Parser {
 
     fn is_kw(&self, kw: &str) -> bool {
         matches!(self.peek(), Tok::Ident(s) if s == kw)
+    }
+
+    fn eat(&mut self, token: &Tok) -> bool {
+        if self.peek() == token {
+            self.advance();
+            true
+        } else {
+            false
+        }
     }
 
     fn eat_kw(&mut self, kw: &str) -> bool {
@@ -1748,6 +1771,7 @@ impl Parser {
         self.check_def_names(&prog)?;
         self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
+        prog.cost_records = std::mem::take(&mut self.cost_records).into_iter().collect();
         prog.libs = self.libs.clone();
         Ok(prog)
     }
@@ -1807,16 +1831,21 @@ impl Parser {
                     );
                 }
             }
-            for (at, name) in std::mem::take(&mut self.dotted_reads) {
+            for (at, name, scope) in std::mem::take(&mut self.dotted_reads) {
                 let (qn, field) = name.split_once('.').expect("a dotted name");
-                let ok = self.queues.iter().any(|q| {
-                    q.name == qn
-                        && (q.marks.iter().any(|m| m == field)
-                            || q.pools.iter().any(|p| p == field)
-                            || q.entries
-                                .iter()
-                                .any(|e| e.locals.iter().any(|l| l == field)))
-                });
+                let record = scope.map_or_else(|| qn.to_string(), |q| format!("{q}.{qn}"));
+                let ok = self
+                    .cost_records
+                    .get(&record)
+                    .is_some_and(|fields| fields.iter().any(|f| f == field))
+                    || self.queues.iter().any(|q| {
+                        q.name == qn
+                            && (q.marks.iter().any(|m| m == field)
+                                || q.pools.iter().any(|p| p == field)
+                                || q.entries
+                                    .iter()
+                                    .any(|e| e.locals.iter().any(|l| l == field)))
+                    });
                 if !ok {
                     return self.err_at(
                         at,
@@ -3400,8 +3429,11 @@ impl Parser {
         self.side = Side::Server;
         self.in_queue = Some(qi);
         self.entry_from = from.clone();
+        self.entry_gateway =
+            verb == "route" && self.queues[qi].roles.iter().any(|r| r == "gateway");
         let body = self.block();
         self.entry_from = None;
+        self.entry_gateway = false;
         self.in_queue = None;
         self.side = outer_side;
         self.stages = outer_stages;
@@ -3521,6 +3553,11 @@ impl Parser {
                     }
                     if allowed_var(&v, header) {
                         continue;
+                    }
+                    if header && locals.contains(&v) {
+                        return self.err_at(at, format!(
+                            "`{qname}.{verb}`: the admission header reads local `{v}`; it sees parameters and the queue's resources, not values calculated by its body. Write the resource conversion in the header or pass a quantity as a parameter"
+                        ));
                     }
                     if v.contains('.') {
                         return self.err_at(
@@ -3694,11 +3731,86 @@ impl Parser {
             out.extend(self.serving(role)?);
             return Ok(());
         }
+        if self.is_kw("Size") || self.is_kw("Cost") {
+            return self.typed_declaration(out);
+        }
         let stmt = self.stmt()?;
         let turn = matches!(stmt, Stmt::Turn);
         out.push(stmt);
         if turn {
             out.push(Stmt::Request);
+        }
+        Ok(())
+    }
+
+    fn cost_scope(&self) -> Option<String> {
+        self.in_queue
+            .filter(|_| !self.entry_gateway)
+            .map(|qi| self.queues[qi].name.clone())
+    }
+
+    /// Typed declarations are source sugar; each field retains a resource cost.
+    fn typed_declaration(&mut self, out: &mut Vec<Stmt>) -> PResult<()> {
+        let is_size = self.eat_kw("Size");
+        if !is_size {
+            self.expect_kw("Cost")?;
+        }
+        if is_size && self.side == Side::Server {
+            return self
+                .err("a server cannot declare a request Size; calculate a separate value or Cost");
+        }
+        let name = self.definition()?;
+        self.expect(&Tok::Assign)?;
+        let kind = if is_size {
+            DeclaredType::Size
+        } else {
+            DeclaredType::Cost
+        };
+        if !is_size && self.eat(&Tok::LBrace) {
+            let mut fields = vec![];
+            loop {
+                if *self.peek() == Tok::RBrace {
+                    break;
+                }
+                let r = self.reference()?;
+                if r.index.is_some() {
+                    return self.err("a Cost field names a resource family without a member index");
+                }
+                if fields.contains(&r.name) {
+                    return self.err(format!("Cost `{name}` repeats resource `{}`", r.name));
+                }
+                self.expect(&Tok::Colon)?;
+                let value = self.expr()?;
+                let field = format!("{name}.{}", r.name);
+                fields.push(r.name.clone());
+                out.push(Stmt::Declare(field.clone(), kind));
+                out.push(Stmt::Set(field, Expr::cost(&[r], value)));
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::RBrace)?;
+            self.expect(&Tok::Semi)?;
+            if fields.is_empty() {
+                return self.err("a Cost record must name at least one resource");
+            }
+            let record = self
+                .cost_scope()
+                .map_or_else(|| name.clone(), |q| format!("{q}.{name}"));
+            if let Some(previous) = self.cost_records.get(&record) {
+                if previous != &fields {
+                    return self.err(format!(
+                        "Cost `{name}` is redeclared with different resource fields or order"
+                    ));
+                }
+            } else {
+                self.cost_records.insert(record, fields);
+            }
+        } else {
+            let value = self.expr()?;
+            self.expect(&Tok::Semi)?;
+            out.push(Stmt::Declare(name.clone(), kind));
+            out.push(Stmt::Set(name, value));
         }
         Ok(())
     }
@@ -4839,9 +4951,13 @@ impl Parser {
                         );
                     }
                     self.expect(&Tok::Dot)?;
-                    let field = self.ident()?;
-                    let name = format!("{name}.{field}");
-                    self.dotted_reads.push((at, name.clone()));
+                    let mut name = format!("{name}.{}", self.ident()?);
+                    while self.eat(&Tok::Dot) {
+                        name.push('.');
+                        name.push_str(&self.ident()?);
+                    }
+                    self.dotted_reads
+                        .push((at, name.clone(), self.cost_scope()));
                     Ok(Expr::Located(span, Box::new(Expr::Var(name))))
                 } else {
                     if name == "self" && self.in_queue.is_none() {

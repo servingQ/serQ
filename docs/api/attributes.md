@@ -1,7 +1,7 @@
 # Attributes
 
 A session carries named numeric attributes, initially 0. Names assigned by
-[`set`](statements.md#set) or [`choose`](statements.md#choose) in session code
+typed declarations, [`set`](statements.md#set) or [`choose`](statements.md#choose) in session code
 are attributes; a `set` in a stage’s `iteration` body instead assigns a stage
 register. The built-in attributes below need no assignment.
 A name may not be both an attribute and a `let` constant, and neither may take
@@ -9,7 +9,9 @@ a [context variable](context.md)'s name.
 
 ## Sizes, values and costs
 
-Attributes have inferred types. Assignments in the workload produce `Size`:
+Use `Size name = expression;` to declare request quantities, and
+`Cost name = cost(resource, expression);` to declare a scalar resource cost.
+Existing `set` assignments still infer their types. Assignments in the workload produce `Size`:
 request quantities and client state. The server may read them but cannot
 assign them. Server assignments produce ordinary `Value` bookkeeping or a
 resource-specific `Cost`. Calculate remaining work or a bounded response in
@@ -22,18 +24,32 @@ require pool costs. For example:
 ```serq
 workload {
   arrive batch(1);
-  turn { set items = 3; }
+  turn { Size items = 3; }
   session { turn; }
 }
 server {
-  set service = cost(svc, 2 * items);
-  hold mem (cost(mem, items)) { run svc (service); }
+  Cost processing = { mem: items, svc: 2 * items };
+  hold mem (processing.mem) { run svc (processing.svc); }
 }
 ```
 
 Here `svc` and `mem` are declared resources. The same three items cost six
 seconds at a FIFO `svc` with this conversion. Changing the coefficient
 changes the deployment model without changing the workload.
+
+A composite `Cost` declares one independent amount per named resource.
+`processing.mem` is a pool cost and `processing.svc` is a stage cost: they
+cannot be substituted for one another. The declaration evaluates fields
+once, in written order; using a field reads its stored value. `Cost duration
+= processing.svc;` copies a scalar cost without repeating its calculation.
+Resource fields name families without member indices; the consuming
+`hold` or `run` chooses a member normally.
+
+These declarations use the existing session attributes, not block-local
+storage. A composite name must differ from scalar attributes, constants
+and resources. Repeating a composite declaration must retain its fields
+and their order. Composite records are accessed through their scalar
+fields; whole-record arithmetic and assignment are not supported.
 
 `Size` is an ownership type, not a physical unit: tokens, bytes, client
 continuation flags and thinking intervals are all ordinary quantities.

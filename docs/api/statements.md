@@ -14,6 +14,7 @@ indices and predicates remain ordinary quantities.
 
 | Statement | Does |
 |---|---|
+| [`Size` / `Cost`](#typed-declarations) | declares request quantities or resource costs |
 | [`set`](#set) | assigns a session attribute |
 | [`observe`](#observe) | records a sample |
 | [`turn`](#turn) | draws attributes and waits for the turn's response |
@@ -28,6 +29,38 @@ indices and predicates remain ordinary quantities.
 | [`loop`](#loop) | repeats a block |
 | [`choose`](#choose) | picks an index by the smallest key |
 | [`end`](#end) | ends the session |
+
+## Typed declarations
+
+```serq
+Size items = 3;
+Cost duration = cost(svc, 2 * items);
+Cost processing = { mem: items, svc: 2 * items };
+```
+
+`Size` declarations belong to the workload. `Cost` declares a scalar
+resource cost or a record of independent resource costs. A bare number
+cannot initialize a scalar Cost because it does not identify a resource.
+Declaration computes and stores values; `hold`, `run`, `grow` and `load`
+apply them at their ordinary execution moments. See
+[attribute types](attributes.md#sizes-values-and-costs) for ownership,
+field order and initialization rules.
+
+Several pools can share one scope:
+
+```serq
+hold P(processing.P), Q(processing.Q) { run svc(processing.svc); }
+```
+
+Here P and Q stand for declared pools. Admission needs room in both and
+waits in P's queue; this differs from nested holds, where P can remain
+allocated while waiting for Q. Use one hold for a common admission and
+lifetime, and nesting for different lifetimes.
+
+A queue entry's admission header can read its parameters and own resources,
+but cannot read Cost fields computed by its body. Keep those conversions
+in the header, for example `hold kv(cost(kv, prompt))`, or pass the ordinary
+quantity as an entry parameter. Cost fields remain available to the body.
 
 ## `set`
 

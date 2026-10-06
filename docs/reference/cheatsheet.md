@@ -68,6 +68,10 @@ stage engine : step {
 turn;                              // draw attributes and wait for the response
 while (more) { … }                 // continue while the condition holds
 // server { gw.route(); }          // select a gateway outside the workload
+Size items = expr;                 // workload request quantity
+Cost duration = cost(svc, expr);    // scalar stage cost
+Cost processing = { mem: expr, svc: expr }; // independent resource costs
+hold mem(processing.mem) { run svc(processing.svc); }
 set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
 

@@ -271,3 +271,155 @@ fn while_preserves_cost_initialization_and_statement_authority() {
     p.sides[body][0] = serq::ir::Side::Workload;
     assert!(p.validate().unwrap_err().contains("server body"));
 }
+
+#[test]
+fn explicit_sizes_and_composite_costs_have_independent_amounts() {
+    // Three items use six memory units and three seconds; a scalar alias
+    // retains the stage type without evaluating the conversion again.
+    let p = compile(
+        "Cost processing = { mem: 2 * items, svc: items }; Cost duration = processing.svc;
+         hold mem (processing.mem) { observe allocated = used(mem); run svc (duration); }
+         observe finished = now;",
+        "Size items = 3;",
+    )
+    .unwrap();
+    let q = Program::from_json(&p.to_json()).unwrap();
+    let report: serde_json::Value =
+        serde_json::from_str(&run_ir(&q, None).unwrap().json()).unwrap();
+    assert_eq!(report["observes"]["allocated"]["mean"], 6.0);
+    assert_eq!(report["observes"]["finished"]["mean"], 3.0);
+}
+
+#[test]
+fn composite_costs_can_hold_multiple_existing_pools_in_one_scope() {
+    let p = compile(
+        "Cost processing = { mem: items, other: 2 * items, svc: items };
+         hold mem (processing.mem), other (processing.other) {
+           observe allocated = used(mem) + used(other); run svc (processing.svc);
+         } observe freed = used(mem) + used(other);",
+        "Size items = 3;",
+    )
+    .unwrap();
+    let report: serde_json::Value =
+        serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
+    assert_eq!(report["observes"]["allocated"]["mean"], 9.0);
+    assert_eq!(report["observes"]["freed"]["mean"], 0.0);
+}
+
+#[test]
+fn typed_declarations_do_not_override_resource_or_side_checks() {
+    for (server, turn) in [
+        ("Size items = 3; run svc (cost(svc, 1));", "Size items = 3;"),
+        (
+            "Cost duration = items; run svc (duration);",
+            "Size items = 3;",
+        ),
+        ("run svc (cost(svc, 1));", "Size items = cost(svc, 3);"),
+        ("run svc (cost(svc, 1));", "Cost processing = { svc: 3 };"),
+        (
+            "Cost processing = { mem: items }; run svc (processing.mem);",
+            "Size items = 3;",
+        ),
+        (
+            "Cost processing = { mem: items }; hold other (processing.mem) { run svc (cost(svc, 1)); }",
+            "Size items = 3;",
+        ),
+        (
+            "Cost processing = {}; run svc (cost(svc, 1));",
+            "Size items = 3;",
+        ),
+        (
+            "Cost processing = { mem: 1, mem: 2 }; run svc (cost(svc, 1));",
+            "Size items = 3;",
+        ),
+        (
+            "Cost processing = { absent: 1 }; run svc (cost(svc, 1));",
+            "Size items = 3;",
+        ),
+        (
+            "Cost processing = { mem: 1 }; run svc (processing.absent);",
+            "Size items = 3;",
+        ),
+    ] {
+        assert!(compile(server, turn).is_err(), "{server} / {turn}");
+    }
+}
+
+#[test]
+fn composite_cost_fields_require_initialization_on_every_path() {
+    let e = compile(
+        "branch (items > 3) { Cost processing = { svc: items }; }
+         run svc (processing.svc);",
+        "Size items = 3;",
+    )
+    .unwrap_err();
+    assert!(e.contains("before every path converts and assigns"), "{e}");
+}
+
+#[test]
+fn record_names_cannot_also_name_scalars_or_resources() {
+    for body in [
+        "Cost c = cost(svc, 2); Cost c = { mem: 3 }; run svc (c);",
+        "Cost mem = { svc: 1 }; run svc (mem.svc);",
+        "set c = 0; Cost c = { svc: 1 }; run svc (c.svc);",
+    ] {
+        let e = compile(body, "Size items = 3;").unwrap_err();
+        assert!(e.contains("conflicts"), "{e}");
+    }
+}
+
+#[test]
+fn queue_records_keep_their_own_names_and_admission_rules() {
+    let model = r#"fn main() {
+      queue A : prefill { serve fifo; prefill(n) { Cost c = { A: n }; run(c.A); } }
+      queue B : prefill { serve fifo; prefill(n) { Cost c = { B: 2 * n }; run(c.B); } }
+      workload { arrive batch(1); }
+      server { A.prefill(1); B.prefill(1); observe finished = now; }
+    }"#;
+    let p = compile_source(model, &common::horizon(10.0)).unwrap();
+    let report: serde_json::Value =
+        serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
+    assert_eq!(report["observes"]["finished"]["mean"], 3.0);
+    let bad = r#"fn main() {
+      queue A : prefill {
+        pool mem { cap 10; } serve fifo;
+        prefill(n) { Cost c = { mem: n, A: n }; hold mem(c.mem) { run(c.A); } }
+      }
+      workload { arrive batch(1); }
+      server { A.prefill(1); }
+    }"#;
+    let e = compile_source(bad, &common::horizon(10.0)).unwrap_err();
+    assert!(e.contains("admission header reads local `c.mem`"), "{e}");
+}
+
+#[test]
+fn record_initializers_evaluate_once_in_written_order() {
+    let server = "Cost processing = { mem: ~uniform(1, 3), svc: ~exp(1) };
+                  Cost duration = processing.svc;
+                  observe a = processing.mem; observe b = duration;
+                  observe next = ~uniform(0, 1);
+                  hold mem(processing.mem) { run svc(duration); }";
+    let expanded = "set processing_mem = cost(mem, ~uniform(1, 3));
+                    set processing_svc = cost(svc, ~exp(1));
+                    set duration = processing_svc;
+                    observe a = processing_mem; observe b = duration;
+                    observe next = ~uniform(0, 1);
+                    hold mem(processing_mem) { run svc(duration); }";
+    let actual = run_ir(&compile(server, "Size items = 3;").unwrap(), None)
+        .unwrap()
+        .json();
+    let expected = run_ir(&compile(expanded, "set items = 3;").unwrap(), None)
+        .unwrap()
+        .json();
+    assert_eq!(actual, expected);
+    // Declaration at t=0 stores 1 second, even when consumed after 5 seconds.
+    let p = compile(
+        "Cost processing = { svc: now + 1 }; run tool(cost(tool, 5));
+                     run svc(processing.svc); observe finished = now;",
+        "Size items = 3;",
+    )
+    .unwrap();
+    let report: serde_json::Value =
+        serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
+    assert_eq!(report["observes"]["finished"]["mean"], 6.0);
+}

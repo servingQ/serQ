@@ -359,3 +359,12 @@ The `.sq` frontend requires `fn main()` for an executable source program.
 entry-point wrapper nor the input library adds a runtime node or field;
 plain constants remain folded, and an IR program never reads host arguments.
 This source-language change does not change `IR_VERSION` or IR meaning.
+
+### Explicit source declarations
+
+The `.sq` frontend accepts explicit `Size` and `Cost` declarations.
+A composite Cost is lowered to separate scalar attributes, one per named
+resource, and existing `CExpr::Cost` conversions. Source declarations are
+checked against the inferred slot types and erased; they add no IR node
+or execution scope. Serialized programs retain the same mandatory
+`attr_types` and `sides` validation contract.
