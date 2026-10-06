@@ -10,12 +10,13 @@
 // iteration reads the weights (omega, the idle ITL) plus the batch's KV.
 use "std/args";
 
+let bs = 16;           // block_size
+
 fn main() {
   let spacing = args.number("spacing", 3.5);     // seconds between session arrivals
   let N = args.number("N", 333);           // sessions in the trace
   let B = args.number("B", 512);           // max_num_batched_tokens
   let max_seqs = args.number("max_seqs", 64);     // max_num_seqs
-  let bs = 16;           // block_size
   let blocks = args.number("blocks", 8010);     // 128 160 tokens / 16
   // step cost, fitted on the A100 step sweeps (data/exp/gpu_seq/fit.json,
   // scripts/exp/fit_steps.py; MAPE 2.7 % decode, 5.6 % prefill, 5.7 % mixed)

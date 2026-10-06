@@ -3,15 +3,16 @@
 // `dai_sarathi.sq`. Decode first and no mixed batches: while a request
 // decodes, an iteration batches only decodes and the prefills wait. Time is
 // in units of 10 µs.
-fn main() {
-  let bmax = 128;
-  let c = 1128;
-  let a = 3547;
-  let b0 = 128;
-  let gap = 46750;
-  let vp = 290;
-  let vd = 990;
 
+let bmax = 128;
+let c = 1128;
+let a = 3547;
+let b0 = 128;
+let gap = 46750;
+let vp = 290;
+let vd = 990;
+
+fn main() {
   stage engine : step {
     budget bmax;
     cost c + a * ceil(tokens / b0);

@@ -13,17 +13,18 @@
 // own: the body sketched in docs/design/engine-neutrality.md (a guard on
 // `queued(kv)`, a counter register, `serve` only when nothing was
 // admitted), with `granule inf`.
-fn main() {
-  let B = 4096;          // max_batch_prefill_tokens
-  let T = 200000;        // max_batch_total_tokens (set by warm-up; assumed)
-  let mnt = 1024;        // the clients' max_new_tokens
-  let a = 2e-5;          // compute per scheduled token (s)
-  let omega = 2e-4;      // weights read per iteration (s)
-  let beta = 2e-9;       // KV read per iteration per resident context token (s)
-  let Lambda = 0.3;      // sessions per second
-  let p = 0.9;           // continue after a turn
-  let Z = 3.0;           // tool time (s)
 
+let B = 4096;          // max_batch_prefill_tokens
+let T = 200000;        // max_batch_total_tokens (set by warm-up; assumed)
+let mnt = 1024;        // the clients' max_new_tokens
+let a = 2e-5;          // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident context token (s)
+let Lambda = 0.3;      // sessions per second
+let p = 0.9;           // continue after a turn
+let Z = 3.0;           // tool time (s)
+
+fn main() {
   pool kv { cap T; block 1; evict lru; preempt none; admit via engine; }
 
   stage engine : step {

@@ -6,12 +6,13 @@
 // makes the queue longer, which loses more prefixes: a feedback loop.
 use "std/args";
 
+let Lambda = 0.5;
+let p = 0.8;
+let Z = 3.0;
+let a = 2e-5;
+let d = 2e-4;
+
 fn main() {
-  let Lambda = 0.5;
-  let p = 0.8;
-  let Z = 3.0;
-  let a = 2e-5;
-  let d = 2e-4;
   let C = args.number("C", 2e5);          // KV pool, tokens
 
   pool kv { cap C; evict lru; }

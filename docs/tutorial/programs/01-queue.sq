@@ -3,9 +3,10 @@
 // first come first served. This is the M/M/1 queue of every textbook.
 use "std/args";
 
+let S = 1.0;          // mean service time (s)
+
 fn main() {
   let Lambda = args.number("Lambda", 0.8);     // arrivals per second
-  let S = 1.0;          // mean service time (s)
 
   stage svc : fifo;
 

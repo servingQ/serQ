@@ -7,15 +7,16 @@
 // 467.5 ms with 290 prefill and 990 decode tokens.
 use "std/args";
 
+let kmax = 100;          // batch size limit k_max (§6)
+let c = 11.28e-3;        // s
+let a = 35.47e-3;        // s per step of b0 tokens
+let b0 = 128;
+let gap = 0.4675;        // fixed inter-arrival time (s)
+let vp = 290;
+let vd = 990;
+
 fn main() {
   let bmax = args.number("bmax", 128);          // token budget b_max
-  let kmax = 100;          // batch size limit k_max (§6)
-  let c = 11.28e-3;        // s
-  let a = 35.47e-3;        // s per step of b0 tokens
-  let b0 = 128;
-  let gap = 0.4675;        // fixed inter-arrival time (s)
-  let vp = 290;
-  let vd = 990;
 
   pool reqs { cap kmax; }
 

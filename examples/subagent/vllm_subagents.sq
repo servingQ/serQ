@@ -9,22 +9,23 @@ use "../../lib/vllm.sq";
 
 use "std/args";
 
+let B = 8192;          // max_num_batched_tokens
+let bs = 16;           // block_size
+let a = 2e-5;          // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident context token (s)
+let c0 = 0;            // fixed cost per iteration (s)
+let Lambda = 0.1;      // agent sessions per second
+let p = 0.9;           // the agent continues after a turn
+let Z = 3.0;           // tool time (s)
+let k = 3;             // subagents per delegation
+let pc = 0.7;          // a subagent continues after a turn
+
 fn main() {
-  let B = 8192;          // max_num_batched_tokens
   let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
   let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
-  let bs = 16;           // block_size
   let chunk_cap = args.number("chunk_cap", 0);     // long_prefill_token_threshold (0: none)
-  let a = 2e-5;          // compute per scheduled token (s)
-  let omega = 2e-4;      // weights read per iteration (s)
-  let beta = 2e-9;       // KV read per iteration per resident context token (s)
-  let c0 = 0;            // fixed cost per iteration (s)
-  let Lambda = 0.1;      // agent sessions per second
-  let p = 0.9;           // the agent continues after a turn
-  let Z = 3.0;           // tool time (s)
   let q = args.number("q", 0.3);           // a turn delegates instead of calling a tool
-  let k = 3;             // subagents per delegation
-  let pc = 0.7;          // a subagent continues after a turn
   let W = args.number("W", 14.7);          // the wait for the subagents (s): the mean of the longest of k
                          // `subagent` samples of a previous run (`--dump`)
   let kids = q * k * p / (1 - p);   // subagents per agent session (a last turn does not delegate)

@@ -3,12 +3,13 @@
 // comes back with a longer context. It continues with probability p.
 use "std/args";
 
+let Lambda = 0.5;     // new sessions per second
+let p = 0.8;          // continue after a turn
+let a = 2e-5;         // prefill: seconds per token
+let d = 2e-4;         // decode: seconds per token
+
 fn main() {
-  let Lambda = 0.5;     // new sessions per second
-  let p = 0.8;          // continue after a turn
   let Z = args.number("Z", 3.0);          // mean tool time (s)
-  let a = 2e-5;         // prefill: seconds per token
-  let d = 2e-4;         // decode: seconds per token
 
   stage engine : fifo;
   stage tool : delay;

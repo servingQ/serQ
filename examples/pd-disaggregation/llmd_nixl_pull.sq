@@ -23,28 +23,29 @@ use "../../lib/vllm.sq";
 
 use "std/args";
 
+let NP = 2;            // prefill instances
+let ND = 2;            // decode instances
+let B = 8192;          // max_num_batched_tokens
+let max_seqsP = 16;    // max_num_seqs on a prefiller
+let max_seqsD = 64;    // max_num_seqs on a decoder
+let blocksP = 10000;   // num_gpu_blocks on a prefiller
+let bs = 16;           // block_size
+let max_model_len = 16384;  // every KV pool holds one request of it: vLLM refuses to start otherwise (kv_cache_utils.py:864-900, called at kv_cache_utils.py:2742)
+let a = 2e-5;          // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident context token (s)
+let c0 = 0;            // fixed cost per iteration (s)
+let BwP = 2e5;         // NIXL bandwidth out of a prefiller, tokens/s (128 KB per token at 25 GB/s)
+let BwD = 2e5;         // and into a decoder (one NIC each: the tensor-parallel fan-out of the read is not modelled)
+let x0 = 0.002;        // per-read latency: posting the READ and the step that polls its completion (s; nixl/pull_worker.py:545-558)
+let minp = 0;          // prefix-based-pd-decider promptTokens
+let p = 0.9;           // continue after a turn
+let Z = 3.0;           // tool time (s)
+
 fn main() {
-  let NP = 2;            // prefill instances
-  let ND = 2;            // decode instances
-  let B = 8192;          // max_num_batched_tokens
-  let max_seqsP = 16;    // max_num_seqs on a prefiller
-  let max_seqsD = 64;    // max_num_seqs on a decoder
-  let blocksP = 10000;   // num_gpu_blocks on a prefiller
   let blocksD = args.number("blocksD", 10000);   // num_gpu_blocks on a decoder
-  let bs = 16;           // block_size
-  let max_model_len = 16384;  // every KV pool holds one request of it: vLLM refuses to start otherwise (kv_cache_utils.py:864-900, called at kv_cache_utils.py:2742)
-  let a = 2e-5;          // compute per scheduled token (s)
-  let omega = 2e-4;      // weights read per iteration (s)
-  let beta = 2e-9;       // KV read per iteration per resident context token (s)
-  let c0 = 0;            // fixed cost per iteration (s)
-  let BwP = 2e5;         // NIXL bandwidth out of a prefiller, tokens/s (128 KB per token at 25 GB/s)
-  let BwD = 2e5;         // and into a decoder (one NIC each: the tensor-parallel fan-out of the read is not modelled)
-  let x0 = 0.002;        // per-read latency: posting the READ and the step that polls its completion (s; nixl/pull_worker.py:545-558)
   let thr = args.number("thr", 512);         // prefix-based-pd-decider nonCachedTokens (1: the guide's always-disagg-pd-decider)
-  let minp = 0;          // prefix-based-pd-decider promptTokens
   let Lambda = args.number("Lambda", 0.6);      // sessions per second
-  let p = 0.9;           // continue after a turn
-  let Z = 3.0;           // tool time (s)
 
   // The deployment: what the router, the sidecar and the two schedulers do
   // with one request. The router and the sidecar are the gateway; each

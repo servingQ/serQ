@@ -9,18 +9,19 @@
 // granularity. Sessions: two classes (agents, one-shot documents); at most
 // `cap` live sessions (the rest wait to enter), batch cap `B`, a KV pool of
 // `C` tokens with shortest-first eviction (tool calls before waiting turns).
-fn main() {
-  let Lambda = 0.28;   // sessions per second
-  let cap = 24;        // live sessions (entry queue beyond)
-  let B = 8;           // batch cap (prefilling and decoding turns)
-  let C = 6e5;         // KV pool, tokens
-  let maxctx = C / 2;
-  let s0 = 0.005;      // per-turn overhead (s)
-  let a = 2e-5;        // prefill compute per token (s)
-  let b = 2e-9;        // prefill attention per token per context token (s)
-  let omega = 2e-4;    // weights read per iteration (s)
-  let beta = 2e-9;     // KV read per iteration per context token (s)
 
+let Lambda = 0.28;   // sessions per second
+let cap = 24;        // live sessions (entry queue beyond)
+let B = 8;           // batch cap (prefilling and decoding turns)
+let C = 6e5;         // KV pool, tokens
+let maxctx = C / 2;
+let s0 = 0.005;      // per-turn overhead (s)
+let a = 2e-5;        // prefill compute per token (s)
+let b = 2e-9;        // prefill attention per token per context token (s)
+let omega = 2e-4;    // weights read per iteration (s)
+let beta = 2e-9;     // KV read per iteration per context token (s)
+
+fn main() {
   pool live { cap cap; }
   pool batch { cap B; }
   pool kv { cap C; evict by (waiting, size); }

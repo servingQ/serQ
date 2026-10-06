@@ -6,19 +6,20 @@ use "../../lib/vllm.sq";
 
 use "std/args";
 
+let B = 8192;          // max_num_batched_tokens
+let bs = 16;           // block_size
+let a = 2e-5;          // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident context token (s)
+let c0 = 0;            // fixed cost per iteration (s)
+let Lambda = 0.3;      // conversations per second
+let p = 0.8;           // the person asks again
+let Z = 20.0;          // reading and typing time (s)
+
 fn main() {
-  let B = 8192;          // max_num_batched_tokens
   let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
   let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
-  let bs = 16;           // block_size
   let chunk_cap = args.number("chunk_cap", 0);     // long_prefill_token_threshold (0: none)
-  let a = 2e-5;          // compute per scheduled token (s)
-  let omega = 2e-4;      // weights read per iteration (s)
-  let beta = 2e-9;       // KV read per iteration per resident context token (s)
-  let c0 = 0;            // fixed cost per iteration (s)
-  let Lambda = 0.3;      // conversations per second
-  let p = 0.8;           // the person asks again
-  let Z = 20.0;          // reading and typing time (s)
 
   pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
   pool reqs { cap max_seqs; admit via engine; }   // the engine's step admits the waiting, FCFS
