@@ -15,13 +15,13 @@ serq --help
 Or install the CLI straight from a release tag:
 
 ```bash
-cargo install --git https://github.com/servingQ/serQ --tag v0.1.3 --locked --root ~/.local
+cargo install --git https://github.com/servingQ/serQ --tag v0.1.4 --locked --root ~/.local
 ```
 
 As a dependency, pin a tag:
 
 ```toml
-serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.3" }
+serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.4" }
 ```
 
 ## Run your first program
