@@ -434,7 +434,7 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
 /// but only for the 10 serials below 10.
 #[test]
 fn a_test_observe_that_never_held_is_noted() {
-    let src = "def below(x) = x < 0;
+    let src = "def below(x) { x < 0 }
         stage svc : delay; workload { arrive batch(40);
           session { request;
             end;

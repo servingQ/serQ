@@ -6,7 +6,7 @@ use serq::{Overrides, compile_source};
 const SOURCE: &str = r#"
 use "std/args";
 let fixed = 2;
-def twice(x) = x * 2;
+def twice(x) { x * 2 }
 fn main() {
   let rate = args.number("arrival_rate", 0.5);
   let service = twice(fixed);

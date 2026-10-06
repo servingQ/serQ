@@ -2,7 +2,7 @@
 use "std/args";
 
 let seconds_per_unit = 1;
-def service_time(units) = units * seconds_per_unit;
+def service_time(units) { units * seconds_per_unit }
 
 fn main() {
   let requests = args.number("requests", 2);

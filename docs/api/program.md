@@ -111,9 +111,14 @@ program the same system with other numbers
 ## `def`
 
 ```serq
-def NAME ( PARAM, … ) = expr;
+def NAME ( PARAM, … ) { expr }
 def NAME ( PARAM, … ) { statement* }
 ```
+
+Both forms enclose the body in braces. A value definition contains one
+expression without a trailing semicolon. A statement definition contains
+statements, or is empty. Statements followed by a result expression are
+not supported; definitions do not introduce local variables or `return`.
 
 A name for source the program would otherwise repeat. A use, `NAME(arg, …)`
 in an expression or `NAME(arg, …);` as a statement, is replaced by the body
@@ -125,10 +130,10 @@ the rules of the block it is used in (no `turn`, `end` or `request` in a
 An expression definition's body can separately be given from outside: `--def NAME=expr` on the command line, `defs={"NAME": "expr"}` in
 pyserq. The program is then the one written with that body, so a
 distribution or a key the program leaves open is a parameter of the run
-(`def service() = ~exp(1);`, run with `--def service='~erlang(4, 1)'`).
+(`def service() { ~exp(1) }`, run with `--def service='~erlang(4, 1)'`).
 
 ```serq
-def reusable(x, bs) = floor((x - 1) / bs) * bs;
+def reusable(x, bs) { floor((x - 1) / bs) * bs }
 set hitD = min(cachedin(D[j].kv), reusable(prompt, bs));
 ```
 

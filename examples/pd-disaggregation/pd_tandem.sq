@@ -16,9 +16,9 @@ let jobs = 320;
 let mode = 1;   // 0 aggregated, 1 disaggregated
 
 // the laws, by name (`--def prefill_work='~erlang(4, sP)'`)
-def prefill_work() = ~exp(sP);
-def decode_work() = ~exp(sD);
-def kv_tokens() = ~exp(K);
+def prefill_work() { ~exp(sP) }
+def decode_work() { ~exp(sD) }
+def kv_tokens() { ~exp(K) }
 
 fn main() {
   stage agg : fifo(max(N, 1));

@@ -40,9 +40,9 @@ only in cost:
 
 ```serq
 // Selected configuration: three slots, decode buckets [1, 2, 4].
-def decode_rows(n) = n <= 1 ? 1 : n <= 2 ? 2 : 4;
+def decode_rows(n) { n <= 1 ? 1 : n <= 2 ? 2 : 4 }
 // Integer token alignment for a TP4 cost approximation.
-def aligned_tokens(n) = 4 * floor((n + 3) / 4);
+def aligned_tokens(n) { 4 * floor((n + 3) / 4) }
 ```
 
 For an exclusive-prefill engine with compiled width 128, a cost can charge

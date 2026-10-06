@@ -351,7 +351,7 @@ fn a_latency_is_the_links_constant() {
 fn a_keyword_named_attribute_is_a_read() {
     for word in ["latency", "cap"] {
         let src = format!(
-            "def get() = {word};
+            "def get() {{ {word} }}
         def f(x) {{ set {word} = 2; observe o = x; }}
         stage s : delay;
         workload {{ session {{ request; end;

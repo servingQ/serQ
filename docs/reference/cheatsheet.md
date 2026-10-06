@@ -7,7 +7,7 @@ argument rules and [The language](../language.md) for complete semantics.
 
 ```serq
 let NAME = expr;                    // fixed constants
-def NAME(x, …) = expr;              // a name for an expression, expanded where it is used
+def NAME(x, …) { expr }              // a name for an expression, expanded where it is used
 def NAME(x, …) { … }                // a name for statements: NAME(a, …);
 use "file.sq";                     // the defs of a library, relative to this file
 

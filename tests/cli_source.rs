@@ -288,8 +288,8 @@ fn a_def_given_from_outside_is_the_program_written_with_that_body() {
     let src = |service: &str, key: &str| {
         format!(
             "let lam = 0.5;
-def service() = {service};
-def key(x) = {key};
+def service() {{ {service} }}
+def key(x) {{ {key} }}
 def twice(x) {{ set y = x * 2; }}
 stage svc : fifo;
 workload {{ arrive poisson(lam);

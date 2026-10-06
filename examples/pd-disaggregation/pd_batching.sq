@@ -44,8 +44,8 @@ let c0 = 0;            // fixed cost per iteration (s)
 let gD = 1;            // a decode engine's memory bandwidth against a colocated one's
 
 // the laws, by name (`--def output='1001'`)
-def prompt_len() = floor(~uniform(1000, 3000));
-def output() = floor(~exp(200)) + 2;   // at least two tokens, so a TPOT exists
+def prompt_len() { floor(~uniform(1000, 3000)) }
+def output() { floor(~exp(200)) + 2 }   // at least two tokens, so a TPOT exists
 
 fn main() {
   let mode = args.number("mode", 1);          // 0 colocated, 1 split

@@ -86,3 +86,22 @@ fn invalid_batch_leaves_every_file_untouched() {
         common::main_source(original)
     );
 }
+
+#[test]
+fn braced_definitions_format_and_preserve_expansion() {
+    let source = "def twice(x){\n// value\nx * 2\n}\ndef record(x){observe value = x;}\nfn main(){\nworkload { session { request; end; } }\nserver { record(twice(3)); }\nrun { horizon 1; }\n}\n";
+    let formatted = format(source).unwrap();
+    assert!(
+        formatted.contains("def twice(x) {\n  // value\n  x * 2\n}"),
+        "{formatted}"
+    );
+    assert_eq!(format(&formatted).unwrap(), formatted);
+    assert_eq!(
+        compile_source(source, &Overrides::default())
+            .unwrap()
+            .to_json(),
+        compile_source(&formatted, &Overrides::default())
+            .unwrap()
+            .to_json(),
+    );
+}

@@ -128,7 +128,7 @@ fn overrides_are_refused_on_ir_by_what_they_override() {
     let f = Fixture::new();
     let program = compile_source(
         &common::main_source(
-            "let lam = 1; def law() = ~exp(1); workload { arrive poisson(lam);
+            "let lam = 1; def law() { ~exp(1) } workload { arrive poisson(lam);
           session { request; end;
           }
         } server { set x = law();

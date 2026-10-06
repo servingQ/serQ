@@ -327,7 +327,7 @@ struct Expanded {
     file: usize,
 }
 
-/// `def name(x, y) = e;` or `def name(x, y) { statements }`: a name for
+/// `def name(x, y) { e }` or `def name(x, y) { statements }`: a name for
 /// source a program would otherwise repeat. A use is replaced by the body's
 /// tokens, each parameter by its argument's, and parsed where it stands, so
 /// the AST, the IR and everything after know nothing of it.
@@ -335,7 +335,7 @@ struct Expanded {
 struct Def {
     name: String,
     params: Vec<String>,
-    /// An expression (`= e;`) or statements (`{ … }`).
+    /// A single expression or statements, both enclosed in braces.
     stmts: bool,
     body: Vec<Token>,
     /// The body draws, itself or through a definition it uses.
@@ -613,7 +613,7 @@ fn parse_with(
             line: 0,
             col: 0,
             msg: format!(
-                "unknown `def` override `{name}`\nhelp: an override replaces the body of a declared `def NAME(...) = expr;`; \
+                "unknown `def` override `{name}`\nhelp: an override replaces the body of a declared `def NAME(...) {{ expr }}`; \
                  the program declares: {}",
                 if known.is_empty() {
                     "none".to_string()
@@ -2250,7 +2250,7 @@ impl Parser {
         Ok(())
     }
 
-    /// `def name(x, …) = e;` or `def name(x, …) { … }`, after `def`.
+    /// `def name(x, …) { e }` or `def name(x, …) { … }`, after `def`.
     fn def(&mut self) -> PResult<()> {
         let at = self.pos;
         let name = self.ident()?;
@@ -2303,23 +2303,18 @@ impl Parser {
             }
         }
         self.expect(&Tok::RParen)?;
-        let stmts = match self.peek() {
-            Tok::Assign => false,
-            Tok::LBrace => true,
-            other => {
-                return self.err(format!(
-                    "expected `= expression;` or `{{ statements }}` after `def {name}(…)`, found {other}"
-                ));
-            }
-        };
-        self.advance();
+        if *self.peek() == Tok::Assign {
+            return self.err(
+                "expression definitions use `def name(…) { expression }` without a semicolon",
+            );
+        }
+        self.expect(&Tok::LBrace)?;
         let start = self.pos;
         let mut depth = 0usize;
         loop {
             match self.peek() {
                 Tok::Eof => return self.err_at(at, format!("`def {name}` is not closed")),
-                Tok::RBrace if depth == 0 && stmts => break,
-                Tok::Semi if depth == 0 && !stmts => break,
+                Tok::RBrace if depth == 0 => break,
                 Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
                 Tok::RParen | Tok::RBracket | Tok::RBrace => {
                     if depth == 0 {
@@ -2333,6 +2328,20 @@ impl Parser {
         }
         let mut body = self.toks[start..self.pos].to_vec();
         self.advance();
+        // Expressions contain no statement terminators or blocks. Empty
+        // definitions remain statement definitions, as do nested blocks.
+        let stmts = body.is_empty()
+            || body
+                .iter()
+                .any(|t| matches!(t.tok, Tok::Semi | Tok::LBrace));
+        if stmts
+            && body
+                .last()
+                .is_some_and(|t| !matches!(t.tok, Tok::Semi | Tok::RBrace))
+        {
+            return self.err_at(at, "a definition contains either one expression without a semicolon or statements; a statement body cannot end with a result expression");
+        }
+
         if let Some(i) = self.def_overrides.iter().position(|d| d.0 == name) {
             if stmts {
                 return self.err_at(
@@ -3828,7 +3837,7 @@ impl Parser {
         if let Some(i) = self.use_of_def() {
             if !self.defs[i].stmts {
                 return self.err(format!(
-                    "`{}` is an expression (`def {0}(…) = …;`), not statements",
+                    "`{}` is an expression (`def {0}(…) {{ … }}`), not statements",
                     self.defs[i].name
                 ));
             }
@@ -5342,7 +5351,7 @@ mod tests {
         // an expression: the argument in parentheses, the body too
         same(
             &format!(
-                "{ENGINE} def full(x) = floor((x - 1) / bs) * bs;
+                "{ENGINE} def full(x) {{ floor((x - 1) / bs) * bs }}
         workload {{ session {{ request;
         }} }}
         server {{ set h = full(a + b) * 2; set g = min(full(k), 3);
@@ -5399,7 +5408,7 @@ mod tests {
                 .msg
         };
         assert!(
-            err("def f(x) = x; workload { session { request; \n} }\nserver { f(1);\n}")
+            err("def f(x) { x } workload { session { request; \n} }\nserver { f(1);\n}")
                 .contains("is an expression")
         );
         assert!(
@@ -5407,35 +5416,35 @@ mod tests {
                 .contains("is statements")
         );
         assert!(
-            err("def f(x) = x; workload { session { request; \n} }\nserver { set a = f(1, 2);\n}")
+            err("def f(x) { x } workload { session { request; \n} }\nserver { set a = f(1, 2);\n}")
                 .contains("takes 1 argument(s), got 2")
         );
         assert!(
-            err("def f(x) = x + x; workload { session { request; \n} }\nserver { set a = f(~exp(1));\n}").contains("would draw 2 times")
+            err("def f(x) { x + x } workload { session { request; \n} }\nserver { set a = f(~exp(1));\n}").contains("would draw 2 times")
         );
         assert!(
-            err("def f(x) = f(x); workload { session { request; \n} }\nserver {\n}")
+            err("def f(x) { f(x) } workload { session { request; \n} }\nserver {\n}")
                 .contains("uses itself")
         );
         assert!(
-            err("def min(x) = x; workload { session { request; \n} }\nserver {\n}")
+            err("def min(x) { x } workload { session { request; \n} }\nserver {\n}")
                 .contains("a word of the language")
         );
         assert!(
-            err("def uniform(x) = x; workload { session { request; \n} }\nserver {\n}")
+            err("def uniform(x) { x } workload { session { request; \n} }\nserver {\n}")
                 .contains("a word of the language")
         );
         assert!(
-            err("def f(on) = on; workload { session { request; \n} }\nserver {\n}")
+            err("def f(on) { on } workload { session { request; \n} }\nserver {\n}")
                 .contains("a word of the language")
         );
         assert!(
-            err("def f(min) = min(min, 1); workload { session { request; \n} }\nserver {\n}")
+            err("def f(min) { min(min, 1) } workload { session { request; \n} }\nserver {\n}")
                 .contains("a word of the language")
         );
         // a definition uses only the ones before it: no recursion
         assert!(
-            err("def g(x) = f(x); def f(x) = g(x); workload { session { request; \n} }\nserver { set a = g(1);\n}")
+            err("def g(x) { f(x) } def f(x) { g(x) } workload { session { request; \n} }\nserver { set a = g(1);\n}")
                 .contains("`g` uses `f`, which is defined after it")
         );
         assert!(
@@ -5444,12 +5453,12 @@ mod tests {
         );
         // a stray closer
         assert!(
-            err("def f(x) = x; workload { session { request; \n} }\nserver { set a = f(1]);\n}")
+            err("def f(x) { x } workload { session { request; \n} }\nserver { set a = f(1]);\n}")
                 .contains("unmatched")
         );
         // a definition that draws draws when it is an argument
         assert!(
-            err("def d() = ~exp(1); def twice(x) = x + x; workload { session { request; \n} }\nserver { set a = twice(d());\n}")
+            err("def d() { ~exp(1) } def twice(x) { x + x } workload { session { request; \n} }\nserver { set a = twice(d());\n}")
                 .contains("would draw 2 times")
         );
         // an argument the body would capture
@@ -5475,14 +5484,14 @@ mod tests {
         );
         // a parameter may not be an aggregate's index, and a count may be one
         assert!(
-            err("def tally(k) = sum k in 2 (k); workload { session { request; \n} }\nserver { set x = tally(7);\n}")
+            err("def tally(k) { sum k in 2 (k) } workload { session { request; \n} }\nserver { set x = tally(7);\n}")
                 .contains("is a parameter")
         );
-        parse(&main_source("def tally(n) = sum k in n (k); workload { session { request; \n} }\nserver { set x = tally(2);\n}",
+        parse(&main_source("def tally(n) { sum k in n (k) } workload { session { request; \n} }\nserver { set x = tally(2);\n}",
         )).unwrap();
         // a parenthesised count: the body's `k` is still the aggregate's
         parse(&main_source(
-            "def tally() = sum k in (1 + 1) (k); def next(x) { turn; observe p = x; } workload { turn { set k = 1; }
+            "def tally() { sum k in (1 + 1) (k) } def next(x) { turn; observe p = x; } workload { turn { set k = 1; }
           session { next(tally()); request; end; }
         } server {}",
         )
@@ -5490,7 +5499,7 @@ mod tests {
         .unwrap();
         // an aggregate's index is its own, not a name the argument reads
         parse(&main_source(
-            "def tally() = sum i in 2 (i); def next(x) { turn; observe p = x; } workload { turn { set i = 1; }
+            "def tally() { sum i in 2 (i) } def next(x) { turn; observe p = x; } workload { turn { set i = 1; }
           session { next(tally()); request; end; }
         } server {}",
         )
@@ -5519,7 +5528,7 @@ mod tests {
         );
         // an expression's argument is read where the expression is
         parse(&main_source(&format!(
-            "{ENGINE} def g(x) = x + 1; workload {{ session {{ request; \n}} }}\nserver {{ set a = g(now);\n}}"
+            "{ENGINE} def g(x) {{ x + 1 }} workload {{ session {{ request; \n}} }}\nserver {{ set a = g(now);\n}}"
         )
         ))
         .unwrap();
@@ -5531,15 +5540,15 @@ mod tests {
         .unwrap();
         // and through an expression the argument uses
         assert!(
-            err("stage svc : fifo; def clock() = now; def timed(t) { run svc (1); observe took = now - t; } workload { session { request; \n} }\nserver { timed(clock());\n}")
+            err("stage svc : fifo; def clock() { now } def timed(t) { run svc (1); observe took = now - t; } workload { session { request; \n} }\nserver { timed(clock());\n}")
                 .contains("reads `now`")
         );
         assert!(
-            err("def occ(p) = used(p); def f(q) { observe b = q; } workload { session { request; \n} }\nserver { f(occ(kv));\n}")
+            err("def occ(p) { used(p) } def f(q) { observe b = q; } workload { session { request; \n} }\nserver { f(occ(kv));\n}")
                 .contains("reads `used(…)`")
         );
         assert!(
-            err("def plus(x) = s + x; def f(v) { set s = 10; observe o = v; } workload { session { request; \n} }\nserver { f(plus(1));\n}")
+            err("def plus(x) { s + x } def f(v) { set s = 10; observe o = v; } workload { session { request; \n} }\nserver { f(plus(1));\n}")
                 .contains("which `f` assigns")
         );
         // and through a definition the body uses
@@ -5557,11 +5566,11 @@ mod tests {
         );
         // a name that is a declaration's
         assert!(
-            err("def kv(x) = x; workload { session { request; \n} }\nserver {\n}")
+            err("def kv(x) { x } workload { session { request; \n} }\nserver {\n}")
                 .contains("also a pool")
         );
         assert!(
-            err("def engine(x) = x; workload { session { request; \n} }\nserver {\n}")
+            err("def engine(x) { x } workload { session { request; \n} }\nserver {\n}")
                 .contains("also a stage")
         );
         // the name of a statement body's attribute is not a use
@@ -5575,19 +5584,19 @@ mod tests {
             err("def take(n) { turn; } workload { session { request; end; } } server { take(4); }");
         assert!(e.contains("note: in `take`, used at"), "{e}");
         assert!(
-            err("def f(x) = x; def f(y) = y; workload { session { request; \n} }\nserver {\n}")
+            err("def f(x) { x } def f(y) { y } workload { session { request; \n} }\nserver {\n}")
                 .contains("defined twice")
         );
         // an argument used once may draw
         parse(&main_source(&format!(
-            "{ENGINE} def f(x) = x + 1; workload {{ session {{ request; \n}} }}\nserver {{ set a = f(~exp(1));\n}}"
+            "{ENGINE} def f(x) {{ x + 1 }} workload {{ session {{ request; \n}} }}\nserver {{ set a = f(~exp(1));\n}}"
         )
         ))
         .unwrap();
         // a def used before it is defined is a call of an unknown function,
         // which the linker reports
         parse(&main_source(&format!(
-            "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ set a = f(1);\n}} def f(x) = x;"
+            "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ set a = f(1);\n}} def f(x) {{ x }}"
         )
         ))
         .unwrap();
@@ -5797,7 +5806,7 @@ mod tests {
         // and none of them names anything, so a name never means two things
         for src in [
             "def keep(n) { observe k = n; } workload { session { request; end; \n} }\nserver {\n}",
-            "def f(where) = where; workload { session { request; end; \n} }\nserver {\n}",
+            "def f(where) { where } workload { session { request; end; \n} }\nserver {\n}",
             "workload { session { request; end; \n} }\nserver { set fit = 1;\n}",
             "workload { session { request; end; \n} }\nserver { hold kv (1) at admission (enter = 1) { observe e = enter; }\n}",
         ] {

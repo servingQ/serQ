@@ -12,10 +12,12 @@ fn main() {
   let cv2 = args.number("cv2", 4.0);
   let law = args.number("law", 1);
 
-  def service() = law == 0 ? mean_s
-                : law == 1 ? ~exp(mean_s)
-                : law == 2 ? ~erlang(4, mean_s)
-                : ~h2(mean_s, cv2);
+  def service() {
+    law == 0 ? mean_s
+    : law == 1 ? ~exp(mean_s)
+    : law == 2 ? ~erlang(4, mean_s)
+    : ~h2(mean_s, cv2)
+  }
 
   stage svc : fifo(servers);
 

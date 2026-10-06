@@ -24,10 +24,10 @@ let bw = 2e6;        // migration link, tokens/s
 let dv = 0.0;        // decode KV-read cost, seconds/token^2
 
 // the laws, by name (`--def new_tokens='~erlang(2, 500)'`)
-def initial_tokens() = ~uniform(5000, 15000);
-def new_tokens() = ~exp(500);
-def output_tokens() = ~exp(200);
-def tool_time() = ~exp(Z);
+def initial_tokens() { ~uniform(5000, 15000) }
+def new_tokens() { ~exp(500) }
+def output_tokens() { ~exp(200) }
+def tool_time() { ~exp(Z) }
 
 fn main() {
   stage rep[4] : fifo;

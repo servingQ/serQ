@@ -39,7 +39,7 @@ fn a_program_uses_the_definitions_of_a_library() {
                 "lib/a.sq",
                 "use \"b.sq\";\ndef take(n) { hold kv (n) { prefill on engine (n) growing kv; } }\n",
             ),
-            ("lib/b.sq", "def twice(x) = 2 * x;\n"),
+            ("lib/b.sq", "def twice(x) { 2 * x }\n"),
             (
                 "main.sq",
                 &format!("use \"lib/a.sq\";\nuse \"lib/b.sq\";\n{PROGRAM}"),
@@ -82,7 +82,7 @@ fn a_library_holds_definitions() {
     let d = dir(
         "only-defs",
         &[
-            ("lib.sq", "def f(x) = x;\nlet k = 3;\n"),
+            ("lib.sq", "def f(x) { x }\nlet k = 3;\n"),
             (
                 "main.sq",
                 "use \"lib.sq\";\nworkload { session { request; end; \n} }\nserver {\n}\n",
@@ -99,7 +99,7 @@ fn a_library_definition_is_whole() {
     // the program cannot finish a library's definition
     for (lib, main) in [
         ("def", "take(n) { set a = n; }\n"),
-        ("def g(x) = x +", "1;\n"),
+        ("def g(x) { x +", "1 }\n"),
     ] {
         let d = dir(
             "whole",
@@ -142,15 +142,15 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
     let d = dir(
         "root",
         &[
-            ("lib/a.sq", "use \"../main.sq\";\ndef twice(x) = 2 * x;\n"),
+            ("lib/a.sq", "use \"../main.sq\";\ndef twice(x) { 2 * x }\n"),
             (
                 "main.sq",
                 "use \"lib/a.sq\";\nstage svc : fifo;\nworkload { session { request; end; \n} }\nserver { run svc (twice(1));\n}\nrun { horizon 10; }\n",
             ),
             // two libraries that use each other: the order of their definitions
             // is what is wrong, and the error says so
-            ("lib/a2.sq", "use \"b2.sq\";\ndef take(n) = n;\n"),
-            ("lib/b2.sq", "use \"a2.sq\";\ndef give(n) = take(n);\n"),
+            ("lib/a2.sq", "use \"b2.sq\";\ndef take(n) { n }\n"),
+            ("lib/b2.sq", "use \"a2.sq\";\ndef give(n) { take(n) }\n"),
         ],
     );
     let main = d.join("main.sq");
@@ -245,7 +245,7 @@ fn blocksize_is_not_a_constant() {
     assert!(e.contains("`blocksize` is not a constant"), "{e}");
     let e = compile_source(
         &common::main_source(
-        "def f(blocksize) = blocksize + 1;\nstage svc : delay;\nworkload { session { request; end; \n} }\nserver {\n}\n",
+        "def f(blocksize) { blocksize + 1 }\nstage svc : delay;\nworkload { session { request; end; \n} }\nserver {\n}\n",
         ),
         &Overrides::default(),
     )
@@ -290,4 +290,59 @@ fn the_library_is_one_definition_of_the_vllm_engine() {
             "{name} writes the admission out"
         );
     }
+}
+
+#[test]
+fn braced_values_and_statements_expand_without_changing_ir() {
+    let source = r#"
+def twice(x) {
+  // A multiline value body with nested parentheses and a conditional.
+  x > 0 ? (x * 2) : 0
+}
+def idle() {}
+def take(n) { hold kv (n) { prefill on engine (n) growing kv; } }
+"#;
+    let used = compile_source(
+        &common::main_source(
+            &format!("{source}{PROGRAM}").replace("take(twice(k));", "idle(); take(twice(k));"),
+        ),
+        &Overrides::default(),
+    )
+    .unwrap();
+    let written = compile_source(
+        &common::main_source(&PROGRAM.replace(
+            "take(twice(k));",
+            "hold kv (k > 0 ? (k * 2) : 0) { prefill on engine (k > 0 ? (k * 2) : 0) growing kv; }",
+        )),
+        &Overrides::default(),
+    )
+    .unwrap();
+    assert_eq!(used.to_json(), written.to_json());
+}
+
+#[test]
+fn definitions_reject_legacy_syntax_and_mixed_bodies() {
+    for (definition, expected) in [
+        ("def f(x) = x;", "without a semicolon"),
+        (
+            "def f(x) { set y = x; y }",
+            "cannot end with a result expression",
+        ),
+        (
+            "def f(x) { if x { observe y = x; } x }",
+            "cannot end with a result expression",
+        ),
+        ("def f(x) { x", "is not closed"),
+    ] {
+        let source = format!(
+            "{definition}\nfn main() {{ workload {{ session {{ request; end; }} }} server {{}} }}"
+        );
+        let error = compile_source(&source, &Overrides::default()).unwrap_err();
+        assert!(error.contains(expected), "{error}");
+    }
+    let source = common::main_source(
+        "def f(x) { x; } workload { session { request; end; } } server { set y = f(1); }",
+    );
+    let error = compile_source(&source, &Overrides::default()).unwrap_err();
+    assert!(error.contains("not an expression"), "{error}");
 }
