@@ -16,11 +16,16 @@ fn source(policy: &str, slot_cap: usize, kv_cap: usize) -> String {
         pool kv {{ cap {kv_cap}; }}
         stage gate : delay;
         stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {policy} }}
-        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} }}
-        session {{
+        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
           run gate (serial);
           hold reqs (1), kv (min(prompt, left)) reserve (prompt)
-               at admission (left = budget_left(engine)) {{
+          at admission (left = budget_left(engine)) {{
             observe allocation = used(kv);
             run engine prefill (prompt) growing kv;
             observe prefill_done = now;
@@ -30,10 +35,9 @@ fn source(policy: &str, slot_cap: usize, kv_cap: usize) -> String {
           observe final_cached = cachedin(kv);
           observe done = now;
           observe who = serial;
-          end;
         }}
         run {{ horizon 20; }}
-        "#
+"#
     )
 }
 
@@ -139,17 +143,21 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
         stage engine : step {
           budget 4; chunk 4; cost 1; memory kv; serve exclusive prefill;
         }
-        workload { arrive batch(3); }
-        session {
+        workload { arrive batch(3);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold reqs (1), kv (4) reserve (6) {
             observe admitted = now;
             run engine prefill (6) growing kv;
             run engine decode (1) growing kv;
           }
-          end;
         }
         run { horizon 20; }
-    "#;
+"#;
     let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 2.0, 4.0]);
@@ -165,8 +173,13 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
     let src = r#"
         pool reqs { cap 3; admit via engine; }
         stage engine : step { budget 2; cost 1; serve exclusive prefill; }
-        workload { arrive batch(3); }
-        session {
+        workload { arrive batch(3);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold reqs (1) {
             observe admitted = now;
             branch (serial < 2) {
@@ -176,10 +189,9 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
             }
           }
           observe done = now;
-          end;
         }
         run { horizon 10; }
-    "#;
+"#;
     let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 0.0, 2.0]);
@@ -202,10 +214,15 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
         stage engine : step {
           budget 4; chunk 2; cost 1; memory kv; serve exclusive prefill;
         }
-        workload { arrive batch(2); }
-        session {
+        workload { arrive batch(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold reqs (1), kv (min(known, left)) reserve (known) reuse (0)
-               at admission (known = max(2, computed), left = budget_left(engine)) {
+          at admission (known = max(2, computed), left = budget_left(engine)) {
             branch (serial == 1) {
               observe admitted_b = now;
               observe restored_b = known;
@@ -215,10 +232,9 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
           } cache (100);
           observe cached_extent = cachedin(kv);
           observe done = now;
-          end;
         }
         run { horizon 20; }
-    "#;
+"#;
     let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 2, "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);

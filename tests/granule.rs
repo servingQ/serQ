@@ -18,17 +18,21 @@ fn prog(granule: &str) -> String {
         r#"
         pool reqs {{ cap 4; admit via engine; }}
         stage engine : step {{ budget 8; cost 1 + max(0, tokens - 6); {granule} }}
-        workload {{ arrive batch(2); }}
-        session {{
+        workload {{ arrive batch(2);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
           set t0 = now;
           hold reqs (1) {{
             prefill on engine (6);
             observe ttft = now - t0;
           }}
-          end;
         }}
         run {{ horizon 20; warmup 0; seed 1; }}
-        "#
+"#
     )
 }
 
@@ -94,14 +98,18 @@ fn the_chunk_caps_and_the_granule_rounds() {
     let src = r#"
         pool reqs { cap 4; admit via engine; }
         stage engine : step { budget 8; chunk 6; granule 4; cost 1; }
-        workload { arrive batch(1); }
-        session {
+        workload { arrive batch(1);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           set t0 = now;
           hold reqs (1) { prefill on engine (10); observe ttft = now - t0; }
-          end;
         }
         run { horizon 20; warmup 0; seed 1; }
-        "#;
+"#;
     let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     // 4 at the first, 6 at the second (the whole remainder, not capped
     // below the chunk): done at 2
@@ -120,16 +128,20 @@ fn a_refused_prefill_ends_the_admissions() {
         pool reqs { cap 8; admit via engine; }
         pool kv { cap 100; }
         stage engine : step { budget 8; granule inf; cost 1; memory kv; }
-        workload { arrive batch(5); }
-        session {
+        workload { arrive batch(5);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold reqs (1), kv (min(6, left)) at admission (left = budget_left(engine)) {
             observe admitted = now;
             prefill on engine (6) growing kv;
           }
-          end;
         }
         run { horizon 20; warmup 0; seed 1; }
-        "#;
+"#;
     let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     let admitted = &r.observe("admitted").unwrap().samples;
     assert_eq!(

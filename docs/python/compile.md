@@ -64,8 +64,14 @@ use "std/args";
 fn main() {
   let duration = args.number("duration", 2);
   stage svc : delay;
-  workload { arrive batch(1); }
-  session { run svc (duration); observe elapsed = now; end; }
+  workload {
+    arrive batch(1);
+    session { request; end; }
+  }
+  server {
+    run svc (duration);
+    observe elapsed = now;
+  }
   run { horizon 10; }
 }
 """

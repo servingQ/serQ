@@ -25,23 +25,27 @@ fn main() {
       set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
       set o = ~exp(200);
     }
+
+    session {
+      turn;
+      loop {
+        request;
+        set K = K + n + o;
+        branch with (p) { run tool (~exp(Z)); turn; } else { drop kv; end; }
+      }
+    }
   }
 
-  session {
-    turn;
-    loop {
-      set t0 = now;
-      hold kv (K + n + o) {
-        // `cached` is how much of this session's own prefix survived,
-        // decided at the moment the hold is admitted
-        set hit = cached >= K;
-        run engine ((hit ? a * n : a * (K + n)) + d * o);
-      } cache (K + n + o);
-      observe response = now - t0;
-      branch (K > 0) { observe hitrate = hit; }
-      set K = K + n + o;
-      branch with (p) { run tool (~exp(Z)); turn; } else { drop kv; end; }
-    }
+  server {
+    set t0 = now;
+    hold kv (K + n + o) {
+      // `cached` is how much of this session's own prefix survived,
+      // decided at the moment the hold is admitted
+      set hit = cached >= K;
+      run engine ((hit ? a * n : a * (K + n)) + d * o);
+    } cache (K + n + o);
+    observe response = now - t0;
+    branch (K > 0) { observe hitrate = hit; }
   }
 
   run { horizon 20000; warmup 2000; seed 1; }

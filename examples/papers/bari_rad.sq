@@ -35,13 +35,14 @@ fn main() {
       set vp = bcol * floor(~uniform(1, vpmax + 1));
       set vd = min(floor(~exp(200)) + 1, vdmax);
     }
+
+    session { request; end; }
   }
 
-  session {
+  server {
     run E prefill (vp);
     run E decode (vd);
     observe response = now - t0;
-    end;
   }
 
   // Theorem 1: under any scheduler a node completes at most one token per

@@ -67,7 +67,7 @@ fn arrival_override_applies_to_run_and_ir() {
     f.write(
         "model.sq",
         &common::main_source(
-            "workload { arrive renewal(2); } session { end; } run { horizon 10; arrivals 1; }",
+        "workload { arrive renewal(2); \n  session { request; end; \n  }\n} server {\n} run { horizon 10; arrivals 1; }",
         ),
     );
     for command in ["run", "ir"] {
@@ -98,7 +98,7 @@ fn arrival_override_also_applies_to_json_ir() {
     let f = Fixture::new();
     let program = compile_source(
         &common::main_source(
-            "workload { arrive renewal(2); } session { end; } run { horizon 10; arrivals 1; }",
+        "workload { arrive renewal(2); \n  session { request; end; \n  }\n} server {\n} run { horizon 10; arrivals 1; }",
         ),
         &Overrides::default(),
     )
@@ -128,8 +128,11 @@ fn overrides_are_refused_on_ir_by_what_they_override() {
     let f = Fixture::new();
     let program = compile_source(
         &common::main_source(
-            "let lam = 1; def law() = ~exp(1); workload { arrive poisson(lam); } \
-         session { set x = law(); end; } run { horizon 10; }",
+            "let lam = 1; def law() = ~exp(1); workload { arrive poisson(lam);
+          session { request; end;
+          }
+        } server { set x = law();
+        } run { horizon 10; }",
         ),
         &Overrides::default(),
     )

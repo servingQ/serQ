@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub const PROGRAM: &str = "use \"std/args\"; let rate = args.number(\"rate\", 1);\nstage svc : fifo;\nworkload { arrive batch(1); }\nsession { run svc (rate); end; }\nrun { horizon 10; warmup 0; seed 1; }\n";
+pub const PROGRAM: &str = "use \"std/args\"; let rate = args.number(\"rate\", 1);\nstage svc : fifo;\nworkload { arrive batch(1); session { request; end; } }\nserver { run svc (rate); }\nrun { horizon 10; warmup 0; seed 1; }\n";
 
 pub struct Fixture(pub PathBuf);
 

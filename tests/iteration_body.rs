@@ -55,21 +55,25 @@ fn several_prefills_run_alone_in_one_iteration() {
     let prog = |serve: &str| {
         format!(
             r#"
-            pool reqs {{ cap 8; admit via engine; }}
-            pool kv {{ cap 100; }}
-            stage engine : step {{ budget 8; cost 1; memory kv; {serve} }}
-            workload {{ arrive batch(3); }}
-            session {{
-              set t0 = now;
-              hold reqs (1), kv (4) {{
-                prefill on engine (2) growing kv;
-                observe ttft = now - t0;
-                decode on engine (2) growing kv;
-              }}
-              end;
-            }}
-            run {{ horizon 20; warmup 0; seed 1; }}
-            "#
+        pool reqs {{ cap 8; admit via engine; }}
+        pool kv {{ cap 100; }}
+        stage engine : step {{ budget 8; cost 1; memory kv; {serve} }}
+        workload {{ arrive batch(3);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          set t0 = now;
+          hold reqs (1), kv (4) {{
+            prefill on engine (2) growing kv;
+            observe ttft = now - t0;
+            decode on engine (2) growing kv;
+          }}
+        }}
+        run {{ horizon 20; warmup 0; seed 1; }}
+"#
         )
     };
     let sglang = "iteration { serve only (!decoding); admit; branch (tokens == 0) { serve; } }";
@@ -100,8 +104,13 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
           iteration { serve; branch (residents == 0) { admit; } }
         }
         stage gap : delay;
-        workload { arrive batch(4); }
-        session {
+        workload { arrive batch(4);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run gap (serial < 2 ? 0 : 0.5);
           set t0 = now;
           hold reqs (1) {
@@ -109,10 +118,9 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
             prefill on engine (1);
             decode on engine (4);
           }
-          end;
         }
         run { horizon 50; warmup 0; seed 1; }
-        "#;
+"#;
     let r = run(src);
     let start = &r.observe("start").unwrap().samples;
     // the first two at 0; they prefill 1 and decode 4, one token an
@@ -126,12 +134,16 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
     let prog = |body: &str| {
         format!(
             r#"
-            pool reqs {{ cap 8; admit via engine; }}
-            stage engine : step {{ budget 8; cost 1; {body} }}
-            workload {{ arrive batch(1); }}
-            session {{ hold reqs (1) {{ prefill on engine (2); }} end; }}
-            run {{ horizon 20; }}
-            "#
+        pool reqs {{ cap 8; admit via engine; }}
+        stage engine : step {{ budget 8; cost 1; {body} }}
+        workload {{ arrive batch(1);
+          session {{ request; end;
+          }}
+        }}
+        server {{ hold reqs (1) {{ prefill on engine (2); }}
+        }}
+        run {{ horizon 20; }}
+"#
         )
     };
     let err = |body: &str| {
@@ -173,22 +185,26 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
             let prog = |body: &str| {
                 format!(
                     r#"
-                    pool reqs {{ cap 6; admit via engine; }}
-                    pool kv {{ cap {kv}; preempt lifo; }}
-                    stage engine : step {{
-                      budget {budget}; chunk {chunk}; cost 1; memory kv; {serve} {body}
-                    }}
-                    workload {{ arrive renewal(1.5); }}
-                    session {{
-                      set n = 3 + serial - 5 * floor(serial / 5);
-                      hold reqs (1), kv (1) {{
-                        prefill on engine (n) growing kv;
-                        decode on engine (6 + serial - 3 * floor(serial / 3)) growing kv;
-                      }}
-                      end;
-                    }}
-                    run {{ horizon 120; warmup 0; seed 1; }}
-                    "#
+        pool reqs {{ cap 6; admit via engine; }}
+        pool kv {{ cap {kv}; preempt lifo; }}
+        stage engine : step {{
+          budget {budget}; chunk {chunk}; cost 1; memory kv; {serve} {body}
+        }}
+        workload {{ arrive renewal(1.5);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          set n = 3 + serial - 5 * floor(serial / 5);
+          hold reqs (1), kv (1) {{
+            prefill on engine (n) growing kv;
+            decode on engine (6 + serial - 3 * floor(serial / 3)) growing kv;
+          }}
+        }}
+        run {{ horizon 120; warmup 0; seed 1; }}
+"#
                 )
             };
             let a = run(&prog(""));
@@ -257,10 +273,14 @@ fn an_engine_idle_with_work_is_named() {
     let src = r#"
         pool reqs { cap 8; admit via engine; }
         stage engine : step { budget 8; cost 1; iteration { serve; admit while (tokens > 0); } }
-        workload { arrive batch(3); }
-        session { hold reqs (1) { prefill on engine (2); } end; }
+        workload { arrive batch(3);
+          session { request; end;
+          }
+        }
+        server { hold reqs (1) { prefill on engine (2); }
+        }
         run { horizon 20; warmup 0; seed 1; }
-        "#;
+"#;
     let r = run(src);
     assert!(r.stages[0].idle_with_work, "{}", r.text());
     assert!(r.text().contains("idle: stage `engine`"), "{}", r.text());
@@ -272,10 +292,14 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
     let src = r#"
         pool reqs { cap 8; admit via engine; }
         stage engine : step { budget 8; cost 1; iteration { serve; admit while (residents + 2); } }
-        workload { arrive batch(1); }
-        session { hold reqs (1) { prefill on engine (2); } end; }
+        workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { hold reqs (1) { prefill on engine (2); }
+        }
         run { horizon 20; warmup 0; seed 1; }
-        "#;
+"#;
     let e = run_source(&common::main_source(src), &Overrides::default(), None).unwrap_err();
     assert!(e.contains("a test is 1 or 0"), "{e}");
 }
@@ -290,20 +314,24 @@ fn a_register_remembers_the_last_iteration() {
     let prog = |body: &str| {
         format!(
             r#"
-            pool reqs {{ cap 64; admit via engine; }}
-            stage engine : step {{ budget 64; cost 1; {body} }}
-            workload {{ arrive renewal(1); }}
-            session {{
-              set t0 = now;
-              hold reqs (1) {{
-                observe wait = now - t0;
-                prefill on engine (1);
-                decode on engine (30);
-              }}
-              end;
-            }}
-            run {{ horizon 40; warmup 0; seed 1; }}
-            "#
+        pool reqs {{ cap 64; admit via engine; }}
+        stage engine : step {{ budget 64; cost 1; {body} }}
+        workload {{ arrive renewal(1);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          set t0 = now;
+          hold reqs (1) {{
+            observe wait = now - t0;
+            prefill on engine (1);
+            decode on engine (30);
+          }}
+        }}
+        run {{ horizon 40; warmup 0; seed 1; }}
+"#
         )
     };
     let wait = |body: &str| {
@@ -338,11 +366,15 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
           state n = 0;
           iteration { set n = n + 1; serve only (decoding); admit while (residents == 0); }
         }
-        workload { arrive renewal(1); }
-        session { hold reqs (1) { prefill on engine (100); } end; }
+        workload { arrive renewal(1);
+          session { request; end;
+          }
+        }
+        server { hold reqs (1) { prefill on engine (100); }
+        }
         gauge count = n;
         run { horizon 30; warmup 0; seed 1; }
-        "#;
+"#;
     let r = run(src);
     // the first session is admitted and gets 4 tokens; after that its
     // prefill is excluded and nothing else may be admitted: every later
@@ -355,13 +387,17 @@ fn a_register_is_the_stage_s_own() {
     let prog = |stage: &str, session: &str| {
         format!(
             r#"
-            pool reqs {{ cap 8; admit via engine; }}
-            stage engine : step {{ budget 8; cost 1; {stage} }}
-            stage other : step {{ budget 8; cost 1; state r = 0; iteration {{ serve; admit; }} }}
-            workload {{ arrive batch(1); }}
-            session {{ hold reqs (1) {{ prefill on engine (2); }} {session} end; }}
-            run {{ horizon 20; }}
-            "#
+        pool reqs {{ cap 8; admit via engine; }}
+        stage engine : step {{ budget 8; cost 1; {stage} }}
+        stage other : step {{ budget 8; cost 1; state r = 0; iteration {{ serve; admit; }} }}
+        workload {{ arrive batch(1);
+          session {{ request; end;
+          }}
+        }}
+        server {{ hold reqs (1) {{ prefill on engine (2); }} {session}
+        }}
+        run {{ horizon 20; }}
+"#
         )
     };
     let err = |stage: &str, session: &str| {
@@ -394,14 +430,18 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
     let prog = |extra: &str, hold: &str| {
         format!(
             r#"
-            pool reqs {{ cap 8; admit via b; }}
-            pool other {{ cap 8; }}
-            stage b : step {{ budget 8; cost 1; state go = 0; iteration {{ serve; admit; set go = 1; }} }}
-            {extra}
-            workload {{ arrive batch(1); }}
-            session {{ {hold} end; }}
-            run {{ horizon 20; }}
-            "#
+        pool reqs {{ cap 8; admit via b; }}
+        pool other {{ cap 8; }}
+        stage b : step {{ budget 8; cost 1; state go = 0; iteration {{ serve; admit; set go = 1; }} }}
+        {extra}
+        workload {{ arrive batch(1);
+          session {{ request; end;
+          }}
+        }}
+        server {{ {hold}
+        }}
+        run {{ horizon 20; }}
+"#
         )
     };
     let ok = |extra: &str, hold: &str| {
@@ -450,11 +490,15 @@ fn a_try_that_admitted_keeps_its_sets() {
           state k = 0;
           iteration { serve only (decoding); set k = k + 1; admit only (decoding); }
         }
-        workload { arrive batch(2); }
-        session { hold reqs (1) { prefill on engine (2); } end; }
+        workload { arrive batch(2);
+          session { request; end;
+          }
+        }
+        server { hold reqs (1) { prefill on engine (2); }
+        }
         gauge seen = k;
         run { horizon 10; warmup 0; seed 1; }
-        "#;
+"#;
     let r = run(src);
     assert!(r.pool("reqs").unwrap().admissions > 0, "{}", r.text());
     assert!(r.gauge("seen").unwrap().max >= 1.0, "{}", r.text());
@@ -474,16 +518,20 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
           state r = 5000;
           iteration { set r = 10; serve; admit; }
         }
-        workload { arrive renewal(2); }
-        session {
+        workload { arrive renewal(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold reqs (1), kv (100) reserve (100 + r) {
             prefill on engine (100);
             decode on engine (9) growing kv;
           }
-          end;
         }
         run { horizon 50; warmup 0; seed 1; }
-        "#;
+"#;
     let r = run(src);
     assert_eq!(r.pool("kv").unwrap().rejected, 0, "{}", r.text());
     assert!(r.pool("reqs").unwrap().admissions > 20, "{}", r.text());

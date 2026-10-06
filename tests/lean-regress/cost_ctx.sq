@@ -17,9 +17,11 @@ fn main() {
   workload {
     arrive batch(2);
     init { set n = 0; set o = 0; set t0 = 0; }
+
+    session { request; end; }
   }
 
-  session {
+  server {
     run gate (t0);
     hold slots (1), kv (min(n, budget_left(engine))) reserve (n) {
       run engine prefill (n) growing kv;
@@ -27,7 +29,6 @@ fn main() {
       run engine decode (o) growing kv;
       observe done = now;
     }
-    end;
   }
 
   run { horizon 100000; }

@@ -7,20 +7,20 @@ fn main() {
   let Lambda = args.number("Lambda", 0.8);     // arrivals per second
   let S = 1.0;          // mean service time (s)
 
-  stage server : fifo;
+  stage svc : fifo;
 
   workload {
     arrive poisson(Lambda);
     turn { set s = ~exp(S); }
+
+    session { turn; request; end; }
   }
 
-  session {
-    turn;
+  server {
     set t0 = now;
-    run server (s);
+    run svc (s);
     observe response = now - t0;
     observe wait = now - t0 - s;
-    end;
   }
 
   run { horizon 100000; warmup 5000; seed 1; }

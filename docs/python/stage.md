@@ -46,8 +46,13 @@ import pyserq
 report = pyserq.run(pyserq.compile(source="""
 fn main() {
   stage svc[2] : fifo;
-  workload { arrive batch(1); }
-  session { run svc[1] (2); end; }
+  workload {
+    arrive batch(1);
+    session { request; end; }
+  }
+  server {
+    run svc[1] (2);
+  }
   run { horizon 10; }
 }
 """))

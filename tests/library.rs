@@ -83,7 +83,10 @@ fn a_library_holds_definitions() {
         "only-defs",
         &[
             ("lib.sq", "def f(x) = x;\nlet k = 3;\n"),
-            ("main.sq", "use \"lib.sq\";\nsession { end; }\n"),
+            (
+                "main.sq",
+                "use \"lib.sq\";\nworkload { session { request; end; \n} }\nserver {\n}\n",
+            ),
         ],
     );
     let e = compile(&d, "main.sq").unwrap_err();
@@ -104,7 +107,9 @@ fn a_library_definition_is_whole() {
                 ("lib.sq", lib),
                 (
                     "main.sq",
-                    &format!("use \"lib.sq\";\n{main}session {{ end; }}\n"),
+                    &format!(
+                        "use \"lib.sq\";\n{main}workload {{ session {{ request; end; \n}} }}\nserver {{\n}}\n"
+                    ),
                 ),
             ],
         );
@@ -124,7 +129,7 @@ fn a_link_note_names_the_library() {
             ("lib.sq", "def take(n) {\n  set granted = n;\n}\n"),
             (
                 "main.sq",
-                "use \"lib.sq\";\nsession { take(1); observe x = grantedd; end; }\n",
+                "use \"lib.sq\";\nworkload { session { request; end; \n} }\nserver { take(1); observe x = grantedd;\n}\n",
             ),
         ],
     );
@@ -140,7 +145,7 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
             ("lib/a.sq", "use \"../main.sq\";\ndef twice(x) = 2 * x;\n"),
             (
                 "main.sq",
-                "use \"lib/a.sq\";\nstage svc : fifo;\nsession { run svc (twice(1)); end; }\nrun { horizon 10; }\n",
+                "use \"lib/a.sq\";\nstage svc : fifo;\nworkload { session { request; end; \n} }\nserver { run svc (twice(1));\n}\nrun { horizon 10; }\n",
             ),
             // two libraries that use each other: the order of their definitions
             // is what is wrong, and the error says so
@@ -177,7 +182,7 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
 fn blocksize_is_the_pools_block() {
     let src = |pool: &str, e: &str| {
         format!(
-            "{pool}\nstage svc : delay;\nsession {{ observe b = {e}; end; }}\nrun {{ horizon 1; }}\n"
+            "{pool}\nstage svc : delay;\nworkload {{ session {{ request; end; \n}} }}\nserver {{ observe b = {e};\n}}\nrun {{ horizon 1; }}\n"
         )
     };
     let p = compile_source(
@@ -233,14 +238,14 @@ fn blocksize_is_the_pools_block() {
 #[test]
 fn blocksize_is_not_a_constant() {
     let e = compile_source(&common::main_source(
-        "pool kv { cap 64; block 16; }\nlet b = blocksize(kv);\nstage svc : delay;\nsession { end; }\n"),
+        "pool kv { cap 64; block 16; }\nlet b = blocksize(kv);\nstage svc : delay;\nworkload { session { request; end; \n} }\nserver {\n}\n"),
         &Overrides::default(),
     )
     .unwrap_err();
     assert!(e.contains("`blocksize` is not a constant"), "{e}");
     let e = compile_source(
         &common::main_source(
-            "def f(blocksize) = blocksize + 1;\nstage svc : delay;\nsession { end; }\n",
+        "def f(blocksize) = blocksize + 1;\nstage svc : delay;\nworkload { session { request; end; \n} }\nserver {\n}\n",
         ),
         &Overrides::default(),
     )
@@ -251,14 +256,19 @@ fn blocksize_is_not_a_constant() {
 #[test]
 fn a_use_needs_a_file() {
     let e = compile_source(
-        &common::main_source("use \"lib.sq\";\nsession { end; }\n"),
+        &common::main_source(
+            "use \"lib.sq\";\nworkload { session { request; end; \n} }\nserver {\n}\n",
+        ),
         &Overrides::default(),
     )
     .unwrap_err();
     assert!(e.contains("given as text"), "{e}");
     let d = dir(
         "missing",
-        &[("main.sq", "use \"nowhere.sq\";\nsession { end; }\n")],
+        &[(
+            "main.sq",
+            "use \"nowhere.sq\";\nworkload { session { request; end; \n} }\nserver {\n}\n",
+        )],
     );
     let e = compile(&d, "main.sq").unwrap_err();
     assert!(e.contains("cannot read `nowhere.sq`"), "{e}");

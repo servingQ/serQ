@@ -21,13 +21,14 @@ fn main() {
   workload {
     arrive renewal(gap);
     init { set t0 = now; }
+
+    session { request; end; }
   }
 
-  session {
+  server {
     run engine prefill (vp);
     run engine decode (vd);
     observe response = now - t0;
-    end;
   }
 
   // §4: FasterTransformer is not work-conserving. Some batch is not full

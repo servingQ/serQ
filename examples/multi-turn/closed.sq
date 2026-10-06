@@ -9,17 +9,22 @@ fn main() {
   stage svc : fifo;
   stage think : delay;
 
-  workload { arrive closed(N); }
-
-  session {
-    loop {
-      set t0 = now;
-      set s = ~exp(1 / mu);
-      run svc (s);
-      observe wait = now - t0 - s;
-      observe response = now - t0;
-      run think (~exp(Z));
+  workload {
+    arrive closed(N);
+    session {
+      loop {
+        set t0 = now;
+        set s = ~exp(1 / mu);
+        request;
+        run think (~exp(Z));
+      }
     }
+  }
+
+  server {
+    run svc (s);
+    observe wait = now - t0 - s;
+    observe response = now - t0;
   }
 
   run { horizon 200000; warmup 20000; seed 1; }

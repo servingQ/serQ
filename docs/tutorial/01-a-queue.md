@@ -14,7 +14,7 @@ This program has four blocks:
 ### `stage`
 
 ```serq
-stage server : fifo;
+stage svc : fifo;
 ```
 
 A **stage** is where time passes. `fifo` serves one job at a time in arrival
@@ -23,12 +23,13 @@ sharing — everyone at once, sharing the throughput), `delay` (everyone at once
 no waiting at all) and `step`, the LLM engine, which arrives in
 [chapter 5](05-the-engine.md).
 
-### `workload`
+### `workload` and its `session`
 
 ```serq
 workload {
   arrive poisson(Lambda);
   turn { set s = ~exp(S); }
+  session { turn; request; end; }
 }
 ```
 
@@ -37,23 +38,23 @@ turn's attributes; `~exp(S)` is a fresh draw from an exponential with mean `S`.
 The other distributions are `~det`, `~uniform`, `~erlang`, `~h2` and
 `~bernoulli`.
 
-### `session`
+The `session` describes the client: draw a turn, make one request, then end.
+`request;` runs the `server` block below and returns when it finishes.
+
+### `server`
 
 ```serq
-session {
-  turn;
+server {
   set t0 = now;
-  run server (s);
+  run svc (s);
   observe response = now - t0;
   observe wait = now - t0 - s;
-  end;
 }
 ```
 
-A `session` block is what one session does, from arrival to `end`.
-`run server (s)` is `s` seconds of work at `server`. `now` is the clock. `observe name = expr` records
-a sample — this is how the program says what it measures, rather than the
-interpreter guessing.
+The `server` block handles one request. `run svc (s)` is `s` seconds of work
+at the FIFO stage named `svc`. `now` is the clock. `observe name = expr`
+records a sample — the program says what it measures.
 
 ### `run`
 
@@ -77,9 +78,9 @@ observe   count    mean   95% CI    cv2      p99
 response  75464  4.7432  ±0.2838  1.028  22.9285
 wait      75464  3.7458  ±0.2833  1.578  21.7495
 
-stage   number   util   done    thru    wait  service  iters
-------  ------  -----  -----  ------  ------  -------  -----
-server   3.768  0.792  75464  0.7944  3.7458   0.9974      0
+stage  number   util   done    thru    wait  service  iters
+-----  ------  -----  -----  ------  ------  -------  -----
+svc     3.768  0.792  75464  0.7944  3.7458   0.9974      0
 ```
 
 ## Checking it against the textbook

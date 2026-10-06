@@ -32,15 +32,16 @@ fn main() {
       set o = output();
       set k = floor(~uniform(0, N));   // a Poisson stream split at random is Poisson
     }
+
+    session { request; end; }
   }
 
-  session {
+  server {
     set t0 = now;
     branch (mode == 0) { run colo[k] ((o - 1) * tok); } else { run dec ((o - 1) * tok); }
     observe decode_time = now - t0;
     observe tpot = (now - t0) / (o - 1);
     observe output_tokens = o;
-    end;
   }
 
   run { horizon 300; warmup 30; seed 1; }

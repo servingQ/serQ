@@ -18,8 +18,8 @@ fn main() {
   pool NAME [ '[' N ']' ] { … }       // a counted resource
   stage NAME [ '[' N ']' ] : kind;    // where time passes
 
-  workload { … }                      // how sessions arrive and turns evolve
-  session { … }                      // what every session does
+  workload { … session { turn; request; end; } }  // arrivals, turns and client actions
+  server { … }                       // what one request runs
   share maxmin;                       // or bottleneck: how a run over several stages divides them
   run { horizon …; warmup …; seed …; arrivals …; }
   gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))

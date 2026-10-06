@@ -114,12 +114,14 @@ A complete program with bursty arrivals and Erlang service times:
 ```serq
 fn main() {
   stage svc : fifo;
-  workload { arrive renewal(~h2(2, 4)); }
-  session {
+  workload {
+    arrive renewal(~h2(2, 4));
+    session { request; end; }
+  }
+  server {
     set t0 = now;
     run svc (~erlang(4, 1));
     observe latency = now - t0;
-    end;
   }
   run { horizon 1000; seed 10; }
 }

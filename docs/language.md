@@ -36,8 +36,7 @@ item     := let NAME = expr ;
           | pool NAME [ '[' N ']' ] { poolopt* }
           | stage NAME [ '[' N ']' ] : kind ;
           | workload { wlitem* }
-          | session block                     -- the session, in one block
-          | server block                      -- or its server side, with the session inside workload
+          | server block                      -- request handling; the session lives inside workload
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
           | run { ( horizon | warmup | seed | arrivals ) expr ; ... }   -- any of them, in any order
           | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
@@ -255,10 +254,10 @@ constructs to the pinned scheduler source.
 
 ### The two sides
 
-A `session` block writes a session's whole life in one place: what the
-client does (arrive, think, decide whether to go on) next to what the
-deployment does with each request. A program can instead be written from
-its two sides, as `examples/multi-turn/vllm.sq` is:
+A program separates the client from request handling. The `session` inside
+`workload` describes the client's turns, thinking and continuation. The
+`server` describes what the deployment does with each request, as in
+`examples/multi-turn/vllm.sq`:
 
 ```
 workload {
@@ -286,8 +285,8 @@ server {
 
 `request;` runs the server once. The parser splices the server's
 statements in its place, at any depth and as often as it is written, so the
-IR and everything downstream see one session: the two forms compile to the
-same IR.
+IR and interpreter see one session. This expansion adds no execution boundary
+or separate attribute scope.
 
 The parser enforces these boundaries:
 
@@ -302,10 +301,10 @@ have room. `reserve` specifies an admission requirement larger than the
 initial allocation. A [`def`](api/program.md#def) can name a reusable
 admission pattern.
 
-A `session` at top level is the kernel form. The two forms are exclusive in
-one program; a workload's `session` that neither says `request;` to a
-`server` nor `request Q;` to a gateway, or a `server` that is never
-requested, is an error.
+`session` is allowed only inside `workload`. A workload's `session` must
+say `request;` to a `server` or `request Q;` to a gateway. A `server` that
+is never requested is an error. A named gateway supplies request handling
+through its `route`, so it does not need an anonymous `server` block.
 
 ### Queues
 

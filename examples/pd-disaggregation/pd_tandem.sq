@@ -25,9 +25,13 @@ fn main() {
   stage link : fifo;
   stage decode : fifo(max(N - NP, 1));
 
-  workload { arrive closed(jobs); }
+  workload {
+    arrive closed(jobs);
+    session { request;
+    }
+  }
 
-  session {
+  server {
     loop {
       set t0 = now;
       set sp = prefill_work();

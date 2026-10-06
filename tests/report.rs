@@ -16,8 +16,12 @@ fn keys(v: &serde_json::Value) -> Vec<String> {
 #[test]
 fn the_report_has_the_shape_its_version_names() {
     let src = "pool kv { cap 10; } stage svc : fifo;
-        workload { arrive poisson(1); }
-        session { hold kv (1) { run svc (~exp(0.5)); } observe x = now; end; }
+        workload { arrive poisson(1);
+          session { request; end;
+          }
+        }
+        server { hold kv (1) { run svc (~exp(0.5)); } observe x = now;
+        }
         gauge g = used(kv);
         run { horizon 100; }";
     let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
@@ -106,8 +110,12 @@ fn the_report_has_the_shape_its_version_names() {
 #[test]
 fn an_array_member_is_reported_with_its_index() {
     let src = "pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
-        workload { arrive poisson(1); }
-        session { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } end; }
+        workload { arrive poisson(1);
+          session { request; end;
+          }
+        }
+        server { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } }
+        }
         run { horizon 100; }";
     let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let r = run_ir(&p, None).unwrap();
@@ -158,18 +166,22 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
     let itl = |serve: &str| {
         let src = format!(
             "pool reqs {{ cap 2; admit via engine; }} pool kv {{ cap 20; }} stage gate : delay;
-             stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
-             workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} }}
-             session {{
-               run gate (2 * serial);
-               hold reqs (1), kv (min(prompt, left)) reserve (prompt)
-                    at admission (left = budget_left(engine)) {{
-                 prefill prompt growing kv;
-                 branch (serial == 0) {{ decode (3) growing kv; }}
-               }}
-               end;
-             }}
-             run {{ horizon 20; warmup 0; seed 1; }}"
+        stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
+        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          run gate (2 * serial);
+          hold reqs (1), kv (min(prompt, left)) reserve (prompt)
+          at admission (left = budget_left(engine)) {{
+            prefill prompt growing kv;
+            branch (serial == 0) {{ decode (3) growing kv; }}
+          }}
+        }}
+        run {{ horizon 20; warmup 0; seed 1; }}"
         );
         let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
         let r = run_ir(&p, None).unwrap();
@@ -194,15 +206,19 @@ fn a_gap_holds_the_transfer_between_two_engines() {
     let itl = |recompute: &str| {
         let src = format!(
             "stage p : step {{ cost 1; }} stage d : step {{ cost 1; }} stage link : delay;
-             workload {{ arrive batch(1); }}
-             session {{
-               prefill on p (2);
-               run link (5);
-               {recompute}
-               decode on d (2);
-               end;
-             }}
-             run {{ horizon 20; warmup 0; seed 1; }}"
+        workload {{ arrive batch(1);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          prefill on p (2);
+          run link (5);
+          {recompute}
+          decode on d (2);
+        }}
+        run {{ horizon 20; warmup 0; seed 1; }}"
         );
         let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
         let r = run_ir(&p, None).unwrap();
@@ -227,17 +243,21 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
           arrive poisson(40);
           hidden o;
           init { set prompt = floor(~uniform(500, 1500)); set o = floor(~exp(100)) + 2; }
+
+          session { request;
+            end;
+
+          }
         }
-        session {
+        server {
           hold kv (min(known, budget_left(engine))) reserve (known), reqs (1)
-               at admission (known = computed < prompt ? prompt : computed + 1) {
+          at admission (known = computed < prompt ? prompt : computed + 1) {
             prefill (known) growing kv;
             branch (known == prompt) { set first = now; }
             decode (o - 1 - (known - prompt)) growing kv;
           }
           observe span = now - first;
           observe gaps = o - 1;
-          end;
         }
         run { horizon 1e6; warmup 0; seed 1; arrivals 8000; }";
     let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
@@ -262,8 +282,12 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
 #[test]
 fn a_one_member_array_keeps_its_index() {
     let src = "pool kv[1] { cap 10; } pool reqs { cap 4; } stage svc[1] : fifo;
-        workload { arrive poisson(1); }
-        session { hold reqs (1) { hold kv[0] (1) { run svc[0] (~exp(2)); } } end; }
+        workload { arrive poisson(1);
+          session { request; end;
+          }
+        }
+        server { hold reqs (1) { hold kv[0] (1) { run svc[0] (~exp(2)); } }
+        }
         run { horizon 100; }";
     let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let r = run_ir(&p, None).unwrap();
@@ -302,18 +326,22 @@ fn a_step_stage_reports_what_its_iterations_carried() {
     let src = |serve: &str| {
         format!(
             "pool reqs {{ cap 2; admit via engine; }} pool kv {{ cap 20; }} stage gate : delay;
-             stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
-             workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} }}
-             session {{
-               run gate (serial);
-               hold reqs (1), kv (min(prompt, left)) reserve (prompt)
-                    at admission (left = budget_left(engine)) {{
-                 prefill prompt growing kv;
-                 branch (serial == 0) {{ decode (2) growing kv; }}
-               }}
-               end;
-             }}
-             run {{ horizon 20; warmup 0; seed 1; }}"
+        stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
+        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          run gate (serial);
+          hold reqs (1), kv (min(prompt, left)) reserve (prompt)
+          at admission (left = budget_left(engine)) {{
+            prefill prompt growing kv;
+            branch (serial == 0) {{ decode (2) growing kv; }}
+          }}
+        }}
+        run {{ horizon 20; warmup 0; seed 1; }}"
         )
     };
     let stage = |serve: &str| {
@@ -340,7 +368,7 @@ fn a_step_stage_reports_what_its_iterations_carried() {
 #[test]
 fn the_report_records_the_serq_version() {
     let p = compile_source(&common::main_source(
-        "stage svc : delay; workload { arrive batch(1); } session { run svc (1); end; } run { horizon 2; }"),
+        "stage svc : delay; workload { arrive batch(1); \n  session { request; end; \n  }\n} server { run svc (1);\n} run { horizon 2; }"),
         &Overrides::default(),
     )
     .unwrap();
@@ -407,8 +435,13 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
 #[test]
 fn a_test_observe_that_never_held_is_noted() {
     let src = "def below(x) = x < 0;
-        stage svc : delay; workload { arrive batch(40); }
-        session {
+        stage svc : delay; workload { arrive batch(40);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run svc (serial);
           observe never = serial < 0;
           observe neither = !(serial >= 0);
@@ -420,7 +453,6 @@ fn a_test_observe_that_never_held_is_noted() {
           observe cond = serial < 0 ? 1 : 0;
           branch (serial < 20) { observe mixed = serial < 0; } else { observe mixed = 0; }
           branch (serial < 10) { observe few = serial > 100; }
-          end;
         }
         run { horizon 100; }";
     let r = run_ir(

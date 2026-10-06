@@ -10,12 +10,12 @@ use serq::{Overrides, compile_source};
 fn program(server: &str) -> String {
     format!(
         "pool kv {{ cap 1000; block 16; }}
-         stage E : step {{ cost 1; memory kv; }}
-         workload {{ arrive batch(1); hidden o;
-                     init {{ set prompt = 32; set o = 4; }}
-                     session {{ request; end; }} }}
-         server {{ {server} }}
-         run {{ horizon 100; }}"
+        stage E : step {{ cost 1; memory kv; }}
+        workload {{ arrive batch(1); hidden o;
+          init {{ set prompt = 32; set o = 4; }}
+          session {{ request; end; }} }}
+        server {{ {server} }}
+        run {{ horizon 100; }}"
     )
 }
 
@@ -78,16 +78,20 @@ fn a_loop_carries_what_it_sets_round_to_its_start() {
     );
 }
 
-/// A program written as one session has no server, so nothing tells the
-/// scheduler's statements from the client's; the check needs the split.
+/// A top-level session used to bypass the server's hidden-attribute check.
 #[test]
-fn a_single_session_is_not_split_and_not_checked() {
+fn a_top_level_session_cannot_bypass_the_server_check() {
     let src = "pool kv { cap 1000; block 16; }
                stage E : step { cost 1; memory kv; }
                workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } }
                session { branch (o > 2) { hold kv (prompt) { prefill (prompt) growing kv; } } else { } end; }
                run { horizon 100; }";
-    compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+    let err = compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
+    assert!(err.contains("`session` belongs inside `workload`"), "{err}");
+    refused(
+        "branch (o > 2) { hold kv (prompt) { prefill (prompt) growing kv; } } else { }",
+        &["hidden from the scheduler"],
+    );
 }
 
 /// A run whose work reads a hidden attribute reveals it when it ends (the

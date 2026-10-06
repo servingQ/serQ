@@ -23,8 +23,13 @@ fn release_frees_the_pool_before_the_scope_ends() {
     let src = r#"
         pool kv { cap 10; }
         stage svc : delay;
-        workload { arrive batch(2); }
-        session {
+        workload { arrive batch(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run svc (serial);
           set t0 = now;
           hold kv (10) {
@@ -35,10 +40,9 @@ fn release_frees_the_pool_before_the_scope_ends() {
             run svc (5);
           }
           observe free_at_end = free(kv);
-          end;
         }
         run { horizon 100; }
-    "#;
+"#;
     let r = run(src);
     // session 0 at 0; session 1 arrives at 1 and is admitted at the release
     // (not at 6): the pool is free for it and taken by it at once
@@ -56,14 +60,18 @@ fn release_caches_per_the_hold_clause() {
     let src = r#"
         pool kv { cap 100; }
         stage svc : delay;
-        workload { arrive batch(1); }
-        session {
+        workload { arrive batch(1);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold kv (8) { run svc (1); release kv; run svc (1); } cache (8);
           hold kv (8) { observe hit = cached; } cache (0);
-          end;
         }
         run { horizon 100; }
-    "#;
+"#;
     assert_eq!(samples(&run(src), "hit"), [8.0]);
 }
 
@@ -76,8 +84,13 @@ fn a_hold_on_two_pools_releases_one_of_them() {
         pool slots { cap 1; }
         pool kv { cap 100; }
         stage svc : delay;
-        workload { arrive batch(2); }
-        session {
+        workload { arrive batch(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run svc (serial * 0.5);
           set t0 = now;
           hold slots (1), kv (10) {
@@ -87,10 +100,9 @@ fn a_hold_on_two_pools_releases_one_of_them() {
             run svc (4);
             observe kv_used = used(kv);
           }
-          end;
         }
         run { horizon 100; }
-    "#;
+"#;
     let r = run(src);
     assert_eq!(
         samples(&r, "got_slot"),
@@ -112,14 +124,18 @@ fn load_advances_the_computed_position() {
     let src = r#"
         pool kv { cap 100; }
         stage svc : delay;
-        workload { arrive batch(1); }
-        session {
+        workload { arrive batch(1);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold kv (40) { run svc (1); load kv (30); } cache (40);
           hold kv (40) { observe hit = cached; } cache (0);
-          end;
         }
         run { horizon 100; }
-    "#;
+"#;
     // nothing was computed before the load: 30 of the 40 are cached
     assert_eq!(samples(&run(src), "hit"), [30.0]);
 }
@@ -130,10 +146,14 @@ fn load_must_fit_the_allocation() {
     let src = r#"
         pool kv { cap 100; }
         stage svc : delay;
-        workload { arrive batch(1); }
-        session { hold kv (10) { load kv (11); } end; }
+        workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { hold kv (10) { load kv (11); }
+        }
         run { horizon 10; }
-    "#;
+"#;
     let msg = run_source(&common::main_source(src), &Overrides::default(), None).unwrap_err();
     assert!(msg.contains("must fit the allocation"), "{msg}");
 }
@@ -145,8 +165,12 @@ fn release_and_load_need_an_enclosing_hold() {
     for stmt in ["release kv;", "load kv (1);", "hold q (1) { release kv; }"] {
         let src = format!(
             "pool kv {{ cap 10; }} pool q {{ cap 10; }} stage svc : delay;
-             workload {{ arrive batch(1); }}
-             session {{ {stmt} end; }} run {{ horizon 10; }}"
+        workload {{ arrive batch(1);
+          session {{ request; end;
+          }}
+        }}
+        server {{ {stmt}
+        }} run {{ horizon 10; }}"
         );
         let e = check_source(&common::main_source(&src), &Overrides::default())
             .err()
@@ -167,9 +191,13 @@ fn grow_and_growing_need_an_enclosing_hold() {
     ] {
         let src = format!(
             "pool kv {{ cap 64; }} pool q {{ cap 10; }}
-             stage engine : step {{ budget 8; cost 1; memory kv; }}
-             workload {{ arrive batch(1); }}
-             session {{ {stmt} end; }} run {{ horizon 10; }}"
+        stage engine : step {{ budget 8; cost 1; memory kv; }}
+        workload {{ arrive batch(1);
+          session {{ request; end;
+          }}
+        }}
+        server {{ {stmt}
+        }} run {{ horizon 10; }}"
         );
         let e = check_source(&common::main_source(&src), &Overrides::default())
             .err()
@@ -179,9 +207,13 @@ fn grow_and_growing_need_an_enclosing_hold() {
     // a lease is not a hold: `grow` there is refused, and the hint does
     // not blame the index, which is the same
     let src = "pool kv { cap 64; } stage d : delay;
-         workload { arrive batch(1); }
-         session { hold kv (16) { run d (1); } lease kv (5); grow kv (16); end; }
-         run { horizon 10; }";
+        workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { hold kv (16) { run d (1); } lease kv (5); grow kv (16);
+        }
+        run { horizon 10; }";
     let e = check_source(&common::main_source(src), &Overrides::default()).unwrap_err();
     assert!(
         e.contains("it acts on an enclosing hold's allocation"),
@@ -189,10 +221,14 @@ fn grow_and_growing_need_an_enclosing_hold() {
     );
     // inside one, both link
     let src = "pool kv { cap 64; }
-         stage engine : step { budget 8; cost 1; memory kv; }
-         workload { arrive batch(1); }
-         session { hold kv (8) { grow kv (8); run engine prefill (8) growing kv; } end; }
-         run { horizon 10; }";
+        stage engine : step { budget 8; cost 1; memory kv; }
+        workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { hold kv (8) { grow kv (8); run engine prefill (8) growing kv; }
+        }
+        run { horizon 10; }";
     check_source(&common::main_source(src), &Overrides::default()).unwrap();
 }
 
@@ -203,16 +239,20 @@ fn a_preemptible_hold_reads_no_moving_index() {
     let src = |preempt: &str| {
         format!(
             "pool kv {{ cap 128; block 16; preempt {preempt}; }}
-             pool aux[2] {{ cap 64; }}
-             stage engine : step {{ budget 128; chunk 128; cost 0.5; memory kv; }}
-             workload {{ arrive batch(4); }}
-             session {{
-               hold kv (16), aux[1 - min(1, floor(now))] (1) {{
-                 prefill 16 growing kv; decode 200 growing kv;
-               }}
-               end;
-             }}
-             run {{ horizon 500; }}"
+        pool aux[2] {{ cap 64; }}
+        stage engine : step {{ budget 128; chunk 128; cost 0.5; memory kv; }}
+        workload {{ arrive batch(4);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          hold kv (16), aux[1 - min(1, floor(now))] (1) {{
+            prefill 16 growing kv; decode 200 growing kv;
+          }}
+        }}
+        run {{ horizon 500; }}"
         )
     };
     let e = check_source(&common::main_source(&src("lifo")), &Overrides::default()).unwrap_err();
@@ -231,12 +271,7 @@ fn a_preemptible_hold_reads_no_moving_index() {
         "hold kv (16), aux[1 - min(1, floor(now))] (1) {",
         "hold kv (16) { hold aux[1 - min(1, floor(now))] (1) {",
     );
-    let nested = nested.replace(
-        "decode 200 growing kv;
-               }",
-        "decode 200 growing kv;
-               } }",
-    );
+    let nested = nested.replace("decode 200 growing kv;", "decode 200 growing kv; }");
     let e = check_source(&common::main_source(&nested), &Overrides::default()).unwrap_err();
     assert!(e.contains("`kv` may preempt it"), "{e}");
     // a hold no pool preempts reads its index once
@@ -252,9 +287,14 @@ fn a_hold_whose_body_changes_its_index_does_not_link() {
     let run = |workload: &str, hold: &str, body: &str| {
         let src = format!(
             "pool kv[2] {{ cap 4096; block 16; }} stage d : delay;
-             workload {{ arrive batch(2); init {{ set j = 0; }} {workload} }}
-             session {{ hold kv[1] (16) {{ hold {hold} (16) {{ {body} run d (1); }} }} end; }}
-             run {{ horizon 10; }}"
+        workload {{ arrive batch(2); init {{ set j = 0; }} {workload}
+          session {{
+            hold kv[1] (16) {{ hold {hold} (16) {{ {body} run d (1); }} }}
+            request; end;
+          }}
+        }}
+        server {{}}
+        run {{ horizon 10; }}"
         );
         check_source(&common::main_source(&src), &Overrides::default())
     };
@@ -300,8 +340,13 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
         stage link : delay;
         stage decode : delay;
         stage gate : delay;
-        workload { arrive batch(3); init { set kind = serial; } }
-        session {
+        workload { arrive batch(3); init { set kind = serial; }
+          session { request;
+            end;
+
+          }
+        }
+        server {
           branch (kind == 0) {
             hold memP (10) { prefill (1); } lease memP (inf);
             hold memD (10) {
@@ -313,10 +358,9 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
           }
           branch (kind == 1) { run gate (0.5); hold memP (10) { observe p_admitted = now; } }
           branch (kind == 2) { run gate (1.5); hold memD (10) { observe d_admitted = now; } }
-          end;
         }
         run { horizon 100; }
-    "#;
+"#;
     let r = run(src);
     // the source is free the moment the link run ends (the waiting session
     // holds it now, alone), the destination is held on
@@ -330,13 +374,21 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
 #[test]
 fn transfer_from_to_is_sugar_for_three_statements() {
     let a = "pool memP { cap 10; } pool memD { cap 10; } stage link : delay;
-             workload { arrive batch(1); }
-             session { hold memP (10) { hold memD (10) { transfer (1) from memP to memD (9); } } end; }
-             run { horizon 10; }";
+        workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { hold memP (10) { hold memD (10) { transfer (1) from memP to memD (9); } }
+        }
+        run { horizon 10; }";
     let b = "pool memP { cap 10; } pool memD { cap 10; } stage link : delay;
-             workload { arrive batch(1); }
-             session { hold memP (10) { hold memD (10) { run link (1); load memD (9); release memP; } } end; }
-             run { horizon 10; }";
+        workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { hold memP (10) { hold memD (10) { run link (1); load memD (9); release memP; } }
+        }
+        run { horizon 10; }";
     let ir = |s: &str| {
         serq::compile_source(&common::main_source(s), &Overrides::default())
             .unwrap()
@@ -359,18 +411,22 @@ fn decode_pressure_backs_into_the_prefill_pool() {
         stage link : delay;
         stage decode : delay;
         stage gate : delay;
-        workload { arrive batch(6); }
-        session {
+        workload { arrive batch(6);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run gate (serial * 0.01);
           hold memP (10) { prefill (0.1); observe prefilled = serial; } lease memP (inf);
           hold memD (10) {
             transfer (0.1) from memP to memD (10);
             decode (10);
           }
-          end;
         }
         run { horizon 15; }
-    "#;
+"#;
     let store_and_forward = r#"
         pool memP { cap 20; }
         pool memD { cap 10; }
@@ -378,15 +434,19 @@ fn decode_pressure_backs_into_the_prefill_pool() {
         stage link : delay;
         stage decode : delay;
         stage gate : delay;
-        workload { arrive batch(6); }
-        session {
+        workload { arrive batch(6);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run gate (serial * 0.01);
           hold memP (10) { prefill (0.1); observe prefilled = serial; run link (0.1); }
           hold memD (10) { decode (10); }
-          end;
         }
         run { horizon 15; }
-    "#;
+"#;
     // one decode of 10 s fits the decoder; by t = 15 one has finished and a
     // second is running. NIXL: the prefiller's two slots are taken by the
     // request decoding (its lease ended) ... no: by the requests waiting for
@@ -412,8 +472,13 @@ fn a_re_executed_hold_releases_nothing_twice() {
         pool memD { cap 20; block 10; preempt lifo; }
         stage link : delay;
         stage engine : step { budget 100; cost 1; memory memD; }
-        workload { arrive batch(1); }
-        session {
+        workload { arrive batch(1);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold memP (10) {
             hold memD (10) {
               transfer (1) from memP to memD (10);
@@ -421,10 +486,9 @@ fn a_re_executed_hold_releases_nothing_twice() {
               run engine decode (25) growing memD;
             }
           }
-          end;
         }
         run { horizon 30; }
-    "#;
+"#;
     let r = run(src);
     let free = samples(&r, "p_free");
     assert!(free.len() > 1, "the hold was re-executed: {free:?}");
@@ -442,20 +506,24 @@ fn an_engine_serves_its_queues_in_declaration_order() {
     let program = |first: &str, second: &str| {
         format!(
             r#"
-            pool {first} {{ cap 1; admit via engine; }}
-            pool {second} {{ cap 1; admit via engine; }}
-            stage engine : step {{ budget 1000; cost 1; }}
-            stage gate : delay;
-            workload {{ arrive batch(3); }}
-            session {{
-              run gate (serial);
-              branch (serial == 0) {{ hold a (1) {{ run engine decode (50); }} }}
-              branch (serial == 1) {{ hold a (1) {{ run engine decode (1); }} }}
-              branch (serial == 2) {{ hold b (1) {{ observe b_admitted = now; run engine decode (1); }} }}
-              end;
-            }}
-            run {{ horizon 200; }}
-            "#
+        pool {first} {{ cap 1; admit via engine; }}
+        pool {second} {{ cap 1; admit via engine; }}
+        stage engine : step {{ budget 1000; cost 1; }}
+        stage gate : delay;
+        workload {{ arrive batch(3);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          run gate (serial);
+          branch (serial == 0) {{ hold a (1) {{ run engine decode (50); }} }}
+          branch (serial == 1) {{ hold a (1) {{ run engine decode (1); }} }}
+          branch (serial == 2) {{ hold b (1) {{ observe b_admitted = now; run engine decode (1); }} }}
+        }}
+        run {{ horizon 200; }}
+"#
         )
     };
     // `a` first: its head (session 1, no room until 50) blocks `b`'s
@@ -537,8 +605,12 @@ fn release_and_load_name_the_pool_as_the_hold_does() {
     let program = |body: &str| {
         format!(
             "pool q[2] {{ cap 10; }} stage svc : delay;
-             workload {{ arrive batch(1); init {{ set j = 0; }} }}
-             session {{ {body} end; }} run {{ horizon 10; }}"
+        workload {{ arrive batch(1); init {{ set j = 0; }}
+          session {{ request; end;
+          }}
+        }}
+        server {{ {body}
+        }} run {{ horizon 10; }}"
         )
     };
     let e = check_source(
@@ -571,16 +643,20 @@ fn a_grow_with_nobody_to_preempt_waits() {
         pool kv { cap 20; preempt lifo; }
         stage engine : step { budget 100; cost 1; memory kv; }
         stage svc : delay;
-        workload { arrive batch(2); }
-        session {
+        workload { arrive batch(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold kv (10) {
             branch (serial == 0) { run svc (1); grow kv (10); observe grew = now; run svc (1); }
             else { run svc (5); }
           }
-          end;
         }
         run { horizon 50; }
-    "#;
+"#;
     let r = run(src);
     assert_eq!(samples(&r, "grew"), [5.0], "{}", r.text());
     assert_eq!(r.pool("kv").unwrap().preemptions, 0, "{}", r.text());
@@ -595,8 +671,13 @@ fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
         pool kv { cap 10; }
         stage svc : delay;
         stage gate : delay;
-        workload { arrive batch(2); }
-        session {
+        workload { arrive batch(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           branch (serial == 0) {
             hold kv (10) { run svc (1); } cache (10) lease kv (2);
             observe leased = used(kv);
@@ -606,10 +687,9 @@ fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
             run gate (0.5);
             hold kv (10) { observe admitted = now; }
           }
-          end;
         }
         run { horizon 100; }
-    "#;
+"#;
     let r = run(src);
     assert_eq!(
         samples(&r, "leased"),
@@ -629,8 +709,13 @@ fn a_lease_ends_with_the_session() {
     let src = r#"
         pool kv { cap 10; }
         stage svc : delay;
-        workload { arrive batch(2); }
-        session {
+        workload { arrive batch(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           branch (serial == 0) {
             hold kv (10) { run svc (1); } cache (10) lease kv (inf);
             run svc (1);
@@ -638,10 +723,9 @@ fn a_lease_ends_with_the_session() {
             run svc (0.5);
             hold kv (10) { observe admitted = now; }
           }
-          end;
         }
         run { horizon 100; }
-    "#;
+"#;
     let r = run(src);
     assert_eq!(samples(&r, "admitted"), [2.0], "{}", r.text());
 }
@@ -654,8 +738,13 @@ fn a_lease_is_not_a_preemption_victim() {
     let src = r#"
         pool kv { cap 20; preempt lifo; }
         stage svc : delay;
-        workload { arrive batch(2); }
-        session {
+        workload { arrive batch(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           branch (serial == 0) {
             hold kv (5) { run svc (1); grow kv (10); observe grew = now; run svc (1); }
           } else {
@@ -665,10 +754,9 @@ fn a_lease_is_not_a_preemption_victim() {
             release kv;
             observe released = now;
           }
-          end;
         }
         run { horizon 100; }
-    "#;
+"#;
     let r = run(src);
     // session 0 needs 15 of 20 at t = 1 and again at 2; session 1's lease
     // holds 10 and is not the victim: the only holder in a scope is the
@@ -683,13 +771,21 @@ fn a_lease_is_not_a_preemption_victim() {
 #[test]
 fn a_lease_names_a_pool_of_the_hold() {
     let bad = "pool a { cap 1; } pool b { cap 1; } stage svc : delay;
-               workload { arrive batch(1); }
-               session { hold a (1) { run svc (1); } lease b (1); end; } run { horizon 10; }";
+        workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { hold a (1) { run svc (1); } lease b (1);
+        } run { horizon 10; }";
     let e = check_source(&common::main_source(bad), &Overrides::default()).expect_err("linked");
     assert!(e.contains("does not take that pool"), "{e}");
     // and a `release` of a leased pool links outside any hold of it
     let ok = "pool a { cap 1; } stage svc : delay;
-              workload { arrive batch(1); }
-              session { hold a (1) { run svc (1); } lease a (1); run svc (1); release a; end; } run { horizon 10; }";
+        workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { hold a (1) { run svc (1); } lease a (1); run svc (1); release a;
+        } run { horizon 10; }";
     check_source(&common::main_source(ok), &Overrides::default()).expect("links");
 }

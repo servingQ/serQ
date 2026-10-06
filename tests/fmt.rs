@@ -7,19 +7,19 @@ use serq::{Overrides, compile_source};
 #[test]
 fn formatting_preserves_program_and_comments_and_is_idempotent() {
     let source = "let B=10;         // token budget\n\
-                  let C=10;         // pool capacity\n\
-                  // a paragraph\n\n\
-                  pool kv { cap C; }\n\
-                  stage engine : step { budget B; cost 1; memory kv; }\n\
-                  workload { arrive batch(1); session { request; end; } }\n\
-                  server {\n\
-                  hold kv (1)\n\
-                  at admission (hit = 1,\n\
-                  value = hit + 1) {\n\
-                  prefill (1) growing kv;\n\
-                  } cache (1);\n\
-                  }\n\
-                  run { horizon 1; }\n";
+        let C=10;         // pool capacity\n\
+        // a paragraph\n\n\
+        pool kv { cap C; }\n\
+        stage engine : step { budget B; cost 1; memory kv; }\n\
+        workload { arrive batch(1); session { request; end; } }\n\
+        server {\n\
+          hold kv (1)\n\
+          at admission (hit = 1,\n\
+          value = hit + 1) {\n\
+            prefill (1) growing kv;\n\
+          } cache (1);\n\
+        }\n\
+        run { horizon 1; }\n";
     let formatted = format(&common::main_source(source)).unwrap();
     assert!(
         formatted.contains(
@@ -44,7 +44,8 @@ fn cli_check_and_write_are_consistent() {
     let fixture = Fixture::new();
     fixture.write(
         "model.sq",
-        &common::main_source("stage svc : delay;\nsession {run svc (1); end;}\nrun {horizon 1;}\n"),
+        &common::main_source(
+        "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (1);\n}\nrun {horizon 1;}\n"),
     );
     failure(
         &fixture.run(&["fmt", "--check", "model.sq"]),
@@ -69,7 +70,7 @@ fn cli_check_and_write_are_consistent() {
 #[test]
 fn invalid_batch_leaves_every_file_untouched() {
     let fixture = Fixture::new();
-    let original = "stage svc : delay;\nsession {run svc (1); end;}\nrun {horizon 1;}\n";
+    let original = "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (1);\n}\nrun {horizon 1;}\n";
     fixture.write("good.sq", &common::main_source(original));
     fixture.write(
         "bad.sq",

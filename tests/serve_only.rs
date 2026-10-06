@@ -18,18 +18,22 @@ fn source(serve: &str) -> String {
         pool reqs {{ cap 4; }}
         stage gate : delay;
         stage engine : step {{ budget 8; cost 1; {serve} }}
-        workload {{ arrive batch(2); }}
-        session {{
+        workload {{ arrive batch(2);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
           run gate (serial);
           hold reqs (1) {{
             run engine prefill (3);
             run engine decode (2);
           }}
           observe done = now;
-          end;
         }}
         run {{ horizon 20; }}
-        "#
+"#
     )
 }
 
@@ -106,13 +110,17 @@ fn only_selects_and_by_orders() {
           budget 2; cost 1;
           serve only (decoders > 0 ? decoding : !decoding) by (remaining);
         }
-        workload { arrive batch(2); init { set prompt = serial == 0 ? 4 : 2; } }
-        session {
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 4 : 2; }
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold reqs (1) { run engine prefill (prompt); run engine decode (1); }
-          end;
         }
         run { horizon 20; }
-    "#;
+"#;
     assert_eq!(
         trace("by", src),
         [
@@ -133,18 +141,22 @@ fn admitted(serve: &str) -> String {
         pool reqs {{ cap 4; admit via engine; }}
         stage gate : delay;
         stage engine : step {{ budget 8; cost 1; {serve} }}
-        workload {{ arrive batch(3); }}
-        session {{
+        workload {{ arrive batch(3);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
           run gate (serial > 0 ? 1 : 0);
           hold reqs (1) {{
             observe admitted = now;
             run engine prefill (1);
             run engine decode (2);
           }}
-          end;
         }}
         run {{ horizon 20; }}
-        "#
+"#
     )
 }
 
@@ -224,14 +236,18 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
         pool reqs { cap 4; }
         stage gate : delay;
         stage engine : step { budget 8; cost 1; serve only (residents > 1); }
-        workload { arrive batch(2); }
-        session {
+        workload { arrive batch(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run gate (2 * serial);
           hold reqs (1) { run engine prefill (1); run engine decode (1); }
-          end;
         }
         run { horizon 20; }
-    "#;
+"#;
     assert_eq!(
         trace("waits", src),
         ["ITER 2.0000 0:0:p1 1:0:p1", "ITER 3.0000 0:0:d1 1:0:d1"]

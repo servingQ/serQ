@@ -1,6 +1,6 @@
 """Register a Pygments lexer for serQ, so ```serq fences highlight.
 
-Four roles, four colours. A program's shape is `pool`/`stage`/`session`; what
+Four roles, four colours. A program's shape is `workload`/`session`/`server`; what
 a session *does* is `hold`, `prefill`, `observe`; the knobs are `cap`,
 `evict`, `budget`; and what it *reads* is `cachedin`, `budget_left`, `now`.
 A reader should be able to tell those apart before reading a word, so each

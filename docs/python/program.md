@@ -45,8 +45,14 @@ import pyserq
 program = pyserq.compile(source="""
 fn main() {
   stage svc : delay;
-  workload { arrive batch(1); }
-  session { run svc (2); observe elapsed = now; end; }
+  workload {
+    arrive batch(1);
+    session { request; end; }
+  }
+  server {
+    run svc (2);
+    observe elapsed = now;
+  }
   run { horizon 10; }
 }
 """)

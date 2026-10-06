@@ -14,11 +14,16 @@ turns. This chapter models the conversation and the context it accumulates.
 ### `loop` and `turn`
 
 ```serq
-session {
-  turn;
-  loop {
-    …
-    branch with (p) { run tool (~exp(Z)); turn; } else { end; }
+workload {
+  …
+  session {
+    turn;
+    loop {
+      request;
+      set K = K + n + o;
+      observe context = K;
+      branch with (p) { run tool (~exp(Z)); turn; } else { end; }
+    }
   }
 }
 ```

@@ -13,8 +13,11 @@ fn main() {
   pool kv { cap 4096; block 16; }
   stage engine : step { budget 128; chunk 128; cost 0.001; memory kv; }
   stage delay : delay;
-  workload { arrive batch(6); }
-  session {
+  workload {
+    arrive batch(6);
+    session { request; end; }
+  }
+  server {
     set prompt = serial == 1 || serial == 5 ? 256 : 64;
     set immediate = serial == 4;
     set out = serial == 0 ? 4 : 1;
@@ -26,7 +29,6 @@ fn main() {
       decode out;
     }
     observe response = now;
-    end;
   }
   run { horizon 1; }
 }

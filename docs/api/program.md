@@ -2,7 +2,7 @@
 
 ```
 program := (let | def | use)* fn main() { item* }
-item    := let | def | use | pool | stage | queue | workload | session | server | share | run | gauge | claim
+item    := let | def | use | pool | stage | queue | workload | server | share | run | gauge | claim
 ```
 
 `fn main()` is the single execution entry point: it constructs the deployment,
@@ -53,8 +53,11 @@ use "std/args";
 fn main() {
   let rate = args.number("arrival_rate", 0.3);
   stage svc : delay;
-  workload { arrive poisson(rate); }
-  session { run svc (1); end; }
+  workload {
+    arrive poisson(rate); session { request; end; } }
+  server {
+    run svc (1);
+    }
   run { horizon 10; }
 }
 ```
@@ -210,18 +213,19 @@ At most one per program (a second is `duplicate workload`).
 ## `session`
 
 ```serq
-session block
+workload {
+  session { turn; request; end; }
+}
 ```
 
-What every session does, written as one block: the client's side (`turn`,
-`end`) next to the deployment's (`hold`, `prefill`, …). At top level it is the
-kernel form; inside a `workload` it is the session's side of a
-[two-sided program](../language.md#the-two-sides) and says `request;` where the
-server runs.
+What the client does, from arrival to `end`. A `session` belongs inside
+`workload`; `request;` runs the server once and then continues with the
+next statement. `request NAME;` instead runs a named gateway's route.
+See [the two sides](../language.md#the-two-sides).
 
 | | |
 |---|---|
-| Statements allowed | any [statement](statements.md); `request;` only inside `workload` |
+| Statements allowed | any [statement](statements.md) |
 | Moment | `Session` |
 
 ## `server`
@@ -231,16 +235,16 @@ server block
 ```
 
 The deployment's side of a request, run at every `request;` of the workload's
-`session`. The parser splices the block in place of `request;`, so the IR is
-that of the one-block `session`.
+`session`. The parser splices the block in place of `request;`, so the IR executes
+one session, with shared attributes across the client and server.
 
 | | |
 |---|---|
 | Refused in a `server` | `turn`, `end`, `request` |
 | Admission is written | `hold … at admission (…)` |
 
-A workload `session` without a `server`, a `server` that is never requested,
-and a `server` next to a top-level `session` are errors.
+A workload `session` must request a `server` or a named gateway. An unused
+`server` and a top-level `session` are errors.
 
 ## `share`
 
@@ -321,7 +325,8 @@ arrivals or with a session still live, and if the run drains at or before
 run ended as `end`, and its rates and time averages are over `end − warmup`.
 
 ```serq
-workload { arrive renewal(~h2(2, 4)); … }
+workload {
+    arrive renewal(~h2(2, 4)); … }
 run { horizon 1e5; warmup 0; arrivals 1000; }
 ```
 
@@ -337,12 +342,14 @@ A complete program:
 fn main() {
   let duration = 2;
   stage svc : fifo;
-  workload { arrive batch(2); }
-  session {
+  workload {
+    arrive batch(2);
+    session { request; end; }
+  }
+  server {
     set t0 = now;
     run svc (duration);
     observe latency = now - t0;
-    end;
   }
   gauge jobs = queue(svc);
   claim done : at end (count(latency) == 2);
