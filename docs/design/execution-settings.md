@@ -80,3 +80,12 @@ that a rendered documentation example was runnable was false; MkDocs does
 not compile source inside code fences. The example now uses the existing
 workload session and server syntax. The language already refuses the stale
 form, so no additional static check is needed.
+
+The PR review found two experiment runners and the Rust `no_run` example
+still relying on settings embedded in their source models. The migration
+assumed example and test callers covered every executable entry point;
+`tools/pd_batching/` was missed. Both runners now explicitly select the
+original model's instance before applying the requested seed, including
+when editing a temporary copy. The gate runs small cases through both
+runners, and the Rust example is now an executed doctest. The linker already
+rejects missing horizons; no new language check is needed.

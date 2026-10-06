@@ -67,6 +67,7 @@ VARIATIONS = {
 
 
 def run(program, sets, defs, seed, edits=()):
+    instance = program.parent / "instances" / program.stem / "default.sq"
     with tempfile.TemporaryDirectory() as dump:
         if edits:
             text = program.read_text()
@@ -75,7 +76,7 @@ def run(program, sets, defs, seed, edits=()):
                 text = text.replace(old, new)
             program = Path(dump) / program.name
             program.write_text(text)
-        cmd = [SERQ, "run", str(program), "--json", "--seed", str(seed), "--dump", dump]
+        cmd = [SERQ, "run", str(program), "--instance", str(instance), "--json", "--seed", str(seed), "--dump", dump]
         for k, v in sets.items():
             cmd += ["--set", f"{k}={v}"]
         for k, v in defs.items():

@@ -8,9 +8,12 @@
 //! that compiles to it. `examples/` holds example deployments, among them
 //! vLLM v1.
 //!
-//! ```no_run
+//! ```
 //! let src = std::fs::read_to_string("examples/single-turn/mg1.sq").unwrap();
-//! let report = serq::run_source(&src, &serq::Overrides::default(), None).unwrap();
+//! let options = serq::Overrides {
+//!     horizon: Some(100.0), warmup: Some(10.0), ..Default::default()
+//! };
+//! let report = serq::run_source(&src, &options, None).unwrap();
 //! println!("{}", report.text());
 //! ```
 

@@ -78,7 +78,8 @@ def run(mode, workload, x, seed):
     with tempfile.TemporaryDirectory() as d:
         program = Path(d) / LLMD.name
         program.write_text(text)
-        cmd = [SERQ, "run", str(program), "--json", "--seed", str(seed)]
+        instance = LLMD.parent / "instances" / LLMD.stem / "default.sq"
+        cmd = [SERQ, "run", str(program), "--instance", str(instance), "--json", "--seed", str(seed)]
         for k, v in sets.items():
             cmd += ["--set", f"{k}={v}"]
         return json.loads(subprocess.run(cmd, check=True, capture_output=True, text=True).stdout)

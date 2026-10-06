@@ -41,6 +41,8 @@ for f in docs/tutorial/programs/*.sq; do
   ./target/release/serq check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
   t=$((t + 1))
 done
+# Experimental runners must explicitly select their execution conditions too.
+python3 tools/pd_batching/test_runners.py
 python3 scripts/check_oracle_gpu.py
 # The docs' `file.py:line` evidence for the vLLM correspondence. Skips loudly
 # where ref/vllm is absent (scripts/fetch_vllm_ref.sh --sparse: 4 MB, 2 s).
