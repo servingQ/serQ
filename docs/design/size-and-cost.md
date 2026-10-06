@@ -150,11 +150,23 @@ the same classification. A client resource must not be a resource the
 server consumes this way; no implicit cost handoff is permitted.
 
 The release gate also exercised an existing large aggregate/index case.
-Adding conversion linking to the recursive expression function increased
-its stack frame enough to overflow before reporting the invalid index.
-Conversion linking is now a separate helper, and cost typing uses an
-iterative traversal. The program already has a static index check; this was
-an implementation failure to reach it, not a missing language restriction.
+The first fix separated conversion linking into a helper and made cost
+validation iterative. It passed locally but still overflowed on Linux:
+assuming a local pass guaranteed enough stack on other targets was wrong.
+Aggregate expansion built a left-deep source tree, then recursively linked
+or evaluated it, making stack usage proportional to the expanded count.
+The linker now processes the separate terms before folding their results
+left. It preserves the IR shape, floating-point grouping, evaluation order,
+and the aggregate expansion budget without recursively linking that spine.
+
+A regression reproduces the original 2100-term invalid index on a 1 MiB
+thread stack and checks sum/min/max at the 4096-term limit. The test aborted
+before the fix and now reports the expected range error. Three-term IR
+comparisons and a rounding-sensitive constant sum check the left fold.
+The program already has a static index check: this was an implementation
+failure to reach it, not a missing language restriction. Increasing the
+thread stack or balancing the sum was rejected: the former leaves the
+linear stack dependency in place, while the latter changes rounding.
 
 ## Validation
 

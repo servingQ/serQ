@@ -1570,15 +1570,29 @@ impl Linker<'_> {
                 }
             }
             Expr::Sample(..) => return Err(LinkError::new("a constant cannot sample".into())),
-            Expr::Over(agg, j, n, body) => self.eval_const(&self.unroll(*agg, j, n, body)?)?,
+            Expr::Over(agg, j, n, body) => {
+                let terms = self.over_terms(*agg, j, n, body)?;
+                let mut values = terms.iter().map(|e| self.eval_const(e));
+                let first = values.next().expect("positive aggregate count")?;
+                values.try_fold(first, |acc, value| {
+                    let value = value?;
+                    Ok(match agg {
+                        Agg::Sum => acc + value,
+                        Agg::Min => acc.min(value),
+                        Agg::Max => acc.max(value),
+                    })
+                })?
+            }
         })
     }
 
-    /// `max j in n (e)` written out: `e` with `j` = 0, 1, …, n-1, folded by
-    /// binary `max`, `min` or `+`. `n` is a constant, and `j` a name of its
+    /// `max j in n (e)` written out as separate terms, with `j` = 0, 1, …,
+    /// n-1. Callers fold left after linking/evaluating each term: constructing
+    /// a deep source tree first makes linking consume one stack frame per term.
+    /// `n` is a constant, and `j` a name of its
     /// own: a constant, an attribute, a pool, a stage or a context variable
     /// of the same name would leave the body saying two things.
-    fn unroll(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Expr> {
+    fn over_terms(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Vec<Expr>> {
         let what = format!("`{} {j} in`", agg.name());
         let clash = if self.prog.lets.iter().any(|(n, _)| n == j) {
             Some("a `let` constant")
@@ -1618,17 +1632,23 @@ impl Linker<'_> {
             bind_index(&mut e, j, k as f64);
             e
         };
-        let mut acc = term(0);
-        for k in 1..count as usize {
-            let t = term(k);
-            acc = match agg {
-                Agg::Sum => Expr::Binary(BinOp::Add, Box::new(acc), Box::new(t)),
-                Agg::Max | Agg::Min => {
-                    Expr::Call(agg.name().into(), vec![Arg::Expr(acc), Arg::Expr(t)])
-                }
-            };
-        }
-        Ok(acc)
+        Ok((0..count as usize).map(term).collect())
+    }
+
+    fn over_expr(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<CExpr> {
+        let terms = self.over_terms(agg, j, n, body)?;
+        let mut values = terms.iter().map(|e| self.expr(e));
+        let first = values.next().expect("positive aggregate count")?;
+        values.try_fold(first, |acc, value| {
+            let value = value?;
+            Ok(match agg {
+                Agg::Sum => CExpr::Binary(BinOp::Add, Box::new(acc), Box::new(value)),
+                Agg::Min | Agg::Max => CExpr::Call(
+                    if agg == Agg::Min { Fun::Min } else { Fun::Max },
+                    vec![CArg::Expr(acc), CArg::Expr(value)],
+                ),
+            })
+        })
     }
 
     fn expr(&self, e: &Expr) -> LResult<CExpr> {
@@ -1731,7 +1751,7 @@ impl Linker<'_> {
                 Box::new(self.expr(a)?),
                 Box::new(self.expr(b)?),
             ),
-            Expr::Over(agg, j, n, body) => self.expr(&self.unroll(*agg, j, n, body)?)?,
+            Expr::Over(agg, j, n, body) => self.over_expr(*agg, j, n, body)?,
         })
     }
 

@@ -112,6 +112,24 @@ fn an_aggregate_is_written_out() {
         ir("gauge x = sum k in 2 (holders(kv[k]));"),
         ir("gauge x = holders(kv[0]) + holders(kv[1]);")
     );
+    // Keep the left fold in the IR: balancing sums changes floating-point
+    // rounding, and reordering terms can change which draw an operand reads.
+    for (aggregate, expanded) in [
+        ("sum", "(0 + 1) + 2"),
+        ("min", "min(min(0, 1), 2)"),
+        ("max", "max(max(0, 1), 2)"),
+    ] {
+        assert_eq!(
+            ir(&format!("gauge x = {aggregate} k in 3 (k);")),
+            ir(&format!("gauge x = {expanded};")),
+        );
+    }
+    // The same order applies during constant folding: (1e16 - 1e16) + 1
+    // is 1, whereas 1e16 + (-1e16 + 1) rounds to 0.
+    assert_eq!(
+        ir("let N = sum k in 3 (k == 0 ? 1e16 : k == 1 ? -1e16 : 1); gauge x = N;"),
+        ir("gauge x = 1;"),
+    );
 }
 
 /// A `let` the linker folds is a constant everywhere, an array size
@@ -216,6 +234,28 @@ fn an_aggregates_index_and_count_are_its_own() {
         let e = link_error(&format!("{DEPLOYMENT}{gauge}"));
         assert!(e.contains(want), "{gauge}: {e}");
     }
+}
+
+/// Aggregate expansion must reach the index diagnostic on a bounded stack.
+/// 2100 units cannot index a two-member pool; min/max likewise produce 2.
+#[test]
+fn large_aggregate_indices_report_errors_on_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            for expression in [
+                "sum k in 2100 (1)",
+                "sum k in 4096 (1)",
+                "min k in 4096 (2)",
+                "max k in 4096 (2)",
+            ] {
+                let e = link_error(&format!("{DEPLOYMENT} gauge x = used(kv[{expression}]);"));
+                assert!(e.contains("out of range"), "{expression}: {e}");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// `--dump` writes a gauge's change points; their integral is the mean.
