@@ -39,7 +39,8 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # for every file the generator has read. 11 changed what a `seed` names
 # (per-session random streams), which the fragment never reads: its
 # programs draw nothing, so a 10 file and an 11 file translate alike. The
-# pinned corpus (IR 11) is FIFO and stays inside the fragment.
+# pinned corpus (IR 12) is FIFO and stays inside the fragment.
+# 12 adds resource cost conversions, erased without changing numeric work.
 IR_VERSION = 12
 SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, IR_VERSION)
 
@@ -100,6 +101,8 @@ def fold(e):
     computes them (a negative difference stays negative, and `nat` refuses
     a negative result: a budget or a chunk folds to the interpreter's
     value, not to ℕ's)."""
+    if "Cost" in e:
+        return fold(e["Cost"][1])
     if "Num" in e:
         return e["Num"]
     if "Binary" in e:
@@ -141,6 +144,17 @@ def subtracts(e):
     return False
 
 
+def erase_costs(e):
+    """Conversions preserve values, including under syntax-sensitive rounding."""
+    if isinstance(e, dict):
+        if "Cost" in e:
+            return erase_costs(e["Cost"][1])
+        return {k: erase_costs(v) for k, v in e.items()}
+    if isinstance(e, list):
+        return [erase_costs(v) for v in e]
+    return e
+
+
 def unsafe_division(e):
     """A divisor without a positive constant natural value is not proven
     safe in Nat: Rust yields infinity/NaN at zero, whereas Nat yields 0."""
@@ -169,6 +183,7 @@ class Expr:
         self.leaf, self.sub = leaf, sub
 
     def nat(self, e):
+        e = erase_costs(e)
         if not self.sub and subtracts(e):
             raise Fragment("a difference: ℕ stops at 0 where the interpreter goes negative")
         v = fold(e)

@@ -206,6 +206,9 @@ struct Linker<'a> {
     pools: HashMap<String, (usize, usize)>,
     stages: HashMap<String, (usize, usize)>,
     blocks: Vec<Vec<CStmt>>,
+    sides: Vec<Vec<crate::ir::Side>>,
+    declarations: Vec<(usize, DeclaredType)>,
+    side: crate::ir::Side,
     /// Per block, per statement: where the statement is in the text, as
     /// far as a reference or an expression in it says (#279).
     spans: Vec<Vec<Option<Span>>>,
@@ -254,8 +257,9 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 23] = [
 /// out, nested ones included.
 pub(crate) const MAX_OVER: usize = 4096;
 
-/// Calls the linker folds to a constant from a declaration.
-pub const FOLDED: [&str; 1] = ["blocksize"];
+/// Calls lowered directly by the linker instead of a numeric `Fun`: a
+/// declaration query (`blocksize`) and a resource conversion (`cost`).
+pub const FOLDED: [&str; 2] = ["blocksize", "cost"];
 
 /// The functions a call may name, as a constant the parser checks names
 /// against and `scripts/metrics.py` counts: the IR's `Fun::names`, which
@@ -349,6 +353,9 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         pools: HashMap::new(),
         stages: HashMap::new(),
         blocks: vec![],
+        sides: vec![],
+        declarations: vec![],
+        side: crate::ir::Side::Workload,
         spans: vec![],
         prog,
         over_terms: std::cell::Cell::new(0),
@@ -768,7 +775,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         });
     }
     let slot = |lk: &Linker, n: &str| lk.attr_index[n];
-    let linked = Linked {
+    let mut linked = Linked {
         gauges,
         claims,
         registers: lk.registers.clone(),
@@ -784,6 +791,8 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         slot_more: slot(&lk, "more"),
         slot_forced: slot(&lk, "forced"),
         slot_computed: slot(&lk, "computed"),
+        attr_types: vec![],
+        sides: lk.sides,
         attrs: lk.attrs,
         observes: lk.observes,
         pools,
@@ -800,6 +809,31 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         seed,
         arrivals,
     };
+    for (name, _) in &prog.cost_records {
+        if linked.attrs.iter().any(|n| n == name)
+            || linked.pools.iter().any(|p| p.name == *name)
+            || linked.stages.iter().any(|s| s.name == *name)
+            || prog.lets.iter().any(|(n, _)| n == name)
+        {
+            return Err(LinkError::new(format!(
+                "Cost record `{name}` conflicts with a scalar attribute, constant, or resource; give it a separate name"
+            )));
+        }
+    }
+    linked.infer_types().map_err(LinkError::new)?;
+    for (slot, declared) in lk.declarations {
+        let actual = &linked.attr_types[slot];
+        let matches = match declared {
+            DeclaredType::Size => *actual == crate::ir::ValueType::Size,
+            DeclaredType::Cost => matches!(actual, crate::ir::ValueType::Cost(_)),
+        };
+        if !matches {
+            return Err(LinkError::new(format!(
+                "`{}` is declared {declared:?} but its assignments do not have that type; a Cost needs a named resource conversion",
+                linked.attrs[slot]
+            )));
+        }
+    }
     crate::frontend::lint::lint(&linked).map_err(LinkError::new)?;
     Ok((linked, lk.spans))
 }
@@ -954,8 +988,15 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
             Expr::Binary(BinOp::And | BinOp::Or, a, _) | Expr::Over(_, _, a, _) => certain(a, t),
             Expr::Binary(_, a, b) => certain(a, t).union(&certain(b, t)).cloned().collect(),
             Expr::Sample(_, xs) => xs.iter().flat_map(|e| certain(e, t)).collect(),
-            Expr::Call(_, args) => args
+            // Resource annotations are checked but not evaluated. Only the
+            // converted quantity can reveal a hidden input when work ends.
+            Expr::Call(f, args) => args
                 .iter()
+                .skip(if f == "cost" {
+                    args.len().saturating_sub(1)
+                } else {
+                    0
+                })
                 .flat_map(|a| match a {
                     Arg::Expr(e) => certain(e, t),
                     Arg::Ref(r) => match &r.index {
@@ -1141,7 +1182,12 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                     let mut leg = t.clone();
                     walk(body, &mut leg)?;
                 }
-                Stmt::Request | Stmt::Call { .. } | Stmt::Mark(_) | Stmt::Join => {}
+                Stmt::Declare(..)
+                | Stmt::Side(_)
+                | Stmt::Request
+                | Stmt::Call { .. }
+                | Stmt::Mark(_)
+                | Stmt::Join => {}
             }
         }
         Ok(())
@@ -1373,6 +1419,57 @@ impl Linker<'_> {
         self.cref(r, &self.stages, "stage")
     }
 
+    fn cost(&self, args: &[Arg]) -> LResult<CExpr> {
+        let Some((value, resources)) = args.split_last() else {
+            return Err(LinkError::new(
+                "cost takes resources followed by an expression".into(),
+            ));
+        };
+        let mut targets = vec![];
+        for arg in resources {
+            let Arg::Ref(r) = arg else {
+                return Err(LinkError::new(
+                    "cost expects resource names before its expression".into(),
+                ));
+            };
+            // An indexed reference (including a def's substituted
+            // resource argument) projects its family's type. Check
+            // the written index before erasing the annotation.
+            if r.index.as_deref().is_some_and(Expr::draws) {
+                return Err(LinkError::new(
+                    "a cost type annotation cannot draw a member index".into(),
+                ));
+            }
+            targets.push(if let Some(&(base, count)) = self.pools.get(&r.name) {
+                if r.index.is_some() {
+                    self.pool_ref(r)?;
+                }
+                crate::ir::CostTarget::Pool { base, count }
+            } else if let Some(&(base, count)) = self.stages.get(&r.name) {
+                if r.index.is_some() {
+                    self.stage_ref(r)?;
+                }
+                crate::ir::CostTarget::Stage { base, count }
+            } else {
+                return Err(self.unknown("cost resource", &r.name));
+            });
+        }
+        if targets.is_empty() {
+            return Err(LinkError::new("cost requires at least one resource".into()));
+        }
+        let target = crate::ir::CostTarget::joint(targets);
+        let value = match value {
+            Arg::Expr(e) => self.expr(e)?,
+            Arg::Ref(r) if r.index.is_none() => self.expr(&Expr::Var(r.name.clone()))?,
+            _ => {
+                return Err(LinkError::new(
+                    "cost's last argument is an expression".into(),
+                ));
+            }
+        };
+        Ok(CExpr::Cost(target, Box::new(value)))
+    }
+
     /// `blocksize(p)`: the `block` of pool `p`, a constant the linker folds,
     /// so a definition takes the pool and not its block size beside it.
     fn blocksize(&self, args: &[Arg]) -> LResult<f64> {
@@ -1504,15 +1601,29 @@ impl Linker<'_> {
                 }
             }
             Expr::Sample(..) => return Err(LinkError::new("a constant cannot sample".into())),
-            Expr::Over(agg, j, n, body) => self.eval_const(&self.unroll(*agg, j, n, body)?)?,
+            Expr::Over(agg, j, n, body) => {
+                let terms = self.over_terms(*agg, j, n, body)?;
+                let mut values = terms.iter().map(|e| self.eval_const(e));
+                let first = values.next().expect("positive aggregate count")?;
+                values.try_fold(first, |acc, value| {
+                    let value = value?;
+                    Ok(match agg {
+                        Agg::Sum => acc + value,
+                        Agg::Min => acc.min(value),
+                        Agg::Max => acc.max(value),
+                    })
+                })?
+            }
         })
     }
 
-    /// `max j in n (e)` written out: `e` with `j` = 0, 1, …, n-1, folded by
-    /// binary `max`, `min` or `+`. `n` is a constant, and `j` a name of its
+    /// `max j in n (e)` written out as separate terms, with `j` = 0, 1, …,
+    /// n-1. Callers fold left after linking/evaluating each term: constructing
+    /// a deep source tree first makes linking consume one stack frame per term.
+    /// `n` is a constant, and `j` a name of its
     /// own: a constant, an attribute, a pool, a stage or a context variable
     /// of the same name would leave the body saying two things.
-    fn unroll(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Expr> {
+    fn over_terms(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Vec<Expr>> {
         let what = format!("`{} {j} in`", agg.name());
         let clash = if self.prog.lets.iter().any(|(n, _)| n == j) {
             Some("a `let` constant")
@@ -1552,17 +1663,23 @@ impl Linker<'_> {
             bind_index(&mut e, j, k as f64);
             e
         };
-        let mut acc = term(0);
-        for k in 1..count as usize {
-            let t = term(k);
-            acc = match agg {
-                Agg::Sum => Expr::Binary(BinOp::Add, Box::new(acc), Box::new(t)),
-                Agg::Max | Agg::Min => {
-                    Expr::Call(agg.name().into(), vec![Arg::Expr(acc), Arg::Expr(t)])
-                }
-            };
-        }
-        Ok(acc)
+        Ok((0..count as usize).map(term).collect())
+    }
+
+    fn over_expr(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<CExpr> {
+        let terms = self.over_terms(agg, j, n, body)?;
+        let mut values = terms.iter().map(|e| self.expr(e));
+        let first = values.next().expect("positive aggregate count")?;
+        values.try_fold(first, |acc, value| {
+            let value = value?;
+            Ok(match agg {
+                Agg::Sum => CExpr::Binary(BinOp::Add, Box::new(acc), Box::new(value)),
+                Agg::Min | Agg::Max => CExpr::Call(
+                    if agg == Agg::Min { Fun::Min } else { Fun::Max },
+                    vec![CArg::Expr(acc), CArg::Expr(value)],
+                ),
+            })
+        })
     }
 
     fn expr(&self, e: &Expr) -> LResult<CExpr> {
@@ -1623,6 +1740,7 @@ impl Linker<'_> {
                     })?;
                 CExpr::Agg(agg, k)
             }
+            Expr::Call(f, args) if f == "cost" => self.cost(args)?,
             Expr::Call(f, args) => {
                 let Some(fun) = Fun::from_name(f) else {
                     return Err(LinkError::new(format!("unknown function `{f}`")));
@@ -1664,7 +1782,7 @@ impl Linker<'_> {
                 Box::new(self.expr(a)?),
                 Box::new(self.expr(b)?),
             ),
-            Expr::Over(agg, j, n, body) => self.expr(&self.unroll(*agg, j, n, body)?)?,
+            Expr::Over(agg, j, n, body) => self.over_expr(*agg, j, n, body)?,
         })
     }
 
@@ -1680,9 +1798,30 @@ impl Linker<'_> {
     fn block(&mut self, stmts: &[Stmt]) -> LResult<BlockId> {
         let id = self.blocks.len();
         self.blocks.push(vec![]);
-        self.spans.push(stmts.iter().map(stmt_span).collect());
+        self.spans.push(vec![]);
+        self.sides.push(vec![]);
+        let initial_side = self.side;
+        let mut side_stack = vec![];
         let mut out = vec![];
         for s in stmts {
+            if let Stmt::Declare(name, kind) = s {
+                self.declarations.push((self.attr_index[name], *kind));
+                continue;
+            }
+            if let Stmt::Side(side) = s {
+                match side {
+                    crate::ir::Side::Server => {
+                        side_stack.push(self.side);
+                        self.side = *side;
+                    }
+                    crate::ir::Side::Workload => {
+                        self.side = side_stack.pop().unwrap_or(initial_side);
+                    }
+                }
+                continue;
+            }
+            self.spans[id].push(stmt_span(s));
+            self.sides[id].push(self.side);
             let cs = match s {
                 Stmt::Set(n, e) => CStmt::Set(self.attr_index[n], self.expr(e)?),
                 Stmt::Observe(n, e) => {
@@ -1691,6 +1830,7 @@ impl Linker<'_> {
                 }
                 Stmt::Turn => CStmt::Turn,
                 Stmt::End => CStmt::End,
+                Stmt::Declare(..) | Stmt::Side(_) => unreachable!(),
                 Stmt::Request => {
                     return Err(LinkError::new(
                         "`request` survived parsing: the parser splices the server in its place"
@@ -1778,6 +1918,7 @@ impl Linker<'_> {
             out.push(cs);
         }
         self.blocks[id] = out;
+        self.side = initial_side;
         Ok(id)
     }
 }

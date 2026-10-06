@@ -52,7 +52,7 @@ fn main() {
     route {
       set t0 = now;
       set prompt = new;
-      run front (h);
+      run front (cost(front, h));
       branch (concurrent) {
         fork { P.prefill (prompt); }     // asyncio.create_task: the prefill leg runs beside
       } else {
@@ -82,12 +82,12 @@ fn main() {
     }
     nic ps(Bw);                           // the pod's NIC: the writes out of it share it
     prefill (prompt) {
-      hold reqs (1), kv (min(prompt, hit + budget_left(P))) reserve (prompt)
+      hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt))
            at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
         set c = cached;
         observe p_cached = c;
         prefill (prompt - c) growing kv;      // chunked; one token is sampled and discarded
-      } cache (prompt) lease kv (inf);
+      } cache (cost(reqs, kv, prompt)) lease kv (inf);
     }
   }
 
@@ -106,10 +106,10 @@ fn main() {
 
     // Every request has a remote prefill: this entry is never called.
     decode (prompt) {
-      hold kv (prompt) reserve (prompt), reqs (1) {
+      hold kv (cost(kv, prompt)) reserve (cost(kv, prompt)), reqs (cost(reqs, 1)) {
         prefill (prompt) growing kv;
         decode (out - 1) growing kv;
-      } cache (prompt + out);
+      } cache (cost(kv, reqs, prompt + out));
     }
 
     // With remote KV. The decode request is taken when the whole prompt fits
@@ -118,8 +118,8 @@ fn main() {
     // full blocks it has of the prompt.
     decode (prompt) from src {
       set transferred = 0;   // one KV transfer per request
-      hold kv (known) reserve (known), reqs (0) reserve (1)
-           reuse (reusable(known, bs))
+      hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
+           reuse (cost(kv, reqs, reusable(known, bs)))
            at admission (known = computed < prompt ? prompt : computed + 1) {
         set c = cached;
         branch (!transferred) {
@@ -137,12 +137,12 @@ fn main() {
           set c = prompt - 1;
         }
         // Back in the waiting queue: a running slot and a token of budget.
-        hold reqs (1) {
+        hold reqs (cost(reqs, 1)) {
           prefill (known - c) growing kv;
           branch (known == prompt) { mark first_token; }
           decode (out - 1 - (known - prompt)) growing kv;
         }
-      } cache (prompt + out);
+      } cache (cost(kv, reqs, prompt + out));
     }
   }
 
@@ -163,7 +163,7 @@ fn main() {
     trace "../replay/data/short_base.csv" ordered;
     hidden out;            // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
     session {
-      run gate (serial * spacing);
+      run gate (cost(gate, serial * spacing));
       turn;
       while (more) {
         tool think;

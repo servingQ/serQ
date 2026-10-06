@@ -23,6 +23,11 @@ only `set` and `observe`. Random draws in the workload use their own stream.
 | [`session`](#session) | Describe how completed turns lead to the next; default: one turn. |
 | [`hidden`](#hidden) | Restrict scheduler access to future attributes. |
 
+Workload assignments produce [`Size`](attributes.md#sizes-values-and-costs)
+attributes that a server can read but cannot overwrite. `init` and `turn`
+produce no resource costs. The server interprets request quantities with
+[`cost`](functions.md#cost); the session may use costs of client resources.
+
 ## `arrive`
 
 | Form | Argument | Sessions arrive |
@@ -153,7 +158,7 @@ fn main() {
     }
   }
   server {
-    run svc (duration);
+    run svc (cost(svc, duration));
     observe elapsed = now;
   }
 }

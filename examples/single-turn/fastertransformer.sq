@@ -33,9 +33,9 @@ fn main() {
   }
 
   server {
-    hold reqs (1) {
-      run engine prefill (vp);
-      run engine decode (vd);
+    hold reqs (cost(reqs, 1)) {
+      run engine prefill (cost(engine, vp));
+      run engine decode (cost(engine, vd));
     }
     observe response = now - t0;
   }

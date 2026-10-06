@@ -17,7 +17,7 @@ const DEPLOYMENT: &str = "
         server {
           choose j in 2 by (holders(kv[j]));
           set n = ~uniform(1, 20);
-          hold kv[j] (n) { run svc[j] (~exp(0.5)); }
+          hold kv[j] (cost(kv, n)) { run svc[j] (cost(svc, ~exp(0.5))); }
         }
 
 ";
@@ -112,6 +112,24 @@ fn an_aggregate_is_written_out() {
         ir("gauge x = sum k in 2 (holders(kv[k]));"),
         ir("gauge x = holders(kv[0]) + holders(kv[1]);")
     );
+    // Keep the left fold in the IR: balancing sums changes floating-point
+    // rounding, and reordering terms can change which draw an operand reads.
+    for (aggregate, expanded) in [
+        ("sum", "(0 + 1) + 2"),
+        ("min", "min(min(0, 1), 2)"),
+        ("max", "max(max(0, 1), 2)"),
+    ] {
+        assert_eq!(
+            ir(&format!("gauge x = {aggregate} k in 3 (k);")),
+            ir(&format!("gauge x = {expanded};")),
+        );
+    }
+    // The same order applies during constant folding: (1e16 - 1e16) + 1
+    // is 1, whereas 1e16 + (-1e16 + 1) rounds to 0.
+    assert_eq!(
+        ir("let N = sum k in 3 (k == 0 ? 1e16 : k == 1 ? -1e16 : 1); gauge x = N;"),
+        ir("gauge x = 1;"),
+    );
 }
 
 /// A `let` the linker folds is a constant everywhere, an array size
@@ -131,7 +149,7 @@ fn an_aggregate_let_sizes_an_array() {
           session {{ turn; end;
           }}
         }}
-        server {{ run s[0] (N);
+        server {{ run s[0] (cost(s, N));
         }}
         "
         );
@@ -218,6 +236,28 @@ fn an_aggregates_index_and_count_are_its_own() {
     }
 }
 
+/// Aggregate expansion must reach the index diagnostic on a bounded stack.
+/// 2100 units cannot index a two-member pool; min/max likewise produce 2.
+#[test]
+fn large_aggregate_indices_report_errors_on_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            for expression in [
+                "sum k in 2100 (1)",
+                "sum k in 4096 (1)",
+                "min k in 4096 (2)",
+                "max k in 4096 (2)",
+            ] {
+                let e = link_error(&format!("{DEPLOYMENT} gauge x = used(kv[{expression}]);"));
+                assert!(e.contains("out of range"), "{expression}: {e}");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// `--dump` writes a gauge's change points; their integral is the mean.
 #[test]
 fn the_dump_is_the_signal() {
@@ -289,8 +329,8 @@ fn a_gauge_reads_the_end_of_an_instant() {
           }
         }
         server {
-          run gate (serial == 0 ? 0 : 1);
-          hold kv (1) { run gate (1); }
+          run gate (cost(gate, serial == 0 ? 0 : 1));
+          hold kv (cost(kv, 1)) { run gate (cost(gate, 1)); }
         }
         gauge n = holders(kv);
         ";
@@ -309,7 +349,7 @@ fn a_gauge_does_not_plan_an_iteration() {
     let src = "stage e : step { budget ~uniform(1, 2); cost 1; }
         workload { session { turn; end;
         } }
-        server { run e prefill (1);
+        server { run e prefill (cost(e, 1));
         }
         gauge g = budget_left(e);";
     assert!(link_error(src).contains("may not read `budget_left"));
@@ -330,7 +370,7 @@ fn a_budget_does_not_read_budget_left() {
         stage f : step {{ budget 64; cost 1; }}
         workload {{ session {{ turn; end;
         }} }}
-        server {{ run e prefill (1);
+        server {{ run e prefill (cost(e, 1));
         }} "
         );
         let e = link_error(&src);
@@ -347,7 +387,7 @@ fn a_budget_does_not_read_budget_left() {
           session { turn; end;
           }
         }
-        server { hold kv (min(8, budget_left(e))) { run e prefill (4); }
+        server { hold kv (cost(kv, min(8, budget_left(e)))) { run e prefill (cost(e, 4)); }
         }
         ";
     run_source(&common::main_source(src), &common::horizon(1.0), None).unwrap();
@@ -360,7 +400,7 @@ fn a_budget_does_not_read_budget_left() {
 fn an_aggregate_in_a_queue_entry_reads_its_own_index() {
     let src = "queue engine : prefill {
           serve fifo;
-          prefill (prompt) { run (sum k in 2 (max(k, 1)) * prompt); }
+          prefill (prompt) { run (cost(engine, sum k in 2 (max(k, 1)) * prompt)); }
         }
         queue gw : gateway { route { engine.prefill (1); } }
         workload { arrive batch(1); session { turn; end; } } server { gw.route(); }

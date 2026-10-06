@@ -4096,6 +4096,7 @@ impl<'p> Interp<'p> {
 
     fn eval(&mut self, e: &CExpr, ctx: &Ctx, w: Which) -> f64 {
         match e {
+            CExpr::Cost(_, x) => self.eval(x, ctx, w),
             CExpr::Num(x) => *x,
             CExpr::Reg(r) => self.regs[*r],
             CExpr::Attr(i) => match (&ctx.snap, ctx.sid) {
@@ -4616,7 +4617,7 @@ fn aggregates(e: &CExpr, out: &mut [bool]) {
                 }
             }
         }
-        CExpr::Unary(_, x) => aggregates(x, out),
+        CExpr::Unary(_, x) | CExpr::Cost(_, x) => aggregates(x, out),
         CExpr::Binary(_, a, b) => {
             aggregates(a, out);
             aggregates(b, out);

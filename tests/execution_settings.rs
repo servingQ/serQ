@@ -8,7 +8,7 @@ const MODEL: &str = "fn main() {
   pool slots { cap 2; }
   stage svc : fifo;
   workload { arrive batch(4); session { set t0 = now; turn; observe latency = now - t0; end; } }
-  server { hold slots (1) { run svc (2); } }
+  server { hold slots (cost(slots, 1)) { run svc (cost(svc, 2)); } }
   gauge occupied = used(slots);
 }";
 

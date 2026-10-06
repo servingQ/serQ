@@ -15,20 +15,24 @@ Four servers now, so compute is not the constraint. Ten memory units are.
 ## Reserve memory with `hold`
 
 ```serq
-hold mem (c) {
+Cost processing = { svc: S * work_size, mem: items };
+hold mem (processing.mem) {
   observe admit_wait = now - t0;
-  run svc (s);
+  run svc (processing.svc);
 }
 ```
 
-`hold` joins the pool's queue, waits for `c` units and reserves them for the
+The workload draws `work_size` and `items`. The server converts them to
+service work and memory demand; here each item needs one memory unit.
+
+`hold` joins the pool's queue, waits for `processing.mem` units and reserves them for the
 body. When the body finishes, the units are released automatically.
 
 !!! info "When are the units counted?"
-    `c` is evaluated **when the session is admitted**, not when it joins the
-    queue. This matters as soon as the expression reads something that changes
-    while you wait — the cache, or the engine's remaining budget. Chapter 5
-    depends on it entirely.
+    The declaration computes `processing.mem` once. The hold reads that
+    stored amount **at admission**. A header that reads changing cache or
+    budget state must calculate it at admission instead; Chapter 5 uses
+    those expressions directly in the header.
 
 ## Running it
 

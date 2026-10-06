@@ -15,6 +15,46 @@
     "arrive",
     "known"
   ],
+  "attr_types": [
+    "Value",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Value",
+    "Size",
+    "Size",
+    "Size",
+    "Value"
+  ],
+  "sides": [
+    [
+      "Workload",
+      "Workload",
+      "Workload"
+    ],
+    [],
+    [
+      "Workload",
+      "Workload",
+      "Server",
+      "Server",
+      "Workload"
+    ],
+    [
+      "Server",
+      "Server",
+      "Server",
+      "Server"
+    ],
+    [
+      "Server"
+    ],
+    []
+  ],
   "observes": [
     "first",
     "done"
@@ -232,7 +272,17 @@
           },
           "mode": "Plain",
           "work": {
-            "Attr": 11
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 1,
+                  "count": 1
+                }
+              },
+              {
+                "Attr": 11
+              }
+            ]
           },
           "growing": null
         }
@@ -248,7 +298,17 @@
                 "index": null
               },
               {
-                "Num": 1.0
+                "Cost": [
+                  {
+                    "Pool": {
+                      "base": 0,
+                      "count": 1
+                    }
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
               },
               null
             ],
@@ -259,83 +319,103 @@
                 "index": null
               },
               {
-                "Call": [
-                  "Min",
-                  [
-                    {
-                      "Expr": {
-                        "Cond": [
-                          {
-                            "Binary": [
-                              "Lt",
+                "Cost": [
+                  {
+                    "Pool": {
+                      "base": 1,
+                      "count": 1
+                    }
+                  },
+                  {
+                    "Call": [
+                      "Min",
+                      [
+                        {
+                          "Expr": {
+                            "Cond": [
                               {
-                                "Attr": 8
+                                "Binary": [
+                                  "Lt",
+                                  {
+                                    "Attr": 8
+                                  },
+                                  {
+                                    "Attr": 9
+                                  }
+                                ]
                               },
                               {
                                 "Attr": 9
-                              }
-                            ]
-                          },
-                          {
-                            "Attr": 9
-                          },
-                          {
-                            "Binary": [
-                              "Add",
-                              {
-                                "Attr": 8
                               },
                               {
-                                "Num": 1.0
+                                "Binary": [
+                                  "Add",
+                                  {
+                                    "Attr": 8
+                                  },
+                                  {
+                                    "Num": 1.0
+                                  }
+                                ]
                               }
                             ]
                           }
-                        ]
-                      }
-                    },
-                    {
-                      "Expr": {
-                        "Call": [
-                          "BudgetLeft",
-                          [
-                            {
-                              "Stage": {
-                                "base": 0,
-                                "count": 1,
-                                "index": null
-                              }
-                            }
-                          ]
-                        ]
-                      }
-                    }
-                  ]
+                        },
+                        {
+                          "Expr": {
+                            "Call": [
+                              "BudgetLeft",
+                              [
+                                {
+                                  "Stage": {
+                                    "base": 0,
+                                    "count": 1,
+                                    "index": null
+                                  }
+                                }
+                              ]
+                            ]
+                          }
+                        }
+                      ]
+                    ]
+                  }
                 ]
               },
               {
-                "Cond": [
+                "Cost": [
                   {
-                    "Binary": [
-                      "Lt",
+                    "Pool": {
+                      "base": 1,
+                      "count": 1
+                    }
+                  },
+                  {
+                    "Cond": [
                       {
-                        "Attr": 8
+                        "Binary": [
+                          "Lt",
+                          {
+                            "Attr": 8
+                          },
+                          {
+                            "Attr": 9
+                          }
+                        ]
                       },
                       {
                         "Attr": 9
-                      }
-                    ]
-                  },
-                  {
-                    "Attr": 9
-                  },
-                  {
-                    "Binary": [
-                      "Add",
-                      {
-                        "Attr": 8
                       },
                       {
-                        "Num": 1.0
+                        "Binary": [
+                          "Add",
+                          {
+                            "Attr": 8
+                          },
+                          {
+                            "Num": 1.0
+                          }
+                        ]
                       }
                     ]
                   }
@@ -403,7 +483,17 @@
           },
           "mode": "Prefill",
           "work": {
-            "Attr": 12
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 0,
+                  "count": 1
+                }
+              },
+              {
+                "Attr": 12
+              }
+            ]
           },
           "growing": {
             "base": 1,
@@ -438,27 +528,37 @@
           },
           "mode": "Decode",
           "work": {
-            "Binary": [
-              "Sub",
+            "Cost": [
               {
-                "Binary": [
-                  "Sub",
-                  {
-                    "Attr": 10
-                  },
-                  {
-                    "Num": 1.0
-                  }
-                ]
+                "Stage": {
+                  "base": 0,
+                  "count": 1
+                }
               },
               {
                 "Binary": [
                   "Sub",
                   {
-                    "Attr": 12
+                    "Binary": [
+                      "Sub",
+                      {
+                        "Attr": 10
+                      },
+                      {
+                        "Num": 1.0
+                      }
+                    ]
                   },
                   {
-                    "Attr": 9
+                    "Binary": [
+                      "Sub",
+                      {
+                        "Attr": 12
+                      },
+                      {
+                        "Attr": 9
+                      }
+                    ]
                   }
                 ]
               }

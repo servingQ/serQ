@@ -27,7 +27,7 @@ fn main() {
       observe context = K + n + o;
       while (~bernoulli(p)) {
         set K = K + n + o;
-        run tool (~exp(Z));
+        run tool (cost(tool, ~exp(Z)));
         turn;
         observe context = K + n + o;
       }
@@ -36,7 +36,7 @@ fn main() {
 
   server {
     set t0 = now;
-    run engine (a * (K + n) + d * o);
+    run engine (cost(engine, a * (K + n) + d * o));
     observe response = now - t0;
   }
 

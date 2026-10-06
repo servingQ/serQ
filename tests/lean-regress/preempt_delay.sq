@@ -18,11 +18,11 @@ fn main() {
   }
 
   server {
-    hold slots (1), kv (16) {
+    hold slots (cost(slots, 1)), kv (cost(kv, 16)) {
       observe resumed = computed;
-      run engine prefill (16) growing kv;
-      run tool (d);
-      run engine decode (20) growing kv;
+      run engine prefill (cost(engine, 16)) growing kv;
+      run tool (cost(tool, d));
+      run engine decode (cost(engine, 20)) growing kv;
       observe done = now;
     }
   }

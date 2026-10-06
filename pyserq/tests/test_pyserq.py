@@ -26,7 +26,7 @@ MG1 = ROOT / "examples" / "single-turn" / "mg1.sq"
 REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
 ARRAYS = """fn main() { pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
 workload { arrive poisson(1);  }
-server { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } }
+server { set j = ~bernoulli(0.5); hold reqs (cost(reqs, 1)) { hold kv[j] (cost(kv, 1)) { run svc[j] (cost(svc, ~exp(0.5))); } } }
  }"""
 
 
@@ -60,7 +60,7 @@ workload { arrive poisson(1.5);  }
 server {
   choose j in 2 by (holders(kv[j]));
   set u = ~uniform(1, 20);
-  hold kv[j] (u) { run svc[j] (~exp(0.5)); }
+  hold kv[j] (cost(kv, u)) { run svc[j] (cost(svc, ~exp(0.5))); }
 }
 gauge spread = max k in 2 (used(kv[k])) - min k in 2 (used(kv[k]));
 
@@ -176,7 +176,7 @@ def test_an_infinity_is_inf():
 
 def test_defs_is_the_program_written_with_that_body():
     src = ("fn main() { def service() { ~exp(1) }\nstage svc : fifo;\nworkload { arrive poisson(0.5);  }\n"
-           "server { run svc (service()); observe s = now; }\n }\n")
+           "server { run svc (cost(svc, service())); observe s = now; }\n }\n")
     given = pyserq.compile(source=src, defs={"service": "~erlang(4, 1)"}, horizon=1000, seed=2)
     written = pyserq.compile(source=src.replace("~exp(1)", "~erlang(4, 1)"), horizon=1000, seed=2)
     assert given.to_json() == written.to_json() != pyserq.compile(source=src, horizon=1000, seed=2).to_json()
@@ -224,7 +224,7 @@ def test_draw_is_serq_draw():
 def test_errors_are_value_errors():
     for call in [
         lambda: pyserq.compile(ROOT / "nowhere.sq"),
-        lambda: pyserq.compile(source="fn main() { workload {  } server { run nowhere (1); } }", horizon=10),
+        lambda: pyserq.compile(source="fn main() { workload {  } server { run nowhere (cost(nowhere, 1)); } }", horizon=10),
         lambda: pyserq.compile(MG1, sets={"nope": 1}, horizon=250000, warmup=25000),
         lambda: pyserq.compile(MG1, source="x", horizon=10),
         lambda: pyserq.compile(MG1, sets={"lam": float("nan")}, horizon=250000, warmup=25000),

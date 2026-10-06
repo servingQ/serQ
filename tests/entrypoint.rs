@@ -12,7 +12,7 @@ fn main() {
   let service = twice(fixed);
   stage worker : delay;
   workload { arrive batch(1); session { turn; end; } }
-  server { run worker (service); observe elapsed = now; }
+  server { run worker (cost(worker, service)); observe elapsed = now; }
 
 }
 "#;
@@ -140,7 +140,7 @@ fn an_input_name_does_not_make_an_unrelated_constant_structural() {
     let src = r#"use "std/args"; fn main() {
       let count = 2;
       let cost = args.number("count", 1);
-      queue q[count] : prefill { serve delay; prefill(p) { run (p); } }
+      queue q[count] : prefill { serve delay; prefill(p) { run (cost(q, p)); } }
       workload { session { turn; end; } }
       server { q[0].prefill(cost); }
 

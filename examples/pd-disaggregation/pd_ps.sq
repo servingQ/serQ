@@ -38,7 +38,7 @@ fn main() {
 
   server {
     set t0 = now;
-    branch (mode == 0) { run colo[k] ((o - 1) * tok); } else { run dec ((o - 1) * tok); }
+    branch (mode == 0) { run colo[k] (cost(colo, (o - 1) * tok)); } else { run dec (cost(dec, (o - 1) * tok)); }
     observe decode_time = now - t0;
     observe tpot = (now - t0) / (o - 1);
     observe output_tokens = o;

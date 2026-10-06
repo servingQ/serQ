@@ -55,12 +55,12 @@ the server side.
 
 ```serq
 set hitmax = floor((prompt - 1) / bs) * bs;
-hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
      at admission (hit = min(cachedin(kv), hitmax)) {
   set c = min(cached, floor((prompt - 1) / bs) * bs);
-  run engine prefill (prompt - c) growing kv;
-  run engine decode (o - 1) growing kv;
-} cache (prompt + o);
+  run engine prefill (cost(engine, prompt - c)) growing kv;
+  run engine decode (cost(engine, o - 1)) growing kv;
+} cache (cost(reqs, kv, prompt + o));
 ```
 
 **`growing kv`** allocates additional blocks as the request advances instead

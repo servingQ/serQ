@@ -43,8 +43,8 @@ fn a_leg_runs_beside_the_session_and_join_waits_for_it() {
           }
         }
         server {
-          fork { run svc (5); observe leg_done = now; }
-          run svc (3);
+          fork { run svc (cost(svc, 5)); observe leg_done = now; }
+          run svc (cost(svc, 3));
           observe before_join = now;
           join;
           observe after_join = now;
@@ -71,8 +71,8 @@ fn a_join_after_the_legs_end_passes() {
           }
         }
         server {
-          fork { run svc (1); }
-          run svc (3);
+          fork { run svc (cost(svc, 1)); }
+          run svc (cost(svc, 3));
           join;
           observe after_join = now;
         }
@@ -98,7 +98,7 @@ fn a_leg_sets_its_own_copy() {
         }
         server {
           set x = 1;
-          fork { observe leg_reads = x; set x = 7; run svc (1); observe leg_after = x; }
+          fork { observe leg_reads = x; set x = 7; run svc (cost(svc, 1)); observe leg_after = x; }
           set x = 2;
           join;
           observe session_x = x;
@@ -126,8 +126,8 @@ fn a_leg_is_not_a_session() {
           }
         }
         server {
-          fork { run svc (1); }
-          fork { run svc (2); }
+          fork { run svc (cost(svc, 1)); }
+          fork { run svc (cost(svc, 2)); }
           join;
         }
 
@@ -153,10 +153,10 @@ fn a_legs_lease_passes_to_its_session() {
           }
         }
         server {
-          fork { hold kv (10) { run svc (1); } lease kv (inf); }
+          fork { hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } lease kv (inf); }
           join;
           observe leased = free(kv);
-          run svc (2);
+          run svc (cost(svc, 2));
           release kv;
           observe released = free(kv);
         }
@@ -183,8 +183,8 @@ fn a_leg_shares_the_sessions_cache() {
           }
         }
         server {
-          hold kv (8) { run svc (1); } cache (8);
-          fork { hold kv (8) { observe hit = cached; run svc (1); } cache (8); }
+          hold kv (cost(kv, 8)) { run svc (cost(svc, 1)); } cache (cost(kv, 8));
+          fork { hold kv (cost(kv, 8)) { observe hit = cached; run svc (cost(svc, 1)); } cache (cost(kv, 8)); }
           join;
         }
 
@@ -214,15 +214,15 @@ fn the_decode_leg_holds_its_blocks_during_the_prefill() {
           pool kv {{ cap 100; }}
           serve fifo;
           nic ps(10);
-          prefill (p) {{ hold kv (p) {{ run (p); }} cache (p) lease kv (inf); }}
+          prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }}
         }}
         queue D : decode {{
           pool kv {{ cap 100; }}
           serve step {{ cost 1; memory kv; }}
           nic ps(10);
-          decode (p) {{ hold kv (p) {{ prefill (p) growing kv; }} }}
+          decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }}
           decode (p) from src {{
-            hold kv (p) {{
+            hold kv (cost(kv, p)) {{
               mark parked;
               join;
               transfer (p) from src to kv (p);
@@ -257,7 +257,7 @@ fn legs_that_wait_for_each_other_fail_the_run() {
         queue gw : gateway {
           route {
             fork { P.prefill (prompt); }
-            run gate (serial == 1 ? 1 : 0);
+            run gate (cost(gate, serial == 1 ? 1 : 0));
             D.decode (prompt) from P;
           }
         }
@@ -265,21 +265,22 @@ fn legs_that_wait_for_each_other_fail_the_run() {
           pool kv { cap 10; }
           serve fifo;
           nic ps(100);
-          prefill (p) { hold kv (p) { run (p); } cache (p) lease kv (inf); }
+          prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); }
         }
         queue D : decode {
           pool kv { cap 10; }
           serve step { cost 1; memory kv; }
           nic ps(100);
-          decode (p) { hold kv (p) { prefill (p) growing kv; } }
-          decode (p) from src { hold kv (p) { join; transfer (p) from src to kv (p); } }
+          decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
+          decode (p) from src { hold kv (cost(kv, p)) { join; transfer (p) from src to kv (p); } }
         }
         P push D share maxmin;
         stage gate : delay;
+        stage client_gate : delay;
         workload {
           arrive batch(2);
           init { set prompt = 8; }
-          session { run gate (serial == 0 ? 0.5 : 0); turn; end; }
+          session { run client_gate (cost(client_gate, serial == 0 ? 0.5 : 0)); turn; end; }
         } server { gw.route(); }
 
     "#,
@@ -310,9 +311,9 @@ fn a_refused_leg_or_session_ends_the_request() {
         server {{
           set na = {leg};
           set nb = {session};
-          fork {{ hold a (na) {{ run svc (2); }} lease a (inf); }}
-          run svc (1);
-          hold b (nb) {{ join; release a; }}
+          fork {{ hold a (cost(a, na)) {{ run svc (cost(svc, 2)); }} lease a (inf); }}
+          run svc (cost(svc, 1));
+          hold b (cost(b, nb)) {{ join; release a; }}
           observe done = now;
         }}
 
@@ -343,7 +344,7 @@ fn a_session_may_not_end_before_its_legs() {
           session { turn; end;
           }
         }
-        server { set x = 0; fork { run svc (5); } run svc (1); branch (x) { join; }
+        server { set x = 0; fork { run svc (cost(svc, 5)); } run svc (cost(svc, 1)); branch (x) { join; }
         }
 
 "#,
@@ -357,14 +358,14 @@ fn a_leg_may_only_run_the_request() {
     for (stmt, what) in [
         ("turn;", "`turn`"),
         ("end;", "`end`"),
-        ("fork { run svc (1); }", "fork"),
+        ("fork { run svc (cost(svc, 1)); }", "fork"),
         ("join;", "`join`"),
     ] {
         refused(
             &format!(
                 "stage svc : delay;
         workload {{ arrive batch(1); session {{
-            fork {{ run svc (1); {stmt} }} join; turn; end;
+            fork {{ run svc (cost(svc, 1)); {stmt} }} join; turn; end;
         }} }}
         server {{}}
         "
@@ -382,7 +383,7 @@ fn a_join_needs_a_fork() {
           session { turn; end;
           }
         }
-        server { run svc (1); join;
+        server { run svc (cost(svc, 1)); join;
         }
         ",
         "a `join` in a program that forks no leg waits for nothing",
@@ -400,7 +401,7 @@ fn a_leg_does_not_act_on_the_sessions_holds() {
           session { turn; end;
           }
         }
-        server { hold kv (1) { fork { grow kv (1); } join; }
+        server { hold kv (cost(kv, 1)) { fork { grow kv (cost(kv, 1)); } join; }
         }
         ",
         "`grow kv` outside a hold of `kv`",
@@ -423,10 +424,10 @@ fn a_legs_lease_caches_by_the_legs_attributes() {
         }
         server {
           set n = 0;
-          fork { set n = 8; hold kv (8) { run svc (1); } cache (n) lease kv (inf); }
+          fork { set n = 8; hold kv (cost(kv, 8)) { run svc (cost(svc, 1)); } cache (cost(kv, n)) lease kv (inf); }
           join;
           release kv;
-          hold kv (8) { observe hit = cached; } cache (0);
+          hold kv (cost(kv, 8)) { observe hit = cached; } cache (cost(kv, 0));
         }
 
 "#,
@@ -445,7 +446,7 @@ fn a_lease_that_expires_is_not_a_deadlock() {
         queue gw : gateway {
           route {
             fork { P.prefill (prompt); }
-            run gate (serial == 1 ? 1 : 0);
+            run gate (cost(gate, serial == 1 ? 1 : 0));
             D.decode (prompt) from P;
           }
         }
@@ -453,21 +454,22 @@ fn a_lease_that_expires_is_not_a_deadlock() {
           pool kv { cap 10; }
           serve fifo;
           nic ps(100);
-          prefill (p) { hold kv (p) { run (p); } cache (p) lease kv (50); }
+          prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (50); }
         }
         queue D : decode {
           pool kv { cap 10; }
           serve step { cost 1; memory kv; }
           nic ps(100);
-          decode (p) { hold kv (p) { prefill (p) growing kv; } }
-          decode (p) from src { hold kv (p) { join; transfer (p) from src to kv (p); } }
+          decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
+          decode (p) from src { hold kv (cost(kv, p)) { join; transfer (p) from src to kv (p); } }
         }
         P push D share maxmin;
         stage gate : delay;
+        stage client_gate : delay;
         workload {
           arrive batch(2);
           init { set prompt = 8; }
-          session { run gate (serial == 0 ? 0.5 : 0); turn; end; }
+          session { run client_gate (cost(client_gate, serial == 0 ? 0.5 : 0)); turn; end; }
         } server { gw.route(); }
 
     "#,
@@ -487,7 +489,7 @@ fn a_fork_in_a_hold_that_may_be_preempted_is_refused() {
           session { turn; end;
           }
         }
-        server { hold kv (1) { fork { run svc (1); } join; }
+        server { hold kv (cost(kv, 1)) { fork { run svc (cost(svc, 1)); } join; }
         }
         ",
         "`fork` inside a hold of `kv`, which may preempt it",
@@ -502,7 +504,7 @@ fn a_fork_needs_a_join() {
           session { turn; end;
           }
         }
-        server { fork { run svc (1); } run svc (2);
+        server { fork { run svc (cost(svc, 1)); } run svc (cost(svc, 2));
         }
         ",
         "a program that forks a leg and never joins",
@@ -515,13 +517,13 @@ fn a_fork_needs_a_join() {
 fn a_queue_posts_the_copies_of_one_relation() {
     refused(
         "queue P : prefill { pool kv { cap 10; } serve fifo; nic ps(1);
-          prefill (p) { hold kv (p) { run (p); } cache (p) lease kv (inf); } }
+          prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
         queue D : decode { pool kv { cap 10; } serve step { cost 1; memory kv; } nic ps(1);
-          decode (p) { hold kv (p) { prefill (p) growing kv; } }
-          decode (p) from src { hold kv (p) { transfer (p) from src to kv (p); } } }
+          decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
+          decode (p) from src { hold kv (cost(kv, p)) { transfer (p) from src to kv (p); } } }
         queue E : decode { pool kv { cap 10; } serve step { cost 1; memory kv; } nic ps(1);
-          decode (p) { hold kv (p) { prefill (p) growing kv; } }
-          decode (p) from src { hold kv (p) { transfer (p) from src to kv (p); } } }
+          decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
+          decode (p) from src { hold kv (cost(kv, p)) { transfer (p) from src to kv (p); } } }
         P push D latency 1 share maxmin;
         P push E latency 1 share maxmin;
         workload { arrive batch(1);

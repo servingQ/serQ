@@ -6,9 +6,15 @@ they run whenever a session is ready, in the order sessions became ready. Only
 `Session` moment unless the entry says otherwise.
 
 The [serving vocabulary](serving.md) provides shorthand for these statements.
+Resource amounts must have the matching [`Cost`](functions.md#cost) type:
+`run` work for its stage(s), and `hold`/`grow`/`load` amounts for their pools.
+Common `reuse` and `cache` expressions name all pools held by that hold.
+These conversions do not change evaluation moments. Lease durations,
+indices and predicates remain ordinary quantities.
 
 | Statement | Does |
 |---|---|
+| [`Size` / `Cost`](#typed-declarations) | declares request quantities or resource costs |
 | [`set`](#set) | assigns a session attribute |
 | [`observe`](#observe) | records a sample |
 | [`turn`](#turn) | draws attributes and waits for the turn's response |
@@ -24,13 +30,46 @@ The [serving vocabulary](serving.md) provides shorthand for these statements.
 | [`choose`](#choose) | picks an index by the smallest key |
 | [`end`](#end) | ends the session |
 
+## Typed declarations
+
+```serq
+Size items = 3;
+Cost duration = cost(svc, 2 * items);
+Cost processing = { mem: items, svc: 2 * items };
+```
+
+`Size` declarations belong to the workload. `Cost` declares a scalar
+resource cost or a record of independent resource costs. A bare number
+cannot initialize a scalar Cost because it does not identify a resource.
+Declaration computes and stores values; `hold`, `run`, `grow` and `load`
+apply them at their ordinary execution moments. See
+[attribute types](attributes.md#sizes-values-and-costs) for ownership,
+field order and initialization rules.
+
+Several pools can share one scope:
+
+```serq
+hold P(processing.P), Q(processing.Q) { run svc(processing.svc); }
+```
+
+Here P and Q stand for declared pools. Admission needs room in both and
+waits in P's queue; this differs from nested holds, where P can remain
+allocated while waiting for Q. Use one hold for a common admission and
+lifetime, and nesting for different lifetimes.
+
+A queue entry's admission header can read its parameters and own resources,
+but cannot read Cost fields computed by its body. Keep those conversions
+in the header, for example `hold kv(cost(kv, prompt))`, or pass the ordinary
+quantity as an entry parameter. Cost fields remain available to the body.
+
 ## `set`
 
 ```serq
 set NAME = expr;
 ```
 
-Assigns the session attribute `NAME`. Every name assigned by `set` or `choose`
+Assigns the session attribute `NAME`. Workload sizes are read-only in the
+server; use a separate server attribute for derived quantities. Every name assigned by `set` or `choose`
 in session code is an attribute of every session. In an iteration body,
 [`set`](stage.md#registers) instead assigns a stage register.
 
@@ -80,12 +119,12 @@ body (a body that reads it there, or a `reuse` there, does not link).
 | Argument | Type | Moment | Default | Description |
 |---|---|---|---|---|
 | `POOL` | `pool` | | | One or more. Admission needs room in every one; the hold waits in the first pool's queue. |
-| `units` | `expr` | `Admit` | | Units to allocate at admission. |
-| `reserve` | `expr` | `Admit` | `units` | Room required before admitting: `max(units, r)`, rounded up to blocks. It does not change the allocation. See [`reserve held`](pool.md#reserve-held) for outstanding reservations. |
-| `reuse` | `expr` | `Admit` | no bound | At most this many units of the session's own cached prefix are consumed (rounded down to blocks); `cached` is set to what was. The rest stays as a dead entry until evicted. Without `reuse`, the whole own prefix is consumed. Only with `cache`: a hold without the clause consumes nothing. |
+| `units` | `Cost(POOL)` | `Admit` | | Units to allocate at admission. |
+| `reserve` | `Cost(POOL)` | `Admit` | `units` | Room required before admitting: `max(units, r)`, rounded up to blocks. It does not change the allocation. See [`reserve held`](pool.md#reserve-held) for outstanding reservations. |
+| `reuse` | `Cost(all held pools)` | `Admit` | no bound | At most this many units of the session's own cached prefix are consumed (rounded down to blocks); `cached` is set to what was. The rest stays as a dead entry until evicted. Without `reuse`, the whole own prefix is consumed. Only with `cache`: a hold without the clause consumes nothing. |
 | `at admission` | `NAME = expr, …` | `Admit` | | Names used in the header and body; see below. |
 | `block` | `block` | `Session` | | The body. |
-| `cache` | `expr` | `Session` | none | Units kept cached at the end, at most what was computed. Read when the session releases. Its presence is what makes the hold consume the session's prefix at admission; `cache (0)` consumes and keeps nothing, no clause leaves the prefix where it is. |
+| `cache` | `Cost(all held pools)` | `Session` | none | Units kept cached at the end, at most what was computed. Read when the session releases. Its presence is what makes the hold consume the session's prefix at admission; `cache (0)` consumes and keeps nothing, no clause leaves the prefix where it is. |
 | `lease` | `pool`, `expr` | `Session` | none | That pool's allocation outlives the scope: neither evictable nor a preemption victim until `release` of it, `t` clock units, or the session's end; `cache` applies then. |
 
 ### Admission bindings
@@ -119,7 +158,7 @@ grow POOL (d);
 | Argument | Type | Description |
 |---|---|---|
 | `POOL` | `pool` | A pool the session holds. |
-| `d` | `expr` | Units added to the innermost hold on `POOL`, rounded to blocks. |
+| `d` | `Cost(POOL)` | Units added to the innermost hold on `POOL`, rounded to blocks. |
 
 If it does not fit, the pool's [`preempt`](pool.md#preempt) applies.
 
@@ -153,7 +192,7 @@ load POOL (n);
 | Argument | Type | Description |
 |---|---|---|
 | `POOL` | `pool` | |
-| `n` | `expr` | Tokens of KV that arrived from outside the engine. |
+| `n` | `Cost(POOL)` | Tokens of KV that arrived from outside the engine. |
 
 The innermost enclosing hold's computed position on `POOL` advances by `n`,
 within its allocation; a program that needs more grows first. Afterwards `cache`
@@ -170,7 +209,7 @@ run STAGE, STAGE [, STAGE]* (work);
 |---|---|---|
 | `STAGE` | `stage` | Indexed when the stage is an array. |
 | mode | `prefill` \| `decode` | Required on a `step` stage, forbidden on any other. |
-| `work` | `expr` | Clock time at rate 1 (`fifo`, `delay`), or at `φ(present)/present` (`ps`), or tokens on a `step` stage. A run of zero work completes at once. |
+| `work` | `Cost(STAGE)` | Clock time at rate 1 (`fifo`, `delay`), or at `φ(present)/present` (`ps`), or tokens on a `step` stage. A run of zero work completes at once. |
 | `growing` | `pool` | Only on a `step` stage. The hold on this pool grows block by block as the run advances, preempting if needed. |
 
 Blocks the session until the work is done.
@@ -189,7 +228,7 @@ stage egress[2] : ps(BwP);     // a prefiller's NIC, tokens per second
 stage ingress[2] : ps(BwD);    // a decoder's NIC
 share maxmin;
 …
-run egress[i], ingress[j] (tokens);
+run egress[i], ingress[j] (cost(egress, ingress, tokens));
 ```
 
 ## `branch`
@@ -239,7 +278,7 @@ choose NAME in n by (key, …);
 | Argument | Type | Description |
 |---|---|---|
 | `NAME` | identifier | Becomes a session attribute. |
-| `n` | `expr` | Number of candidates, `0 … n-1` (rounded down; 0 or less leaves `NAME` at 0). |
+| `n` | `Cost(POOL)` | Number of candidates, `0 … n-1` (rounded down; 0 or less leaves `NAME` at 0). |
 | `key, …` | `expr`, one or more | Evaluated with `NAME` bound to each candidate. Several keys compare in order: the second decides among the first's ties, and so on. |
 
 `NAME` is set to the index with the smallest key (tuple), ties to the smallest index.
@@ -266,7 +305,7 @@ fn main() {
   }
   server {
     set t0 = now;
-    hold reqs (1) { run svc (2); }
+    hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
     observe response = now - t0;
   }
 }

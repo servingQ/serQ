@@ -7,10 +7,11 @@
 //! version, and is checked on load (`Program::validate`). See `docs/ir.md`.
 
 pub mod trace;
+mod types;
 
 use serde::{Deserialize, Serialize};
 
-/// Version of IR meaning; see docs/ir.md (Stability) before changing it.
+/// Version of the IR meaning; see `docs/ir.md` for the tagged-version policy.
 /// 2 added the sessions' turns; 3 renamed `route` to `session`; 4 replaced
 /// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`; 5 added
 /// `Release` and `Load`; 6 added renewal arrivals and finite open runs; 7
@@ -22,6 +23,8 @@ use serde::{Deserialize, Serialize};
 /// (a hold without it consumes nothing of the session's own entry).
 /// 11 separates random streams by session and turn; 12 adds `While`,
 /// a guarded loop that continues after its body when the guard becomes zero.
+/// IR 12 also adds resource cost conversions and mandatory attribute types
+/// and workload/server statement authority.
 pub const IR_VERSION: u32 = 12;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
@@ -377,8 +380,36 @@ pub enum CArg {
     Stage(CRef),
 }
 
+/// The side executing a statement; requests lower to statements without
+/// losing the authority under which each statement runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Side {
+    Workload,
+    Server,
+}
+
+/// A cost belongs to a resource family. Members of an array share its units.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum CostTarget {
+    Joint(Vec<CostTarget>),
+    Pool { base: usize, count: usize },
+    Stage { base: usize, count: usize },
+}
+
+/// Request sizes are workload-owned; other scalar values are bookkeeping.
+/// Cost values cannot be assigned to either kind without a type error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ValueType {
+    Size,
+    Value,
+    Cost(CostTarget),
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CExpr {
+    /// Explicit conversion of a request quantity into this resource's cost.
+    /// The conversion preserves the value and evaluation moment.
+    Cost(CostTarget, Box<CExpr>),
     /// A constant. JSON has no infinity, so `inf` is written as the string
     /// `"inf"` (`-inf` as `"-inf"`) and read back from either form.
     Num(#[serde(with = "real")] f64),
@@ -446,6 +477,15 @@ impl Agg {
 }
 
 impl CExpr {
+    /// The numerical expression inside a conversion, for readers that already
+    /// know the resource (for example a stage label in a deployment figure).
+    pub fn cost_value(&self) -> &Self {
+        match self {
+            Self::Cost(_, value) => value.cost_value(),
+            _ => self,
+        }
+    }
+
     /// The first expression, this one or one in it, of which `f` holds,
     /// outermost first and then left to right; the index of a pool or
     /// stage reference is in it (#273).
@@ -460,7 +500,7 @@ impl CExpr {
                 CArg::Expr(x) => x.find(f),
                 CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().and_then(|i| i.find(f)),
             }),
-            CExpr::Unary(_, x) => x.find(f),
+            CExpr::Unary(_, x) | CExpr::Cost(_, x) => x.find(f),
             CExpr::Binary(_, a, b) => a.find(f).or_else(|| b.find(f)),
             CExpr::Cond(c, a, b) => c.find(f).or_else(|| a.find(f)).or_else(|| b.find(f)),
         }
@@ -752,6 +792,9 @@ pub struct Program {
     /// IR format version (`IR_VERSION`).
     pub version: u32,
     pub attrs: Vec<String>,
+    pub attr_types: Vec<ValueType>,
+    /// Mandatory, aligned with `blocks`, including every nested statement.
+    pub sides: Vec<Vec<Side>>,
     pub observes: Vec<String>,
     pub pools: Vec<CPool>,
     pub stages: Vec<CStage>,
@@ -1326,6 +1369,7 @@ impl Program {
     pub fn validate_located(&self) -> Result<(), Invalid> {
         self.validate_statements()?;
         self.validate_declarations()?;
+        self.validate_types()?;
         Ok(())
     }
 
@@ -1815,6 +1859,7 @@ fn reads_clock(e: &CExpr) -> bool {
 fn constant(e: &CExpr) -> Option<f64> {
     match e {
         CExpr::Num(x) => Some(*x),
+        CExpr::Cost(_, x) => constant(x),
         CExpr::Unary(UnOp::Neg, x) => constant(x).map(|x| -x),
         CExpr::Binary(op, a, b) => Some(crate::frontend::link::binop(
             *op,
@@ -2051,6 +2096,10 @@ impl Validator<'_> {
     /// The expression is well formed and reads only what moment `m` supplies.
     fn expr(&self, e: &CExpr, m: Moment) -> Result<(), String> {
         match e {
+            CExpr::Cost(target, value) => {
+                self.p.validate_cost_target(target)?;
+                self.expr(value, m)
+            }
             CExpr::Num(_) => Ok(()),
             // a gauge is integrated as constant between events: what moves
             // between them would be read at the event and held
@@ -2281,7 +2330,7 @@ impl Validator<'_> {
             match s {
                 CStmt::End => return true,
                 CStmt::Run { work, .. } => {
-                    if !matches!(work, CExpr::Num(w) if *w <= 0.0) {
+                    if !constant(work).is_some_and(|w| w <= 0.0) {
                         return true;
                     }
                 }
@@ -2873,6 +2922,11 @@ impl Program {
     fn write_expr(&self, out: &mut String, e: &CExpr, min: u8) {
         use std::fmt::Write as _;
         match e {
+            CExpr::Cost(target, value) => {
+                let _ = write!(out, "cost({}, ", self.show_cost_target(target));
+                self.write_expr(out, value, prec::COND);
+                out.push(')');
+            }
             CExpr::Num(x) => {
                 // `pow()` parses `atom() '^' unary()`, so a folded negative
                 // constant on the left of `^` has to be bracketed or the

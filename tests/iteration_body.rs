@@ -66,7 +66,7 @@ fn several_prefills_run_alone_in_one_iteration() {
         }}
         server {{
           set t0 = now;
-          hold reqs (1), kv (4) {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {{
             prefill on engine (2) growing kv;
             observe ttft = now - t0;
             decode on engine (2) growing kv;
@@ -125,9 +125,9 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
           }
         }
         server {
-          run gap (serial < 2 ? 0 : 0.5);
+          run gap (cost(gap, serial < 2 ? 0 : 0.5));
           set t0 = now;
-          hold reqs (1) {
+          hold reqs (cost(reqs, 1)) {
             observe start = now;
             prefill on engine (1);
             decode on engine (4);
@@ -161,7 +161,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
           session {{ turn; end;
           }}
         }}
-        server {{ hold reqs (1) {{ prefill on engine (2); }}
+        server {{ hold reqs (cost(reqs, 1)) {{ prefill on engine (2); }}
         }}
 
 "#
@@ -219,7 +219,7 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
         }}
         server {{
           set n = 3 + serial - 5 * floor(serial / 5);
-          hold reqs (1), kv (1) {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 1)) {{
             prefill on engine (n) growing kv;
             decode on engine (6 + serial - 3 * floor(serial / 3)) growing kv;
           }}
@@ -312,7 +312,7 @@ fn an_engine_idle_with_work_is_named() {
           session { turn; end;
           }
         }
-        server { hold reqs (1) { prefill on engine (2); }
+        server { hold reqs (cost(reqs, 1)) { prefill on engine (2); }
         }
 
 "#;
@@ -338,7 +338,7 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
           session { turn; end;
           }
         }
-        server { hold reqs (1) { prefill on engine (2); }
+        server { hold reqs (cost(reqs, 1)) { prefill on engine (2); }
         }
 
 "#;
@@ -375,7 +375,7 @@ fn a_register_remembers_the_last_iteration() {
         }}
         server {{
           set t0 = now;
-          hold reqs (1) {{
+          hold reqs (cost(reqs, 1)) {{
             observe wait = now - t0;
             prefill on engine (1);
             decode on engine (30);
@@ -428,7 +428,7 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
           session { turn; end;
           }
         }
-        server { hold reqs (1) { prefill on engine (100); }
+        server { hold reqs (cost(reqs, 1)) { prefill on engine (100); }
         }
         gauge count = n;
 
@@ -459,7 +459,7 @@ fn a_register_is_the_stage_s_own() {
           session {{ turn; end;
           }}
         }}
-        server {{ hold reqs (1) {{ prefill on engine (2); }} {session}
+        server {{ hold reqs (cost(reqs, 1)) {{ prefill on engine (2); }} {session}
         }}
 
 "#
@@ -521,13 +521,29 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
             &common::horizon(20.0),
         )
     };
-    let base = "hold reqs (1) { prefill on b (2); }";
+    let base = "hold reqs (cost(reqs, 1)) { prefill on b (2); }";
     // its pool's header and keys, a gauge
-    assert!(ok("gauge g = go;", "hold reqs (1 + go) { prefill on b (2); }").is_ok());
+    assert!(
+        ok(
+            "gauge g = go;",
+            "hold reqs (cost(reqs, 1 + go)) { prefill on b (2); }"
+        )
+        .is_ok()
+    );
     // a hold whose first pool, where it waits, the stage admits, whatever
     // else it holds (SGLang's `reqs` and `kv`); not one that waits elsewhere
-    assert!(ok("", "hold reqs (1), other (1 + go) { prefill on b (2); }").is_ok());
-    let e = ok("", "hold other (1), reqs (1 + go) { prefill on b (2); }").unwrap_err();
+    assert!(
+        ok(
+            "",
+            "hold reqs (cost(reqs, 1)), other (cost(other, 1 + go)) { prefill on b (2); }"
+        )
+        .is_ok()
+    );
+    let e = ok(
+        "",
+        "hold other (cost(other, 1)), reqs (cost(reqs, 1 + go)) { prefill on b (2); }",
+    )
+    .unwrap_err();
     assert!(e.contains("`go` is stage `b`'s register"), "{e}");
     // a ps capacity, another stage, a hold on a pool admitted at settle time
     for (extra, hold) in [
@@ -536,7 +552,10 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
             "stage a : step { budget 8; cost 1; serve only (go == 1); }",
             base,
         ),
-        ("", "hold other (1 + go) { run b prefill (2); }"),
+        (
+            "",
+            "hold other (cost(other, 1 + go)) { run b prefill (cost(b, 2)); }",
+        ),
     ] {
         let e = ok(extra, hold)
             .err()
@@ -565,7 +584,7 @@ fn a_try_that_admitted_keeps_its_sets() {
           session { turn; end;
           }
         }
-        server { hold reqs (1) { prefill on engine (2); }
+        server { hold reqs (cost(reqs, 1)) { prefill on engine (2); }
         }
         gauge seen = k;
 
@@ -603,7 +622,7 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
           }
         }
         server {
-          hold reqs (1), kv (100) reserve (100 + r) {
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100 + r)) {
             prefill on engine (100);
             decode on engine (9) growing kv;
           }

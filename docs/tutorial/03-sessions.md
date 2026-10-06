@@ -19,7 +19,7 @@ session {
   observe context = K + n + o;
   while (~bernoulli(p)) {
     set K = K + n + o;
-    run tool (~exp(Z));
+    run tool (cost(tool, ~exp(Z)));
     turn;
     observe context = K + n + o;
   }

@@ -12,15 +12,16 @@ fn main() {
 
   workload {
     arrive poisson(Lambda);
-    turn { set s = ~exp(S); }
+    turn { Size work_size = ~exp(1); }
 
   }
 
   server {
+    Cost s = cost(svc, S * work_size);
     set t0 = now;
     run svc (s);
     observe response = now - t0;
-    observe wait = now - t0 - s;
+    observe wait = now - t0 - S * work_size;
   }
 
 

@@ -253,7 +253,7 @@ fn observable(e: &CExpr) -> bool {
     match e {
         CExpr::Num(_) => true,
         CExpr::Ctx(v) => matches!(v, CtxVar::Decoding | CtxVar::Admission),
-        CExpr::Unary(_, a) => observable(a),
+        CExpr::Unary(_, a) | CExpr::Cost(_, a) => observable(a),
         CExpr::Binary(op, a, b) => *op != BinOp::Pow && observable(a) && observable(b),
         CExpr::Cond(c, a, b) => observable(c) && observable(a) && observable(b),
         CExpr::Attr(_) | CExpr::Sample(..) | CExpr::Call(..) | CExpr::Agg(..) | CExpr::Reg(_) => {

@@ -13,7 +13,7 @@ fn deterministic_renewal_arrivals_follow_the_supplied_gap() {
         }
         server {
           set t0 = now;
-          run svc (~det(1));
+          run svc (cost(svc, ~det(1)));
           observe response = now - t0;
         }
 
@@ -41,7 +41,7 @@ fn hyperexponential_renewal_arrivals_have_the_configured_mean_rate() {
           session { turn; end;
           }
         }
-        server { run svc (0);
+        server { run svc (cost(svc, 0));
         }
 
 "#;
@@ -70,7 +70,7 @@ fn open_arrival_limit_drains_within_the_horizon() {
           }
         }
         server {
-          run svc (~det(2));
+          run svc (cost(svc, ~det(2)));
           observe service = 2;
         }
 
@@ -102,22 +102,22 @@ fn open_arrival_limit_drains_within_the_horizon() {
 fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
     for (session, run, expected) in [
         (
-            "loop { run svc (1); }",
+            "loop { run svc (cost(svc, 1)); }",
             "horizon 10; arrivals 3;",
             "failed to drain",
         ),
         (
-            "run svc (1); end;",
+            "run svc (cost(svc, 1)); end;",
             "horizon 10; arrivals 1000;",
             "requested arrivals",
         ),
         (
-            "run svc (1); end;",
+            "run svc (cost(svc, 1)); end;",
             "horizon 1000; warmup 500; arrivals 5;",
             "before or at warmup",
         ),
         (
-            "run svc (1); end;",
+            "run svc (cost(svc, 1)); end;",
             "horizon 20; warmup 3; arrivals 1;",
             "before or at warmup",
         ),
@@ -137,7 +137,7 @@ fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
 #[test]
 fn finite_arrivals_can_finish_exactly_at_the_deadline() {
     // Arrivals at 2, 4, 6 and one second of service finish at 3, 5, 7.
-    let src = "stage svc : fifo; workload { arrive renewal(2); \n  session { turn; end; \n  }\n} server { run svc (1);\n} ";
+    let src = "stage svc : fifo; workload { arrive renewal(2); \n  session { turn; end; \n  }\n} server { run svc (cost(svc, 1));\n} ";
     let report = run_source(
         &common::main_source(src),
         &Overrides {
@@ -202,7 +202,7 @@ fn a_renewal_gap_must_be_positive() {
           session {{ turn; end;
           }}
         }}
-        server {{ run svc (1);
+        server {{ run svc (cost(svc, 1));
         }}
         "
         )
@@ -250,7 +250,7 @@ fn a_poisson_rate_must_be_positive() {
           session {{ turn; end;
           }}
         }}
-        server {{ run svc (1);
+        server {{ run svc (cost(svc, 1));
         }}
         "
         );
@@ -279,7 +279,7 @@ fn a_count_is_a_whole_number_in_range() {
         let src = format!(
             "stage svc : delay;
              workload {{ arrive {workload}; session {{ turn; end; }} }}
-             server {{ run svc (1); }}"
+             server {{ run svc (cost(svc, 1)); }}"
         );
         let e =
             serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap_err();
@@ -309,7 +309,7 @@ fn a_count_is_a_whole_number_in_range() {
           session { turn; end;
           }
         }
-        server { run svc (1);
+        server { run svc (cost(svc, 1));
         } ",
         ),
         &common::horizon(10.0),

@@ -28,8 +28,8 @@ fn main() {
   }
 
   server {
-    run engine prefill (vp);
-    run engine decode (vd);
+    run engine prefill (cost(engine, vp));
+    run engine decode (cost(engine, vd));
     observe response = now - t0;
   }
 

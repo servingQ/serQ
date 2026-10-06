@@ -18,13 +18,15 @@ fn main() {
   stage delay : delay;
   workload {
     arrive batch(6);
+    turn {
+      set prompt = serial == 1 || serial == 5 ? 256 : 64;
+      set immediate = serial == 4;
+      set out = serial == 0 ? 4 : 1;
+    }
   }
   server {
-    set prompt = serial == 1 || serial == 5 ? 256 : 64;
-    set immediate = serial == 4;
-    set out = serial == 0 ? 4 : 1;
-    run delay (serial == 2 ? 0.001 : serial == 3 ? 0.002 : serial >= 4 ? 0.003 : 0);
-    hold reqs (1), kv (prompt + out) {
+    run delay (cost(delay, serial == 2 ? 0.001 : serial == 3 ? 0.002 : serial >= 4 ? 0.003 : 0));
+    hold reqs (cost(reqs, 1)), kv (cost(kv, prompt + out)) {
       observe selected = serial;
       observe admitted = now;
       prefill prompt;

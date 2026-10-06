@@ -18,9 +18,9 @@ fn main() {
 
   }
   server {
-    run gate (serial);
+    run gate (cost(gate, serial));
     set t0 = now;
-    hold reqs (1), kv (min(prompt, left)) reserve (prompt)
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
          at admission (left = budget_left(engine)) {
       prefill prompt growing kv;
       observe ttft = now - t0;

@@ -238,6 +238,24 @@ impl Ctx<'_> {
                     .map(|a| self.expr(a))
                     .collect::<Result<_, _>>()?,
             ),
+            Expr::Call(f, args) if f == "cost" => {
+                let mut converted = vec![];
+                for (i, arg) in args.iter().enumerate() {
+                    let arg = if i + 1 < args.len() {
+                        match arg {
+                            Arg::Ref(r) => Arg::Ref(self.reference(r)?),
+                            Arg::Expr(e) => Arg::Expr(self.expr(e)?),
+                        }
+                    } else {
+                        match arg {
+                            Arg::Expr(e) => Arg::Expr(self.expr(e)?),
+                            Arg::Ref(r) => Arg::Expr(self.var(&r.name)?),
+                        }
+                    };
+                    converted.push(arg);
+                }
+                Expr::Call(f.clone(), converted)
+            }
             Expr::Call(f, args) => Expr::Call(
                 f.clone(),
                 args.iter()
@@ -373,9 +391,9 @@ impl Ctx<'_> {
                 own(format!("{}.nic.latency", self.q.name))
             };
             out.push(Stmt::Run {
-                stage,
+                stage: stage.clone(),
                 mode: crate::ir::RunMode::Plain,
-                work: l.clone(),
+                work: Expr::cost(std::slice::from_ref(&stage), l.clone()),
                 growing: None,
                 also: vec![],
             });
@@ -387,7 +405,17 @@ impl Ctx<'_> {
                 index: src.index.clone(),
             },
             mode: crate::ir::RunMode::Plain,
-            work: self.expr(work)?,
+            work: Expr::cost(
+                &[
+                    Ref {
+                        span: Some(self.at),
+                        name: format!("{source}.nic"),
+                        index: None,
+                    },
+                    own(format!("{}.nic", self.q.name)),
+                ],
+                self.expr(work)?,
+            ),
             growing: None,
             also: vec![own(format!("{}.nic", self.q.name))],
         });
@@ -396,7 +424,8 @@ impl Ctx<'_> {
 
     fn stmt(&self, s: &Stmt) -> Result<Stmt, ExpandError> {
         Ok(match s {
-            Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Join => s.clone(),
+            Stmt::Side(_) | Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Join => s.clone(),
+            Stmt::Declare(n, t) => Stmt::Declare(self.local(n), *t),
             Stmt::Set(n, e) => Stmt::Set(self.local(n), self.expr(e)?),
             Stmt::Observe(n, e) => Stmt::Observe(n.clone(), self.expr(e)?),
             Stmt::Mark(n) => Stmt::Set(format!("{}.{n}", self.q.name), Expr::Var("now".into())),
@@ -554,7 +583,13 @@ fn expand_at(
                 let result = expand_at(&mut body, queues, stack, expanded);
                 stack.pop();
                 result?;
+                if verb == "route" {
+                    out.push(Stmt::Side(crate::ir::Side::Server));
+                }
                 out.extend(body);
+                if verb == "route" {
+                    out.push(Stmt::Side(crate::ir::Side::Workload));
+                }
                 continue;
             }
             Stmt::Hold { body, .. }
@@ -749,7 +784,10 @@ fn call(
     };
     let mut out = ctx.stmts(&entry.body)?;
     if let Some((dst, m)) = to {
-        out.push(Stmt::Load(dst.clone(), m.clone()));
+        out.push(Stmt::Load(
+            dst.clone(),
+            Expr::cost(std::slice::from_ref(dst), m.clone()),
+        ));
         out.push(Stmt::Release(src.expect("a transfer has a source")));
     }
     Ok(out)

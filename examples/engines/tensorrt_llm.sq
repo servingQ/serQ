@@ -67,13 +67,13 @@ fn main() {
   server {
     set t0 = now;
     set prompt = K + n;
-    hold reqs (1), kv (prompt) reserve (prompt + mt)
+    hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) reserve (cost(kv, prompt + mt))
          at admission (hit = min(cachedin(kv), reusable(prompt, blocksize(kv)))) {
       set c = min(cached, reusable(prompt, blocksize(kv)));
       prefill on engine (prompt - c) growing kv;
       observe ttft = now - t0;
       decode on engine (o) growing kv;
-    } cache (prompt + o - 1);
+    } cache (cost(reqs, kv, prompt + o - 1));
     observe response = now - t0;
   }
 

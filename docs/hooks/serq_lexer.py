@@ -30,14 +30,14 @@ STRUCTURE = ("fn", "let", "def", "use", "pool", "stage", "workload", "session", 
 
 # Statements, in the session and server blocks.
 STATEMENTS = (
-    "turn", "request", "set", "observe", "hold", "admit", "mark", "self", "grow", "drop", "release", "load", "lease", "from", "to", "branch", "with",
+    "Size", "Cost", "turn", "request", "set", "observe", "hold", "admit", "mark", "self", "grow", "drop", "release", "load", "lease", "from", "to", "branch", "with",
     "while", "loop", "fork", "join", "choose", "end", "run", "reserve", "reuse", "cache",
     "at", "admission", "growing", "on", "in", "by", "else", "sum",
     # the serving vocabulary: sugar over hold and run
     "prefill", "transfer", "decode", "tool",
 )
 
-# Pool and stage options, and workload forms.
+# Pool and stage options, workload forms, and the resource cost constructor.
 OPTIONS = (
     "cap", "block", "evict", "lru", "preempt", "lifo", "held", "requeue", "head", "tail", "none", "queue", "fifo",
     "admit", "while", "state", "via", "spill", "when", "ps", "delay", "step", "budget", "cost",

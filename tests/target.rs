@@ -93,7 +93,7 @@ fn another_policy_is_refused_with_its_construct() {
           session { turn; end;
           }
         }
-        server { hold reqs (1), kv (n) { prefill (n) growing kv; }
+        server { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { prefill (n) growing kv; }
         } ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
@@ -113,7 +113,7 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
           session { turn; end;
           }
         }
-        server { hold reqs (1), kv (n) { prefill (n) growing kv; }
+        server { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { prefill (n) growing kv; }
         } ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let t = serq::target::vllm(&p).unwrap();
@@ -186,7 +186,7 @@ fn the_newer_constructs_are_refused_and_vllms_body_taken() {
         }
         server {
         } ";
-    let hold = "hold reqs (1), kv (n) { prefill (n) growing kv; }";
+    let hold = "hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { prefill (n) growing kv; }";
     let compile = |reserve: &str, iter: &str, h: &str| {
         let src = base
             .replace("RESERVE", reserve)
@@ -196,7 +196,8 @@ fn the_newer_constructs_are_refused_and_vllms_body_taken() {
     };
     let body = "iteration { serve; admit while (!preempted); }";
     serq::target::vllm(&compile("", body, hold)).unwrap();
-    let legs = "fork { hold reqs (1), kv (n) { prefill (n) growing kv; } } join;";
+    let legs =
+        "fork { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { prefill (n) growing kv; } } join;";
     for (reserve, iter, h, why) in [
         (
             "",

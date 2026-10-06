@@ -15,17 +15,21 @@ fn main() {
   workload {
     arrive poisson(Lambda);
     turn {
-      set s = ~exp(S);
-      set c = ceil(~uniform(1, 5));   // units this request needs
+      Size work_size = ~exp(1);
+      Size items = ceil(~uniform(1, 5));   // request items
     }
 
   }
 
   server {
+    Cost processing = {
+      svc: S * work_size,
+      mem: items
+    };
     set t0 = now;
-    hold mem (c) {
+    hold mem (processing.mem) {
       observe admit_wait = now - t0;
-      run svc (s);
+      run svc (processing.svc);
     }
     observe response = now - t0;
   }

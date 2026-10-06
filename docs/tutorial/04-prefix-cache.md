@@ -12,10 +12,10 @@ The prefix can be evicted while the session thinks or waits for admission.
 ## `cache`, `cached`, `evict`, `drop`
 
 ```serq
-hold kv (K + n + o) {
+hold kv (cost(kv, K + n + o)) {
   set hit = cached >= K;
-  run engine ((hit ? a * n : a * (K + n)) + d * o);
-} cache (K + n + o);
+  run engine (cost(engine, (hit ? a * n : a * (K + n)) + d * o));
+} cache (cost(kv, K + n + o));
 ```
 
 **`cache (ℓ)`** at the end of a hold: when the scope ends the units are

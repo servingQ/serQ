@@ -43,7 +43,7 @@ fn a_run_on_one_arm_only_is_a_link_error() {
     let e = check(&format!(
         "{TOOL} workload {{ {CLIENT} session {{ turn;
         }} }}
-        server {{ loop {{ branch (w > 0) {{ run tool (w); }} else {{ set w = w; }} }}
+        server {{ loop {{ branch (w > 0) {{ run tool (cost(tool, w)); }} else {{ set w = w; }} }}
         }}
         "
     ))
@@ -55,7 +55,7 @@ fn a_run_on_one_arm_only_is_a_link_error() {
 #[test]
 fn a_run_of_constant_zero_work_does_not_count() {
     let e = check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ run tool (0); }}\n}} "
+        "{TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ run tool (cost(tool, 0)); }}\n}} "
     ))
     .expect_err("refused");
     assert!(e.contains("let time pass"), "{e}");
@@ -67,11 +67,11 @@ fn a_run_of_constant_zero_work_does_not_count() {
 fn a_hold_counts_only_through_its_body() {
     let pool = "pool kv { cap 100; }";
     check(&format!(
-        "{pool} {TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ hold kv (1) {{ run tool (1); }} }}\n}} "
+        "{pool} {TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ hold kv (cost(kv, 1)) {{ run tool (cost(tool, 1)); }} }}\n}} "
     ))
     .expect("the body runs");
     let e = check(&format!(
-        "{pool} {TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ hold kv (1) {{ set w = 1; }} }}\n}} "
+        "{pool} {TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ hold kv (cost(kv, 1)) {{ set w = 1; }} }}\n}} "
     ))
     .expect_err("refused");
     assert!(e.contains("let time pass"), "{e}");
@@ -87,7 +87,7 @@ fn end_and_a_later_run_cover_the_loop() {
     check(&format!(
         "{TOOL} workload {{ {CLIENT} session {{ turn;
         }} }}
-        server {{ loop {{ branch (w > 0) {{ set w = 0; }} else {{ set w = 1; }} run tool (1); }}
+        server {{ loop {{ branch (w > 0) {{ set flag = 0; }} else {{ set flag = 1; }} run tool (cost(tool, 1)); }}
         }}
         "
     ))
@@ -101,7 +101,7 @@ fn end_and_a_later_run_cover_the_loop() {
 #[test]
 fn a_computed_zero_work_in_a_loop_is_a_run_time_error() {
     let e = run(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ run tool (w); }}\n}} "
+        "{TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ run tool (cost(tool, w)); }}\n}} "
     ), &common::horizon(10.0))
     .expect_err("does not settle");
     assert!(e.contains("does not settle"), "{e}");
@@ -118,7 +118,7 @@ fn a_self_preempting_grow_is_a_run_time_error() {
           session { turn; end;
           }
         }
-        server { hold kv (10) { grow kv (1000); run tool (1); }
+        server { hold kv (cost(kv, 10)) { grow kv (cost(kv, 1000)); run tool (cost(tool, 1)); }
         }
         ",
         &common::horizon(10.0),
@@ -137,7 +137,7 @@ fn an_iteration_with_tokens_and_zero_cost_is_an_error() {
           session { turn; end;
           }
         }
-        server { hold kv (100) { prefill (100) growing kv; }
+        server { hold kv (cost(kv, 100)) { prefill (100) growing kv; }
         }
         ",
         &common::horizon(10.0),
@@ -161,9 +161,9 @@ fn a_preempt_only_step_may_cost_zero() {
           }
         }
         server {
-          hold reqs (1), kv (100) reserve (100) {
-            run engine prefill (100) growing kv;
-            run engine decode (100) growing kv;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100)) {
+            run engine prefill (cost(engine, 100)) growing kv;
+            run engine decode (cost(engine, 100)) growing kv;
           }
         }
         ",
@@ -203,10 +203,10 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
         }}
         server {{
           set prompt = K + n;
-          hold reqs (1), kv (prompt) {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
             prefill (prompt) growing kv;
             decode (o - 1) growing kv;
-          }} cache (prompt + o);
+          }} cache (cost(reqs, kv, prompt + o));
         }}
         "
         )
@@ -269,7 +269,7 @@ fn the_machine_still_matters() {
           session {{  turn; end;
           }}
         }}
-        server {{ set t0 = now; hold kv (n) {{ prefill (n) growing kv; }}
+        server {{ set t0 = now; hold kv (cost(kv, n)) {{ prefill (n) growing kv; }}
           observe ttft = now - t0;
         }}
         "
@@ -340,7 +340,7 @@ fn a_hold_header_may_not_draw() {
           session {{ turn; end;
           }}
         }}
-        server {{ hold {header} {{ run tool (1); }} cache (5);
+        server {{ hold {header} {{ run tool (cost(tool, 1)); }} cache (5);
         }} "
         ))
         .expect_err(what);
@@ -359,10 +359,10 @@ fn overwriting_turn_no_does_not_repeat_the_marks() {
     let r = run(
         "stage tool : delay;
         workload { arrive batch(1); turn { set n = ~uniform(0, 1); }
-          session {  loop { turn;  }
+          session { loop { set turn_no = 0; turn; }
           }
         }
-        server { observe nn = n; set turn_no = 0; run tool (1);
+        server { observe nn = n; run tool (cost(tool, 1));
         }
         ",
         &common::horizon(5.0),

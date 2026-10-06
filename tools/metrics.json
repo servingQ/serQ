@@ -2,13 +2,13 @@
   "IR_VERSION": 12,
   "ir": {
     "CStmt": 16,
-    "CExpr": 10,
+    "CExpr": 11,
     "Fun": 22,
     "CtxVar": 23
   },
   "surface": {
-    "keywords": 106,
-    "functions": 28,
+    "keywords": 108,
+    "functions": 29,
     "context_variables": 23
   },
   "clones": [
@@ -21,12 +21,13 @@
     "cost c + a * ceil(tokens / b0);",
     "cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);",
     "cost max(omega + beta * (kv_decode + kv_prefill), tokens * a);",
-    "decode (o - 1 - (known - prompt)) growing kv;",
-    "hold kv (known) reserve (known), reqs (0) reserve (1)",
+    "hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))",
     "pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }",
     "pool kv { cap blocksD * bs; block bs; evict lru; preempt lifo; admit via D; }",
     "pool reqs { cap max_seqs; admit via engine; }",
     "prefill (known - c) growing kv;",
+    "run engine decode (cost(engine, vd));",
+    "run engine prefill (cost(engine, vp));",
     "set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));",
     "vllm_request(reqs, kv, engine, prompt, o, t0);"
   ]

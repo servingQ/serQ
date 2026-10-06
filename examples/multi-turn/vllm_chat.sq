@@ -48,7 +48,7 @@ fn main() {
       turn;
       while (more) {
         set K = K + n + o;
-        run user (~exp(Z));
+        run user (cost(user, ~exp(Z)));
         turn;
       }
     }

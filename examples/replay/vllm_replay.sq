@@ -47,7 +47,7 @@ fn main() {
     trace "data/short_base.csv" ordered;
     hidden out;            // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
     session {
-      run gate (serial * spacing);
+      run gate (cost(gate, serial * spacing));
       set prev = 0;
       set prevout = 0;
       turn;
@@ -64,7 +64,7 @@ fn main() {
   server {
     set t0 = now;
     set prompt = new;
-    run front (c0 + f * prompt);
+    run front (cost(front, c0 + f * prompt));
     // reusable: the common prefix with the previous turn's computed tokens
     // (the previous prompt; the generated tokens are not in this prompt),
     // never the whole prompt (the last token is recomputed for its logits)
@@ -79,8 +79,8 @@ fn main() {
     // `known` is the prompt plus those, its own cached blocks up to `known - 1`
     // are reusable again (a forced turn's included: they carry its nonce), and
     // it generates only what is left
-    hold reqs (1), kv (hit + min(known - hit, budget_left(engine))) reserve (known)
-         reuse (max(hitmax, floor(computed / bs) * bs))
+    hold reqs (cost(reqs, 1)), kv (cost(kv, hit + min(known - hit, budget_left(engine)))) reserve (cost(kv, known))
+         reuse (cost(reqs, kv, max(hitmax, floor(computed / bs) * bs)))
          at admission (known = computed < prompt ? prompt : computed + 1,
                        hit = min(cachedin(kv), max(hitmax, floor(computed / bs) * bs))) {
       set c = cached;
@@ -90,7 +90,7 @@ fn main() {
       prefill (known - c) growing kv;
       branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
       decode (out - 1 - (known - prompt)) growing kv;
-    } cache (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
+    } cache (cost(reqs, kv, prompt + out - 1));   // every computed token, full blocks (kv_cache_manager.py:602)
     observe response = now - t0;
   }
 

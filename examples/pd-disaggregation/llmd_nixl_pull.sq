@@ -54,7 +54,6 @@ fn main() {
     route {
       set t0 = now;
       set prompt = K + n;
-      set o = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
       // The router. Decode profile first: the least busy decode pod
       // (active-request-scorer). Then the decider: a remote prefill only when the
       // prompt's uncached suffix on that pod is long enough
@@ -97,11 +96,11 @@ fn main() {
     }
     nic ps(BwP);                          // the pod's NIC: the reads out of it share it
     prefill (prompt) {
-      hold reqs (1), kv (min(prompt, hit + budget_left(P))) reserve (prompt)
+      hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt))
            at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
         set c = cached;
         prefill (prompt - c) growing kv;      // chunked; one token is sampled and discarded
-      } cache (prompt) lease kv (inf);
+      } cache (cost(reqs, kv, prompt)) lease kv (inf);
     }
   }
 
@@ -121,15 +120,16 @@ fn main() {
 
     // Decode only: the pod prefills the prompt itself (examples/multi-turn/vllm.sq).
     decode (prompt) {
-      hold kv (min(known, hit + budget_left(D))) reserve (known), reqs (1)
+      set produced = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
+      hold kv (cost(kv, min(known, hit + budget_left(D)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
            at admission (known = computed < prompt ? prompt : computed + 1,
                          hit = min(cachedin(kv), reusable(known, bs))) {
         set c = min(cached, reusable(known, bs));
         observe local_tokens = known - c;
         prefill (known - c) growing kv;
         branch (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
-        decode (o - 1 - (known - prompt)) growing kv;
-      } cache (prompt + o);
+        decode (produced - 1 - (known - prompt)) growing kv;
+      } cache (cost(kv, reqs, prompt + produced));
     }
 
     // With remote KV. The sidecar's decode request is taken when the whole
@@ -137,9 +137,10 @@ fn main() {
     // free - it takes neither (the request is parked, not running) - and
     // reuses the full blocks it has of the prompt.
     decode (prompt) from src {
+      set produced = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
       set transferred = 0;   // one KV transfer per request (nixl/pull_scheduler.py:187-189)
-      hold kv (known) reserve (known), reqs (0) reserve (1)
-           reuse (reusable(known, bs))
+      hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
+           reuse (cost(kv, reqs, reusable(known, bs)))
            at admission (known = computed < prompt ? prompt : computed + 1) {
         set c = cached;
         branch (!transferred) {
@@ -156,12 +157,12 @@ fn main() {
         // Back in the waiting queue: a running slot and a token of budget.
         // A request preempted on the decoder afterwards recomputes what it
         // lost here, as any local prefill would (do_remote_prefill is spent).
-        hold reqs (1) {
+        hold reqs (cost(reqs, 1)) {
           prefill (known - c) growing kv;
           branch (known == prompt) { mark first_token; }
-          decode (o - 1 - (known - prompt)) growing kv;
+          decode (produced - 1 - (known - prompt)) growing kv;
         }
-      } cache (prompt + o);
+      } cache (cost(kv, reqs, prompt + produced));
     }
   }
 
@@ -188,8 +189,8 @@ fn main() {
     }
     session {
       turn;
-      while (more) {
-        set K = K + n + o;
+      while (more && accepted) {
+        set K = prompt + D.produced;
         tool (~exp(Z));
         turn;
       }
@@ -200,7 +201,8 @@ fn main() {
     // vLLM refuses a prompt of max_model_len tokens or more before it is
     // scheduled (input_processor.py:512-536): the session ends there.
     observe too_long = K + n >= max_model_len;
-    branch (K + n < max_model_len) { gw.route(); } else { set more = 0; }
+    set accepted = K + n < max_model_len;
+    branch (accepted) { gw.route(); }
   }
 
   // How evenly the router spreads the decoders, read at every instant: the

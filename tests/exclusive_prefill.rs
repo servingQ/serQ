@@ -23,15 +23,15 @@ fn source(policy: &str, slot_cap: usize, kv_cap: usize) -> String {
           }}
         }}
         server {{
-          run gate (serial);
-          hold reqs (1), kv (min(prompt, left)) reserve (prompt)
+          run gate (cost(gate, serial));
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
           at admission (left = budget_left(engine)) {{
             observe allocation = used(kv);
-            run engine prefill (prompt) growing kv;
+            run engine prefill (cost(engine, prompt)) growing kv;
             observe prefill_done = now;
             observe prefill_who = serial;
-            branch (serial == 0) {{ run engine decode (2) growing kv; }}
-          }} cache (100);
+            branch (serial == 0) {{ run engine decode (cost(engine, 2)) growing kv; }}
+          }} cache (cost(reqs, kv, 100));
           observe final_cached = cachedin(kv);
           observe done = now;
           observe who = serial;
@@ -150,10 +150,10 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
           }
         }
         server {
-          hold reqs (1), kv (4) reserve (6) {
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) reserve (cost(kv, 6)) {
             observe admitted = now;
-            run engine prefill (6) growing kv;
-            run engine decode (1) growing kv;
+            run engine prefill (cost(engine, 6)) growing kv;
+            run engine decode (cost(engine, 1)) growing kv;
           }
         }
 
@@ -180,12 +180,12 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
           }
         }
         server {
-          hold reqs (1) {
+          hold reqs (cost(reqs, 1)) {
             observe admitted = now;
             branch (serial < 2) {
-              run engine decode (2);
+              run engine decode (cost(engine, 2));
             } else {
-              run engine prefill (4);
+              run engine prefill (cost(engine, 4));
             }
           }
           observe done = now;
@@ -221,15 +221,15 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
           }
         }
         server {
-          hold reqs (1), kv (min(known, left)) reserve (known) reuse (0)
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, left))) reserve (cost(kv, known)) reuse (cost(reqs, kv, 0))
           at admission (known = max(2, computed), left = budget_left(engine)) {
             branch (serial == 1) {
               observe admitted_b = now;
               observe restored_b = known;
             }
-            run engine prefill (known) growing kv;
-            run engine decode (3 - (known - 2)) growing kv;
-          } cache (100);
+            run engine prefill (cost(engine, known)) growing kv;
+            run engine decode (cost(engine, 3 - (known - 2))) growing kv;
+          } cache (cost(reqs, kv, 100));
           observe cached_extent = cachedin(kv);
           observe done = now;
         }

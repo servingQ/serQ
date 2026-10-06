@@ -444,7 +444,7 @@ impl Walker<'_> {
                     self.place(node, &stage);
                     let n = &mut self.net.nodes[node];
                     if n.modes.is_empty() {
-                        n.work = self.p.show_expr(&work);
+                        n.work = self.p.show_expr(work.cost_value());
                         // a delay is its duration: written inside it, under
                         // the shape of its density, when it is a
                         // distribution or a constant and fits
@@ -495,7 +495,7 @@ impl Walker<'_> {
                         visits: vec![],
                     });
                     for (r, units, _) in &pools {
-                        let encloses = !matches!(units, CExpr::Num(x) if *x == 0.0);
+                        let encloses = !self.value(units).is_some_and(|(v, _)| v == 0.0);
                         self.holds.push((r.base, id, encloses));
                         if let Some(k) = self.instance(r.index.as_deref())
                             && !self.net.instances.iter().any(|g| g.pools.contains(&r.base))
@@ -681,6 +681,7 @@ impl Walker<'_> {
     fn value(&self, e: &CExpr) -> Option<(f64, bool)> {
         fn eval(e: &CExpr, known: &[(usize, f64)], read: &mut bool) -> Option<f64> {
             Some(match e {
+                CExpr::Cost(_, x) => eval(x, known, read)?,
                 CExpr::Num(x) => *x,
                 CExpr::Attr(s) => {
                     *read = true;

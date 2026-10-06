@@ -12,6 +12,18 @@ from unittest.mock import patch
 import gen_lean_oracle as generator
 
 
+class ResourceCosts(unittest.TestCase):
+    def test_rounding_preserves_the_existing_fragment_under_a_conversion(self):
+        expr = generator.Expr(lambda e: "items" if e == {"Attr": 0} else self.fail(str(e)))
+        quotient = {"Binary": ["Div", {"Attr": 0}, {"Num": 2}]}
+        cost = {"Cost": [{"Pool": {"base": 0, "count": 1}}, quotient]}
+        for rounding in ("Floor", "Ceil"):
+            plain = {"Call": [rounding, [{"Expr": quotient}]]}
+            converted = {"Call": [rounding, [{"Expr": cost}]]}
+            self.assertEqual(expr.nat(plain), expr.nat(converted))
+
+
+
 class FragmentBoundaries(unittest.TestCase):
     def setUp(self):
         self.ir, _ = generator.load("mixed")

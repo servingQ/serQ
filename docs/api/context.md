@@ -81,7 +81,7 @@ fn main() {
     arrive batch(2);
   }
   server {
-    run engine prefill (8);
+    run engine prefill (cost(engine, 8));
     observe finished = now;
   }
 }

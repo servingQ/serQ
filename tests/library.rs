@@ -37,7 +37,7 @@ fn a_program_uses_the_definitions_of_a_library() {
         &[
             (
                 "lib/a.sq",
-                "use \"b.sq\";\ndef take(n) { hold kv (n) { prefill on engine (n) growing kv; } }\n",
+                "use \"b.sq\";\ndef take(n) { hold kv (cost(kv, n)) { prefill on engine (n) growing kv; } }\n",
             ),
             ("lib/b.sq", "def twice(x) { 2 * x }\n"),
             (
@@ -51,7 +51,7 @@ fn a_program_uses_the_definitions_of_a_library() {
     let written = compile_source(
         &common::main_source(&PROGRAM.replace(
             "server { take(twice(k)); }",
-            "server { hold kv (2 * k) { prefill on engine (2 * k) growing kv; } }",
+            "server { hold kv (cost(kv, 2 * k)) { prefill on engine (2 * k) growing kv; } }",
         )),
         &common::horizon(10.0),
     )
@@ -145,7 +145,7 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
             ("lib/a.sq", "use \"../main.sq\";\ndef twice(x) { 2 * x }\n"),
             (
                 "main.sq",
-                "use \"lib/a.sq\";\nstage svc : fifo;\nworkload { session { turn; end; \n} }\nserver { run svc (twice(1));\n}\n\n",
+                "use \"lib/a.sq\";\nstage svc : fifo;\nworkload { session { turn; end; \n} }\nserver { run svc (cost(svc, twice(1)));\n}\n\n",
             ),
             // two libraries that use each other: the order of their definitions
             // is what is wrong, and the error says so
@@ -300,7 +300,7 @@ def twice(x) {
   x > 0 ? (x * 2) : 0
 }
 def idle() {}
-def take(n) { hold kv (n) { prefill on engine (n) growing kv; } }
+def take(n) { hold kv (cost(kv, n)) { prefill on engine (n) growing kv; } }
 "#;
     let used = compile_source(
         &common::main_source(
@@ -312,7 +312,7 @@ def take(n) { hold kv (n) { prefill on engine (n) growing kv; } }
     let written = compile_source(
         &common::main_source(&PROGRAM.replace(
             "take(twice(k));",
-            "hold kv (k > 0 ? (k * 2) : 0) { prefill on engine (k > 0 ? (k * 2) : 0) growing kv; }",
+            "hold kv (cost(kv, k > 0 ? (k * 2) : 0)) { prefill on engine (k > 0 ? (k * 2) : 0) growing kv; }",
         )),
         &common::horizon(10.0),
     )

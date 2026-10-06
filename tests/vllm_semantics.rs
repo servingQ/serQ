@@ -35,12 +35,12 @@ fn engine(
         }}
         server {{
           set t0 = now;
-          hold reqs (1), kv (min(prompt, {budget})) {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, {budget}))) {{
             observe admitted = now - t0;
             observe who_admitted = serial;
-            run engine prefill (prompt) growing kv;
+            run engine prefill (cost(engine, prompt)) growing kv;
             observe ttft = now - t0;
-            run engine decode (o - 1) growing kv;
+            run engine decode (cost(engine, o - 1)) growing kv;
           }}
           observe done = now - t0;
           observe order = serial;
@@ -104,12 +104,12 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
           }
         }
         server {
-          hold reqs (1), kv (min(known, 1000)) reserve (known)
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, 1000))) reserve (cost(kv, known))
           at admission (known = computed < prompt ? prompt : computed + 1) {
             observe known = known;
-            run engine prefill (known) growing kv;
+            run engine prefill (cost(engine, known)) growing kv;
             branch (known == prompt) { observe first = now; }
-            run engine decode (o - 1 - (known - prompt)) growing kv;
+            run engine decode (cost(engine, o - 1 - (known - prompt))) growing kv;
           }
           observe done = now;
           observe order = serial;
@@ -156,12 +156,12 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
         }
         server {
           branch (serial == 0) {
-            hold kv (prompt) reserve (prompt) {
-              run engine prefill (prompt) growing kv;
-              run engine decode (o - 1) growing kv;
+            hold kv (cost(kv, prompt)) reserve (cost(kv, prompt)) {
+              run engine prefill (cost(engine, prompt)) growing kv;
+              run engine decode (cost(engine, o - 1)) growing kv;
             }
           } else {
-            hold kv (prompt) { observe c2 = computed; run svc (100); }
+            hold kv (cost(kv, prompt)) { observe c2 = computed; run svc (cost(svc, 100)); }
           }
           observe done = now;
         }
@@ -204,9 +204,9 @@ fn serve_by_orders_residents_by_the_declared_keys() {
           }}
         }}
         server {{
-          hold kv (100) {{
-            run engine prefill (1) growing kv;
-            run engine decode (o - 1) growing kv;
+          hold kv (cost(kv, 100)) {{
+            run engine prefill (cost(engine, 1)) growing kv;
+            run engine decode (cost(engine, o - 1)) growing kv;
           }}
           observe done = now;
           observe order = serial;
@@ -286,10 +286,10 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
           }
         }
         server {
-          run gate (arrive);
-          hold reqs (1), kv (10) {
-            run engine prefill (1) growing kv;
-            run engine decode (o - 1) growing kv;
+          run gate (cost(gate, arrive));
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 10)) {
+            run engine prefill (cost(engine, 1)) growing kv;
+            run engine decode (cost(engine, o - 1)) growing kv;
           }
           observe done = now;
           observe order = serial;
@@ -387,7 +387,7 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         stage engine : step { budget 8192; cost 1; memory kv; }
         workload { arrive batch(1); init { set K = 0; set turns = 0; }
           session {
-            loop { turn;
+            loop { turn; set K = prompt + 10; set turns = turns + 1;
               branch (turns >= 3) { end; }
             }
 
@@ -395,15 +395,13 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         }
         server {
           set prompt = K + 100;
-          hold reqs (1), kv (c + min(prompt - c, 8192))
+          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, 8192)))
           at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
             observe cached_seen = cached;
             observe prefill_tokens = prompt - min(cached, floor((prompt - 1) / bs) * bs);
-            run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
-            run engine decode (9) growing kv;
-          } cache (prompt + 10);
-          set K = prompt + 10;
-          set turns = turns + 1;
+            run engine prefill (cost(engine, prompt - min(cached, floor((prompt - 1) / bs) * bs))) growing kv;
+            run engine decode (cost(engine, 9)) growing kv;
+          } cache (cost(reqs, kv, prompt + 10));
         }
 
 "#;
@@ -433,23 +431,21 @@ fn lru_eviction_drops_tail_blocks_first() {
             // session 0 runs first (160 tokens -> 10 blocks cached), then session 1
             // takes 12 blocks, evicting 2 of session 0's from its tail; session 0's
             // second turn then reuses 8 blocks.
-            run gate (serial * 2);
-            loop { turn;
+            run gate (cost(gate, serial * 2));
+            loop { turn; set K = prompt; set turns = turns + 1;
               branch (turns >= 2 || serial == 1) { end; }
-              run gate (10);
+              run gate (cost(gate, 10));
             }
 
           }
         }
         server {
           set prompt = serial == 0 ? K + 160 : 192;
-          hold reqs (1), kv (c + min(prompt - c, 8192))
+          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, 8192)))
           at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
             branch (serial == 0) { observe cached0 = cached; }
-            run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
-          } cache (prompt);
-          set K = prompt;
-          set turns = turns + 1;
+            run engine prefill (cost(engine, prompt - min(cached, floor((prompt - 1) / bs) * bs))) growing kv;
+          } cache (cost(reqs, kv, prompt));
         }
 
 "#;

@@ -40,8 +40,8 @@ fn main() {
   }
 
   server {
-    run E prefill (vp);
-    run E decode (vd);
+    run E prefill (cost(E, vp));
+    run E decode (cost(E, vd));
     observe response = now - t0;
   }
 

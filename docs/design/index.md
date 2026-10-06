@@ -84,6 +84,8 @@ here. This directory is the record of **applying** them.
 | [A shared prefix cache](shared-prefix-cache.md) | Cached KV shared across sessions, as every engine surveyed shares it: a hold names its prefix as a chain of keyed segments, the pool's cache is a trie of them, eviction takes leaves; the per-session cache is the one-segment case; LPM and agent workloads; `cache P (ℓ)` first (#366) | RFC, 2026-10-05 |
 | [Braced definitions](braced-definitions.md) | One braced spelling for expression and statement definitions; unchanged expansion and IR | implemented |
 
+| [Sizes and costs](size-and-cost.md) | Workload-owned request sizes, explicit resource costs, and IR validation without a new request execution frame | IR 12 |
+
 A new design document adds a row to this table.
 
 - [Sessions describe completed turns](session-turns.md): optional single-turn sessions, server-independent continuation, and conditional loops.

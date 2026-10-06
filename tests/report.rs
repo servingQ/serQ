@@ -20,7 +20,7 @@ fn the_report_has_the_shape_its_version_names() {
           session { turn; end;
           }
         }
-        server { hold kv (1) { run svc (~exp(0.5)); } observe x = now;
+        server { hold kv (cost(kv, 1)) { run svc (cost(svc, ~exp(0.5))); } observe x = now;
         }
         gauge g = used(kv);
         ";
@@ -114,7 +114,7 @@ fn an_array_member_is_reported_with_its_index() {
           session { turn; end;
           }
         }
-        server { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } }
+        server { set j = ~bernoulli(0.5); hold reqs (cost(reqs, 1)) { hold kv[j] (cost(kv, 1)) { run svc[j] (cost(svc, ~exp(0.5))); } }
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
@@ -174,8 +174,8 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
           }}
         }}
         server {{
-          run gate (2 * serial);
-          hold reqs (1), kv (min(prompt, left)) reserve (prompt)
+          run gate (cost(gate, 2 * serial));
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
           at admission (left = budget_left(engine)) {{
             prefill prompt growing kv;
             branch (serial == 0) {{ decode (3) growing kv; }}
@@ -222,7 +222,7 @@ fn a_gap_holds_the_transfer_between_two_engines() {
         }}
         server {{
           prefill on p (2);
-          run link (5);
+          run link (cost(link, 5));
           {recompute}
           decode on d (2);
         }}
@@ -266,7 +266,7 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
           }
         }
         server {
-          hold kv (min(known, budget_left(engine))) reserve (known), reqs (1)
+          hold kv (cost(kv, min(known, budget_left(engine)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
           at admission (known = computed < prompt ? prompt : computed + 1) {
             prefill (known) growing kv;
             branch (known == prompt) { set first = now; }
@@ -311,7 +311,7 @@ fn a_one_member_array_keeps_its_index() {
           session { turn; end;
           }
         }
-        server { hold reqs (1) { hold kv[0] (1) { run svc[0] (~exp(2)); } }
+        server { hold reqs (cost(reqs, 1)) { hold kv[0] (cost(kv, 1)) { run svc[0] (cost(svc, ~exp(2))); } }
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
@@ -333,7 +333,7 @@ fn a_queue_family_of_one_is_reported_by_index() {
         queue D[ND] : decode {
           pool kv { cap 100; }
           serve step { cost 1; memory kv; }
-          decode (p) { hold kv (p) { prefill (p) growing kv; } }
+          decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
         }
         workload { arrive batch(1); init { set prompt = 4; } session { turn; end; } } server { gw.route(); }
         ";
@@ -359,8 +359,8 @@ fn a_step_stage_reports_what_its_iterations_carried() {
           }}
         }}
         server {{
-          run gate (serial);
-          hold reqs (1), kv (min(prompt, left)) reserve (prompt)
+          run gate (cost(gate, serial));
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
           at admission (left = budget_left(engine)) {{
             prefill prompt growing kv;
             branch (serial == 0) {{ decode (2) growing kv; }}
@@ -401,7 +401,7 @@ fn a_step_stage_reports_what_its_iterations_carried() {
 #[test]
 fn the_report_records_the_serq_version() {
     let p = compile_source(&common::main_source(
-        "stage svc : delay; workload { arrive batch(1); \n  session { turn; end; \n  }\n} server { run svc (1);\n} "),
+        "stage svc : delay; workload { arrive batch(1); \n  session { turn; end; \n  }\n} server { run svc (cost(svc, 1));\n} "),
         &common::horizon(2.0),
     )
     .unwrap();
@@ -475,7 +475,7 @@ fn a_test_observe_that_never_held_is_noted() {
           }
         }
         server {
-          run svc (serial);
+          run svc (cost(svc, serial));
           observe never = serial < 0;
           observe neither = !(serial >= 0);
           observe both = serial < 0 && serial > 100;

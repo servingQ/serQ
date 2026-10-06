@@ -12,6 +12,31 @@
     "computed",
     "t0"
   ],
+  "attr_types": [
+    "Value",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Value",
+    "Size"
+  ],
+  "sides": [
+    [
+      "Workload"
+    ],
+    [],
+    [
+      "Workload",
+      "Server",
+      "Server",
+      "Server",
+      "Workload"
+    ]
+  ],
   "observes": [
     "response"
   ],
@@ -174,7 +199,17 @@
           },
           "mode": "Prefill",
           "work": {
-            "Num": 290.0
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 0,
+                  "count": 1
+                }
+              },
+              {
+                "Num": 290.0
+              }
+            ]
           },
           "growing": null
         }
@@ -188,7 +223,17 @@
           },
           "mode": "Decode",
           "work": {
-            "Num": 990.0
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 0,
+                  "count": 1
+                }
+              },
+              {
+                "Num": 990.0
+              }
+            ]
           },
           "growing": null
         }

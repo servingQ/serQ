@@ -22,7 +22,7 @@ fn main() {
   }
 
   server {
-    run svc (s);
+    run svc (cost(svc, s));
     observe response = now - t0;
   }
 

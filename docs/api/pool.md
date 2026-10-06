@@ -217,7 +217,7 @@ fn main() {
   }
   server {
     set t0 = now;
-    hold reqs (1) { run svc (2); }
+    hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
     observe response = now - t0;
   }
 }

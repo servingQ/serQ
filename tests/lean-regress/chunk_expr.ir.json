@@ -42,6 +42,19 @@
    }
   ]
  },
+ "attr_types": [
+  "Value",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Value",
+  "Size",
+  "Size"
+ ],
  "attrs": [
   "cached",
   "serial",
@@ -90,7 +103,17 @@
         "index": null
        },
        {
-        "Num": 1.0
+        "Cost": [
+         {
+          "Pool": {
+           "base": 1,
+           "count": 1
+          }
+         },
+         {
+          "Num": 1.0
+         }
+        ]
        },
        null
       ],
@@ -101,7 +124,17 @@
         "index": null
        },
        {
-        "Attr": 9
+        "Cost": [
+         {
+          "Pool": {
+           "base": 0,
+           "count": 1
+          }
+         },
+         {
+          "Attr": 9
+         }
+        ]
        },
        null
       ]
@@ -126,7 +159,17 @@
       "index": null
      },
      "work": {
-      "Attr": 9
+      "Cost": [
+       {
+        "Stage": {
+         "base": 0,
+         "count": 1
+        }
+       },
+       {
+        "Attr": 9
+       }
+      ]
      }
     }
    },
@@ -152,7 +195,17 @@
       "index": null
      },
      "work": {
-      "Attr": 10
+      "Cost": [
+       {
+        "Stage": {
+         "base": 0,
+         "count": 1
+        }
+       },
+       {
+        "Attr": 10
+       }
+      ]
      }
     }
    },
@@ -210,6 +263,24 @@
  ],
  "seed": 1,
  "session": 2,
+ "sides": [
+  [
+   "Workload",
+   "Workload"
+  ],
+  [],
+  [
+   "Workload",
+   "Server",
+   "Workload"
+  ],
+  [
+   "Server",
+   "Server",
+   "Server",
+   "Server"
+  ]
+ ],
  "slot_cached": 0,
  "slot_computed": 8,
  "slot_forced": 7,

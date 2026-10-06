@@ -81,7 +81,7 @@ fn stations_take_their_stage_kind() {
             .expect("stage is on the session");
         assert_eq!(net.nodes[i].kind, kind, "{name}");
     }
-    let (p, net) = shape("run A (1); end;");
+    let (p, net) = shape("run A (cost(A, 1)); end;");
     let i = net.node_of(stage(&p, "A")).expect("A is on the session");
     assert_eq!(net.nodes[i].kind, StationKind::Delay);
 }
@@ -156,9 +156,9 @@ fn growing_is_found_through_nested_holds() {
           }
         }
         server {
-          hold kv (32), reqs (1) {
-            hold gate (1) { run engine prefill (n) growing kv; }
-          } cache (n + o);
+          hold kv (cost(kv, 32)), reqs (cost(reqs, 1)) {
+            hold gate (cost(gate, 1)) { run engine prefill (cost(engine, n)) growing kv; }
+          } cache (cost(kv, reqs, n + o));
         }
 
 "#,
@@ -181,9 +181,9 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
           }
         }
         server {
-          hold kv (1) { run s1 (1); run s2 (1); }
-          run s3 (1);
-          hold kv (1) { run s4 (1); run s5 (1); }
+          hold kv (cost(kv, 1)) { run s1 (cost(s1, 1)); run s2 (cost(s2, 1)); }
+          run s3 (cost(s3, 1));
+          hold kv (cost(kv, 1)) { run s4 (cost(s4, 1)); run s5 (cost(s5, 1)); }
         }
 
 "#,
@@ -240,7 +240,7 @@ fn a_session_that_decides_first_starts_at_a_decision() {
           session { turn; end;
           }
         }
-        server { branch (a) { run s1 (1); } else { run s2 (1); }
+        server { branch (a) { run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); }
         }
 
 "#,
@@ -279,7 +279,7 @@ fn negative_constants_reparse() {
           session {  turn; end;
           }
         }
-        server { observe o = k ^ a; run s (1);
+        server { observe o = k ^ a; run s (cost(s, 1));
         }
 
 "#,
@@ -327,7 +327,7 @@ const ACROSS: &str = "pool live { cap 2; } pool kv { cap 9; }
           session { turn; end;
           }
         }
-        server { hold live (1) { hold kv (1) { run A (1); } run B (1); }
+        server { hold live (cost(live, 1)) { hold kv (cost(kv, 1)) { run A (cost(A, 1)); } run B (cost(B, 1)); }
         }
         ";
 
@@ -418,7 +418,7 @@ fn separate_holds_side_by_side_are_two_frames() {
           session { turn; end;
           }
         }
-        server { hold a (1) { run s1 (1); } hold a (1) { run s2 (1); }
+        server { hold a (cost(a, 1)) { run s1 (cost(s1, 1)); } hold a (cost(a, 1)) { run s2 (cost(s2, 1)); }
         }
 
 "#,
@@ -443,7 +443,7 @@ fn a_hold_across_stations_is_no_stations_own() {
           session { turn; end;
           }
         }
-        server { run s1 (1); run s2 (1); hold a (1) { run s1 (1); run s3 (1); run s2 (1); }
+        server { run s1 (cost(s1, 1)); run s2 (cost(s2, 1)); hold a (cost(a, 1)) { run s1 (cost(s1, 1)); run s3 (cost(s3, 1)); run s2 (cost(s2, 1)); }
         }
 
 "#,
@@ -485,7 +485,7 @@ fn a_release_in_one_arm_does_not_reach_the_other() {
           session { turn; end;
           }
         }
-        server { hold p (1) { branch (c) { release p; run s1 (1); } else { run s2 (1); } run s3 (1); }
+        server { hold p (cost(p, 1)) { branch (c) { release p; run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); } run s3 (cost(s3, 1)); }
         }
         ",
     );
@@ -505,7 +505,7 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
           session { turn; end;
           }
         }
-        server { hold p (1) { run s1 (1); } lease p (inf); run s2 (1); release p; run s3 (1);
+        server { hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf); run s2 (cost(s2, 1)); release p; run s3 (cost(s3, 1));
         }
         ",
     );
@@ -586,8 +586,17 @@ fn pools_at(src: &str, stage_name: &str) -> Vec<String> {
 /// A hold of no units reserves and occupies nothing: it draws no boundary.
 #[test]
 fn a_reservation_only_hold_encloses_nothing() {
-    assert!(pools_at("hold p (0) reserve (1) { run A (1); }", "A").is_empty());
-    assert_eq!(pools_at("hold p (1) { run A (1); }", "A"), ["p"]);
+    assert!(
+        pools_at(
+            "hold p (cost(p, 0)) reserve (cost(p, 1)) { run A (cost(A, 1)); }",
+            "A"
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        pools_at("hold p (cost(p, 1)) { run A (cost(A, 1)); }", "A"),
+        ["p"]
+    );
 }
 
 /// A `release` gives back the innermost hold of its pool (`interp.rs`), so
@@ -596,7 +605,10 @@ fn a_reservation_only_hold_encloses_nothing() {
 #[test]
 fn a_release_takes_the_innermost_hold_even_of_no_units() {
     assert_eq!(
-        pools_at("hold p (1) { hold p (0) { release p; run A (1); } }", "A"),
+        pools_at(
+            "hold p (cost(p, 1)) { hold p (cost(p, 0)) { release p; run A (cost(A, 1)); } }",
+            "A"
+        ),
         ["p"]
     );
 }
@@ -693,9 +705,9 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
           init { set first = 1; }
           turn { set n = ~exp(10); }
           session { loop {  turn; set first = 0;
-              branch with (0.5) { run tool (1); } else { end; } } }
+              branch with (0.5) { run tool (cost(tool, 1)); } else { end; } } }
         }
-        server { branch (first) { run big (n); } else { run small (n); } }
+        server { branch (first) { run big (cost(big, n)); } else { run small (cost(small, n)); } }
         ";
     let p =
         compile_drawn_source_at(&common::main_source(src), None, &common::horizon(100.0)).unwrap();
@@ -713,7 +725,7 @@ fn a_turn_forgets_what_the_path_set() {
           session { set n = 0;  turn;
           }
         }
-        server { branch (n > 0) { run A (n); } else { run B (1); }
+        server { branch (n > 0) { run A (cost(A, n)); } else { run B (cost(B, 1)); }
         }
         ",
     );
@@ -735,17 +747,17 @@ fn a_decided_guard_drops_only_an_arm_with_no_station() {
           session {{ turn; end;
           }}
         }}
-        server {{ set x = 0; hold kv (1) {{ run A (1); {arms} set x = 1; run C (1); }}
+        server {{ set x = 0; hold kv (cost(kv, 1)) {{ run A (cost(A, 1)); {arms} set x = 1; run C (cost(C, 1)); }}
         }}
         "
         ))
     };
-    let p = program("branch (!x) { run B (1); }");
+    let p = program("branch (!x) { run B (cost(B, 1)); }");
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["A", "B", "C"]);
     assert!(edge(&p, &net, "A", "C").is_none(), "the skip is not drawn");
     assert!(edge(&p, &net, "A", "B").is_some_and(|e| e.label.is_none()));
-    let p = program("branch (!x) { run B (1); } else { run C (1); }");
+    let p = program("branch (!x) { run B (cost(B, 1)); } else { run C (cost(C, 1)); }");
     let net = deployment::project(&p);
     assert!(edge(&p, &net, "A", "C").is_some(), "an arm with a station");
 }
@@ -760,7 +772,7 @@ fn a_guard_on_constants_draws_both_arms() {
           session { turn; end;
           }
         }
-        server { branch (mode == 0) { run A (1); } else { run B (1); }
+        server { branch (mode == 0) { run A (cost(A, 1)); } else { run B (cost(B, 1)); }
         }
         ",
     );
@@ -823,7 +835,7 @@ fn has(net: &deployment::Net, p: &Program, from: End, to: &str) -> Option<deploy
 #[test]
 fn a_loop_that_decides_first_returns_to_its_decision() {
     let (p, net) = shape(
-        "loop { set a = ~bernoulli(0.5); branch (a) { run A (1); } else { run B (1); } run C (1); }",
+        "loop { set a = ~bernoulli(0.5); branch (a) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } run C (cost(C, 1)); }",
     );
     let d = decision(&net).expect("a decision");
     assert!(net.has_edge(End::Arrival, d));
@@ -841,7 +853,7 @@ fn a_loop_that_decides_first_returns_to_its_decision() {
 #[test]
 fn a_nested_loop_returns_to_the_inner_decision() {
     let (p, net) = shape(
-        "run C (1); loop { loop { set a = ~bernoulli(0.5); branch (a) { run A (1); } else { run B (1); } } }",
+        "run C (cost(C, 1)); loop { loop { set a = ~bernoulli(0.5); branch (a) { run A (cost(A, 1)); } else { run B (cost(B, 1)); } } }",
     );
     let d = decision(&net).expect("a decision");
     assert_eq!(
@@ -865,8 +877,9 @@ fn a_nested_loop_returns_to_the_inner_decision() {
 /// comes back to the decision, not to itself.
 #[test]
 fn a_loop_through_an_empty_arm() {
-    let (p, net) =
-        shape("loop { set a = ~bernoulli(0.5); branch (a) { } else { run A (1); } run B (1); }");
+    let (p, net) = shape(
+        "loop { set a = ~bernoulli(0.5); branch (a) { } else { run A (cost(A, 1)); } run B (cost(B, 1)); }",
+    );
     let d = decision(&net).expect("a decision");
     assert!(has(&net, &p, d, "A").is_some());
     assert!(has(&net, &p, d, "B").is_some());
@@ -879,8 +892,9 @@ fn a_loop_through_an_empty_arm() {
 /// the first turn and every one after.
 #[test]
 fn a_loop_that_can_end_before_a_station() {
-    let (p, net) =
-        shape("loop { set c = ~bernoulli(0.5); branch (c) { end; } run A (1); run B (1); }");
+    let (p, net) = shape(
+        "loop { set c = ~bernoulli(0.5); branch (c) { end; } run A (cost(A, 1)); run B (cost(B, 1)); }",
+    );
     let d = decision(&net).expect("a decision");
     assert!(has(&net, &p, d, "exit").is_some_and(|e| e.label.as_deref() == Some("c")));
     assert!(has(&net, &p, d, "A").is_some());
@@ -894,7 +908,7 @@ fn a_loop_that_can_end_before_a_station() {
 #[test]
 fn a_return_to_the_same_station_is_a_way_in() {
     let (p, net) = shape(
-        "run A (1); loop { set c = ~bernoulli(0.5); branch (c) { end; } else { run A (1); } }",
+        "run A (cost(A, 1)); loop { set c = ~bernoulli(0.5); branch (c) { end; } else { run A (cost(A, 1)); } }",
     );
     let d = decision(&net).expect("a decision");
     assert!(has(&net, &p, d, "exit").is_some());
@@ -909,8 +923,8 @@ fn a_return_to_the_same_station_is_a_way_in() {
 fn a_decision_is_named_by_its_leading_chooses() {
     let (_, net) = shape(
         "set j = 0; loop { choose j in 2 by (0); set c = ~bernoulli(0.5);
-           branch (c) { choose k in 2 by (0); run A (1); } else { run B (1); }
-           choose m in 2 by (0); run C (1); }",
+           branch (c) { choose k in 2 by (0); run A (cost(A, 1)); } else { run B (cost(B, 1)); }
+           choose m in 2 by (0); run C (cost(C, 1)); }",
     );
     let d = net
         .nodes
@@ -936,8 +950,8 @@ fn the_looking_pass_leaves_nothing() {
           }
         }
         server {
-          run x, y (1);
-          run A (1);
+          run x, y (cost(x, y, 1));
+          run A (cost(A, 1));
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -965,10 +979,10 @@ fn a_decision_stays_before_its_stations() {
         }
         server {
           choose i in 2 by (0);
-          hold kv[i] (1) { run A[i] (1); }
+          hold kv[i] (cost(kv, 1)) { run A[i] (cost(A, 1)); }
           loop {
             set c = ~bernoulli(0.5);
-            branch (c) { hold kv[i] (1) { run B[i] (1); } } else { hold kv[i] (1) { run C[i] (1); } }
+            branch (c) { hold kv[i] (cost(kv, 1)) { run B[i] (cost(B, 1)); } } else { hold kv[i] (cost(kv, 1)) { run C[i] (cost(C, 1)); } }
           }
         }
         ";
@@ -995,8 +1009,9 @@ fn a_decision_stays_before_its_stations() {
 /// A body that starts at one station needs no decision: it comes back to it.
 #[test]
 fn a_loop_with_one_way_in_has_no_decision() {
-    let (p, net) =
-        shape("loop { run A (1); set c = ~bernoulli(0.5); branch (c) { end; } run B (1); }");
+    let (p, net) = shape(
+        "loop { run A (cost(A, 1)); set c = ~bernoulli(0.5); branch (c) { end; } run B (cost(B, 1)); }",
+    );
     assert!(decision(&net).is_none());
     assert!(edge(&p, &net, "B", "A").is_some_and(|e| e.back));
 }
@@ -1226,10 +1241,10 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
         }
         server {
           set j = serial;
-          hold kvP (10) { run P (1); } lease kvP (inf);
-          hold kvD[j] (10) {
+          hold kvP (cost(kvP, 10)) { run P (cost(P, 1)); } lease kvP (inf);
+          hold kvD[j] (cost(kvD, 10)) {
             transfer on egress, ingress[j] (1) from kvP to kvD[j] (10);
-            run D[j] (1);
+            run D[j] (cost(D, 1));
           }
         }
         ";
@@ -1264,8 +1279,8 @@ fn only_a_links_latency_folds_into_the_transfer() {
           }
         }
         server {
-          hold kvP (10) { run P (1); } lease kvP (inf);
-          hold kvD (10) { run wait (1); transfer on egress, ingress (1) from kvP to kvD (10); run D (1); }
+          hold kvP (cost(kvP, 10)) { run P (cost(P, 1)); } lease kvP (inf);
+          hold kvD (cost(kvD, 10)) { run wait (cost(wait, 1)); transfer on egress, ingress (1) from kvP to kvD (10); run D (cost(D, 1)); }
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1291,7 +1306,7 @@ fn a_run_from_an_unboxed_choice_does_not_span() {
         server {
           choose i in 2 by (0);
           choose j in 2 by (0);
-          hold kv[j] (10) { run nic[i], ing[j] (1); run D[j] (1); }
+          hold kv[j] (cost(kv, 10)) { run nic[i], ing[j] (cost(nic, ing, 1)); run D[j] (cost(D, 1)); }
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1323,9 +1338,9 @@ fn a_latency_before_two_transfers_stays_a_station() {
           }
         }
         server {
-          hold kvP (10) { run P (1); } lease kvP (inf);
+          hold kvP (cost(kvP, 10)) { run P (cost(P, 1)); } lease kvP (inf);
           set c = ~bernoulli(0.5);
-          hold kvD (10) {
+          hold kvD (cost(kvD, 10)) {
             branch (c) { transfer on a, L (1) from kvP to kvD (10); }
             else { transfer on b, L (1) from kvP to kvD (10); }
           }
@@ -1357,11 +1372,11 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
         server {
           set c = ~bernoulli(0.5);
           branch (c) {
-            hold p1 (1) { run s (1); } lease p1 (inf);
-            hold q1 (1) { transfer on a, b (1) from p1 to q1 (1); }
+            hold p1 (cost(p1, 1)) { run s (cost(s, 1)); } lease p1 (inf);
+            hold q1 (cost(q1, 1)) { transfer on a, b (1) from p1 to q1 (1); }
           } else {
-            hold p2 (1) { run s (1); } lease p2 (inf);
-            hold q2 (1) { transfer on a, b (1) from p2 to q2 (1); }
+            hold p2 (cost(p2, 1)) { run s (cost(s, 1)); } lease p2 (inf);
+            hold q2 (cost(q2, 1)) { transfer on a, b (1) from p2 to q2 (1); }
           }
         }
         ";
@@ -1382,8 +1397,8 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
           }
         }
         server {
-          hold kP (1) { run P (1); } lease kP (inf);
-          hold kD (1) { transfer on A, B (1) from kP to kD (1); }
+          hold kP (cost(kP, 1)) { run P (cost(P, 1)); } lease kP (inf);
+          hold kD (cost(kD, 1)) { transfer on A, B (1) from kP to kD (1); }
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1405,9 +1420,9 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
         server {
           choose i in 2 by (0);
           choose j in 2 by (0);
-          hold kv[i] (1) { run A[i] (1); }
-          hold kv[j] (1) { run B[j] (1); }
-          run a[i], b[j], c[i] (1);
+          hold kv[i] (cost(kv, 1)) { run A[i] (cost(A, 1)); }
+          hold kv[j] (cost(kv, 1)) { run B[j] (cost(B, 1)); }
+          run a[i], b[j], c[i] (cost(a, b, c, 1));
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1426,7 +1441,7 @@ fn a_flows_stations_are_neighbours_in_the_row() {
           session { turn; end;
           }
         }
-        server { run ingress (1); run D (1); run egress, ingress (1);
+        server { run ingress (cost(ingress, 1)); run D (cost(D, 1)); run egress, ingress (cost(egress, ingress, 1));
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1506,7 +1521,7 @@ fn a_reordered_arrow_is_drawn_the_way_it_points() {
           session { turn; end;
           }
         }
-        server { run a (1); run v (1); run u (1); run v (1); run a, u (1);
+        server { run a (cost(a, 1)); run v (cost(v, 1)); run u (cost(u, 1)); run v (cost(v, 1)); run a, u (cost(a, u, 1));
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1606,8 +1621,8 @@ fn a_while_body_does_not_determine_its_continuation() {
       workload { arrive batch(1); }
       server {
         set flag = 0;
-        while (flag) { run a (1); set flag = 1; }
-        branch (flag) { run b (1); } else { run c (1); }
+        while (flag) { run a (cost(a, 1)); set flag = 1; }
+        branch (flag) { run b (cost(b, 1)); } else { run c (cost(c, 1)); }
       }
       ",
     );

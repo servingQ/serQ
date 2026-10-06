@@ -14,7 +14,7 @@ fn run(s: &str) -> serq::Report {
 fn an_omitted_session_is_one_complete_turn() {
     let base = "stage svc : delay;
       workload { arrive batch(1); turn { set s = 3; } SESSION }
-      server { run svc (s); observe finished = now; observe ordinal = turn_no; }
+      server { run svc (cost(svc, s)); observe finished = now; observe ordinal = turn_no; }
       ";
     let implicit = base.replace("SESSION", "");
     let explicit = base.replace("SESSION", "session { turn; }");
@@ -36,12 +36,12 @@ fn turns_wait_for_responses_and_accumulate_the_next_input() {
         turn { set s = k; }
         session {
           turn;
-          while (turn_no < 3) { set k = k + s; run think (2); turn; }
+          while (turn_no < 3) { set k = k + s; run think (cost(think, 2)); turn; }
           observe finished = now;
           observe history = k;
         }
       }
-      server { run svc (s); observe served = s; }
+      server { run svc (cost(svc, s)); observe served = s; }
       ");
     // Requests cost 1, 2, 4; two think intervals cost 2 each: 11 total.
     assert_eq!(rep.observe("finished").unwrap().mean, 11.0);
@@ -53,7 +53,7 @@ fn turns_wait_for_responses_and_accumulate_the_next_input() {
 fn nested_whiles_can_skip_and_continue_after_releasing_a_hold() {
     let rep = run("pool p { cap 1; } stage svc : delay;
       workload { arrive batch(1); session {
-        hold p (1) {
+        hold p (cost(p, 1)) {
           set outer = 0;
           while (outer < 2) {
             turn;
@@ -66,7 +66,7 @@ fn nested_whiles_can_skip_and_continue_after_releasing_a_hold() {
         observe finished = now;
         observe allocated = used(p);
       } }
-      server { run svc (1); }
+      server { run svc (cost(svc, 1)); }
       ");
     // 2 x (1 + 2) requests; the false loop sends none and the scoped hold releases.
     assert_eq!(rep.observe("finished").unwrap().mean, 6.0);
@@ -77,7 +77,7 @@ fn nested_whiles_can_skip_and_continue_after_releasing_a_hold() {
 fn while_progress_is_checked_in_text_and_direct_ir() {
     let source = "stage svc : delay; workload { arrive batch(1); session {
       turn; while (1) { set x = 1; }
-    } } server { run svc (1); } ";
+    } } server { run svc (cost(svc, 1)); } ";
     assert!(
         compile(source)
             .unwrap_err()
@@ -103,7 +103,7 @@ fn while_progress_is_checked_in_text_and_direct_ir() {
 fn while_guards_are_tests_and_missing_turns_are_diagnosed() {
     let source = "stage svc : delay; workload { arrive batch(1); session {
       while (0.5) { turn; }
-    } } server { run svc (1); } ";
+    } } server { run svc (cost(svc, 1)); } ";
     assert!(compile(source).unwrap_err().contains("not 0 or 1"));
     let dynamic = source.replace("while (0.5)", "set probability = 0.5; while (probability)");
     let error =
@@ -137,7 +137,7 @@ fn a_while_guard_obeys_the_enclosing_cache_contract() {
     let error = compile(
         "pool p { cap 1; } stage svc : delay;
       workload { arrive batch(1); }
-      server { hold p (1) { while (cached > 0) { run svc (1); } } }
+      server { hold p (cost(p, 1)) { while (cached > 0) { run svc (cost(svc, 1)); } } }
       ",
     )
     .unwrap_err();

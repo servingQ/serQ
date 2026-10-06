@@ -23,7 +23,7 @@ Avoid extra parameters or wrappers whose only purpose is moving text outside.
 Inside `main`, group inputs and derived settings, resource declarations,
 and request behavior in that order where dependencies allow. Supply execution
 conditions with CLI flags, Python arguments or an explicit instance file;
-`run STAGE (work);` in the model performs stage work.
+`run STAGE (cost(STAGE, work));` in the model performs stage work.
 Keep workload behavior separate from serving policy: put the client's
 `session` inside `workload`, and request handling in `server` or a named gateway.
 Omit `session` for one turn. A multi-turn session uses `turn;` and states how

@@ -134,6 +134,8 @@ struct Parser {
     /// serving forms resolve their stage against.
     stages: Vec<(String, bool)>,
     definitions: Vec<(String, Span)>,
+    /// Composite costs lower to named scalar fields in declaration order.
+    cost_records: std::collections::BTreeMap<String, Vec<String>>,
     /// Which side the statement being parsed is on.
     side: Side,
     /// The workload's `session` block and the `server` block, each with the
@@ -179,6 +181,7 @@ struct Parser {
     in_queue: Option<usize>,
     /// The `from` name of the entry being parsed.
     entry_from: Option<String>,
+    entry_gateway: bool,
     /// The verb of the relation that gave the program's `share`.
     relation_share: Option<&'static str>,
     /// The queues whose relation gives the wait before each copy they post.
@@ -186,7 +189,7 @@ struct Parser {
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
-    dotted_reads: Vec<(usize, String)>,
+    dotted_reads: Vec<(usize, String, Option<String>)>,
     /// `Q[i].x` references, checked once the queues are known: `x` must be
     /// a pool of `Q`.
     indexed_dotted: Vec<(usize, String)>,
@@ -264,7 +267,9 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 106] = [
+pub const KEYWORDS: [&str; 108] = [
+    "Cost",
+    "Size",
     "admission",
     "admit",
     "arrivals",
@@ -709,7 +714,9 @@ fn ref_reads(r: &Ref, n: &str) -> bool {
 fn stmt_reads(s: &Stmt, n: &str) -> bool {
     let block = |b: &[Stmt]| b.iter().any(|s| stmt_reads(s, n));
     match s {
-        Stmt::Turn | Stmt::Request | Stmt::End | Stmt::Join => false,
+        Stmt::Declare(..) | Stmt::Side(_) | Stmt::Turn | Stmt::Request | Stmt::End | Stmt::Join => {
+            false
+        }
         Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
         Stmt::Hold { body, .. } => {
             // a nested hold that binds `n` itself gives its body its own `n`
@@ -966,7 +973,9 @@ fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
         match &mut s {
             Stmt::Request => {
                 n += 1;
+                out.push(Stmt::Side(crate::ir::Side::Server));
                 out.extend(server.iter().cloned());
+                out.push(Stmt::Side(crate::ir::Side::Workload));
                 continue;
             }
             Stmt::Hold { body, .. }
@@ -1000,6 +1009,14 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
         Expr::Num(_) => {}
         Expr::Var(n) => vars.push(n.clone()),
         Expr::Sample(_, args) => args.iter().for_each(|a| names_in(a, vars, indexed, refs)),
+        Expr::Call(f, args) if f == "cost" => {
+            if let Some(arg) = args.last() {
+                match arg {
+                    Arg::Expr(e) => names_in(e, vars, indexed, refs),
+                    Arg::Ref(r) => vars.push(r.name.clone()),
+                }
+            }
+        }
         Expr::Call(_, args) => args.iter().for_each(|a| match a {
             Arg::Expr(x) => names_in(x, vars, indexed, refs),
             Arg::Ref(r) => {
@@ -1118,7 +1135,13 @@ fn split_reads<'a>(
     };
     for s in stmts {
         match s {
-            Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Mark(_) | Stmt::Join => {}
+            Stmt::Declare(..)
+            | Stmt::Side(_)
+            | Stmt::Turn
+            | Stmt::End
+            | Stmt::Request
+            | Stmt::Mark(_)
+            | Stmt::Join => {}
             Stmt::Set(_, e) | Stmt::Observe(_, e) => bodies.push(e),
             Stmt::Grow(r, e) | Stmt::Load(r, e) => {
                 index(r, indices);
@@ -1255,6 +1278,7 @@ impl Parser {
             pos: 0,
             stages: vec![],
             definitions: vec![],
+            cost_records: Default::default(),
             side: Side::Session,
             wl_session: None,
             server: None,
@@ -1275,6 +1299,7 @@ impl Parser {
             structural_overrides: vec![],
             in_queue: None,
             entry_from: None,
+            entry_gateway: false,
             relation_share: None,
             posters: vec![],
             latency_ok: false,
@@ -1348,6 +1373,15 @@ impl Parser {
 
     fn is_kw(&self, kw: &str) -> bool {
         matches!(self.peek(), Tok::Ident(s) if s == kw)
+    }
+
+    fn eat(&mut self, token: &Tok) -> bool {
+        if self.peek() == token {
+            self.advance();
+            true
+        } else {
+            false
+        }
     }
 
     fn eat_kw(&mut self, kw: &str) -> bool {
@@ -1737,6 +1771,7 @@ impl Parser {
         self.check_def_names(&prog)?;
         self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
+        prog.cost_records = std::mem::take(&mut self.cost_records).into_iter().collect();
         prog.libs = self.libs.clone();
         Ok(prog)
     }
@@ -1796,16 +1831,21 @@ impl Parser {
                     );
                 }
             }
-            for (at, name) in std::mem::take(&mut self.dotted_reads) {
+            for (at, name, scope) in std::mem::take(&mut self.dotted_reads) {
                 let (qn, field) = name.split_once('.').expect("a dotted name");
-                let ok = self.queues.iter().any(|q| {
-                    q.name == qn
-                        && (q.marks.iter().any(|m| m == field)
-                            || q.pools.iter().any(|p| p == field)
-                            || q.entries
-                                .iter()
-                                .any(|e| e.locals.iter().any(|l| l == field)))
-                });
+                let record = scope.map_or_else(|| qn.to_string(), |q| format!("{q}.{qn}"));
+                let ok = self
+                    .cost_records
+                    .get(&record)
+                    .is_some_and(|fields| fields.iter().any(|f| f == field))
+                    || self.queues.iter().any(|q| {
+                        q.name == qn
+                            && (q.marks.iter().any(|m| m == field)
+                                || q.pools.iter().any(|p| p == field)
+                                || q.entries
+                                    .iter()
+                                    .any(|e| e.locals.iter().any(|l| l == field)))
+                    });
                 if !ok {
                     return self.err_at(
                         at,
@@ -3389,8 +3429,11 @@ impl Parser {
         self.side = Side::Server;
         self.in_queue = Some(qi);
         self.entry_from = from.clone();
+        self.entry_gateway =
+            verb == "route" && self.queues[qi].roles.iter().any(|r| r == "gateway");
         let body = self.block();
         self.entry_from = None;
+        self.entry_gateway = false;
         self.in_queue = None;
         self.side = outer_side;
         self.stages = outer_stages;
@@ -3510,6 +3553,11 @@ impl Parser {
                     }
                     if allowed_var(&v, header) {
                         continue;
+                    }
+                    if header && locals.contains(&v) {
+                        return self.err_at(at, format!(
+                            "`{qname}.{verb}`: the admission header reads local `{v}`; it sees parameters and the queue's resources, not values calculated by its body. Write the resource conversion in the header or pass a quantity as a parameter"
+                        ));
                     }
                     if v.contains('.') {
                         return self.err_at(
@@ -3683,11 +3731,86 @@ impl Parser {
             out.extend(self.serving(role)?);
             return Ok(());
         }
+        if self.is_kw("Size") || self.is_kw("Cost") {
+            return self.typed_declaration(out);
+        }
         let stmt = self.stmt()?;
         let turn = matches!(stmt, Stmt::Turn);
         out.push(stmt);
         if turn {
             out.push(Stmt::Request);
+        }
+        Ok(())
+    }
+
+    fn cost_scope(&self) -> Option<String> {
+        self.in_queue
+            .filter(|_| !self.entry_gateway)
+            .map(|qi| self.queues[qi].name.clone())
+    }
+
+    /// Typed declarations are source sugar; each field retains a resource cost.
+    fn typed_declaration(&mut self, out: &mut Vec<Stmt>) -> PResult<()> {
+        let is_size = self.eat_kw("Size");
+        if !is_size {
+            self.expect_kw("Cost")?;
+        }
+        if is_size && self.side == Side::Server {
+            return self
+                .err("a server cannot declare a request Size; calculate a separate value or Cost");
+        }
+        let name = self.definition()?;
+        self.expect(&Tok::Assign)?;
+        let kind = if is_size {
+            DeclaredType::Size
+        } else {
+            DeclaredType::Cost
+        };
+        if !is_size && self.eat(&Tok::LBrace) {
+            let mut fields = vec![];
+            loop {
+                if *self.peek() == Tok::RBrace {
+                    break;
+                }
+                let r = self.reference()?;
+                if r.index.is_some() {
+                    return self.err("a Cost field names a resource family without a member index");
+                }
+                if fields.contains(&r.name) {
+                    return self.err(format!("Cost `{name}` repeats resource `{}`", r.name));
+                }
+                self.expect(&Tok::Colon)?;
+                let value = self.expr()?;
+                let field = format!("{name}.{}", r.name);
+                fields.push(r.name.clone());
+                out.push(Stmt::Declare(field.clone(), kind));
+                out.push(Stmt::Set(field, Expr::cost(&[r], value)));
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::RBrace)?;
+            self.expect(&Tok::Semi)?;
+            if fields.is_empty() {
+                return self.err("a Cost record must name at least one resource");
+            }
+            let record = self
+                .cost_scope()
+                .map_or_else(|| name.clone(), |q| format!("{q}.{name}"));
+            if let Some(previous) = self.cost_records.get(&record) {
+                if previous != &fields {
+                    return self.err(format!(
+                        "Cost `{name}` is redeclared with different resource fields or order"
+                    ));
+                }
+            } else {
+                self.cost_records.insert(record, fields);
+            }
+        } else {
+            let value = self.expr()?;
+            self.expect(&Tok::Semi)?;
+            out.push(Stmt::Declare(name.clone(), kind));
+            out.push(Stmt::Set(name, value));
         }
         Ok(())
     }
@@ -4423,7 +4546,16 @@ impl Parser {
             Some(m) if is_step => m,
             _ => RunMode::Plain,
         };
-        let work = self.expr()?;
+        let raw_work = self.expr()?;
+        let resources: Vec<_> = std::iter::once(&stage)
+            .chain(also.iter())
+            .cloned()
+            .collect();
+        let work = if pulled {
+            raw_work
+        } else {
+            Expr::cost(&resources, raw_work)
+        };
         let growing = if self.eat_kw("growing") {
             Some(self.own_pool("growing")?)
         } else {
@@ -4471,7 +4603,14 @@ impl Parser {
                             index: r.index.clone(),
                         },
                         mode: RunMode::Plain,
-                        work: q.latency.clone()?,
+                        work: Expr::cost(
+                            &[Ref {
+                                span: r.span,
+                                name: format!("{}.latency", q.name),
+                                index: None,
+                            }],
+                            q.latency.clone()?,
+                        ),
                         growing: None,
                         also: vec![],
                     })
@@ -4485,7 +4624,7 @@ impl Parser {
                     growing: None,
                     also,
                 },
-                Stmt::Load(to, units),
+                Stmt::Load(to.clone(), Expr::cost(&[to], units)),
                 Stmt::Release(from),
             ]);
             return Ok(out);
@@ -4502,7 +4641,7 @@ impl Parser {
                 at,
                 format!(
                     "`transfer` without `from P to Q (n)`: a KV transfer leaves the lease (or hold) on P and enters the hold on Q\n\
-                     help: write `transfer (w) from P to Q (n);`, or `run {at_stage} (w);` for a link that only takes time"
+                     help: write `transfer (w) from P to Q (n);`, or `run {at_stage} (cost({}, w));` for a link that only takes time", stage.name
                 ),
             );
         }
@@ -4779,6 +4918,25 @@ impl Parser {
                         }
                     }
                     self.expect(&Tok::RParen)?;
+                    if name == "cost" {
+                        let resources = args.len().saturating_sub(1);
+                        for arg in &mut args[..resources] {
+                            if let Arg::Ref(r) = arg {
+                                if r.index.as_deref().is_some_and(Expr::draws) {
+                                    return self.err_at(at, "a cost names a resource family; its type annotation cannot draw a member index");
+                                }
+                            }
+                        }
+                        if let Some(last @ Arg::Ref(_)) = args.last_mut() {
+                            let Arg::Ref(r) = last else { unreachable!() };
+                            if r.index.is_none() {
+                                *last = Arg::Expr(Expr::Located(
+                                    r.span.unwrap_or(span),
+                                    Box::new(Expr::Var(r.name.clone())),
+                                ));
+                            }
+                        }
+                    }
                     Ok(Expr::Located(span, Box::new(Expr::Call(name, args))))
                 } else if *self.peek() == Tok::Dot
                     || (*self.peek() == Tok::LBracket && self.in_expr_index_dot())
@@ -4793,9 +4951,13 @@ impl Parser {
                         );
                     }
                     self.expect(&Tok::Dot)?;
-                    let field = self.ident()?;
-                    let name = format!("{name}.{field}");
-                    self.dotted_reads.push((at, name.clone()));
+                    let mut name = format!("{name}.{}", self.ident()?);
+                    while self.eat(&Tok::Dot) {
+                        name.push('.');
+                        name.push_str(&self.ident()?);
+                    }
+                    self.dotted_reads
+                        .push((at, name.clone(), self.cost_scope()));
                     Ok(Expr::Located(span, Box::new(Expr::Var(name))))
                 } else {
                     if name == "self" && self.in_queue.is_none() {
@@ -4870,17 +5032,17 @@ mod tests {
           session {
 
             loop { turn;
-              branch with (0.9) { run tool (Z);  } else { end; }
+              branch with (0.9) { run tool (cost(tool, Z));  } else { end; }
             }
 
           }
         }
         server {
-          hold kv (K + n + o) {
-            run prefill (a * (K + n - cached));
+          hold kv (cost(kv, K + n + o)) {
+            run prefill (cost(prefill, a * (K + n - cached)));
             observe ttft = now - t0;
-            run decode (o * 2e-4);
-          } cache (K + n + o);
+            run decode (cost(decode, o * 2e-4));
+          } cache (cost(kv, K + n + o));
         }
 
 "#;
@@ -4914,12 +5076,31 @@ mod tests {
         stage tool : delay;
     "#;
 
-    /// Compare the expanded session. The request boundary can move without
-    /// changing execution, while the deployment view keeps just its body.
+    /// Compare executable expansion, erasing authority markers only in this
+    /// parser test. `size_cost` and IR tests check the retained authority;
+    /// moving a size assignment across it is no longer a valid equivalence.
     fn same(a: &str, b: &str) {
-        let run = |s: &str| Program {
-            request: vec![],
-            ..without_locations(parse(&main_source(s)).unwrap())
+        fn executable(stmts: &mut Vec<Stmt>) {
+            stmts.retain(|s| !matches!(s, Stmt::Side(_)));
+            for s in stmts {
+                match s {
+                    Stmt::Hold { body, .. }
+                    | Stmt::Loop(body)
+                    | Stmt::While(_, body)
+                    | Stmt::Fork(body) => executable(body),
+                    Stmt::Branch(_, a, b) => {
+                        executable(a);
+                        executable(b);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let run = |s: &str| {
+            let mut p = without_locations(parse(&main_source(s)).unwrap());
+            p.request.clear();
+            executable(&mut p.session);
+            p
         };
         assert_eq!(run(a), run(b));
     }
@@ -4933,20 +5114,20 @@ mod tests {
 
         }} }}
         server {{
-          hold kv (K) {{ prefill S; }} cache (K) lease kv (inf);
-          hold kvD (K) {{ transfer X from kv to kvD (K); }}
-          hold kv (K) reserve (F) reuse (R) {{ decode D; }}
+          hold kv (cost(kv, K)) {{ prefill S; }} cache (cost(kv, K)) lease kv (inf);
+          hold kvD (cost(kvD, K)) {{ transfer X from kv to kvD (K); }}
+          hold kv (cost(kv, K)) reserve (cost(kv, F)) reuse (cost(kv, R)) {{ decode D; }}
         }}"
             ),
             &format!(
                 "{PD} workload {{ session {{ turn;
-            branch with (p) {{ run tool (Z);  }} else {{ end; }}
+            branch with (p) {{ run tool (cost(tool, Z));  }} else {{ end; }}
 
         }} }}
         server {{
-          hold kv (K) {{ run prefill (S); }} cache (K) lease kv (inf);
-          hold kvD (K) {{ run link (X); load kvD (K); release kv; }}
-          hold kv (K) reserve (F) reuse (R) {{ run decode (D); }}
+          hold kv (cost(kv, K)) {{ run prefill (cost(prefill, S)); }} cache (cost(kv, K)) lease kv (inf);
+          hold kvD (cost(kvD, K)) {{ run link (cost(link, X)); load kvD (cost(kvD, K)); release kv; }}
+          hold kv (cost(kv, K)) reserve (cost(kv, F)) reuse (cost(kv, R)) {{ run decode (cost(decode, D)); }}
         }}"
             ),
         );
@@ -4960,7 +5141,7 @@ mod tests {
 
         }} }}
         server {{
-          hold kv (c) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} cache (c);
+          hold kv (cost(kv, c)) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} cache (cost(kv, c));
           tool (~exp(Z));
         }}"
             ),
@@ -4969,8 +5150,8 @@ mod tests {
 
         }} }}
         server {{
-          hold kv (c) {{ run engine prefill (n) growing kv; run engine decode (o - 1) growing kv; }} cache (c);
-          run tool (~exp(Z));
+          hold kv (cost(kv, c)) {{ run engine prefill (cost(engine, n)) growing kv; run engine decode (cost(engine, o - 1)) growing kv; }} cache (cost(kv, c));
+          run tool (cost(tool, ~exp(Z)));
         }}"
             ),
         );
@@ -4981,7 +5162,7 @@ mod tests {
         // the role's stage array, indexed
         same(
             "stage prefill[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(prefill[j])); prefill[j] S;\n}",
-            "stage prefill[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(prefill[j])); run prefill[j] (S);\n}",
+            "stage prefill[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(prefill[j])); run prefill[j] (cost(prefill, S));\n}",
         );
         // any stage, with the mode a step engine needs
         same(
@@ -4989,7 +5170,7 @@ mod tests {
                 "{ENGINE} stage rep[2] : fifo; workload {{ session {{ turn; \n}} }}\nserver {{ prefill on rep[1] S; decode on engine (D);\n}}"
             ),
             &format!(
-                "{ENGINE} stage rep[2] : fifo; workload {{ session {{ turn; \n}} }}\nserver {{ run rep[1] (S); run engine decode (D);\n}}"
+                "{ENGINE} stage rep[2] : fifo; workload {{ session {{ turn; \n}} }}\nserver {{ run rep[1] (cost(rep, S)); run engine decode (cost(engine, D));\n}}"
             ),
         );
         // a stage named `transfer` plays transfer
@@ -4997,12 +5178,12 @@ mod tests {
             "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
         workload { session { turn;
         } }
-        server { hold b (1) { hold a (1) { transfer X from a to b (1); } }
+        server { hold b (cost(b, 1)) { hold a (cost(a, 1)) { transfer X from a to b (1); } }
         }",
             "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
         workload { session { turn;
         } }
-        server { hold b (1) { hold a (1) { run transfer (X); load b (1); release a; } }
+        server { hold b (cost(b, 1)) { hold a (cost(a, 1)) { run transfer (cost(transfer, X)); load b (cost(b, 1)); release a; } }
         }",
         );
     }
@@ -5018,7 +5199,7 @@ mod tests {
 
         }} }}
         server {{
-          hold kv (known) at admission (known = computed < p ? p : computed + 1) {{
+          hold kv (cost(kv, known)) at admission (known = computed < p ? p : computed + 1) {{
             prefill (known - cached) growing kv;
           }}
         }}"
@@ -5029,9 +5210,9 @@ mod tests {
 
         }} }}
         server {{
-          hold kv (computed < p ? p : computed + 1) {{
+          hold kv (cost(kv, computed < p ? p : computed + 1)) {{
             set known = computed < p ? p : computed + 1;
-            run engine prefill (known - cached) growing kv;
+            run engine prefill (cost(engine, known - cached)) growing kv;
           }}
         }}"
             ),
@@ -5039,10 +5220,10 @@ mod tests {
         // a binding the body does not read stays in the header
         same(
             &format!(
-                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (h) at admission (h = 1) {{ }}\n}}"
+                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, h)) at admission (h = 1) {{ }}\n}}"
             ),
             &format!(
-                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (1) {{ }}\n}}"
+                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) {{ }}\n}}"
             ),
         );
     }
@@ -5057,7 +5238,7 @@ mod tests {
             ("hit = now", "with a `set` in the body"),
         ] {
             let e = parse(&main_source(&format!(
-                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (hit) at admission ({binding}) {{ observe h = hit; }}\n}}"
+                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, hit)) at admission ({binding}) {{ observe h = hit; }}\n}}"
             )
             ))
             .unwrap_err();
@@ -5070,7 +5251,7 @@ mod tests {
         }
         // `n` is a context variable unless the program assigns it
         let src = format!(
-            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ set n = 3; hold kv (m) at admission (m = n + 1) {{ observe x = m; }}\n}}"
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ set n = 3; hold kv (cost(kv, m)) at admission (m = n + 1) {{ observe x = m; }}\n}}"
         );
         parse(&main_source(&src)).unwrap();
     }
@@ -5097,27 +5278,27 @@ mod tests {
             };
             let name = binding.split(' ').next().unwrap();
             let e = parse(&main_source(&format!(
-                "{pre} {ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ {assign} hold kv (1) at admission ({binding}) {{ observe a = {name}; }}\n}}"
+                "{pre} {ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ {assign} hold kv (cost(kv, 1)) at admission ({binding}) {{ observe a = {name}; }}\n}}"
             )
             ))
             .unwrap_err();
             assert!(e.msg.contains(what), "{binding}: {}", e.msg);
         }
         let e = parse(&main_source(&format!(
-            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (1) at admission (k = k + 1) {{ observe a = k; }}\n}}"
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) at admission (k = k + 1) {{ observe a = k; }}\n}}"
         )
         ))
         .unwrap_err();
         assert!(e.msg.contains("reads itself"), "{}", e.msg);
         let e = parse(&main_source(&format!(
-            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (1) at admission (j = k, k = 5) {{ observe a = j; }}\n}}"
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) at admission (j = k, k = 5) {{ observe a = j; }}\n}}"
         )
         ))
         .unwrap_err();
         assert!(e.msg.contains("bound after it"), "{}", e.msg);
         // an attribute the body sets itself is not the binding
         let e = parse(&main_source(&format!(
-            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (hit) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }}\n}}"
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, hit)) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }}\n}}"
         )
         ))
         .unwrap_err();
@@ -5128,11 +5309,11 @@ mod tests {
     fn a_binding_is_read_only_in_its_hold() {
         for after in [
             "observe b = k;",
-            "hold kv (k) { }",
+            "hold kv (cost(kv, k)) { }",
             "branch (k > 1) { } else { }",
         ] {
             let e = parse(&main_source(&format!(
-                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (1) at admission (k = 2) {{ observe a = k; }} {after}\n}}"
+                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) at admission (k = 2) {{ observe a = k; }} {after}\n}}"
             )
             ))
             .unwrap_err();
@@ -5142,7 +5323,7 @@ mod tests {
             "pool kv { cap 100; queue by (k); } stage engine : step { cost 1; }
         workload { session { turn;
         } }
-        server { hold kv (1) at admission (k = 2) { observe a = k; }
+        server { hold kv (cost(kv, 1)) at admission (k = 2) { observe a = k; }
         }",
         ))
         .unwrap_err();
@@ -5154,10 +5335,10 @@ mod tests {
 
         }} }}
         server {{
-          hold kv (1) at admission (k = 2) {{ observe a = k; }}
-          hold kv (1) at admission (k = 3) {{ observe b = k; }}
-          hold kv (h) at admission (h = cachedin(kv)) {{
-            hold kv (1) at admission (h = 1) {{ observe c = h; }}
+          hold kv (cost(kv, 1)) at admission (k = 2) {{ observe a = k; }}
+          hold kv (cost(kv, 1)) at admission (k = 3) {{ observe b = k; }}
+          hold kv (cost(kv, h)) at admission (h = cachedin(kv)) {{
+            hold kv (cost(kv, 1)) at admission (h = 1) {{ observe c = h; }}
           }}
         }}"
         )))
@@ -5189,7 +5370,7 @@ mod tests {
         // parsed where it stands, so a serving form finds its stage there
         same(
             "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
-        def put(p, s, n) { hold p (n) { prefill on s (n) growing p; } cache (n); }
+        def put(p, s, n) { hold p (cost(p, n)) { prefill on s (n) growing p; } cache (cost(p, n)); }
         workload { session { turn; end;
         } }
         server { choose j in 2 by (used(kv[j])); put(kv[j], E[j], k + 1);
@@ -5201,19 +5382,19 @@ mod tests {
         } }
         server {
           choose j in 2 by (used(kv[j]));
-          hold kv[j] ((k + 1)) { run E[j] prefill ((k + 1)) growing kv[j]; } cache ((k + 1));
+          hold kv[j] (cost(kv[j], (k + 1))) { run E[j] prefill (cost(E, (k + 1))) growing kv[j]; } cache (cost(kv[j], (k + 1)));
         }",
         );
         // the side is the use's: a `hold` in a server
         same(
             &format!(
-                "{ENGINE} def take(n) {{ hold kv (n) {{ prefill (n) growing kv; }} }}
+                "{ENGINE} def take(n) {{ hold kv (cost(kv, n)) {{ prefill (n) growing kv; }} }}
         workload {{ session {{ turn; end; }} }}
         server {{ take(4); }}"
             ),
             &format!(
                 "{ENGINE} workload {{ session {{ turn; end; }} }}
-        server {{ hold kv (4) {{ prefill (4) growing kv; }} }}"
+        server {{ hold kv (cost(kv, 4)) {{ prefill (4) growing kv; }} }}"
             ),
         );
     }
@@ -5296,7 +5477,7 @@ mod tests {
         );
         assert!(
             err(
-                "def f(h) { hold kv (h) at admission (h = 3) { observe a = h; } } workload { session { turn; \n} }\nserver { f(2);\n}"
+                "def f(h) { hold kv (cost(kv, h)) at admission (h = 3) { observe a = h; } } workload { session { turn; \n} }\nserver { f(2);\n}"
             )
             .contains("is a parameter")
         );
@@ -5333,12 +5514,12 @@ mod tests {
                 .contains("which its `turn;` assigns")
         );
         assert!(
-            err("def take(x) { hold kv (4) { observe got = x; } } workload { session { turn; \n} }\nserver { take(cached);\n}")
+            err("def take(x) { hold kv (cost(kv, 4)) { observe got = x; } } workload { session { turn; \n} }\nserver { take(cached);\n}")
                 .contains("which `take` assigns")
         );
         // the clock and live state are read where the body reads them
         assert!(
-            err("stage svc : fifo; def timed(t) { run svc (1); observe took = now - t; } workload { session { turn; \n} }\nserver { timed(now);\n}")
+            err("stage svc : fifo; def timed(t) { run svc (cost(svc, 1)); observe took = now - t; } workload { session { turn; \n} }\nserver { timed(now);\n}")
                 .contains("reads `now`, which changes")
         );
         assert!(
@@ -5358,7 +5539,7 @@ mod tests {
         .unwrap();
         // and through an expression the argument uses
         assert!(
-            err("stage svc : fifo; def clock() { now } def timed(t) { run svc (1); observe took = now - t; } workload { session { turn; \n} }\nserver { timed(clock());\n}")
+            err("stage svc : fifo; def clock() { now } def timed(t) { run svc (cost(svc, 1)); observe took = now - t; } workload { session { turn; \n} }\nserver { timed(clock());\n}")
                 .contains("reads `now`")
         );
         assert!(
@@ -5425,19 +5606,19 @@ mod tests {
         // without `from P to Q` it would be a link that stores and forwards,
         // which is the kernel's `run`, not a transfer
         let e = parse(&main_source(&format!(
-            "{PD} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (K) {{ transfer X; }}\n}}"
+            "{PD} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, K)) {{ transfer X; }}\n}}"
         )))
         .unwrap_err();
         assert!(
             e.msg.contains("`transfer` without `from P to Q (n)`"),
             "{e}"
         );
-        assert!(e.msg.contains("`run link (w);`"), "{e}");
+        assert!(e.msg.contains("`run link (cost(link, w));`"), "{e}");
         let e = parse(&main_source(
             "stage link[2] : ps(1); workload { session { turn; \n} }\nserver { transfer[0] X;\n}",
         ))
         .unwrap_err();
-        assert!(e.msg.contains("`run link[…] (w);`"), "{e}");
+        assert!(e.msg.contains("`run link[…] (cost(link, w));`"), "{e}");
         let e = parse(&main_source(
             "pool kv { cap 1; } stage nic : ps(1); workload { session { turn; \n} }\nserver { transfer on nic X growing kv;\n}",
         )
@@ -5447,7 +5628,7 @@ mod tests {
             e.msg.contains("`transfer` without `from P to Q (n)`"),
             "{e}"
         );
-        assert!(e.msg.contains("`run nic (w);`"), "{e}");
+        assert!(e.msg.contains("`run nic (cost(nic, w));`"), "{e}");
     }
 
     #[test]
@@ -5507,11 +5688,11 @@ mod tests {
         }}
         server {{
           set prompt = K + n;
-          hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
           at admission (hit = min(cachedin(kv), prompt - 1)) {{
             prefill (prompt - cached) growing kv;
             decode (o - 1) growing kv;
-          }} cache (prompt + o);
+          }} cache (cost(reqs, kv, prompt + o));
         }}"
             ),
             &format!(
@@ -5526,11 +5707,11 @@ mod tests {
         }}
         server {{
           set prompt = K + n;
-          hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
           at admission (hit = min(cachedin(kv), prompt - 1)) {{
             prefill (prompt - cached) growing kv;
             decode (o - 1) growing kv;
-          }} cache (prompt + o);
+          }} cache (cost(reqs, kv, prompt + o));
           set K = prompt + o;
         }}"
             ),
@@ -5541,18 +5722,18 @@ mod tests {
     fn request_is_spliced_at_any_depth_and_as_often_as_written() {
         same(
             "stage s : fifo; workload { session { branch (x) { turn; } else { loop { turn; end; } } } }
-        server { run s (1); }",
-            "stage s : fifo; workload { \n  session { branch (x) { turn; } else { loop { turn; end; } } \n  }\n} server { run s (1);\n}",
+        server { run s (cost(s, 1)); }",
+            "stage s : fifo; workload { \n  session { branch (x) { turn; } else { loop { turn; end; } } \n  }\n} server { run s (cost(s, 1));\n}",
         );
         // the kernel is written on either side
         same(
-            "pool kv { cap 1; } workload { session { turn; end; } } server { hold kv (1) { } }",
-            "pool kv { cap 1; } workload { \n  session { turn; end; \n  }\n} server { hold kv (1) { }\n}",
+            "pool kv { cap 1; } workload { session { turn; end; } } server { hold kv (cost(kv, 1)) { } }",
+            "pool kv { cap 1; } workload { \n  session { turn; end; \n  }\n} server { hold kv (cost(kv, 1)) { }\n}",
         );
         // the order of the blocks does not matter
         same(
-            "stage s : fifo; server { run s (1); } workload { session { turn; end; } }",
-            "stage s : fifo; workload { \n  session { turn; end; \n  }\n} server { run s (1);\n}",
+            "stage s : fifo; server { run s (cost(s, 1)); } workload { session { turn; end; } }",
+            "stage s : fifo; workload { \n  session { turn; end; \n  }\n} server { run s (cost(s, 1));\n}",
         );
     }
 
@@ -5611,15 +5792,15 @@ mod tests {
                 "is now `hold … at admission",
             ),
             (
-                "workload { session { turn; \n} }\nserver { hold kv (1) { } keep (1);\n}",
+                "workload { session { turn; \n} }\nserver { hold kv (cost(kv, 1)) { } keep (1);\n}",
                 "`keep` is now `cache`",
             ),
             (
-                "workload { session { turn; \n} }\nserver { hold kv (1) where x = 1 { }\n}",
+                "workload { session { turn; \n} }\nserver { hold kv (cost(kv, 1)) where x = 1 { }\n}",
                 "`where x = e` is now `at admission (x = e)`",
             ),
             (
-                "workload { session { turn; \n} }\nserver { hold kv (1) fit { }\n}",
+                "workload { session { turn; \n} }\nserver { hold kv (cost(kv, 1)) fit { }\n}",
                 "`fit` is gone",
             ),
         ] {
@@ -5630,13 +5811,13 @@ mod tests {
             "def keep(n) { observe k = n; } workload { session { turn; end; \n} }\nserver {\n}",
             "def f(where) { where } workload { session { turn; end; \n} }\nserver {\n}",
             "workload { session { turn; end; \n} }\nserver { set fit = 1;\n}",
-            "workload { session { turn; end; \n} }\nserver { hold kv (1) at admission (enter = 1) { observe e = enter; }\n}",
+            "workload { session { turn; end; \n} }\nserver { hold kv (cost(kv, 1)) at admission (enter = 1) { observe e = enter; }\n}",
         ] {
             refused(&format!("pool kv {{ cap 1; }} {src}"), "is a retired word");
         }
         // `hold` is written on either side, with its bindings
         parse(&main_source(&format!(
-            "pool kv {{ cap 1; }} {WL} server {{ hold kv (x) at admission (x = 1) {{ }} cache (1); }}"
+            "pool kv {{ cap 1; }} {WL} server {{ hold kv (cost(kv, x)) at admission (x = 1) {{ }} cache (cost(kv, 1)); }}"
         )
         ))
         .unwrap();
@@ -5645,27 +5826,27 @@ mod tests {
     #[test]
     fn a_side_needs_the_other() {
         refused(
-            "stage s : fifo; workload { session { run s (1); } }",
+            "stage s : fifo; workload { session { run s (cost(s, 1)); } }",
             "written against a `server` block",
         );
         refused(
-            "stage s : fifo; server { run s (1); }",
+            "stage s : fifo; server { run s (cost(s, 1)); }",
             "`server` needs a `workload`",
         );
         refused(
-            "stage s : fifo; workload { session { run s (1); } } server { run s (1); }",
+            "stage s : fifo; workload { session { run s (cost(s, 1)); } } server { run s (cost(s, 1)); }",
             "session has no `turn;`",
         );
         refused(
-            "stage s : fifo; workload { session { turn; } } server { run s (1); } session { run s (1); }",
+            "stage s : fifo; workload { session { turn; } } server { run s (cost(s, 1)); } session { run s (cost(s, 1)); }",
             "`session` belongs inside `workload`",
         );
         refused(
-            "stage s : fifo; session { run s (1); } workload { session { turn; } } server { run s (1); }",
+            "stage s : fifo; session { run s (cost(s, 1)); } workload { session { turn; } } server { run s (cost(s, 1)); }",
             "`session` belongs inside `workload`",
         );
         refused(
-            "stage s : fifo; server { run s (1); } server { run s (1); }",
+            "stage s : fifo; server { run s (cost(s, 1)); } server { run s (cost(s, 1)); }",
             "duplicate server",
         );
     }

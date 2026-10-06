@@ -119,7 +119,7 @@ fn main() {
   }
   server {
     set t0 = now;
-    run svc (~erlang(4, 1));
+    run svc (cost(svc, ~erlang(4, 1)));
     observe response = now - t0;
   }
 }

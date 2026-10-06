@@ -20,7 +20,7 @@ workload { arrive renewal(46750); init { set t0 = now; }
   session { turn; end;
   }
 }
-server { run engine prefill (290); run engine decode (990); observe response = now - t0;
+server { run engine prefill (cost(engine, 290)); run engine decode (cost(engine, 990)); observe response = now - t0;
 }
 claim work_conserving: every iteration of engine (demand < bmax || tokens == bmax);
 claim token_rate: every iteration of engine (served * (c + a * ceil(bmax / b0)) <= bmax * now);
@@ -109,7 +109,7 @@ const BATCH: &str = "
           session { turn; end;
           }
         }
-        server { run engine prefill (n); observe x = n;
+        server { run engine prefill (cost(engine, n)); observe x = n;
         }
 
 ";
@@ -209,7 +209,7 @@ fn arrived_counts_the_sessions_started_by_the_iteration() {
           session { turn; end;
           }
         }
-        server { run engine prefill (3);
+        server { run engine prefill (cost(engine, 3));
         }
 
         claim at_20: some iteration of engine (now == 20 && arrived == 2);
@@ -302,7 +302,7 @@ fn a_claim_over_a_member_of_an_array() {
           session { turn; end;
           }
         }
-        server { run engine[serial] prefill (3);
+        server { run engine[serial] prefill (cost(engine, 3));
         }
         claim one: every iteration of engine[1] (tokens == 3);
         ";
