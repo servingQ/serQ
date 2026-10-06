@@ -76,6 +76,7 @@ other than the pinned one, say so and check out that revision.
 
 ## Documentation
 
+Follow [Writing readable programs](docs/writing-programs.md) when writing or reorganizing `.sq` programs.
 Follow [.github/documentation.md](.github/documentation.md) when editing the site.
 See [.github/contributing.md](.github/contributing.md) for adding examples and oracle scenarios.
 

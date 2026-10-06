@@ -1,10 +1,11 @@
 // FCFS lanes from vllm-ascend v0.27.1rc1: immediate, aged long, short, long.
 // This full-attention example models local admission, not job prediction or remote KV.
+let short_tokens = 128;
+let max_wait = 0.003;
+def waiting_class(urgent, prompt, elapsed) =
+  urgent ? 0 : prompt > short_tokens && max_wait > 0 && elapsed >= max_wait ? 1 : prompt <= short_tokens ? 2 : 3;
+
 fn main() {
-  let short_tokens = 128;
-  let max_wait = 0.003;
-  def waiting_class(urgent, prompt, elapsed) =
-    urgent ? 0 : prompt > short_tokens && max_wait > 0 && elapsed >= max_wait ? 1 : prompt <= short_tokens ? 2 : 3;
   pool reqs {
     cap 1;
     queue by (waiting_class(immediate, prompt, waited));
