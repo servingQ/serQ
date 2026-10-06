@@ -28,7 +28,7 @@ pub use engine::stats::Estimate;
 pub use frontend::link::{Linked, Overrides};
 pub use ir::Program;
 
-/// Compile program text to IR (parse and link; `let` overrides apply).
+/// Compile program text to IR (parse and link; declared inputs are bound).
 /// The version of this serq, as `serq --version` prints it and `Report::json`
 /// records it (`serq_version`): the one version of `Cargo.toml`
 /// (`scripts/version.py`), which pyserq inherits.
@@ -58,7 +58,7 @@ pub fn compile_source_at(
     finish(prog, src, ov)
 }
 
-/// The constants an override replaces, which the parser checks size no queue family.
+/// The supplied inputs, which the parser checks cannot change an array size.
 fn overridden(ov: &Overrides) -> Vec<String> {
     ov.lets.iter().map(|(name, _)| name.clone()).collect()
 }
@@ -98,7 +98,7 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     if path.extension().is_some_and(|e| e == "json") {
         if !ov.lets.is_empty() {
-            return Err("a `let` override applies to program text, not to IR \
+            return Err("a program argument applies to program text, not to IR \
                  (an IR's constants are already folded)\n\
                  help: override the program text (.sq) this IR was compiled from"
                 .into());

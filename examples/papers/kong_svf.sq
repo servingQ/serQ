@@ -5,41 +5,43 @@
 // to the active peaks, so nothing is ever preempted. Smallest Volume First
 // admits the waiting request of least volume vol_i = s_i o_i + (o_i^2 + o_i)/2.
 // Time is in steps.
-let N = 200;
-let M = 20000;           // memory, tokens
-let P = 2500;            // the largest peak s + o; alpha = P / M
+fn main() {
+  let N = 200;
+  let M = 20000;           // memory, tokens
+  let P = 2500;            // the largest peak s + o; alpha = P / M
 
-pool kv { cap M; queue by (s * o + floor((o * o + o) / 2)); }
+  pool kv { cap M; queue by (s * o + floor((o * o + o) / 2)); }
 
-stage engine : step {
-  budget 1000000;        // every active request decodes one token per step
-  cost 1;
-}
-
-workload {
-  arrive batch(N);
-  init {
-    set s = floor(~uniform(100, 2000));
-    set o = floor(~uniform(10, 500));
+  stage engine : step {
+    budget 1000000;        // every active request decodes one token per step
+    cost 1;
   }
-}
 
-session {
-  observe out = o;
-  observe vol = s * o + floor((o * o + o) / 2);
-  hold kv (s + o) {
-    run engine decode (o);
+  workload {
+    arrive batch(N);
+    init {
+      set s = floor(~uniform(100, 2000));
+      set o = floor(~uniform(10, 500));
+    }
   }
-  observe latency = now;
-  end;
+
+  session {
+    observe out = o;
+    observe vol = s * o + floor((o * o + o) / 2);
+    hold kv (s + o) {
+      run engine decode (o);
+    }
+    observe latency = now;
+    end;
+  }
+
+  // Lemma A.2, summed over the requests: every step a request waits, the
+  // active peaks exceed (1 - alpha) M, and the requests ahead of it in volume
+  // order hold their peak o_i steps, with p_i o_i <= 2 vol_i. With
+  // Proposition 3.1 (OPT >= prefix_total(vol) / M, `examples/papers/Kong.lean`)
+  // this is Theorem 3.2: TEL(SVF) <= (1 + 2 / (1 - alpha)) TEL(OPT).
+  claim queueing_bound given (s + o <= P && o >= 1):
+    at end ((M - P) * (total(latency) - total(out)) <= 2 * (prefix_total(vol) - total(vol)));
+
+  run { horizon 100000; warmup 0; seed 1; }
 }
-
-// Lemma A.2, summed over the requests: every step a request waits, the
-// active peaks exceed (1 - alpha) M, and the requests ahead of it in volume
-// order hold their peak o_i steps, with p_i o_i <= 2 vol_i. With
-// Proposition 3.1 (OPT >= prefix_total(vol) / M, `examples/papers/Kong.lean`)
-// this is Theorem 3.2: TEL(SVF) <= (1 + 2 / (1 - alpha)) TEL(OPT).
-claim queueing_bound given (s + o <= P && o >= 1):
-  at end ((M - P) * (total(latency) - total(out)) <= 2 * (prefix_total(vol) - total(vol)));
-
-run { horizon 100000; warmup 0; seed 1; }

@@ -10,6 +10,8 @@
 //! of serving-queue-theory is generated from the same IR file.
 //! `SERQ_BLESS=1` rewrites the IR file (`make oracle-ir`).
 
+mod common;
+
 use std::path::Path;
 
 use serq::frontend::parser;
@@ -43,7 +45,7 @@ fn cache_ir() -> Program {
             .push((k.to_string(), parser::parse_expr(v).unwrap()));
     }
     let src = std::fs::read_to_string(program_path("vllm_replay")).unwrap();
-    let p = serq::compile_source(&src, &ov).unwrap();
+    let p = serq::compile_source(&common::main_source(&src), &ov).unwrap();
     inline_trace(p, None).unwrap()
 }
 

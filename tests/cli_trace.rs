@@ -8,7 +8,7 @@ fn trace_errors_name_the_resolved_file_row_and_column() {
         "arrive batch(1);",
         "arrive batch(1); trace \"data.csv\" ordered;",
     );
-    f.write("models/model.sq", &program);
+    f.write("models/model.sq", &common::main_source(&program));
     f.write(
         "models/data.csv",
         "session,turn,new,out,think\n1,1,10,oops,0\n",
@@ -50,10 +50,10 @@ fn empty_and_short_rows_explain_the_expected_schema() {
     let f = Fixture::new();
     f.write(
         "model.sq",
-        &PROGRAM.replace(
+        &common::main_source(&PROGRAM.replace(
             "arrive batch(1);",
             "arrive batch(1); trace \"data.csv\" ordered;",
-        ),
+        )),
     );
     for (csv, cause) in [
         ("# no rows\n", "empty trace"),

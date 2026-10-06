@@ -41,6 +41,12 @@ cargo run --release -- ir examples/multi-turn/vllm.sq > vllm.json      # the IR
 cargo run --release -- draw examples/multi-turn/vllm.sq --format svg --out vllm.svg   # experimental
 ```
 
+Source programs construct their deployment inside `fn main()`. Import
+`"std/args"` and use `let rate = args.number("rate", 0.3);` to expose a numeric
+input; pass it after `--`, as `serq run model.sq -- --rate 0.5`. Ordinary
+`let` constants stay internal. See the [complete example](examples/single-turn/arguments.sq)
+and [input reference](docs/api/program.md#stdargs).
+
 As a dependency, pin a release tag:
 
 ```toml

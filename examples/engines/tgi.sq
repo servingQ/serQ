@@ -13,58 +13,60 @@
 // own: the body sketched in docs/design/engine-neutrality.md (a guard on
 // `queued(kv)`, a counter register, `serve` only when nothing was
 // admitted), with `granule inf`.
-let B = 4096;          // max_batch_prefill_tokens
-let T = 200000;        // max_batch_total_tokens (set by warm-up; assumed)
-let mnt = 1024;        // the clients' max_new_tokens
-let a = 2e-5;          // compute per scheduled token (s)
-let omega = 2e-4;      // weights read per iteration (s)
-let beta = 2e-9;       // KV read per iteration per resident context token (s)
-let Lambda = 0.3;      // sessions per second
-let p = 0.9;           // continue after a turn
-let Z = 3.0;           // tool time (s)
+fn main() {
+  let B = 4096;          // max_batch_prefill_tokens
+  let T = 200000;        // max_batch_total_tokens (set by warm-up; assumed)
+  let mnt = 1024;        // the clients' max_new_tokens
+  let a = 2e-5;          // compute per scheduled token (s)
+  let omega = 2e-4;      // weights read per iteration (s)
+  let beta = 2e-9;       // KV read per iteration per resident context token (s)
+  let Lambda = 0.3;      // sessions per second
+  let p = 0.9;           // continue after a turn
+  let Z = 3.0;           // tool time (s)
 
-pool kv { cap T; block 1; evict lru; preempt none; admit via engine; }
+  pool kv { cap T; block 1; evict lru; preempt none; admit via engine; }
 
-stage engine : step {
-  budget B;
-  cost max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-  memory kv;
-  state just = 0;                // the last forward admitted
-  // with no running batch there is no decode forward, and the queue is read
-  iteration { serve; branch (just == 0 || residents == 0) { admit; } set just = admitted > 0; }
-}
-stage tool : delay;
-
-workload {
-  arrive poisson(Lambda);
-  hidden o;
-  init { set K = 0; }
-  turn {
-    set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
-    set o = min(floor(~exp(300)) + 1, mnt);
-    set more = ~bernoulli(p);
+  stage engine : step {
+    budget B;
+    cost max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+    memory kv;
+    state just = 0;                // the last forward admitted
+    // with no running batch there is no decode forward, and the queue is read
+    iteration { serve; branch (just == 0 || residents == 0) { admit; } set just = admitted > 0; }
   }
-  session {
-    turn;
-    loop {
-      request;
-      set K = prompt + o;
-      branch (more) { tool (~exp(Z)); turn; } else { end; }
+  stage tool : delay;
+
+  workload {
+    arrive poisson(Lambda);
+    hidden o;
+    init { set K = 0; }
+    turn {
+      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+      set o = min(floor(~exp(300)) + 1, mnt);
+      set more = ~bernoulli(p);
+    }
+    session {
+      turn;
+      loop {
+        request;
+        set K = prompt + o;
+        branch (more) { tool (~exp(Z)); turn; } else { end; }
+      }
     }
   }
-}
 
-// The hit never covers the whole input; only the input is cached.
-server {
-  set t0 = now;
-  set prompt = K + n;
-  hold kv (prompt + mnt - 1) reuse (prompt - 1) {
-    set c = cached;
-    prefill on engine (prompt - c);
-    observe ttft = now - t0;
-    decode on engine (o - 1);
-  } cache (prompt);
-  observe response = now - t0;
-}
+  // The hit never covers the whole input; only the input is cached.
+  server {
+    set t0 = now;
+    set prompt = K + n;
+    hold kv (prompt + mnt - 1) reuse (prompt - 1) {
+      set c = cached;
+      prefill on engine (prompt - c);
+      observe ttft = now - t0;
+      decode on engine (o - 1);
+    } cache (prompt);
+    observe response = now - t0;
+  }
 
-run { horizon 2000; warmup 200; seed 1; }
+  run { horizon 2000; warmup 200; seed 1; }
+}

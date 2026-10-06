@@ -26,7 +26,7 @@ from pygments.lexers import _mapping
 from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String, Text
 
 # The blocks a program is made of.
-STRUCTURE = ("let", "def", "use", "pool", "stage", "workload", "session", "server", "run", "queue", "gateway", "link", "route", "pull", "push", "gauge", "claim")
+STRUCTURE = ("fn", "let", "def", "use", "pool", "stage", "workload", "session", "server", "run", "queue", "gateway", "link", "route", "pull", "push", "gauge", "claim")
 
 # Statements, in the session and server blocks.
 STATEMENTS = (
@@ -94,7 +94,7 @@ class SerqLexer(RegexLexer):
             (words(ARITHMETIC, suffix=r"\b"), Name),            # how it computes
             (r"\d+\.?\d*([eE][-+]?\d+)?", Number),
             (r"[-+*/^<>=!&|?:]+", Operator),
-            (r"[{}()\[\],;]", Punctuation),
+            (r"[{}()\[\],;.]", Punctuation),
             (r"[a-zA-Z_]\w*", Name),
             (r"\s+", Text),
         ],

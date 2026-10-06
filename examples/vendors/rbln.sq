@@ -5,31 +5,33 @@
 // failed allocation preempts the last running request under FCFS
 // (docs/use-cases/rbln.md links the lines at tag v0.11.3a21).
 use "../../lib/vllm.sq";
-pool kv { cap 8192; block 16; evict lru; preempt lifo; }
-pool reqs { cap 4; admit via engine; }
-stage engine : step {
-  budget 256;
-  chunk 128;
-  serve exclusive prefill;
-  cost 0.002 + 0.00001 * tokens;
-  memory kv;
+fn main() {
+  pool kv { cap 8192; block 16; evict lru; preempt lifo; }
+  pool reqs { cap 4; admit via engine; }
+  stage engine : step {
+    budget 256;
+    chunk 128;
+    serve exclusive prefill;
+    cost 0.002 + 0.00001 * tokens;
+    memory kv;
+  }
+  workload {
+    arrive batch(6);
+    init { set prompt = 256; set out = 16; }
+  }
+  session {
+    set t0 = now;
+    hold reqs (1), kv (min(known, hit + min(128, left))) reserve (known)
+         at admission (known = computed < prompt ? prompt : computed + 1,
+                       left = budget_left(engine),
+                       hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
+      set c = min(cached, reusable(known, blocksize(kv)));
+      prefill (known - c) growing kv;
+      branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
+      decode (out - (known - prompt)) growing kv;
+    } cache (prompt + out);
+    observe response = now - t0;
+    end;
+  }
+  run { horizon 2; warmup 0; seed 1; }
 }
-workload {
-  arrive batch(6);
-  init { set prompt = 256; set out = 16; }
-}
-session {
-  set t0 = now;
-  hold reqs (1), kv (min(known, hit + min(128, left))) reserve (known)
-       at admission (known = computed < prompt ? prompt : computed + 1,
-                     left = budget_left(engine),
-                     hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
-    set c = min(cached, reusable(known, blocksize(kv)));
-    prefill (known - c) growing kv;
-    branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
-    decode (out - (known - prompt)) growing kv;
-  } cache (prompt + out);
-  observe response = now - t0;
-  end;
-}
-run { horizon 2; warmup 0; seed 1; }

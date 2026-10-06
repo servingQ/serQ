@@ -3,6 +3,8 @@
 //! chunking is off, and rounds a chunk down to a block when it is on;
 //! `microBatchScheduler.cpp` L228-L263 at bf414e37).
 
+mod common;
+
 use serq::{Overrides, compile_source, run_source};
 
 /// Two six-token prompts on a budget of eight; an iteration costs 1, and 1
@@ -31,7 +33,12 @@ fn prog(granule: &str) -> String {
 }
 
 fn ttft(granule: &str) -> Vec<f64> {
-    let r = run_source(&prog(granule), &Overrides::default(), None).unwrap();
+    let r = run_source(
+        &common::main_source(&prog(granule)),
+        &Overrides::default(),
+        None,
+    )
+    .unwrap();
     r.observe("ttft").unwrap().samples.clone()
 }
 
@@ -48,7 +55,7 @@ fn a_prefill_takes_its_whole_remainder_or_a_multiple_of_the_granule() {
 #[test]
 fn a_granule_is_above_zero() {
     for g in ["granule 0;", "granule -1;"] {
-        let e = compile_source(&prog(g), &Overrides::default()).unwrap_err();
+        let e = compile_source(&common::main_source(&prog(g)), &Overrides::default()).unwrap_err();
         assert!(e.contains("above 0"), "{g}: {e}");
     }
 }
@@ -65,12 +72,18 @@ fn a_granule_that_could_never_be_given_does_not_link() {
         ("chunk 3; granule 4;", "chunk"),
     ] {
         let src = prog(opts);
-        let e = compile_source(&src, &Overrides::default()).unwrap_err();
+        let e = compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
         assert!(e.contains(message), "{opts}: {e}");
     }
     // above the budget is allowed: a prompt that fits the budget is run
     // whole, and a longer one is the workload's (it waits, `idle:`)
-    assert!(compile_source(&prog("granule 16;"), &Overrides::default()).is_ok());
+    assert!(
+        compile_source(
+            &common::main_source(&prog("granule 16;")),
+            &Overrides::default()
+        )
+        .is_ok()
+    );
 }
 
 /// The chunk caps first and the granule rounds what it leaves: a prefill of
@@ -89,7 +102,7 @@ fn the_chunk_caps_and_the_granule_rounds() {
         }
         run { horizon 20; warmup 0; seed 1; }
         "#;
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     // 4 at the first, 6 at the second (the whole remainder, not capped
     // below the chunk): done at 2
     assert_eq!(r.observe("ttft").unwrap().samples, [2.0]);
@@ -117,7 +130,7 @@ fn a_refused_prefill_ends_the_admissions() {
         }
         run { horizon 20; warmup 0; seed 1; }
         "#;
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     let admitted = &r.observe("admitted").unwrap().samples;
     assert_eq!(
         admitted.iter().filter(|&&t| t == 0.0).count(),

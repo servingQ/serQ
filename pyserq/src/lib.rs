@@ -274,7 +274,7 @@ impl Gauge {
     }
 }
 
-/// A `sets` value, a `let` override: a number stands for itself, a string
+/// A `sets` value, a declared program input: a number stands for itself, a string
 /// is an expression.
 #[derive(FromPyObject)]
 enum SetValue {
@@ -284,8 +284,8 @@ enum SetValue {
 
 /// `compile(path=None, *, source=None, sets={}, defs={}, seed=None,
 /// horizon=None, warmup=None, arrivals=None, trace=None)`: a program file or
-/// program text to its IR, with the overrides of `serq run` (`sets` replace
-/// `let` constants, `defs` the bodies of expression definitions, by name).
+/// program text to its IR, with the overrides of `serq run` (`sets` supply
+/// inputs declared with `args.number`, `defs` the bodies of expression definitions, by name).
 #[pyfunction]
 #[pyo3(signature = (path=None, *, source=None, sets=HashMap::new(), defs=HashMap::new(), seed=None, horizon=None, warmup=None, arrivals=None, trace=None))]
 #[allow(clippy::too_many_arguments)]

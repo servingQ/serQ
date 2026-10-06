@@ -1,9 +1,15 @@
 # Program
 
 ```
-program := item*
-item    := let | def | use | pool | stage | workload | session | server | share | run | gauge | claim
+program := (let | def | use)* fn main() { item* }
+item    := let | def | use | pool | stage | queue | workload | session | server | share | run | gauge | claim
 ```
+
+`fn main()` is the single execution entry point: it constructs the deployment,
+workload and run configuration. The session body then runs for each arrival.
+Top-level constants and definitions do not execute a simulation. Libraries
+contain definitions and imports, and cannot declare a `main` or a deployment.
+There are no arguments or return value on `main`; use `std/args` for inputs.
 
 Items are read in order and declarations come first: a [serving form](serving.md)
 finds its stage among the stages declared above it.
@@ -14,17 +20,53 @@ finds its stage among the stages declared above it.
 let NAME = expr;
 ```
 
-A named constant, folded at link time and overridable from the command line
-(`--set NAME=value`; see the [CLI reference](../reference/cli.md)).
+A named constant, folded at link time. A plain `let` is internal to the
+program: CLI options and instances cannot replace it.
 
 | Argument | Type | Description |
 |---|---|---|
 | `NAME` | identifier | May not also be a session attribute: the linker rejects it. |
 | `expr` | `const` | May read earlier constants. |
 
+### `std/args`
+
+```serq
+use "std/args";
+
+fn main() {
+  let rate = args.number("arrival_rate", 0.3);
+  stage svc : delay;
+  workload { arrive poisson(rate); }
+  session { run svc (1); end; }
+  run { horizon 10; }
+}
+```
+
+`args.number("name", default)` declares a numeric input as the entire
+initializer of a `let` inside `main`. Its external name is an identifier;
+its local binding may have a different name. Read each input once and reuse
+that binding. The default is a constant expression and may read earlier
+constants. Values are numbers (including `inf`), never NaN. Strings,
+positional arguments and implicit access to the host environment are not
+part of this numeric library.
+
+`serq run model.sq -- --arrival_rate 0.5` supplies the value. The separator
+keeps the program's options apart from the interpreter's `--seed`,
+`--horizon`, and other run settings. `--arrival_rate=0.5` works too;
+repeated options use the last value. Unknown names, missing values and
+invalid numbers fail before simulation. `--set arrival_rate=0.5`,
+instances and Python `sets={"arrival_rate": 0.5}` bind the same declared
+input. `--set` and API strings can also supply a constant expression.
+
+The frontend provides `std/args` on every installation; it does not read a
+file or the process environment. Inputs become constants before IR is
+produced. Runtime expressions cannot call `args.number`. Array sizes are
+resolved during parsing, so supplying an input that affects an array size
+is refused, including through a derived constant.
+
 ### Instances
 
-An instance gives a program's constants their values and its run its
+An instance gives a program's declared inputs their values and its run its
 options, in a file of its own, and changes nothing else:
 
 ```serq
@@ -38,7 +80,7 @@ examples/replay/instances/vllm_replay/spacing_3s.sq` is the run `--set
 spacing=3.0` gives, and an instance with `run { seed 2; }` added the one
 `--set spacing=3.0 --seed 2` gives: an instance is the `--set`s
 and run flags it writes, so its program has the IR they give. It may hold
-only `let` bindings of constants the program declares, each once, and one
+only `let` bindings of inputs the program declares with `args.number`, each once, and one
 `run` block whose options are numbers. Pools, stages, the workload and
 definitions are the program's, which is what keeps every instance of a
 program the same system with other numbers
@@ -60,8 +102,7 @@ serving form in it finds its stage at the use, and a statement body follows
 the rules of the block it is used in (no `turn`, `end` or `request` in a
 `server`).
 
-An expression definition's body can be given from outside, as a `let`'s
-value can: `--def NAME=expr` on the command line, `defs={"NAME": "expr"}` in
+An expression definition's body can separately be given from outside: `--def NAME=expr` on the command line, `defs={"NAME": "expr"}` in
 pyserq. The program is then the one written with that body, so a
 distribution or a key the program leaves open is a parameter of the run
 (`def service() = ~exp(1);`, run with `--def service='~erlang(4, 1)'`).

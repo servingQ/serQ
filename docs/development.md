@@ -107,8 +107,9 @@ one comes from:
 - **A quantity the program cannot compute itself.** For example, the subagent
   wait `W` of `examples/subagent/vllm_subagents.sq` is taken from the program's own
   output. Run the program, compute the statistic from `--dump`, set it with
-  `--set`, and repeat until it stops moving. Write the fixed point into the
-  `let` with a comment that says how it was obtained.
+  `--set W=…` (the example exposes `W` through `args.number`), and repeat
+  until it stops moving. Write the fixed point into that input's default
+  with a comment that says how it was obtained.
 
 ## In Lean
 

@@ -5,6 +5,8 @@
 //! `tests/vllm_oracle.rs` checks the scheduler so configured decides as the
 //! program does.
 
+mod common;
+
 use serde_json::Value;
 use serq::Overrides;
 
@@ -90,7 +92,7 @@ fn another_policy_is_refused_with_its_construct() {
                stage engine : step { budget 64; cost 1; serve by (remaining); memory kv; }
                workload { arrive batch(1); init { set n = 8; } }
                session { hold reqs (1), kv (n) { prefill (n) growing kv; } end; } run { horizon 10; }";
-    let p = serq::compile_source(src, &Overrides::default()).unwrap();
+    let p = serq::compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
     assert!(
         e.contains("serves by `remaining`") && e.contains("observes `decoding` and `admission`"),
@@ -106,7 +108,7 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
                stage engine : step { budget 64; cost 1; serve by (decoding ? 0 : 1, -admission); memory kv; }
                workload { arrive batch(1); init { set n = 8; } }
                session { hold reqs (1), kv (n) { prefill (n) growing kv; } end; } run { horizon 10; }";
-    let p = serq::compile_source(src, &Overrides::default()).unwrap();
+    let p = serq::compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let t = serq::target::vllm(&p).unwrap();
     assert_eq!(t["config"]["scheduler_cls"], "serq_vllm.SerqScheduler");
     assert_eq!(
@@ -132,20 +134,25 @@ fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
     let dir = root().join("examples/multi-turn");
     let rule = "chunk long_prefill(reqs, chunk_cap);";
     assert!(src.contains(rule), "the program's chunk moved");
-    let p = serq::compile_source_at(&src, Some(&dir), &Overrides::default()).unwrap();
+    let p = serq::compile_source_at(
+        &common::main_source(&src),
+        Some(&dir),
+        &Overrides::default(),
+    )
+    .unwrap();
     assert_eq!(
         serq::target::vllm(&p).unwrap()["config"]["long_prefill_token_threshold"],
         0
     );
     let mut ov = Overrides::default();
     ov.set("chunk_cap", "512").unwrap();
-    let p = serq::compile_source_at(&src, Some(&dir), &ov).unwrap();
+    let p = serq::compile_source_at(&common::main_source(&src), Some(&dir), &ov).unwrap();
     assert_eq!(
         serq::target::vllm(&p).unwrap()["config"]["long_prefill_token_threshold"],
         512
     );
     let p = serq::compile_source_at(
-        &src.replace(rule, "chunk 512;"),
+        &common::main_source(&src.replace(rule, "chunk 512;")),
         Some(&dir),
         &Overrides::default(),
     )
@@ -174,7 +181,7 @@ fn the_newer_constructs_are_refused_and_vllms_body_taken() {
             .replace("RESERVE", reserve)
             .replace("ITER", iter)
             .replace("HOLD", h);
-        serq::compile_source(&src, &Overrides::default()).unwrap()
+        serq::compile_source(&common::main_source(&src), &Overrides::default()).unwrap()
     };
     let body = "iteration { serve; admit while (!preempted); }";
     serq::target::vllm(&compile("", body, hold)).unwrap();

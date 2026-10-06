@@ -8,86 +8,90 @@
 // is the testbed's fit (c0 + a n + b n (K + n/2)), spent chunk by chunk;
 // c0 is the per-request front-end overhead outside the engine; a decode
 // iteration reads the weights (omega, the idle ITL) plus the batch's KV.
-let spacing = 3.5;     // seconds between session arrivals
-let N = 333;           // sessions in the trace
-let B = 512;           // max_num_batched_tokens
-let max_seqs = 64;     // max_num_seqs
-let bs = 16;           // block_size
-let blocks = 8010;     // 128 160 tokens / 16
-// step cost, fitted on the A100 step sweeps (data/exp/gpu_seq/fit.json,
-// scripts/exp/fit_steps.py; MAPE 2.7 % decode, 5.6 % prefill, 5.7 % mixed)
-let c_it = 0.004;      // s per iteration on the served path (13.9 ms stepped by hand, less what async scheduling hides; fitted on the 5 s and 4.2 s runs)
-let d = 4.1053e-5;     // s per decoding request
-let e = 1.3786e-7;     // s per KV token held by the decoders
-let a = 5.1527e-5;     // s per prefill token
-let b = 4.0196e-9;     // s per prefill token per context token (attention)
-let c0 = 0.04;         // s per request outside the engine (fitted with c_it, data/exp/seq/calibration.txt)
-let f = 0;             // s per prompt token outside the engine (0: not separable from c0 on these runs)
+use "std/args";
 
-pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool reqs { cap max_seqs; admit via engine; }  // the scheduler admits (scheduler.py:868)
+fn main() {
+  let spacing = args.number("spacing", 3.5);     // seconds between session arrivals
+  let N = args.number("N", 333);           // sessions in the trace
+  let B = args.number("B", 512);           // max_num_batched_tokens
+  let max_seqs = args.number("max_seqs", 64);     // max_num_seqs
+  let bs = 16;           // block_size
+  let blocks = args.number("blocks", 8010);     // 128 160 tokens / 16
+  // step cost, fitted on the A100 step sweeps (data/exp/gpu_seq/fit.json,
+  // scripts/exp/fit_steps.py; MAPE 2.7 % decode, 5.6 % prefill, 5.7 % mixed)
+  let c_it = args.number("c_it", 0.004);      // s per iteration on the served path (13.9 ms stepped by hand, less what async scheduling hides; fitted on the 5 s and 4.2 s runs)
+  let d = args.number("d", 4.1053e-5);     // s per decoding request
+  let e = args.number("e", 1.3786e-7);     // s per KV token held by the decoders
+  let a = args.number("a", 5.1527e-5);     // s per prefill token
+  let b = args.number("b", 4.0196e-9);     // s per prefill token per context token (attention)
+  let c0 = args.number("c0", 0.04);         // s per request outside the engine (fitted with c_it, data/exp/seq/calibration.txt)
+  let f = args.number("f", 0);             // s per prompt token outside the engine (0: not separable from c0 on these runs)
 
-stage engine : step {
-  budget B;
-  cost c_it + d * decoders + e * kv_decode + a * prefilled + b * attention;
-  memory kv;
-}
-stage front : delay;
-stage gate : delay;
-stage tool : delay;
+  pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
+  pool reqs { cap max_seqs; admit via engine; }  // the scheduler admits (scheduler.py:868)
 
-// The client: the trace's sessions, sent `spacing` apart; a turn is sent
-// `think` seconds after the previous one completes.
-workload {
-  arrive batch(N);
-  trace "data/short_base.csv" ordered;
-  hidden out;            // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
-  session {
-    run gate (serial * spacing);
-    set prev = 0;
-    set prevout = 0;
-    turn;
-    loop {
-      request;
-      set prev = prompt;
-      set prevout = out;
-      branch (more) { tool think; turn; } else { end; }
+  stage engine : step {
+    budget B;
+    cost c_it + d * decoders + e * kv_decode + a * prefilled + b * attention;
+    memory kv;
+  }
+  stage front : delay;
+  stage gate : delay;
+  stage tool : delay;
+
+  // The client: the trace's sessions, sent `spacing` apart; a turn is sent
+  // `think` seconds after the previous one completes.
+  workload {
+    arrive batch(N);
+    trace "data/short_base.csv" ordered;
+    hidden out;            // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    session {
+      run gate (serial * spacing);
+      set prev = 0;
+      set prevout = 0;
+      turn;
+      loop {
+        request;
+        set prev = prompt;
+        set prevout = out;
+        branch (more) { tool think; turn; } else { end; }
+      }
     }
   }
-}
 
-// The served path: the front end, then the engine.
-server {
-  set t0 = now;
-  set prompt = new;
-  run front (c0 + f * prompt);
-  // reusable: the common prefix with the previous turn's computed tokens
-  // (the previous prompt; the generated tokens are not in this prompt),
-  // never the whole prompt (the last token is recomputed for its logits)
-  // a forced turn carries a nonce at its head: nothing matches, and the
-  // old prefix stays in the cache, unusable, until it is evicted
-  set hitmax = forced ? 0 : floor(min(prev, prompt - 1) / bs) * bs;
-  // the header is evaluated when the scheduler admits: the prefix still
-  // cached then, plus the chunk the step's remaining budget allows
-  // the admission needs room for the whole sequence (scheduler_reserve_full_isl,
-  // kv_cache_manager.py:515-531) but allocates only the first chunk.
-  // A preempted request keeps its generated tokens (scheduler.py:1560-1561):
-  // `known` is the prompt plus those, its own cached blocks up to `known - 1`
-  // are reusable again (a forced turn's included: they carry its nonce), and
-  // it generates only what is left
-  hold reqs (1), kv (hit + min(known - hit, budget_left(engine))) reserve (known)
-       reuse (max(hitmax, floor(computed / bs) * bs))
-       at admission (known = computed < prompt ? prompt : computed + 1,
-                     hit = min(cachedin(kv), max(hitmax, floor(computed / bs) * bs))) {
-    set c = cached;
-    observe cached_tokens = c;
-    observe prefix = prev + prevout;
-    observe sent = t0;
-    prefill (known - c) growing kv;
-    branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
-    decode (out - 1 - (known - prompt)) growing kv;
-  } cache (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
-  observe latency = now - t0;
-}
+  // The served path: the front end, then the engine.
+  server {
+    set t0 = now;
+    set prompt = new;
+    run front (c0 + f * prompt);
+    // reusable: the common prefix with the previous turn's computed tokens
+    // (the previous prompt; the generated tokens are not in this prompt),
+    // never the whole prompt (the last token is recomputed for its logits)
+    // a forced turn carries a nonce at its head: nothing matches, and the
+    // old prefix stays in the cache, unusable, until it is evicted
+    set hitmax = forced ? 0 : floor(min(prev, prompt - 1) / bs) * bs;
+    // the header is evaluated when the scheduler admits: the prefix still
+    // cached then, plus the chunk the step's remaining budget allows
+    // the admission needs room for the whole sequence (scheduler_reserve_full_isl,
+    // kv_cache_manager.py:515-531) but allocates only the first chunk.
+    // A preempted request keeps its generated tokens (scheduler.py:1560-1561):
+    // `known` is the prompt plus those, its own cached blocks up to `known - 1`
+    // are reusable again (a forced turn's included: they carry its nonce), and
+    // it generates only what is left
+    hold reqs (1), kv (hit + min(known - hit, budget_left(engine))) reserve (known)
+         reuse (max(hitmax, floor(computed / bs) * bs))
+         at admission (known = computed < prompt ? prompt : computed + 1,
+                       hit = min(cachedin(kv), max(hitmax, floor(computed / bs) * bs))) {
+      set c = cached;
+      observe cached_tokens = c;
+      observe prefix = prev + prevout;
+      observe sent = t0;
+      prefill (known - c) growing kv;
+      branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
+      decode (out - 1 - (known - prompt)) growing kv;
+    } cache (prompt + out - 1);   // every computed token, full blocks (kv_cache_manager.py:602)
+    observe latency = now - t0;
+  }
 
-run { horizon 6000; warmup 0; seed 1; }
+  run { horizon 6000; warmup 0; seed 1; }
+}

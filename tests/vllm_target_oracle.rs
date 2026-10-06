@@ -17,6 +17,8 @@
 //! order), so they live apart from `tools/oracle/*.json`, which
 //! `scripts/gen_lean_oracle.py` translates.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -69,10 +71,14 @@ fn ir(name: &str) -> serq::Program {
             ]
         })
         .collect();
-    compile_source_at(&src, program_path("vllm_request").parent(), &ov)
-        .unwrap()
-        .with_sessions(&sessions)
-        .unwrap()
+    compile_source_at(
+        &common::main_source(&src),
+        program_path("vllm_request").parent(),
+        &ov,
+    )
+    .unwrap()
+    .with_sessions(&sessions)
+    .unwrap()
 }
 
 fn scenarios() -> Vec<String> {

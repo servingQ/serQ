@@ -4,58 +4,62 @@
 // (docs/use-cases/workloads.md).
 use "../../lib/vllm.sq";
 
-let B = 8192;          // max_num_batched_tokens
-let max_seqs = 16;     // max_num_seqs
-let blocks = 10000;    // num_gpu_blocks (less the null block)
-let bs = 16;           // block_size
-let chunk_cap = 0;     // long_prefill_token_threshold (0: none)
-let a = 2e-5;          // compute per scheduled token (s)
-let omega = 2e-4;      // weights read per iteration (s)
-let beta = 2e-9;       // KV read per iteration per resident context token (s)
-let c0 = 0;            // fixed cost per iteration (s)
-let Lambda = 0.3;      // conversations per second
-let p = 0.8;           // the person asks again
-let Z = 20.0;          // reading and typing time (s)
+use "std/args";
 
-pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool reqs { cap max_seqs; admit via engine; }   // the engine's step admits the waiting, FCFS
+fn main() {
+  let B = 8192;          // max_num_batched_tokens
+  let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
+  let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
+  let bs = 16;           // block_size
+  let chunk_cap = args.number("chunk_cap", 0);     // long_prefill_token_threshold (0: none)
+  let a = 2e-5;          // compute per scheduled token (s)
+  let omega = 2e-4;      // weights read per iteration (s)
+  let beta = 2e-9;       // KV read per iteration per resident context token (s)
+  let c0 = 0;            // fixed cost per iteration (s)
+  let Lambda = 0.3;      // conversations per second
+  let p = 0.8;           // the person asks again
+  let Z = 20.0;          // reading and typing time (s)
 
-stage engine : step {
-  budget B;
-  chunk long_prefill(reqs, chunk_cap);
-  cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-  memory kv;
-}
-stage user : delay;
+  pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
+  pool reqs { cap max_seqs; admit via engine; }   // the engine's step admits the waiting, FCFS
 
-// --8<-- [start:workload]
-// Each turn resends the conversation so far (`K`) with a short message;
-// the gap between turns is a person, not a tool.
-workload {
-  arrive poisson(Lambda);
-  hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
-  init { set K = 0; }
-  turn {
-    set n = ceil(K == 0 ? ~uniform(200, 1000) : ~exp(100));
-    set o = floor(~exp(300)) + 1;
-    set more = ~bernoulli(p);
+  stage engine : step {
+    budget B;
+    chunk long_prefill(reqs, chunk_cap);
+    cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+    memory kv;
   }
-  session {
-    turn;
-    loop {
-      request;
-      set K = prompt + o;
-      branch (more) { run user (~exp(Z)); turn; } else { end; }
+  stage user : delay;
+
+  // --8<-- [start:workload]
+  // Each turn resends the conversation so far (`K`) with a short message;
+  // the gap between turns is a person, not a tool.
+  workload {
+    arrive poisson(Lambda);
+    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    init { set K = 0; }
+    turn {
+      set n = ceil(K == 0 ? ~uniform(200, 1000) : ~exp(100));
+      set o = floor(~exp(300)) + 1;
+      set more = ~bernoulli(p);
+    }
+    session {
+      turn;
+      loop {
+        request;
+        set K = prompt + o;
+        branch (more) { run user (~exp(Z)); turn; } else { end; }
+      }
     }
   }
-}
-// --8<-- [end:workload]
+  // --8<-- [end:workload]
 
-server {
-  set t0 = now;
-  set prompt = K + n;
-  vllm_request(reqs, kv, engine, prompt, o, t0);
-  observe response = now - t0;
-}
+  server {
+    set t0 = now;
+    set prompt = K + n;
+    vllm_request(reqs, kv, engine, prompt, o, t0);
+    observe response = now - t0;
+  }
 
-run { horizon 2000; warmup 200; seed 1; }
+  run { horizon 2000; warmup 200; seed 1; }
+}

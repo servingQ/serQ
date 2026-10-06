@@ -24,10 +24,10 @@ ROOT = Path(__file__).resolve().parents[2]
 CLI = os.environ.get("SERQ_CLI", str(ROOT / "target" / "release" / "serq"))
 MG1 = ROOT / "examples" / "single-turn" / "mg1.sq"
 REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
-ARRAYS = """pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
+ARRAYS = """fn main() { pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
 workload { arrive poisson(1); }
 session { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } end; }
-run { horizon 100; }"""
+run { horizon 100; } }"""
 
 
 def cli(path, *args):
@@ -53,7 +53,7 @@ def test_a_file_with_numbers_and_a_seed():
         assert [(float(t), int(s), int(u), float(v)) for t, s, u, v in rows] == list(zip(o.times, o.sessions, o.turns, o.samples))
 
 
-GAUGED = """
+GAUGED = """fn main() {
 pool kv[2] { cap 100; }
 stage svc[2] : fifo;
 workload { arrive poisson(1.5); }
@@ -65,6 +65,7 @@ session {
 }
 gauge spread = max k in 2 (used(kv[k])) - min k in 2 (used(kv[k]));
 run { horizon 2000; warmup 100; seed 3; }
+}
 """
 
 
@@ -175,8 +176,8 @@ def test_an_infinity_is_inf():
 
 
 def test_defs_is_the_program_written_with_that_body():
-    src = ("def service() = ~exp(1);\nstage svc : fifo;\nworkload { arrive poisson(0.5); }\n"
-           "session { run svc (service()); observe s = now; end; }\nrun { horizon 1000; seed 2; }\n")
+    src = ("fn main() { def service() = ~exp(1);\nstage svc : fifo;\nworkload { arrive poisson(0.5); }\n"
+           "session { run svc (service()); observe s = now; end; }\nrun { horizon 1000; seed 2; } }\n")
     given = pyserq.compile(source=src, defs={"service": "~erlang(4, 1)"})
     written = pyserq.compile(source=src.replace("~exp(1)", "~erlang(4, 1)"))
     assert given.to_json() == written.to_json() != pyserq.compile(source=src).to_json()
@@ -186,8 +187,8 @@ def test_defs_is_the_program_written_with_that_body():
 
 def test_rng_is_the_stream_a_run_draws_from():
     # the arrivals of a run seeded 11 are the gaps Rng(11) draws, exactly
-    src = ("let lam = 0.5;\nworkload { arrive poisson(lam); }\n"
-           "session { observe t = now; end; }\nrun { horizon 100; warmup 0; seed 11; }\n")
+    src = ("fn main() { let lam = 0.5;\nworkload { arrive poisson(lam); }\n"
+           "session { observe t = now; end; }\nrun { horizon 100; warmup 0; seed 11; } }\n")
     got = pyserq.run(pyserq.compile(source=src)).observe("t").samples
     rng, t, want = pyserq.Rng(11), 0.0, []
     while t < 100:
@@ -224,7 +225,7 @@ def test_draw_is_serq_draw():
 def test_errors_are_value_errors():
     for call in [
         lambda: pyserq.compile(ROOT / "nowhere.sq"),
-        lambda: pyserq.compile(source="session { run nowhere (1); end; }"),
+        lambda: pyserq.compile(source="fn main() { session { run nowhere (1); end; } }"),
         lambda: pyserq.compile(MG1, sets={"nope": 1}),
         lambda: pyserq.compile(MG1, source="x"),
         lambda: pyserq.compile(MG1, sets={"lam": float("nan")}),
@@ -252,9 +253,9 @@ def test_an_override_on_ir_says_what_it_overrides():
     ir = Path(tempfile.mkdtemp(prefix="pyserq-")) / "mg1.json"
     ir.write_text(pyserq.compile(MG1).to_json())
     for call, what in [
-        (lambda: pyserq.compile(ir, sets={"lam": 1}), "a `let` override"),
+        (lambda: pyserq.compile(ir, sets={"lam": 1}), "a program argument"),
         (lambda: pyserq.compile(ir, defs={"service": "~exp(1)"}), "a `def` override"),
-        (lambda: pyserq.draw(ir, sets={"lam": 1}), "a `let` override"),
+        (lambda: pyserq.draw(ir, sets={"lam": 1}), "a program argument"),
         (lambda: pyserq.draw(ir, defs={"service": "~exp(1)"}), "a `def` override"),
     ]:
         try:
@@ -269,9 +270,9 @@ def test_an_override_error_names_the_let_or_def():
     # sets= and defs= meet the library's errors; they speak of what is
     # overridden, not of the CLI's --set and --def
     for call, what in [
-        (lambda: pyserq.compile(MG1, sets={"nope": 1}), "unknown `let` override `nope`"),
-        (lambda: pyserq.compile(MG1, sets={"x y": 1}), "invalid `let` override name `x y`"),
-        (lambda: pyserq.compile(MG1, sets={"lam": "~"}), "invalid expression in the `let` override"),
+        (lambda: pyserq.compile(MG1, sets={"nope": 1}), "unknown program argument `nope`"),
+        (lambda: pyserq.compile(MG1, sets={"x y": 1}), "invalid argument name `x y`"),
+        (lambda: pyserq.compile(MG1, sets={"lam": "~"}), "invalid expression for program argument"),
         (lambda: pyserq.compile(MG1, defs={"nope": "1"}), "unknown `def` override `nope`"),
         (lambda: pyserq.compile(MG1, defs={"x y": "1"}), "invalid `def` override name `x y`"),
         (lambda: pyserq.compile(MG1, defs={"service": "~exp("}), "invalid expression in the `def` override"),
@@ -294,6 +295,25 @@ def test_runs_in_threads_are_the_runs_alone():
     parallel = time.time() - t0
     assert threaded == alone
     print(f"  4 runs: {serial:.2f}s one after another, {parallel:.2f}s in 4 threads")
+
+
+def test_only_declared_inputs_can_be_supplied():
+    src = '''use "std/args";
+let fixed = 2;
+fn main() {
+  let rate = args.number("arrival_rate", 0.5);
+  workload { arrive poisson(rate * fixed); }
+  run { horizon 1; }
+}'''
+    p = pyserq.compile(source=src, sets={"arrival_rate": 3})
+    assert json.loads(p.to_json())["arrival"] == {"Poisson": 6.0}
+    for name in ["fixed", "rate"]:
+        try:
+            pyserq.compile(source=src, sets={name: 3})
+        except ValueError as e:
+            assert "unknown program argument" in str(e), e
+        else:
+            raise AssertionError(f"private constant {name} was replaced")
 
 
 def test_one_version():

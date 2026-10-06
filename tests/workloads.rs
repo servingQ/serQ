@@ -11,7 +11,10 @@ use serq::program_path;
 
 fn engine(name: &str) -> Vec<String> {
     let src = std::fs::read_to_string(program_path(name)).unwrap();
-    let lines: Vec<&str> = src.lines().collect();
+    let lines: Vec<&str> = src
+        .lines()
+        .map(|l| l.strip_prefix("  ").unwrap_or(l))
+        .collect();
     let span = |from: &str, to: &dyn Fn(&str) -> bool| -> Vec<String> {
         let i = lines
             .iter()

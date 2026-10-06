@@ -25,7 +25,7 @@ serving model step by step in the [tutorial](tutorial/index.md).
     `serq run` executes the program as a discrete-event simulation and
     reports each stage's throughput, utilisation and waits, an engine's
     inter-token latency, and whatever the program observes (time to first
-    token, say) with a confidence interval. `--set` and `--def` change a
+    token, say) with a confidence interval. `--set` supplies declared inputs and `--def` changes definitions in a
     constant or a law without editing the file, for sweeps.
     [Getting started](getting-started.md), [use cases](use-cases/index.md#simulation)
 

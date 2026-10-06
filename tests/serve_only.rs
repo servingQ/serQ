@@ -3,6 +3,8 @@
 //! model it (arXiv 2504.07347 §4, decode first, no mixed batching) is the
 //! case that asked for it. Unit step costs make the schedule explicit.
 
+mod common;
+
 use serq::{Overrides, Program, compile_source, run_ir, run_source};
 use std::path::Path;
 use std::process::Command;
@@ -35,7 +37,7 @@ fn trace(name: &str, src: &str) -> Vec<String> {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("serve-only");
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{name}.sq"));
-    std::fs::write(&path, src).unwrap();
+    std::fs::write(&path, common::main_source(src)).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_serq"))
         .env("SERQ_TRACE_ITER", "1")
         .args(["run", path.to_str().unwrap(), "--json"])
@@ -163,7 +165,7 @@ fn an_excluded_admission_waits_as_a_resident() {
             "ITER 5.0000 1:0:d1 2:0:d1",
         ]
     );
-    let r = run_source(&src, &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 1.0, 1.0]);
 }
@@ -199,14 +201,18 @@ fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
 #[test]
 fn the_ir_runs_as_the_text_and_omits_an_absent_only() {
     let src = source(FT);
-    let p = compile_source(&src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
     let json = p.to_json();
     assert!(json.contains("\"only\""));
     let from_ir = run_ir(&Program::from_json(&json).unwrap(), None).unwrap();
-    let from_text = run_source(&src, &Overrides::default(), None).unwrap();
+    let from_text = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
     assert_eq!(from_text.json(), from_ir.json());
     assert_eq!(from_text.observe("done").unwrap().samples, [3.0, 6.0]);
-    let plain = compile_source(&source("serve decode first;"), &Overrides::default()).unwrap();
+    let plain = compile_source(
+        &common::main_source(&source("serve decode first;")),
+        &Overrides::default(),
+    )
+    .unwrap();
     assert!(!plain.to_json().contains("\"only\""));
 }
 
@@ -240,14 +246,14 @@ fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
         ("serve only (tokens > 0);", "tokens"),
         ("serve only (now >= 5 || decoding);", "may not read `now`"),
     ] {
-        let error = compile_source(&source(serve), &Overrides::default())
+        let error = compile_source(&common::main_source(&source(serve)), &Overrides::default())
             .unwrap_err()
             .to_string();
         assert!(error.contains(message), "{serve}: {error}");
     }
     // the IR refuses what the parser does: `only` is a body, which the
     // exclusive rule cannot sit beside
-    let mut p = compile_source(&source(FT), &Overrides::default()).unwrap();
+    let mut p = compile_source(&common::main_source(&source(FT)), &Overrides::default()).unwrap();
     let serq::ir::CStageKind::Step(st) = &mut p.stages[1].kind else {
         panic!("engine is a step stage")
     };

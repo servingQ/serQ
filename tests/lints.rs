@@ -6,10 +6,12 @@
 //! is a real cost and `no_false_positives_on_the_corpus` is the test that
 //! matters most.
 
+mod common;
+
 use serq::{Overrides, compile_source, program_path};
 
 fn check(src: &str) -> Result<(), String> {
-    compile_source(src, &Overrides::default()).map(|_| ())
+    compile_source(&common::main_source(src), &Overrides::default()).map(|_| ())
 }
 
 const ENGINE: &str = "let bs = 16;
@@ -285,7 +287,7 @@ fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
         )
     };
     let ir = |s: &str| {
-        serq::compile_source(&step(s), &Overrides::default())
+        serq::compile_source(&common::main_source(&step(s)), &Overrides::default())
             .unwrap()
             .to_json()
     };
@@ -393,8 +395,12 @@ fn no_false_positives_on_the_corpus() {
     ] {
         let path = program_path(name);
         let src = std::fs::read_to_string(&path).unwrap();
-        serq::compile_source_at(&src, path.parent(), &Overrides::default())
-            .unwrap_or_else(|e| panic!("{name} is a real program and must link: {e}"));
+        serq::compile_source_at(
+            &common::main_source(&src),
+            path.parent(),
+            &Overrides::default(),
+        )
+        .unwrap_or_else(|e| panic!("{name} is a real program and must link: {e}"));
     }
 }
 
@@ -414,7 +420,7 @@ fn an_old_context_variable_name_says_the_new_one() {
         let src = format!(
             "pool kv {{ cap 10; evict by ({key}); }}\nstage e : step {{ cost {cost}; memory kv; }}\nsession {{ end; }}\n"
         );
-        let e = compile_source(&src, &Overrides::default()).unwrap_err();
+        let e = compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
         assert!(e.contains(&format!("`{old}` is now `{new}`")), "{e}");
     }
 }
@@ -522,6 +528,6 @@ fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
     // (the attribute's 0.125 needs the two jobs together: 16/2 = 8).
     let src = PS.replace("SET", "set prompt = 500;");
     check(&src).expect("links");
-    let r = serq::run_source(&src, &Overrides::default(), None).unwrap();
+    let r = serq::run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
     assert_eq!(r.stage("dec").unwrap().mean_service, 1.0, "{}", r.text());
 }

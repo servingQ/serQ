@@ -3,10 +3,12 @@
 //! goes back to the head of its queue or to the tail (#356). `preempt lifo`
 //! is `preempt by (-admission)`.
 
+mod common;
+
 use serq::{Overrides, compile_source, run_source};
 
 fn run(src: &str) -> serq::Report {
-    run_source(src, &Overrides::default(), None).unwrap()
+    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
 }
 
 /// Three requests decode on a pool that cannot hold them all. After six
@@ -53,7 +55,7 @@ fn the_victim_is_the_least_key() {
 #[test]
 fn lifo_is_by_minus_admission() {
     let ir = |p: &str| {
-        let prog = compile_source(&three(p), &Overrides::default()).unwrap();
+        let prog = compile_source(&common::main_source(&three(p)), &Overrides::default()).unwrap();
         serde_json::to_string(&prog.pools).unwrap()
     };
     assert_eq!(ir("preempt lifo;"), ir("preempt by (-admission);"));
@@ -127,9 +129,12 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
         )
     };
     let err = |preempt: &str, hidden: &str| {
-        compile_source(&base(preempt, hidden), &Overrides::default())
-            .err()
-            .unwrap_or_else(|| panic!("`{preempt}` linked"))
+        compile_source(
+            &common::main_source(&base(preempt, hidden)),
+            &Overrides::default(),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("`{preempt}` linked"))
     };
     assert!(err("preempt by (~exp(1));", "").contains("may not draw"));
     assert!(err("preempt by (budget_left(engine));", "").contains("budget_left"));
@@ -138,7 +143,7 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
     // `position` is a preempt key's alone
     let src = base("preempt lifo;", "").replace("set o = 12;", "set o = position;");
     assert!(
-        compile_source(&src, &Overrides::default())
+        compile_source(&common::main_source(&src), &Overrides::default())
             .unwrap_err()
             .contains("position")
     );
@@ -229,7 +234,11 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
 #[test]
 fn a_preempt_key_reads_decoding_and_not_computed() {
     let base = three("preempt by (1 - decoding, position - prompt, -prompt);");
-    assert!(compile_source(&base, &Overrides::default()).is_ok());
-    let err = compile_source(&three("preempt by (computed);"), &Overrides::default()).unwrap_err();
+    assert!(compile_source(&common::main_source(&base), &Overrides::default()).is_ok());
+    let err = compile_source(
+        &common::main_source(&three("preempt by (computed);")),
+        &Overrides::default(),
+    )
+    .unwrap_err();
     assert!(err.contains("`position`"), "{err}");
 }

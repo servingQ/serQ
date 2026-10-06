@@ -24,8 +24,12 @@ prefills in the compute its decode step leaves is a stage kind of its own
 ## Syntax {#2-syntax}
 
 ```
-program  := item*
+program  := (constant | definition | import)* fn main ( ) { item* }
+constant := let NAME = expr ;
+definition := def NAME ( NAME , ... ) ( = expr ; | block )
+import   := use "file.sq" ; | use "std/args" ;
 item     := let NAME = expr ;
+          | let NAME = args.number ( "argument_name" , expr ) ;
           | use "file.sq" ;                  -- the definitions of a library, next to this file
           | def NAME ( NAME , ... ) = expr ;   -- a name for an expression: NAME ( arg , ... )
           | def NAME ( NAME , ... ) block      -- a name for statements: NAME ( arg , ... ) ;
@@ -161,6 +165,24 @@ The rules that are the language's, not the catalogue's:
   consumed at the last admission; 0 after a hold without `cache`),
   `computed` (the position a preempted hold had reached, 0 otherwise; [Semantics](#3-semantics)),
   and with a trace `new`, `out`, `think`, `more`, `forced`.
+
+### Entry point and external inputs
+
+Source programs declare exactly one `fn main()`. It constructs the deployment
+and run configuration once; each arriving session executes its session body.
+Only imports, definitions and fixed constants may precede `main`. Declarations
+after it and nested or duplicate entry points are refused. Libraries provide
+definitions and imports, never an executable entry point.
+
+A plain `let` cannot be replaced externally. With `use "std/args";`, a
+`let` inside `main` may declare an input using
+`args.number("name", default)` as its entire initializer. CLI arguments after
+`--`, `--set`, instance bindings and API `sets` supply only those named
+inputs. Defaults and supplied expressions are resolved at link time; the
+result is the same IR as a program written with those values. An input that
+would change a parse-time array size is refused. See [Program](api/program.md)
+for the full input contract. Syntax snippets elsewhere may show just a main
+body or one of its nested blocks.
 
 ### The serving vocabulary
 

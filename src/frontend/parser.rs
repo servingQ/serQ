@@ -1,7 +1,7 @@
 //! Recursive-descent parser for serQ programs.
 //!
 //! ```text
-//! program  := item*
+//! program  := (let | def | use)* 'fn' 'main' '(' ')' '{' item* '}'
 //! item     := 'let' IDENT '=' expr ';'
 //!           | 'pool' IDENT ('[' NUM ']')? '{' poolopt* '}'
 //!           | 'stage' IDENT ('[' NUM ']')? ':' kind ';'
@@ -133,6 +133,8 @@ impl From<LexError> for ParseError {
 type PResult<T> = Result<T, ParseError>;
 
 struct Parser {
+    args_imported: bool,
+    supplied_inputs: Vec<String>,
     toks: Vec<Token>,
     pos: usize,
     /// The stages declared so far, (name, is a step engine): what the
@@ -373,7 +375,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 105] = [
+pub const KEYWORDS: [&str; 106] = [
     "admission",
     "admit",
     "arrivals",
@@ -405,6 +407,7 @@ pub const KEYWORDS: [&str; 105] = [
     "fifo",
     "first",
     "fits",
+    "fn",
     "fork",
     "from",
     "gauge",
@@ -593,7 +596,7 @@ fn parse_with(
         .iter()
         .map(|(n, e)| (n.clone(), e.clone(), false))
         .collect();
-    p.structural_overrides = lets.to_vec();
+    p.supplied_inputs = lets.to_vec();
     let prog = p.program()?;
     let unknown: Vec<&str> = p
         .def_overrides
@@ -1376,6 +1379,8 @@ fn pools_named<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Ref>) {
 impl Parser {
     fn new(toks: Vec<Token>) -> Parser {
         Parser {
+            args_imported: false,
+            supplied_inputs: vec![],
             toks,
             pos: 0,
             stages: vec![],
@@ -1622,7 +1627,7 @@ impl Parser {
         Ok(())
     }
 
-    /// An instance: `let` bindings of the program's constants and at most
+    /// An instance: `let` bindings of the program's inputs and at most
     /// one `run` block, nothing that adds to the program's structure.
     fn instance(&mut self) -> PResult<(Vec<(String, Expr)>, RunOpts)> {
         let (mut lets, mut run, mut ran) =
@@ -1645,7 +1650,7 @@ impl Parser {
             } else {
                 return self.err(format!(
                     "an instance binds values: found {} where `let` or `run` goes\n\
-                     help: an instance gives the program's constants their values \
+                     help: an instance gives the program's declared inputs their values \
                      (`let NAME = expr;`) and the run its options (`run {{ … }}`, once); \
                      pools, stages, the workload and definitions belong to the program",
                     self.peek()
@@ -1657,7 +1662,37 @@ impl Parser {
 
     fn program(&mut self) -> PResult<Program> {
         let mut prog = Program::default();
+        let mut in_main = false;
         while *self.peek() != Tok::Eof {
+            if self.toks[self.pos].file == 0 {
+                if self.eat_kw("fn") {
+                    if in_main || prog.has_main {
+                        return self.err("a program has exactly one `fn main()`; nested or duplicate entry points are not allowed");
+                    }
+                    let name = self.ident()?;
+                    if name != "main" {
+                        return self
+                            .err("the entry point is `fn main()`; reusable definitions use `def`");
+                    }
+                    self.expect(&Tok::LParen)?;
+                    self.expect(&Tok::RParen)?;
+                    self.expect(&Tok::LBrace)?;
+                    prog.has_main = true;
+                    in_main = true;
+                    continue;
+                }
+                if in_main && *self.peek() == Tok::RBrace {
+                    self.advance();
+                    in_main = false;
+                    continue;
+                }
+                if !in_main && !self.is_kw("use") && !self.is_kw("def") && !self.is_kw("let") {
+                    return self.err("executable declarations belong inside `fn main() { … }`; only `use`, `def` and constants belong outside it");
+                }
+                if prog.has_main && !in_main {
+                    return self.err("declarations belong before `fn main()`; its local names are not visible after it");
+                }
+            }
             if self.toks[self.pos].file != 0 && !self.is_kw("def") && !self.is_kw("use") {
                 return self.err(format!(
                     "a library holds definitions: found {} where `def` or `use` goes",
@@ -1672,13 +1707,43 @@ impl Parser {
             if self.eat_kw("let") {
                 let name = self.definition()?;
                 self.expect(&Tok::Assign)?;
-                let e = self.expr()?;
+                let mut supplied_input = false;
+                let e = if matches!(self.peek(), Tok::Ident(n) if n == "args")
+                    && *self.peek_at(1) == Tok::Dot
+                {
+                    if !in_main || !self.args_imported {
+                        return self.err("`args.number` needs `use \"std/args\";` and a `let` inside `fn main()`");
+                    }
+                    self.advance();
+                    self.advance();
+                    let function = self.ident()?;
+                    if function != "number" {
+                        return self.err(format!("std/args has no function `{function}`; use `args.number(\"name\", default)`"));
+                    }
+                    self.expect(&Tok::LParen)?;
+                    let key = self.string()?;
+                    crate::frontend::args::check_name(&key).or_else(|e| self.err(e))?;
+                    if prog.inputs.iter().any(|(n, _)| *n == key) {
+                        return self.err(format!(
+                            "argument `{key}` is declared twice; read it once and reuse its binding"
+                        ));
+                    }
+                    self.expect(&Tok::Comma)?;
+                    let default = self.expr()?;
+                    self.expect(&Tok::RParen)?;
+                    supplied_input = self.supplied_inputs.contains(&key);
+                    prog.inputs.push((key, prog.lets.len()));
+                    default
+                } else {
+                    self.expr()?
+                };
                 self.expect(&Tok::Semi)?;
                 let mut vars = vec![];
                 names(&e, &mut vars, &mut Vec::new());
-                if vars.iter().any(|v| self.structural_overrides.contains(v))
-                    && !self.structural_overrides.contains(&name)
-                {
+                let varies =
+                    supplied_input || vars.iter().any(|v| self.structural_overrides.contains(v));
+                self.structural_overrides.retain(|n| n != &name);
+                if varies {
                     self.structural_overrides.push(name.clone());
                 }
                 if let Some(v) = self.const_value(&e) {
@@ -1770,6 +1835,20 @@ impl Parser {
                      definitions are whole",
                 );
             }
+        }
+        if in_main {
+            return self.err("unclosed `fn main()`; expected `}`");
+        }
+        if self.args_imported
+            && (prog.lets.iter().any(|(n, _)| n == "args")
+                || prog.pools.iter().any(|p| p.name == "args")
+                || prog.stages.iter().any(|s| s.name == "args")
+                || self.queues.iter().any(|q| q.name == "args")
+                || self.defs.iter().any(|d| d.name == "args"))
+        {
+            return self.err(
+                "`args` names the imported std/args module; give the declaration another name",
+            );
         }
         // a request runs the server or a named gateway's `route`, whose
         // admissions set `cached` and `computed`, and the entries it calls
@@ -2099,6 +2178,10 @@ impl Parser {
         self.advance();
         let path = self.string()?;
         self.expect(&Tok::Semi)?;
+        if path == "std/args" {
+            self.args_imported = true;
+            return Ok(());
+        }
         let file = self.toks[at].file;
         let dir = match file.checked_sub(1) {
             Some(i) => Some(self.lib_dirs[i].clone()),
@@ -4944,6 +5027,17 @@ impl Parser {
 mod tests {
     use super::*;
 
+    /// Existing semantic fixtures describe a main body; complete example files
+    /// already contain their entry point. The entrypoint tests use the public API
+    /// directly, so this builder cannot make an implicit program pass those checks.
+    pub fn main_source(body: &str) -> String {
+        if body.contains("fn main()") {
+            body.to_string()
+        } else {
+            format!("fn main() {{ {body}\n}}")
+        }
+    }
+
     #[test]
     fn parses_a_small_program() {
         let src = r#"
@@ -4970,7 +5064,7 @@ mod tests {
             }
             run { horizon 1000; warmup 100; seed 1; }
         "#;
-        let p = parse(src).unwrap();
+        let p = parse(&main_source(src)).unwrap();
         assert_eq!(p.pools.len(), 1);
         assert_eq!(p.stages.len(), 3);
         assert_eq!(p.lets[0].0, "a");
@@ -5006,7 +5100,7 @@ mod tests {
     fn same(a: &str, b: &str) {
         let run = |s: &str| Program {
             request: vec![],
-            ..without_locations(parse(s).unwrap())
+            ..without_locations(parse(&main_source(s)).unwrap())
         };
         assert_eq!(run(a), run(b));
     }
@@ -5115,9 +5209,9 @@ mod tests {
             ("hit = cached", "read `cached`"),
             ("hit = now", "with a `set` in the body"),
         ] {
-            let e = parse(&format!(
+            let e = parse(&main_source(&format!(
                 "{ENGINE} session {{ hold kv (hit) at admission ({binding}) {{ observe h = hit; }} }}"
-            ))
+            )))
             .unwrap_err();
             assert!(
                 e.msg.contains("the body reads `hit`, and `hit` reads"),
@@ -5130,7 +5224,7 @@ mod tests {
         let src = format!(
             "{ENGINE} session {{ set n = 3; hold kv (m) at admission (m = n + 1) {{ observe x = m; }} }}"
         );
-        parse(&src).unwrap();
+        parse(&main_source(&src)).unwrap();
     }
 
     #[test]
@@ -5154,26 +5248,26 @@ mod tests {
                 ""
             };
             let name = binding.split(' ').next().unwrap();
-            let e = parse(&format!(
+            let e = parse(&main_source(&format!(
                 "{pre} {ENGINE} session {{ {assign} hold kv (1) at admission ({binding}) {{ observe a = {name}; }} }}"
-            ))
+            )))
             .unwrap_err();
             assert!(e.msg.contains(what), "{binding}: {}", e.msg);
         }
-        let e = parse(&format!(
+        let e = parse(&main_source(&format!(
             "{ENGINE} session {{ hold kv (1) at admission (k = k + 1) {{ observe a = k; }} }}"
-        ))
+        )))
         .unwrap_err();
         assert!(e.msg.contains("reads itself"), "{}", e.msg);
-        let e = parse(&format!(
+        let e = parse(&main_source(&format!(
             "{ENGINE} session {{ hold kv (1) at admission (j = k, k = 5) {{ observe a = j; }} }}"
-        ))
+        )))
         .unwrap_err();
         assert!(e.msg.contains("bound after it"), "{}", e.msg);
         // an attribute the body sets itself is not the binding
-        let e = parse(&format!(
+        let e = parse(&main_source(&format!(
             "{ENGINE} session {{ hold kv (hit) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }} }}"
-        ))
+        )))
         .unwrap_err();
         assert!(e.msg.contains("an attribute the program sets"), "{}", e.msg);
     }
@@ -5185,21 +5279,21 @@ mod tests {
             "hold kv (k) { }",
             "branch (k > 1) { } else { }",
         ] {
-            let e = parse(&format!(
+            let e = parse(&main_source(&format!(
                 "{ENGINE} session {{ hold kv (1) at admission (k = 2) {{ observe a = k; }} {after} }}"
-            ))
+            )))
             .unwrap_err();
             assert!(e.msg.contains("outside the body"), "{after}: {}", e.msg);
         }
-        let e = parse(
+        let e = parse(&main_source(
             "pool kv { cap 100; queue by (k); } stage engine : step { cost 1; }
              session { hold kv (1) at admission (k = 2) { observe a = k; } }",
-        )
+        ))
         .unwrap_err();
         assert!(e.msg.contains("outside the body"), "{}", e.msg);
         // two holds may bind one name, and a nested hold may bind it again
         // over a live outer binding its body does not read
-        parse(&format!(
+        parse(&main_source(&format!(
             "{ENGINE} session {{
                 hold kv (1) at admission (k = 2) {{ observe a = k; }}
                 hold kv (1) at admission (k = 3) {{ observe b = k; }}
@@ -5207,7 +5301,7 @@ mod tests {
                     hold kv (1) at admission (h = 1) {{ observe c = h; }}
                 }}
             }}"
-        ))
+        )))
         .unwrap();
     }
 
@@ -5255,7 +5349,11 @@ mod tests {
 
     #[test]
     fn a_def_says_what_goes_wrong() {
-        let err = |src: &str| parse(&format!("{ENGINE} {src}")).unwrap_err().msg;
+        let err = |src: &str| {
+            parse(&main_source(&format!("{ENGINE} {src}")))
+                .unwrap_err()
+                .msg
+        };
         assert!(err("def f(x) = x; session { f(1); }").contains("is an expression"));
         assert!(err("def f(x) { end; } session { set a = f(1); }").contains("is statements"));
         assert!(
@@ -5292,9 +5390,9 @@ mod tests {
                 .contains("which `f` assigns")
         );
         // an observation's name is not captured
-        parse(&format!(
+        parse(&main_source(&format!(
             "{ENGINE} def f(x) {{ observe s = 10; observe o = x; }} session {{ f(s + 1); }}"
-        ))
+        )))
         .unwrap();
         assert!(err("def f(p) { set p = 1; } session { f(2); }").contains("is a parameter"));
         assert!(
@@ -5308,18 +5406,21 @@ mod tests {
             err("def tally(k) = sum k in 2 (k); session { set x = tally(7); }")
                 .contains("is a parameter")
         );
-        parse("def tally(n) = sum k in n (k); session { set x = tally(2); }").unwrap();
+        parse(&main_source(
+            "def tally(n) = sum k in n (k); session { set x = tally(2); }",
+        ))
+        .unwrap();
         // a parenthesised count: the body's `k` is still the aggregate's
-        parse(
+        parse(&main_source(
             "def tally() = sum k in (1 + 1) (k); def next(x) { turn; observe p = x; } \
                workload { turn { set k = 1; } } session { next(tally()); end; }",
-        )
+        ))
         .unwrap();
         // an aggregate's index is its own, not a name the argument reads
-        parse(
+        parse(&main_source(
             "def tally() = sum i in 2 (i); def next(x) { turn; observe p = x; } \
                workload { turn { set i = 1; } } session { next(tally()); end; }",
-        )
+        ))
         .unwrap();
         // what a turn, a request or an admission assigns is captured too
         assert!(
@@ -5343,14 +5444,14 @@ mod tests {
             err("def f(q) { observe b = q; } session { f(used(kv)); }").contains("reads `used(…)`")
         );
         // an expression's argument is read where the expression is
-        parse(&format!(
+        parse(&main_source(&format!(
             "{ENGINE} def g(x) = x + 1; session {{ set a = g(now); }}"
-        ))
+        )))
         .unwrap();
         // `n` is an attribute when the program sets it
-        parse(&format!(
+        parse(&main_source(&format!(
             "{ENGINE} def f(x) {{ observe b = x; }} session {{ set n = 1; f(n); }}"
-        ))
+        )))
         .unwrap();
         // and through an expression the argument uses
         assert!(
@@ -5382,9 +5483,9 @@ mod tests {
         assert!(err("def kv(x) = x; session { }").contains("also a pool"));
         assert!(err("def engine(x) = x; session { }").contains("also a stage"));
         // the name of a statement body's attribute is not a use
-        parse(&format!(
+        parse(&main_source(&format!(
             "{ENGINE} def c(x) {{ set c = x; }} session {{ c(1); }}"
-        ))
+        )))
         .unwrap();
         // an error in the body says where the definition was used
         let e =
@@ -5392,15 +5493,15 @@ mod tests {
         assert!(e.contains("note: in `take`, used at"), "{e}");
         assert!(err("def f(x) = x; def f(y) = y; session { }").contains("defined twice"));
         // an argument used once may draw
-        parse(&format!(
+        parse(&main_source(&format!(
             "{ENGINE} def f(x) = x + 1; session {{ set a = f(~exp(1)); }}"
-        ))
+        )))
         .unwrap();
         // a def used before it is defined is a call of an unknown function,
         // which the linker reports
-        parse(&format!(
+        parse(&main_source(&format!(
             "{ENGINE} session {{ set a = f(1); }} def f(x) = x;"
-        ))
+        )))
         .unwrap();
     }
 
@@ -5408,17 +5509,23 @@ mod tests {
     fn a_transfer_says_where_the_kv_goes() {
         // without `from P to Q` it would be a link that stores and forwards,
         // which is the kernel's `run`, not a transfer
-        let e = parse(&format!("{PD} session {{ hold kv (K) {{ transfer X; }} }}")).unwrap_err();
+        let e = parse(&main_source(&format!(
+            "{PD} session {{ hold kv (K) {{ transfer X; }} }}"
+        )))
+        .unwrap_err();
         assert!(
             e.msg.contains("`transfer` without `from P to Q (n)`"),
             "{e}"
         );
         assert!(e.msg.contains("`run link (w);`"), "{e}");
-        let e = parse("stage link[2] : ps(1); session { transfer[0] X; }").unwrap_err();
+        let e = parse(&main_source(
+            "stage link[2] : ps(1); session { transfer[0] X; }",
+        ))
+        .unwrap_err();
         assert!(e.msg.contains("`run link[…] (w);`"), "{e}");
-        let e = parse(
+        let e = parse(&main_source(
             "pool kv { cap 1; } stage nic : ps(1); session { transfer on nic X growing kv; }",
-        )
+        ))
         .unwrap_err();
         assert!(
             e.msg.contains("`transfer` without `from P to Q (n)`"),
@@ -5429,22 +5536,29 @@ mod tests {
 
     #[test]
     fn serving_forms_need_exactly_one_stage() {
-        let e = parse("stage svc : fifo; session { prefill S; }").unwrap_err();
+        let e = parse(&main_source("stage svc : fifo; session { prefill S; }")).unwrap_err();
         assert!(
             e.msg.contains("no stage declared above plays `prefill`"),
             "{e}"
         );
-        assert_eq!((e.line, e.col), (1, 29));
-        let e =
-            parse("stage a : step { cost 1; } stage b : step { cost 1; } session { decode D; }")
-                .unwrap_err();
+        assert_eq!((e.line, e.col), (1, 41));
+        let e = parse(&main_source(
+            "stage a : step { cost 1; } stage b : step { cost 1; } session { decode D; }",
+        ))
+        .unwrap_err();
         assert!(e.msg.contains("several stages play `decode` (a, b)"), "{e}");
-        let e = parse("stage engine : step { cost 1; } session { transfer X; }").unwrap_err();
+        let e = parse(&main_source(
+            "stage engine : step { cost 1; } session { transfer X; }",
+        ))
+        .unwrap_err();
         assert!(
             e.msg.contains("no stage declared above plays `transfer`"),
             "{e}"
         );
-        let e = parse("stage tool : delay; session { tool on other Z; }").unwrap_err();
+        let e = parse(&main_source(
+            "stage tool : delay; session { tool on other Z; }",
+        ))
+        .unwrap_err();
         assert!(e.msg.contains("no stage `other` is declared above"), "{e}");
     }
 
@@ -5522,7 +5636,7 @@ mod tests {
     }
 
     fn refused(src: &str, needle: &str) {
-        let e = parse(src).unwrap_err();
+        let e = parse(&main_source(src)).unwrap_err();
         assert!(e.msg.contains(needle), "{src}\n  {e}");
     }
 
@@ -5580,9 +5694,9 @@ mod tests {
             refused(&format!("pool kv {{ cap 1; }} {src}"), "is a retired word");
         }
         // `hold` is written on either side, with its bindings
-        parse(&format!(
+        parse(&main_source(&format!(
             "pool kv {{ cap 1; }} {WL} server {{ hold kv (x) at admission (x = 1) {{ }} cache (1); }}"
-        ))
+        )))
         .unwrap();
     }
 

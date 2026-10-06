@@ -5,6 +5,8 @@
 //! than its images: a coordinate that moved is a diagnosable failure, and a
 //! diff of two SVGs is not. The golden files at the bottom guard the writers.
 
+mod common;
+
 use serq::ir::Program;
 use serq::view::deployment::{self, End};
 use serq::view::figure::{BoxStyle, Figure, StationKind};
@@ -135,7 +137,7 @@ fn choose_annotates_the_station_it_selects() {
 }
 
 fn compile(src: &str) -> Program {
-    compile_source(src, &Overrides::default()).expect("the fixture compiles")
+    compile_source(&common::main_source(src), &Overrides::default()).expect("the fixture compiles")
 }
 
 /// `grow` advances the *innermost* hold holding the pool, so a `growing` run
@@ -536,7 +538,7 @@ fn pools_at(src: &str, stage_name: &str) -> Vec<String> {
         "pool p {{ cap 2; }} stage A : delay; workload {{ arrive poisson(1); }}
          session {{ {src} }} run {{ horizon 1; }}"
     );
-    let p = compile_source(&src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     pools_of(&p, &net, stage_name)
 }
@@ -654,7 +656,8 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
         }
         server { branch (first) { run big (n); } else { run small (n); } }
         run { horizon 100; }";
-    let p = compile_drawn_source_at(src, None, &Overrides::default()).unwrap();
+    let p =
+        compile_drawn_source_at(&common::main_source(src), None, &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     assert_eq!(drawn_stages(&p, &net), ["big", "small"]);
 }
@@ -722,7 +725,7 @@ fn shape(session: &str) -> (Program, deployment::Net) {
          session {{ {session} }}
          run {{ horizon 1; }}"
     );
-    let p = compile_source(&src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     (p, net)
 }
@@ -880,7 +883,7 @@ fn the_looking_pass_leaves_nothing() {
                  }
                }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     assert_eq!(net.flows.len(), 1);
     assert_eq!(net.flow_notes.len(), 1);
@@ -908,7 +911,7 @@ fn a_decision_stays_before_its_stations() {
                  }
                }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     let End::Node(d) = decision(&net).expect("a decision") else {
         unreachable!()
@@ -1165,7 +1168,7 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
                  end;
                }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
     let (pf, eg, ing, d) = (at("P"), at("egress"), at("ingress"), at("D"));
@@ -1196,7 +1199,7 @@ fn only_a_links_latency_folds_into_the_transfer() {
                  end;
                }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     assert!(net.node_of(stage(&p, "wait")).is_some());
     assert!(net.flow_notes[0].latency.is_empty());
@@ -1218,7 +1221,7 @@ fn a_run_from_an_unboxed_choice_does_not_span() {
                  end;
                }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     let ing = net.node_of(stage(&p, "ing")).unwrap();
     assert_eq!(
@@ -1251,7 +1254,7 @@ fn a_latency_before_two_transfers_stays_a_station() {
                  end;
                }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     assert!(net.node_of(stage(&p, "L.latency")).is_some());
     assert_eq!(net.flows.len(), 2);
@@ -1281,7 +1284,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
                  end;
                }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     assert_eq!(net.flows.len(), 1);
     let n = &net.flow_notes[0];
@@ -1298,7 +1301,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
                  end;
                }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     assert_eq!(
         net.flow_notes[0].latency,
@@ -1318,7 +1321,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
                  end;
                }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     assert!(!net.spans(&net.flows[0]));
 }
@@ -1333,7 +1336,7 @@ fn a_flows_stations_are_neighbours_in_the_row() {
                workload { arrive batch(1); }
                session { run ingress (1); run D (1); run egress, ingress (1); end; }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
     let (eg, ing, d) = (at("egress"), at("ingress"), at("D"));
@@ -1409,7 +1412,7 @@ fn a_reordered_arrow_is_drawn_the_way_it_points() {
                workload { arrive batch(1); }
                session { run a (1); run v (1); run u (1); run v (1); run a, u (1); end; }
                run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let net = deployment::project(&p);
     let at = |name: &str| End::Node(net.node_of(stage(&p, name)).unwrap());
     let (u, v) = (at("u"), at("v"));
@@ -1453,7 +1456,8 @@ fn labels_do_not_overlap() {
     for path in &files {
         let name = path.strip_prefix(root).unwrap().display().to_string();
         let src = std::fs::read_to_string(path).unwrap();
-        let p = serq::compile_file(&src, path, &Overrides::default()).unwrap();
+        let p =
+            serq::compile_file(&common::main_source(&src), path, &Overrides::default()).unwrap();
         let f = deployment::figure(&p);
         let boxes: Vec<(f64, f64, f64, &str)> = f
             .items

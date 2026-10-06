@@ -3,6 +3,8 @@
 //! re-preemption once per session and rises under ordinary overload too
 //! (#64 holds the livelock criterion that would change this).
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -32,7 +34,7 @@ fn a_stuck_run_prints_its_report_and_exits_0() {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli-stuck");
     std::fs::create_dir_all(&dir).unwrap();
     let file = dir.join("stuck.sq");
-    std::fs::write(&file, STUCK).unwrap();
+    std::fs::write(&file, common::main_source(STUCK)).unwrap();
     let out = serq().arg("run").arg(&file).output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert_eq!(out.status.code(), Some(0), "{text}");
@@ -50,7 +52,9 @@ fn a_program_that_does_not_load_exits_1() {
     let file = dir.join("bad.sq");
     std::fs::write(
         &file,
-        "stage svc : delay;\nsession { run nowhere (1); end; }\nrun { horizon 1; }\n",
+        common::main_source(
+            "stage svc : delay;\nsession { run nowhere (1); end; }\nrun { horizon 1; }\n",
+        ),
     )
     .unwrap();
     let out = serq().arg("run").arg(&file).output().unwrap();
@@ -65,8 +69,10 @@ fn a_runtime_guard_error_exits_1_without_a_panic() {
     let file = dir.join("guard.sq");
     std::fs::write(
         &file,
-        "stage svc : delay; workload { arrive batch(1); init { set c = 5; set K = 10; } }\n\
+        common::main_source(
+            "stage svc : delay; workload { arrive batch(1); init { set c = 5; set K = 10; } }\n\
          session { branch (c / K) { run svc (1); } end; } run { horizon 10; }\n",
+        ),
     )
     .unwrap();
     let out = serq().arg("run").arg(&file).output().unwrap();

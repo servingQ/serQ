@@ -108,7 +108,7 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
 
 ## What to try
 
-`--set` overrides any `let`, so the whole stability curve is one loop:
+`Lambda` is declared with `args.number`, so the whole stability curve is one loop:
 
 ```bash
 for L in 0.5 0.8 0.9 0.95 0.99; do

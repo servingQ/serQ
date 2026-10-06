@@ -1,30 +1,34 @@
 // Chapter 2: memory is a resource.
 // Four servers, so compute is not the bottleneck — a pool of 10 memory
 // units is. A request holds the units it needs for as long as it runs.
-let Lambda = 0.8;
-let S = 1.0;
-let C = 10;           // memory units
+use "std/args";
 
-pool mem { cap C; }
-stage server : fifo(4);
+fn main() {
+  let Lambda = 0.8;
+  let S = 1.0;
+  let C = args.number("C", 10);           // memory units
 
-workload {
-  arrive poisson(Lambda);
-  turn {
-    set s = ~exp(S);
-    set c = ceil(~uniform(1, 5));   // units this request needs
+  pool mem { cap C; }
+  stage server : fifo(4);
+
+  workload {
+    arrive poisson(Lambda);
+    turn {
+      set s = ~exp(S);
+      set c = ceil(~uniform(1, 5));   // units this request needs
+    }
   }
-}
 
-session {
-  turn;
-  set t0 = now;
-  hold mem (c) {
-    observe admit_wait = now - t0;
-    run server (s);
+  session {
+    turn;
+    set t0 = now;
+    hold mem (c) {
+      observe admit_wait = now - t0;
+      run server (s);
+    }
+    observe response = now - t0;
+    end;
   }
-  observe response = now - t0;
-  end;
-}
 
-run { horizon 100000; warmup 5000; seed 1; }
+  run { horizon 100000; warmup 5000; seed 1; }
+}

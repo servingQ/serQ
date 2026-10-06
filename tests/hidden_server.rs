@@ -3,6 +3,8 @@
 //! (`docs/design/serving-specification-language.md` §2). The server's
 //! session statements are checked as the parser expanded them.
 
+mod common;
+
 use serq::{Overrides, compile_source};
 
 fn program(server: &str) -> String {
@@ -18,7 +20,11 @@ fn program(server: &str) -> String {
 }
 
 fn refused(server: &str, fragments: &[&str]) {
-    let err = compile_source(&program(server), &Overrides::default()).unwrap_err();
+    let err = compile_source(
+        &common::main_source(&program(server)),
+        &Overrides::default(),
+    )
+    .unwrap_err();
     for f in fragments {
         assert!(err.contains(f), "{server}\n  missing {f:?} in {err}");
     }
@@ -28,7 +34,7 @@ fn refused(server: &str, fragments: &[&str]) {
 fn the_server_may_run_cache_and_observe_by_a_hidden_attribute() {
     let ok = "hold kv (prompt) { prefill (prompt) growing kv; decode (o - 1) growing kv; } cache (prompt + o);
               observe length = o;";
-    compile_source(&program(ok), &Overrides::default()).unwrap();
+    compile_source(&common::main_source(&program(ok)), &Overrides::default()).unwrap();
 }
 
 #[test]
@@ -81,7 +87,7 @@ fn a_single_session_is_not_split_and_not_checked() {
                workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } }
                session { branch (o > 2) { hold kv (prompt) { prefill (prompt) growing kv; } } else { } end; }
                run { horizon 100; }";
-    compile_source(src, &Overrides::default()).unwrap();
+    compile_source(&common::main_source(src), &Overrides::default()).unwrap();
 }
 
 /// A run whose work reads a hidden attribute reveals it when it ends (the
@@ -93,7 +99,7 @@ fn a_run_reveals_what_its_work_reads() {
                  hold kv (prompt) { prefill (prompt) growing kv; decode (o - 1) growing kv; } cache (prompt + o);
                  branch (long) { observe was_long = 1; } else { observe was_long = 0; }
                  branch (o > 3) { observe longer = 1; } else { }";
-    compile_source(&program(after), &Overrides::default()).unwrap();
+    compile_source(&common::main_source(&program(after)), &Overrides::default()).unwrap();
     // before the run ends, inside the hold, it is still hidden
     refused(
         "hold kv (prompt) { prefill (prompt) growing kv;

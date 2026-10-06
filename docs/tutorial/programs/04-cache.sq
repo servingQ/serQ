@@ -4,41 +4,45 @@
 // cached; the next turn of that session is a *hit* if its prefix survived.
 // A miss recomputes the whole context, which costs the engine more, which
 // makes the queue longer, which loses more prefixes: a feedback loop.
-let Lambda = 0.5;
-let p = 0.8;
-let Z = 3.0;
-let a = 2e-5;
-let d = 2e-4;
-let C = 2e5;          // KV pool, tokens
+use "std/args";
 
-pool kv { cap C; evict lru; }
-stage engine : fifo;
-stage tool : delay;
+fn main() {
+  let Lambda = 0.5;
+  let p = 0.8;
+  let Z = 3.0;
+  let a = 2e-5;
+  let d = 2e-4;
+  let C = args.number("C", 2e5);          // KV pool, tokens
 
-workload {
-  arrive poisson(Lambda);
-  init { set K = 0; }
-  turn {
-    set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
-    set o = ~exp(200);
+  pool kv { cap C; evict lru; }
+  stage engine : fifo;
+  stage tool : delay;
+
+  workload {
+    arrive poisson(Lambda);
+    init { set K = 0; }
+    turn {
+      set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
+      set o = ~exp(200);
+    }
   }
-}
 
-session {
-  turn;
-  loop {
-    set t0 = now;
-    hold kv (K + n + o) {
-      // `cached` is how much of this session's own prefix survived,
-      // decided at the moment the hold is admitted
-      set hit = cached >= K;
-      run engine ((hit ? a * n : a * (K + n)) + d * o);
-    } cache (K + n + o);
-    observe response = now - t0;
-    branch (K > 0) { observe hitrate = hit; }
-    set K = K + n + o;
-    branch with (p) { run tool (~exp(Z)); turn; } else { drop kv; end; }
+  session {
+    turn;
+    loop {
+      set t0 = now;
+      hold kv (K + n + o) {
+        // `cached` is how much of this session's own prefix survived,
+        // decided at the moment the hold is admitted
+        set hit = cached >= K;
+        run engine ((hit ? a * n : a * (K + n)) + d * o);
+      } cache (K + n + o);
+      observe response = now - t0;
+      branch (K > 0) { observe hitrate = hit; }
+      set K = K + n + o;
+      branch with (p) { run tool (~exp(Z)); turn; } else { drop kv; end; }
+    }
   }
-}
 
-run { horizon 20000; warmup 2000; seed 1; }
+  run { horizon 20000; warmup 2000; seed 1; }
+}

@@ -4,28 +4,30 @@
 // 40 tokens start capped at 8 and run uncapped once one has left. The Lean
 // semantics reads the program's expression (`Deployment.chunkAt`) and must
 // give the interpreter's answer (lean/Serq/Regress.lean, README.md).
-pool kv { cap 160; block 16; evict lru; preempt lifo; }
-pool slots { cap 2; admit via engine; }
-stage engine : step {
-  budget 32;
-  chunk queued(slots) + residents > 2 ? 8 : 0;
-  cost 1;
-  memory kv;
-}
-
-workload {
-  arrive batch(3);
-  init { set p = 0; set o = 0; }
-}
-
-session {
-  hold slots (1), kv (p) {
-    run engine prefill (p) growing kv;
-    observe first = now;
-    run engine decode (o) growing kv;
-    observe done = now;
+fn main() {
+  pool kv { cap 160; block 16; evict lru; preempt lifo; }
+  pool slots { cap 2; admit via engine; }
+  stage engine : step {
+    budget 32;
+    chunk queued(slots) + residents > 2 ? 8 : 0;
+    cost 1;
+    memory kv;
   }
-  end;
-}
 
-run { horizon 1000; }
+  workload {
+    arrive batch(3);
+    init { set p = 0; set o = 0; }
+  }
+
+  session {
+    hold slots (1), kv (p) {
+      run engine prefill (p) growing kv;
+      observe first = now;
+      run engine decode (o) growing kv;
+      observe done = now;
+    }
+    end;
+  }
+
+  run { horizon 1000; }
+}
