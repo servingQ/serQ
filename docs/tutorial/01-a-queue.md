@@ -28,13 +28,13 @@ no waiting at all) and `step`, the LLM engine, which arrives in
 ```serq
 workload {
   arrive poisson(Lambda);
-  turn { set s = ~exp(S); }
+  turn { set work_size = ~exp(1); }
   session { turn; request; end; }
 }
 ```
 
 `arrive` says how sessions show up. `turn` is the block that draws the next
-turn's attributes; `~exp(S)` is a fresh draw from an exponential with mean `S`.
+turn's sizes; `~exp(1)` draws normalized work with mean one.
 The other distributions are `~det`, `~uniform`, `~erlang`, `~h2` and
 `~bernoulli`.
 
@@ -45,14 +45,17 @@ The `session` describes the client: draw a turn, make one request, then end.
 
 ```serq
 server {
+  set s = cost(svc, S * work_size);
   set t0 = now;
   run svc (s);
   observe response = now - t0;
-  observe wait = now - t0 - s;
+  observe wait = now - t0 - S * work_size;
 }
 ```
 
-The `server` block handles one request. `run svc (s)` is `s` seconds of work
+The `server` block converts the requested work into a `svc` cost: `S` seconds
+per unit. The workload owns `work_size`; the server cannot overwrite it.
+The `server` block handles one request. `run svc (cost(svc, s))` is `s` seconds of work
 at the FIFO stage named `svc`. `now` is the clock. `observe name = expr`
 records a sample — the program says what it measures.
 

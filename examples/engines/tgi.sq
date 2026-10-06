@@ -60,12 +60,12 @@ fn main() {
   server {
     set t0 = now;
     set prompt = K + n;
-    hold kv (prompt + mnt - 1) reuse (prompt - 1) {
+    hold kv (cost(kv, prompt + mnt - 1)) reuse (cost(kv, prompt - 1)) {
       set c = cached;
       prefill on engine (prompt - c);
       observe ttft = now - t0;
       decode on engine (o - 1);
-    } cache (prompt);
+    } cache (cost(kv, prompt));
     observe response = now - t0;
   }
 

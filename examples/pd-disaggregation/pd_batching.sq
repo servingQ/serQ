@@ -98,7 +98,7 @@ fn main() {
       serve exclusive prefill;
     }
     decode (prompt) {
-      hold kv (min(known, budget_left(E))) reserve (known), reqs (1)
+      hold kv (cost(kv, min(known, budget_left(E)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
            at admission (known = computed < prompt ? prompt : computed + 1) {
         prefill (known) growing kv;
         branch (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
@@ -123,7 +123,7 @@ fn main() {
     }
     nic ps(Bw);
     prefill (prompt) {
-      hold reqs (1), kv (min(prompt, budget_left(P))) reserve (prompt) {
+      hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, budget_left(P)))) reserve (cost(kv, prompt)) {
         prefill (prompt) growing kv;
         mark prefill_done;
       } lease kv (inf);
@@ -147,7 +147,7 @@ fn main() {
     nic ps(Bw);
     // The `decode` role asks for this entry; the gateway never calls it.
     decode (prompt) {
-      hold kv (min(known, budget_left(D))) reserve (known), reqs (1)
+      hold kv (cost(kv, min(known, budget_left(D)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
            at admission (known = computed < prompt ? prompt : computed + 1) {
         prefill (known) growing kv;
         decode (o - 1 - (known - prompt)) growing kv;
@@ -155,7 +155,7 @@ fn main() {
     }
     decode (prompt) from src {
       set transferred = 0;
-      hold kv (known) reserve (known), reqs (0) reserve (1)
+      hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
            at admission (known = computed < prompt ? prompt : computed + 1) {
         set c = 0;
         branch (!transferred) {
@@ -167,7 +167,7 @@ fn main() {
         }
         // a running slot and a token of budget: the last prompt token
         // recomputed for its logits, or what a preemption lost
-        hold reqs (1) {
+        hold reqs (cost(reqs, 1)) {
           prefill (known - c) growing kv;
           branch (known == prompt) { mark first_token; }
           decode (o - 1 - (known - prompt)) growing kv;

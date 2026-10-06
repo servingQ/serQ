@@ -25,10 +25,10 @@ fn source(serve: &str) -> String {
           }}
         }}
         server {{
-          run gate (serial);
-          hold reqs (1) {{
-            run engine prefill (3);
-            run engine decode (2);
+          run gate (cost(gate, serial));
+          hold reqs (cost(reqs, 1)) {{
+            run engine prefill (cost(engine, 3));
+            run engine decode (cost(engine, 2));
           }}
           observe done = now;
         }}
@@ -117,7 +117,7 @@ fn only_selects_and_by_orders() {
           }
         }
         server {
-          hold reqs (1) { run engine prefill (prompt); run engine decode (1); }
+          hold reqs (cost(reqs, 1)) { run engine prefill (cost(engine, prompt)); run engine decode (cost(engine, 1)); }
         }
 
 "#;
@@ -148,11 +148,11 @@ fn admitted(serve: &str) -> String {
           }}
         }}
         server {{
-          run gate (serial > 0 ? 1 : 0);
-          hold reqs (1) {{
+          run gate (cost(gate, serial > 0 ? 1 : 0));
+          hold reqs (cost(reqs, 1)) {{
             observe admitted = now;
-            run engine prefill (1);
-            run engine decode (2);
+            run engine prefill (cost(engine, 1));
+            run engine decode (cost(engine, 2));
           }}
         }}
 
@@ -190,7 +190,7 @@ fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
     // rule saw each as a prefill among none (0 < 0 is false), served it
     // nothing, and the engine never ran.
     let src = admitted("serve only (decoders < residents ? !decoding : decoding);")
-        .replace("run gate (serial > 0 ? 1 : 0);", "");
+        .replace("run gate (cost(gate, serial > 0 ? 1 : 0));", "");
     assert_eq!(
         trace("admitted-opposite", &src),
         [
@@ -243,8 +243,8 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
           }
         }
         server {
-          run gate (2 * serial);
-          hold reqs (1) { run engine prefill (1); run engine decode (1); }
+          run gate (cost(gate, 2 * serial));
+          hold reqs (cost(reqs, 1)) { run engine prefill (cost(engine, 1)); run engine decode (cost(engine, 1)); }
         }
 
 "#;

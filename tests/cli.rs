@@ -25,9 +25,9 @@ const STUCK: &str = r#"
           }
         }
         server {
-          hold reqs (1), kv (100) reserve (100) {
-            run engine prefill (100) growing kv;
-            run engine decode (100) growing kv;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100)) {
+            run engine prefill (cost(engine, 100)) growing kv;
+            run engine decode (cost(engine, 100)) growing kv;
           }
         }
 
@@ -68,7 +68,7 @@ fn a_program_that_does_not_load_exits_1() {
     std::fs::write(
         &file,
         common::main_source(
-        "stage svc : delay;\nworkload { session { request; end; \n} }\nserver { run nowhere (1);\n}\n\n",
+        "stage svc : delay;\nworkload { session { request; end; \n} }\nserver { run nowhere (cost(nowhere, 1));\n}\n\n",
         ),
     )
     .unwrap();
@@ -94,7 +94,7 @@ fn a_runtime_guard_error_exits_1_without_a_panic() {
           session { request; end;
           }
         }
-        server { branch (c / K) { run svc (1); }
+        server { branch (c / K) { run svc (cost(svc, 1)); }
         }
 ",
         ),

@@ -22,7 +22,7 @@ workload {
       request;
       set K = K + n + o;
       observe context = K;
-      branch with (p) { run tool (~exp(Z)); turn; } else { end; }
+      branch with (p) { run tool (cost(tool, ~exp(Z))); turn; } else { end; }
     }
   }
 }

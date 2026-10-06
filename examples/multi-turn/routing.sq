@@ -37,7 +37,7 @@ fn main() {
   workload {
     arrive poisson(rate);
     init {
-      set home = ~bernoulli(hot) ? 0 : floor(~uniform(0, J));
+      set initial_home = ~bernoulli(hot) ? 0 : floor(~uniform(0, J));
       set K = 0;
       set first = 1;
     }
@@ -52,7 +52,7 @@ fn main() {
         request;
         set first = 0;
         set K = K + n + o;
-        branch with (p) { run tool (tool_time()); } else { end; }
+        branch with (p) { run tool (cost(tool, tool_time())); } else { end; }
       }
     }
   }
@@ -65,6 +65,7 @@ fn main() {
     set mig = work(link) + K / bw;
     set mv = 0;
     branch (first) {
+      set home = initial_home;
       set j = home;
       set S = miss;
     } else {
@@ -89,8 +90,8 @@ fn main() {
         set S = (j == home || mv) ? hit : miss;
       }
     }
-    branch (mv) { run link (K / bw); observe migration = 1; }
-    run rep[j] (S);
+    branch (mv) { run link (cost(link, K / bw)); observe migration = 1; }
+    run rep[j] (cost(rep, S));
     set home = j;
     branch (!first) {
       observe response = now - t0;

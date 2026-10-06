@@ -49,7 +49,7 @@ fn main() {
       loop {
         request;
         set K = prompt + o;
-        branch (more) { run user (~exp(Z)); turn; } else { end; }
+        branch (more) { run user (cost(user, ~exp(Z))); turn; } else { end; }
       }
     }
   }

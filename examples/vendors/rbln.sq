@@ -23,7 +23,7 @@ fn main() {
   }
   server {
     set t0 = now;
-    hold reqs (1), kv (min(known, hit + min(128, left))) reserve (known)
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + min(128, left)))) reserve (cost(kv, known))
          at admission (known = computed < prompt ? prompt : computed + 1,
                        left = budget_left(engine),
                        hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
@@ -31,7 +31,7 @@ fn main() {
       prefill (known - c) growing kv;
       branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
       decode (out - (known - prompt)) growing kv;
-    } cache (prompt + out);
+    } cache (cost(reqs, kv, prompt + out));
     observe response = now - t0;
   }
 

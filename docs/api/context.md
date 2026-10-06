@@ -82,7 +82,7 @@ fn main() {
     session { request; end; }
   }
   server {
-    run engine prefill (8);
+    run engine prefill (cost(engine, 8));
     observe finished = now;
   }
 }

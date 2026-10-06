@@ -29,14 +29,13 @@ const ENGINE_WORKLOAD: &str = "arrive poisson(0.3); init { set K = 0; }
 #[test]
 fn a_stale_header_read_is_rejected() {
     let src = format!(
-        "{ENGINE} workload {{ {ENGINE_WORKLOAD} session {{ turn; loop {{ request; end; }}
+        "{ENGINE} workload {{ {ENGINE_WORKLOAD} session {{ turn; loop {{ request; set K = prompt + o; end; }}
         }} }}
         server {{
           set prompt = K + n;
           set c = min(cachedin(kv), prompt - 1);
-          hold reqs (1), kv (c + min(prompt - c, budget_left(engine)))
-          {{ prefill (prompt - cached) growing kv; }} cache (prompt + o);
-          set K = prompt + o;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, budget_left(engine))))
+          {{ prefill (prompt - cached) growing kv; }} cache (cost(reqs, kv, prompt + o));
         }}"
     );
     let e = check(&src).expect_err("rejected");
@@ -55,14 +54,13 @@ fn a_stale_header_read_is_rejected() {
 #[test]
 fn at_admission_is_the_way_through() {
     let src = format!(
-        "{ENGINE} workload {{ {ENGINE_WORKLOAD} session {{ turn; loop {{ request; end; }}
+        "{ENGINE} workload {{ {ENGINE_WORKLOAD} session {{ turn; loop {{ request; set K = prompt + o; end; }}
         }} }}
         server {{
           set prompt = K + n;
-          hold reqs (1), kv (c + min(prompt - c, budget_left(engine)))
+          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, budget_left(engine))))
           at admission (c = min(cachedin(kv), prompt - 1))
-          {{ prefill (prompt - cached) growing kv; }} cache (prompt + o);
-          set K = prompt + o;
+          {{ prefill (prompt - cached) growing kv; }} cache (cost(reqs, kv, prompt + o));
         }}"
     );
     check(&src).expect("the clause is the way to say it");
@@ -72,14 +70,13 @@ fn at_admission_is_the_way_through() {
 #[test]
 fn a_reassignment_clears_the_lint() {
     let src = format!(
-        "{ENGINE} workload {{ {ENGINE_WORKLOAD} session {{ turn; loop {{ request; end; }}
+        "{ENGINE} workload {{ {ENGINE_WORKLOAD} session {{ turn; loop {{ request; set K = prompt + o; end; }}
         }} }}
         server {{
           set prompt = K + n;
           set c = min(cachedin(kv), prompt - 1);
           set c = 0;
-          hold reqs (1), kv (c + prompt) {{ prefill (prompt) growing kv; }} cache (prompt);
-          set K = prompt + o;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, c + prompt)) {{ prefill (prompt) growing kv; }} cache (cost(reqs, kv, prompt));
         }}"
     );
     check(&src).expect("the read no longer reaches the header");
@@ -90,14 +87,13 @@ fn a_reassignment_clears_the_lint() {
 #[test]
 fn a_read_inside_the_body_is_fine() {
     let src = format!(
-        "{ENGINE} workload {{ {ENGINE_WORKLOAD} session {{ turn; loop {{ request; end; }}
+        "{ENGINE} workload {{ {ENGINE_WORKLOAD} session {{ turn; loop {{ request; set K = prompt + o; end; }}
         }} }}
         server {{
           set prompt = K + n;
-          hold reqs (1), kv (prompt) {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
             set c = min(cachedin(kv), prompt - 1);
-            observe hit = c; prefill (prompt) growing kv; }} cache (prompt);
-          set K = prompt + o;
+            observe hit = c; prefill (prompt) growing kv; }} cache (cost(reqs, kv, prompt));
         }}"
     );
     check(&src).expect("after admission is not stale");
@@ -112,7 +108,7 @@ fn a_constant_probability_guard_is_rejected() {
           session { turn; loop { branch (0.8) { request; turn; } else { end; } }
           }
         }
-        server { run tool (Z);
+        server { run tool (cost(tool, Z));
         }
         ";
     let e = check(src).expect_err("rejected");
@@ -138,7 +134,7 @@ fn zero_and_one_are_tests() {
           session {{ turn; loop {{ branch ({g}) {{ request; turn; }} else {{ end; }} }}
           }}
         }}
-        server {{ run tool (Z);
+        server {{ run tool (cost(tool, Z));
         }}
         "
         );
@@ -156,7 +152,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         "{ENGINE} workload {{ {ENGINE_WORKLOAD} session {{ turn; request; end;
         }} }}
         server {{ set x = tokens;
-          hold reqs (1), kv (n) {{ prefill (n) growing kv; }}
+          hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ prefill (n) growing kv; }}
         }}"
     );
     let e = check(&src).expect_err("rejected");
@@ -183,7 +179,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
           }}
         }}
 
-        server {{ {session} hold reqs (1), kv (m) {{ prefill (m) growing kv; }}
+        server {{ {session} hold reqs (cost(reqs, 1)), kv (cost(kv, m)) {{ prefill (m) growing kv; }}
         }}"
         )
     };
@@ -201,12 +197,20 @@ fn a_context_variable_outside_its_moment_is_rejected() {
             "an eviction key",
         ),
         (
-            engine("", "", "hold kv (size) { run svc (1); }"),
+            engine(
+                "",
+                "",
+                "hold kv (cost(kv, size)) { run svc (cost(svc, 1)); }",
+            ),
             "session: `size` is read in a hold's header, read at admission",
             "an eviction key",
         ),
         (
-            engine("", "", "hold kv (1) { run svc (present); }"),
+            engine(
+                "",
+                "",
+                "hold kv (cost(kv, 1)) { run svc (cost(svc, present)); }",
+            ),
             "session: `present` is read in a session statement",
             "a ps stage's capacity",
         ),
@@ -258,7 +262,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
           session { turn; request; end;
           }
         }
-        server { set t = now; hold kv[0] (n) { run svc (n); }
+        server { set t = now; hold kv[0] (cost(kv, n)) { run svc (cost(svc, n)); }
         }
         ";
     check(src).expect("links");
@@ -276,7 +280,7 @@ fn serve_is_one_order_said_once() {
           session {{ request; end;
           }}
         }}
-        server {{ hold kv (1) {{ run engine prefill (1) growing kv; }}
+        server {{ hold kv (cost(kv, 1)) {{ run engine prefill (cost(engine, 1)) growing kv; }}
         }}
         "
         )
@@ -321,7 +325,7 @@ fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
           session {{ request; end;
           }}
         }}
-        server {{ hold kv (1) {{ run engine prefill (1) growing kv; }}
+        server {{ hold kv (cost(kv, 1)) {{ run engine prefill (cost(engine, 1)) growing kv; }}
         }}
         "
         )
@@ -356,12 +360,12 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
                    turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     // the body may read it
     let ok = format!(
-        "{wl} workload {{ {wl_workload} session {{ turn; request; end; \n}} }}\nserver {{ hold reqs (1), kv (n) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} cache (n + o);\n}}"
+        "{wl} workload {{ {wl_workload} session {{ turn; request; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} cache (cost(reqs, kv, n + o));\n}}"
     );
     check(&ok).expect("links");
     // a hold's header may not: the reservation is the scheduler's
     let bad = format!(
-        "{wl} workload {{ {wl_workload} session {{ turn; request; end; \n}} }}\nserver {{ hold reqs (1), kv (n) reserve (n + o) {{ prefill (n) growing kv; }}\n}}"
+        "{wl} workload {{ {wl_workload} session {{ turn; request; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) reserve (cost(kv, n + o)) {{ prefill (n) growing kv; }}\n}}"
     );
     let e = check(&bad).expect_err("rejected");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
@@ -370,7 +374,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     // and the check sees the substituted expression
     let bad = format!(
         "{wl} workload {{ {wl_workload} session {{ turn; request; end; }} }}
-        server {{ hold reqs (1), kv (n) reserve (need) at admission (need = n + o) {{ prefill (n) growing kv; }} }}"
+        server {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) reserve (cost(kv, need)) at admission (need = n + o) {{ prefill (n) growing kv; }} }}"
     );
     let e = check(&bad).expect_err("rejected");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
@@ -384,7 +388,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           }
         }
 
-        server { hold kv (n) { prefill (n) growing kv; }
+        server { hold kv (cost(kv, n)) { prefill (n) growing kv; }
         }";
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("pool `kv`"), "{e}");
@@ -398,7 +402,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           }
         }
 
-        server { hold kv (n) { prefill (n) growing kv; }
+        server { hold kv (cost(kv, n)) { prefill (n) growing kv; }
         }";
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("stage `engine`"), "{e}");
@@ -411,19 +415,19 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           }
         }
 
-        server { hold kv (1) { run svc (1); }
+        server { hold kv (cost(kv, 1)) { run svc (cost(svc, 1)); }
         }";
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("hidden `nothing`"), "{e}");
     // what the scheduler sets cannot be hidden from it, and a name is hidden once
-    let bad = format!("{wl} workload {{ {wl_workload} session {{ turn; request; end; \n}} }}\nserver {{ hold kv (n) {{ prefill (n) growing kv; }}\n}}")
+    let bad = format!("{wl} workload {{ {wl_workload} session {{ turn; request; end; \n}} }}\nserver {{ hold kv (cost(kv, n)) {{ prefill (n) growing kv; }}\n}}")
         .replace("hidden o;", "hidden computed;");
     let e = check(&bad).expect_err("rejected");
     assert!(
         e.contains("hidden `computed`: the scheduler sets it"),
         "{e}"
     );
-    let bad = format!("{wl} workload {{ {wl_workload} session {{ turn; request; end; \n}} }}\nserver {{ hold kv (n) {{ prefill (n) growing kv; }}\n}}")
+    let bad = format!("{wl} workload {{ {wl_workload} session {{ turn; request; end; \n}} }}\nserver {{ hold kv (cost(kv, n)) {{ prefill (n) growing kv; }}\n}}")
         .replace("hidden o;", "hidden o, o;");
     let e = check(&bad).expect_err("rejected");
     assert!(e.contains("hidden `o` twice"), "{e}");
@@ -489,8 +493,8 @@ fn cached_in_a_hold_without_cache_is_rejected() {
     let src = format!(
         "{CACHE_ENGINE} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ request;
         }} }}
-        server {{ loop {{ run think (1);
-            hold kv (1000) {{ observe hit = cached > 0; prefill on engine (1000 - cached) growing kv; }}
+        server {{ loop {{ run think (cost(think, 1));
+            hold kv (cost(kv, 1000)) {{ observe hit = cached > 0; prefill on engine (1000 - cached) growing kv; }}
           }}
         }} "
     );
@@ -505,12 +509,12 @@ fn cached_in_a_hold_without_cache_is_rejected() {
 /// `cache (0)` is that spelling, and the usual request links as before.
 #[test]
 fn cache_zero_is_the_way_through() {
-    for clause in ["cache (0)", "cache (1000)"] {
+    for clause in ["cache (cost(kv, 0))", "cache (cost(kv, 1000))"] {
         let src = format!(
             "{CACHE_ENGINE} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ request;
         }} }}
-        server {{ loop {{ run think (1);
-            hold kv (1000) {{ observe hit = cached > 0; prefill on engine (1000 - cached) growing kv; }} {clause};
+        server {{ loop {{ run think (cost(think, 1));
+            hold kv (cost(kv, 1000)) {{ observe hit = cached > 0; prefill on engine (1000 - cached) growing kv; }} {clause};
           }}
         }} "
         );
@@ -525,8 +529,8 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
     let src = format!(
         "{CACHE_ENGINE} pool reqs {{ cap 4; }} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ request;
         }} }}
-        server {{ loop {{ run think (1);
-            hold kv (1000) {{ hold reqs (1) {{ prefill on engine (1000 - cached) growing kv; }} }} cache (1000);
+        server {{ loop {{ run think (cost(think, 1));
+            hold kv (cost(kv, 1000)) {{ hold reqs (cost(reqs, 1)) {{ prefill on engine (1000 - cached) growing kv; }} }} cache (cost(kv, 1000));
           }}
         }} "
     );
@@ -535,8 +539,8 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
     let src = format!(
         "{CACHE_ENGINE} pool reqs {{ cap 4; }} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ request;
         }} }}
-        server {{ loop {{ run think (1);
-            hold kv (1000) {{ set c = cached; hold reqs (1) {{ prefill on engine (1000 - c) growing kv; }} }} cache (1000);
+        server {{ loop {{ run think (cost(think, 1));
+            hold kv (cost(kv, 1000)) {{ set c = cached; hold reqs (cost(reqs, 1)) {{ prefill on engine (1000 - c) growing kv; }} }} cache (cost(kv, 1000));
           }}
         }} "
     );
@@ -549,8 +553,8 @@ fn reuse_without_cache_is_rejected() {
     let src = format!(
         "{CACHE_ENGINE} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ request;
         }} }}
-        server {{ loop {{ run think (1);
-            hold kv (1000) reuse (512) {{ prefill on engine (1000) growing kv; }}
+        server {{ loop {{ run think (cost(think, 1));
+            hold kv (cost(kv, 1000)) reuse (cost(kv, 512)) {{ prefill on engine (1000) growing kv; }}
           }}
         }} "
     );
@@ -574,7 +578,7 @@ fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
           session { request;
           }
         }
-        server { loop { SET run dec (1); observe r = now; run think (1); }
+        server { loop { SET run dec (cost(dec, 1)); observe r = now; run think (cost(think, 1)); }
         }
         ";
     let e = check(&PS.replace("SET", "set present = 500;")).expect_err("rejected");

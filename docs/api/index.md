@@ -31,6 +31,8 @@ commands and report fields, see the [CLI Reference](../reference/cli.md).
 | Type | Meaning |
 |---|---|
 | `expr` | An expression. Every value is a number (`f64`); comparisons and `!` give 0 or 1, and a non-zero operand is true. `inf` is a number. |
+| `Size`, `Value` | Ordinary quantities: workload-owned request/client attributes and server bookkeeping, respectively. See [attribute types](attributes.md#sizes-values-and-costs). |
+| `Cost(resource)` | An explicitly interpreted resource quantity. Primitive resource operations require their own cost type. See [`cost`](functions.md#cost). |
 | `const` | An expression that folds at link time: numbers, `let` constants, arithmetic and the [arithmetic functions](functions.md#arithmetic). It may not read a session attribute, a pool or a stage, or draw. |
 | `pool` | The name of a `pool`, with an index (`kv[j]`, any `expr`) when it is an array. |
 | `stage` | The name of a `stage`, indexed the same way. |

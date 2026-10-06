@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 11`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 12`.
 
 ## Format
 
@@ -34,6 +34,8 @@ variants as strings, `"Lru"`). JSON has no infinity: an infinite constant
 |---|---|
 | `version` | `IR_VERSION`; a different version is rejected |
 | `attrs` | attribute names; an attribute is referenced by its index (slot) |
+| `attr_types` | mandatory type per slot: `Size`, `Value`, or `Cost(CostTarget)` |
+| `sides` | mandatory `Workload`/`Server` per statement, aligned with `blocks`, including nested bodies |
 | `observes` | observation names, by index |
 | `pools` | `CPool` declarations, below |
 | `stages` | `CStage` declarations, below |
@@ -136,9 +138,41 @@ between simulation checks and proofs.
 | `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}` (`key` a list, compared in order), `End` | control; `End` ends the session |
 | `Fork(body)`, `Join` | `Fork` runs `body` beside the session as a leg of the request: from now, with a copy of the attributes, its own holds and stream; the leases it leaves pass to the session when it ends. `Join` waits until every leg the session forked has ended |
 
+### Types and statement authority
+
+`Size` slots are workload-owned and read-only to server statements. `Value`
+slots are server bookkeeping; workload assignment targets must be `Size`
+or a permitted client `Cost`. Built-in trace/client slots are `Size`;
+`cached` and `computed` are `Value`. Explicit sessions may preset only sizes.
+Server control-flow bodies retain server authority. Inlined server statements
+inside a workload block retain `Server` in `sides`; there is no new runtime
+request frame or attribute reset.
+
+`CostTarget` is `Pool {base, count}`, `Stage {base, count}`, or
+`Joint([targets])`. A joint target has at least two distinct, sorted,
+non-nested targets. A cost's resource span must match its consumer: a run's
+stage(s), a hold's individual pool, or all held pools for common
+`reuse`/`cache`. `Grow` and `Load` require their pool cost. A lease duration
+remains an ordinary scalar in seconds. No raw number or size implicitly
+becomes a cost in these statements.
+
+`CExpr::Cost(target, expression)` explicitly interprets an ordinary quantity
+as the resource cost; the expression must not already have a cost type.
+Evaluation returns the inner value at the same moment and with the same
+random stream. Numeric execution is unchanged. Aliases and allowed scalar
+arithmetic preserve costs; incompatible cost operands are invalid.
+See [attribute types](api/attributes.md#sizes-values-and-costs).
+
+`init` and `turn` neither construct nor read costs. A workload session cannot
+construct or read costs of pools acquired, grown or loaded, or stages run by server
+statements. It can use client resources. Resource declarations, gauges and
+claims use ordinary quantities rather than session costs. Every cost
+attribute read must follow an assignment on all paths; `cache` cost
+attributes must be ready at hold entry, including for early release paths.
+
 ### Expressions (`CExpr`)
 
-`Num`, `Attr(slot)`, `Ctx(var)` (`Now`, `Waited`, `Size`, `Age`, `Last`, `Queued`,
+`Cost(target, expression)`, `Num`, `Attr(slot)`, `Ctx(var)` (`Now`, `Waited`, `Size`, `Age`, `Last`, `Queued`,
 `N`, `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Decoding`,
 `Admission`, `Remaining`, `Position`, `Admitted`, `Preempted`, `Demand`,
 `Served`, `Arrived`: availability is defined by the moments below), `Sample(dist, args)`,
@@ -160,6 +194,8 @@ text and directly constructed IR meet the same rules. Validation covers:
   signatures and distribution arities. Blocks reachable from `init`,
   `turn` and `session` form a tree; `init` and `turn` contain only `Set`
   and `Observe`.
+- **Types.** The mandatory type and side tables obey the contract above;
+  conversions cannot hide an invalid inner expression or evaluation moment.
 - **Evaluation.** Expressions read only what their moment supplies.
   Hold headers (`units`, `reserve`, `reuse`) cannot draw.
   `BudgetLeft` references only step stages, including every member of an

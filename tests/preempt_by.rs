@@ -29,11 +29,11 @@ fn three(preempt: &str) -> String {
         }}
         server {{
           set prompt = serial == 0 ? 4 : serial == 1 ? 10 : 6;
-          hold reqs (1), kv (prompt) {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
             branch (computed > 0) {{ observe victim = serial; }}
             prefill on engine (prompt) growing kv;
             decode on engine (12) growing kv;
-          }} cache (0);
+          }} cache (cost(reqs, kv, 0));
         }}
 
 "#
@@ -95,11 +95,11 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
           }}
         }}
         server {{
-          hold reqs (1), kv (4) {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {{
             observe admitted = serial;
             prefill on engine (4) growing kv;
             decode on engine (10) growing kv;
-          }} cache (0);
+          }} cache (cost(reqs, kv, 0));
         }}
 
 "#
@@ -139,10 +139,10 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
         server {{
           set prompt = 4;
           set o = 12;
-          hold reqs (1), kv (prompt) {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
             prefill on engine (prompt) growing kv;
             decode on engine (o) growing kv;
-          }} cache (0);
+          }} cache (cost(reqs, kv, 0));
         }}
 
 "#
@@ -201,13 +201,13 @@ fn lifo_is_by_minus_admission_on_a_pool_no_engine_reads() {
         }}
         server {{
           branch (serial == 0) {{
-            hold a (4) {{
-              run svc (1);
-              hold b (1) {{ run svc (1); grow a (4); run svc (1); }}
+            hold a (cost(a, 4)) {{
+              run svc (cost(svc, 1));
+              hold b (cost(b, 1)) {{ run svc (cost(svc, 1)); grow a (cost(a, 4)); run svc (cost(svc, 1)); }}
             }}
           }} else {{
-            run svc (0.5);
-            hold a (4) {{ observe s1 = computed; run svc (5); }}
+            run svc (cost(svc, 0.5));
+            hold a (cost(a, 4)) {{ observe s1 = computed; run svc (cost(svc, 5)); }}
           }}
         }}
 
@@ -255,11 +255,11 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
         }
         server {
           set rank = serial == 2 ? 9 : serial;
-          hold reqs (1), kv (4) {
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {
             observe admitted = serial;
             prefill on engine (4) growing kv;
             decode on engine (10) growing kv;
-          } cache (0);
+          } cache (cost(reqs, kv, 0));
         }
 
 "#;

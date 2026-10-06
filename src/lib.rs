@@ -201,6 +201,7 @@ fn drawn(mut prog: frontend::ast::Program) -> frontend::ast::Program {
             session.push(Stmt::Set(name, Expr::Var("now".into())));
         }
     }
+    session.push(Stmt::Side(ir::Side::Server));
     session.extend(request);
     prog.session = session;
     prog

@@ -32,12 +32,12 @@ fn aging_source(bound: bool, key: &str) -> String {
         server {{
           set prompt = serial == 1 || serial == 5 ? 256 : 64;
           set immediate = serial == 4;
-          run delay (serial == 2 ? 1 : serial == 3 ? 2 : serial >= 4 ? 3 : 0);
+          run delay (cost(delay, serial == 2 ? 1 : serial == 3 ? 2 : serial >= 4 ? 3 : 0));
           set queued = now;
-          hold reqs (1) {{
+          hold reqs (cost(reqs, 1)) {{
             observe selected = serial;
             observe admitted = now;
-            {run} (serial == 0 ? 4 : 1);
+            {run} (cost(engine, serial == 0 ? 4 : 1));
           }}
         }}
 
@@ -106,12 +106,12 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
           }
         }
         server {
-          run delay (serial == 0 ? 0 : 0.25);
-          hold reqs (1) {
+          run delay (cost(delay, serial == 0 ? 0 : 0.25));
+          hold reqs (cost(reqs, 1)) {
             observe selected = serial;
             observe admitted = now;
-            branch (serial == 0) { run engine decode (1); }
-            else { run engine prefill (serial == 2 ? 1 : serial == 1 ? 2 : 3); }
+            branch (serial == 0) { run engine decode (cost(engine, 1)); }
+            else { run engine prefill (cost(engine, serial == 2 ? 1 : serial == 1 ? 2 : 3)); }
           }
         }
 
@@ -137,8 +137,8 @@ fn lexicographic_keys_preserve_enqueue_order_for_equal_keys() {
           }
         }
         server {
-          run delay (serial == 0 ? 0 : 0.25);
-          hold reqs (1) { observe selected = serial; run engine (1); }
+          run delay (cost(delay, serial == 0 ? 0 : 0.25));
+          hold reqs (cost(reqs, 1)) { observe selected = serial; run engine (cost(engine, 1)); }
         }
 
 "#;
@@ -220,11 +220,11 @@ fn a_selected_request_that_cannot_fit_still_blocks_lower_priority_requests() {
           }
         }
         server {
-          run delay (serial == 0 ? 0 : 0.25);
-          hold kv (serial == 0 ? 3 : serial == 1 ? 2 : 1) {
+          run delay (cost(delay, serial == 0 ? 0 : 0.25));
+          hold kv (cost(kv, serial == 0 ? 3 : serial == 1 ? 2 : 1)) {
             observe selected = serial;
             observe admitted = now;
-            run service (serial == 0 ? 4 : 1);
+            run service (cost(service, serial == 0 ? 4 : 1));
           }
         }
 
@@ -253,15 +253,15 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
           }
         }
         server {
-          run delay (serial == 2 ? 3.25 : 0);
-          hold reqs (1), kv (min(known, left)) reserve (known)
+          run delay (cost(delay, serial == 2 ? 3.25 : 0));
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, left))) reserve (cost(kv, known))
           at admission (known = serial == 2 ? 0 : max(2, computed), left = budget_left(engine)) {
             observe selected = serial;
             observe admitted = now;
-            branch (serial == 2) { run engine decode (1); }
+            branch (serial == 2) { run engine decode (cost(engine, 1)); }
             else {
-              run engine prefill (known) growing kv;
-              run engine decode (3 - (known - 2)) growing kv;
+              run engine prefill (cost(engine, known)) growing kv;
+              run engine decode (cost(engine, 3 - (known - 2))) growing kv;
             }
           }
         }

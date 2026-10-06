@@ -45,7 +45,7 @@ fn main() {
       loop {
         request;
         set K = prompt + o;
-        branch with (p) { run tool (~exp(Z)); turn; } else { drop kv; end; }
+        branch with (p) { run tool (cost(tool, ~exp(Z))); turn; } else { drop kv; end; }
       }
     }
   }
@@ -58,14 +58,14 @@ fn main() {
     // cache itself is read inside the hold's units, so it is read when the
     // request is admitted -- while it waits, its prefix is still evictable
     set hitmax = floor((prompt - 1) / bs) * bs;
-    hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
          at admission (hit = min(cachedin(kv), hitmax)) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;
-      run engine prefill (prompt - c) growing kv;
+      run engine prefill (cost(engine, prompt - c)) growing kv;
       observe ttft = now - t0;
-      run engine decode (o - 1) growing kv;
-    } cache (prompt + o);
+      run engine decode (cost(engine, o - 1)) growing kv;
+    } cache (cost(reqs, kv, prompt + o));
     observe response = now - t0;
   }
 

@@ -167,6 +167,14 @@ The rules that are the language's, not the catalogue's:
   `computed` (the position a preempted hold had reached, 0 otherwise; [Semantics](#3-semantics)),
   and with a trace `new`, `out`, `think`, `more`, `forced`.
 
+Workload assignments produce read-only-to-server `Size` attributes. A server
+computes separate bookkeeping values and explicitly interprets quantities
+with `cost(resource, expression)`. Resource primitives require this nominal
+cost type; serving vocabulary performs the named conversion itself. The
+contract applies to direct JSON IR as well as source. See
+[attribute types](api/attributes.md#sizes-values-and-costs) and
+[`cost`](api/functions.md#cost).
+
 ### Entry point and external inputs
 
 Source programs declare exactly one `fn main()`. It constructs the deployment
@@ -195,14 +203,14 @@ kernel), the interpreter and the Lean model know nothing of them.
 
 | Serving form | Kernel |
 |---|---|
-| `prefill W;` | `run prefill (W);`, or on a step engine `E`: `run E prefill (T);` |
-| `transfer (X) from P to Q (n);` | `run link (X); load Q (n); release P;` — the KV of `n` tokens moves from the session's lease (or hold) on `P` to its hold on `Q`: the link takes the time, the tokens count as computed at `Q`, and `P` is given back (below, *A KV transfer*) |
-| `decode W;` | `run decode (W);`, or on a step engine `E`: `run E decode (T);` |
-| `tool Z;` | `run tool (Z);` |
-| `prefill (T) growing kv;` | `run E prefill (T) growing kv;` (`growing` passes through; a form never adds it) |
-| `prefill[j] W;` | `run prefill[j] (W);`, or `run prefill[j] prefill (T);` when the array is step engines (the index applies to the role's stage array) |
-| `prefill on P[j] (W);` | `run P[j] (W);`, or `run P[j] prefill (T);` when `P` is a step engine |
-| `transfer on egress[i], ingress[j] (X) from P to Q (n);` | `run egress[i], ingress[j] (X); load Q (n); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*) |
+| `prefill W;` | `run prefill (cost(prefill, W));`, or on a step engine `E`: `run E prefill (cost(E, T));` |
+| `transfer (X) from P to Q (n);` | `run link (cost(link, X)); load Q (cost(Q, n)); release P;` — the KV of `n` tokens moves from the session's lease (or hold) on `P` to its hold on `Q`: the link takes the time, the tokens count as computed at `Q`, and `P` is given back (below, *A KV transfer*) |
+| `decode W;` | `run decode (cost(decode, W));`, or on a step engine `E`: `run E decode (cost(E, T));` |
+| `tool Z;` | `run tool (cost(tool, Z));` |
+| `prefill (T) growing kv;` | `run E prefill (cost(E, T)) growing kv;` (`growing` passes through; a form never adds it) |
+| `prefill[j] W;` | `run prefill[j] (cost(prefill, W));`, or `run prefill[j] prefill (cost(prefill, T));` when the array is step engines (the index applies to the role's stage array) |
+| `prefill on P[j] (W);` | `run P[j] (cost(P, W));`, or `run P[j] prefill (cost(P, T));` when `P` is a step engine |
+| `transfer on egress[i], ingress[j] (X) from P to Q (n);` | `run egress[i], ingress[j] (cost(egress, ingress, X)); load Q (cost(Q, n)); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*) |
 
 The argument is work in the unit of the stage it runs on, and the two
 metavariables say which: `W` is the time the job takes alone on a `fifo`,
@@ -225,7 +233,7 @@ serves an array and `prefill on P2 (W);` stages that are not one. On a
 step engine the run gets the role's mode (`run E prefill`), elsewhere it
 is plain, so the linker's rule (the mode is required on a step stage and
 forbidden elsewhere) is met by construction; `transfer` and `tool` on a
-step engine are rejected by the linker as `run E (X)` would be. A linker
+step engine are rejected by the linker as `run E (cost(E, X))` would be. A linker
 error inside a form (an unknown name in `W`, say) speaks of the kernel
 statement.
 
@@ -243,7 +251,7 @@ victim, until the session's `release P` (a `transfer … from P` contains
 one), `t` seconds, or the session's end, and then `cache` applies (`inf`
 keeps the lease until an explicit release or the session's end). `release P` with a hold on `P` gives the innermost
 enclosing hold's allocation there back now, caching per that hold's `cache`,
-and the scope's end then has nothing left there. `load Q (n)` says the KV
+and the scope's end then has nothing left there. `load Q (cost(Q, n))` says the KV
 of `n` tokens arrived from outside the engine: the enclosing hold's
 computed position on `Q` advances by `n` (within its allocation), as a
 `growing` run's would token by token, so `cache` and `cached` count them.
@@ -287,16 +295,17 @@ server {
 
 `request;` runs the server once. The parser splices the server's
 statements in its place, at any depth and as often as it is written, so the
-IR and interpreter see one session. This expansion adds no execution boundary
-or separate attribute scope.
+IR and interpreter see one session. The IR retains each statement's
+workload/server side and attribute types to enforce request ownership.
+This expansion adds no execution boundary or separate attribute scope.
 
-The parser enforces these boundaries:
+The parser and IR validator enforce these boundaries:
 
 | | the session's side (`session` inside `workload`) | the server's side (`server`) |
 |---|---|---|
 | the next turn, the exit | `turn;`, `end;` | refused: a server is done with a request when its block is |
 | the request | `request;` | refused: a server does not request itself |
-| admission | `hold P (u), … at admission (x = e) { … } cache (ℓ)` | the same |
+| admission | `hold P (cost(P, u)), … at admission (x = e) { … } cache (cost(P, ℓ))` | the same |
 
 A `hold` uses the same admission rules on either side: all named pools must
 have room. `reserve` specifies an admission requirement larger than the
@@ -322,11 +331,11 @@ queue P[NP] : prefill {
   pool kv { cap blocksP * bs; block bs; evict lru; preempt lifo; }
   serve step { budget B; cost …; memory kv; }
   prefill (prompt) {
-    hold reqs (1), kv (min(prompt, hit + budget_left(P))) reserve (prompt)
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt))
          at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
       set c = cached;
       prefill (prompt - c) growing kv;
-    } cache (prompt) lease kv (inf);
+    } cache (cost(reqs, kv, prompt)) lease kv (inf);
   }
 }
 ```
@@ -336,7 +345,7 @@ named after the queue (`admit via P`, `budget_left(P)`, `work(P[i])`), and
 an *entry* — one per verb of the queue's roles — holds what the station
 does with one request, with the role's parameters (`prefill (prompt)`). A
 queue declares its pools, then its `serve`, then its entries, each reading
-what is above it. The body is the server's statements; `run (X)` with
+what is above it. The body is the server's statements; `run (cost(P, X))` with
 no stage names the queue's own, and a serving form with no `on` finds it;
 the stages that are not a step engine (a link's, a delay) the body may name
 as a `server` does. `self` is the member's index in a family. A family's
@@ -489,7 +498,7 @@ finite `lease` breaks it).
 
 ### Pools
 
-`hold m₁(u₁) reserve(r₁), m₂(u₂) … reuse(ρ) { body } cache(ℓ)`
+`hold m₁(cost(m₁, u₁)) reserve(cost(m₁, r₁)), m₂(cost(m₂, u₂)) … reuse(cost(m₁, m₂, ρ)) { body } cache(cost(m₁, m₂, ℓ))`
 joins the queue of `m₁`. The unit expressions are evaluated *when the
 session is admitted* (observables such as the cache or an engine's budget
 change while a session waits), and re-evaluated at every attempt, so the units, `reserve`
@@ -526,7 +535,7 @@ preemption victim, until the session's `release m`, `t` seconds, or the
 session's end, and `cache` applies then; a `release m` outside any hold on
 `m` ends the lease. A session that holds and leases nothing on `m` releases
 nothing (a hold re-executed after a preemption reaches the statement
-again). `load m (n)` advances the innermost
+again). `load m (cost(m, n))` advances the innermost
 enclosing hold's position on `m` by `n` tokens, which its allocation must
 cover; the KV of a transfer counts as computed from then on. `grow`,
 `growing`, `load` and `release` stand inside a hold of the same pool
@@ -577,7 +586,7 @@ otherwise a fitting waiting prefill can displace tentative decodes, and
 its header sees the full budget. Until then a waiting session's cached
 prefix is evictable: the *wait channel*.
 
-`grow m (d)` enlarges the innermost hold on `m` by `d` (rounded to
+`grow m (cost(m, d))` enlarges the innermost hold on `m` by `d` (rounded to
 blocks). If it does not fit: with `preempt none` the session waits and
 resumes where it was; with `preempt by (k₁, …)` a candidate is
 preempted: the holders that are residents of the step stage the pool is the
@@ -650,7 +659,7 @@ pool declared first is served first.
 
 `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(present)/present`. `delay`: every job on its
-own at rate 1. `run a, b (w)` is one job that holds `a` and `b` from its
+own at rate 1. `run a, b (cost(a, b, w))` is one job that holds `a` and `b` from its
 start to its end: a *flow*, whose work goes down at one rate at all its
 stages, set by the program's `share` from their capacities. `share maxmin`
 is max-min fair: every flow's rate rises together until a stage fills,
@@ -782,7 +791,7 @@ header a place to name what it is written in terms of, as `lib/vllm.sq`
 does:
 
 ```
-hold reqs (1), kv (min(known, hit + budget_left(engine)))
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(engine))))
      at admission (known = computed < prompt ? prompt : computed + 1,
                    hit = min(cachedin(kv), reusable(known, blocksize(kv)))) { … }
 ```
@@ -1022,7 +1031,7 @@ rather than from the previous prompt, and caches `prompt + o`.
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk long_prefill(reqs, c)`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
+| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (cost(engine, n)) growing kv`), `chunk long_prefill(reqs, c)`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
 | a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `prefill (known - c)`, `decode (o - 1 - (known - prompt))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |

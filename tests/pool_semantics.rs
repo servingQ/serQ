@@ -34,11 +34,11 @@ fn eviction_order_is_the_declared_key() {
           }}
         }}
         server {{
-          run gate (serial);                 // 0, 1, 2: sequential first turns
-          hold kv (c) {{ run svc (0.1); }} cache (c);
-          run gate (10);
+          run gate (cost(gate, serial));                 // 0, 1, 2: sequential first turns
+          hold kv (cost(kv, c)) {{ run svc (cost(svc, 0.1)); }} cache (cost(kv, c));
+          run gate (cost(gate, 10));
           branch (serial == 1) {{
-            hold kv (c) {{ observe hit = cached >= c; run svc (0.1); }} cache (c);
+            hold kv (cost(kv, c)) {{ observe hit = cached >= c; run svc (cost(svc, 0.1)); }} cache (cost(kv, c));
           }}
         }}
 
@@ -74,23 +74,23 @@ fn queued_sessions_are_evicted_after_suspended_ones() {
         }}
         server {{
           branch (serial == 0) {{
-            hold slot (1) {{ hold kv (8) {{ run svc (1); }} cache (8); }}
-            run gate (2);                                   // t = 3: queue for the slot
-            hold slot (1) {{ hold kv (8) {{ observe hit0 = cached >= 8; run svc (0.1); }} cache (0); }}
+            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 8)) {{ run svc (cost(svc, 1)); }} cache (cost(kv, 8)); }}
+            run gate (cost(gate, 2));                                   // t = 3: queue for the slot
+            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 8)) {{ observe hit0 = cached >= 8; run svc (cost(svc, 0.1)); }} cache (cost(kv, 0)); }}
           }}
           branch (serial == 1) {{
-            run gate (1);
-            hold slot (1) {{ hold kv (10) {{ run svc (1); }} cache (10); }}
-            run gate (5);                                   // tool call t = 2..7
-            hold slot (1) {{ hold kv (10) {{ observe hit1 = cached >= 10; run svc (0.1); }} cache (0); }}
+            run gate (cost(gate, 1));
+            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 10)) {{ run svc (cost(svc, 1)); }} cache (cost(kv, 10)); }}
+            run gate (cost(gate, 5));                                   // tool call t = 2..7
+            hold slot (cost(slot, 1)) {{ hold kv (cost(kv, 10)) {{ observe hit1 = cached >= 10; run svc (cost(svc, 0.1)); }} cache (cost(kv, 0)); }}
           }}
           branch (serial == 2) {{
-            run gate (3.5);
-            hold kv (20) {{ run svc (0.1); }}               // no slot needed: evicts at t = 3.5
+            run gate (cost(gate, 3.5));
+            hold kv (cost(kv, 20)) {{ run svc (cost(svc, 0.1)); }}               // no slot needed: evicts at t = 3.5
           }}
           branch (serial == 3) {{
-            run gate (2);
-            hold slot (1) {{ run gate (2); }}               // blocks the slot t = 2..4
+            run gate (cost(gate, 2));
+            hold slot (cost(slot, 1)) {{ run gate (cost(gate, 2)); }}               // blocks the slot t = 2..4
           }}
         }}
 
@@ -128,12 +128,12 @@ fn block_pools_round_and_evict_by_block() {
           }
         }
         server {
-          run gate (serial);
+          run gate (cost(gate, serial));
           // s0 takes 55 -> 60 allocated, caches 55 -> 50 (five full blocks)
           // s1 takes 70 -> needs 70 of 100 - 0 used; cached 50 -> evict 2 blocks
-          hold kv (serial == 0 ? 55 : 70) { observe used = used(kv); run svc (1); } cache (serial == 0 ? 55 : 0);
-          run gate (10);
-          branch (serial == 0) { hold kv (55) { observe cached0 = cached; run svc (0.1); } cache (0); }
+          hold kv (cost(kv, serial == 0 ? 55 : 70)) { observe used = used(kv); run svc (cost(svc, 1)); } cache (cost(kv, serial == 0 ? 55 : 0));
+          run gate (cost(gate, 10));
+          branch (serial == 0) { hold kv (cost(kv, 55)) { observe cached0 = cached; run svc (cost(svc, 0.1)); } cache (cost(kv, 0)); }
         }
 
 "#;
@@ -167,13 +167,13 @@ fn spill_to_a_tier_and_fetch_back() {
           }
         }
         server {
-          run gate (serial);
-          hold kv (c) { run svc (1); } cache (c);
-          run gate (5);
+          run gate (cost(gate, serial));
+          hold kv (cost(kv, c)) { run svc (cost(svc, 1)); } cache (cost(kv, c));
+          run gate (cost(gate, 5));
           branch (serial == 0) {
             observe in_tier = cachedin(tier);
-            branch (cachedin(tier) > 0) { run link (cachedin(tier) / 100); observe fetched = 1; drop tier; }
-            hold kv (c) { run svc (0.1); }
+            branch (cachedin(tier) > 0) { run link (cost(link, cachedin(tier) / 100)); observe fetched = 1; drop tier; }
+            hold kv (cost(kv, c)) { run svc (cost(svc, 0.1)); }
           }
         }
 
@@ -213,12 +213,12 @@ fn a_spill_predicate_sees_whether_the_session_is_queued() {
         }}
         server {{
           branch (serial == 0) {{
-            hold kv (6) {{ run svc (0.5); }} cache (6);
-            run gate (0.6);
-            hold kv (20) {{ run svc (0.1); }}
+            hold kv (cost(kv, 6)) {{ run svc (cost(svc, 0.5)); }} cache (cost(kv, 6));
+            run gate (cost(gate, 0.6));
+            hold kv (cost(kv, 20)) {{ run svc (cost(svc, 0.1)); }}
           }}
-          branch (serial == 1) {{ run gate (0.5); hold kv (24) {{ run svc (10); }} }}
-          branch (serial == 2) {{ run gate (1.2); hold kv (6) {{ run svc (1); }} }}
+          branch (serial == 1) {{ run gate (cost(gate, 0.5)); hold kv (cost(kv, 24)) {{ run svc (cost(svc, 10)); }} }}
+          branch (serial == 2) {{ run gate (cost(gate, 1.2)); hold kv (cost(kv, 6)) {{ run svc (cost(svc, 1)); }} }}
         }}
         "
         )
@@ -246,10 +246,10 @@ fn grow_waits_under_preempt_none() {
           }
         }
         server {
-          run gate (serial);
-          hold kv (50) {
-            run svc (5);
-            branch (serial == 0) { set t = now; grow kv (30); observe waited = now - t; }
+          run gate (cost(gate, serial));
+          hold kv (cost(kv, 50)) {
+            run svc (cost(svc, 5));
+            branch (serial == 0) { set t = now; grow kv (cost(kv, 30)); observe waited = now - t; }
           }
           observe done = now;
         }
@@ -286,13 +286,13 @@ fn a_preempted_hold_caches_what_it_computed() {
         }
         server {
           branch (serial == 0) {
-            hold kv (5) { run d (2); grow kv (5); run d (10); }
+            hold kv (cost(kv, 5)) { run d (cost(d, 2)); grow kv (cost(kv, 5)); run d (cost(d, 10)); }
           } else {
-            hold kv (12) {
+            hold kv (cost(kv, 12)) {
               observe cached_at_admission = cached;
               observe computed_at_admission = computed;
-              run d (5);
-            } cache (12);
+              run d (cost(d, 5));
+            } cache (cost(kv, 12));
           }
         }
 
@@ -332,7 +332,7 @@ fn priority_queue_orders_admissions() {
           }
         }
         server {
-          hold kv (10) { observe order = serial; run svc (1); }
+          hold kv (cost(kv, 10)) { observe order = serial; run svc (cost(svc, 1)); }
         }
 
 "#;
@@ -356,7 +356,7 @@ fn oversized_requests_are_rejected() {
           session { request; end;
           }
         }
-        server { hold kv (serial == 0 ? 20 : 5) { run svc (1); } observe done = serial;
+        server { hold kv (cost(kv, serial == 0 ? 20 : 5)) { run svc (cost(svc, 1)); } observe done = serial;
         }
 
 "#;
@@ -378,7 +378,7 @@ fn an_oversized_reservation_is_rejected() {
           session { request; end;
           }
         }
-        server { hold kv (1) reserve (serial == 0 ? 20 : 1) { run svc (1); } observe done = serial;
+        server { hold kv (cost(kv, 1)) reserve (cost(kv, serial == 0 ? 20 : 1)) { run svc (cost(svc, 1)); } observe done = serial;
         }
 
 "#;
@@ -394,13 +394,13 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
     // constant units that fit no member of the reference do not link
     // (#271), rounded to blocks, `reserve` included
     for hold in [
-        "hold kv (20)",
-        "hold kv (2 * 5 + 1)",
-        "hold kv (1) reserve (11)",
-        "hold kv (max(20, 1))",
-        "hold kv (1 > 0 ? 20 : 1)",
-        "hold kv2[0] (20)",
-        "hold kv2[serial] (20)",
+        "hold kv (cost(kv, 20))",
+        "hold kv (cost(kv, 2 * 5 + 1))",
+        "hold kv (cost(kv, 1)) reserve (cost(kv, 11))",
+        "hold kv (cost(kv, max(20, 1)))",
+        "hold kv (cost(kv, 1 > 0 ? 20 : 1))",
+        "hold kv2[0] (cost(kv2, 20))",
+        "hold kv2[serial] (cost(kv2, 20))",
     ] {
         let src = format!(
             "pool kv {{ cap 10; }} pool kv2[2] {{ cap 10; }} stage d : delay;
@@ -408,7 +408,7 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
           session {{ request; end;
           }}
         }}
-        server {{ {hold} {{ run d (1); }}
+        server {{ {hold} {{ run d (cost(d, 1)); }}
         }}
         "
         );
@@ -427,7 +427,7 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
           session { request; end;
           }
         }
-        server { hold kv (9) { run d (1); }
+        server { hold kv (cost(kv, 9)) { run d (cost(d, 1)); }
         }
         ",
         ),
@@ -447,7 +447,7 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
           session { request; end;
           }
         }
-        server { hold kv (u) { run d (1); }
+        server { hold kv (cost(kv, u)) { run d (cost(d, 1)); }
         }
         ",
         &common::horizon(10.0),
@@ -489,9 +489,9 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
           }
         }
         server {
-          hold reqs (1), kv (100) reserve (100) {
-            run engine prefill (100) growing kv;
-            run engine decode (100) growing kv;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100)) {
+            run engine prefill (cost(engine, 100)) growing kv;
+            run engine decode (cost(engine, 100)) growing kv;
           }
         }
 
@@ -526,9 +526,9 @@ fn a_zero_cost_preempting_step_does_not_hang() {
           }
         }
         server {
-          hold reqs (1), kv (100) reserve (100) {
-            run engine prefill (100) growing kv;
-            run engine decode (100) growing kv;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100)) {
+            run engine prefill (cost(engine, 100)) growing kv;
+            run engine decode (cost(engine, 100)) growing kv;
           }
         }
 
@@ -548,7 +548,7 @@ const GUARD: &str = "
           session { request; end;
           }
         }
-        server { branch (GUARD) { run svc (1); }
+        server { branch (GUARD) { run svc (cost(svc, 1)); }
         }
         ";
 
@@ -609,15 +609,21 @@ fn a_boolean_guard_and_a_declared_draw_run() {
 #[test]
 fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
     let request =
-        "hold kv (min(cachedin(kv), 992) + 8) at admission (hit = min(cachedin(kv), 992)) {
+        "hold kv (cost(kv, min(cachedin(kv), 992) + 8)) at admission (hit = min(cachedin(kv), 992)) {
                      observe hit = cached > 0;
                      prefill on engine (1000 - cached) growing kv;
-                   } cache (1000);";
+                   } cache (cost(kv, 1000));";
     for (wrap, want_hit) in [
         (request.to_string(), 1.0),
-        (format!("hold kv (0) {{ {request} }}"), 1.0),
-        (format!("hold kv (0) {{ release kv; {request} }}"), 1.0),
-        (format!("hold kv (0) {{ {request} }} cache (0);"), 0.0),
+        (format!("hold kv (cost(kv, 0)) {{ {request} }}"), 1.0),
+        (
+            format!("hold kv (cost(kv, 0)) {{ release kv; {request} }}"),
+            1.0,
+        ),
+        (
+            format!("hold kv (cost(kv, 0)) {{ {request} }} cache (cost(kv, 0));"),
+            0.0,
+        ),
     ] {
         let src = format!(
             r#"
@@ -628,7 +634,7 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
           session {{ request;
           }}
         }}
-        server {{ loop {{ run think (1); {wrap} }}
+        server {{ loop {{ run think (cost(think, 1)); {wrap} }}
         }}
 
 "#
@@ -672,30 +678,39 @@ fn bad_amounts_and_indices_fail_the_run() {
         run_source(&common::main_source(&src), &common::horizon(10.0), None).unwrap_err()
     };
     for (stmt, said) in [
-        ("run d (z / z);", "`run d (z / z)`: the amount is NaN"),
-        ("run d (z - 5);", "`run d (z - 5)`: the amount is -5"),
         (
-            "hold kv (z - 1) { run d (1); }",
-            "`hold kv (z - 1)`: the amount is -1",
+            "run d (cost(d, z / z));",
+            "`run d (cost(d, z / z))`: the amount is NaN",
         ),
         (
-            "hold kv (8) { grow kv (z - 1); }",
-            "`grow kv (z - 1)`: the amount is -1",
+            "run d (cost(d, z - 5));",
+            "`run d (cost(d, z - 5))`: the amount is -5",
         ),
         (
-            "hold kv (8) { load kv (z / z); }",
-            "`load kv (z / z)`: the amount is NaN",
+            "hold kv (cost(kv, z - 1)) { run d (cost(d, 1)); }",
+            "`hold kv (cost(kv, z - 1))`: the amount is -1",
         ),
         (
-            "run a[i - 1] (1);",
+            "hold kv (cost(kv, 8)) { grow kv (cost(kv, z - 1)); }",
+            "`grow kv (cost(kv, z - 1))`: the amount is -1",
+        ),
+        (
+            "hold kv (cost(kv, 8)) { load kv (cost(kv, z / z)); }",
+            "`load kv (cost(kv, z / z))`: the amount is NaN",
+        ),
+        (
+            "run a[i - 1] (cost(a, 1));",
             "index `i - 1` is -1: a member of an array of 2 is 0 to 1",
         ),
-        ("run a[i + 0.5] (1);", "index `i + 0.5` is 0.5"),
-        ("run a[i + 2] (1);", "index `i + 2` is 2"),
-        ("hold q[i - 1] (1) { run d (1); }", "index `i - 1` is -1"),
+        ("run a[i + 0.5] (cost(a, 1));", "index `i + 0.5` is 0.5"),
+        ("run a[i + 2] (cost(a, 1));", "index `i + 2` is 2"),
         (
-            "hold kv (1) reserve (z / z) { run d (1); }",
-            "`hold kv reserve (z / z)`: the amount is NaN",
+            "hold q[i - 1] (cost(q, 1)) { run d (cost(d, 1)); }",
+            "index `i - 1` is -1",
+        ),
+        (
+            "hold kv (cost(kv, 1)) reserve (cost(kv, z / z)) { run d (cost(d, 1)); }",
+            "`hold kv reserve (cost(kv, z / z))`: the amount is NaN",
         ),
         (
             "choose j in (z - 1) by (j);",
@@ -707,10 +722,19 @@ fn bad_amounts_and_indices_fail_the_run() {
     }
     // a constant one does not link
     for (stmt, said) in [
-        ("run d (-5);", "`run d (-5)`"),
-        ("hold kv (2 - 3) { run d (1); }", "`hold kv (-1)`"),
-        ("hold kv (8) { grow kv (-1); }", "`grow kv (-1)`"),
-        ("hold kv (8) { load kv (0 / 0); }", "`load kv (NaN)`"),
+        ("run d (cost(d, -5));", "`run d (-5)`"),
+        (
+            "hold kv (cost(kv, 2 - 3)) { run d (cost(d, 1)); }",
+            "`hold kv (-1)`",
+        ),
+        (
+            "hold kv (cost(kv, 8)) { grow kv (cost(kv, -1)); }",
+            "`grow kv (-1)`",
+        ),
+        (
+            "hold kv (cost(kv, 8)) { load kv (cost(kv, 0 / 0)); }",
+            "`load kv (NaN)`",
+        ),
     ] {
         let src = format!(
             "pool kv {{ cap 64; }} stage d : delay;
@@ -736,7 +760,7 @@ fn bad_amounts_and_indices_fail_the_run() {
           session { request; end;
           }
         }
-        server { run a[0] (1);
+        server { run a[0] (cost(a, 1));
         } ",
         ),
         &common::horizon(10.0),
@@ -759,7 +783,7 @@ fn bad_amounts_and_indices_fail_the_run() {
           session { request; end;
           }
         }
-        server { hold kv (8) { run eng decode (z - 1); }
+        server { hold kv (cost(kv, 8)) { run eng decode (cost(eng, z - 1)); }
         }
         ",
         ),
@@ -768,7 +792,7 @@ fn bad_amounts_and_indices_fail_the_run() {
     )
     .unwrap_err();
     assert!(
-        e.contains("`run eng decode (z - 1)`: the amount is -1"),
+        e.contains("`run eng decode (cost(eng, z - 1))`: the amount is -1"),
         "{e}"
     );
     // zero is an amount: a run of no work, a hold of nothing
@@ -778,7 +802,7 @@ fn bad_amounts_and_indices_fail_the_run() {
           session { request; end;
           }
         }
-        server { run d (z); hold kv (z) { run d (1); }
+        server { run d (cost(d, z)); hold kv (cost(kv, z)) { run d (cost(d, 1)); }
         }
         ",
         &common::horizon(10.0),
@@ -800,7 +824,7 @@ fn a_hold_takes_a_pool_once() {
         }
         server {
           set prompt = 64;
-          hold kv (16), kv (16) { prefill prompt growing kv; decode 40 growing kv; }
+          hold kv (cost(kv, 16)), kv (cost(kv, 16)) { prefill prompt growing kv; decode 40 growing kv; }
         }
         ";
     let e = serq::compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap_err();
@@ -813,7 +837,7 @@ fn a_hold_takes_a_pool_once() {
           session { request; end;
           }
         }
-        server { hold kv[i] (1), kv[j] (1) { run d (1); }
+        server { hold kv[i] (cost(kv, 1)), kv[j] (cost(kv, 1)) { run d (cost(d, 1)); }
         }
         ",
         ),
@@ -849,7 +873,7 @@ fn a_reserve_that_reads_the_state_waits_instead_of_being_rejected() {
           }}
         }}
         server {{
-          hold reqs (1), kv (2) reserve ({reserve}) {{ run svc (1 + serial); }}
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 2)) reserve (cost(kv, {reserve})) {{ run svc (cost(svc, 1 + serial)); }}
           observe done = serial;
         }}
 
@@ -929,11 +953,11 @@ fn a_held_reservation_counts_against_later_admissions() {
           }}
         }}
         server {{
-          hold reqs (1), kv (4) reserve (10) {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) reserve (cost(kv, 10)) {{
             observe admitted = now;
             prefill on engine (4) growing kv;
             decode on engine (6) growing kv;
-          }} cache (0);
+          }} cache (cost(reqs, kv, 0));
         }}
 
 "#
@@ -982,15 +1006,15 @@ fn a_held_reservation_is_each_live_hold_s() {
           }}
         }}
         server {{
-          run gate (serial);
+          run gate (cost(gate, serial));
           branch (serial == 0) {{
-            hold kv (1) reserve (5) {{
-              hold kv (1) reserve (5) {{ run gate (10); }}
+            hold kv (cost(kv, 1)) reserve (cost(kv, 5)) {{
+              hold kv (cost(kv, 1)) reserve (cost(kv, 5)) {{ run gate (cost(gate, 10)); }}
               {after_inner}
             }}
           }}
           branch (serial == 1) {{
-            hold kv ({second}) {{ observe admitted = now; run gate (1); }}
+            hold kv (cost(kv, {second})) {{ observe admitted = now; run gate (cost(gate, 1)); }}
           }}
         }}
 
@@ -1013,5 +1037,5 @@ fn a_held_reservation_is_each_live_hold_s() {
     // serial 0 starts at 0: the inner hold ends at 10, and the outer one
     // still reserves 4 until 20 (counted by holders, it was lost at 10):
     // 1 + 4 + 8 = 13 > 12 until then
-    assert_eq!(admitted(&prog("run gate (10);", 8)), [20.0]);
+    assert_eq!(admitted(&prog("run gate (cost(gate, 10));", 8)), [20.0]);
 }

@@ -67,7 +67,7 @@ fn main() {
         request;
         set K = prompt + o;
         branch (more) {
-          branch (fan) { run delegate (W); } else { tool (~exp(Z)); }
+          branch (fan) { run delegate (cost(delegate, W)); } else { tool (~exp(Z)); }
           turn;
         } else {
           branch (sub) { observe subagent = now - t_s; }

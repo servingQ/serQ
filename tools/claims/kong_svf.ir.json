@@ -1,5 +1,5 @@
 {
-  "version": 11,
+  "version": 12,
   "attrs": [
     "cached",
     "serial",
@@ -12,6 +12,36 @@
     "computed",
     "s",
     "o"
+  ],
+  "attr_types": [
+    "Value",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Value",
+    "Size",
+    "Size"
+  ],
+  "sides": [
+    [
+      "Workload",
+      "Workload"
+    ],
+    [],
+    [
+      "Server",
+      "Server",
+      "Server",
+      "Server",
+      "Workload"
+    ],
+    [
+      "Server"
+    ]
   ],
   "observes": [
     "out",
@@ -247,13 +277,23 @@
                 "index": null
               },
               {
-                "Binary": [
-                  "Add",
+                "Cost": [
                   {
-                    "Attr": 9
+                    "Pool": {
+                      "base": 0,
+                      "count": 1
+                    }
                   },
                   {
-                    "Attr": 10
+                    "Binary": [
+                      "Add",
+                      {
+                        "Attr": 9
+                      },
+                      {
+                        "Attr": 10
+                      }
+                    ]
                   }
                 ]
               },
@@ -286,7 +326,17 @@
           },
           "mode": "Decode",
           "work": {
-            "Attr": 10
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 0,
+                  "count": 1
+                }
+              },
+              {
+                "Attr": 10
+              }
+            ]
           },
           "growing": null
         }

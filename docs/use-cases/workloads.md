@@ -16,7 +16,7 @@ They hide output length `o` from scheduling expressions. See the
 | program | `vllm_single_turn.sq` | `vllm_chat.sq` | `vllm.sq` | `vllm_subagents.sq` |
 | a session is | one request | a conversation | a task | a task and the subtasks it hands out |
 | carried to the next turn | nothing | the conversation, `K = prompt + o` | the same | the same |
-| between turns | — | a person, `run user (~exp(Z))` | a tool, `tool (~exp(Z))` | a tool, or waiting for the subagents |
+| between turns | — | a person, `run user (cost(user, ~exp(Z)))` | a tool, `tool (~exp(Z))` | a tool, or waiting for the subagents |
 | who makes arrivals | the environment | the environment | the environment | a Poisson approximation of parent and child traffic |
 | the prefix cache | never read back | the last turn's prefix | the last turn's prefix | same, and a subagent misses the context it copied |
 
@@ -47,7 +47,7 @@ prefix from another request. serQ's cache is per session; see
 
 Each turn sends the conversation `K` plus a new message of mean 100 tokens.
 After the request, `set K = prompt + o` carries its input and output into the
-next turn. `run user (~exp(Z))` models reading and typing time on a delay
+next turn. `run user (cost(user, ~exp(Z)))` models reading and typing time on a delay
 stage, with mean `Z = 20` seconds.
 
 ## Multi-turn agent
@@ -78,7 +78,7 @@ The approximation has three parts:
   `kids = q · k · p / (1 − p)` subagents. The program folds them into the
   one Poisson stream at rate `Lambda · (1 + kids)`, and marks an arrival as a
   subagent (`sub`) with probability `kids / (1 + kids)`.
-- **The parent waits a constant.** A delegating turn runs `run delegate (W)`.
+- **The parent waits a constant.** A delegating turn runs `run delegate (cost(delegate, W))`.
   The supplied `W = 14.7` seconds is a model input; it does not track the
   simulated children's completion times. To calibrate it, collect
   `subagent` durations with `--dump` and estimate the mean maximum of `k`

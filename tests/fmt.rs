@@ -13,17 +13,17 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
         stage engine : step { budget B; cost 1; memory kv; }\n\
         workload { arrive batch(1); session { request; end; } }\n\
         server {\n\
-          hold kv (1)\n\
+          hold kv (cost(kv, 1))\n\
           at admission (hit = 1,\n\
           value = hit + 1) {\n\
             prefill (1) growing kv;\n\
-          } cache (1);\n\
+          } cache (cost(kv, 1));\n\
         }\n\
         \n";
     let formatted = format(&common::main_source(source)).unwrap();
     assert!(
         formatted.contains(
-            "    hold kv (1)\n         at admission (hit = 1,\n                       value = hit + 1) {"
+            "    hold kv (cost(kv, 1))\n         at admission (hit = 1,\n                       value = hit + 1) {"
         ),
         "{formatted}"
     );
@@ -45,7 +45,7 @@ fn cli_check_and_write_are_consistent() {
     fixture.write(
         "model.sq",
         &common::main_source(
-        "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (1);\n}\n\n"),
+        "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (cost(svc, 1));\n}\n\n"),
     );
     failure(
         &fixture.run(&["fmt", "--check", "model.sq"]),
@@ -70,8 +70,7 @@ fn cli_check_and_write_are_consistent() {
 #[test]
 fn invalid_batch_leaves_every_file_untouched() {
     let fixture = Fixture::new();
-    let original =
-        "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (1);\n}\n\n";
+    let original = "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (cost(svc, 1));\n}\n\n";
     fixture.write("good.sq", &common::main_source(original));
     fixture.write(
         "bad.sq",

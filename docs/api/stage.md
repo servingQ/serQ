@@ -242,8 +242,8 @@ fn main() {
     session { request; end; }
   }
   server {
-    run engine prefill (8);
-    run engine decode (2);
+    run engine prefill (cost(engine, 8));
+    run engine decode (cost(engine, 2));
     observe finished = now;
   }
 }

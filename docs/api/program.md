@@ -55,7 +55,7 @@ fn main() {
   workload {
     arrive poisson(rate); session { request; end; } }
   server {
-    run svc (1);
+    run svc (cost(svc, 1));
     }
 }
 ```
@@ -88,7 +88,7 @@ An instance supplies the model's declared inputs and its execution conditions.
 It may contain `let NAME = expr;` for inputs declared with `args.number` and
 one `run` configuration block with numeric values. It cannot declare pools,
 stages, workloads or definitions. The configuration block belongs only to
-an instance; a model's `run STAGE (work);` performs stage work.
+an instance; a model's `run STAGE (cost(STAGE, work));` performs stage work.
 
 ```serq
 // experiment.sq
@@ -309,7 +309,7 @@ A simulation result alone is not a proof over all paths. See
 
 Supply execution settings through [CLI flags](../reference/cli.md), an
 explicit [instance](#instances), or [`pyserq.compile`](../python/compile.md).
-They are not declarations inside `fn main()`. In a model, `run STAGE (work);`
+They are not declarations inside `fn main()`. In a model, `run STAGE (cost(STAGE, work));`
 performs work on a stage.
 
 ```sh
@@ -357,7 +357,7 @@ fn main() {
   }
   server {
     set t0 = now;
-    run svc (duration);
+    run svc (cost(svc, duration));
     observe latency = now - t0;
   }
   gauge jobs = queue(svc);

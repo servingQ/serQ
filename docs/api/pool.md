@@ -218,7 +218,7 @@ fn main() {
   }
   server {
     set t0 = now;
-    hold slots (1) { run svc (2); }
+    hold slots (cost(slots, 1)) { run svc (cost(svc, 2)); }
     observe latency = now - t0;
   }
 }

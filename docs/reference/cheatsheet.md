@@ -71,16 +71,16 @@ request gw;                        // workload session: run the named gateway's 
 set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
 
-hold P (u) [reserve (r)] [, Q (v)]* [reuse (ρ)]
+hold P (cost(P, u)) [reserve (r)] [, Q (v)]* [reuse (cost(P, ρ))]
      [at admission (name = e, …)]      // names evaluated at admission; body access is restricted
      { … } [cache (ℓ)] [lease P (t)];   // lease: P's units outlive the scope until released, t seconds, or the end
-grow P (d);                        // enlarge the innermost hold
+grow P (cost(P, d));                        // enlarge the innermost hold
 drop P;                            // discard the own cached prefix
 release P;                         // give the enclosing hold's units of P back now, or end a lease of P
-load P (n);                        // the KV of n tokens arrived: computed position += n
+load P (cost(P, n));                        // the KV of n tokens arrived: computed position += n
 
 run S [prefill|decode] (w) [growing P];
-run S, T (w);                      // one job holding ps stages S and T at once, at the rate share gives
+run S, T (cost(S, T, w));                      // one job holding ps stages S and T at once, at the rate share gives
 
 // the serving vocabulary: the same statements, named by the request lifecycle
 prefill W;  decode W;  tool Z;     // run on the stage of that name: W is

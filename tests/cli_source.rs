@@ -8,7 +8,9 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
     let f = Fixture::new();
     f.write(
         "model.sq",
-        &common::main_source(&PROGRAM.replace("run svc (rate)", "run svcc (rate)")),
+        &common::main_source(
+            &PROGRAM.replace("run svc (cost(svc, rate))", "run svcc (cost(svcc, rate))"),
+        ),
     );
     failure(
         &f.run(&["check", "model.sq"]),
@@ -16,7 +18,7 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
         &[
             "model.sq: 4:14:",
             "unknown stage `svcc`",
-            "4 | server { run svcc (rate); }",
+            "4 | server { run svcc (cost(svcc, rate)); }",
             "^^^^",
             "did you mean stage `svc`?",
             "declared at 2:7",
@@ -24,7 +26,7 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
     );
     // The first spelling is a valid stage, but the second is an unknown pool.
     // Searching the token stream for the first matching name would misdiagnose it.
-    let src = "stage kvv : fifo;\npool kv { cap 10; }\nworkload { session { request; hold kvv (1) { end; } \n} }\nserver {\n}\n";
+    let src = "stage kvv : fifo;\npool kv { cap 10; }\nworkload { session { request; hold kvv (cost(kvv, 1)) { end; } \n} }\nserver {\n}\n";
     f.write("model.sq", &common::main_source(src));
     failure(
         &f.run(&["check", "model.sq"]),
@@ -88,20 +90,20 @@ fn duplicate_declarations_point_to_both_sites() {
 
 #[test]
 fn desugaring_keeps_server_and_header_binding_locations() {
-    let src = "stage svc : fifo;\nworkload { arrive batch(1); session { request; end; } }\nserver {\n  run svcc (1);\n}\n";
+    let src = "stage svc : fifo;\nworkload { arrive batch(1); session { request; end; } }\nserver {\n  run svcc (cost(svcc, 1));\n}\n";
     let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     assert!(err.contains("4:7:"), "{err}");
-    assert!(err.contains("4 |   run svcc (1);"), "{err}");
-    let src = "pool kv { cap 10; }\nworkload { arrive batch(1); session { request; end; } }\nserver {\n  hold kv (amount) at admission (amount = missing) { }\n}\n";
+    assert!(err.contains("4 |   run svcc (cost(svcc, 1));"), "{err}");
+    let src = "pool kv { cap 10; }\nworkload { arrive batch(1); session { request; end; } }\nserver {\n  hold kv (cost(kv, amount)) at admission (amount = missing) { }\n}\n";
     let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     // `missing`, in the binding, is where the failed expression was written.
-    assert!(err.contains("4:43:"), "{err}");
+    assert!(err.contains("4:53:"), "{err}");
     assert!(err.contains("unknown name `missing`"), "{err}");
 }
 
 #[test]
 fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
-    let src = "queue engine : prefill {\n  serve fifo;\n  prefill (prompt) { run (prompt); }\n}\nqueue gw : gateway { route {\n  engine.prefill (missing);\n} }\nworkload { arrive batch(1); session { request gw; end; } }\n";
+    let src = "queue engine : prefill {\n  serve fifo;\n  prefill (prompt) { run (cost(engine, prompt)); }\n}\nqueue gw : gateway { route {\n  engine.prefill (missing);\n} }\nworkload { arrive batch(1); session { request gw; end; } }\n";
     let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     // Parameter substitution must point to the argument at the call site,
     // rather than the parameter inside the queue's entry.
@@ -109,7 +111,7 @@ fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
     assert!(err.contains("unknown name `missing`"), "{err}");
     assert!(err.contains("6 |   engine.prefill (missing);"), "{err}");
 
-    let src = "queue engine : prefill {\n  pool kv { cap 10; admit via engin; }\n  serve step { cost 1; memory kv; }\n  prefill (prompt) { hold kv (prompt) { prefill (prompt) growing kv; } }\n}\n";
+    let src = "queue engine : prefill {\n  pool kv { cap 10; admit via engin; }\n  serve step { cost 1; memory kv; }\n  prefill (prompt) { hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; } }\n}\n";
     let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     assert!(err.contains("2:31:"), "{err}");
     assert!(err.contains("unknown stage `engin`"), "{err}");
@@ -119,7 +121,7 @@ fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
 
 #[test]
 fn ambiguous_suggestions_and_override_spans_are_not_misleading() {
-    let src = "stage cat : fifo; stage cut : fifo; workload { session { request; \n} }\nserver { run cot (1);\n} ";
+    let src = "stage cat : fifo; stage cut : fifo; workload { session { request; \n} }\nserver { run cot (cost(cot, 1));\n} ";
     let err = compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap_err();
     assert!(!err.contains("did you mean"), "{err}");
     let ov = Overrides {
@@ -177,8 +179,8 @@ fn ownership_checks_ignore_locations_but_keep_index_syntax() {
 }} }}
 server {{
            set i = 0; set j = 0;
-           hold q[{index}] (1) {{
-             load q[{target}] (1);
+           hold q[{index}] (cost(q, 1)) {{
+             load q[{target}] (cost(q, 1));
            }} lease q[{target}] (1);
            release q[{target}];
 }}
@@ -207,7 +209,7 @@ workload { arrive poisson(1);
   session { request; end;
   }
 }
-server { run s (x);
+server { run s (cost(s, x));
 }
 ";
     let refused = |src: &str, ov: &Overrides, what: &str| {
@@ -303,7 +305,7 @@ workload {{ arrive poisson(lam);
   session {{ request; end;
   }}
 }}
-server {{ set c = 1; run svc (service()); observe k = key(c);
+server {{ set c = 1; run svc (cost(svc, service())); observe k = key(c);
 }}
 "
         )

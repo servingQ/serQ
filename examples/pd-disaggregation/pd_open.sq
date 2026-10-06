@@ -34,11 +34,11 @@ fn main() {
     set sd = decode_work();
     set kv = kv_tokens();
     branch (mode == 0) {
-      run agg (sp + sd + I);
+      run agg (cost(agg, sp + sd + I));
     } else {
-      run prefill (sp / gP);
-      run link (kv / bnet);
-      run decode (sd / gD);
+      run prefill (cost(prefill, sp / gP));
+      run link (cost(link, kv / bnet));
+      run decode (cost(decode, sd / gD));
     }
     observe latency = now - t0;
   }

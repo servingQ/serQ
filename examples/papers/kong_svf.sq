@@ -31,8 +31,8 @@ fn main() {
   server {
     observe out = o;
     observe vol = s * o + floor((o * o + o) / 2);
-    hold kv (s + o) {
-      run engine decode (o);
+    hold kv (cost(kv, s + o)) {
+      run engine decode (cost(engine, o));
     }
     observe latency = now;
   }

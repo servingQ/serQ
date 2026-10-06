@@ -22,10 +22,10 @@ fn main() {
   }
 
   server {
-    hold slots (1), kv (p) {
-      run engine prefill (p) growing kv;
+    hold slots (cost(slots, 1)), kv (cost(kv, p)) {
+      run engine prefill (cost(engine, p)) growing kv;
       observe first = now;
-      run engine decode (o) growing kv;
+      run engine decode (cost(engine, o)) growing kv;
       observe done = now;
     }
   }

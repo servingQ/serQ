@@ -206,6 +206,8 @@ struct Linker<'a> {
     pools: HashMap<String, (usize, usize)>,
     stages: HashMap<String, (usize, usize)>,
     blocks: Vec<Vec<CStmt>>,
+    sides: Vec<Vec<crate::ir::Side>>,
+    side: crate::ir::Side,
     /// Per block, per statement: where the statement is in the text, as
     /// far as a reference or an expression in it says (#279).
     spans: Vec<Vec<Option<Span>>>,
@@ -254,8 +256,9 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 23] = [
 /// out, nested ones included.
 pub(crate) const MAX_OVER: usize = 4096;
 
-/// Calls the linker folds to a constant from a declaration.
-pub const FOLDED: [&str; 1] = ["blocksize"];
+/// Calls lowered directly by the linker instead of a numeric `Fun`: a
+/// declaration query (`blocksize`) and a resource conversion (`cost`).
+pub const FOLDED: [&str; 2] = ["blocksize", "cost"];
 
 /// The functions a call may name, as a constant the parser checks names
 /// against and `scripts/metrics.py` counts: the IR's `Fun::names`, which
@@ -349,6 +352,8 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         pools: HashMap::new(),
         stages: HashMap::new(),
         blocks: vec![],
+        sides: vec![],
+        side: crate::ir::Side::Workload,
         spans: vec![],
         prog,
         over_terms: std::cell::Cell::new(0),
@@ -768,7 +773,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         });
     }
     let slot = |lk: &Linker, n: &str| lk.attr_index[n];
-    let linked = Linked {
+    let mut linked = Linked {
         gauges,
         claims,
         registers: lk.registers.clone(),
@@ -784,6 +789,8 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         slot_more: slot(&lk, "more"),
         slot_forced: slot(&lk, "forced"),
         slot_computed: slot(&lk, "computed"),
+        attr_types: vec![],
+        sides: lk.sides,
         attrs: lk.attrs,
         observes: lk.observes,
         pools,
@@ -800,6 +807,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         seed,
         arrivals,
     };
+    linked.infer_types().map_err(LinkError::new)?;
     crate::frontend::lint::lint(&linked).map_err(LinkError::new)?;
     Ok((linked, lk.spans))
 }
@@ -1098,7 +1106,7 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                     let mut leg = t.clone();
                     walk(body, &mut leg)?;
                 }
-                Stmt::Request | Stmt::Call { .. } | Stmt::Mark(_) | Stmt::Join => {}
+                Stmt::Side(_) | Stmt::Request | Stmt::Call { .. } | Stmt::Mark(_) | Stmt::Join => {}
             }
         }
         Ok(())
@@ -1313,6 +1321,57 @@ impl Linker<'_> {
 
     fn stage_ref(&self, r: &Ref) -> LResult<CRef> {
         self.cref(r, &self.stages, "stage")
+    }
+
+    fn cost(&self, args: &[Arg]) -> LResult<CExpr> {
+        let Some((value, resources)) = args.split_last() else {
+            return Err(LinkError::new(
+                "cost takes resources followed by an expression".into(),
+            ));
+        };
+        let mut targets = vec![];
+        for arg in resources {
+            let Arg::Ref(r) = arg else {
+                return Err(LinkError::new(
+                    "cost expects resource names before its expression".into(),
+                ));
+            };
+            // An indexed reference (including a def's substituted
+            // resource argument) projects its family's type. Check
+            // the written index before erasing the annotation.
+            if r.index.as_deref().is_some_and(Expr::draws) {
+                return Err(LinkError::new(
+                    "a cost type annotation cannot draw a member index".into(),
+                ));
+            }
+            targets.push(if let Some(&(base, count)) = self.pools.get(&r.name) {
+                if r.index.is_some() {
+                    self.pool_ref(r)?;
+                }
+                crate::ir::CostTarget::Pool { base, count }
+            } else if let Some(&(base, count)) = self.stages.get(&r.name) {
+                if r.index.is_some() {
+                    self.stage_ref(r)?;
+                }
+                crate::ir::CostTarget::Stage { base, count }
+            } else {
+                return Err(self.unknown("cost resource", &r.name));
+            });
+        }
+        if targets.is_empty() {
+            return Err(LinkError::new("cost requires at least one resource".into()));
+        }
+        let target = crate::ir::CostTarget::joint(targets);
+        let value = match value {
+            Arg::Expr(e) => self.expr(e)?,
+            Arg::Ref(r) if r.index.is_none() => self.expr(&Expr::Var(r.name.clone()))?,
+            _ => {
+                return Err(LinkError::new(
+                    "cost's last argument is an expression".into(),
+                ));
+            }
+        };
+        Ok(CExpr::Cost(target, Box::new(value)))
     }
 
     /// `blocksize(p)`: the `block` of pool `p`, a constant the linker folds,
@@ -1565,6 +1624,7 @@ impl Linker<'_> {
                     })?;
                 CExpr::Agg(agg, k)
             }
+            Expr::Call(f, args) if f == "cost" => self.cost(args)?,
             Expr::Call(f, args) => {
                 let Some(fun) = Fun::from_name(f) else {
                     return Err(LinkError::new(format!("unknown function `{f}`")));
@@ -1622,9 +1682,26 @@ impl Linker<'_> {
     fn block(&mut self, stmts: &[Stmt]) -> LResult<BlockId> {
         let id = self.blocks.len();
         self.blocks.push(vec![]);
-        self.spans.push(stmts.iter().map(stmt_span).collect());
+        self.spans.push(vec![]);
+        self.sides.push(vec![]);
+        let initial_side = self.side;
+        let mut side_stack = vec![];
         let mut out = vec![];
         for s in stmts {
+            if let Stmt::Side(side) = s {
+                match side {
+                    crate::ir::Side::Server => {
+                        side_stack.push(self.side);
+                        self.side = *side;
+                    }
+                    crate::ir::Side::Workload => {
+                        self.side = side_stack.pop().unwrap_or(initial_side);
+                    }
+                }
+                continue;
+            }
+            self.spans[id].push(stmt_span(s));
+            self.sides[id].push(self.side);
             let cs = match s {
                 Stmt::Set(n, e) => CStmt::Set(self.attr_index[n], self.expr(e)?),
                 Stmt::Observe(n, e) => {
@@ -1633,6 +1710,7 @@ impl Linker<'_> {
                 }
                 Stmt::Turn => CStmt::Turn,
                 Stmt::End => CStmt::End,
+                Stmt::Side(_) => unreachable!(),
                 Stmt::Request => {
                     return Err(LinkError::new(
                         "`request` survived parsing: the parser splices the server in its place"
@@ -1719,6 +1797,7 @@ impl Linker<'_> {
             out.push(cs);
         }
         self.blocks[id] = out;
+        self.side = initial_side;
         Ok(id)
     }
 }

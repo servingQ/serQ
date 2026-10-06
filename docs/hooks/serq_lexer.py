@@ -37,7 +37,7 @@ STATEMENTS = (
     "prefill", "transfer", "decode", "tool",
 )
 
-# Pool and stage options, and workload forms.
+# Pool and stage options, workload forms, and the resource cost constructor.
 OPTIONS = (
     "cap", "block", "evict", "lru", "preempt", "lifo", "held", "requeue", "head", "tail", "none", "queue", "fifo",
     "admit", "while", "state", "via", "spill", "when", "ps", "delay", "step", "budget", "cost",

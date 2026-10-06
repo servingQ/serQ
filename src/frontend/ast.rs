@@ -89,6 +89,21 @@ impl Ref {
 }
 
 impl Expr {
+    /// Serving vocabulary is a named conversion from request quantities into
+    /// work at its stage(s). Primitive `run` requires an explicit conversion.
+    pub(crate) fn cost(resources: &[Ref], value: Expr) -> Expr {
+        let mut args: Vec<_> = resources
+            .iter()
+            .cloned()
+            .map(|mut r| {
+                r.index = None;
+                Arg::Ref(r)
+            })
+            .collect();
+        args.push(Arg::Expr(value));
+        Expr::Call("cost".into(), args)
+    }
+
     /// Whether `f` holds of this expression or of one in it: the operand of
     /// a `Located`, a reference's index and an aggregate's count and body
     /// included (#280). Names are not resolved: an aggregate's index is not
@@ -364,6 +379,8 @@ pub struct Workload {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt {
+    /// Parse-time boundary, retained as per-statement authority in the IR.
+    Side(crate::ir::Side),
     /// Draw the next turn's attributes from the workload.
     Turn,
     /// `request;` in a workload's `session`: the request runs the `server`

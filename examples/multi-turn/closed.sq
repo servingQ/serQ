@@ -17,13 +17,13 @@ fn main() {
         set t0 = now;
         set s = ~exp(1 / mu);
         request;
-        run think (~exp(Z));
+        run think (cost(think, ~exp(Z)));
       }
     }
   }
 
   server {
-    run svc (s);
+    run svc (cost(svc, s));
     observe wait = now - t0 - s;
     observe response = now - t0;
   }

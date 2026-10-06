@@ -28,14 +28,14 @@ fn main() {
         request;
         set K = K + n + o;
         observe context = K;
-        branch with (p) { run tool (~exp(Z)); turn; } else { end; }
+        branch with (p) { run tool (cost(tool, ~exp(Z))); turn; } else { end; }
       }
     }
   }
 
   server {
     set t0 = now;
-    run engine (a * (K + n) + d * o);
+    run engine (cost(engine, a * (K + n) + d * o));
     observe response = now - t0;
   }
 

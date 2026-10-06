@@ -53,7 +53,7 @@ fn main() {
     // before every `end;`
     session {
       set t_arr = now;
-      hold live (1) {
+      hold live (cost(live, 1)) {
         observe entry_wait = now - t_arr;
         loop {
           turn;
@@ -62,7 +62,7 @@ fn main() {
           set cold = 0;
           branch (K > maxctx) { drop kv; end; }
           // whether the session continues is decided when the tool returns
-          run tool (~exp(Z));
+          run tool (cost(tool, ~exp(Z)));
           branch with (p) { } else { drop kv; end; }
         }
       }
@@ -72,16 +72,16 @@ fn main() {
   // the replica: one turn's prefill and decode
   server {
     set t0 = now;
-    hold batch (1), kv (K + n + o) {
+    hold batch (cost(batch, 1)), kv (cost(kv, K + n + o)) {
       set hit = !cold && cached >= K;
       // prefill work in tokens: the overhead and the attention term are
       // converted at the compute rate 1/a
       set P = s0 / a + (hit ? n + (b / a) * n * (K + n / 2)
                             : (K + n) + (b / a) * (K + n) * (K + n) / 2);
-      run engine prefill (P);
+      run engine prefill (cost(engine, P));
       observe ttft = now - t0;
-      run engine decode (o);
-    } cache (K + n + o);
+      run engine decode (cost(engine, o));
+    } cache (cost(batch, kv, K + n + o));
     observe response = now - t0;
     branch (!cold) { observe hit = hit; }
   }

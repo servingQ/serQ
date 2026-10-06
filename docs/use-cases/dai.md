@@ -27,7 +27,7 @@ The operating point of the program is the paper's point C (§6.2): CodeLlama-34B
 |---|---|
 | batch budget $b_{\max}$ | `budget bmax;` |
 | batch time $t_b = c + a\lceil b/b_0\rceil$ | `cost c + a * ceil(tokens / b0);` (time in 10 µs, so every number is an integer) |
-| request $i$ with $v_p$, $v_d$ | `run engine prefill (vp); run engine decode (vd);` |
+| request $i$ with $v_p$, $v_d$ | `run engine prefill (cost(engine, vp)); run engine decode (cost(engine, vd));` |
 | deterministic arrivals | `arrive renewal(gap);` |
 | Sarathi-Serve: decodes first, then the oldest prefills | `serve admission;`: residents are served in admission order, and without a chunk cap that order is decodes first (`Serve.serve_eq_decode_first`) |
 

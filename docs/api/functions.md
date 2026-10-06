@@ -1,6 +1,7 @@
 # Functions
 
-Functions take a fixed number of arguments and return a number (`f64`).
+Numeric functions take a fixed number of arguments. The `cost` constructor
+additionally carries a resource type; all values execute as numbers (`f64`).
 `expr`, `pool`, `stage` and `observe` in signatures describe argument kinds;
 they are not part of the call syntax. Arguments are required and positional.
 A wrong count, wrong kind, or unavailable evaluation context is a link error.
@@ -65,6 +66,45 @@ See [types](index.md#types) and [evaluation moments](context.md).
 | [`largest(o: observe)`](#largest) | Greatest observed value; 0 when there are none. |
 | [`smallest(o: observe)`](#smallest) | Least observed value; 0 when there are none. |
 | [`prefix_total(o: observe)`](#prefix_total) | Sum of prefix sums after sorting the observed values ascending; 0 when there are none. |
+
+## Resource conversion
+
+### `cost` {#cost}
+
+```text
+cost(resource, …, expression) -> Cost(resources)
+```
+
+Names one or more pool or stage families, followed by the quantity to
+interpret. The result has the same numeric value, evaluated once at the
+containing expression's original moment. It does not allocate, advance
+time, resample, or capture an admission value early. The consuming
+statement does the resource operation.
+
+```serq
+run svc (cost(svc, seconds_per_item * items));
+hold mem (cost(mem, bytes_per_item * items)) { /* use the allocation */ }
+```
+
+One cost type belongs to an entire resource family. Prefer `cost(kv, n)`.
+An indexed annotation such as `cost(kv[j], n)`, including a reference
+substituted by a `def`, projects the same family type. Its names and
+statically invalid indices are checked, and it cannot draw, but `j` is
+not evaluated. The actual `hold kv[j]` or `run engine[j]` selects and
+checks the member at its normal execution moment.
+
+For common `cache`/`reuse` amounts across several pools, or work on several
+stages together, name every affected family: `cost(kv, reqs, n)` or
+`cost(egress, ingress, bytes)`. Order and duplicates do not change the type.
+A cost of one resource cannot be used as another's or passed to `cost`
+again. See [attribute types](attributes.md#sizes-values-and-costs).
+
+Serving forms (`prefill`, `decode`, `tool`, `transfer`) perform this
+conversion themselves and accept ordinary quantities. Pass an already
+converted cost to the primitive `run`, `hold`, `grow` or `load` instead.
+A stage's declarative `cost expr` specifies its iteration duration and is
+already a resource formula; it takes ordinary quantities, not session
+`Cost` values. The same applies to a spill's declarative work formula.
 
 ## Arithmetic
 
@@ -361,9 +401,9 @@ fn main() {
   }
   server {
     set t0 = now;
-    hold slots (1) {
+    hold slots (cost(slots, 1)) {
       observe allocated = used(slots);
-      run svc (ceil(1.2));
+      run svc (cost(svc, ceil(1.2)));
     }
     observe latency = now - t0;
   }

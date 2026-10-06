@@ -30,14 +30,14 @@ fn release_frees_the_pool_before_the_scope_ends() {
           }
         }
         server {
-          run svc (serial);
+          run svc (cost(svc, serial));
           set t0 = now;
-          hold kv (10) {
+          hold kv (cost(kv, 10)) {
             observe admitted = now - t0;
-            run svc (1);
+            run svc (cost(svc, 1));
             release kv;
             observe free_after = free(kv);
-            run svc (5);
+            run svc (cost(svc, 5));
           }
           observe free_at_end = free(kv);
         }
@@ -67,8 +67,8 @@ fn release_caches_per_the_hold_clause() {
           }
         }
         server {
-          hold kv (8) { run svc (1); release kv; run svc (1); } cache (8);
-          hold kv (8) { observe hit = cached; } cache (0);
+          hold kv (cost(kv, 8)) { run svc (cost(svc, 1)); release kv; run svc (cost(svc, 1)); } cache (cost(kv, 8));
+          hold kv (cost(kv, 8)) { observe hit = cached; } cache (cost(kv, 0));
         }
 
 "#;
@@ -91,13 +91,13 @@ fn a_hold_on_two_pools_releases_one_of_them() {
           }
         }
         server {
-          run svc (serial * 0.5);
+          run svc (cost(svc, serial * 0.5));
           set t0 = now;
-          hold slots (1), kv (10) {
+          hold slots (cost(slots, 1)), kv (cost(kv, 10)) {
             observe got_slot = now;
-            run svc (1);
+            run svc (cost(svc, 1));
             release slots;
-            run svc (4);
+            run svc (cost(svc, 4));
             observe kv_used = used(kv);
           }
         }
@@ -131,8 +131,8 @@ fn load_advances_the_computed_position() {
           }
         }
         server {
-          hold kv (40) { run svc (1); load kv (30); } cache (40);
-          hold kv (40) { observe hit = cached; } cache (0);
+          hold kv (cost(kv, 40)) { run svc (cost(svc, 1)); load kv (cost(kv, 30)); } cache (cost(kv, 40));
+          hold kv (cost(kv, 40)) { observe hit = cached; } cache (cost(kv, 0));
         }
 
 "#;
@@ -150,7 +150,7 @@ fn load_must_fit_the_allocation() {
           session { request; end;
           }
         }
-        server { hold kv (10) { load kv (11); }
+        server { hold kv (cost(kv, 10)) { load kv (cost(kv, 11)); }
         }
 
 "#;
@@ -162,7 +162,11 @@ fn load_must_fit_the_allocation() {
 /// link.
 #[test]
 fn release_and_load_need_an_enclosing_hold() {
-    for stmt in ["release kv;", "load kv (1);", "hold q (1) { release kv; }"] {
+    for stmt in [
+        "release kv;",
+        "load kv (cost(kv, 1));",
+        "hold q (cost(q, 1)) { release kv; }",
+    ] {
         let src = format!(
             "pool kv {{ cap 10; }} pool q {{ cap 10; }} stage svc : delay;
         workload {{ arrive batch(1);
@@ -184,10 +188,10 @@ fn release_and_load_need_an_enclosing_hold() {
 #[test]
 fn grow_and_growing_need_an_enclosing_hold() {
     for stmt in [
-        "grow kv (16);",
-        "hold q (1) { grow kv (16); }",
-        "run engine prefill (8) growing kv;",
-        "hold q (1) { run engine prefill (8) growing kv; }",
+        "grow kv (cost(kv, 16));",
+        "hold q (cost(q, 1)) { grow kv (cost(kv, 16)); }",
+        "run engine prefill (cost(engine, 8)) growing kv;",
+        "hold q (cost(q, 1)) { run engine prefill (cost(engine, 8)) growing kv; }",
     ] {
         let src = format!(
             "pool kv {{ cap 64; }} pool q {{ cap 10; }}
@@ -211,7 +215,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
           session { request; end;
           }
         }
-        server { hold kv (16) { run d (1); } lease kv (5); grow kv (16);
+        server { hold kv (cost(kv, 16)) { run d (cost(d, 1)); } lease kv (5); grow kv (cost(kv, 16));
         }
         ";
     let e = check_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
@@ -226,7 +230,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
           session { request; end;
           }
         }
-        server { hold kv (8) { grow kv (8); run engine prefill (8) growing kv; }
+        server { hold kv (cost(kv, 8)) { grow kv (cost(kv, 8)); run engine prefill (cost(engine, 8)) growing kv; }
         }
         ";
     check_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -248,7 +252,7 @@ fn a_preemptible_hold_reads_no_moving_index() {
           }}
         }}
         server {{
-          hold kv (16), aux[1 - min(1, floor(now))] (1) {{
+          hold kv (cost(kv, 16)), aux[1 - min(1, floor(now))] (cost(aux, 1)) {{
             prefill 16 growing kv; decode 200 growing kv;
           }}
         }}
@@ -268,8 +272,8 @@ fn a_preemptible_hold_reads_no_moving_index() {
     assert!(e.contains("`kv` may preempt it"), "{e}");
     // a hold inside one that is preempted runs again too
     let nested = src("lifo").replace(
-        "hold kv (16), aux[1 - min(1, floor(now))] (1) {",
-        "hold kv (16) { hold aux[1 - min(1, floor(now))] (1) {",
+        "hold kv (cost(kv, 16)), aux[1 - min(1, floor(now))] (cost(aux, 1)) {",
+        "hold kv (cost(kv, 16)) { hold aux[1 - min(1, floor(now))] (cost(aux, 1)) {",
     );
     let nested = nested.replace("decode 200 growing kv;", "decode 200 growing kv; }");
     let e = check_source(&common::main_source(&nested), &common::horizon(500.0)).unwrap_err();
@@ -289,7 +293,7 @@ fn a_hold_whose_body_changes_its_index_does_not_link() {
             "pool kv[2] {{ cap 4096; block 16; }} stage d : delay;
         workload {{ arrive batch(2); init {{ set j = 0; }} {workload}
           session {{
-            hold kv[1] (16) {{ hold {hold} (16) {{ {body} run d (1); }} }}
+            hold kv[1] (cost(kv, 16)) {{ hold {hold} (cost({hold}, 16)) {{ {body} run d (cost(d, 1)); }} }}
             request; end;
           }}
         }}
@@ -299,9 +303,9 @@ fn a_hold_whose_body_changes_its_index_does_not_link() {
         check_source(&common::main_source(&src), &common::horizon(10.0))
     };
     for body in [
-        "set j = 1; grow kv[j] (16);",
-        "branch (j == 0) { set j = 1; } grow kv[j] (16);",
-        "grow kv[j] (16); choose j in 2 by (j);",
+        "set j = 1; grow kv[j] (cost(kv, 16));",
+        "branch (j == 0) { set j = 1; } grow kv[j] (cost(kv, 16));",
+        "grow kv[j] (cost(kv, 16)); choose j in 2 by (j);",
         "set j = 1;",
     ] {
         let e = run("", "kv[j]", body)
@@ -318,13 +322,13 @@ fn a_hold_whose_body_changes_its_index_does_not_link() {
     // an index read again at a statement inside reads attributes, not state
     for index in ["used(kv[0]) > 0 ? 1 : 0", "now > 0.5 ? 1 : 0"] {
         let hold = format!("kv[{index}]");
-        let e = run("", &hold, &format!("grow kv[{index}] (16);")).unwrap_err();
+        let e = run("", &hold, &format!("grow kv[{index}] (cost(kv, 16));")).unwrap_err();
         assert!(e.contains("reads the state or the clock"), "{index}: {e}");
         // read once, at admission, it may
         run("", &hold, "").unwrap();
     }
     // an index the body leaves alone links
-    run("", "kv[j]", "grow kv[j] (16);").unwrap();
+    run("", "kv[j]", "grow kv[j] (cost(kv, 16));").unwrap();
 }
 
 /// The transfer: the source's lease outlives its scope, the KV is in both
@@ -348,16 +352,16 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
         }
         server {
           branch (kind == 0) {
-            hold memP (10) { prefill (1); } lease memP (inf);
-            hold memD (10) {
+            hold memP (cost(memP, 10)) { prefill (1); } lease memP (inf);
+            hold memD (cost(memD, 10)) {
               transfer (1) from memP to memD (10);
               observe p_holders = holders(memP);
               observe d_used = used(memD);
               decode (1);
             }
           }
-          branch (kind == 1) { run gate (0.5); hold memP (10) { observe p_admitted = now; } }
-          branch (kind == 2) { run gate (1.5); hold memD (10) { observe d_admitted = now; } }
+          branch (kind == 1) { run gate (cost(gate, 0.5)); hold memP (cost(memP, 10)) { observe p_admitted = now; } }
+          branch (kind == 2) { run gate (cost(gate, 1.5)); hold memD (cost(memD, 10)) { observe d_admitted = now; } }
         }
 
 "#;
@@ -378,7 +382,7 @@ fn transfer_from_to_is_sugar_for_three_statements() {
           session { request; end;
           }
         }
-        server { hold memP (10) { hold memD (10) { transfer (1) from memP to memD (9); } }
+        server { hold memP (cost(memP, 10)) { hold memD (cost(memD, 10)) { transfer (1) from memP to memD (9); } }
         }
         ";
     let b = "pool memP { cap 10; } pool memD { cap 10; } stage link : delay;
@@ -386,7 +390,7 @@ fn transfer_from_to_is_sugar_for_three_statements() {
           session { request; end;
           }
         }
-        server { hold memP (10) { hold memD (10) { run link (1); load memD (9); release memP; } }
+        server { hold memP (cost(memP, 10)) { hold memD (cost(memD, 10)) { run link (cost(link, 1)); load memD (cost(memD, 9)); release memP; } }
         }
         ";
     let ir = |s: &str| {
@@ -418,9 +422,9 @@ fn decode_pressure_backs_into_the_prefill_pool() {
           }
         }
         server {
-          run gate (serial * 0.01);
-          hold memP (10) { prefill (0.1); observe prefilled = serial; } lease memP (inf);
-          hold memD (10) {
+          run gate (cost(gate, serial * 0.01));
+          hold memP (cost(memP, 10)) { prefill (0.1); observe prefilled = serial; } lease memP (inf);
+          hold memD (cost(memD, 10)) {
             transfer (0.1) from memP to memD (10);
             decode (10);
           }
@@ -441,9 +445,9 @@ fn decode_pressure_backs_into_the_prefill_pool() {
           }
         }
         server {
-          run gate (serial * 0.01);
-          hold memP (10) { prefill (0.1); observe prefilled = serial; run link (0.1); }
-          hold memD (10) { decode (10); }
+          run gate (cost(gate, serial * 0.01));
+          hold memP (cost(memP, 10)) { prefill (0.1); observe prefilled = serial; run link (cost(link, 0.1)); }
+          hold memD (cost(memD, 10)) { decode (10); }
         }
 
 "#;
@@ -479,11 +483,11 @@ fn a_re_executed_hold_releases_nothing_twice() {
           }
         }
         server {
-          hold memP (10) {
-            hold memD (10) {
+          hold memP (cost(memP, 10)) {
+            hold memD (cost(memD, 10)) {
               transfer (1) from memP to memD (10);
               observe p_free = free(memP);
-              run engine decode (25) growing memD;
+              run engine decode (cost(engine, 25)) growing memD;
             }
           }
         }
@@ -517,10 +521,10 @@ fn an_engine_serves_its_queues_in_declaration_order() {
           }}
         }}
         server {{
-          run gate (serial);
-          branch (serial == 0) {{ hold a (1) {{ run engine decode (50); }} }}
-          branch (serial == 1) {{ hold a (1) {{ run engine decode (1); }} }}
-          branch (serial == 2) {{ hold b (1) {{ observe b_admitted = now; run engine decode (1); }} }}
+          run gate (cost(gate, serial));
+          branch (serial == 0) {{ hold a (cost(a, 1)) {{ run engine decode (cost(engine, 50)); }} }}
+          branch (serial == 1) {{ hold a (cost(a, 1)) {{ run engine decode (cost(engine, 1)); }} }}
+          branch (serial == 2) {{ hold b (cost(b, 1)) {{ observe b_admitted = now; run engine decode (cost(engine, 1)); }} }}
         }}
 
 "#
@@ -614,19 +618,23 @@ fn release_and_load_name_the_pool_as_the_hold_does() {
         )
     };
     let e = check_source(
-        &common::main_source(&program("hold q[0] (1) { load q[1] (1); }")),
+        &common::main_source(&program(
+            "hold q[0] (cost(q, 1)) { load q[1] (cost(q, 1)); }",
+        )),
         &common::horizon(10.0),
     )
     .expect_err("linked");
     assert!(e.contains("index included"), "{e}");
     let e = check_source(
-        &common::main_source(&program("hold q[j] (1) { release q[0]; }")),
+        &common::main_source(&program("hold q[j] (cost(q, 1)) { release q[0]; }")),
         &common::horizon(10.0),
     )
     .expect_err("linked");
     assert!(e.contains("index included"), "{e}");
     check_source(
-        &common::main_source(&program("hold q[j] (1) { run svc (1); release q[j]; }")),
+        &common::main_source(&program(
+            "hold q[j] (cost(q, 1)) { run svc (cost(svc, 1)); release q[j]; }",
+        )),
         &common::horizon(10.0),
     )
     .expect("links");
@@ -650,9 +658,9 @@ fn a_grow_with_nobody_to_preempt_waits() {
           }
         }
         server {
-          hold kv (10) {
-            branch (serial == 0) { run svc (1); grow kv (10); observe grew = now; run svc (1); }
-            else { run svc (5); }
+          hold kv (cost(kv, 10)) {
+            branch (serial == 0) { run svc (cost(svc, 1)); grow kv (cost(kv, 10)); observe grew = now; run svc (cost(svc, 1)); }
+            else { run svc (cost(svc, 5)); }
           }
         }
 
@@ -679,13 +687,13 @@ fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
         }
         server {
           branch (serial == 0) {
-            hold kv (10) { run svc (1); } cache (10) lease kv (2);
+            hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } cache (cost(kv, 10)) lease kv (2);
             observe leased = used(kv);
-            run svc (5);
-            hold kv (10) { observe hit = cached; } cache (0);
+            run svc (cost(svc, 5));
+            hold kv (cost(kv, 10)) { observe hit = cached; } cache (cost(kv, 0));
           } else {
-            run gate (0.5);
-            hold kv (10) { observe admitted = now; }
+            run gate (cost(gate, 0.5));
+            hold kv (cost(kv, 10)) { observe admitted = now; }
           }
         }
 
@@ -717,11 +725,11 @@ fn a_lease_ends_with_the_session() {
         }
         server {
           branch (serial == 0) {
-            hold kv (10) { run svc (1); } cache (10) lease kv (inf);
-            run svc (1);
+            hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); } cache (cost(kv, 10)) lease kv (inf);
+            run svc (cost(svc, 1));
           } else {
-            run svc (0.5);
-            hold kv (10) { observe admitted = now; }
+            run svc (cost(svc, 0.5));
+            hold kv (cost(kv, 10)) { observe admitted = now; }
           }
         }
 
@@ -746,11 +754,11 @@ fn a_lease_is_not_a_preemption_victim() {
         }
         server {
           branch (serial == 0) {
-            hold kv (5) { run svc (1); grow kv (10); observe grew = now; run svc (1); }
+            hold kv (cost(kv, 5)) { run svc (cost(svc, 1)); grow kv (cost(kv, 10)); observe grew = now; run svc (cost(svc, 1)); }
           } else {
-            run svc (0.5);
-            hold kv (10) { run svc (0.1); } lease kv (inf);
-            run svc (2);
+            run svc (cost(svc, 0.5));
+            hold kv (cost(kv, 10)) { run svc (cost(svc, 0.1)); } lease kv (inf);
+            run svc (cost(svc, 2));
             release kv;
             observe released = now;
           }
@@ -775,7 +783,7 @@ fn a_lease_names_a_pool_of_the_hold() {
           session { request; end;
           }
         }
-        server { hold a (1) { run svc (1); } lease b (1);
+        server { hold a (cost(a, 1)) { run svc (cost(svc, 1)); } lease b (1);
         } ";
     let e = check_source(&common::main_source(bad), &common::horizon(10.0)).expect_err("linked");
     assert!(e.contains("does not take that pool"), "{e}");
@@ -785,7 +793,7 @@ fn a_lease_names_a_pool_of_the_hold() {
           session { request; end;
           }
         }
-        server { hold a (1) { run svc (1); } lease a (1); run svc (1); release a;
+        server { hold a (cost(a, 1)) { run svc (cost(svc, 1)); } lease a (1); run svc (cost(svc, 1)); release a;
         } ";
     check_source(&common::main_source(ok), &common::horizon(10.0)).expect("links");
 }

@@ -22,11 +22,11 @@ fn main() {
   }
 
   server {
-    run gate (t0);
-    hold slots (1), kv (min(n, budget_left(engine))) reserve (n) {
-      run engine prefill (n) growing kv;
+    run gate (cost(gate, t0));
+    hold slots (cost(slots, 1)), kv (cost(kv, min(n, budget_left(engine)))) reserve (cost(kv, n)) {
+      run engine prefill (cost(engine, n)) growing kv;
       observe ttft = now - t0;
-      run engine decode (o) growing kv;
+      run engine decode (cost(engine, o)) growing kv;
       observe done = now;
     }
   }

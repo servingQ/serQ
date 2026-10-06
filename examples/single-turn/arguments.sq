@@ -11,7 +11,7 @@ fn main() {
   stage worker : delay;
   workload { arrive batch(requests); session { request; end; } }
   server {
-    run worker (service_time(units));
+    run worker (cost(worker, service_time(units)));
     observe elapsed = now;
   }
 
