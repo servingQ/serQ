@@ -775,7 +775,7 @@ fn bad_amounts_and_indices_fail_the_run() {
         e.contains("stage index -1: a member of an array of 2 is 0 to 1"),
         "{e}"
     );
-    // a decode is named as the kernel writes it (`decode on E (…)`)
+    // a decode is named as the kernel writes it (`run E decode (…)`)
     let e = run_source(
         &common::main_source(
             "pool kv { cap 64; } stage eng : step { budget 8; cost 1; memory kv; }

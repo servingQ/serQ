@@ -43,9 +43,8 @@
 //!           | 'loop' block | 'end' ';'
 //!           | 'choose' IDENT 'in' expr 'by' '(' expr (',' expr)* ')' ';'
 //!           | serving
-//! serving  := role ('[' expr ']' | 'on' ref)? expr ('growing' ref)? ';'
+//! serving  := 'tool' ('[' expr ']' | 'on' ref)? expr ';'
 //!           | 'transfer' ('[' expr ']' | 'on' ref)? expr 'from' ref 'to' ref '(' expr ')' ';'
-//! role     := 'prefill' | 'decode' | 'tool'
 //! ref      := IDENT ('[' expr ']')?
 //! atom     := NUM | '(' expr ')' | IDENT | IDENT '(' arg (',' arg)* ')' | over
 //! over     := ('max' | 'min' | 'sum') IDENT 'in' (NUM | IDENT | '(' expr ')') '(' expr ')'
@@ -54,10 +53,9 @@
 //! The serving forms (`serving`) are sugar: they are rewritten to `hold`
 //! and `run` here, so the AST, the IR and the interpreter know only the
 //! kernel. A role finds its stage among the stages declared above the
-//! statement: the stage of the role's name (`prefill`, `link` or
-//! `transfer`, `decode`, `tool`), else, for `prefill` and `decode`, the
-//! `step` engine; `on STAGE` names it explicitly. On a step engine the run
-//! gets the role's mode (`run E prefill (S)`), elsewhere it is plain.
+//! statement: the stage of the role's name (`link` or `transfer`, `tool`);
+//! `on STAGE` names it explicitly. The run is plain. Prefill and decode are
+//! not roles: they are the mode of a `run` on a step engine.
 //!
 //! A workload's optional session describes complete turns and their continuation.
 //! Each source `turn;` becomes an attribute draw followed by the one server's
@@ -130,9 +128,9 @@ struct Parser {
     supplied_inputs: Vec<String>,
     toks: Vec<Token>,
     pos: usize,
-    /// The stages declared so far, (name, is a step engine): what the
-    /// serving forms resolve their stage against.
-    stages: Vec<(String, bool)>,
+    /// The stages declared so far: what the serving forms resolve their
+    /// stage against.
+    stages: Vec<String>,
     definitions: Vec<(String, Span)>,
     /// Composite costs lower to named scalar fields in declaration order.
     cost_records: std::collections::BTreeMap<String, Vec<String>>,
@@ -1655,8 +1653,7 @@ impl Parser {
                 self.queue(&mut prog, at)?;
             } else if self.eat_kw("stage") {
                 let d = self.stage()?;
-                self.stages
-                    .push((d.name.clone(), matches!(d.kind, StageKind::Step(_))));
+                self.stages.push(d.name.clone());
                 prog.stages.push(d);
             } else if self.eat_kw("workload") {
                 if prog.workload.is_some() {
@@ -3219,8 +3216,7 @@ impl Parser {
                     m.name = format!("{name}.{}", m.name);
                 }
                 self.queues[qi].has_stage = true;
-                self.stages
-                    .push((name.clone(), matches!(kind, StageKind::Step(_))));
+                self.stages.push(name.clone());
                 prog.stages.push(StageDecl {
                     span,
                     name: name.clone(),
@@ -3243,7 +3239,7 @@ impl Parser {
                 let kind = self.stage_kind()?;
                 self.queues[qi].nic = true;
                 let nname = format!("{name}.nic");
-                self.stages.push((nname.clone(), false));
+                self.stages.push(nname.clone());
                 prog.stages.push(StageDecl {
                     span,
                     name: nname,
@@ -3274,7 +3270,7 @@ impl Parser {
                 );
             }
             let lname = format!("{name}.latency");
-            self.stages.push((lname.clone(), false));
+            self.stages.push(lname.clone());
             prog.stages.push(StageDecl {
                 span,
                 name: lname,
@@ -3393,23 +3389,6 @@ impl Parser {
             );
         }
         let outer_side = self.side;
-        let outer_stages = std::mem::take(&mut self.stages);
-        // the body's serving forms find the queue's own step engine; the
-        // stages that are not one (a link's, a delay) it may name
-        let own = self.queues[qi].has_stage.then(|| {
-            outer_stages
-                .iter()
-                .rev()
-                .find(|(n, _)| *n == qname)
-                .cloned()
-                .expect("the queue's stage")
-        });
-        self.stages = outer_stages
-            .iter()
-            .filter(|(n, step)| !step && own.as_ref().is_none_or(|o| o.0 != *n))
-            .cloned()
-            .chain(own.clone())
-            .collect();
         self.side = Side::Server;
         self.in_queue = Some(qi);
         self.entry_from = from.clone();
@@ -3420,7 +3399,6 @@ impl Parser {
         self.entry_gateway = false;
         self.in_queue = None;
         self.side = outer_side;
-        self.stages = outer_stages;
         let body = body?;
         // what the body sets is the entry's; what it marks the caller reads;
         // what it leases a `from` takes
@@ -3717,12 +3695,11 @@ impl Parser {
         }
         if let Tok::Ident(s) = self.peek()
             && (s == "prefill" || s == "decode")
-            && *self.peek_at(1) != Tok::Dot
         {
             let s = s.clone();
             return self.err(format!(
-                "`{s} W;` is gone: prefill and decode are the mode of a run on a step engine\n\
-                 help: write `run E {s} (cost(E, W));` on the step engine `E`, or `run S (cost(S, W));` on another stage"
+                "`{s}` is the mode of a `run` on a step engine, not a statement\n\
+                 help: write `run E {s} (cost(E, T));` on the step engine `E`, or `run S (cost(S, W));` on another stage"
             ));
         }
         if self.is_kw("Size") || self.is_kw("Cost") {
@@ -4435,7 +4412,7 @@ impl Parser {
             self.consts.push((lname.clone(), v));
             prog.lets.push((lname.clone(), e));
             let count = self.queues[pi].count;
-            self.stages.push((sname.clone(), false));
+            self.stages.push(sname.clone());
             prog.stages.push(StageDecl {
                 span,
                 name: sname,
@@ -4493,8 +4470,8 @@ impl Parser {
         Ok(())
     }
 
-    /// `prefill S;`, `transfer[j] X from P to Q (n);`, `decode on E (D)
-    /// growing kv;`, ...: a `run` on the stage that plays the role.
+    /// `tool Z;`, `transfer[j] X from P to Q (n);`, `tool on S (Z);`: a
+    /// `run` on the stage that plays the role.
     fn serving(&mut self, role: Role) -> PResult<Vec<Stmt>> {
         let at = self.pos;
         let span = Some(self.span());
@@ -4532,7 +4509,6 @@ impl Parser {
             let name = self.role_stage(role, at)?;
             Ref { span, name, index }
         };
-        let mode = RunMode::Plain;
         let raw_work = self.expr()?;
         let resources: Vec<_> = std::iter::once(&stage)
             .chain(also.iter())
@@ -4606,7 +4582,7 @@ impl Parser {
             out.extend([
                 Stmt::Run {
                     stage,
-                    mode,
+                    mode: RunMode::Plain,
                     work,
                     growing: None,
                     also,
@@ -4635,7 +4611,7 @@ impl Parser {
         self.expect(&Tok::Semi)?;
         Ok(vec![Stmt::Run {
             stage,
-            mode,
+            mode: RunMode::Plain,
             work,
             growing,
             also,
@@ -4646,10 +4622,10 @@ impl Parser {
     fn declared_stage(&mut self, kw: &str) -> PResult<Ref> {
         let ref_at = self.pos;
         let r = self.reference()?;
-        if !self.stages.iter().any(|(n, _)| *n == r.name) {
+        if !self.stages.contains(&r.name) {
             let help = crate::frontend::diagnostic::suggestion(
                 &r.name,
-                self.stages.iter().map(|(name, _)| name.as_str()),
+                self.stages.iter().map(String::as_str),
             )
             .map(|name| format!("did you mean stage `{name}`?"))
             .unwrap_or_else(|| "declare the stage above this statement".into());
@@ -4675,14 +4651,14 @@ impl Parser {
     }
 
     /// The stage a role names when none is given: the stage of the role's
-    /// name, else (for `prefill` and `decode`) the step engine; exactly one.
+    /// name; exactly one.
     fn role_stage(&self, role: Role, at: usize) -> PResult<String> {
         let kw = role.keyword();
         let found: Vec<&str> = self
             .stages
             .iter()
-            .filter(|(n, _)| role.names().contains(&n.as_str()))
-            .map(|(n, _)| n.as_str())
+            .filter(|n| role.names().contains(&n.as_str()))
+            .map(String::as_str)
             .collect();
         match found.len() {
             1 => Ok(found[0].to_string()),
@@ -5114,11 +5090,15 @@ mod tests {
                 "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) {{ {form} }}\n}}"
             )))
             .unwrap_err();
-            assert!(e.msg.contains(&format!("`{kw} W;` is gone")), "{e}");
             assert!(
-                e.msg.contains(&format!("`run E {kw} (cost(E, W));`")),
+                e.msg.contains(&format!("`{kw}` is the mode of a `run`")),
                 "{e}"
             );
+            assert!(
+                e.msg.contains(&format!("`run E {kw} (cost(E, T));`")),
+                "{e}"
+            );
+            assert_eq!((e.line, e.col), (7, 34), "{e}");
         }
     }
 
@@ -5326,6 +5306,23 @@ mod tests {
           set g = min(floor((k - 1) / bs) * bs, 3);
         }}"
             ),
+        );
+        // a serving form in a def finds its stage where the def is used
+        same(
+            "stage T[2] : fifo; def put(s, n) { tool on s (n); }
+        workload { session { turn; end;
+        } }
+        server { choose j in 2 by (work(T[j])); put(T[j], 3);
+        }",
+            "stage T[2] : fifo;
+        workload { session { turn;
+            end;
+
+        } }
+        server {
+          choose j in 2 by (work(T[j]));
+          run T[j] (cost(T, 3));
+        }",
         );
         // statements, with references for pools and stages
         same(
