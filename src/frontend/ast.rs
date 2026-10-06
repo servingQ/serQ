@@ -445,8 +445,9 @@ pub struct RunOpts {
 pub struct Program {
     /// The source declares its executable entry point. Libraries have none.
     pub has_main: bool,
-    /// (external argument name, local binding), declared through std/args.
-    pub inputs: Vec<(String, String)>,
+    /// (external argument name, declaration index in `lets`), from std/args.
+    /// A name can be shadowed; inputs belong to declarations, not spellings.
+    pub inputs: Vec<(String, usize)>,
     /// Locations of constants and assigned attributes, for diagnostic notes.
     pub definitions: Vec<(String, Span)>,
     /// The libraries `use` read, for the spans that point into them.

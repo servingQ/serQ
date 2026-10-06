@@ -163,3 +163,52 @@ fn numeric_options_accept_equals_negatives_and_last_value() {
     let p: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(p["arrival"]["Poisson"], 3.0);
 }
+
+#[test]
+fn inputs_bind_declarations_without_replacing_shadowed_constants() {
+    for (declarations, expected) in [
+        ("let x = args.number(\"first\", 1); let x = 7;", 7.0),
+        (
+            "let x = 2; let saved = x * 2; let x = args.number(\"first\", 1); let x = saved + x;",
+            7.0,
+        ),
+        (
+            "let x = args.number(\"first\", 1); let saved = x; let x = args.number(\"second\", 2); let x = saved + x;",
+            8.0,
+        ),
+    ] {
+        let src = format!(
+            "use \"std/args\"; fn main() {{ {declarations} workload {{ arrive poisson(x); }} run {{ horizon 1; }} }}"
+        );
+        let mut ov = Overrides::default();
+        ov.set("first", "3").unwrap();
+        if declarations.contains("second") {
+            ov.set("second", "5").unwrap();
+        }
+        // The last fixed binding is 7; an earlier fixed x contributes 2*2;
+        // two distinct inputs contribute 3+5 even with one local spelling.
+        assert_eq!(
+            compile_source(&src, &ov).unwrap().arrival,
+            serq::ir::CArrival::Poisson(expected)
+        );
+    }
+}
+
+#[test]
+fn a_fixed_shadow_can_size_an_array_but_an_input_dependent_shadow_cannot() {
+    let src = r#"use "std/args"; fn main() {
+        let count = args.number("size", 2);
+        let count = 3;
+        stage workers[count] : delay;
+        run { horizon 1; }
+    }"#;
+    let mut ov = Overrides::default();
+    ov.set("size", "4").unwrap();
+    assert_eq!(compile_source(src, &ov).unwrap().stages.len(), 3);
+    let dependent = src.replace("let count = 3;", "let count = count + 1;");
+    assert!(
+        compile_source(&dependent, &ov)
+            .unwrap_err()
+            .contains("affects an array size")
+    );
+}

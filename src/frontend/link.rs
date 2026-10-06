@@ -418,11 +418,11 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         }
     }
     // Constants, in order; supplied inputs replace only their declared defaults.
-    for (name, e) in &prog.lets {
+    for (index, (name, e)) in prog.lets.iter().enumerate() {
         let input = prog
             .inputs
             .iter()
-            .find(|(_, binding)| binding == name)
+            .find(|(_, declaration)| *declaration == index)
             .map(|(key, _)| key);
         let overridden = ov.lets.iter().any(|(n, _)| Some(n) == input);
         let e = ov

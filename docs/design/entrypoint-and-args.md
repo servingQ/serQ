@@ -138,3 +138,26 @@ programs must add an entry point, and sweep parameters must opt in through
 Validation: `make check`, Python binding tests from a freshly built local
 wheel, `mkdocs build --strict`, generated Lean freshness checks and pinned
 citation checks. `IR_VERSION` stays 11.
+
+## PR review: shadowed bindings
+
+The first implementation matched inputs to local names. That assumed every
+`let` name identified one declaration, although the frontend already permits
+shadowing. In `let rate = args.number("public_rate", 1); let rate = 7;`,
+supplying `public_rate=3` consequently replaced both declarations and produced
+3 instead of 7. Two distinct inputs sharing a local name also both read the
+first option.
+
+Inputs now identify their declaration's index in the frontend's `lets` list.
+Later fixed bindings remain fixed, earlier constants retain their values,
+and two inputs with one local spelling remain distinct. Array-size dependency
+tracking follows each rebinding too: a fixed shadow removes that dependency,
+while `let count = count + 1;` retains it.
+
+The source program is valid, so refusing all shadowing would hide a frontend
+bug by adding an unnecessary language restriction. No new static refusal is
+needed. The existing check still refuses an array size that actually depends
+on a supplied input. The regression tests reproduce the private-constant
+replacement and derive the expected rates (7, 2*2+3, and 3+5) from the written
+bindings. This fix changes only the frontend; IR meaning and version remain
+unchanged.

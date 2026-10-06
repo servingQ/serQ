@@ -1707,6 +1707,7 @@ impl Parser {
             if self.eat_kw("let") {
                 let name = self.definition()?;
                 self.expect(&Tok::Assign)?;
+                let mut supplied_input = false;
                 let e = if matches!(self.peek(), Tok::Ident(n) if n == "args")
                     && *self.peek_at(1) == Tok::Dot
                 {
@@ -1730,10 +1731,8 @@ impl Parser {
                     self.expect(&Tok::Comma)?;
                     let default = self.expr()?;
                     self.expect(&Tok::RParen)?;
-                    if self.supplied_inputs.contains(&key) {
-                        self.structural_overrides.push(name.clone());
-                    }
-                    prog.inputs.push((key, name.clone()));
+                    supplied_input = self.supplied_inputs.contains(&key);
+                    prog.inputs.push((key, prog.lets.len()));
                     default
                 } else {
                     self.expr()?
@@ -1741,9 +1740,10 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 let mut vars = vec![];
                 names(&e, &mut vars, &mut Vec::new());
-                if vars.iter().any(|v| self.structural_overrides.contains(v))
-                    && !self.structural_overrides.contains(&name)
-                {
+                let varies =
+                    supplied_input || vars.iter().any(|v| self.structural_overrides.contains(v));
+                self.structural_overrides.retain(|n| n != &name);
+                if varies {
                     self.structural_overrides.push(name.clone());
                 }
                 if let Some(v) = self.const_value(&e) {
