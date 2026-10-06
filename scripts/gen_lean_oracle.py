@@ -373,6 +373,40 @@ class Lean:
                    for attrs in [session["attrs"], *session.get("turns", [])]
                    for key, value in attrs if key == slot)
 
+    def while_guard(self, e):
+        if not self.boolean_guard(e):
+            raise Fragment("while guard is not guaranteed to be 0 or 1; "
+                           "the Lean fragment does not model invalid-guard errors")
+        # A boolean result does not make Nat arithmetic agree with Rust:
+        # prompt - 2 < 0 can be true in Rust and false in Lean. Check both
+        # the guard and every assignment feeding it, including alias chains
+        # and loop-carried values. A visited set terminates cyclic aliases.
+        pending, seen = [e], set()
+
+        def attributes(value):
+            if isinstance(value, dict):
+                if "Attr" in value:
+                    yield value["Attr"]
+                for child in value.values():
+                    yield from attributes(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from attributes(child)
+
+        while pending:
+            value = pending.pop()
+            if subtracts(value):
+                raise Fragment("while guard depends on subtraction: Lean naturals truncate "
+                               "at 0 where Rust can go negative")
+            for slot in attributes(value):
+                if slot not in seen:
+                    seen.add(slot)
+                    pending.extend(st["Set"][1]
+                                   for block in self.ir["blocks"] for st in block
+                                   if isinstance(st, dict) and "Set" in st
+                                   and st["Set"][0] == slot)
+        return self.top(e)
+
     def block(self, b, ind):
         pad = "  " * ind
         out = []
@@ -432,10 +466,7 @@ class Lean:
                 out.append(f"{pad}}};")
             elif kind == "While":
                 c, body = v
-                if not self.boolean_guard(c):
-                    raise Fragment("while guard is not guaranteed to be 0 or 1; "
-                                   "the Lean fragment does not model invalid-guard errors")
-                out.append(f"{pad}while ({self.top(c)}) {{")
+                out.append(f"{pad}while ({self.while_guard(c)}) {{")
                 out.append(self.block(body, ind + 1))
                 out.append(f"{pad}}};")
             elif kind == "Loop":

@@ -128,3 +128,107 @@ fn a_reveal_on_one_arm_only_does_not_reveal() {
         &["`o` is hidden from the scheduler", "branch"],
     );
 }
+
+/// The review's two-hop chain reaches the guard on its third evaluation.
+/// Longer chains and unconditional loops need the same fixed-point check.
+#[test]
+fn hidden_values_propagate_through_every_loop_pass() {
+    let source = "stage svc : delay;
+      workload { arrive batch(1); hidden secret; turn { set secret = 2; } }
+      server {
+        set a = 0; set b = 0;
+        while (a == 0) { run svc (1); set a = b; set b = secret; }
+        observe done = now;
+      }";
+    let error = compile_source(&common::main_source(source), &common::horizon(10.0)).unwrap_err();
+    assert!(
+        error.contains("`a` is set from the hidden `secret`"),
+        "{error}"
+    );
+    assert!(error.contains("server's while reads it"), "{error}");
+
+    for depth in [3, 8] {
+        let init = (0..depth)
+            .map(|i| format!("set x{i} = 0; "))
+            .collect::<String>();
+        let mut chain = (0..depth - 1)
+            .map(|i| format!("set x{i} = x{}; ", i + 1))
+            .collect::<String>();
+        chain.push_str(&format!("set x{} = o;", depth - 1));
+        let work = "hold kv (prompt) { prefill (prompt) growing kv; }";
+        refused(
+            &format!("{init} while (x0 == 0) {{ {work} {chain} }}"),
+            &["`x0` is set from the hidden `o`", "server's while reads it"],
+        );
+        refused(
+            &format!("{init} loop {{ branch (x0 == 0) {{ observe flag = 1; }} {work} {chain} }}"),
+            &[
+                "`x0` is set from the hidden `o`",
+                "server's branch reads it",
+            ],
+        );
+        // A run revealing o before the decision makes the same chain legal.
+        let safe = format!(
+            "hold kv (prompt) {{ prefill (prompt) growing kv; decode (o) growing kv; }}
+          {init} while (x0 == 0) {{ {work} {chain} }}"
+        );
+        compile_source(
+            &common::main_source(&program(&safe)),
+            &common::horizon(100.0),
+        )
+        .unwrap();
+    }
+}
+
+/// Joining loop paths must retain every origin, including a hidden name
+/// overwritten from a different hidden input. Revealing one is not both.
+#[test]
+fn loop_join_preserves_origins_of_reassigned_hidden_names() {
+    let src = "stage svc : delay;
+      workload { arrive batch(1); hidden a, b; init { set a = 1; set b = 2; set flag = 0; } }
+      server { while (1) {
+        branch (flag) { set a = b; }
+        run svc (b);
+        branch (a > 0) {}
+      } }";
+    let error = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
+    // The else path leaves a's original hidden value. Running by b cannot
+    // reveal it just because the other path assigned a from b.
+    assert!(error.contains("hidden `a`"), "{error}");
+    assert!(error.contains("server's branch reads it"), "{error}");
+}
+
+#[test]
+fn a_run_reveals_only_origins_present_on_every_path() {
+    let model = |body: &str| {
+        common::main_source(&format!(
+            "stage svc : delay;
+         workload {{ arrive batch(1); hidden a, b; init {{ set a = 1; set b = 2; }} }}
+         server {{ {body} }}"
+        ))
+    };
+    for body in [
+        "branch (1) {} else { set a = b; } run svc (a); branch (b > 0) { observe leaked = b; }",
+        "set c = 1 ? a : b; run svc (c); branch (b > 0) {}",
+        "run svc (1 || b); branch (b > 0) {}",
+    ] {
+        let error = compile_source(&model(body), &common::horizon(10.0)).unwrap_err();
+        assert!(error.contains("`b` is hidden"), "{error}");
+    }
+    // Both branch arms depend on b: reading c genuinely reveals b.
+    compile_source(
+        &model(
+            "branch (1) { set c = b; } else { set c = b + 1; }
+         run svc (c); branch (b > 0) {}",
+        ),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+    // Preserve dependency information after revelation so repeated runs
+    // remain evidence at every loop pass, without falsely revealing b.
+    compile_source(
+        &model("set i = 0; while (i < 2) { run svc (a); branch (a > 0) {} set i = i + 1; }"),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+}

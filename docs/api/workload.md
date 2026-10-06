@@ -113,17 +113,22 @@ future output length.
 The `server`'s own statements are the rest of the scheduler, and there a
 hidden attribute is the target's until a run reveals it. The server may run work by it
 (`decode (o - 1)`: the model ends the run, not the scheduler), cache by it
-at release, and observe it. A run whose work reads it reveals it when the
-run ends, since the end of a decode is the EOS the scheduler sees. After
+at release, and observe it. A run whose work necessarily reads it on every
+path reveals it when the run ends, since the end of a decode is the EOS the scheduler sees. After
 that the server may decide on it.
 
 Before it is revealed, these are link errors when they read it, or read an
-attribute the server set from it (`set long = o > 100;`): a `branch`, a
-`choose`, a `grow` or `load` amount, or the index that picks a pool or
+attribute the server set from it (`set long = o > 100;`): a `branch` or `while`
+condition, a `choose`, a `grow` or `load` amount, or the index that picks a pool or
 stage. An attribute set from it is revealed with it.
 
 Paths join conservatively: after a branch, the attribute counts as revealed
-only if both arms reveal it, and a loop's body may not run at all. A hold's
+only if both arms reveal it, and a loop's body may not run at all. Loop-carried
+assignments are checked until no new hidden dependencies reach the next pass.
+If one branch assigns `x = a` and another `x = b`, running work by `x` does
+not establish that both hidden inputs were read. Conditional expressions and
+short-circuit operators follow the same rule; an aggregate body is not
+assumed to execute. A hold's
 header is read at admission, where the attribute itself stays refused even
 after a run (the moment rule above). The workload's statements are the
 client's and are not subject to the server statement check.

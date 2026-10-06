@@ -113,6 +113,29 @@ class Sessions(unittest.TestCase):
             with self.assertRaisesRegex(generator.Fragment, "while guard.*0 or 1"):
                 generator.Lean(ir).block(ir["session"], 0)
 
+    def test_while_rejects_natural_subtraction_even_through_aliases(self):
+        # Review regression: Rust sees -1 < 0, Lean's Nat sees 0 < 0.
+        # The original body has positive work; only the guard diverges.
+        for indirect in (False, True):
+            with self.subTest(indirect=indirect):
+                ir, _ = generator.load("alone")
+                body = len(ir["blocks"])
+                ir["blocks"].append(ir["blocks"][ir["session"]])
+                slot = ir["attrs"].index("prompt")
+                difference = {"Binary": ["Sub", {"Attr": slot}, {"Num": 2}]}
+                stmts = [{"Set": [slot, {"Num": 1}]}]
+                operand = difference
+                if indirect:
+                    first, second = len(ir["attrs"]), len(ir["attrs"]) + 1
+                    ir["attrs"].extend(["difference", "alias"])
+                    stmts.extend([{"Set": [first, difference]},
+                                  {"Set": [second, {"Attr": first}]}])
+                    operand = {"Attr": second}
+                guard = {"Binary": ["Lt", operand, {"Num": 0}]}
+                ir["blocks"][ir["session"]] = stmts + [{"While": [guard, body]}, "End"]
+                with self.assertRaisesRegex(generator.Fragment, "while guard depends on subtraction"):
+                    generator.Lean(ir).block(ir["session"], 0)
+
     def test_more_cannot_bypass_guard_validation_through_writes_or_presets(self):
         original, _ = generator.load("cache_trace")
         slot = original["slot_more"]

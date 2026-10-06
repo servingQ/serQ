@@ -108,7 +108,11 @@ are rejected rather than silently omitted.
 - A `while` guard must be a literal 0/1, a comparison or logical expression,
   a conditional with such results, or the read-only `more` attribute of an
   explicit-session workload whose presets for `more` are all 0/1. Assignments to `more`
-  and other bare attribute guards are rejected. Rust reports invalid guards
+  and other bare attribute guards are rejected. A guard and every assignment
+  feeding its attributes must be free of subtraction: natural subtraction
+  can change a comparison even when its result is 0/1. This conservative
+  restriction includes differences that happen to stay nonnegative.
+  Rust reports invalid guards
   at runtime; Lean's executable model has no corresponding error state.
 - The claims fragment also supports `serve only`, a chunk expression over
   `residents` and `queued(p)`, one queue key on a pool that no run grows,

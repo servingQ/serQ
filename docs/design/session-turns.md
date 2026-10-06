@@ -209,3 +209,51 @@ The existing prefix-cache oracle remains in the fragment. Adding an error
 state throughout the Lean machine was rejected for this fix: the current
 fragment deliberately excludes runtime-error behavior, so the translation
 boundary is the place to enforce this restriction.
+
+
+## Re-review: loop-carried hidden values and arithmetic guards
+
+The server's hidden-attribute analysis visited a loop body twice. That
+assumed that a late assignment reaches every relevant decision on the next
+pass. The counterexample `a = b; b = secret` reaches `while (a == 0)` only
+on its third evaluation; longer chains require more passes. The analysis
+now unions the origins arriving at the loop header until that finite set
+stops growing, checking the guard and body on each pass. The same rule
+applies to `Loop`. Joining paths retains all possible origins even when a hidden
+attribute is reassigned from another hidden input. Possible origins prohibit
+premature decisions; a separate intersection of origins present on every
+path determines what a run can reveal. Revelation is tracked separately from
+the value's dependencies, so repeated runs remain valid evidence at every
+loop pass. These are statically
+recognizable hidden reads, so the linker refuses them before execution.
+Tests preserve the original two-hop counterexample, longer chains and the
+legal case where a run has revealed the value before the decision.
+
+The 0/1 translation check also confused a boolean result with an equivalent
+boolean result. With `prompt = 1`, Rust evaluates `prompt - 2 < 0` as true,
+but Lean's natural subtraction makes it false. The `alone` oracle wrapped
+in this loop completed four requests in Rust and none in Lean; request work
+and resource amounts remained nonnegative. This is a valid Rust program,
+so rejecting it in the language would be wrong.
+
+The Lean `While` boundary now refuses subtraction in the guard or any
+assignment feeding its attributes, following aliases transitively. It uses
+a visited set for cycles and checks assignments in every block, including
+later loop passes. The regression covers the review's exact wrapper and a
+two-hop alias of the difference. This is intentionally conservative: even
+nonnegative differences are rejected here. Adding only a direct guard check
+was rejected because moving the subtraction into an attribute would bypass
+it; proving arithmetic ranges is beyond this translation fragment. Existing
+`Branch` and general natural-arithmetic limits are unchanged. Neither fix
+changes IR meaning or requires another version bump.
+
+
+The first fix tried to union origins and reveal every member after a run.
+That was rejected by a regression where only one branch assigns `a = b`:
+a later run by `a` cannot establish that hidden `b` was read. The revised
+analysis separates possible dependencies from guaranteed reads, including
+conditional expressions and short-circuit operators. Tests cover both
+branch directions, the rejected disclosure, and the allowed case where
+both arms depend on the same hidden input. Aggregate bodies are not assumed
+to execute; that conservative boundary avoids treating a zero-term
+aggregate as evidence of a read.
