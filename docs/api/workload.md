@@ -117,7 +117,7 @@ future output length.
 
 The `server`'s own statements are the rest of the scheduler, and there a
 hidden attribute is the target's until a run reveals it. The server may run work by it
-(`decode (o - 1)`: the model ends the run, not the scheduler), cache by it
+(`run engine decode (cost(engine, o - 1))`: the model ends the run, not the scheduler), cache by it
 at release, and observe it. A run whose work necessarily reads it on every
 path reveals it when the run ends, since the end of a decode is the EOS the scheduler sees. After
 that the server may decide on it.

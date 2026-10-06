@@ -204,15 +204,12 @@ fn json_cannot_retype_builtins_or_restore_workload_authority_inside_server() {
 
 #[test]
 fn serving_vocabulary_converts_quantities_not_already_converted_costs() {
-    for body in [
-        "prefill(cost(svc, 3));",
-        "set c = cost(svc, 3); prefill(c);",
-    ] {
+    for body in ["tool(cost(svc, 3));", "set c = cost(svc, 3); tool(c);"] {
         let src = format!(
             "fn main() {{ stage svc : delay; workload {{ arrive batch(1); session {{ turn; end; }} }} server {{ {body} }} }}"
         );
         // Explicit on: this stage's name need not be the vocabulary's default.
-        let src = src.replace("prefill(", "prefill on svc (");
+        let src = src.replace("tool(", "tool on svc (");
         assert!(
             compile_source(&src, &common::horizon(10.0))
                 .unwrap_err()

@@ -61,9 +61,9 @@ fn main() {
     set prompt = K + n;
     hold kv (cost(kv, prompt + mnt - 1)) reuse (cost(kv, prompt - 1)) {
       set c = cached;
-      prefill on engine (prompt - c);
+      run engine prefill (cost(engine, prompt - c));
       observe ttft = now - t0;
-      decode on engine (o - 1);
+      run engine decode (cost(engine, o - 1));
     } cache (cost(kv, prompt));
     observe response = now - t0;
   }

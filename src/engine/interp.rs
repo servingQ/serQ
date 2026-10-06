@@ -1831,7 +1831,7 @@ impl<'p> Interp<'p> {
                     also,
                 } => {
                     let st = self.session_index(stage, sid);
-                    // the kernel's spelling: `decode on E (…)` is `run E decode (…)`
+                    // the kernel's spelling: `run E decode (…)`
                     let m = match mode {
                         RunMode::Plain => "",
                         RunMode::Prefill => " prefill",

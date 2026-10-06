@@ -220,7 +220,7 @@ fn the_decode_leg_holds_its_blocks_during_the_prefill() {
           pool kv {{ cap 100; }}
           serve step {{ cost 1; memory kv; }}
           nic ps(10);
-          decode (p) {{ hold kv (cost(kv, p)) {{ prefill (p) growing kv; }} }}
+          decode (p) {{ hold kv (cost(kv, p)) {{ run D prefill (cost(D, p)) growing kv; }} }}
           decode (p) from src {{
             hold kv (cost(kv, p)) {{
               mark parked;
@@ -271,7 +271,7 @@ fn legs_that_wait_for_each_other_fail_the_run() {
           pool kv { cap 10; }
           serve step { cost 1; memory kv; }
           nic ps(100);
-          decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
+          decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
           decode (p) from src { hold kv (cost(kv, p)) { join; transfer (p) from src to kv (p); } }
         }
         P push D share maxmin;
@@ -460,7 +460,7 @@ fn a_lease_that_expires_is_not_a_deadlock() {
           pool kv { cap 10; }
           serve step { cost 1; memory kv; }
           nic ps(100);
-          decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
+          decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
           decode (p) from src { hold kv (cost(kv, p)) { join; transfer (p) from src to kv (p); } }
         }
         P push D share maxmin;
@@ -519,10 +519,10 @@ fn a_queue_posts_the_copies_of_one_relation() {
         "queue P : prefill { pool kv { cap 10; } serve fifo; nic ps(1);
           prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
         queue D : decode { pool kv { cap 10; } serve step { cost 1; memory kv; } nic ps(1);
-          decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
+          decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
           decode (p) from src { hold kv (cost(kv, p)) { transfer (p) from src to kv (p); } } }
         queue E : decode { pool kv { cap 10; } serve step { cost 1; memory kv; } nic ps(1);
-          decode (p) { hold kv (cost(kv, p)) { prefill (p) growing kv; } }
+          decode (p) { hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; } }
           decode (p) from src { hold kv (cost(kv, p)) { transfer (p) from src to kv (p); } } }
         P push D latency 1 share maxmin;
         P push E latency 1 share maxmin;

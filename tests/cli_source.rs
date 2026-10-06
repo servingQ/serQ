@@ -111,7 +111,7 @@ fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
     assert!(err.contains("unknown name `missing`"), "{err}");
     assert!(err.contains("6 |   engine.prefill (missing);"), "{err}");
 
-    let src = "queue engine : prefill {\n  pool kv { cap 10; admit via engin; }\n  serve step { cost 1; memory kv; }\n  prefill (prompt) { hold kv (cost(kv, prompt)) { prefill (prompt) growing kv; } }\n}\n";
+    let src = "queue engine : prefill {\n  pool kv { cap 10; admit via engin; }\n  serve step { cost 1; memory kv; }\n  prefill (prompt) { hold kv (cost(kv, prompt)) { run engine prefill (cost(engine, prompt)) growing kv; } }\n}\n";
     let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     assert!(err.contains("2:31:"), "{err}");
     assert!(err.contains("unknown stage `engin`"), "{err}");

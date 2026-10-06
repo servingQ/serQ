@@ -99,7 +99,7 @@ fn main() {
       hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt))
            at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
         set c = cached;
-        prefill (prompt - c) growing kv;      // chunked; one token is sampled and discarded
+        run P prefill (cost(P, prompt - c)) growing kv;      // chunked; one token is sampled and discarded
       } cache (cost(reqs, kv, prompt)) lease kv (inf);
     }
   }
@@ -126,9 +126,9 @@ fn main() {
                          hit = min(cachedin(kv), reusable(known, bs))) {
         set c = min(cached, reusable(known, bs));
         observe local_tokens = known - c;
-        prefill (known - c) growing kv;
+        run D prefill (cost(D, known - c)) growing kv;
         branch (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
-        decode (produced - 1 - (known - prompt)) growing kv;
+        run D decode (cost(D, produced - 1 - (known - prompt))) growing kv;
       } cache (cost(kv, reqs, prompt + produced));
     }
 
@@ -158,9 +158,9 @@ fn main() {
         // A request preempted on the decoder afterwards recomputes what it
         // lost here, as any local prefill would (do_remote_prefill is spent).
         hold reqs (cost(reqs, 1)) {
-          prefill (known - c) growing kv;
+          run D prefill (cost(D, known - c)) growing kv;
           branch (known == prompt) { mark first_token; }
-          decode (produced - 1 - (known - prompt)) growing kv;
+          run D decode (cost(D, produced - 1 - (known - prompt))) growing kv;
         }
       } cache (cost(kv, reqs, prompt + produced));
     }

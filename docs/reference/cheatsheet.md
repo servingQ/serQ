@@ -87,12 +87,10 @@ run S [prefill|decode] (w) [growing P];
 run S, T (cost(S, T, w));                      // one job holding ps stages S and T at once, at the rate share gives
 
 // the serving vocabulary: the same statements, named by the request lifecycle
-prefill W;  decode W;  tool Z;     // run on the stage of that name: W is
-                                   // time on a fifo/ps/delay stage (seconds)
-prefill T;  decode T;              // on a step engine: T is tokens, the budget's unit
+tool Z;                            // run on the stage `tool`: Z is time (seconds)
 transfer (X) from P to Q (n);      // run link (X); load Q (n); release P
 transfer on S, T (X) from P to Q (n);   // uses both links for the transfer
-prefill[j] W;  prefill on P (W);   // an instance of an array; an explicit stage
+tool[j] Z;  tool on S (Z);         // an instance of an array; an explicit stage
 
 branch (e) { … } [else { … }]      // a test: e is 0 or 1
 branch with (p) { … } [else { … }] // a draw: with probability p

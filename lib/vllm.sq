@@ -45,8 +45,8 @@ def vllm_request(reqs, kv, engine, prompt, o, t0) {
     set c = min(cached, reusable(known, blocksize(kv)));
     observe hit = c > 0;
     observe prefill_tokens = known - c;
-    prefill on engine (known - c) growing kv;
+    run engine prefill (cost(engine, known - c)) growing kv;
     branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
-    decode on engine (o - 1 - (known - prompt)) growing kv;
+    run engine decode (cost(engine, o - 1 - (known - prompt))) growing kv;
   } cache (cost(reqs, kv, prompt + o));
 }

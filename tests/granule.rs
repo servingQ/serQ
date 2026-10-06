@@ -27,7 +27,7 @@ fn prog(granule: &str) -> String {
         server {{
           set t0 = now;
           hold reqs (cost(reqs, 1)) {{
-            prefill on engine (6);
+            run engine prefill (cost(engine, 6));
             observe ttft = now - t0;
           }}
         }}
@@ -106,7 +106,7 @@ fn the_chunk_caps_and_the_granule_rounds() {
         }
         server {
           set t0 = now;
-          hold reqs (cost(reqs, 1)) { prefill on engine (10); observe ttft = now - t0; }
+          hold reqs (cost(reqs, 1)) { run engine prefill (cost(engine, 10)); observe ttft = now - t0; }
         }
 
 "#;
@@ -146,7 +146,7 @@ fn a_refused_prefill_ends_the_admissions() {
         server {
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(6, left))) at admission (left = budget_left(engine)) {
             observe admitted = now;
-            prefill on engine (6) growing kv;
+            run engine prefill (cost(engine, 6)) growing kv;
           }
         }
 

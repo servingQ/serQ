@@ -137,7 +137,7 @@ fn an_iteration_with_tokens_and_zero_cost_is_an_error() {
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, 100)) { prefill (100) growing kv; }
+        server { hold kv (cost(kv, 100)) { run engine prefill (cost(engine, 100)) growing kv; }
         }
         ",
         &common::horizon(10.0),
@@ -204,8 +204,8 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
         server {{
           set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
-            prefill (prompt) growing kv;
-            decode (o - 1) growing kv;
+            run engine prefill (cost(engine, prompt)) growing kv;
+            run engine decode (cost(engine, o - 1)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
         }}
         "
@@ -269,7 +269,7 @@ fn the_machine_still_matters() {
           session {{  turn; end;
           }}
         }}
-        server {{ set t0 = now; hold kv (cost(kv, n)) {{ prefill (n) growing kv; }}
+        server {{ set t0 = now; hold kv (cost(kv, n)) {{ run engine prefill (cost(engine, n)) growing kv; }}
           observe ttft = now - t0;
         }}
         "

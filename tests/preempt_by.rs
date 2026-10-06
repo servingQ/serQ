@@ -31,8 +31,8 @@ fn three(preempt: &str) -> String {
           set prompt = serial == 0 ? 4 : serial == 1 ? 10 : 6;
           hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
             branch (computed > 0) {{ observe victim = serial; }}
-            prefill on engine (prompt) growing kv;
-            decode on engine (12) growing kv;
+            run engine prefill (cost(engine, prompt)) growing kv;
+            run engine decode (cost(engine, 12)) growing kv;
           }} cache (cost(reqs, kv, 0));
         }}
 
@@ -97,8 +97,8 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
         server {{
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {{
             observe admitted = serial;
-            prefill on engine (4) growing kv;
-            decode on engine (10) growing kv;
+            run engine prefill (cost(engine, 4)) growing kv;
+            run engine decode (cost(engine, 10)) growing kv;
           }} cache (cost(reqs, kv, 0));
         }}
 
@@ -140,8 +140,8 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
           set prompt = 4;
           set o = 12;
           hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
-            prefill on engine (prompt) growing kv;
-            decode on engine (o) growing kv;
+            run engine prefill (cost(engine, prompt)) growing kv;
+            run engine decode (cost(engine, o)) growing kv;
           }} cache (cost(reqs, kv, 0));
         }}
 
@@ -257,8 +257,8 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
           set rank = serial == 2 ? 9 : serial;
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {
             observe admitted = serial;
-            prefill on engine (4) growing kv;
-            decode on engine (10) growing kv;
+            run engine prefill (cost(engine, 4)) growing kv;
+            run engine decode (cost(engine, 10)) growing kv;
           } cache (cost(reqs, kv, 0));
         }
 

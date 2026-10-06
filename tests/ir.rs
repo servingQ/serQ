@@ -393,8 +393,8 @@ fn serving_forms_compile_to_the_kernel_ir() {
 
         }} }}
         server {{
-          hold memP (cost(memP, T)) {{ prefill (n + K); }} cache (cost(memP, T)) lease memP (inf);
-          hold memD (cost(memD, T)) {{ transfer (T / 100) from memP to memD (T); decode (o); }}
+          hold memP (cost(memP, T)) {{ run prefill (cost(prefill, n + K)); }} cache (cost(memP, T)) lease memP (inf);
+          hold memD (cost(memD, T)) {{ transfer (T / 100) from memP to memD (T); run decode (cost(decode, o)); }}
         }}"
     );
     let kernel = format!(
@@ -514,7 +514,7 @@ fn at_admission_is_substituted_into_the_header() {
         server {{ set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
           at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            prefill (prompt - cached) growing kv;
+            run engine prefill (cost(engine, prompt - cached)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
         }}"
     );
@@ -523,7 +523,7 @@ fn at_admission_is_substituted_into_the_header() {
         }} }}
         server {{ set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, min(cachedin(kv), prompt - 1) + budget_left(engine)))) {{
-            prefill (prompt - cached) growing kv;
+            run engine prefill (cost(engine, prompt - cached)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
         }}"
     );
@@ -556,7 +556,7 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
         }} }}
         server {{ set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(hit, 10))) at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            prefill (prompt - cached) growing kv;
+            run engine prefill (cost(engine, prompt - cached)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
         }}"
     );
@@ -565,7 +565,7 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
         }} }}
         server {{ set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(min(cachedin(kv), prompt - 1), 10))) {{
-            prefill (prompt - cached) growing kv;
+            run engine prefill (cost(engine, prompt - cached)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
         }}"
     );
@@ -693,9 +693,9 @@ fn the_request_boundary_preserves_size_ownership() {
           set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
           at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            prefill (prompt - cached) growing kv;
+            run engine prefill (cost(engine, prompt - cached)) growing kv;
             observe ttft = now - t0;
-            decode (o - 1) growing kv;
+            run engine decode (cost(engine, o - 1)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
           observe response = now - t0;
         }}"
@@ -716,9 +716,9 @@ fn the_request_boundary_preserves_size_ownership() {
           set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
           at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            prefill (prompt - cached) growing kv;
+            run engine prefill (cost(engine, prompt - cached)) growing kv;
             observe ttft = now - t0;
-            decode (o - 1) growing kv;
+            run engine decode (cost(engine, o - 1)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
           observe response = now - t0;
           set K = prompt + o;
@@ -752,7 +752,7 @@ fn enter_is_hold_and_admit_via_survives() {
         ";
     let head_workload = "arrive poisson(1); init { set n = 10; }";
     let sugar = format!(
-        "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ prefill (n) growing kv; }} cache (cost(reqs, kv, n));\n}}"
+        "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run engine prefill (cost(engine, n)) growing kv; }} cache (cost(reqs, kv, n));\n}}"
     );
     let kernel = format!(
         "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run engine prefill (cost(engine, n)) growing kv; }} cache (cost(reqs, kv, n));\n}}"

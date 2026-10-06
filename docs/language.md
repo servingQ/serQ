@@ -91,6 +91,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | release POOL ;                   -- give the enclosing hold's allocation on POOL back now, or end a lease of it
           | load POOL ( expr ) ;             -- the KV of expr tokens arrived: the enclosing hold's computed position advances
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
+                                             -- the mode: required on a step stage, refused on any other
                                              -- growing: inside a hold of POOL, which grows with the tokens
           | run STAGE , STAGE [, STAGE]* ( expr ) ;   -- one job holding every stage at once
           | run ( expr ) ;                   -- in a queue's entry: the queue's own stage
@@ -106,10 +107,8 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
                                              -- a queue's entry, in its place (*Queues*)
           | mark NAME ;                        -- in an entry: the moment, read by the caller as QUEUE.NAME
           | serving                          -- the serving vocabulary, sugar for run
-serving  := prefill  [ '[' expr ']' | on STAGE [, STAGE]* ] expr [ growing POOL ] ;
-          | transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
+serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
-          | decode   [ '[' expr ']' | on STAGE [, STAGE]* ] expr [ growing POOL ] ;
           | tool     [ '[' expr ']' | on STAGE [, STAGE]* ] expr ;
 ```
 
@@ -204,46 +203,38 @@ The source lowers to existing assignments and conversions, with no new
 execution scope. See [attribute types](api/attributes.md#sizes-values-and-costs).
 
 The statements above are about resources: `hold` a pool, `run` a stage.
-The serving forms name the request's lifecycle instead (prefill, KV
-transfer, decode, tool call). They are sugar: the parser rewrites each to
-the kernel statement it stands for, so the IR (`serq ir` prints the
-kernel), the interpreter and the Lean model know nothing of them.
+The serving forms name a part of the request's lifecycle that is more than
+one run (a KV transfer) or that is not the engine's (a tool call). They are
+sugar: the parser rewrites each to the kernel statement it stands for, so
+the IR (`serq ir` prints the kernel), the interpreter and the Lean model
+know nothing of them. Prefill and decode are not forms: on a step engine
+they are the mode of the run, `run E prefill (cost(E, T));` and
+`run E decode (cost(E, T));`, which names the engine the request uses.
 
 | Serving form | Kernel |
 |---|---|
-| `prefill W;` | `run prefill (cost(prefill, W));`, or on a step engine `E`: `run E prefill (cost(E, T));` |
 | `transfer (X) from P to Q (n);` | `run link (cost(link, X)); load Q (cost(Q, n)); release P;` — the KV of `n` tokens moves from the session's lease (or hold) on `P` to its hold on `Q`: the link takes the time, the tokens count as computed at `Q`, and `P` is given back (below, *A KV transfer*) |
-| `decode W;` | `run decode (cost(decode, W));`, or on a step engine `E`: `run E decode (cost(E, T));` |
 | `tool Z;` | `run tool (cost(tool, Z));` |
-| `prefill (T) growing kv;` | `run E prefill (cost(E, T)) growing kv;` (`growing` passes through; a form never adds it) |
-| `prefill[j] W;` | `run prefill[j] (cost(prefill, W));`, or `run prefill[j] prefill (cost(prefill, T));` when the array is step engines (the index applies to the role's stage array) |
-| `prefill on P[j] (W);` | `run P[j] (cost(P, W));`, or `run P[j] prefill (cost(P, T));` when `P` is a step engine |
+| `tool[j] Z;` | `run tool[j] (cost(tool, Z));` (the index applies to the role's stage array) |
+| `tool on S[j] (Z);` | `run S[j] (cost(S, Z));` |
 | `transfer on egress[i], ingress[j] (X) from P to Q (n);` | `run egress[i], ingress[j] (cost(egress, ingress, X)); load Q (cost(Q, n)); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*) |
 
-The argument is work in the unit of the stage it runs on, and the two
-metavariables say which: `W` is the time the job takes alone on a `fifo`,
-`ps` or `delay` stage (seconds, when the program's clock is seconds; a `ps`
-stage serves it at `φ(present)/present`), `T` is tokens on a step engine, the unit of
-its `budget`. The same form takes either; the Which-stage rule below
-decides.
+The argument is work in the unit of the stage it runs on: the time the job
+takes alone on a `fifo`, `ps` or `delay` stage (seconds, when the program's
+clock is seconds; a `ps` stage serves it at `φ(present)/present`).
 
 #### Which stage
 
 A form finds its stage among the stages declared above
 it (declarations come first in every program here): the stage whose name
-is the role's, `prefill`, `link` (or `transfer`), `decode`, `tool`;
-failing that, for `prefill` and `decode`, the `step` engine, since prefill
-and decode share its iteration. Exactly one must qualify: with none
-(`stage svc : fifo;` and `prefill W;`) or several (two step engines) the
-parser stops at the form and says so. `on STAGE` names the stage
-explicitly; with several instances of a role, `choose j …; prefill[j] W;`
-serves an array and `prefill on P2 (W);` stages that are not one. On a
-step engine the run gets the role's mode (`run E prefill`), elsewhere it
-is plain, so the linker's rule (the mode is required on a step stage and
-forbidden elsewhere) is met by construction; `transfer` and `tool` on a
-step engine are rejected by the linker as `run E (cost(E, X))` would be. A linker
-error inside a form (an unknown name in `W`, say) speaks of the kernel
-statement.
+is the role's, `link` (or `transfer`), `tool`. Exactly one must qualify:
+with none (`stage svc : fifo;` and `tool Z;`) or several (`link` and
+`transfer`) the parser stops at the form and says so. `on STAGE` names the
+stage explicitly; with several instances of a role, `choose j …; tool[j] Z;`
+serves an array and `tool on S2 (Z);` stages that are not one. The run is
+plain: `transfer` and `tool` on a step engine are rejected by the linker as
+`run E (cost(E, X))` would be. A linker error inside a form (an unknown name
+in `Z`, say) speaks of the kernel statement.
 
 #### A KV transfer
 
@@ -343,7 +334,7 @@ queue P[NP] : prefill {
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt))
          at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
       set c = cached;
-      prefill (prompt - c) growing kv;
+      run P prefill (cost(P, prompt - c)) growing kv;
     } cache (cost(reqs, kv, prompt)) lease kv (inf);
   }
 }
@@ -355,7 +346,7 @@ an *entry* — one per verb of the queue's roles — holds what the station
 does with one request, with the role's parameters (`prefill (prompt)`). A
 queue declares its pools, then its `serve`, then its entries, each reading
 what is above it. The body is the server's statements; `run (cost(P, X))` with
-no stage names the queue's own, and a serving form with no `on` finds it;
+no stage names the queue's own, and a step engine's run names it with its mode (`run P prefill (cost(P, T))`);
 the stages that are not a step engine (a link's, a delay) the body may name
 as a `server` does. `self` is the member's index in a family. A family's
 size may be a `let` constant (`queue D[ND]`), and a family of one is still
@@ -625,8 +616,8 @@ output tokens (`scheduler.py:1560-1561`), so the request is rescheduled with
 `num_tokens = prompt + outputs`, reserves and recomputes that many
 (`kv_cache_manager.py:515-531`) and generates only the rest. The vLLM
 programs write `known = computed < prompt ? prompt : computed + 1` (the token
-sampled at `computed` is the request's too), `prefill (known - c)` and
-`decode (o - 1 - (known - prompt))`. A program that recomputes from the
+sampled at `computed` is the request's too), `run engine prefill (cost(engine, known - c))` and
+`run engine decode (cost(engine, o - 1 - (known - prompt)))`. A program that recomputes from the
 prompt alone says so by not reading `computed`.
 
 ### Waiting selection
@@ -1039,10 +1030,10 @@ rather than from the previous prompt, and caches `prompt + o`.
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (cost(engine, n)) growing kv`), `chunk long_prefill(reqs, c)`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
+| chunked prefill, `long_prefill_token_threshold` | `run engine prefill (cost(engine, n)) growing kv`, `chunk long_prefill(reqs, c)`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
-| a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `prefill (known - c)`, `decode (o - 1 - (known - prompt))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |
+| a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `run engine prefill (cost(engine, known - c))`, `run engine decode (cost(engine, o - 1 - (known - prompt)))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |
 | the scheduler reserves by `num_tokens` (prompt and generated so far), never by the final length: it knows `max_tokens` and learns the length when `check_stop` sees EOS or the cap | `hidden o;`: no header, key or budget reads `o` | `kv_cache_manager.py:517, 533-534`, `config/scheduler.py:191`, `scheduler.py:639, 2426`, `sched/utils.py:98-119` |
 | the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (prompt + out − 1)`; `reuse (floor(min(prev prompt, prompt − 1)/bs)·bs)`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
 | the free queue: freed blocks appended tail first (LRU), in the order requests finish | `evict lru` per block from the tail, ties by release order | `block_pool.py:776-805`, `single_type_kv_cache_manager.py:557-585` |

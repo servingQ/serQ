@@ -1,7 +1,7 @@
 """Register a Pygments lexer for serQ, so ```serq fences highlight.
 
 Four roles, four colours. A program's shape is `workload`/`session`/`server`; what
-a session *does* is `hold`, `prefill`, `observe`; the knobs are `cap`,
+a session *does* is `hold`, `run`, `observe`; the knobs are `cap`,
 `evict`, `budget`; and what it *reads* is `cachedin`, `budget_left`, `now`.
 A reader should be able to tell those apart before reading a word, so each
 lands in a different colour group, and `~` gets its own because that is where
