@@ -4,9 +4,10 @@
 ~name(args…)
 ```
 
-A draw: an expression that samples a distribution each time it is evaluated. A
-`const`, a `serve` key and an `at admission` binding may not draw. The result is a number, so `branch with (p)` is
-`branch (~bernoulli(p))`.
+A draw samples a distribution each time the expression is evaluated. It is
+allowed only where the construct’s expression rules permit sampling; for
+example, `const` expressions and hold headers cannot draw. The result is a
+number: `branch with (p)` is `branch (~bernoulli(p))`.
 
 | Signature | Parameters | Mean | Notes |
 |---|---|---|---|
@@ -19,6 +20,7 @@ A draw: an expression that samples a distribution each time it is evaluated. A
 
 Each returns a number. An argument count other than the one above is a link error.
 
-Draws in the workload, the session and eviction keys use separate random
-streams, all seeded from `run`'s `seed`, so a change to one does not move the
-others.
+The run’s `seed` initializes separate streams for arrivals, workload draws,
+session statements and eviction keys. Workload draws are keyed by session
+and turn: unchanged draw expressions with the same inputs reproduce the same
+values across scheduling policies. See [workloads](../use-cases/workloads.md).

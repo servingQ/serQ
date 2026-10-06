@@ -11,8 +11,8 @@ the request does once it is in.
 | [`tool Z;`](#prefill-decode-tool) | waits outside the engine (a tool call, a person reading) | `run tool (Z);` |
 | [`transfer (X) from P to Q (n);`](#transfer-from-to) | has its KV moved to another instance | `run link (X); load Q (n); release P;` |
 
-Each form is sugar: the parser rewrites it to the [kernel statement](statements.md)
-in the last column, so the AST, the IR and the interpreter know nothing of it.
+Each form is shorthand for the [kernel statements](statements.md) in the
+last column.
 
 ## `prefill`, `decode`, `tool`
 
@@ -29,7 +29,9 @@ tool    [ '[' j ']' | on STAGE [, STAGE]* ] work;
 | `work` | `expr` | `W`: clock time on a `fifo`, `ps` or `delay` stage. `T`: tokens on a `step` engine. |
 | `growing` | `pool` | `prefill` and `decode` on a step engine only. Passes through to the `run`; a form never adds it. |
 
-**Which stage.** Without `[j]` or `on`, the form finds its stage among those
+### Stage selection
+
+Without `[j]` or `on`, the form finds its stage among those
 declared above it: the stage named for the role (`prefill`, `link` or
 `transfer`, `decode`, `tool`); failing that, for `prefill` and `decode`, the
 `step` engine. Exactly one must qualify: with none or several the parser stops
@@ -55,7 +57,7 @@ transfer [ '[' j ']' | on STAGE [, STAGE]* ] (X) from P to Q (n);
 `run link (X); load Q (n); release P;`. The KV of a prefill/decode split lives
 in two pools whose lifetimes overlap without nesting: the decode instance
 allocates before the prefill instance frees. `on a, b` names several stages
-the read holds at once, the sender's link and the receiver's
+the transfer uses at once, the sender's link and the receiver's
 ([`run`](statements.md#run)): `transfer on egress[i], ingress[j] (X) from P to Q (n);`
 is `run egress[i], ingress[j] (X); load Q (n); release P;`. A link queue with
 a `latency` (`serve ps(BwD) latency x0;`) is waited first: each named link

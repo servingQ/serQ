@@ -65,36 +65,47 @@ step {
   serve only (expr) [admission | by (expr, …) | decode first];
   memory POOL;
   state NAME = c;           // a register the body sets
-  iteration { stmt … }      // stmt: serve […]; | admit [while (expr)]; | branch (expr) { … } [else { … }] | set NAME = expr;
+  iteration { stmt … }      // serve, admit, branch and set (below)
 }
 ```
 
-An engine that runs iterations (continuous batching). An iteration serves its
+An engine that runs iterations (continuous batching). By default, an iteration serves its
 residents one token per decoding job and up to `chunk` per prefilling job until
 `budget` is spent. A `growing` job first grows its hold to the position it will
 reach. Then the stage admits from the pools that name it in [`admit via`](pool.md#admit-via). The
-iteration lasts `cost`, and its tokens are applied when it ends. An iteration
-that schedules no token is not one, unless it preempted.
+iteration lasts `cost`, and its tokens are applied when it ends. An attempt that schedules no token and preempts nobody waits for the next
+event without running a timed iteration.
 
 | Clause | Type | Moment | Default | Description |
 |---|---|---|---|---|
 | `budget` | `expr` | `Budget` | `inf` | Tokens per iteration. Reads `residents`, `decoders`, `kv_decode`, `kv_prefill`. |
 | `cost` | `expr` | `Step` | required (a parse error without it) | Clock time of the iteration. Reads `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`. |
 | `chunk` | `expr` | `Budget` | `0` (no cap) | Cap on one request's prefill tokens in an iteration. |
-| `granule` | constant | | none (any amount) | A prefill gets all it has left, or a multiple of it (after `chunk` caps it, rounded down; none when that is 0). `inf` schedules a prefill whole or not at all (TensorRT-LLM without chunking, [`microBatchScheduler.cpp` L416-L435](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/microBatchScheduler.cpp#L416-L435)), a block size aligns its chunks (TensorRT-LLM with chunking, [L228-L263](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/microBatchScheduler.cpp#L228-L263)). A constant above 0; not with `exclusive prefill`, and not above a constant `chunk`, where a longer prompt would never get a token. A prefill that gets none waits, a resident, for an iteration with room; the iteration serves the residents after it and admits no one more, as TensorRT-LLM without chunking stops its scan at the first context that does not fit ([L428-L431](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/microBatchScheduler.cpp#L428-L431)). |
+| `granule` | `const`, positive | | none | Prefill chunk alignment; see below. |
 | `serve` | see below | `Serve` | `admission` | Which residents are served (`only`) and in what order, or an exclusive-prefill batch policy. At most once. |
-| `memory` | `pool` | | none | The pool whose holds give `kv_decode` and `kv_prefill`, and whose `preempt lifo` victims come from this stage. |
-| `iteration` | a body | `Serve`, `Plan` | vLLM's procedure | The iteration as the program writes it: whom it serves, in what order, and when it admits (below). Not with `exclusive prefill` or `only`. |
+| `memory` | `pool` | | none | The pool whose holds give `kv_decode` and `kv_prefill`, and whose preemption victims come from this stage. |
+| `iteration` | a body | `Serve`, `Plan` | serve, then admit | The iteration as the program writes it: whom it serves, in what order, and when it admits (below). Not with `exclusive prefill` or `only`. |
+
+### `granule`
+
+A prefill receives all its remaining work, or a multiple of `granule`.
+After `chunk` caps the work, it is rounded down to that multiple; a result
+of 0 waits. `granule inf` schedules a whole prefill or none. A waiting
+prefill stays resident: later residents may still be served, but the
+iteration admits no further requests.
+
+The constant must be positive, cannot exceed a positive constant `chunk`, and cannot
+be combined with `exclusive prefill`.
 
 ### `serve`
 
-| Form | Meaning | IR (`CServe`) |
-|---|---|---|
-| `admission` | admission order (vLLM's `running` list) | `By([])` |
-| `by (k1, …)` | ascending keys per resident, ties by admission order | `By(keys)` |
-| `decode first` | decodes before prefills | `By([decoding ? 0 : 1])` |
-| `exclusive prefill` | one prefill alone, or a decode-only batch; a fitting waiting prefill displaces tentative resident decodes | `ExclusivePrefill` |
-| `only (p)` then an order | only the residents for which `p` is nonzero, in that order (`admission` when none is written) | the body `serve only (p); admit only (p) while (!preempted);`, beside the order's `By` (the linker writes it) |
+| Form | Meaning |
+|---|---|
+| `admission` | admission order |
+| `by (k1, …)` | ascending keys per resident, ties by admission order |
+| `decode first` | decodes before prefills |
+| `exclusive prefill` | one prefill alone, or a decode-only batch |
+| `only (p)` followed by an optional order | serve only residents for which `p` is nonzero; default order is `admission` |
 
 Keys read `decoding`, `admission`, `remaining` and the totals `residents`,
 `decoders`, `kv_decode`, `kv_prefill`, and may not draw. `serve by (remaining)` is
@@ -106,9 +117,7 @@ replace that selection and use the full budget. A selected prefill admits
 no further waiting request in that iteration. Cancelled decode work neither
 runs nor advances computed KV; any capacity already allocated remains held.
 During these admissions `budget_left` supplies the full budget. Ordinary
-fit, queue-head and no-admission-after-preemption gates still apply. This
-policy does not supply vendor PP caps or remote-KV admission rules. See
-[Separate prefill/decode batches](../design/exclusive-prefill.md).
+fit, queue-head and no-admission-after-preemption gates still apply.
 
 `only (p)` is read for each resident at its turn, from the variables a key
 reads, the totals as the residents stand at that read (a session the
@@ -119,8 +128,7 @@ excludes gets no token this iteration, keeps its allocation and advances no
 computed KV; an admitted session it excludes waits as such a resident.
 `serve only (decoders > 0 ? decoding : !decoding);` is FasterTransformer's decode-only batches
 ([FasterTransformer](../use-cases/fastertransformer.md)). `only` does not
-combine with `exclusive prefill`. See
-[Serving a subset](../design/serve-only.md).
+combine with `exclusive prefill`.
 
 ### `iteration`
 
@@ -129,6 +137,7 @@ iteration {
   serve [only (p)] [admission | by (k, …) | decode first];
   admit [only (p)] [while (e)];
   branch (e) { … } [else { … }]
+  set NAME = e;
 }
 ```
 
@@ -140,75 +149,73 @@ iteration.
 | Statement | What it does |
 |---|---|
 | `serve [only (p)] [order]` | Gives the residents not yet served their tokens (one to a decode, up to `chunk` to a prefill, a `growing` job growing first) in the order (the stage's `serve` order when none), while budget is left. A resident `p` reads as 0 is skipped and stays unserved, for a later `serve`. A grower that preempts itself ends the statement. |
-| `admit [only (p)] [while (e)]` | Admits the head of the queues that name this stage in `admit via` and serves the newcomer, one at a time, while budget is left, the head fits and `e` (read before each) is 1. A newcomer `p` reads as 0 is admitted and waits unserved, so the stage's `serve only (p)` is the body `serve only (p); admit only (p) while (!preempted);`. |
+| `admit [only (p)] [while (e)]` | Admits the head of the queues that name this stage in `admit via` and serves the newcomer, one at a time, while budget is left, the head fits and `e` (read before each) is 1. A newcomer for which `p` is 0 is admitted and waits unserved. |
 | `branch (e) { … } else { … }` | A test: the first body when `e` is 1, the second when it is 0. |
-| `set NAME = e` | Sets one of this stage's registers (`state NAME = c;`, below) to `e`, read as a guard is. |
+| `set NAME = e` | Updates one of this stage's registers; see below. |
 
-A guard and a `while` are read at the `Plan` moment: the residents' totals
-(`residents`, `decoders`, `kv_decode`, `kv_prefill`) as they stand, what the
-iteration has scheduled so far (`tokens`, `prefilled`), `admitted` (the
-sessions it has admitted) and `preempted` (the residents it has preempted), pool
-and stage queries and constants; neither draws, reads `now`, `work(…)` or
-this stage's `budget_left(…)`. `only` and keys read what a `serve` key reads. A body with
-a path that neither serves nor admits does not link: an engine that took it
-would schedule nothing and wait for an event that may never come. The rule
-is necessary, not sufficient: `admit while (tokens > 0)` reaches an `admit`
-and never admits into an empty engine. What the linker cannot see the report
-says: an engine that ends the run with residents or a waiting queue and a
-last try that scheduled nothing is named (`idle: stage …`, the stage's
-`idle_with_work`).
+Guards and `while` conditions are read at `Plan`: current resident totals,
+tokens scheduled so far (`tokens`, `prefilled`), `admitted`, `preempted`,
+pool and stage queries, and constants. They cannot draw or read `now`,
+`work(…)` or this stage's `budget_left(…)`. Keys and `only` predicates follow
+the rules of `serve`.
 
-A stage without a body runs vLLM's procedure, which is this body
-(`tests/iteration_body.rs` runs every example both ways):
+Every path through a body must reach a `serve` or `admit`; otherwise it is a
+link error. This does not guarantee progress: `admit while (tokens > 0)`
+cannot admit into an empty engine. If the run ends with residents or a
+waiting queue and the last iteration attempt scheduled nothing, the report
+flags `idle: stage …` (`idle_with_work` in JSON).
+
+Without an explicit body, the stage serves residents and admits only if no
+preemption occurred:
 
 ```serq
 iteration { serve; admit while (!preempted); }
 ```
 
-Other engines' are other bodies:
+To admit only into an empty engine:
 
-| Engine | Body |
-|---|---|
-| SGLang (no mixed chunk): the chunked request and new prefills alone, a decode batch when no prefill forms | `iteration { serve only (!decoding); admit; branch (tokens == 0) { serve; } }` |
-| TensorRT-LLM `STATIC_BATCH`: admit only into an empty engine | `iteration { serve; branch (residents == 0) { admit; } }` |
-| FasterTransformer as Dai et al. model it | `iteration { branch (decoders > 0) { serve only (decoding); } else { serve; admit; } }` |
-| TGI with chunking: no admission in the forward after one that admitted | `state just = 0; iteration { serve; branch (just == 0 \|\| residents == 0) { admit; } set just = admitted > 0; }` |
+```serq
+iteration {
+  serve;
+  branch (residents == 0) { admit; }
+}
+```
 
 #### Registers
 
-`state NAME = c;` gives a stage with a body a register, a number its body
-sets with `set NAME = e;` and keeps from one iteration to the next: what an
-engine's scheduler remembers, such as TGI's count of decode steps since a
-new batch or SGLang's `new_token_ratio`. `c` is a constant; `e` is read as
-a guard is. A set takes effect with its iteration: a try that schedules
-nothing, preempts nothing and admits nobody has been no iteration, and its
-sets are undone (a try that admitted keeps them, with the admission).
+`state NAME = c;` declares a numeric register initialized by constant `c`.
+The iteration body updates it with `set NAME = e;`, where `e` follows guard
+expression rules. Values persist between iterations. Updates are undone
+if the attempt schedules no token, preempts nobody and admits nobody.
 
-A register is read where its stage orders the read: the stage's own
-budget, chunk, cost, serve keys and body, a claim over its iterations, the
-keys of a pool it admits (`admit via`) and the header of a hold whose
-first pool, where it waits, is such a pool, a gauge, a claim `at end`. Read elsewhere — another stage, a `ps`
-capacity, a pool admitted at settle time — the read and the set would fall
-at one instant in the order of the declarations, and the program does not
-link; nor does a session statement or a claim's `given` read one: a
-register is the engine's. Its name is its own (not an attribute, a
-constant, a name the language supplies, a pool, a stage or another
-register); a stage array has none (which member's would an expression
-read?), and a body sets only its own stage's.
+A register may be read in:
 
-SGLang resets `new_token_ratio` when the server goes idle
-([`scheduler.py` L4998](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/scheduler.py#L4998)),
-which is no iteration. What reads the ratio is the next iteration's
-admission, so the body says it at its top:
-`branch (residents == 0) { set ratio = r0; }`.
+- its stage's budget, chunk, cost, serve keys, body and iteration claims;
+- queue keys of pools admitted by that stage;
+- hold headers whose first pool is admitted by that stage;
+- gauges and `at end` claims.
 
-A guard on a register that only an iteration changes can keep an engine
-idle: TGI admits in a forward and not in the next, but `branch (just == 0)
-{ admit; }` alone never admits again once the batch empties, since the try
-that would set `just` back schedules nothing and its set is undone. TGI's
-loop reads the queue at once when no batch runs, and the body says so:
-`branch (just == 0 || residents == 0) { admit; }`. The run names an engine
-left so (`idle:`).
+Other reads are link errors. Each register name must be unique and cannot
+also name an attribute, constant, context variable, pool or stage. Stage
+arrays cannot declare registers, and a body can set only its own stage's
+registers.
+
+A guard based on a register must allow recovery when the engine empties.
+For example, this policy skips admission after an iteration that admitted,
+unless no residents remain:
+
+```serq
+state just = 0;
+iteration {
+  serve;
+  branch (just == 0 || residents == 0) { admit; }
+  set just = admitted > 0;
+}
+```
+
+Without the `residents == 0` condition, an empty engine with `just == 1`
+could never admit again: its unsuccessful attempt would undo the reset.
+The report flags an engine left in this state as `idle: stage …`.
 
 ### Example
 

@@ -1,8 +1,9 @@
 # Attributes
 
-A session carries named numeric attributes. Every name assigned by
-[`set`](statements.md#set) or [`choose`](statements.md#choose) is an attribute
-of every session, starting at 0. The built-in ones below need no assignment.
+A session carries named numeric attributes, initially 0. Names assigned by
+[`set`](statements.md#set) or [`choose`](statements.md#choose) in session code
+are attributes; a `set` in a stage’s `iteration` body instead assigns a stage
+register. The built-in attributes below need no assignment.
 A name may not be both an attribute and a `let` constant, and neither may take
 a [context variable](context.md)'s name.
 

@@ -1,18 +1,10 @@
 # Smallest Volume First (Kong et al.)
 
-Kong, Qi, Ye, Zhou, *Geometry-Aware Online Scheduling for LLM Serving: From Theoretical Bound to System Practice* ([arXiv 2606.22327](https://arxiv.org/abs/2606.22327), v2, June 2026). This page writes the paper's memory-constrained serving model with its scheduler SVF as a serQ program, states the core of its competitive-ratio theorem as a claim, and proves the claim and the theorem in Lean about the program's paths. Issue #258.
+Kong, Qi, Ye, Zhou, *Geometry-Aware Online Scheduling for LLM Serving: From Theoretical Bound to System Practice* ([arXiv 2606.22327](https://arxiv.org/abs/2606.22327), v2, June 2026). This page writes the paper's memory-constrained serving model with its scheduler SVF as a serQ program, states the core of its competitive-ratio theorem as a claim, and proves the claim and the theorem in Lean about the program's paths.
 
 ## The paper
 
 The paper schedules requests whose KV cache grows while they decode. Request $i$ has a prompt of $s_i$ tokens and an output of $o_i$ tokens, holds $s_i + t$ tokens of memory after $t$ decode steps, and decodes one token per step. The GPU has memory $M$. The scheduler chooses which waiting request to start, without preemption. The objective is the total end-to-end latency (TEL). The paper compares a scheduler's TEL with the best schedule in hindsight (OPT).
-
-## Key contributions
-
-- **A volume view of a request**: its memory-time, $\mathrm{vol}_i = s_i o_i + (o_i^2 + o_i)/2$, the area of the trapezoid its KV cache draws over its life.
-- **Smallest Volume First (SVF)**: admit the waiting request of least volume while its peak fits.
-- **A lower bound on OPT** (Proposition 3.1): $\mathrm{TEL}(\mathrm{OPT}) \ge \frac1M \sum_j \sum_{i \le j} \mathrm{vol}_{(i)}$, the volumes sorted ascending.
-- **A constant competitive ratio** (Theorem 3.2): with every peak $p_i = s_i + o_i \le \alpha M$ and all requests arriving at once, $\mathrm{TEL}(\mathrm{SVF}) \le (1 + \frac{2}{1-\alpha})\,\mathrm{TEL}(\mathrm{OPT})$: at most 3 as $\alpha \to 0$, where the prior best was 48.
-- A 1-bit variant (Theorem 3.3), Poisson bounds (3.4, 3.5), and an implementation in vLLM.
 
 ## The serving system it assumes
 
@@ -20,7 +12,7 @@ The model of §3:
 
 - discrete time; one decode token per request per step;
 - memory $M$; an active request $i$ that started at $k$ holds $s_i + t - k$ at step $t$, $k < t \le k + o_i$ (constraint (c2));
-- no preemption; a request is admitted when it fits with the active requests' peaks (the "forward-looking memory check" of the proof);
+- no preemption; admission must preserve the memory constraint;
 - burst arrivals for Theorem 3.2: every request arrives at time 0.
 
 ## The system in serQ
@@ -39,13 +31,46 @@ The model of §3:
 | $\mathrm{vol}_i$, $o_i$, TEL | `observe vol`, `observe out`, `observe latency = now;` |
 | $\alpha = P/M$ | `let P = 2500;` and `given (s + o <= P ...)` |
 
-The program admits a request when its peak fits next to the active requests' *peaks*. The paper's forward-looking check admits it when the active requests' future memory leaves room for its peak, which never refuses more. The proof of Theorem 3.2 uses one fact about admission: while request $j$ waits, the active peaks exceed $(1-\alpha)M$. Both rules give it. With the peak held from admission, the memory the program reports is the peaks' sum, not the trapezoid's. Holding $s$ and growing to $s+o$ under a promise of the peak is #262's `commit`.
+The program admits a request when its peak fits next to the active requests' *peaks*. The paper's forward-looking check admits it when the active requests' future memory leaves room for its peak, which never refuses more. The proof of Theorem 3.2 uses one fact about admission: while request $j$ waits, the active peaks exceed $(1-\alpha)M$. Both rules give it. With the peak held from admission, the memory the program reports is the peaks' sum, not the trapezoid's.
 
 ## The key propositions
 
-1. **Lemma A.2 (the waiting time).** While request $j$ waits, the active peaks exceed $(1-\alpha)M$. The active requests precede $j$ in volume order, and each holds its peak $o_i$ steps, with $p_i o_i < 2\,\mathrm{vol}_i$. Summed over the requests: $(1-\alpha)M \sum_j W_j \le 2 \sum_j \sum_{i \prec j} \mathrm{vol}_i$.
-2. **Proposition 3.1.** Every feasible schedule has $M\cdot\mathrm{TEL} \ge \sum_j \sum_{i \le j} \mathrm{vol}_{(i)}$.
-3. **Theorem 3.2.** $\mathrm{TEL}(\mathrm{SVF}) \le (1 + \frac{2}{1-\alpha})\,\mathrm{TEL}(\mathrm{OPT})$.
+For the burst-arrival model above, let $W_j$ be request $j$'s waiting time,
+$p_i = s_i + o_i$ its peak memory, and
+$\mathrm{vol}_i = s_i o_i + (o_i^2 + o_i)/2$ its volume.
+Write $i \prec j$ for the order in which SVF admits requests and $(i)$ for
+ascending volume order. Assume $M>0$, $o_i\ge1$ and $p_i \le \alpha M$ with $0 \le \alpha < 1$.
+
+!!! proposition "Lemma A.2 — Waiting-time bound"
+    While request $j$ waits, active peaks exceed $(1-\alpha)M$.
+    Each preceding request holds its peak for $o_i$ steps, with
+    $p_i o_i < 2\,\mathrm{vol}_i$. Therefore
+
+    $$
+    (1-\alpha)M \sum_j W_j
+    \le 2 \sum_j \sum_{i \prec j} \mathrm{vol}_i.
+    $$
+
+!!! proposition "Proposition 3.1 — Lower bound on total latency"
+    Every schedule feasible under the paper's memory constraint satisfies
+
+    $$
+    M\,\mathrm{TEL}
+    \ge \sum_j \sum_{i \le j} \mathrm{vol}_{(i)}.
+    $$
+
+!!! theorem "Theorem 3.2 — SVF competitive ratio"
+    When all requests arrive at time zero, SVF satisfies
+
+    $$
+    \mathrm{TEL}(\mathrm{SVF})
+    \le \left(1 + \frac{2}{1-\alpha}\right)\mathrm{TEL}(\mathrm{OPT}).
+    $$
+
+The waiting-time bound is a program claim proved in `examples/papers/Kong.lean`.
+The lower bound is in `examples/papers/KongMath.lean`; `competitive_ratio`
+in `examples/papers/Kong.lean` applies it to the program; the [Lean proof](#the-proof-in-lean) below
+explains how they compose.
 
 ## The propositions in serQ
 
@@ -60,50 +85,54 @@ claim queueing_bound given (s + o <= P && o >= 1):
 
 ## The proof in Lean
 
-The generated statement (`lean/Serq/Claims.lean`):
+`examples/papers/Kong.lean` proves `queueing_bound` for every terminating
+path in the generated workload family: up to 500 requests, memory
+$M=20\,000$, peak limit $P=2\,500$ and $o_i\ge1$. The claim is conditional
+on all sessions ending; it is not itself a termination theorem.
 
-```lean
-def queueing_bound : Prop :=
-  AtEnd deployment family_queueing_bound prog fun m =>
-    ((17500 * ((Exec.total m 2) - (Exec.total m 0))) ≤ (2 * ((Exec.prefixTotal (Exec.values m 1)) - (Exec.total m 1))))
-```
+The proof tracks each request's remaining decode work. While request $j$
+waits, active peaks sum to at least $M-P+1$. Each decode step reduces the
+remaining memory-time ahead of $j$ by that amount. At admission this gives
+a bound on $W_j$; summing the bounds and using $p_i o_i<2\,\mathrm{vol}_i$
+gives the program claim.
 
-For every number of requests up to 500, every $(s_i, o_i)$ with $s_i + o_i \le 2500$ and $o_i \ge 1$, and every machine of every path at which every session has ended, the inequality holds. The proof is `examples/papers/Kong.lean`. It is the paper's proof, made an invariant of the executable semantics.
+`KongMath.lean` proves the lower bounds on every feasible comparison
+schedule $\sigma$. `Kong.lean` combines them with the claim to obtain
 
-**A ghost state.** Each request has a place: before its first command, waiting, admitted, decoding, finished, released, ended. A ghost also keeps the decode work left and the observed latency. `SInv` relates the ghost to the machine: each session's program, stack and status in its place, the pool's queue and holders, the jobs, the ready list, and the observations as a permutation of the expected ones.
+$$(M-P)\,\mathrm{TEL}(\mathrm{SVF})
+  \le (3M-P)\,\mathrm{TEL}(\sigma).$$
 
-**The potential.** For every waiting request $j$:
+Thus `competitive_ratio` covers every terminating program path in the
+family and every schedule feasible under the comparison model.
 
-$$17501 \cdot \mathit{now} + \sum_{i \prec j} p_i \cdot \mathit{rem}_i \;\le\; \sum_{i \prec j} p_i\, o_i,$$
+### Poisson results
 
-with $\mathit{rem}_i$ the work request $i$ has left ($o_i$ while waiting). When $j$ is admitted it keeps the certificate $17501 \cdot W_j \le \sum_{i \prec j} p_i o_i$. That is Lemma A.2 with the strict inequality of natural numbers, $M - P + 1$ for $(1-\alpha)M$.
+`examples/papers/KongPoisson.lean` proves conditional versions of Theorems
+3.4 and 3.5 for Poisson arrivals and geometric output lengths. They are
+ratios of expected total latency, not expectations of a per-run ratio.
+The proofs assume four steady-state relations:
 
-**The steps.** Each operation of the semantics keeps `SInv`:
+- the per-class waiting-time balance at rate $(1-\alpha)M/2$;
+- the residual-work identity $W_0=\mathbb{E}[U_{run}]$;
+- the lower bound on expected OPT;
+- expected SVF latency bounded by expected decode time plus wait.
 
-- the first commands of a request (observe its length and volume, queue): `sinv_pop_s0`;
-- an admission, which takes the least volume, ties by serial number (`argminKey_least`), its potential becoming its certificate: `sinv_admit`;
-- the start of a decode: `sinv_pop_r2`;
-- a finished request releasing its peak, the pool admitting what now fits, the latency observed: `sinv_pop_r1`.
-
-`settle` runs these until nothing is ready. Two measures show that the fuel of `drain` and `settleLoop` suffices for 500 requests, and the last admission round leaves the head of the queue not fitting: `sinv_settleLoop`. So at every boundary, while anyone waits, the active peaks are at least $M - P + 1 = 17501$ (`Settled.full`). Every decoding request gets one token, and the iteration lasts one step (`start_bnd`).
-
-**The iteration's end** (`end_sinv`) is where the inequality is earned. Every decoding request advances one token, so each waiting $j$'s sum drops by the active peaks: all of them precede $j$, and they exceed 17501, while $\mathit{now}$ grows by 1.
-
-**The end.** `reach_bnd` gives the invariant at every machine of every path. When every session has ended, the certificates are $17501\,(\mathit{lat}_j - o_j) \le \sum_{i \prec j} p_i o_i$. With $p_i o_i + o_i \le 2\,\mathrm{vol}_i$ (`vol_bound`) and $\sum_j \sum_{i \prec j} \mathrm{vol}_i = \sum_{\text{pairs}} \min = \mathtt{prefix\_total} - \mathtt{total}$ (`sum_prec`, `prefixTotal_eq`), the claim follows (`queueing_bound`).
-
-**Theorem 3.2** (`competitive_ratio`). `examples/papers/KongMath.lean` proves Proposition 3.1 for every schedule feasible in the paper's model (start times $x_i$, memory $s_i + t - x_i$ per active request, at most $M$ at every step): `opt_lower_bound`. It also proves the composition: from the claim, $M\cdot\mathrm{TEL}(\sigma) \ge \mathtt{prefix\_total}$ and $\mathrm{TEL}(\sigma) \ge \sum o$,
-
-$$(M - P)\,\mathrm{TEL}(\mathrm{SVF}) \;\le\; (3M - P)\,\mathrm{TEL}(\sigma),$$
-
-that is $\mathrm{CR} \le \frac{3M-P}{M-P} = 1 + \frac{2}{1-\alpha}$, for every path of the program and every feasible $\sigma$.
-
-**Theorems 3.4 and 3.5** (Poisson arrivals, geometric output lengths). `examples/papers/KongPoisson.lean` proves them as paper mathematics, from the steady-state steps of the paper's proof taken as premises. `harris` is Harris's inequality, weighted and finite. `aux_bound`, `aux_mono` and `aux_sum` solve the priority recursion: per-class waits $w_k$ obeying the balance (A), $w_k (D - R_k) \le W_0 + \sum_{j<k} \lambda_j v_j w_j$ with $D = (1-\alpha)M/2$, are at most $W'_k = W_0 D / ((D - R_{k-1})(D - R_k))$, which is monotone in $k$ and whose load-weighted sum telescopes to $W_0 \Lambda / (D - \Lambda)$. `wait_bound` applies Harris to the proxy volumes and $W'$ and gives $\mathbb{E}[W_q] \le \frac{\mathbb{E}[v]}{\mathbb{E}[v] - \epsilon} \frac{W_0}{D - \Lambda}$. On the geometric side, `memoryless`, `cmean_tail`, `cvar_tail`, `cmean_low` and `cvar_low` give the 1-bit proxies and the conditional variances, `penalty` the closed form $\epsilon = \frac12 (\theta q^\theta / (1 - q^\theta))^2$, and `w0_closed`, `w_exact` the closed forms $W_0 = \lambda(\mathbb{E}[s]/\mu^2 + 2/\mu^3)$ and $W_{\mathrm{exact}} = (1-\mu) W_0$. `svf_poisson` and `svf_1bit_poisson` compose these into $\mathbb{E}[\mathrm{SVF}] / \mathbb{E}[\mathrm{OPT}] \le 1 + \frac{2}{(1-\alpha)(1-\mu)(1-\rho)}$ and the same with the factor $\frac{\mathbb{E}[v]}{\mathbb{E}[v] - \epsilon}$.
-
-The paper applies Harris's inequality to the volumes and the actual waits, which needs the waits monotone in the class; neither the paper nor (A) shows that. The proof here applies it to the auxiliary bound $W'$, which is monotone, and the bound is unchanged. It is a ratio of expectations, which is what the proof bounds, and Theorem 3.5 needs $\mathbb{E}[v] > \epsilon$, which the paper leaves implicit.
+These premises are not derived from the program's chain. In particular,
+the peak bound needed for the waiting-time balance is incompatible with
+unbounded geometric output lengths unless further restrictions are added.
+The 1-bit result also requires $\mathbb{E}[v]>\epsilon$, where $\epsilon$
+is the proxy-volume penalty defined in the proof. The burst-arrival
+program above does not establish either Poisson result.
 
 ## On the run
 
-`serq run`, seed 1, 200 requests, $M = 20000$, $P = 2500$ ($\alpha = 0.125$, bound $1 + 2/0.875 = 3.29$):
+Run the default 200-request burst with seed 1:
+
+```bash
+serq run examples/papers/kong_svf.sq
+```
+
+Selected report columns ($M=20\,000$, $P=2\,500$):
 
 ```
 observe  count         mean    cv2          p99
@@ -115,11 +144,18 @@ claim           kind    result
 queueing_bound  at end  holds
 ```
 
-The report's confidence intervals are left out: the 200 requests arrive together and are served in volume order, so their latencies are not independent. On this run the claim holds with room: its left side is 46 % of its right side, and TEL(SVF) is 1.33 times the larger of the two lower bounds on OPT, against the bound 3.29.
+All 200 requests finish and the claim holds on this run. With
+$\alpha=P/M=0.125$, the proved competitive bound is approximately 3.29.
+This burst is not a stationary latency sample; the excerpt omits the
+report's confidence intervals.
 
 ## What it leaves out
 
-- **The trapezoid.** The program holds the peak from admission. The memory over time is then $p_i(o_i+1)$, not $\mathrm{vol}_i$. The admission rule and the theorem are the paper's, and #262 would let a hold promise its peak while it grows.
-- **Theorem 3.3 (1-bit SVF)** is the same program with a proxy key (`queue by` on the class). Its $O(T)$ bound is not claimed.
-- **The steady state of Theorems 3.4 and 3.5.** `KongPoisson.lean` proves the theorems from four premises that the paper argues by ergodicity and that the program's chain does not yet derive: the balance (A) per class, at Lemma 1's rate $(1-\alpha)M/2$; Lemma 2's value of the residual work $W_0 = \mathbb{E}[U_{\mathrm{run}}]$; Lemma `opt_poisson_lb`, the lower bound $\mathbb{E}[\mathrm{OPT}] \ge \max(1/\mu, W_{\mathrm{exact}}/M)$; and SVF's latency as decode plus wait, $\mathbb{E}[\mathrm{SVF}] \le \mathbb{E}[o] + \mathbb{E}[W_q]$. Lemma 1 needs every peak at most $\alpha M$, which a geometric output length violates with positive probability, so the first premise may fail in the paper's own model. The program's `arrive batch(N)` is not Poisson, so no claim of the program states them either.
-- **Prefill.** The model gives a prompt no time, and so does the program. Chunked prefill would put the program outside the paper's hypotheses.
+- **Growing memory.** The program reserves each request's peak from
+  admission. Reported memory is the sum of reserved peaks, not the sum of
+  growing KV footprints; the admission policy can be more conservative
+  than the paper's forward-looking check.
+- **1-bit scheduling.** The program uses exact volume. It does not model
+  the proxy queue key or establish Theorem 3.3's bound.
+- **Prefill time.** Prompts consume memory but no processing time. Adding
+  prefill would change the hypotheses of these results.

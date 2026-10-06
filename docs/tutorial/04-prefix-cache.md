@@ -1,10 +1,7 @@
 # 4. The prefix cache
 
-Chapter 3 recomputed every turn's whole context. Nobody does that: the KV of
-turn \(j\) is still in memory when turn \(j+1\) arrives, unless something threw
-it away. Whether it is still there is the single most important thing about an
-agentic serving system, and it is not a property of one request — it is a
-property of the traffic.
+Reuse a session's cached KV between turns to avoid recomputing its context.
+The prefix can be evicted while the session thinks or waits for admission.
 
 ## The program
 
@@ -39,10 +36,8 @@ what it does.
 whatever the program says — `replica.sq` uses `evict by (waiting, size)`, which
 throws out queued sessions' short prefixes first.
 
-**`drop kv;`** before `end` discards the session's prefix. Without it the
-prefix survives the session, which is not an oversight: vLLM keeps a finished
-request's blocks in the free queue, and `examples/multi-turn/vllm.sq` models that by not
-dropping.
+**`drop kv;`** discards the session's prefix. Without it, cached units can
+remain after the session ends, until they are evicted.
 
 ## Running it
 
@@ -51,29 +46,29 @@ serq run docs/tutorial/programs/04-cache.sq
 ```
 
 ```text
-run: horizon 20000 end 20000 warmup 2000 seed 1 events 97621 arrivals 9905 ended 8903 turns 43947 mean live 5.977
+run: horizon 20000 end 20000 warmup 2000 seed 1 events 98781 arrivals 9905 ended 8905 turns 44301 mean live 6.006
 
 observe   count    mean   95% CI    cv2     p99
 --------  -----  ------  -------  -----  ------
-response  43947  0.0635  ±0.0007  0.626  0.2375
-hitrate   35044  1.0000  ±0.0000  0.000  1.0000
+response  44301  0.0629  ±0.0006  0.615  0.2317
+hitrate   35398  1.0000  ±0.0000  0.000  1.0000
 
 stage   number   util   done    thru    wait  service  iters
 ------  ------  -----  -----  ------  ------  -------  -----
-engine   0.155  0.137  43947  2.4415  0.0073   0.0562      0
-tool     5.822  0.998  35044  1.9469  0.0000   2.9903      0
+engine   0.155  0.138  44301  2.4612  0.0070   0.0559      0
+tool     5.851  0.997  35398  1.9666  0.0000   2.9755      0
 
 pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    758.5  28834.6  0.000    0.155  0.0000   48810         0         0        0      0    0      0
+kv    763.5  28966.3  0.000    0.155  0.0000   49390         0         0        0      0    0      0
 ```
 
-A perfect hit rate, and the response time falls from 0.180 s to 0.064 s against
+A perfect hit rate, and the response time falls from 0.183 s to 0.063 s against
 chapter 3 — nearly a factor of three, from one clause. The pool is holding
-28 835 tokens of cache against a capacity of 200 000, so nothing is ever
+28 966 tokens of cache against a capacity of 200 000, so nothing is ever
 evicted.
 
-## The sweep that matters
+## Vary cache capacity
 
 ```bash
 for C in 2e5 6e4 4e4 3e4 2e4 1.5e4 1e4; do
@@ -81,34 +76,24 @@ for C in 2e5 6e4 4e4 3e4 2e4 1.5e4 1e4; do
 done
 ```
 
-| `cap` | hit rate | response | entries evicted | mean cached |
+| `cap` | hit rate | response (s) | entries evicted | rejected |
 |---|---|---|---|---|
-| 200 000 | 1.000 | 0.0635 | 0 | 28 835 |
-| 60 000 | 0.979 | 0.0672 | 789 | 28 107 |
-| 40 000 | 0.868 | 0.0848 | 5 220 | 23 990 |
-| 30 000 | 0.719 | 0.1049 | 11 130 | 19 094 |
-| 20 000 | 0.489 | 0.1296 | 20 196 | 12 055 |
-| 15 000 | 0.356 | 0.1383 | 25 243 | 8 215 |
-| 10 000 | 0.260 | **0.1307** | 27 696 | 4 949 |
+| 200,000 | 1.000 | 0.0629 | 0 | 0 |
+| 60,000 | 0.980 | 0.0664 | 827 | 0 |
+| 40,000 | 0.854 | 0.0856 | 5,848 | 0 |
+| 30,000 | 0.699 | 0.1083 | 12,046 | 1 |
+| 20,000 | 0.472 | 0.1354 | 21,208 | 35 |
+| 15,000 | 0.346 | 0.1444 | 26,163 | 174 |
+| 10,000 | 0.256 | 0.1313 | 28,225 | 846 |
 
-Read the last row twice. Going from 15 000 to 10 000 units the hit rate keeps
-falling, but the **response time improves**. That is not an error. At 10 000
-the only prefixes that survive are short ones, so the sessions that hit are
-cheap and the ones that miss were going to be expensive anyway; the mean moves
-for a reason that has nothing to do with the system getting better.
+At 10 000 units the mean response time is lower than at 15 000 despite a
+lower hit rate, but rejections rise from 174 to 846. Requests that cannot
+fit do not contribute completed response samples, so the lower mean alone
+does not establish better performance.
 
-This is why `observe` exists and why the report gives you the pool counters
-next to the times. A hit rate is not a performance number, and a mean is not a
-system.
-
-## The pool is holding 28 835 tokens. Where does that come from?
-
-`mean live 5.977`, of which 5.822 are in the tool call (chapter 3). Those
-5.8 thinking sessions each have a context in the pool that nobody is using and
-everybody is paying for. The KV cache of an agentic workload is mostly storage
-for sessions that are not there.
-
-Squeeze it and they lose their prefixes. Chapter 6.
+The default run caches 28 966 tokens on average. Most live sessions are in
+the tool stage, so the cache stores context that the engine is not currently
+using. Reducing its capacity forces more of that context to be recomputed.
 
 ---
 
