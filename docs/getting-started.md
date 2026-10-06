@@ -73,7 +73,7 @@ percentile.
 
 The interval describes uncertainty within this run. Compare multiple seeds
 and longer horizons before drawing conclusions, especially near saturation.
-Below 40 samples, the printed CI is `NaN`.
+Below 40 samples, the printed CI is `±inf`.
 
 ### Stages and pools
 
