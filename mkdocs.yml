@@ -69,6 +69,11 @@ extra_javascript:
   - javascripts/mathjax.js
   - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
+# Contributor design records stay in Git, outside the reader-facing site.
+exclude_docs: |
+  /design/
+  /review.md
+
 nav:
   - Home: index.md
   - User Guide:
@@ -120,25 +125,3 @@ nav:
       - reference/cli.md
   - Python Reference:
       - python.md
-  - Design:
-      - design/index.md
-      - Philosophy: design/philosophy.md
-      - The stochastic process: design/stochastic-model.md
-      - Frontend: design/frontend.md
-      - Subagents: design/subagents.md
-      - The KV transfer: design/pd-transfer.md
-      - Renewal arrivals: design/renewal-arrivals.md
-      - Bandwidth sharing: design/bandwidth-sharing.md
-      - One admission: design/one-admission.md
-      - Separate prefill/decode batches: design/exclusive-prefill.md
-      - Serving a subset: design/serve-only.md
-      - Claims: design/claims.md
-      - Stability: design/stability.md
-      - Waiting selection: design/waiting-selection.md
-      - Queues: design/queue.md
-      - Explicit gateways: design/explicit-gateways.md
-      - The pull relation: design/pull-relation.md
-      - The push mode: design/push-mode.md
-      - Engine neutrality: design/engine-neutrality.md
-      - A serving specification language: design/serving-specification-language.md
-      - A shared prefix cache: design/shared-prefix-cache.md

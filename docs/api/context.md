@@ -1,12 +1,9 @@
 # Context variables
 
-A context variable is supplied by the scheduler at one *moment* and exists only
-there (`now` at every moment). Reading it anywhere else is a link error rather
-than a 0: `set x = tokens;` in a session, or `evict by (tokens)`, does not link.
-Its name is its own: a `set`, `choose` or `let` may not take it (an attribute
-of that name would be read where the context variable was meant: `set present
-= 500;` anywhere in the program would make a stage's `ps(min(present, 16))`
-read the attribute), and the linker rejects the program.
+A context variable is supplied at specific evaluation moments. Reading it
+elsewhere is a link error: a session cannot use `set x = tokens;`.
+Context-variable names are reserved and cannot be assigned by `set`,
+`choose` or `let`.
 
 ## Moments
 
@@ -19,9 +16,10 @@ read the attribute), and the linker rejects the program.
 | `Ps` | a `ps` stage's capacity | for the stage's jobs |
 | `Budget` | a step stage's `budget` and `chunk` | before the iteration, from the residents |
 | `Step` | a step stage's `cost` | after the iteration is scheduled |
-| `Serve` | a step stage's `serve by` keys | for one resident |
+| `Serve` | a step stage's `serve by` keys and `only` predicates | for one resident |
 | `Victim` | a pool's `preempt by` keys | for one candidate victim, when a growth does not fit |
-| `Plan` | a step stage's `iteration` body: a `branch` guard, an `admit`'s `while` | as the iteration is planned, from the residents and what it has done so far |
+| `Plan` | a step stage's `iteration` body: a `branch` guard, an `admit`'s `while`, a register assignment | as the iteration is planned, from the residents and what it has done so far |
+| `Gauge` | a gauge expression | after each instant settles, held until the next event |
 | `Given` | a claim's `given` | for each session, once its `init` has run |
 | `Iteration` | a claim over iterations | when an iteration starts, where the cost is read |
 | `End` | a claim `at end` | once, when the run ends |
@@ -30,7 +28,7 @@ read the attribute), and the linker rejects the program.
 
 | Name | Type | Moments | Meaning |
 |---|---|---|---|
-| `now` | number | all | simulation clock |
+| `now` | number | except `Gauge`, `Given`, `only` predicates and iteration guards | simulation clock |
 | `waited` | number | `Select` | seconds since this hold entered the queue; reset on re-entry |
 | `size` | number | `Evict` | units of the entry |
 | `age` | number | `Evict` | `now − last` |
@@ -54,15 +52,16 @@ read the attribute), and the linker rejects the program.
 | `served` | number | `Iteration` | tokens the stage scheduled in its earlier iterations, from the start of the run |
 | `arrived` | number | `Iteration` | sessions the workload has started by the iteration's start, one arriving at that instant included |
 
-`residents`, `decoders`, `kv_decode` and `kv_prefill` are totals over the residents, the same for
-every resident at `Serve`. At `Budget` and `Serve` they count every resident
-before the iteration. At `Step`, `decoders`, `kv_decode` and `kv_prefill` count only the
-residents the iteration scheduled, and `residents` every resident.
+At `Budget`, totals describe residents before the iteration. At `Serve`
+they describe the residents present when the expression is read, including
+new admissions and excluding preempted residents. At `Step` and
+`Iteration`, `decoders`, `kv_decode` and `kv_prefill` count scheduled
+residents, while `residents` counts all residents.
 
 `waiting` (a context variable at `Evict`, 0 or 1 for one entry) is not
 `queued(p)` ([function](functions.md#pool)), the length of a pool's queue.
 
 ## Reading hidden attributes
 
-[`hidden`](workload.md#hidden) attributes are legal at `Session` only, so every
-moment above other than `Session` rejects them.
+[`hidden`](workload.md#hidden) attributes are legal at `Session` and in a
+claim's `Given` condition. Scheduler expressions cannot read them.

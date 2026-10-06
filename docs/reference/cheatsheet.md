@@ -1,7 +1,7 @@
 # Language cheatsheet
 
-The complete specification is [the language](../language.md). This is the
-one-page version.
+Common syntax at a glance. See the [API reference](../api/index.md) for
+argument rules and [The language](../language.md) for complete semantics.
 
 ## Shape of a program
 
@@ -15,7 +15,7 @@ pool NAME [ '[' N ']' ] { … }       // a counted resource
 stage NAME [ '[' N ']' ] : kind;    // where time passes
 
 workload { … }                      // how sessions arrive and turns evolve
-session { … }                         // what every session does
+session { … }                      // what every session does
 share maxmin;                       // or bottleneck: how a run over several stages divides them
 run { horizon …; warmup …; seed …; arrivals …; }
 gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
@@ -68,7 +68,7 @@ set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
 
 hold P (u) [reserve (r)] [, Q (v)]* [reuse (ρ)]
-     [at admission (name = e, …)]      // names for the header, read at admission; the body sees them
+     [at admission (name = e, …)]      // names evaluated at admission; body access is restricted
      { … } [cache (ℓ)] [lease P (t)];   // lease: P's units outlive the scope until released, t seconds, or the end
 grow P (d);                        // enlarge the innermost hold
 drop P;                            // discard the own cached prefix
@@ -83,13 +83,13 @@ prefill W;  decode W;  tool Z;     // run on the stage of that name: W is
                                    // time on a fifo/ps/delay stage (seconds)
 prefill T;  decode T;              // on a step engine: T is tokens, the budget's unit
 transfer (X) from P to Q (n);      // run link (X); load Q (n); release P
-transfer on S, T (X) from P to Q (n);   // the read holds the sender's link and the receiver's
+transfer on S, T (X) from P to Q (n);   // uses both links for the transfer
 prefill[j] W;  prefill on P (W);   // an instance of an array; an explicit stage
 
 branch (e) { … } [else { … }]      // a test: e is 0 or 1
 branch with (p) { … } [else { … }] // a draw: with probability p
 loop { … }
-choose j in n by (k1, …);          // j := argmin over 0..n, keys in order
+choose j in n by (k1, …);          // least key over indices 0 through n-1
 end;
 ```
 
@@ -110,19 +110,14 @@ Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 | `est_lambda(s)` `est_rho(s)` `est_wait(s)` | `cachedin(p)` `holders(p)` `queued(p)` | |
 | `price(s, s_hit, ds)` | `blocksize(p)` (folded) | |
 
-**Context variables**
-
-| Where | Names |
-|---|---|
-| anywhere | `now` |
-| eviction keys, spill predicates | `size` `age` `last` `waiting` |
-| `ps` capacity | `present` |
-| `step` budget and chunk | `residents` `decoders` `kv_decode` `kv_prefill` (the residents, before the iteration) |
-| `step` cost | `tokens` `decoders` `prefilled` `residents` `kv_decode` `kv_prefill` `attention` |
-| `step` `serve by` keys and `serve only` | `decoding` `admission` `remaining` (per resident), and `residents` `decoders` `kv_decode` `kv_prefill` |
+[Context variables](../api/context.md) depend on the evaluation moment:
+`waited` in queue keys, `size` and `age` in eviction keys, `present` in `ps`
+capacity, `tokens` in step cost, and `decoding` in serve and preemption keys.
+`now` is the clock, but is forbidden in gauges, `given`, `only` predicates
+and iteration guards.
 
 **Built-in session attributes** `serial` `turn_no` `cached` `computed` (what a
-preempted hold had computed; 0 otherwise), and with a trace `new` `out`
+preempted hold had computed; 0 initially and after the hold completes), and with a trace `new` `out`
 `think` `more` `forced`.
 
 ## Workload

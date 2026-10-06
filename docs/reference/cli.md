@@ -19,7 +19,7 @@ serq --version
 | | |
 |---|---|
 | `run` | execute the program as a discrete-event simulation and print the report |
-| `check` | parse, resolve every name and fold the constants; print a summary. This is what `make check` runs over every program |
+| `check` | parse, link and validate the program; print a summary |
 | `ir` | print the program's [IR](../ir.md) as JSON |
 | `draw` | render the program as a figure ([visualization](../visualization/index.md)) |
 | `target` | synthesise the program for [vLLM's scheduler](#the-vllm-target): print the configuration that runs it, or refuse with the construct vLLM cannot run (exit 1) |
@@ -32,11 +32,11 @@ serq --version
 |---|---|---|
 | `--seed N` | run, ir | RNG seed, overriding the program's `run` block |
 | `--horizon T` | run, ir | simulated seconds |
-| `--warmup T` | run, ir | seconds discarded before anything is recorded |
+| `--warmup T` | run, ir | exclude the first `T` seconds from measured statistics; claims and whole-run counters still include them |
 | `--arrivals N` | run, ir | stop after `N` arrivals and drain their sessions, overriding the `run` block's `arrivals` ([a finite run](../api/program.md#a-finite-run)); open workloads only |
-| `--set name=expr` | all | override a declared `let` constant (unknown names are errors; the last override of a name wins). Rejected if the constant, directly or through another `let`, sets a queue family's size. **Rejected on `.json`**: an IR's constants are already folded |
-| `--instance F` | all | read an [instance](../api/program.md#instances) from `F`: each of its `let`s is a `--set` of that constant and each option of its `run` block the flag of the same name, applied where the flag stands, so a later `--set` or flag wins over the instance and the instance over an earlier one. Anything else in `F` (a pool, a `def`, a `use`, a second `run`) is an error |
-| `--def name=expr` | all | replace the body of a declared expression [`def`](../api/program.md#def), which then expands at each use as if written so: a distribution, a policy key or a law per class passed in as a parameter (`--def service='~erlang(4, 1)'`). The body may draw and read what the program's body could; the definition keeps its parameters. Unknown names and statement definitions are errors; the last override of a name wins. **Rejected on `.json`**: an IR's definitions are already expanded |
+| `--set name=expr` | run, check, ir, draw, target | override a declared `let` constant (unknown names are errors; the last override of a name wins). Rejected if the constant, directly or through another `let`, sets a queue family's size. **Rejected on `.json`**: an IR's constants are already folded |
+| `--instance F` | run, check, ir, draw, target | read an [instance](../api/program.md#instances) from `F`: each of its `let`s is a `--set` of that constant and each option of its `run` block the flag of the same name, applied where the flag stands, so a later `--set` or flag wins over the instance and the instance over an earlier one. Anything else in `F` (a pool, a `def`, a `use`, a second `run`) is an error |
+| `--def name=expr` | run, check, ir, draw, target | replace the body of a declared expression [`def`](../api/program.md#def), which then expands at each use as if written so: a distribution, a policy key or a law per class passed in as a parameter (`--def service='~erlang(4, 1)'`). The body may draw and read what the program's body could; the definition keeps its parameters. Unknown names and statement definitions are errors; the last override of a name wins. **Rejected on `.json`**: an IR's definitions are already expanded |
 | `--trace F` | run, ir | replace the program's trace corpus |
 | `--inline-trace` | ir | turn the trace file into the sessions' turns, as `CArrival::Sessions` data |
 | `--json` | run | print the report as JSON |
@@ -60,13 +60,82 @@ serq run examples/multi-turn/vllm.sq --json | jq '.pools[] | select(.name=="kv")
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
 | `gauges.<name>` | `mean` (time average over `[warmup, end]`), `ci`, `min`, `max` |
 | `claims[]` | present when the program has a `claim`: `name`, `kind` (`every_iteration`, `some_iteration`, `at_end`), `result` (`holds`, `fails`, `witnessed`, `not_witnessed`, `not_evaluated`, `out_of_scope`), `checked` (iterations read, or 1 for a claim read at the end), `failures` (of those, the ones that read 0), `first` (the first failure, or a `some` claim's first witness; `null` when none), `note` (the sessions live at the end, or the session that failed `given`; `null` otherwise). The whole run, warm-up included |
-| `stages[]` | `name`, `index` (the member's index in a stage array, `null` for a single stage), `mean_number`, `utilization`, `completed`, `throughput`, `mean_wait`, `mean_service`, `iterations`, and for a step stage: `prefill_only`, `decode_only`, `mixed` (fractions of the measured time an iteration of prefill only, decodes only, or both was running; the rest is idle), `mean_decodes` (time-average decodes in the running iteration, 0 while none runs), `mean_decode_batch` and `mean_decode_step` (the decodes and the duration of an iteration that carried a decode, averaged over those started after warm-up: the batch a decode is in and the step it waits for), `mean_itl`, `itl_p50`, `itl_p99` (the gaps between a turn's successive tokens, a session's tokens with the same `turn_no`, that end on the stage after warm-up, wherever the earlier token was: a transfer between a prefill engine's first token and a decode engine's second is in the gap, and so is a preemption; a prefill's end is the next token after a decode or after a preemption on the previous token's stage, otherwise the first, replacing any before it, so a decoder's recompute replaces a prefiller's dropped token; a turn's gaps add up to its last token less its first; the quantiles are within 0.5 %, exact for a single value, the mean exact); 0 for the fractions and `mean_decodes`, `null` for the others, on other stages. An iteration that only preempted counts as idle; `utilization` is the time with a job present, which differs from `1 - idle` while residents stall. `iterations` counts the whole run, warm-up included. `idle_with_work` (a step stage's) is true when the run ended with the stage holding residents or a waiting queue it serves and its last try at an iteration scheduling nothing; the text report names it (`idle: stage …`) |
-| `pools[]` | `name`, `index` (the member's index in a pool array, `null` for a single pool), `mean_used`, `mean_cached`, `mean_queue`, `mean_holders`, `mean_wait`, `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected`, `stuck` (sessions preempted again without progress since their previous preemption), `over_cap` (`null`, or `{queue, need}`: read as the run ends, the head of `queue`'s queue asks this pool for `need`, above its cap; a hold whose units or `reserve` read the deployment's state is not rejected when it joins, and waits; the text report says `over:`) |
+| `stages[]` | stage statistics, below |
+| `pools[]` | pool statistics, below |
+
+Non-finite numbers are written as `null`. For stages and pools, `name`
+identifies the resource and `index` its array member (`null` for a single resource).
+
+### Stage statistics
+
+| Fields | Meaning |
+|---|---|
+| `mean_number`, `utilization` | time-average jobs present and fraction of time occupied; on a shared stage, utilization is the time-average capacity carried by its flows |
+| `completed`, `throughput`, `mean_wait`, `mean_service` | completions, completions per clock unit, mean queue wait and mean service time |
+| `iterations` | step iterations over the whole run, including warm-up |
+| `prefill_only`, `decode_only`, `mixed` | fractions of measured time running each kind of step iteration; the remainder is idle |
+| `mean_decodes` | time-average decodes in the running iteration, 0 while none runs |
+| `mean_decode_batch`, `mean_decode_step` | mean decode count and duration of iterations carrying a decode, over those started after warm-up |
+| `mean_itl`, `itl_p50`, `itl_p99` | mean, median and 99th percentile of inter-token gaps ending on this stage after warm-up |
+| `idle_with_work` | the step stage ended with residents or a waiting queue it serves, and its last iteration attempt scheduled nothing |
+
+On non-step stages, `iterations`, the time fractions and `mean_decodes` are
+0; decode-batch, decode-step and inter-token statistics are `null`.
+An iteration that only preempts counts as idle. Step utilization measures
+time with a job present, so stalled residents can make it differ from the
+sum of the three active-time fractions. The text report marks
+`idle_with_work` as `idle: stage …`.
+
+Inter-token gaps follow one session and `turn_no`, even across stages:
+transfer time and preemption delays count. A prefill's end is the next token
+after a decode, or after a preemption on the previous token's stage;
+otherwise it starts a new sequence, replacing any earlier first token.
+Thus a decoder's recompute replaces a prefiller's dropped token. A turn's
+gaps sum to its last-token time minus its first-token time. The mean is
+exact; quantiles are within 0.5 %, and exact for a single value.
+
+### Pool statistics
+
+| Fields | Meaning |
+|---|---|
+| `mean_used`, `mean_cached`, `mean_queue`, `mean_holders` | time-average allocated units, cached units, waiting sessions and holding sessions |
+| `mean_wait` | mean admission wait |
+| `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected` | admission, eviction, preemption, spill and rejection counters |
+| `stuck` | sessions preempted again without progress past their previous preemption |
+| `over_cap` | `null`, or `{queue, need}` when that queue's head asks for more than this pool's capacity at the end of the run |
+
+A hold whose units or `reserve` depend on deployment state is not rejected
+when it joins the queue. If its demand remains above capacity at the end,
+`over_cap` records it and the text report prints `over:`.
+
+## Input errors
+
+`fmt` parses every input before writing any file. It leaves the batch untouched
+if one file has a syntax error. `make check` runs `fmt --check` on the example
+and tutorial programs.
+
+Commands and their supported options are checked before the program is opened.
+An unknown command or option, a missing value, or an invalid value prints the
+problem and a correction hint to stderr and exits with code 2. Options belonging
+to another command are rejected rather than ignored. `--seed` takes an unsigned
+integer, `--horizon` a finite positive number, `--warmup` a finite nonnegative
+number, and `--arrivals` a positive integer. Program loading, validation, and runtime errors exit with code 1. Failed commands
+do not write a report to stdout.
+
+Trace CSV errors identify the actual trace path, row, and column name, followed
+by a correction hint. Paths declared in the program are relative to its directory;
+`--trace` paths are relative to the current directory. `run` and
+`ir --inline-trace` use the same trace diagnostics.
+
+Name-resolution errors in `.sq` programs show the line, character column,
+source excerpt, and a correction hint. A close, unambiguous name of the same
+kind is suggested with its declaration location; duplicate pools and stages
+identify both declarations. `.json` validation errors identify the IR context. Syntax errors, including unclosed `/*` comments, point
+to the offending source location.
 
 ## The vLLM target
 
-`serq target` treats vLLM v1's own scheduler as a fixed-function
-architecture ([the design](../design/serving-specification-language.md), §5).
+`serq target` compiles a supported program to a vLLM v1 scheduler configuration.
 Its configuration can change values, but its policy is fixed. One step
 engine serves its running requests in admission order. The request slots
 are capped. The KV blocks have an LRU prefix cache and LIFO preemption, and
@@ -117,38 +186,3 @@ recorded on a vLLM host.
 scenario's program compiles to the configuration that the oracle drove the
 real scheduler with, and `tests/vllm_oracle.rs` checks that the scheduler,
 so configured, decides as the program does.
-
-## Make targets
-
-| | |
-|---|---|
-| `make check` | fmt, clippy, tests, every program links and draws, the oracles agree, IR files current |
-| `make oracle-ir` | regenerate `tools/oracle/*.ir.json` |
-| `make draw-golden` | regenerate `docs/assets/*.deployment.svg` |
-
-## Input errors
-
-`fmt` parses every input before writing any file. It leaves the batch untouched
-if one file has a syntax error. `make check` runs `fmt --check` on the example
-and tutorial programs.
-
-Commands and their supported options are checked before the program is opened.
-An unknown command or option, a missing value, or an invalid value prints the
-problem and a correction hint to stderr and exits with code 2. Options belonging
-to another command are rejected rather than ignored. `--seed` takes an unsigned
-integer, `--horizon` a finite positive number, `--warmup` a finite nonnegative
-number, and `--arrivals` a positive integer. Program loading, validation, and runtime errors exit with code 1. Failed commands
-do not write a report to stdout.
-
-Trace CSV errors identify the actual trace path, row, and column name, followed
-by a correction hint. Paths declared in the program are relative to its directory;
-`--trace` paths are relative to the current directory. `run` and
-`ir --inline-trace` use the same trace diagnostics.
-
-Name-resolution errors in `.sq` programs show the line, character column,
-source excerpt, and a correction hint. A close, unambiguous name of the same
-kind is suggested with its declaration location; duplicate pools and stages
-identify both declarations. Locations survive `server`/`request` expansion and
-header bindings. `.json` validation errors use IR context instead of inventing
-text-source locations. Syntax errors, including unclosed `/*` comments, point
-to the offending source location.

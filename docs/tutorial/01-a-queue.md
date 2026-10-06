@@ -1,8 +1,7 @@
 # 1. A queue
 
-Before there are tokens, there is a queue. A serving system is, at bottom, a
-thing that makes requests wait — and the whole of queueing theory is about how
-long.
+Model requests arriving at one server, then compare their simulated waiting
+and response times with the M/M/1 queue's closed forms.
 
 ## The program
 
@@ -10,7 +9,7 @@ long.
 --8<-- "docs/tutorial/programs/01-queue.sq"
 ```
 
-Four blocks, and every serQ program has the same four.
+This program has four blocks:
 
 ### `stage`
 
@@ -71,16 +70,16 @@ serq run docs/tutorial/programs/01-queue.sq
 ```
 
 ```text
-run: horizon 100000 end 100000 warmup 5000 seed 1 events 158920 arrivals 79460 ended 75464 turns 75462 mean live 3.816
+run: horizon 100000 end 100000 warmup 5000 seed 1 events 158921 arrivals 79460 ended 75464 turns 75462 mean live 3.768
 
 observe   count    mean   95% CI    cv2      p99
 --------  -----  ------  -------  -----  -------
-response  75464  4.8040  ±0.2377  0.916  20.4865
-wait      75464  3.8023  ±0.2330  1.394  19.3448
+response  75464  4.7432  ±0.2838  1.028  22.9285
+wait      75464  3.7458  ±0.2833  1.578  21.7495
 
 stage   number   util   done    thru    wait  service  iters
 ------  ------  -----  -----  ------  ------  -------  -----
-server   3.816  0.796  75464  0.7944  3.8023   1.0017      0
+server   3.768  0.792  75464  0.7944  3.7458   0.9974      0
 ```
 
 ## Checking it against the textbook
@@ -96,17 +95,16 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
 
 | | closed form | run | |
 |---|---|---|---|
-| response | 5 | 4.8040 ±0.2377 | covered |
-| wait | 4 | 3.8023 ±0.2330 | covered |
-| number in system | 4 | 3.816 | |
-| utilisation | 0.8 | 0.796 | |
+| response | 5 | 4.7432 ±0.2838 | covered |
+| wait | 4 | 3.7458 ±0.2833 | covered |
+| number in system | 4 | 3.768 | |
+| utilisation | 0.8 | 0.792 | |
 
-!!! warning "Read the interval, not the mean"
-    `4.8040` is not 5, and it is not supposed to be. The interval is what makes
-    the claim: `±0.2377` covers 5. A run whose interval does *not* cover the
-    closed form is a bug — in the program, or in serQ. Check
-    `examples/single-turn/ps.sq` and `examples/multi-turn/closed.sq` against
-    theirs the same way; no test does it for you.
+!!! tip "Compare intervals across runs"
+    This run's response-time interval includes the theoretical mean of 5.
+    A 95% confidence interval can miss the true mean even for a correct
+    model. If discrepancies persist across seeds and longer runs, check the
+    model assumptions, warm-up and implementation.
 
 ## What to try
 

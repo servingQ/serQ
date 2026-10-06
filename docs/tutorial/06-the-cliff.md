@@ -1,7 +1,7 @@
 # 6. The cliff
 
-Everything so far degraded gracefully. Turn the load up on the engine of
-chapter 5 and it does not.
+Sweep the arrival rate to find where latency rises sharply, then vary memory
+to see how cache pressure affects that threshold.
 
 ## The sweep
 
@@ -11,41 +11,40 @@ for L in 1.5 1.7 1.8 1.9 2.0; do
 done
 ```
 
-| sessions/s | hit rate | **TTFT** | preemptions | engine utilisation |
-|---|---|---|---|---|
-| 1.5 | 0.512 | **0.364 s** | 22 043 | 0.628 |
-| 1.7 | 0.490 | **3.058 s** | 99 128 | 0.872 |
-| 1.8 | 0.498 | **40.06 s** | 169 930 | 1.000 |
-| 1.9 | 0.494 | 85.44 s | 173 225 | 1.000 |
-| 2.0 | 0.486 | 168.9 s | 174 634 | 1.000 |
+| sessions/s | hit rate | TTFT (s) | preemptions | `stuck` | utilisation |
+|---|---|---|---|---|---|
+| 1.5 | 0.491 | 0.115 | 5,631 | 101 | 0.579 |
+| 1.7 | 0.416 | 0.235 | 19,884 | 320 | 0.713 |
+| 1.8 | 0.393 | 0.493 | 38,690 | 652 | 0.793 |
+| 1.9 | 0.381 | 1.482 | 67,731 | 1,079 | 0.883 |
+| 2.0 | 0.380 | 8.178 | 108,787 | 1,635 | 0.974 |
 
-Between 1.7 and 1.8 sessions per second — a 6 % increase in load — the time to
-first token goes up by a factor of thirteen. There is no knee to plan against
-here; there is an edge.
+Between 1.9 and 2.0 sessions/s, a 5% load increase raises observed TTFT
+from 1.48 s to 8.18 s. These seed-1 runs also report `stuck` sessions:
+requests preempted again without progress. The latency samples therefore
+do not describe all offered traffic. Inspect these counters before using
+a mean for capacity planning, and repeat the experiment across seeds.
 
 ## Is it just saturation?
 
-The obvious reading is that the engine ran out of compute at \(\rho = 1\). It
-did, but that is the symptom. Run the same loads with ten times the KV pool
-and nothing else changed:
+To separate compute saturation from memory pressure, run the same loads
+with ten times the KV pool and the same cost model:
 
 ```bash
 serq run docs/tutorial/programs/05-engine.sq --set Lambda=2.0 --set blocks=40000
 serq run docs/tutorial/programs/05-engine.sq --set Lambda=3.0 --set blocks=40000
 ```
 
-| sessions/s | KV blocks | hit rate | TTFT | preemptions | utilisation |
+| sessions/s | KV blocks | hit rate | TTFT (s) | `stuck` | utilisation |
 |---|---|---|---|---|---|
-| 2.0 | 4 000 | 0.486 | **168.9 s** | 174 634 | 1.000 |
-| 2.0 | 40 000 | 0.801 | **0.020 s** | 0 | 0.471 |
-| 3.0 | 40 000 | 0.801 | 0.023 s | 0 | 0.636 |
+| 2.0 | 4,000 | 0.380 | 8.178 | 1,635 | 0.974 |
+| 2.0 | 40,000 | 0.800 | 0.020 | 0 | 0.470 |
+| 3.0 | 40,000 | 0.800 | 0.023 | 0 | 0.635 |
 
-Same arrival rate, same engine, same cost model. Ten times the memory, and the
-time to first token falls by a factor of **eight thousand** — and at half again
-the load the big-pool system is still idle.
-
-The engine did not run out of compute. It ran out of compute *because* it ran
-out of memory.
+At 2.0 sessions/s, the larger pool reduces observed TTFT from 8.18 s to
+0.020 s. Both larger-pool runs have no preemptions or `stuck` sessions.
+Memory capacity changes the amount of recomputation, even with the same
+arrival rate and engine cost model.
 
 ## The loop
 
@@ -69,47 +68,27 @@ out of memory.
   longer, holding KV ───────┘
 ```
 
-Nothing in this loop is a bug. Every step is the system behaving exactly as
-designed. The loop has two stable states — one where prefixes survive and work
-is cheap, and one where they do not and it is not — and the load at which it
-falls out of the first is not where utilisation says it should be.
+Eviction and recomputation can reinforce each other: longer service keeps
+more KV resident, leaving less room for cached prefixes. The sweep shows a
+sharp change in observed latency, but does not establish multiple stable states.
 
-The 174 634 preemptions in the bottom row are the loop running: requests being
-thrown out of the batch, their blocks freed, and their work recomputed when
-they come back.
-
-## This is not an artefact of the model
-
-`examples/replay/vllm_replay.sq` is this same structure fitted to an A100 running
-Qwen3-8B, replaying a measured 333-session trace. The measured replica
-collapsed between a 3.0 s and a 2.5 s session spacing; the program predicted a
-mean TTFT of 39.1 s against 34.6 s measured, and a full-hit rate of 0.192
-against 0.216.
-
-Better: the program predicted the *fix* before it was run. Pinning a waiting
-request's prefix so that it cannot be evicted while it queues — one line, the
-program without `admit via engine` — was predicted to take the 2.5 s replay
-from 39.1 s to 0.888 s. Measured on the real A100 engine afterwards: 34.6 s →
-0.878 s.
-
-That pre-registered prediction is what a specification is *for*. You do not
-run the experiment to find out what happens; you run it to find out whether
-you were right.
+For comparison with a measured A100 deployment and a cache-policy
+experiment, see the [vLLM use case](../use-cases/vllm.md).
 
 ## What to try
 
-The interesting question is not where the cliff is but what moves it:
+Vary one parameter at a time:
 
 ```bash
 # more memory
 serq run docs/tutorial/programs/05-engine.sq --set Lambda=1.8 --set blocks=8000
-# fewer concurrent requests, so each one holds memory for less time
+# fewer concurrent requests
 serq run docs/tutorial/programs/05-engine.sq --set Lambda=1.8 --set max_seqs=8
-# shorter thinking time, so prefixes are reused before they are evicted
+# shorter thinking time
 serq run docs/tutorial/programs/05-engine.sq --set Lambda=1.8 --set Z=1
 ```
 
 ---
 
-That is the language. Next: [a real system written in
+Next: [a real system written in
 it](../use-cases/vllm.md), or [the reference](../reference/cheatsheet.md).

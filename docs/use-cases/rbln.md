@@ -1,6 +1,6 @@
 # vllm-rbln
 
-The latest tag checked on 2026-09-30 is [v0.11.3a21](https://github.com/rebellions-sw/vllm-rbln/tree/v0.11.3a21), an alpha. Its [dependency](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/pyproject.toml#L41) is **vLLM 0.26.0+cpu**; the plugin's version is separate. Only the native `RBLNScheduler` and `RBLNKVCacheManager` full-attention paths are considered.
+Reference: [v0.11.3a21](https://github.com/rebellions-sw/vllm-rbln/tree/v0.11.3a21), an alpha. Its [dependency](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/pyproject.toml#L41) is **vLLM 0.26.0+cpu**; the plugin's version is separate. Only the native `RBLNScheduler` and `RBLNKVCacheManager` full-attention paths are considered.
 
 ## Tagged behavior
 
@@ -53,9 +53,7 @@ A fitting waiting prefill can replace tentative resident decodes and use the
 full token budget. Cancelled decode work does not advance computed KV; its
 already acquired allocation stays held. A selected prefill stops further
 waiting admission. Ordinary capacity, budget-exhaustion and preemption gates
-still apply. [PR #171](https://github.com/servingQ/serQ/pull/171) implemented this
-policy in the current interpreter; see the [phase-isolation contract](../design/exclusive-prefill.md)
-for the regression scenarios and exact limits.
+still apply. See the [`serve` reference](../api/stage.md#serve).
 
 `reserve (known)` tests the current sequence's capacity (the prompt, or what a resumed request had computed), while the hold allocates
 only the initial chunk and `growing kv` extends it as computation advances.
@@ -89,11 +87,9 @@ interpreter regressions do not establish native scheduler equivalence.
 
 Reducing `block` to the sub-block size would also reduce physical allocation. It can match hit counts while predicting the wrong memory pressure.
 
-## Oracle scenarios
+## Validation
 
-Compare waiting prefill arriving during resident decode; PP hard/soft cap divergence; and a partial-block prefix match requiring a copy. Include source eviction and cancellation while copying. Observe final selected batch, computed/committed progress, physical block count and copy reference acquisition/release.
-
-**Validation:** this reduced example links and completes its six requests.
+this reduced example links and completes its six requests.
 All 44 iteration assignments were checked to contain either a lone prefill
 or decodes only. The interpreter policy also has six hand-derived regression
 tests. No native RBLN differential test has been run.

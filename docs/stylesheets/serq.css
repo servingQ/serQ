@@ -55,3 +55,24 @@
 .language-serq .k {
   font-weight: 600;
 }
+
+/* Mathematical statements use the text palette in both color schemes. */
+.md-typeset .admonition.theorem,
+.md-typeset .admonition.proposition {
+  border: 0;
+  border-left: 0.2rem solid var(--md-typeset-a-color);
+  border-radius: 0;
+  box-shadow: none;
+  font-size: inherit;
+}
+
+.md-typeset .theorem > .admonition-title,
+.md-typeset .proposition > .admonition-title {
+  padding-left: 0.6rem;
+  background-color: var(--md-default-fg-color--lightest);
+}
+
+.md-typeset .theorem > .admonition-title::before,
+.md-typeset .proposition > .admonition-title::before {
+  display: none;
+}

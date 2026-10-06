@@ -1,7 +1,7 @@
 # Tutorial
 
-Six chapters. Each one is a complete, runnable program that adds exactly one
-idea to the last, and each ends with something you can measure.
+Build a serving model in five runnable programs, then explore its behavior
+under load in chapter 6.
 
 By the end you will have built, from nothing, a colocated LLM engine with
 continuous batching, chunked prefill, a block-level prefix cache and LIFO
@@ -18,7 +18,7 @@ preemption — and watched it fall off a cliff.
 
 The programs are in
 [`docs/tutorial/programs/`](https://github.com/servingQ/serQ/tree/main/docs/tutorial/programs).
-Every number quoted in these pages came from running them.
+Run the examples with the listed settings to reproduce the reports.
 
 !!! tip "Run as you read"
     ```bash

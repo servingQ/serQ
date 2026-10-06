@@ -40,8 +40,8 @@ arrive renewal(2);             // one every 2 clock units
 
 The first arrival is one gap after time 0, where `poisson` has one at 0: with
 the same seed, `renewal(~exp(1 / rate))` arrives at the same times as
-`poisson(rate)` after its first arrival, and has no arrival at 0
-([design](../design/renewal-arrivals.md)). Gaps draw from the arrival stream.
+`poisson(rate)` after its first arrival, and has no arrival at 0. Gaps draw
+from the arrival stream.
 
 ## `trace`
 
@@ -52,7 +52,7 @@ trace "file.csv" [ordered];
 | Argument | Type | Description |
 |---|---|---|
 | file | string | Path relative to the program. Columns `session,turn,new,out,think[,forced]`, one row per turn. |
-| `ordered` | flag | Session `i` replays trace session `i`. Without it, sessions draw turns from the corpus. |
+| `ordered` | flag | Replay corpus sessions in order, cycling back to the first when exhausted. Without it, each session samples one corpus session and replays its turns in order. |
 
 At every `turn;` the next turn sets `new`, `out`, `think` and `forced`, and
 sets `more` to 1 while another turn remains ([attributes](attributes.md)).
@@ -90,12 +90,15 @@ hidden o, think;
 |---|---|---|
 | `NAME` | session attribute | The scheduler may not read it. |
 
-A hidden attribute is legal at the `Session` moment only, so it may be read in a
-session statement (`decode (o - 1)`), a run or a hold's `cache`. It is a link
-error in a hold's units, `reserve` or `reuse`, a queue or eviction key, a spill
-clause, a `ps` capacity, or a step stage's `budget`, `cost`, `chunk` or `serve`
-keys. An attribute the scheduler itself sets (`cached`, `computed`) cannot be
-hidden, and a name nothing sets is an error.
+Hidden attributes may be read in session expressions and a claim's `given`
+condition. They are forbidden in scheduler expressions, including hold
+headers, queue and eviction keys, and stage scheduling rules. See
+[evaluation moments](context.md#reading-hidden-attributes).
+
+An attribute the scheduler sets (`cached`, `computed`) cannot be hidden,
+and a name nothing sets is an error. The [vLLM program](../use-cases/vllm.md)
+hides output length `o`, preventing admission from reserving memory using
+future output length.
 
 In a program split into a workload and a `server`, the server's own
 statements are the rest of the scheduler, and there a hidden attribute is
@@ -116,6 +119,3 @@ header is read at admission, where the attribute itself stays refused even
 after a run (the moment rule above). The workload's statements are the
 client's and are not checked. A program written as one `session` has no
 server to check.
-
-The vLLM programs hide `o`: the scheduler knows `max_tokens` and learns the
-length only at EOS, so a program that reserves `prompt + o` is one vLLM cannot be.

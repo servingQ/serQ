@@ -7,29 +7,14 @@ hide:
 
 *pronounced "ser-Q": **se**rving + **Q**ueue*
 
-**serQ is a language in which an LLM serving deployment is a program.** Its
-memory pools, its engines, the traffic that arrives and the path every
-request takes through them are written down once. That one program is then
-simulated, proved about in Lean, and drawn; the vLLM program is checked
-against the real scheduler request for request. It is a serving
-specification language: the deployment is the circuit and the workload its
-testbench, and what P4 is to a packet switch, serQ is meant to be to a
-serving engine ([the design](design/serving-specification-language.md)).
+**serQ describes an LLM serving deployment as a program:** its memory
+pools, engines, workload and scheduling policy. Use the same program to
+simulate performance, state claims for Lean proofs and draw the deployment.
+Programs supported by the [vLLM target](reference/cli.md#the-vllm-target)
+also compile to a scheduler configuration.
 
-## Why serQ exists
-
-A serving system is usually described three times, and the three are never
-reconciled: a paper's queueing model, the scheduler's source code, and
-whatever load test last ran against it. Each answers a different question,
-and none of them can be checked against the others.
-
-serQ replaces the three with one program. Its definition is an intermediate
-representation, the [IR](ir.md): the simulator runs it, the Lean model is
-generated from it, and the oracle tests read it. The `.sq` text you write is
-one frontend that compiles to it. Because they read the same IR, a change to
-the program reaches the simulation, the Lean statements and the figure at
-once. That the interpreter and the Lean semantics agree is tested (the
-oracle scenarios, random differential runs), not proved.
+Start with [installation and a first run](getting-started.md), or build a
+serving model step by step in the [tutorial](tutorial/index.md).
 
 ## What you can do with it
 
@@ -53,17 +38,16 @@ oracle scenarios, random differential runs), not proved.
 
 - **State claims and prove them**
 
-    A `claim` is a proposition about every path of the program, written in
-    the program: the simulator checks it on the path it runs, and for a
-    program inside Lean's fragment a Lean proof covers every path. Three
-    papers' propositions are proved this way, and the memory invariant `allocated + cached ≤ cap` is a theorem
-    of the pool model.
-    [The Lean model](lean.md), [Claims](design/claims.md), [use cases](use-cases/index.md#formal-verification)
+    Write a `claim` in the program and check it on a simulated run.
+    For supported programs, Lean proofs establish claims over all paths
+    covered by their assumptions. The interpreter and Lean semantics are
+    tested for agreement; their equivalence is not proved.
+    [The Lean model](lean.md), [formal verification examples](use-cases/index.md#formal-verification)
 
 - **Draw it**
 
     `serq draw` renders the program as a queueing network, in TikZ or SVG.
-    The figure is generated from the program, so it cannot fall out of date.
+    Regenerate the figure when the program changes.
     [Visualization](visualization/index.md)
 
 - **Use it from Python**

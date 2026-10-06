@@ -60,7 +60,7 @@ jobs:
 
   deploy:
     name: Deploy to GitHub Pages
-    # The site is public (docs/publishing.md). Only main publishes; a pull
+    # The site is public (.github/contributing.md). Only main publishes; a pull
     # request builds and uploads the artifact and stops there.
     if: github.event_name != 'pull_request'
     needs: build

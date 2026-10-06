@@ -42,7 +42,7 @@ only `let` bindings of constants the program declares, each once, and one
 `run` block whose options are numbers. Pools, stages, the workload and
 definitions are the program's, which is what keeps every instance of a
 program the same system with other numbers
-([the design](../design/serving-specification-language.md#4-parameters-and-a-control-plane-the-modelinstance-split)).
+([the design](https://github.com/servingQ/serQ/blob/main/docs/design/serving-specification-language.md#4-parameters-and-a-control-plane-the-modelinstance-split)).
 `examples/<dir>/instances/<program>/` holds instances of
 `examples/<dir>/<program>.sq`, and the tests link each with its program.
 
@@ -58,8 +58,7 @@ in an expression or `NAME(arg, …);` as a statement, is replaced by the body
 with each parameter replaced by its argument, and parsed where it stands: a
 serving form in it finds its stage at the use, and a statement body follows
 the rules of the block it is used in (no `turn`, `end` or `request` in a
-`server`). The AST and the IR hold the expansion, so a program with a `def`
-has the IR of the one written out.
+`server`).
 
 An expression definition's body can be given from outside, as a `let`'s
 value can: `--def NAME=expr` on the command line, `defs={"NAME": "expr"}` in
@@ -80,16 +79,16 @@ set hitD = min(cachedin(D[j].kv), reusable(prompt, bs));
 | `PARAM` | identifier | Not a keyword or a function, and not a name the body assigns or binds (`set p =`, `choose p`, `p =` in a binding). |
 | `arg` | `expr` or reference | A reference (`kv`, `kvD[j]`) is put in as written, so it may name a pool or a stage; any other argument is put in inside parentheses. An argument that draws (itself, or through a definition that draws) may be passed only to a parameter the body reads once, and an argument may not read a name the body assigns. |
 
-Only the parameters are the definition's own. Every other name in the body is
-the program's: an attribute the body sets is the session's attribute, as it
-would be written out. So that a use reads as a call, an argument that reads
-a name the body assigns is refused rather than read after the assignment:
-a `set`, `choose` or binding of the body, the attributes a hold's admission
-sets (`cached`, `computed`) when the body holds, and what a `turn;` or
-`request;` in the body assigns, directly or through a definition the body uses. A `request gw;` assigns what `gw`'s `route` does, not what another gateway's does; when the gateway is a parameter, it is the one the argument names, at the use and through every definition that passes it on; an argument that is not a name stands for any gateway. For the same reason an argument of statements may not read the clock or
-live state (`now`, `used(kv)`): the body would read it after its runs. Name
-the value with `set` first and pass the name. An error in
-an expansion is reported in the body, with a note naming the use.
+Definitions do not create local attributes: names other than parameters
+refer to the program's names. Arguments cannot read names the body may
+assign, including assignments through nested definitions, hold admission,
+`turn` or `request`. For a named gateway request, this includes the selected
+gateway's routing assignments.
+
+A statement-definition argument also cannot read the clock or live state
+(`now`, `used(kv)`), since the body may use it after time passes. Capture
+such a value with `set` first and pass the attribute. Errors in an expansion
+identify both the body and its use.
 
 ## `use`
 
@@ -210,7 +209,7 @@ gauge NAME = expr;
 A function of the deployment's state whose time average over
 `[warmup, end]` the report gives, with a batch-means 95 % CI and the least
 and greatest value held; `--dump` writes its change points
-(`gauge/NAME.csv`). See [the language](../language.md), *Gauges*.
+(`gauge/NAME.csv`). See [Gauges](../language.md#gauges).
 
 | Argument | Type | Description |
 |---|---|---|
@@ -225,10 +224,11 @@ claim NAME [given (expr)]: some iteration of STAGE (expr);
 claim NAME [given (expr)]: at end (expr);
 ```
 
-A proposition about every path of the program, which reads and does not
-act. The interpreter checks it on the path it runs and the report says
-whether it held, failed (and when first), was witnessed, or was not
-evaluated. See [the language](../language.md), *Claims*.
+A property of the program’s paths. Claims do not change execution. The
+interpreter checks each claim on the path it runs; the report records the
+result, first failure or witness, and whether the claim was evaluated.
+A simulation result alone is not a proof over all paths. See
+[Claims](../language.md#claims).
 
 | Argument | Type | Description |
 |---|---|---|
@@ -247,7 +247,7 @@ run { horizon expr; warmup expr; seed expr; arrivals expr; }
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `horizon` | `const` | required | End of the simulation, in the program's clock unit. |
-| `warmup` | `const` | `0` | Samples before this time are discarded. Must be below `horizon`. |
+| `warmup` | `const` | `0` | Measured statistics exclude earlier samples; claims still include them. Must be below `horizon`. |
 | `seed` | `const` | `1` | Seed of the random streams. Arrivals, the workload, the session, eviction and trace sampling each draw from their own. |
 | `arrivals` | `const`, a positive integer | none | Stop after exactly this many arrivals and run until their sessions have all ended. Only with an open workload (`poisson` or `renewal`). |
 

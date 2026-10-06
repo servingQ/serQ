@@ -5,8 +5,9 @@ pool NAME [ '[' N ']' ] {
   cap expr;
   block expr;
   evict lru;  |  evict by (expr, …);
-  preempt none;  |  preempt lifo;
+  preempt none;  |  preempt lifo;  |  preempt by (expr, …) [requeue head | tail];
   queue fifo;  |  queue by (key, …);
+  reserve held;
   admit via STAGE;
   spill POOL via STAGE (expr) when (expr);
 }
@@ -22,17 +23,15 @@ queues the sessions that do not yet fit. Every option is optional.
 | [`block`](#block) | `const` | none | allocation and caching granularity |
 | [`evict`](#evict) | `lru` \| `by (expr, …)` | `lru` | which cache entry goes first |
 | [`preempt`](#preempt) | `none` \| `by (expr, …) [requeue head \| tail]` \| `lifo` | `none` | what a failed `grow` does: whom it preempts, and where the victim goes back |
-| [`queue`](#queue) | `fifo` \| `by (expr)` | `fifo` | admission order |
+| [`queue`](#queue) | `fifo` \| `by (expr, …)` | `fifo` | admission order |
 | [`admit via`](#admit-via) | `stage` | none | the queue is served by a step stage |
 | [`reserve held`](#reserve-held) | — | off | a hold's unallocated `reserve` counts against later admissions |
 | [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
 
-The invariant `allocated + cached ≤ cap` holds in every reachable
-configuration. A request that can never fit — its units, or its `reserve`
-when that is larger, above the cap — is rejected and its session ends. vLLM
-judges `max_model_len` instead: it refuses a longer prompt before
-scheduling it, and refuses to start a KV cache smaller than one request of
-that length, which is what makes every request it admits fit.
+The pool maintains `allocated + cached ≤ cap`. If either `units` or `reserve` is independent of deployment state and
+exceeds capacity after block rounding, the hold is rejected and its session ends. State-dependent demand waits for admission and is reported as
+[`over_cap`](../reference/cli.md#pool-statistics) if it still exceeds capacity
+at the end of the run.
 
 ## `cap`
 
@@ -50,7 +49,7 @@ block expr;
 ```
 
 Allocations round up, and cache entries are kept and evicted, in blocks of this
-many units (vLLM's `block_size`). An entry is evicted from its tail, block by
+many units. An entry is evicted from its tail, block by
 block.
 
 ## `evict`
@@ -82,9 +81,20 @@ What a [`grow`](statements.md#grow) (or a `growing` run) does when the pool has 
 
 | Form | Behaviour |
 |---|---|
-| `none` | The session waits and resumes where it was. |
-| `by (k, …)` | A candidate is preempted: the one with the least keys, compared in order, ties to the one admitted last. The candidates are the holders that are residents of the step stage this pool is the memory of (for a pool that is no engine's memory, the holders that hold it in a scope; a lease is not preempted). The victim's job leaves the stage, its hold is released with the computed prefix cached, and it re-enters its queue to execute its hold again with `computed` set: at the head with `requeue head` (the default), or with `requeue tail` as a newcomer: at the back of a FIFO queue, placed by the keys of a `queue by` (`waited` from 0). The queue is the hold's first pool's, which need not be this one. The grower can be its own victim. |
-| `lifo` | `by (-admission)`: the latest admitted, back at the head (vLLM's `running[-1]` and `prepend_request`). The parser writes it so. |
+| `none` | Wait for room, then resume. |
+| `by (k, …)` | Preempt the candidate with the least keys, compared in order; ties go to the last admitted. |
+| `lifo` | Shorthand for `by (-admission) requeue head`: preempt the last admitted. |
+
+Candidates are holders resident in the stage whose `memory` is this pool.
+If no stage names it as memory, candidates are holders with an active hold
+scope. Leases are not candidates; the grower can be its own victim.
+
+The victim leaves its stage, releases its hold and caches its computed prefix.
+It re-enters the hold's first pool's queue to execute the hold again with
+`computed` set to the position reached. `requeue head` (the default) places
+it first, ahead of policy keys. `requeue tail` treats it as a newcomer:
+FIFO places it last, while `queue by` places it by its keys, with `waited`
+reset to 0.
 
 Keys are read at the `Victim` moment, for each candidate: its visible
 attributes, `admission` (its place in the candidates' admission order: the
@@ -93,17 +103,16 @@ engine's serving order, or the order the pool admitted its holders),
 has computed on the pool, [context variables](context.md)), constants, `now`
 and pool and stage queries. A key may not draw, read `budget_left(…)`, or
 read `computed`, which is the position at the session's last preemption,
-not where the candidate is now. The keys are the program's, so its
-engine's rule is written there:
+not where the candidate is now.
 
-| Engine | Victim |
-|---|---|
-| vLLM, FCFS | `preempt lifo;` |
-| vLLM, PRIORITY: the largest `(priority, arrival)`, back into a queue ordered by them (`scheduler.py:761-765`, `request_queue.py:159-164`) | `preempt by (-priority, -t0) requeue tail;` beside `queue by (priority, t0);` |
-| SGLang: from the decode batch, the fewest outputs, then the longest prompt; to the back of the queue | `preempt by (1 - decoding, position - prompt, -prompt) requeue tail;` |
-| TensorRT-LLM `MAX_UTILIZATION`: the last started, by arrival | `preempt by (-t0);` |
+For a priority queue where larger priority values lose first:
 
-(`t0`, `priority`, `prompt` are attributes the program sets.)
+```serq
+queue by (priority, t0);
+preempt by (-priority, -t0) requeue tail;
+```
+
+Here `priority` and arrival time `t0` are attributes set by the program.
 
 ## `queue`
 
@@ -125,7 +134,7 @@ Selection occurs at admission attempts; there is no implicit aging timer.
 For a stage-bound pool, `budget_left(stage)` reads the budget remaining for
 that admission, and the policy is evaluated again after every admission.
 
-For Ascend-style FCFS lanes with a three-second aging threshold:
+For priority lanes with a three-second aging threshold:
 
 ```serq
 queue by (immediate ? 0 : prompt > 128 && waited >= 3 ? 1 : prompt <= 128 ? 2 : 3,
@@ -134,8 +143,7 @@ queue by (immediate ? 0 : prompt > 128 && waited >= 3 ? 1 : prompt <= 128 ? 2 : 
 
 This admits immediate requests, then aged long requests, then short requests,
 then other long requests. `serial` orders requests within a lane in this
-single-hold workload. [Waiting selection](../design/waiting-selection.md)
-records the exact scope and regression cases.
+single-hold workload.
 
 ## `reserve held`
 
@@ -143,25 +151,24 @@ records the exact scope and regression cases.
 reserve held;
 ```
 
-Without it a hold's `reserve` is a test at admission alone: once admitted,
-the hold counts only what it allocated. With it, what the hold reserved and
-has not allocated (`max(0, reserve − allocation)`) counts against every later
-admission on the pool while the hold lasts, and the hold grows into its own: a
-later admission needs `used + Σ max(0, rᵢ − allocᵢ) + r ≤ cap`, a growth
-`used + (the other holds' outstanding) + d ≤ cap`. Each live hold counts once,
-nested holds and a hold beside a lease each their own; `r` is the units or
-`reserve` as evaluated at the hold's admission; a hold's reservation ends
-with it (its scope, `release`, a preemption), and a lease keeps none.
-Cached prefixes are evicted
-when units are allocated, not when they are reserved. TensorRT-LLM's
-`GUARANTEED_NO_EVICT` is `hold kv (prompt) reserve (prompt + max_tokens)` with
-`growing kv` on a pool `reserve held`: it admits a request only when what
-every running one may still need is left ([`capacityScheduler.cpp`
-L401-L445](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/capacityScheduler.cpp#L401-L445),
-what is still to come being `getRemainingBlocksToCompletion`,
-[`kvCacheManager.cpp` L3492-L3603](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/kvCacheManager.cpp#L3492-L3603)),
-and while every hold grows within its `reserve`, nothing is preempted;
-growth past it falls to the pool's `preempt`.
+By default, `reserve` is checked only at admission. With `reserve held`,
+each live hold's unallocated reservation also counts against later
+admissions and growth by other holds:
+
+$$
+u_i = \max(0, r_i-a_i),
+$$
+
+where $a_i$ is allocated units and $r_i$ is the larger of `units` and
+`reserve`, evaluated at admission and rounded up to blocks. A new reservation $r$ requires
+$\mathrm{used}+\sum_i u_i+r\leq\mathrm{cap}$. Growth by $d$ requires
+$\mathrm{used}+\sum_{i\ne\mathrm{grower}}u_i+d\leq\mathrm{cap}$: the growing
+hold can use its own reservation.
+
+Each hold counts separately, including nested holds. Reservations end with
+the hold's scope, `release` or preemption; leases retain none. Cached
+prefixes are evicted when units are allocated, not when reserved. A hold
+that grows beyond its reservation follows the pool's `preempt` rule.
 
 ## `admit via`
 
@@ -171,9 +178,9 @@ admit via STAGE;
 
 | Argument | Type | Description |
 |---|---|---|
-| `STAGE` | `stage` (a `step` stage) | Serves this pool's queue at the start of each iteration, after the residents have taken their tokens, while budget is left, and not in an iteration that preempted (vLLM's waiting loop). |
+| `STAGE` | `stage` (a `step` stage) | Serves this pool's queue at the start of each iteration, after the residents have taken their tokens, while budget is left, and not in an iteration that preempted under the default iteration procedure. |
 
-Without it the pool is admitted at every settle. `budget_left(STAGE)` is
+Without it, admission is attempted whenever the simulation settles an event. `budget_left(STAGE)` is
 meaningful in the hold's header. Arrays join member for member (`pool q[N]`
 with `stage S[N]`), a family of one is shared by every member, and any other
 pair of counts is a link error. A stage that serves several pools tries them in
@@ -196,8 +203,3 @@ spill TIER via LINK (work) when (pred);
 | `LINK` | `stage` | | The stage the write takes time on. |
 | `work` | `expr` | `Evict` | Work the write puts on `LINK`. |
 | `pred` | `expr` | `Evict` | The prefix is spilled when this is non-zero. May read `size`. |
-
-## In the IR
-
-`CPool { name, cap, block, evict, preempt, queue, spill, admit_via }`; see
-[the IR](../ir.md).

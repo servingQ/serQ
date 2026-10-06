@@ -1,8 +1,16 @@
 # Python: pyserq
 
-`pyserq` runs serQ in process. It shows what the [IR](ir.md) is the
-definition of: a program is compiled, from a file or from text, to its IR,
-and the IR is run. Nothing of the text frontend is exposed.
+`pyserq` compiles and runs serQ programs in Python. Compile a file or source
+text into a `Program`, then run it to get a `Report`.
+
+## Install
+
+```bash
+pip install pyserq           # release
+pip install --pre pyserq     # include development releases
+```
+
+## Run a program
 
 ```python
 import pyserq
@@ -19,7 +27,9 @@ pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a repla
 pyserq.draw("examples/multi-turn/vllm.sq", format="svg")  # what `serq draw --format svg` prints
 ```
 
-| | |
+## API
+
+| Member | Behavior |
 |---|---|
 | `compile(path=None, *, source=None, sets={}, defs={}, seed, horizon, warmup, arrivals, trace)` | A program file or text to its IR, with the overrides of `serq run`. A number in `sets` is that number (an infinity is `inf`; NaN is refused); a string is an expression. `defs` is `--def`: the body of an expression `def`, by name (`defs={"service": "~erlang(4, 1)"}`). A relative trace is read next to the program file for `compile(path)`, and from the current directory with `trace=`, `source=` or `Program.from_json`, as `serq run` does. |
 | `Program.to_json()`, `Program.from_json(s)` | The IR as JSON (`serq ir`), and back. |
@@ -36,10 +46,3 @@ pyserq.draw("examples/multi-turn/vllm.sq", format="svg")  # what `serq draw --fo
 | `IR_VERSION`, `REPORT_VERSION`, `__version__` | The IR it reads, the shape of the report (the field names of `Report.json()`, which `Report`, `Observe`, `Gauge`, `Stage` and `Pool` carry as attributes; a renamed, removed or retyped field bumps it, an added one does not, by the rules of the IR's Stability), and the serq version it is. |
 
 A program that does not compile or run raises `ValueError` with serQ's message; an argument of the wrong type (`seed=-1`, `sets={"x": None}`) raises `TypeError` or `OverflowError`, as Python does.
-
-## Install
-
-```bash
-pip install pyserq           # a release
-pip install --pre pyserq     # the latest commit on main
-```

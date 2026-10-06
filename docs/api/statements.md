@@ -5,7 +5,7 @@ they run whenever a session is ready, in the order sessions became ready. Only
 [`run`](#run) lets the clock move. Every `expr` below is evaluated at the
 `Session` moment unless the entry says otherwise.
 
-The [serving vocabulary](serving.md) is sugar the parser rewrites to these.
+The [serving vocabulary](serving.md) provides shorthand for these statements.
 
 | Statement | Does |
 |---|---|
@@ -30,7 +30,8 @@ set NAME = expr;
 ```
 
 Assigns the session attribute `NAME`. Every name assigned by `set` or `choose`
-is an attribute of every session.
+in session code is an attribute of every session. In an iteration body,
+[`set`](stage.md#registers) instead assigns a stage register.
 
 ## `observe`
 
@@ -39,12 +40,11 @@ observe NAME = expr;
 ```
 
 Records a sample of `expr` after warm-up, with the time, session and turn.
-`--dump DIR` writes the samples; the report summarises them. A test (an
-expression whose outermost operator is a comparison, `&&`, `||` or `!`) that
-was 0 over 40 or more samples gets a line under the table, `note: observe hit
-is constant 0 over 5357 samples`; the note says the run never varied that
-value, which is the program's intent (`examples/single-turn/vllm_single_turn.sq`
-never reads its cache back) or a bug to find before reading the means.
+`--dump DIR` writes the samples; the report summarises them. An observation
+whose outermost operator is a comparison, `&&`, `||` or `!`, and that stays
+0 for at least 40 samples, produces a
+`note: observe … is constant 0` diagnostic. Check whether the condition
+was expected to occur before interpreting its summary.
 
 ## `turn`
 
@@ -79,18 +79,29 @@ body (a body that reads it there, or a `reuse` there, does not link).
 |---|---|---|---|---|
 | `POOL` | `pool` | | | One or more. Admission needs room in every one; the hold waits in the first pool's queue. |
 | `units` | `expr` | `Admit` | | Units to allocate at admission. |
-| `reserve` | `expr` | `Admit` | `units` | Room required before admitting, `used + max(units, r) ≤ cap`. It does not change what is taken. |
+| `reserve` | `expr` | `Admit` | `units` | Room required before admitting: `max(units, r)`, rounded up to blocks. It does not change the allocation. See [`reserve held`](pool.md#reserve-held) for outstanding reservations. |
 | `reuse` | `expr` | `Admit` | no bound | At most this many units of the session's own cached prefix are consumed (rounded down to blocks); `cached` is set to what was. The rest stays as a dead entry until evicted. Without `reuse`, the whole own prefix is consumed. Only with `cache`: a hold without the clause consumes nothing. |
-| `at admission` | `NAME = expr, …` | `Admit` | | Names for the header, substituted by the parser into the units, `reserve`, `reuse`, `cache` and `lease`, and set at the top of the body when the body reads it. A binding the body reads may read only attributes and constants: one of live state (`cachedin(p)`, `cached`, `now`) is a parse error, and the body reads `cached` instead. Its name is its own (not a builtin attribute, context variable, `let` or attribute the program sets) and is read only in the holds that bind it. A later binding sees earlier ones. A binding may not draw. |
+| `at admission` | `NAME = expr, …` | `Admit` | | Names used in the header and body; see below. |
 | `block` | `block` | `Session` | | The body. |
 | `cache` | `expr` | `Session` | none | Units kept cached at the end, at most what was computed. Read when the session releases. Its presence is what makes the hold consume the session's prefix at admission; `cache (0)` consumes and keeps nothing, no clause leaves the prefix where it is. |
 | `lease` | `pool`, `expr` | `Session` | none | That pool's allocation outlives the scope: neither evictable nor a preemption victim until `release` of it, `t` clock units, or the session's end; `cache` applies then. |
 
+### Admission bindings
+
 The header (`units`, `reserve`, `reuse`) is read at admission, not when the
-session queues. A `set` above the hold is read when the session reaches it, so
-a value it takes from live pool or stage state is stale by admission, and
-linking rejects a header that reads one. Name the value with `at admission`
-instead.
+session queues, and cannot draw. A header cannot use a value captured from
+live pool or stage state by an earlier `set`: that value may be stale by
+admission. Use `at admission` instead.
+
+Bindings are substituted into `units`, `reserve`, `reuse`, `cache` and
+`lease`. Later bindings may use earlier ones. A binding read by the body
+is also assigned at its start; such a binding may read only attributes and
+constants. A body cannot read a binding of live state (`cachedin(p)`,
+`cached`, `now`); use `cached` in the body to read the prefix actually reused.
+
+Binding names are local to the holds that bind them and must not conflict
+with builtin attributes, context variables, constants or attributes the
+program assigns. Bindings cannot draw.
 
 If the hold is preempted (`preempt lifo`, or `preempt by`) it re-enters the
 head of the queue (or, under `requeue tail`, the queue as a newcomer)
@@ -201,7 +212,8 @@ draw written as a test.
 loop block
 ```
 
-Repeats the block until an `end`.
+Repeats the block until an `end`. Every pass must let time pass; a body
+with a path that can repeat without doing so is a link error.
 
 ## `choose`
 

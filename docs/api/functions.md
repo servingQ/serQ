@@ -25,8 +25,10 @@ Operators: `+ - * / ^`, comparisons `< <= > >= == !=` giving 0 or 1, `&&`,
 
 ## Observables
 
-Read live state. They may appear at any moment (a queue key, a step stage's
-`cost`, an eviction key), but not in `const` position. All return a number.
+These functions read live state and return a number. They cannot appear in
+`const` expressions or a claim’s `given` or `at end` expressions. Other
+restrictions depend on the construct: for example, `only` predicates cannot
+read `work`. See [evaluation moments](context.md).
 
 ### Stage
 
@@ -40,12 +42,15 @@ Read live state. They may appear at any moment (a queue key, a step stage's
 | `est_wait(s: stage)` | measured mean wait `Ŵ` at `s` |
 | `price(s: stage, s_hit: expr, ds: expr)` | online price of a miss at `s`, below |
 
-`price` is `missPrice` with the stage's measured estimates. For a miss that
-lengthens a hit service `s_hit` by `ds`, with `s_miss = s_hit + ds`:
+For a miss that lengthens a hit service $s_{\mathrm{hit}}$ by $\Delta s$,
+let $s_{\mathrm{miss}} = s_{\mathrm{hit}} + \Delta s$. Using the stage’s measured
+arrival rate $\hat\lambda$, utilisation $\hat\rho$ and mean wait $\hat W$:
 
-```
-Φ = ds + λ̂ (s_miss² − s_hit²) / (2 (1 − ρ̂)) + λ̂ Ŵ ds / (1 − ρ̂)
-```
+$$
+\Phi = \Delta s
+  + \frac{\hat\lambda(s_{\mathrm{miss}}^2-s_{\mathrm{hit}}^2)}{2(1-\hat\rho)}
+  + \frac{\hat\lambda\hat W\Delta s}{1-\hat\rho}.
+$$
 
 ### Pool
 

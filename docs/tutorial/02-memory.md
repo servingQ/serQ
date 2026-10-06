@@ -1,12 +1,8 @@
 # 2. Memory is a resource
 
-In chapter 1 a request waited for a *server*. In an LLM system it mostly waits
-for **memory**: the KV cache is finite, and a request that has nowhere to put
-its keys and values cannot start, however idle the GPU is.
-
-serQ has one abstraction for this — a **pool** — and it covers KV bytes, request
-slots (`max_num_seqs`), a cap on live sessions and offload tiers alike. A pool
-is a counted resource with a capacity, a queue and, later, a cache.
+A request may need both a server and free memory. A **pool** models a
+resource with a fixed capacity, such as KV memory or request slots. A
+request waits until the pool can supply the units it needs.
 
 ## The program
 
@@ -16,7 +12,7 @@ is a counted resource with a capacity, a queue and, later, a cache.
 
 Four servers now, so compute is not the constraint. Ten memory units are.
 
-## `hold` is the whole idea
+## Reserve memory with `hold`
 
 ```serq
 hold mem (c) {
@@ -25,19 +21,8 @@ hold mem (c) {
 }
 ```
 
-`hold` is a **scope**. Entering it means: join the pool's queue, wait until
-`c` units are free, take them. Leaving it means: give them back. The lecture's
-language had `admit` and `free` as separate statements; making them one scoped
-statement is the single most important design decision in serQ, for three
-reasons:
-
-- **Balance is syntactic.** You cannot forget to free.
-- **The memory invariant becomes a lemma about one statement.**
-  `allocated + cached ≤ cap` holds in every reachable configuration, and that
-  is a theorem in Lean (`SerqLang.Step.invariant`).
-- **Preemption is "abort the scope and re-run the statement"** — which,
-  it turns out, is exactly what vLLM's `_preempt_request` does
-  ([chapter 5](05-the-engine.md)).
+`hold` joins the pool's queue, waits for `c` units and reserves them for the
+body. When the body finishes, the units are released automatically.
 
 !!! info "When are the units counted?"
     `c` is evaluated **when the session is admitted**, not when it joins the
@@ -52,20 +37,20 @@ serq run docs/tutorial/programs/02-memory.sq
 ```
 
 ```text
-run: horizon 100000 end 100000 warmup 5000 seed 1 events 158920 arrivals 79460 ended 75462 turns 75462 mean live 0.871
+run: horizon 100000 end 100000 warmup 5000 seed 1 events 158921 arrivals 79460 ended 75463 turns 75462 mean live 0.866
 
 observe     count    mean   95% CI     cv2     p99
 ----------  -----  ------  -------  ------  ------
-admit_wait  75462  0.0947  ±0.0050  13.756  1.8649
-response    75462  1.0959  ±0.0090   0.944  4.8777
+admit_wait  75462  0.0929  ±0.0072  13.811  1.8108
+response    75463  1.0903  ±0.0100   0.937  4.8689
 
 stage   number   util   done    thru    wait  service  iters
 ------  ------  -----  -----  ------  ------  -------  -----
-server   0.795  0.560  75462  0.7943  0.0000   1.0012      0
+server   0.792  0.559  75463  0.7943  0.0000   0.9974      0
 
 pool  used  cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  ----  ------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-mem    2.8     0.0  0.075    0.795  0.0947   79460         0         0        0      0    0      0
+mem    2.8     0.0  0.074    0.792  0.0929   79460         0         0        0      0    0      0
 ```
 
 Note `wait 0.0000` at the stage: nobody queues for a server. All the waiting
@@ -81,32 +66,24 @@ done
 
 | `cap` | admit wait | response | rejected |
 |---|---|---|---|
-| 4 | 1.1893 | 2.1902 | 19 925 |
-| 6 | 1.5358 | 2.5369 | 0 |
-| 10 | 0.0947 | 1.0959 | 0 |
-| 20 | 0.0006 | 1.0039 | 0 |
+| 4 | 1.1921 | 2.1893 | 19,957 |
+| 6 | 1.5078 | 2.5051 | 0 |
+| 10 | 0.0929 | 1.0903 | 0 |
+| 20 | 0.0006 | 1.0002 | 0 |
 
-Two things are worth stopping on.
+At capacity 4, a request needing 5 units is rejected before it waits.
+The 19,957 rejected sessions explain why mean waiting time can look
+better than at capacity 6: the means describe different admitted workloads.
+Compare rejection counts as well as latency.
 
-**`cap 4` waits *less* than `cap 6`.** It is not better — it is refusing work.
-A request drawing `c = 5` can never fit in a pool of 4, so it is rejected
-outright and never waits. 19 925 of them. serQ counts that in the `rej` column.
-vLLM would not even start this way: it refuses an engine whose memory cannot
-hold one request of its `max_model_len`, and refuses a longer prompt at the
-API, so a request that can never fit never reaches its scheduler.
-
-**The knee is sharp.** Between `cap 6` and `cap 10` the wait falls by a factor
-of 16. Capacity planning for memory is not a smooth trade-off; you are either
-comfortably above the knee or you are in trouble. Every later chapter sharpens
-this.
+For this workload, increasing capacity from 6 to 10 sharply reduces
+admission wait; increasing it to 20 leaves little waiting at either resource.
 
 ## Head-of-line blocking
 
 A pool's queue is FIFO by default, and **only the head can be admitted**. If
 the request at the front needs 5 units and 3 are free, the request behind it
-needing 2 units waits anyway. That is not an accident of the implementation —
-it is vLLM's behaviour (`if new_blocks is None: break`), and it is why a
-long-context request can stall a queue of short ones.
+needing 2 units waits anyway. A large request can therefore delay smaller requests behind it.
 
 `queue by (expr)` changes the order if you want to model a priority scheduler
 instead.
