@@ -58,10 +58,10 @@ fn main() {
     }
     session {
       turn;
-      loop {
-        request;
-        set K = prompt + o;
-        branch (more) { tool (~exp(Z)); turn; } else { end; }
+      while (more) {
+        set K = K + n + o;
+        tool (~exp(Z));
+        turn;
       }
     }
   }

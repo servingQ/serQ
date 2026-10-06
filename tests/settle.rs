@@ -31,7 +31,7 @@ const CLIENT: &str = "arrive batch(1); init { set w = 0; }";
 #[test]
 fn a_loop_that_never_lets_time_pass_is_a_link_error() {
     let e = check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ request; \n}} }}\nserver {{ loop {{ set w = w + 1; }}\n}} "
+        "{TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ set w = w + 1; }}\n}} "
     ))
     .expect_err("refused");
     assert!(e.contains("let time pass"), "{e}");
@@ -41,7 +41,7 @@ fn a_loop_that_never_lets_time_pass_is_a_link_error() {
 #[test]
 fn a_run_on_one_arm_only_is_a_link_error() {
     let e = check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ request;
+        "{TOOL} workload {{ {CLIENT} session {{ turn;
         }} }}
         server {{ loop {{ branch (w > 0) {{ run tool (w); }} else {{ set w = w; }} }}
         }}
@@ -55,7 +55,7 @@ fn a_run_on_one_arm_only_is_a_link_error() {
 #[test]
 fn a_run_of_constant_zero_work_does_not_count() {
     let e = check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ request; \n}} }}\nserver {{ loop {{ run tool (0); }}\n}} "
+        "{TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ run tool (0); }}\n}} "
     ))
     .expect_err("refused");
     assert!(e.contains("let time pass"), "{e}");
@@ -67,11 +67,11 @@ fn a_run_of_constant_zero_work_does_not_count() {
 fn a_hold_counts_only_through_its_body() {
     let pool = "pool kv { cap 100; }";
     check(&format!(
-        "{pool} {TOOL} workload {{ {CLIENT} session {{ request; \n}} }}\nserver {{ loop {{ hold kv (1) {{ run tool (1); }} }}\n}} "
+        "{pool} {TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ hold kv (1) {{ run tool (1); }} }}\n}} "
     ))
     .expect("the body runs");
     let e = check(&format!(
-        "{pool} {TOOL} workload {{ {CLIENT} session {{ request; \n}} }}\nserver {{ loop {{ hold kv (1) {{ set w = 1; }} }}\n}} "
+        "{pool} {TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ hold kv (1) {{ set w = 1; }} }}\n}} "
     ))
     .expect_err("refused");
     assert!(e.contains("let time pass"), "{e}");
@@ -81,11 +81,11 @@ fn a_hold_counts_only_through_its_body() {
 #[test]
 fn end_and_a_later_run_cover_the_loop() {
     check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ request; loop {{ branch (w > 0) {{ end; }} else {{ end; }} }} \n}} }}\nserver {{\n}} "
+        "{TOOL} workload {{ {CLIENT} session {{ turn; loop {{ branch (w > 0) {{ end; }} else {{ end; }} }} \n}} }}\nserver {{\n}} "
     ))
     .expect("ends");
     check(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ request;
+        "{TOOL} workload {{ {CLIENT} session {{ turn;
         }} }}
         server {{ loop {{ branch (w > 0) {{ set w = 0; }} else {{ set w = 1; }} run tool (1); }}
         }}
@@ -101,7 +101,7 @@ fn end_and_a_later_run_cover_the_loop() {
 #[test]
 fn a_computed_zero_work_in_a_loop_is_a_run_time_error() {
     let e = run(&format!(
-        "{TOOL} workload {{ {CLIENT} session {{ request; \n}} }}\nserver {{ loop {{ run tool (w); }}\n}} "
+        "{TOOL} workload {{ {CLIENT} session {{ turn; \n}} }}\nserver {{ loop {{ run tool (w); }}\n}} "
     ), &common::horizon(10.0))
     .expect_err("does not settle");
     assert!(e.contains("does not settle"), "{e}");
@@ -115,7 +115,7 @@ fn a_self_preempting_grow_is_a_run_time_error() {
         "pool kv { cap 100; preempt lifo; }
         stage tool : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (10) { grow kv (1000); run tool (1); }
@@ -134,7 +134,7 @@ fn an_iteration_with_tokens_and_zero_cost_is_an_error() {
         "pool kv { cap 1000; block 16; evict lru; }
         stage engine : step { budget 512; cost 0; memory kv; }
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (100) { prefill (100) growing kv; }
@@ -155,7 +155,7 @@ fn a_preempt_only_step_may_cost_zero() {
         pool kv { cap 160; block 16; evict lru; preempt lifo; }
         stage engine : step { budget 1000; chunk 0; cost tokens; memory kv; }
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -192,12 +192,12 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
           turn {{ set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
             set o = ~exp(200) + 1; set more = ~bernoulli(0.9); }}
           session {{
-            turn;
+
             loop {{
               observe nn = n; observe oo = o; observe uu = u0;
-              request;
+              turn;
               set K = prompt + o;
-              branch (more) {{ tool (~exp(3)); turn; }} else {{ end; }}
+              branch (more) {{ tool (~exp(3));  }} else {{ end; }}
             }}
           }}
         }}
@@ -266,7 +266,7 @@ fn the_machine_still_matters() {
         pool kv {{ cap 1e6; block 16; evict lru; }}
         stage engine : step {{ budget B; cost 1e-4 + 1e-5 * tokens; memory kv; }}
         workload {{ arrive poisson(0.5); turn {{ set n = ~uniform(1000, 3000); }}
-          session {{ turn; request; end;
+          session {{  turn; end;
           }}
         }}
         server {{ set t0 = now; hold kv (n) {{ prefill (n) growing kv; }}
@@ -313,7 +313,7 @@ fn a_large_batch_that_ends_at_once_settles() {
         "let N = 2000;
         stage tool : delay;
         workload { arrive batch(N); init { set w = ~uniform(0, 1); }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { observe w = w;
@@ -337,7 +337,7 @@ fn a_hold_header_may_not_draw() {
     ] {
         let e = check(&format!(
             "pool kv {{ cap 1000; }} stage tool : delay; workload {{ arrive batch(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ hold {header} {{ run tool (1); }} cache (5);
@@ -359,7 +359,7 @@ fn overwriting_turn_no_does_not_repeat_the_marks() {
     let r = run(
         "stage tool : delay;
         workload { arrive batch(1); turn { set n = ~uniform(0, 1); }
-          session { turn; loop { request; turn; }
+          session {  loop { turn;  }
           }
         }
         server { observe nn = n; set turn_no = 0; run tool (1);

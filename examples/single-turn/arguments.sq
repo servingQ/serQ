@@ -9,7 +9,7 @@ fn main() {
   let units = args.number("service", 3);
 
   stage worker : delay;
-  workload { arrive batch(requests); session { request; end; } }
+  workload { arrive batch(requests); }
   server {
     run worker (service_time(units));
     observe elapsed = now;

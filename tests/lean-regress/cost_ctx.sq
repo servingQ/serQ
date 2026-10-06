@@ -18,7 +18,6 @@ fn main() {
     arrive batch(2);
     init { set n = 0; set o = 0; set t0 = 0; }
 
-    session { request; end; }
   }
 
   server {

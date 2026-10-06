@@ -17,7 +17,7 @@ fn keys(v: &serde_json::Value) -> Vec<String> {
 fn the_report_has_the_shape_its_version_names() {
     let src = "pool kv { cap 10; } stage svc : fifo;
         workload { arrive poisson(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (1) { run svc (~exp(0.5)); } observe x = now;
@@ -111,7 +111,7 @@ fn the_report_has_the_shape_its_version_names() {
 fn an_array_member_is_reported_with_its_index() {
     let src = "pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
         workload { arrive poisson(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } }
@@ -168,7 +168,7 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
             "pool reqs {{ cap 2; admit via engine; }} pool kv {{ cap 20; }} stage gate : delay;
         stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
         workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -215,7 +215,7 @@ fn a_gap_holds_the_transfer_between_two_engines() {
         let src = format!(
             "stage p : step {{ cost 1; }} stage d : step {{ cost 1; }} stage link : delay;
         workload {{ arrive batch(1);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -260,7 +260,7 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
           hidden o;
           init { set prompt = floor(~uniform(500, 1500)); set o = floor(~exp(100)) + 2; }
 
-          session { request;
+          session { turn;
             end;
 
           }
@@ -308,7 +308,7 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
 fn a_one_member_array_keeps_its_index() {
     let src = "pool kv[1] { cap 10; } pool reqs { cap 4; } stage svc[1] : fifo;
         workload { arrive poisson(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold reqs (1) { hold kv[0] (1) { run svc[0] (~exp(2)); } }
@@ -335,7 +335,7 @@ fn a_queue_family_of_one_is_reported_by_index() {
           serve step { cost 1; memory kv; }
           decode (p) { hold kv (p) { prefill (p) growing kv; } }
         }
-        workload { arrive batch(1); init { set prompt = 4; } session { request gw; end; } }
+        workload { arrive batch(1); init { set prompt = 4; } session { turn; end; } } server { gw.route(); }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let r = run_ir(&p, None).unwrap();
@@ -353,7 +353,7 @@ fn a_step_stage_reports_what_its_iterations_carried() {
             "pool reqs {{ cap 2; admit via engine; }} pool kv {{ cap 20; }} stage gate : delay;
         stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
         workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -401,7 +401,7 @@ fn a_step_stage_reports_what_its_iterations_carried() {
 #[test]
 fn the_report_records_the_serq_version() {
     let p = compile_source(&common::main_source(
-        "stage svc : delay; workload { arrive batch(1); \n  session { request; end; \n  }\n} server { run svc (1);\n} "),
+        "stage svc : delay; workload { arrive batch(1); \n  session { turn; end; \n  }\n} server { run svc (1);\n} "),
         &common::horizon(2.0),
     )
     .unwrap();
@@ -469,7 +469,7 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
 fn a_test_observe_that_never_held_is_noted() {
     let src = "def below(x) { x < 0 }
         stage svc : delay; workload { arrive batch(40);
-          session { request;
+          session { turn;
             end;
 
           }

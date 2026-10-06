@@ -16,7 +16,7 @@ fn main() {
       loop {
         set t0 = now;
         set s = ~exp(1 / mu);
-        request;
+        turn;
         run think (~exp(Z));
       }
     }

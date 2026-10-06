@@ -33,6 +33,8 @@ inductive Sub (P : Prog) : Prog → Prop
   | no {p a b k} : Sub P (.branch p a b k) → Sub P b
   | branchK {p a b k} : Sub P (.branch p a b k) → Sub P k
   | loopBody {b} : Sub P (.loop b) → Sub P b
+  | whileBody {p b k} : Sub P (.whileLoop p b k) → Sub P b
+  | whileK {p b k} : Sub P (.whileLoop p b k) → Sub P k
 
 /-- A frame of the stack holds sub-programs. -/
 def FrameOK (P : Prog) : Frame → Prop
@@ -254,6 +256,13 @@ theorem inv_exec {P : Prog} : ∀ (f : ℕ) (m : Machine) (i : ℕ), Inv P m →
         · rcases List.mem_cons.mp hg with rfl | hg
           · exact Sub.branchK (hp ▸ ho.1)
           · exact ho.2 g hg
+      · rename_i p body k hp
+        split
+        · refine inv_exec f _ i (h.upd' i _ fun ho => ⟨Sub.whileBody (hp ▸ ho.1), fun g hg => ?_⟩)
+          rcases List.mem_cons.mp hg with rfl | hg
+          · exact hp ▸ ho.1
+          · exact ho.2 g hg
+        · exact inv_exec f _ i (h.upd' i _ fun ho => ⟨Sub.whileK (hp ▸ ho.1), ho.2⟩)
       · rename_i body hp
         refine inv_exec f _ i (h.upd' i _ fun ho => ⟨Sub.loopBody (hp ▸ ho.1), fun g hg => ?_⟩)
         rcases List.mem_cons.mp hg with rfl | hg
@@ -538,6 +547,7 @@ def Route.grows : Prog → Bool
   | .hold _ _ b _ k => Route.grows b || Route.grows k
   | .branch _ a b k => Route.grows a || Route.grows b || Route.grows k
   | .loop b => Route.grows b
+  | .whileLoop _ b k => Route.grows b || Route.grows k
 
 theorem grows_sub {P q : Prog} (h : Sub P q) (hg : Route.grows P = false) : Route.grows q = false := by
   induction h with
@@ -552,6 +562,8 @@ theorem grows_sub {P q : Prog} (h : Sub P q) (hg : Route.grows P = false) : Rout
   | no _ ih => simp [Route.grows] at ih; exact ih.1.2
   | branchK _ ih => simp [Route.grows] at ih; exact ih.2
   | loopBody _ ih => simpa [Route.grows] using ih
+  | whileBody _ ih => simp [Route.grows] at ih; exact ih.1
+  | whileK _ ih => simp [Route.grows] at ih; exact ih.2
 
 /-- A program without `growing` has no growing job. -/
 theorem jobs_not_growing {w : Workload} {P : Prog} {m : Machine} (hr : Reach D w P m)

@@ -36,7 +36,7 @@ fn two_reads_share_the_senders_link() {
         stage P : delay; stage egress : ps(1); stage ingress[2] : ps(1); stage D[2] : delay;
         share {share};
         workload {{ arrive batch(2);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -65,7 +65,7 @@ fn three(share: &str, horizon: f64) -> serq::Report {
             "stage A : ps(1); stage B : ps(2);
         share {share};
         workload {{ arrive batch(3);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -125,7 +125,7 @@ fn a_shared_stage_reports_the_capacity_it_carries() {
 fn a_ps_stage_nobody_shares_is_unchanged() {
     let src = "stage A : ps(1);
         workload { arrive batch(2);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run A (1); observe done = now;
@@ -145,11 +145,11 @@ const HEAD_WORKLOAD: &str = "arrive batch(1);";
 #[test]
 fn a_run_over_several_stages_needs_the_programs_share() {
     let e = err(&format!(
-        "{HEAD} workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run A, B (1);\n}} "
+        "{HEAD} workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run A, B (1);\n}} "
     ));
     assert!(e.contains("needs the program's `share`"), "{e}");
     let e = err(&format!(
-        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run A (1);\n}} "
+        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run A (1);\n}} "
     ));
     assert!(
         e.contains("`share` without a run over several stages"),
@@ -160,14 +160,14 @@ fn a_run_over_several_stages_needs_the_programs_share() {
 #[test]
 fn a_shared_stage_is_ps_of_a_constant() {
     let e = err(&format!(
-        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run A, C (1);\n}} "
+        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run A, C (1);\n}} "
     ));
     assert!(e.contains("stage `C`"), "{e}");
     assert!(e.contains("constant"), "{e}");
     let e = err(
         "stage A : ps(1); stage N : ps(min(present, 4)); share maxmin;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run A, N (1);
@@ -181,7 +181,7 @@ fn a_shared_stage_is_ps_of_a_constant() {
 #[test]
 fn a_run_names_each_stage_array_once() {
     let e = err(&format!(
-        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ request; end; \n}} }}\nserver {{ run E[0], E[1] (1);\n}} "
+        "{HEAD} share maxmin; workload {{ {HEAD_WORKLOAD} session {{ turn; end; \n}} }}\nserver {{ run E[0], E[1] (1);\n}} "
     ));
     assert!(e.contains("named twice"), "{e}");
 }
@@ -196,7 +196,7 @@ fn transfer_on_several_stages_is_sugar() {
     let head_workload = "arrive batch(1);";
     let ir = |body: &str| {
         let src = format!(
-            "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold q (1) {{ hold p (1) {{ {body} }} }}\n}} "
+            "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ hold q (1) {{ hold p (1) {{ {body} }} }}\n}} "
         );
         serq::compile_source(&common::main_source(&src), &common::horizon(5.0))
             .unwrap()
@@ -224,7 +224,7 @@ fn a_seed_reproduces_a_run_with_flows() {
     let src = "stage E[3] : ps(1); stage F : ps(2); stage I[4] : ps(1);
         share maxmin;
         workload { arrive poisson(6.5);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -265,7 +265,7 @@ fn a_seed_reproduces_a_run_with_flows() {
 fn a_shared_stage_has_a_capacity_above_zero() {
     let e = err("stage A : ps(1); stage Z : ps(0); share maxmin;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run A, Z (1);
@@ -279,7 +279,7 @@ fn share_is_given_once() {
         share maxmin;
         share bottleneck;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run A, B (1);

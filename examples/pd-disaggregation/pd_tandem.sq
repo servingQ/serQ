@@ -28,8 +28,6 @@ fn main() {
 
   workload {
     arrive closed(jobs);
-    session { request;
-    }
   }
 
   server {

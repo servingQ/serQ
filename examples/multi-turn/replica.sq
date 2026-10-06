@@ -57,7 +57,6 @@ fn main() {
         observe entry_wait = now - t_arr;
         loop {
           turn;
-          request;
           set K = K + n + o;
           set cold = 0;
           branch (K > maxctx) { drop kv; end; }

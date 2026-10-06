@@ -90,7 +90,6 @@ fn main() {
   stage tool : delay;
   workload {
     arrive batch(1);
-    session { request; end; }
   }
   server {
     prefill (8);

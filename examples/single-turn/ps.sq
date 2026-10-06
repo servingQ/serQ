@@ -19,7 +19,6 @@ fn main() {
             : ~h2(mean_s, cv2);
     }
 
-    session { request; end; }
   }
 
   server {

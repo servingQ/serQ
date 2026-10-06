@@ -25,7 +25,7 @@ CLI = os.environ.get("SERQ_CLI", str(ROOT / "target" / "release" / "serq"))
 MG1 = ROOT / "examples" / "single-turn" / "mg1.sq"
 REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
 ARRAYS = """fn main() { pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
-workload { arrive poisson(1); session { request; end; } }
+workload { arrive poisson(1);  }
 server { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } }
  }"""
 
@@ -56,7 +56,7 @@ def test_a_file_with_numbers_and_a_seed():
 GAUGED = """fn main() {
 pool kv[2] { cap 100; }
 stage svc[2] : fifo;
-workload { arrive poisson(1.5); session { request; end; } }
+workload { arrive poisson(1.5);  }
 server {
   choose j in 2 by (holders(kv[j]));
   set u = ~uniform(1, 20);
@@ -175,7 +175,7 @@ def test_an_infinity_is_inf():
 
 
 def test_defs_is_the_program_written_with_that_body():
-    src = ("fn main() { def service() { ~exp(1) }\nstage svc : fifo;\nworkload { arrive poisson(0.5); session { request; end; } }\n"
+    src = ("fn main() { def service() { ~exp(1) }\nstage svc : fifo;\nworkload { arrive poisson(0.5);  }\n"
            "server { run svc (service()); observe s = now; }\n }\n")
     given = pyserq.compile(source=src, defs={"service": "~erlang(4, 1)"}, horizon=1000, seed=2)
     written = pyserq.compile(source=src.replace("~exp(1)", "~erlang(4, 1)"), horizon=1000, seed=2)
@@ -186,7 +186,7 @@ def test_defs_is_the_program_written_with_that_body():
 
 def test_rng_is_the_stream_a_run_draws_from():
     # the arrivals of a run seeded 11 are the gaps Rng(11) draws, exactly
-    src = ("fn main() { let lam = 0.5;\nworkload { arrive poisson(lam); session { request; end; } }\n"
+    src = ("fn main() { let lam = 0.5;\nworkload { arrive poisson(lam);  }\n"
            "server { observe t = now; }\n }\n")
     got = pyserq.run(pyserq.compile(source=src, horizon=100, warmup=0, seed=11)).observe("t").samples
     rng, t, want = pyserq.Rng(11), 0.0, []
@@ -224,7 +224,7 @@ def test_draw_is_serq_draw():
 def test_errors_are_value_errors():
     for call in [
         lambda: pyserq.compile(ROOT / "nowhere.sq"),
-        lambda: pyserq.compile(source="fn main() { workload { session { request; end; } } server { run nowhere (1); } }", horizon=10),
+        lambda: pyserq.compile(source="fn main() { workload {  } server { run nowhere (1); } }", horizon=10),
         lambda: pyserq.compile(MG1, sets={"nope": 1}, horizon=250000, warmup=25000),
         lambda: pyserq.compile(MG1, source="x", horizon=10),
         lambda: pyserq.compile(MG1, sets={"lam": float("nan")}, horizon=250000, warmup=25000),
@@ -302,7 +302,7 @@ let fixed = 2;
 fn main() {
   let rate = args.number("arrival_rate", 0.5);
   workload { arrive poisson(rate * fixed); }
-
+  server {}
 }'''
     p = pyserq.compile(source=src, sets={"arrival_rate": 3}, horizon=1)
     assert json.loads(p.to_json())["arrival"] == {"Poisson": 6.0}

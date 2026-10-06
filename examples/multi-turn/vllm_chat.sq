@@ -46,10 +46,10 @@ fn main() {
     }
     session {
       turn;
-      loop {
-        request;
-        set K = prompt + o;
-        branch (more) { run user (~exp(Z)); turn; } else { end; }
+      while (more) {
+        set K = K + n + o;
+        run user (~exp(Z));
+        turn;
       }
     }
   }

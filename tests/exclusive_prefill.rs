@@ -17,7 +17,7 @@ fn source(policy: &str, slot_cap: usize, kv_cap: usize) -> String {
         stage gate : delay;
         stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {policy} }}
         workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -72,10 +72,10 @@ fn waiting_prefill_replaces_decodes_and_gets_the_full_budget() {
     assert_eq!(
         trace("takeover", &src),
         [
-            "ITER 0.0000 0:0:p2",
-            "ITER 1.0000 1:0:p4",
-            "ITER 2.0000 0:0:d1",
-            "ITER 3.0000 0:0:d1",
+            "ITER 0.0000 0:1:p2",
+            "ITER 1.0000 1:1:p4",
+            "ITER 2.0000 0:1:d1",
+            "ITER 3.0000 0:1:d1",
         ]
     );
     let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
@@ -99,9 +99,9 @@ fn mixed_batching_remains_the_default() {
     assert_eq!(
         trace("mixed", &source("", 2, 20)),
         [
-            "ITER 0.0000 0:0:p2",
-            "ITER 1.0000 0:0:d1 1:0:p3",
-            "ITER 2.0000 0:0:d1 1:0:p1",
+            "ITER 0.0000 0:1:p2",
+            "ITER 1.0000 0:1:d1 1:1:p3",
+            "ITER 2.0000 0:1:d1 1:1:p1",
         ]
     );
 }
@@ -113,10 +113,10 @@ fn a_waiting_prefill_that_does_not_fit_keeps_the_decode_batch() {
     assert_eq!(
         trace("slots", &source("serve exclusive prefill;", 1, 20)),
         [
-            "ITER 0.0000 0:0:p2",
-            "ITER 1.0000 0:0:d1",
-            "ITER 2.0000 0:0:d1",
-            "ITER 3.0000 1:0:p4",
+            "ITER 0.0000 0:1:p2",
+            "ITER 1.0000 0:1:d1",
+            "ITER 2.0000 0:1:d1",
+            "ITER 3.0000 1:1:p4",
         ]
     );
     // Four KV units: A's growing decode holds 3 at t=1 and 4 at t=2,
@@ -124,10 +124,10 @@ fn a_waiting_prefill_that_does_not_fit_keeps_the_decode_batch() {
     assert_eq!(
         trace("memory", &source("serve exclusive prefill;", 2, 4)),
         [
-            "ITER 0.0000 0:0:p2",
-            "ITER 1.0000 0:0:d1",
-            "ITER 2.0000 0:0:d1",
-            "ITER 3.0000 1:0:p4",
+            "ITER 0.0000 0:1:p2",
+            "ITER 1.0000 0:1:d1",
+            "ITER 2.0000 0:1:d1",
+            "ITER 3.0000 1:1:p4",
         ]
     );
 }
@@ -144,7 +144,7 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
           budget 4; chunk 4; cost 1; memory kv; serve exclusive prefill;
         }
         workload { arrive batch(3);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -174,7 +174,7 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
         pool reqs { cap 3; admit via engine; }
         stage engine : step { budget 2; cost 1; serve exclusive prefill; }
         workload { arrive batch(3);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -215,7 +215,7 @@ fn preemption_keeps_only_committed_progress_and_defers_readmission() {
           budget 4; chunk 2; cost 1; memory kv; serve exclusive prefill;
         }
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }

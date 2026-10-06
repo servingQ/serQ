@@ -55,7 +55,7 @@ fn a_folded_constant_survives_the_round_trip() {
     let src = "let rate = 0.1 * (1 + 0.3 * 3 * 0.9 / (1 - 0.9));
         stage svc : fifo;
         workload { arrive poisson(rate);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run svc (~exp(1));
@@ -96,7 +96,7 @@ fn ir_that_skips_the_linker_meets_its_checks() {
         stage engine : step { budget 8; cost 1; memory kv; }
         stage d : delay;
         workload { arrive batch(1); init { set x = 1; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (8) { run engine prefill (8) growing kv; }
@@ -168,8 +168,8 @@ fn ir_that_skips_the_linker_meets_its_checks() {
     // not a panic naming it (#309)
     refused(
         &|q| {
-            let CStmt::Hold { pools, .. } = &mut q.blocks[q.session][0] else {
-                panic!("the session holds first")
+            let CStmt::Hold { pools, .. } = &mut q.blocks[q.session][1] else {
+                panic!("the turn is followed by a hold")
             };
             let far = CRef {
                 base: 99,
@@ -277,7 +277,7 @@ fn budget_left_needs_a_step_stage() {
         stage engine : step { budget 8; cost 1; memory kv; }
         stage d : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { set b = budget_left(d); run d (1);
@@ -319,7 +319,7 @@ fn explicit_sessions_preset_attributes() {
     let src = r#"
         stage d : delay;
         workload { arrive batch(1); init { set w = 1; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run d (w); observe done = now;
@@ -387,9 +387,9 @@ fn serving_forms_compile_to_the_kernel_ir() {
           turn { set n = ~exp(100); set o = ~exp(20); set Z = ~exp(3); set T = K + n; }"#;
     let serving = format!(
         "{deployment} workload {{ {deployment_workload} session {{
-            turn;
-            loop {{ request;
-              branch with (0.8) {{ tool Z; turn; }} else {{ end; }}
+
+            loop {{ turn;
+              branch with (0.8) {{ tool Z;  }} else {{ end; }}
             }}
 
         }} }}
@@ -401,9 +401,9 @@ fn serving_forms_compile_to_the_kernel_ir() {
     );
     let kernel = format!(
         "{deployment} workload {{ {deployment_workload} session {{
-            turn;
-            loop {{ request;
-              branch with (0.8) {{ run tool (Z); turn; }} else {{ end; }}
+
+            loop {{ turn;
+              branch with (0.8) {{ run tool (Z);  }} else {{ end; }}
             }}
 
         }} }}
@@ -443,10 +443,10 @@ fn branch_with_is_sugar_for_bernoulli() {
         ";
     let head_workload = "arrive poisson(0.5); turn { set Z = ~exp(3); }";
     let sugar = format!(
-        "{head} workload {{ {head_workload} session {{ turn; loop {{ branch with (0.8) {{ request; turn; }} else {{ end; }} }} \n}} }}\nserver {{ run tool (Z);\n}}"
+        "{head} workload {{ {head_workload} session {{  loop {{ branch with (0.8) {{ turn;  }} else {{ end; }} }} \n}} }}\nserver {{ run tool (Z);\n}}"
     );
     let explicit = format!(
-        "{head} workload {{ {head_workload} session {{ turn; loop {{ branch (~bernoulli(0.8)) {{ request; turn; }} else {{ end; }} }} \n}} }}\nserver {{ run tool (Z);\n}}"
+        "{head} workload {{ {head_workload} session {{  loop {{ branch (~bernoulli(0.8)) {{ turn;  }} else {{ end; }} }} \n}} }}\nserver {{ run tool (Z);\n}}"
     );
     let ov = Overrides {
         warmup: Some(200.0),
@@ -480,7 +480,7 @@ fn a_draw_is_labelled_w_p() {
     // guard labels the edge that leaves it
     let src = "stage svc : fifo; stage tool : delay;
         workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
-          session { turn; loop { request; branch with (0.8) { run tool (Z); turn; } else { end; } }
+          session {  loop { turn; branch with (0.8) { run tool (Z);  } else { end; } }
           }
         }
         server { run svc (1);
@@ -513,7 +513,7 @@ fn at_admission_is_substituted_into_the_header() {
     let head_workload = "arrive poisson(0.3); init { set K = 0; }
                    turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     let bound = format!(
-        "{head} workload {{ {head_workload} session {{ turn; loop {{ request; end; }}
+        "{head} workload {{ {head_workload} session {{  loop {{ turn; end; }}
         }} }}
         server {{ set prompt = K + n;
           hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
@@ -524,7 +524,7 @@ fn at_admission_is_substituted_into_the_header() {
         }}"
     );
     let inlined = format!(
-        "{head} workload {{ {head_workload} session {{ turn; loop {{ request; end; }}
+        "{head} workload {{ {head_workload} session {{  loop {{ turn; end; }}
         }} }}
         server {{ set prompt = K + n;
           hold reqs (1), kv (min(prompt, min(cachedin(kv), prompt - 1) + budget_left(engine))) {{
@@ -558,7 +558,7 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
     let head_workload = "arrive poisson(0.3); init { set K = 0; }
                    turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     let bound = format!(
-        "{head} workload {{ {head_workload} session {{ turn; request; end;
+        "{head} workload {{ {head_workload} session {{  turn; end;
         }} }}
         server {{ set prompt = K + n;
           hold reqs (1), kv (min(hit, 10)) at admission (hit = min(cachedin(kv), prompt - 1)) {{
@@ -567,7 +567,7 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
         }}"
     );
     let inlined = format!(
-        "{head} workload {{ {head_workload} session {{ turn; request; end;
+        "{head} workload {{ {head_workload} session {{  turn; end;
         }} }}
         server {{ set prompt = K + n;
           hold reqs (1), kv (min(min(cachedin(kv), prompt - 1), 10)) {{
@@ -592,7 +592,7 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
 fn at_admission_rejects_a_draw() {
     let src = "pool kv { cap 100; } stage s : fifo;
         workload { arrive poisson(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (x) at admission (x = ~exp(3)) { run s (1); }
@@ -611,14 +611,14 @@ fn at_admission_bindings_are_sequential() {
         ";
     let head_workload = "arrive poisson(1); init { set n = 10; }";
     let steps = format!(
-        "{head} workload {{ {head_workload} session {{ request; end;
+        "{head} workload {{ {head_workload} session {{ turn; end;
         }} }}
         server {{ hold kv (need) at admission (half = n / 2, need = half + 1)
           {{ run s (1); }}
         }}"
     );
     let flat = format!(
-        "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold kv (n / 2 + 1) {{ run s (1); }}\n}}"
+        "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ hold kv (n / 2 + 1) {{ run s (1); }}\n}}"
     );
     let ov = common::horizon(10.0);
     assert_eq!(
@@ -637,7 +637,7 @@ fn at_admission_bindings_are_sequential() {
 fn fits_says_it_is_now_reserve() {
     let src = "pool kv { cap 100; } stage s : fifo;
         workload { arrive poisson(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (1) fits (2) { run s (1); }
@@ -655,7 +655,7 @@ fn fits_says_it_is_now_reserve() {
 fn admit_as_a_statement_says_what_to_write() {
     let src = "pool kv { cap 100; } stage s : fifo;
         workload { arrive poisson(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { admit kv (1) { run s (1); }
@@ -670,7 +670,7 @@ fn admit_as_a_statement_says_what_to_write() {
     );
 }
 
-/// `workload { session { … request; … } }` with `server { … }` is the
+/// `workload { session { … turn; … } }` with `server { … }` is the
 /// expanded session. Moving the context update across the request boundary
 /// without changing statement order must preserve the IR and the run.
 #[test]
@@ -686,11 +686,11 @@ fn the_request_boundary_does_not_change_the_session_ir() {
         "{head}
         workload {{ {client}
           session {{
-            turn;
+
             loop {{
-              request;
+              turn;
               set K = prompt + o;
-              branch (more) {{ tool (~exp(3)); turn; }} else {{ end; }}
+              branch (more) {{ tool (~exp(3));  }} else {{ end; }}
             }}
           }}
         }}
@@ -710,9 +710,9 @@ fn the_request_boundary_does_not_change_the_session_ir() {
         "{head}
         workload {{ {client}
           session {{
-            turn;
-            loop {{ request;
-              branch (more) {{ tool (~exp(3)); turn; }} else {{ end; }}
+
+            loop {{ turn;
+              branch (more) {{ tool (~exp(3));  }} else {{ end; }}
             }}
 
           }}
@@ -754,10 +754,10 @@ fn enter_is_hold_and_admit_via_survives() {
         ";
     let head_workload = "arrive poisson(1); init { set n = 10; }";
     let sugar = format!(
-        "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold reqs (1), kv (n) {{ prefill (n) growing kv; }} cache (n);\n}}"
+        "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ hold reqs (1), kv (n) {{ prefill (n) growing kv; }} cache (n);\n}}"
     );
     let kernel = format!(
-        "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold reqs (1), kv (n) {{ run engine prefill (n) growing kv; }} cache (n);\n}}"
+        "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ hold reqs (1), kv (n) {{ run engine prefill (n) growing kv; }} cache (n);\n}}"
     );
     let ov = common::horizon(20.0);
     assert_eq!(
@@ -796,7 +796,7 @@ fn choose_compares_its_keys_in_order() {
         let src = format!(
             "stage s : delay;
         workload {{ arrive batch(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ choose j in 4 by ({by}); observe j = j;
@@ -822,7 +822,7 @@ fn choose_compares_its_keys_in_order() {
 #[test]
 fn an_old_or_keyless_choose_is_refused_plainly() {
     let src = "stage s : delay; workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { choose j in 2 by (-j);
@@ -865,7 +865,7 @@ fn a_validate_error_points_at_the_statement() {
     let src = "pool kv { cap 64; }
         stage d : delay;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }

@@ -1,5 +1,5 @@
 {
-  "version": 11,
+  "version": 12,
   "attrs": [
     "cached",
     "serial",
@@ -387,11 +387,6 @@
         ]
       },
       "Turn",
-      {
-        "Loop": 3
-      }
-    ],
-    [
       {
         "Set": [
           11,
@@ -794,7 +789,7 @@
               ]
             ]
           },
-          "body": 4,
+          "body": 3,
           "cache": {
             "Binary": [
               "Sub",
@@ -834,10 +829,201 @@
         ]
       },
       {
+        "While": [
+          {
+            "Attr": 6
+          },
+          6
+        ]
+      },
+      "End"
+    ],
+    [
+      {
+        "Set": [
+          14,
+          {
+            "Cond": [
+              {
+                "Binary": [
+                  "Lt",
+                  {
+                    "Attr": 8
+                  },
+                  {
+                    "Attr": 12
+                  }
+                ]
+              },
+              {
+                "Attr": 12
+              },
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Attr": 8
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "Set": [
+          15,
+          {
+            "Attr": 0
+          }
+        ]
+      },
+      {
+        "Observe": [
+          0,
+          {
+            "Attr": 15
+          }
+        ]
+      },
+      {
+        "Observe": [
+          1,
+          {
+            "Binary": [
+              "Add",
+              {
+                "Attr": 9
+              },
+              {
+                "Attr": 10
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "Observe": [
+          2,
+          {
+            "Attr": 11
+          }
+        ]
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Prefill",
+          "work": {
+            "Binary": [
+              "Sub",
+              {
+                "Attr": 14
+              },
+              {
+                "Attr": 15
+              }
+            ]
+          },
+          "growing": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          }
+        }
+      },
+      {
+        "Branch": [
+          {
+            "Binary": [
+              "Eq",
+              {
+                "Attr": 14
+              },
+              {
+                "Attr": 12
+              }
+            ]
+          },
+          4,
+          5
+        ]
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Decode",
+          "work": {
+            "Binary": [
+              "Sub",
+              {
+                "Binary": [
+                  "Sub",
+                  {
+                    "Attr": 4
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
+              },
+              {
+                "Binary": [
+                  "Sub",
+                  {
+                    "Attr": 14
+                  },
+                  {
+                    "Attr": 12
+                  }
+                ]
+              }
+            ]
+          },
+          "growing": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          }
+        }
+      }
+    ],
+    [
+      {
+        "Observe": [
+          3,
+          {
+            "Binary": [
+              "Sub",
+              {
+                "Ctx": "Now"
+              },
+              {
+                "Attr": 11
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    [],
+    [
+      {
         "Set": [
           9,
           {
-            "Attr": 12
+            "Attr": 3
           }
         ]
       },
@@ -850,12 +1036,459 @@
         ]
       },
       {
-        "Branch": [
-          {
-            "Attr": 6
+        "Run": {
+          "stage": {
+            "base": 3,
+            "count": 1,
+            "index": null
           },
-          7,
-          8
+          "mode": "Plain",
+          "work": {
+            "Attr": 5
+          },
+          "growing": null
+        }
+      },
+      "Turn",
+      {
+        "Set": [
+          11,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      },
+      {
+        "Set": [
+          12,
+          {
+            "Attr": 3
+          }
+        ]
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 1,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Plain",
+          "work": {
+            "Binary": [
+              "Add",
+              {
+                "Num": 0.0
+              },
+              {
+                "Binary": [
+                  "Mul",
+                  {
+                    "Num": 0.0
+                  },
+                  {
+                    "Attr": 12
+                  }
+                ]
+              }
+            ]
+          },
+          "growing": null
+        }
+      },
+      {
+        "Set": [
+          13,
+          {
+            "Cond": [
+              {
+                "Attr": 7
+              },
+              {
+                "Num": 0.0
+              },
+              {
+                "Binary": [
+                  "Mul",
+                  {
+                    "Call": [
+                      "Floor",
+                      [
+                        {
+                          "Expr": {
+                            "Binary": [
+                              "Div",
+                              {
+                                "Call": [
+                                  "Min",
+                                  [
+                                    {
+                                      "Expr": {
+                                        "Attr": 9
+                                      }
+                                    },
+                                    {
+                                      "Expr": {
+                                        "Binary": [
+                                          "Sub",
+                                          {
+                                            "Attr": 12
+                                          },
+                                          {
+                                            "Num": 1.0
+                                          }
+                                        ]
+                                      }
+                                    }
+                                  ]
+                                ]
+                              },
+                              {
+                                "Num": 16.0
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    ]
+                  },
+                  {
+                    "Num": 16.0
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "Hold": {
+          "pools": [
+            [
+              {
+                "base": 1,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Num": 1.0
+              },
+              null
+            ],
+            [
+              {
+                "base": 0,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Call": [
+                      "Min",
+                      [
+                        {
+                          "Expr": {
+                            "Call": [
+                              "CachedIn",
+                              [
+                                {
+                                  "Pool": {
+                                    "base": 0,
+                                    "count": 1,
+                                    "index": null
+                                  }
+                                }
+                              ]
+                            ]
+                          }
+                        },
+                        {
+                          "Expr": {
+                            "Call": [
+                              "Max",
+                              [
+                                {
+                                  "Expr": {
+                                    "Attr": 13
+                                  }
+                                },
+                                {
+                                  "Expr": {
+                                    "Binary": [
+                                      "Mul",
+                                      {
+                                        "Call": [
+                                          "Floor",
+                                          [
+                                            {
+                                              "Expr": {
+                                                "Binary": [
+                                                  "Div",
+                                                  {
+                                                    "Attr": 8
+                                                  },
+                                                  {
+                                                    "Num": 16.0
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          ]
+                                        ]
+                                      },
+                                      {
+                                        "Num": 16.0
+                                      }
+                                    ]
+                                  }
+                                }
+                              ]
+                            ]
+                          }
+                        }
+                      ]
+                    ]
+                  },
+                  {
+                    "Call": [
+                      "Min",
+                      [
+                        {
+                          "Expr": {
+                            "Binary": [
+                              "Sub",
+                              {
+                                "Cond": [
+                                  {
+                                    "Binary": [
+                                      "Lt",
+                                      {
+                                        "Attr": 8
+                                      },
+                                      {
+                                        "Attr": 12
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "Attr": 12
+                                  },
+                                  {
+                                    "Binary": [
+                                      "Add",
+                                      {
+                                        "Attr": 8
+                                      },
+                                      {
+                                        "Num": 1.0
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              {
+                                "Call": [
+                                  "Min",
+                                  [
+                                    {
+                                      "Expr": {
+                                        "Call": [
+                                          "CachedIn",
+                                          [
+                                            {
+                                              "Pool": {
+                                                "base": 0,
+                                                "count": 1,
+                                                "index": null
+                                              }
+                                            }
+                                          ]
+                                        ]
+                                      }
+                                    },
+                                    {
+                                      "Expr": {
+                                        "Call": [
+                                          "Max",
+                                          [
+                                            {
+                                              "Expr": {
+                                                "Attr": 13
+                                              }
+                                            },
+                                            {
+                                              "Expr": {
+                                                "Binary": [
+                                                  "Mul",
+                                                  {
+                                                    "Call": [
+                                                      "Floor",
+                                                      [
+                                                        {
+                                                          "Expr": {
+                                                            "Binary": [
+                                                              "Div",
+                                                              {
+                                                                "Attr": 8
+                                                              },
+                                                              {
+                                                                "Num": 16.0
+                                                              }
+                                                            ]
+                                                          }
+                                                        }
+                                                      ]
+                                                    ]
+                                                  },
+                                                  {
+                                                    "Num": 16.0
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                          ]
+                                        ]
+                                      }
+                                    }
+                                  ]
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "Expr": {
+                            "Call": [
+                              "BudgetLeft",
+                              [
+                                {
+                                  "Stage": {
+                                    "base": 0,
+                                    "count": 1,
+                                    "index": null
+                                  }
+                                }
+                              ]
+                            ]
+                          }
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              },
+              {
+                "Cond": [
+                  {
+                    "Binary": [
+                      "Lt",
+                      {
+                        "Attr": 8
+                      },
+                      {
+                        "Attr": 12
+                      }
+                    ]
+                  },
+                  {
+                    "Attr": 12
+                  },
+                  {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Attr": 8
+                      },
+                      {
+                        "Num": 1.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          ],
+          "reuse": {
+            "Call": [
+              "Max",
+              [
+                {
+                  "Expr": {
+                    "Attr": 13
+                  }
+                },
+                {
+                  "Expr": {
+                    "Binary": [
+                      "Mul",
+                      {
+                        "Call": [
+                          "Floor",
+                          [
+                            {
+                              "Expr": {
+                                "Binary": [
+                                  "Div",
+                                  {
+                                    "Attr": 8
+                                  },
+                                  {
+                                    "Num": 16.0
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        ]
+                      },
+                      {
+                        "Num": 16.0
+                      }
+                    ]
+                  }
+                }
+              ]
+            ]
+          },
+          "body": 7,
+          "cache": {
+            "Binary": [
+              "Sub",
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Attr": 12
+                  },
+                  {
+                    "Attr": 4
+                  }
+                ]
+              },
+              {
+                "Num": 1.0
+              }
+            ]
+          },
+          "lease": null
+        }
+      },
+      {
+        "Observe": [
+          4,
+          {
+            "Binary": [
+              "Sub",
+              {
+                "Ctx": "Now"
+              },
+              {
+                "Attr": 11
+              }
+            ]
+          }
         ]
       }
     ],
@@ -973,8 +1606,8 @@
               }
             ]
           },
-          5,
-          6
+          8,
+          9
         ]
       },
       {
@@ -1038,27 +1671,7 @@
         ]
       }
     ],
-    [],
-    [
-      {
-        "Run": {
-          "stage": {
-            "base": 3,
-            "count": 1,
-            "index": null
-          },
-          "mode": "Plain",
-          "work": {
-            "Attr": 5
-          },
-          "growing": null
-        }
-      },
-      "Turn"
-    ],
-    [
-      "End"
-    ]
+    []
   ],
   "horizon": 6000.0,
   "warmup": 0.0,

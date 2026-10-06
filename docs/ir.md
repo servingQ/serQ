@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 11`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 12`.
 
 ## Format
 
@@ -126,13 +126,14 @@ between simulation checks and proofs.
 
 | Statement | Meaning |
 |---|---|
-| `Turn` | draw the next turn's attributes (workload `turn` block or trace) |
+| `Turn` | draw the next turn's attributes (workload `turn` block or trace); the source `turn;` also expands the server statements immediately after this node |
 | `Set(slot, e)`, `Observe(k, e)` | assign an attribute, record an observation |
 | `Hold {pools: [(pool, units, reserve?)], reuse?, body, cache?, lease?}` | acquire units of every pool (admission gate `reserve` if given), run `body`, release; with `cache` the admission consumes the own cached prefix, `reuse` bounds how much, and `cache` is the units left cached; without `cache` the hold leaves the session's cached prefix where it is; `lease: (pool, t)` keeps that pool's allocation past the scope, neither evictable nor a preemption victim, until the session's `Release` of it, `t` seconds, or its end (vLLM's `delay_free_blocks`) |
 | `Grow(pool, e)`, `Drop(pool)` | grow the current hold, drop the own cached entry |
 | `Release(pool)` | give the innermost enclosing hold's allocation on the pool back now, or end the session's lease of it, caching per the hold's `cache`; nothing held or leased there is a no-op. A KV transfer between instances is `Run` (the link), `Load` (the destination) and `Release` (the source's lease) |
 | `Load(pool, e)` | the KV of `e` tokens arrived from outside the engine (a NIXL read): the innermost enclosing hold's computed position on the pool advances by `e`, within its allocation |
 | `Run {stage, mode, work, growing?, also?}` | work at a stage; `mode` `Plain`, `Prefill`, `Decode` (step stages); `growing` the pool that grows with the tokens computed; `also` further stages the same job holds at once (a flow of `share`), omitted when empty |
+| `While(guard, body)` | test `guard` before each pass (exactly 0 or 1); run `body` for 1, continue after the loop for 0; reevaluate after each completed body |
 | `Branch(e, then, else)`, `Loop(body)`, `Choose {var, count, key}` (`key` a list, compared in order), `End` | control; `End` ends the session |
 | `Fork(body)`, `Join` | `Fork` runs `body` beside the session as a leg of the request: from now, with a copy of the attributes, its own holds and stream; the leases it leaves pass to the session when it ends. `Join` waits until every leg the session forked has ended |
 
@@ -175,7 +176,7 @@ text and directly constructed IR meet the same rules. Validation covers:
   `Join` and cannot act on its parent's holds. A fork cannot sit inside a
   hold whose pool may preempt. A program with either `Fork` or `Join`
   must contain the other.
-- **Progress and amounts.** Every loop path reaches a `Run` with positive
+- **Progress and amounts.** Every `Loop` or `While` body path reaches a `Run` with positive
   or nonconstant work, a hold whose body does so, or `End`.
   Constant work and resource amounts cannot be negative or NaN. A
   constant hold demand, rounded to blocks, must fit at least one pool its
@@ -205,7 +206,7 @@ predicates and iteration-body guards, admission gates and assignments:
 
 | Moment (`ir::Moment`) | Positions | Context variables |
 |---|---|---|
-| `Session` | statements of `init`, `turn`, `session`; a run's work; a hold's `cache` (read when the session releases); `Grow`, `Load`, `Branch`, `Choose` | `Now` |
+| `Session` | statements of `init`, `turn`, `session`; a run's work; a hold's `cache` (read when the session releases); `Grow`, `Load`, `Branch`, `While`, `Choose` | `Now` |
 | `Admit` | a hold's units, `reserve`, `reuse`, admission bindings | `Now` |
 | `Select` | a pool's queue keys, reevaluated for each waiting hold before every admission attempt | `Waited`, `Now` |
 | `Evict` | eviction keys, a spill's `work` and `when` | `Size`, `Age`, `Last`, `Queued`, `Now` |
@@ -283,7 +284,7 @@ with LRU eviction and LIFO preemption, one step engine (stage 0) whose
 iteration cost uses supported terms in `tokens`, `prefilled`, `decoders`,
 `kv_decode` and `attention`, with natural coefficients and a constant term
 of at least 1 (`cost 1` is the step clock; attention coefficients must be even), delay stages, explicit sessions with preset attributes and turns, and the
-statements `Turn`, `Hold`, `Run`, `Set`, `Observe`, `Branch`, `Loop`, `End`
+statements `Turn`, `Hold`, `Run`, `Set`, `Observe`, `Branch`, `Loop`, `While`, `End`
 (not `Release`, `Load`, `Fork`, `Join` or a hold with a `lease`)
 with expressions built from integer constants, attributes, `Now`,
 `CachedIn`, `BudgetLeft`, `min`, `max`, `+`, `-` (truncated at 0), `*`,
@@ -292,10 +293,22 @@ with expressions built from integer constants, attributes, `Now`,
 as the interpreter computes it. In a cost, a context
 variable with a zero coefficient (the replay's cost at `a = b = 0`) is
 dropped. Its generator translates an IR file into Lean and
-fails on anything outside the fragment. The Lean `Branch` takes the first
-block when the guard is non-zero; the interpreter admits only 0 or 1
-(`docs/language.md`, Branching), so the two agree on every program that
-runs.
+fails on anything outside the fragment. Lean uses a nonzero test for
+`Branch` and `While`; Rust reports an error for a guard other than 0 or 1.
+The `While` translator therefore requires a guaranteed 0/1 range:
+boolean literals, comparisons, logical expressions, conditionals with boolean
+outcomes, or read-only trace `more` with boolean session and turn presets.
+Other guards are outside the fragment, including mutable attribute guards.
+A `While` guard and the transitive assignments of attributes it reads may
+not contain subtraction. A 0/1 result alone does not ensure that a comparison
+agrees when natural subtraction truncates a negative intermediate value.
+Every division in the guard or those assignments must have a divisor that
+folds to a positive natural constant. This excludes dynamic divisors, even
+ones that stay positive: Lean division by zero returns zero, unlike Rust's
+infinity or NaN. These checks inspect expressions before constant folding.
+This preserves the prefix-cache oracle without translating an invalid guard
+into a successful Lean execution. For `Branch`, correspondence remains
+restricted to executions with valid 0/1 guards.
 
 The claims generator additionally accepts the body generated by `serve only`,
 one queue key on a pool that no run grows, and supported tiled costs. See

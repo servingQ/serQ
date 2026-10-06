@@ -1706,6 +1706,25 @@ impl<'p> Interp<'p> {
                         return;
                     }
                 }
+                CStmt::While(c, b) => {
+                    let v = self.eval(c, &Ctx::session(sid), Which::Session);
+                    if v != 0.0 && v != 1.0 {
+                        self.error = Some(format!(
+                            "`while ({})`: the guard is {v}, not 0 or 1",
+                            self.p.show_expr(c)
+                        ));
+                        return;
+                    }
+                    if v == 1.0 {
+                        // Retest the guard after this plain body frame returns.
+                        self.sessions[sid].frames.last_mut().unwrap().pc -= 1;
+                        self.sessions[sid].frames.push(Frame {
+                            block: *b,
+                            pc: 0,
+                            kind: FrameKind::Plain,
+                        });
+                    }
+                }
                 CStmt::Loop(b) => self.sessions[sid].frames.push(Frame {
                     block: *b,
                     pc: 0,

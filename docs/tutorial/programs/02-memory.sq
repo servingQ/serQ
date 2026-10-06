@@ -19,7 +19,6 @@ fn main() {
       set c = ceil(~uniform(1, 5));   // units this request needs
     }
 
-    session { turn; request; end; }
   }
 
   server {

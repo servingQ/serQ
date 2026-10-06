@@ -23,7 +23,6 @@ fn main() {
     arrive renewal(gap);
     init { set t0 = now; }
 
-    session { request; end; }
   }
 
   server {

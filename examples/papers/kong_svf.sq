@@ -25,7 +25,6 @@ fn main() {
       set o = floor(~uniform(10, 500));
     }
 
-    session { request; end; }
   }
 
   server {

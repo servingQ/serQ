@@ -39,7 +39,6 @@ fn main() {
   stage svc : delay;
   workload {
     arrive batch(2);
-    session { turn; request; end; }
   }
   server {
     run svc (1);

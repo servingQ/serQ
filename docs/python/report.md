@@ -116,7 +116,6 @@ fn main() {
   stage svc : fifo;
   workload {
     arrive batch(4);
-    session { request; end; }
   }
   server {
     set t0 = now;

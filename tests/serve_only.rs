@@ -19,7 +19,7 @@ fn source(serve: &str) -> String {
         stage gate : delay;
         stage engine : step {{ budget 8; cost 1; {serve} }}
         workload {{ arrive batch(2);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -62,10 +62,10 @@ fn decode_first_mixes_and_fastertransformer_does_not() {
     assert_eq!(
         trace("sarathi", &source("serve decode first;")),
         [
-            "ITER 0.0000 0:0:p3",
-            "ITER 1.0000 0:0:d1 1:0:p3",
-            "ITER 2.0000 0:0:d1 1:0:d1",
-            "ITER 3.0000 1:0:d1",
+            "ITER 0.0000 0:1:p3",
+            "ITER 1.0000 0:1:d1 1:1:p3",
+            "ITER 2.0000 0:1:d1 1:1:d1",
+            "ITER 3.0000 1:1:d1",
         ]
     );
     // FasterTransformer: B is resident from t=1 and waits until A has
@@ -73,12 +73,12 @@ fn decode_first_mixes_and_fastertransformer_does_not() {
     assert_eq!(
         trace("ft", &source(FT)),
         [
-            "ITER 0.0000 0:0:p3",
-            "ITER 1.0000 0:0:d1",
-            "ITER 2.0000 0:0:d1",
-            "ITER 3.0000 1:0:p3",
-            "ITER 4.0000 1:0:d1",
-            "ITER 5.0000 1:0:d1",
+            "ITER 0.0000 0:1:p3",
+            "ITER 1.0000 0:1:d1",
+            "ITER 2.0000 0:1:d1",
+            "ITER 3.0000 1:1:p3",
+            "ITER 4.0000 1:1:d1",
+            "ITER 5.0000 1:1:d1",
         ]
     );
 }
@@ -91,10 +91,10 @@ fn the_opposite_is_written_with_the_same_construct() {
     assert_eq!(
         trace("prefill-alone", &src),
         [
-            "ITER 0.0000 0:0:p3",
-            "ITER 1.0000 1:0:p3",
-            "ITER 2.0000 0:0:d1 1:0:d1",
-            "ITER 3.0000 0:0:d1 1:0:d1",
+            "ITER 0.0000 0:1:p3",
+            "ITER 1.0000 1:1:p3",
+            "ITER 2.0000 0:1:d1 1:1:d1",
+            "ITER 3.0000 0:1:d1 1:1:d1",
         ]
     );
 }
@@ -111,7 +111,7 @@ fn only_selects_and_by_orders() {
           serve only (decoders > 0 ? decoding : !decoding) by (remaining);
         }
         workload { arrive batch(2); init { set prompt = serial == 0 ? 4 : 2; }
-          session { request;
+          session { turn;
             end;
 
           }
@@ -124,11 +124,11 @@ fn only_selects_and_by_orders() {
     assert_eq!(
         trace("by", src),
         [
-            "ITER 0.0000 1:0:p2",
-            "ITER 1.0000 1:0:d1",
-            "ITER 2.0000 0:0:p2",
-            "ITER 3.0000 0:0:p2",
-            "ITER 4.0000 0:0:d1",
+            "ITER 0.0000 1:1:p2",
+            "ITER 1.0000 1:1:d1",
+            "ITER 2.0000 0:1:p2",
+            "ITER 3.0000 0:1:p2",
+            "ITER 4.0000 0:1:d1",
         ]
     );
 }
@@ -142,7 +142,7 @@ fn admitted(serve: &str) -> String {
         stage gate : delay;
         stage engine : step {{ budget 8; cost 1; {serve} }}
         workload {{ arrive batch(3);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -169,12 +169,12 @@ fn an_excluded_admission_waits_as_a_resident() {
     assert_eq!(
         trace("admitted", &src),
         [
-            "ITER 0.0000 0:0:p1",
-            "ITER 1.0000 0:0:d1",
-            "ITER 2.0000 0:0:d1",
-            "ITER 3.0000 1:0:p1 2:0:p1",
-            "ITER 4.0000 1:0:d1 2:0:d1",
-            "ITER 5.0000 1:0:d1 2:0:d1",
+            "ITER 0.0000 0:1:p1",
+            "ITER 1.0000 0:1:d1",
+            "ITER 2.0000 0:1:d1",
+            "ITER 3.0000 1:1:p1 2:1:p1",
+            "ITER 4.0000 1:1:d1 2:1:d1",
+            "ITER 5.0000 1:1:d1 2:1:d1",
         ]
     );
     let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
@@ -194,9 +194,9 @@ fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
     assert_eq!(
         trace("admitted-opposite", &src),
         [
-            "ITER 0.0000 0:0:p1 1:0:p1 2:0:p1",
-            "ITER 1.0000 0:0:d1 1:0:d1 2:0:d1",
-            "ITER 2.0000 0:0:d1 1:0:d1 2:0:d1",
+            "ITER 0.0000 0:1:p1 1:1:p1 2:1:p1",
+            "ITER 1.0000 0:1:d1 1:1:d1 2:1:d1",
+            "ITER 2.0000 0:1:d1 1:1:d1 2:1:d1",
         ]
     );
     // A resident served earlier in the iteration is not reconsidered: at
@@ -206,7 +206,7 @@ fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
     let src = admitted("serve only (decoders < residents ? !decoding : decoding);");
     assert_eq!(
         trace("admitted-joins", &src)[1],
-        "ITER 1.0000 0:0:d1 1:0:p1 2:0:p1"
+        "ITER 1.0000 0:1:d1 1:1:p1 2:1:p1"
     );
 }
 
@@ -237,7 +237,7 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
         stage gate : delay;
         stage engine : step { budget 8; cost 1; serve only (residents > 1); }
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -250,7 +250,7 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
 "#;
     assert_eq!(
         trace("waits", src),
-        ["ITER 2.0000 0:0:p1 1:0:p1", "ITER 3.0000 0:0:d1 1:0:d1"]
+        ["ITER 2.0000 0:1:p1 1:1:p1", "ITER 3.0000 0:1:d1 1:1:d1"]
     );
 }
 

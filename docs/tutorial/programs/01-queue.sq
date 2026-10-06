@@ -14,7 +14,6 @@ fn main() {
     arrive poisson(Lambda);
     turn { set s = ~exp(S); }
 
-    session { turn; request; end; }
   }
 
   server {

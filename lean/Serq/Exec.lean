@@ -893,6 +893,10 @@ def exec : ℕ → Machine → ℕ → Machine
     | .branch p a b k =>
       let c := evalE m i p
       exec f (setS m i { s with prog := if c ≠ 0 then a else b, stack := List.cons (Frame.seq k) s.stack }) i
+    | .whileLoop p body k =>
+      if evalE m i p ≠ 0 then
+        exec f (setS m i { s with prog := body, stack := .seq (.whileLoop p body k) :: s.stack }) i
+      else exec f (setS m i { s with prog := k }) i
     | .loop body => exec f (setS m i { s with prog := body, stack := List.cons (Frame.loop body) s.stack }) i
     | .run st mode w g k =>
       let work := evalE m i w

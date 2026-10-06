@@ -73,11 +73,9 @@ istmt    := serve [only ( expr )] [admission | by ( expr , ... ) | decode first]
 wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
           | init block | turn block          -- only set / observe
-          | session block                    -- the session's side; says `request`
+          | session block                    -- optional: the sequence of completed turns
           | hidden NAME [, NAME]* ;           -- the scheduler may not read these
-stmt     := turn ;                           -- next turn's attributes (workload `turn`, trace)
-          | request ;                        -- the server block, once (workload `session` only)
-          | request QUEUE ;                  -- the named gateway's route, once (workload `session` only)
+stmt     := turn ;                           -- draw attributes, submit, wait for the response (session only)
           | set NAME = expr ;
           | observe NAME = expr ;
           | hold POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]*
@@ -95,6 +93,7 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | run ( expr ) ;                   -- in a queue's entry: the queue's own stage
           | branch ( expr ) block [ else block ]          -- a test
           | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
+          | while ( expr ) block             -- test before each pass; continue after the block
           | loop block
           | fork block                       -- the block runs beside the session: a leg of the request
           | join ;                           -- wait until every leg forked so far has ended
@@ -133,7 +132,7 @@ See [Workload](api/workload.md) and [A finite run](api/program.md#a-finite-run).
 ### Expressions
 
 Arithmetic, comparisons (0/1), `&&`, `||`, `!` and
-`c ? a : b` (a non-zero operand is true; only a `branch` guard is held to 0
+`c ? a : b` (a non-zero operand is true; `branch` and `while` guards are held to 0
 or 1); the draws `~exp`, `~det`, `~uniform`, `~erlang`, `~h2`,
 `~bernoulli`; functions, observables of pools and stages, and aggregates
 over an index, `max j in n (e)`, `min j in n (e)`, `sum j in n (e)`: `n` is
@@ -256,12 +255,15 @@ constructs to the pinned scheduler source.
 
 ### The two sides
 
-A program separates the client from request handling. The `session` inside
-`workload` describes the client's turns, thinking and continuation. The
-`server` describes what the deployment does with each request, as in
-`examples/multi-turn/vllm.sq`:
+A workload describes arrivals, turn attributes and how turns follow one
+another. A server handles every turn. Omitting `session` means one turn
+per arriving session; there is no call or termination statement to write.
 
-```
+For a conversation, `turn;` draws the next turn's attributes, submits it
+to the server, and waits for its response. Statements after it see the
+completed turn. From `examples/multi-turn/vllm.sq`:
+
+```serq
 workload {
   arrive poisson(Lambda);
   hidden o;
@@ -269,10 +271,10 @@ workload {
   turn { … }
   session {
     turn;
-    loop {
-      request;
-      set K = prompt + o;
-      branch (more) { tool (~exp(Z)); turn; } else { end; }
+    while (more) {
+      set K = K + n + o;
+      tool (~exp(Z));
+      turn;
     }
   }
 }
@@ -285,28 +287,24 @@ server {
 }
 ```
 
-`request;` runs the server once. The parser splices the server's
-statements in its place, at any depth and as often as it is written, so the
-IR and interpreter see one session. This expansion adds no execution boundary
-or separate attribute scope.
+The end of the session block ends the session. `end;` is only needed for
+an early exit, including an exit from an unconditional `loop`.
 
-The parser enforces these boundaries:
+The parser expands each source `turn;` into the IR's attribute-drawing
+`Turn` followed by the server's statements. Client and server attributes
+remain shared; this expansion introduces no extra scope or dispatch.
 
-| | the session's side (`session` inside `workload`) | the server's side (`server`) |
+| | Session | Server |
 |---|---|---|
-| the next turn, the exit | `turn;`, `end;` | refused: a server is done with a request when its block is |
-| the request | `request;` | refused: a server does not request itself |
-| admission | `hold P (u), … at admission (x = e) { … } cache (ℓ)` | the same |
+| Turn lifecycle | `turn;`, optional early `end;` | Refused; completion is the end of its block |
+| Repetition | `while (condition) { … }`, `loop { … }` | The same, without session lifecycle statements |
+| Queue entry calls | Refused | `gw.route();`, `D[j].decode (prompt);`, … |
+| Admission | `hold … at admission (…) { … } cache (…)` | The same |
 
-A `hold` uses the same admission rules on either side: all named pools must
-have room. `reserve` specifies an admission requirement larger than the
-initial allocation. A [`def`](api/program.md#def) can name a reusable
-admission pattern.
-
-`session` is allowed only inside `workload`. A workload's `session` must
-say `request;` to a `server` or `request Q;` to a gateway. A `server` that
-is never requested is an error. A named gateway supplies request handling
-through its `route`, so it does not need an anonymous `server` block.
+There is one `server` per workload. An explicit session must contain a
+turn, and `session` belongs inside `workload`. Gateway selection and
+routing belong in the server, for example `server { gw.route(); }`.
+Several gateways may be declared, but none implicitly becomes the server.
 
 ### Queues
 
@@ -350,20 +348,17 @@ Four roles are built into the parser, and a queue declares which it plays:
 
 | Role | Entries | The queue |
 |---|---|---|
-| `gateway` | `route { … }` | `request Q;` enters this queue's `route`; each gateway is a single queue |
+| `gateway` | `route { … }` | `Q.route();` enters this queue's `route`; each gateway is a single queue |
 | `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `cache`, a transfer) is the entry's |
 | `decode` | `decode (prompt)`, `decode (prompt) from Q` | a local prefill, or with the KV `Q`'s entry leased for this request |
 | `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost, and its `latency` a wait before it |
 
-The workload names its entry point with `request gw;`, where `gw` is a
-queue declared with the `gateway` role. The parser checks that the target
-exists and plays that role, then expands its `route` at the request site.
-Declarations may follow the workload, and several gateways may coexist;
-there is no default gateway. Declaring a gateway does not execute it or
-register it as the `server`. Bare `request;` runs the `server { … }` block
-and fails without one.
+The server selects a gateway with `gw.route();`. The parser checks the
+queue and its entry, then expands the route at the call site. Declarations
+may follow the server and several gateways may coexist. Declaring a gateway
+does not execute it or register a default server.
 
-`queue`, `pool`, `serve`, `nic`, `pull`, `request` and `mark` are language
+`queue`, `pool`, `serve`, `nic`, `pull`, `turn` and `mark` are language
 syntax. The role names and their entry signatures in the table are
 predefined vocabulary; `gw`, `P` and `D` are names declared by this
 program. User-defined roles are not supported.
@@ -843,8 +838,10 @@ the interpreter on programs whose amounts are never negative.
 
 ### Workload
 
-`init` runs at arrival, `turn` at every `turn` statement;
-with a `trace`, `turn` loads the next turn's `new`, `out`, `think`,
+`init` runs at arrival. Each source `turn;` draws its attributes and waits
+for the server; the `turn` block runs just before that submission.
+With no session block, this happens once per arrival;
+with a `trace`, it first loads the next turn's `new`, `out`, `think`,
 `forced` and sets `more` (`ordered`: session `i` replays trace session `i`
 modulo the trace's sessions).
 Random draws read separate streams: the arrival law reads the run's
@@ -860,7 +857,7 @@ change its workload; a shared seed does not make those changes equivalent.
 
 ### Every instant settles
 
-A `loop` must let time pass on every pass
+A `loop` or `while` must let time pass on every pass
 through its body: every path through it reaches a `run` (a constant zero
 work does not count), a `hold` whose body does, or `end`; the linker
 refuses a loop that does not (`loop { set w = w + 1; }`, or a `run` on one

@@ -6,7 +6,7 @@
 //! are stored in an arena so that a session's continuation is a stack of
 //! `(block, pc)` frames.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
 use crate::frontend::ast::*;
@@ -918,70 +918,107 @@ fn iteration(lk: &Linker, stage: usize, body: &[IterStmt]) -> LResult<Vec<CIter>
 /// is revealed. Paths join conservatively: after a branch an attribute is
 /// revealed only if both arms reveal it, and a loop's body may not run.
 fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
-    /// `(name, None)` is a hidden attribute itself; `(name, Some(from))`
-    /// one the server set from the hidden attributes `from`.
-    type Taint = Vec<(String, Option<Vec<String>>)>;
-    fn reads<'a>(
-        e: &Expr,
-        tainted: &'a [(String, Option<Vec<String>>)],
-    ) -> Vec<&'a (String, Option<Vec<String>>)> {
+    #[derive(Clone, Default, PartialEq)]
+    struct Origins {
+        possible: BTreeSet<String>,
+        certain: BTreeSet<String>,
+        derived: bool,
+    }
+    #[derive(Clone, Default, PartialEq)]
+    struct Taint {
+        attrs: BTreeMap<String, Origins>,
+        // Keep dependencies after revelation: another loop pass still knows
+        // what a run by that value reveals, even if a prior pass revealed it.
+        revealed: BTreeSet<String>,
+    }
+    fn names(e: &Expr) -> Vec<String> {
         let (mut vars, mut refs) = (vec![], vec![]);
         crate::frontend::parser::names(e, &mut vars, &mut refs);
-        refs.iter()
-            .filter_map(|r| r.index.as_deref())
-            .for_each(|i| {
+        for r in refs {
+            if let Some(i) = r.index.as_deref() {
                 crate::frontend::parser::names(i, &mut vars, &mut vec![]);
-            });
-        tainted.iter().filter(|(n, _)| vars.contains(n)).collect()
+            }
+        }
+        vars
     }
-    /// The hidden attributes behind what `e` reads.
-    fn origins(e: &Expr, t: &Taint) -> Vec<String> {
-        let mut out: Vec<String> = vec![];
-        for (n, from) in reads(e, t) {
-            for h in from.clone().unwrap_or_else(|| vec![n.clone()]) {
-                if !out.contains(&h) {
-                    out.push(h);
-                }
+    /// Origins read on every evaluation path. Conditional arms and the
+    /// right side of a short-circuit operator need not be evaluated.
+    fn certain(e: &Expr, t: &Taint) -> BTreeSet<String> {
+        match e {
+            Expr::Located(_, e) | Expr::Unary(_, e) => certain(e, t),
+            Expr::Cond(c, a, b) => {
+                let mut out = certain(c, t);
+                out.extend(certain(a, t).intersection(&certain(b, t)).cloned());
+                out
+            }
+            Expr::Binary(BinOp::And | BinOp::Or, a, _) | Expr::Over(_, _, a, _) => certain(a, t),
+            Expr::Binary(_, a, b) => certain(a, t).union(&certain(b, t)).cloned().collect(),
+            Expr::Sample(_, xs) => xs.iter().flat_map(|e| certain(e, t)).collect(),
+            Expr::Call(_, args) => args
+                .iter()
+                .flat_map(|a| match a {
+                    Arg::Expr(e) => certain(e, t),
+                    Arg::Ref(r) => match &r.index {
+                        Some(e) => certain(e, t),
+                        None => t
+                            .attrs
+                            .get(&r.name)
+                            .map(|s| s.certain.clone())
+                            .unwrap_or_default(),
+                    },
+                })
+                .collect(),
+            Expr::Var(n) => t
+                .attrs
+                .get(n)
+                .map(|s| s.certain.clone())
+                .unwrap_or_default(),
+            Expr::Num(_) => BTreeSet::new(),
+        }
+    }
+    /// Possible origins prohibit decisions; only certain origins let a run
+    /// reveal an input. The two differ after control-flow paths join.
+    fn origins(e: &Expr, t: &Taint) -> Origins {
+        let mut out = Origins {
+            derived: true,
+            certain: certain(e, t),
+            ..Default::default()
+        };
+        for n in names(e) {
+            if let Some(from) = t.attrs.get(&n) {
+                out.possible.extend(from.possible.iter().cloned());
             }
         }
         out
     }
-    /// `h` is revealed: it, and what was set from it alone, are visible.
-    fn reveal(t: &mut Taint, h: &str) {
-        t.retain_mut(|(n, from)| match from {
-            None => n != h,
-            Some(from) => {
-                from.retain(|x| x != h);
-                !from.is_empty()
-            }
-        });
-    }
-    /// Hidden after either of two paths: the union.
     fn join(a: &mut Taint, b: &Taint) {
-        for e in b {
-            match a.iter_mut().find(|(n, _)| *n == e.0) {
-                None => a.push(e.clone()),
-                Some((_, Some(from))) => {
-                    if let Some(more) = &e.1 {
-                        for h in more {
-                            if !from.contains(h) {
-                                from.push(h.clone());
-                            }
-                        }
-                    }
-                }
-                Some(_) => {}
+        a.revealed.retain(|h| b.revealed.contains(h));
+        for (name, from) in &mut a.attrs {
+            if let Some(other) = b.attrs.get(name) {
+                from.possible.extend(other.possible.iter().cloned());
+                from.certain.retain(|h| other.certain.contains(h));
+                from.derived |= other.derived;
+            } else {
+                from.certain.clear();
+            }
+        }
+        for (name, from) in &b.attrs {
+            if !a.attrs.contains_key(name) {
+                let mut from = from.clone();
+                from.certain.clear();
+                a.attrs.insert(name.clone(), from);
             }
         }
     }
-    fn refuse(e: &Expr, what: &str, found: &(String, Option<Vec<String>>)) -> LinkError {
-        let (name, from) = found;
-        let why = match from {
-            None => format!("`{name}` is hidden from the scheduler"),
-            Some(h) => format!(
+    fn refuse(e: &Expr, what: &str, name: &str, from: &Origins, t: &Taint) -> LinkError {
+        let why = if !from.derived {
+            format!("`{name}` is hidden from the scheduler")
+        } else {
+            let hidden: Vec<_> = from.possible.difference(&t.revealed).cloned().collect();
+            format!(
                 "`{name}` is set from the hidden `{}` in the server",
-                h.join("`, `")
-            ),
+                hidden.join("`, `")
+            )
         };
         let span = match e {
             Expr::Located(span, _) => Some(*span),
@@ -999,19 +1036,24 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
         r.index.as_deref()
     }
     fn walk(stmts: &[Stmt], t: &mut Taint) -> LResult<()> {
-        let check =
-            |e: &Expr, what: &str, t: &[(String, Option<Vec<String>>)]| match reads(e, t).first() {
-                Some(found) => Err(refuse(e, what, found)),
-                None => Ok(()),
-            };
+        let check = |e: &Expr, what: &str, t: &Taint| {
+            for n in names(e) {
+                if let Some(from) = t.attrs.get(&n)
+                    && !from.possible.is_subset(&t.revealed)
+                {
+                    return Err(refuse(e, what, &n, from, t));
+                }
+            }
+            Ok(())
+        };
         for s in stmts {
             match s {
                 Stmt::Set(n, e) => {
                     // a later `set` of a visible value makes it visible again
                     let from = origins(e, t);
-                    t.retain(|(m, _)| m != n);
-                    if !from.is_empty() {
-                        t.push((n.clone(), Some(from)));
+                    t.attrs.remove(n);
+                    if !from.possible.is_empty() {
+                        t.attrs.insert(n.clone(), from);
                     }
                 }
                 Stmt::Observe(..) | Stmt::Drop(_) | Stmt::Release(_) | Stmt::End | Stmt::Turn => {}
@@ -1028,9 +1070,7 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                         }
                     }
                     // the run's end reveals the hidden attributes its work reads
-                    for h in origins(work, t) {
-                        reveal(t, &h);
-                    }
+                    t.revealed.extend(origins(work, t).certain);
                 }
                 Stmt::Hold {
                     pools,
@@ -1042,11 +1082,8 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                     // the header is read at admission, where `Program::validate`
                     // refuses the hidden attribute itself; what the server set from
                     // it is left here
-                    let derived: Vec<_> = t
-                        .iter()
-                        .filter(|(_, from)| from.is_some())
-                        .cloned()
-                        .collect();
+                    let mut derived = t.clone();
+                    derived.attrs.retain(|_, from| from.derived);
                     for (r, units, reserve) in pools {
                         if let Some(i) = index(r) {
                             check(i, "choice of a pool", t)?;
@@ -1077,15 +1114,21 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                     walk(b, &mut other)?;
                     join(t, &other);
                 }
-                // twice: a `set` late in the body reaches its start the next
-                // time round; and the body may not run at all
-                Stmt::Loop(body) => {
+                // The loop header can receive hidden values after arbitrarily
+                // many passes (a <- b <- c <- hidden). Accumulate every incoming
+                // origin until the finite set of names/origins stops growing.
+                Stmt::While(_, body) | Stmt::Loop(body) => loop {
+                    if let Stmt::While(c, _) = s {
+                        check(c, "while", t)?;
+                    }
                     let before = t.clone();
-                    walk(body, t)?;
-                    join(t, &before);
-                    walk(body, t)?;
-                    join(t, &before);
-                }
+                    let mut after = before.clone();
+                    walk(body, &mut after)?;
+                    join(t, &after);
+                    if *t == before {
+                        break;
+                    }
+                },
                 Stmt::Choose { count, key, .. } => {
                     check(count, "choice", t)?;
                     for k in key {
@@ -1106,7 +1149,22 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
     if hidden.is_empty() {
         return Ok(());
     }
-    let mut tainted: Taint = hidden.iter().map(|h| (h.clone(), None)).collect();
+    let mut tainted = Taint {
+        attrs: hidden
+            .iter()
+            .map(|h| {
+                (
+                    h.clone(),
+                    Origins {
+                        possible: BTreeSet::from([h.clone()]),
+                        certain: BTreeSet::from([h.clone()]),
+                        derived: false,
+                    },
+                )
+            })
+            .collect(),
+        ..Default::default()
+    };
     walk(server, &mut tainted)
 }
 
@@ -1708,6 +1766,7 @@ impl Linker<'_> {
                     CStmt::Branch(p, a, b)
                 }
                 Stmt::Loop(b) => CStmt::Loop(self.block(b)?),
+                Stmt::While(c, b) => CStmt::While(self.expr(c)?, self.block(b)?),
                 Stmt::Fork(b) => CStmt::Fork(self.block(b)?),
                 Stmt::Join => CStmt::Join,
                 Stmt::Choose { var, count, key } => CStmt::Choose {

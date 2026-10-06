@@ -597,6 +597,18 @@ impl Walker<'_> {
                     self.frontier.append(&mut ends);
                     dedupe(&mut self.frontier);
                 }
+                CStmt::While(_, body) => {
+                    self.known.clear();
+                    let before = self.frontier.clone();
+                    let held = self.holds.clone();
+                    self.enter(body, true);
+                    self.frontier.extend(before);
+                    dedupe(&mut self.frontier);
+                    // The body may be skipped; its assignments and leases
+                    // are not unconditional facts after the loop.
+                    self.known.clear();
+                    self.holds.retain(|h| held.contains(h));
+                }
                 CStmt::Loop(body) => {
                     // A full-session view (IR input or no unique request
                     // body) includes client loops. Draw their way back so
@@ -815,9 +827,10 @@ fn reaches_a_station(p: &Program, block: usize) -> bool {
     p.blocks.get(block).is_some_and(|stmts| {
         stmts.iter().any(|s| match s {
             CStmt::Run { .. } => true,
-            CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::Fork(body) => {
-                reaches_a_station(p, *body)
-            }
+            CStmt::Hold { body, .. }
+            | CStmt::Loop(body)
+            | CStmt::While(_, body)
+            | CStmt::Fork(body) => reaches_a_station(p, *body),
             CStmt::Branch(_, a, b) => reaches_a_station(p, *a) || reaches_a_station(p, *b),
             _ => false,
         })
@@ -847,6 +860,9 @@ fn leading_chooses(p: &Program, block: usize, out: &mut Vec<usize>) -> bool {
             }
             // a guard that walks the body: the chooses in it are collected
             // whether or not it reaches a station
+            CStmt::While(_, body) => {
+                leading_chooses(p, *body, out);
+            }
             CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::Fork(body)
                 if leading_chooses(p, *body, out) =>
             {
@@ -1293,7 +1309,7 @@ pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
                     walk(p, *t, stack, out);
                     walk(p, *e, stack, out);
                 }
-                CStmt::Loop(b) => walk(p, *b, stack, out),
+                CStmt::Loop(b) | CStmt::While(_, b) => walk(p, *b, stack, out),
                 // a leg's holds are its own
                 CStmt::Fork(b) => walk(p, *b, &mut vec![], out),
                 _ => {}

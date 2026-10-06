@@ -11,7 +11,7 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
         // a paragraph\n\n\
         pool kv { cap C; }\n\
         stage engine : step { budget B; cost 1; memory kv; }\n\
-        workload { arrive batch(1); session { request; end; } }\n\
+        workload { arrive batch(1); session { turn; end; } }\n\
         server {\n\
           hold kv (1)\n\
           at admission (hit = 1,\n\
@@ -45,7 +45,8 @@ fn cli_check_and_write_are_consistent() {
     fixture.write(
         "model.sq",
         &common::main_source(
-        "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (1);\n}\n\n"),
+            "stage svc : delay;\nworkload { session { turn; end;\n} }\nserver {run svc (1);\n}\n\n",
+        ),
     );
     failure(
         &fixture.run(&["fmt", "--check", "model.sq"]),
@@ -71,7 +72,7 @@ fn cli_check_and_write_are_consistent() {
 fn invalid_batch_leaves_every_file_untouched() {
     let fixture = Fixture::new();
     let original =
-        "stage svc : delay;\nworkload { session { request; end;\n} }\nserver {run svc (1);\n}\n\n";
+        "stage svc : delay;\nworkload { session { turn; end;\n} }\nserver {run svc (1);\n}\n\n";
     fixture.write("good.sq", &common::main_source(original));
     fixture.write(
         "bad.sq",
@@ -90,7 +91,7 @@ fn invalid_batch_leaves_every_file_untouched() {
 
 #[test]
 fn braced_definitions_format_and_preserve_expansion() {
-    let source = "def twice(x){\n// value\nx * 2\n}\ndef record(x){observe value = x;}\nfn main(){\nworkload { session { request; end; } }\nserver { record(twice(3)); }\n}\n";
+    let source = "def twice(x){\n// value\nx * 2\n}\ndef record(x){observe value = x;}\nfn main(){\nworkload { session { turn; end; } }\nserver { record(twice(3)); }\n}\n";
     let formatted = format(source).unwrap();
     assert!(
         formatted.contains("def twice(x) {\n  // value\n  x * 2\n}"),

@@ -28,7 +28,7 @@ fn engine(
         pool reqs {{ cap {max_seqs}; }}
         stage engine : step {{ budget {budget}; cost 1; memory kv; {extra} }}
         workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }}
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -98,7 +98,7 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         pool reqs { cap 16; }
         stage engine : step { budget 1000; cost 1; memory kv; }
         workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; }
-          session { request;
+          session { turn;
             end;
 
           }
@@ -149,7 +149,7 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
         stage engine : step { budget 1000; cost 1; }
         stage svc : fifo;
         workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; }
-          session { request;
+          session { turn;
             end;
 
           }
@@ -198,7 +198,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
             "pool kv {{ cap 1000; }}
         stage engine : step {{ budget 1; cost 1; memory kv; {serve} }}
         workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }}
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -280,7 +280,7 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
         stage engine : step { budget 2; cost 1; memory kv; serve by (remaining); }
         stage gate : delay;
         workload { arrive batch(2); init { set arrive = serial; set o = serial == 0 ? 4 : 1; }
-          session { request;
+          session { turn;
             end;
 
           }
@@ -387,7 +387,7 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         stage engine : step { budget 8192; cost 1; memory kv; }
         workload { arrive batch(1); init { set K = 0; set turns = 0; }
           session {
-            loop { request;
+            loop { turn;
               branch (turns >= 3) { end; }
             }
 
@@ -434,7 +434,7 @@ fn lru_eviction_drops_tail_blocks_first() {
             // takes 12 blocks, evicting 2 of session 0's from its tail; session 0's
             // second turn then reuses 8 blocks.
             run gate (serial * 2);
-            loop { request;
+            loop { turn;
               branch (turns >= 2 || serial == 1) { end; }
               run gate (10);
             }

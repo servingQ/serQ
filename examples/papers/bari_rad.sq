@@ -37,7 +37,6 @@ fn main() {
       set vd = min(floor(~exp(200)) + 1, vdmax);
     }
 
-    session { request; end; }
   }
 
   server {

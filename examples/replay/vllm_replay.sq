@@ -51,11 +51,11 @@ fn main() {
       set prev = 0;
       set prevout = 0;
       turn;
-      loop {
-        request;
-        set prev = prompt;
+      while (more) {
+        set prev = new;
         set prevout = out;
-        branch (more) { tool think; turn; } else { end; }
+        tool think;
+        turn;
       }
     }
   }

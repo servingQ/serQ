@@ -39,7 +39,7 @@ fn misspelled_and_empty_override_names_do_not_produce_ir() {
 
 #[test]
 fn overrides_keep_last_value_and_declaration_order() {
-    let src = "use \"std/args\"; let rate = args.number(\"rate\", 1); let doubled = rate * 2; workload { arrive poisson(doubled); } ";
+    let src = "use \"std/args\"; let rate = args.number(\"rate\", 1); let doubled = rate * 2; workload { arrive poisson(doubled); } server {} ";
     let ov = Overrides {
         lets: vec![
             ("rate".into(), parser::parse_expr("2").unwrap()),
@@ -83,7 +83,7 @@ fn arrival_override_applies_to_run_and_ir() {
     f.write(
         "model.sq",
         &common::main_source(
-            "workload { arrive renewal(2); \n  session { request; end; \n  }\n} server {\n} ",
+            "workload { arrive renewal(2); \n  session { turn; end; \n  }\n} server {\n} ",
         ),
     );
     for command in ["run", "ir"] {
@@ -114,7 +114,7 @@ fn arrival_override_also_applies_to_json_ir() {
     let f = Fixture::new();
     let program = compile_source(
         &common::main_source(
-            "workload { arrive renewal(2); \n  session { request; end; \n  }\n} server {\n} ",
+            "workload { arrive renewal(2); \n  session { turn; end; \n  }\n} server {\n} ",
         ),
         &Overrides {
             arrivals: Some(1),
@@ -148,7 +148,7 @@ fn overrides_are_refused_on_ir_by_what_they_override() {
     let program = compile_source(
         &common::main_source(
             "let lam = 1; def law() { ~exp(1) } workload { arrive poisson(lam);
-          session { request; end;
+          session { turn; end;
           }
         } server { set x = law();
         } ",
