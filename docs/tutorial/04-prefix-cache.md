@@ -34,7 +34,8 @@ what it does.
 
 **`evict lru`** orders eviction by release time. `evict by (k₁, …)` orders by
 whatever the program says — `replica.sq` uses `evict by (waiting, size)`, which
-throws out queued sessions' short prefixes first.
+evicts non-queued sessions' prefixes before queued sessions' prefixes,
+shortest first within each group.
 
 **`drop kv;`** discards the session's prefix. Without it, cached units can
 remain after the session ends, until they are evicted.
