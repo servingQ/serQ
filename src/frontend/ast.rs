@@ -3,7 +3,7 @@
 //! A program is a *deployment* (pools and stages), a *workload* (how
 //! sessions arrive and how a session's attributes evolve from turn to
 //! turn) and a *session* (the statements every session executes). A
-//! program written as `workload { … session { … request; … } }` and
+//! program written as `workload { … session { … turn; … } }` and
 //! `server { … }` arrives here with the server spliced into the session:
 //! the split is the parser's. See `docs/language.md` for the semantics.
 
@@ -383,8 +383,8 @@ pub enum Stmt {
     Side(crate::ir::Side),
     /// Draw the next turn's attributes from the workload.
     Turn,
-    /// `request;` in a workload's `session`: the request runs the `server`
-    /// block. Parse-time only: the parser splices the server's statements
+    /// Internal marker after a source `turn;`: splice the `server` block.
+    /// Parse-time only: the parser splices the server's statements
     /// in its place before it returns, so the linker never sees one.
     Request,
     Set(String, Expr),
@@ -422,6 +422,7 @@ pub enum Stmt {
     },
     Branch(Expr, Vec<Stmt>, Vec<Stmt>),
     Loop(Vec<Stmt>),
+    While(Expr, Vec<Stmt>),
     /// `choose j in 0..n by (k1, …)`: `j := argmin`, keys in order.
     Choose {
         var: String,
@@ -589,6 +590,10 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                 Stmt::Branch(e, a, b) => {
                     expr(e);
                     block(a);
+                    block(b);
+                }
+                Stmt::While(e, b) => {
+                    expr(e);
                     block(b);
                 }
                 Stmt::Loop(b) | Stmt::Fork(b) => block(b),

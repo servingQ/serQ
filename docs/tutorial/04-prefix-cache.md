@@ -51,7 +51,7 @@ run: horizon 20000 end 20000 warmup 2000 seed 1 events 98781 arrivals 9905 ended
 observe   count    mean   95% CI    cv2     p99
 --------  -----  ------  -------  -----  ------
 response  44301  0.0629  ±0.0006  0.615  0.2317
-hitrate   35398  1.0000  ±0.0000  0.000  1.0000
+hit       35398  1.0000  ±0.0000  0.000  1.0000
 
 stage   number   util   done    thru    wait  service  iters
 ------  ------  -----  -----  ------  ------  -------  -----

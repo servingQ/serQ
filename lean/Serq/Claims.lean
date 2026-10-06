@@ -167,7 +167,7 @@ end DaiSarathi
 
 namespace KongSvf
 
-/-- The session program of `examples/papers/kong_svf.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = s, 10 = o. Observations: 0 = out, 1 = vol, 2 = latency. -/
+/-- The session program of `examples/papers/kong_svf.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = s, 10 = o. Observations: 0 = out, 1 = vol, 2 = response. -/
 def prog : Prog := [route|
   observe 0 = x.attr 10;
   observe 1 = ((x.attr 9) * (x.attr 10)) + ((((x.attr 10) * (x.attr 10)) + (x.attr 10)) / 2);

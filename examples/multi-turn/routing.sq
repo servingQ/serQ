@@ -49,7 +49,6 @@ fn main() {
     session {
       loop {
         turn;
-        request;
         set first = 0;
         set K = K + n + o;
         branch with (p) { run tool (cost(tool, tool_time())); } else { end; }
@@ -95,7 +94,7 @@ fn main() {
     set home = j;
     branch (!first) {
       observe response = now - t0;
-      observe hitrate = S == hit;
+      observe hit = S == hit;
       observe context = K;
     }
     observe service = S;

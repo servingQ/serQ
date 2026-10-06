@@ -11,7 +11,7 @@ fn main() {
   let rate = args.number("arrival_rate", 0.5);
   let service = twice(fixed);
   stage worker : delay;
-  workload { arrive batch(1); session { request; end; } }
+  workload { arrive batch(1); session { turn; end; } }
   server { run worker (cost(worker, service)); observe elapsed = now; }
 
 }
@@ -141,7 +141,7 @@ fn an_input_name_does_not_make_an_unrelated_constant_structural() {
       let count = 2;
       let cost = args.number("count", 1);
       queue q[count] : prefill { serve delay; prefill(p) { run (cost(q, p)); } }
-      workload { session { request; end; } }
+      workload { session { turn; end; } }
       server { q[0].prefill(cost); }
 
     }"#;
@@ -212,7 +212,7 @@ fn inputs_bind_declarations_without_replacing_shadowed_constants() {
         ),
     ] {
         let src = format!(
-            "use \"std/args\"; fn main() {{ {declarations} workload {{ arrive poisson(x); }}  }}"
+            "use \"std/args\"; fn main() {{ {declarations} workload {{ arrive poisson(x); }} server {{}}  }}"
         );
         let mut ov = common::horizon(1.0);
         ov.set("first", "3").unwrap();

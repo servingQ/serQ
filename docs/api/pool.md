@@ -210,16 +210,15 @@ A complete program:
 
 ```serq
 fn main() {
-  pool slots { cap 2; }
+  pool reqs { cap 2; }
   stage svc : delay;
   workload {
     arrive batch(3);
-    session { request; end; }
   }
   server {
     set t0 = now;
-    hold slots (cost(slots, 1)) { run svc (cost(svc, 2)); }
-    observe latency = now - t0;
+    hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
+    observe response = now - t0;
   }
 }
 ```

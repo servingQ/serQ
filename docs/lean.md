@@ -105,6 +105,19 @@ are rejected rather than silently omitted.
   twice its value, so its IR coefficient must be even. Fractional
   coefficients and costs reading `residents`, `kv_prefill` or `now` are
   rejected.
+- A `while` guard must be a literal 0/1, a comparison or logical expression,
+  a conditional with such results, or the read-only `more` attribute of an
+  explicit-session workload whose presets for `more` are all 0/1. Assignments to `more`
+  and other bare attribute guards are rejected. A guard and every assignment
+  feeding its attributes must be free of subtraction: natural subtraction
+  can change a comparison even when its result is 0/1. This conservative
+  restriction includes differences that happen to stay nonnegative.
+  Every division in the guard or those assignments must have a divisor
+  that folds to a positive natural constant. Dynamic divisors are rejected,
+  including ones that happen to stay positive; Lean division by zero yields
+  zero where Rust produces infinity or NaN.
+  Rust reports invalid guards
+  at runtime; Lean's executable model has no corresponding error state.
 - The claims fragment also supports `serve only`, a chunk expression over
   `residents` and `queued(p)`, one queue key on a pool that no run grows,
   and cost terms of the form `k * ceil(tokens / b)`.

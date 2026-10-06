@@ -19,12 +19,11 @@ fn main() {
             : ~h2(mean_s, cv2);
     }
 
-    session { request; end; }
   }
 
   server {
     run svc (cost(svc, s));
-    observe sojourn = now - t0;
+    observe response = now - t0;
   }
 
 

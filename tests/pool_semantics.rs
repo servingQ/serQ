@@ -28,7 +28,7 @@ fn eviction_order_is_the_declared_key() {
         stage svc : fifo;
         stage gate : delay;
         workload {{ arrive batch(3); init {{ set c = 10 * (serial + 1); }}
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -67,7 +67,7 @@ fn queued_sessions_are_evicted_after_suspended_ones() {
         stage svc : fifo;
         stage gate : delay;
         workload {{ arrive batch(4);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -122,7 +122,7 @@ fn block_pools_round_and_evict_by_block() {
         stage svc : fifo;
         stage gate : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -161,7 +161,7 @@ fn spill_to_a_tier_and_fetch_back() {
         stage link : fifo;
         stage gate : delay;
         workload { arrive batch(2); init { set c = serial == 0 ? 20 : 25; }
-          session { request;
+          session { turn;
             end;
 
           }
@@ -206,7 +206,7 @@ fn a_spill_predicate_sees_whether_the_session_is_queued() {
         stage link : fifo;
         stage gate : delay;
         workload {{ arrive batch(3); init {{ set pri = serial == 2 ? 0 : 1; }}
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -240,7 +240,7 @@ fn grow_waits_under_preempt_none() {
         stage svc : fifo(2);
         stage gate : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -279,7 +279,7 @@ fn a_preempted_hold_caches_what_it_computed() {
         pool kv { cap 20; block 1; preempt lifo; }
         stage d : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -326,7 +326,7 @@ fn priority_queue_orders_admissions() {
         pool kv { cap 10; queue by (prio); }
         stage svc : fifo;
         workload { arrive batch(3); init { set prio = 2 - serial; }
-          session { request;
+          session { turn;
             end;
 
           }
@@ -353,7 +353,7 @@ fn oversized_requests_are_rejected() {
         pool kv { cap 10; }
         stage svc : fifo;
         workload { arrive batch(2);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (cost(kv, serial == 0 ? 20 : 5)) { run svc (cost(svc, 1)); } observe done = serial;
@@ -375,7 +375,7 @@ fn an_oversized_reservation_is_rejected() {
         pool kv { cap 10; }
         stage svc : fifo;
         workload { arrive batch(3);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (cost(kv, 1)) reserve (cost(kv, serial == 0 ? 20 : 1)) { run svc (cost(svc, 1)); } observe done = serial;
@@ -405,7 +405,7 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
         let src = format!(
             "pool kv {{ cap 10; }} pool kv2[2] {{ cap 10; }} stage d : delay;
         workload {{ arrive batch(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ {hold} {{ run d (cost(d, 1)); }}
@@ -424,7 +424,7 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
         &common::main_source(
             "pool kv { cap 10; block 4; } stage d : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (cost(kv, 9)) { run d (cost(d, 1)); }
@@ -444,7 +444,7 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
     let r = run(
         "pool kv { cap 10; } stage d : delay;
         workload { arrive batch(2); init { set u = 5 + 10 * serial; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (cost(kv, u)) { run d (cost(d, 1)); }
@@ -483,7 +483,7 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
         pool kv { cap 160; block 16; evict lru; preempt lifo; }
         stage engine : step { budget 1000; chunk 0; cost 1; memory kv; }
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -520,7 +520,7 @@ fn a_zero_cost_preempting_step_does_not_hang() {
         pool kv { cap 160; block 16; evict lru; preempt lifo; }
         stage engine : step { budget 1000; chunk 0; cost tokens; memory kv; }
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -545,7 +545,7 @@ fn a_zero_cost_preempting_step_does_not_hang() {
 const GUARD: &str = "
         stage svc : delay;
         workload { arrive batch(1); init { set c = 5; set K = 10; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { branch (GUARD) { run svc (cost(svc, 1)); }
@@ -631,7 +631,7 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
         stage engine : step {{ budget 8192; cost tokens * 1e-5 + 1e-4; memory kv; }}
         stage think : delay;
         workload {{ arrive closed(1);
-          session {{ request;
+          session {{ turn;
           }}
         }}
         server {{ loop {{ run think (cost(think, 1)); {wrap} }}
@@ -668,7 +668,7 @@ fn bad_amounts_and_indices_fail_the_run() {
         let src = format!(
             "pool kv {{ cap 64; }} pool q[2] {{ cap 64; }} stage d : delay; stage a[2] : delay;
         workload {{ arrive batch(1); init {{ set z = 0; set i = 0; }}
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ {stmt}
@@ -739,7 +739,7 @@ fn bad_amounts_and_indices_fail_the_run() {
         let src = format!(
             "pool kv {{ cap 64; }} stage d : delay;
         workload {{ arrive batch(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ {stmt}
@@ -757,7 +757,7 @@ fn bad_amounts_and_indices_fail_the_run() {
     let mut p = serq::compile_source(
         &common::main_source(
             "stage a[2] : delay; workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run a[0] (cost(a, 1));
@@ -766,8 +766,8 @@ fn bad_amounts_and_indices_fail_the_run() {
         &common::horizon(10.0),
     )
     .unwrap();
-    let serq::ir::CStmt::Run { stage, .. } = &mut p.blocks[p.session][0] else {
-        panic!("the session runs first")
+    let serq::ir::CStmt::Run { stage, .. } = &mut p.blocks[p.session][1] else {
+        panic!("the turn is followed by a run")
     };
     stage.index = Some(Box::new(serq::ir::CExpr::Num(-1.0)));
     let e = p.validate().unwrap_err();
@@ -780,7 +780,7 @@ fn bad_amounts_and_indices_fail_the_run() {
         &common::main_source(
             "pool kv { cap 64; } stage eng : step { budget 8; cost 1; memory kv; }
         workload { arrive batch(1); init { set z = 0; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (cost(kv, 8)) { run eng decode (cost(eng, z - 1)); }
@@ -799,7 +799,7 @@ fn bad_amounts_and_indices_fail_the_run() {
     let r = run(
         "pool kv { cap 64; } stage d : delay;
         workload { arrive batch(1); init { set z = 0; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run d (cost(d, z)); hold kv (cost(kv, z)) { run d (cost(d, 1)); }
@@ -817,7 +817,7 @@ fn a_hold_takes_a_pool_once() {
     let src = "pool kv { cap 400; block 16; }
         stage engine : step { budget 128; chunk 128; cost 0.001; memory kv; }
         workload { arrive batch(3);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -834,7 +834,7 @@ fn a_hold_takes_a_pool_once() {
         &common::main_source(
             "pool kv[2] { cap 64; } stage d : delay;
         workload { arrive batch(1); init { set i = 1; set j = 1; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv[i] (cost(kv, 1)), kv[j] (cost(kv, 1)) { run d (cost(d, 1)); }
@@ -867,7 +867,7 @@ fn a_reserve_that_reads_the_state_waits_instead_of_being_rejected() {
         pool kv {{ cap 10; }}
         stage svc : delay;
         workload {{ arrive batch(3);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -947,7 +947,7 @@ fn a_held_reservation_counts_against_later_admissions() {
         pool kv {{ cap 20; preempt lifo; {held} }}
         stage engine : step {{ budget 64; cost 1; memory kv; }}
         workload {{ arrive batch(3);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -1000,7 +1000,7 @@ fn a_held_reservation_is_each_live_hold_s() {
         pool kv {{ cap 12; reserve held; }}
         stage gate : delay;
         workload {{ arrive batch(2);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}

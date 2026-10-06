@@ -14,7 +14,6 @@ fn main() {
     arrive poisson(Lambda);
     turn { set work_size = ~exp(1); }
 
-    session { turn; request; end; }
   }
 
   server {

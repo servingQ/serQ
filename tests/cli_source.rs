@@ -26,13 +26,13 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
     );
     // The first spelling is a valid stage, but the second is an unknown pool.
     // Searching the token stream for the first matching name would misdiagnose it.
-    let src = "stage kvv : fifo;\npool kv { cap 10; }\nworkload { session { request; hold kvv (cost(kvv, 1)) { end; } \n} }\nserver {\n}\n";
+    let src = "stage kvv : fifo;\npool kv { cap 10; }\nworkload { session { turn; hold kvv (cost(kvv, 1)) { end; } \n} }\nserver {\n}\n";
     f.write("model.sq", &common::main_source(src));
     failure(
         &f.run(&["check", "model.sq"]),
         1,
         &[
-            "3:36:",
+            "3:33:",
             "unknown pool `kvv`",
             "did you mean pool `kv`?",
             "declared at 2:6",
@@ -44,7 +44,7 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
 fn names_and_bare_references_keep_their_locations() {
     for (src, location, cause) in [
         (
-            "workload { session { request; \n} }\nserver { set x = min(typo, 1);\n}\n",
+            "workload { session { turn; \n} }\nserver { set x = min(typo, 1);\n}\n",
             "3:22:",
             "unknown name `typo`",
         ),
@@ -59,7 +59,7 @@ fn names_and_bare_references_keep_their_locations() {
             "unknown pool `kvv`",
         ),
         (
-            "// 한글 주석\nlet 용량 = 10;\nworkload { session { request; \n} }\nserver { set x = 용랑;\n}\n",
+            "// 한글 주석\nlet 용량 = 10;\nworkload { session { turn; \n} }\nserver { set x = 용랑;\n}\n",
             "5:18:",
             "unknown name `용랑`",
         ),
@@ -90,11 +90,11 @@ fn duplicate_declarations_point_to_both_sites() {
 
 #[test]
 fn desugaring_keeps_server_and_header_binding_locations() {
-    let src = "stage svc : fifo;\nworkload { arrive batch(1); session { request; end; } }\nserver {\n  run svcc (cost(svcc, 1));\n}\n";
+    let src = "stage svc : fifo;\nworkload { arrive batch(1); session { turn; end; } }\nserver {\n  run svcc (cost(svcc, 1));\n}\n";
     let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     assert!(err.contains("4:7:"), "{err}");
     assert!(err.contains("4 |   run svcc (cost(svcc, 1));"), "{err}");
-    let src = "pool kv { cap 10; }\nworkload { arrive batch(1); session { request; end; } }\nserver {\n  hold kv (cost(kv, amount)) at admission (amount = missing) { }\n}\n";
+    let src = "pool kv { cap 10; }\nworkload { arrive batch(1); session { turn; end; } }\nserver {\n  hold kv (cost(kv, amount)) at admission (amount = missing) { }\n}\n";
     let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     // `missing`, in the binding, is where the failed expression was written.
     assert!(err.contains("4:53:"), "{err}");
@@ -103,7 +103,7 @@ fn desugaring_keeps_server_and_header_binding_locations() {
 
 #[test]
 fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
-    let src = "queue engine : prefill {\n  serve fifo;\n  prefill (prompt) { run (cost(engine, prompt)); }\n}\nqueue gw : gateway { route {\n  engine.prefill (missing);\n} }\nworkload { arrive batch(1); session { request gw; end; } }\n";
+    let src = "queue engine : prefill {\n  serve fifo;\n  prefill (prompt) { run (cost(engine, prompt)); }\n}\nqueue gw : gateway { route {\n  engine.prefill (missing);\n} }\nworkload { arrive batch(1); session { turn; end; } } server { gw.route(); }\n";
     let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     // Parameter substitution must point to the argument at the call site,
     // rather than the parameter inside the queue's entry.
@@ -121,7 +121,7 @@ fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
 
 #[test]
 fn ambiguous_suggestions_and_override_spans_are_not_misleading() {
-    let src = "stage cat : fifo; stage cut : fifo; workload { session { request; \n} }\nserver { run cot (cost(cot, 1));\n} ";
+    let src = "stage cat : fifo; stage cut : fifo; workload { session { turn; \n} }\nserver { run cot (cost(cot, 1));\n} ";
     let err = compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap_err();
     assert!(!err.contains("did you mean"), "{err}");
     let ov = Overrides {
@@ -173,7 +173,7 @@ fn ownership_checks_ignore_locations_but_keep_index_syntax() {
     let program = |target: &str| {
         format!(
             "pool q[2] {{ cap 10; }}
-         workload {{ session {{ request;
+         workload {{ session {{ turn;
            end;
 
 }} }}
@@ -206,7 +206,7 @@ fn a_constant_that_is_nan_is_refused_and_an_infinity_is_not() {
 pool kv { cap 100; block 16; }
 stage s : fifo(1);
 workload { arrive poisson(1);
-  session { request; end;
+  session { turn; end;
   }
 }
 server { run s (cost(s, x));
@@ -302,7 +302,7 @@ def key(x) {{ {key} }}
 def twice(x) {{ set y = x * 2; }}
 stage svc : fifo;
 workload {{ arrive poisson(lam);
-  session {{ request; end;
+  session {{ turn; end;
   }}
 }}
 server {{ set c = 1; run svc (cost(svc, service())); observe k = key(c);

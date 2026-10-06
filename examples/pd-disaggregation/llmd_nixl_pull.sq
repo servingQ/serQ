@@ -189,16 +189,20 @@ fn main() {
     }
     session {
       turn;
-      loop {
-        // vLLM refuses a prompt of max_model_len tokens or more before it is
-        // scheduled (input_processor.py:512-536): the session ends there.
-        observe too_long = K + n >= max_model_len;
-        branch (K + n >= max_model_len) { end; }
-        request gw;
+      while (more && accepted) {
         set K = prompt + D.produced;
-        branch (more) { tool (~exp(Z)); turn; } else { end; }
+        tool (~exp(Z));
+        turn;
       }
     }
+  }
+
+  server {
+    // vLLM refuses a prompt of max_model_len tokens or more before it is
+    // scheduled (input_processor.py:512-536): the session ends there.
+    observe too_long = K + n >= max_model_len;
+    set accepted = K + n < max_model_len;
+    branch (accepted) { gw.route(); }
   }
 
   // How evenly the router spreads the decoders, read at every instant: the

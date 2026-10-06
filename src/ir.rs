@@ -21,8 +21,10 @@ use serde::{Deserialize, Serialize};
 /// 9 reevaluates lexicographic queue keys at selection and supplies `Waited`;
 /// 10 makes `Hold.cache` the clause that admits a hold to the prefix cache
 /// (a hold without it consumes nothing of the session's own entry).
-/// 11 changes what the random seed names; 12 adds resource cost conversions
-/// and mandatory attribute types and workload/server statement authority.
+/// 11 separates random streams by session and turn; 12 adds `While`,
+/// a guarded loop that continues after its body when the guard becomes zero.
+/// IR 12 also adds resource cost conversions and mandatory attribute types
+/// and workload/server statement authority.
 pub const IR_VERSION: u32 = 12;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
@@ -594,6 +596,8 @@ pub enum CStmt {
     },
     Branch(CExpr, BlockId, BlockId),
     Loop(BlockId),
+    /// Test the guard before each pass; continue after the loop when it is zero.
+    While(CExpr, BlockId),
     Choose {
         var: usize,
         count: CExpr,
@@ -988,9 +992,10 @@ impl Program {
             *was = true;
             for st in &self.blocks[b] {
                 match st {
-                    CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::Fork(body) => {
-                        todo.push(*body)
-                    }
+                    CStmt::Hold { body, .. }
+                    | CStmt::Loop(body)
+                    | CStmt::While(_, body)
+                    | CStmt::Fork(body) => todo.push(*body),
                     CStmt::Branch(_, a, c) => todo.extend([*a, *c]),
                     _ => {}
                 }
@@ -1140,7 +1145,7 @@ impl Program {
                     self.enclosed(*a, held, leased)?;
                     self.enclosed(*c, held, leased)?;
                 }
-                CStmt::Loop(x) => self.enclosed(*x, held, leased)?,
+                CStmt::Loop(x) | CStmt::While(_, x) => self.enclosed(*x, held, leased)?,
                 CStmt::Fork(x) => {
                     // a preempted hold runs again from its start, and would
                     // fork a second leg; the proxy sends each leg once
@@ -1177,7 +1182,7 @@ impl Program {
                     out.extend([self.slot_cached, self.slot_computed]);
                     out.extend(self.assigned(*body));
                 }
-                CStmt::Loop(body) => out.extend(self.assigned(*body)),
+                CStmt::Loop(body) | CStmt::While(_, body) => out.extend(self.assigned(*body)),
                 CStmt::Branch(_, x, y) => {
                     out.extend(self.assigned(*x));
                     out.extend(self.assigned(*y));
@@ -2505,6 +2510,23 @@ impl Validator<'_> {
                 self.block(*a)?;
                 self.block(*b)
             }
+            CStmt::While(c, b) => {
+                self.expr(c, m)?;
+                if let CExpr::Num(x) = c
+                    && *x != 0.0
+                    && *x != 1.0
+                {
+                    return Err(format!(
+                        "`while ({})`: the guard is not 0 or 1; write `~bernoulli(p)` for a continuation probability",
+                        show_num_exact(*x)
+                    ));
+                }
+                self.block(*b)?;
+                if !self.lets_time_pass(*b) {
+                    return Err("a `while` must let time pass on every pass through its body: a `run`, a `hold` whose body does, or `end` on every path".into());
+                }
+                Ok(())
+            }
             CStmt::Loop(b) => {
                 self.block(*b)?;
                 if !self.lets_time_pass(*b) {
@@ -2571,7 +2593,9 @@ impl Validator<'_> {
             CStmt::End => Some("`end`"),
             CStmt::Fork(_) => Some("fork"),
             CStmt::Join => Some("`join`"),
-            CStmt::Hold { body, .. } | CStmt::Loop(body) => self.leg_may_not(*body),
+            CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::While(_, body) => {
+                self.leg_may_not(*body)
+            }
             CStmt::Branch(_, x, y) => self.leg_may_not(*x).or_else(|| self.leg_may_not(*y)),
             _ => None,
         })

@@ -41,11 +41,10 @@ fn main() {
     // the conversation: a request per turn, then a tool call and the next
     // turn, or the end
     session {
-      turn;
       loop {
-        request;
+        turn;
         set K = prompt + o;
-        branch with (p) { run tool (cost(tool, ~exp(Z))); turn; } else { drop kv; end; }
+        branch with (p) { run tool (cost(tool, ~exp(Z))); } else { drop kv; end; }
       }
     }
   }

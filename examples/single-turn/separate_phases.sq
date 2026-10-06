@@ -16,7 +16,6 @@ fn main() {
     arrive batch(2);
     init { set prompt = serial == 0 ? 2 : 4; }
 
-    session { request; end; }
   }
   server {
     run gate (cost(gate, serial));

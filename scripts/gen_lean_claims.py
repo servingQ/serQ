@@ -120,6 +120,17 @@ class Program:
         self.init = ir["blocks"][ir["init"]]
         if ir["blocks"][ir["turn"]]:
             raise Fragment(f"{name}: a turn block")
+        # This fragment fixes w.turns = [] and w.turnSlot = none. A Turn
+        # with no turn block is a pure continuation step (exec_empty_turn).
+        # The counter must be unobserved everywhere, including claims and
+        # scheduler expressions; otherwise the family would omit meaning.
+        def reads_turn(value):
+            if isinstance(value, dict):
+                return value.get("Attr") == ir["slot_turn"] or any(reads_turn(v) for v in value.values())
+            return isinstance(value, list) and any(reads_turn(v) for v in value)
+        if reads_turn(ir):
+            raise Fragment(f"{name}: turn_no is outside the empty-turn claim fragment")
+        self.lean.empty_turns = True
         self.drawn = set()
         self.defs = {}  # attribute -> its init expression, for `given`
         for st in self.init:
@@ -206,6 +217,8 @@ class Program:
                     walk(v[1]); walk(v[2])
                 if k in ("Loop", "Fork"):
                     walk(v)
+                if k == "While":
+                    walk(v[1])
         walk(self.ir["session"])
         return out
 

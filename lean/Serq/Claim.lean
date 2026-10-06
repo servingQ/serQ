@@ -274,6 +274,9 @@ theorem same_exec : ∀ (f : ℕ) (m : Machine) (i : ℕ), Same m (exec D f m i)
       · exact Same.key_trans (same_exec f _ i) rfl
       · exact Same.key_trans (same_exec f _ i) rfl
       · exact Same.key_trans (same_exec f _ i) rfl
+      · split
+        · exact Same.key_trans (same_exec f _ i) rfl
+        · exact Same.key_trans (same_exec f _ i) rfl
       · exact Same.key_trans (same_exec f _ i) rfl
       · split
         · exact Same.of_key rfl

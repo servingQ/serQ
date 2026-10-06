@@ -239,7 +239,6 @@ fn main() {
   stage engine : step { budget 8; cost 1; }
   workload {
     arrive batch(2);
-    session { request; end; }
   }
   server {
     run engine prefill (cost(engine, 8));

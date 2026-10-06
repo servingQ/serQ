@@ -90,7 +90,7 @@ fn another_policy_is_refused_with_its_construct() {
     let src = "pool kv { cap 160; block 16; evict lru; preempt lifo; } pool reqs { cap 4; }
         stage engine : step { budget 64; cost 1; serve by (remaining); memory kv; }
         workload { arrive batch(1); init { set n = 8; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { prefill (n) growing kv; }
@@ -110,7 +110,7 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
     let src = "pool kv { cap 160; block 16; evict lru; preempt lifo; } pool reqs { cap 4; }
         stage engine : step { budget 64; cost 1; serve by (decoding ? 0 : 1, -admission); memory kv; }
         workload { arrive batch(1); init { set n = 8; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { prefill (n) growing kv; }
@@ -181,7 +181,7 @@ fn the_newer_constructs_are_refused_and_vllms_body_taken() {
         pool reqs { cap 4; admit via engine; RESERVE }
         stage engine : step { budget 64; cost 1; memory kv; ITER }
         workload { arrive batch(1); init { set n = 8; }
-          session { request; HOLD end;
+          session { turn; HOLD end;
           }
         }
         server {

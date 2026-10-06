@@ -35,6 +35,7 @@ open Exec
 /-- The vLLM request program (serQ `examples/oracle/vllm_request.sq`), translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prompt, 10 = o, 11 = arrive, 12 = known. Observations: 0 = first, 1 = done. Pools: 0 = reqs, 1 = kv. Stages: 0 = engine, 1 = gate. -/
 def vllmRequest : Prog := [route|
   run 1 (x.attr 11);
+  turn;
   hold 0 (1), 1 (min (if ((x.attr 8) < (x.attr 9)) then (x.attr 9) else ((x.attr 8) + 1)) x.budgetLeft) fits (if ((x.attr 8) < (x.attr 9)) then (x.attr 9) else ((x.attr 8) + 1)) {
     set 12 = if ((x.attr 8) < (x.attr 9)) then (x.attr 9) else ((x.attr 8) + 1);
     run 0 prefill (x.attr 12) growing 1;
@@ -109,13 +110,38 @@ theorem vllm_seqcap :
 
 /-! ### A multi-turn scenario with a prefix cache -/
 
-/-- The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prev, 10 = prevout, 11 = t0, 12 = prompt, 13 = hitmax, 14 = known, 15 = c. Observations: 0 = cached_tokens, 1 = prefix, 2 = sent, 3 = ttft, 4 = latency. Pools: 0 = kv, 1 = reqs. Stages: 0 = engine, 1 = front, 2 = gate, 3 = tool. -/
+/-- The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prev, 10 = prevout, 11 = t0, 12 = prompt, 13 = hitmax, 14 = known, 15 = c. Observations: 0 = cached_tokens, 1 = prefix, 2 = sent, 3 = ttft, 4 = response. Pools: 0 = kv, 1 = reqs. Stages: 0 = engine, 1 = front, 2 = gate, 3 = tool. -/
 def vllmTurn : Prog := [route|
   run 2 (x.serial * 3);
   set 9 = 0;
   set 10 = 0;
   turn;
-  loop {
+  set 11 = x.now;
+  set 12 = x.attr 3;
+  run 1 (0);
+  set 13 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
+  hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16))) + (min ((if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16)))) x.budgetLeft)) fits (if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1)) reuse (max (x.attr 13) (((x.attr 8) / 16) * 16)) {
+    set 14 = if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1);
+    set 15 = x.cached;
+    observe 0 = x.attr 15;
+    observe 1 = (x.attr 9) + (x.attr 10);
+    observe 2 = x.attr 11;
+    run 0 prefill ((x.attr 14) - (x.attr 15)) growing 0;
+    branch (if ((x.attr 14) = (x.attr 12)) then 1 else 0) {
+      observe 3 = x.now - (x.attr 11);
+      done
+    } else {
+      done
+    };
+    run 0 decode (((x.attr 4) - 1) - ((x.attr 14) - (x.attr 12))) growing 0;
+    done
+  } cache (((x.attr 12) + (x.attr 4)) - 1);
+  observe 4 = x.now - (x.attr 11);
+  while (x.attr 6) {
+    set 9 = x.attr 3;
+    set 10 = x.attr 4;
+    run 3 (x.attr 5);
+    turn;
     set 11 = x.now;
     set 12 = x.attr 3;
     run 1 (0);
@@ -137,17 +163,9 @@ def vllmTurn : Prog := [route|
       done
     } cache (((x.attr 12) + (x.attr 4)) - 1);
     observe 4 = x.now - (x.attr 11);
-    set 9 = x.attr 12;
-    set 10 = x.attr 4;
-    branch (x.attr 6) {
-      run 3 (x.attr 5);
-      turn;
-      done
-    } else {
-      stop
-    };
     done
-  }]
+  };
+  stop]
 
 theorem vllmTurn_wf : vllmTurn.wf = true := by decide
 

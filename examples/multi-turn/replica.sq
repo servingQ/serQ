@@ -23,7 +23,7 @@ let beta = 2e-9;     // KV read per iteration per context token (s)
 
 fn main() {
   pool live { cap cap; }
-  pool batch { cap B; }
+  pool reqs { cap B; }
   pool kv { cap C; evict by (waiting, size); }
 
   stage engine : step {
@@ -57,7 +57,6 @@ fn main() {
         observe entry_wait = now - t_arr;
         loop {
           turn;
-          request;
           set K = K + n + o;
           set cold = 0;
           branch (K > maxctx) { drop kv; end; }
@@ -72,7 +71,7 @@ fn main() {
   // the replica: one turn's prefill and decode
   server {
     set t0 = now;
-    hold batch (cost(batch, 1)), kv (cost(kv, K + n + o)) {
+    hold reqs (cost(reqs, 1)), kv (cost(kv, K + n + o)) {
       set hit = !cold && cached >= K;
       // prefill work in tokens: the overhead and the attention term are
       // converted at the compute rate 1/a
@@ -81,7 +80,7 @@ fn main() {
       run engine prefill (cost(engine, P));
       observe ttft = now - t0;
       run engine decode (cost(engine, o));
-    } cache (cost(batch, kv, K + n + o));
+    } cache (cost(reqs, kv, K + n + o));
     observe response = now - t0;
     branch (!cold) { observe hit = hit; }
   }

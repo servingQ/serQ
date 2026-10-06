@@ -524,9 +524,11 @@ impl Program {
                     CStmt::Observe(_, e) => {
                         expression(e)?;
                     }
-                    CStmt::Branch(e, ..) => {
+                    CStmt::Branch(e, ..) | CStmt::While(e, _) => {
                         if expression(e)?.is_some() {
-                            return Err(at("a branch predicate is not a resource cost".into()));
+                            return Err(at(
+                                "a control-flow predicate is not a resource cost".into()
+                            ));
                         }
                     }
                     CStmt::Turn | CStmt::End if side == Side::Server => {
@@ -717,6 +719,11 @@ impl Program {
                             *x &= y;
                         }
                     }
+                    CStmt::While(e, body) => {
+                        read(e, ready)?;
+                        let mut inside = ready.clone();
+                        walk(p, *body, &mut inside)?;
+                    }
                     CStmt::Loop(body) => {
                         let mut inside = ready.clone();
                         walk(p, *body, &mut inside)?;
@@ -746,7 +753,10 @@ impl Program {
 
 fn children(st: &CStmt) -> Vec<BlockId> {
     match st {
-        CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::Fork(body) => vec![*body],
+        CStmt::Hold { body, .. }
+        | CStmt::Loop(body)
+        | CStmt::While(_, body)
+        | CStmt::Fork(body) => vec![*body],
         CStmt::Branch(_, a, b) => vec![*a, *b],
         _ => vec![],
     }

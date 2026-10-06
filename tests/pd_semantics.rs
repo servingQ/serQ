@@ -24,7 +24,7 @@ fn release_frees_the_pool_before_the_scope_ends() {
         pool kv { cap 10; }
         stage svc : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -61,7 +61,7 @@ fn release_caches_per_the_hold_clause() {
         pool kv { cap 100; }
         stage svc : delay;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -85,7 +85,7 @@ fn a_hold_on_two_pools_releases_one_of_them() {
         pool kv { cap 100; }
         stage svc : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -125,7 +125,7 @@ fn load_advances_the_computed_position() {
         pool kv { cap 100; }
         stage svc : delay;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -147,7 +147,7 @@ fn load_must_fit_the_allocation() {
         pool kv { cap 100; }
         stage svc : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (cost(kv, 10)) { load kv (cost(kv, 11)); }
@@ -170,7 +170,7 @@ fn release_and_load_need_an_enclosing_hold() {
         let src = format!(
             "pool kv {{ cap 10; }} pool q {{ cap 10; }} stage svc : delay;
         workload {{ arrive batch(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ {stmt}
@@ -197,7 +197,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
             "pool kv {{ cap 64; }} pool q {{ cap 10; }}
         stage engine : step {{ budget 8; cost 1; memory kv; }}
         workload {{ arrive batch(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ {stmt}
@@ -212,7 +212,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
     // not blame the index, which is the same
     let src = "pool kv { cap 64; } stage d : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (cost(kv, 16)) { run d (cost(d, 1)); } lease kv (5); grow kv (cost(kv, 16));
@@ -227,7 +227,7 @@ fn grow_and_growing_need_an_enclosing_hold() {
     let src = "pool kv { cap 64; }
         stage engine : step { budget 8; cost 1; memory kv; }
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold kv (cost(kv, 8)) { grow kv (cost(kv, 8)); run engine prefill (cost(engine, 8)) growing kv; }
@@ -246,7 +246,7 @@ fn a_preemptible_hold_reads_no_moving_index() {
         pool aux[2] {{ cap 64; }}
         stage engine : step {{ budget 128; chunk 128; cost 0.5; memory kv; }}
         workload {{ arrive batch(4);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -294,7 +294,7 @@ fn a_hold_whose_body_changes_its_index_does_not_link() {
         workload {{ arrive batch(2); init {{ set j = 0; }} {workload}
           session {{
             hold kv[1] (cost(kv, 16)) {{ hold {hold} (cost({hold}, 16)) {{ {body} run d (cost(d, 1)); }} }}
-            request; end;
+            turn; end;
           }}
         }}
         server {{}}
@@ -345,7 +345,7 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
         stage decode : delay;
         stage gate : delay;
         workload { arrive batch(3); init { set kind = serial; }
-          session { request;
+          session { turn;
             end;
 
           }
@@ -379,7 +379,7 @@ fn a_transfer_overlaps_the_two_pools_for_the_link_run() {
 fn transfer_from_to_is_sugar_for_three_statements() {
     let a = "pool memP { cap 10; } pool memD { cap 10; } stage link : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold memP (cost(memP, 10)) { hold memD (cost(memD, 10)) { transfer (1) from memP to memD (9); } }
@@ -387,7 +387,7 @@ fn transfer_from_to_is_sugar_for_three_statements() {
         ";
     let b = "pool memP { cap 10; } pool memD { cap 10; } stage link : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold memP (cost(memP, 10)) { hold memD (cost(memD, 10)) { run link (cost(link, 1)); load memD (cost(memD, 9)); release memP; } }
@@ -416,7 +416,7 @@ fn decode_pressure_backs_into_the_prefill_pool() {
         stage decode : delay;
         stage gate : delay;
         workload { arrive batch(6);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -439,7 +439,7 @@ fn decode_pressure_backs_into_the_prefill_pool() {
         stage decode : delay;
         stage gate : delay;
         workload { arrive batch(6);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -477,7 +477,7 @@ fn a_re_executed_hold_releases_nothing_twice() {
         stage link : delay;
         stage engine : step { budget 100; cost 1; memory memD; }
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -515,7 +515,7 @@ fn an_engine_serves_its_queues_in_declaration_order() {
         stage engine : step {{ budget 1000; cost 1; }}
         stage gate : delay;
         workload {{ arrive batch(3);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -610,7 +610,7 @@ fn release_and_load_name_the_pool_as_the_hold_does() {
         format!(
             "pool q[2] {{ cap 10; }} stage svc : delay;
         workload {{ arrive batch(1); init {{ set j = 0; }}
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ {body}
@@ -652,7 +652,7 @@ fn a_grow_with_nobody_to_preempt_waits() {
         stage engine : step { budget 100; cost 1; memory kv; }
         stage svc : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -680,7 +680,7 @@ fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
         stage svc : delay;
         stage gate : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -718,7 +718,7 @@ fn a_lease_ends_with_the_session() {
         pool kv { cap 10; }
         stage svc : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -747,7 +747,7 @@ fn a_lease_is_not_a_preemption_victim() {
         pool kv { cap 20; preempt lifo; }
         stage svc : delay;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -780,7 +780,7 @@ fn a_lease_is_not_a_preemption_victim() {
 fn a_lease_names_a_pool_of_the_hold() {
     let bad = "pool a { cap 1; } pool b { cap 1; } stage svc : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold a (cost(a, 1)) { run svc (cost(svc, 1)); } lease b (1);
@@ -790,7 +790,7 @@ fn a_lease_names_a_pool_of_the_hold() {
     // and a `release` of a leased pool links outside any hold of it
     let ok = "pool a { cap 1; } stage svc : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold a (cost(a, 1)) { run svc (cost(svc, 1)); } lease a (1); run svc (cost(svc, 1)); release a;

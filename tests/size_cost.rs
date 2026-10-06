@@ -13,7 +13,7 @@ fn compile(server: &str, turn: &str) -> Result<Program, String> {
         stage svc : fifo;
         stage tool : delay;
         workload {{ arrive batch(1); turn {{ {turn} }}
-            session {{ turn; request; end; }} }}
+            session {{ turn; end; }} }}
         server {{ {server} }}
     }}"#
         ),
@@ -122,7 +122,7 @@ fn client_tool_cost_does_not_grant_server_resource_access() {
     let source = r#"fn main() {
         stage svc : fifo; stage tool : delay;
         workload { arrive batch(1); turn { set items = 3; }
-          session { turn; request; run tool (cost(tool, 2)); end; } }
+          session { turn; run tool (cost(tool, 2)); end; } }
         server { run svc (cost(svc, items)); }
     }"#;
     compile_source(source, &common::horizon(10.0)).unwrap();
@@ -209,7 +209,7 @@ fn serving_vocabulary_converts_quantities_not_already_converted_costs() {
         "set c = cost(svc, 3); prefill(c);",
     ] {
         let src = format!(
-            "fn main() {{ stage svc : delay; workload {{ arrive batch(1); session {{ request; end; }} }} server {{ {body} }} }}"
+            "fn main() {{ stage svc : delay; workload {{ arrive batch(1); session {{ turn; end; }} }} server {{ {body} }} }}"
         );
         // Explicit on: this stage's name need not be the vocabulary's default.
         let src = src.replace("prefill(", "prefill on svc (");
@@ -225,7 +225,7 @@ fn serving_vocabulary_converts_quantities_not_already_converted_costs() {
 fn family_annotations_check_written_indices_before_projecting_the_type() {
     for index in ["missing", "99", "~uniform(0, 2)"] {
         let src = format!(
-            "fn main() {{ stage svc[2] : delay; workload {{ arrive batch(1); session {{ request; end; }} }} server {{ run svc[0] (cost(svc[{index}], 1)); }} }}"
+            "fn main() {{ stage svc[2] : delay; workload {{ arrive batch(1); session {{ turn; end; }} }} server {{ run svc[0] (cost(svc[{index}], 1)); }} }}"
         );
         assert!(
             compile_source(&src, &common::horizon(10.0)).is_err(),
@@ -238,9 +238,36 @@ fn family_annotations_check_written_indices_before_projecting_the_type() {
 fn workload_cannot_supply_a_cost_for_server_growth_or_load() {
     for action in ["grow mem(c);", "load mem(c);"] {
         let src = format!(
-            "fn main() {{ pool mem {{ cap 10; }} workload {{ arrive batch(1); session {{ set c = cost(mem, 3); hold mem(cost(mem, 1)) {{ request; }} end; }} }} server {{ {action} }} }}"
+            "fn main() {{ pool mem {{ cap 10; }} workload {{ arrive batch(1); session {{ set c = cost(mem, 3); hold mem(cost(mem, 1)) {{ turn; }} end; }} }} server {{ {action} }} }}"
         );
         let e = compile_source(&src, &common::horizon(10.0)).unwrap_err();
         assert!(e.contains("workload cannot"), "{e}");
     }
+}
+
+#[test]
+fn while_preserves_cost_initialization_and_statement_authority() {
+    for body in [
+        "while (c > cost(svc, 0)) { set c = cost(svc, 1); run svc(c); }",
+        "while (items > 0) { set c = cost(svc, 1); run svc(c); } run svc(c);",
+    ] {
+        let e = compile(body, "set items = 0;").unwrap_err();
+        assert!(e.contains("read before every path"), "{e}");
+    }
+    let mut p = compile(
+        "while (items > 0) { run svc(cost(svc, 1)); }",
+        "set items = 0;",
+    )
+    .unwrap();
+    let body = p
+        .blocks
+        .iter()
+        .flatten()
+        .find_map(|s| match s {
+            serq::ir::CStmt::While(_, body) => Some(*body),
+            _ => None,
+        })
+        .unwrap();
+    p.sides[body][0] = serq::ir::Side::Workload;
+    assert!(p.validate().unwrap_err().contains("server body"));
 }

@@ -66,8 +66,8 @@ coefficient changes the deployment's cost, not the sampled demand.
 `tests/size_cost.rs` uses a demand of three items and servers costing one
 and two seconds per item: completion must be at three and six seconds.
 
-The request boundary previously disappeared completely. Its expansion now
-retains the executing side for every IR statement, including nested bodies.
+The server boundary was previously erased by source expansion. A completed
+source `turn;` now expands to a drawing `Turn` and the server statements, and retains the executing side for every IR statement, including nested bodies.
 No request event, call frame, attribute reset or new random stream is added.
 
 ## IR and consumers
@@ -90,7 +90,7 @@ know the target resource, such as a figure's stage label, display its
 underlying amount.
 
 The latest tag at implementation start, `v0.1.3`, uses IR 11. New expression
-readers and the mandatory type contract are introduced as IR 12. The Lean
+readers and the mandatory type contract are included in the untagged IR 12 alongside `While`; they do not bump it again. The Lean
 expression translator explicitly erases conversions after accepting their
 underlying expression. This preserves the executable fragment; the Lean
 execution theorems do not claim to prove the Rust type checker sound.
@@ -159,13 +159,34 @@ an implementation failure to reach it, not a missing language restriction.
 ## Validation
 
 `make check` passes release and debug tests, links and draws all 30 example
-programs, and links the five tutorial programs. The 16 size/cost regressions
+programs, and links the five tutorial programs. The 17 size/cost regressions
 cover both source and direct IR. Oracle, scheduler-target, claim and Lean
 regression IR files were regenerated. Their numeric oracle outputs and the
 generated Lean statements are unchanged; deployment figure regeneration
 also produced no changed figures.
 
-`make lean` passes the oracle/claim freshness checks and build, with 121
-theorems audited using only the standard axioms. `mkdocs build --strict`
+`make lean` passes the oracle/claim freshness checks and build, with the
+theorem audit using only the standard axioms. `mkdocs build --strict`
 passes. The Python binding tests agree with the CLI at IR 12, and all 102
 vLLM citations resolve against the pinned source.
+
+## Integration with completed turns
+
+The untagged IR 12 also contains `While` from the completed-turn frontend.
+Its guard obeys the same scalar and resource-authority rules as a branch.
+Cost initialization is checked before the guard and on a separate copy for
+the body, so a zero-iteration path cannot acquire a cost initialized only
+inside the loop. Server authority also covers the nested body. Regression
+cases exercise all three boundaries.
+
+The updated hidden-input analysis must treat `cost(resource[index], value)`
+as evaluating only `value`. Counting the annotation's index as a definitely
+read origin would incorrectly reveal that hidden input after a run. The
+analysis now skips the resource annotations; the regression runs constant
+work then attempts to branch on the hidden annotation index, which must be
+rejected. This is a static visibility error, not a new execution policy.
+
+The prefill/decode example returns a separate `accepted` server result when
+a prompt is too long; the client's `while (more && accepted)` decides
+whether to continue. This preserves the workload-owned `more` instead of
+letting the server overwrite it.

@@ -33,6 +33,7 @@
     ],
     [],
     [
+      "Workload",
       "Server",
       "Server",
       "Server",
@@ -46,7 +47,7 @@
   "observes": [
     "out",
     "vol",
-    "latency"
+    "response"
   ],
   "pools": [
     {
@@ -202,6 +203,7 @@
     ],
     [],
     [
+      "Turn",
       {
         "Observe": [
           0,

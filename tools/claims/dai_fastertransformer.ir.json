@@ -30,6 +30,7 @@
     ],
     [],
     [
+      "Workload",
       "Server",
       "Server",
       "Server",
@@ -188,6 +189,7 @@
     ],
     [],
     [
+      "Turn",
       {
         "Run": {
           "stage": {

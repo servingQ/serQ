@@ -22,7 +22,7 @@ fn three(preempt: &str) -> String {
         pool kv {{ cap 40; {preempt} }}
         stage engine : step {{ budget 64; cost 1; memory kv; }}
         workload {{ arrive batch(3);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -89,7 +89,7 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
         pool kv {{ cap 24; preempt by (-admission) {requeue}; }}
         stage engine : step {{ budget 64; cost 1; memory kv; }}
         workload {{ arrive batch(3);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -131,7 +131,7 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
         pool kv {{ cap 40; {preempt} }}
         stage engine : step {{ budget 64; cost 1; memory kv; }}
         workload {{ arrive batch(3); {hidden}
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -194,7 +194,7 @@ fn lifo_is_by_minus_admission_on_a_pool_no_engine_reads() {
         pool b {{ cap 10; }}
         stage svc : delay;
         workload {{ arrive batch(2);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -248,7 +248,7 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
         pool kv { cap 24; preempt by (-admission) requeue tail; }
         stage engine : step { budget 64; cost 1; memory kv; }
         workload { arrive batch(3);
-          session { request;
+          session { turn;
             end;
 
           }

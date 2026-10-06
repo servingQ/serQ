@@ -24,7 +24,7 @@ fn aging_source(bound: bool, key: &str) -> String {
         {stage}
         stage delay : delay;
         workload {{ arrive batch(6);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -100,7 +100,7 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
         stage engine : step { budget 5; cost 1; }
         stage delay : delay;
         workload { arrive batch(4);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -131,7 +131,7 @@ fn lexicographic_keys_preserve_enqueue_order_for_equal_keys() {
         stage engine : fifo;
         stage delay : delay;
         workload { arrive batch(4);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -154,14 +154,14 @@ fn selection_rejects_random_hidden_and_wrong_moment_keys_in_source_and_ir() {
         ("secret", "hidden"),
     ] {
         let src = format!(
-            "pool reqs {{ cap 1; queue by ({key}); }} workload {{ hidden secret; init {{ set secret = 1; }} \n  session {{ request; end; \n  }}\n}} server {{\n}} "
+            "pool reqs {{ cap 1; queue by ({key}); }} workload {{ hidden secret; init {{ set secret = 1; }} \n  session {{ turn; end; \n  }}\n}} server {{\n}} "
         );
         let error = compile_source(&common::main_source(&src), &common::horizon(1.0))
             .unwrap_err()
             .to_string();
         assert!(error.contains(message), "{key}: {error}");
     }
-    let src = "pool reqs { cap 1; queue by (waited); } workload { session { request; end; \n} }\nserver {\n} ";
+    let src = "pool reqs { cap 1; queue by (waited); } workload { session { turn; end; \n} }\nserver {\n} ";
     let p = compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap();
     let mut bad = p.clone();
     bad.pools[0].queue = Some(vec![]);
@@ -194,7 +194,7 @@ fn selection_rejects_random_hidden_and_wrong_moment_keys_in_source_and_ir() {
     assert!(
         compile_source(
             &common::main_source(
-                "workload { session { request; end; \n} }\nserver { observe x = waited;\n} "
+                "workload { session { turn; end; \n} }\nserver { observe x = waited;\n} "
             ),
             &common::horizon(1.0)
         )
@@ -214,7 +214,7 @@ fn a_selected_request_that_cannot_fit_still_blocks_lower_priority_requests() {
         stage delay : delay;
         stage service : delay;
         workload { arrive batch(3);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -247,7 +247,7 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         stage engine : step { budget 4; chunk 2; cost 1; memory kv; serve exclusive prefill; }
         stage delay : delay;
         workload { arrive batch(3);
-          session { request;
+          session { turn;
             end;
 
           }

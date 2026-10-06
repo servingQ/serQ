@@ -62,13 +62,11 @@ fn main() {
       set fan = sub ? 0 : ~bernoulli(q);
     }
     session {
-      turn;
       loop {
-        request;
+        turn;
         set K = prompt + o;
         branch (more) {
           branch (fan) { run delegate (cost(delegate, W)); } else { tool (~exp(Z)); }
-          turn;
         } else {
           branch (sub) { observe subagent = now - t_s; }
           end;

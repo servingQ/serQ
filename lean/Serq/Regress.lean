@@ -21,6 +21,7 @@ open Exec
 
 /-- `tests/lean-regress/chunk_expr.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = p, 10 = o. Observations: 0 = first, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = engine. -/
 def chunkExpr : Prog := [route|
+  turn;
   hold 1 (1), 0 (x.attr 9) {
     run 0 prefill (x.attr 9) growing 0;
     observe 0 = x.now;
@@ -40,6 +41,7 @@ theorem regress_chunk_expr :
 
 /-- `tests/lean-regress/cost_ctx.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = n, 10 = o, 11 = t0. Observations: 0 = ttft, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = engine, 1 = gate. -/
 def costCtx : Prog := [route|
+  turn;
   run 1 (x.attr 11);
   hold 1 (1), 0 (min (x.attr 9) x.budgetLeft) fits (x.attr 9) {
     run 0 prefill (x.attr 9) growing 0;
@@ -60,6 +62,7 @@ theorem regress_cost_ctx :
 
 /-- `tests/lean-regress/preempt_delay.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = d. Observations: 0 = resumed, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = engine, 1 = tool. -/
 def preemptDelay : Prog := [route|
+  turn;
   hold 1 (1), 0 (16) {
     observe 0 = x.attr 8;
     run 0 prefill (16) growing 0;

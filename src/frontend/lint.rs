@@ -81,7 +81,7 @@ fn header_using(p: &Program, block: usize, from: usize, slot: usize) -> Option<S
                     return Some(x);
                 }
             }
-            CStmt::Loop(b) | CStmt::Fork(b) => {
+            CStmt::Loop(b) | CStmt::While(_, b) | CStmt::Fork(b) => {
                 if let Some(x) = header_using(p, *b, 0, slot) {
                     return Some(x);
                 }
@@ -125,7 +125,7 @@ fn stale_header_read(p: &Program, block: usize, out: &mut Vec<String>) {
                 stale_header_read(p, *t, out);
                 stale_header_read(p, *e, out);
             }
-            CStmt::Loop(b) | CStmt::Fork(b) => stale_header_read(p, *b, out),
+            CStmt::Loop(b) | CStmt::While(_, b) | CStmt::Fork(b) => stale_header_read(p, *b, out),
             _ => {}
         }
     }
@@ -158,7 +158,9 @@ fn constant_probability_guard(p: &Program, block: usize, out: &mut Vec<String>) 
                 constant_probability_guard(p, *e, out);
             }
             CStmt::Hold { body, .. } => constant_probability_guard(p, *body, out),
-            CStmt::Loop(b) | CStmt::Fork(b) => constant_probability_guard(p, *b, out),
+            CStmt::Loop(b) | CStmt::While(_, b) | CStmt::Fork(b) => {
+                constant_probability_guard(p, *b, out)
+            }
             _ => {}
         }
     }
@@ -185,7 +187,7 @@ fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
             .chain(lease.iter().map(|(_, t)| t))
             .collect(),
         CStmt::Run { work, .. } => vec![work],
-        CStmt::Branch(g, _, _) => vec![g],
+        CStmt::Branch(g, _, _) | CStmt::While(g, _) => vec![g],
         CStmt::Choose { count, key, .. } => std::iter::once(count).chain(key.iter()).collect(),
         CStmt::Turn
         | CStmt::Drop(_)
@@ -255,7 +257,7 @@ fn cached_in_a_hold_without_cache(
                 cached_in_a_hold_without_cache(p, *t, hold, out);
                 cached_in_a_hold_without_cache(p, *e, hold, out);
             }
-            CStmt::Loop(b) => cached_in_a_hold_without_cache(p, *b, hold, out),
+            CStmt::Loop(b) | CStmt::While(_, b) => cached_in_a_hold_without_cache(p, *b, hold, out),
             // a leg holds nothing of the session's
             CStmt::Fork(b) => cached_in_a_hold_without_cache(p, *b, None, out),
             _ => {}

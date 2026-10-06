@@ -27,18 +27,17 @@ import pyserq
 
 source = """
 fn main() {
-  pool slots { cap 2; }
+  pool reqs { cap 2; }
   stage svc : fifo;
   workload {
     arrive batch(4);
-    session { request; end; }
   }
   server {
     set t0 = now;
-    hold slots (1) { run svc (2); }
-    observe latency = now - t0;
+    hold reqs (1) { run svc (2); }
+    observe response = now - t0;
   }
-  gauge occupied = used(slots);
+  gauge occupied = used(reqs);
 }
 """
 report = pyserq.run(pyserq.compile(source=source, horizon=10))

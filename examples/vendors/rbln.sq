@@ -19,7 +19,6 @@ fn main() {
     arrive batch(6);
     init { set prompt = 256; set out = 16; }
 
-    session { request; end; }
   }
   server {
     set t0 = now;

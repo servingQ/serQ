@@ -47,11 +47,10 @@ fn main() {
       set more = ~bernoulli(p);
     }
     session {
-      turn;
       loop {
-        request;
+        turn;
         set K = prompt + o;
-        branch (more) { tool (~exp(Z)); turn; } else { end; }
+        branch (more) { tool (~exp(Z)); } else { end; }
       }
     }
   }

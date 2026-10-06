@@ -24,11 +24,12 @@ fn main() {
 
     session {
       turn;
-      loop {
-        request;
+      observe context = K + n + o;
+      while (~bernoulli(p)) {
         set K = K + n + o;
-        observe context = K;
-        branch with (p) { run tool (cost(tool, ~exp(Z))); turn; } else { end; }
+        run tool (cost(tool, ~exp(Z)));
+        turn;
+        observe context = K + n + o;
       }
     }
   }

@@ -23,7 +23,7 @@ require pool costs. For example:
 workload {
   arrive batch(1);
   turn { set items = 3; }
-  session { turn; request; end; }
+  session { turn; }
 }
 server {
   set service = cost(svc, 2 * items);
@@ -91,7 +91,6 @@ fn main() {
   stage svc : delay;
   workload {
     arrive batch(2);
-    session { turn; request; end; }
   }
   server {
     run svc (cost(svc, 1));

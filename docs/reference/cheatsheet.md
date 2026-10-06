@@ -18,7 +18,7 @@ fn main() {
   pool NAME [ '[' N ']' ] { … }       // a counted resource
   stage NAME [ '[' N ']' ] : kind;    // where time passes
 
-  workload { … session { turn; request; end; } }  // arrivals, turns and client actions
+  workload { …  }  // arrivals, turns and client actions
   server { … }                       // what one request runs
   share maxmin;                       // or bottleneck: how a run over several stages divides them
   gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
@@ -65,9 +65,9 @@ stage engine : step {
 ## Statements
 
 ```serq
-turn;                              // draw the next turn's attributes
-request;                           // workload session: run the anonymous server block
-request gw;                        // workload session: run the named gateway's route
+turn;                              // draw attributes and wait for the response
+while (more) { … }                 // continue while the condition holds
+// server { gw.route(); }          // select a gateway outside the workload
 set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
 

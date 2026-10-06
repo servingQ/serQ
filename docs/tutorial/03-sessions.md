@@ -11,31 +11,29 @@ turns. This chapter models the conversation and the context it accumulates.
 
 ## What is new
 
-### `loop` and `turn`
+### `while` and `turn`
 
 ```serq
-workload {
-  …
-  session {
+session {
+  turn;
+  observe context = K + n + o;
+  while (~bernoulli(p)) {
+    set K = K + n + o;
+    run tool (cost(tool, ~exp(Z)));
     turn;
-    loop {
-      request;
-      set K = K + n + o;
-      observe context = K;
-      branch with (p) { run tool (cost(tool, ~exp(Z))); turn; } else { end; }
-    }
+    observe context = K + n + o;
   }
 }
 ```
 
-`turn;` runs the workload's `turn` block, drawing the next turn's attributes.
-`loop` repeats until something inside it ends the session.
+`turn;` draws the next turn's attributes and waits for its response.
+`while` tests its guard before each pass and continues after the loop when
+it is zero. Here `~bernoulli(p)` draws 1 with probability `p = 0.8`:
+after each response, the client either thinks and sends another turn or
+finishes. No explicit server call or final `end;` is needed.
 
-There are two branches, and the difference matters. `branch (e) { … } else { … }`
-is the **conditional** — it takes the first block when `e` is 1 and the second
-when it is 0 (anything else is a run-time error), so the guard can depend on
-the session's state. `branch with (p) { … }` is a **draw**:
-it takes the first block with probability `p`. Here the session continues with probability `p = 0.8`.
+A guard must be 0 or 1. Write a state condition such as `while (more)`
+for trace continuation, or an explicit draw as above for random continuation.
 
 ### Attributes carry state across turns
 

@@ -87,3 +87,5 @@ here. This directory is the record of **applying** them.
 | [Sizes and costs](size-and-cost.md) | Workload-owned request sizes, explicit resource costs, and IR validation without a new request execution frame | IR 12 |
 
 A new design document adds a row to this table.
+
+- [Sessions describe completed turns](session-turns.md): optional single-turn sessions, server-independent continuation, and conditional loops.

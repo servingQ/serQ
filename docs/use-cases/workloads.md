@@ -15,7 +15,7 @@ They hide output length `o` from scheduling expressions. See the
 |---|---|---|---|---|
 | program | `vllm_single_turn.sq` | `vllm_chat.sq` | `vllm.sq` | `vllm_subagents.sq` |
 | a session is | one request | a conversation | a task | a task and the subtasks it hands out |
-| carried to the next turn | nothing | the conversation, `K = prompt + o` | the same | the same |
+| carried to the next turn | nothing | the conversation, `K = K + n + o` | the same | the same |
 | between turns | — | a person, `run user (cost(user, ~exp(Z)))` | a tool, `tool (~exp(Z))` | a tool, or waiting for the subagents |
 | who makes arrivals | the environment | the environment | the environment | a Poisson approximation of parent and child traffic |
 | the prefix cache | never read back | the last turn's prefix | the last turn's prefix | same, and a subagent misses the context it copied |
@@ -26,8 +26,8 @@ They hide output length `o` from scheduling expressions. See the
 --8<-- "examples/single-turn/vllm_single_turn.sq:workload"
 ```
 
-`session { turn; request; end; }` is the whole client: one request, then the
-session leaves. `K` stays 0 because nothing carries over, so the server's
+No `session` declaration is needed: each arrival makes one turn and then
+leaves. `K` stays 0 because nothing carries over, so the server's
 `prompt = K + n` is just the new tokens. The `cache (prompt + o)` in the
 server still caches the prefix when the request finishes, but no later
 request of that session will read it, so here the cache only takes up space
@@ -46,7 +46,7 @@ prefix from another request. serQ's cache is per session; see
 ```
 
 Each turn sends the conversation `K` plus a new message of mean 100 tokens.
-After the request, `set K = prompt + o` carries its input and output into the
+After the request, `set K = K + n + o` carries its input and output into the
 next turn. `run user (cost(user, ~exp(Z)))` models reading and typing time on a delay
 stage, with mean `Z = 20` seconds.
 

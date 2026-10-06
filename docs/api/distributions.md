@@ -116,12 +116,11 @@ fn main() {
   stage svc : fifo;
   workload {
     arrive renewal(~h2(2, 4));
-    session { request; end; }
   }
   server {
     set t0 = now;
     run svc (cost(svc, ~erlang(4, 1)));
-    observe latency = now - t0;
+    observe response = now - t0;
   }
 }
 ```

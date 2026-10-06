@@ -29,7 +29,6 @@ no waiting at all) and `step`, the LLM engine, which arrives in
 workload {
   arrive poisson(Lambda);
   turn { set work_size = ~exp(1); }
-  session { turn; request; end; }
 }
 ```
 
@@ -38,8 +37,8 @@ turn's sizes; `~exp(1)` draws normalized work with mean one.
 The other distributions are `~det`, `~uniform`, `~erlang`, `~h2` and
 `~bernoulli`.
 
-The `session` describes the client: draw a turn, make one request, then end.
-`request;` runs the `server` block below and returns when it finishes.
+With no `session` block, each arrival draws one turn, waits for the response,
+and finishes. The `server` below handles that turn.
 
 ### `server`
 

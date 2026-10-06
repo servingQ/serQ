@@ -19,7 +19,7 @@ fn prog(granule: &str) -> String {
         pool reqs {{ cap 4; admit via engine; }}
         stage engine : step {{ budget 8; cost 1 + max(0, tokens - 6); {granule} }}
         workload {{ arrive batch(2);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -99,7 +99,7 @@ fn the_chunk_caps_and_the_granule_rounds() {
         pool reqs { cap 4; admit via engine; }
         stage engine : step { budget 8; chunk 6; granule 4; cost 1; }
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -138,7 +138,7 @@ fn a_refused_prefill_ends_the_admissions() {
         pool kv { cap 100; }
         stage engine : step { budget 8; granule inf; cost 1; memory kv; }
         workload { arrive batch(5);
-          session { request;
+          session { turn;
             end;
 
           }

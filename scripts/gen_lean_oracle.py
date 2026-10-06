@@ -155,6 +155,21 @@ def erase_costs(e):
     return e
 
 
+def unsafe_division(e):
+    """A divisor without a positive constant natural value is not proven
+    safe in Nat: Rust yields infinity/NaN at zero, whereas Nat yields 0."""
+    if isinstance(e, dict):
+        if "Binary" in e and e["Binary"][0] == "Div":
+            divisor = fold(e["Binary"][2])
+            if (divisor is None or not math.isfinite(divisor)
+                    or divisor <= 0 or not float(divisor).is_integer()):
+                return True
+        return any(unsafe_division(v) for v in e.values())
+    if isinstance(e, list):
+        return any(unsafe_division(v) for v in e)
+    return False
+
+
 class Expr:
     """An IR expression as a Lean term over natural numbers: `nat` gives a
     term of type ℕ (a boolean is 1 or 0), `prop` a proposition (the
@@ -327,6 +342,7 @@ class Lean:
 
     def __init__(self, ir):
         self.ir = ir
+        self.empty_turns = False
         self.builtin = {ir["slot_cached"]: "x.cached", ir["slot_serial"]: "x.serial"}
 
     def leaf(self, e):
@@ -354,6 +370,76 @@ class Lean:
         """An expression in statement position: drop one pair of outer parentheses."""
         return Expr(self.leaf).top(e)
 
+    def boolean_guard(self, e):
+        """Only translate guards whose range is 0/1: Exec has no runtime
+        error for Rust's invalid-guard case. This is deliberately conservative,
+        not a general dataflow proof for mutable attributes."""
+        if "Num" in e:
+            return e["Num"] in (0, 1)
+        if "Binary" in e:
+            return e["Binary"][0] in (*REL, "And", "Or")
+        if "Unary" in e:
+            return e["Unary"][0] == "Not"
+        if "Cond" in e:
+            return all(self.boolean_guard(x) for x in e["Cond"][1:])
+        if e != {"Attr": self.ir["slot_more"]}:
+            return False
+        # The trace sets more to 0/1, but source assignments and explicit
+        # session/turn presets can overwrite it. Inspect all of them, even
+        # in a nested body or before the first Turn.
+        slot = self.ir["slot_more"]
+        if any(slot == self.ir[k] for k in
+               ("slot_cached", "slot_serial", "slot_turn", "slot_computed")):
+            return False
+        arrival = self.ir["arrival"]
+        sessions = arrival.get("Sessions") if isinstance(arrival, dict) else None
+        if not sessions or self.ir["trace"] is not None:
+            return False
+        if any(isinstance(st, dict) and "Set" in st and st["Set"][0] == slot
+               for block in self.ir["blocks"] for st in block):
+            return False
+        return all(value in (0, 1)
+                   for session in sessions
+                   for attrs in [session["attrs"], *session.get("turns", [])]
+                   for key, value in attrs if key == slot)
+
+    def while_guard(self, e):
+        if not self.boolean_guard(e):
+            raise Fragment("while guard is not guaranteed to be 0 or 1; "
+                           "the Lean fragment does not model invalid-guard errors")
+        # A boolean result does not make Nat arithmetic agree with Rust:
+        # prompt - 2 < 0 can be true in Rust and false in Lean. Check both
+        # the guard and every assignment feeding it, including alias chains
+        # and loop-carried values. A visited set terminates cyclic aliases.
+        pending, seen = [e], set()
+
+        def attributes(value):
+            if isinstance(value, dict):
+                if "Attr" in value:
+                    yield value["Attr"]
+                for child in value.values():
+                    yield from attributes(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from attributes(child)
+
+        while pending:
+            value = pending.pop()
+            if subtracts(value):
+                raise Fragment("while guard depends on subtraction: Lean naturals truncate "
+                               "at 0 where Rust can go negative")
+            if unsafe_division(value):
+                raise Fragment("while guard depends on division without a positive constant "
+                               "natural divisor: Lean division by 0 differs from Rust")
+            for slot in attributes(value):
+                if slot not in seen:
+                    seen.add(slot)
+                    pending.extend(st["Set"][1]
+                                   for block in self.ir["blocks"] for st in block
+                                   if isinstance(st, dict) and "Set" in st
+                                   and st["Set"][0] == slot)
+        return self.top(e)
+
     def block(self, b, ind):
         pad = "  " * ind
         out = []
@@ -362,6 +448,8 @@ class Lean:
                 out.append(pad + "stop")
                 return "\n".join(out)
             if st == "Turn":
+                if self.empty_turns:
+                    continue
                 out.append(pad + "turn;")
                 continue
             if st == "Join":
@@ -408,6 +496,11 @@ class Lean:
                 out.append(self.block(t, ind + 1))
                 out.append(f"{pad}}} else {{")
                 out.append(self.block(f, ind + 1))
+                out.append(f"{pad}}};")
+            elif kind == "While":
+                c, body = v
+                out.append(f"{pad}while ({self.while_guard(c)}) {{")
+                out.append(self.block(body, ind + 1))
                 out.append(f"{pad}}};")
             elif kind == "Loop":
                 out.append(f"{pad}loop {{")
@@ -608,7 +701,7 @@ def gen_cache():
     keys = sorted(rows)
     horizon = max(r[2] for r in rows.values()) + 5
     ob = {n: i for i, n in enumerate(ir["observes"])}
-    for n in ("sent", "ttft", "latency", "cached_tokens"):
+    for n in ("sent", "ttft", "response", "cached_tokens"):
         if n not in ob:
             raise Fragment(f"cache_trace: no observation `{n}`")
 
@@ -624,7 +717,7 @@ send step, time to first token, latency, cached tokens at admission. -/
 theorem vllm_cache_trace :
     let m := Exec.runW {lean.deployment()} {horizon}
       {lean.workload()} vllmTurn
-    (observed m {ob["sent"]}, observed m {ob["ttft"]}, observed m {ob["latency"]}, observed m {ob["cached_tokens"]}) =
+    (observed m {ob["sent"]}, observed m {ob["ttft"]}, observed m {ob["response"]}, observed m {ob["cached_tokens"]}) =
       ({col(lambda r: r[0])},
        {col(lambda r: r[1] - r[0])},
        {col(lambda r: r[2] - r[0])},

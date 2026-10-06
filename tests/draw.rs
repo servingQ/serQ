@@ -151,7 +151,7 @@ fn growing_is_found_through_nested_holds() {
         pool kv { cap 100000; } pool reqs { cap 8; } pool gate { cap 4; }
         stage engine : step { budget 512; cost 1e-3; memory kv; }
         workload { arrive poisson(0.2); turn { set n = 100; set o = 2; }
-          session { turn; request;
+          session {  turn;
             end;
           }
         }
@@ -176,7 +176,7 @@ fn disjoint_holds_of_one_pool_get_separate_enclosures() {
         pool kv { cap 100; }
         stage s1 : fifo; stage s2 : fifo; stage s3 : delay; stage s4 : fifo; stage s5 : fifo;
         workload { arrive poisson(0.2);
-          session { request;
+          session { turn;
             end;
           }
         }
@@ -237,7 +237,7 @@ fn a_session_that_decides_first_starts_at_a_decision() {
         r#"
         stage s1 : fifo; stage s2 : fifo;
         workload { arrive poisson(1); init { set a = 1; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { branch (a) { run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); }
@@ -276,7 +276,7 @@ fn negative_constants_reparse() {
         let k = 0 - 2;
         stage s : fifo;
         workload { arrive batch(1); turn { set a = 2; }
-          session { turn; request; end;
+          session {  turn; end;
           }
         }
         server { observe o = k ^ a; run s (cost(s, 1));
@@ -304,7 +304,7 @@ fn negative_constants_reparse() {
 
 /// `release_hold` caches the growing run's position when a hold grew, and the
 /// allocation otherwise, so a hold with `growing` caches in that pool alone.
-/// `replica.sq` has no `growing` and really does keep a unit of `batch`.
+/// `replica.sq` has no `growing` and really does keep a unit of `reqs`.
 #[test]
 fn cache_targets_follow_the_release_rule() {
     let p = program("vllm");
@@ -315,7 +315,7 @@ fn cache_targets_follow_the_release_rule() {
     let net = deployment::project(&p);
     let mut cached = net.cached.clone();
     cached.sort_unstable();
-    let mut want = vec![pool(&p, "batch"), pool(&p, "kv")];
+    let mut want = vec![pool(&p, "reqs"), pool(&p, "kv")];
     want.sort_unstable();
     assert_eq!(cached, want);
 }
@@ -324,7 +324,7 @@ fn cache_targets_follow_the_release_rule() {
 const ACROSS: &str = "pool live { cap 2; } pool kv { cap 9; }
         stage A : fifo; stage B : fifo;
         workload { arrive poisson(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold live (cost(live, 1)) { hold kv (cost(kv, 1)) { run A (cost(A, 1)); } run B (cost(B, 1)); }
@@ -336,7 +336,7 @@ const ACROSS: &str = "pool live { cap 2; } pool kv { cap 9; }
 fn nested_holds_nest() {
     let p = program("replica");
     let net = deployment::project(&p);
-    assert_eq!(pools_of(&p, &net, "engine"), ["live", "batch", "kv"]);
+    assert_eq!(pools_of(&p, &net, "engine"), ["live", "reqs", "kv"]);
     let p = compile(ACROSS);
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "A"), ["live", "kv"]);
@@ -367,13 +367,13 @@ fn pools_held_at_one_station_are_drawn_in_it() {
     assert_eq!(queues(&f), 0, "a frame draws no queue");
 
     // `replica.sq` serves a request inside the workload's `live`, and holds
-    // its `batch` and `kv` around the engine: all three at the engine alone
+    // its `reqs` and `kv` around the engine: all three at the engine alone
     let p = program("replica");
     let net = deployment::project(&p);
     let engine = net.node_of(stage(&p, "engine")).unwrap();
     assert_eq!(
         net.resident_pools(engine),
-        [pool(&p, "live"), pool(&p, "batch"), pool(&p, "kv")]
+        [pool(&p, "live"), pool(&p, "reqs"), pool(&p, "kv")]
     );
     let f = deployment::layout(&p, &net);
     assert_eq!(f.boxes(BoxStyle::Enclosure).len(), 0);
@@ -415,7 +415,7 @@ fn separate_holds_side_by_side_are_two_frames() {
         r#"
         pool a { cap 10; } stage s1 : fifo; stage s2 : fifo;
         workload { arrive poisson(0.2);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold a (cost(a, 1)) { run s1 (cost(s1, 1)); } hold a (cost(a, 1)) { run s2 (cost(s2, 1)); }
@@ -440,7 +440,7 @@ fn a_hold_across_stations_is_no_stations_own() {
         r#"
         pool a { cap 10; } stage s1 : fifo; stage s2 : fifo; stage s3 : fifo;
         workload { arrive poisson(0.2);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run s1 (cost(s1, 1)); run s2 (cost(s2, 1)); hold a (cost(a, 1)) { run s1 (cost(s1, 1)); run s3 (cost(s3, 1)); run s2 (cost(s2, 1)); }
@@ -482,7 +482,7 @@ fn a_release_in_one_arm_does_not_reach_the_other() {
     let p = compile(
         "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
         workload { arrive batch(1); init { set c = 1; }
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold p (cost(p, 1)) { branch (c) { release p; run s1 (cost(s1, 1)); } else { run s2 (cost(s2, 1)); } run s3 (cost(s3, 1)); }
@@ -502,7 +502,7 @@ fn a_lease_keeps_the_pool_on_the_stations_until_its_release() {
     let p = compile(
         "pool p { cap 10; } stage s1 : delay; stage s2 : delay; stage s3 : delay;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold p (cost(p, 1)) { run s1 (cost(s1, 1)); } lease p (inf); run s2 (cost(s2, 1)); release p; run s3 (cost(s3, 1));
@@ -572,7 +572,7 @@ fn a_transfer_between_instances_is_drawn_between_their_boxes() {
 fn pools_at(src: &str, stage_name: &str) -> Vec<String> {
     let src = format!(
         "pool p {{ cap 2; }} stage A : delay; workload {{ arrive poisson(1);
-          session {{ request;
+          session {{ turn;
           }}
         }}
         server {{ {src}
@@ -619,8 +619,8 @@ fn a_release_takes_the_innermost_hold_even_of_no_units() {
 /// straight to the decoder (local); a request whose KV is already there
 /// skips both. The router decides before any station, so it is the
 /// decision a request starts from. The figure is what a request runs: the
-/// workload's `max_model_len` check, its tool call and its next turn are
-/// not drawn, and a request leaves from the decoder.
+/// server's `max_model_len` check contributes a rejection exit. The client's
+/// tool call and next turn are not drawn.
 #[test]
 fn the_router_branches_to_a_remote_or_a_local_prefill() {
     let p = program("llmd_nixl_pull");
@@ -634,8 +634,8 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
     assert!(net.has_edge(route, pf), "remote");
     assert!(net.has_edge(route, d), "local");
     assert!(
-        !net.has_edge(route, End::Exit),
-        "max_model_len is the workload's"
+        net.has_edge(route, End::Exit),
+        "the server rejects a prompt beyond max_model_len before routing"
     );
     assert!(net.has_edge(pf, eg));
     assert!(net.has_edge(ing, d));
@@ -651,8 +651,9 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
         "a decided guard labels nothing"
     );
     let out: Vec<_> = net.edges.iter().filter(|e| e.to == End::Exit).collect();
-    assert_eq!(out.len(), 1);
-    assert_eq!((out[0].from, out[0].label.as_deref()), (d, None));
+    assert_eq!(out.len(), 2);
+    assert!(out.iter().any(|e| e.from == d && e.label.is_none()));
+    assert!(out.iter().any(|e| e.from == route));
     assert!(net.arrival.contains("Poisson"));
 }
 
@@ -703,7 +704,7 @@ fn a_server_guard_on_the_workload_draws_both_arms() {
           arrive poisson(1);
           init { set first = 1; }
           turn { set n = ~exp(10); }
-          session { loop { turn; request; set first = 0;
+          session { loop {  turn; set first = 0;
               branch with (0.5) { run tool (cost(tool, 1)); } else { end; } } }
         }
         server { branch (first) { run big (cost(big, n)); } else { run small (cost(small, n)); } }
@@ -721,7 +722,7 @@ fn a_turn_forgets_what_the_path_set() {
     let p = compile(
         "stage A : fifo; stage B : fifo;
         workload { arrive poisson(1); turn { set n = ~exp(10); }
-          session { set n = 0; turn; request;
+          session { set n = 0;  turn;
           }
         }
         server { branch (n > 0) { run A (cost(A, n)); } else { run B (cost(B, 1)); }
@@ -743,7 +744,7 @@ fn a_decided_guard_drops_only_an_arm_with_no_station() {
         compile(&format!(
             "stage A : fifo; stage B : fifo; stage C : fifo; pool kv {{ cap 100; }}
         workload {{ arrive poisson(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ set x = 0; hold kv (cost(kv, 1)) {{ run A (cost(A, 1)); {arms} set x = 1; run C (cost(C, 1)); }}
@@ -768,7 +769,7 @@ fn a_guard_on_constants_draws_both_arms() {
     let p = compile(
         "let mode = 0; stage A : fifo; stage B : fifo;
         workload { arrive poisson(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { branch (mode == 0) { run A (cost(A, 1)); } else { run B (cost(B, 1)); }
@@ -785,7 +786,7 @@ fn a_guard_on_constants_draws_both_arms() {
 fn shape(session: &str) -> (Program, deployment::Net) {
     let src = format!(
         "stage A : delay; stage B : delay; stage C : delay;
-        workload {{ arrive poisson(1); session {{ request; {session} }} }}
+        workload {{ arrive poisson(1); session {{ turn; {session} }} }}
         server {{}}
         "
     );
@@ -943,7 +944,7 @@ fn the_looking_pass_leaves_nothing() {
           session {
             loop {
               set c = ~bernoulli(0.5);
-              branch (c) { end; } request;
+              branch (c) { end; } turn;
             }
 
           }
@@ -972,7 +973,7 @@ fn the_looking_pass_leaves_nothing() {
 fn a_decision_stays_before_its_stations() {
     let src = "pool kv[2] { cap 9; } stage A[2] : delay; stage B[2] : delay; stage C[2] : delay;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
 
           }
         }
@@ -1233,7 +1234,7 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
         stage P : delay; stage egress : ps(1); stage ingress[2] : ps(1); stage D[2] : delay;
         share maxmin;
         workload { arrive batch(2);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -1272,7 +1273,7 @@ fn only_a_links_latency_folds_into_the_transfer() {
         stage P : delay; stage wait : delay; stage egress : ps(1); stage ingress : ps(1); stage D : delay;
         share maxmin;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -1297,7 +1298,7 @@ fn a_run_from_an_unboxed_choice_does_not_span() {
         "pool kv[2] { cap 100; } stage nic[2] : ps(1); stage ing[2] : ps(1); stage D[2] : delay;
         share maxmin;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -1331,7 +1332,7 @@ fn a_latency_before_two_transfers_stays_a_station() {
         queue L : link { serve ps(1) latency 0.5; }
         share maxmin;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -1363,7 +1364,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
         stage s : delay; stage a : ps(1); stage b : ps(1);
         share maxmin;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -1390,7 +1391,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
         queue B : link { serve ps(1) latency 0.5; }
         share maxmin;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -1411,7 +1412,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
         stage A[2] : delay; stage B[2] : delay;
         share maxmin;
         workload { arrive batch(1);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -1437,7 +1438,7 @@ fn a_flows_stations_are_neighbours_in_the_row() {
     let src = "stage ingress : ps(1); stage D : delay; stage egress : ps(1);
         share maxmin;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run ingress (cost(ingress, 1)); run D (cost(D, 1)); run egress, ingress (cost(egress, ingress, 1));
@@ -1517,7 +1518,7 @@ fn a_reordered_arrow_is_drawn_the_way_it_points() {
     let src = "stage a : ps(1); stage v : delay; stage u : ps(1);
         share maxmin;
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { run a (cost(a, 1)); run v (cost(v, 1)); run u (cost(u, 1)); run v (cost(v, 1)); run a, u (cost(a, u, 1));
@@ -1609,4 +1610,23 @@ fn labels_do_not_overlap() {
             }
         }
     }
+}
+
+/// A loop body can run zero times: an assignment inside it cannot decide
+/// the branch after it or remove that branch's other station from the view.
+#[test]
+fn a_while_body_does_not_determine_its_continuation() {
+    let src = common::main_source(
+        "stage a : delay; stage b : delay; stage c : delay;
+      workload { arrive batch(1); }
+      server {
+        set flag = 0;
+        while (flag) { run a (cost(a, 1)); set flag = 1; }
+        branch (flag) { run b (cost(b, 1)); } else { run c (cost(c, 1)); }
+      }
+      ",
+    );
+    let p = compile_drawn_source_at(&src, None, &common::horizon(10.0)).unwrap();
+    let net = deployment::project(&p);
+    assert!(net.node_of(stage(&p, "c")).is_some(), "zero passes reach c");
 }

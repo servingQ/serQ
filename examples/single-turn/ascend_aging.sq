@@ -23,7 +23,6 @@ fn main() {
       set immediate = serial == 4;
       set out = serial == 0 ? 4 : 1;
     }
-    session { turn; request; end; }
   }
   server {
     run delay (cost(delay, serial == 2 ? 0.001 : serial == 3 ? 0.002 : serial >= 4 ? 0.003 : 0));

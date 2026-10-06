@@ -34,7 +34,6 @@ fn main() {
       set k = floor(~uniform(0, N));   // a Poisson stream split at random is Poisson
     }
 
-    session { request; end; }
   }
 
   server {

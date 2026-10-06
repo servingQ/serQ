@@ -79,7 +79,6 @@ fn main() {
   }
   workload {
     arrive batch(2);
-    session { request; end; }
   }
   server {
     run engine prefill (cost(engine, 8));

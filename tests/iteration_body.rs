@@ -59,7 +59,7 @@ fn several_prefills_run_alone_in_one_iteration() {
         pool kv {{ cap 100; }}
         stage engine : step {{ budget 8; cost 1; memory kv; {serve} }}
         workload {{ arrive batch(3);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -119,7 +119,7 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
         }
         stage gap : delay;
         workload { arrive batch(4);
-          session { request;
+          session { turn;
             end;
 
           }
@@ -158,7 +158,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
         pool reqs {{ cap 8; admit via engine; }}
         stage engine : step {{ budget 8; cost 1; {body} }}
         workload {{ arrive batch(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ hold reqs (cost(reqs, 1)) {{ prefill on engine (2); }}
@@ -212,7 +212,7 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
           budget {budget}; chunk {chunk}; cost 1; memory kv; {serve} {body}
         }}
         workload {{ arrive renewal(1.5);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -309,7 +309,7 @@ fn an_engine_idle_with_work_is_named() {
         pool reqs { cap 8; admit via engine; }
         stage engine : step { budget 8; cost 1; iteration { serve; admit while (tokens > 0); } }
         workload { arrive batch(3);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold reqs (cost(reqs, 1)) { prefill on engine (2); }
@@ -335,7 +335,7 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
         pool reqs { cap 8; admit via engine; }
         stage engine : step { budget 8; cost 1; iteration { serve; admit while (residents + 2); } }
         workload { arrive batch(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold reqs (cost(reqs, 1)) { prefill on engine (2); }
@@ -368,7 +368,7 @@ fn a_register_remembers_the_last_iteration() {
         pool reqs {{ cap 64; admit via engine; }}
         stage engine : step {{ budget 64; cost 1; {body} }}
         workload {{ arrive renewal(1);
-          session {{ request;
+          session {{ turn;
             end;
 
           }}
@@ -425,7 +425,7 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
           iteration { set n = n + 1; serve only (decoding); admit while (residents == 0); }
         }
         workload { arrive renewal(1);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold reqs (cost(reqs, 1)) { prefill on engine (100); }
@@ -456,7 +456,7 @@ fn a_register_is_the_stage_s_own() {
         stage engine : step {{ budget 8; cost 1; {stage} }}
         stage other : step {{ budget 8; cost 1; state r = 0; iteration {{ serve; admit; }} }}
         workload {{ arrive batch(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ hold reqs (cost(reqs, 1)) {{ prefill on engine (2); }} {session}
@@ -506,7 +506,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
         stage b : step {{ budget 8; cost 1; state go = 0; iteration {{ serve; admit; set go = 1; }} }}
         {extra}
         workload {{ arrive batch(1);
-          session {{ request; end;
+          session {{ turn; end;
           }}
         }}
         server {{ {hold}
@@ -581,7 +581,7 @@ fn a_try_that_admitted_keeps_its_sets() {
           iteration { serve only (decoding); set k = k + 1; admit only (decoding); }
         }
         workload { arrive batch(2);
-          session { request; end;
+          session { turn; end;
           }
         }
         server { hold reqs (cost(reqs, 1)) { prefill on engine (2); }
@@ -616,7 +616,7 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
           iteration { set r = 10; serve; admit; }
         }
         workload { arrive renewal(2);
-          session { request;
+          session { turn;
             end;
 
           }

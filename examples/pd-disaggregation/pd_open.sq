@@ -25,7 +25,6 @@ fn main() {
 
   workload {
     arrive poisson(Lambda);
-    session { request; end; }
   }
 
   server {
@@ -40,7 +39,7 @@ fn main() {
       run link (cost(link, kv / bnet));
       run decode (cost(decode, sd / gD));
     }
-    observe latency = now - t0;
+    observe response = now - t0;
   }
 
 

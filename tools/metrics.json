@@ -1,7 +1,7 @@
 {
   "IR_VERSION": 12,
   "ir": {
-    "CStmt": 15,
+    "CStmt": 16,
     "CExpr": 11,
     "Fun": 22,
     "CtxVar": 23
@@ -16,7 +16,7 @@
     "at admission (known = computed < prompt ? prompt : computed + 1,",
     "branch (known == prompt) { mark first_token; }",
     "branch (known == prompt) { observe ttft = now - t0; }",
-    "branch (more) { tool (~exp(Z)); turn; } else { end; }",
+    "branch (more) { tool (~exp(Z)); } else { end; }",
     "chunk long_prefill(reqs, chunk_cap);",
     "cost c + a * ceil(tokens / b0);",
     "cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);",
@@ -28,7 +28,6 @@
     "prefill (known - c) growing kv;",
     "run engine decode (cost(engine, vd));",
     "run engine prefill (cost(engine, vp));",
-    "session { turn; request; end; }",
     "set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));",
     "vllm_request(reqs, kv, engine, prompt, o, t0);"
   ]

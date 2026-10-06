@@ -53,7 +53,7 @@ fn main() {
   let rate = args.number("arrival_rate", 0.3);
   stage svc : delay;
   workload {
-    arrive poisson(rate); session { request; end; } }
+    arrive poisson(rate);  }
   server {
     run svc (cost(svc, 1));
     }
@@ -217,21 +217,23 @@ At most one per program (a second is `duplicate workload`).
 
 ## `session`
 
+An optional block inside `workload` describing the sequence of turns.
+Omit it for a single turn. `turn;` draws attributes and waits for the
+server's response; reaching the end of the block ends the session.
+
 ```serq
-workload {
-  session { turn; request; end; }
+session {
+  turn;
+  while (more) {
+    set K = K + n + o;
+    tool (~exp(Z));
+    turn;
+  }
 }
 ```
 
-What the client does, from arrival to `end`. A `session` belongs inside
-`workload`; `request;` runs the server once and then continues with the
-next statement. `request NAME;` instead runs a named gateway's route.
-See [the two sides](../language.md#the-two-sides).
-
-| | |
-|---|---|
-| Statements allowed | any [statement](statements.md) |
-| Moment | `Session` |
+This is an excerpt of the [multi-turn program](../use-cases/vllm.md).
+Use `end;` only to exit early. Queue entry calls belong in the server.
 
 ## `server`
 
@@ -239,17 +241,14 @@ See [the two sides](../language.md#the-two-sides).
 server block
 ```
 
-The deployment's side of a request, run at every `request;` of the workload's
-`session`. The parser splices the block in place of `request;`, so the IR executes
-one session, with shared attributes across the client and server.
+The deployment's handling of each turn. Every workload uses one server;
+the server may route to queues, for example `server { gw.route(); }`.
+It completes a turn when its block finishes. It cannot draw another turn
+or end the client's session (`turn;` and `end;` are refused).
 
-| | |
-|---|---|
-| Refused in a `server` | `turn`, `end`, `request` |
-| Admission is written | `hold … at admission (…)` |
-
-A workload `session` must request a `server` or a named gateway. An unused
-`server` and a top-level `session` are errors.
+An explicit session must contain a turn. A top-level `session` is an error.
+The default session is `session { turn; }`.
+See [the two sides](../language.md#the-two-sides).
 
 ## `share`
 
@@ -353,15 +352,14 @@ fn main() {
   stage svc : fifo;
   workload {
     arrive batch(2);
-    session { request; end; }
   }
   server {
     set t0 = now;
     run svc (cost(svc, duration));
-    observe latency = now - t0;
+    observe response = now - t0;
   }
   gauge jobs = queue(svc);
-  claim done : at end (count(latency) == 2);
+  claim done : at end (count(response) == 2);
 }
 ```
 

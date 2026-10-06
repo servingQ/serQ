@@ -19,7 +19,6 @@ fn main() {
       set items = ceil(~uniform(1, 5));   // request items
     }
 
-    session { turn; request; end; }
   }
 
   server {

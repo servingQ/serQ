@@ -25,7 +25,7 @@ fn compile(d: &Path, main: &str) -> Result<serq::Program, String> {
 
 const PROGRAM: &str = "pool kv { cap 100; }
 stage engine : step { cost 1; }
-workload { arrive batch(1); init { set k = 3; } session { request; end; } }
+workload { arrive batch(1); init { set k = 3; } session { turn; end; } }
 server { take(twice(k)); }
 
 ";
@@ -85,7 +85,7 @@ fn a_library_holds_definitions() {
             ("lib.sq", "def f(x) { x }\nlet k = 3;\n"),
             (
                 "main.sq",
-                "use \"lib.sq\";\nworkload { session { request; end; \n} }\nserver {\n}\n",
+                "use \"lib.sq\";\nworkload { session { turn; end; \n} }\nserver {\n}\n",
             ),
         ],
     );
@@ -108,7 +108,7 @@ fn a_library_definition_is_whole() {
                 (
                     "main.sq",
                     &format!(
-                        "use \"lib.sq\";\n{main}workload {{ session {{ request; end; \n}} }}\nserver {{\n}}\n"
+                        "use \"lib.sq\";\n{main}workload {{ session {{ turn; end; \n}} }}\nserver {{\n}}\n"
                     ),
                 ),
             ],
@@ -129,7 +129,7 @@ fn a_link_note_names_the_library() {
             ("lib.sq", "def take(n) {\n  set granted = n;\n}\n"),
             (
                 "main.sq",
-                "use \"lib.sq\";\nworkload { session { request; end; \n} }\nserver { take(1); observe x = grantedd;\n}\n",
+                "use \"lib.sq\";\nworkload { session { turn; end; \n} }\nserver { take(1); observe x = grantedd;\n}\n",
             ),
         ],
     );
@@ -145,7 +145,7 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
             ("lib/a.sq", "use \"../main.sq\";\ndef twice(x) { 2 * x }\n"),
             (
                 "main.sq",
-                "use \"lib/a.sq\";\nstage svc : fifo;\nworkload { session { request; end; \n} }\nserver { run svc (cost(svc, twice(1)));\n}\n\n",
+                "use \"lib/a.sq\";\nstage svc : fifo;\nworkload { session { turn; end; \n} }\nserver { run svc (cost(svc, twice(1)));\n}\n\n",
             ),
             // two libraries that use each other: the order of their definitions
             // is what is wrong, and the error says so
@@ -182,7 +182,7 @@ fn a_library_that_uses_the_program_back_does_not_read_it_again() {
 fn blocksize_is_the_pools_block() {
     let src = |pool: &str, e: &str| {
         format!(
-            "{pool}\nstage svc : delay;\nworkload {{ session {{ request; end; \n}} }}\nserver {{ observe b = {e};\n}}\n\n"
+            "{pool}\nstage svc : delay;\nworkload {{ session {{ turn; end; \n}} }}\nserver {{ observe b = {e};\n}}\n\n"
         )
     };
     let p = compile_source(
@@ -238,14 +238,14 @@ fn blocksize_is_the_pools_block() {
 #[test]
 fn blocksize_is_not_a_constant() {
     let e = compile_source(&common::main_source(
-        "pool kv { cap 64; block 16; }\nlet b = blocksize(kv);\nstage svc : delay;\nworkload { session { request; end; \n} }\nserver {\n}\n"),
+        "pool kv { cap 64; block 16; }\nlet b = blocksize(kv);\nstage svc : delay;\nworkload { session { turn; end; \n} }\nserver {\n}\n"),
         &common::horizon(10.0),
     )
     .unwrap_err();
     assert!(e.contains("`blocksize` is not a constant"), "{e}");
     let e = compile_source(
         &common::main_source(
-        "def f(blocksize) { blocksize + 1 }\nstage svc : delay;\nworkload { session { request; end; \n} }\nserver {\n}\n",
+        "def f(blocksize) { blocksize + 1 }\nstage svc : delay;\nworkload { session { turn; end; \n} }\nserver {\n}\n",
         ),
         &common::horizon(10.0),
     )
@@ -257,7 +257,7 @@ fn blocksize_is_not_a_constant() {
 fn a_use_needs_a_file() {
     let e = compile_source(
         &common::main_source(
-            "use \"lib.sq\";\nworkload { session { request; end; \n} }\nserver {\n}\n",
+            "use \"lib.sq\";\nworkload { session { turn; end; \n} }\nserver {\n}\n",
         ),
         &common::horizon(10.0),
     )
@@ -267,7 +267,7 @@ fn a_use_needs_a_file() {
         "missing",
         &[(
             "main.sq",
-            "use \"nowhere.sq\";\nworkload { session { request; end; \n} }\nserver {\n}\n",
+            "use \"nowhere.sq\";\nworkload { session { turn; end; \n} }\nserver {\n}\n",
         )],
     );
     let e = compile(&d, "main.sq").unwrap_err();
@@ -335,13 +335,13 @@ fn definitions_reject_legacy_syntax_and_mixed_bodies() {
         ("def f(x) { x", "is not closed"),
     ] {
         let source = format!(
-            "{definition}\nfn main() {{ workload {{ session {{ request; end; }} }} server {{}} }}"
+            "{definition}\nfn main() {{ workload {{ session {{ turn; end; }} }} server {{}} }}"
         );
         let error = compile_source(&source, &common::horizon(10.0)).unwrap_err();
         assert!(error.contains(expected), "{error}");
     }
     let source = common::main_source(
-        "def f(x) { x; } workload { session { request; end; } } server { set y = f(1); }",
+        "def f(x) { x; } workload { session { turn; end; } } server { set y = f(1); }",
     );
     let error = compile_source(&source, &common::horizon(10.0)).unwrap_err();
     assert!(error.contains("not an expression"), "{error}");
