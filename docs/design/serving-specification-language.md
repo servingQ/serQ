@@ -101,7 +101,6 @@ and the order of events. Durations matter only through the order they
 produce. A theorem about decisions given an event order therefore holds of
 a target as well:
 
-- the memory invariant (`Step.invariant`);
 - the fill of an iteration's budget in serving order (`Serq/Fill.lean`);
 - serving order (`Serq/Serve.lean`);
 - the oracle scenarios, which fix the clock;

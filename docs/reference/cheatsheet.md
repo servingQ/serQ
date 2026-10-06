@@ -143,4 +143,3 @@ workload {
 5. **Cached units never block an admission**; they are evicted to make room.
 6. **`end` keeps the session's cached prefixes.** Write `drop P;` first if you
    want them gone.
-7. **`allocated + cached ≤ cap`** holds in every reachable configuration.

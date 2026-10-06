@@ -518,10 +518,8 @@ pool of its own or of a hold around it may preempt runs again, admitted
 anew, and reads its indices again: they read attributes and numbers, and
 not `cached` or `computed`, which admission and the preemption set. A hold
 names each pool once: the same reference twice does not link, and two
-indices that name one member at run time fail the run. The invariant
-`allocated + cached ≤ cap` is a theorem of the pool relation
-(`SerqLang.Step.invariant`), and every debug run of the interpreter checks
-it. `end` releases every hold but *keeps* the session's cached prefixes:
+indices that name one member at run time fail the run. `end` releases every
+hold but *keeps* the session's cached prefixes:
 cached entries persist until explicitly dropped or evicted. A program that models dropping
 them writes `drop POOL;` before `end;`. Eviction is per entry, or per block
 from the tail of the entry when the pool has `block b`; `evict lru` orders

@@ -21,8 +21,7 @@ hold kv (K + n + o) {
 **`cache (ℓ)`** at the end of a hold: when the scope ends the units are
 released, but up to `ℓ` of them stay in the pool as this session's cached
 prefix. Cached units do not block anybody — a request that needs room evicts
-them — but they occupy the pool, and the invariant
-`allocated + cached ≤ cap` holds in every reachable state. The clause is also
+them — but they occupy the pool. The clause is also
 what makes the hold *take* from the cache: a hold without it leaves this
 session's cached prefix where it is (`cached` is 0 in its body), and
 `cache (0)` consumes the prefix and keeps nothing.

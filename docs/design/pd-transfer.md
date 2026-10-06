@@ -158,13 +158,11 @@ admit via D; }` and `stage D[2] : step { memory kvD; }` mean what they say.
 ## Why these and not others
 
 **Not `acquire`/`free` as separate statements.** That was the lecture's
-language, and v2 folded them into a scope so that balance is syntactic and
-the memory invariant is a lemma about one command. A lease is the one
-allocation that outlives its scope, and it is bounded three ways where a
+language, and v2 folded them into a scope so that balance is syntactic.
+A lease is the one allocation that outlives its scope, and it is bounded
+three ways where a
 free `acquire` was bounded by nothing: the lease names its pool at the
-scope, its expiry is a number, and the session's end collects it. The
-invariant `allocated + cached ≤ cap` is unchanged, since a lease's end is
-the same transition the scope's end performs.
+scope, its expiry is a number, and the session's end collects it.
 
 **Not the decoder's hold nested inside the prefiller's.** That was the
 first form of this change: `release reqsP` inside the prefiller's scope,
