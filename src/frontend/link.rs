@@ -589,7 +589,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 CStageKind::Fifo(c as usize)
             }
             StageKind::Ps(phi) => CStageKind::Ps(lk.expr(phi)?),
-            StageKind::Delay => CStageKind::Delay,
+            StageKind::Delay => CStageKind::delay(),
             StageKind::Step(sp) => CStageKind::Step(CStep {
                 budget: lk.expr(&sp.budget)?,
                 cost: lk.expr(&sp.cost)?,

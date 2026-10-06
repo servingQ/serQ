@@ -428,6 +428,25 @@ fn serving_forms_compile_to_the_kernel_ir() {
     assert_eq!(a.to_json(), b.to_json());
 }
 
+/// `delay` is `ps(present)`, every job at rate 1. The two spellings link to
+/// one IR, so the interpreter, the drawing and the Lean generator cannot
+/// tell them apart (#396).
+#[test]
+fn delay_is_ps_of_present() {
+    let ir = |kind: &str| {
+        let src = format!(
+            "stage d : {kind}; stage f : fifo(1);
+            workload {{ arrive renewal(1); init {{ set s = floor(~uniform(1, 4)); }} }}
+            server {{ run d (cost(d, s)); run f (cost(f, 0.5)); }}"
+        );
+        compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap()
+    };
+    let (delay, ps) = (ir("delay"), ir("ps(present)"));
+    assert!(delay.stages[0].kind.is_delay());
+    assert_eq!(delay.to_json(), ps.to_json());
+    assert!(!ir("ps(1)").stages[0].kind.is_delay());
+}
+
 /// `branch with (p)` is a draw and says so. It rewrites at parse time to
 /// `branch (~bernoulli(p))`: the sample is a 0 or a 1 by the time the guard
 /// sees it, and a bare `branch (p)` with a fractional `p` is an error, not a

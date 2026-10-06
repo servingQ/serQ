@@ -899,8 +899,8 @@ fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>
             let note = (*c != 1).then(|| format!("{c} servers"));
             (StationKind::Fifo, "FIFO".into(), note)
         }
+        k if k.is_delay() => (StationKind::Delay, String::new(), Some("delay".into())),
         CStageKind::Ps(phi) => (StationKind::Ps, "PS".into(), Some(p.show_expr(phi))),
-        CStageKind::Delay => (StationKind::Delay, String::new(), Some("delay".into())),
         CStageKind::Step(s) => (
             StationKind::Step,
             "step".into(),
