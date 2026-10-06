@@ -11,20 +11,19 @@ let M = 20000;           // memory, tokens
 let P = 2500;            // the largest peak s + o; alpha = P / M
 
 fn main() {
-  pool kv { cap M; queue by (s * o + floor((o * o + o) / 2)); }
-
-  stage engine : step {
-    budget 1000000;        // every active request decodes one token per step
-    cost 1;
-  }
-
   workload {
     arrive batch(N);
     init {
       set s = floor(~uniform(100, 2000));
       set o = floor(~uniform(10, 500));
     }
+  }
 
+  pool kv { cap M; queue by (s * o + floor((o * o + o) / 2)); }
+
+  stage engine : step {
+    budget 1000000;        // every active request decodes one token per step
+    cost 1;
   }
 
   server {
