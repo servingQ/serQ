@@ -62,7 +62,7 @@ tool call, a human reading, a downstream API.
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/03-sessions.sq --instance docs/tutorial/programs/instances/03-sessions/default.sq
+serq run docs/tutorial/programs/03-sessions.sq --horizon 20000 --warmup 2000 --seed 1
 ```
 
 ```text
@@ -93,7 +93,7 @@ Turn the thinking time down and watch the sessions pile back in:
 
 ```bash
 for Z in 0.5 1 3 10; do
-  serq run docs/tutorial/programs/03-sessions.sq --instance docs/tutorial/programs/instances/03-sessions/default.sq --set Z=$Z
+  serq run docs/tutorial/programs/03-sessions.sq --horizon 20000 --warmup 2000 --seed 1 --set Z=$Z
 done
 ```
 

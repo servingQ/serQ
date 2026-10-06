@@ -429,7 +429,7 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
         defs: vec![("prompt_len".into(), "2000".into())],
         warmup: Some(0.0),
         arrivals: Some(4000),
-        ..common::example_options("pd_batching")
+        ..common::horizon(300.0)
     };
     let src = include_str!("../examples/pd-disaggregation/pd_batching.sq");
     let p = compile_source(&common::main_source(src), &ov).unwrap();

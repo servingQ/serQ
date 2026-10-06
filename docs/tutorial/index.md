@@ -23,6 +23,6 @@ Run the examples with the listed settings to reproduce the reports.
 !!! tip "Run as you read"
     ```bash
     cargo build --release
-    ./target/release/serq run docs/tutorial/programs/01-queue.sq --instance docs/tutorial/programs/instances/01-queue/default.sq
+    ./target/release/serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1
     ```
     Every chapter ends with a sweep you can reproduce with `--set`.

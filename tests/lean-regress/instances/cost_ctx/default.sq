@@ -1,2 +1,0 @@
-// Execution settings for cost_ctx.sq. Pass explicitly with --instance.
-run { horizon 100000; }

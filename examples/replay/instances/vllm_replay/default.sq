@@ -1,2 +1,0 @@
-// Execution settings for vllm_replay.sq. Pass explicitly with --instance.
-run { horizon 6000; warmup 0; seed 1; }

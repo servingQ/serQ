@@ -1,2 +1,0 @@
-// Execution settings for 02-memory.sq. Pass explicitly with --instance.
-run { horizon 100000; warmup 5000; seed 1; }

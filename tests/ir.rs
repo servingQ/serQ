@@ -38,7 +38,7 @@ fn json_round_trip_is_exact() {
         let p = compile_source_at(
             &common::main_source(&src),
             path.parent(),
-            &common::example_options(path.file_stem().unwrap().to_str().unwrap()),
+            &common::horizon(10.0),
         )
         .unwrap();
         let j = p.to_json();

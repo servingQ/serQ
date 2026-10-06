@@ -46,8 +46,8 @@ Comments should explain assumptions and source correspondence, not repeat syntax
 See [`examples/vendors/ascend.sq`](https://github.com/servingQ/serQ/blob/main/examples/vendors/ascend.sq):
 its fixed thresholds and `waiting_class` definition precede `main`, while
 resources, workload and request handler form the model inside it. Its execution
-conditions are in `examples/vendors/instances/ascend/default.sq`, selected
-explicitly with `--instance`.
+conditions are supplied by the caller, for example
+`serq run examples/vendors/ascend.sq --horizon 1`.
 When reorganizing a program, preserve its linked IR and observed behavior.
 Run `serq check` and inspect `serq draw`, then compare a repeatable run before
 and after. Use the repository's `make check` gate for committed changes.

@@ -37,7 +37,7 @@ fn a_served_resident_preempted_in_its_iteration_leaves_it() {
         "stage engine : step { budget B; chunk long_prefill(reqs, chunk); \
          cost 1; serve by (-admission); memory kv; }",
     );
-    let mut ov = common::example_options("vllm_request");
+    let mut ov = common::horizon(100000.0);
     for (k, v) in [
         ("bs", 16.0),
         ("B", 32.0),

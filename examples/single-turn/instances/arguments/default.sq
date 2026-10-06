@@ -1,2 +1,0 @@
-// Execution settings for arguments.sq. Pass explicitly with --instance.
-run { horizon 10; seed 1; }

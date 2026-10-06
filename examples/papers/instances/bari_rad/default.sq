@@ -1,2 +1,0 @@
-// Execution settings for bari_rad.sq. Pass explicitly with --instance.
-run { horizon 100000000; warmup 0; seed 1; }

@@ -33,7 +33,7 @@ body. When the body finishes, the units are released automatically.
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/02-memory.sq --instance docs/tutorial/programs/instances/02-memory/default.sq
+serq run docs/tutorial/programs/02-memory.sq --horizon 100000 --warmup 5000 --seed 1
 ```
 
 ```text
@@ -60,7 +60,7 @@ has moved to the pool.
 
 ```bash
 for C in 4 6 10 20; do
-  serq run docs/tutorial/programs/02-memory.sq --instance docs/tutorial/programs/instances/02-memory/default.sq --set C=$C
+  serq run docs/tutorial/programs/02-memory.sq --horizon 100000 --warmup 5000 --seed 1 --set C=$C
 done
 ```
 

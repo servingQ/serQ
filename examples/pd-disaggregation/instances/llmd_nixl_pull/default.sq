@@ -1,2 +1,0 @@
-// Execution settings for llmd_nixl_pull.sq. Pass explicitly with --instance.
-run { horizon 2000; warmup 200; seed 1; }

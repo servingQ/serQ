@@ -48,7 +48,7 @@ fn cli_inspection_needs_no_experiment_but_run_and_ir_do() {
     let f = Fixture::new();
     f.write("model.sq", MODEL);
     // A nearby file is never an implicit source of settings.
-    f.write("instances/model/default.sq", "run { horizon 10; }");
+    f.write("experiment.sq", "run { horizon 10; }");
     for cmd in ["check", "draw", "fmt"] {
         let out = f.run(&[cmd, "model.sq"]);
         assert!(
@@ -65,7 +65,7 @@ fn cli_inspection_needs_no_experiment_but_run_and_ir_do() {
             "{}",
             String::from_utf8_lossy(&out.stderr)
         );
-        let out = f.run(&[cmd, "model.sq", "--instance", "instances/model/default.sq"]);
+        let out = f.run(&[cmd, "model.sq", "--instance", "experiment.sq"]);
         assert!(
             out.status.success(),
             "{}",

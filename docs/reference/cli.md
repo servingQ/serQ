@@ -60,8 +60,8 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 `observes` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
 
 ```bash
-serq run examples/multi-turn/vllm.sq --instance examples/multi-turn/instances/vllm/default.sq --json | jq '.observes.ttft.mean'
-serq run examples/multi-turn/vllm.sq --instance examples/multi-turn/instances/vllm/default.sq --json | jq '.pools[] | select(.name=="kv") | .preemptions'
+serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.observes.ttft.mean'
+serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.pools[] | select(.name=="kv") | .preemptions'
 ```
 
 | Path | |

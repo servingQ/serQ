@@ -1,2 +1,0 @@
-// Execution settings for 04-cache.sq. Pass explicitly with --instance.
-run { horizon 20000; warmup 2000; seed 1; }

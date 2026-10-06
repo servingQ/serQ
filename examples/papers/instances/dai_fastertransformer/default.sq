@@ -1,2 +1,0 @@
-// Execution settings for dai_fastertransformer.sq. Pass explicitly with --instance.
-run { horizon 5000000; warmup 0; seed 1; }

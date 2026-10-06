@@ -1,2 +1,0 @@
-// Execution settings for vllm_request.sq. Pass explicitly with --instance.
-run { horizon 100000; }

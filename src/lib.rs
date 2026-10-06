@@ -281,24 +281,15 @@ pub fn program_path(name: &str) -> std::path::PathBuf {
 }
 
 /// Convenience for tests: run `examples/*/<name>.sq` with overrides given
-/// as `name=expr` strings, explicitly selecting its `instances/<name>/default.sq`.
+/// as `name=expr` strings. Supply `Some(horizon)` for a source model; use
+/// `run_file` when the experiment also needs warm-up or an arrival limit.
 pub fn run_program(name: &str, sets: &[&str], seed: Option<u64>, horizon: Option<f64>) -> Report {
     let path = program_path(name);
-    let mut ov = Overrides::default();
-    let instance = path
-        .parent()
-        .unwrap()
-        .join("instances")
-        .join(name)
-        .join("default.sq");
-    ov.instance(&std::fs::read_to_string(&instance).expect("example execution settings"))
-        .expect("valid example execution settings");
-    if let Some(seed) = seed {
-        ov.seed = Some(seed);
-    }
-    if let Some(horizon) = horizon {
-        ov.horizon = Some(horizon);
-    }
+    let mut ov = Overrides {
+        seed,
+        horizon,
+        ..Default::default()
+    };
     for s in sets {
         let (k, v) = s.split_once('=').expect("name=expr");
         let e = frontend::parser::parse_expr(v).expect("override expression");

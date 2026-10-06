@@ -362,6 +362,16 @@ fn the_formatter_keeps_a_claim() {
     );
 }
 
+/// Durations of the paper experiments whose complete IR is committed.
+fn paper_horizon(name: &str) -> f64 {
+    match name {
+        "bari_rad" => 100_000_000.0,
+        "dai_fastertransformer" | "dai_sarathi" => 5_000_000.0,
+        "kong_svf" => 100_000.0,
+        _ => panic!("specify the experiment horizon for {name}"),
+    }
+}
+
 /// The paper programs' IR, which `scripts/gen_lean_claims.py` reads to write
 /// their claims as Lean statements (`lean/Serq/Claims.lean`), is the IR of
 /// `examples/papers/*.sq` (`make claims-ir` rewrites it).
@@ -380,8 +390,11 @@ fn claim_ir_files_are_current() {
     assert!(!names.is_empty());
     for name in names {
         let src = std::fs::read_to_string(root.join(format!("examples/papers/{name}.sq"))).unwrap();
-        let p: Program =
-            compile_source(&common::main_source(&src), &common::example_options(&name)).unwrap();
+        let p: Program = compile_source(
+            &common::main_source(&src),
+            &common::horizon(paper_horizon(&name)),
+        )
+        .unwrap();
         let want = p.to_json() + "\n";
         let path = root.join(format!("tools/claims/{name}.ir.json"));
         if bless {
@@ -412,7 +425,7 @@ fn paper_claims_hold() {
     names.sort();
     for name in names {
         let src = std::fs::read_to_string(root.join(format!("examples/papers/{name}.sq"))).unwrap();
-        let r = run(&src, &common::example_options(&name));
+        let r = run(&src, &common::horizon(paper_horizon(&name)));
         for c in &r.claims {
             assert!(
                 matches!(c.result, ClaimResult::Holds | ClaimResult::Witnessed),

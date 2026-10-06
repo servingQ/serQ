@@ -1,2 +1,0 @@
-// Execution settings for separate_phases.sq. Pass explicitly with --instance.
-run { horizon 20; warmup 0; seed 1; }

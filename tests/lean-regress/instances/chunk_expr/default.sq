@@ -1,2 +1,0 @@
-// Execution settings for chunk_expr.sq. Pass explicitly with --instance.
-run { horizon 1000; }

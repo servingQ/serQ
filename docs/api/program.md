@@ -104,10 +104,9 @@ This supplies the same inputs and execution conditions as
 `--set spacing=3.0 --horizon 6000 --warmup 0 --seed 2`. Flags and instances
 apply in command-line order; later values win.
 
-`examples/<dir>/instances/<program>/default.sq` records the example's
-execution conditions. Select it explicitly; settings files are never
-auto-loaded. Other files in that directory describe named experiments
-for the same model. Each instance is tested with its model.
+Example commands state their execution conditions directly. An instance is
+optional: use one to name an experiment, and select it explicitly with
+`--instance`. Settings files are never auto-loaded.
 
 ## `def`
 

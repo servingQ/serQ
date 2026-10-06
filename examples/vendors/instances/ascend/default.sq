@@ -1,2 +1,0 @@
-// Execution settings for ascend.sq. Pass explicitly with --instance.
-run { horizon 1; }

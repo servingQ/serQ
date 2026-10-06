@@ -1,2 +1,0 @@
-// Execution settings for routing.sq. Pass explicitly with --instance.
-run { horizon 10500; warmup 500; seed 1; }

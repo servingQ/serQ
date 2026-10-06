@@ -42,7 +42,7 @@ const ENGINE: &str =
 /// The oracle program with the scenario's engine, order and requests.
 fn ir(name: &str) -> serq::Program {
     let sc = read(&format!("{name}.json"));
-    let mut ov = common::example_options("vllm_request");
+    let mut ov = common::horizon(100000.0);
     for (k, v) in [
         ("bs", num(&sc, "block_size")),
         ("B", num(&sc, "budget")),

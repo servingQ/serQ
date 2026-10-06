@@ -1,2 +1,0 @@
-// Execution settings for vllm_nixl_push.sq. Pass explicitly with --instance.
-run { horizon 3000; warmup 0; seed 1; }

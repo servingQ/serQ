@@ -1,2 +1,0 @@
-// Execution settings for rbln.sq. Pass explicitly with --instance.
-run { horizon 2; warmup 0; seed 1; }

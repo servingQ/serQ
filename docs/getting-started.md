@@ -27,7 +27,7 @@ serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.3" }
 ## Run your first program
 
 ```bash
-serq run examples/single-turn/mg1.sq --instance examples/single-turn/instances/mg1/default.sq
+serq run examples/single-turn/mg1.sq --horizon 250000 --warmup 25000 --seed 1
 ```
 
 ```text

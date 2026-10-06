@@ -68,19 +68,3 @@ pub fn horizon(horizon: f64) -> serq::Overrides {
         ..Default::default()
     }
 }
-
-/// Load the example's explicitly selected experiment, as `--instance` does.
-pub fn example_options(name: &str) -> serq::Overrides {
-    let path = serq::program_path(name);
-    let instance = path
-        .parent()
-        .unwrap()
-        .join("instances")
-        .join(name)
-        .join("default.sq");
-    let mut options = serq::Overrides::default();
-    options
-        .instance(&std::fs::read_to_string(instance).unwrap())
-        .unwrap();
-    options
-}
