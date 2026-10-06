@@ -17,6 +17,7 @@
 pub mod engine;
 pub mod frontend;
 pub mod ir;
+pub mod target;
 pub mod view;
 
 use std::path::Path;

@@ -786,6 +786,12 @@ before it in its clause.
 
 ### `hidden`
 
+In a `server`, hidden attributes may control run work, cache release and
+observations. Decisions and allocations may read them only after a run
+whose work reads them has ended. This also applies to attributes derived
+from hidden ones; both branch arms must reveal an attribute before it is
+known after the branch. See [the full rule](api/workload.md#hidden).
+
 `hidden o;` in a workload prevents scheduler expressions, such as a hold's
 header, queue keys or a budget, from reading `o`. Session statements,
 run work, a hold's `cache` and a claim's `given` may read it. Attributes
@@ -995,7 +1001,7 @@ rather than from the previous prompt, and caches `prompt + o`.
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk long_prefill(reqs, c)`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's | `scheduler.py:606-616, 675-676, 1115-1128` |
+| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk long_prefill(reqs, c)`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
 | a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `prefill (known - c)`, `decode (o - 1 - (known - prompt))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |

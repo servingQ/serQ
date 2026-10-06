@@ -1,0 +1,511 @@
+{
+  "version": 11,
+  "attrs": [
+    "cached",
+    "serial",
+    "turn_no",
+    "new",
+    "out",
+    "think",
+    "more",
+    "forced",
+    "computed",
+    "prompt",
+    "o",
+    "arrive",
+    "known"
+  ],
+  "observes": [
+    "first",
+    "done"
+  ],
+  "pools": [
+    {
+      "name": "reqs",
+      "cap": 8.0,
+      "block": null,
+      "evict": "Lru",
+      "preempt": "None",
+      "queue": null,
+      "spill": null,
+      "admit_via": 0
+    },
+    {
+      "name": "kv",
+      "cap": 15984.0,
+      "block": 16.0,
+      "evict": "Lru",
+      "preempt": {
+        "By": {
+          "keys": [
+            {
+              "Unary": [
+                "Neg",
+                {
+                  "Ctx": "Admission"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "queue": null,
+      "spill": null,
+      "admit_via": null
+    }
+  ],
+  "stages": [
+    {
+      "name": "engine",
+      "kind": {
+        "Step": {
+          "budget": {
+            "Num": 64.0
+          },
+          "cost": {
+            "Num": 1.0
+          },
+          "chunk": {
+            "Cond": [
+              {
+                "Binary": [
+                  "Gt",
+                  {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Ctx": "Nres"
+                      },
+                      {
+                        "Call": [
+                          "Queued",
+                          [
+                            {
+                              "Pool": {
+                                "base": 0,
+                                "count": 1,
+                                "index": null
+                              }
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
+              },
+              {
+                "Num": 48.0
+              },
+              {
+                "Num": 0.0
+              }
+            ]
+          },
+          "serve": {
+            "By": [
+              {
+                "Cond": [
+                  {
+                    "Ctx": "Decoding"
+                  },
+                  {
+                    "Num": 1.0
+                  },
+                  {
+                    "Num": 0.0
+                  }
+                ]
+              }
+            ]
+          },
+          "memory": 1
+        }
+      }
+    },
+    {
+      "name": "gate",
+      "kind": "Delay"
+    }
+  ],
+  "arrival": {
+    "Sessions": [
+      {
+        "attrs": [
+          [
+            9,
+            30.0
+          ],
+          [
+            10,
+            20.0
+          ],
+          [
+            11,
+            0.0
+          ]
+        ]
+      },
+      {
+        "attrs": [
+          [
+            9,
+            30.0
+          ],
+          [
+            10,
+            20.0
+          ],
+          [
+            11,
+            0.0
+          ]
+        ]
+      },
+      {
+        "attrs": [
+          [
+            9,
+            200.0
+          ],
+          [
+            10,
+            3.0
+          ],
+          [
+            11,
+            2.0
+          ]
+        ]
+      },
+      {
+        "attrs": [
+          [
+            9,
+            90.0
+          ],
+          [
+            10,
+            3.0
+          ],
+          [
+            11,
+            3.0
+          ]
+        ]
+      }
+    ]
+  },
+  "trace": null,
+  "trace_ordered": false,
+  "init": 0,
+  "turn": 1,
+  "session": 2,
+  "blocks": [
+    [
+      {
+        "Set": [
+          9,
+          {
+            "Num": 1.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          10,
+          {
+            "Num": 1.0
+          }
+        ]
+      },
+      {
+        "Set": [
+          11,
+          {
+            "Num": 0.0
+          }
+        ]
+      }
+    ],
+    [],
+    [
+      {
+        "Run": {
+          "stage": {
+            "base": 1,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Plain",
+          "work": {
+            "Attr": 11
+          },
+          "growing": null
+        }
+      },
+      {
+        "Hold": {
+          "pools": [
+            [
+              {
+                "base": 0,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Num": 1.0
+              },
+              null
+            ],
+            [
+              {
+                "base": 1,
+                "count": 1,
+                "index": null
+              },
+              {
+                "Call": [
+                  "Min",
+                  [
+                    {
+                      "Expr": {
+                        "Cond": [
+                          {
+                            "Binary": [
+                              "Lt",
+                              {
+                                "Attr": 8
+                              },
+                              {
+                                "Attr": 9
+                              }
+                            ]
+                          },
+                          {
+                            "Attr": 9
+                          },
+                          {
+                            "Binary": [
+                              "Add",
+                              {
+                                "Attr": 8
+                              },
+                              {
+                                "Num": 1.0
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "Expr": {
+                        "Call": [
+                          "BudgetLeft",
+                          [
+                            {
+                              "Stage": {
+                                "base": 0,
+                                "count": 1,
+                                "index": null
+                              }
+                            }
+                          ]
+                        ]
+                      }
+                    }
+                  ]
+                ]
+              },
+              {
+                "Cond": [
+                  {
+                    "Binary": [
+                      "Lt",
+                      {
+                        "Attr": 8
+                      },
+                      {
+                        "Attr": 9
+                      }
+                    ]
+                  },
+                  {
+                    "Attr": 9
+                  },
+                  {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Attr": 8
+                      },
+                      {
+                        "Num": 1.0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          ],
+          "reuse": null,
+          "body": 3,
+          "cache": null,
+          "lease": null
+        }
+      },
+      {
+        "Observe": [
+          1,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      },
+      "End"
+    ],
+    [
+      {
+        "Set": [
+          12,
+          {
+            "Cond": [
+              {
+                "Binary": [
+                  "Lt",
+                  {
+                    "Attr": 8
+                  },
+                  {
+                    "Attr": 9
+                  }
+                ]
+              },
+              {
+                "Attr": 9
+              },
+              {
+                "Binary": [
+                  "Add",
+                  {
+                    "Attr": 8
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Prefill",
+          "work": {
+            "Attr": 12
+          },
+          "growing": {
+            "base": 1,
+            "count": 1,
+            "index": null
+          }
+        }
+      },
+      {
+        "Branch": [
+          {
+            "Binary": [
+              "Eq",
+              {
+                "Attr": 12
+              },
+              {
+                "Attr": 9
+              }
+            ]
+          },
+          4,
+          5
+        ]
+      },
+      {
+        "Run": {
+          "stage": {
+            "base": 0,
+            "count": 1,
+            "index": null
+          },
+          "mode": "Decode",
+          "work": {
+            "Binary": [
+              "Sub",
+              {
+                "Binary": [
+                  "Sub",
+                  {
+                    "Attr": 10
+                  },
+                  {
+                    "Num": 1.0
+                  }
+                ]
+              },
+              {
+                "Binary": [
+                  "Sub",
+                  {
+                    "Attr": 12
+                  },
+                  {
+                    "Attr": 9
+                  }
+                ]
+              }
+            ]
+          },
+          "growing": {
+            "base": 1,
+            "count": 1,
+            "index": null
+          }
+        }
+      }
+    ],
+    [
+      {
+        "Observe": [
+          0,
+          {
+            "Ctx": "Now"
+          }
+        ]
+      }
+    ],
+    []
+  ],
+  "horizon": 100000.0,
+  "warmup": 0.0,
+  "seed": 1,
+  "slot_cached": 0,
+  "slot_serial": 1,
+  "slot_turn": 2,
+  "slot_new": 3,
+  "slot_out": 4,
+  "slot_think": 5,
+  "slot_more": 6,
+  "slot_forced": 7,
+  "slot_computed": 8,
+  "hidden": [
+    10
+  ]
+}

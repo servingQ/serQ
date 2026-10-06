@@ -1,0 +1,23 @@
+{
+  "config": {
+    "block_size": 16,
+    "enable_prefix_caching": false,
+    "long_prefill_token_threshold": 24,
+    "max_num_batched_tokens": 32,
+    "max_num_seqs": 8,
+    "num_gpu_blocks": 10,
+    "scheduler_cls": "serq_vllm.SerqScheduler"
+  },
+  "engine": "engine",
+  "serve_by": [
+    {
+      "Unary": [
+        "Neg",
+        {
+          "Ctx": "Admission"
+        }
+      ]
+    }
+  ],
+  "target": "vllm"
+}

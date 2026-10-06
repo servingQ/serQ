@@ -22,6 +22,30 @@ A named constant, folded at link time and overridable from the command line
 | `NAME` | identifier | May not also be a session attribute: the linker rejects it. |
 | `expr` | `const` | May read earlier constants. |
 
+### Instances
+
+An instance gives a program's constants their values and its run its
+options, in a file of its own, and changes nothing else:
+
+```serq
+// The 3.0 s run of docs/language.md §8: sessions 3 s apart, the rest of
+// the A100 deployment as vllm_replay.sq states it.
+let spacing = 3.0;
+```
+
+`serq run examples/replay/vllm_replay.sq --instance
+examples/replay/instances/vllm_replay/spacing_3s.sq` is the run `--set
+spacing=3.0` gives, and an instance with `run { seed 2; }` added the one
+`--set spacing=3.0 --seed 2` gives: an instance is the `--set`s
+and run flags it writes, so its program has the IR they give. It may hold
+only `let` bindings of constants the program declares, each once, and one
+`run` block whose options are numbers. Pools, stages, the workload and
+definitions are the program's, which is what keeps every instance of a
+program the same system with other numbers
+([the design](https://github.com/servingQ/serQ/blob/main/docs/design/serving-specification-language.md#4-parameters-and-a-control-plane-the-modelinstance-split)).
+`examples/<dir>/instances/<program>/` holds instances of
+`examples/<dir>/<program>.sq`, and the tests link each with its program.
+
 ## `def`
 
 ```serq

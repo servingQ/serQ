@@ -234,6 +234,9 @@ may not read it.
 An attribute listed in `hidden` may be read at `Session` or by a claim's
 `Given` condition. Scheduler reads are rejected. This is a validation
 restriction: a valid program runs the same with or without the declaration.
+The IR does not distinguish server statements from workload statements.
+The additional [server hidden-attribute rule](api/workload.md#hidden) is
+checked by the text linker.
 
 ## Ties
 

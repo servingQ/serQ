@@ -1,7 +1,8 @@
-//! `serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
-//! `serq check FILE [--set k=expr]...`
-//! `serq ir FILE [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]`
+//! `serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
+//! `serq check FILE [--instance F] [--set k=expr]...`
+//! `serq ir FILE [--instance F] [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]`
 //! `serq draw FILE [--format tikz|svg] [--out PATH]` (experimental)
+//! `serq target FILE [--instance F] [--set k=expr]...`
 //! `serq fmt [--check] FILE...`
 //! `serq --version`
 //!
@@ -16,17 +17,18 @@ use serq::frontend::parser;
 fn usage(cmd: &str) -> &'static str {
     match cmd {
         "run" => {
-            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--set name=expr]... [--def name=expr]... [--trace F] [--json] [--dump DIR]"
+            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--set name=expr]... [--def name=expr]... [--trace F] [--json] [--dump DIR]"
         }
-        "check" => "serq check FILE [--set name=expr]... [--def name=expr]...",
+        "check" => "serq check FILE [--instance F] [--set name=expr]... [--def name=expr]...",
         "ir" => {
-            "serq ir FILE [--set name=expr]... [--def name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]"
+            "serq ir FILE [--instance F] [--set name=expr]... [--def name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]"
         }
         "draw" => {
-            "serq draw FILE [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH]"
+            "serq draw FILE [--instance F] [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH]"
         }
+        "target" => "serq target FILE [--instance F] [--set name=expr]... [--def name=expr]...",
         "fmt" => "serq fmt [--check] FILE...",
-        _ => "serq <run|check|ir|draw|fmt> FILE [OPTIONS] | serq --version",
+        _ => "serq <run|check|ir|draw|target|fmt> FILE [OPTIONS] | serq --version",
     }
 }
 
@@ -108,11 +110,11 @@ fn main() {
         println!("serq {}", serq::VERSION);
         return;
     }
-    if !matches!(cmd, "run" | "check" | "ir" | "draw" | "fmt") {
+    if !matches!(cmd, "run" | "check" | "ir" | "draw" | "target" | "fmt") {
         argument_error(
             cmd,
             format!(
-                "unknown command `{cmd}`\nhelp: choose run, check, ir, draw, or fmt, or --version"
+                "unknown command `{cmd}`\nhelp: choose run, check, ir, draw, target, or fmt, or --version"
             ),
         );
     }
@@ -137,7 +139,7 @@ fn main() {
     while i < args.len() {
         let flag = args[i].as_str();
         let allowed: &[&str] = match flag {
-            "--set" | "--def" => &["run", "check", "ir", "draw"],
+            "--set" | "--def" | "--instance" => &["run", "check", "ir", "draw", "target"],
             "--seed" | "--horizon" | "--warmup" | "--arrivals" | "--trace" => &["run", "ir"],
             "--json" | "--dump" => &["run"],
             "--inline-trace" => &["ir"],
@@ -207,6 +209,13 @@ fn main() {
                     format!("invalid expression in --set `{kv}`: {e}\nhelp: use --set name=expr, for example --set rate=2")));
                 ov.lets.push((name.to_string(), e));
             }
+            "--instance" => {
+                let path = next(&mut i);
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| fail(Path::new(&path), format!("cannot read: {e}")));
+                ov.instance(&text)
+                    .unwrap_or_else(|e| fail(Path::new(&path), e));
+            }
             "--def" => {
                 let kv = next(&mut i);
                 let (k, v) = kv.split_once('=').unwrap_or_else(|| {
@@ -249,6 +258,15 @@ fn main() {
     } else {
         file.parent()
     };
+    if cmd == "target" {
+        let prog = serq::load(file, &ov).unwrap_or_else(|e| fail(file, e));
+        let config = serq::target::vllm(&prog).unwrap_or_else(|e| fail(file, e));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&config).expect("a JSON value serialises")
+        );
+        return;
+    }
     let load = if cmd == "draw" {
         serq::load_drawn
     } else {

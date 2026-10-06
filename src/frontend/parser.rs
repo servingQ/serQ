@@ -627,6 +627,13 @@ fn parse_with(
     Ok(prog)
 }
 
+/// Parse an instance file (`--instance`): the values of a program's
+/// constants, as `let` bindings, and its run options, as a `run` block.
+pub fn parse_instance(src: &str) -> PResult<(Vec<(String, Expr)>, RunOpts)> {
+    let toks = lex(src)?;
+    Parser::new(toks).instance()
+}
+
 /// Parse a standalone expression (an override's: `--set name=expr`, `sets=`).
 pub fn parse_expr(src: &str) -> PResult<Expr> {
     let toks = lex(src)?;
@@ -1112,7 +1119,7 @@ fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
 }
 
 /// The names an expression reads: variables and references.
-fn names(e: &Expr, vars: &mut Vec<String>, refs: &mut Vec<Ref>) {
+pub(crate) fn names(e: &Expr, vars: &mut Vec<String>, refs: &mut Vec<Ref>) {
     let mut indexed = vec![];
     names_in(e, vars, &mut indexed, refs);
     vars.extend(indexed);
@@ -1596,6 +1603,58 @@ impl Parser {
         })
     }
 
+    /// `{ horizon e; warmup e; seed e; arrivals e; }`, after `run`.
+    fn run_block(&mut self, run: &mut RunOpts) -> PResult<()> {
+        self.expect(&Tok::LBrace)?;
+        while *self.peek() != Tok::RBrace {
+            let key = self.ident()?;
+            let e = self.expr()?;
+            self.expect(&Tok::Semi)?;
+            match key.as_str() {
+                "horizon" => run.horizon = Some(e),
+                "warmup" => run.warmup = Some(e),
+                "seed" => run.seed = Some(e),
+                "arrivals" => run.arrivals = Some(e),
+                other => return self.err(format!("unknown run option `{other}`")),
+            }
+        }
+        self.expect(&Tok::RBrace)?;
+        Ok(())
+    }
+
+    /// An instance: `let` bindings of the program's constants and at most
+    /// one `run` block, nothing that adds to the program's structure.
+    fn instance(&mut self) -> PResult<(Vec<(String, Expr)>, RunOpts)> {
+        let (mut lets, mut run, mut ran) =
+            (Vec::<(String, Expr)>::new(), RunOpts::default(), false);
+        while *self.peek() != Tok::Eof {
+            if self.eat_kw("let") {
+                let at = self.pos;
+                let name = self.ident()?;
+                if lets.iter().any(|(n, _)| *n == name) {
+                    return self.err_at(at, format!("`{name}` is bound twice in this instance"));
+                }
+                self.expect(&Tok::Assign)?;
+                let e = self.expr()?;
+                self.expect(&Tok::Semi)?;
+                lets.push((name, e));
+            } else if self.is_kw("run") && !ran {
+                self.pos += 1;
+                self.run_block(&mut run)?;
+                ran = true;
+            } else {
+                return self.err(format!(
+                    "an instance binds values: found {} where `let` or `run` goes\n\
+                     help: an instance gives the program's constants their values \
+                     (`let NAME = expr;`) and the run its options (`run {{ … }}`, once); \
+                     pools, stages, the workload and definitions belong to the program",
+                    self.peek()
+                ));
+            }
+        }
+        Ok((lets, run))
+    }
+
     fn program(&mut self) -> PResult<Program> {
         let mut prog = Program::default();
         while *self.peek() != Tok::Eof {
@@ -1697,20 +1756,7 @@ impl Parser {
                 });
                 self.expect(&Tok::Semi)?;
             } else if self.eat_kw("run") {
-                self.expect(&Tok::LBrace)?;
-                while *self.peek() != Tok::RBrace {
-                    let key = self.ident()?;
-                    let e = self.expr()?;
-                    self.expect(&Tok::Semi)?;
-                    match key.as_str() {
-                        "horizon" => prog.run.horizon = Some(e),
-                        "warmup" => prog.run.warmup = Some(e),
-                        "seed" => prog.run.seed = Some(e),
-                        "arrivals" => prog.run.arrivals = Some(e),
-                        other => return self.err(format!("unknown run option `{other}`")),
-                    }
-                }
-                self.expect(&Tok::RBrace)?;
+                self.run_block(&mut prog.run)?;
             } else {
                 return self.err(format!("unexpected {} at top level", self.peek()));
             }

@@ -10,6 +10,8 @@ hide:
 **serQ describes an LLM serving deployment as a program:** its memory
 pools, engines, workload and scheduling policy. Use the same program to
 simulate performance, state claims for Lean proofs and draw the deployment.
+Programs supported by the [vLLM target](reference/cli.md#the-vllm-target)
+also compile to a scheduler configuration.
 
 Start with [installation and a first run](getting-started.md), or build a
 serving model step by step in the [tutorial](tutorial/index.md).
