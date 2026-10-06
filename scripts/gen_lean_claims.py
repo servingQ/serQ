@@ -34,14 +34,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 from gen_lean_oracle import (  # noqa: E402
-    Expr, Fragment, Lean, affine, chunk_rule, fold, nat, one_ref, COST_VARS, is_lifo, only_body,
+    Expr, Fragment, Lean, affine, chunk_rule, fold, nat, one_ref, COST_VARS, is_delay, is_lifo, only_body,
 )
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 CDIR = os.path.join(ROOT, "tools", "claims")
 OUT = os.path.join(ROOT, "lean", "Serq", "Claims.lean")
 PROVED = os.path.join(ROOT, "examples", "papers", "ClaimsProved.lean")
-IR_VERSION = 12
+IR_VERSION = 13
 # the fragment's bound on the number of sessions, under which the fuel of
 # `settleLoop`, `drain` and `admitHeads` is shown to suffice (examples/papers/Kong.lean)
 MAX_SESSIONS = 500
@@ -166,7 +166,7 @@ class Program:
     def deployment(self):
         ir = self.ir
         st = ir["stages"]
-        if not st or "Step" not in st[0]["kind"] or any(s["kind"] != "Delay" for s in st[1:]):
+        if not st or "Step" not in st[0]["kind"] or any(not is_delay(s["kind"]) for s in st[1:]):
             raise Fragment("stages must be one step engine (stage 0) and delays")
         step = st[0]["kind"]["Step"]
         if step.get("granule") is not None:

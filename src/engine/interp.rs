@@ -712,6 +712,9 @@ impl<'p> Interp<'p> {
                         active: vec![],
                     },
                     CStageKind::Ps(CExpr::Num(cap)) if shared[k] => Kind::Shared { cap: *cap },
+                    // `ps(present)` gives every job rate 1: a finish event
+                    // each, no virtual time to re-share at every arrival
+                    _ if cs.kind.is_delay() => Kind::Delay,
                     CStageKind::Ps(_) => Kind::Ps {
                         v: 0.0,
                         v_last: 0.0,
@@ -720,7 +723,6 @@ impl<'p> Interp<'p> {
                         epoch: 0,
                         dirty: false,
                     },
-                    CStageKind::Delay => Kind::Delay,
                     CStageKind::Step(_) => Kind::Step {
                         residents: vec![],
                         iter: None,

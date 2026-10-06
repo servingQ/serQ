@@ -47,7 +47,7 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
     if let Some(s) = p
         .stages
         .iter()
-        .find(|s| matches!(s.kind, CStageKind::Fifo(_) | CStageKind::Ps(_)))
+        .find(|s| matches!(s.kind, CStageKind::Fifo(_) | CStageKind::Ps(_)) && !s.kind.is_delay())
     {
         return refuse(format!(
             "stage `{}` is a queueing server; vLLM's only server is its engine, and a delay is all else it is given",

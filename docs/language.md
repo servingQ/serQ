@@ -60,7 +60,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
           | ps ( expr )                      -- throughput phi(present) shared equally; expr reads present
-          | delay                            -- every job at rate 1, no waiting
+          | delay                            -- ps(present): every job at rate 1, no waiting
           | step { cost expr ; [budget expr ;] [chunk expr ;] [granule c ;]     -- options in any order; budget inf by default
                    [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
                     | serve exclusive prefill ;
@@ -656,7 +656,7 @@ pool declared first is served first.
 
 `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(present)/present`. `delay`: every job on its
-own at rate 1. `run a, b (cost(a, b, w))` is one job that holds `a` and `b` from its
+own at rate 1, which is `ps(present)` and links to it. `run a, b (cost(a, b, w))` is one job that holds `a` and `b` from its
 start to its end: a *flow*, whose work goes down at one rate at all its
 stages, set by the program's `share` from their capacities. `share maxmin`
 is max-min fair: every flow's rate rises together until a stage fills,

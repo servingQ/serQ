@@ -320,10 +320,8 @@ fn a_latency_is_the_links_constant() {
     let wait = |src: &str, ov: &Overrides| -> String {
         let p =
             compile_source(&common::main_source(src), ov).unwrap_or_else(|e| panic!("{e}\n{src}"));
-        let ir = p.to_json();
-        let at = ir.find("\"Delay\"").map(|_| ()).is_some();
-        assert!(at, "a delay stage");
-        ir
+        assert!(p.stages.iter().any(|s| s.kind.is_delay()), "a delay stage");
+        p.to_json()
     };
     // the entry's parameter `x` is not the constant `x`
     let named = wait(&program("x", "x"), &common::horizon(100.0));

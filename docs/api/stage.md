@@ -51,7 +51,9 @@ split.
 delay
 ```
 
-Every job proceeds at rate 1 with no waiting.
+Every job proceeds at rate 1 with no waiting. It is `ps(present)`, each of
+`present` jobs at `present/present`, and links to the same IR: the run, the
+drawing and the Lean model read the two spellings alike.
 
 ## `step`
 

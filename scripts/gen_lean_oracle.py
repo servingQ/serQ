@@ -41,8 +41,15 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # programs draw nothing, so a 10 file and an 11 file translate alike. The
 # pinned corpus (IR 12) is FIFO and stays inside the fragment.
 # 12 adds resource cost conversions, erased without changing numeric work.
-IR_VERSION = 12
-SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, IR_VERSION)
+# 13 removes the `Delay` stage kind: a delay is `Ps` of `present`, every job
+# at rate 1, and `is_delay` reads either spelling.
+IR_VERSION = 13
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, IR_VERSION)
+
+
+def is_delay(kind):
+    """A delay stage: `Delay` up to IR 12, `ps(present)` from 13."""
+    return kind == "Delay" or kind == {"Ps": {"Ctx": "N"}}
 
 
 class Fragment(Exception):
@@ -515,7 +522,7 @@ class Lean:
     def deployment(self):
         ir = self.ir
         st = ir["stages"]
-        if not st or "Step" not in st[0]["kind"] or any(s["kind"] != "Delay" for s in st[1:]):
+        if not st or "Step" not in st[0]["kind"] or any(not is_delay(s["kind"]) for s in st[1:]):
             raise Fragment("stages must be one step engine (stage 0) and delays")
         step = st[0]["kind"]["Step"]
         cost = cost_fn(step["cost"])

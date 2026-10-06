@@ -17,7 +17,7 @@ than host-language code, and every input passes `Program::validate`.
 The source model and externally supplied execution settings resolve to one
 complete `Program`; its JSON records the experiment as well as the deployment.
 
-Source: `src/ir.rs`. Current version: `IR_VERSION = 12`.
+Source: `src/ir.rs`. Current version: `IR_VERSION = 13`.
 
 ## Format
 
@@ -81,7 +81,8 @@ For allocation, caching, reservation lifetime and preemption behavior, see
 ### Stages (`CStage`, `CStep`)
 
 A `CStage` has `name`, optional `index` (the same report-label rule as a
-pool), and `kind`: `Fifo(servers)`, `Ps(capacity)`, `Delay` or `Step(CStep)`.
+pool), and `kind`: `Fifo(servers)`, `Ps(capacity)` or `Step(CStep)`. A
+delay stage is `Ps(Ctx(N))`, `ps(present)` (`CStageKind::delay`).
 
 | `CStep` field | Meaning |
 |---|---|

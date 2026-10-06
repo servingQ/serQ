@@ -24,8 +24,9 @@ use serde::{Deserialize, Serialize};
 /// 11 separates random streams by session and turn; 12 adds `While`,
 /// a guarded loop that continues after its body when the guard becomes zero.
 /// IR 12 also adds resource cost conversions and mandatory attribute types
-/// and workload/server statement authority.
-pub const IR_VERSION: u32 = 12;
+/// and workload/server statement authority. 13 removes `CStageKind::Delay`,
+/// which meant `Ps(present)` (`CStageKind::delay`).
+pub const IR_VERSION: u32 = 13;
 
 /// A reason `Program::validate` refuses a program, and the statement it is
 /// about (block, index in it) when it is about one.
@@ -753,8 +754,20 @@ pub enum CServe {
 pub enum CStageKind {
     Fifo(usize),
     Ps(CExpr),
-    Delay,
     Step(CStep),
+}
+
+impl CStageKind {
+    /// `delay`: `ps(present)`, every job at rate 1 with no waiting, an
+    /// infinite server. The frontend's `delay` lowers to it; the interpreter
+    /// and the drawing recognise it (13).
+    pub fn delay() -> Self {
+        CStageKind::Ps(CExpr::Ctx(CtxVar::N))
+    }
+
+    pub fn is_delay(&self) -> bool {
+        matches!(self, CStageKind::Ps(CExpr::Ctx(CtxVar::N)))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1522,7 +1535,7 @@ impl Program {
                         read(e, &ok, &place)?;
                     }
                 }
-                CStageKind::Fifo(_) | CStageKind::Delay => {}
+                CStageKind::Fifo(_) => {}
             }
         }
         for b in &self.blocks {
@@ -1622,7 +1635,7 @@ impl Program {
         for (si, s) in self.stages.iter().enumerate() {
             let at = |e| format!("stage `{}`: {e}", s.name);
             match &s.kind {
-                CStageKind::Fifo(_) | CStageKind::Delay => {}
+                CStageKind::Fifo(_) => {}
                 CStageKind::Ps(e) => v.expr(e, Moment::Ps).map_err(at)?,
                 CStageKind::Step(st) => {
                     v.expr(&st.budget, Moment::Budget).map_err(at)?;
@@ -2290,8 +2303,8 @@ impl Validator<'_> {
                 {
                     let kind = match s.kind {
                         CStageKind::Fifo(_) => "fifo",
+                        _ if s.kind.is_delay() => "delay",
                         CStageKind::Ps(_) => "ps",
-                        CStageKind::Delay => "delay",
                         CStageKind::Step(_) => unreachable!("found a stage that is not a step"),
                     };
                     let n = &s.name;

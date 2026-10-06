@@ -1,5 +1,5 @@
 {
-  "version": 12,
+  "version": 13,
   "attrs": [
     "cached",
     "serial",
@@ -223,15 +223,27 @@
     },
     {
       "name": "front",
-      "kind": "Delay"
+      "kind": {
+        "Ps": {
+          "Ctx": "N"
+        }
+      }
     },
     {
       "name": "gate",
-      "kind": "Delay"
+      "kind": {
+        "Ps": {
+          "Ctx": "N"
+        }
+      }
     },
     {
       "name": "tool",
-      "kind": "Delay"
+      "kind": {
+        "Ps": {
+          "Ctx": "N"
+        }
+      }
     }
   ],
   "arrival": {
