@@ -30,5 +30,5 @@ fn main() {
     }
   }
 
-  run { horizon 1000; }
+
 }

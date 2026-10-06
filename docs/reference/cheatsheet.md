@@ -21,7 +21,6 @@ fn main() {
   workload { … session { turn; request; end; } }  // arrivals, turns and client actions
   server { … }                       // what one request runs
   share maxmin;                       // or bottleneck: how a run over several stages divides them
-  run { horizon …; warmup …; seed …; arrivals …; }
   gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
   claim NAME: every iteration of E (demand < B || tokens == B);   // checked on the run; also `some iteration of`, `at end`
 }

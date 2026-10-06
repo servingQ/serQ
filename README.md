@@ -36,14 +36,14 @@ theorems.
 ## Quickstart
 
 ```bash
-cargo run --release -- run examples/multi-turn/vllm.sq --seed 2 --horizon 3000
-cargo run --release -- ir examples/multi-turn/vllm.sq > vllm.json      # the IR
+cargo run --release -- run examples/multi-turn/vllm.sq --seed 2 --horizon 3000 --warmup 200
+cargo run --release -- ir examples/multi-turn/vllm.sq --horizon 3000 > vllm.json      # the IR
 cargo run --release -- draw examples/multi-turn/vllm.sq --format svg --out vllm.svg   # experimental
 ```
 
 Source programs construct their deployment inside `fn main()`. Import
 `"std/args"` and use `let rate = args.number("rate", 0.3);` to expose a numeric
-input; pass it after `--`, as `serq run model.sq -- --rate 0.5`. Ordinary
+input; pass it after `--`, as `serq run model.sq --horizon 10 -- --rate 0.5`. Ordinary
 `let` constants stay internal. See the [complete example](examples/single-turn/arguments.sq)
 and [input reference](docs/api/program.md#stdargs).
 

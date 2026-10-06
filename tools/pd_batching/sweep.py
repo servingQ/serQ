@@ -75,7 +75,7 @@ def run(program, sets, defs, seed, edits=()):
                 text = text.replace(old, new)
             program = Path(dump) / program.name
             program.write_text(text)
-        cmd = [SERQ, "run", str(program), "--json", "--seed", str(seed), "--dump", dump]
+        cmd = [SERQ, "run", str(program), "--horizon", "300", "--warmup", "30", "--json", "--seed", str(seed), "--dump", dump]
         for k, v in sets.items():
             cmd += ["--set", f"{k}={v}"]
         for k, v in defs.items():

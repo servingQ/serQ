@@ -213,5 +213,5 @@ fn main() {
   gauge load_spread = max k in ND (holders(D[k].kv) + queued(D[k].kv))
                     - min k in ND (holders(D[k].kv) + queued(D[k].kv));
 
-  run { horizon 2000; warmup 200; seed 1; }
+
 }

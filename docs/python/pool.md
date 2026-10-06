@@ -49,10 +49,9 @@ fn main() {
     observe latency = now - t0;
   }
   gauge occupied = used(slots);
-  run { horizon 10; }
 }
 """
-report = pyserq.run(pyserq.compile(source=source))
+report = pyserq.run(pyserq.compile(source=source, horizon=10))
 pool = report.pool("slots")
 assert pool is not None
 assert pool.index is None

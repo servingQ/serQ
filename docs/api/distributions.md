@@ -123,8 +123,13 @@ fn main() {
     run svc (~erlang(4, 1));
     observe latency = now - t0;
   }
-  run { horizon 1000; seed 10; }
 }
+```
+
+Save as `model.sq`, then run:
+
+```sh
+serq run model.sq --horizon 1000 --seed 10
 ```
 
 ## See also

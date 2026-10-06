@@ -43,5 +43,5 @@ fn main() {
 
   gauge pending = holders(reqs) + queued(reqs);
 
-  run { horizon 500; warmup 0; seed 1; }
+
 }

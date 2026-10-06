@@ -8,7 +8,6 @@
 //!           | 'workload' '{' wlitem* '}'
 //!           | 'server' block
 //!           | 'queue' IDENT ('[' expr ']')? (':' IDENT (',' IDENT)*)? '{' qitem* '}'
-//!           | 'run' '{' ('horizon' | 'warmup' | 'seed' | 'arrivals') expr ';' ... '}'
 //!           | 'gauge' IDENT '=' expr ';'      -- a time average of the deployment's state
 //!           | 'claim' IDENT ('given' '(' expr ')')? ':'
 //!                 ('every' | 'some') 'iteration' 'of' ref '(' expr ')' ';'
@@ -986,12 +985,6 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
             Arrival::None => {}
         }
     }
-    let r = &prog.run;
-    out.extend(
-        [&r.horizon, &r.warmup, &r.seed, &r.arrivals]
-            .into_iter()
-            .flatten(),
-    );
     out
 }
 
@@ -1814,7 +1807,7 @@ impl Parser {
                 });
                 self.expect(&Tok::Semi)?;
             } else if self.eat_kw("run") {
-                self.run_block(&mut prog.run)?;
+                return self.err("execution settings do not belong in a model\nhelp: supply --horizon T (and --warmup, --seed, --arrivals) or --instance FILE; `run STAGE (work);` belongs in a session or server");
             } else {
                 return self.err(format!("unexpected {} at top level", self.peek()));
             }
@@ -5064,7 +5057,7 @@ mod tests {
             run decode (o * 2e-4);
           } cache (K + n + o);
         }
-        run { horizon 1000; warmup 100; seed 1; }
+
 "#;
         let p = parse(&main_source(src)).unwrap();
         assert_eq!(p.pools.len(), 1);

@@ -49,5 +49,5 @@ fn main() {
     branch (K > 0) { observe hitrate = hit; }
   }
 
-  run { horizon 20000; warmup 2000; seed 1; }
+
 }

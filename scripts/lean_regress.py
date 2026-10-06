@@ -19,10 +19,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DIR = ROOT / "tests" / "lean-regress"
 SERQ = ROOT / "target" / "release" / "serq"
+# Durations of the regression experiments; the models contain no run settings.
+HORIZONS = {"chunk_expr": 1000, "cost_ctx": 100000, "preempt_delay": 1000}
 
 
 def ir_of(sq):
-    ir = json.loads(subprocess.run([str(SERQ), "ir", str(sq)], capture_output=True, text=True, check=True).stdout)
+    ir = json.loads(subprocess.run([str(SERQ), "ir", str(sq), "--horizon", str(HORIZONS[sq.stem])], capture_output=True, text=True, check=True).stdout)
     sessions = json.load(open(sq.with_suffix(".sessions.json")))
     slot = {n: i for i, n in enumerate(ir["attrs"])}
     ir["arrival"] = {"Sessions": [{"attrs": [[slot[k], float(v)] for k, v in s.items()], "turns": []}

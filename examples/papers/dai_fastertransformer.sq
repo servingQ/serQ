@@ -39,5 +39,5 @@ fn main() {
   // Theorem 2(a) holds for it as for every scheduler.
   claim token_rate: every iteration of engine (served * (c + a * bmax / b0) <= bmax * now);
 
-  run { horizon 5000000; warmup 0; seed 1; }
+
 }

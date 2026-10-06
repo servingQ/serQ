@@ -11,7 +11,7 @@ parameters and repeatable workloads. For formal verification, see
 ```bash
 serq check examples/multi-turn/vllm.sq  # validate without running
 serq draw  examples/multi-turn/vllm.sq --format svg --out my.svg
-serq run   examples/multi-turn/vllm.sq
+serq run   examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1
 ```
 
 `check` validates the program without simulating it. The deployment view
@@ -68,7 +68,7 @@ over `--set`, with a few seeds per point:
 ```bash
 for lam in 0.3 0.6 0.9; do
   for seed in 1 2 3; do
-    serq run examples/multi-turn/vllm.sq --set Lambda=$lam --seed $seed --json \
+    serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --set Lambda=$lam --seed $seed --json \
       | jq -r --arg l $lam --arg s $seed \
           '[$l, $s, .observes.ttft.mean, (.pools[] | select(.name=="kv") | .preemptions)] | @tsv'
   done

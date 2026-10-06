@@ -221,8 +221,13 @@ fn main() {
     hold slots (1) { run svc (2); }
     observe latency = now - t0;
   }
-  run { horizon 10; }
 }
+```
+
+Save as `model.sq`, then run:
+
+```sh
+serq run model.sq --horizon 10
 ```
 
 ## See also

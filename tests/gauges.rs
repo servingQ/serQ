@@ -19,22 +19,33 @@ const DEPLOYMENT: &str = "
           set n = ~uniform(1, 20);
           hold kv[j] (n) { run svc[j] (~exp(0.5)); }
         }
-        run { horizon 4000; warmup 100; seed 3; }
+
 ";
 
 fn run(gauges: &str) -> serq::Report {
     run_source(
         &common::main_source(&format!("{DEPLOYMENT}{gauges}")),
-        &Overrides::default(),
+        &Overrides {
+            warmup: Some(100.0),
+            seed: Some(3),
+            ..common::horizon(4000.0)
+        },
         None,
     )
     .unwrap()
 }
 
 fn link_error(src: &str) -> String {
-    compile_source(&common::main_source(src), &Overrides::default())
-        .unwrap_err()
-        .to_string()
+    compile_source(
+        &common::main_source(src),
+        &Overrides {
+            warmup: Some(100.0),
+            seed: Some(3),
+            ..common::horizon(4000.0)
+        },
+    )
+    .unwrap_err()
+    .to_string()
 }
 
 /// A gauge of a pool's `used` is the pool's time-average `used`: the two
@@ -84,7 +95,11 @@ fn an_aggregate_is_written_out() {
     let ir = |g: &str| {
         let p = compile_source(
             &common::main_source(&format!("{DEPLOYMENT}{g}")),
-            &Overrides::default(),
+            &Overrides {
+                warmup: Some(100.0),
+                seed: Some(3),
+                ..common::horizon(4000.0)
+            },
         )
         .unwrap();
         serde_json::to_value(&p.gauges).unwrap()
@@ -118,9 +133,9 @@ fn an_aggregate_let_sizes_an_array() {
         }}
         server {{ run s[0] (N);
         }}
-        run {{ horizon 10; }}"
+        "
         );
-        let p = compile_source(&common::main_source(&src), &Overrides::default())
+        let p = compile_source(&common::main_source(&src), &common::horizon(10.0))
             .unwrap_or_else(|e| panic!("{n}: {e}"));
         assert_eq!(p.stages.len(), size, "{n}");
     }
@@ -132,7 +147,7 @@ fn an_aggregate_let_sizes_an_array() {
         workload { session { request; end;
         } }
         server {
-        } run { horizon 1; }",
+        } ",
     );
     assert!(e.contains("terms, at most 4096"), "{e}");
 }
@@ -246,7 +261,11 @@ fn a_gauges_index_is_a_number() {
         &common::main_source(&format!(
             "{DEPLOYMENT} let N = 2; gauge x = used(kv[N - 1]);"
         )),
-        &Overrides::default(),
+        &Overrides {
+            warmup: Some(100.0),
+            seed: Some(3),
+            ..common::horizon(4000.0)
+        },
     )
     .unwrap();
     assert_eq!(
@@ -274,8 +293,8 @@ fn a_gauge_reads_the_end_of_an_instant() {
           hold kv (1) { run gate (1); }
         }
         gauge n = holders(kv);
-        run { horizon 3; }";
-    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+        ";
+    let r = run_source(&common::main_source(src), &common::horizon(3.0), None).unwrap();
     // [0, 1): session 0 holds; at 1 it releases and session 1 takes, and
     // in between the instant has two holders, which no gauge reads
     let n = r.gauge("n").unwrap();
@@ -291,7 +310,7 @@ fn a_gauge_does_not_plan_an_iteration() {
         workload { session { request; end;
         } }
         server { run e prefill (1);
-        } run { horizon 1; }
+        }
         gauge g = budget_left(e);";
     assert!(link_error(src).contains("may not read `budget_left"));
 }
@@ -312,7 +331,7 @@ fn a_budget_does_not_read_budget_left() {
         workload {{ session {{ request; end;
         }} }}
         server {{ run e prefill (1);
-        }} run {{ horizon 1; }}"
+        }} "
         );
         let e = link_error(&src);
         assert!(
@@ -330,8 +349,8 @@ fn a_budget_does_not_read_budget_left() {
         }
         server { hold kv (min(8, budget_left(e))) { run e prefill (4); }
         }
-        run { horizon 10; }";
-    run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+        ";
+    run_source(&common::main_source(src), &common::horizon(1.0), None).unwrap();
 }
 
 /// Inside a queue's entry an aggregate's index is the aggregate's, not a
@@ -345,7 +364,7 @@ fn an_aggregate_in_a_queue_entry_reads_its_own_index() {
         }
         queue gw : gateway { route { engine.prefill (1); } }
         workload { arrive batch(1); session { request gw; end; } }
-        run { horizon 10; }";
-    let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+        ";
+    let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
     assert!((r.stage("engine").unwrap().mean_service - 2.0).abs() < 1e-12);
 }

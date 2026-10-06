@@ -94,5 +94,5 @@ fn main() {
     observe latency = now - t0;
   }
 
-  run { horizon 6000; warmup 0; seed 1; }
+
 }

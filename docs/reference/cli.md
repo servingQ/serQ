@@ -18,6 +18,11 @@ all interpreter options precede it.
 
 `FILE` is program text (`.sq`) or IR (`.json`, as written by `serq ir`).
 
+Source models contain no execution settings. `run` and `ir` require
+`--horizon T` or an explicit `--instance F` that supplies it. `warmup` defaults
+to 0 and `seed` to 1. JSON IR contains all resolved settings already.
+`check`, `draw`, `target` and `fmt` inspect the model without requiring a horizon.
+
 ## Commands
 
 | | |
@@ -34,10 +39,10 @@ all interpreter options precede it.
 
 | Flag | Applies to | Meaning |
 |---|---|---|
-| `--seed N` | run, ir | RNG seed, overriding the program's `run` block |
+| `--seed N` | run, ir | RNG seed (default 1) |
 | `--horizon T` | run, ir | simulated seconds |
 | `--warmup T` | run, ir | exclude the first `T` seconds from measured statistics; claims and whole-run counters still include them |
-| `--arrivals N` | run, ir | stop after `N` arrivals and drain their sessions, overriding the `run` block's `arrivals` ([a finite run](../api/program.md#a-finite-run)); open workloads only |
+| `--arrivals N` | run, ir | stop after `N` arrivals and drain their sessions ([a finite run](../api/program.md#a-finite-run)); open workloads only |
 | `-- --name value` | run, check, ir, draw, target | numeric program inputs declared with `args.number`; `--name=value` also works. Interpreter flags must precede the separator. Rejected on `.json`, whose inputs are already resolved |
 | `--set name=expr` | run, check, ir, draw, target | supply an input declared with `args.number` (plain `let` constants and unknown names are errors; the last value wins). Rejected if the constant, directly or through another `let`, sets a queue family's size. **Rejected on `.json`**: an IR's constants are already folded |
 | `--instance F` | run, check, ir, draw, target | read an [instance](../api/program.md#instances) from `F`: each of its `let`s supplies a declared input as `--set` would and each option of its `run` block the flag of the same name, applied where the flag stands, so a later `--set` or flag wins over the instance and the instance over an earlier one. Anything else in `F` (a pool, a `def`, a `use`, a second `run`) is an error |
@@ -55,8 +60,8 @@ all interpreter options precede it.
 `observes` and `gauges` are objects keyed by name; `stages` and `pools` are arrays.
 
 ```bash
-serq run examples/multi-turn/vllm.sq --json | jq '.observes.ttft.mean'
-serq run examples/multi-turn/vllm.sq --json | jq '.pools[] | select(.name=="kv") | .preemptions'
+serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.observes.ttft.mean'
+serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json | jq '.pools[] | select(.name=="kv") | .preemptions'
 ```
 
 | Path | |

@@ -148,8 +148,8 @@ Run both programs with their default seed and 50 s horizon (5 000 000
 units of 10 µs):
 
 ```bash
-serq run examples/papers/dai_sarathi.sq
-serq run examples/papers/dai_fastertransformer.sq
+serq run examples/papers/dai_sarathi.sq --horizon 5000000 --warmup 0 --seed 1
+serq run examples/papers/dai_fastertransformer.sq --horizon 5000000 --warmup 0 --seed 1
 ```
 
 Claim-table excerpts, Sarathi first:

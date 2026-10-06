@@ -57,7 +57,7 @@ fn oracle_ir(name: &str) -> serq::Program {
             set("max_seqs", num(&sc, "max_seqs")),
             set("chunk", num(&sc, "chunk")),
         ],
-        ..Default::default()
+        ..common::horizon(100000.0)
     };
     let path = program_path("vllm_request");
     let src = std::fs::read_to_string(&path).unwrap();

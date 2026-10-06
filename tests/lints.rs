@@ -11,7 +11,7 @@ mod common;
 use serq::{Overrides, compile_source, program_path};
 
 fn check(src: &str) -> Result<(), String> {
-    compile_source(&common::main_source(src), &Overrides::default()).map(|_| ())
+    compile_source(&common::main_source(src), &common::horizon(500.0)).map(|_| ())
 }
 
 const ENGINE: &str = "let bs = 16;
@@ -19,7 +19,7 @@ const ENGINE: &str = "let bs = 16;
     pool reqs { cap 8; }
     stage engine : step { budget 512; cost 1e-3; memory kv; }
 
-    run { horizon 500; }";
+    ";
 const ENGINE_WORKLOAD: &str = "arrive poisson(0.3); init { set K = 0; }
                turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
 
@@ -114,7 +114,7 @@ fn a_constant_probability_guard_is_rejected() {
         }
         server { run tool (Z);
         }
-        run { horizon 100; }";
+        ";
     let e = check(src).expect_err("rejected");
     assert!(e.contains("`branch (0.8)` is not a test"), "{e}");
     assert!(e.contains("branch with (0.8)"), "{e}");
@@ -140,7 +140,7 @@ fn zero_and_one_are_tests() {
         }}
         server {{ run tool (Z);
         }}
-        run {{ horizon 100; }}"
+        "
         );
         check(&src).unwrap_or_else(|e| panic!("`branch ({g})` is a test: {e}"));
     }
@@ -182,7 +182,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
           session {{ turn; request; end;
           }}
         }}
-        run {{ horizon 500; }}
+
         server {{ {session} hold reqs (1), kv (m) {{ prefill (m) growing kv; }}
         }}"
         )
@@ -260,7 +260,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         }
         server { set t = now; hold kv[0] (n) { run svc (n); }
         }
-        run { horizon 500; }";
+        ";
     check(src).expect("links");
 }
 
@@ -278,7 +278,7 @@ fn serve_is_one_order_said_once() {
         }}
         server {{ hold kv (1) {{ run engine prefill (1) growing kv; }}
         }}
-        run {{ horizon 10; }}"
+        "
         )
     };
     for ok in [
@@ -323,11 +323,11 @@ fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
         }}
         server {{ hold kv (1) {{ run engine prefill (1) growing kv; }}
         }}
-        run {{ horizon 10; }}"
+        "
         )
     };
     let ir = |s: &str| {
-        serq::compile_source(&common::main_source(&step(s)), &Overrides::default())
+        serq::compile_source(&common::main_source(&step(s)), &common::horizon(10.0))
             .unwrap()
             .to_json()
     };
@@ -351,7 +351,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
         pool reqs { cap 8; }
         stage engine : step { budget 512; cost 1e-3; memory kv; }
 
-        run { horizon 500; }";
+        ";
     let wl_workload = "arrive poisson(0.3); hidden o; init { set K = 0; }
                    turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     // the body may read it
@@ -383,7 +383,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           session { turn; request; end;
           }
         }
-        run { horizon 500; }
+
         server { hold kv (n) { prefill (n) growing kv; }
         }";
     let e = check(bad).expect_err("rejected");
@@ -397,7 +397,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           session { turn; request; end;
           }
         }
-        run { horizon 500; }
+
         server { hold kv (n) { prefill (n) growing kv; }
         }";
     let e = check(bad).expect_err("rejected");
@@ -410,7 +410,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
           session { request; end;
           }
         }
-        run { horizon 500; }
+
         server { hold kv (1) { run svc (1); }
         }";
     let e = check(bad).expect_err("rejected");
@@ -448,7 +448,7 @@ fn no_false_positives_on_the_corpus() {
         serq::compile_source_at(
             &common::main_source(&src),
             path.parent(),
-            &Overrides::default(),
+            &common::horizon(500.0),
         )
         .unwrap_or_else(|e| panic!("{name} is a real program and must link: {e}"));
     }
@@ -470,7 +470,7 @@ fn an_old_context_variable_name_says_the_new_one() {
         let src = format!(
             "pool kv {{ cap 10; evict by ({key}); }}\nstage e : step {{ cost {cost}; memory kv; }}\nworkload {{ session {{ request; end; \n}} }}\nserver {{\n}}\n"
         );
-        let e = compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
+        let e = compile_source(&common::main_source(&src), &common::horizon(500.0)).unwrap_err();
         assert!(e.contains(&format!("`{old}` is now `{new}`")), "{e}");
     }
 }
@@ -492,7 +492,7 @@ fn cached_in_a_hold_without_cache_is_rejected() {
         server {{ loop {{ run think (1);
             hold kv (1000) {{ observe hit = cached > 0; prefill on engine (1000 - cached) growing kv; }}
           }}
-        }} run {{ horizon 20; }}"
+        }} "
     );
     let e = check(&src).expect_err("rejected");
     assert!(
@@ -512,7 +512,7 @@ fn cache_zero_is_the_way_through() {
         server {{ loop {{ run think (1);
             hold kv (1000) {{ observe hit = cached > 0; prefill on engine (1000 - cached) growing kv; }} {clause};
           }}
-        }} run {{ horizon 20; }}"
+        }} "
         );
         check(&src).unwrap_or_else(|e| panic!("{clause}: {e}"));
     }
@@ -528,7 +528,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
         server {{ loop {{ run think (1);
             hold kv (1000) {{ hold reqs (1) {{ prefill on engine (1000 - cached) growing kv; }} }} cache (1000);
           }}
-        }} run {{ horizon 20; }}"
+        }} "
     );
     let e = check(&src).expect_err("rejected");
     assert!(e.contains("hold on `reqs`"), "{e}");
@@ -538,7 +538,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
         server {{ loop {{ run think (1);
             hold kv (1000) {{ set c = cached; hold reqs (1) {{ prefill on engine (1000 - c) growing kv; }} }} cache (1000);
           }}
-        }} run {{ horizon 20; }}"
+        }} "
     );
     check(&src).expect("read above the inner hold, as llmd_nixl_pull.sq does");
 }
@@ -552,7 +552,7 @@ fn reuse_without_cache_is_rejected() {
         server {{ loop {{ run think (1);
             hold kv (1000) reuse (512) {{ prefill on engine (1000) growing kv; }}
           }}
-        }} run {{ horizon 20; }}"
+        }} "
     );
     let e = check(&src).expect_err("rejected");
     assert!(
@@ -576,7 +576,7 @@ fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
         }
         server { loop { SET run dec (1); observe r = now; run think (1); }
         }
-        run { horizon 50; warmup 0; seed 1; }";
+        ";
     let e = check(&PS.replace("SET", "set present = 500;")).expect_err("rejected");
     assert!(
         e.contains("`present` is a name the language supplies, read in a ps stage's capacity"),
@@ -598,6 +598,15 @@ fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
     // (the attribute's 0.125 needs the two jobs together: 16/2 = 8).
     let src = PS.replace("SET", "set prompt = 500;");
     check(&src).expect("links");
-    let r = serq::run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
+    let r = serq::run_source(
+        &common::main_source(&src),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(50.0)
+        },
+        None,
+    )
+    .unwrap();
     assert_eq!(r.stage("dec").unwrap().mean_service, 1.0, "{}", r.text());
 }

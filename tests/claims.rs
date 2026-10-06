@@ -26,19 +26,19 @@ claim work_conserving: every iteration of engine (demand < bmax || tokens == bma
 claim token_rate: every iteration of engine (served * (c + a * ceil(bmax / b0)) <= bmax * now);
 claim starved: some iteration of engine (demand >= bmax && tokens < bmax);
 claim mean_ok: at end (total(response) <= 1000000 * count(response));
-run { horizon 1000000; warmup 0; seed 1; }
+
 ";
 
 fn engine(serve: &str) -> String {
     ENGINE.replace("SERVE", serve)
 }
 
-fn run(src: &str) -> serq::Report {
-    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
+fn run(src: &str, options: &Overrides) -> serq::Report {
+    run_source(&common::main_source(src), options, None).unwrap()
 }
 
 fn link_error(src: &str) -> String {
-    compile_source(&common::main_source(src), &Overrides::default()).unwrap_err()
+    compile_source(&common::main_source(src), &common::horizon(1000000.0)).unwrap_err()
 }
 
 fn result(r: &serq::Report, name: &str) -> ClaimResult {
@@ -50,7 +50,7 @@ fn result(r: &serq::Report, name: &str) -> ClaimResult {
 /// the tokens it served never outrun a full batch per iteration's cost.
 #[test]
 fn a_work_conserving_engine_holds_its_claims() {
-    let r = run(&engine("serve decode first;"));
+    let r = run(&engine("serve decode first;"), &common::horizon(1000000.0));
     let iterations = r.stage("engine").unwrap().iterations;
     assert!(iterations > 100, "{iterations}");
     for name in ["work_conserving", "token_rate"] {
@@ -81,7 +81,10 @@ fn a_work_conserving_engine_holds_its_claims() {
 /// so the engine is not work conserving and an iteration starves.
 #[test]
 fn an_engine_that_serves_one_kind_fails_them() {
-    let r = run(&engine("serve only (decoders > 0 ? decoding : !decoding);"));
+    let r = run(
+        &engine("serve only (decoders > 0 ? decoding : !decoding);"),
+        &common::horizon(1000000.0),
+    );
     let w = r.claim("work_conserving").unwrap();
     assert_eq!(w.result, ClaimResult::Fails);
     assert!(w.failures > 0 && w.failures <= w.checked);
@@ -108,19 +111,22 @@ const BATCH: &str = "
         }
         server { run engine prefill (n); observe x = n;
         }
-        run { horizon 100; }
+
 ";
 
 /// `prefix_total` sorts the values: 3, 1, 2 give 1 + (1 + 2) + (1 + 2 + 3).
 #[test]
 fn the_aggregates_of_the_observations() {
-    let r = run(&format!(
-        "{BATCH}
+    let r = run(
+        &format!(
+            "{BATCH}
          claim t: at end (total(x) == 6 && count(x) == 3);
          claim m: at end (largest(x) == 3 && smallest(x) == 1);
          claim p: at end (prefix_total(x) == 10);
          claim q: at end (prefix_total(x) == 14);"
-    ));
+        ),
+        &common::horizon(100.0),
+    );
     for name in ["t", "m", "p"] {
         assert_eq!(result(&r, name), ClaimResult::Holds, "{name}");
     }
@@ -135,9 +141,14 @@ fn the_aggregates_of_the_observations() {
 /// The aggregates are the whole run's: warm-up does not drop a value.
 #[test]
 fn the_aggregates_include_the_warmup() {
-    let src = format!("{BATCH} claim t: at end (count(x) == 3);")
-        .replace("run { horizon 100; }", "run { horizon 100; warmup 50; }");
-    let r = run(&src);
+    let src = format!("{BATCH} claim t: at end (count(x) == 3);");
+    let r = run(
+        &src,
+        &Overrides {
+            warmup: Some(50.0),
+            ..common::horizon(100.0)
+        },
+    );
     assert_eq!(r.observe("x").unwrap().count, 0);
     assert_eq!(result(&r, "t"), ClaimResult::Holds);
 }
@@ -146,11 +157,14 @@ fn the_aggregates_include_the_warmup() {
 /// not one the claim is about.
 #[test]
 fn a_session_that_fails_given_puts_the_claim_out_of_scope() {
-    let r = run(&format!(
-        "{BATCH}
+    let r = run(
+        &format!(
+            "{BATCH}
          claim small given (n <= 2): every iteration of engine (tokens <= 2);
          claim any given (n <= 3): every iteration of engine (tokens <= 4);"
-    ));
+        ),
+        &common::horizon(100.0),
+    );
     let small = r.claim("small").unwrap();
     assert_eq!(small.result, ClaimResult::OutOfScope);
     assert_eq!(small.note.as_deref(), Some("session 0 fails `given`"));
@@ -167,12 +181,15 @@ fn a_session_that_fails_given_puts_the_claim_out_of_scope() {
 /// are scheduled 4 then 2, with 6 then 2 demanded.
 #[test]
 fn served_and_demand_are_read_as_the_iteration_starts() {
-    let r = run(&format!(
-        "{BATCH}
+    let r = run(
+        &format!(
+            "{BATCH}
          claim first: some iteration of engine (served == 0 && demand == 6 && tokens == 4);
          claim second: some iteration of engine (served == 4 && demand == 2 && tokens == 2);
          claim two: every iteration of engine (served < 6);"
-    ));
+        ),
+        &common::horizon(100.0),
+    );
     assert_eq!(result(&r, "first"), ClaimResult::Witnessed);
     assert_eq!(result(&r, "second"), ClaimResult::Witnessed);
     let two = r.claim("two").unwrap();
@@ -185,7 +202,8 @@ fn served_and_demand_are_read_as_the_iteration_starts() {
 /// arrived and `3 * arrived` is always what was served plus this batch.
 #[test]
 fn arrived_counts_the_sessions_started_by_the_iteration() {
-    let r = run("
+    let r = run(
+        "
         stage engine : step { budget 4; cost 1; }
         workload { arrive renewal(10);
           session { request; end;
@@ -193,10 +211,12 @@ fn arrived_counts_the_sessions_started_by_the_iteration() {
         }
         server { run engine prefill (3);
         }
-        run { horizon 55; }
+
         claim at_20: some iteration of engine (now == 20 && arrived == 2);
         claim balance: every iteration of engine (arrived * 3 == served + tokens);
-        claim clock: every iteration of engine (arrived * 10 == now);");
+        claim clock: every iteration of engine (arrived * 10 == now);",
+        &common::horizon(55.0),
+    );
     assert_eq!(result(&r, "at_20"), ClaimResult::Witnessed);
     let b = r.claim("balance").unwrap();
     assert_eq!((b.result, b.checked), (ClaimResult::Holds, 5));
@@ -285,10 +305,10 @@ fn a_claim_over_a_member_of_an_array() {
         server { run engine[serial] prefill (3);
         }
         claim one: every iteration of engine[1] (tokens == 3);
-        run { horizon 100; }";
-    let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     assert_eq!(p.claims[0].kind, serq::ir::ClaimKind::EveryIteration(1));
-    let r = run(src);
+    let r = run(src, &common::horizon(100.0));
     let one = r.claim("one").unwrap();
     assert_eq!((one.result, one.checked), (ClaimResult::Holds, 1));
 }
@@ -301,7 +321,7 @@ fn the_ir_keeps_the_claims() {
         "{BATCH} claim small given (n <= 3): some iteration of engine (demand > served);
          claim p: at end (prefix_total(x) == 10);"
     );
-    let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(&src), &common::horizon(100.0)).unwrap();
     assert_eq!(p.claims.len(), 2);
     let back = Program::from_json(&p.to_json()).unwrap();
     assert_eq!(back.claims, p.claims);
@@ -317,12 +337,13 @@ fn the_ir_keeps_the_claims() {
         serde_json::json!("Served")
     );
 
-    let none = compile_source(&common::main_source(BATCH), &Overrides::default()).unwrap();
+    let none = compile_source(&common::main_source(BATCH), &common::horizon(100.0)).unwrap();
     let j: serde_json::Value = serde_json::from_str(&none.to_json()).unwrap();
     assert!(j.get("claims").is_none());
-    let r: serde_json::Value = serde_json::from_str(&run(BATCH).json()).unwrap();
+    let r: serde_json::Value =
+        serde_json::from_str(&run(BATCH, &common::horizon(100.0)).json()).unwrap();
     assert!(r.get("claims").is_none());
-    assert!(!run(BATCH).text().contains("claim"));
+    assert!(!run(BATCH, &common::horizon(100.0)).text().contains("claim"));
 }
 
 /// `serq fmt` prints a claim back as it was written.
@@ -332,13 +353,23 @@ fn the_formatter_keeps_a_claim() {
     let formatted = serq::frontend::fmt::format(&common::main_source(&src)).unwrap();
     assert!(formatted.contains("claim work_conserving:"));
     assert_eq!(
-        compile_source(&formatted, &Overrides::default())
+        compile_source(&formatted, &common::horizon(100.0))
             .unwrap()
             .to_json(),
-        compile_source(&common::main_source(&src), &Overrides::default())
+        compile_source(&common::main_source(&src), &common::horizon(100.0))
             .unwrap()
             .to_json()
     );
+}
+
+/// Durations of the paper experiments whose complete IR is committed.
+fn paper_horizon(name: &str) -> f64 {
+    match name {
+        "bari_rad" => 100_000_000.0,
+        "dai_fastertransformer" | "dai_sarathi" => 5_000_000.0,
+        "kong_svf" => 100_000.0,
+        _ => panic!("specify the experiment horizon for {name}"),
+    }
 }
 
 /// The paper programs' IR, which `scripts/gen_lean_claims.py` reads to write
@@ -359,7 +390,11 @@ fn claim_ir_files_are_current() {
     assert!(!names.is_empty());
     for name in names {
         let src = std::fs::read_to_string(root.join(format!("examples/papers/{name}.sq"))).unwrap();
-        let p: Program = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
+        let p: Program = compile_source(
+            &common::main_source(&src),
+            &common::horizon(paper_horizon(&name)),
+        )
+        .unwrap();
         let want = p.to_json() + "\n";
         let path = root.join(format!("tools/claims/{name}.ir.json"));
         if bless {
@@ -390,7 +425,7 @@ fn paper_claims_hold() {
     names.sort();
     for name in names {
         let src = std::fs::read_to_string(root.join(format!("examples/papers/{name}.sq"))).unwrap();
-        let r = run(&src);
+        let r = run(&src, &common::horizon(paper_horizon(&name)));
         for c in &r.claims {
             assert!(
                 matches!(c.result, ClaimResult::Holds | ClaimResult::Witnessed),

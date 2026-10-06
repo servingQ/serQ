@@ -22,7 +22,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use serq::{Overrides, compile_source_at, program_path, run_ir};
+use serq::{compile_source_at, program_path, run_ir};
 
 fn dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle/serve")
@@ -42,7 +42,7 @@ const ENGINE: &str =
 /// The oracle program with the scenario's engine, order and requests.
 fn ir(name: &str) -> serq::Program {
     let sc = read(&format!("{name}.json"));
-    let mut ov = Overrides::default();
+    let mut ov = common::horizon(100000.0);
     for (k, v) in [
         ("bs", num(&sc, "block_size")),
         ("B", num(&sc, "budget")),

@@ -33,5 +33,5 @@ fn main() {
     }
     observe response = now;
   }
-  run { horizon 1; }
+
 }

@@ -16,9 +16,18 @@ fn deterministic_renewal_arrivals_follow_the_supplied_gap() {
           run svc (~det(1));
           observe response = now - t0;
         }
-        run { horizon 10; warmup 0; seed 7; }
+
 "#;
-    let report = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+    let report = run_source(
+        &common::main_source(src),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(7),
+            ..common::horizon(10.0)
+        },
+        None,
+    )
+    .unwrap();
     assert_eq!(report.arrivals, 5);
     let response = report.observe("response").unwrap();
     assert_eq!(response.samples, vec![1.0; 4]);
@@ -34,9 +43,18 @@ fn hyperexponential_renewal_arrivals_have_the_configured_mean_rate() {
         }
         server { run svc (0);
         }
-        run { horizon 20_000; warmup 0; seed 19; }
+
 "#;
-    let report = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+    let report = run_source(
+        &common::main_source(src),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(19),
+            ..common::horizon(20_000.0)
+        },
+        None,
+    )
+    .unwrap();
     let rate = report.arrivals as f64 / 20_000.0;
     assert!((rate - 1.0).abs() < 0.06, "observed arrival rate {rate}");
 }
@@ -55,9 +73,19 @@ fn open_arrival_limit_drains_within_the_horizon() {
           run svc (~det(2));
           observe service = 2;
         }
-        run { horizon 10; arrivals 2; warmup 0; seed 7; }
+
 "#;
-    let report = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+    let report = run_source(
+        &common::main_source(src),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(7),
+            arrivals: Some(2),
+            ..common::horizon(10.0)
+        },
+        None,
+    )
+    .unwrap();
     assert_eq!(report.arrivals, 2);
     assert_eq!(report.ended, 2);
     // FIFO jobs take two seconds each; the first Poisson arrival is at zero.
@@ -95,10 +123,13 @@ fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
         ),
     ] {
         let src = format!(
-            "stage svc : fifo; workload {{ arrive renewal(2); session {{ request; {session} }} }} server {{}} run {{ {run} }}"
+            "stage svc : fifo; workload {{ arrive renewal(2); session {{ request; {session} }} }} server {{}}"
         );
-        let error =
-            run_source(&common::main_source(&src), &Overrides::default(), None).unwrap_err();
+        let error = {
+            let mut options = common::horizon(10.0);
+            options.instance(&format!("run {{ {run} }}")).unwrap();
+            run_source(&common::main_source(&src), &options, None).unwrap_err()
+        };
         assert!(error.contains(expected), "{error}");
     }
 }
@@ -106,8 +137,16 @@ fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
 #[test]
 fn finite_arrivals_can_finish_exactly_at_the_deadline() {
     // Arrivals at 2, 4, 6 and one second of service finish at 3, 5, 7.
-    let src = "stage svc : fifo; workload { arrive renewal(2); \n  session { request; end; \n  }\n} server { run svc (1);\n} run { horizon 7; arrivals 3; }";
-    let report = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
+    let src = "stage svc : fifo; workload { arrive renewal(2); \n  session { request; end; \n  }\n} server { run svc (1);\n} ";
+    let report = run_source(
+        &common::main_source(src),
+        &Overrides {
+            arrivals: Some(3),
+            ..common::horizon(7.0)
+        },
+        None,
+    )
+    .unwrap();
     assert_eq!(report.arrivals, 3);
     assert_eq!(report.ended, 3);
     assert_eq!(report.end, 7.0);
@@ -118,8 +157,8 @@ fn poisson_retains_its_initial_arrival_and_renewal_waits_for_a_gap() {
     let run = |arrival: &str| {
         run_source(
             &common::main_source(
-            &format!("workload {{ arrive {arrival}; \n  session {{ request; end; \n  }}\n}} server {{ observe arrival = now;\n}} run {{ horizon 10; seed 1; }}")),
-            &Overrides::default(), None,
+            &format!("workload {{ arrive {arrival}; \n  session {{ request; end; \n  }}\n}} server {{ observe arrival = now;\n}} ")),
+            &Overrides { seed: Some(1), ..common::horizon(10.0) }, None,
         ).unwrap()
     };
     let poisson = run("poisson(2)");
@@ -133,12 +172,12 @@ fn poisson_retains_its_initial_arrival_and_renewal_waits_for_a_gap() {
 #[test]
 fn renewal_validation_and_ir_version_prevent_ambiguous_inputs() {
     for gap in ["now", "serial"] {
-        let src = format!("workload {{ arrive renewal({gap}); }} run {{ horizon 10; }}");
-        assert!(serq::compile_source(&common::main_source(&src), &Overrides::default()).is_err());
+        let src = format!("workload {{ arrive renewal({gap}); }} ");
+        assert!(serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).is_err());
     }
     let mut program = serq::compile_source(
-        &common::main_source("workload { arrive renewal(2); } run { horizon 10; arrivals 3; }"),
-        &Overrides::default(),
+        &common::main_source("workload { arrive renewal(2); } "),
+        &common::horizon(10.0),
     )
     .unwrap();
     program.version = 5;
@@ -165,11 +204,11 @@ fn a_renewal_gap_must_be_positive() {
         }}
         server {{ run svc (1);
         }}
-        run {{ horizon 10; }}"
+        "
         )
     };
     for gap in ["0", "-1", "g - 2 * g"] {
-        let e = serq::compile_source(&common::main_source(&src(gap)), &Overrides::default())
+        let e = serq::compile_source(&common::main_source(&src(gap)), &common::horizon(10.0))
             .unwrap_err();
         assert!(
             e.contains("an interarrival time must be positive"),
@@ -178,7 +217,7 @@ fn a_renewal_gap_must_be_positive() {
     }
     let e = run_source(
         &common::main_source(&src("~uniform(-1, 1)")),
-        &Overrides::default(),
+        &common::horizon(10.0),
         None,
     )
     .unwrap_err();
@@ -188,7 +227,7 @@ fn a_renewal_gap_must_be_positive() {
     );
     // IR that bypasses the text: a literal gap is the IR's to refuse
     let mut p =
-        serq::compile_source(&common::main_source(&src("2")), &Overrides::default()).unwrap();
+        serq::compile_source(&common::main_source(&src("2")), &common::horizon(10.0)).unwrap();
     p.arrival = serq::ir::CArrival::Renewal(serq::ir::CExpr::Num(0.0));
     let e = p.validate().unwrap_err();
     assert!(e.contains("an interarrival time must be positive"), "{e}");
@@ -213,10 +252,10 @@ fn a_poisson_rate_must_be_positive() {
         }}
         server {{ run svc (1);
         }}
-        run {{ horizon 10; }}"
+        "
         );
         let e =
-            serq::compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
+            serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap_err();
         assert!(e.contains(said), "{rate}: {e}");
     }
 }
@@ -226,43 +265,42 @@ fn a_poisson_rate_must_be_positive() {
 /// started (#289).
 #[test]
 fn a_count_is_a_whole_number_in_range() {
-    for (workload, run, said) in [
-        ("closed(-1)", "", "the closed population is -1"),
-        ("closed(0)", "", "the closed population is 0"),
-        ("poisson(1)", "seed -1;", "the seed is -1"),
-        ("poisson(1)", "seed 2.5;", "the seed is 2.5"),
-        (
-            "poisson(1)",
-            "arrivals 1e30;",
-            "arrivals is 1000000000000000000000000000000",
-        ),
-        ("closed(2.5)", "", "the closed population is 2.5"),
-        ("batch(0)", "", "the batch size is 0"),
-        ("batch(0.5)", "", "the batch size is 0.5"),
+    for (workload, said) in [
+        ("closed(-1)", "the closed population is -1"),
+        ("closed(0)", "the closed population is 0"),
+        ("closed(2.5)", "the closed population is 2.5"),
+        ("batch(0)", "the batch size is 0"),
+        ("batch(0.5)", "the batch size is 0.5"),
         (
             "batch(1e30)",
-            "",
             "the batch size is 1000000000000000000000000000000",
         ),
-        ("poisson(1)", "arrivals 2.5;", "arrivals is 2.5"),
-        ("poisson(1)", "arrivals -1;", "arrivals is -1"),
     ] {
         let src = format!(
             "stage svc : delay;
-        workload {{ arrive {workload};
-          session {{ request; end;
-          }}
-        }}
-        server {{ run svc (1);
-        }}
-        run {{ horizon 10; {run} }}"
+             workload {{ arrive {workload}; session {{ request; end; }} }}
+             server {{ run svc (1); }}"
         );
         let e =
-            serq::compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
+            serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap_err();
         assert!(
             e.contains(said) && e.contains("a count is a whole number"),
-            "{workload} {run}: {e}"
+            "{workload}: {e}"
         );
+    }
+    // Invocation integer settings are typed in Rust/Python and checked when
+    // parsing an external instance. Preserve the former in-model bad values.
+    for (settings, said) in [
+        ("seed -1;", "run option `seed` is not a number"),
+        ("seed 2.5;", "seed 2.5 is not an unsigned integer"),
+        ("arrivals 1e30;", "is not a positive integer"),
+        ("arrivals 2.5;", "arrivals 2.5 is not a positive integer"),
+        ("arrivals -1;", "run option `arrivals` is not a number"),
+    ] {
+        let e = Overrides::default()
+            .instance(&format!("run {{ {settings} }}"))
+            .unwrap_err();
+        assert!(e.contains(said), "{settings}: {e}");
     }
     // IR that bypasses the text meets the same bound
     let mut p = serq::compile_source(
@@ -272,9 +310,9 @@ fn a_count_is_a_whole_number_in_range() {
           }
         }
         server { run svc (1);
-        } run { horizon 10; }",
+        } ",
         ),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     for n in [0, serq::ir::MAX_SESSIONS + 1] {

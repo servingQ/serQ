@@ -56,18 +56,17 @@ The `server` block handles one request. `run svc (s)` is `s` seconds of work
 at the FIFO stage named `svc`. `now` is the clock. `observe name = expr`
 records a sample — the program says what it measures.
 
-### `run`
+### Execution settings
 
-```serq
-run { horizon 100000; warmup 5000; seed 1; }
-```
-
-How long to simulate, how much to throw away first, and the seed.
+The model says what each request does. The invocation says how long to
+simulate, how much warm-up to exclude, and which random seed to use.
+The command below supplies these values with `--horizon`, `--warmup` and
+`--seed`; they are not part of `fn main()`.
 
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/01-queue.sq
+serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1
 ```
 
 ```text
@@ -113,7 +112,7 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
 
 ```bash
 for L in 0.5 0.8 0.9 0.95 0.99; do
-  serq run docs/tutorial/programs/01-queue.sq --set Lambda=$L --json
+  serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1 --set Lambda=$L --json
 done
 ```
 

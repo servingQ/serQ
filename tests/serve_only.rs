@@ -5,7 +5,7 @@
 
 mod common;
 
-use serq::{Overrides, Program, compile_source, run_ir, run_source};
+use serq::{Program, compile_source, run_ir, run_source};
 use std::path::Path;
 use std::process::Command;
 
@@ -32,7 +32,7 @@ fn source(serve: &str) -> String {
           }}
           observe done = now;
         }}
-        run {{ horizon 20; }}
+
 "#
     )
 }
@@ -44,7 +44,7 @@ fn trace(name: &str, src: &str) -> Vec<String> {
     std::fs::write(&path, common::main_source(src)).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_serq"))
         .env("SERQ_TRACE_ITER", "1")
-        .args(["run", path.to_str().unwrap(), "--json"])
+        .args(["run", path.to_str().unwrap(), "--horizon", "20", "--json"])
         .output()
         .unwrap();
     let stderr = String::from_utf8(out.stderr).unwrap();
@@ -119,7 +119,7 @@ fn only_selects_and_by_orders() {
         server {
           hold reqs (1) { run engine prefill (prompt); run engine decode (1); }
         }
-        run { horizon 20; }
+
 "#;
     assert_eq!(
         trace("by", src),
@@ -155,7 +155,7 @@ fn admitted(serve: &str) -> String {
             run engine decode (2);
           }}
         }}
-        run {{ horizon 20; }}
+
 "#
     )
 }
@@ -177,7 +177,7 @@ fn an_excluded_admission_waits_as_a_resident() {
             "ITER 5.0000 1:0:d1 2:0:d1",
         ]
     );
-    let r = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
+    let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 1.0, 1.0]);
 }
@@ -213,16 +213,16 @@ fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
 #[test]
 fn the_ir_runs_as_the_text_and_omits_an_absent_only() {
     let src = source(FT);
-    let p = compile_source(&common::main_source(&src), &Overrides::default()).unwrap();
+    let p = compile_source(&common::main_source(&src), &common::horizon(20.0)).unwrap();
     let json = p.to_json();
     assert!(json.contains("\"only\""));
     let from_ir = run_ir(&Program::from_json(&json).unwrap(), None).unwrap();
-    let from_text = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
+    let from_text = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
     assert_eq!(from_text.json(), from_ir.json());
     assert_eq!(from_text.observe("done").unwrap().samples, [3.0, 6.0]);
     let plain = compile_source(
         &common::main_source(&source("serve decode first;")),
-        &Overrides::default(),
+        &common::horizon(20.0),
     )
     .unwrap();
     assert!(!plain.to_json().contains("\"only\""));
@@ -246,7 +246,7 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
           run gate (2 * serial);
           hold reqs (1) { run engine prefill (1); run engine decode (1); }
         }
-        run { horizon 20; }
+
 "#;
     assert_eq!(
         trace("waits", src),
@@ -262,14 +262,14 @@ fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
         ("serve only (tokens > 0);", "tokens"),
         ("serve only (now >= 5 || decoding);", "may not read `now`"),
     ] {
-        let error = compile_source(&common::main_source(&source(serve)), &Overrides::default())
+        let error = compile_source(&common::main_source(&source(serve)), &common::horizon(20.0))
             .unwrap_err()
             .to_string();
         assert!(error.contains(message), "{serve}: {error}");
     }
     // the IR refuses what the parser does: `only` is a body, which the
     // exclusive rule cannot sit beside
-    let mut p = compile_source(&common::main_source(&source(FT)), &Overrides::default()).unwrap();
+    let mut p = compile_source(&common::main_source(&source(FT)), &common::horizon(20.0)).unwrap();
     let serq::ir::CStageKind::Step(st) = &mut p.stages[1].kind else {
         panic!("engine is a step stage")
     };

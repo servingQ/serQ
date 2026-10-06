@@ -34,5 +34,5 @@ fn main() {
     } cache (prompt + out);
     observe response = now - t0;
   }
-  run { horizon 2; warmup 0; seed 1; }
+
 }

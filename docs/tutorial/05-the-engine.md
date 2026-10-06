@@ -86,7 +86,7 @@ the budget left, and never in an iteration that preempted.
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/05-engine.sq
+serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --seed 1
 ```
 
 ```text

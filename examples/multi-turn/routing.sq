@@ -100,5 +100,5 @@ fn main() {
     observe service = S;
   }
 
-  run { horizon 10500; warmup 500; seed 1; }
+
 }

@@ -86,5 +86,5 @@ fn main() {
     branch (!cold) { observe hit = hit; }
   }
 
-  run { horizon 3000; warmup 500; seed 1; }
+
 }

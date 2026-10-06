@@ -297,7 +297,7 @@ blocksize(p: pool) -> number
 
 **Returns:** The allocation block size declared for `p`.
 
-The pool must declare `block`; otherwise linking fails. Although folded by the linker, this call is not allowed in a `const` position, such as a `let`, capacity, array size or horizon. A pool array requires an index. A pool-parameter definition can use `reusable(known, blocksize(kv))`.
+The pool must declare `block`; otherwise linking fails. Although folded by the linker, this call is not allowed in a `const` position, such as a `let`, capacity or array size. A pool array requires an index. A pool-parameter definition can use `reusable(known, blocksize(kv))`.
 
 ## Aggregates of the observations
 
@@ -369,8 +369,13 @@ fn main() {
   }
   claim completed : at end (count(latency) == 3);
   claim elapsed : at end (largest(latency) == 6);
-  run { horizon 10; }
 }
+```
+
+Save as `model.sq`, then run:
+
+```sh
+serq run model.sq --horizon 10
 ```
 
 ## Where an observable may be read

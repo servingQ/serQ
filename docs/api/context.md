@@ -85,8 +85,13 @@ fn main() {
     run engine prefill (8);
     observe finished = now;
   }
-  run { horizon 10; }
 }
+```
+
+Save as `model.sq`, then run:
+
+```sh
+serq run model.sq --horizon 10
 ```
 
 ## See also

@@ -53,9 +53,8 @@ fn main() {
   server {
     run svc[1] (2);
   }
-  run { horizon 10; }
 }
-"""))
+""", horizon=10))
 rows = report.stages_named("svc")
 assert [row.index for row in rows] == [0, 1]
 assert rows[1].completed == 1

@@ -8,9 +8,12 @@
 //! that compiles to it. `examples/` holds example deployments, among them
 //! vLLM v1.
 //!
-//! ```no_run
+//! ```
 //! let src = std::fs::read_to_string("examples/single-turn/mg1.sq").unwrap();
-//! let report = serq::run_source(&src, &serq::Overrides::default(), None).unwrap();
+//! let options = serq::Overrides {
+//!     horizon: Some(100.0), warmup: Some(10.0), ..Default::default()
+//! };
+//! let report = serq::run_source(&src, &options, None).unwrap();
 //! println!("{}", report.text());
 //! ```
 
@@ -56,6 +59,15 @@ pub fn compile_source_at(
     let prog = frontend::parser::parse_at_with(src, base, &ov.defs, &overridden(ov))
         .map_err(|e| e.render(src))?;
     finish(prog, src, ov)
+}
+
+/// Static inspection needs a valid IR but does not choose an experiment's duration.
+/// This placeholder is used only by drawing; executing/exporting IR requires a horizon.
+fn inspection_options(ov: &Overrides) -> Overrides {
+    Overrides {
+        horizon: ov.horizon.or(Some(f64::MAX)),
+        ..ov.clone()
+    }
 }
 
 /// The supplied inputs, which the parser checks cannot change an array size.
@@ -139,7 +151,7 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 pub fn compile_drawn_file(src: &str, path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     let prog = frontend::parser::parse_file_with(src, path, &ov.defs, &overridden(ov))
         .map_err(|e| e.render(src))?;
-    finish(drawn(prog), src, ov)
+    finish(drawn(prog), src, &inspection_options(ov))
 }
 
 /// `compile_drawn_file` for the text of a program file in `base`.
@@ -150,7 +162,7 @@ pub fn compile_drawn_source_at(
 ) -> Result<ir::Program, String> {
     let prog = frontend::parser::parse_at_with(src, base, &ov.defs, &overridden(ov))
         .map_err(|e| e.render(src))?;
-    finish(drawn(prog), src, ov)
+    finish(drawn(prog), src, &inspection_options(ov))
 }
 
 /// `load`, for the deployment view: program text is compiled with
@@ -269,7 +281,8 @@ pub fn program_path(name: &str) -> std::path::PathBuf {
 }
 
 /// Convenience for tests: run `examples/*/<name>.sq` with overrides given
-/// as `name=expr` strings.
+/// as `name=expr` strings. Supply `Some(horizon)` for a source model; use
+/// `run_file` when the experiment also needs warm-up or an arrival limit.
 pub fn run_program(name: &str, sets: &[&str], seed: Option<u64>, horizon: Option<f64>) -> Report {
     let path = program_path(name);
     let mut ov = Overrides {

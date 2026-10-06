@@ -7,7 +7,7 @@ operational semantics, see [The language](../language.md).
 
 | Page | Contents |
 |---|---|
-| [Program](program.md) | `let`, `def`, `use`, `pool`, `stage`, `workload`, `session`, `server`, `gauge`, `claim`, `run` |
+| [Program](program.md) | `let`, `def`, `use`, `pool`, `stage`, `workload`, `session`, `server`, `gauge`, `claim` |
 | [Pool](pool.md) | the options of `pool` |
 | [Stage](stage.md) | `fifo`, `ps`, `delay`, `step` |
 | [Workload](workload.md) | `arrive`, `trace`, `init`, `turn`, `hidden` |

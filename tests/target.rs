@@ -8,14 +8,13 @@
 mod common;
 
 use serde_json::Value;
-use serq::Overrides;
 
 fn root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf()
 }
 
 fn target(path: &str) -> Result<Value, String> {
-    let p = serq::load(&root().join(path), &Overrides::default())?;
+    let p = serq::load(&root().join(path), &common::horizon(10.0))?;
     serq::target::vllm(&p)
 }
 
@@ -95,8 +94,8 @@ fn another_policy_is_refused_with_its_construct() {
           }
         }
         server { hold reqs (1), kv (n) { prefill (n) growing kv; }
-        } run { horizon 10; }";
-    let p = serq::compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        } ";
+    let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
     assert!(
         e.contains("serves by `remaining`") && e.contains("observes `decoding` and `admission`"),
@@ -115,8 +114,8 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
           }
         }
         server { hold reqs (1), kv (n) { prefill (n) growing kv; }
-        } run { horizon 10; }";
-    let p = serq::compile_source(&common::main_source(src), &Overrides::default()).unwrap();
+        } ";
+    let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let t = serq::target::vllm(&p).unwrap();
     assert_eq!(t["config"]["scheduler_cls"], "serq_vllm.SerqScheduler");
     assert_eq!(
@@ -126,7 +125,7 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
     let fcfs = serq::target::vllm(
         &serq::load(
             &root().join("examples/multi-turn/vllm.sq"),
-            &Overrides::default(),
+            &common::horizon(10.0),
         )
         .unwrap(),
     )
@@ -145,14 +144,14 @@ fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
     let p = serq::compile_source_at(
         &common::main_source(&src),
         Some(&dir),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     assert_eq!(
         serq::target::vllm(&p).unwrap()["config"]["long_prefill_token_threshold"],
         0
     );
-    let mut ov = Overrides::default();
+    let mut ov = common::horizon(10.0);
     ov.set("chunk_cap", "512").unwrap();
     let p = serq::compile_source_at(&common::main_source(&src), Some(&dir), &ov).unwrap();
     assert_eq!(
@@ -162,7 +161,7 @@ fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
     let p = serq::compile_source_at(
         &common::main_source(&src.replace(rule, "chunk 512;")),
         Some(&dir),
-        &Overrides::default(),
+        &common::horizon(10.0),
     )
     .unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
@@ -186,14 +185,14 @@ fn the_newer_constructs_are_refused_and_vllms_body_taken() {
           }
         }
         server {
-        } run { horizon 10; }";
+        } ";
     let hold = "hold reqs (1), kv (n) { prefill (n) growing kv; }";
     let compile = |reserve: &str, iter: &str, h: &str| {
         let src = base
             .replace("RESERVE", reserve)
             .replace("ITER", iter)
             .replace("HOLD", h);
-        serq::compile_source(&common::main_source(&src), &Overrides::default()).unwrap()
+        serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap()
     };
     let body = "iteration { serve; admit while (!preempted); }";
     serq::target::vllm(&compile("", body, hold)).unwrap();

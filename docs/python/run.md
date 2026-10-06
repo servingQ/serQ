@@ -47,10 +47,9 @@ fn main() {
     observe latency = now - t0;
   }
   gauge occupied = used(slots);
-  run { horizon 10; }
 }
 """
-report = pyserq.run(pyserq.compile(source=source))
+report = pyserq.run(pyserq.compile(source=source, horizon=10))
 assert report.ended == 4
 assert report.observe("latency").samples == [2.0, 4.0, 6.0, 8.0]
 ```

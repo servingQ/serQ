@@ -7,8 +7,8 @@ mod common;
 
 use serq::{Overrides, compile_source, run_source};
 
-fn run(src: &str) -> serq::Report {
-    run_source(&common::main_source(src), &Overrides::default(), None).unwrap()
+fn run(src: &str, options: &Overrides) -> serq::Report {
+    run_source(&common::main_source(src), options, None).unwrap()
 }
 
 /// Three requests decode on a pool that cannot hold them all. After six
@@ -35,7 +35,7 @@ fn three(preempt: &str) -> String {
             decode on engine (12) growing kv;
           }} cache (0);
         }}
-        run {{ horizon 200; warmup 0; seed 1; }}
+
 "#
     )
 }
@@ -49,7 +49,7 @@ fn the_victim_is_the_least_key() {
         // the earliest admitted: the opposite of lifo
         ("preempt by (admission);", 0.0),
     ] {
-        let r = run(&three(preempt));
+        let r = run(&three(preempt), &common::horizon(200.0));
         let victims = &r.observe("victim").unwrap().samples;
         assert_eq!(victims[0], first, "{preempt}: {victims:?}\n{}", r.text());
     }
@@ -59,7 +59,8 @@ fn the_victim_is_the_least_key() {
 #[test]
 fn lifo_is_by_minus_admission() {
     let ir = |p: &str| {
-        let prog = compile_source(&common::main_source(&three(p)), &Overrides::default()).unwrap();
+        let prog =
+            compile_source(&common::main_source(&three(p)), &common::horizon(200.0)).unwrap();
         serde_json::to_string(&prog.pools).unwrap()
     };
     assert_eq!(ir("preempt lifo;"), ir("preempt by (-admission);"));
@@ -100,10 +101,17 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
             decode on engine (10) growing kv;
           }} cache (0);
         }}
-        run {{ horizon 200; warmup 0; seed 1; }}
+
 "#
         );
-        let r = run(&src);
+        let r = run(
+            &src,
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(200.0)
+            },
+        );
         let admitted = &r.observe("admitted").unwrap().samples;
         assert_eq!(
             admitted[..4],
@@ -136,14 +144,18 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
             decode on engine (o) growing kv;
           }} cache (0);
         }}
-        run {{ horizon 200; warmup 0; seed 1; }}
+
 "#
         )
     };
     let err = |preempt: &str, hidden: &str| {
         compile_source(
             &common::main_source(&base(preempt, hidden)),
-            &Overrides::default(),
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(200.0)
+            },
         )
         .err()
         .unwrap_or_else(|| panic!("`{preempt}` linked"))
@@ -155,9 +167,16 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
     // `position` is a preempt key's alone
     let src = base("preempt lifo;", "").replace("set o = 12;", "set o = position;");
     assert!(
-        compile_source(&common::main_source(&src), &Overrides::default())
-            .unwrap_err()
-            .contains("position")
+        compile_source(
+            &common::main_source(&src),
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(200.0)
+            }
+        )
+        .unwrap_err()
+        .contains("position")
     );
 }
 
@@ -191,12 +210,19 @@ fn lifo_is_by_minus_admission_on_a_pool_no_engine_reads() {
             hold a (4) {{ observe s1 = computed; run svc (5); }}
           }}
         }}
-        run {{ horizon 50; warmup 0; seed 1; }}
+
 "#
         )
     };
     let report = |p: &str| {
-        let r = run(&prog(p));
+        let r = run(
+            &prog(p),
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(50.0)
+            },
+        );
         let pool = r.pool("a").unwrap();
         (
             pool.preemptions,
@@ -235,9 +261,16 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
             decode on engine (10) growing kv;
           } cache (0);
         }
-        run { horizon 200; warmup 0; seed 1; }
+
 "#;
-    let r = run(src);
+    let r = run(
+        src,
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            ..common::horizon(200.0)
+        },
+    );
     let admitted = &r.observe("admitted").unwrap().samples;
     // serial 1 (rank 1) is the victim; at the tail of a keyed queue its key
     // puts it ahead of serial 2 (rank 9)
@@ -254,10 +287,10 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
 #[test]
 fn a_preempt_key_reads_decoding_and_not_computed() {
     let base = three("preempt by (1 - decoding, position - prompt, -prompt);");
-    assert!(compile_source(&common::main_source(&base), &Overrides::default()).is_ok());
+    assert!(compile_source(&common::main_source(&base), &common::horizon(200.0)).is_ok());
     let err = compile_source(
         &common::main_source(&three("preempt by (computed);")),
-        &Overrides::default(),
+        &common::horizon(200.0),
     )
     .unwrap_err();
     assert!(err.contains("`position`"), "{err}");

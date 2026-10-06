@@ -15,8 +15,8 @@ fn trace_errors_name_the_resolved_file_row_and_column() {
     );
     f.write("data.csv", "session,turn,new,out,think\n1,1,broken,1,0\n");
     for prefix in [
-        vec!["run", "models/model.sq"],
-        vec!["ir", "models/model.sq", "--inline-trace"],
+        vec!["run", "models/model.sq", "--horizon", "10"],
+        vec!["ir", "models/model.sq", "--horizon", "10", "--inline-trace"],
     ] {
         failure(
             &f.run(&prefix),
@@ -39,9 +39,16 @@ fn trace_errors_name_the_resolved_file_row_and_column() {
     }
     f.write("data.csv", "session,turn,new,out,think\n1,1,10,1,0\n");
     assert!(
-        f.run(&["run", "models/model.sq", "--trace", "data.csv"])
-            .status
-            .success()
+        f.run(&[
+            "run",
+            "models/model.sq",
+            "--horizon",
+            "10",
+            "--trace",
+            "data.csv"
+        ])
+        .status
+        .success()
     );
 }
 
@@ -61,7 +68,7 @@ fn empty_and_short_rows_explain_the_expected_schema() {
     ] {
         f.write("data.csv", csv);
         failure(
-            &f.run(&["run", "model.sq"]),
+            &f.run(&["run", "model.sq", "--horizon", "10"]),
             1,
             &[
                 "trace data.csv",

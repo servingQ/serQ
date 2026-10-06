@@ -47,5 +47,5 @@ fn main() {
     observe done = now;
   }
 
-  run { horizon 100000; }
+
 }

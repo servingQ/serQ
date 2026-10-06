@@ -432,6 +432,7 @@ pub enum Stmt {
     Mark(String),
 }
 
+/// Execution settings parsed only from an external instance, never a model.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct RunOpts {
     pub horizon: Option<Expr>,
@@ -462,7 +463,6 @@ pub struct Program {
     /// no request body exists, or the session requests more than one thing.
     /// The deployment view draws this; the session is what runs.
     pub request: Vec<Stmt>,
-    pub run: RunOpts,
     /// `share maxmin;` or `share bottleneck;`
     pub share: Option<crate::ir::Share>,
     /// `gauge NAME = e;`, in order.
@@ -634,10 +634,6 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
     }
     block(&mut p.session);
     block(&mut p.request);
-    p.run.horizon.iter_mut().for_each(expr);
-    p.run.warmup.iter_mut().for_each(expr);
-    p.run.seed.iter_mut().for_each(expr);
-    p.run.arrivals.iter_mut().for_each(expr);
     for c in &mut p.claims {
         c.span = None;
         c.given.iter_mut().for_each(expr);

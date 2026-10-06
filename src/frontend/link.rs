@@ -697,26 +697,14 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     let init = lk.block(&init)?;
     let turn = lk.block(&turn)?;
     let session = lk.block(&prog.session)?;
-    let horizon = match (&ov.horizon, &prog.run.horizon) {
-        (Some(h), _) => *h,
-        (None, Some(e)) => lk.const_eval(e, "the horizon")?,
-        (None, None) => return Err(LinkError::new("no horizon (run { horizon T; })".into())),
-    };
-    let warmup = match (&ov.warmup, &prog.run.warmup) {
-        (Some(w), _) => *w,
-        (None, Some(e)) => lk.const_eval(e, "the warmup")?,
-        (None, None) => 0.0,
-    };
-    let seed = match (&ov.seed, &prog.run.seed) {
-        (Some(s), _) => *s,
-        (None, Some(e)) => lk.const_count(e, "the seed", 0, 1 << 53)? as u64,
-        (None, None) => 1,
-    };
-    let arrivals = match (ov.arrivals, &prog.run.arrivals) {
-        (Some(n), _) => Some(n),
-        (None, Some(e)) => Some(lk.const_count(e, "arrivals", 1, 1 << 53)?),
-        (None, None) => None,
-    };
+    let horizon = ov.horizon.ok_or_else(|| {
+        LinkError::new(
+            "no horizon: supply --horizon T, --instance FILE, or Overrides.horizon".into(),
+        )
+    })?;
+    let warmup = ov.warmup.unwrap_or(0.0);
+    let seed = ov.seed.unwrap_or(1);
+    let arrivals = ov.arrivals;
     if warmup >= horizon {
         return Err(LinkError::new("warmup must be below the horizon".into()));
     }

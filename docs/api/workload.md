@@ -34,7 +34,7 @@ only `set` and `observe`. Random draws in the workload use their own stream.
 | `none` | | never (the default) |
 
 `poisson` and `renewal` are *open*: they arrive until the horizon, or until
-[`run { arrivals N; }`](program.md#run) has had its `N`.
+[`--arrivals N`](program.md#run) has had its `N`.
 
 ### `renewal`
 
@@ -151,8 +151,13 @@ fn main() {
     run svc (duration);
     observe elapsed = now;
   }
-  run { horizon 10; seed 10; }
 }
+```
+
+Save as `model.sq`, then run:
+
+```sh
+serq run model.sq --horizon 10 --seed 10
 ```
 
 ## See also

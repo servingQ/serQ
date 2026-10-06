@@ -7,7 +7,7 @@ to see how cache pressure affects that threshold.
 
 ```bash
 for L in 1.5 1.7 1.8 1.9 2.0; do
-  serq run docs/tutorial/programs/05-engine.sq --set Lambda=$L --json
+  serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --seed 1 --set Lambda=$L --json
 done
 ```
 
@@ -31,8 +31,8 @@ To separate compute saturation from memory pressure, run the same loads
 with ten times the KV pool and the same cost model:
 
 ```bash
-serq run docs/tutorial/programs/05-engine.sq --set Lambda=2.0 --set blocks=40000
-serq run docs/tutorial/programs/05-engine.sq --set Lambda=3.0 --set blocks=40000
+serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --seed 1 --set Lambda=2.0 --set blocks=40000
+serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --seed 1 --set Lambda=3.0 --set blocks=40000
 ```
 
 | sessions/s | KV blocks | hit rate | TTFT (s) | `stuck` | utilisation |
@@ -81,11 +81,11 @@ Vary one parameter at a time:
 
 ```bash
 # more memory
-serq run docs/tutorial/programs/05-engine.sq --set Lambda=1.8 --set blocks=8000
+serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --seed 1 --set Lambda=1.8 --set blocks=8000
 # fewer concurrent requests
-serq run docs/tutorial/programs/05-engine.sq --set Lambda=1.8 --set max_seqs=8
+serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --seed 1 --set Lambda=1.8 --set max_seqs=8
 # shorter thinking time
-serq run docs/tutorial/programs/05-engine.sq --set Lambda=1.8 --set Z=1
+serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --seed 1 --set Lambda=1.8 --set Z=1
 ```
 
 ---
