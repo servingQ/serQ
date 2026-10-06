@@ -134,25 +134,25 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request gw; end; } }
       run { horizon 100; }";
     let flat = "
-      let ND = 2; let Bw = 1000;
-      pool kvP { cap 1000; }
-      pool kvD[2] { cap 1000; block 16; }
-      stage P : fifo;
-      stage D[2] : step { cost 1; memory kvD; }
-      stage nic[2] : ps(1);
-      server {
-        set t0 = now;
-        hold kvP (prompt) { run P (prompt); } cache (prompt) lease kvP (inf);
-        set c = 0;
-        hold kvD[j] (prompt) {
-          transfer on nic[j] ((prompt - c) / Bw) from kvP to kvD[j] (prompt - 1);
-          prefill on D[j] (1) growing kvD[j]; set first = now;
-          decode on D[j] (o - 1) growing kvD[j];
+        let ND = 2; let Bw = 1000;
+        pool kvP { cap 1000; }
+        pool kvD[2] { cap 1000; block 16; }
+        stage P : fifo;
+        stage D[2] : step { cost 1; memory kvD; }
+        stage nic[2] : ps(1);
+        server {
+          set t0 = now;
+          hold kvP (prompt) { run P (prompt); } cache (prompt) lease kvP (inf);
+          set c = 0;
+          hold kvD[j] (prompt) {
+            transfer on nic[j] ((prompt - c) / Bw) from kvP to kvD[j] (prompt - 1);
+            prefill on D[j] (1) growing kvD[j]; set first = now;
+            decode on D[j] (o - 1) growing kvD[j];
+          }
+          observe ttft = first - t0;
         }
-        observe ttft = first - t0;
-      }
-      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request; end; } }
-      run { horizon 100; }";
+        workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { request; end; } }
+        run { horizon 100; }";
     same_ir(
         queues,
         flat,
@@ -201,25 +201,25 @@ fn a_read_over_both_links_is_the_flat_read() {
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request gw; end; } }
       run { horizon 100; }";
     let flat = "
-      let NP = 2; let ND = 2;
-      stage egress[2] : ps(100);
-      stage ingress[2] : ps(200);
-      stage setup : delay;
-      pool kvP[2] { cap 1000; }
-      stage P[2] : fifo;
-      pool kvD[2] { cap 1000; block 16; }
-      stage D[2] : step { cost 1; memory kvD; }
-      share maxmin;
-      server {
-        hold kvP[i] (prompt) { run P[i] (prompt); } cache (prompt) lease kvP[i] (inf);
-        hold kvD[j] (prompt) {
-          run setup (1);
-          transfer on egress[i], ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
-          decode on D[j] (o - 1) growing kvD[j];
+        let NP = 2; let ND = 2;
+        stage egress[2] : ps(100);
+        stage ingress[2] : ps(200);
+        stage setup : delay;
+        pool kvP[2] { cap 1000; }
+        stage P[2] : fifo;
+        pool kvD[2] { cap 1000; block 16; }
+        stage D[2] : step { cost 1; memory kvD; }
+        share maxmin;
+        server {
+          hold kvP[i] (prompt) { run P[i] (prompt); } cache (prompt) lease kvP[i] (inf);
+          hold kvD[j] (prompt) {
+            run setup (1);
+            transfer on egress[i], ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
+            decode on D[j] (o - 1) growing kvD[j];
+          }
         }
-      }
-      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
-      run { horizon 100; }";
+        workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
+        run { horizon 100; }";
     same_ir(queues, flat, &[("P.kv", "kvP"), ("D.kv", "kvD")]);
 }
 
@@ -255,27 +255,27 @@ fn a_link_latency_is_a_wait_before_the_read() {
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request gw; end; } }
       run { horizon 100; }";
     let flat = "
-      let x0 = 0.5; let x1 = 0.25;
-      stage egress[2] : ps(100);
-      stage egressL[2] : delay;
-      stage ingress[2] : ps(200);
-      stage ingressL[2] : delay;
-      pool kvP[2] { cap 1000; }
-      stage P[2] : fifo;
-      pool kvD[2] { cap 1000; block 16; }
-      stage D[2] : step { cost 1; memory kvD; }
-      share maxmin;
-      server {
-        hold kvP[i] (prompt) { run P[i] (prompt); } cache (prompt) lease kvP[i] (inf);
-        hold kvD[j] (prompt) {
-          run egressL[i] (x1);
-          run ingressL[j] (x0);
-          transfer on egress[i], ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
-          decode on D[j] (o - 1) growing kvD[j];
+        let x0 = 0.5; let x1 = 0.25;
+        stage egress[2] : ps(100);
+        stage egressL[2] : delay;
+        stage ingress[2] : ps(200);
+        stage ingressL[2] : delay;
+        pool kvP[2] { cap 1000; }
+        stage P[2] : fifo;
+        pool kvD[2] { cap 1000; block 16; }
+        stage D[2] : step { cost 1; memory kvD; }
+        share maxmin;
+        server {
+          hold kvP[i] (prompt) { run P[i] (prompt); } cache (prompt) lease kvP[i] (inf);
+          hold kvD[j] (prompt) {
+            run egressL[i] (x1);
+            run ingressL[j] (x0);
+            transfer on egress[i], ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
+            decode on D[j] (o - 1) growing kvD[j];
+          }
         }
-      }
-      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
-      run { horizon 100; }";
+        workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
+        run { horizon 100; }";
     same_ir(
         queues,
         flat,
@@ -352,10 +352,13 @@ fn a_keyword_named_attribute_is_a_read() {
     for word in ["latency", "cap"] {
         let src = format!(
             "def get() = {word};
-             def f(x) {{ set {word} = 2; observe o = x; }}
-             stage s : delay;
-             session {{ set {word} = 1; f(get()); run s (1); end; }}
-             run {{ horizon 1; }}"
+        def f(x) {{ set {word} = 2; observe o = x; }}
+        stage s : delay;
+        workload {{ session {{ request; end;
+        }} }}
+        server {{ set {word} = 1; f(get()); run s (1);
+        }}
+        run {{ horizon 1; }}"
         );
         let e = compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
         assert!(
@@ -375,7 +378,7 @@ fn a_latency_belongs_to_a_link() {
         "`latency` belongs to the `serve` of a queue that plays `link`",
     );
     refused(
-        "stage s : ps(1) latency 1; session { run s (1); end; } run { horizon 1; }",
+        "stage s : ps(1) latency 1; workload { session { request; end; \n} }\nserver { run s (1);\n} run { horizon 1; }",
         "`latency` belongs to the `serve` of a queue that plays `link`",
     );
     refused(
@@ -528,7 +531,7 @@ fn roles_and_entries_agree() {
         "a gateway is one queue",
     );
     refused(
-        "queue prefill : link { serve fifo; transfer (n) { run (n); } } stage s : fifo; session { run s (1); end; }",
+        "queue prefill : link { serve fifo; transfer (n) { run (n); } } stage s : fifo; workload { session { request; end; \n} }\nserver { run s (1);\n}",
         "serving word",
     );
 }
@@ -565,7 +568,7 @@ fn a_call_is_checked_against_the_entry() {
     refused(&program("X.decode (prompt);"), "no queue `X` is declared");
     // `self` is a member's word
     refused(
-        "stage s : fifo; session { observe s = self; end; } run { horizon 1; }",
+        "stage s : fifo; workload { session { request; end; \n} }\nserver { observe s = self;\n} run { horizon 1; }",
         "`self` is a queue entry's word",
     );
     refused(
@@ -610,9 +613,13 @@ fn requests_select_named_gateways_in_nested_sessions_and_before_declarations() {
       queue second : gateway { route { observe selected = 2; } }
       run { horizon 1; }";
     let flat = "
-      workload { arrive batch(1); }
-      session { loop { branch (1) { observe selected = 2; } else { observe selected = 1; } end; } }
-      run { horizon 1; }";
+        workload { arrive batch(1);
+          session { loop { request; end; }
+          }
+        }
+        server { branch (1) { observe selected = 2; } else { observe selected = 1; }
+        }
+        run { horizon 1; }";
     same_ir(queues, flat, &[]);
     same_ir(&queues.replace("second", "router"), flat, &[]);
 }
@@ -640,7 +647,7 @@ fn a_gateway_declaration_does_not_bind_an_anonymous_request() {
     );
     refused(
         "queue gw : gateway { route { } } session { request gw; }",
-        "`session` inside `workload`",
+        "`session` belongs inside `workload`",
     );
     refused(
         "queue gw : gateway { route { request gw; } }",
@@ -648,8 +655,9 @@ fn a_gateway_declaration_does_not_bind_an_anonymous_request() {
     );
     refused(
         "queue gw : gateway { route { } }
-         workload { session { request gw; } } session { end; }",
-        "one session",
+         workload { session { request gw; } }
+         session { end; }",
+        "`session` belongs inside `workload`",
     );
 }
 
@@ -657,12 +665,16 @@ fn a_gateway_declaration_does_not_bind_an_anonymous_request() {
 fn named_gateways_and_anonymous_servers_have_distinct_requests() {
     same_ir(
         "queue gw : gateway { route { observe selected = 2; } }
-         server { observe selected = 1; }
-         workload { arrive batch(1); session { request; request gw; end; } }
-         run { horizon 1; }",
-        "workload { arrive batch(1); }
-         session { observe selected = 1; observe selected = 2; end; }
-         run { horizon 1; }",
+        server { observe selected = 1; }
+        workload { arrive batch(1); session { request; request gw; end; } }
+        run { horizon 1; }",
+        "workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { observe selected = 1; observe selected = 2;
+        }
+        run { horizon 1; }",
         &[],
     );
 }
@@ -992,25 +1004,25 @@ fn a_pull_relation_is_the_flat_read() {
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request gw; end; } }
       run { horizon 100; }";
     let flat = "
-      let x0 = 0.5;
-      pool kvP[2] { cap 1000; }
-      stage P[2] : fifo;
-      stage nicP[2] : ps(100);
-      pool kvD[2] { cap 1000; block 16; }
-      stage D[2] : step { cost 1; memory kvD; }
-      stage nicD[2] : ps(200);
-      stage wait[2] : delay;
-      share maxmin;
-      server {
-        hold kvP[i] (prompt) { run P[i] (prompt); } cache (prompt) lease kvP[i] (inf);
-        hold kvD[j] (prompt) {
-          run wait[j] (x0);
-          transfer on nicP[i], nicD[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
-          decode on D[j] (o - 1) growing kvD[j];
+        let x0 = 0.5;
+        pool kvP[2] { cap 1000; }
+        stage P[2] : fifo;
+        stage nicP[2] : ps(100);
+        pool kvD[2] { cap 1000; block 16; }
+        stage D[2] : step { cost 1; memory kvD; }
+        stage nicD[2] : ps(200);
+        stage wait[2] : delay;
+        share maxmin;
+        server {
+          hold kvP[i] (prompt) { run P[i] (prompt); } cache (prompt) lease kvP[i] (inf);
+          hold kvD[j] (prompt) {
+            run wait[j] (x0);
+            transfer on nicP[i], nicD[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
+            decode on D[j] (o - 1) growing kvD[j];
+          }
         }
-      }
-      workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
-      run { horizon 100; }";
+        workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { request; end; } }
+        run { horizon 100; }";
     same_ir(
         queues,
         flat,
@@ -1183,8 +1195,12 @@ fn each_overload_substitutes_only_its_own_locals() {
            session { request gw; end; } }
          run { horizon 1; }",
         "stage D : fifo;
-         workload { arrive batch(1); hidden x; init { set x = 3; } }
-         session { observe seen = x; end; } run { horizon 1; }",
+        workload { arrive batch(1); hidden x; init { set x = 3; }
+          session { request; end;
+          }
+        }
+        server { observe seen = x;
+        } run { horizon 1; }",
         &[],
     );
 }

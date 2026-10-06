@@ -23,8 +23,13 @@ fn aging_source(bound: bool, key: &str) -> String {
         pool reqs {{ cap 1; queue by ({key}); {via} }}
         {stage}
         stage delay : delay;
-        workload {{ arrive batch(6); }}
-        session {{
+        workload {{ arrive batch(6);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
           set prompt = serial == 1 || serial == 5 ? 256 : 64;
           set immediate = serial == 4;
           run delay (serial == 2 ? 1 : serial == 3 ? 2 : serial >= 4 ? 3 : 0);
@@ -34,10 +39,9 @@ fn aging_source(bound: bool, key: &str) -> String {
             observe admitted = now;
             {run} (serial == 0 ? 4 : 1);
           }}
-          end;
         }}
         run {{ horizon 20; }}
-    "#
+"#
     )
 }
 
@@ -95,8 +99,13 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
         }
         stage engine : step { budget 5; cost 1; }
         stage delay : delay;
-        workload { arrive batch(4); }
-        session {
+        workload { arrive batch(4);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run delay (serial == 0 ? 0 : 0.25);
           hold reqs (1) {
             observe selected = serial;
@@ -104,10 +113,9 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
             branch (serial == 0) { run engine decode (1); }
             else { run engine prefill (serial == 2 ? 1 : serial == 1 ? 2 : 3); }
           }
-          end;
         }
         run { horizon 10; }
-    "#;
+"#;
     let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 4);
     assert_eq!(r.observe("selected").unwrap().samples, [0., 1., 3., 2.]);
@@ -122,14 +130,18 @@ fn lexicographic_keys_preserve_enqueue_order_for_equal_keys() {
         pool reqs { cap 1; queue by (0, serial == 2 ? 0 : 1); }
         stage engine : fifo;
         stage delay : delay;
-        workload { arrive batch(4); }
-        session {
+        workload { arrive batch(4);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run delay (serial == 0 ? 0 : 0.25);
           hold reqs (1) { observe selected = serial; run engine (1); }
-          end;
         }
         run { horizon 10; }
-    "#;
+"#;
     let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.observe("selected").unwrap().samples, [0., 2., 1., 3.]);
 }
@@ -142,14 +154,14 @@ fn selection_rejects_random_hidden_and_wrong_moment_keys_in_source_and_ir() {
         ("secret", "hidden"),
     ] {
         let src = format!(
-            "pool reqs {{ cap 1; queue by ({key}); }} workload {{ hidden secret; init {{ set secret = 1; }} }} session {{ end; }} run {{ horizon 1; }}"
+            "pool reqs {{ cap 1; queue by ({key}); }} workload {{ hidden secret; init {{ set secret = 1; }} \n  session {{ request; end; \n  }}\n}} server {{\n}} run {{ horizon 1; }}"
         );
         let error = compile_source(&common::main_source(&src), &Overrides::default())
             .unwrap_err()
             .to_string();
         assert!(error.contains(message), "{key}: {error}");
     }
-    let src = "pool reqs { cap 1; queue by (waited); } session { end; } run { horizon 1; }";
+    let src = "pool reqs { cap 1; queue by (waited); } workload { session { request; end; \n} }\nserver {\n} run { horizon 1; }";
     let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let mut bad = p.clone();
     bad.pools[0].queue = Some(vec![]);
@@ -181,7 +193,8 @@ fn selection_rejects_random_hidden_and_wrong_moment_keys_in_source_and_ir() {
     );
     assert!(
         compile_source(
-            &common::main_source("session { observe x = waited; end; } run { horizon 1; }"),
+            &common::main_source(
+            "workload { session { request; end; \n} }\nserver { observe x = waited;\n} run { horizon 1; }"),
             &Overrides::default()
         )
         .unwrap_err()
@@ -199,18 +212,22 @@ fn a_selected_request_that_cannot_fit_still_blocks_lower_priority_requests() {
         pool kv { cap 4; queue by (serial == 1 && waited >= 0.5 ? 0 : serial); }
         stage delay : delay;
         stage service : delay;
-        workload { arrive batch(3); }
-        session {
+        workload { arrive batch(3);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run delay (serial == 0 ? 0 : 0.25);
           hold kv (serial == 0 ? 3 : serial == 1 ? 2 : 1) {
             observe selected = serial;
             observe admitted = now;
             run service (serial == 0 ? 4 : 1);
           }
-          end;
         }
         run { horizon 10; }
-    "#;
+"#;
     let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.observe("selected").unwrap().samples, [0., 1., 2.]);
     assert_eq!(r.observe("admitted").unwrap().samples, [0., 4., 4.]);
@@ -228,11 +245,16 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         pool kv { cap 6; preempt lifo; }
         stage engine : step { budget 4; chunk 2; cost 1; memory kv; serve exclusive prefill; }
         stage delay : delay;
-        workload { arrive batch(3); }
-        session {
+        workload { arrive batch(3);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run delay (serial == 2 ? 3.25 : 0);
           hold reqs (1), kv (min(known, left)) reserve (known)
-               at admission (known = serial == 2 ? 0 : max(2, computed), left = budget_left(engine)) {
+          at admission (known = serial == 2 ? 0 : max(2, computed), left = budget_left(engine)) {
             observe selected = serial;
             observe admitted = now;
             branch (serial == 2) { run engine decode (1); }
@@ -241,10 +263,9 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
               run engine decode (3 - (known - 2)) growing kv;
             }
           }
-          end;
         }
         run { horizon 20; }
-    "#;
+"#;
     let r = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(r.ended, 3);
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);

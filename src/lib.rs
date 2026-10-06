@@ -134,10 +134,8 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 
 /// The program the deployment view draws, from program text: what one
 /// request runs (the `server`, or a gateway's `route`) in place of the
-/// session, when the program splits its session into a workload and a
-/// server. Whether a session comes back, and when it ends, is the
-/// workload's and not the deployment's. A program written as one session
-/// is drawn whole.
+/// session. Whether a session comes back, and when it ends, belongs to the
+/// workload. A program with no unique request body is drawn whole.
 pub fn compile_drawn_file(src: &str, path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     let prog = frontend::parser::parse_file_with(src, path, &ov.defs, &overridden(ov))
         .map_err(|e| e.render(src))?;

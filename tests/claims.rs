@@ -16,8 +16,12 @@ let c = 1128;
 let a = 3547;
 let b0 = 128;
 stage engine : step { budget bmax; cost c + a * ceil(tokens / b0); SERVE }
-workload { arrive renewal(46750); init { set t0 = now; } }
-session { run engine prefill (290); run engine decode (990); observe response = now - t0; end; }
+workload { arrive renewal(46750); init { set t0 = now; }
+  session { request; end;
+  }
+}
+server { run engine prefill (290); run engine decode (990); observe response = now - t0;
+}
 claim work_conserving: every iteration of engine (demand < bmax || tokens == bmax);
 claim token_rate: every iteration of engine (served * (c + a * ceil(bmax / b0)) <= bmax * now);
 claim starved: some iteration of engine (demand >= bmax && tokens < bmax);
@@ -97,10 +101,14 @@ fn an_engine_that_serves_one_kind_fails_them() {
 }
 
 const BATCH: &str = "
-stage engine : step { budget 4; cost 1; }
-workload { arrive batch(3); init { set n = serial == 0 ? 3 : serial; } }
-session { run engine prefill (n); observe x = n; end; }
-run { horizon 100; }
+        stage engine : step { budget 4; cost 1; }
+        workload { arrive batch(3); init { set n = serial == 0 ? 3 : serial; }
+          session { request; end;
+          }
+        }
+        server { run engine prefill (n); observe x = n;
+        }
+        run { horizon 100; }
 ";
 
 /// `prefix_total` sorts the values: 3, 1, 2 give 1 + (1 + 2) + (1 + 2 + 3).
@@ -179,8 +187,12 @@ fn served_and_demand_are_read_as_the_iteration_starts() {
 fn arrived_counts_the_sessions_started_by_the_iteration() {
     let r = run("
         stage engine : step { budget 4; cost 1; }
-        workload { arrive renewal(10); }
-        session { run engine prefill (3); end; }
+        workload { arrive renewal(10);
+          session { request; end;
+          }
+        }
+        server { run engine prefill (3);
+        }
         run { horizon 55; }
         claim at_20: some iteration of engine (now == 20 && arrived == 2);
         claim balance: every iteration of engine (arrived * 3 == served + tokens);
@@ -266,8 +278,12 @@ fn a_claim_reads_only_what_its_moment_supplies() {
 fn a_claim_over_a_member_of_an_array() {
     let src = "
         stage engine[2] : step { budget 4; cost 1; }
-        workload { arrive batch(2); }
-        session { run engine[serial] prefill (3); end; }
+        workload { arrive batch(2);
+          session { request; end;
+          }
+        }
+        server { run engine[serial] prefill (3);
+        }
         claim one: every iteration of engine[1] (tokens == 3);
         run { horizon 100; }";
     let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();

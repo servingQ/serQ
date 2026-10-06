@@ -6,16 +6,20 @@ mod common;
 use serq::{Overrides, compile_source, run_source};
 
 const DEPLOYMENT: &str = "
-    pool kv[2] { cap 100; }
-    stage svc[2] : fifo;
-    workload { arrive poisson(1.5); }
-    session {
-      choose j in 2 by (holders(kv[j]));
-      set n = ~uniform(1, 20);
-      hold kv[j] (n) { run svc[j] (~exp(0.5)); }
-      end;
-    }
-    run { horizon 4000; warmup 100; seed 3; }
+        pool kv[2] { cap 100; }
+        stage svc[2] : fifo;
+        workload { arrive poisson(1.5);
+          session { request;
+            end;
+
+          }
+        }
+        server {
+          choose j in 2 by (holders(kv[j]));
+          set n = ~uniform(1, 20);
+          hold kv[j] (n) { run svc[j] (~exp(0.5)); }
+        }
+        run { horizon 4000; warmup 100; seed 3; }
 ";
 
 fn run(gauges: &str) -> serq::Report {
@@ -107,10 +111,14 @@ fn an_aggregate_let_sizes_an_array() {
     ] {
         let src = format!(
             "let N = {n};
-             stage s[N] : delay;
-             workload {{ arrive batch(1); }}
-             session {{ run s[0] (N); end; }}
-             run {{ horizon 10; }}"
+        stage s[N] : delay;
+        workload {{ arrive batch(1);
+          session {{ request; end;
+          }}
+        }}
+        server {{ run s[0] (N);
+        }}
+        run {{ horizon 10; }}"
         );
         let p = compile_source(&common::main_source(&src), &Overrides::default())
             .unwrap_or_else(|e| panic!("{n}: {e}"));
@@ -121,7 +129,10 @@ fn an_aggregate_let_sizes_an_array() {
     // counts of 4096 ran for minutes before the linker could say so
     let e = link_error(
         "let N = sum i in 64 (sum j in 64 (sum k in 64 (0))) + 1;
-         session { end; } run { horizon 1; }",
+        workload { session { request; end;
+        } }
+        server {
+        } run { horizon 1; }",
     );
     assert!(e.contains("terms, at most 4096"), "{e}");
 }
@@ -252,11 +263,15 @@ fn a_gauge_reads_the_end_of_an_instant() {
     let src = "
         pool kv { cap 10; }
         stage gate : delay;
-        workload { arrive batch(2); }
-        session {
+        workload { arrive batch(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run gate (serial == 0 ? 0 : 1);
           hold kv (1) { run gate (1); }
-          end;
         }
         gauge n = holders(kv);
         run { horizon 3; }";
@@ -273,7 +288,10 @@ fn a_gauge_reads_the_end_of_an_instant() {
 #[test]
 fn a_gauge_does_not_plan_an_iteration() {
     let src = "stage e : step { budget ~uniform(1, 2); cost 1; }
-        session { run e prefill (1); end; } run { horizon 1; }
+        workload { session { request; end;
+        } }
+        server { run e prefill (1);
+        } run { horizon 1; }
         gauge g = budget_left(e);";
     assert!(link_error(src).contains("may not read `budget_left"));
 }
@@ -290,8 +308,11 @@ fn a_budget_does_not_read_budget_left() {
     ] {
         let src = format!(
             "stage e : step {{ budget {budget}; chunk {chunk}; cost 1; }}
-             stage f : step {{ budget 64; cost 1; }}
-             session {{ run e prefill (1); end; }} run {{ horizon 1; }}"
+        stage f : step {{ budget 64; cost 1; }}
+        workload {{ session {{ request; end;
+        }} }}
+        server {{ run e prefill (1);
+        }} run {{ horizon 1; }}"
         );
         let e = link_error(&src);
         assert!(
@@ -303,8 +324,12 @@ fn a_budget_does_not_read_budget_left() {
     // header read it and the run ends
     let src = "pool kv { cap 64; }
         stage e : step { budget 8; cost 1 + 0 * budget_left(e); serve by (budget_left(e)); memory kv; }
-        workload { arrive batch(2); }
-        session { hold kv (min(8, budget_left(e))) { run e prefill (4); } end; }
+        workload { arrive batch(2);
+          session { request; end;
+          }
+        }
+        server { hold kv (min(8, budget_left(e))) { run e prefill (4); }
+        }
         run { horizon 10; }";
     run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
 }

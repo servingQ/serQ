@@ -44,7 +44,7 @@ of the engine you want to model.
 `chunk` limits each request's prefill allocation. `serve` controls resident
 order and selection; see the [stage reference](../api/stage.md).
 
-## Two sides: the workload and the server
+## The workload and the server
 
 The `session` inside `workload` describes the conversation: a `request;`
 per turn, followed by a tool call or the end of the session. The `server`

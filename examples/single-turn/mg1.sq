@@ -24,14 +24,15 @@ fn main() {
       set t0 = now;
       set s = service();
     }
+
+    session { request; end; }
   }
 
-  session {
+  server {
     run svc (s);
     observe sojourn = now - t0;
     observe wait = now - t0 - s;
     observe service = s;
-    end;
   }
 
   run { horizon 250000; warmup 25000; seed 1; }

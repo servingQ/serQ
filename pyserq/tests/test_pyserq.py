@@ -25,8 +25,8 @@ CLI = os.environ.get("SERQ_CLI", str(ROOT / "target" / "release" / "serq"))
 MG1 = ROOT / "examples" / "single-turn" / "mg1.sq"
 REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
 ARRAYS = """fn main() { pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
-workload { arrive poisson(1); }
-session { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } end; }
+workload { arrive poisson(1); session { request; end; } }
+server { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } }
 run { horizon 100; } }"""
 
 
@@ -56,12 +56,11 @@ def test_a_file_with_numbers_and_a_seed():
 GAUGED = """fn main() {
 pool kv[2] { cap 100; }
 stage svc[2] : fifo;
-workload { arrive poisson(1.5); }
-session {
+workload { arrive poisson(1.5); session { request; end; } }
+server {
   choose j in 2 by (holders(kv[j]));
   set u = ~uniform(1, 20);
   hold kv[j] (u) { run svc[j] (~exp(0.5)); }
-  end;
 }
 gauge spread = max k in 2 (used(kv[k])) - min k in 2 (used(kv[k]));
 run { horizon 2000; warmup 100; seed 3; }
@@ -176,8 +175,8 @@ def test_an_infinity_is_inf():
 
 
 def test_defs_is_the_program_written_with_that_body():
-    src = ("fn main() { def service() = ~exp(1);\nstage svc : fifo;\nworkload { arrive poisson(0.5); }\n"
-           "session { run svc (service()); observe s = now; end; }\nrun { horizon 1000; seed 2; } }\n")
+    src = ("fn main() { def service() = ~exp(1);\nstage svc : fifo;\nworkload { arrive poisson(0.5); session { request; end; } }\n"
+           "server { run svc (service()); observe s = now; }\nrun { horizon 1000; seed 2; } }\n")
     given = pyserq.compile(source=src, defs={"service": "~erlang(4, 1)"})
     written = pyserq.compile(source=src.replace("~exp(1)", "~erlang(4, 1)"))
     assert given.to_json() == written.to_json() != pyserq.compile(source=src).to_json()
@@ -187,8 +186,8 @@ def test_defs_is_the_program_written_with_that_body():
 
 def test_rng_is_the_stream_a_run_draws_from():
     # the arrivals of a run seeded 11 are the gaps Rng(11) draws, exactly
-    src = ("fn main() { let lam = 0.5;\nworkload { arrive poisson(lam); }\n"
-           "session { observe t = now; end; }\nrun { horizon 100; warmup 0; seed 11; } }\n")
+    src = ("fn main() { let lam = 0.5;\nworkload { arrive poisson(lam); session { request; end; } }\n"
+           "server { observe t = now; }\nrun { horizon 100; warmup 0; seed 11; } }\n")
     got = pyserq.run(pyserq.compile(source=src)).observe("t").samples
     rng, t, want = pyserq.Rng(11), 0.0, []
     while t < 100:
@@ -225,7 +224,7 @@ def test_draw_is_serq_draw():
 def test_errors_are_value_errors():
     for call in [
         lambda: pyserq.compile(ROOT / "nowhere.sq"),
-        lambda: pyserq.compile(source="fn main() { session { run nowhere (1); end; } }"),
+        lambda: pyserq.compile(source="fn main() { workload { session { request; end; } } server { run nowhere (1); } }"),
         lambda: pyserq.compile(MG1, sets={"nope": 1}),
         lambda: pyserq.compile(MG1, source="x"),
         lambda: pyserq.compile(MG1, sets={"lam": float("nan")}),

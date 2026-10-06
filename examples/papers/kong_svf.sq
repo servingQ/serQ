@@ -23,16 +23,17 @@ fn main() {
       set s = floor(~uniform(100, 2000));
       set o = floor(~uniform(10, 500));
     }
+
+    session { request; end; }
   }
 
-  session {
+  server {
     observe out = o;
     observe vol = s * o + floor((o * o + o) / 2);
     hold kv (s + o) {
       run engine decode (o);
     }
     observe latency = now;
-    end;
   }
 
   // Lemma A.2, summed over the requests: every step a request waits, the

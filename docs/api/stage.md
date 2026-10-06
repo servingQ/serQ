@@ -237,12 +237,14 @@ A complete program:
 ```serq
 fn main() {
   stage engine : step { budget 8; cost 1; }
-  workload { arrive batch(2); }
-  session {
+  workload {
+    arrive batch(2);
+    session { request; end; }
+  }
+  server {
     run engine prefill (8);
     run engine decode (2);
     observe finished = now;
-    end;
   }
   run { horizon 10; }
 }

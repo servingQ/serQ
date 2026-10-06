@@ -355,15 +355,17 @@ A complete program using arithmetic, live state and end-of-run aggregates:
 fn main() {
   pool slots { cap 2; }
   stage svc : fifo;
-  workload { arrive batch(3); }
-  session {
+  workload {
+    arrive batch(3);
+    session { request; end; }
+  }
+  server {
     set t0 = now;
     hold slots (1) {
       observe allocated = used(slots);
       run svc (ceil(1.2));
     }
     observe latency = now - t0;
-    end;
   }
   claim completed : at end (count(latency) == 3);
   claim elapsed : at end (largest(latency) == 6);

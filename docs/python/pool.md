@@ -39,12 +39,14 @@ source = """
 fn main() {
   pool slots { cap 2; }
   stage svc : fifo;
-  workload { arrive batch(4); }
-  session {
+  workload {
+    arrive batch(4);
+    session { request; end; }
+  }
+  server {
     set t0 = now;
     hold slots (1) { run svc (2); }
     observe latency = now - t0;
-    end;
   }
   gauge occupied = used(slots);
   run { horizon 10; }

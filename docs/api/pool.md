@@ -212,12 +212,14 @@ A complete program:
 fn main() {
   pool slots { cap 2; }
   stage svc : delay;
-  workload { arrive batch(3); }
-  session {
+  workload {
+    arrive batch(3);
+    session { request; end; }
+  }
+  server {
     set t0 = now;
     hold slots (1) { run svc (2); }
     observe latency = now - t0;
-    end;
   }
   run { horizon 10; }
 }

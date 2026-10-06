@@ -14,9 +14,9 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
         &f.run(&["check", "model.sq"]),
         1,
         &[
-            "model.sq: 4:15:",
+            "model.sq: 4:14:",
             "unknown stage `svcc`",
-            "4 | session { run svcc (rate); end; }",
+            "4 | server { run svcc (rate); }",
             "^^^^",
             "did you mean stage `svc`?",
             "declared at 2:7",
@@ -24,13 +24,13 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
     );
     // The first spelling is a valid stage, but the second is an unknown pool.
     // Searching the token stream for the first matching name would misdiagnose it.
-    let src = "stage kvv : fifo;\npool kv { cap 10; }\nsession { hold kvv (1) { end; } }\nrun { horizon 10; }";
+    let src = "stage kvv : fifo;\npool kv { cap 10; }\nworkload { session { request; hold kvv (1) { end; } \n} }\nserver {\n}\nrun { horizon 10; }";
     f.write("model.sq", &common::main_source(src));
     failure(
         &f.run(&["check", "model.sq"]),
         1,
         &[
-            "3:16:",
+            "3:36:",
             "unknown pool `kvv`",
             "did you mean pool `kv`?",
             "declared at 2:6",
@@ -42,8 +42,8 @@ fn unknown_references_show_the_use_and_a_declaration_of_the_right_kind() {
 fn names_and_bare_references_keep_their_locations() {
     for (src, location, cause) in [
         (
-            "session { set x = min(typo, 1); }\nrun { horizon 1; }",
-            "1:35:",
+            "workload { session { request; \n} }\nserver { set x = min(typo, 1);\n}\nrun { horizon 1; }",
+            "3:22:",
             "unknown name `typo`",
         ),
         (
@@ -57,8 +57,8 @@ fn names_and_bare_references_keep_their_locations() {
             "unknown pool `kvv`",
         ),
         (
-            "// 한글 주석\nlet 용량 = 10;\nsession { set x = 용랑; }\nrun { horizon 1; }",
-            "3:19:",
+            "// 한글 주석\nlet 용량 = 10;\nworkload { session { request; \n} }\nserver { set x = 용랑;\n}\nrun { horizon 1; }",
+            "5:18:",
             "unknown name `용랑`",
         ),
         (
@@ -127,7 +127,7 @@ fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
 
 #[test]
 fn ambiguous_suggestions_and_override_spans_are_not_misleading() {
-    let src = "stage cat : fifo; stage cut : fifo; session { run cot (1); } run { horizon 1; }";
+    let src = "stage cat : fifo; stage cut : fifo; workload { session { request; \n} }\nserver { run cot (1);\n} run { horizon 1; }";
     let err = compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
     assert!(!err.contains("did you mean"), "{err}");
     let ov = Overrides {
@@ -179,14 +179,17 @@ fn ownership_checks_ignore_locations_but_keep_index_syntax() {
     let program = |target: &str| {
         format!(
             "pool q[2] {{ cap 10; }}
-         session {{
+         workload {{ session {{ request;
+           end;
+
+}} }}
+server {{
            set i = 0; set j = 0;
            hold q[{index}] (1) {{
              load q[{target}] (1);
            }} lease q[{target}] (1);
            release q[{target}];
-           end;
-         }}
+}}
          run {{ horizon 10; }}"
         )
     };
@@ -202,9 +205,16 @@ fn ownership_checks_ignore_locations_but_keep_index_syntax() {
 
 #[test]
 fn a_constant_that_is_nan_is_refused_and_an_infinity_is_not() {
-    let src = "use \"std/args\"; let x = args.number(\"x\", 1);\npool kv { cap 100; block 16; }\nstage s : fifo(1);\n\
-               workload { arrive poisson(1); }\nsession { run s (x); end; }\n\
-               run { horizon 10; seed 1; }";
+    let src = "use \"std/args\"; let x = args.number(\"x\", 1);
+pool kv { cap 100; block 16; }
+stage s : fifo(1);
+workload { arrive poisson(1);
+  session { request; end;
+  }
+}
+server { run s (x);
+}
+run { horizon 10; seed 1; }";
     let refused = |src: &str, ov: &Overrides, what: &str| {
         let err = compile_source(&common::main_source(src), ov).expect_err(what);
         assert!(
@@ -277,11 +287,18 @@ fn a_constant_that_is_nan_is_refused_and_an_infinity_is_not() {
 fn a_def_given_from_outside_is_the_program_written_with_that_body() {
     let src = |service: &str, key: &str| {
         format!(
-            "let lam = 0.5;\ndef service() = {service};\ndef key(x) = {key};\n\
-             def twice(x) {{ set y = x * 2; }}\nstage svc : fifo;\n\
-             workload {{ arrive poisson(lam); }}\n\
-             session {{ set c = 1; run svc (service()); observe k = key(c); end; }}\n\
-             run {{ horizon 100; seed 3; }}"
+            "let lam = 0.5;
+def service() = {service};
+def key(x) = {key};
+def twice(x) {{ set y = x * 2; }}
+stage svc : fifo;
+workload {{ arrive poisson(lam);
+  session {{ request; end;
+  }}
+}}
+server {{ set c = 1; run svc (service()); observe k = key(c);
+}}
+run {{ horizon 100; seed 3; }}"
         )
     };
     let base = src("~exp(1)", "x");

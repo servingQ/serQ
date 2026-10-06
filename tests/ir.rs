@@ -54,8 +54,12 @@ fn json_round_trip_is_exact() {
 fn a_folded_constant_survives_the_round_trip() {
     let src = "let rate = 0.1 * (1 + 0.3 * 3 * 0.9 / (1 - 0.9));
         stage svc : fifo;
-        workload { arrive poisson(rate); }
-        session { run svc (~exp(1)); end; }
+        workload { arrive poisson(rate);
+          session { request; end;
+          }
+        }
+        server { run svc (~exp(1));
+        }
         run { horizon 10; }";
     let j = compile_source(&common::main_source(src), &Overrides::default())
         .unwrap()
@@ -91,8 +95,12 @@ fn ir_that_skips_the_linker_meets_its_checks() {
     let src = "pool kv { cap 64; }
         stage engine : step { budget 8; cost 1; memory kv; }
         stage d : delay;
-        workload { arrive batch(1); init { set x = 1; } }
-        session { hold kv (8) { run engine prefill (8) growing kv; } end; }
+        workload { arrive batch(1); init { set x = 1; }
+          session { request; end;
+          }
+        }
+        server { hold kv (8) { run engine prefill (8) growing kv; }
+        }
         run { horizon 10; }";
     let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let d = p.stages.iter().position(|s| s.name == "d").unwrap();
@@ -268,8 +276,12 @@ fn budget_left_needs_a_step_stage() {
     let src = "pool kv { cap 64; }
         stage engine : step { budget 8; cost 1; memory kv; }
         stage d : delay;
-        workload { arrive batch(1); }
-        session { set b = budget_left(d); run d (1); end; }
+        workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { set b = budget_left(d); run d (1);
+        }
         run { horizon 10; }";
     let e = compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
     assert!(e.contains("`budget_left(d)`: `d` is a delay stage"), "{e}");
@@ -306,10 +318,14 @@ fn explicit_sessions_preset_attributes() {
     // two sessions with different service times through a delay stage
     let src = r#"
         stage d : delay;
-        workload { arrive batch(1); init { set w = 1; } }
-        session { run d (w); observe done = now; end; }
+        workload { arrive batch(1); init { set w = 1; }
+          session { request; end;
+          }
+        }
+        server { run d (w); observe done = now;
+        }
         run { horizon 100; }
-    "#;
+"#;
     let p = compile_source(&common::main_source(src), &Overrides::default())
         .unwrap()
         .with_sessions(&[vec![("w", 5.0)], vec![("w", 2.0)]])
@@ -363,33 +379,38 @@ fn serving_forms_compile_to_the_kernel_ir() {
         stage link : ps(1);
         stage decode : ps(min(present, 4));
         stage tool : delay;
-        workload {
-          arrive poisson(0.5);
-          init { set K = 0; }
-          turn { set n = ~exp(100); set o = ~exp(20); set Z = ~exp(3); set T = K + n; }
-        }
+
         run { horizon 100; seed 1; }
     "#;
+    let deployment_workload = r#"arrive poisson(0.5);
+          init { set K = 0; }
+          turn { set n = ~exp(100); set o = ~exp(20); set Z = ~exp(3); set T = K + n; }"#;
     let serving = format!(
-        "{deployment} session {{
+        "{deployment} workload {{ {deployment_workload} session {{
             turn;
-            loop {{
-              hold memP (T) {{ prefill (n + K); }} cache (T) lease memP (inf);
-              hold memD (T) {{ transfer (T / 100) from memP to memD (T); decode (o); }}
-              set K = T;
+            loop {{ request;
               branch with (0.8) {{ tool Z; turn; }} else {{ end; }}
             }}
+
+        }} }}
+        server {{
+          hold memP (T) {{ prefill (n + K); }} cache (T) lease memP (inf);
+          hold memD (T) {{ transfer (T / 100) from memP to memD (T); decode (o); }}
+          set K = T;
         }}"
     );
     let kernel = format!(
-        "{deployment} session {{
+        "{deployment} workload {{ {deployment_workload} session {{
             turn;
-            loop {{
-              hold memP (T) {{ run prefill (n + K); }} cache (T) lease memP (inf);
-              hold memD (T) {{ run link (T / 100); load memD (T); release memP; run decode (o); }}
-              set K = T;
+            loop {{ request;
               branch with (0.8) {{ run tool (Z); turn; }} else {{ end; }}
             }}
+
+        }} }}
+        server {{
+          hold memP (T) {{ run prefill (n + K); }} cache (T) lease memP (inf);
+          hold memD (T) {{ run link (T / 100); load memD (T); release memP; run decode (o); }}
+          set K = T;
         }}"
     );
     let a = compile_source(&common::main_source(&serving), &Overrides::default()).unwrap();
@@ -404,13 +425,14 @@ fn serving_forms_compile_to_the_kernel_ir() {
 #[test]
 fn branch_with_is_sugar_for_bernoulli() {
     let head = "stage tool : delay;
-        workload { arrive poisson(0.5); turn { set Z = ~exp(3); } }
+
         run { horizon 2000; warmup 200; seed 1; }";
+    let head_workload = "arrive poisson(0.5); turn { set Z = ~exp(3); }";
     let sugar = format!(
-        "{head} session {{ turn; loop {{ branch with (0.8) {{ run tool (Z); turn; }} else {{ end; }} }} }}"
+        "{head} workload {{ {head_workload} session {{ turn; loop {{ branch with (0.8) {{ request; turn; }} else {{ end; }} }} \n}} }}\nserver {{ run tool (Z);\n}}"
     );
     let explicit = format!(
-        "{head} session {{ turn; loop {{ branch (~bernoulli(0.8)) {{ run tool (Z); turn; }} else {{ end; }} }} }}"
+        "{head} workload {{ {head_workload} session {{ turn; loop {{ branch (~bernoulli(0.8)) {{ request; turn; }} else {{ end; }} }} \n}} }}\nserver {{ run tool (Z);\n}}"
     );
     let ov = serq::Overrides::default();
     let a = serq::compile_source(&common::main_source(&sugar), &ov).expect("the sugar compiles");
@@ -439,8 +461,12 @@ fn a_draw_is_labelled_w_p() {
     // a station before the branch, as every program in the corpus has: the
     // guard labels the edge that leaves it
     let src = "stage svc : fifo; stage tool : delay;
-        workload { arrive poisson(0.5); turn { set Z = ~exp(3); } }
-        session { turn; loop { run svc (1); branch with (0.8) { run tool (Z); turn; } else { end; } } }
+        workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
+          session { turn; loop { request; branch with (0.8) { run tool (Z); turn; } else { end; } }
+          }
+        }
+        server { run svc (1);
+        }
         run { horizon 100; }";
     let p = serq::compile_source(&common::main_source(src), &serq::Overrides::default()).unwrap();
     let svg = serq::view::svg::render(&serq::view::deployment::figure(&p));
@@ -464,23 +490,30 @@ fn at_admission_is_substituted_into_the_header() {
     let head = "pool kv { cap 1e5; block 16; evict lru; }
         pool reqs { cap 8; }
         stage engine : step { budget 512; cost 1e-3; memory kv; }
-        workload { arrive poisson(0.3); init { set K = 0; }
-                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
+
         run { horizon 500; }";
+    let head_workload = "arrive poisson(0.3); init { set K = 0; }
+                   turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     let bound = format!(
-        "{head} session {{ turn; loop {{ set prompt = K + n;
+        "{head} workload {{ {head_workload} session {{ turn; loop {{ request; end; }}
+        }} }}
+        server {{ set prompt = K + n;
           hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
-                at admission (hit = min(cachedin(kv), prompt - 1)) {{
+          at admission (hit = min(cachedin(kv), prompt - 1)) {{
             prefill (prompt - cached) growing kv;
           }} cache (prompt + o);
-          set K = prompt + o; end; }} }}"
+          set K = prompt + o;
+        }}"
     );
     let inlined = format!(
-        "{head} session {{ turn; loop {{ set prompt = K + n;
+        "{head} workload {{ {head_workload} session {{ turn; loop {{ request; end; }}
+        }} }}
+        server {{ set prompt = K + n;
           hold reqs (1), kv (min(prompt, min(cachedin(kv), prompt - 1) + budget_left(engine))) {{
             prefill (prompt - cached) growing kv;
           }} cache (prompt + o);
-          set K = prompt + o; end; }} }}"
+          set K = prompt + o;
+        }}"
     );
     let ov = serq::Overrides::default();
     let a = serq::compile_source(&common::main_source(&bound), &ov).expect("the clause compiles");
@@ -502,20 +535,27 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
     let head = "pool kv { cap 1e5; block 16; evict lru; }
         pool reqs { cap 8; }
         stage engine : step { budget 512; cost 1e-3; memory kv; }
-        workload { arrive poisson(0.3); init { set K = 0; }
-                   turn { set n = ~exp(500); set o = ~exp(200) + 1; } }
+
         run { horizon 500; }";
+    let head_workload = "arrive poisson(0.3); init { set K = 0; }
+                   turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     let bound = format!(
-        "{head} session {{ turn; set prompt = K + n;
+        "{head} workload {{ {head_workload} session {{ turn; request; end;
+        }} }}
+        server {{ set prompt = K + n;
           hold reqs (1), kv (min(hit, 10)) at admission (hit = min(cachedin(kv), prompt - 1)) {{
             prefill (prompt - cached) growing kv;
-          }} cache (prompt + o); end; }}"
+          }} cache (prompt + o);
+        }}"
     );
     let inlined = format!(
-        "{head} session {{ turn; set prompt = K + n;
+        "{head} workload {{ {head_workload} session {{ turn; request; end;
+        }} }}
+        server {{ set prompt = K + n;
           hold reqs (1), kv (min(min(cachedin(kv), prompt - 1), 10)) {{
             prefill (prompt - cached) growing kv;
-          }} cache (prompt + o); end; }}"
+          }} cache (prompt + o);
+        }}"
     );
     let ov = serq::Overrides::default();
     let a = serq::compile_source(&common::main_source(&bound), &ov).expect("the clause compiles");
@@ -533,8 +573,12 @@ fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
 #[test]
 fn at_admission_rejects_a_draw() {
     let src = "pool kv { cap 100; } stage s : fifo;
-        workload { arrive poisson(1); }
-        session { hold kv (x) at admission (x = ~exp(3)) { run s (1); } end; }
+        workload { arrive poisson(1);
+          session { request; end;
+          }
+        }
+        server { hold kv (x) at admission (x = ~exp(3)) { run s (1); }
+        }
         run { horizon 10; }";
     let e = serq::compile_source(&common::main_source(src), &serq::Overrides::default())
         .expect_err("rejected");
@@ -545,13 +589,19 @@ fn at_admission_rejects_a_draw() {
 #[test]
 fn at_admission_bindings_are_sequential() {
     let head = "pool kv { cap 1000; } stage s : fifo;
-        workload { arrive poisson(1); init { set n = 10; } }
+
         run { horizon 10; }";
+    let head_workload = "arrive poisson(1); init { set n = 10; }";
     let steps = format!(
-        "{head} session {{ hold kv (need) at admission (half = n / 2, need = half + 1)
-           {{ run s (1); }} end; }}"
+        "{head} workload {{ {head_workload} session {{ request; end;
+        }} }}
+        server {{ hold kv (need) at admission (half = n / 2, need = half + 1)
+          {{ run s (1); }}
+        }}"
     );
-    let flat = format!("{head} session {{ hold kv (n / 2 + 1) {{ run s (1); }} end; }}");
+    let flat = format!(
+        "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold kv (n / 2 + 1) {{ run s (1); }}\n}}"
+    );
     let ov = serq::Overrides::default();
     assert_eq!(
         serq::compile_source(&common::main_source(&steps), &ov)
@@ -568,8 +618,12 @@ fn at_admission_bindings_are_sequential() {
 #[test]
 fn fits_says_it_is_now_reserve() {
     let src = "pool kv { cap 100; } stage s : fifo;
-        workload { arrive poisson(1); }
-        session { hold kv (1) fits (2) { run s (1); } end; }
+        workload { arrive poisson(1);
+          session { request; end;
+          }
+        }
+        server { hold kv (1) fits (2) { run s (1); }
+        }
         run { horizon 10; }";
     let e = serq::compile_source(&common::main_source(src), &serq::Overrides::default())
         .expect_err("rejected");
@@ -582,8 +636,12 @@ fn fits_says_it_is_now_reserve() {
 #[test]
 fn admit_as_a_statement_says_what_to_write() {
     let src = "pool kv { cap 100; } stage s : fifo;
-        workload { arrive poisson(1); }
-        session { admit kv (1) { run s (1); } end; }
+        workload { arrive poisson(1);
+          session { request; end;
+          }
+        }
+        server { admit kv (1) { run s (1); }
+        }
         run { horizon 10; }";
     let e = serq::compile_source(&common::main_source(src), &serq::Overrides::default())
         .expect_err("rejected");
@@ -595,10 +653,10 @@ fn admit_as_a_statement_says_what_to_write() {
 }
 
 /// `workload { session { … request; … } }` with `server { … }` is the
-/// session written from its two sides, and compiles to the IR of the same
-/// program written as one `session` block: the split is the parser's.
+/// expanded session. Moving the context update across the request boundary
+/// without changing statement order must preserve the IR and the run.
 #[test]
-fn the_two_sides_compile_to_the_session_ir() {
+fn the_request_boundary_does_not_change_the_session_ir() {
     let head = "pool kv { cap 1e5; block 16; evict lru; }
         pool reqs { cap 8; }
         stage engine : step { budget 512; cost 1e-3; memory kv; }
@@ -622,7 +680,7 @@ fn the_two_sides_compile_to_the_session_ir() {
           set t0 = now;
           set prompt = K + n;
           hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
-                at admission (hit = min(cachedin(kv), prompt - 1)) {{
+          at admission (hit = min(cachedin(kv), prompt - 1)) {{
             prefill (prompt - cached) growing kv;
             observe ttft = now - t0;
             decode (o - 1) growing kv;
@@ -632,28 +690,32 @@ fn the_two_sides_compile_to_the_session_ir() {
     );
     let flat = format!(
         "{head}
-        workload {{ {client} }}
-        session {{
-          turn;
-          loop {{
-            set t0 = now;
-            set prompt = K + n;
-            hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
-                  at admission (hit = min(cachedin(kv), prompt - 1)) {{
-              prefill (prompt - cached) growing kv;
-              observe ttft = now - t0;
-              decode (o - 1) growing kv;
-            }} cache (prompt + o);
-            observe response = now - t0;
-            set K = prompt + o;
-            branch (more) {{ tool (~exp(3)); turn; }} else {{ end; }}
+        workload {{ {client}
+          session {{
+            turn;
+            loop {{ request;
+              branch (more) {{ tool (~exp(3)); turn; }} else {{ end; }}
+            }}
+
           }}
+        }}
+        server {{
+          set t0 = now;
+          set prompt = K + n;
+          hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+          at admission (hit = min(cachedin(kv), prompt - 1)) {{
+            prefill (prompt - cached) growing kv;
+            observe ttft = now - t0;
+            decode (o - 1) growing kv;
+          }} cache (prompt + o);
+          observe response = now - t0;
+          set K = prompt + o;
         }}"
     );
     let ov = serq::Overrides::default();
     let a = serq::compile_source(&common::main_source(&split), &ov).expect("the two sides compile");
-    let b =
-        serq::compile_source(&common::main_source(&flat), &ov).expect("the session block compiles");
+    let b = serq::compile_source(&common::main_source(&flat), &ov)
+        .expect("the moved context update compiles");
     assert_eq!(a.to_json(), b.to_json(), "one session, one IR");
     // and the same run: nothing downstream of the parser can tell
     let ra = serq::run_source(&common::main_source(&split), &ov, None).unwrap();
@@ -667,13 +729,14 @@ fn the_two_sides_compile_to_the_session_ir() {
 fn enter_is_hold_and_admit_via_survives() {
     let head = "pool kv { cap 1000; } pool reqs { cap 4; admit via engine; }
         stage engine : step { budget 64; cost 1; memory kv; }
-        workload { arrive poisson(1); init { set n = 10; } }
+
         run { horizon 20; }";
+    let head_workload = "arrive poisson(1); init { set n = 10; }";
     let sugar = format!(
-        "{head} session {{ hold reqs (1), kv (n) {{ prefill (n) growing kv; }} cache (n); end; }}"
+        "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold reqs (1), kv (n) {{ prefill (n) growing kv; }} cache (n);\n}}"
     );
     let kernel = format!(
-        "{head} session {{ hold reqs (1), kv (n) {{ run engine prefill (n) growing kv; }} cache (n); end; }}"
+        "{head} workload {{ {head_workload} session {{ request; end; \n}} }}\nserver {{ hold reqs (1), kv (n) {{ run engine prefill (n) growing kv; }} cache (n);\n}}"
     );
     let ov = serq::Overrides::default();
     assert_eq!(
@@ -711,9 +774,13 @@ fn choose_compares_its_keys_in_order() {
     let pick = |by: &str| {
         let src = format!(
             "stage s : delay;
-             workload {{ arrive batch(1); }}
-             session {{ choose j in 4 by ({by}); observe j = j; end; }}
-             run {{ horizon 1; }}"
+        workload {{ arrive batch(1);
+          session {{ request; end;
+          }}
+        }}
+        server {{ choose j in 4 by ({by}); observe j = j;
+        }}
+        run {{ horizon 1; }}"
         );
         let r = run_source(&common::main_source(&src), &Overrides::default(), None).unwrap();
         r.observe("j").unwrap().samples[0]
@@ -733,8 +800,12 @@ fn choose_compares_its_keys_in_order() {
 /// no text can write, is refused too.
 #[test]
 fn an_old_or_keyless_choose_is_refused_plainly() {
-    let src = "stage s : delay; workload { arrive batch(1); }
-        session { choose j in 2 by (-j); end; } run { horizon 1; }";
+    let src = "stage s : delay; workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { choose j in 2 by (-j);
+        } run { horizon 1; }";
     let p = compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let json = p.to_json();
     let old = json
@@ -771,18 +842,22 @@ fn an_old_or_keyless_choose_is_refused_plainly() {
 #[test]
 fn a_validate_error_points_at_the_statement() {
     let src = "pool kv { cap 64; }
-stage d : delay;
-workload { arrive batch(1); }
-session {
-  run d (1);
-  load kv (1);
-  end;
-}
-run { horizon 10; }";
+        stage d : delay;
+        workload { arrive batch(1);
+          session { request;
+            end;
+
+          }
+        }
+        server {
+          run d (1);
+          load kv (1);
+        }
+        run { horizon 10; }";
     let e = compile_source(&common::main_source(src), &Overrides::default()).unwrap_err();
     assert!(
-        e.starts_with("6:8: session: `load kv` outside a hold of `kv`"),
+        e.starts_with("11:16: session: `load kv` outside a hold of `kv`"),
         "{e}"
     );
-    assert!(e.contains("6 |   load kv (1);"), "{e}");
+    assert!(e.contains("11 |           load kv (1);"), "{e}");
 }

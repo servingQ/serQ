@@ -14,9 +14,11 @@ fn main() {
   workload {
     arrive batch(2);
     init { set d = 0; }
+
+    session { request; end; }
   }
 
-  session {
+  server {
     hold slots (1), kv (16) {
       observe resumed = computed;
       run engine prefill (16) growing kv;
@@ -24,7 +26,6 @@ fn main() {
       run engine decode (20) growing kv;
       observe done = now;
     }
-    end;
   }
 
   run { horizon 1000; }

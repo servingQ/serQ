@@ -18,8 +18,10 @@ fn main() {
   workload {
     arrive batch(6);
     init { set prompt = 256; set out = 16; }
+
+    session { request; end; }
   }
-  session {
+  server {
     set t0 = now;
     hold reqs (1), kv (min(known, hit + min(128, left))) reserve (known)
          at admission (known = computed < prompt ? prompt : computed + 1,
@@ -31,7 +33,6 @@ fn main() {
       decode (out - (known - prompt)) growing kv;
     } cache (prompt + out);
     observe response = now - t0;
-    end;
   }
   run { horizon 2; warmup 0; seed 1; }
 }

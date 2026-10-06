@@ -46,8 +46,13 @@ import pyserq
 svg = pyserq.draw(source="""
 fn main() {
   stage svc : fifo;
-  workload { arrive batch(1); }
-  session { run svc (2); end; }
+  workload {
+    arrive batch(1);
+    session { request; end; }
+  }
+  server {
+    run svc (2);
+  }
   run { horizon 10; }
 }
 """, format="svg")

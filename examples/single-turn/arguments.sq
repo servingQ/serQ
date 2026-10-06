@@ -9,11 +9,10 @@ fn main() {
   let units = args.number("service", 3);
 
   stage worker : delay;
-  workload { arrive batch(requests); }
-  session {
+  workload { arrive batch(requests); session { request; end; } }
+  server {
     run worker (service_time(units));
     observe elapsed = now;
-    end;
   }
   run { horizon 10; seed 1; }
 }

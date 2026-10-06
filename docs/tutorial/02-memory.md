@@ -17,7 +17,7 @@ Four servers now, so compute is not the constraint. Ten memory units are.
 ```serq
 hold mem (c) {
   observe admit_wait = now - t0;
-  run server (s);
+  run svc (s);
 }
 ```
 
@@ -44,9 +44,9 @@ observe     count    mean   95% CI     cv2     p99
 admit_wait  75462  0.0929  ±0.0072  13.811  1.8108
 response    75463  1.0903  ±0.0100   0.937  4.8689
 
-stage   number   util   done    thru    wait  service  iters
-------  ------  -----  -----  ------  ------  -------  -----
-server   0.792  0.559  75463  0.7943  0.0000   0.9974      0
+stage  number   util   done    thru    wait  service  iters
+-----  ------  -----  -----  ------  ------  -------  -----
+svc     0.792  0.559  75463  0.7943  0.0000   0.9974      0
 
 pool  used  cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  ----  ------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----

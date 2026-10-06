@@ -27,8 +27,13 @@ fn engine(
         pool kv {{ cap {blocks} * bs; block bs; evict lru; preempt lifo; }}
         pool reqs {{ cap {max_seqs}; }}
         stage engine : step {{ budget {budget}; cost 1; memory kv; {extra} }}
-        workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }} }}
-        session {{
+        workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }}
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
           set t0 = now;
           hold reqs (1), kv (min(prompt, {budget})) {{
             observe admitted = now - t0;
@@ -39,10 +44,9 @@ fn engine(
           }}
           observe done = now - t0;
           observe order = serial;
-          end;
         }}
         run {{ horizon 1000; }}
-        "#
+"#
     )
 }
 
@@ -99,10 +103,15 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         pool kv { cap 10 * bs; block bs; evict lru; preempt lifo; }
         pool reqs { cap 16; }
         stage engine : step { budget 1000; cost 1; memory kv; }
-        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; } }
-        session {
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; }
+          session { request;
+            end;
+
+          }
+        }
+        server {
           hold reqs (1), kv (min(known, 1000)) reserve (known)
-               at admission (known = computed < prompt ? prompt : computed + 1) {
+          at admission (known = computed < prompt ? prompt : computed + 1) {
             observe known = known;
             run engine prefill (known) growing kv;
             branch (known == prompt) { observe first = now; }
@@ -110,10 +119,9 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
           }
           observe done = now;
           observe order = serial;
-          end;
         }
         run { horizon 1000; }
-    "#;
+"#;
     let r = run(src);
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 1, "{}", r.text());
@@ -146,8 +154,13 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
         pool kv { cap 6 * bs; block bs; evict lru; preempt lifo; }
         stage engine : step { budget 1000; cost 1; }
         stage svc : fifo;
-        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; } }
-        session {
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; }
+          session { request;
+            end;
+
+          }
+        }
+        server {
           branch (serial == 0) {
             hold kv (prompt) reserve (prompt) {
               run engine prefill (prompt) growing kv;
@@ -157,10 +170,9 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
             hold kv (prompt) { observe c2 = computed; run svc (100); }
           }
           observe done = now;
-          end;
         }
         run { horizon 200; }
-    "#;
+"#;
     let r = run(src);
     assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
     // first execution, then the re-execution after A frees its blocks at 20
@@ -190,18 +202,22 @@ fn serve_by_orders_residents_by_the_declared_keys() {
     let prog = |serve: &str| {
         format!(
             "pool kv {{ cap 1000; }}
-            stage engine : step {{ budget 1; cost 1; memory kv; {serve} }}
-            workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }} }}
-            session {{
-              hold kv (100) {{
-                run engine prefill (1) growing kv;
-                run engine decode (o - 1) growing kv;
-              }}
-              observe done = now;
-              observe order = serial;
-              end;
-            }}
-            run {{ horizon 100; }}"
+        stage engine : step {{ budget 1; cost 1; memory kv; {serve} }}
+        workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }}
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          hold kv (100) {{
+            run engine prefill (1) growing kv;
+            run engine decode (o - 1) growing kv;
+          }}
+          observe done = now;
+          observe order = serial;
+        }}
+        run {{ horizon 100; }}"
         )
     };
     let r = run(&prog("serve admission;"));
@@ -269,8 +285,13 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
         pool kv { cap 1e5; }
         stage engine : step { budget 2; cost 1; memory kv; serve by (remaining); }
         stage gate : delay;
-        workload { arrive batch(2); init { set arrive = serial; set o = serial == 0 ? 4 : 1; } }
-        session {
+        workload { arrive batch(2); init { set arrive = serial; set o = serial == 0 ? 4 : 1; }
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run gate (arrive);
           hold reqs (1), kv (10) {
             run engine prefill (1) growing kv;
@@ -278,10 +299,9 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
           }
           observe done = now;
           observe order = serial;
-          end;
         }
         run { horizon 50; }
-    "#;
+"#;
     let r = run(src);
     assert_eq!(
         r.observe("order").unwrap().samples,
@@ -362,24 +382,28 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
         pool kv { cap 1000 * bs; block bs; evict lru; preempt lifo; }
         pool reqs { cap 16; }
         stage engine : step { budget 8192; cost 1; memory kv; }
-        workload { arrive batch(1); init { set K = 0; set turns = 0; } }
-        session {
-          loop {
-            set prompt = K + 100;
-            hold reqs (1), kv (c + min(prompt - c, 8192))
-                 at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
-              observe cached_seen = cached;
-              observe prefill_tokens = prompt - min(cached, floor((prompt - 1) / bs) * bs);
-              run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
-              run engine decode (9) growing kv;
-            } cache (prompt + 10);
-            set K = prompt + 10;
-            set turns = turns + 1;
-            branch (turns >= 3) { end; }
+        workload { arrive batch(1); init { set K = 0; set turns = 0; }
+          session {
+            loop { request;
+              branch (turns >= 3) { end; }
+            }
+
           }
         }
+        server {
+          set prompt = K + 100;
+          hold reqs (1), kv (c + min(prompt - c, 8192))
+          at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
+            observe cached_seen = cached;
+            observe prefill_tokens = prompt - min(cached, floor((prompt - 1) / bs) * bs);
+            run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
+            run engine decode (9) growing kv;
+          } cache (prompt + 10);
+          set K = prompt + 10;
+          set turns = turns + 1;
+        }
         run { horizon 1000; }
-    "#;
+"#;
     let r = run(src);
     let seen = &r.observe("cached_seen").unwrap().samples;
     let pre = &r.observe("prefill_tokens").unwrap().samples;
@@ -401,27 +425,31 @@ fn lru_eviction_drops_tail_blocks_first() {
         pool reqs { cap 16; }
         stage engine : step { budget 8192; cost 1; memory kv; }
         stage gate : delay;
-        workload { arrive batch(2); init { set K = 0; set turns = 0; } }
-        session {
-          // session 0 runs first (160 tokens -> 10 blocks cached), then session 1
-          // takes 12 blocks, evicting 2 of session 0's from its tail; session 0's
-          // second turn then reuses 8 blocks.
-          run gate (serial * 2);
-          loop {
-            set prompt = serial == 0 ? K + 160 : 192;
-            hold reqs (1), kv (c + min(prompt - c, 8192))
-                 at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
-              branch (serial == 0) { observe cached0 = cached; }
-              run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
-            } cache (prompt);
-            set K = prompt;
-            set turns = turns + 1;
-            branch (turns >= 2 || serial == 1) { end; }
-            run gate (10);
+        workload { arrive batch(2); init { set K = 0; set turns = 0; }
+          session {
+            // session 0 runs first (160 tokens -> 10 blocks cached), then session 1
+            // takes 12 blocks, evicting 2 of session 0's from its tail; session 0's
+            // second turn then reuses 8 blocks.
+            run gate (serial * 2);
+            loop { request;
+              branch (turns >= 2 || serial == 1) { end; }
+              run gate (10);
+            }
+
           }
         }
+        server {
+          set prompt = serial == 0 ? K + 160 : 192;
+          hold reqs (1), kv (c + min(prompt - c, 8192))
+          at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
+            branch (serial == 0) { observe cached0 = cached; }
+            run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
+          } cache (prompt);
+          set K = prompt;
+          set turns = turns + 1;
+        }
         run { horizon 1000; }
-    "#;
+"#;
     let r = run(src);
     let c0 = &r.observe("cached0").unwrap().samples;
     assert_eq!(c0, &[0.0, 128.0], "{}", r.text());

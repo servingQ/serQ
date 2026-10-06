@@ -37,13 +37,14 @@ A complete program:
 ```serq
 fn main() {
   stage svc : delay;
-  workload { arrive batch(2); }
-  session {
-    turn;
+  workload {
+    arrive batch(2);
+    session { turn; request; end; }
+  }
+  server {
     run svc (1);
     observe request_id = serial;
     observe current_turn = turn_no;
-    end;
   }
   run { horizon 10; }
 }

@@ -89,9 +89,13 @@ fn another_policy_is_refused_with_its_construct() {
         );
     }
     let src = "pool kv { cap 160; block 16; evict lru; preempt lifo; } pool reqs { cap 4; }
-               stage engine : step { budget 64; cost 1; serve by (remaining); memory kv; }
-               workload { arrive batch(1); init { set n = 8; } }
-               session { hold reqs (1), kv (n) { prefill (n) growing kv; } end; } run { horizon 10; }";
+        stage engine : step { budget 64; cost 1; serve by (remaining); memory kv; }
+        workload { arrive batch(1); init { set n = 8; }
+          session { request; end;
+          }
+        }
+        server { hold reqs (1), kv (n) { prefill (n) growing kv; }
+        } run { horizon 10; }";
     let p = serq::compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
     assert!(
@@ -105,9 +109,13 @@ fn another_policy_is_refused_with_its_construct() {
 #[test]
 fn observable_serve_keys_name_the_programmable_scheduler() {
     let src = "pool kv { cap 160; block 16; evict lru; preempt lifo; } pool reqs { cap 4; }
-               stage engine : step { budget 64; cost 1; serve by (decoding ? 0 : 1, -admission); memory kv; }
-               workload { arrive batch(1); init { set n = 8; } }
-               session { hold reqs (1), kv (n) { prefill (n) growing kv; } end; } run { horizon 10; }";
+        stage engine : step { budget 64; cost 1; serve by (decoding ? 0 : 1, -admission); memory kv; }
+        workload { arrive batch(1); init { set n = 8; }
+          session { request; end;
+          }
+        }
+        server { hold reqs (1), kv (n) { prefill (n) growing kv; }
+        } run { horizon 10; }";
     let p = serq::compile_source(&common::main_source(src), &Overrides::default()).unwrap();
     let t = serq::target::vllm(&p).unwrap();
     assert_eq!(t["config"]["scheduler_cls"], "serq_vllm.SerqScheduler");
@@ -171,10 +179,14 @@ fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
 #[test]
 fn the_newer_constructs_are_refused_and_vllms_body_taken() {
     let base = "pool kv { cap 160; block 16; evict lru; preempt lifo; }
-                pool reqs { cap 4; admit via engine; RESERVE }
-                stage engine : step { budget 64; cost 1; memory kv; ITER }
-                workload { arrive batch(1); init { set n = 8; } }
-                session { HOLD end; } run { horizon 10; }";
+        pool reqs { cap 4; admit via engine; RESERVE }
+        stage engine : step { budget 64; cost 1; memory kv; ITER }
+        workload { arrive batch(1); init { set n = 8; }
+          session { request; HOLD end;
+          }
+        }
+        server {
+        } run { horizon 10; }";
     let hold = "hold reqs (1), kv (n) { prefill (n) growing kv; }";
     let compile = |reserve: &str, iter: &str, h: &str| {
         let src = base

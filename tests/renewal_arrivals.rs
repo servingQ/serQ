@@ -5,15 +5,19 @@ use serq::{Overrides, run_source};
 fn deterministic_renewal_arrivals_follow_the_supplied_gap() {
     let src = r#"
         stage svc : fifo;
-        workload { arrive renewal(2); }
-        session {
+        workload { arrive renewal(2);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           set t0 = now;
           run svc (~det(1));
           observe response = now - t0;
-          end;
         }
         run { horizon 10; warmup 0; seed 7; }
-    "#;
+"#;
     let report = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(report.arrivals, 5);
     let response = report.observe("response").unwrap();
@@ -24,10 +28,14 @@ fn deterministic_renewal_arrivals_follow_the_supplied_gap() {
 fn hyperexponential_renewal_arrivals_have_the_configured_mean_rate() {
     let src = r#"
         stage svc : fifo;
-        workload { arrive renewal(~h2(1, 4)); }
-        session { run svc (0); end; }
+        workload { arrive renewal(~h2(1, 4));
+          session { request; end;
+          }
+        }
+        server { run svc (0);
+        }
         run { horizon 20_000; warmup 0; seed 19; }
-    "#;
+"#;
     let report = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     let rate = report.arrivals as f64 / 20_000.0;
     assert!((rate - 1.0).abs() < 0.06, "observed arrival rate {rate}");
@@ -37,14 +45,18 @@ fn hyperexponential_renewal_arrivals_have_the_configured_mean_rate() {
 fn open_arrival_limit_drains_within_the_horizon() {
     let src = r#"
         stage svc : fifo;
-        workload { arrive poisson(1000); }
-        session {
+        workload { arrive poisson(1000);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           run svc (~det(2));
           observe service = 2;
-          end;
         }
         run { horizon 10; arrivals 2; warmup 0; seed 7; }
-    "#;
+"#;
     let report = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(report.arrivals, 2);
     assert_eq!(report.ended, 2);
@@ -83,7 +95,7 @@ fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
         ),
     ] {
         let src = format!(
-            "stage svc : fifo; workload {{ arrive renewal(2); }} session {{ {session} }} run {{ {run} }}"
+            "stage svc : fifo; workload {{ arrive renewal(2); session {{ request; {session} }} }} server {{}} run {{ {run} }}"
         );
         let error =
             run_source(&common::main_source(&src), &Overrides::default(), None).unwrap_err();
@@ -94,7 +106,7 @@ fn finite_arrivals_reject_incomplete_runs_and_empty_measurement_intervals() {
 #[test]
 fn finite_arrivals_can_finish_exactly_at_the_deadline() {
     // Arrivals at 2, 4, 6 and one second of service finish at 3, 5, 7.
-    let src = "stage svc : fifo; workload { arrive renewal(2); } session { run svc (1); end; } run { horizon 7; arrivals 3; }";
+    let src = "stage svc : fifo; workload { arrive renewal(2); \n  session { request; end; \n  }\n} server { run svc (1);\n} run { horizon 7; arrivals 3; }";
     let report = run_source(&common::main_source(src), &Overrides::default(), None).unwrap();
     assert_eq!(report.arrivals, 3);
     assert_eq!(report.ended, 3);
@@ -104,8 +116,9 @@ fn finite_arrivals_can_finish_exactly_at_the_deadline() {
 #[test]
 fn poisson_retains_its_initial_arrival_and_renewal_waits_for_a_gap() {
     let run = |arrival: &str| {
-        run_source(&common::main_source(
-            &format!("workload {{ arrive {arrival}; }} session {{ observe arrival = now; end; }} run {{ horizon 10; seed 1; }}")),
+        run_source(
+            &common::main_source(
+            &format!("workload {{ arrive {arrival}; \n  session {{ request; end; \n  }}\n}} server {{ observe arrival = now;\n}} run {{ horizon 10; seed 1; }}")),
             &Overrides::default(), None,
         ).unwrap()
     };
@@ -145,10 +158,14 @@ fn a_renewal_gap_must_be_positive() {
     let src = |gap: &str| {
         format!(
             "let g = 0.5;
-             stage svc : delay;
-             workload {{ arrive renewal({gap}); }}
-             session {{ run svc (1); end; }}
-             run {{ horizon 10; }}"
+        stage svc : delay;
+        workload {{ arrive renewal({gap});
+          session {{ request; end;
+          }}
+        }}
+        server {{ run svc (1);
+        }}
+        run {{ horizon 10; }}"
         )
     };
     for gap in ["0", "-1", "g - 2 * g"] {
@@ -190,9 +207,13 @@ fn a_poisson_rate_must_be_positive() {
     ] {
         let src = format!(
             "let lam = 1; stage svc : delay;
-             workload {{ arrive poisson({rate}); }}
-             session {{ run svc (1); end; }}
-             run {{ horizon 10; }}"
+        workload {{ arrive poisson({rate});
+          session {{ request; end;
+          }}
+        }}
+        server {{ run svc (1);
+        }}
+        run {{ horizon 10; }}"
         );
         let e =
             serq::compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
@@ -228,9 +249,13 @@ fn a_count_is_a_whole_number_in_range() {
     ] {
         let src = format!(
             "stage svc : delay;
-             workload {{ arrive {workload}; }}
-             session {{ run svc (1); end; }}
-             run {{ horizon 10; {run} }}"
+        workload {{ arrive {workload};
+          session {{ request; end;
+          }}
+        }}
+        server {{ run svc (1);
+        }}
+        run {{ horizon 10; {run} }}"
         );
         let e =
             serq::compile_source(&common::main_source(&src), &Overrides::default()).unwrap_err();
@@ -242,8 +267,12 @@ fn a_count_is_a_whole_number_in_range() {
     // IR that bypasses the text meets the same bound
     let mut p = serq::compile_source(
         &common::main_source(
-            "stage svc : delay; workload { arrive batch(1); }
-         session { run svc (1); end; } run { horizon 10; }",
+            "stage svc : delay; workload { arrive batch(1);
+          session { request; end;
+          }
+        }
+        server { run svc (1);
+        } run { horizon 10; }",
         ),
         &Overrides::default(),
     )

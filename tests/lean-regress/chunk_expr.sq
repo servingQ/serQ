@@ -17,16 +17,17 @@ fn main() {
   workload {
     arrive batch(3);
     init { set p = 0; set o = 0; }
+
+    session { request; end; }
   }
 
-  session {
+  server {
     hold slots (1), kv (p) {
       run engine prefill (p) growing kv;
       observe first = now;
       run engine decode (o) growing kv;
       observe done = now;
     }
-    end;
   }
 
   run { horizon 1000; }

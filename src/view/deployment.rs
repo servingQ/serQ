@@ -598,14 +598,10 @@ impl Walker<'_> {
                     dedupe(&mut self.frontier);
                 }
                 CStmt::Loop(body) => {
-                    // Every loop is the session's: a server cannot write
-                    // `end`, so a loop in one could never be left, and the
-                    // request `serq draw` draws of a program with a server
-                    // has none. A program written as one session cannot
-                    // tell its workload from its deployment and is drawn
-                    // whole: its way back too, so that no station is a dead
-                    // end. What was set before it holds on the first pass
-                    // only.
+                    // A full-session view (IR input or no unique request
+                    // body) includes client loops. Draw their way back so
+                    // no station is a dead end. Values set before the loop
+                    // are known only on its first pass.
                     self.known.clear();
                     self.enter(body, true);
                     self.frontier.clear();

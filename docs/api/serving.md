@@ -88,13 +88,15 @@ A complete program:
 fn main() {
   stage engine : step { budget 8; cost 1; }
   stage tool : delay;
-  workload { arrive batch(1); }
-  session {
+  workload {
+    arrive batch(1);
+    session { request; end; }
+  }
+  server {
     prefill (8);
     decode (2);
     tool (3);
     observe finished = now;
-    end;
   }
   run { horizon 10; }
 }

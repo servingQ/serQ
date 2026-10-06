@@ -459,9 +459,8 @@ pub struct Program {
     pub session: Vec<Stmt>,
     /// What one request runs, as the session runs it at its `request`: the
     /// server, or a gateway's `route`, expanded like the session. Empty when
-    /// the program does not split its session into a workload and a server,
-    /// or requests more than one thing. The deployment view draws this; the
-    /// session is what runs.
+    /// no request body exists, or the session requests more than one thing.
+    /// The deployment view draws this; the session is what runs.
     pub request: Vec<Stmt>,
     pub run: RunOpts,
     /// `share maxmin;` or `share bottleneck;`

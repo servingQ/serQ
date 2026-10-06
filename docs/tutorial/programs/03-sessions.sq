@@ -20,18 +20,22 @@ fn main() {
       set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);  // new tokens
       set o = ~exp(200);                                  // output tokens
     }
+
+    session {
+      turn;
+      loop {
+        request;
+        set K = K + n + o;
+        observe context = K;
+        branch with (p) { run tool (~exp(Z)); turn; } else { end; }
+      }
+    }
   }
 
-  session {
-    turn;
-    loop {
-      set t0 = now;
-      run engine (a * (K + n) + d * o);
-      observe response = now - t0;
-      set K = K + n + o;
-      observe context = K;
-      branch with (p) { run tool (~exp(Z)); turn; } else { end; }
-    }
+  server {
+    set t0 = now;
+    run engine (a * (K + n) + d * o);
+    observe response = now - t0;
   }
 
   run { horizon 20000; warmup 2000; seed 1; }

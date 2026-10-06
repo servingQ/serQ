@@ -21,18 +21,22 @@ fn three(preempt: &str) -> String {
         pool reqs {{ cap 3; admit via engine; }}
         pool kv {{ cap 40; {preempt} }}
         stage engine : step {{ budget 64; cost 1; memory kv; }}
-        workload {{ arrive batch(3); }}
-        session {{
+        workload {{ arrive batch(3);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
           set prompt = serial == 0 ? 4 : serial == 1 ? 10 : 6;
           hold reqs (1), kv (prompt) {{
             branch (computed > 0) {{ observe victim = serial; }}
             prefill on engine (prompt) growing kv;
             decode on engine (12) growing kv;
           }} cache (0);
-          end;
         }}
         run {{ horizon 200; warmup 0; seed 1; }}
-        "#
+"#
     )
 }
 
@@ -80,20 +84,24 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
     ] {
         let src = format!(
             r#"
-            pool reqs {{ cap 2; admit via engine; }}
-            pool kv {{ cap 24; preempt by (-admission) {requeue}; }}
-            stage engine : step {{ budget 64; cost 1; memory kv; }}
-            workload {{ arrive batch(3); }}
-            session {{
-              hold reqs (1), kv (4) {{
-                observe admitted = serial;
-                prefill on engine (4) growing kv;
-                decode on engine (10) growing kv;
-              }} cache (0);
-              end;
-            }}
-            run {{ horizon 200; warmup 0; seed 1; }}
-            "#
+        pool reqs {{ cap 2; admit via engine; }}
+        pool kv {{ cap 24; preempt by (-admission) {requeue}; }}
+        stage engine : step {{ budget 64; cost 1; memory kv; }}
+        workload {{ arrive batch(3);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          hold reqs (1), kv (4) {{
+            observe admitted = serial;
+            prefill on engine (4) growing kv;
+            decode on engine (10) growing kv;
+          }} cache (0);
+        }}
+        run {{ horizon 200; warmup 0; seed 1; }}
+"#
         );
         let r = run(&src);
         let admitted = &r.observe("admitted").unwrap().samples;
@@ -111,21 +119,25 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
     let base = |preempt: &str, hidden: &str| {
         format!(
             r#"
-            pool reqs {{ cap 3; admit via engine; }}
-            pool kv {{ cap 40; {preempt} }}
-            stage engine : step {{ budget 64; cost 1; memory kv; }}
-            workload {{ arrive batch(3); {hidden} }}
-            session {{
-              set prompt = 4;
-              set o = 12;
-              hold reqs (1), kv (prompt) {{
-                prefill on engine (prompt) growing kv;
-                decode on engine (o) growing kv;
-              }} cache (0);
-              end;
-            }}
-            run {{ horizon 200; warmup 0; seed 1; }}
-            "#
+        pool reqs {{ cap 3; admit via engine; }}
+        pool kv {{ cap 40; {preempt} }}
+        stage engine : step {{ budget 64; cost 1; memory kv; }}
+        workload {{ arrive batch(3); {hidden}
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          set prompt = 4;
+          set o = 12;
+          hold reqs (1), kv (prompt) {{
+            prefill on engine (prompt) growing kv;
+            decode on engine (o) growing kv;
+          }} cache (0);
+        }}
+        run {{ horizon 200; warmup 0; seed 1; }}
+"#
         )
     };
     let err = |preempt: &str, hidden: &str| {
@@ -159,24 +171,28 @@ fn lifo_is_by_minus_admission_on_a_pool_no_engine_reads() {
     let prog = |preempt: &str| {
         format!(
             r#"
-            pool a {{ cap 10; {preempt} }}
-            pool b {{ cap 10; }}
-            stage svc : delay;
-            workload {{ arrive batch(2); }}
-            session {{
-              branch (serial == 0) {{
-                hold a (4) {{
-                  run svc (1);
-                  hold b (1) {{ run svc (1); grow a (4); run svc (1); }}
-                }}
-              }} else {{
-                run svc (0.5);
-                hold a (4) {{ observe s1 = computed; run svc (5); }}
-              }}
-              end;
+        pool a {{ cap 10; {preempt} }}
+        pool b {{ cap 10; }}
+        stage svc : delay;
+        workload {{ arrive batch(2);
+          session {{ request;
+            end;
+
+          }}
+        }}
+        server {{
+          branch (serial == 0) {{
+            hold a (4) {{
+              run svc (1);
+              hold b (1) {{ run svc (1); grow a (4); run svc (1); }}
             }}
-            run {{ horizon 50; warmup 0; seed 1; }}
-            "#
+          }} else {{
+            run svc (0.5);
+            hold a (4) {{ observe s1 = computed; run svc (5); }}
+          }}
+        }}
+        run {{ horizon 50; warmup 0; seed 1; }}
+"#
         )
     };
     let report = |p: &str| {
@@ -205,18 +221,22 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
         pool reqs { cap 2; admit via engine; queue by (rank); }
         pool kv { cap 24; preempt by (-admission) requeue tail; }
         stage engine : step { budget 64; cost 1; memory kv; }
-        workload { arrive batch(3); }
-        session {
+        workload { arrive batch(3);
+          session { request;
+            end;
+
+          }
+        }
+        server {
           set rank = serial == 2 ? 9 : serial;
           hold reqs (1), kv (4) {
             observe admitted = serial;
             prefill on engine (4) growing kv;
             decode on engine (10) growing kv;
           } cache (0);
-          end;
         }
         run { horizon 200; warmup 0; seed 1; }
-        "#;
+"#;
     let r = run(src);
     let admitted = &r.observe("admitted").unwrap().samples;
     // serial 1 (rank 1) is the victim; at the tail of a keyed queue its key

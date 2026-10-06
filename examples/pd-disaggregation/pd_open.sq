@@ -22,9 +22,12 @@ fn main() {
   stage link : fifo;
   stage decode : fifo(max(N - NP, 1));
 
-  workload { arrive poisson(Lambda); }
+  workload {
+    arrive poisson(Lambda);
+    session { request; end; }
+  }
 
-  session {
+  server {
     set t0 = now;
     set sp = prefill_work();
     set sd = decode_work();
@@ -37,7 +40,6 @@ fn main() {
       run decode (sd / gD);
     }
     observe latency = now - t0;
-    end;
   }
 
   run { horizon 20000; warmup 2000; seed 1; }

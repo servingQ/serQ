@@ -6,7 +6,6 @@
 //!           | 'pool' IDENT ('[' NUM ']')? '{' poolopt* '}'
 //!           | 'stage' IDENT ('[' NUM ']')? ':' kind ';'
 //!           | 'workload' '{' wlitem* '}'
-//!           | 'session' block
 //!           | 'server' block
 //!           | 'queue' IDENT ('[' expr ']')? (':' IDENT (',' IDENT)*)? '{' qitem* '}'
 //!           | 'run' '{' ('horizon' | 'warmup' | 'seed' | 'arrivals') expr ';' ... '}'
@@ -66,10 +65,9 @@
 //! (arrivals, turns, thinking, whether to go on) and the server's (what
 //! the deployment does with one request). The parser splices the server's
 //! statements in place of every `request;`, so the AST holds one session
-//! and the IR is the one the same program written as `session { … }`
-//! compiles to. Each side has its words: `request`, `turn` and `end` are
-//! the session's and are refused in a `server`. An admission is written
-//! one way on both sides: `hold … at admission (…) { … } cache (…)`.
+//! and the IR executes that session. Each side has its words: `request`,
+//! `turn` and `end` are the session's and are refused in a `server`. An
+//! admission is written one way on both sides: `hold … at admission (…) { … } cache (…)`.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -484,8 +482,7 @@ pub const KEYWORDS: [&str; 106] = [
     "workload",
 ];
 
-/// Where a statement sits: a top-level `session`, the `session` inside
-/// `workload` (the only place `request` is a statement) or `server`.
+/// Where a statement sits: declarations, the workload session, or a server.
 #[derive(Clone, Copy, PartialEq)]
 enum Side {
     Session,
@@ -1776,12 +1773,8 @@ impl Parser {
                     return self.err("duplicate workload");
                 }
                 prog.workload = Some(self.workload()?);
-            } else if self.eat_kw("session") {
-                if !prog.session.is_empty() {
-                    return self.err("duplicate session");
-                }
-                self.side = Side::Session;
-                prog.session = self.block()?;
+            } else if self.is_kw("session") {
+                return self.err("`session` belongs inside `workload`; put request handling in `server` and call it with `request;`");
             } else if self.is_kw("server") {
                 let at = self.pos;
                 self.advance();
@@ -1882,7 +1875,7 @@ impl Parser {
 
     /// Resolve named gateway requests, then expand entries and splice the
     /// anonymous server at bare `request;` sites. The workload's session
-    /// becomes the program's session; a second top-level session is an error.
+    /// becomes the program's session.
     fn assemble(&mut self, prog: &mut Program) -> PResult<()> {
         for (at, target) in &self.requests {
             match target {
@@ -1909,10 +1902,7 @@ impl Parser {
                 None => {}
             }
         }
-        if self.wl_session.is_some() && !prog.session.is_empty() {
-            return self
-                .err("a program has one session: inside `workload` or at top level, not both");
-        }
+
         // what one request runs, before either side is expanded: the one
         // thing every `request` of the workload's session names
         let mut request = vec![];
@@ -1993,7 +1983,6 @@ impl Parser {
             if let Some((_, s)) = &mut self.server {
                 expand(s)?;
             }
-            expand(&mut prog.session)?;
             expand(&mut request)?;
         }
         match (self.wl_session.take(), self.server.take()) {
@@ -2008,7 +1997,7 @@ impl Parser {
             (Some((at, _)), None) => self.err_at(
                 at,
                 "a `session` inside `workload` is written against a `server` block; \
-                 name a gateway with `request NAME;`, or write `session` at top level",
+                 add `server { … }` and `request;`, or name a gateway with `request NAME;`",
             ),
             (None, Some((at, _))) => self.err_at(
                 at,
@@ -5041,29 +5030,33 @@ mod tests {
     #[test]
     fn parses_a_small_program() {
         let src = r#"
-            let a = 2e-5;
-            pool kv { cap 3e5; evict lru; preempt lifo; }
-            stage prefill : fifo;
-            stage decode : ps(min(present, 8));
-            stage tool : delay;
-            workload {
-              arrive poisson(0.3);
-              init { set K = 0; set n = ~uniform(1e4, 3e4); }
-              turn { set K = K + n + o; set n = ~exp(1000); }
+        let a = 2e-5;
+        pool kv { cap 3e5; evict lru; preempt lifo; }
+        stage prefill : fifo;
+        stage decode : ps(min(present, 8));
+        stage tool : delay;
+        workload {
+          arrive poisson(0.3);
+          init { set K = 0; set n = ~uniform(1e4, 3e4); }
+          turn { set K = K + n + o; set n = ~exp(1000); }
+
+          session {
+            turn;
+            loop { request;
+              branch with (0.9) { run tool (Z); turn; } else { end; }
             }
-            session {
-              turn;
-              loop {
-                hold kv (K + n + o) {
-                  run prefill (a * (K + n - cached));
-                  observe ttft = now - t0;
-                  run decode (o * 2e-4);
-                } cache (K + n + o);
-                branch with (0.9) { run tool (Z); turn; } else { end; }
-              }
-            }
-            run { horizon 1000; warmup 100; seed 1; }
-        "#;
+
+          }
+        }
+        server {
+          hold kv (K + n + o) {
+            run prefill (a * (K + n - cached));
+            observe ttft = now - t0;
+            run decode (o * 2e-4);
+          } cache (K + n + o);
+        }
+        run { horizon 1000; warmup 100; seed 1; }
+"#;
         let p = parse(&main_source(src)).unwrap();
         assert_eq!(p.pools.len(), 1);
         assert_eq!(p.stages.len(), 3);
@@ -5094,9 +5087,8 @@ mod tests {
         stage tool : delay;
     "#;
 
-    /// The same program runs: the same session. What one request runs, kept
-    /// for the deployment view, is not compared: one spelling splits the
-    /// session into a workload and a server, and the other does not.
+    /// Compare the expanded session. The request boundary can move without
+    /// changing execution, while the deployment view keeps just its body.
     fn same(a: &str, b: &str) {
         let run = |s: &str| Program {
             request: vec![],
@@ -5109,20 +5101,26 @@ mod tests {
     fn serving_forms_desugar_to_the_kernel() {
         same(
             &format!(
-                "{PD} session {{
-                    hold kv (K) {{ prefill S; }} cache (K) lease kv (inf);
-                    hold kvD (K) {{ transfer X from kv to kvD (K); }}
-                    hold kv (K) reserve (F) reuse (R) {{ decode D; }}
-                    branch with (p) {{ tool Z; turn; }} else {{ end; }}
-                }}"
+                "{PD} workload {{ session {{ request;
+            branch with (p) {{ tool Z; turn; }} else {{ end; }}
+
+        }} }}
+        server {{
+          hold kv (K) {{ prefill S; }} cache (K) lease kv (inf);
+          hold kvD (K) {{ transfer X from kv to kvD (K); }}
+          hold kv (K) reserve (F) reuse (R) {{ decode D; }}
+        }}"
             ),
             &format!(
-                "{PD} session {{
-                    hold kv (K) {{ run prefill (S); }} cache (K) lease kv (inf);
-                    hold kvD (K) {{ run link (X); load kvD (K); release kv; }}
-                    hold kv (K) reserve (F) reuse (R) {{ run decode (D); }}
-                    branch with (p) {{ run tool (Z); turn; }} else {{ end; }}
-                }}"
+                "{PD} workload {{ session {{ request;
+            branch with (p) {{ run tool (Z); turn; }} else {{ end; }}
+
+        }} }}
+        server {{
+          hold kv (K) {{ run prefill (S); }} cache (K) lease kv (inf);
+          hold kvD (K) {{ run link (X); load kvD (K); release kv; }}
+          hold kv (K) reserve (F) reuse (R) {{ run decode (D); }}
+        }}"
             ),
         );
     }
@@ -5131,16 +5129,22 @@ mod tests {
     fn serving_forms_on_a_step_engine() {
         same(
             &format!(
-                "{ENGINE} session {{
-                    hold kv (c) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} cache (c);
-                    tool (~exp(Z));
-                }}"
+                "{ENGINE} workload {{ session {{ request;
+
+        }} }}
+        server {{
+          hold kv (c) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} cache (c);
+          tool (~exp(Z));
+        }}"
             ),
             &format!(
-                "{ENGINE} session {{
-                    hold kv (c) {{ run engine prefill (n) growing kv; run engine decode (o - 1) growing kv; }} cache (c);
-                    run tool (~exp(Z));
-                }}"
+                "{ENGINE} workload {{ session {{ request;
+
+        }} }}
+        server {{
+          hold kv (c) {{ run engine prefill (n) growing kv; run engine decode (o - 1) growing kv; }} cache (c);
+          run tool (~exp(Z));
+        }}"
             ),
         );
     }
@@ -5149,24 +5153,30 @@ mod tests {
     fn serving_forms_name_their_stage_explicitly() {
         // the role's stage array, indexed
         same(
-            "stage prefill[2] : fifo; session { choose j in 2 by (work(prefill[j])); prefill[j] S; }",
-            "stage prefill[2] : fifo; session { choose j in 2 by (work(prefill[j])); run prefill[j] (S); }",
+            "stage prefill[2] : fifo; workload { session { request; \n} }\nserver { choose j in 2 by (work(prefill[j])); prefill[j] S;\n}",
+            "stage prefill[2] : fifo; workload { session { request; \n} }\nserver { choose j in 2 by (work(prefill[j])); run prefill[j] (S);\n}",
         );
         // any stage, with the mode a step engine needs
         same(
             &format!(
-                "{ENGINE} stage rep[2] : fifo; session {{ prefill on rep[1] S; decode on engine (D); }}"
+                "{ENGINE} stage rep[2] : fifo; workload {{ session {{ request; \n}} }}\nserver {{ prefill on rep[1] S; decode on engine (D);\n}}"
             ),
             &format!(
-                "{ENGINE} stage rep[2] : fifo; session {{ run rep[1] (S); run engine decode (D); }}"
+                "{ENGINE} stage rep[2] : fifo; workload {{ session {{ request; \n}} }}\nserver {{ run rep[1] (S); run engine decode (D);\n}}"
             ),
         );
         // a stage named `transfer` plays transfer
         same(
             "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
-             session { hold b (1) { hold a (1) { transfer X from a to b (1); } } }",
+        workload { session { request;
+        } }
+        server { hold b (1) { hold a (1) { transfer X from a to b (1); } }
+        }",
             "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
-             session { hold b (1) { hold a (1) { run transfer (X); load b (1); release a; } } }",
+        workload { session { request;
+        } }
+        server { hold b (1) { hold a (1) { run transfer (X); load b (1); release a; } }
+        }",
         );
     }
 
@@ -5176,27 +5186,37 @@ mod tests {
         // and constants is the value it has at the top of the body
         same(
             &format!(
-                "{ENGINE} session {{
-                    hold kv (known) at admission (known = computed < p ? p : computed + 1) {{
-                        prefill (known - cached) growing kv;
-                    }}
-                    end;
-                }}"
+                "{ENGINE} workload {{ session {{ request;
+            end;
+
+        }} }}
+        server {{
+          hold kv (known) at admission (known = computed < p ? p : computed + 1) {{
+            prefill (known - cached) growing kv;
+          }}
+        }}"
             ),
             &format!(
-                "{ENGINE} session {{
-                    hold kv (computed < p ? p : computed + 1) {{
-                        set known = computed < p ? p : computed + 1;
-                        run engine prefill (known - cached) growing kv;
-                    }}
-                    end;
-                }}"
+                "{ENGINE} workload {{ session {{ request;
+            end;
+
+        }} }}
+        server {{
+          hold kv (computed < p ? p : computed + 1) {{
+            set known = computed < p ? p : computed + 1;
+            run engine prefill (known - cached) growing kv;
+          }}
+        }}"
             ),
         );
         // a binding the body does not read stays in the header
         same(
-            &format!("{ENGINE} session {{ hold kv (h) at admission (h = 1) {{ }} }}"),
-            &format!("{ENGINE} session {{ hold kv (1) {{ }} }}"),
+            &format!(
+                "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ hold kv (h) at admission (h = 1) {{ }}\n}}"
+            ),
+            &format!(
+                "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ hold kv (1) {{ }}\n}}"
+            ),
         );
     }
 
@@ -5210,8 +5230,9 @@ mod tests {
             ("hit = now", "with a `set` in the body"),
         ] {
             let e = parse(&main_source(&format!(
-                "{ENGINE} session {{ hold kv (hit) at admission ({binding}) {{ observe h = hit; }} }}"
-            )))
+                "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ hold kv (hit) at admission ({binding}) {{ observe h = hit; }}\n}}"
+            )
+            ))
             .unwrap_err();
             assert!(
                 e.msg.contains("the body reads `hit`, and `hit` reads"),
@@ -5222,7 +5243,7 @@ mod tests {
         }
         // `n` is a context variable unless the program assigns it
         let src = format!(
-            "{ENGINE} session {{ set n = 3; hold kv (m) at admission (m = n + 1) {{ observe x = m; }} }}"
+            "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ set n = 3; hold kv (m) at admission (m = n + 1) {{ observe x = m; }}\n}}"
         );
         parse(&main_source(&src)).unwrap();
     }
@@ -5249,25 +5270,29 @@ mod tests {
             };
             let name = binding.split(' ').next().unwrap();
             let e = parse(&main_source(&format!(
-                "{pre} {ENGINE} session {{ {assign} hold kv (1) at admission ({binding}) {{ observe a = {name}; }} }}"
-            )))
+                "{pre} {ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ {assign} hold kv (1) at admission ({binding}) {{ observe a = {name}; }}\n}}"
+            )
+            ))
             .unwrap_err();
             assert!(e.msg.contains(what), "{binding}: {}", e.msg);
         }
         let e = parse(&main_source(&format!(
-            "{ENGINE} session {{ hold kv (1) at admission (k = k + 1) {{ observe a = k; }} }}"
-        )))
+            "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ hold kv (1) at admission (k = k + 1) {{ observe a = k; }}\n}}"
+        )
+        ))
         .unwrap_err();
         assert!(e.msg.contains("reads itself"), "{}", e.msg);
         let e = parse(&main_source(&format!(
-            "{ENGINE} session {{ hold kv (1) at admission (j = k, k = 5) {{ observe a = j; }} }}"
-        )))
+            "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ hold kv (1) at admission (j = k, k = 5) {{ observe a = j; }}\n}}"
+        )
+        ))
         .unwrap_err();
         assert!(e.msg.contains("bound after it"), "{}", e.msg);
         // an attribute the body sets itself is not the binding
         let e = parse(&main_source(&format!(
-            "{ENGINE} session {{ hold kv (hit) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }} }}"
-        )))
+            "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ hold kv (hit) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }}\n}}"
+        )
+        ))
         .unwrap_err();
         assert!(e.msg.contains("an attribute the program sets"), "{}", e.msg);
     }
@@ -5280,27 +5305,34 @@ mod tests {
             "branch (k > 1) { } else { }",
         ] {
             let e = parse(&main_source(&format!(
-                "{ENGINE} session {{ hold kv (1) at admission (k = 2) {{ observe a = k; }} {after} }}"
-            )))
+                "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ hold kv (1) at admission (k = 2) {{ observe a = k; }} {after}\n}}"
+            )
+            ))
             .unwrap_err();
             assert!(e.msg.contains("outside the body"), "{after}: {}", e.msg);
         }
         let e = parse(&main_source(
             "pool kv { cap 100; queue by (k); } stage engine : step { cost 1; }
-             session { hold kv (1) at admission (k = 2) { observe a = k; } }",
+        workload { session { request;
+        } }
+        server { hold kv (1) at admission (k = 2) { observe a = k; }
+        }",
         ))
         .unwrap_err();
         assert!(e.msg.contains("outside the body"), "{}", e.msg);
         // two holds may bind one name, and a nested hold may bind it again
         // over a live outer binding its body does not read
         parse(&main_source(&format!(
-            "{ENGINE} session {{
-                hold kv (1) at admission (k = 2) {{ observe a = k; }}
-                hold kv (1) at admission (k = 3) {{ observe b = k; }}
-                hold kv (h) at admission (h = cachedin(kv)) {{
-                    hold kv (1) at admission (h = 1) {{ observe c = h; }}
-                }}
-            }}"
+            "{ENGINE} workload {{ session {{ request;
+
+        }} }}
+        server {{
+          hold kv (1) at admission (k = 2) {{ observe a = k; }}
+          hold kv (1) at admission (k = 3) {{ observe b = k; }}
+          hold kv (h) at admission (h = cachedin(kv)) {{
+            hold kv (1) at admission (h = 1) {{ observe c = h; }}
+          }}
+        }}"
         )))
         .unwrap();
     }
@@ -5311,38 +5343,50 @@ mod tests {
         same(
             &format!(
                 "{ENGINE} def full(x) = floor((x - 1) / bs) * bs;
-                 session {{ set h = full(a + b) * 2; set g = min(full(k), 3); }}"
+        workload {{ session {{ request;
+        }} }}
+        server {{ set h = full(a + b) * 2; set g = min(full(k), 3);
+        }}"
             ),
             &format!(
-                "{ENGINE} session {{
-                    set h = (floor(((a + b) - 1) / bs) * bs) * 2;
-                    set g = min(floor((k - 1) / bs) * bs, 3);
-                 }}"
+                "{ENGINE} workload {{ session {{ request;
+
+        }} }}
+        server {{
+          set h = (floor(((a + b) - 1) / bs) * bs) * 2;
+          set g = min(floor((k - 1) / bs) * bs, 3);
+        }}"
             ),
         );
         // statements, with references for pools and stages; the use is
         // parsed where it stands, so a serving form finds its stage there
         same(
             "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
-             def put(p, s, n) { hold p (n) { prefill on s (n) growing p; } cache (n); }
-             session { choose j in 2 by (used(kv[j])); put(kv[j], E[j], k + 1); end; }",
+        def put(p, s, n) { hold p (n) { prefill on s (n) growing p; } cache (n); }
+        workload { session { request; end;
+        } }
+        server { choose j in 2 by (used(kv[j])); put(kv[j], E[j], k + 1);
+        }",
             "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
-             session {
-                choose j in 2 by (used(kv[j]));
-                hold kv[j] ((k + 1)) { run E[j] prefill ((k + 1)) growing kv[j]; } cache ((k + 1));
-                end;
-             }",
+        workload { session { request;
+            end;
+
+        } }
+        server {
+          choose j in 2 by (used(kv[j]));
+          hold kv[j] ((k + 1)) { run E[j] prefill ((k + 1)) growing kv[j]; } cache ((k + 1));
+        }",
         );
         // the side is the use's: a `hold` in a server
         same(
             &format!(
                 "{ENGINE} def take(n) {{ hold kv (n) {{ prefill (n) growing kv; }} }}
-                 workload {{ session {{ request; end; }} }}
-                 server {{ take(4); }}"
+        workload {{ session {{ request; end; }} }}
+        server {{ take(4); }}"
             ),
             &format!(
                 "{ENGINE} workload {{ session {{ request; end; }} }}
-                 server {{ hold kv (4) {{ prefill (4) growing kv; }} }}"
+        server {{ hold kv (4) {{ prefill (4) growing kv; }} }}"
             ),
         );
     }
@@ -5354,77 +5398,107 @@ mod tests {
                 .unwrap_err()
                 .msg
         };
-        assert!(err("def f(x) = x; session { f(1); }").contains("is an expression"));
-        assert!(err("def f(x) { end; } session { set a = f(1); }").contains("is statements"));
         assert!(
-            err("def f(x) = x; session { set a = f(1, 2); }")
+            err("def f(x) = x; workload { session { request; \n} }\nserver { f(1);\n}")
+                .contains("is an expression")
+        );
+        assert!(
+            err("def f(x) { end; } workload { session { request; \n} }\nserver { set a = f(1);\n}")
+                .contains("is statements")
+        );
+        assert!(
+            err("def f(x) = x; workload { session { request; \n} }\nserver { set a = f(1, 2);\n}")
                 .contains("takes 1 argument(s), got 2")
         );
         assert!(
-            err("def f(x) = x + x; session { set a = f(~exp(1)); }").contains("would draw 2 times")
+            err("def f(x) = x + x; workload { session { request; \n} }\nserver { set a = f(~exp(1));\n}").contains("would draw 2 times")
         );
-        assert!(err("def f(x) = f(x); session { }").contains("uses itself"));
-        assert!(err("def min(x) = x; session { }").contains("a word of the language"));
-        assert!(err("def uniform(x) = x; session { }").contains("a word of the language"));
-        assert!(err("def f(on) = on; session { }").contains("a word of the language"));
-        assert!(err("def f(min) = min(min, 1); session { }").contains("a word of the language"));
+        assert!(
+            err("def f(x) = f(x); workload { session { request; \n} }\nserver {\n}")
+                .contains("uses itself")
+        );
+        assert!(
+            err("def min(x) = x; workload { session { request; \n} }\nserver {\n}")
+                .contains("a word of the language")
+        );
+        assert!(
+            err("def uniform(x) = x; workload { session { request; \n} }\nserver {\n}")
+                .contains("a word of the language")
+        );
+        assert!(
+            err("def f(on) = on; workload { session { request; \n} }\nserver {\n}")
+                .contains("a word of the language")
+        );
+        assert!(
+            err("def f(min) = min(min, 1); workload { session { request; \n} }\nserver {\n}")
+                .contains("a word of the language")
+        );
         // a definition uses only the ones before it: no recursion
         assert!(
-            err("def g(x) = f(x); def f(x) = g(x); session { set a = g(1); }")
+            err("def g(x) = f(x); def f(x) = g(x); workload { session { request; \n} }\nserver { set a = g(1);\n}")
                 .contains("`g` uses `f`, which is defined after it")
         );
         assert!(
-            err("def g(x) { f(x); } def f(x) { g(x); } session { g(1); }")
+            err("def g(x) { f(x); } def f(x) { g(x); } workload { session { request; \n} }\nserver { g(1);\n}")
                 .contains("defined after it")
         );
         // a stray closer
-        assert!(err("def f(x) = x; session { set a = f(1]); }").contains("unmatched"));
+        assert!(
+            err("def f(x) = x; workload { session { request; \n} }\nserver { set a = f(1]);\n}")
+                .contains("unmatched")
+        );
         // a definition that draws draws when it is an argument
         assert!(
-            err("def d() = ~exp(1); def twice(x) = x + x; session { set a = twice(d()); }")
+            err("def d() = ~exp(1); def twice(x) = x + x; workload { session { request; \n} }\nserver { set a = twice(d());\n}")
                 .contains("would draw 2 times")
         );
         // an argument the body would capture
         assert!(
-            err("def f(x) { set s = 10; observe o = x; } session { f(s + 1); }")
+            err("def f(x) { set s = 10; observe o = x; } workload { session { request; \n} }\nserver { f(s + 1);\n}")
                 .contains("which `f` assigns")
         );
         // an observation's name is not captured
         parse(&main_source(&format!(
-            "{ENGINE} def f(x) {{ observe s = 10; observe o = x; }} session {{ f(s + 1); }}"
-        )))
+            "{ENGINE} def f(x) {{ observe s = 10; observe o = x; }} workload {{ session {{ request; \n}} }}\nserver {{ f(s + 1);\n}}"
+        )
+        ))
         .unwrap();
-        assert!(err("def f(p) { set p = 1; } session { f(2); }").contains("is a parameter"));
+        assert!(
+            err("def f(p) { set p = 1; } workload { session { request; \n} }\nserver { f(2);\n}")
+                .contains("is a parameter")
+        );
         assert!(
             err(
-                "def f(h) { hold kv (h) at admission (h = 3) { observe a = h; } } session { f(2); }"
+                "def f(h) { hold kv (h) at admission (h = 3) { observe a = h; } } workload { session { request; \n} }\nserver { f(2);\n}"
             )
             .contains("is a parameter")
         );
         // a parameter may not be an aggregate's index, and a count may be one
         assert!(
-            err("def tally(k) = sum k in 2 (k); session { set x = tally(7); }")
+            err("def tally(k) = sum k in 2 (k); workload { session { request; \n} }\nserver { set x = tally(7);\n}")
                 .contains("is a parameter")
         );
-        parse(&main_source(
-            "def tally(n) = sum k in n (k); session { set x = tally(2); }",
-        ))
-        .unwrap();
+        parse(&main_source("def tally(n) = sum k in n (k); workload { session { request; \n} }\nserver { set x = tally(2);\n}",
+        )).unwrap();
         // a parenthesised count: the body's `k` is still the aggregate's
         parse(&main_source(
-            "def tally() = sum k in (1 + 1) (k); def next(x) { turn; observe p = x; } \
-               workload { turn { set k = 1; } } session { next(tally()); end; }",
-        ))
+            "def tally() = sum k in (1 + 1) (k); def next(x) { turn; observe p = x; } workload { turn { set k = 1; }
+          session { next(tally()); request; end; }
+        } server {}",
+        )
+        )
         .unwrap();
         // an aggregate's index is its own, not a name the argument reads
         parse(&main_source(
-            "def tally() = sum i in 2 (i); def next(x) { turn; observe p = x; } \
-               workload { turn { set i = 1; } } session { next(tally()); end; }",
-        ))
+            "def tally() = sum i in 2 (i); def next(x) { turn; observe p = x; } workload { turn { set i = 1; }
+          session { next(tally()); request; end; }
+        } server {}",
+        )
+        )
         .unwrap();
         // what a turn, a request or an admission assigns is captured too
         assert!(
-            err("def next(x) { turn; observe p = x; } workload { turn { set n = 1; } } session { next(n); end; }")
+            err("def next(x) { turn; observe p = x; } workload { turn { set n = 1; } \n  session { next(n); request; end; } } server {}")
                 .contains("which its `turn;` assigns")
         );
         assert!(
@@ -5432,47 +5506,49 @@ mod tests {
                 .contains("which its `request;` assigns")
         );
         assert!(
-            err("def take(x) { hold kv (4) { observe got = x; } } session { take(cached); }")
+            err("def take(x) { hold kv (4) { observe got = x; } } workload { session { request; \n} }\nserver { take(cached);\n}")
                 .contains("which `take` assigns")
         );
         // the clock and live state are read where the body reads them
         assert!(
-            err("stage svc : fifo; def timed(t) { run svc (1); observe took = now - t; } session { timed(now); }")
+            err("stage svc : fifo; def timed(t) { run svc (1); observe took = now - t; } workload { session { request; \n} }\nserver { timed(now);\n}")
                 .contains("reads `now`, which changes")
         );
         assert!(
-            err("def f(q) { observe b = q; } session { f(used(kv)); }").contains("reads `used(…)`")
+            err("def f(q) { observe b = q; } workload { session { request; \n} }\nserver { f(used(kv));\n}").contains("reads `used(…)`")
         );
         // an expression's argument is read where the expression is
         parse(&main_source(&format!(
-            "{ENGINE} def g(x) = x + 1; session {{ set a = g(now); }}"
-        )))
+            "{ENGINE} def g(x) = x + 1; workload {{ session {{ request; \n}} }}\nserver {{ set a = g(now);\n}}"
+        )
+        ))
         .unwrap();
         // `n` is an attribute when the program sets it
         parse(&main_source(&format!(
-            "{ENGINE} def f(x) {{ observe b = x; }} session {{ set n = 1; f(n); }}"
-        )))
+            "{ENGINE} def f(x) {{ observe b = x; }} workload {{ session {{ request; \n}} }}\nserver {{ set n = 1; f(n);\n}}"
+        )
+        ))
         .unwrap();
         // and through an expression the argument uses
         assert!(
-            err("stage svc : fifo; def clock() = now; def timed(t) { run svc (1); observe took = now - t; } session { timed(clock()); }")
+            err("stage svc : fifo; def clock() = now; def timed(t) { run svc (1); observe took = now - t; } workload { session { request; \n} }\nserver { timed(clock());\n}")
                 .contains("reads `now`")
         );
         assert!(
-            err("def occ(p) = used(p); def f(q) { observe b = q; } session { f(occ(kv)); }")
+            err("def occ(p) = used(p); def f(q) { observe b = q; } workload { session { request; \n} }\nserver { f(occ(kv));\n}")
                 .contains("reads `used(…)`")
         );
         assert!(
-            err("def plus(x) = s + x; def f(v) { set s = 10; observe o = v; } session { f(plus(1)); }")
+            err("def plus(x) = s + x; def f(v) { set s = 10; observe o = v; } workload { session { request; \n} }\nserver { f(plus(1));\n}")
                 .contains("which `f` assigns")
         );
         // and through a definition the body uses
         assert!(
-            err("def reset() { set s = 10; } def f(x) { reset(); observe o = x; } session { f(s + 1); }")
+            err("def reset() { set s = 10; } def f(x) { reset(); observe o = x; } workload { session { request; \n} }\nserver { f(s + 1);\n}")
                 .contains("which `f` assigns")
         );
         assert!(
-            err("def adv() { turn; } def next(x) { adv(); observe p = x; } workload { turn { set n = 1; } } session { next(n); end; }")
+            err("def adv() { turn; } def next(x) { adv(); observe p = x; } workload { turn { set n = 1; } \n  session { next(n); request; end; } } server {}")
                 .contains("which its `turn;` assigns")
         );
         assert!(
@@ -5480,28 +5556,40 @@ mod tests {
                 .contains("which its `request;` assigns")
         );
         // a name that is a declaration's
-        assert!(err("def kv(x) = x; session { }").contains("also a pool"));
-        assert!(err("def engine(x) = x; session { }").contains("also a stage"));
+        assert!(
+            err("def kv(x) = x; workload { session { request; \n} }\nserver {\n}")
+                .contains("also a pool")
+        );
+        assert!(
+            err("def engine(x) = x; workload { session { request; \n} }\nserver {\n}")
+                .contains("also a stage")
+        );
         // the name of a statement body's attribute is not a use
         parse(&main_source(&format!(
-            "{ENGINE} def c(x) {{ set c = x; }} session {{ c(1); }}"
-        )))
+            "{ENGINE} def c(x) {{ set c = x; }} workload {{ session {{ request; \n}} }}\nserver {{ c(1);\n}}"
+        )
+        ))
         .unwrap();
         // an error in the body says where the definition was used
         let e =
             err("def take(n) { turn; } workload { session { request; end; } } server { take(4); }");
         assert!(e.contains("note: in `take`, used at"), "{e}");
-        assert!(err("def f(x) = x; def f(y) = y; session { }").contains("defined twice"));
+        assert!(
+            err("def f(x) = x; def f(y) = y; workload { session { request; \n} }\nserver {\n}")
+                .contains("defined twice")
+        );
         // an argument used once may draw
         parse(&main_source(&format!(
-            "{ENGINE} def f(x) = x + 1; session {{ set a = f(~exp(1)); }}"
-        )))
+            "{ENGINE} def f(x) = x + 1; workload {{ session {{ request; \n}} }}\nserver {{ set a = f(~exp(1));\n}}"
+        )
+        ))
         .unwrap();
         // a def used before it is defined is a call of an unknown function,
         // which the linker reports
         parse(&main_source(&format!(
-            "{ENGINE} session {{ set a = f(1); }} def f(x) = x;"
-        )))
+            "{ENGINE} workload {{ session {{ request; \n}} }}\nserver {{ set a = f(1);\n}} def f(x) = x;"
+        )
+        ))
         .unwrap();
     }
 
@@ -5509,23 +5597,20 @@ mod tests {
     fn a_transfer_says_where_the_kv_goes() {
         // without `from P to Q` it would be a link that stores and forwards,
         // which is the kernel's `run`, not a transfer
-        let e = parse(&main_source(&format!(
-            "{PD} session {{ hold kv (K) {{ transfer X; }} }}"
-        )))
-        .unwrap_err();
+        let e = parse(&main_source(&format!("{PD} workload {{ session {{ request; \n}} }}\nserver {{ hold kv (K) {{ transfer X; }}\n}}"
+        ))).unwrap_err();
         assert!(
             e.msg.contains("`transfer` without `from P to Q (n)`"),
             "{e}"
         );
         assert!(e.msg.contains("`run link (w);`"), "{e}");
-        let e = parse(&main_source(
-            "stage link[2] : ps(1); session { transfer[0] X; }",
-        ))
-        .unwrap_err();
+        let e = parse(&main_source("stage link[2] : ps(1); workload { session { request; \n} }\nserver { transfer[0] X;\n}",
+        )).unwrap_err();
         assert!(e.msg.contains("`run link[…] (w);`"), "{e}");
         let e = parse(&main_source(
-            "pool kv { cap 1; } stage nic : ps(1); session { transfer on nic X growing kv; }",
-        ))
+            "pool kv { cap 1; } stage nic : ps(1); workload { session { request; \n} }\nserver { transfer on nic X growing kv;\n}",
+        )
+        )
         .unwrap_err();
         assert!(
             e.msg.contains("`transfer` without `from P to Q (n)`"),
@@ -5536,27 +5621,28 @@ mod tests {
 
     #[test]
     fn serving_forms_need_exactly_one_stage() {
-        let e = parse(&main_source("stage svc : fifo; session { prefill S; }")).unwrap_err();
+        let e = parse(&main_source(
+            "stage svc : fifo; workload { session { request; \n} }\nserver { prefill S;\n}",
+        ))
+        .unwrap_err();
         assert!(
             e.msg.contains("no stage declared above plays `prefill`"),
             "{e}"
         );
-        assert_eq!((e.line, e.col), (1, 41));
-        let e = parse(&main_source(
-            "stage a : step { cost 1; } stage b : step { cost 1; } session { decode D; }",
+        assert_eq!((e.line, e.col), (3, 10));
+        let e =
+            parse(&main_source("stage a : step { cost 1; } stage b : step { cost 1; } workload { session { request; \n} }\nserver { decode D;\n}",
         ))
-        .unwrap_err();
+                .unwrap_err();
         assert!(e.msg.contains("several stages play `decode` (a, b)"), "{e}");
-        let e = parse(&main_source(
-            "stage engine : step { cost 1; } session { transfer X; }",
-        ))
-        .unwrap_err();
+        let e = parse(&main_source("stage engine : step { cost 1; } workload { session { request; \n} }\nserver { transfer X;\n}",
+        )).unwrap_err();
         assert!(
             e.msg.contains("no stage declared above plays `transfer`"),
             "{e}"
         );
         let e = parse(&main_source(
-            "stage tool : delay; session { tool on other Z; }",
+            "stage tool : delay; workload { session { request; \n} }\nserver { tool on other Z;\n}",
         ))
         .unwrap_err();
         assert!(e.msg.contains("no stage `other` is declared above"), "{e}");
@@ -5579,39 +5665,43 @@ mod tests {
         same(
             &format!(
                 "{DEPLOYMENT} workload {{ {CLIENT}
-                    session {{
-                      turn;
-                      loop {{
-                        request;
-                        set K = prompt + o;
-                        branch (more) {{ tool 3; turn; }} else {{ end; }}
-                      }}
-                    }}
-                }}
-                server {{
-                  set prompt = K + n;
-                  hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
-                        at admission (hit = min(cachedin(kv), prompt - 1)) {{
-                    prefill (prompt - cached) growing kv;
-                    decode (o - 1) growing kv;
-                  }} cache (prompt + o);
-                }}"
+          session {{
+            turn;
+            loop {{
+              request;
+              set K = prompt + o;
+              branch (more) {{ tool 3; turn; }} else {{ end; }}
+            }}
+          }}
+        }}
+        server {{
+          set prompt = K + n;
+          hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+          at admission (hit = min(cachedin(kv), prompt - 1)) {{
+            prefill (prompt - cached) growing kv;
+            decode (o - 1) growing kv;
+          }} cache (prompt + o);
+        }}"
             ),
             &format!(
-                "{DEPLOYMENT} workload {{ {CLIENT} }}
-                session {{
-                  turn;
-                  loop {{
-                    set prompt = K + n;
-                    hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
-                          at admission (hit = min(cachedin(kv), prompt - 1)) {{
-                      prefill (prompt - cached) growing kv;
-                      decode (o - 1) growing kv;
-                    }} cache (prompt + o);
-                    set K = prompt + o;
-                    branch (more) {{ tool 3; turn; }} else {{ end; }}
-                  }}
-                }}"
+                "{DEPLOYMENT} workload {{ {CLIENT}
+          session {{
+            turn;
+            loop {{ request;
+              branch (more) {{ tool 3; turn; }} else {{ end; }}
+            }}
+
+          }}
+        }}
+        server {{
+          set prompt = K + n;
+          hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+          at admission (hit = min(cachedin(kv), prompt - 1)) {{
+            prefill (prompt - cached) growing kv;
+            decode (o - 1) growing kv;
+          }} cache (prompt + o);
+          set K = prompt + o;
+        }}"
             ),
         );
     }
@@ -5620,24 +5710,38 @@ mod tests {
     fn request_is_spliced_at_any_depth_and_as_often_as_written() {
         same(
             "stage s : fifo; workload { session { branch (x) { request; } else { loop { request; end; } } } }
-             server { run s (1); }",
-            "stage s : fifo; workload { } session { branch (x) { run s (1); } else { loop { run s (1); end; } } }",
+        server { run s (1); }",
+            "stage s : fifo; workload { \n  session { branch (x) { request; } else { loop { run s (1); end; } } \n  }\n} server { run s (1);\n}",
         );
         // the kernel is written on either side
         same(
             "pool kv { cap 1; } workload { session { request; end; } } server { hold kv (1) { } }",
-            "pool kv { cap 1; } workload { } session { hold kv (1) { } end; }",
+            "pool kv { cap 1; } workload { \n  session { request; end; \n  }\n} server { hold kv (1) { }\n}",
         );
         // the order of the blocks does not matter
         same(
             "stage s : fifo; server { run s (1); } workload { session { request; end; } }",
-            "stage s : fifo; workload { } session { run s (1); end; }",
+            "stage s : fifo; workload { \n  session { request; end; \n  }\n} server { run s (1);\n}",
         );
     }
 
     fn refused(src: &str, needle: &str) {
         let e = parse(&main_source(src)).unwrap_err();
         assert!(e.msg.contains(needle), "{src}\n  {e}");
+    }
+
+    #[test]
+    fn a_session_belongs_only_inside_workload() {
+        for source in [
+            "session {}",
+            "session { end; }",
+            "workload { arrive batch(1); } session { end; }",
+            "session {} workload { session { request; end; } } server {}",
+            "workload { session { request; end; } } server {} session {}",
+        ] {
+            refused(source, "`session` belongs inside `workload`");
+            refused(source, "call it with `request;`");
+        }
     }
 
     #[test]
@@ -5658,7 +5762,7 @@ mod tests {
         );
         refused(
             "pool kv { cap 1; } session { request; }",
-            "`session` inside `workload`",
+            "`session` belongs inside `workload`",
         );
     }
 
@@ -5667,36 +5771,43 @@ mod tests {
         // the words #136 took out say what a program writes instead
         const WL: &str = "workload { session { request; } }";
         for (src, now) in [
-            ("session { enter kv (1) { } }", "`enter` is now `hold`"),
+            (
+                "workload { session { request; \n} }\nserver { enter kv (1) { }\n}",
+                "`enter` is now `hold`",
+            ),
             (
                 &*format!("{WL} server {{ admit if kv (1) fit {{ }} }}"),
                 "is now `hold … at admission",
             ),
             (
-                "session { hold kv (1) { } keep (1); }",
+                "workload { session { request; \n} }\nserver { hold kv (1) { } keep (1);\n}",
                 "`keep` is now `cache`",
             ),
             (
-                "session { hold kv (1) where x = 1 { } }",
+                "workload { session { request; \n} }\nserver { hold kv (1) where x = 1 { }\n}",
                 "`where x = e` is now `at admission (x = e)`",
             ),
-            ("session { hold kv (1) fit { } }", "`fit` is gone"),
+            (
+                "workload { session { request; \n} }\nserver { hold kv (1) fit { }\n}",
+                "`fit` is gone",
+            ),
         ] {
             refused(&format!("pool kv {{ cap 1; }} {src}"), now);
         }
         // and none of them names anything, so a name never means two things
         for src in [
-            "def keep(n) { observe k = n; } session { end; }",
-            "def f(where) = where; session { end; }",
-            "session { set fit = 1; end; }",
-            "session { hold kv (1) at admission (enter = 1) { observe e = enter; } end; }",
+            "def keep(n) { observe k = n; } workload { session { request; end; \n} }\nserver {\n}",
+            "def f(where) = where; workload { session { request; end; \n} }\nserver {\n}",
+            "workload { session { request; end; \n} }\nserver { set fit = 1;\n}",
+            "workload { session { request; end; \n} }\nserver { hold kv (1) at admission (enter = 1) { observe e = enter; }\n}",
         ] {
             refused(&format!("pool kv {{ cap 1; }} {src}"), "is a retired word");
         }
         // `hold` is written on either side, with its bindings
         parse(&main_source(&format!(
             "pool kv {{ cap 1; }} {WL} server {{ hold kv (x) at admission (x = 1) {{ }} cache (1); }}"
-        )))
+        )
+        ))
         .unwrap();
     }
 
@@ -5716,11 +5827,11 @@ mod tests {
         );
         refused(
             "stage s : fifo; workload { session { request; } } server { run s (1); } session { run s (1); }",
-            "one session",
+            "`session` belongs inside `workload`",
         );
         refused(
             "stage s : fifo; session { run s (1); } workload { session { request; } } server { run s (1); }",
-            "one session",
+            "`session` belongs inside `workload`",
         );
         refused(
             "stage s : fifo; server { run s (1); } server { run s (1); }",

@@ -109,9 +109,8 @@ and a name nothing sets is an error. The [vLLM program](../use-cases/vllm.md)
 hides output length `o`, preventing admission from reserving memory using
 future output length.
 
-In a program split into a workload and a `server`, the server's own
-statements are the rest of the scheduler, and there a hidden attribute is
-the target's until a run reveals it. The server may run work by it
+The `server`'s own statements are the rest of the scheduler, and there a
+hidden attribute is the target's until a run reveals it. The server may run work by it
 (`decode (o - 1)`: the model ends the run, not the scheduler), cache by it
 at release, and observe it. A run whose work reads it reveals it when the
 run ends, since the end of a decode is the EOS the scheduler sees. After
@@ -126,8 +125,7 @@ Paths join conservatively: after a branch, the attribute counts as revealed
 only if both arms reveal it, and a loop's body may not run at all. A hold's
 header is read at admission, where the attribute itself stays refused even
 after a run (the moment rule above). The workload's statements are the
-client's and are not checked. A program written as one `session` has no
-server to check.
+client's and are not subject to the server statement check.
 
 ## Examples
 
@@ -140,15 +138,18 @@ fn main() {
     arrive batch(2);
     init { set rounds = 2; }
     turn { set duration = ~uniform(1, 2); }
-  }
-  session {
-    loop {
-      turn;
-      run svc (duration);
-      observe elapsed = now;
-      set rounds = rounds - 1;
-      branch (rounds == 0) { end; }
+    session {
+      loop {
+        turn;
+        request;
+        set rounds = rounds - 1;
+        branch (rounds == 0) { end; }
+      }
     }
+  }
+  server {
+    run svc (duration);
+    observe elapsed = now;
   }
   run { horizon 10; seed 10; }
 }

@@ -77,11 +77,13 @@ fn main() {
     cost 1 + 0.1 * tokens;
     serve by (remaining);
   }
-  workload { arrive batch(2); }
-  session {
+  workload {
+    arrive batch(2);
+    session { request; end; }
+  }
+  server {
     run engine prefill (8);
     observe finished = now;
-    end;
   }
   run { horizon 10; }
 }

@@ -18,8 +18,9 @@ the link's latency are written on it.
 
 For a program with a `server` or gateway, the figure shows one request's
 path. Workload tool calls, subsequent turns and session exits are omitted,
-but holds surrounding the workload's `request` remain visible. A program
-written as one top-level `session` is drawn in full.
+but holds surrounding the workload's `request` remain visible. When there
+is no unique request body, or when drawing IR directly, the figure shows
+the full session.
 
 | Element | Meaning |
 |---|---|
