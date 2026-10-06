@@ -32,7 +32,9 @@ the next turn follows its response. Route to a gateway in the server with
 
 Current syntax requires `pool`, `stage`, and other deployment declarations
 inside `main`, even when their settings are fixed. Group them together before
-the workload. Do not enforce a rule that `main` contains only `workload`,
+the workload where dependencies allow: a declaration that reads a request
+attribute, such as a `queue by` key, follows the workload that sets it.
+Do not enforce a rule that `main` contains only `workload`
 and `server`; input-dependent configuration belongs there too.
 Imported libraries contain `def` and `use`, not concrete resource declarations.
 
@@ -68,8 +70,9 @@ Comments should explain assumptions and source correspondence, not repeat syntax
 
 See [`examples/vendors/ascend.sq`](https://github.com/servingQ/serQ/blob/main/examples/vendors/ascend.sq):
 its fixed thresholds and `waiting_class` definition precede `main`, while
-resources, workload and request handler form the model inside it. Its execution
-conditions are supplied by the caller, for example
+the workload, resources and request handler form the model inside it. The
+workload comes first because the queue key reads the attributes it sets.
+Its execution conditions are supplied by the caller, for example
 `serq run examples/vendors/ascend.sq --horizon 1`.
 When reorganizing a program, preserve its linked IR and observed behavior.
 Run `serq check` and inspect `serq draw`, then compare a repeatable run before
