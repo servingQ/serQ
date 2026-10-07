@@ -151,6 +151,13 @@ iteration); about twelve forms and ten link errors come.
   whether the IR has `admit_via`; the holds' order does, and with it which
   pool's keys may read the engine's `state` (`src/ir.rs`, "the keys of a
   pool it admits").
+- **An `each at most` that computes its cap**: the caps are constants, so
+  vLLM's adaptive threshold, `max(long_prefill_token_threshold,
+  input_budget // num_eligible_reqs)` (`scheduler.py:617-622`, off by
+  default), cannot be written as an engine's, where a `chunk` could. Kept:
+  a constant is what lets a cap of 0 or below be refused before the run;
+  `max(k, e)` with `k > 0` constant would keep that and is the opening when
+  a program needs it.
 - **Open**: names for a run's own attributes (`decoding`, `remaining`) and
   the eviction key's `waiting` (`src/frontend/link.rs:236`), which reads as
   the list; `batch.kv_decode`; the queue a hold waits in; `exclusive

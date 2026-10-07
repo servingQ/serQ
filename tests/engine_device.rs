@@ -372,6 +372,19 @@ fn the_design_refuses_what_it_says() {
         &engine("advance running each at most (-4);"),
         "would be given nothing",
     );
+    // a condition known once linked chooses its branch: vLLM's 0 for none
+    assert_eq!(
+        ir(
+            &engine(
+                "let c = 0; let t = c > 0 ? c : inf; advance running each at most (t); \
+                 admit waiting while (running.preempted == 0) each at most (t);"
+            ),
+            None,
+            &common::horizon(20.0)
+        ),
+        ir(&stage(""), None, &common::horizon(20.0))
+    );
+    refused(&engine("advance running each at most (foo);"), "unknown");
     refused(
         &engine("advance running each at most (2 - 2);"),
         "would be given nothing",

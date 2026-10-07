@@ -594,7 +594,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 budget: lk.expr(&sp.budget)?,
                 cost: lk.expr(&sp.cost)?,
                 chunk: if sp.per_run {
-                    lk.per_run_cap(&sp.chunk, &s.name)?
+                    lk.per_run_cap(&sp.chunk, &s.name, None)?
                 } else {
                     no_cap_is_zero(lk.expr(&sp.chunk)?)
                 },
@@ -1539,26 +1539,38 @@ impl Linker<'_> {
     /// start, and each cap it chooses is a constant once the `let`s are
     /// known, above 0 (`inf` for none, which the kernel writes 0). A cap of 0
     /// or below would run as none, since the kernel reads 0 so.
-    fn per_run_cap(&self, e: &Expr, stage: &str) -> LResult<CExpr> {
+    fn per_run_cap(&self, e: &Expr, stage: &str, span: Option<Span>) -> LResult<CExpr> {
         Ok(match e {
-            Expr::Located(_, a) => self.per_run_cap(a, stage)?,
-            Expr::Cond(k, a, b) => CExpr::Cond(
-                Box::new(self.expr(k)?),
-                Box::new(self.per_run_cap(a, stage)?),
-                Box::new(self.per_run_cap(b, stage)?),
-            ),
+            Expr::Located(s, a) => self.per_run_cap(a, stage, Some(*s))?,
+            // a condition known once linked chooses its branch here, so the
+            // other may be vLLM's 0 for none: `c > 0 ? c : inf`
+            Expr::Cond(k, a, b) => match self.eval_const(k) {
+                Ok(c) if !c.is_nan() => {
+                    self.per_run_cap(if c != 0.0 { a } else { b }, stage, span)?
+                }
+                _ => CExpr::Cond(
+                    Box::new(self.expr(k)?),
+                    Box::new(self.per_run_cap(a, stage, span)?),
+                    Box::new(self.per_run_cap(b, stage, span)?),
+                ),
+            },
             leaf => {
+                // a name it does not know is that error, not this one
+                self.expr(leaf).map_err(|e| e.at(span))?;
                 let v = self.eval_const(leaf).map_err(|_| {
                     LinkError::new(format!(
                         "engine `{stage}`: an `each at most` chooses among constants: its \
-                         condition may read the iteration, the cap it gives a run may not"
+                         condition may read the iteration, the cap it gives a run may not \
+                         (write the `?:` outermost: `c ? 8 : 16`, not `(c ? 4 : 8) * 2`)"
                     ))
+                    .at(span)
                 })?;
                 if v.is_nan() || v <= 0.0 {
                     return Err(LinkError::new(format!(
                         "engine `{stage}`: `each at most ({v})`: a run would be given nothing, \
                          and the kernel reads 0 as no cap; no cap is written `inf`"
-                    )));
+                    ))
+                    .at(span));
                 }
                 CExpr::Num(if v.is_infinite() { 0.0 } else { v })
             }

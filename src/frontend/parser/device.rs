@@ -1067,37 +1067,19 @@ fn first_pools(stmts: &[Stmt], out: &mut Vec<String>) {
 
 /// Whether a step's expressions read the name `n`.
 fn step_reads(s: &StepSpec, n: &str) -> bool {
-    let mut exprs: Vec<&Expr> = vec![&s.chunk];
-    if let Serve::By(keys) = &s.serve {
-        exprs.extend(keys);
-    }
-    exprs.extend(s.only.iter());
-    fn body(b: &[IterStmt], out: &mut Vec<Expr>) {
-        for st in b {
-            match st {
-                IterStmt::Serve { only, order } => {
-                    out.extend(only.iter().cloned());
-                    if let Some(Serve::By(keys)) = order {
-                        out.extend(keys.iter().cloned());
-                    }
-                }
-                IterStmt::Admit { only, gate } => out.extend(only.iter().chain(gate).cloned()),
-                IterStmt::Branch(g, a, b) => {
-                    out.push(g.clone());
-                    body(a, out);
-                    body(b, out);
-                }
-                IterStmt::Set(_, e) => out.push(e.clone()),
+    fn body_reads(b: &[IterStmt], n: &str) -> bool {
+        b.iter().any(|st| match st {
+            IterStmt::Serve { only, order } => {
+                only.iter().any(|e| reads_name(e, n))
+                    || matches!(order, Some(Serve::By(keys)) if keys.iter().any(|e| reads_name(e, n)))
             }
-        }
+            IterStmt::Admit { only, gate } => only.iter().chain(gate).any(|e| reads_name(e, n)),
+            IterStmt::Branch(g, a, b) => reads_name(g, n) || body_reads(a, n) || body_reads(b, n),
+            IterStmt::Set(_, e) => reads_name(e, n),
+        })
     }
-    let mut owned = vec![];
-    if let Some(b) = &s.iteration {
-        body(b, &mut owned);
-    }
-    exprs
-        .iter()
-        .copied()
-        .chain(owned.iter())
-        .any(|e| reads_name(e, n))
+    reads_name(&s.chunk, n)
+        || matches!(&s.serve, Serve::By(keys) if keys.iter().any(|e| reads_name(e, n)))
+        || s.only.iter().any(|e| reads_name(e, n))
+        || s.iteration.as_deref().is_some_and(|b| body_reads(b, n))
 }
