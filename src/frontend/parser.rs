@@ -71,6 +71,8 @@ use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
 use crate::frontend::queue::{self, QueueDecl};
 
+mod device;
+
 #[derive(Debug, Clone)]
 pub struct ParseError {
     pub line: usize,
@@ -191,6 +193,14 @@ struct Parser {
     /// `Q[i].x` references, checked once the queues are known: `x` must be
     /// a pool of `Q`.
     indexed_dotted: Vec<(usize, String)>,
+    /// `device`s, `engine … on` them and `pool … on` either, linked once
+    /// the program is read (`device::link_engines`).
+    devices: Vec<device::DeviceDecl>,
+    engines: Vec<device::EngineDecl>,
+    pools_on: Vec<device::PoolOn>,
+    /// Parsing an engine's `schedule`, where `running.…` and `waiting.…`
+    /// are read.
+    in_schedule: bool,
 }
 
 /// A use of a `def` whose body says `turn;`, with the names
@@ -265,11 +275,12 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 108] = [
+pub const KEYWORDS: [&str; 112] = [
     "Cost",
     "Size",
     "admission",
     "admit",
+    "advance",
     "arrivals",
     "arrive",
     "at",
@@ -290,12 +301,14 @@ pub const KEYWORDS: [&str; 108] = [
     "decode",
     "def",
     "delay",
+    "device",
     "drop",
     "else",
     "end",
     "every",
     "evict",
     "exclusive",
+    "execute",
     "fifo",
     "first",
     "fits",
@@ -307,8 +320,8 @@ pub const KEYWORDS: [&str; 108] = [
     "granule",
     "grow",
     "growing",
-    "held",
     "head",
+    "held",
     "hidden",
     "hold",
     "horizon",
@@ -343,12 +356,13 @@ pub const KEYWORDS: [&str; 108] = [
     "push",
     "queue",
     "release",
-    "requeue",
     "renewal",
     "request",
+    "requeue",
     "reserve",
     "reuse",
     "run",
+    "schedule",
     "seed",
     "serve",
     "server",
@@ -1287,6 +1301,10 @@ impl Parser {
             latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
+            devices: vec![],
+            engines: vec![],
+            pools_on: vec![],
+            in_schedule: false,
         }
     }
 
@@ -1646,7 +1664,20 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 prog.gauges.push((name, e));
             } else if self.eat_kw("pool") {
-                prog.pools.push(self.pool()?);
+                let (d, on) = self.pool(true)?;
+                if let Some((owner, at)) = on {
+                    self.pools_on.push(device::PoolOn {
+                        pool: prog.pools.len(),
+                        owner,
+                        at,
+                    });
+                }
+                prog.pools.push(d);
+            } else if self.eat_kw("device") {
+                self.device(&prog)?;
+            } else if self.at_engine() {
+                self.advance();
+                self.engine(&mut prog)?;
             } else if self.is_kw("queue") {
                 let at = self.pos;
                 self.advance();
@@ -1748,6 +1779,7 @@ impl Parser {
         }
         served.shared = shared;
         self.assemble(&mut prog, &mut served)?;
+        self.link_engines(&mut prog)?;
         self.check_body_bindings(&prog)?;
         self.check_def_names(&prog)?;
         self.check_deferred(&prog, &served)?;
@@ -2705,17 +2737,41 @@ impl Parser {
         })
     }
 
-    fn pool(&mut self) -> PResult<PoolDecl> {
+    /// `pool NAME [N] { … }`, or `pool NAME on OWNER { … }` where `on` is
+    /// allowed: OWNER's capacity NAME, with the owner and where it is named.
+    fn pool(&mut self, on_ok: bool) -> PResult<(PoolDecl, Option<(String, usize)>)> {
         let span = Some(self.span());
+        let at = self.pos;
         let name = self.ident()?;
         let array = self.array_count()?;
+        let mut on = None;
+        let mut count = array.unwrap_or(1);
+        let mut is_array = array.is_some();
+        let mut cap = Expr::Num(f64::INFINITY);
+        if self.is_kw("on") {
+            if !on_ok {
+                return self.err("a queue's pool is its own: `pool NAME on …` is a deployment's");
+            }
+            if array.is_some() {
+                return self.err_at(
+                    at,
+                    "a pool on a device or an engine is a family as its owner is: write no `[N]`",
+                );
+            }
+            self.advance();
+            let o_at = self.pos;
+            let owner = self.ident()?;
+            let (c, n, a) = self.capacity_of(at, &name, &owner)?;
+            (cap, count, is_array) = (c, n, a);
+            on = Some((owner, o_at));
+        }
         self.expect(&Tok::LBrace)?;
         let mut d = PoolDecl {
             span,
             name,
-            count: array.unwrap_or(1),
-            array: array.is_some(),
-            cap: Expr::Num(f64::INFINITY),
+            count,
+            array: is_array,
+            cap,
             block: None,
             evict: EvictOrder::Lru,
             preempt: PreemptOrder::None,
@@ -2726,6 +2782,15 @@ impl Parser {
         };
         while *self.peek() != Tok::RBrace {
             let key = self.ident()?;
+            if on.is_some() && (key == "cap" || key == "admit") {
+                return self.err_at(
+                    self.pos - 1,
+                    format!(
+                        "a pool on a device or an engine takes `{key}` from it: its capacity \
+                         and who admits it are already said"
+                    ),
+                );
+            }
             match key.as_str() {
                 "cap" => d.cap = self.expr()?,
                 "block" => d.block = Some(self.expr()?),
@@ -2823,7 +2888,7 @@ impl Parser {
             self.expect(&Tok::Semi)?;
         }
         self.expect(&Tok::RBrace)?;
-        Ok(d)
+        Ok((d, on))
     }
 
     fn stage(&mut self) -> PResult<StageDecl> {
@@ -2951,6 +3016,7 @@ impl Parser {
                 budget: Expr::Num(f64::INFINITY),
                 cost: Expr::Num(0.0),
                 chunk: Expr::Num(0.0),
+                per_run: false,
                 granule: None,
                 serve: Serve::Admission,
                 only: None,
@@ -3159,7 +3225,7 @@ impl Parser {
             }
             if self.eat_kw("pool") {
                 let p_at = self.pos;
-                let mut d = self.pool()?;
+                let (mut d, _) = self.pool(false)?;
                 if d.count != 1 {
                     return self.err_at(
                         p_at,
@@ -4868,6 +4934,14 @@ impl Parser {
                         }
                     }
                     self.expect(&Tok::RParen)?;
+                    if self.is_time_resource(&name) {
+                        return self.err_at(
+                            at,
+                            format!(
+                                "`{name}` is a device's time resource, read in an engine's `execute`"
+                            ),
+                        );
+                    }
                     if name == "cost" {
                         let resources = args.len().saturating_sub(1);
                         for arg in &mut args[..resources] {
@@ -4888,6 +4962,11 @@ impl Parser {
                         }
                     }
                     Ok(Expr::Located(span, Box::new(Expr::Call(name, args))))
+                } else if (name == "running" || name == "waiting") && *self.peek() == Tok::Dot {
+                    let at = self.pos - 1;
+                    self.advance();
+                    let e = self.list_value(at, &name)?;
+                    Ok(Expr::Located(span, Box::new(e)))
                 } else if *self.peek() == Tok::Dot
                     || (*self.peek() == Tok::LBracket && self.in_expr_index_dot())
                 {
@@ -4914,6 +4993,7 @@ impl Parser {
                         self.pos -= 1;
                         return self.err("`self` is a queue entry's word: the member's own index");
                     }
+                    self.retired_in_schedule(self.pos - 1, &name)?;
                     Ok(Expr::Located(span, Box::new(Expr::Var(name))))
                 }
             }

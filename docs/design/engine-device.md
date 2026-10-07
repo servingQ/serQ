@@ -75,37 +75,45 @@ pool reqs on vllm { queue fifo; }
 Link errors, each with its reason: a pool on no such capacity, or with
 `cap` or `admit via`; an undeclared capacity; two pools on one capacity;
 two engines, or two candidate KV pools, on one device; a time resource
-outside `execute`; no `tokens cap`; a constant cap ≤ 0; `inf` inside a
-cap's arithmetic; a `let` not first or read outside `each at most`; two
-`each at most` that differ.
+outside `execute`; no `tokens cap`; a constant cap ≤ 0 (the per-run one
+once linked); `inf` inside a cap's arithmetic; `[N]` on a pool `on` a
+family; a `let` not first or read outside `each at most`; two `each at
+most` that differ.
 
 ## Lowering
 
-`tokens cap` is `budget`; `each at most (c)` is `chunk`, a whole-`inf`
-outcome written 0; `advance running`/`admit waiting` are `serve`/`admit`;
-list values are the context variables, `waiting.count` the sum of
-`queued(p)`; `execute` is `cost`; the engine is a step stage whose `memory`
-is its device's pool. vLLM's body is the kernel's default procedure
-statement for statement and lowers to no `iteration`, as the oracle
-fragment requires (`deployment()` in `scripts/gen_lean_oracle.py`).
-`def compute`/`def hbm` in today's cost give byte-identical IR.
+`tokens cap` is `budget`; `each at most (c)` is `chunk`; `advance
+running`/`admit waiting` are `serve`/`admit`; list values are the context
+variables; `execute` is `cost`; the engine is a step stage whose `memory` is
+its device's pool. vLLM's body is the kernel's default procedure statement
+for statement and lowers to no `iteration`, as the oracle fragment requires
+(`deployment()` in `scripts/gen_lean_oracle.py`); `advance running only
+(p); admit waiting only (p) while …` lowers to `serve only (p)`, and
+`exclusive prefill; admit waiting while …` to `serve exclusive prefill`.
 
-Two IR values move with the same meaning, each a handshake for the coming
-tag's message:
+No IR value moves, so the oracle and the Lean fragment read every program
+as before:
 
-- **A device pool gains `admit_via`.** No hold waits in `kv`'s queue in the
-  12 programs without it, but `deployment()` requires an engine-admitted
-  pool to preempt nothing, and the eight oracle programs' `kv` is `lifo`.
-  The rule is relaxed, `Exec.lean`'s `viaEngine` and `lean_bench.py` taught
-  it, and `make lean` re-proved before `pool kv on gpu` lands.
-- **`waiting.count` adds an empty `queued(kv)`**; `lean_bench.py`'s
-  `chunk_of` learns the sum.
+- **`admit_via` where a queue is used.** A pool on an engine is admitted by
+  it. A pool on its device is admitted by it only where a hold names the
+  pool first, so waits in its queue; elsewhere that queue is empty, and the
+  pool is written without `admit_via`, as the 12 programs do today (and as
+  `deployment()` requires of an engine-admitted pool: no preemption).
+- **`waiting.count`** is `queued(p)` summed over the pools whose `admit_via`
+  is the engine, which is `queued(reqs)` where `long_prefill` read it.
+- **`inf` is written 0 by the linker**, once the `let`s have their values:
+  an outcome of `inf` (the whole cap, or a branch of a `?:`) is no cap,
+  which the kernel writes 0 as `min(remaining, inf)` gives. The linker does
+  it for every step, so an old `chunk inf` is 0 too; an engine's outcome at
+  or below 0 does not link.
 
-The 21 step programs are rewritten and the old spellings refused with the
-new one ([one admission](one-admission.md)), as a stack: `device`, then
-`engine`, then `schedule` and `execute`. Six rules go (`memory`, `admit
-via`, `budget`, `chunk`, a step's `cost`, the default iteration); about
-twelve forms and ten link errors come.
+`tests/engine_device.rs` holds `vllm.sq`, `sglang.sq` and `tgi.sq` written
+as engines to their programs' IR, byte for byte, as it holds each stage form
+to its schedule. The 21 step programs are rewritten and the old spellings
+refused with the new one ([one admission](one-admission.md)), as a stack:
+the forms, the programs, the documentation, then the refusal. Six rules go
+(`memory`, `admit via`, `budget`, `chunk`, a step's `cost`, the default
+iteration); about twelve forms and ten link errors come.
 
 ## Self-critique
 

@@ -593,7 +593,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             StageKind::Step(sp) => CStageKind::Step(CStep {
                 budget: lk.expr(&sp.budget)?,
                 cost: lk.expr(&sp.cost)?,
-                chunk: lk.expr(&sp.chunk)?,
+                chunk: per_run_chunk(lk.expr(&sp.chunk)?, sp.per_run, &s.name)?,
                 granule: match &sp.granule {
                     None => None,
                     Some(g) => {
@@ -1965,4 +1965,26 @@ pub fn binop(op: BinOp, a: f64, b: f64) -> f64 {
 /// keeps its own.
 pub(crate) fn bind_index(e: &mut Expr, j: &str, k: f64) {
     e.substitute(&[(j.to_string(), Expr::Num(k))]);
+}
+
+/// A step's chunk as the kernel reads it: an outcome of `inf` (the whole
+/// chunk, or a branch of a `?:`) is no cap, which the kernel writes 0, as
+/// `min(remaining, inf)` would give. An engine's `each at most` (`per_run`)
+/// may not be 0 or below, which the kernel would read as no cap.
+fn per_run_chunk(c: CExpr, per_run: bool, stage: &str) -> Result<CExpr, LinkError> {
+    Ok(match c {
+        CExpr::Num(v) if v == f64::INFINITY => CExpr::Num(0.0),
+        CExpr::Num(v) if per_run && v <= 0.0 => {
+            return Err(LinkError::new(format!(
+                "engine `{stage}`: `each at most ({v})`: a run would be given nothing; no cap is \
+                 written `inf`"
+            )));
+        }
+        CExpr::Cond(k, a, b) => CExpr::Cond(
+            k,
+            Box::new(per_run_chunk(*a, per_run, stage)?),
+            Box::new(per_run_chunk(*b, per_run, stage)?),
+        ),
+        c => c,
+    })
 }
