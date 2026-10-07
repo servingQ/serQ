@@ -201,6 +201,8 @@ struct Parser {
     /// Parsing an engine's `schedule`, where `running.…` and `waiting.…`
     /// are read.
     in_schedule: bool,
+    /// The queue whose body is being read: its `device gpu` is `Q.gpu`.
+    device_scope: Option<String>,
 }
 
 /// A use of a `def` whose body says `turn;`, with the names
@@ -275,7 +277,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 112] = [
+pub const KEYWORDS: [&str; 113] = [
     "Cost",
     "Size",
     "admission",
@@ -305,6 +307,7 @@ pub const KEYWORDS: [&str; 112] = [
     "drop",
     "else",
     "end",
+    "engine",
     "every",
     "evict",
     "exclusive",
@@ -1305,6 +1308,7 @@ impl Parser {
             engines: vec![],
             pools_on: vec![],
             in_schedule: false,
+            device_scope: None,
         }
     }
 
@@ -2767,7 +2771,13 @@ impl Parser {
             }
             self.advance();
             let o_at = self.pos;
-            let owner = self.ident()?;
+            let mut owner = self.ident()?;
+            if let Some(q) = &self.device_scope {
+                let scoped = format!("{q}.{owner}");
+                if self.devices.iter().any(|d| d.name == scoped) {
+                    owner = scoped;
+                }
+            }
             let (c, n, a) = self.capacity_of(at, &name, &owner)?;
             (cap, count, is_array) = (c, n, a);
             on = Some((owner, o_at));
@@ -3222,8 +3232,10 @@ impl Parser {
         while *self.peek() != Tok::RBrace {
             // pools, then the stage, then the entries: each reads what is above it
             let item_at = self.pos;
+            let pool_on =
+                self.is_kw("pool") && matches!(self.peek_at(2), Tok::Ident(k) if k == "on");
             if self.is_kw("pool")
-                && (self.queues[qi].has_stage || !self.queues[qi].entries.is_empty())
+                && (!self.queues[qi].entries.is_empty() || (self.queues[qi].has_stage && !pool_on))
             {
                 return self.err_at(
                     item_at,
@@ -3238,9 +3250,70 @@ impl Parser {
                     format!("queue `{name}` declares its `serve` above its entries"),
                 );
             }
-            if self.eat_kw("pool") {
+            if self.is_kw("device") {
+                self.advance();
+                if self.queues[qi].has_stage || !self.queues[qi].entries.is_empty() {
+                    return self.err_at(
+                        item_at,
+                        format!("queue `{name}` declares its device above its engine and entries"),
+                    );
+                }
+                let d_at = self.pos;
+                let dev = self.ident()?;
+                if *self.peek() == Tok::LBracket {
+                    return self.err(format!(
+                        "a queue's device is the member's, one per member of `{name}`: write `device {dev}`"
+                    ));
+                }
+                let scoped = format!("{name}.{dev}");
+                if self.devices.iter().any(|d| d.name == scoped) {
+                    return self
+                        .err_at(d_at, format!("`{dev}` is declared twice in queue `{name}`"));
+                }
+                self.device_body(scoped, count, family)?;
+            } else if self.is_kw("engine") && matches!(self.peek_at(1), Tok::Ident(k) if k == "on")
+            {
+                let e_at = self.pos;
+                self.advance();
+                self.advance();
+                if self.queues[qi].has_stage {
+                    return self.err_at(
+                        e_at,
+                        format!("queue `{name}` has one stage: its engine or its `serve`"),
+                    );
+                }
+                let d_at = self.pos;
+                let dev = self.ident()?;
+                let scoped = format!("{name}.{dev}");
+                let Some(di) = self.devices.iter().position(|d| d.name == scoped) else {
+                    return self.err_at(
+                        d_at,
+                        format!("no device `{dev}` in queue `{name}`: declare `device {dev} {{ … }}` above the engine"),
+                    );
+                };
+                self.engine_body(prog, span, e_at, name.clone(), di)?;
+                self.queues[qi].has_stage = true;
+            } else if self.eat_kw("pool") {
                 let p_at = self.pos;
-                let (mut d, _) = self.pool(false)?;
+                self.device_scope = Some(name.clone());
+                let parsed = self.pool(true);
+                self.device_scope = None;
+                let (mut d, on) = parsed?;
+                if let Some((owner, o_at)) = on {
+                    if self.queues[qi].pools.contains(&d.name) {
+                        return self.err(format!("duplicate pool `{}` in queue `{name}`", d.name));
+                    }
+                    self.queues[qi].pools.push(d.name.clone());
+                    self.pools_on.push(device::PoolOn {
+                        pool: prog.pools.len(),
+                        owner,
+                        cap: d.name.clone(),
+                        at: o_at,
+                    });
+                    d.name = format!("{name}.{}", d.name);
+                    prog.pools.push(d);
+                    continue;
+                }
                 if d.count != 1 {
                     return self.err_at(
                         p_at,
@@ -5621,8 +5694,13 @@ mod tests {
                 .contains("also a pool")
         );
         assert!(
-            err("def engine(x) { x } workload { session { turn; \n} }\nserver {\n}")
+            err("stage svc : fifo; def svc(x) { x } workload { session { turn; \n} }\nserver {\n}")
                 .contains("also a stage")
+        );
+        // `engine` is the keyword of an engine's declaration
+        assert!(
+            err("def engine(x) { x } workload { session { turn; \n} }\nserver {\n}")
+                .contains("a word of the language")
         );
         // the name of a statement body's attribute is not a use
         parse(&main_source(&format!(

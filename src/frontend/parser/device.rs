@@ -94,11 +94,17 @@ impl Parser {
             return self.err_at(at, format!("`{name}` is declared twice"));
         }
         let array = self.array_count()?;
+        self.device_body(name, array.unwrap_or(1), array.is_some())
+    }
+
+    /// `{ resource* }` of a device named `name` (a queue's is `Q.name`), a
+    /// family of `count` when `array`.
+    pub(super) fn device_body(&mut self, name: String, count: usize, array: bool) -> PResult<()> {
         self.expect(&Tok::LBrace)?;
         let mut d = DeviceDecl {
             name,
-            count: array.unwrap_or(1),
-            array: array.is_some(),
+            count,
+            array,
             times: vec![],
             caps: vec![],
         };
@@ -279,6 +285,21 @@ impl Parser {
                 );
             }
         }
+        self.engine_body(prog, span, at, name, dev)
+    }
+
+    /// `{ … }` of the engine `name` on `devices[dev]`, with the device's
+    /// family; a queue's engine is named after the queue.
+    pub(super) fn engine_body(
+        &mut self,
+        prog: &mut Program,
+        span: Option<Span>,
+        at: usize,
+        name: String,
+        dev: usize,
+    ) -> PResult<()> {
+        let (dev_count, dev_array) = (self.devices[dev].count, self.devices[dev].array);
+        let device = self.devices[dev].name.clone();
         self.expect(&Tok::LBrace)?;
         let mut s = StepSpec {
             budget: Expr::Num(f64::INFINITY),

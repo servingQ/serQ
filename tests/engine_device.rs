@@ -13,14 +13,50 @@ fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// The stage the programs here name `engine` is named `vllm`: `engine` is
+/// the keyword of the form, so an engine cannot be called it. Both sides of
+/// a comparison are renamed alike, the keyword left where it is one.
+fn named(src: &str) -> String {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::new();
+    let mut rest = src;
+    while let Some(i) = rest.find("engine") {
+        let before = rest[..i].chars().next_back();
+        let after = rest[i + 6..].chars().next();
+        out.push_str(&rest[..i]);
+        let whole = !before.is_some_and(word) && !after.is_some_and(word);
+        // the keyword: `engine NAME on`, `engine NAME[`, a queue's `engine on`
+        let tail = rest[i + 6..].trim_start();
+        let next: String = tail.chars().take_while(|c| word(*c)).collect();
+        let after_next = tail[next.len()..].trim_start();
+        // right after the keyword, the word is the engine's name
+        let named_here = out.trim_end().ends_with("engine")
+            && out.trim_end().len() < out.len()
+            && !out.trim_end()[..out.trim_end().len() - 6]
+                .chars()
+                .next_back()
+                .is_some_and(word);
+        let keyword = !named_here
+            && (next == "on"
+                || (!next.is_empty()
+                    && (after_next.starts_with("on ") || after_next.starts_with('['))));
+        out.push_str(if whole && !keyword { "vllm" } else { "engine" });
+        rest = &rest[i + 6..];
+    }
+    out.push_str(rest);
+    out
+}
+
 fn ir(src: &str, base: Option<&Path>, ov: &Overrides) -> String {
-    let p = compile_source_at(&common::main_source(src), base, ov)
+    let src = named(src);
+    let p = compile_source_at(&common::main_source(&src), base, ov)
         .unwrap_or_else(|e| panic!("{e}\n{src}"));
     serde_json::to_string_pretty(&p).unwrap()
 }
 
 fn error(src: &str) -> String {
-    match compile_source_at(&common::main_source(src), None, &common::horizon(10.0)) {
+    let src = named(src);
+    match compile_source_at(&common::main_source(&src), None, &common::horizon(10.0)) {
         Ok(_) => panic!("links:\n{src}"),
         Err(e) => e,
     }
@@ -320,7 +356,7 @@ fn the_design_refuses_what_it_says() {
                 "pool reqs on engine { }",
                 "pool reqs on engine { } pool enc on gpu { }",
             ),
-        "which is `engine`'s KV",
+        "which is `vllm`'s KV",
     );
     // the engine's three parts
     refused(
@@ -511,5 +547,94 @@ stage engine[2] : step {{ budget 8; cost 1; memory kv; }}
              admit waiting while (running.preempted == 0) each at most (c); }",
         ),
         "is a family, and its `waiting.count`",
+    );
+}
+
+/// Inside a `queue`, `device gpu` is the member's and `engine on gpu` is
+/// the queue's stage: `examples/pd-disaggregation/llmd_nixl_pull.sq` with
+/// both pods written so has its IR. The decoder's holds name `kv` first,
+/// so its device pool is admitted by its engine; the prefiller's are not.
+#[test]
+fn a_queue_holds_its_engine() {
+    let base = root().join("examples/pd-disaggregation");
+    let old = std::fs::read_to_string(base.join("llmd_nixl_pull.sq")).unwrap();
+    let mut new = old.clone();
+    for (q, cap, blocks) in [("P", "max_seqsP", "blocksP"), ("D", "max_seqsD", "blocksD")] {
+        let via = if q == "D" { " admit via D;" } else { "" };
+        new = replaced(
+            &new,
+            &[(
+                &format!(
+                    "    pool reqs {{ cap {cap}; admit via {q}; }}
+    pool kv {{ cap {blocks} * bs; block bs; evict lru; preempt lifo;{via} }}
+    serve step {{
+      budget B;
+      cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+      memory kv;
+    }}
+"
+                ),
+                &format!(
+                    "    device gpu {{ compute (t) = t * a; hbm (k) = omega + beta * k; kv cap {blocks} * bs; }}
+    engine on gpu {{
+      reqs cap {cap};
+      tokens cap B;
+      schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+      execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
+    }}
+    pool reqs on {q} {{ queue fifo; }}
+    pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
+"
+                ),
+            )],
+        );
+    }
+    let ov = common::horizon(100.0);
+    assert_eq!(ir(&old, Some(&base), &ov), ir(&new, Some(&base), &ov));
+}
+
+#[test]
+fn a_queues_engine_is_its_stage() {
+    let pod = |items: &str| {
+        format!(
+            "queue E : prefill {{
+  {items}
+  prefill (prompt) {{
+    hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, prompt)) growing kv; }}
+  }}
+}}
+workload {{ arrive batch(1); init {{ set prompt = 2; }} }}
+server {{ E.prefill (prompt); }}
+"
+        )
+    };
+    let device = "device gpu { t1 (x) = 1; kv cap 10; }";
+    let engine = "engine on gpu { tokens cap 4; schedule { advance running; admit waiting while (running.preempted == 0); } execute (t1(tokens)); }";
+    let ov = common::horizon(10.0);
+    ir(
+        &pod(&format!("{device} {engine} pool kv on gpu {{ }}")),
+        None,
+        &ov,
+    );
+    refused(
+        &pod(&format!(
+            "{} {engine} pool kv on gpu {{ }}",
+            device.replace("gpu", "gpu[2]")
+        )),
+        "a queue's device is the member's",
+    );
+    refused(
+        &pod(&format!(
+            "{device} {engine} serve fifo; pool kv on gpu {{ }}"
+        )),
+        "is one stage",
+    );
+    refused(
+        &pod(&format!("{engine} {device} pool kv on gpu {{ }}")),
+        "no device `gpu` in queue `E`",
+    );
+    refused(
+        &pod(&format!("{device} {engine} {engine} pool kv on gpu {{ }}")),
+        "has one stage",
     );
 }

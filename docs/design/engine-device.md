@@ -70,7 +70,9 @@ pool reqs on vllm { queue fifo; }
   engine writes `+` for `max`. `cost` is only a request's work.
 - **Names.** `engine` is a keyword, so an engine is named for what it
   models (`vllm`, `sglang`, `tgi`) or `llm`; `docs/writing-programs.md`'s
-  `engine` row moves with the implementation.
+  `engine` row moves with the implementation. Inside a `queue`, `device gpu`
+  is the member's (`Q.gpu`, a family as the queue is) and `engine on gpu`
+  is the queue's stage, named after it, so `pool reqs on Q`.
 
 Link errors, each with its reason: a pool on no such capacity, or with
 `cap` or `admit via`; an undeclared capacity; a capacity declared as a pool
