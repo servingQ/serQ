@@ -128,9 +128,9 @@ An engine holds what lasts across iterations and what bounds each one.
 
   ```
   let NAME = expr ;                                         -- before every other statement
-  advance running [only ( p )] [ORDER] [, each at most ( e )] ;   -- today's serve
-  admit waiting [only ( p )] [while ( e )] [, each at most ( e )] ;   -- today's admit
-  exclusive prefill [, each at most ( e )] ;                -- today's serve exclusive prefill
+  advance running [only ( p )] [ORDER] [each at most ( e )] ;     -- today's serve
+  admit waiting [only ( p )] [while ( e )] [each at most ( e )] ;  -- today's admit
+  exclusive prefill [each at most ( e )] ;                        -- today's serve exclusive prefill
   branch ( e ) { … } [else { … }]
   set NAME = e ;
   ```
@@ -146,6 +146,11 @@ An engine holds what lasts across iterations and what bounds each one.
   is no 0 that means none. A decode is not named. It has one token left,
   and the cap never reaches it.
 
+  The clauses follow their statement without a comma, as `only` and `by`
+  do today, in one order: `only`, then `ORDER` or `while`, then `each at
+  most`, so a statement has one spelling. `each` says the cap is one run's;
+  `at most (e)` alone would also read as the statement's total.
+
   `exclusive prefill` is neither list's: a waiting prefill that fits
   displaces the running decodes already chosen. It stays a rule whose
   meaning is the language's ([exclusive prefill](exclusive-prefill.md)).
@@ -155,9 +160,9 @@ An engine holds what lasts across iterations and what bounds each one.
   ```
   schedule {
     let cap = running.count + waiting.count > 1 ? max_per_request : inf;
-    advance running, each at most (cap);
+    advance running each at most (cap);
     branch (running.preempted == 0) {
-      admit waiting, each at most (cap);
+      admit waiting each at most (cap);
     }
   }
   ```
@@ -330,9 +335,9 @@ moves above.
     tokens cap B;                          // max_num_batched_tokens
     schedule {
       let cap = running.count + waiting.count > 1 ? max_per_request : inf;
-      advance running, each at most (cap);
+      advance running each at most (cap);
       branch (running.preempted == 0) {
-        admit waiting, each at most (cap);
+        admit waiting each at most (cap);
       }
     }
     execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
@@ -501,6 +506,10 @@ ENGINE`; `schedule` and `execute`.
   item, but leaves the condition, which is decided every iteration from the
   lists, in a declaration. In the schedule, as a `let`, the logic sits where
   it is decided.
+- **`advance running, each at most (cap)`.** The comma came from the
+  English sentence. Every other clause of a statement follows it without
+  one (`serve only (p) by (k)`, `admit only (p) while (e)`), so the comma made
+  one clause look like another kind of construct.
 - **`reqs.items` for the items capped.** `reqs` is a pool of slots, and the
   cap is on the engine's runs, which TGI has without a `reqs` pool
   (`examples/engines/tgi.sq` declares `kv` alone).
