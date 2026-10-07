@@ -58,6 +58,8 @@ PATHS = {
     "input_processor.py": "vllm/v1/engine/input_processor.py",
     "nixl/push_worker.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/push_worker.py",
     "config/scheduler.py": "vllm/config/scheduler.py",
+    "config/vllm.py": "vllm/config/vllm.py",
+    "engine/core.py": "vllm/v1/engine/core.py",
     "request.py": "vllm/v1/request.py",
     # the NIXL connector's scheduler side (prefill/decode disaggregation)
     "nixl/base_scheduler.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_scheduler.py",
