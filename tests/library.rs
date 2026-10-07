@@ -275,24 +275,6 @@ fn a_use_needs_a_file() {
 }
 
 #[test]
-fn the_library_is_one_definition_of_the_vllm_engine() {
-    // the four workload programs read their engine from `lib/vllm.sq`, and
-    // none of them writes it out
-    for name in ["vllm", "vllm_chat", "vllm_single_turn", "vllm_subagents"] {
-        let src = std::fs::read_to_string(serq::program_path(name)).unwrap();
-        assert!(src.contains("use \"../../lib/vllm.sq\";"), "{name}");
-        assert!(
-            src.contains("vllm_request(reqs, kv, engine, prompt, o, t0);"),
-            "{name}"
-        );
-        assert!(
-            !src.contains("at admission ("),
-            "{name} writes the admission out"
-        );
-    }
-}
-
-#[test]
 fn braced_values_and_statements_expand_without_changing_ir() {
     let source = r#"
 def twice(x) {

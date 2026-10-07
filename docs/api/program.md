@@ -170,11 +170,10 @@ is reported in the library, with the uses it was expanded from.
 ```serq
 use "../../lib/vllm.sq";
 …
-server {
-  set t0 = now;
-  set prompt = K + n;
-  vllm_request(reqs, kv, engine, prompt, o, t0);
-  observe response = now - t0;
+stage engine : step {
+  budget B;
+  chunk long_prefill(reqs, chunk_cap);
+  …
 }
 ```
 

@@ -47,7 +47,23 @@ fn main() {
   server {
     set t0 = now;
     set prompt = K + n;
-    vllm_request(reqs, kv, engine, prompt, o, t0);
+    // A slot of `reqs` and the blocks of `kv`. The scheduler looks up the
+    // prefix hit when it admits (scheduler.py:932-939) and allocates the hit
+    // plus the chunk the budget allows (scheduler.py:1078-1128, 1214-1226);
+    // docs/language.md §7 "Admission" has the argument. `known` is every
+    // token the request has: the prompt, or after a preemption the position
+    // it had reached plus the token sampled there (vLLM keeps the generated
+    // tokens and drops only their KV, scheduler.py:1560-1561).
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(engine))))
+         at admission (known = computed < prompt ? prompt : computed + 1,
+                       hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
+      set c = min(cached, reusable(known, blocksize(kv)));
+      observe hit = c > 0;                    // any reused block, again after a preemption
+      observe prefill_tokens = known - c;
+      run engine prefill (cost(engine, known - c)) growing kv;
+      branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
+      run engine decode (cost(engine, o - 1 - (known - prompt))) growing kv;
+    } cache (cost(reqs, kv, prompt + o));
     observe response = now - t0;
   }
 
