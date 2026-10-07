@@ -55,8 +55,9 @@ pool reqs on engine { queue fifo; }
   `advance running` is its running loop (`scheduler.py:626-823`), `admit
   waiting` its waiting loop (`:872-1128`), skipped in a step that preempted
   (`:869`). Both spend `tokens`, in the order written; SGLang and TGI write
-  other orders. `each at most (e)` caps one run's tokens, read per run as
-  `only` is, with no comma and in one clause order (`only`, `by`/`while`,
+  other orders. `each at most (e)` caps one run's tokens, evaluated once at
+  the start of the iteration and applied to each run, with no comma and in
+  one clause order (`only`, `by`/`while`,
   `each at most`); no cap is `inf`, not 0. A decode is not named: it has one
   token left (`scheduler.py:670-678`). `let` stands first and is read at the start.
 - **What a schedule reads** is named after its list: `running.count`
