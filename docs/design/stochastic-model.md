@@ -544,7 +544,7 @@ The three numbers the paper works with are functionals of $X$:
 | $L_P$, turns in the prefill stage | sessions queued at `reqs`/`kv`, plus residents whose run is a `prefill` | `queued(reqs)`, `residents - decoders` at the `Budget` moment |
 | $L_D$, turns in the decode batch | residents whose run is a `decode` | `decoders` |
 | resident bytes | $U_{kv}$ | `used(kv)` |
-| the hit rate $h$ | the fraction of admissions that consumed a reusable prefix | `observe hit = c > 0;` with `c = min(cached, reusable(known, blocksize(kv)))` (`lib/vllm.sq:34-35`) |
+| the hit rate $h$ | the fraction of admissions that consumed a reusable prefix | `observe hit = c > 0;` with `c = min(cached, reusable(known, blocksize(kv)))` (`examples/multi-turn/vllm.sq:84-85`) |
 
 The paper's propositions are about these projections under hypotheses
 (Poisson arrivals to the prefill queue, a PS decode station, a fixed $h$).

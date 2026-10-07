@@ -290,7 +290,12 @@ workload {
 server {
   set t0 = now;
   set prompt = K + n;
-  vllm_request(reqs, kv, engine, prompt, o, t0);
+  hold reqs (cost(reqs, 1)), kv (…) at admission (…) {
+    …
+    run engine prefill (cost(engine, known - c)) growing kv;
+    …
+    run engine decode (cost(engine, o - 1 - (known - prompt))) growing kv;
+  } cache (cost(reqs, kv, prompt + o));
   observe response = now - t0;
 }
 ```
@@ -784,8 +789,8 @@ Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the
 hold is not (`cache` is read when the session releases, `Serq/Exec.lean`'s
 `release` and the interpreter agree). `at admission (x = e)` gives the
-header a place to name what it is written in terms of, as `lib/vllm.sq`
-does:
+header a place to name what it is written in terms of, as
+`examples/multi-turn/vllm.sq` does:
 
 ```
 hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(engine))))
@@ -1019,8 +1024,8 @@ scheduler at the pinned revision (`ref/vllm` at 0c87a197; the A100 testbed
 runs vLLM 0.30.0, whose scheduler gives the same answers on the first six
 scenarios below). It is a correspondence under synchronous scheduling at that
 revision, not to the latest vLLM ([the vLLM use case](use-cases/vllm.md)).
-`lib/vllm.sq`'s `vllm_request`, the engine of the workload examples, is a
-simpler one: it does not `reserve`, takes its hit from the cache alone
+The `server` block of `examples/multi-turn/vllm.sq`, the engine of the
+workload examples, is a simpler one: it does not `reserve`, takes its hit from the cache alone
 rather than from the previous prompt, and caches `prompt + o`.
 
 | vLLM | serQ | Where |
@@ -1059,7 +1064,7 @@ blocks, asynchronous scheduling ([A100 testbed](#8-vllm-on-the-a100-testbed)), a
 
 ### Admission
 
-The header of the `hold` in `lib/vllm.sq`'s `vllm_request` is the
+The header of the `hold` in `examples/multi-turn/vllm.sq`'s server is the
 prefix-cache lookup and the allocation of the first chunk, and both happen
 when the scheduler admits the request, not when it queues. `known` is
 every token the request has: the prompt, or after a preemption the tokens

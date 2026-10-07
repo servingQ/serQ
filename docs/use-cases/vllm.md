@@ -22,7 +22,7 @@ The scheduler guards whether victim blocks can actually be freed and manages def
 --8<-- "examples/multi-turn/vllm.sq"
 ```
 
-The program shares its request definition with the other existing workloads:
+The program's definitions, `reusable` and `long_prefill`, are a library the other vLLM programs share:
 
 ```serq title="lib/vllm.sq"
 --8<-- "lib/vllm.sq"
@@ -34,7 +34,7 @@ The program shares its request definition with the other existing workloads:
 | Request slots and KV space | `hold`, admission bindings, `reserve`, `growing` | Tagged fit/lookahead conditions are not fully validated |
 | FCFS/priority | Queue order and `preempt lifo`; PRIORITY is `preempt by (-priority, -t0) requeue tail` beside `queue by (priority, t0)` | No oracle scenario checks the PRIORITY victim |
 | Shared prefix | `cachedin`, `reuse`, `cache` | Cache identity is session-based, not content-key shared objects |
-| Local decode preemption | `computed`-aware `known` in `vllm_request` | Latest-tag recovery paths need differential validation |
+| Local decode preemption | `computed`-aware `known` in the `server` block | Latest-tag recovery paths need differential validation |
 | Async and speculative execution | Cost expressions, explicit leases/transfers | In-flight scheduler state and proposed/accepted progress remain absent |
 
 ## Validation
