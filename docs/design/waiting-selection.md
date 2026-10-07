@@ -35,8 +35,8 @@ lexicographically; ties preserve enqueue order, so no numeric class offset
 or serial-number bound is needed. A zero aging threshold can disable aging
 with an explicit `max_wait > 0` guard, as in the executable example.
 
-```serq title="examples/single-turn/ascend_aging.sq"
---8<-- "examples/single-turn/ascend_aging.sq"
+```serq title="examples/vendors/ascend.sq"
+--8<-- "examples/vendors/ascend.sq"
 ```
 
 ## Selection and admission
