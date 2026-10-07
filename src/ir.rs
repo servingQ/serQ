@@ -245,7 +245,7 @@ pub enum CtxVar {
     Position,
     /// Iteration body: the sessions this iteration has admitted so far.
     Admitted,
-    /// Iteration body: 1 if this iteration has preempted a resident.
+    /// Iteration body: the residents this iteration has preempted so far.
     Preempted,
     /// Iteration claims: the tokens the stage's residents could take in
     /// this iteration if the budget were unlimited (`min(1, remaining)` for
