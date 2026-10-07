@@ -73,12 +73,16 @@ pool reqs on vllm { queue fifo; }
   `engine` row moves with the implementation.
 
 Link errors, each with its reason: a pool on no such capacity, or with
-`cap` or `admit via`; an undeclared capacity; two pools on one capacity;
-two engines, or two candidate KV pools, on one device; a time resource
-outside `execute`; no `tokens cap`; a constant cap ≤ 0 (the per-run one
-once linked); `inf` inside a cap's arithmetic; `[N]` on a pool `on` a
-family; a `let` not first or read outside `each at most`; two `each at
-most` that differ.
+`cap` or `admit via`; an undeclared capacity; a capacity declared as a pool
+twice; two engines, or two candidate KV pools, on one device; a time
+resource outside `execute`, or a `def` named like one; no `tokens cap`, or
+a constant one ≤ 0; an `each at most` that chooses anything but constants
+(its condition may read the iteration), or one ≤ 0 once the `let`s are
+known, or `inf` inside its arithmetic; `[N]` on a pool `on` a family; a
+`let` not first or read outside `each at most`; two `each at most` that
+differ; a family engine's `waiting.count` (no member may count every
+member's queues); a queue named `running` or `waiting`. A capacity's `cap`
+is checked as a pool's is.
 
 ## Lowering
 
@@ -104,8 +108,10 @@ as before:
 - **`inf` is written 0 by the linker**, once the `let`s have their values:
   an outcome of `inf` (the whole cap, or a branch of a `?:`) is no cap,
   which the kernel writes 0 as `min(remaining, inf)` gives. The linker does
-  it for every step, so an old `chunk inf` is 0 too; an engine's outcome at
-  or below 0 does not link.
+  it for every step, so an old `chunk inf` is 0 too. An engine's outcomes
+  are constants once linked, so one at or below 0, which the kernel would
+  read as no cap, does not link: the program never means one thing and runs
+  another.
 
 `tests/engine_device.rs` holds `vllm.sq`, `sglang.sq` and `tgi.sq` written
 as engines to their programs' IR, byte for byte, as it holds each stage form
@@ -138,6 +144,13 @@ iteration); about twelve forms and ten link errors come.
 - **A default schedule, an `admit` method, `admit from q`, `uses …
   overlap`, a `batch` block, `memory` from `growing`**: a rule back in the
   language, a second place for what is said, or (TGI) a pool that never grows.
+- **A device pool always engine-admitted, the Lean fragment taught it**:
+  `deployment()` requires an engine-admitted pool to preempt nothing, and
+  `kv` preempts. Not needed: a device pool is admitted only where a hold
+  waits in its queue. The cost is that `pool kv on gpu` alone does not say
+  whether the IR has `admit_via`; the holds' order does, and with it which
+  pool's keys may read the engine's `state` (`src/ir.rs`, "the keys of a
+  pool it admits").
 - **Open**: names for a run's own attributes (`decoding`, `remaining`) and
   the eviction key's `waiting` (`src/frontend/link.rs:236`), which reads as
   the list; `batch.kv_decode`; the queue a hold waits in; `exclusive

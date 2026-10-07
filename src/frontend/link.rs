@@ -593,7 +593,11 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             StageKind::Step(sp) => CStageKind::Step(CStep {
                 budget: lk.expr(&sp.budget)?,
                 cost: lk.expr(&sp.cost)?,
-                chunk: per_run_chunk(lk.expr(&sp.chunk)?, sp.per_run, &s.name)?,
+                chunk: if sp.per_run {
+                    lk.per_run_cap(&sp.chunk, &s.name)?
+                } else {
+                    no_cap_is_zero(lk.expr(&sp.chunk)?)
+                },
                 granule: match &sp.granule {
                     None => None,
                     Some(g) => {
@@ -1531,6 +1535,36 @@ impl Linker<'_> {
         Ok(v)
     }
 
+    /// An engine's `each at most`: its condition may read the iteration's
+    /// start, and each cap it chooses is a constant once the `let`s are
+    /// known, above 0 (`inf` for none, which the kernel writes 0). A cap of 0
+    /// or below would run as none, since the kernel reads 0 so.
+    fn per_run_cap(&self, e: &Expr, stage: &str) -> LResult<CExpr> {
+        Ok(match e {
+            Expr::Located(_, a) => self.per_run_cap(a, stage)?,
+            Expr::Cond(k, a, b) => CExpr::Cond(
+                Box::new(self.expr(k)?),
+                Box::new(self.per_run_cap(a, stage)?),
+                Box::new(self.per_run_cap(b, stage)?),
+            ),
+            leaf => {
+                let v = self.eval_const(leaf).map_err(|_| {
+                    LinkError::new(format!(
+                        "engine `{stage}`: an `each at most` chooses among constants: its \
+                         condition may read the iteration, the cap it gives a run may not"
+                    ))
+                })?;
+                if v.is_nan() || v <= 0.0 {
+                    return Err(LinkError::new(format!(
+                        "engine `{stage}`: `each at most ({v})`: a run would be given nothing, \
+                         and the kernel reads 0 as no cap; no cap is written `inf`"
+                    )));
+                }
+                CExpr::Num(if v.is_infinite() { 0.0 } else { v })
+            }
+        })
+    }
+
     /// A constant that counts (sessions, arrivals): a whole number from `min`
     /// to `max`. A cast would have made -1 a 0, 2.5 a 2 and 1e30 a run that
     /// never starts (#289).
@@ -1969,22 +2003,15 @@ pub(crate) fn bind_index(e: &mut Expr, j: &str, k: f64) {
 
 /// A step's chunk as the kernel reads it: an outcome of `inf` (the whole
 /// chunk, or a branch of a `?:`) is no cap, which the kernel writes 0, as
-/// `min(remaining, inf)` would give. An engine's `each at most` (`per_run`)
-/// may not be 0 or below, which the kernel would read as no cap.
-fn per_run_chunk(c: CExpr, per_run: bool, stage: &str) -> Result<CExpr, LinkError> {
-    Ok(match c {
+/// `min(remaining, inf)` would give.
+fn no_cap_is_zero(c: CExpr) -> CExpr {
+    match c {
         CExpr::Num(v) if v == f64::INFINITY => CExpr::Num(0.0),
-        CExpr::Num(v) if per_run && v <= 0.0 => {
-            return Err(LinkError::new(format!(
-                "engine `{stage}`: `each at most ({v})`: a run would be given nothing; no cap is \
-                 written `inf`"
-            )));
-        }
         CExpr::Cond(k, a, b) => CExpr::Cond(
             k,
-            Box::new(per_run_chunk(*a, per_run, stage)?),
-            Box::new(per_run_chunk(*b, per_run, stage)?),
+            Box::new(no_cap_is_zero(*a)),
+            Box::new(no_cap_is_zero(*b)),
         ),
         c => c,
-    })
+    }
 }

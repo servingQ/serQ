@@ -369,6 +369,64 @@ fn the_design_refuses_what_it_says() {
         "would be given nothing",
     );
     refused(
+        &engine("advance running each at most (-4);"),
+        "would be given nothing",
+    );
+    refused(
+        &engine("advance running each at most (2 - 2);"),
+        "would be given nothing",
+    );
+    refused(
+        &engine("let t = running.count > 1 ? -1 : inf; advance running each at most (t);"),
+        "would be given nothing",
+    );
+    refused(
+        &engine("advance running each at most (running.count);"),
+        "chooses among constants",
+    );
+    // a `let` reads the ones above it
+    let ov = common::horizon(20.0);
+    assert_eq!(
+        ir(
+            &engine(
+                "let a = 4; let b = a + 1; advance running each at most (b); \
+                 admit waiting while (running.preempted == 0) each at most (b);"
+            ),
+            None,
+            &ov
+        ),
+        ir(&stage("chunk 5;"), None, &ov)
+    );
+    // one device runs one engine, with pools on it or none
+    refused(
+        &format!(
+            "device gpu {{ t (x) = 1; }}
+engine e1 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(tokens)); }}
+engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(tokens)); }}
+{WORKLOAD}"
+        ),
+        "one device runs one engine",
+    );
+    refused(
+        &engine(ok).replace(
+            "pool kv on gpu { preempt lifo; }",
+            "pool kv on gpu { } pool kv on gpu { }",
+        ),
+        "declared as a pool twice",
+    );
+    refused(
+        &engine(ok).replacen(
+            "engine engine on gpu",
+            "def step_time(x) { x }\nengine engine on gpu",
+            1,
+        ),
+        "a device's time resource",
+    );
+    refused(
+        &format!("queue waiting : link {{ serve fifo; }} {}", engine(ok)),
+        "a queue needs another name",
+    );
+    refused(
         &engine("advance running; branch (residents == 0) { admit waiting; }"),
         "`running.count`",
     );
@@ -432,4 +490,13 @@ stage engine[2] : step {{ budget 8; cost 1; memory kv; }}
 {work}"
     );
     assert_eq!(ir(&old, None, &ov), ir(&new, None, &ov));
+    // a member's schedule cannot count every member's queues
+    refused(
+        &new.replace(
+            "schedule { advance running; admit waiting while (running.preempted == 0); }",
+            "schedule { let c = waiting.count > 0 ? 2 : inf; advance running each at most (c); \
+             admit waiting while (running.preempted == 0) each at most (c); }",
+        ),
+        "is a family, and its `waiting.count`",
+    );
 }

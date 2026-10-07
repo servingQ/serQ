@@ -1666,11 +1666,12 @@ impl Parser {
             } else if self.eat_kw("pool") {
                 let (d, on) = self.pool(true)?;
                 if let Some((owner, at)) = on {
-                    self.pools_on.push(device::PoolOn {
+                    self.pool_on(device::PoolOn {
                         pool: prog.pools.len(),
                         owner,
+                        cap: d.name.clone(),
                         at,
-                    });
+                    })?;
                 }
                 prog.pools.push(d);
             } else if self.eat_kw("device") {
@@ -2161,6 +2162,12 @@ impl Parser {
             return self.err_at(
                 at,
                 format!("`{name}` is a retired word and names nothing: {now}"),
+            );
+        }
+        if self.is_time_resource(&name) {
+            return self.err_at(
+                at,
+                format!("`{name}` is a device's time resource: name the definition otherwise"),
             );
         }
         if self.defs.iter().any(|d| d.name == name) {
@@ -3149,6 +3156,14 @@ impl Parser {
         }
         if self.queues.iter().any(|q| q.name == name) {
             return self.err_at(at + 1, format!("duplicate queue `{name}`"));
+        }
+        if name == "running" || name == "waiting" {
+            return self.err_at(
+                at + 1,
+                format!(
+                    "`{name}.…` is a value of an engine's schedule; a queue needs another name"
+                ),
+            );
         }
         // `Q[n]` is a family whatever `n`, called by index, and its pools and
         // stages are arrays; `Q` is one queue

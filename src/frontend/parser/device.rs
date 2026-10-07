@@ -38,6 +38,8 @@ pub(super) struct EngineDecl {
 pub(super) struct PoolOn {
     pub pool: usize,
     pub owner: String,
+    /// The capacity's name: the pool's, before a queue prefixes it.
+    pub cap: String,
     pub at: usize,
 }
 
@@ -245,6 +247,16 @@ impl Parser {
             );
         };
         let (dev_count, dev_array) = (self.devices[dev].count, self.devices[dev].array);
+        if let Some(other) = self.engines.iter().find(|e| e.device == device) {
+            return self.err_at(
+                at,
+                format!(
+                    "`{}` already runs on `{device}`: one device runs one engine, which admits \
+                     its pools",
+                    other.name
+                ),
+            );
+        }
         match (array, dev_array) {
             (Some(n), true) if n == dev_count => {}
             (None, false) => {}
@@ -415,15 +427,22 @@ impl Parser {
             return self.err_at(at, "a schedule needs a statement: what the iteration does");
         }
         // a `let` is read as the iteration starts, where the kernel reads its
-        // per-run cap, and nowhere else
+        // per-run cap, and nowhere else; it may read the ones above it
+        let mut lets = lets;
+        for i in 1..lets.len() {
+            let (above, rest) = lets.split_at_mut(i);
+            rest[0].1.substitute(above);
+        }
         if !lets.is_empty() {
             let mut stray = None;
-            walk(&body, &mut |e, is_cap| {
-                if !is_cap && stray.is_none() {
-                    stray = lets
-                        .iter()
-                        .find(|(n, _)| reads_name(e, n))
-                        .map(|(n, _)| n.clone());
+            visit(&body, &mut |st| {
+                for e in st.exprs() {
+                    if stray.is_none() {
+                        stray = lets
+                            .iter()
+                            .find(|(n, _)| reads_name(e, n))
+                            .map(|(n, _)| n.clone());
+                    }
                 }
             });
             if let Some(n) = stray {
@@ -435,11 +454,19 @@ impl Parser {
                     ),
                 );
             }
-            map_caps(&mut body, &mut |e| e.substitute(&lets));
+            visit_mut(&mut body, &mut |st| {
+                if let Some(c) = st.cap_mut() {
+                    c.substitute(&lets);
+                }
+            });
         }
         // the kernel has one per-run cap for the whole iteration
         let mut caps: Vec<Option<Expr>> = vec![];
-        each_cap(&body, &mut |c| caps.push(c.cloned()));
+        visit(&body, &mut |st| {
+            if let Some(c) = st.cap() {
+                caps.push(c.cloned());
+            }
+        });
         if let Some(first) = caps.first() {
             let same = caps.iter().all(|c| match (c, first) {
                 (Some(a), Some(b)) => a.same_syntax(b),
@@ -655,7 +682,7 @@ impl Parser {
             }
         }
         let mut exclusive = false;
-        walk_stmts(&body, &mut |st| {
+        visit(&body, &mut |st| {
             exclusive |= matches!(st, SStmt::Exclusive { .. })
         });
         if exclusive {
@@ -783,7 +810,7 @@ impl Parser {
                 let declared = self
                     .pools_on
                     .iter()
-                    .any(|po| po.owner == *owner && prog.pools[po.pool].name == c.name);
+                    .any(|po| po.owner == *owner && po.cap == c.name);
                 if !declared {
                     return self.err_at(
                         c.at,
@@ -812,9 +839,21 @@ impl Parser {
                 .map(|r| Expr::Call("queued".into(), vec![Arg::Ref(r)]))
                 .reduce(|a, b| Expr::Binary(BinOp::Add, Box::new(a), Box::new(b)))
                 .unwrap_or(Expr::Num(0.0));
+            let family = prog.stages[e.stage].array;
             let StageKind::Step(s) = &mut prog.stages[e.stage].kind else {
                 unreachable!("an engine is a step stage")
             };
+            if family && step_reads(s, WAITING_COUNT) {
+                return self.err_at(
+                    e.at,
+                    format!(
+                        "`{}` is a family, and its `waiting.count` would read every member's \
+                         queues, which no member's schedule may: count a member's own with \
+                         `queued(…)` where it has an index",
+                        e.name
+                    ),
+                );
+            }
             let binds = [(WAITING_COUNT.to_string(), count)];
             s.chunk.substitute(&binds);
             if let Serve::By(keys) = &mut s.serve {
@@ -827,6 +866,22 @@ impl Parser {
                 substitute_body(body, &binds);
             }
         }
+        Ok(())
+    }
+
+    /// Record that `prog.pools[po.pool]` is `po.owner`'s capacity `po.cap`.
+    pub(super) fn pool_on(&mut self, po: PoolOn) -> PResult<()> {
+        if self
+            .pools_on
+            .iter()
+            .any(|o| o.owner == po.owner && o.cap == po.cap)
+        {
+            return self.err_at(
+                po.at,
+                format!("`{}` of `{}` is declared as a pool twice", po.cap, po.owner),
+            );
+        }
+        self.pools_on.push(po);
         Ok(())
     }
 
@@ -893,69 +948,62 @@ fn reads_name(e: &Expr, n: &str) -> bool {
     e.any(&|x| matches!(x, Expr::Var(v) if v == n))
 }
 
-fn walk_stmts(body: &[SStmt], f: &mut impl FnMut(&SStmt)) {
+/// Each statement of a schedule, a `branch`'s included, before its own.
+fn visit(body: &[SStmt], f: &mut impl FnMut(&SStmt)) {
     for st in body {
         f(st);
         if let SStmt::Branch(_, a, b) = st {
-            walk_stmts(a, f);
-            walk_stmts(b, f);
+            visit(a, f);
+            visit(b, f);
         }
     }
 }
 
-/// Every expression of a schedule, and whether it is an `each at most`.
-fn walk(body: &[SStmt], f: &mut impl FnMut(&Expr, bool)) {
+fn visit_mut(body: &mut [SStmt], f: &mut impl FnMut(&mut SStmt)) {
     for st in body {
-        match st {
-            SStmt::Advance { only, order, cap } => {
-                only.iter().for_each(|e| f(e, false));
+        f(st);
+        if let SStmt::Branch(_, a, b) = st {
+            visit_mut(a, f);
+            visit_mut(b, f);
+        }
+    }
+}
+
+impl SStmt {
+    /// The per-run cap of a statement that gives tokens: `Some(None)` for
+    /// one written without it, `None` for a statement that gives none.
+    fn cap(&self) -> Option<Option<&Expr>> {
+        match self {
+            SStmt::Advance { cap, .. } | SStmt::Admit { cap, .. } | SStmt::Exclusive { cap } => {
+                Some(cap.as_ref())
+            }
+            SStmt::Branch(..) | SStmt::Set(..) => None,
+        }
+    }
+
+    fn cap_mut(&mut self) -> Option<&mut Expr> {
+        match self {
+            SStmt::Advance { cap, .. } | SStmt::Admit { cap, .. } | SStmt::Exclusive { cap } => {
+                cap.as_mut()
+            }
+            SStmt::Branch(..) | SStmt::Set(..) => None,
+        }
+    }
+
+    /// The statement's own expressions other than its cap.
+    fn exprs(&self) -> Vec<&Expr> {
+        match self {
+            SStmt::Advance { only, order, .. } => {
+                let mut v: Vec<&Expr> = only.iter().collect();
                 if let Some(Serve::By(keys)) = order {
-                    keys.iter().for_each(|e| f(e, false));
+                    v.extend(keys);
                 }
-                cap.iter().for_each(|e| f(e, true));
+                v
             }
-            SStmt::Admit { only, gate, cap } => {
-                only.iter().chain(gate.iter()).for_each(|e| f(e, false));
-                cap.iter().for_each(|e| f(e, true));
-            }
-            SStmt::Exclusive { cap } => cap.iter().for_each(|e| f(e, true)),
-            SStmt::Branch(g, a, b) => {
-                f(g, false);
-                walk(a, f);
-                walk(b, f);
-            }
-            SStmt::Set(_, e) => f(e, false),
-        }
-    }
-}
-
-/// The per-run cap of each statement that gives tokens, in order.
-fn each_cap(body: &[SStmt], f: &mut impl FnMut(Option<&Expr>)) {
-    for st in body {
-        match st {
-            SStmt::Advance { cap, .. } | SStmt::Admit { cap, .. } | SStmt::Exclusive { cap } => {
-                f(cap.as_ref())
-            }
-            SStmt::Branch(_, a, b) => {
-                each_cap(a, f);
-                each_cap(b, f);
-            }
-            SStmt::Set(..) => {}
-        }
-    }
-}
-
-fn map_caps(body: &mut [SStmt], f: &mut impl FnMut(&mut Expr)) {
-    for st in body {
-        match st {
-            SStmt::Advance { cap, .. } | SStmt::Admit { cap, .. } | SStmt::Exclusive { cap } => {
-                cap.iter_mut().for_each(&mut *f)
-            }
-            SStmt::Branch(_, a, b) => {
-                map_caps(a, f);
-                map_caps(b, f);
-            }
-            SStmt::Set(..) => {}
+            SStmt::Admit { only, gate, .. } => only.iter().chain(gate.iter()).collect(),
+            SStmt::Exclusive { .. } => vec![],
+            SStmt::Branch(g, ..) => vec![g],
+            SStmt::Set(_, e) => vec![e],
         }
     }
 }
@@ -1015,4 +1063,41 @@ fn first_pools(stmts: &[Stmt], out: &mut Vec<String>) {
             _ => {}
         }
     }
+}
+
+/// Whether a step's expressions read the name `n`.
+fn step_reads(s: &StepSpec, n: &str) -> bool {
+    let mut exprs: Vec<&Expr> = vec![&s.chunk];
+    if let Serve::By(keys) = &s.serve {
+        exprs.extend(keys);
+    }
+    exprs.extend(s.only.iter());
+    fn body(b: &[IterStmt], out: &mut Vec<Expr>) {
+        for st in b {
+            match st {
+                IterStmt::Serve { only, order } => {
+                    out.extend(only.iter().cloned());
+                    if let Some(Serve::By(keys)) = order {
+                        out.extend(keys.iter().cloned());
+                    }
+                }
+                IterStmt::Admit { only, gate } => out.extend(only.iter().chain(gate).cloned()),
+                IterStmt::Branch(g, a, b) => {
+                    out.push(g.clone());
+                    body(a, out);
+                    body(b, out);
+                }
+                IterStmt::Set(_, e) => out.push(e.clone()),
+            }
+        }
+    }
+    let mut owned = vec![];
+    if let Some(b) = &s.iteration {
+        body(b, &mut owned);
+    }
+    exprs
+        .iter()
+        .copied()
+        .chain(owned.iter())
+        .any(|e| reads_name(e, n))
 }
