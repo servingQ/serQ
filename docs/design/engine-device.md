@@ -105,10 +105,13 @@ An engine holds what lasts across iterations: its capacities and its
   starts (`Moment::Budget`), as a hold's `at admission` header is read once
   at admission:
   - `budget B` is the tokens the iteration executes, all requests together:
-    vLLM's `token_budget` (`scheduler.py:577`), spent by the running and
-    then the waiting (`:626`, `:872`).
+    vLLM's `token_budget` (`scheduler.py:577`). `running` and `waiting` spend
+    it in the order the body writes them; vLLM's running loop runs while it
+    lasts and subtracts from it (`:626`, `:821`), and its waiting loop takes
+    what is left (`:872`, `:1317`).
   - `per request (c)` is the tokens one request executes in the iteration,
-    vLLM's cap on `num_new_tokens` (`:675-676`). No cap is `inf`, or no
+    vLLM's cap on `num_new_tokens`, applied to the running
+    (`:675-676`) and to the waiting it admits (`:1115-1128`). No cap is `inf`, or no
     `per request` at all; there is no 0 that means none. A decode is not
     named. It has one token left to compute and the cap never reaches it,
     so the engine does not need a rule for it. A step that computes more
@@ -116,13 +119,28 @@ An engine holds what lasts across iterations: its capacities and its
     request has left, the run's work, and not the schedule.
   - `granule (g)` is today's `granule`, kept as it is.
 
-  The body runs once per iteration, in order: `serve`, `admit`, `branch`
-  and `set`, as today's `iteration { … }`. vLLM's procedure is written out,
-  `serve; admit while (!preempted);`. `serve only (p)`, `serve by (…)`,
-  `serve decode first` and `serve exclusive prefill` move from stage
-  clauses into the body as its `serve` statement. That leaves one place to
-  write an iteration rather than three: a stage clause, a body, or nothing.
-  The body is required.
+  The body runs once per iteration, in order. Its statements are today's
+  `iteration { … }`, two of them renamed after the two lists a scheduler
+  keeps:
+
+  ```
+  running [only ( p )] [ORDER] ;     -- today's serve: tokens to the residents not yet given any
+  waiting [only ( p )] [while ( e )] ;   -- today's admit: the heads of the engine's queues, each given its tokens
+  exclusive prefill ;                -- today's serve exclusive prefill
+  branch ( e ) { … } [else { … }]
+  set NAME = e ;
+  ```
+
+  vLLM's procedure is written out, `running; waiting while (!preempted);`:
+  its running loop, then its waiting loop. `serve only (p)`, `serve by (…)`
+  and `serve decode first` move from stage clauses into the body as
+  `running only (p)`, `running by (…)` and `running decode first`. That
+  leaves one place to write an iteration rather than three: a stage clause,
+  a body, or nothing. The body is required.
+
+  `exclusive prefill` is neither list's: a waiting prefill that fits
+  displaces the running decodes already chosen. It is written alone, with
+  the `waiting while (!preempted)` the kernel's rule implies (below).
 - **`execute (T)`** is how long the scheduled batch takes. `T` reads the
   batch (`tokens`, `kv_decode`, `kv_prefill`, …) once it is chosen
   (`Moment::Step`), and calls the device's resources by name, which writes
@@ -145,9 +163,9 @@ An engine holds what lasts across iterations: its capacities and its
 - **No `memory`.** The engine's KV is the pool on its device.
 
 Admission is not a method of its own. When an engine admits is the place of
-`admit` in the schedule body, and that place is where engines differ.
-SGLang admits between two serves, and TGI admits only when the last forward
-did not. A method the engine called by itself could not say either. Whom it
+`waiting` in the schedule body, and that place is where engines differ.
+SGLang admits between two `running`s, and TGI admits only when the last
+forward did not. A method the engine called by itself could not say either. Whom it
 admits, in what order and how many are already said elsewhere: the pool's
 `queue`, the engine's `cap`, and the hold's `at admission` header.
 
@@ -198,8 +216,9 @@ Each says why in its message.
 | `device D { X cap M; }` + `pool X on D { o }` | `pool X { cap M; o; admit via E; }`, E the engine on D |
 | `engine E on D { R cap S; … }` + `pool R on E { o }` | `pool R { cap S; o; admit via E; }` |
 | `schedule budget B, per request (c) { b }` | `budget B; chunk c'; iteration { b }`, where `c'` is `c` with an `inf` outcome (the whole of it, or a branch of a `?:`) written `0`, and is `0` with no `per request` |
-| `schedule … { serve [ORDER]; admit while (!preempted); }` | no `iteration`, `serve ORDER` (vLLM's procedure) |
-| `schedule … { serve exclusive prefill; admit while (!preempted); }` | no `iteration`, `serve exclusive prefill` |
+| `running` / `waiting` in a body | `CIter::Serve` / `CIter::Admit` |
+| `schedule … { running [ORDER]; waiting while (!preempted); }` | no `iteration`, `serve ORDER` (vLLM's procedure) |
+| `schedule … { exclusive prefill; waiting while (!preempted); }` | no `iteration`, `serve exclusive prefill` |
 | `execute (T)` | `cost T` |
 | the engine | `stage E : step { …; memory X; }`, X the pool on D |
 | a device's time resource `f(k)` | its body, inlined |
@@ -209,7 +228,7 @@ generator (`scripts/gen_lean_oracle.py`'s `only_body` and `chunk_rule`),
 `scripts/lean_drt.py`, `scripts/lean_bench.py` and the oracle read a vLLM
 engine as a step with no body, and its chunk as a constant or
 `Cond[test, c, 0]`. A frontend that wrote the vLLM body out would give that
-program another IR. `iteration { serve; admit while (!preempted); }` added
+program another IR. Today's `iteration { serve; admit while (!preempted); }` added
 to `examples/multi-turn/vllm.sq` today links, but its IR differs from the
 program's, and the Lean fragment accepts no body but `serve only`'s. So the
 parser writes the canonical form, as the linker already writes
@@ -244,8 +263,8 @@ The After does not parse yet. Its kernel is the Before.
   engine engine on gpu {
     reqs cap max_seqs;                     // max_num_seqs
     schedule budget B, per request (residents + queued(reqs) > 1 ? max_per_request : inf) {
-      serve;
-      admit while (!preempted);
+      running;
+      waiting while (!preempted);
     }
     execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
   }
@@ -258,7 +277,7 @@ The After does not parse yet. Its kernel is the Before.
 The condition beside it is the program's too, written where it applies.
 
 `examples/engines/sglang.sq`: the body is the program's already, and it
-moves as it is.
+moves with `serve` and `admit` renamed.
 
 ```
   engine engine on gpu {
@@ -266,7 +285,19 @@ moves as it is.
     state ratio = r0;
     state backlog = 0;    // requests were waiting when the last iteration ended
     schedule budget B {
-      … as today's iteration body …
+      // fully idle since the last iteration: no batch, and none waited
+      branch (residents == 0 && backlog == 0) { set ratio = r0; }
+      running only (!decoding);                          // the chunked request
+      waiting;                                           // and new prefills, alone
+      branch (tokens == 0) {                             // no prefill: a decode batch
+        running;
+        branch (preempted > 0) {
+          set ratio = max(r_min, min(1, retract_steps / M));
+        } else {
+          set ratio = max(r_min, ratio - r_decay);
+        }
+      }
+      set backlog = queued(reqs) > 0;
     }
     execute (max(hbm(kv_decode + kv_prefill), compute(tokens)));
   }
@@ -282,8 +313,8 @@ Placement says it:
   engine engine on gpu {
     state just = 0;                // the last forward admitted
     schedule budget B {
-      serve;
-      branch (just == 0 || residents == 0) { admit; }
+      running;
+      branch (just == 0 || residents == 0) { waiting; }
       set just = admitted > 0;
     }
     execute (max(hbm(kv_decode + kv_prefill), compute(tokens)));
@@ -298,7 +329,7 @@ The decode pod of `examples/pd-disaggregation/llmd_nixl_pull.sq`, inside a
     device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocksD * bs; }
     engine on gpu {
       reqs cap max_seqsD;
-      schedule budget B { serve; admit while (!preempted); }
+      schedule budget B { running; waiting while (!preempted); }
       execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
     }
     pool reqs on D { queue fifo; }                                    // skipped_waiting: the KV arrived
@@ -335,9 +366,10 @@ Parser and linker work, and the documentation:
   lowering above, and the link errors;
 - every program with a step stage (21) is rewritten. The old spellings
   (`stage … : step`, `memory`, `admit via`, `chunk`, `cost` on a step,
-  `iteration`) are then refused with the new one in the message, as
-  [one admission](one-admission.md) retired its: two spellings of one
-  engine would be two constructs with one meaning;
+  `iteration`, `serve` and `admit` as statements) are then refused with
+  the new one in the message, as [one admission](one-admission.md)
+  retired its: two spellings of one engine would be two constructs with one
+  meaning;
 - `lib/vllm.sq` loses `long_prefill`, and `examples/oracle/vllm_request.sq`
   and its scenarios say no cap as `inf` where they pass `chunk=0`. The
   oracle IR files do not move;
@@ -383,8 +415,30 @@ Built as a stack, each part with its programs' IR compared before and after:
   executed tokens. `per request` in the `budget` header says which of the
   two limits it is.
 - **An `admit` method, optional.** Rejected above: when to admit is the
-  body's, and the rest is the pool's and the hold's. An optional method
+  body's (`waiting`'s place), and the rest is the pool's and the hold's. An optional method
   would also need a default, which is criterion 2's problem again.
+- **`serve` and `admit`.** `serve` named the whole of serving in common
+  speech, and in a `queue` it is the station's service (`serve step { … }`),
+  so one word had two meanings (criterion 0). Its partner `admit` named an
+  act where `serve` named the residents' share, and the pair did not read as
+  the running and the waiting. `running` and `waiting` are vLLM's two lists
+  (`self.running`, `self.waiting`), which a vLLM reader already knows.
+- **`budget` and `per request` on `waiting`.** The running spend the budget
+  first and the waiting what is left, which suggested the budget is
+  admission's. It is both lists': vLLM's running loop is bounded by it
+  (`scheduler.py:626`, `:821`), and the per-request cap applies to both
+  (`:675-676`, `:1115-1128`). On `waiting` alone, `running` would be
+  unbounded. Nor is "the running first, then the waiting" every engine's
+  order (SGLang, TGI and `exclusive prefill` differ; V1 of
+  [engine neutrality](engine-neutrality.md)), so the order stays the body's.
+- **A `step { schedule …; execute …; }` around both, or `schedule` inside
+  `execute`.** vLLM's `EngineCore.step()` calls `schedule()` and then
+  `execute_model()`, so the outer block is `step`, not `execute`, which is
+  only the model's run. Today the kernel has one arrangement, choose and
+  then execute, so the block would hold the same two lines in the same
+  order in every program. It earns its place with the batch queue above,
+  where the next batch is scheduled while the last executes
+  (`engine/core.py:673-729`), and that design adds it.
 - **`uses compute (…), hbm (…) overlap`.** Demands per resource, with a
   keyword for how they combine. Rejected: named arms in `max` say the same,
   and the opposite is `+`, not a second keyword.
@@ -408,7 +462,7 @@ Built as a stack, each part with its programs' IR compared before and after:
     names first, so in the decode pod, vLLM's `skipped_waiting` and
     `waiting` are two pools' queues chosen by the order of a hold's pools.
     That is a rule of `hold`, not of the engine, and a separate issue.
-  - **`serve exclusive prefill`.** It remains a statement whose meaning is
+  - **`exclusive prefill`.** It remains a statement whose meaning is
     the language's. A body cannot take back decodes already chosen
     ([exclusive prefill](exclusive-prefill.md)).
   - **`granule`.** It shapes the per-request grant as `per request` bounds
