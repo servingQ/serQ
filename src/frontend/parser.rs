@@ -3304,12 +3304,12 @@ impl Parser {
                         return self.err(format!("duplicate pool `{}` in queue `{name}`", d.name));
                     }
                     self.queues[qi].pools.push(d.name.clone());
-                    self.pools_on.push(device::PoolOn {
+                    self.pool_on(device::PoolOn {
                         pool: prog.pools.len(),
                         owner,
                         cap: d.name.clone(),
                         at: o_at,
-                    });
+                    })?;
                     d.name = format!("{name}.{}", d.name);
                     prog.pools.push(d);
                     continue;

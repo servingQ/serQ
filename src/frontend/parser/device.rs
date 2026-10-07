@@ -253,16 +253,6 @@ impl Parser {
             );
         };
         let (dev_count, dev_array) = (self.devices[dev].count, self.devices[dev].array);
-        if let Some(other) = self.engines.iter().find(|e| e.device == device) {
-            return self.err_at(
-                at,
-                format!(
-                    "`{}` already runs on `{device}`: one device runs one engine, which admits \
-                     its pools",
-                    other.name
-                ),
-            );
-        }
         match (array, dev_array) {
             (Some(n), true) if n == dev_count => {}
             (None, false) => {}
@@ -300,6 +290,16 @@ impl Parser {
     ) -> PResult<()> {
         let (dev_count, dev_array) = (self.devices[dev].count, self.devices[dev].array);
         let device = self.devices[dev].name.clone();
+        if let Some(other) = self.engines.iter().find(|e| e.device == device) {
+            return self.err_at(
+                at,
+                format!(
+                    "`{}` already runs on `{device}`: one device runs one engine, which admits \
+                     its pools",
+                    other.name
+                ),
+            );
+        }
         self.expect(&Tok::LBrace)?;
         let mut s = StepSpec {
             budget: Expr::Num(f64::INFINITY),
