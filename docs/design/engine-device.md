@@ -89,7 +89,8 @@ differ; a family engine's `waiting.count` (no member may count every
 member's queues); a queue named `running` or `waiting`; a queue's pool on
 a device or an engine outside the queue, a top-level pool on a queue's
 engine, a queue that holds an engine named for a keyword, and a queue's
-device named as the queue (`on Q` would be two things). A capacity's `cap`
+device named as the queue (`on Q` would be two things), and a queue named
+as a top-level device, in either order. A capacity's `cap`
 is checked as a pool's is.
 
 ## Lowering
