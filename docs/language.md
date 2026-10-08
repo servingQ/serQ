@@ -842,7 +842,12 @@ pool reqs on vllm { queue fifo; }
 
 The schedule `advance running [only (p)] [order]; admit waiting [only (p)]
 while (running.preempted == 0);` is vLLM's procedure and lowers to no
-iteration body: `serve [only (p)] [order];`. `exclusive prefill; admit
+iteration body: `serve [only (p)] [order];`, when both `p` are the same
+expression. A predicate both statements read is named with a `def`
+(`def in_phase() { running.decoding > 0 ? decoding : !decoding }`, then
+`only (in_phase())` twice), which is read where it stands, for each
+request; a schedule's `let` is read once as the iteration starts and only
+in `each at most`, so it cannot name one. `exclusive prefill; admit
 waiting while (running.preempted == 0);` is `serve exclusive prefill;`.
 Any other schedule is the stage's iteration body; `exclusive prefill`
 appears only in the form above, since it takes back decodes a body cannot.

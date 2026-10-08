@@ -13,14 +13,14 @@ let vp = 290;
 let vd = 990;
 
 fn main() {
+  // decodes while any request decodes, else prefills: never both
+  def in_phase() { running.decoding > 0 ? decoding : !decoding }
   device gpu { compute (t) = a * ceil(t / b0); }
   engine fastertransformer on gpu {
     tokens cap bmax;
     schedule {
-      // decodes while any request decodes, else prefills: never both
-      advance running only (running.decoding > 0 ? decoding : !decoding);
-      admit waiting only (running.decoding > 0 ? decoding : !decoding)
-        while (running.preempted == 0);
+      advance running only (in_phase());
+      admit waiting only (in_phase()) while (running.preempted == 0);
     }
     execute (c + compute(tokens));
   }
