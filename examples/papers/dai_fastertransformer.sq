@@ -13,9 +13,9 @@ let vp = 290;
 let vd = 990;
 
 fn main() {
+  device gpu { compute (t) = a * ceil(t / b0); }
   // decodes while any request decodes, else prefills: never both
   def in_phase() { running.decoding > 0 ? decoding : !decoding }
-  device gpu { compute (t) = a * ceil(t / b0); }
   engine fastertransformer on gpu {
     tokens cap bmax;
     schedule {

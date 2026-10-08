@@ -358,14 +358,21 @@ fn a_def_names_the_predicate_advance_and_admit_share() {
              (running.preempted == 0);"
         )
     );
-    assert_eq!(
-        ir(&named, None, &ov),
-        ir(
-            &stage("serve only (decoders > 0 ? decoding : !decoding);"),
-            None,
-            &ov
-        )
+    // a `def` with an argument, and the other `only` written out
+    let mixed = format!(
+        "def in_phase(k) {{ running.decoding > k ? decoding : !decoding }}\n{}",
+        engine(&format!(
+            "advance running only (in_phase(0)); admit waiting only ({p}) while \
+             (running.preempted == 0);"
+        ))
     );
+    let kernel = ir(
+        &stage("serve only (decoders > 0 ? decoding : !decoding);"),
+        None,
+        &ov,
+    );
+    assert_eq!(ir(&named, None, &ov), kernel);
+    assert_eq!(ir(&mixed, None, &ov), kernel);
 }
 
 #[test]
@@ -457,7 +464,7 @@ fn the_design_refuses_what_it_says() {
              !decoding); admit waiting only (phase ? decoding : !decoding) while \
              (running.preempted == 0);",
         ),
-        "with `def phase() { … }`",
+        "with `def phase() { … }`, read as `phase()`",
     );
     refused(
         &engine("advance running each at most (4); admit waiting each at most (5);"),

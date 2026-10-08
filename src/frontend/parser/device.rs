@@ -487,7 +487,7 @@ impl Parser {
                     format!(
                         "`{n}` is a `let` of the schedule, read as the iteration starts: it is \
                          read only in `each at most`; name an expression read where it stands, \
-                         as `only (p)` is, with `def {n}() {{ … }}`"
+                         as `only (p)` is, with `def {n}() {{ … }}`, read as `{n}()`"
                     ),
                 );
             }

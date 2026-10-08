@@ -36,7 +36,6 @@ FasterTransformer is the same program with its schedule changed:
 ```serq title="examples/papers/dai_fastertransformer.sq (the engine)"
 // decodes while any request decodes, else prefills: never both
 def in_phase() { running.decoding > 0 ? decoding : !decoding }
-device gpu { compute (t) = a * ceil(t / b0); }
 engine fastertransformer on gpu {
   tokens cap bmax;
   schedule {
@@ -47,7 +46,7 @@ engine fastertransformer on gpu {
 }
 ```
 
-`only` serves only the decodes while any request decodes, and only the prefills otherwise: decode first, no mixed batches. The running and the waiting requests share the one predicate `in_phase()`, which is read for each request where `only` reads it.
+`only` serves only the decodes while any request decodes, and only the prefills otherwise: decode first, no mixed batches. The running and the waiting requests share the one predicate `in_phase()`.
 
 ## The key propositions
 
