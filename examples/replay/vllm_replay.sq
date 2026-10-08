@@ -33,7 +33,7 @@ fn main() {
     reqs cap max_seqs;
     tokens cap B;
     schedule { advance running; admit waiting while (running.preempted == 0); }
-    execute (c_it + d * decoders + e * kv_decode + a * prefilled + b * attention);
+    execute (c_it + d * batch.decoding + e * batch.kv_decode + a * batch.prefilled + b * batch.attention);
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on vllm { queue fifo; }  // the scheduler admits (scheduler.py:868)

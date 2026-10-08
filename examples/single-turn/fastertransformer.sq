@@ -29,7 +29,7 @@ fn main() {
       advance running only (in_phase());
       admit waiting only (in_phase()) while (running.preempted == 0);
     }
-    execute (c + compute(tokens));
+    execute (c + compute(batch.tokens));
   }
 
   workload {

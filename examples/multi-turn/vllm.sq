@@ -45,7 +45,7 @@ fn main() {
       advance running each at most (threshold);
       admit waiting while (running.preempted == 0) each at most (threshold);
     }
-    execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
+    execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on vllm { queue fifo; }   // the engine admits the waiting, FCFS

@@ -173,7 +173,7 @@ engine vllm on gpu {{
   reqs cap 8;
   tokens cap 8;
   schedule {{ {schedule} }}
-  execute (step_time(tokens));
+  execute (step_time(batch.tokens));
 }}
 pool reqs on vllm {{ }}
 pool kv on gpu {{ preempt lifo; }}
@@ -239,11 +239,13 @@ fn the_stage_forms_are_schedules() {
     }
 }
 
-/// An engine names a list's value one way in all its clauses: `tokens cap`
-/// and `execute` read `running.…` and `waiting.…` as `schedule` does, and
-/// none of them reads the kernel's name for it (#411). `execute` times the
-/// batch, so its `decoders` are the batch's decodes, which a budget or an
-/// `only` may leave short of `running.decoding`: that one is refused there.
+/// An engine names each value one way in all its clauses: `running.…` the
+/// residents, `waiting.…` the queues, `batch.…` the batch, and none of them
+/// reads the kernel's name for it (#411). The kernel's `decoders` and
+/// `kv_decode` are the residents' before the batch is formed and the
+/// batch's in `cost`, which a budget or an `only` may leave short, so an
+/// engine reads `running.decoding` in `tokens cap` and `schedule` and
+/// `batch.decoding` in `execute` (#416).
 #[test]
 fn an_engine_reads_its_lists_in_every_clause() {
     let ov = common::horizon(20.0);
@@ -252,9 +254,12 @@ fn an_engine_reads_its_lists_in_every_clause() {
         (
             (
                 "tokens cap 8;",
-                "tokens cap max(running.decoding, 8 - running.count);",
+                "tokens cap max(running.decoding, 8 - running.count) + running.kv_decode;",
             ),
-            ("budget 8;", "budget max(decoders, 8 - residents);"),
+            (
+                "budget 8;",
+                "budget max(decoders, 8 - residents) + kv_decode;",
+            ),
         ),
         (
             ("tokens cap 8;", "tokens cap max(8 - waiting.count, 1);"),
@@ -262,10 +267,14 @@ fn an_engine_reads_its_lists_in_every_clause() {
         ),
         (
             (
-                "execute (step_time(tokens));",
-                "execute (step_time(tokens) + decoders + running.count + waiting.count);",
+                "execute (step_time(batch.tokens));",
+                "execute (step_time(batch.tokens) + batch.decoding + batch.kv_decode + \
+                 batch.prefilled + batch.attention + running.count + waiting.count);",
             ),
-            ("cost 1;", "cost 1 + decoders + residents + queued(reqs);"),
+            (
+                "cost 1;",
+                "cost 1 + decoders + kv_decode + prefilled + attention + residents + queued(reqs);",
+            ),
         ),
     ] {
         assert_eq!(
@@ -282,8 +291,8 @@ fn an_engine_reads_its_lists_in_every_clause() {
             "`residents` is `running.count`",
         ),
         (
-            "execute (step_time(tokens));",
-            "execute (step_time(tokens) + max(residents, 1));",
+            "execute (step_time(batch.tokens));",
+            "execute (step_time(batch.tokens) + max(residents, 1));",
             "`residents` is `running.count`",
         ),
         (
@@ -292,29 +301,81 @@ fn an_engine_reads_its_lists_in_every_clause() {
             "`decoders` is `running.decoding`",
         ),
         (
-            "execute (step_time(tokens));",
-            "execute (step_time(tokens) + running.decoding);",
-            "`running.decoding` counts the decoding residents, in the batch or not",
+            "execute (step_time(batch.tokens));",
+            "execute (step_time(batch.tokens) + running.decoding);",
+            "counts the residents, in the batch or not, and the batch's is `batch.decoding`",
+        ),
+        (
+            "execute (step_time(batch.tokens));",
+            "execute (step_time(batch.tokens) + kv_decode);",
+            "`kv_decode` is `batch.kv_decode` here",
+        ),
+        (
+            "execute (step_time(batch.tokens));",
+            "execute (step_time(batch.tokens) + tokens);",
+            "`tokens` is `batch.tokens` here",
+        ),
+        (
+            "tokens cap 8;",
+            "tokens cap 8 - batch.tokens;",
+            "`tokens cap` is read before the batch is formed",
+        ),
+        (
+            "while (running.preempted == 0)",
+            "while (batch.decoding == 0)",
+            "`batch.decoding` is the formed batch's, read in `execute`",
+        ),
+        (
+            "tokens cap 8;",
+            "tokens cap 8 - batch.size;",
+            "`batch` has `tokens`, `prefilled`, `decoding`",
+        ),
+        // a schedule's `only`, `by` and `each at most` are read at their own
+        // moments, before the batch so far exists
+        (
+            "advance running;",
+            "advance running only (batch.prefilled == 0);",
+            "`only` is read before the batch is formed",
+        ),
+        (
+            "advance running;",
+            "advance running by (batch.tokens);",
+            "`by` is read before the batch is formed",
+        ),
+        (
+            "advance running;",
+            "advance running only (running.preempted == 0);",
+            "read in its `branch`, `while` and `set`, not in `only`",
+        ),
+        (
+            "advance running;",
+            "let c = batch.tokens > 0 ? 4 : 8; advance running each at most (c);",
+            "`each at most` is read before the batch is formed",
+        ),
+        (
+            "tokens cap 8;",
+            "tokens cap 8 - attention;",
+            "`attention` is `batch.attention`, and `tokens cap` is read before",
         ),
         (
             "tokens cap 8;",
             "tokens cap 8 - running.preempted;",
-            "read only in its `schedule`, not in `tokens cap`",
+            "read in its `branch`, `while` and `set`, not in `tokens cap`",
         ),
         (
-            "execute (step_time(tokens));",
-            "execute (step_time(tokens) + waiting.admitted);",
-            "read only in its `schedule`, not in `execute`",
+            "execute (step_time(batch.tokens));",
+            "execute (step_time(batch.tokens) + waiting.admitted);",
+            "read in its `branch`, `while` and `set`, not in `execute`",
         ),
         (
-            "execute (step_time(tokens));",
-            "execute (step_time(tokens) + preempted);",
+            "execute (step_time(batch.tokens));",
+            "execute (step_time(batch.tokens) + preempted);",
             "`running.preempted` is what the iteration's schedule did",
         ),
         (
             "tokens cap 8;",
             "tokens cap max(tokens, 8);",
-            "`tokens cap` bounds the batch before it is formed",
+            "`tokens cap` is read before the batch is formed",
         ),
         (
             "while (running.preempted == 0)",
@@ -324,6 +385,35 @@ fn an_engine_reads_its_lists_in_every_clause() {
     ] {
         refused(&replaced(&engine(ok), &[(from, to)]), why);
     }
+    // a schedule reads the batch it has formed so far
+    assert_eq!(
+        ir(
+            &engine("advance running; branch (batch.tokens < 8) { admit waiting; }"),
+            None,
+            &ov
+        ),
+        ir(
+            &stage("iteration { serve; branch (tokens < 8) { admit; } }"),
+            None,
+            &ov
+        )
+    );
+    // and after an `only`, read for each resident, the statements read it again
+    assert_eq!(
+        ir(
+            &engine(
+                "advance running only (running.count > 0); branch (batch.tokens < 8) { admit \
+                 waiting; }"
+            ),
+            None,
+            &ov
+        ),
+        ir(
+            &stage("iteration { serve only (residents > 0); branch (tokens < 8) { admit; } }"),
+            None,
+            &ov
+        )
+    );
     // the bug as found: a list value as a call argument, in a schedule
     assert_eq!(
         ir(
@@ -434,7 +524,7 @@ fn the_design_refuses_what_it_says() {
         "needs `tokens cap B;`",
     );
     refused(
-        &engine(ok).replace("execute (step_time(tokens));", ""),
+        &engine(ok).replace("execute (step_time(batch.tokens));", ""),
         "needs `execute (T);`",
     );
     refused(
@@ -528,8 +618,8 @@ fn the_design_refuses_what_it_says() {
     refused(
         &format!(
             "device gpu {{ t (x) = 1; }}
-engine e1 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(tokens)); }}
-engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(tokens)); }}
+engine e1 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(batch.tokens)); }}
+engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(batch.tokens)); }}
 {WORKLOAD}"
         ),
         "one device runs one engine",
@@ -602,7 +692,7 @@ server {
 engine vllm[2] on gpu {{
   tokens cap 8;
   schedule {{ advance running; admit waiting while (running.preempted == 0); }}
-  execute (step_time(tokens));
+  execute (step_time(batch.tokens));
 }}
 pool kv on gpu {{ }}
 {work}"
@@ -665,7 +755,7 @@ fn a_queue_holds_its_engine() {
       reqs cap {cap};
       tokens cap B;
       schedule {{ advance running; admit waiting while (running.preempted == 0); }}
-      execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
+      execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
     }}
     pool reqs on {q} {{ queue fifo; }}
     pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
@@ -694,7 +784,7 @@ server {{ E.prefill (prompt); }}
         )
     };
     let device = "device gpu { t1 (x) = 1; kv cap 10; }";
-    let engine = "engine on gpu { tokens cap 4; schedule { advance running; admit waiting while (running.preempted == 0); } execute (t1(tokens)); }";
+    let engine = "engine on gpu { tokens cap 4; schedule { advance running; admit waiting while (running.preempted == 0); } execute (t1(batch.tokens)); }";
     let ov = common::horizon(10.0);
     ir(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}")),

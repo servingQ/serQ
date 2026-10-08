@@ -68,25 +68,85 @@ enum SStmt {
 /// A schedule's `let`s, in order.
 type Lets = Vec<(String, Expr)>;
 
-/// The context variables an engine reads by its lists' names.
-const RETIRED_IN_ENGINE: [(&str, &str); 4] = [
-    ("residents", "running.count"),
-    ("decoders", "running.decoding"),
-    ("preempted", "running.preempted"),
-    ("admitted", "waiting.admitted"),
+/// The clauses that read the residents as they stand: as the iteration
+/// starts (`tokens cap`, `each at most` and the `let`s it reads), at each
+/// resident's turn (`only`, `by`) and in the schedule's statements.
+const AS_THEY_STAND: &[&str] = &["tokens cap", "each at most", "only", "by", "schedule"];
+
+/// Those, and `execute`, which reads the count of the residents too.
+const RESIDENTS: &[&str] = &[
+    "tokens cap",
+    "each at most",
+    "only",
+    "by",
+    "schedule",
+    "execute",
 ];
 
-/// What a batch holds once it is formed, which `execute` reads and
-/// `tokens cap`, read before, cannot.
-const BATCH_ONLY: [&str; 3] = ["tokens", "prefilled", "attention"];
+/// An engine's values: the name it reads one by, the kernel's context
+/// variable, and the clauses that read it. `running` is the residents as
+/// they stand, `waiting` the queues, `batch` the iteration's batch: in a
+/// schedule's statements (`schedule`), what it has formed so far; in
+/// `execute`, what it formed. The kernel reads `decoders` and `kv_decode` as
+/// the residents' before the batch is formed and as the batch's in `cost`
+/// (#416), so the engine names them twice. Within a schedule, `only`, `by`
+/// and `each at most` are read at their own moments, not the statements'.
+const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
+    ("running.count", "residents", RESIDENTS),
+    ("running.decoding", "decoders", AS_THEY_STAND),
+    ("running.kv_decode", "kv_decode", AS_THEY_STAND),
+    ("running.kv_prefill", "kv_prefill", AS_THEY_STAND),
+    ("running.preempted", "preempted", &["schedule"]),
+    ("waiting.count", WAITING_COUNT, RESIDENTS),
+    ("waiting.admitted", "admitted", &["schedule"]),
+    ("batch.tokens", "tokens", &["schedule", "execute"]),
+    ("batch.prefilled", "prefilled", &["schedule", "execute"]),
+    ("batch.decoding", "decoders", &["execute"]),
+    ("batch.kv_decode", "kv_decode", &["execute"]),
+    ("batch.kv_prefill", "kv_prefill", &["execute"]),
+    ("batch.attention", "attention", &["execute"]),
+];
 
-/// The refusal of what the iteration's schedule did (`running.preempted`,
-/// `waiting.admitted`) in another clause.
-fn schedule_only(value: &str, clause: &str) -> String {
-    format!(
-        "`{value}` is what the iteration's schedule did, read only in its `schedule`, not in \
-         `{clause}`"
-    )
+/// The name an engine reads the kernel's context variable `var` by in
+/// `clause` (`tokens cap`, `schedule`, `execute`), if it reads it there: a
+/// view that draws a step stage in an engine's words names it so.
+pub fn engine_name(var: &str, clause: &str) -> Option<&'static str> {
+    ENGINE_VALUES
+        .iter()
+        .find(|(_, k, cs)| *k == var && cs.contains(&clause))
+        .map(|(v, ..)| *v)
+}
+
+/// Why `value` of `ENGINE_VALUES` is not read in `clause`.
+fn not_read_in(value: &str, clause: &str) -> String {
+    let (list, field) = value.split_once('.').expect("a list's value");
+    if field == "preempted" || field == "admitted" {
+        format!(
+            "`{value}` is what the iteration's schedule did, read in its `branch`, `while` and \
+             `set`, not in `{clause}`"
+        )
+    } else if list == "running" {
+        format!(
+            "`execute` times the batch: `{value}` counts the residents, in the batch or not, \
+             and the batch's is `batch.{field}`"
+        )
+    } else if clause == "schedule" {
+        format!(
+            "`{value}` is the formed batch's, read in `execute`; a schedule's statements read \
+             the batch so far as `batch.tokens` and `batch.prefilled`, and the residents' as \
+             `running.…`"
+        )
+    } else {
+        let so_far = if ["tokens", "prefilled"].contains(&field) {
+            ", and as the batch so far in a schedule's `branch`, `while` and `set`"
+        } else {
+            ""
+        };
+        format!(
+            "`{clause}` is read before the batch is formed, so it reads no `batch.…`: `{value}` \
+             is read in `execute`{so_far}"
+        )
+    }
 }
 
 /// `waiting.count` until the pools the engine admits are known.
@@ -543,7 +603,7 @@ impl Parser {
                     return self.err_at(n_at, format!("`{n}` cannot name a `let` here"));
                 }
                 self.expect(&Tok::Assign)?;
-                let e = self.expr()?;
+                let e = self.engine_expr("each at most", |p| p.expr())?;
                 self.expect(&Tok::Semi)?;
                 lets.push((n, e));
             } else {
@@ -573,7 +633,7 @@ impl Parser {
         }
         self.expect_kw("at")?;
         self.expect_kw("most")?;
-        Ok(Some(self.paren_expr()?))
+        Ok(Some(self.engine_expr("each at most", |p| p.paren_expr())?))
     }
 
     fn schedule_stmt(&mut self) -> PResult<SStmt> {
@@ -582,7 +642,7 @@ impl Parser {
                 return self.err("`advance` takes `running`: `advance running;`");
             }
             let only = if self.eat_kw("only") {
-                Some(self.paren_expr()?)
+                Some(self.engine_expr("only", |p| p.paren_expr())?)
             } else {
                 None
             };
@@ -593,9 +653,9 @@ impl Parser {
                 Some(Serve::DecodeFirst)
             } else if self.eat_kw("by") {
                 self.expect(&Tok::LParen)?;
-                let mut keys = vec![self.expr()?];
+                let mut keys = vec![self.engine_expr("by", |p| p.expr())?];
                 while self.eat(&Tok::Comma) {
-                    keys.push(self.expr()?);
+                    keys.push(self.engine_expr("by", |p| p.expr())?);
                 }
                 self.expect(&Tok::RParen)?;
                 Some(Serve::By(keys))
@@ -610,7 +670,7 @@ impl Parser {
                 return self.err("`admit` takes `waiting`: `admit waiting;`");
             }
             let only = if self.eat_kw("only") {
-                Some(self.paren_expr()?)
+                Some(self.engine_expr("only", |p| p.paren_expr())?)
             } else {
                 None
             };
@@ -734,21 +794,21 @@ impl Parser {
         Ok(())
     }
 
-    /// `read` with the engine's list values in scope: its `tokens cap`,
-    /// `execute` and `schedule` read `running.…` and `waiting.…`, and only
-    /// those names.
+    /// `read` as `clause` of an engine, which reads `running.…`, `waiting.…`
+    /// and `batch.…` as `ENGINE_VALUES` says, and no bare total; the clause
+    /// outside it is restored after.
     fn engine_expr<T>(
         &mut self,
         clause: &'static str,
         read: impl FnOnce(&mut Self) -> PResult<T>,
     ) -> PResult<T> {
-        self.in_engine = Some(clause);
+        let outer = self.in_engine.replace(clause);
         let r = read(self);
-        self.in_engine = None;
+        self.in_engine = outer;
         r
     }
 
-    /// A list value of an engine after `running` or `waiting` and its dot.
+    /// An engine's value after `running`, `waiting` or `batch` and its dot.
     pub(super) fn list_value(&mut self, at: usize, list: &str) -> PResult<Expr> {
         let Some(clause) = self.in_engine else {
             return self.err_at(
@@ -761,64 +821,46 @@ impl Parser {
         };
         let f_at = self.pos;
         let field = self.ident()?;
-        let var = match (list, field.as_str()) {
-            ("running", "count") => "residents",
-            // `execute` reads the batch, which may leave a decoding resident out
-            ("running", "decoding") if clause == "execute" => {
-                return self.err_at(
-                    at,
-                    "`execute` times the batch, whose decodes are `decoders`: \
-                     `running.decoding` counts the decoding residents, in the batch or not",
-                );
-            }
-            ("running", "decoding") => "decoders",
-            ("running", "preempted") | ("waiting", "admitted") if clause != "schedule" => {
-                return self.err_at(at, schedule_only(&format!("{list}.{field}"), clause));
-            }
-            ("running", "preempted") => "preempted",
-            ("waiting", "admitted") => "admitted",
-            ("waiting", "count") => WAITING_COUNT,
-            _ => {
-                return self.err_at(
-                    f_at,
-                    format!(
-                        "`{list}.{field}`: `running` has `count`, `decoding` and `preempted`, \
-                         `waiting` has `count` and `admitted`"
-                    ),
-                );
-            }
+        let value = format!("{list}.{field}");
+        let Some((_, var, clauses)) = ENGINE_VALUES.iter().find(|(v, ..)| *v == value) else {
+            let has: Vec<&str> = ENGINE_VALUES
+                .iter()
+                .filter_map(|(v, ..)| v.strip_prefix(list)?.strip_prefix('.'))
+                .collect();
+            return self.err_at(
+                f_at,
+                format!("`{value}`: `{list}` has `{}`", has.join("`, `")),
+            );
         };
-        Ok(Expr::Var(var.into()))
+        if !clauses.contains(&clause) {
+            return self.err_at(at, not_read_in(&value, clause));
+        }
+        Ok(Expr::Var((*var).into()))
     }
 
-    /// In an engine, the bare names its lists' values replaced.
+    /// In an engine, the bare names its values replaced: the name for the
+    /// clause, or why the clause reads none.
     pub(super) fn retired_in_engine(&self, at: usize, name: &str) -> PResult<()> {
         let Some(clause) = self.in_engine else {
             return Ok(());
         };
-        // in `execute`, `decoders` is the batch's decodes, which no list names
-        if let Some((_, now)) = RETIRED_IN_ENGINE
+        let named: Vec<_> = ENGINE_VALUES
             .iter()
-            .find(|(n, _)| *n == name && !(clause == "execute" && *n == "decoders"))
-        {
-            if clause != "schedule" && ["preempted", "admitted"].contains(&name) {
-                return self.err_at(at, schedule_only(now, clause));
-            }
-            return self.err_at(
+            .filter(|(_, k, _)| *k == name)
+            .collect();
+        let Some((value, _, _)) = named.first() else {
+            return Ok(());
+        };
+        match named.iter().find(|(_, _, cs)| cs.contains(&clause)) {
+            Some((now, ..)) => self.err_at(
                 at,
-                format!("in an engine, `{name}` is `{now}`: one value, one name"),
-            );
-        }
-        if clause == "tokens cap" && BATCH_ONLY.contains(&name) {
-            return self.err_at(
+                format!("in an engine, `{name}` is `{now}` here: one value, one name"),
+            ),
+            None => self.err_at(
                 at,
-                format!(
-                    "`{name}` is the batch's, and `tokens cap` bounds the batch before it is \
-                     formed: `execute` reads it"
-                ),
-            );
+                format!("`{name}` is `{value}`, and {}", not_read_in(value, clause)),
+            ),
         }
-        Ok(())
     }
 
     /// Link the engines, their devices and the pools on them, once the

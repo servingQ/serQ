@@ -57,7 +57,7 @@ fn main() {
       branch (running.count == 0 && backlog == 0) { set ratio = r0; }
       advance running only (!decoding);                  // the chunked request
       admit waiting;                                     // and new prefills, alone
-      branch (tokens == 0) {                             // no prefill: a decode batch
+      branch (batch.tokens == 0) {                       // no prefill: a decode batch
         advance running;
         branch (running.preempted > 0) {
           set ratio = max(r_min, min(1, retract_steps / M));   // the bound, see above
@@ -67,7 +67,7 @@ fn main() {
       }
       set backlog = waiting.count > 0;
     }
-    execute (max(hbm(kv_decode + kv_prefill), compute(tokens)));
+    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
   pool reqs on sglang { queue fifo; }
   pool kv on gpu { evict lru; preempt by (1 - decoding, position - prompt, -prompt) requeue tail; }
