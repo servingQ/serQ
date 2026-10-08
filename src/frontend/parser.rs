@@ -3188,9 +3188,11 @@ impl Parser {
         if self.queues.iter().any(|q| q.name == name) {
             return self.err_at(at + 1, format!("duplicate queue `{name}`"));
         }
-        // a device declared after the queue is refused by its own check, so
-        // one declared before is refused here: the order changes nothing
-        if self.devices.iter().any(|d| d.name == name) {
+        // a device or an engine declared after the queue is refused by its
+        // own check, so one declared before is refused here: the order
+        // changes nothing
+        if self.devices.iter().any(|d| d.name == name) || prog.stages.iter().any(|s| s.name == name)
+        {
             return self.err_at(at + 1, format!("`{name}` is declared twice"));
         }
         if name == "running" || name == "waiting" {
