@@ -467,6 +467,36 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
 /// report counts the session once as `stuck` (preempted again at the same
 /// position) and says so.
 ///
+/// Only a step stage's scheduler admits: `admit via` a FIFO, PS or delay
+/// stage linked, and the pool's queue waited forever with nothing counted
+/// stuck (#418, the program as found).
+#[test]
+fn admit_via_names_a_step_stage() {
+    for (stage, kind) in [
+        ("stage F : fifo;", "a fifo stage"),
+        ("stage F : ps(2);", "a ps stage"),
+        ("stage F : delay;", "a delay stage"),
+    ] {
+        let src = format!(
+            "pool reqs {{ cap 4; admit via F; }}
+  {stage}
+  workload {{ arrive poisson(1); init {{ set t0 = now; }} }}
+  server {{
+    hold reqs (cost(reqs, 1)) {{ run F (cost(F, 1)); }}
+    observe response = now - t0;
+  }}"
+        );
+        let error =
+            run_source(&common::main_source(&src), &common::horizon(100.0), None).unwrap_err();
+        assert!(
+            error.contains(&format!(
+                "`F` is {kind}: only a step stage's scheduler admits"
+            )),
+            "{error}"
+        );
+    }
+}
+
 /// On 10 blocks of 16 (160 tokens) with a 1000-token budget: step 1
 /// prefills the 100-token prompt (7 blocks), steps 2..61 decode tokens
 /// 101..160 (block 8 at 113, 9 at 129, 10 at 145), step 62 needs an 11th

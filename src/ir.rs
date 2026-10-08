@@ -1630,6 +1630,21 @@ impl Program {
             }
             if let Some(s) = p.admit_via {
                 v.stage(s)?;
+                // only a step stage's scheduler admits: a queue another
+                // stage was named for would never be served (#418)
+                let stage = &self.stages[s];
+                if !matches!(stage.kind, CStageKind::Step(_)) {
+                    let kind = match &stage.kind {
+                        k if k.is_delay() => "a delay stage",
+                        CStageKind::Fifo(_) => "a fifo stage",
+                        _ => "a ps stage",
+                    };
+                    return Err(at(format!(
+                        "`admit via {}`, but `{}` is {kind}: only a step stage's scheduler \
+                         admits, and nothing would admit `{}`",
+                        stage.name, stage.name, p.name
+                    )));
+                }
             }
         }
         for (si, s) in self.stages.iter().enumerate() {

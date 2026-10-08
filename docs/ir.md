@@ -71,7 +71,7 @@ runs identically (`tests/ir.rs`).
 | `preempt` | `None` or `By {keys, tail}`. The least keys at `Victim` select the victim; ties select the last admitted. `tail` defaults to false (requeue at the head); true requeues as a newcomer. |
 | `queue` | `null` for FIFO, otherwise nonempty pure selection keys, read at `Select`. |
 | `spill` | Optional `CSpill {to, via, work, when}`: destination pool, transfer stage, work and predicate. |
-| `admit_via` | Optional index of the step stage serving this pool's queue. |
+| `admit_via` | Optional index of the step stage serving this pool's queue; a stage of another kind is refused, since nothing would admit the queue. |
 | `reserve_held` | Outstanding reservations count against later admissions and other holds' growth. Omitted when false. |
 
 `preempt lifo` compiles to `By {keys: [-admission], tail: false}`.
