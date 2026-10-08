@@ -768,6 +768,17 @@ impl CStageKind {
     pub fn is_delay(&self) -> bool {
         matches!(self, CStageKind::Ps(CExpr::Ctx(CtxVar::N)))
     }
+
+    /// The kind as a program writes it, for a message: `fifo`, `delay`,
+    /// `ps`, `step`.
+    pub fn word(&self) -> &'static str {
+        match self {
+            CStageKind::Fifo(_) => "fifo",
+            k if k.is_delay() => "delay",
+            CStageKind::Ps(_) => "ps",
+            CStageKind::Step(_) => "step",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1630,19 +1641,18 @@ impl Program {
             }
             if let Some(s) = p.admit_via {
                 v.stage(s)?;
-                // only a step stage's scheduler admits: a queue another
-                // stage was named for would never be served (#418)
+                // only a step stage's scheduler admits a bound queue
+                // (`admit_bound`); named for any other stage, the queue is
+                // never served (#418)
                 let stage = &self.stages[s];
                 if !matches!(stage.kind, CStageKind::Step(_)) {
-                    let kind = match &stage.kind {
-                        k if k.is_delay() => "a delay stage",
-                        CStageKind::Fifo(_) => "a fifo stage",
-                        _ => "a ps stage",
-                    };
                     return Err(at(format!(
-                        "`admit via {}`, but `{}` is {kind}: only a step stage's scheduler \
+                        "`admit via {}`, but `{}` is a {} stage: only a step stage's scheduler \
                          admits, and nothing would admit `{}`",
-                        stage.name, stage.name, p.name
+                        stage.name,
+                        stage.name,
+                        stage.kind.word(),
+                        p.name
                     )));
                 }
             }
@@ -2316,12 +2326,7 @@ impl Validator<'_> {
                         .iter()
                         .find(|s| !matches!(s.kind, CStageKind::Step(_)))
                 {
-                    let kind = match s.kind {
-                        CStageKind::Fifo(_) => "fifo",
-                        _ if s.kind.is_delay() => "delay",
-                        CStageKind::Ps(_) => "ps",
-                        CStageKind::Step(_) => unreachable!("found a stage that is not a step"),
-                    };
+                    let kind = s.kind.word();
                     let n = &s.name;
                     let what = if s.index.is_some() {
                         format!("a member of `{n}`")
