@@ -210,8 +210,8 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
 /// applies the cap only while more than one request is running or waiting
 /// (scheduler.py:606-616), so a constant cap is not vLLM's: an engine writes
 /// `each at most (threshold)` with `let threshold = running.count +
-/// waiting.count > 1 ? c : inf;`, a step stage `chunk long_prefill(reqs, c)`
-/// (lib/vllm.sq), `residents + queued(reqs) > 1 ? c : 0` with `reqs` the
+/// waiting.count > 1 ? c : inf;` (`long_prefill(c)`, lib/vllm.sq), a step
+/// stage `chunk residents + queued(reqs) > 1 ? c : 0` with `reqs` the
 /// request-slot pool, or `chunk 0` for no cap.
 fn vllm_chunk(p: &Program, e: &CExpr, slots: usize) -> Result<f64, String> {
     use crate::ir::{CArg, Fun};
@@ -221,7 +221,7 @@ fn vllm_chunk(p: &Program, e: &CExpr, slots: usize) -> Result<f64, String> {
              another request is running or waiting (scheduler.py:606-616)\nhelp: in an \
              engine's schedule, `let threshold = running.count + waiting.count > 1 ? c : inf;` \
              and `each at most (threshold)`, or no `each at most` for no cap; in a step stage, \
-             `chunk long_prefill({name}, c)` (lib/vllm.sq), or `chunk 0`",
+             `chunk residents + queued({name}) > 1 ? c : 0`, or `chunk 0`",
             p.show_expr(e),
             name = p.pools[slots].name
         ))

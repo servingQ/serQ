@@ -8,12 +8,10 @@
 // (kv_cache_manager.py:289-300).
 def reusable(x, bs) { floor((x - 1) / bs) * bs }
 
-// `long_prefill_token_threshold` as a step stage's `chunk`: the cap `c`
-// holds only while more than one request is running or waiting for a slot
-// of `reqs`; a request alone takes the whole budget (scheduler.py:606-616).
-// `queued(reqs)` counts the waiting holds that name `reqs` first, as a hold
-// waits in its first pool's queue; one that names `kv` first is not
-// counted. vLLM's count also has `skipped_waiting`,
-// which these programs leave empty, and its adaptive threshold (off by
-// default) is not modelled.
-def long_prefill(reqs, c) { residents + queued(reqs) > 1 ? c : 0 }
+// `long_prefill_token_threshold` as an engine's `each at most`: the cap `c`
+// holds only while more than one request is running or waiting; a request
+// alone takes the whole budget (scheduler.py:606-616). `waiting.count`
+// counts the queues the engine admits, as vLLM counts `waiting`; vLLM's
+// count also has `skipped_waiting`, which these programs leave empty, and
+// its adaptive threshold (off by default) is not modelled.
+def long_prefill(c) { running.count + waiting.count > 1 ? c : inf }

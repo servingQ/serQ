@@ -48,7 +48,7 @@ expressions and the remaining IR requirements.
 --8<-- "examples/vendors/rbln.sq"
 ```
 
-`serve exclusive prefill` selects either one prefill or a decode-only batch.
+`exclusive prefill` selects either one prefill or a decode-only batch.
 A fitting waiting prefill can replace tentative resident decodes and use the
 full token budget. Cancelled decode work does not advance computed KV; its
 already acquired allocation stays held. A selected prefill stops further

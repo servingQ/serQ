@@ -29,11 +29,11 @@ arrival every 0.4675 seconds, and at most 100 residents:
 --8<-- "examples/single-turn/fastertransformer.sq"
 ```
 
-`only` says which residents an iteration serves. Its predicate is read for every resident, from the current resident totals (`decoders`) and the resident's own `decoding`. While any request decodes, only decodes are served. A request that is still prefilling stays resident and keeps its slot of `reqs`, but gets no token. With nothing decoding, only prefills are served.
+`only` says which residents an iteration serves. Its predicate is read for every resident, from the current resident totals (`running.decoding`) and the resident's own `decoding`. While any request decodes, only decodes are served. A request that is still prefilling stays resident and keeps its slot of `reqs`, but gets no token. With nothing decoding, only prefills are served.
 
 ## Results at point C
 
-`serq run`, seed 1, horizon 500 s, 1069 arrivals. Each row changes the `serve` line, with `bmax` overrides shown below. `pending` is the time average of `holders(reqs) + queued(reqs)`.
+`serq run`, seed 1, horizon 500 s, 1069 arrivals. Each row writes the listed policy in the engine's `schedule`, with `bmax` overrides shown below. `pending` is the time average of `holders(reqs) + queued(reqs)`.
 
 | Scheduler | `b_max` | pending mean | pending max | decode batch | batches |
 |---|---|---|---|---|---|
@@ -56,8 +56,10 @@ in 500 seconds. At `bmax = 1024`, more prefills finish together, but the
 mean decode batch is still only 3.3. The large-budget variant gives much
 larger decode batches; it also leaves a substantial backlog in this run.
 
-To reproduce a row, replace the example's `serve` clause with the listed
-policy and pass `--set bmax=…`. These finite runs compare queue accumulation;
+To reproduce a row, replace the example's `advance running only …; admit
+waiting only …` with the listed policy (`advance running decode first;`,
+`exclusive prefill;`, … then `admit waiting while (running.preempted ==
+0);`) and pass `--set bmax=…`. These finite runs compare queue accumulation;
 they do not by themselves prove stability or divergence.
 
 ## Validation

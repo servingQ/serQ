@@ -60,7 +60,7 @@ fn vllm_engine() -> (String, String) {
 
   stage vllm : step {
     budget B;
-    chunk long_prefill(reqs, chunk_cap);
+    chunk residents + queued(reqs) > 1 ? chunk_cap : 0;
     cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
     memory kv;
   }

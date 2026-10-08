@@ -19,6 +19,7 @@ fn main() {
     }
   }
 
+  // not on the device: the paper's memory M is held, not read by the step (cost 1)
   pool kv { cap M; queue by (s * o + floor((o * o + o) / 2)); }
 
   device gpu { }

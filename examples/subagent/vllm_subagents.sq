@@ -39,8 +39,7 @@ fn main() {
     reqs cap max_seqs;
     tokens cap B;
     schedule {
-      // the cap holds only while more than one request is running or waiting
-      let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
+      let threshold = long_prefill(chunk_cap);
       advance running each at most (threshold);
       admit waiting while (running.preempted == 0) each at most (threshold);
     }

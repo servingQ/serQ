@@ -1,6 +1,7 @@
 // Whole-batch prefill isolation: B arrives while A is decoding.
 // With unit step costs the selected batches are A:p2, B:p4, A:d1, A:d1.
-// Removing the serve clause allows mixed A:d1+B:p3 and A:d1+B:p1.
+// Writing `advance running` for `exclusive prefill` allows mixed A:d1+B:p3
+// and A:d1+B:p1.
 fn main() {
   stage gate : delay;
   device gpu { kv cap 20; }

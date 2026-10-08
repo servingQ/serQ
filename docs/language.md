@@ -76,7 +76,7 @@ istmt    := serve [only ( expr )] [admission | by ( expr , ... ) | decode first]
           | admit [only ( expr )] [while ( expr )] ;           -- the waiting, one at a time, each served
           | branch ( expr ) { istmt* } [else { istmt* }]
           | set NAME = expr ;                  -- one of the stage's registers (`state NAME = c ;` among its options)
-resource := NAME ( NAME ) = expr ;           -- a time resource: a demand to time, read in `execute`
+resource := NAME ( NAME , ... ) = expr ;           -- a time resource: a demand to time, read in `execute`
           | NAME cap expr ;                  -- a capacity, declared as a pool with `pool NAME on DEVICE`
 eitem    := NAME cap expr ;                  -- a capacity the engine holds (`reqs cap max_seqs;`)
           | tokens cap expr ;                -- the tokens one iteration computes (required; `inf` for none)
@@ -836,7 +836,7 @@ pool reqs on vllm { queue fifo; }
 | `tokens cap B;` | `budget B;` |
 | `execute (T);` | `cost T;` |
 | `advance running …;` / `admit waiting …;` | `serve …;` / `admit …;` |
-| `each at most (e)` | `chunk e;`: one cap per run for the whole iteration; `inf` is no cap, which the kernel writes 0 |
+| `each at most (e)` | `chunk e;`: one cap per run for the whole iteration; `inf` is no cap, which the linker writes 0 as the kernel reads it |
 | `running.count`, `running.decoding`, `running.preempted`, `waiting.admitted` | `residents`, `decoders`, `preempted`, `admitted` |
 | `waiting.count` | `queued(p)` summed over the pools the engine admits |
 
@@ -844,9 +844,14 @@ The schedule `advance running [only (p)] [order]; admit waiting [only (p)]
 while (running.preempted == 0);` is vLLM's procedure and lowers to no
 iteration body: `serve [only (p)] [order];`. `exclusive prefill; admit
 waiting while (running.preempted == 0);` is `serve exclusive prefill;`.
-Any other schedule is the stage's iteration body. `each at most` chooses
-among constants (its condition may read the iteration), so a cap at or
-below 0 does not link. `engine` is a keyword: an engine is named for what
+Any other schedule is the stage's iteration body; `exclusive prefill`
+appears only in the form above, since it takes back decodes a body cannot.
+`each at most` chooses among constants (its condition may read the
+iteration), and one at or below 0 does not link: the kernel would read 0
+as no cap, so the program would mean one thing and run another. The list
+values `running.…` and `waiting.…` are read in `schedule`; `tokens cap`
+and `execute` read the stage's totals by their kernel names (`decoders`,
+`kv_decode`, `tokens`). `engine` is a keyword: an engine is named for what
 it models (`vllm`, `sglang`, `tgi`) or `llm`. Inside a `queue`, `device
 gpu` is the member's and `engine on gpu` is the queue's stage, named after
 the queue, so its pool is `pool reqs on Q`.
@@ -1099,13 +1104,13 @@ rather than from the previous prompt, and caches `prompt + o`.
 | vLLM | serQ | Where |
 |---|---|---|
 | a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `engine vllm on gpu { tokens cap B; schedule { advance running; admit waiting while (running.preempted == 0); } … }`, residents in admission order; `pool reqs on vllm` | `scheduler.py:577, 624-823, 868-1128` |
-| `max_num_seqs` | `pool reqs { cap max_seqs }` in the hold | `scheduler.py:877-879` |
+| `max_num_seqs` | `reqs cap max_seqs;` in `engine vllm`, held as `pool reqs on vllm` | `scheduler.py:877-879` |
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(vllm))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `run vllm prefill (cost(vllm, n)) growing kv`, `each at most (threshold)` with `let threshold = running.count + waiting.count > 1 ? c : inf;`: the cap only while more than one request is running or waiting; a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
+| chunked prefill, `long_prefill_token_threshold` | `run vllm prefill (cost(vllm, n)) growing kv`, `each at most (threshold)` with `let threshold = long_prefill(c);`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
-| preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
+| preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit waiting while (running.preempted == 0)` | `scheduler.py:742-813, 869, 1539-1582` |
 | a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `run vllm prefill (cost(vllm, known - c))`, `run vllm decode (cost(vllm, o - 1 - (known - prompt)))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |
 | the scheduler reserves by `num_tokens` (prompt and generated so far), never by the final length: it knows `max_tokens` and learns the length when `check_stop` sees EOS or the cap | `hidden o;`: no header, key or budget reads `o` | `kv_cache_manager.py:517, 533-534`, `config/scheduler.py:191`, `scheduler.py:639, 2426`, `sched/utils.py:98-119` |
 | the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (prompt + out − 1)`; `reuse (floor(min(prev prompt, prompt − 1)/bs)·bs)`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |

@@ -122,8 +122,8 @@ as before:
   read as no cap, does not link: the program never means one thing and runs
   another.
 
-`tests/engine_device.rs` holds `vllm.sq`, `sglang.sq` and `tgi.sq` written
-as engines to their programs' IR, byte for byte, as it holds each stage form
+`tests/engine_device.rs` holds `vllm.sq`, `sglang.sq` and `tgi.sq`, engines,
+to the IR of their step stages, byte for byte, as it holds each stage form
 to its schedule. The 21 step programs are rewritten and the old spellings
 refused with the new one ([one admission](one-admission.md)), as a stack:
 the forms, the programs, the documentation, then the refusal. Six rules go
