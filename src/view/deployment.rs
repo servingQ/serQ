@@ -924,17 +924,21 @@ fn list_names(v: CtxVar) -> &'static str {
     }
 }
 
+/// The step stage whose `memory` pool `i` is.
+fn memory_of(p: &Program, i: usize) -> Option<usize> {
+    p.stages
+        .iter()
+        .position(|s| matches!(&s.kind, CStageKind::Step(spec) if spec.memory == Some(i)))
+}
+
 /// A pool's title, with what it is on as an engine names it: an engine's
 /// memory is the pool on its device, which the IR does not name, and a pool
-/// it admits otherwise is a pool on the engine.
+/// it admits otherwise is a pool on the engine. A memory the engine also
+/// admits says so among its options (`pool_notes`).
 fn pool_title(p: &Program, i: usize) -> String {
     let pool = &p.pools[i];
-    let memory_of = p
-        .stages
-        .iter()
-        .find(|s| matches!(&s.kind, CStageKind::Step(spec) if spec.memory == Some(i)));
-    match (memory_of, pool.admit_via) {
-        (Some(s), _) => format!("pool {} on {}'s device", pool.name, s.name),
+    match (memory_of(p, i), pool.admit_via) {
+        (Some(s), _) => format!("pool {} on {}'s device", pool.name, p.stages[s].name),
         (None, Some(e)) => format!("pool {} on {}", pool.name, p.stages[e].name),
         (None, None) => format!("pool {}", pool.name),
     }
@@ -2085,6 +2089,10 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
                 .join(", "),
             if *tail { " requeue tail" } else { "" }
         )),
+    }
+    // the title says `on S` only for a pool that is no memory
+    if let (Some(_), Some(s)) = (memory_of(p, i), pool.admit_via) {
+        parts.push(format!("admitted by {}", p.stages[s].name));
     }
     if pool.reserve_held {
         parts.push("reserve held".into());

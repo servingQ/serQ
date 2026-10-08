@@ -15,6 +15,12 @@ Its deployment, drawn by [`serq draw`](../visualization/index.md):
 
 ![The engine as a queueing network](../assets/05-engine.deployment.svg)
 
+The figure is labelled in the words an engine is written in
+([Engines on devices](../language.md#engines-on-devices)), whichever form
+the program uses: `tokens cap` is the `budget` below, `pool reqs on
+engine` is `admit via engine`, and `pool kv on engine's device` is the
+stage's `memory`.
+
 ## The `step` stage
 
 ```serq

@@ -42,9 +42,9 @@ program when you need the exact execution path.
 ![vLLM v1: one engine](../assets/vllm.deployment.svg)
 
 That is `examples/multi-turn/vllm.sq`. Its request slot (`reqs`) and its
-KV blocks (`kv`) are held only at `engine`, so they are drawn in its frame.
+KV blocks (`kv`) are held only at `vllm`, so they are drawn in its frame.
 The tool call and the next turn are the workload's, so the figure has
-neither: a request arrives at `engine` and goes out.
+neither: a request arrives at `vllm` and goes out.
 
 ## Glyphs
 
@@ -59,7 +59,7 @@ neither: a request arrives at `engine` and goes out.
 | a pool held across several stations | dashed rounded box, the drum and options in the column at its left |
 | a pool a hold caches in | a grey strip under its row, or along the bottom of its box |
 | the queue a hold waits in | ahead of a dashed box, one per hold rather than per pool: a hold of several pools joins the queue of its first. A frame draws none: its pools are taken at its entrance |
-| a step stage's `memory` | `pool X on S's device` as the pool's title: the engine form's pool on the device, which the IR does not name |
+| a step stage's `memory` | `pool X on S's device` as the pool's title: the engine form's pool on the device, which the IR does not name; `admitted by S` among its options when `S` also admits it |
 | `admit via S` | `pool X on S` as the pool's title, unless it is `S`'s memory; from a dashed box, also a dashed edge from the queue to `S` |
 
 A pool's eviction order is drawn only where something is cached in it: an order
@@ -78,7 +78,7 @@ than assuming every cached pool represents KV memory.
 `replica.sq`'s workload holds `live` for a session's whole conversation,
 and its server holds `reqs` and `kv` only around the engine. A request is
 served inside the workload's hold, so `live` is drawn too. All three are
-held at `engine` alone, so all three are rows in its frame.
+held at `llm` alone, so all three are rows in its frame.
 
 ## A program that holds nothing
 
