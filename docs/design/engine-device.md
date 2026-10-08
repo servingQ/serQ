@@ -172,6 +172,12 @@ iteration); about twelve forms and ten link errors come.
   a constant is what lets a cap of 0 or below be refused before the run;
   `max(k, e)` with `k > 0` constant would keep that and is the opening when
   a program needs it.
+- **A schedule `let` read in `only` (#412)**, to name the predicate
+  `advance running` and `admit waiting` share: a `let` is read as the
+  iteration starts, and `only` for each request with the residents as they
+  stand, so `running.decoding` would mean two values by where it is
+  written (a preemption in the iteration changes it). A `def` names it
+  already and is read where it stands, so the IR stays `serve only (p)`.
 - **A queue's `pool reqs on engine`, or `on gpu` falling back to a
   top-level `gpu`**: `engine` is the keyword, and the queue's name is the
   name its stage already has; a fallback would give one spelling two

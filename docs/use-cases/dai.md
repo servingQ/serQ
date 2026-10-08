@@ -34,19 +34,19 @@ The operating point of the program is the paper's point C (§6.2): CodeLlama-34B
 FasterTransformer is the same program with its schedule changed:
 
 ```serq title="examples/papers/dai_fastertransformer.sq (the engine)"
+// decodes while any request decodes, else prefills: never both
+def in_phase() { running.decoding > 0 ? decoding : !decoding }
 engine fastertransformer on gpu {
   tokens cap bmax;
   schedule {
-    // decodes while any request decodes, else prefills: never both
-    advance running only (running.decoding > 0 ? decoding : !decoding);
-    admit waiting only (running.decoding > 0 ? decoding : !decoding)
-      while (running.preempted == 0);
+    advance running only (in_phase());
+    admit waiting only (in_phase()) while (running.preempted == 0);
   }
   execute (c + compute(tokens));
 }
 ```
 
-`only` serves only the decodes while any request decodes, and only the prefills otherwise: decode first, no mixed batches.
+`only` serves only the decodes while any request decodes, and only the prefills otherwise: decode first, no mixed batches. The running and the waiting requests share the one predicate `in_phase()`.
 
 ## The key propositions
 

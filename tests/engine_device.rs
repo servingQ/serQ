@@ -344,6 +344,37 @@ fn an_engine_reads_its_lists_in_every_clause() {
     );
 }
 
+/// A predicate `advance running` and `admit waiting` share is named with a
+/// `def`, read where each `only` stands, and the schedule is still vLLM's
+/// procedure: `serve only (p)`, no iteration body (#412).
+#[test]
+fn a_def_names_the_predicate_advance_and_admit_share() {
+    let ov = common::horizon(20.0);
+    let p = "running.decoding > 0 ? decoding : !decoding";
+    let named = format!(
+        "def in_phase() {{ {p} }}\n{}",
+        engine(
+            "advance running only (in_phase()); admit waiting only (in_phase()) while \
+             (running.preempted == 0);"
+        )
+    );
+    // a `def` with an argument, and the other `only` written out
+    let mixed = format!(
+        "def in_phase(k) {{ running.decoding > k ? decoding : !decoding }}\n{}",
+        engine(&format!(
+            "advance running only (in_phase(0)); admit waiting only ({p}) while \
+             (running.preempted == 0);"
+        ))
+    );
+    let kernel = ir(
+        &stage("serve only (decoders > 0 ? decoding : !decoding);"),
+        None,
+        &ov,
+    );
+    assert_eq!(ir(&named, None, &ov), kernel);
+    assert_eq!(ir(&mixed, None, &ov), kernel);
+}
+
 #[test]
 fn the_design_refuses_what_it_says() {
     let ok = "advance running; admit waiting while (running.preempted == 0);";
@@ -426,6 +457,14 @@ fn the_design_refuses_what_it_says() {
     refused(
         &engine("let c = 4; advance running; branch (c > 1) { admit waiting; }"),
         "read only in `each at most`",
+    );
+    refused(
+        &engine(
+            "let phase = running.decoding > 0; advance running only (phase ? decoding : \
+             !decoding); admit waiting only (phase ? decoding : !decoding) while \
+             (running.preempted == 0);",
+        ),
+        "with `def phase() { … }`, read as `phase()`",
     );
     refused(
         &engine("advance running each at most (4); admit waiting each at most (5);"),
