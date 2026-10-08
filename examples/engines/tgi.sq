@@ -35,7 +35,7 @@ fn main() {
       branch (just == 0 || running.count == 0) { admit waiting; }
       set just = waiting.admitted > 0;
     }
-    execute (max(hbm(kv_decode + kv_prefill), compute(tokens)));
+    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
   pool kv on gpu { block 1; evict lru; preempt none; }   // the holds name it first: the engine admits it
   stage tool : delay;

@@ -73,6 +73,8 @@ use crate::frontend::queue::{self, QueueDecl};
 
 mod device;
 
+pub use device::engine_name;
+
 #[derive(Debug, Clone)]
 pub struct ParseError {
     pub line: usize,
@@ -266,6 +268,10 @@ struct Def {
 /// Tokens a program may expand to. Definitions use only earlier ones, so
 /// an expansion ends; one can still double at every level.
 const MAX_TOKENS: usize = 100_000;
+
+/// The names an engine reads its values under: `running.count`,
+/// `waiting.count`, `batch.tokens` (`parser/device.rs`).
+const LISTS: [&str; 3] = ["running", "waiting", "batch"];
 
 /// The most members a family (`pool p[N]`, `queue D[N]`) may have.
 const MAX_FAMILY: usize = 10_000;
@@ -3195,7 +3201,7 @@ impl Parser {
         {
             return self.err_at(at + 1, format!("`{name}` is declared twice"));
         }
-        if name == "running" || name == "waiting" {
+        if LISTS.contains(&name.as_str()) {
             return self.err_at(
                 at + 1,
                 format!("`{name}.…` is a value of an engine; a queue needs another name"),
@@ -5110,7 +5116,7 @@ impl Parser {
                         }
                     }
                     Ok(Expr::Located(span, Box::new(Expr::Call(name, args))))
-                } else if (name == "running" || name == "waiting") && *self.peek() == Tok::Dot {
+                } else if LISTS.contains(&name.as_str()) && *self.peek() == Tok::Dot {
                     let at = self.pos - 1;
                     self.advance();
                     let e = self.list_value(at, &name)?;
@@ -5160,7 +5166,7 @@ impl Parser {
         if let Tok::Ident(name) = self.peek().clone() {
             match self.peek_at(1) {
                 // an engine's list value is a value, not a queue's reference
-                Tok::Dot if name == "running" || name == "waiting" => {}
+                Tok::Dot if LISTS.contains(&name.as_str()) => {}
                 Tok::Comma | Tok::RParen => {
                     self.retired_in_engine(self.pos, &name)?;
                     self.advance();

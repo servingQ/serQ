@@ -36,7 +36,7 @@ engine vllm on gpu {
     advance running each at most (threshold);
     admit waiting while (running.preempted == 0) each at most (threshold);
   }
-  execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
+  execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
 }
 pool kv on gpu { block bs; evict lru; preempt lifo; }
 pool reqs on vllm { queue fifo; }
@@ -64,13 +64,17 @@ pool reqs on vllm { queue fifo; }
 - **Values** are named after their list: `running.count` (`residents`),
   `running.decoding` (`decoders`), `running.preempted` (a count this
   iteration), `waiting.count` (every queue the engine admits, as vLLM counts
-  `skipped_waiting`, `scheduler.py:609-611`), `waiting.admitted`. An
-  engine reads them by these names in its `tokens cap`, `execute` and
-  `schedule`, and the bare names nowhere in those clauses, with one
-  exception: `execute` times the batch, whose decodes are `decoders` and
-  may be fewer than `running.decoding`, so there `decoders` stays and
-  `running.decoding` is refused. `running.preempted` and `waiting.admitted`
-  say what the schedule did, so only `schedule` reads them.
+  `skipped_waiting`, `scheduler.py:609-611`), `waiting.admitted`, and the
+  residents' KV `running.kv_decode`, `running.kv_prefill`. The batch's are
+  `batch.tokens`, `batch.prefilled` (in `schedule`, what it has formed so
+  far) and `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`,
+  `batch.attention` (in `execute`). The kernel reads `decoders` and
+  `kv_decode` as the residents' before the batch is formed and as the
+  batch's in `cost`, and a budget or an `only` can leave a resident out of
+  the batch, so the engine names them twice (#416). An engine reads no bare
+  name in its `tokens cap`, `execute` and `schedule`; `running.preempted`
+  and `waiting.admitted` say what the schedule did, so only `schedule`
+  reads them.
 - **`execute (T)`**: the batch's time over the device's resources; a serial
   engine writes `+` for `max`. `cost` is only a request's work.
 - **Names.** `engine` is a keyword, so an engine is named for what it
@@ -192,5 +196,5 @@ iteration); about twelve forms and ten link errors come.
   would be one shared by all, or another queue's.
 - **Open**: names for a run's own attributes (`decoding`, `remaining`) and
   the eviction key's `waiting` (`src/frontend/link.rs:236`), which reads as
-  the list; `batch.kv_decode`; the queue a hold waits in; `exclusive
+  the list; the queue a hold waits in; `exclusive
   prefill`; `granule`; the name `stage`.

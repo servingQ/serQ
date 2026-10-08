@@ -23,7 +23,7 @@ fn main() {
       advance running admission;
       admit waiting while (running.preempted == 0);
     }
-    execute (c + compute(tokens));
+    execute (c + compute(batch.tokens));
   }
 
   workload {

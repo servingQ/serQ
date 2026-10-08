@@ -41,7 +41,7 @@ fn main() {
     tokens cap B;
     granule inf;
     schedule { advance running; admit waiting while (running.preempted == 0); }
-    execute (max(hbm(kv_decode + kv_prefill), compute(tokens)));
+    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
   pool kv on gpu { block bs; evict lru; preempt none; reserve held; }
   pool reqs on trtllm { queue fifo; }

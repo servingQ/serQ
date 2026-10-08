@@ -26,7 +26,7 @@ The operating point of the program is the paper's point C (§6.2): CodeLlama-34B
 | Paper | serQ |
 |---|---|
 | batch budget $b_{\max}$ | `tokens cap bmax;` |
-| batch time $t_b = c + a\lceil b/b_0\rceil$ | `compute (t) = a * ceil(t / b0);` on the device, `execute (c + compute(tokens));` (time in 10 µs, so every number is an integer) |
+| batch time $t_b = c + a\lceil b/b_0\rceil$ | `compute (t) = a * ceil(t / b0);` on the device, `execute (c + compute(batch.tokens));` (time in 10 µs, so every number is an integer) |
 | request $i$ with $v_p$, $v_d$ | `run sarathi prefill (cost(sarathi, vp)); run sarathi decode (cost(sarathi, vd));` |
 | deterministic arrivals | `arrive renewal(gap);` |
 | Sarathi-Serve: decodes first, then the oldest prefills | `advance running admission;`: residents are served in admission order, and without a chunk cap that order is decodes first (`Serve.serve_eq_decode_first`) |
@@ -42,7 +42,7 @@ engine fastertransformer on gpu {
     advance running only (in_phase());
     admit waiting only (in_phase()) while (running.preempted == 0);
   }
-  execute (c + compute(tokens));
+  execute (c + compute(batch.tokens));
 }
 ```
 

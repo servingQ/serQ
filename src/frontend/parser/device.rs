@@ -68,25 +68,77 @@ enum SStmt {
 /// A schedule's `let`s, in order.
 type Lets = Vec<(String, Expr)>;
 
-/// The context variables an engine reads by its lists' names.
-const RETIRED_IN_ENGINE: [(&str, &str); 4] = [
-    ("residents", "running.count"),
-    ("decoders", "running.decoding"),
-    ("preempted", "running.preempted"),
-    ("admitted", "waiting.admitted"),
+/// An engine's values: the name it reads one by, the kernel's context
+/// variable, and the clauses that read it. `running` is the residents as
+/// they stand, `waiting` the queues, `batch` the iteration's batch: as
+/// the schedule forms it, its tokens so far; once formed, what `execute`
+/// times. The kernel reads `decoders` and `kv_decode` as the residents'
+/// before the batch is formed and as the batch's after (#416), so the
+/// engine names them twice.
+const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
+    (
+        "running.count",
+        "residents",
+        &["tokens cap", "schedule", "execute"],
+    ),
+    ("running.decoding", "decoders", &["tokens cap", "schedule"]),
+    (
+        "running.kv_decode",
+        "kv_decode",
+        &["tokens cap", "schedule"],
+    ),
+    (
+        "running.kv_prefill",
+        "kv_prefill",
+        &["tokens cap", "schedule"],
+    ),
+    ("running.preempted", "preempted", &["schedule"]),
+    (
+        "waiting.count",
+        WAITING_COUNT,
+        &["tokens cap", "schedule", "execute"],
+    ),
+    ("waiting.admitted", "admitted", &["schedule"]),
+    ("batch.tokens", "tokens", &["schedule", "execute"]),
+    ("batch.prefilled", "prefilled", &["schedule", "execute"]),
+    ("batch.decoding", "decoders", &["execute"]),
+    ("batch.kv_decode", "kv_decode", &["execute"]),
+    ("batch.kv_prefill", "kv_prefill", &["execute"]),
+    ("batch.attention", "attention", &["execute"]),
 ];
 
-/// What a batch holds once it is formed, which `execute` reads and
-/// `tokens cap`, read before, cannot.
-const BATCH_ONLY: [&str; 3] = ["tokens", "prefilled", "attention"];
+/// The name an engine reads the kernel's context variable `var` by in
+/// `clause` (`tokens cap`, `schedule`, `execute`), if it reads it there: a
+/// view that draws a step stage in an engine's words names it so.
+pub fn engine_name(var: &str, clause: &str) -> Option<&'static str> {
+    ENGINE_VALUES
+        .iter()
+        .find(|(_, k, cs)| *k == var && cs.contains(&clause))
+        .map(|(v, ..)| *v)
+}
 
-/// The refusal of what the iteration's schedule did (`running.preempted`,
-/// `waiting.admitted`) in another clause.
-fn schedule_only(value: &str, clause: &str) -> String {
-    format!(
-        "`{value}` is what the iteration's schedule did, read only in its `schedule`, not in \
-         `{clause}`"
-    )
+/// Why `value` of `ENGINE_VALUES` is not read in `clause`.
+fn not_read_in(value: &str, clause: &str) -> String {
+    let (list, field) = value.split_once('.').expect("a list's value");
+    match list {
+        _ if field == "preempted" || field == "admitted" => format!(
+            "`{value}` is what the iteration's schedule did, read only in its `schedule`, not \
+             in `{clause}`"
+        ),
+        "running" => format!(
+            "`execute` times the batch: `{value}` counts the residents, in the batch or not, \
+             and the batch's is `batch.{field}`"
+        ),
+        _ if clause == "tokens cap" => format!(
+            "`tokens cap` bounds the batch before it is formed: `{value}` is read in `execute`, \
+             and `batch.tokens` and `batch.prefilled` in `schedule` too"
+        ),
+        _ => format!(
+            "`{value}` is the formed batch's, read in `execute`; a schedule reads what it has \
+             formed so far as `batch.tokens` and `batch.prefilled`, and the residents' as \
+             `running.…`"
+        ),
+    }
 }
 
 /// `waiting.count` until the pools the engine admits are known.
@@ -748,7 +800,7 @@ impl Parser {
         r
     }
 
-    /// A list value of an engine after `running` or `waiting` and its dot.
+    /// An engine's value after `running`, `waiting` or `batch` and its dot.
     pub(super) fn list_value(&mut self, at: usize, list: &str) -> PResult<Expr> {
         let Some(clause) = self.in_engine else {
             return self.err_at(
@@ -761,64 +813,43 @@ impl Parser {
         };
         let f_at = self.pos;
         let field = self.ident()?;
-        let var = match (list, field.as_str()) {
-            ("running", "count") => "residents",
-            // `execute` reads the batch, which may leave a decoding resident out
-            ("running", "decoding") if clause == "execute" => {
-                return self.err_at(
-                    at,
-                    "`execute` times the batch, whose decodes are `decoders`: \
-                     `running.decoding` counts the decoding residents, in the batch or not",
-                );
-            }
-            ("running", "decoding") => "decoders",
-            ("running", "preempted") | ("waiting", "admitted") if clause != "schedule" => {
-                return self.err_at(at, schedule_only(&format!("{list}.{field}"), clause));
-            }
-            ("running", "preempted") => "preempted",
-            ("waiting", "admitted") => "admitted",
-            ("waiting", "count") => WAITING_COUNT,
-            _ => {
-                return self.err_at(
-                    f_at,
-                    format!(
-                        "`{list}.{field}`: `running` has `count`, `decoding` and `preempted`, \
-                         `waiting` has `count` and `admitted`"
-                    ),
-                );
-            }
+        let value = format!("{list}.{field}");
+        let Some((_, var, clauses)) = ENGINE_VALUES.iter().find(|(v, ..)| *v == value) else {
+            let has: Vec<&str> = ENGINE_VALUES
+                .iter()
+                .filter_map(|(v, ..)| v.strip_prefix(list)?.strip_prefix('.'))
+                .collect();
+            return self.err_at(
+                f_at,
+                format!("`{value}`: `{list}` has `{}`", has.join("`, `")),
+            );
         };
-        Ok(Expr::Var(var.into()))
+        if !clauses.contains(&clause) {
+            return self.err_at(at, not_read_in(&value, clause));
+        }
+        Ok(Expr::Var((*var).into()))
     }
 
-    /// In an engine, the bare names its lists' values replaced.
+    /// In an engine, the bare names its values replaced: the name for the
+    /// clause, or why the clause reads none.
     pub(super) fn retired_in_engine(&self, at: usize, name: &str) -> PResult<()> {
         let Some(clause) = self.in_engine else {
             return Ok(());
         };
-        // in `execute`, `decoders` is the batch's decodes, which no list names
-        if let Some((_, now)) = RETIRED_IN_ENGINE
+        let named: Vec<_> = ENGINE_VALUES
             .iter()
-            .find(|(n, _)| *n == name && !(clause == "execute" && *n == "decoders"))
-        {
-            if clause != "schedule" && ["preempted", "admitted"].contains(&name) {
-                return self.err_at(at, schedule_only(now, clause));
-            }
-            return self.err_at(
+            .filter(|(_, k, _)| *k == name)
+            .collect();
+        let Some((value, _, _)) = named.first() else {
+            return Ok(());
+        };
+        match named.iter().find(|(_, _, cs)| cs.contains(&clause)) {
+            Some((now, ..)) => self.err_at(
                 at,
-                format!("in an engine, `{name}` is `{now}`: one value, one name"),
-            );
+                format!("in an engine, `{name}` is `{now}` here: one value, one name"),
+            ),
+            None => self.err_at(at, not_read_in(value, clause)),
         }
-        if clause == "tokens cap" && BATCH_ONLY.contains(&name) {
-            return self.err_at(
-                at,
-                format!(
-                    "`{name}` is the batch's, and `tokens cap` bounds the batch before it is \
-                     formed: `execute` reads it"
-                ),
-            );
-        }
-        Ok(())
     }
 
     /// Link the engines, their devices and the pools on them, once the

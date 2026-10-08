@@ -822,7 +822,7 @@ engine vllm on gpu {
     advance running each at most (threshold);
     admit waiting while (running.preempted == 0) each at most (threshold);
   }
-  execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
+  execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
 }
 pool kv on gpu { block bs; evict lru; preempt lifo; }
 pool reqs on vllm { queue fifo; }
@@ -837,7 +837,8 @@ pool reqs on vllm { queue fifo; }
 | `execute (T);` | `cost T;` |
 | `advance running …;` / `admit waiting …;` | `serve …;` / `admit …;` |
 | `each at most (e)` | `chunk e;`: one cap per run for the whole iteration; `inf` is no cap, which the linker writes 0 as the kernel reads it |
-| `running.count`, `running.decoding`, `running.preempted`, `waiting.admitted` | `residents`, `decoders`, `preempted`, `admitted` |
+| `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill`, `running.preempted`, `waiting.admitted` | `residents`, `decoders`, `kv_decode`, `kv_prefill`, `preempted`, `admitted` |
+| `batch.tokens`, `batch.prefilled`, `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | `tokens`, `prefilled`, `decoders`, `kv_decode`, `kv_prefill`, `attention` |
 | `waiting.count` | `queued(p)` summed over the pools the engine admits |
 
 The schedule `advance running [only (p)] [order]; admit waiting [only (p)]
@@ -854,18 +855,26 @@ appears only in the form above, since it takes back decodes a body cannot.
 `each at most` chooses among constants (its condition may read the
 iteration), and one at or below 0 does not link: the kernel would read 0
 as no cap, so the program would mean one thing and run another. An engine
-names a list's value one way in all its clauses: `tokens cap`, `execute`
-and `schedule` read `running.count` and `waiting.count`, never `residents`.
-`tokens cap` and `schedule` read the residents decoding as
-`running.decoding`, never `decoders`. `execute` times the batch, so its
-`decoders`, `tokens` and `kv_decode` are the batch's, and a budget or an
-`only` can leave a decoding resident out of it: `running.decoding` does not
-link there. `running.preempted` and `waiting.admitted` say what the
+names each value one way in all its clauses, and none by the kernel's
+bare name: `running.…` is the residents as they stand, `waiting.…` the
+queues, `batch.…` the iteration's batch.
+
+| Value | `tokens cap` | `schedule` | `execute` |
+|---|---|---|---|
+| `running.count`, `waiting.count` | yes | yes | yes |
+| `running.decoding`, `running.kv_decode`, `running.kv_prefill` | yes | yes | no: the batch's is `batch.…` |
+| `running.preempted`, `waiting.admitted` | no | yes | no |
+| `batch.tokens`, `batch.prefilled` | no | yes: the batch so far | yes |
+| `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | no | no | yes |
+
+`tokens cap` bounds the batch before it is formed, so it reads no
+`batch.…`. `execute` times the batch, which a budget or an `only` can
+leave short of the residents, so it reads the batch's decodes and KV, not
+the residents'. `running.preempted` and `waiting.admitted` say what the
 schedule did, so only `schedule` reads them. `engine` is a keyword: an
 engine is named for what it models (`vllm`, `sglang`, `tgi`) or `llm`.
-Inside a `queue`, `device
-gpu` is the member's and `engine on gpu` is the queue's stage, named after
-the queue, so its pool is `pool reqs on Q`.
+Inside a `queue`, `device gpu` is the member's and `engine on gpu` is the
+queue's stage, named after the queue, so its pool is `pool reqs on Q`.
 
 ### `at admission`
 

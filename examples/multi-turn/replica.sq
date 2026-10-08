@@ -26,12 +26,12 @@ fn main() {
   pool reqs { cap B; }
   device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap C; }
   engine llm on gpu {
-    tokens cap max(running.decoding, (omega + beta * kv_decode) / a);    // fill the memory time
+    tokens cap max(running.decoding, (omega + beta * running.kv_decode) / a);    // fill the memory time
     schedule {
       advance running decode first;                // prefill in what decode leaves
       admit waiting while (running.preempted == 0);
     }
-    execute (max(hbm(kv_decode), compute(tokens)));
+    execute (max(hbm(batch.kv_decode), compute(batch.tokens)));
   }
   pool kv on gpu { evict by (waiting, size); }
   stage tool : delay;

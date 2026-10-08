@@ -14,7 +14,7 @@ fn main() {
       exclusive prefill each at most (128);
       admit waiting while (running.preempted == 0) each at most (128);
     }
-    execute (0.002 + 0.00001 * tokens);
+    execute (0.002 + 0.00001 * batch.tokens);
   }
   pool kv on npu { block 16; evict lru; preempt lifo; }
   pool reqs on llm { queue fifo; }

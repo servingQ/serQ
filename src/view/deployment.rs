@@ -914,14 +914,10 @@ fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>
 
 /// A step stage is drawn in the words an engine is written in
 /// (`docs/language.md`, the engine form), whichever form the program used:
-/// the IR does not keep the form. Its `tokens cap` reads the residents'
-/// totals by their list (#411).
+/// the IR does not keep the form. Its budget is read as `tokens cap` reads
+/// it, the residents' totals by their list (#411, #416).
 fn list_names(v: CtxVar) -> &'static str {
-    match v {
-        CtxVar::Nres => "running.count",
-        CtxVar::Ndec => "running.decoding",
-        v => v.name(),
-    }
+    crate::frontend::parser::engine_name(v.name(), "tokens cap").unwrap_or(v.name())
 }
 
 /// The step stage whose `memory` pool `i` is.
