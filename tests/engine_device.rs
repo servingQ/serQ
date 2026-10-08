@@ -398,6 +398,22 @@ fn an_engine_reads_its_lists_in_every_clause() {
             &ov
         )
     );
+    // and after an `only`, read for each resident, the statements read it again
+    assert_eq!(
+        ir(
+            &engine(
+                "advance running only (running.count > 0); branch (batch.tokens < 8) { admit \
+                 waiting; }"
+            ),
+            None,
+            &ov
+        ),
+        ir(
+            &stage("iteration { serve only (residents > 0); branch (tokens < 8) { admit; } }"),
+            None,
+            &ov
+        )
+    );
     // the bug as found: a list value as a call argument, in a schedule
     assert_eq!(
         ir(

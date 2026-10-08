@@ -71,7 +71,7 @@ type Lets = Vec<(String, Expr)>;
 /// The clauses that read the residents as they stand: as the iteration
 /// starts (`tokens cap`, `each at most` and the `let`s it reads), at each
 /// resident's turn (`only`, `by`) and in the schedule's statements.
-const BEFORE_BATCH: &[&str] = &["tokens cap", "each at most", "only", "by", "schedule"];
+const AS_THEY_STAND: &[&str] = &["tokens cap", "each at most", "only", "by", "schedule"];
 
 /// Those, and `execute`, which reads the count of the residents too.
 const RESIDENTS: &[&str] = &[
@@ -93,9 +93,9 @@ const RESIDENTS: &[&str] = &[
 /// and `each at most` are read at their own moments, not the statements'.
 const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
     ("running.count", "residents", RESIDENTS),
-    ("running.decoding", "decoders", BEFORE_BATCH),
-    ("running.kv_decode", "kv_decode", BEFORE_BATCH),
-    ("running.kv_prefill", "kv_prefill", BEFORE_BATCH),
+    ("running.decoding", "decoders", AS_THEY_STAND),
+    ("running.kv_decode", "kv_decode", AS_THEY_STAND),
+    ("running.kv_prefill", "kv_prefill", AS_THEY_STAND),
     ("running.preempted", "preempted", &["schedule"]),
     ("waiting.count", WAITING_COUNT, RESIDENTS),
     ("waiting.admitted", "admitted", &["schedule"]),
