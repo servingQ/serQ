@@ -11,6 +11,12 @@ model, without a two-scheduler differential oracle or hardware validation.
 
 ![llm-d prefill/decode over NIXL as a queueing network](../assets/llmd_nixl_pull.deployment.svg)
 
+The figure is labelled in an engine's words
+([Engines on devices](../language.md#engines-on-devices)): `pool D.reqs on
+D` is `admit via D`, `pool D.kv on D's device` is `D`'s `memory`,
+`admitted by D` among its options, and `tokens cap` is the `budget` of
+`serve step`.
+
 The router picks a prefill instance and a decode instance, each a box with
 its engine, its NIC and its pools. The read crosses between them: it holds
 the prefiller's NIC and the decoder's at once, which is the bracket around

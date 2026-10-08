@@ -51,6 +51,44 @@ fn pools_of(p: &Program, net: &deployment::Net, stage_name: &str) -> Vec<String>
         .collect()
 }
 
+/// Every text the figure of `name` writes.
+fn texts(name: &str) -> Vec<String> {
+    deployment::figure(&program(name))
+        .items
+        .into_iter()
+        .filter_map(|i| match i {
+            serq::view::figure::Item::Text { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A step stage is drawn in an engine's words, whichever form the program
+/// is written in (#413): `llmd_nixl_pull.sq`'s `serve step` is an engine
+/// with `tokens cap`; a pool it admits is on it, its memory on its device,
+/// and a memory it also admits (`D.kv`) says so among its options.
+#[test]
+fn a_step_stage_is_drawn_in_an_engines_words() {
+    let t = texts("llmd_nixl_pull");
+    let has = |s: &str| t.iter().any(|x| x == s);
+    for s in [
+        "tokens cap 8192",
+        "pool P.reqs on P",
+        "pool D.reqs on D",
+        "pool P.kv on P's device",
+        "pool D.kv on D's device",
+    ] {
+        assert!(has(s), "no {s:?} in {t:?}");
+    }
+    let admitted: Vec<&String> = t.iter().filter(|x| x.contains("admitted by")).collect();
+    assert_eq!(admitted.len(), 1, "{admitted:?}");
+    assert!(admitted[0].ends_with("admitted by D"), "{admitted:?}");
+    assert!(
+        !t.iter()
+            .any(|x| x.contains("admit via") || x.starts_with("budget"))
+    );
+}
+
 // --- the station kinds -----------------------------------------------------
 
 /// Each stage kind has its glyph: `mg1.sq` is one FIFO server, `ps.sq` one

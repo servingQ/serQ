@@ -178,6 +178,13 @@ iteration); about twelve forms and ten link errors come.
   stand, so `running.decoding` would mean two values by where it is
   written (a preemption in the iteration changes it). A `def` names it
   already and is read where it stands, so the IR stays `serve only (p)`.
+- **The drawing in two vocabularies, or with the device's name (#413)**:
+  `serq draw` labels a step stage `engine` and `tokens cap`, and a pool
+  `on S` or `on S's device`, whichever form the program used. The IR keeps
+  no form, so telling them apart would need the frontend's spans beside
+  the IR, and a drawing from the IR alone would differ from one from the
+  text. Naming the device would need it in the IR, where no value moves
+  (§Lowering) and a label does not earn a field.
 - **A queue's `pool reqs on engine`, or `on gpu` falling back to a
   top-level `gpu`**: `engine` is the keyword, and the queue's name is the
   name its stage already has; a fallback would give one spelling two
