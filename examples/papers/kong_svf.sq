@@ -21,16 +21,18 @@ fn main() {
 
   pool kv { cap M; queue by (s * o + floor((o * o + o) / 2)); }
 
-  stage engine : step {
-    budget 1000000;        // every active request decodes one token per step
-    cost 1;
+  device gpu { }
+  engine llm on gpu {
+    tokens cap 1000000;    // every active request decodes one token per step
+    schedule { advance running; admit waiting while (running.preempted == 0); }
+    execute (1);           // one time unit per step
   }
 
   server {
     observe out = o;
     observe vol = s * o + floor((o * o + o) / 2);
     hold kv (cost(kv, s + o)) {
-      run engine decode (cost(engine, o));
+      run llm decode (cost(llm, o));
     }
     observe response = now;
   }

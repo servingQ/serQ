@@ -15,10 +15,15 @@ let vp = 290;
 let vd = 990;
 
 fn main() {
-  stage engine : step {
-    budget bmax;
-    cost c + a * ceil(tokens / b0);
-    serve admission;       // admission order: decodes first, then the oldest prefills (no chunk cap)
+  device gpu { compute (t) = a * ceil(t / b0); }
+  engine sarathi on gpu {
+    tokens cap bmax;
+    schedule {
+      // admission order: decodes first, then the oldest prefills (no chunk cap)
+      advance running admission;
+      admit waiting while (running.preempted == 0);
+    }
+    execute (c + compute(tokens));
   }
 
   workload {
@@ -28,23 +33,23 @@ fn main() {
   }
 
   server {
-    run engine prefill (cost(engine, vp));
-    run engine decode (cost(engine, vd));
+    run sarathi prefill (cost(sarathi, vp));
+    run sarathi decode (cost(sarathi, vd));
     observe response = now - t0;
   }
 
   // (8)-(9): a batch is full whenever the residents could fill it. Sarathi is
   // work-conserving (§4).
-  claim work_conserving: every iteration of engine (demand < bmax || tokens == bmax);
+  claim work_conserving: every iteration of sarathi (demand < bmax || tokens == bmax);
 
   // Theorem 2(a): no scheduler serves more than b_max / t_{b_max} tokens per
   // unit of time, so a load above it diverges.
-  claim token_rate: every iteration of engine (served * (c + a * bmax / b0) <= bmax * now);
+  claim token_rate: every iteration of sarathi (served * (c + a * bmax / b0) <= bmax * now);
 
   // Theorem 2(b), pathwise: at this load (one request's tokens per gap, which is
   // exactly b_max / t_{b_max}) the work that has arrived and not been served
   // never exceeds b_max + 1 requests' worth, however many arrive.
-  claim bounded: every iteration of engine (arrived * (vp + vd) <= served + (bmax + 1) * (vp + vd));
+  claim bounded: every iteration of sarathi (arrived * (vp + vd) <= served + (bmax + 1) * (vp + vd));
 
 
 }

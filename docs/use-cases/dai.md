@@ -25,23 +25,28 @@ The operating point of the program is the paper's point C (§6.2): CodeLlama-34B
 
 | Paper | serQ |
 |---|---|
-| batch budget $b_{\max}$ | `budget bmax;` |
-| batch time $t_b = c + a\lceil b/b_0\rceil$ | `cost c + a * ceil(tokens / b0);` (time in 10 µs, so every number is an integer) |
-| request $i$ with $v_p$, $v_d$ | `run engine prefill (cost(engine, vp)); run engine decode (cost(engine, vd));` |
+| batch budget $b_{\max}$ | `tokens cap bmax;` |
+| batch time $t_b = c + a\lceil b/b_0\rceil$ | `compute (t) = a * ceil(t / b0);` on the device, `execute (c + compute(tokens));` (time in 10 µs, so every number is an integer) |
+| request $i$ with $v_p$, $v_d$ | `run sarathi prefill (cost(sarathi, vp)); run sarathi decode (cost(sarathi, vd));` |
 | deterministic arrivals | `arrive renewal(gap);` |
-| Sarathi-Serve: decodes first, then the oldest prefills | `serve admission;`: residents are served in admission order, and without a chunk cap that order is decodes first (`Serve.serve_eq_decode_first`) |
+| Sarathi-Serve: decodes first, then the oldest prefills | `advance running admission;`: residents are served in admission order, and without a chunk cap that order is decodes first (`Serve.serve_eq_decode_first`) |
 
-FasterTransformer is the same program with one line changed:
+FasterTransformer is the same program with its schedule changed:
 
-```serq title="examples/papers/dai_fastertransformer.sq (the stage)"
-stage engine : step {
-  budget bmax;
-  cost c + a * ceil(tokens / b0);
-  serve only (decoders > 0 ? decoding : !decoding);
+```serq title="examples/papers/dai_fastertransformer.sq (the engine)"
+engine fastertransformer on gpu {
+  tokens cap bmax;
+  schedule {
+    // decodes while any request decodes, else prefills: never both
+    advance running only (running.decoding > 0 ? decoding : !decoding);
+    admit waiting only (running.decoding > 0 ? decoding : !decoding)
+      while (running.preempted == 0);
+  }
+  execute (c + compute(tokens));
 }
 ```
 
-`serve only` serves only the decodes while any request decodes, and only the prefills otherwise: decode first, no mixed batches.
+`only` serves only the decodes while any request decodes, and only the prefills otherwise: decode first, no mixed batches.
 
 ## The key propositions
 
@@ -84,16 +89,16 @@ The two programs express these results as [claims](../api/program.md#claim):
 
 ```serq
 // (8)-(9): a batch is full whenever the residents could fill it.
-claim work_conserving: every iteration of engine (demand < bmax || tokens == bmax);
+claim work_conserving: every iteration of sarathi (demand < bmax || tokens == bmax);
 
 // Theorem 2(a): no scheduler serves more than b_max / t_{b_max} tokens per unit of time.
-claim token_rate: every iteration of engine (served * (c + a * bmax / b0) <= bmax * now);
+claim token_rate: every iteration of sarathi (served * (c + a * bmax / b0) <= bmax * now);
 
 // §4 (dai_fastertransformer.sq): FasterTransformer is not work-conserving.
-claim not_work_conserving: some iteration of engine (demand >= bmax && tokens < bmax);
+claim not_work_conserving: some iteration of fastertransformer (demand >= bmax && tokens < bmax);
 
 // Theorem 2(b), pathwise: arrived and unserved work stays below b_max + 1 requests' worth.
-claim bounded: every iteration of engine (arrived * (vp + vd) <= served + (bmax + 1) * (vp + vd));
+claim bounded: every iteration of sarathi (arrived * (vp + vd) <= served + (bmax + 1) * (vp + vd));
 ```
 
 `demand` is the paper's $\sum_i (p_i + \mathbf 1\{p_i=0\})$: what the residents could take with an unlimited budget. `served` is the tokens of the earlier iterations and `now` the start of this one, so `token_rate` says the served tokens never exceed the rate $b_{\max}/t_{b_{\max}}$ times the elapsed time. `arrived` is the requests that have arrived by the iteration's start, so `arrived * (vp + vd) - served` is the backlog in tokens. `some iteration` claims existence: one workload of the program's family and one iteration of one of its paths.

@@ -336,7 +336,7 @@ const ACROSS: &str = "pool live { cap 2; } pool kv { cap 9; }
 fn nested_holds_nest() {
     let p = program("replica");
     let net = deployment::project(&p);
-    assert_eq!(pools_of(&p, &net, "engine"), ["live", "reqs", "kv"]);
+    assert_eq!(pools_of(&p, &net, "llm"), ["live", "reqs", "kv"]);
     let p = compile(ACROSS);
     let net = deployment::project(&p);
     assert_eq!(pools_of(&p, &net, "A"), ["live", "kv"]);
@@ -356,7 +356,7 @@ fn pools_held_at_one_station_are_drawn_in_it() {
     };
     let p = program("vllm");
     let net = deployment::project(&p);
-    let engine = net.node_of(stage(&p, "engine")).unwrap();
+    let engine = net.node_of(stage(&p, "vllm")).unwrap();
     assert_eq!(
         net.resident_pools(engine),
         [pool(&p, "reqs"), pool(&p, "kv")]
@@ -370,7 +370,7 @@ fn pools_held_at_one_station_are_drawn_in_it() {
     // its `reqs` and `kv` around the engine: all three at the engine alone
     let p = program("replica");
     let net = deployment::project(&p);
-    let engine = net.node_of(stage(&p, "engine")).unwrap();
+    let engine = net.node_of(stage(&p, "llm")).unwrap();
     assert_eq!(
         net.resident_pools(engine),
         [pool(&p, "live"), pool(&p, "reqs"), pool(&p, "kv")]
@@ -666,7 +666,7 @@ fn the_router_branches_to_a_remote_or_a_local_prefill() {
 fn a_split_program_is_drawn_as_its_server() {
     let p = program("vllm");
     let net = deployment::project(&p);
-    let engine = End::Node(net.node_of(stage(&p, "engine")).unwrap());
+    let engine = End::Node(net.node_of(stage(&p, "vllm")).unwrap());
     assert_eq!(net.nodes.len(), 1);
     assert!(net.node_of(stage(&p, "tool")).is_none());
     assert!(net.has_edge(End::Arrival, engine));
@@ -675,7 +675,7 @@ fn a_split_program_is_drawn_as_its_server() {
     assert_eq!((out[0].from, out[0].label.as_deref()), (engine, None));
     let p = program("vllm_replay");
     let net = deployment::project(&p);
-    for st in ["front", "engine"] {
+    for st in ["front", "vllm"] {
         assert!(net.node_of(stage(&p, st)).is_some(), "{st}");
     }
     for st in ["gate", "tool"] {

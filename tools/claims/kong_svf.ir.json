@@ -116,7 +116,7 @@
   ],
   "stages": [
     {
-      "name": "engine",
+      "name": "llm",
       "kind": {
         "Step": {
           "budget": {

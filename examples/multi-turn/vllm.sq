@@ -2,7 +2,7 @@
 // scheduler.py`, `kv_cache_manager.py`, `block_pool.py`), as a serQ
 // program. Continuous batching with chunked prefill: every iteration hands
 // a token budget to the running requests in admission order (one token per
-// decoding request, up to `chunk` per prefilling one), then admits waiting
+// decoding request, up to `each at most` per prefilling one), then admits waiting
 // requests FCFS while the request cap and the KV blocks allow, the first
 // that does not fit blocking the rest. KV memory is a block pool with a
 // block-level LRU prefix cache: a finished (or preempted) request's full
@@ -28,19 +28,28 @@ let p = 0.9;           // continue after a turn
 fn main() {
   let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
   let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
-  let chunk_cap = args.number("chunk_cap", 0);     // long_prefill_token_threshold (0: none)
+  let chunk_cap = args.number("chunk_cap", inf);   // long_prefill_token_threshold (inf: none)
   let Lambda = args.number("Lambda", 0.3);      // sessions per second
   let Z = args.number("Z", 3.0);           // tool time (s)
 
-  pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-  pool reqs { cap max_seqs; admit via engine; }   // the engine's step admits the waiting, FCFS
-
-  stage engine : step {
-    budget B;
-    chunk long_prefill(reqs, chunk_cap);
-    cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-    memory kv;
+  device gpu {
+    compute (t) = t * a;
+    hbm (k) = omega + beta * k;
+    kv cap blocks * bs;
   }
+  engine vllm on gpu {
+    reqs cap max_seqs;
+    tokens cap B;
+    schedule {
+      // the cap holds only while more than one request is running or waiting
+      let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
+      advance running each at most (threshold);
+      admit waiting while (running.preempted == 0) each at most (threshold);
+    }
+    execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
+  }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
+  pool reqs on vllm { queue fifo; }   // the engine admits the waiting, FCFS
   stage tool : delay;
 
   // --8<-- [start:workload]
@@ -78,15 +87,15 @@ fn main() {
     // token the request has: the prompt, or after a preemption the position
     // it had reached plus the token sampled there (vLLM keeps the generated
     // tokens and drops only their KV, scheduler.py:1560-1561).
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(engine))))
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))
          at admission (known = computed < prompt ? prompt : computed + 1,
                        hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
       set c = min(cached, reusable(known, blocksize(kv)));
       observe hit = c > 0;                    // any reused block, again after a preemption
       observe prefill_tokens = known - c;
-      run engine prefill (cost(engine, known - c)) growing kv;
+      run vllm prefill (cost(vllm, known - c)) growing kv;
       branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
-      run engine decode (cost(engine, o - 1 - (known - prompt))) growing kv;
+      run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
     } cache (cost(reqs, kv, prompt + o));
     observe response = now - t0;
   }

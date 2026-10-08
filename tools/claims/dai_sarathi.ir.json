@@ -43,7 +43,7 @@
   "pools": [],
   "stages": [
     {
-      "name": "engine",
+      "name": "sarathi",
       "kind": {
         "Step": {
           "budget": {

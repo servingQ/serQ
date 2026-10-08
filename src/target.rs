@@ -208,18 +208,20 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
 
 /// vLLM's `long_prefill_token_threshold` as a program states it. vLLM
 /// applies the cap only while more than one request is running or waiting
-/// (scheduler.py:606-616), so a constant cap is not vLLM's: the program
-/// writes `chunk long_prefill(reqs, c)` (lib/vllm.sq), `residents +
-/// queued(reqs) > 1 ? c : 0` with `reqs` the request-slot pool, or `chunk 0`
-/// for no cap.
+/// (scheduler.py:606-616), so a constant cap is not vLLM's: an engine writes
+/// `each at most (threshold)` with `let threshold = running.count +
+/// waiting.count > 1 ? c : inf;`, a step stage `chunk long_prefill(reqs, c)`
+/// (lib/vllm.sq), `residents + queued(reqs) > 1 ? c : 0` with `reqs` the
+/// request-slot pool, or `chunk 0` for no cap.
 fn vllm_chunk(p: &Program, e: &CExpr, slots: usize) -> Result<f64, String> {
     use crate::ir::{CArg, Fun};
     let refuse = || {
         Err(format!(
             "not on vLLM's architecture: the chunk cap is `{}`; vLLM caps a prefill only while \
-             another request is running or waiting (scheduler.py:606-616)\nhelp: write `chunk \
-             long_prefill({name}, c)` (lib/vllm.sq), which is `residents + queued({name}) > 1 ? \
-             c : 0`, or `chunk 0` for no cap",
+             another request is running or waiting (scheduler.py:606-616)\nhelp: in an \
+             engine's schedule, `let threshold = running.count + waiting.count > 1 ? c : inf;` \
+             and `each at most (threshold)`, or no `each at most` for no cap; in a step stage, \
+             `chunk long_prefill({name}, c)` (lib/vllm.sq), or `chunk 0`",
             p.show_expr(e),
             name = p.pools[slots].name
         ))

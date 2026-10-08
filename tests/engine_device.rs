@@ -13,21 +13,6 @@ fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// An example's stage `engine` renamed `vllm`, the name the engine form
-/// gives it here: `engine` is the keyword of the form, so an engine cannot
-/// be called it. Only the places an example names its stage are rewritten.
-fn as_vllm(src: &str) -> String {
-    [
-        ("admit via engine;", "admit via vllm;"),
-        ("stage engine :", "stage vllm :"),
-        ("run engine ", "run vllm "),
-        ("cost(engine,", "cost(vllm,"),
-        ("budget_left(engine)", "budget_left(vllm)"),
-    ]
-    .iter()
-    .fold(src.to_string(), |s, (a, b)| s.replace(a, b))
-}
-
 fn ir(src: &str, base: Option<&Path>, ov: &Overrides) -> String {
     let p = compile_source_at(&common::main_source(src), base, ov)
         .unwrap_or_else(|e| panic!("{e}\n{src}"));
@@ -55,20 +40,23 @@ fn replaced(text: &str, pairs: &[(&str, &str)]) -> String {
     t
 }
 
-/// `examples/multi-turn/vllm.sq`'s step stage, written as an engine.
+/// `text` with its declarations from `from` up to `to` replaced by `with`.
+fn spliced(text: &str, from: &str, to: &str, with: &str) -> String {
+    let i = text.find(from).unwrap_or_else(|| panic!("no {from:?}"));
+    let j = i + text[i..].find(to).unwrap_or_else(|| panic!("no {to:?}"));
+    format!("{}{with}{}", &text[..i], &text[j..])
+}
+
+/// `examples/multi-turn/vllm.sq`, an engine, and the step stage it is.
 fn vllm_engine() -> (String, String) {
-    let old =
-        as_vllm(&std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap());
-    let new = replaced(
-        &old,
-        &[
-            (
-                r#"let chunk_cap = args.number("chunk_cap", 0);"#,
-                r#"let chunk_cap = args.number("chunk_cap", inf);"#,
-            ),
-            (
-                "  pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-  pool reqs { cap max_seqs; admit via vllm; }   // the engine's step admits the waiting, FCFS
+    let new = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
+    let old = replaced(
+        &spliced(
+            &new,
+            "  device gpu {",
+            "  stage tool : delay;",
+            "  pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
+  pool reqs { cap max_seqs; admit via vllm; }
 
   stage vllm : step {
     budget B;
@@ -77,26 +65,11 @@ fn vllm_engine() -> (String, String) {
     memory kv;
   }
 ",
-                "  device gpu {
-    compute (t) = t * a;
-    hbm (k) = omega + beta * k;
-    kv cap blocks * bs;
-  }
-  engine vllm on gpu {
-    reqs cap max_seqs;
-    tokens cap B;
-    schedule {
-      let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
-      advance running each at most (threshold);
-      admit waiting while (running.preempted == 0) each at most (threshold);
-    }
-    execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
-  }
-  pool kv on gpu { block bs; evict lru; preempt lifo; }
-  pool reqs on vllm { queue fifo; }
-",
-            ),
-        ],
+        ),
+        &[(
+            r#"args.number("chunk_cap", inf)"#,
+            r#"args.number("chunk_cap", 0)"#,
+        )],
     );
     (old, new)
 }
@@ -127,77 +100,58 @@ fn vllm_as_an_engine_has_the_step_stages_ir() {
 fn sglang_and_tgi_as_engines_have_their_irs() {
     let base = root().join("examples/engines");
     let ov = common::horizon(100.0);
-    let tgi = as_vllm(&std::fs::read_to_string(base.join("tgi.sq")).unwrap());
-    let tgi_new = replaced(
+    let tgi = std::fs::read_to_string(base.join("tgi.sq")).unwrap();
+    let tgi_old = spliced(
         &tgi,
-        &[(
-            "  pool kv { cap T; block 1; evict lru; preempt none; admit via vllm; }
+        "  device gpu {",
+        "  stage tool : delay;",
+        "  pool kv { cap T; block 1; evict lru; preempt none; admit via tgi; }
 
-  stage vllm : step {
+  stage tgi : step {
     budget B;
     cost max(omega + beta * (kv_decode + kv_prefill), tokens * a);
     memory kv;
-    state just = 0;                // the last forward admitted
-    // with no running batch there is no decode forward, and the queue is read
+    state just = 0;
     iteration { serve; branch (just == 0 || residents == 0) { admit; } set just = admitted > 0; }
   }
 ",
-            "  device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap T; }
-  engine vllm on gpu {
-    tokens cap B;
-    state just = 0;
-    schedule {
-      advance running;
-      branch (just == 0 || running.count == 0) { admit waiting; }
-      set just = waiting.admitted > 0;
-    }
-    execute (max(hbm(kv_decode + kv_prefill), compute(tokens)));
-  }
-  pool kv on gpu { block 1; evict lru; preempt none; }
-",
-        )],
     );
-    assert_eq!(ir(&tgi, Some(&base), &ov), ir(&tgi_new, Some(&base), &ov));
+    assert_eq!(ir(&tgi_old, Some(&base), &ov), ir(&tgi, Some(&base), &ov));
 
-    let sglang = as_vllm(&std::fs::read_to_string(base.join("sglang.sq")).unwrap());
-    let start = sglang
-        .find("  pool reqs { cap max_run; admit via vllm; }")
-        .unwrap();
-    let end = sglang.find("  stage tool : delay;").unwrap();
-    let block = &sglang[start..end];
-    let body = &block[block.find("    iteration {").unwrap()..block.rfind("  }").unwrap()];
-    let body = replaced(
-        body,
-        &[
-            ("    iteration {", "    schedule {"),
-            (
-                "serve only (!decoding);",
-                "advance running only (!decoding);",
-            ),
-            ("      admit;", "      admit waiting;"),
-            ("        serve;", "        advance running;"),
-            ("residents == 0", "running.count == 0"),
-            ("preempted > 0", "running.preempted > 0"),
-            ("queued(reqs) > 0", "waiting.count > 0"),
-        ],
-    );
-    let engine = format!(
-        "  device gpu {{ compute (t) = t * a; hbm (k) = omega + beta * k; kv cap tokens_cap; }}
-  engine vllm on gpu {{
-    reqs cap max_run;
-    tokens cap B;
+    let sglang = std::fs::read_to_string(base.join("sglang.sq")).unwrap();
+    let sglang_old = spliced(
+        &sglang,
+        "  device gpu {",
+        "  stage tool : delay;",
+        "  pool reqs { cap max_run; admit via sglang; }
+  pool kv { cap tokens_cap; evict lru; preempt by (1 - decoding, position - prompt, -prompt) requeue tail; }
+
+  stage sglang : step {
+    budget B;
+    cost max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+    memory kv;
     state ratio = r0;
     state backlog = 0;
-{body}    execute (max(hbm(kv_decode + kv_prefill), compute(tokens)));
-  }}
-  pool reqs on vllm {{ queue fifo; }}
-  pool kv on gpu {{ evict lru; preempt by (1 - decoding, position - prompt, -prompt) requeue tail; }}
-"
+    iteration {
+      branch (residents == 0 && backlog == 0) { set ratio = r0; }
+      serve only (!decoding);
+      admit;
+      branch (tokens == 0) {
+        serve;
+        branch (preempted > 0) {
+          set ratio = max(r_min, min(1, retract_steps / M));
+        } else {
+          set ratio = max(r_min, ratio - r_decay);
+        }
+      }
+      set backlog = queued(reqs) > 0;
+    }
+  }
+",
     );
-    let sglang_new = format!("{}{engine}{}", &sglang[..start], &sglang[end..]);
     assert_eq!(
-        ir(&sglang, Some(&base), &ov),
-        ir(&sglang_new, Some(&base), &ov)
+        ir(&sglang_old, Some(&base), &ov),
+        ir(&sglang, Some(&base), &ov)
     );
 }
 

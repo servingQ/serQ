@@ -8,7 +8,7 @@
     "num_gpu_blocks": 1000,
     "scheduler_cls": "serq_vllm.SerqScheduler"
   },
-  "engine": "engine",
+  "engine": "vllm",
   "serve_by": [
     {
       "Cond": [

@@ -22,20 +22,18 @@ mod common;
 
 use serq::{compile_source_at, program_path, run_ir};
 
-const ENGINE: &str =
-    "stage engine : step { budget B; chunk long_prefill(reqs, chunk); cost 1; memory kv; }";
+const RUNNING: &str = "advance running each at most (threshold);";
 
 #[test]
 fn a_served_resident_preempted_in_its_iteration_leaves_it() {
     let path = program_path("vllm_request");
     let src = std::fs::read_to_string(&path).unwrap();
-    assert!(src.contains(ENGINE), "the oracle program's engine moved");
-    // newest first (the oracle program's chunk is vLLM's already: the cap
-    // holds only with another request eligible)
+    assert!(src.contains(RUNNING), "the oracle program's engine moved");
+    // newest first (the oracle program's cap is vLLM's already: it holds
+    // only with another request eligible)
     let src = src.replace(
-        ENGINE,
-        "stage engine : step { budget B; chunk long_prefill(reqs, chunk); \
-         cost 1; serve by (-admission); memory kv; }",
+        RUNNING,
+        "advance running by (-admission) each at most (threshold);",
     );
     let mut ov = common::horizon(100000.0);
     for (k, v) in [

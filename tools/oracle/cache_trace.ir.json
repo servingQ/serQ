@@ -138,7 +138,7 @@
   ],
   "stages": [
     {
-      "name": "engine",
+      "name": "vllm",
       "kind": {
         "Step": {
           "budget": {
