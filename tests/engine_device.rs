@@ -13,50 +13,29 @@ fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// The stage the programs here name `engine` is named `vllm`: `engine` is
-/// the keyword of the form, so an engine cannot be called it. Both sides of
-/// a comparison are renamed alike, the keyword left where it is one.
-fn named(src: &str) -> String {
-    let word = |c: char| c.is_alphanumeric() || c == '_';
-    let mut out = String::new();
-    let mut rest = src;
-    while let Some(i) = rest.find("engine") {
-        let before = rest[..i].chars().next_back();
-        let after = rest[i + 6..].chars().next();
-        out.push_str(&rest[..i]);
-        let whole = !before.is_some_and(word) && !after.is_some_and(word);
-        // the keyword: `engine NAME on`, `engine NAME[`, a queue's `engine on`
-        let tail = rest[i + 6..].trim_start();
-        let next: String = tail.chars().take_while(|c| word(*c)).collect();
-        let after_next = tail[next.len()..].trim_start();
-        // right after the keyword, the word is the engine's name
-        let named_here = out.trim_end().ends_with("engine")
-            && out.trim_end().len() < out.len()
-            && !out.trim_end()[..out.trim_end().len() - 6]
-                .chars()
-                .next_back()
-                .is_some_and(word);
-        let keyword = !named_here
-            && (next == "on"
-                || (!next.is_empty()
-                    && (after_next.starts_with("on ") || after_next.starts_with('['))));
-        out.push_str(if whole && !keyword { "vllm" } else { "engine" });
-        rest = &rest[i + 6..];
-    }
-    out.push_str(rest);
-    out
+/// An example's stage `engine` renamed `vllm`, the name the engine form
+/// gives it here: `engine` is the keyword of the form, so an engine cannot
+/// be called it. Only the places an example names its stage are rewritten.
+fn as_vllm(src: &str) -> String {
+    [
+        ("admit via engine;", "admit via vllm;"),
+        ("stage engine :", "stage vllm :"),
+        ("run engine ", "run vllm "),
+        ("cost(engine,", "cost(vllm,"),
+        ("budget_left(engine)", "budget_left(vllm)"),
+    ]
+    .iter()
+    .fold(src.to_string(), |s, (a, b)| s.replace(a, b))
 }
 
 fn ir(src: &str, base: Option<&Path>, ov: &Overrides) -> String {
-    let src = named(src);
-    let p = compile_source_at(&common::main_source(&src), base, ov)
+    let p = compile_source_at(&common::main_source(src), base, ov)
         .unwrap_or_else(|e| panic!("{e}\n{src}"));
     serde_json::to_string_pretty(&p).unwrap()
 }
 
 fn error(src: &str) -> String {
-    let src = named(src);
-    match compile_source_at(&common::main_source(&src), None, &common::horizon(10.0)) {
+    match compile_source_at(&common::main_source(src), None, &common::horizon(10.0)) {
         Ok(_) => panic!("links:\n{src}"),
         Err(e) => e,
     }
@@ -78,7 +57,8 @@ fn replaced(text: &str, pairs: &[(&str, &str)]) -> String {
 
 /// `examples/multi-turn/vllm.sq`'s step stage, written as an engine.
 fn vllm_engine() -> (String, String) {
-    let old = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
+    let old =
+        as_vllm(&std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap());
     let new = replaced(
         &old,
         &[
@@ -88,9 +68,9 @@ fn vllm_engine() -> (String, String) {
             ),
             (
                 "  pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-  pool reqs { cap max_seqs; admit via engine; }   // the engine's step admits the waiting, FCFS
+  pool reqs { cap max_seqs; admit via vllm; }   // the engine's step admits the waiting, FCFS
 
-  stage engine : step {
+  stage vllm : step {
     budget B;
     chunk long_prefill(reqs, chunk_cap);
     cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
@@ -102,7 +82,7 @@ fn vllm_engine() -> (String, String) {
     hbm (k) = omega + beta * k;
     kv cap blocks * bs;
   }
-  engine engine on gpu {
+  engine vllm on gpu {
     reqs cap max_seqs;
     tokens cap B;
     schedule {
@@ -113,7 +93,7 @@ fn vllm_engine() -> (String, String) {
     execute (c0 + max(hbm(kv_decode + kv_prefill), compute(tokens)));
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
-  pool reqs on engine { queue fifo; }
+  pool reqs on vllm { queue fifo; }
 ",
             ),
         ],
@@ -147,13 +127,13 @@ fn vllm_as_an_engine_has_the_step_stages_ir() {
 fn sglang_and_tgi_as_engines_have_their_irs() {
     let base = root().join("examples/engines");
     let ov = common::horizon(100.0);
-    let tgi = std::fs::read_to_string(base.join("tgi.sq")).unwrap();
+    let tgi = as_vllm(&std::fs::read_to_string(base.join("tgi.sq")).unwrap());
     let tgi_new = replaced(
         &tgi,
         &[(
-            "  pool kv { cap T; block 1; evict lru; preempt none; admit via engine; }
+            "  pool kv { cap T; block 1; evict lru; preempt none; admit via vllm; }
 
-  stage engine : step {
+  stage vllm : step {
     budget B;
     cost max(omega + beta * (kv_decode + kv_prefill), tokens * a);
     memory kv;
@@ -163,7 +143,7 @@ fn sglang_and_tgi_as_engines_have_their_irs() {
   }
 ",
             "  device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap T; }
-  engine engine on gpu {
+  engine vllm on gpu {
     tokens cap B;
     state just = 0;
     schedule {
@@ -179,9 +159,9 @@ fn sglang_and_tgi_as_engines_have_their_irs() {
     );
     assert_eq!(ir(&tgi, Some(&base), &ov), ir(&tgi_new, Some(&base), &ov));
 
-    let sglang = std::fs::read_to_string(base.join("sglang.sq")).unwrap();
+    let sglang = as_vllm(&std::fs::read_to_string(base.join("sglang.sq")).unwrap());
     let start = sglang
-        .find("  pool reqs { cap max_run; admit via engine; }")
+        .find("  pool reqs { cap max_run; admit via vllm; }")
         .unwrap();
     let end = sglang.find("  stage tool : delay;").unwrap();
     let block = &sglang[start..end];
@@ -203,14 +183,14 @@ fn sglang_and_tgi_as_engines_have_their_irs() {
     );
     let engine = format!(
         "  device gpu {{ compute (t) = t * a; hbm (k) = omega + beta * k; kv cap tokens_cap; }}
-  engine engine on gpu {{
+  engine vllm on gpu {{
     reqs cap max_run;
     tokens cap B;
     state ratio = r0;
     state backlog = 0;
 {body}    execute (max(hbm(kv_decode + kv_prefill), compute(tokens)));
   }}
-  pool reqs on engine {{ queue fifo; }}
+  pool reqs on vllm {{ queue fifo; }}
   pool kv on gpu {{ evict lru; preempt by (1 - decoding, position - prompt, -prompt) requeue tail; }}
 "
     );
@@ -226,8 +206,8 @@ const WORKLOAD: &str = "
 workload { arrive batch(3); init { set prompt = 2; } }
 server {
   hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {
-    run engine prefill (cost(engine, prompt)) growing kv;
-    run engine decode (cost(engine, 2)) growing kv;
+    run vllm prefill (cost(vllm, prompt)) growing kv;
+    run vllm decode (cost(vllm, 2)) growing kv;
   }
 }
 ";
@@ -235,13 +215,13 @@ server {
 fn engine(schedule: &str) -> String {
     format!(
         "device gpu {{ step_time (t) = 1; kv cap 100; }}
-engine engine on gpu {{
+engine vllm on gpu {{
   reqs cap 8;
   tokens cap 8;
   schedule {{ {schedule} }}
   execute (step_time(tokens));
 }}
-pool reqs on engine {{ }}
+pool reqs on vllm {{ }}
 pool kv on gpu {{ preempt lifo; }}
 {WORKLOAD}"
     )
@@ -249,9 +229,9 @@ pool kv on gpu {{ preempt lifo; }}
 
 fn stage(options: &str) -> String {
     format!(
-        "pool reqs {{ cap 8; admit via engine; }}
+        "pool reqs {{ cap 8; admit via vllm; }}
 pool kv {{ cap 100; preempt lifo; }}
-stage engine : step {{ budget 8; cost 1; memory kv; {options} }}
+stage vllm : step {{ budget 8; cost 1; memory kv; {options} }}
 {WORKLOAD}"
     )
 }
@@ -323,8 +303,8 @@ fn the_design_refuses_what_it_says() {
     );
     refused(
         &engine(ok).replace(
-            "pool reqs on engine { }",
-            "pool reqs on engine { admit via engine; }",
+            "pool reqs on vllm { }",
+            "pool reqs on vllm { admit via vllm; }",
         ),
         "takes `admit` from it",
     );
@@ -333,7 +313,7 @@ fn the_design_refuses_what_it_says() {
         "write no `[N]`",
     );
     refused(
-        &engine(ok).replace("pool reqs on engine { }", "pool slots on engine { }"),
+        &engine(ok).replace("pool reqs on vllm { }", "pool slots on vllm { }"),
         "has no capacity `slots`",
     );
     refused(
@@ -345,7 +325,7 @@ fn the_design_refuses_what_it_says() {
     );
     // a capacity no pool declares
     refused(
-        &engine(ok).replace("pool reqs on engine { }", ""),
+        &engine(ok).replace("pool reqs on vllm { }", ""),
         "is no pool",
     );
     // two pools on the engine's device
@@ -353,8 +333,8 @@ fn the_design_refuses_what_it_says() {
         &engine(ok)
             .replace("kv cap 100;", "kv cap 100; enc cap 10;")
             .replace(
-                "pool reqs on engine { }",
-                "pool reqs on engine { } pool enc on gpu { }",
+                "pool reqs on vllm { }",
+                "pool reqs on vllm { } pool enc on gpu { }",
             ),
         "which is `vllm`'s KV",
     );
@@ -465,8 +445,8 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(tok
     );
     refused(
         &engine(ok).replacen(
-            "engine engine on gpu",
-            "def step_time(x) { x }\nengine engine on gpu",
+            "engine vllm on gpu",
+            "def step_time(x) { x }\nengine vllm on gpu",
             1,
         ),
         "a device's time resource",
@@ -499,7 +479,7 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(tok
     );
     // one engine per device, as many as its devices
     refused(
-        &engine(ok).replace("engine engine on gpu", "engine engine[2] on gpu"),
+        &engine(ok).replace("engine vllm on gpu", "engine vllm[2] on gpu"),
         "an engine is one per device",
     );
     refused(
@@ -519,13 +499,13 @@ workload { arrive batch(4); init { set prompt = 2; } }
 server {
   choose j in 2 by (holders(kv[j]));
   hold kv[j] (cost(kv, prompt)) {
-    run engine[j] prefill (cost(engine, prompt)) growing kv[j];
+    run vllm[j] prefill (cost(vllm, prompt)) growing kv[j];
   }
 }
 ";
     let new = format!(
         "device gpu[2] {{ step_time (t) = 1; kv cap 100; }}
-engine engine[2] on gpu {{
+engine vllm[2] on gpu {{
   tokens cap 8;
   schedule {{ advance running; admit waiting while (running.preempted == 0); }}
   execute (step_time(tokens));
@@ -534,8 +514,8 @@ pool kv on gpu {{ }}
 {work}"
     );
     let old = format!(
-        "pool kv[2] {{ cap 100; admit via engine; }}
-stage engine[2] : step {{ budget 8; cost 1; memory kv; }}
+        "pool kv[2] {{ cap 100; admit via vllm; }}
+stage vllm[2] : step {{ budget 8; cost 1; memory kv; }}
 {work}"
     );
     assert_eq!(ir(&old, None, &ov), ir(&new, None, &ov));
@@ -636,5 +616,74 @@ server {{ E.prefill (prompt); }}
     refused(
         &pod(&format!("{device} {engine} {engine} pool kv on gpu {{ }}")),
         "has one stage",
+    );
+    // a queue's pool is on its own device or engine, never one outside it
+    let other = format!(
+        "queue F[3] {{ device g {{ t1 (x) = 1; }} {} }}\n",
+        engine.replace("gpu", "g")
+    );
+    refused(
+        &format!(
+            "{other}{}",
+            pod(&format!(
+                "{device} {engine} pool kv on gpu {{ }} pool r on F {{ }}"
+            ))
+        ),
+        "`F` is neither in queue `E`",
+    );
+    refused(
+        &format!(
+            "device gtop {{ t1 (x) = 1; }}\n{}",
+            pod(&format!("{device} {engine} pool kv on gtop {{ }}"))
+        ),
+        "`gtop` is neither in queue `E`",
+    );
+    refused(
+        &format!(
+            "{}pool reqs on E {{ }}\n",
+            pod(&format!("{device} {engine} pool kv on gpu {{ }}"))
+        ),
+        "declare `pool reqs on E` in queue `E`",
+    );
+    // the names a declaration outside a queue may not take
+    refused(
+        &pod(&format!("{device} {engine} pool kv on gpu {{ }}"))
+            .replace("queue E", "queue engine")
+            .replace("run E", "run engine")
+            .replace("cost(E,", "cost(engine,")
+            .replace("E.prefill", "engine.prefill"),
+        "a queue's engine is named after the queue",
+    );
+    refused(
+        &pod(&format!("{device} {engine} pool kv on gpu {{ }}").replace("gpu", "schedule")),
+        "`schedule` is a word of the language",
+    );
+    refused(
+        &pod(&format!("{device} {engine} pool kv on kv {{ }}").replace("gpu", "kv")),
+        "`kv` is declared twice in queue `E`",
+    );
+    // an error names a queue's device as the program does
+    refused(
+        &pod(&format!("{device} {engine} pool kv on gpu {{ }}")
+            .replace(" kv cap 10;", " kv cap 10; enc cap 5;")),
+        "`enc` of `gpu` of queue `E` is no pool: declare `pool enc on gpu { … }` in queue `E`",
+    );
+    // #403's checks hold for a queue's engine
+    refused(
+        &pod(&format!("{device} {engine} pool kv on gpu {{ }}")).replace(
+            "advance running; admit waiting while (running.preempted == 0);",
+            "advance running each at most (0);",
+        ),
+        "`each at most (0)`",
+    );
+    refused(
+        &pod(&format!("{device} {engine} pool kv on gpu {{ }}"))
+            .replace("queue E :", "queue E[2] :")
+            .replace("E.prefill", "E[0].prefill")
+            .replace(
+                "while (running.preempted == 0)",
+                "while (waiting.count > 0)",
+            ),
+        "its `waiting.count` would read every member's",
     );
 }

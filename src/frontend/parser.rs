@@ -2773,10 +2773,29 @@ impl Parser {
             let o_at = self.pos;
             let mut owner = self.ident()?;
             if let Some(q) = &self.device_scope {
+                // a queue's pool is the member's: on the queue's own device,
+                // or on the queue's engine, which is named after the queue
                 let scoped = format!("{q}.{owner}");
                 if self.devices.iter().any(|d| d.name == scoped) {
                     owner = scoped;
+                } else if owner != *q {
+                    return self.err_at(
+                        o_at,
+                        format!(
+                            "a queue's pool is on its own device or its engine: `{owner}` is \
+                             neither in queue `{q}`; write `on DEVICE` for a `device` above, or \
+                             `on {q}`"
+                        ),
+                    );
                 }
+            } else if self.queues.iter().any(|q| q.name == owner) {
+                return self.err_at(
+                    o_at,
+                    format!(
+                        "`{owner}` is a queue's engine, which admits the queue's own pools: \
+                         declare `pool {name} on {owner}` in queue `{owner}`"
+                    ),
+                );
             }
             let (c, n, a) = self.capacity_of(at, &name, &owner)?;
             (cap, count, is_array) = (c, n, a);
@@ -3230,7 +3249,9 @@ impl Parser {
         let qi = self.queues.len() - 1;
         self.expect(&Tok::LBrace)?;
         while *self.peek() != Tok::RBrace {
-            // pools, then the stage, then the entries: each reads what is above it
+            // pools and devices, then the stage, then the entries: each reads
+            // what is above it; a pool on a device or the engine may follow
+            // the engine
             let item_at = self.pos;
             let pool_on =
                 self.is_kw("pool") && matches!(self.peek_at(2), Tok::Ident(k) if k == "on");
@@ -3239,9 +3260,7 @@ impl Parser {
             {
                 return self.err_at(
                     item_at,
-                    format!(
-                        "queue `{name}` declares its pools first, above its `serve` and entries"
-                    ),
+                    format!("queue `{name}` declares its pools first, above its stage and entries"),
                 );
             }
             if self.is_kw("serve") && !self.queues[qi].entries.is_empty() {
@@ -3265,8 +3284,13 @@ impl Parser {
                         "a queue's device is the member's, one per member of `{name}`: write `device {dev}`"
                     ));
                 }
+                if KEYWORDS.contains(&dev.as_str()) {
+                    return self.err_at(d_at, format!("`{dev}` is a word of the language"));
+                }
                 let scoped = format!("{name}.{dev}");
-                if self.devices.iter().any(|d| d.name == scoped) {
+                if self.devices.iter().any(|d| d.name == scoped)
+                    || self.queues[qi].pools.contains(&dev)
+                {
                     return self
                         .err_at(d_at, format!("`{dev}` is declared twice in queue `{name}`"));
                 }
@@ -3280,6 +3304,15 @@ impl Parser {
                     return self.err_at(
                         e_at,
                         format!("queue `{name}` has one stage: its engine or its `serve`"),
+                    );
+                }
+                if KEYWORDS.contains(&name.as_str()) {
+                    return self.err_at(
+                        at + 1,
+                        format!(
+                            "`{name}` is a word of the language, and a queue's engine is named \
+                             after the queue: name the queue for what it models"
+                        ),
                     );
                 }
                 let d_at = self.pos;
@@ -3299,6 +3332,16 @@ impl Parser {
                 let parsed = self.pool(true);
                 self.device_scope = None;
                 let (mut d, on) = parsed?;
+                if self
+                    .devices
+                    .iter()
+                    .any(|dv| dv.name == format!("{name}.{}", d.name))
+                {
+                    return self.err_at(
+                        p_at,
+                        format!("`{}` is declared twice in queue `{name}`", d.name),
+                    );
+                }
                 if let Some((owner, o_at)) = on {
                     if self.queues[qi].pools.contains(&d.name) {
                         return self.err(format!("duplicate pool `{}` in queue `{name}`", d.name));
@@ -3405,7 +3448,8 @@ impl Parser {
                 self.entry(qi, verb)?;
             } else {
                 return self.err(format!(
-                    "expected `pool`, `serve` or an entry in queue `{name}`, found {}",
+                    "expected `pool`, `device`, `engine on`, `serve` or an entry in queue \
+                     `{name}`, found {}",
                     self.peek()
                 ));
             }

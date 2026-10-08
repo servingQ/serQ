@@ -122,7 +122,10 @@ impl Parser {
                 );
             }
             if d.times.iter().any(|t| t.name == r) || d.caps.iter().any(|c| c.name == r) {
-                return self.err_at(r_at, format!("`{r}` is a resource of `{}` twice", d.name));
+                return self.err_at(
+                    r_at,
+                    format!("`{r}` is a resource of {} twice", shown(&d.name)),
+                );
             }
             if *self.peek() == Tok::LParen {
                 d.times.push(self.time_resource(r_at, r)?);
@@ -836,9 +839,10 @@ impl Parser {
                     return self.err_at(
                         c.at,
                         format!(
-                            "`{}` of `{owner}` is no pool: declare `pool {} on {owner} {{ … }}`, \
-                             or nothing can hold it",
-                            c.name, c.name
+                            "`{}` of {} is no pool: declare {}, or nothing can hold it",
+                            c.name,
+                            shown(owner),
+                            pool_on_as_written(&c.name, owner)
                         ),
                     );
                 }
@@ -899,7 +903,11 @@ impl Parser {
         {
             return self.err_at(
                 po.at,
-                format!("`{}` of `{}` is declared as a pool twice", po.cap, po.owner),
+                format!(
+                    "`{}` of {} is declared as a pool twice",
+                    po.cap,
+                    shown(&po.owner)
+                ),
             );
         }
         self.pools_on.push(po);
@@ -918,13 +926,14 @@ impl Parser {
                 return self.err_at(
                     at,
                     format!(
-                        "`{name}` is a time resource of `{owner}`, not a capacity: no pool holds it"
+                        "`{name}` is a time resource of {}, not a capacity: no pool holds it",
+                        shown(owner)
                     ),
                 );
             }
             return match d.caps.iter().find(|c| c.name == name) {
                 Some(c) => Ok((c.cap.clone(), d.count, d.array)),
-                None => self.err_at(at, format!("`{owner}` has no capacity `{name}`")),
+                None => self.err_at(at, format!("{} has no capacity `{name}`", shown(owner))),
             };
         }
         if let Some(e) = self.engines.iter().find(|e| e.name == owner) {
@@ -942,6 +951,24 @@ impl Parser {
             at,
             format!("no device or engine `{owner}`: a pool is on one declared before it"),
         )
+    }
+}
+
+/// A device or an engine as the program names it: a queue's device `Q.gpu`
+/// is `gpu` in queue `Q`.
+fn shown(owner: &str) -> String {
+    match owner.split_once('.') {
+        Some((q, local)) => format!("`{local}` of queue `{q}`"),
+        None => format!("`{owner}`"),
+    }
+}
+
+/// The `pool … on …` that declares capacity `cap` of `owner`, as written
+/// where `owner` is declared.
+fn pool_on_as_written(cap: &str, owner: &str) -> String {
+    match owner.split_once('.') {
+        Some((q, local)) => format!("`pool {cap} on {local} {{ … }}` in queue `{q}`"),
+        None => format!("`pool {cap} on {owner} {{ … }}`"),
     }
 }
 
