@@ -181,7 +181,7 @@ impl Expr {
         self.any(&|x| matches!(x, Expr::Sample(..)))
     }
 
-    fn same_syntax(&self, other: &Self) -> bool {
+    pub(crate) fn same_syntax(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Located(_, a), b) => a.same_syntax(b),
             (a, Self::Located(_, b)) => a.same_syntax(b),
@@ -286,8 +286,11 @@ pub struct StepSpec {
     /// Seconds per iteration, in `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`.
     pub cost: Expr,
     /// Cap on one request's prefill chunk (`long_prefill_token_threshold`,
-    /// 0 = none).
+    /// 0 = none). The linker writes an `inf` outcome 0, the kernel's none.
     pub chunk: Expr,
+    /// The cap is an engine's `each at most`: an outcome at or below 0 does
+    /// not link, and `inf` is no cap, which the linker writes 0.
+    pub per_run: bool,
     /// `granule g`: a prefill gets all it has left or a multiple of `g`.
     pub granule: Option<Expr>,
     /// The order the iteration serves its residents in (`serve …;`).

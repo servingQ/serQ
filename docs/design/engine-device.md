@@ -73,39 +73,53 @@ pool reqs on vllm { queue fifo; }
   `engine` row moves with the implementation.
 
 Link errors, each with its reason: a pool on no such capacity, or with
-`cap` or `admit via`; an undeclared capacity; two pools on one capacity;
-two engines, or two candidate KV pools, on one device; a time resource
-outside `execute`; no `tokens cap`; a constant cap ≤ 0; `inf` inside a
-cap's arithmetic; a `let` not first or read outside `each at most`; two
-`each at most` that differ.
+`cap` or `admit via`; an undeclared capacity; a capacity declared as a pool
+twice; two engines, or two candidate KV pools, on one device; a time
+resource outside `execute`, or a `def` named like one; no `tokens cap`, or
+a constant one ≤ 0; an `each at most` that chooses anything but constants
+(its condition may read the iteration), or one ≤ 0 once the `let`s are
+known, or `inf` inside its arithmetic; `[N]` on a pool `on` a family; a
+`let` not first or read outside `each at most`; two `each at most` that
+differ; a family engine's `waiting.count` (no member may count every
+member's queues); a queue named `running` or `waiting`. A capacity's `cap`
+is checked as a pool's is.
 
 ## Lowering
 
-`tokens cap` is `budget`; `each at most (c)` is `chunk`, a whole-`inf`
-outcome written 0; `advance running`/`admit waiting` are `serve`/`admit`;
-list values are the context variables, `waiting.count` the sum of
-`queued(p)`; `execute` is `cost`; the engine is a step stage whose `memory`
-is its device's pool. vLLM's body is the kernel's default procedure
-statement for statement and lowers to no `iteration`, as the oracle
-fragment requires (`deployment()` in `scripts/gen_lean_oracle.py`).
-`def compute`/`def hbm` in today's cost give byte-identical IR.
+`tokens cap` is `budget`; `each at most (c)` is `chunk`; `advance
+running`/`admit waiting` are `serve`/`admit`; list values are the context
+variables; `execute` is `cost`; the engine is a step stage whose `memory` is
+its device's pool. vLLM's body is the kernel's default procedure statement
+for statement and lowers to no `iteration`, as the oracle fragment requires
+(`deployment()` in `scripts/gen_lean_oracle.py`); `advance running only
+(p); admit waiting only (p) while …` lowers to `serve only (p)`, and
+`exclusive prefill; admit waiting while …` to `serve exclusive prefill`.
 
-Two IR values move with the same meaning, each a handshake for the coming
-tag's message:
+No IR value moves, so the oracle and the Lean fragment read every program
+as before:
 
-- **A device pool gains `admit_via`.** No hold waits in `kv`'s queue in the
-  12 programs without it, but `deployment()` requires an engine-admitted
-  pool to preempt nothing, and the eight oracle programs' `kv` is `lifo`.
-  The rule is relaxed, `Exec.lean`'s `viaEngine` and `lean_bench.py` taught
-  it, and `make lean` re-proved before `pool kv on gpu` lands.
-- **`waiting.count` adds an empty `queued(kv)`**; `lean_bench.py`'s
-  `chunk_of` learns the sum.
+- **`admit_via` where a queue is used.** A pool on an engine is admitted by
+  it. A pool on its device is admitted by it only where a hold names the
+  pool first, so waits in its queue; elsewhere that queue is empty, and the
+  pool is written without `admit_via`, as the 12 programs do today (and as
+  `deployment()` requires of an engine-admitted pool: no preemption).
+- **`waiting.count`** is `queued(p)` summed over the pools whose `admit_via`
+  is the engine, which is `queued(reqs)` where `long_prefill` read it.
+- **`inf` is written 0 by the linker**, once the `let`s have their values:
+  an outcome of `inf` (the whole cap, or a branch of a `?:`) is no cap,
+  which the kernel writes 0 as `min(remaining, inf)` gives. The linker does
+  it for every step, so an old `chunk inf` is 0 too. An engine's outcomes
+  are constants once linked, so one at or below 0, which the kernel would
+  read as no cap, does not link: the program never means one thing and runs
+  another.
 
-The 21 step programs are rewritten and the old spellings refused with the
-new one ([one admission](one-admission.md)), as a stack: `device`, then
-`engine`, then `schedule` and `execute`. Six rules go (`memory`, `admit
-via`, `budget`, `chunk`, a step's `cost`, the default iteration); about
-twelve forms and ten link errors come.
+`tests/engine_device.rs` holds `vllm.sq`, `sglang.sq` and `tgi.sq` written
+as engines to their programs' IR, byte for byte, as it holds each stage form
+to its schedule. The 21 step programs are rewritten and the old spellings
+refused with the new one ([one admission](one-admission.md)), as a stack:
+the forms, the programs, the documentation, then the refusal. Six rules go
+(`memory`, `admit via`, `budget`, `chunk`, a step's `cost`, the default
+iteration); about twelve forms and ten link errors come.
 
 ## Self-critique
 
@@ -130,6 +144,20 @@ twelve forms and ten link errors come.
 - **A default schedule, an `admit` method, `admit from q`, `uses …
   overlap`, a `batch` block, `memory` from `growing`**: a rule back in the
   language, a second place for what is said, or (TGI) a pool that never grows.
+- **A device pool always engine-admitted, the Lean fragment taught it**:
+  `deployment()` requires an engine-admitted pool to preempt nothing, and
+  `kv` preempts. Not needed: a device pool is admitted only where a hold
+  waits in its queue. The cost is that `pool kv on gpu` alone does not say
+  whether the IR has `admit_via`; the holds' order does, and with it which
+  pool's keys may read the engine's `state` (`src/ir.rs`, "the keys of a
+  pool it admits").
+- **An `each at most` that computes its cap**: the caps are constants, so
+  vLLM's adaptive threshold, `max(long_prefill_token_threshold,
+  input_budget // num_eligible_reqs)` (`scheduler.py:617-622`, off by
+  default), cannot be written as an engine's, where a `chunk` could. Kept:
+  a constant is what lets a cap of 0 or below be refused before the run;
+  `max(k, e)` with `k > 0` constant would keep that and is the opening when
+  a program needs it.
 - **Open**: names for a run's own attributes (`decoding`, `remaining`) and
   the eviction key's `waiting` (`src/frontend/link.rs:236`), which reads as
   the list; `batch.kv_decode`; the queue a hold waits in; `exclusive
