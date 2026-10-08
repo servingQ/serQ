@@ -52,7 +52,7 @@ Use the same names for the same roles across examples and documentation:
 | Pool limiting concurrent requests | `reqs` (capacity in request slots) |
 | KV memory pool | `kv` |
 | Generic service stage | `svc` |
-| LLM inference stage | `engine` |
+| LLM inference stage | `llm`, or the engine it models (`vllm`, `sglang`, `tgi`); `engine` is the keyword of the engine form |
 | Request response time, including queueing and service | `response` |
 | Cache-hit indicator (0 or 1) | `hit` (its mean is the hit rate) |
 

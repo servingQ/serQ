@@ -69,8 +69,13 @@ pool reqs on vllm { queue fifo; }
 - **`execute (T)`**: the batch's time over the device's resources; a serial
   engine writes `+` for `max`. `cost` is only a request's work.
 - **Names.** `engine` is a keyword, so an engine is named for what it
-  models (`vllm`, `sglang`, `tgi`) or `llm`; `docs/writing-programs.md`'s
-  `engine` row moves with the implementation.
+  models (`vllm`, `sglang`, `tgi`) or `llm`, as `docs/writing-programs.md`
+  names it. Inside a `queue`, `device gpu` is the member's (`Q.gpu`, a
+  family as the queue is) and `engine on gpu` is the queue's stage, named
+  after it as the queue's `serve` is, so `pool reqs on Q` reads "the
+  requests `Q` admits". A queue's pool is on its own device or on `Q`,
+  never on a name outside the queue, and a queue's device takes the names a
+  top-level one may.
 
 Link errors, each with its reason: a pool on no such capacity, or with
 `cap` or `admit via`; an undeclared capacity; a capacity declared as a pool
@@ -81,7 +86,10 @@ a constant one ≤ 0; an `each at most` that chooses anything but constants
 known, or `inf` inside its arithmetic; `[N]` on a pool `on` a family; a
 `let` not first or read outside `each at most`; two `each at most` that
 differ; a family engine's `waiting.count` (no member may count every
-member's queues); a queue named `running` or `waiting`. A capacity's `cap`
+member's queues); a queue named `running` or `waiting`; a queue's pool on
+a device or an engine outside the queue, a top-level pool on a queue's
+engine, a queue that holds an engine named for a keyword, and a queue's
+device named as the queue (`on Q` would be two things). A capacity's `cap`
 is checked as a pool's is.
 
 ## Lowering
@@ -158,6 +166,11 @@ iteration); about twelve forms and ten link errors come.
   a constant is what lets a cap of 0 or below be refused before the run;
   `max(k, e)` with `k > 0` constant would keep that and is the opening when
   a program needs it.
+- **A queue's `pool reqs on engine`, or `on gpu` falling back to a
+  top-level `gpu`**: `engine` is the keyword, and the queue's name is the
+  name its stage already has; a fallback would give one spelling two
+  meanings by whether the queue declares `gpu`, and a pool of the member
+  would be one shared by all, or another queue's.
 - **Open**: names for a run's own attributes (`decoding`, `remaining`) and
   the eviction key's `waiting` (`src/frontend/link.rs:236`), which reads as
   the list; `batch.kv_decode`; the queue a hold waits in; `exclusive
