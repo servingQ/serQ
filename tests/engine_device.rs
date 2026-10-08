@@ -318,7 +318,7 @@ fn an_engine_reads_its_lists_in_every_clause() {
         (
             "tokens cap 8;",
             "tokens cap 8 - batch.tokens;",
-            "`tokens cap` bounds the batch before it is formed",
+            "`tokens cap` is read before the batch is formed",
         ),
         (
             "while (running.preempted == 0)",
@@ -330,15 +330,42 @@ fn an_engine_reads_its_lists_in_every_clause() {
             "tokens cap 8 - batch.size;",
             "`batch` has `tokens`, `prefilled`, `decoding`",
         ),
+        // a schedule's `only`, `by` and `each at most` are read at their own
+        // moments, before the batch so far exists
+        (
+            "advance running;",
+            "advance running only (batch.prefilled == 0);",
+            "`only` is read before the batch is formed",
+        ),
+        (
+            "advance running;",
+            "advance running by (batch.tokens);",
+            "`by` is read before the batch is formed",
+        ),
+        (
+            "advance running;",
+            "advance running only (running.preempted == 0);",
+            "read in its `branch`, `while` and `set`, not in `only`",
+        ),
+        (
+            "advance running;",
+            "let c = batch.tokens > 0 ? 4 : 8; advance running each at most (c);",
+            "`each at most` is read before the batch is formed",
+        ),
+        (
+            "tokens cap 8;",
+            "tokens cap 8 - attention;",
+            "`attention` is `batch.attention`, and `tokens cap` is read before",
+        ),
         (
             "tokens cap 8;",
             "tokens cap 8 - running.preempted;",
-            "read only in its `schedule`, not in `tokens cap`",
+            "read in its `branch`, `while` and `set`, not in `tokens cap`",
         ),
         (
             "execute (step_time(batch.tokens));",
             "execute (step_time(batch.tokens) + waiting.admitted);",
-            "read only in its `schedule`, not in `execute`",
+            "read in its `branch`, `while` and `set`, not in `execute`",
         ),
         (
             "execute (step_time(batch.tokens));",
@@ -348,7 +375,7 @@ fn an_engine_reads_its_lists_in_every_clause() {
         (
             "tokens cap 8;",
             "tokens cap max(tokens, 8);",
-            "`tokens cap` bounds the batch before it is formed",
+            "`tokens cap` is read before the batch is formed",
         ),
         (
             "while (running.preempted == 0)",

@@ -867,6 +867,12 @@ queues, `batch.…` the iteration's batch.
 | `batch.tokens`, `batch.prefilled` | no | yes: the batch so far | yes |
 | `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | no | no | yes |
 
+`schedule` is its statements: `branch`, `while` and `set`, read as the
+iteration is planned. A schedule's `only` and `by`, read for each resident
+at its turn, and its `each at most` and the `let`s it reads, read as the
+iteration starts, read what `tokens cap` reads: `running.count`,
+`running.decoding`, `running.kv_…` and `waiting.count`.
+
 `tokens cap` bounds the batch before it is formed, so it reads no
 `batch.…`. `execute` times the batch, which a budget or an `only` can
 leave short of the residents, so it reads the batch's decodes and KV, not

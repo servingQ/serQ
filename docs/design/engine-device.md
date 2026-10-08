@@ -189,6 +189,11 @@ iteration); about twelve forms and ten link errors come.
   the IR, and a drawing from the IR alone would differ from one from the
   text. Naming the device would need it in the IR, where no value moves
   (§Lowering) and a label does not earn a field.
+- **`batch.…` and `arrive batch(n)` (#416)**: `batch` names the iteration's
+  batch in an engine and the sessions at time 0 in a workload. Kept: one is
+  a value after a dot in an engine's clauses, the other a call in
+  `workload`, so no place reads both; `iteration.…` would name the step,
+  not what it computes.
 - **A queue's `pool reqs on engine`, or `on gpu` falling back to a
   top-level `gpu`**: `engine` is the keyword, and the queue's name is the
   name its stage already has; a fallback would give one spelling two

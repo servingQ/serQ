@@ -200,8 +200,9 @@ struct Parser {
     devices: Vec<device::DeviceDecl>,
     engines: Vec<device::EngineDecl>,
     pools_on: Vec<device::PoolOn>,
-    /// The engine clause being parsed, `tokens cap`, `execute` or
-    /// `schedule`, where `running.…` and `waiting.…` are read.
+    /// The engine clause being parsed, `tokens cap`, `execute`, `schedule`
+    /// or one of the schedule's own (`only`, `by`, `each at most`), where
+    /// `running.…`, `waiting.…` and `batch.…` are read.
     in_engine: Option<&'static str>,
     /// The queue whose body is being read: its `device gpu` is `Q.gpu`.
     device_scope: Option<String>,
