@@ -88,7 +88,8 @@ known, or `inf` inside its arithmetic; `[N]` on a pool `on` a family; a
 differ; a family engine's `waiting.count` (no member may count every
 member's queues); a queue named `running` or `waiting`; a queue's pool on
 a device or an engine outside the queue, a top-level pool on a queue's
-engine, and a queue that holds an engine named for a keyword. A capacity's `cap`
+engine, a queue that holds an engine named for a keyword, and a queue's
+device named as the queue (`on Q` would be two things). A capacity's `cap`
 is checked as a pool's is.
 
 ## Lowering

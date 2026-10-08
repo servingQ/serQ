@@ -2783,12 +2783,14 @@ impl Parser {
                         o_at,
                         format!(
                             "a queue's pool is on its own device or its engine: `{owner}` is \
-                             neither in queue `{q}`; write `on DEVICE` for a `device` above, or \
-                             `on {q}`"
+                             not a device or the engine of queue `{q}`; write `on DEVICE` for a \
+                             `device` above, or `on {q}`"
                         ),
                     );
                 }
-            } else if self.queues.iter().any(|q| q.name == owner) {
+            } else if self.queues.iter().any(|q| q.name == owner)
+                && self.engines.iter().any(|e| e.name == owner)
+            {
                 return self.err_at(
                     o_at,
                     format!(
@@ -3286,6 +3288,15 @@ impl Parser {
                 }
                 if KEYWORDS.contains(&dev.as_str()) {
                     return self.err_at(d_at, format!("`{dev}` is a word of the language"));
+                }
+                if dev == name {
+                    return self.err_at(
+                        d_at,
+                        format!(
+                            "`{dev}` names queue `{name}`'s engine, so `on {dev}` would mean \
+                             two things: a queue's device needs another name"
+                        ),
+                    );
                 }
                 let scoped = format!("{name}.{dev}");
                 if self.devices.iter().any(|d| d.name == scoped)

@@ -629,14 +629,14 @@ server {{ E.prefill (prompt); }}
                 "{device} {engine} pool kv on gpu {{ }} pool r on F {{ }}"
             ))
         ),
-        "`F` is neither in queue `E`",
+        "`F` is not a device or the engine of queue `E`",
     );
     refused(
         &format!(
             "device gtop {{ t1 (x) = 1; }}\n{}",
             pod(&format!("{device} {engine} pool kv on gtop {{ }}"))
         ),
-        "`gtop` is neither in queue `E`",
+        "`gtop` is not a device or the engine of queue `E`",
     );
     refused(
         &format!(
@@ -646,6 +646,10 @@ server {{ E.prefill (prompt); }}
         "declare `pool reqs on E` in queue `E`",
     );
     // the names a declaration outside a queue may not take
+    refused(
+        &pod(&format!("{device} {engine} pool kv on E {{ }}").replace("gpu", "E")),
+        "a queue's device needs another name",
+    );
     refused(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}"))
             .replace("queue E", "queue engine")
