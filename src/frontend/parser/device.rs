@@ -933,7 +933,7 @@ impl Parser {
                     e.at,
                     format!(
                         "`{}` is a family, and its `waiting.count` would read every member's \
-                         queues, which no member's schedule may: count a member's own with \
+                         queues, which no member's engine may: count a member's own with \
                          `queued(…)` where it has an index",
                         e.name
                     ),

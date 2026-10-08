@@ -257,6 +257,10 @@ fn an_engine_reads_its_lists_in_every_clause() {
             ("budget 8;", "budget max(decoders, 8 - residents);"),
         ),
         (
+            ("tokens cap 8;", "tokens cap max(8 - waiting.count, 1);"),
+            ("budget 8;", "budget max(8 - queued(reqs), 1);"),
+        ),
+        (
             (
                 "execute (step_time(tokens));",
                 "execute (step_time(tokens) + decoders + running.count + waiting.count);",
@@ -578,6 +582,17 @@ stage vllm[2] : step {{ budget 8; cost 1; memory kv; }}
              admit waiting while (running.preempted == 0) each at most (c); }",
         ),
         "is a family, and its `waiting.count`",
+    );
+    // nor its `tokens cap`
+    let tokens_cap = new
+        .lines()
+        .find(|l| l.trim_start().starts_with("tokens cap"))
+        .expect("the engine's tokens cap")
+        .trim()
+        .to_string();
+    refused(
+        &new.replace(&tokens_cap, "tokens cap 8 + waiting.count;"),
+        "which no member's engine may",
     );
 }
 
