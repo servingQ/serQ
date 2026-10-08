@@ -68,13 +68,26 @@ enum SStmt {
 /// A schedule's `let`s, in order.
 type Lets = Vec<(String, Expr)>;
 
-/// The context variables a schedule reads by its lists' names.
-const RETIRED_IN_SCHEDULE: [(&str, &str); 4] = [
+/// The context variables an engine reads by its lists' names.
+const RETIRED_IN_ENGINE: [(&str, &str); 4] = [
     ("residents", "running.count"),
     ("decoders", "running.decoding"),
     ("preempted", "running.preempted"),
     ("admitted", "waiting.admitted"),
 ];
+
+/// What a batch holds once it is formed, which `execute` reads and
+/// `tokens cap`, read before, cannot.
+const BATCH_ONLY: [&str; 3] = ["tokens", "prefilled", "attention"];
+
+/// The refusal of what the iteration's schedule did (`running.preempted`,
+/// `waiting.admitted`) in another clause.
+fn schedule_only(value: &str, clause: &str) -> String {
+    format!(
+        "`{value}` is what the iteration's schedule did, read only in its `schedule`, not in \
+         `{clause}`"
+    )
+}
 
 /// `waiting.count` until the pools the engine admits are known.
 pub(super) const WAITING_COUNT: &str = "waiting.count";
@@ -329,7 +342,7 @@ impl Parser {
                 tokens = true;
                 self.expect_kw("cap")?;
                 let e_at = self.pos;
-                let e = self.expr()?;
+                let e = self.engine_expr("tokens cap", |p| p.expr())?;
                 if self.const_value(&e).is_some_and(|v| v <= 0.0) {
                     return self.err_at(
                         e_at,
@@ -362,7 +375,7 @@ impl Parser {
                 let mark = self.defs.len();
                 let times: Vec<Def> = self.devices[dev].times.clone();
                 self.defs.extend(times);
-                let e = self.expr();
+                let e = self.engine_expr("execute", |p| p.expr());
                 self.defs.truncate(mark);
                 s.cost = e?;
                 self.expect(&Tok::RParen)?;
@@ -444,10 +457,7 @@ impl Parser {
     fn schedule(&mut self, s: &mut StepSpec) -> PResult<()> {
         let at = self.pos;
         self.expect(&Tok::LBrace)?;
-        self.in_schedule = true;
-        let parsed = self.schedule_items();
-        self.in_schedule = false;
-        let (lets, mut body) = parsed?;
+        let (lets, mut body) = self.engine_expr("schedule", |p| p.schedule_items())?;
         self.expect(&Tok::RBrace)?;
         if body.is_empty() {
             return self.err_at(at, "a schedule needs a statement: what the iteration does");
@@ -723,19 +733,47 @@ impl Parser {
         Ok(())
     }
 
-    /// A list value of a schedule after `running` or `waiting` and its dot.
+    /// `read` with the engine's list values in scope: its `tokens cap`,
+    /// `execute` and `schedule` read `running.…` and `waiting.…`, and only
+    /// those names.
+    fn engine_expr<T>(
+        &mut self,
+        clause: &'static str,
+        read: impl FnOnce(&mut Self) -> PResult<T>,
+    ) -> PResult<T> {
+        self.in_engine = Some(clause);
+        let r = read(self);
+        self.in_engine = None;
+        r
+    }
+
+    /// A list value of an engine after `running` or `waiting` and its dot.
     pub(super) fn list_value(&mut self, at: usize, list: &str) -> PResult<Expr> {
-        if !self.in_schedule {
+        let Some(clause) = self.in_engine else {
             return self.err_at(
                 at,
-                format!("`{list}.…` is a value of an engine's schedule, read in its `schedule`"),
+                format!(
+                    "`{list}.…` is a value of an engine, read in its `tokens cap`, `execute` and \
+                     `schedule`"
+                ),
             );
-        }
+        };
         let f_at = self.pos;
         let field = self.ident()?;
         let var = match (list, field.as_str()) {
             ("running", "count") => "residents",
+            // `execute` reads the batch, which may leave a decoding resident out
+            ("running", "decoding") if clause == "execute" => {
+                return self.err_at(
+                    at,
+                    "`execute` times the batch, whose decodes are `decoders`: \
+                     `running.decoding` counts the decoding residents, in the batch or not",
+                );
+            }
             ("running", "decoding") => "decoders",
+            ("running", "preempted") | ("waiting", "admitted") if clause != "schedule" => {
+                return self.err_at(at, schedule_only(&format!("{list}.{field}"), clause));
+            }
             ("running", "preempted") => "preempted",
             ("waiting", "admitted") => "admitted",
             ("waiting", "count") => WAITING_COUNT,
@@ -752,12 +790,32 @@ impl Parser {
         Ok(Expr::Var(var.into()))
     }
 
-    /// In a schedule, the bare names its lists' values replaced.
-    pub(super) fn retired_in_schedule(&self, at: usize, name: &str) -> PResult<()> {
-        if self.in_schedule
-            && let Some((_, now)) = RETIRED_IN_SCHEDULE.iter().find(|(n, _)| *n == name)
+    /// In an engine, the bare names its lists' values replaced.
+    pub(super) fn retired_in_engine(&self, at: usize, name: &str) -> PResult<()> {
+        let Some(clause) = self.in_engine else {
+            return Ok(());
+        };
+        // in `execute`, `decoders` is the batch's decodes, which no list names
+        if let Some((_, now)) = RETIRED_IN_ENGINE
+            .iter()
+            .find(|(n, _)| *n == name && !(clause == "execute" && *n == "decoders"))
         {
-            return self.err_at(at, format!("in a schedule, `{name}` is `{now}`"));
+            if clause != "schedule" && ["preempted", "admitted"].contains(&name) {
+                return self.err_at(at, schedule_only(now, clause));
+            }
+            return self.err_at(
+                at,
+                format!("in an engine, `{name}` is `{now}`: one value, one name"),
+            );
+        }
+        if clause == "tokens cap" && BATCH_ONLY.contains(&name) {
+            return self.err_at(
+                at,
+                format!(
+                    "`{name}` is the batch's, and `tokens cap` bounds the batch before it is \
+                     formed: `execute` reads it"
+                ),
+            );
         }
         Ok(())
     }
@@ -875,13 +933,15 @@ impl Parser {
                     e.at,
                     format!(
                         "`{}` is a family, and its `waiting.count` would read every member's \
-                         queues, which no member's schedule may: count a member's own with \
+                         queues, which no member's engine may: count a member's own with \
                          `queued(…)` where it has an index",
                         e.name
                     ),
                 );
             }
             let binds = [(WAITING_COUNT.to_string(), count)];
+            s.budget.substitute(&binds);
+            s.cost.substitute(&binds);
             s.chunk.substitute(&binds);
             if let Serve::By(keys) = &mut s.serve {
                 keys.iter_mut().for_each(|k| k.substitute(&binds));
@@ -1128,7 +1188,9 @@ fn step_reads(s: &StepSpec, n: &str) -> bool {
             IterStmt::Set(_, e) => reads_name(e, n),
         })
     }
-    reads_name(&s.chunk, n)
+    reads_name(&s.budget, n)
+        || reads_name(&s.cost, n)
+        || reads_name(&s.chunk, n)
         || matches!(&s.serve, Serve::By(keys) if keys.iter().any(|e| reads_name(e, n)))
         || s.only.iter().any(|e| reads_name(e, n))
         || s.iteration.as_deref().is_some_and(|b| body_reads(b, n))

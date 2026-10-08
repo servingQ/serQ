@@ -26,7 +26,7 @@ fn main() {
   pool reqs { cap B; }
   device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap C; }
   engine llm on gpu {
-    tokens cap max(decoders, (omega + beta * kv_decode) / a);    // fill the memory time
+    tokens cap max(running.decoding, (omega + beta * kv_decode) / a);    // fill the memory time
     schedule {
       advance running decode first;                // prefill in what decode leaves
       admit waiting while (running.preempted == 0);

@@ -239,6 +239,111 @@ fn the_stage_forms_are_schedules() {
     }
 }
 
+/// An engine names a list's value one way in all its clauses: `tokens cap`
+/// and `execute` read `running.…` and `waiting.…` as `schedule` does, and
+/// none of them reads the kernel's name for it (#411). `execute` times the
+/// batch, so its `decoders` are the batch's decodes, which a budget or an
+/// `only` may leave short of `running.decoding`: that one is refused there.
+#[test]
+fn an_engine_reads_its_lists_in_every_clause() {
+    let ov = common::horizon(20.0);
+    let ok = "advance running; admit waiting while (running.preempted == 0);";
+    for (form, kernel) in [
+        (
+            (
+                "tokens cap 8;",
+                "tokens cap max(running.decoding, 8 - running.count);",
+            ),
+            ("budget 8;", "budget max(decoders, 8 - residents);"),
+        ),
+        (
+            ("tokens cap 8;", "tokens cap max(8 - waiting.count, 1);"),
+            ("budget 8;", "budget max(8 - queued(reqs), 1);"),
+        ),
+        (
+            (
+                "execute (step_time(tokens));",
+                "execute (step_time(tokens) + decoders + running.count + waiting.count);",
+            ),
+            ("cost 1;", "cost 1 + decoders + residents + queued(reqs);"),
+        ),
+    ] {
+        assert_eq!(
+            ir(&replaced(&engine(ok), &[form]), None, &ov),
+            ir(&replaced(&stage(""), &[kernel]), None, &ov),
+            "{}",
+            form.1
+        );
+    }
+    for (from, to, why) in [
+        (
+            "tokens cap 8;",
+            "tokens cap 8 - residents;",
+            "`residents` is `running.count`",
+        ),
+        (
+            "execute (step_time(tokens));",
+            "execute (step_time(tokens) + max(residents, 1));",
+            "`residents` is `running.count`",
+        ),
+        (
+            "tokens cap 8;",
+            "tokens cap max(decoders, 1);",
+            "`decoders` is `running.decoding`",
+        ),
+        (
+            "execute (step_time(tokens));",
+            "execute (step_time(tokens) + running.decoding);",
+            "`running.decoding` counts the decoding residents, in the batch or not",
+        ),
+        (
+            "tokens cap 8;",
+            "tokens cap 8 - running.preempted;",
+            "read only in its `schedule`, not in `tokens cap`",
+        ),
+        (
+            "execute (step_time(tokens));",
+            "execute (step_time(tokens) + waiting.admitted);",
+            "read only in its `schedule`, not in `execute`",
+        ),
+        (
+            "execute (step_time(tokens));",
+            "execute (step_time(tokens) + preempted);",
+            "`running.preempted` is what the iteration's schedule did",
+        ),
+        (
+            "tokens cap 8;",
+            "tokens cap max(tokens, 8);",
+            "`tokens cap` bounds the batch before it is formed",
+        ),
+        (
+            "while (running.preempted == 0)",
+            "while (max(decoders, 1) == 1)",
+            "`decoders` is `running.decoding`",
+        ),
+    ] {
+        refused(&replaced(&engine(ok), &[(from, to)]), why);
+    }
+    // the bug as found: a list value as a call argument, in a schedule
+    assert_eq!(
+        ir(
+            &engine("advance running; admit waiting while (max(running.decoding, 1) == 1);"),
+            None,
+            &ov
+        ),
+        ir(
+            &stage("iteration { serve; admit while (max(decoders, 1) == 1); }"),
+            None,
+            &ov
+        )
+    );
+    // a step stage is no engine: it has no lists to name
+    refused(
+        &replaced(&stage(""), &[("budget 8;", "budget 8 - running.count;")]),
+        "is a value of an engine",
+    );
+}
+
 #[test]
 fn the_design_refuses_what_it_says() {
     let ok = "advance running; admit waiting while (running.preempted == 0);";
@@ -427,10 +532,6 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(tok
         &engine("exclusive prefill; branch (running.count == 0) { admit waiting; }"),
         "takes back decodes already chosen",
     );
-    refused(
-        &engine(ok).replace("tokens cap 8;", "tokens cap 8 + running.count;"),
-        "read in its `schedule`",
-    );
     // one engine per device, as many as its devices
     refused(
         &engine(ok).replace("engine vllm on gpu", "engine vllm[2] on gpu"),
@@ -481,6 +582,17 @@ stage vllm[2] : step {{ budget 8; cost 1; memory kv; }}
              admit waiting while (running.preempted == 0) each at most (c); }",
         ),
         "is a family, and its `waiting.count`",
+    );
+    // nor its `tokens cap`
+    let tokens_cap = new
+        .lines()
+        .find(|l| l.trim_start().starts_with("tokens cap"))
+        .expect("the engine's tokens cap")
+        .trim()
+        .to_string();
+    refused(
+        &new.replace(&tokens_cap, "tokens cap 8 + waiting.count;"),
+        "which no member's engine may",
     );
 }
 

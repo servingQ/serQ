@@ -848,11 +848,17 @@ Any other schedule is the stage's iteration body; `exclusive prefill`
 appears only in the form above, since it takes back decodes a body cannot.
 `each at most` chooses among constants (its condition may read the
 iteration), and one at or below 0 does not link: the kernel would read 0
-as no cap, so the program would mean one thing and run another. The list
-values `running.…` and `waiting.…` are read in `schedule`; `tokens cap`
-and `execute` read the stage's totals by their kernel names (`decoders`,
-`kv_decode`, `tokens`). `engine` is a keyword: an engine is named for what
-it models (`vllm`, `sglang`, `tgi`) or `llm`. Inside a `queue`, `device
+as no cap, so the program would mean one thing and run another. An engine
+names a list's value one way in all its clauses: `tokens cap`, `execute`
+and `schedule` read `running.count` and `waiting.count`, never `residents`.
+`tokens cap` and `schedule` read the residents decoding as
+`running.decoding`, never `decoders`. `execute` times the batch, so its
+`decoders`, `tokens` and `kv_decode` are the batch's, and a budget or an
+`only` can leave a decoding resident out of it: `running.decoding` does not
+link there. `running.preempted` and `waiting.admitted` say what the
+schedule did, so only `schedule` reads them. `engine` is a keyword: an
+engine is named for what it models (`vllm`, `sglang`, `tgi`) or `llm`.
+Inside a `queue`, `device
 gpu` is the member's and `engine on gpu` is the queue's stage, named after
 the queue, so its pool is `pool reqs on Q`.
 

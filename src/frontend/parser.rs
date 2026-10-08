@@ -198,9 +198,9 @@ struct Parser {
     devices: Vec<device::DeviceDecl>,
     engines: Vec<device::EngineDecl>,
     pools_on: Vec<device::PoolOn>,
-    /// Parsing an engine's `schedule`, where `running.…` and `waiting.…`
-    /// are read.
-    in_schedule: bool,
+    /// The engine clause being parsed, `tokens cap`, `execute` or
+    /// `schedule`, where `running.…` and `waiting.…` are read.
+    in_engine: Option<&'static str>,
     /// The queue whose body is being read: its `device gpu` is `Q.gpu`.
     device_scope: Option<String>,
 }
@@ -1307,7 +1307,7 @@ impl Parser {
             devices: vec![],
             engines: vec![],
             pools_on: vec![],
-            in_schedule: false,
+            in_engine: None,
             device_scope: None,
         }
     }
@@ -3198,9 +3198,7 @@ impl Parser {
         if name == "running" || name == "waiting" {
             return self.err_at(
                 at + 1,
-                format!(
-                    "`{name}.…` is a value of an engine's schedule; a queue needs another name"
-                ),
+                format!("`{name}.…` is a value of an engine; a queue needs another name"),
             );
         }
         // `Q[n]` is a family whatever `n`, called by index, and its pools and
@@ -5143,7 +5141,7 @@ impl Parser {
                         self.pos -= 1;
                         return self.err("`self` is a queue entry's word: the member's own index");
                     }
-                    self.retired_in_schedule(self.pos - 1, &name)?;
+                    self.retired_in_engine(self.pos - 1, &name)?;
                     Ok(Expr::Located(span, Box::new(Expr::Var(name))))
                 }
             }
@@ -5161,7 +5159,10 @@ impl Parser {
         let span = Some(self.span());
         if let Tok::Ident(name) = self.peek().clone() {
             match self.peek_at(1) {
+                // an engine's list value is a value, not a queue's reference
+                Tok::Dot if name == "running" || name == "waiting" => {}
                 Tok::Comma | Tok::RParen => {
+                    self.retired_in_engine(self.pos, &name)?;
                     self.advance();
                     return Ok(Arg::Ref(Ref {
                         span,

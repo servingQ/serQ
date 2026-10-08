@@ -64,8 +64,13 @@ pool reqs on vllm { queue fifo; }
 - **Values** are named after their list: `running.count` (`residents`),
   `running.decoding` (`decoders`), `running.preempted` (a count this
   iteration), `waiting.count` (every queue the engine admits, as vLLM counts
-  `skipped_waiting`, `scheduler.py:609-611`), `waiting.admitted`. The bare
-  names are retired where these replace them (serve keys, claims, gauges).
+  `skipped_waiting`, `scheduler.py:609-611`), `waiting.admitted`. An
+  engine reads them by these names in its `tokens cap`, `execute` and
+  `schedule`, and the bare names nowhere in those clauses, with one
+  exception: `execute` times the batch, whose decodes are `decoders` and
+  may be fewer than `running.decoding`, so there `decoders` stays and
+  `running.decoding` is refused. `running.preempted` and `waiting.admitted`
+  say what the schedule did, so only `schedule` reads them.
 - **`execute (T)`**: the batch's time over the device's resources; a serial
   engine writes `+` for `max`. `cost` is only a request's work.
 - **Names.** `engine` is a keyword, so an engine is named for what it
