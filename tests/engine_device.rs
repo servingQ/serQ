@@ -645,6 +645,16 @@ server {{ E.prefill (prompt); }}
         ),
         "declare `pool reqs on E` in queue `E`",
     );
+    // a queue and a top-level device of one name: refused in either order
+    let top = "device E { t1 (x) = 1; z cap 2; } pool z on E { }\n";
+    let queue = pod(&format!("{device} {engine} pool kv on gpu {{ }}"));
+    let (decls, rest) = queue.split_at(queue.find("workload").unwrap());
+    refused(&format!("{top}{decls}{rest}"), "`E` is declared twice");
+    refused(&format!("{decls}{top}{rest}"), "`E` is declared twice");
+    // a gateway has no stage, and is named all the same
+    let gateway = "queue E : gateway { route () { } }\n";
+    refused(&format!("{top}{gateway}"), "`E` is declared twice");
+    refused(&format!("{gateway}{top}"), "`E` is declared twice");
     // the names a declaration outside a queue may not take
     refused(
         &pod(&format!("{device} {engine} pool kv on E {{ }}").replace("gpu", "E")),
