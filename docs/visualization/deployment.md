@@ -53,13 +53,14 @@ neither: a request arrives at `engine` and goes out.
 | `Fifo(c)` | circle, `FIFO`, the server count when `c ≠ 1` |
 | `Ps(φ)` | circle, `PS`, with `φ` beneath |
 | `Delay` | rounded box with a duration-density glyph: decaying for `~exp` and `~h2`, a hump for `~erlang`, flat for `~uniform`, a spike for a deterministic duration. Other or long expressions use a row of small circles for infinite servers |
-| `Step { … }` | rounded box with a token-budget bar: an iterating engine, not a queueing station |
+| `Step { … }` | rounded box with a token-budget bar: an iterating engine, not a queueing station. It is labelled `engine` and `tokens cap B` in the engine form's words, the residents' totals as `running.count` and `running.decoding`; the IR keeps no form, so a `stage : step` is drawn the same |
 | a pool | a drum, its capacity and options written beside it (`cap 8192 · block 16`) |
 | a pool held at one station alone | a row in the station's unfilled frame, under its glyph: drum, name, options |
 | a pool held across several stations | dashed rounded box, the drum and options in the column at its left |
 | a pool a hold caches in | a grey strip under its row, or along the bottom of its box |
 | the queue a hold waits in | ahead of a dashed box, one per hold rather than per pool: a hold of several pools joins the queue of its first. A frame draws none: its pools are taken at its entrance |
-| `admit via S` | `admit via S` among the pool's options; from a dashed box, also a dashed edge from the queue to `S` |
+| a step stage's `memory` | `pool X on S's device` as the pool's title: the engine form's pool on the device, which the IR does not name |
+| `admit via S` | `pool X on S` as the pool's title, unless it is `S`'s memory; from a dashed box, also a dashed edge from the queue to `S` |
 
 A pool's eviction order is drawn only where something is cached in it: an order
 over an empty cache says nothing.

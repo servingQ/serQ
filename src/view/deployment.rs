@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, Program, RunMode, UnOp};
+use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, UnOp};
 use crate::view::figure::{
     Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
@@ -903,9 +903,40 @@ fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>
         CStageKind::Ps(phi) => (StationKind::Ps, "PS".into(), Some(p.show_expr(phi))),
         CStageKind::Step(s) => (
             StationKind::Step,
-            "step".into(),
-            Some(format!("budget {}", p.show_expr(&s.budget))),
+            "engine".into(),
+            Some(format!(
+                "tokens cap {}",
+                p.show_expr_with(&s.budget, list_names)
+            )),
         ),
+    }
+}
+
+/// A step stage is drawn in the words an engine is written in
+/// (`docs/language.md`, the engine form), whichever form the program used:
+/// the IR does not keep the form. Its `tokens cap` reads the residents'
+/// totals by their list (#411).
+fn list_names(v: CtxVar) -> &'static str {
+    match v {
+        CtxVar::Nres => "running.count",
+        CtxVar::Ndec => "running.decoding",
+        v => v.name(),
+    }
+}
+
+/// A pool's title, with what it is on as an engine names it: an engine's
+/// memory is the pool on its device, which the IR does not name, and a pool
+/// it admits otherwise is a pool on the engine.
+fn pool_title(p: &Program, i: usize) -> String {
+    let pool = &p.pools[i];
+    let memory_of = p
+        .stages
+        .iter()
+        .find(|s| matches!(&s.kind, CStageKind::Step(spec) if spec.memory == Some(i)));
+    match (memory_of, pool.admit_via) {
+        (Some(s), _) => format!("pool {} on {}'s device", pool.name, s.name),
+        (None, Some(e)) => format!("pool {} on {}", pool.name, p.stages[e].name),
+        (None, None) => format!("pool {}", pool.name),
     }
 }
 
@@ -1472,7 +1503,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         DRUM_W
             + 10.0
             + TextSize::Normal
-                .width_of(&format!("pool {}", p.pools[q].name))
+                .width_of(&pool_title(p, q))
                 .max(TextSize::Small.width_of(&row_notes(q)))
     };
     // under the glyph: its note, then a row per resident pool
@@ -1687,7 +1718,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         let gy = rects[g.first].centre().y;
         f.text(
             pt(gx, r.y - 5.0),
-            format!("pool {}", pool.name),
+            pool_title(p, g.pool),
             Anchor::Start,
             TextSize::Normal,
         );
@@ -1749,7 +1780,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             let tx = gx + DRUM_W + 10.0;
             f.text(
                 pt(tx, y + 11.0),
-                format!("pool {}", p.pools[q].name),
+                pool_title(p, q),
                 Anchor::Start,
                 TextSize::Normal,
             );
@@ -2054,9 +2085,6 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
                 .join(", "),
             if *tail { " requeue tail" } else { "" }
         )),
-    }
-    if let Some(s) = pool.admit_via {
-        parts.push(format!("admit via {}", p.stages[s].name));
     }
     if pool.reserve_held {
         parts.push("reserve held".into());

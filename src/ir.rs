@@ -261,9 +261,12 @@ pub enum CtxVar {
     Arrived,
 }
 
+/// How an expression's printer names a context variable (`show_expr_with`).
+pub type CtxNames = fn(CtxVar) -> &'static str;
+
 impl CtxVar {
     /// The source spelling (`link.rs` maps the same names).
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             CtxVar::Now => "now",
             CtxVar::Waited => "waited",
@@ -2910,8 +2913,15 @@ impl Program {
     /// `let` constants were folded at link time, so they come back as their
     /// values: `cap blocks * bs` prints as `160000`.
     pub fn show_expr(&self, e: &CExpr) -> String {
+        self.show_expr_with(e, CtxVar::name)
+    }
+
+    /// An expression with its context variables named by `ctx`: a view
+    /// that writes a step stage in an engine's words names the residents'
+    /// totals by their list.
+    pub fn show_expr_with(&self, e: &CExpr, ctx: CtxNames) -> String {
         let mut s = String::new();
-        self.write_expr(&mut s, e, prec::COND);
+        self.write_expr(&mut s, e, prec::COND, ctx);
         s
     }
 
@@ -2952,12 +2962,12 @@ impl Program {
         self.attrs.get(slot).map_or("?", String::as_str)
     }
 
-    fn write_expr(&self, out: &mut String, e: &CExpr, min: u8) {
+    fn write_expr(&self, out: &mut String, e: &CExpr, min: u8, ctx: CtxNames) {
         use std::fmt::Write as _;
         match e {
             CExpr::Cost(target, value) => {
                 let _ = write!(out, "cost({}, ", self.show_cost_target(target));
-                self.write_expr(out, value, prec::COND);
+                self.write_expr(out, value, prec::COND, ctx);
                 out.push(')');
             }
             CExpr::Num(x) => {
@@ -2971,20 +2981,20 @@ impl Program {
                 }
             }
             CExpr::Attr(slot) => out.push_str(self.attr_name(*slot)),
-            CExpr::Ctx(v) => out.push_str(v.name()),
+            CExpr::Ctx(v) => out.push_str(ctx(*v)),
             CExpr::Sample(d, args) => {
                 let _ = write!(out, "~{}(", d.name());
                 for (i, a) in args.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    self.write_expr(out, a, prec::COND);
+                    self.write_expr(out, a, prec::COND, ctx);
                 }
                 out.push(')');
             }
             CExpr::Call(f, args) => {
                 let _ = write!(out, "{}(", f.name());
-                self.write_list(out, args);
+                self.write_list(out, args, ctx);
                 out.push(')');
             }
             CExpr::Agg(a, k) => {
@@ -3003,7 +3013,7 @@ impl Program {
                     UnOp::Neg => "-",
                     UnOp::Not => "!",
                 });
-                self.write_expr(out, a, prec::UNARY);
+                self.write_expr(out, a, prec::UNARY, ctx);
                 if wrap {
                     out.push(')');
                 }
@@ -3021,9 +3031,9 @@ impl Program {
                 } else {
                     (p, p + 1)
                 };
-                self.write_expr(out, a, l);
+                self.write_expr(out, a, l, ctx);
                 let _ = write!(out, " {} ", op.symbol());
-                self.write_expr(out, b, r);
+                self.write_expr(out, b, r, ctx);
                 if wrap {
                     out.push(')');
                 }
@@ -3033,11 +3043,11 @@ impl Program {
                 if wrap {
                     out.push('(');
                 }
-                self.write_expr(out, c, prec::OR);
+                self.write_expr(out, c, prec::OR, ctx);
                 out.push_str(" ? ");
-                self.write_expr(out, a, prec::COND);
+                self.write_expr(out, a, prec::COND, ctx);
                 out.push_str(" : ");
-                self.write_expr(out, b, prec::COND);
+                self.write_expr(out, b, prec::COND, ctx);
                 if wrap {
                     out.push(')');
                 }
@@ -3045,13 +3055,13 @@ impl Program {
         }
     }
 
-    fn write_list(&self, out: &mut String, args: &[CArg]) {
+    fn write_list(&self, out: &mut String, args: &[CArg], ctx: CtxNames) {
         for (i, a) in args.iter().enumerate() {
             if i > 0 {
                 out.push_str(", ");
             }
             match a {
-                CArg::Expr(e) => self.write_expr(out, e, prec::COND),
+                CArg::Expr(e) => self.write_expr(out, e, prec::COND, ctx),
                 CArg::Pool(r) => out.push_str(&self.show_pool_ref(r)),
                 CArg::Stage(r) => out.push_str(&self.show_stage_ref(r)),
             }
