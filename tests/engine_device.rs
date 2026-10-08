@@ -302,9 +302,37 @@ fn an_engine_reads_its_lists_in_every_clause() {
             "execute (step_time(tokens) + waiting.admitted);",
             "read only in its `schedule`, not in `execute`",
         ),
+        (
+            "execute (step_time(tokens));",
+            "execute (step_time(tokens) + preempted);",
+            "`running.preempted` is what the iteration's schedule did",
+        ),
+        (
+            "tokens cap 8;",
+            "tokens cap max(tokens, 8);",
+            "`tokens cap` bounds the batch before it is formed",
+        ),
+        (
+            "while (running.preempted == 0)",
+            "while (max(decoders, 1) == 1)",
+            "`decoders` is `running.decoding`",
+        ),
     ] {
         refused(&replaced(&engine(ok), &[(from, to)]), why);
     }
+    // the bug as found: a list value as a call argument, in a schedule
+    assert_eq!(
+        ir(
+            &engine("advance running; admit waiting while (max(running.decoding, 1) == 1);"),
+            None,
+            &ov
+        ),
+        ir(
+            &stage("iteration { serve; admit while (max(decoders, 1) == 1); }"),
+            None,
+            &ov
+        )
+    );
     // a step stage is no engine: it has no lists to name
     refused(
         &replaced(&stage(""), &[("budget 8;", "budget 8 - running.count;")]),

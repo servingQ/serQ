@@ -76,6 +76,19 @@ const RETIRED_IN_ENGINE: [(&str, &str); 4] = [
     ("admitted", "waiting.admitted"),
 ];
 
+/// What a batch holds once it is formed, which `execute` reads and
+/// `tokens cap`, read before, cannot.
+const BATCH_ONLY: [&str; 3] = ["tokens", "prefilled", "attention"];
+
+/// The refusal of what the iteration's schedule did (`running.preempted`,
+/// `waiting.admitted`) in another clause.
+fn schedule_only(value: &str, clause: &str) -> String {
+    format!(
+        "`{value}` is what the iteration's schedule did, read only in its `schedule`, not in \
+         `{clause}`"
+    )
+}
+
 /// `waiting.count` until the pools the engine admits are known.
 pub(super) const WAITING_COUNT: &str = "waiting.count";
 
@@ -758,15 +771,8 @@ impl Parser {
                 );
             }
             ("running", "decoding") => "decoders",
-            // what this iteration's schedule did, known only as it runs
             ("running", "preempted") | ("waiting", "admitted") if clause != "schedule" => {
-                return self.err_at(
-                    at,
-                    format!(
-                        "`{list}.{field}` is what the iteration's schedule did, read only in \
-                         its `schedule`, not in `{clause}`"
-                    ),
-                );
+                return self.err_at(at, schedule_only(&format!("{list}.{field}"), clause));
             }
             ("running", "preempted") => "preempted",
             ("waiting", "admitted") => "admitted",
@@ -794,9 +800,21 @@ impl Parser {
             .iter()
             .find(|(n, _)| *n == name && !(clause == "execute" && *n == "decoders"))
         {
+            if clause != "schedule" && ["preempted", "admitted"].contains(&name) {
+                return self.err_at(at, schedule_only(now, clause));
+            }
             return self.err_at(
                 at,
                 format!("in an engine, `{name}` is `{now}`: one value, one name"),
+            );
+        }
+        if clause == "tokens cap" && BATCH_ONLY.contains(&name) {
+            return self.err_at(
+                at,
+                format!(
+                    "`{name}` is the batch's, and `tokens cap` bounds the batch before it is \
+                     formed: `execute` reads it"
+                ),
             );
         }
         Ok(())
