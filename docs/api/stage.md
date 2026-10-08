@@ -221,12 +221,13 @@ The report flags an engine left in this state as `idle: stage …`.
 
 ### Example
 
-From `examples/multi-turn/vllm.sq`:
+`examples/multi-turn/vllm.sq`'s engine, as the step stage it lowers to
+([engines on devices](../language.md#engines-on-devices)):
 
 ```serq
-stage engine : step {
+stage vllm : step {
   budget B;
-  chunk long_prefill(reqs, chunk_cap);
+  chunk residents + queued(reqs) > 1 ? chunk_cap : 0;
   cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
   memory kv;
 }

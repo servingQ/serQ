@@ -14,7 +14,9 @@ const VLLM: &str = "iteration { serve; admit while (!preempted); }";
 
 /// A stage without a body runs vLLM's procedure: every program of the
 /// corpus whose engines have no `exclusive prefill`, no `serve only` and no body
-/// gives the same report with the procedure written as a body.
+/// gives the same report with the procedure written as a body. An engine's
+/// schedule that is the procedure lowers to no body; as both arms of a
+/// `branch` it is a body.
 #[test]
 fn the_vllm_body_is_the_procedure() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -26,14 +28,19 @@ fn the_vllm_body_is_the_procedure() {
                 continue;
             }
             let src = std::fs::read_to_string(&path).unwrap();
-            if !src.contains("step {")
-                || src.contains("serve exclusive")
-                || src.contains("serve only")
-                || src.contains("iteration {")
-            {
+            let body = if src.contains("step {") {
+                if src.contains("serve exclusive")
+                    || src.contains("serve only")
+                    || src.contains("iteration {")
+                {
+                    continue;
+                }
+                src.replace("step {", &format!("step {{ {VLLM} "))
+            } else if let Some(body) = procedure_as_body(&src) {
+                body
+            } else {
                 continue;
-            }
-            let body = src.replace("step {", &format!("step {{ {VLLM} "));
+            };
             let ov = common::horizon(20.0);
             let base = path.parent();
             let a = run_source(&common::main_source(&src), &ov, base)
@@ -45,6 +52,27 @@ fn the_vllm_body_is_the_procedure() {
         }
     }
     assert!(checked >= 10, "{checked} programs");
+}
+
+/// An engine's schedule `advance running …; admit waiting while
+/// (running.preempted == 0) …;`, vLLM's procedure, as both arms of a
+/// `branch`, which makes it a body; `None` for any other schedule.
+fn procedure_as_body(src: &str) -> Option<String> {
+    let i = src.find("advance running")?;
+    let first = i + src[i..].find(';')? + 1;
+    let rest = &src[first..];
+    let admit = "admit waiting while (running.preempted == 0)";
+    if !rest.trim_start().starts_with(admit) || src[i..first].contains(" only ") {
+        return None;
+    }
+    let j = first + rest.find(admit)?;
+    let end = j + src[j..].find(';')? + 1;
+    Some(format!(
+        "{}branch (running.count >= 0) {{ {p} }} else {{ {p} }}{}",
+        &src[..i],
+        &src[end..],
+        p = &src[i..end]
+    ))
 }
 
 /// Three two-token prompts arrive together on a budget of eight. SGLang
@@ -263,42 +291,32 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
 /// The stage's `serve only (p)` is the body `serve only (p); admit only (p)
 /// while (!preempted);`: the linker writes the one as the other, so the
 /// two compile to one IR. That the body runs as the stage option ran,
-/// before it was lowered, was shown on these three programs in #362; paths
+/// before it was lowered, was shown in #362 on this program and the two
+/// FasterTransformer ones, which are engines now (their `advance running
+/// only (p); admit waiting only (p) while …` is `serve only (p)`,
+/// `tests/engine_device.rs`); paths
 /// they do not take (a preemption beside `only`, `only` with `serve by`)
 /// were compared by reading the code, not by a run.
 #[test]
 fn a_stage_only_is_a_body() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    for (file, p) in [
-        (
-            "examples/single-turn/fastertransformer.sq",
-            "decoders > 0 ? decoding : !decoding",
-        ),
-        (
-            "examples/papers/dai_fastertransformer.sq",
-            "decoders > 0 ? decoding : !decoding",
-        ),
-        (
-            "examples/papers/bari_rad.sq",
-            "decoders >= bcol || decoders == residents ? decoding : !decoding",
-        ),
-    ] {
-        let path = root.join(file);
-        let src = std::fs::read_to_string(&path).unwrap();
-        let stage = format!("serve only ({p});");
-        assert!(src.contains(&stage), "{file}");
-        let body = src.replace(
-            &stage,
-            &format!("iteration {{ serve only ({p}); admit only ({p}) while (!preempted); }}"),
-        );
-        let ov = common::horizon(20.0);
-        let ir = |s: &str| {
-            serq::compile_file(&common::main_source(s), &path, &ov)
-                .unwrap_or_else(|e| panic!("{file}: {e}"))
-                .to_json()
-        };
-        assert_eq!(ir(&src), ir(&body), "{file}");
-    }
+    let file = "examples/papers/bari_rad.sq";
+    let p = "decoders >= bcol || decoders == residents ? decoding : !decoding";
+    let path = root.join(file);
+    let src = std::fs::read_to_string(&path).unwrap();
+    let stage = format!("serve only ({p});");
+    assert!(src.contains(&stage), "{file}");
+    let body = src.replace(
+        &stage,
+        &format!("iteration {{ serve only ({p}); admit only ({p}) while (!preempted); }}"),
+    );
+    let ov = common::horizon(20.0);
+    let ir = |s: &str| {
+        serq::compile_file(&common::main_source(s), &path, &ov)
+            .unwrap_or_else(|e| panic!("{file}: {e}"))
+            .to_json()
+    };
+    assert_eq!(ir(&src), ir(&body), "{file}");
 }
 
 /// A body the linker cannot see stall still says so: the engine that ends

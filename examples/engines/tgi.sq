@@ -25,16 +25,19 @@ let p = 0.9;           // continue after a turn
 let Z = 3.0;           // tool time (s)
 
 fn main() {
-  pool kv { cap T; block 1; evict lru; preempt none; admit via engine; }
-
-  stage engine : step {
-    budget B;
-    cost max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-    memory kv;
+  device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap T; }
+  engine tgi on gpu {
+    tokens cap B;
     state just = 0;                // the last forward admitted
     // with no running batch there is no decode forward, and the queue is read
-    iteration { serve; branch (just == 0 || residents == 0) { admit; } set just = admitted > 0; }
+    schedule {
+      advance running;
+      branch (just == 0 || running.count == 0) { admit waiting; }
+      set just = waiting.admitted > 0;
+    }
+    execute (max(hbm(kv_decode + kv_prefill), compute(tokens)));
   }
+  pool kv on gpu { block 1; evict lru; preempt none; }   // the holds name it first: the engine admits it
   stage tool : delay;
 
   workload {
@@ -61,9 +64,9 @@ fn main() {
     set prompt = K + n;
     hold kv (cost(kv, prompt + mnt - 1)) reuse (cost(kv, prompt - 1)) {
       set c = cached;
-      run engine prefill (cost(engine, prompt - c));
+      run tgi prefill (cost(tgi, prompt - c));
       observe ttft = now - t0;
-      run engine decode (cost(engine, o - 1));
+      run tgi decode (cost(tgi, o - 1));
     } cache (cost(kv, prompt));
     observe response = now - t0;
   }

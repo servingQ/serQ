@@ -1,17 +1,21 @@
 // Whole-batch prefill isolation: B arrives while A is decoding.
 // With unit step costs the selected batches are A:p2, B:p4, A:d1, A:d1.
-// Removing the serve clause allows mixed A:d1+B:p3 and A:d1+B:p1.
+// Writing `advance running` for `exclusive prefill` allows mixed A:d1+B:p3
+// and A:d1+B:p1.
 fn main() {
-  pool reqs { cap 2; admit via engine; }
-  pool kv { cap 20; }
   stage gate : delay;
-  stage engine : step {
-    budget 4;
-    chunk 4;
-    cost 1;
-    memory kv;
-    serve exclusive prefill;
+  device gpu { kv cap 20; }
+  engine llm on gpu {
+    reqs cap 2;
+    tokens cap 4;
+    schedule {
+      exclusive prefill each at most (4);
+      admit waiting while (running.preempted == 0) each at most (4);
+    }
+    execute (1);
   }
+  pool reqs on llm { queue fifo; }
+  pool kv on gpu { }
   workload {
     arrive batch(2);
     init { set prompt = serial == 0 ? 2 : 4; }
@@ -21,10 +25,10 @@ fn main() {
     run gate (cost(gate, serial));
     set t0 = now;
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
-         at admission (left = budget_left(engine)) {
-      run engine prefill (cost(engine, prompt)) growing kv;
+         at admission (left = budget_left(llm)) {
+      run llm prefill (cost(llm, prompt)) growing kv;
       observe ttft = now - t0;
-      branch (serial == 0) { run engine decode (cost(engine, 2)) growing kv; }
+      branch (serial == 0) { run llm decode (cost(llm, 2)) growing kv; }
     }
     observe response = now - t0;
   }

@@ -36,8 +36,7 @@ fn read(name: &str) -> Value {
     serde_json::from_str(&std::fs::read_to_string(dir().join(name)).unwrap()).unwrap()
 }
 
-const ENGINE: &str =
-    "stage engine : step { budget B; chunk long_prefill(reqs, chunk); cost 1; memory kv; }";
+const RUNNING: &str = "advance running each at most (threshold);";
 
 /// The oracle program with the scenario's engine, order and requests.
 fn ir(name: &str) -> serq::Program {
@@ -48,16 +47,19 @@ fn ir(name: &str) -> serq::Program {
         ("B", num(&sc, "budget")),
         ("blocks", num(&sc, "num_blocks") - 1.0), // the null block
         ("max_seqs", num(&sc, "max_seqs")),
-        ("chunk", num(&sc, "chunk")),
     ] {
         ov.set_num(k, v).unwrap();
     }
+    // vLLM's 0 is no cap, which the program's default `inf` already is
+    if num(&sc, "chunk") > 0.0 {
+        ov.set_num("chunk", num(&sc, "chunk")).unwrap();
+    }
     let src = std::fs::read_to_string(program_path("vllm_request")).unwrap();
-    assert!(src.contains(ENGINE), "the oracle program's engine moved");
+    assert!(src.contains(RUNNING), "the oracle program's engine moved");
     let serve = sc["serve"].as_str().expect("a scenario names its order");
     let src = src.replace(
-        ENGINE,
-        &format!("stage engine : step {{ budget B; chunk long_prefill(reqs, chunk); cost 1; serve by ({serve}); memory kv; }}"),
+        RUNNING,
+        &format!("advance running by ({serve}) each at most (threshold);"),
     );
     let sessions: Vec<Vec<(&str, f64)>> = sc["requests"]
         .as_array()

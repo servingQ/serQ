@@ -6,15 +6,18 @@
 // (docs/use-cases/rbln.md links the lines at tag v0.11.3a21).
 use "../../lib/vllm.sq";
 fn main() {
-  pool kv { cap 8192; block 16; evict lru; preempt lifo; }
-  pool reqs { cap 4; admit via engine; }
-  stage engine : step {
-    budget 256;
-    chunk 128;
-    serve exclusive prefill;
-    cost 0.002 + 0.00001 * tokens;
-    memory kv;
+  device npu { kv cap 8192; }
+  engine llm on npu {
+    reqs cap 4;
+    tokens cap 256;
+    schedule {
+      exclusive prefill each at most (128);
+      admit waiting while (running.preempted == 0) each at most (128);
+    }
+    execute (0.002 + 0.00001 * tokens);
   }
+  pool kv on npu { block 16; evict lru; preempt lifo; }
+  pool reqs on llm { queue fifo; }
   workload {
     arrive batch(6);
     init { set prompt = 256; set out = 16; }
@@ -24,12 +27,12 @@ fn main() {
     set t0 = now;
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + min(128, left)))) reserve (cost(kv, known))
          at admission (known = computed < prompt ? prompt : computed + 1,
-                       left = budget_left(engine),
+                       left = budget_left(llm),
                        hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
       set c = min(cached, reusable(known, blocksize(kv)));
-      run engine prefill (cost(engine, known - c)) growing kv;
+      run llm prefill (cost(llm, known - c)) growing kv;
       branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
-      run engine decode (cost(engine, out - (known - prompt))) growing kv;
+      run llm decode (cost(llm, out - (known - prompt))) growing kv;
     } cache (cost(reqs, kv, prompt + out));
     observe response = now - t0;
   }

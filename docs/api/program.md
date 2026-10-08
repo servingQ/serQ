@@ -170,9 +170,13 @@ is reported in the library, with the uses it was expanded from.
 ```serq
 use "../../lib/vllm.sq";
 …
-stage engine : step {
-  budget B;
-  chunk long_prefill(reqs, chunk_cap);
+engine vllm on gpu {
+  …
+  schedule {
+    let threshold = long_prefill(chunk_cap);
+    advance running each at most (threshold);
+    admit waiting while (running.preempted == 0) each at most (threshold);
+  }
   …
 }
 ```

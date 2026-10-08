@@ -179,8 +179,10 @@ refused, and the error names the construct:
 - a `fifo` or `ps` stage, or a request's legs (`fork`);
 - a pool count other than two;
 - a constant chunk cap: vLLM lifts the cap for a request alone
-  (`scheduler.py:606-616`), so the program writes
-  `chunk long_prefill(reqs, c)` from `lib/vllm.sq`, or `chunk 0`.
+  (`scheduler.py:606-616`), so an engine writes `each at most (threshold)`
+  with `let threshold = long_prefill(c);` from `lib/vllm.sq`, or no `each
+  at most` for no cap; a step stage writes `residents + queued(reqs) > 1 ?
+  c : 0`, or `chunk 0`.
 
 `serve by` keys that vLLM's scheduler can observe are the programmable
 part. The configuration then also names `scheduler_cls:

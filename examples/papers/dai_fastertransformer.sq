@@ -13,10 +13,16 @@ let vp = 290;
 let vd = 990;
 
 fn main() {
-  stage engine : step {
-    budget bmax;
-    cost c + a * ceil(tokens / b0);
-    serve only (decoders > 0 ? decoding : !decoding);
+  device gpu { compute (t) = a * ceil(t / b0); }
+  engine fastertransformer on gpu {
+    tokens cap bmax;
+    schedule {
+      // decodes while any request decodes, else prefills: never both
+      advance running only (running.decoding > 0 ? decoding : !decoding);
+      admit waiting only (running.decoding > 0 ? decoding : !decoding)
+        while (running.preempted == 0);
+    }
+    execute (c + compute(tokens));
   }
 
   workload {
@@ -26,17 +32,17 @@ fn main() {
   }
 
   server {
-    run engine prefill (cost(engine, vp));
-    run engine decode (cost(engine, vd));
+    run fastertransformer prefill (cost(fastertransformer, vp));
+    run fastertransformer decode (cost(fastertransformer, vd));
     observe response = now - t0;
   }
 
   // §4: FasterTransformer is not work-conserving. Some batch is not full
   // although the residents could fill it.
-  claim not_work_conserving: some iteration of engine (demand >= bmax && tokens < bmax);
+  claim not_work_conserving: some iteration of fastertransformer (demand >= bmax && tokens < bmax);
 
   // Theorem 2(a) holds for it as for every scheduler.
-  claim token_rate: every iteration of engine (served * (c + a * bmax / b0) <= bmax * now);
+  claim token_rate: every iteration of fastertransformer (served * (c + a * bmax / b0) <= bmax * now);
 
 
 }

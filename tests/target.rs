@@ -134,12 +134,13 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
 }
 
 /// vLLM lifts the chunk cap for a request alone (scheduler.py:606-616), so a
-/// constant cap is not vLLM's: the target takes `long_prefill(reqs, c)` or 0.
+/// constant cap is not vLLM's: the target takes the cap that holds only with
+/// another request eligible, or none.
 #[test]
 fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
     let src = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
     let dir = root().join("examples/multi-turn");
-    let rule = "chunk long_prefill(reqs, chunk_cap);";
+    let rule = "let threshold = long_prefill(chunk_cap);";
     assert!(src.contains(rule), "the program's chunk moved");
     let p = serq::compile_source_at(
         &common::main_source(&src),
@@ -159,14 +160,14 @@ fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
         512
     );
     let p = serq::compile_source_at(
-        &common::main_source(&src.replace(rule, "chunk 512;")),
+        &common::main_source(&src.replace(rule, "let threshold = 512;")),
         Some(&dir),
         &common::horizon(10.0),
     )
     .unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
     assert!(
-        e.contains("the chunk cap is `512`") && e.contains("long_prefill(reqs, c)"),
+        e.contains("the chunk cap is `512`") && e.contains("running.count + waiting.count > 1"),
         "{e}"
     );
 }

@@ -2,7 +2,7 @@
 
 These examples keep the same engine and vary the client: single requests,
 chat, tool-using agents and an approximation of delegated subagent traffic.
-The deployment uses pools, `stage engine` and `server`; `workload` supplies
+The deployment uses a device, the engine `vllm` on it, its pools and `server`; `workload` supplies
 arrivals and turns. Client delays (`tool`, `user`, `delegate`) represent time
 outside the engine.
 

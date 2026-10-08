@@ -14,7 +14,7 @@ the program, what the runs show, and what the program leaves out.
 | [Input shapes and padding](input-shapes.md) | How scheduler output becomes compiled device inputs, per vendor |
 | [Different workloads](workloads.md) | One engine under single-turn, chat and subagent traffic |
 | [Prefill/decode over NIXL](pd.md) | llm-d's prefill/decode disaggregation with the KV transfer |
-| [FasterTransformer](fastertransformer.md) | Decode-only batches and their queueing cost (`serve only`) |
+| [FasterTransformer](fastertransformer.md) | Decode-only batches and their queueing cost (`only`) |
 
 ## Formal verification
 

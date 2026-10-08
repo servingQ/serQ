@@ -49,14 +49,18 @@ fn oracle_ir(name: &str) -> serq::Program {
         serde_json::from_str(&std::fs::read_to_string(dir().join(format!("{name}.json"))).unwrap())
             .unwrap();
     let set = |k: &str, v: f64| (k.to_string(), parser::parse_expr(&format!("{v}")).unwrap());
+    let mut lets = vec![
+        set("bs", num(&sc, "block_size")),
+        set("B", num(&sc, "budget")),
+        set("blocks", num(&sc, "num_blocks") - 1.0), // the null block
+        set("max_seqs", num(&sc, "max_seqs")),
+    ];
+    // vLLM's 0 is no cap, which the program's default `inf` already is
+    if num(&sc, "chunk") > 0.0 {
+        lets.push(set("chunk", num(&sc, "chunk")));
+    }
     let ov = Overrides {
-        lets: vec![
-            set("bs", num(&sc, "block_size")),
-            set("B", num(&sc, "budget")),
-            set("blocks", num(&sc, "num_blocks") - 1.0), // the null block
-            set("max_seqs", num(&sc, "max_seqs")),
-            set("chunk", num(&sc, "chunk")),
-        ],
+        lets,
         ..common::horizon(100000.0)
     };
     let path = program_path("vllm_request");

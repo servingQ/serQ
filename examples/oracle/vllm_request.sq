@@ -11,13 +11,23 @@ fn main() {
   let B = args.number("B", 1024);          // max_num_batched_tokens
   let blocks = args.number("blocks", 999);      // num_gpu_blocks less the null block
   let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
-  let chunk = args.number("chunk", 0);         // long_prefill_token_threshold (0: none)
+  let chunk = args.number("chunk", inf);       // long_prefill_token_threshold (inf: none)
 
-  pool reqs { cap max_seqs; admit via engine; }
-  pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-  // the chunk cap holds only while more than one request is running or
-  // waiting (lib/vllm.sq's long_prefill): a request alone takes the whole budget
-  stage engine : step { budget B; chunk long_prefill(reqs, chunk); cost 1; memory kv; }
+  device gpu { kv cap blocks * bs; }
+  engine vllm on gpu {
+    reqs cap max_seqs;
+    tokens cap B;
+    schedule {
+      // the chunk cap holds only while more than one request is running or
+      // waiting (lib/vllm.sq's long_prefill): a request alone takes the whole budget
+      let threshold = long_prefill(chunk);
+      advance running each at most (threshold);
+      admit waiting while (running.preempted == 0) each at most (threshold);
+    }
+    execute (1);
+  }
+  pool reqs on vllm { queue fifo; }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
   stage gate : delay;
 
   workload {
@@ -36,13 +46,13 @@ fn main() {
     // is dropped (scheduler.py:1560-1561): re-executed, the server recomputes
     // every token it has (`known`: the prompt, or the position it had reached
     // plus the token sampled there) and generates only what is left
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(engine)))) reserve (cost(kv, known))
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(vllm)))) reserve (cost(kv, known))
          at admission (known = computed < prompt ? prompt : computed + 1) {
-      run engine prefill (cost(engine, known)) growing kv;
+      run vllm prefill (cost(vllm, known)) growing kv;
       // the first token is sampled when the prompt is computed; a resumed
       // request's prefill recomputes tokens it had already produced
       branch (known == prompt) { observe first = now; }
-      run engine decode (cost(engine, o - 1 - (known - prompt))) growing kv;
+      run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
     }
     observe done = now;
   }

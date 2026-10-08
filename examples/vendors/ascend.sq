@@ -15,21 +15,26 @@ fn main() {
       set out = serial == 0 ? 4 : 1;
     }
   }
-  pool reqs {
-    cap 1;
-    queue by (waiting_class(immediate, prompt, waited));
-    admit via engine;
+  device npu { kv cap 4096; }
+  engine llm on npu {
+    reqs cap 1;
+    tokens cap 128;
+    schedule {
+      advance running each at most (128);
+      admit waiting while (running.preempted == 0) each at most (128);
+    }
+    execute (0.001);
   }
-  pool kv { cap 4096; block 16; }
-  stage engine : step { budget 128; chunk 128; cost 0.001; memory kv; }
+  pool reqs on llm { queue by (waiting_class(immediate, prompt, waited)); }
+  pool kv on npu { block 16; }
   stage delay : delay;
   server {
     run delay (cost(delay, serial == 2 ? 0.001 : serial == 3 ? 0.002 : serial >= 4 ? 0.003 : 0));
     hold reqs (cost(reqs, 1)), kv (cost(kv, prompt + out)) {
       observe selected = serial;
       observe admitted = now;
-      run engine prefill (cost(engine, prompt));
-      run engine decode (cost(engine, out));
+      run llm prefill (cost(llm, prompt));
+      run llm decode (cost(llm, out));
     }
     observe response = now;
   }
