@@ -66,14 +66,16 @@ serq run examples/multi-turn/vllm.sq --horizon 2000 --warmup 200 --seed 1 --json
 
 | Path | |
 |---|---|
-| top level | `serq_version` (the interpreter that ran, `serq --version`), `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals`, `ended`, `turns`, `mean_live` |
+| top level | `serq_version` (the interpreter that ran, `serq --version`), `horizon` (the configured deadline), `end` (when the run ended: `horizon`, or earlier with `--arrivals`), `warmup`, `seed`, `events`, `arrivals` (sessions that arrived, warm-up included), `ended` (sessions that ended after warm-up), `turns` (`turn;` statements run after warm-up: each is one request to the `server`), `mean_live` (time-average sessions alive) |
 | `observes.<name>` | `count`, `mean`, `ci`, `cv2`, `p99` |
 | `gauges.<name>` | `mean` (time average over `[warmup, end]`), `ci`, `min`, `max` |
 | `claims[]` | present when the program has a `claim`: `name`, `kind` (`every_iteration`, `some_iteration`, `at_end`), `result` (`holds`, `fails`, `witnessed`, `not_witnessed`, `not_evaluated`, `out_of_scope`), `checked` (iterations read, or 1 for a claim read at the end), `failures` (of those, the ones that read 0), `first` (the first failure, or a `some` claim's first witness; `null` when none), `note` (the sessions live at the end, or the session that failed `given`; `null` otherwise). The whole run, warm-up included |
 | `stages[]` | stage statistics, below |
 | `pools[]` | pool statistics, below |
 
-Non-finite numbers are written as `null`. For stages and pools, `name`
+Non-finite numbers are written as `null`, and as `NaN` in the text report:
+a mean with no sample, such as the `mean_wait` of a pool no hold waited at
+first, is one. For stages and pools, `name`
 identifies the resource and `index` its array member (`null` for a single resource).
 
 ### Stage statistics
@@ -81,7 +83,7 @@ identifies the resource and `index` its array member (`null` for a single resour
 | Fields | Meaning |
 |---|---|
 | `mean_number`, `utilization` | time-average jobs present and fraction of time occupied; on a shared stage, utilization is the time-average capacity carried by its flows |
-| `completed`, `throughput`, `mean_wait`, `mean_service` | completions, completions per clock unit, mean queue wait and mean service time |
+| `completed`, `throughput`, `mean_wait`, `mean_service` | runs completed after warm-up, runs per clock unit, mean wait from a run's arrival at the stage to its start, and mean time from its start to its end. They count runs, not requests: on an engine a request's `prefill` and `decode` are two runs, a run's service is its stay among the running requests, and its wait is 0, the wait for admission being the pool's `mean_wait` |
 | `iterations` | step iterations over the whole run, including warm-up |
 | `prefill_only`, `decode_only`, `mixed` | fractions of measured time running each kind of step iteration; the remainder is idle |
 | `mean_decodes` | time-average decodes in the running iteration, 0 while none runs |
@@ -108,8 +110,8 @@ exact; quantiles are within 0.5 %, and exact for a single value.
 
 | Fields | Meaning |
 |---|---|
-| `mean_used`, `mean_cached`, `mean_queue`, `mean_holders` | time-average allocated units, cached units, waiting sessions and holding sessions |
-| `mean_wait` | mean admission wait |
+| `mean_used`, `mean_cached`, `mean_queue`, `mean_holders` | time-average allocated units, cached units, waiting holds and holds that have it (a hold of two pools counts in both) |
+| `mean_wait` | mean wait from a hold joining this pool's queue to its admission, after warm-up; a hold waits in the queue of its first pool, so a later pool of the hold has none |
 | `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected` | admission, eviction, preemption, spill and rejection counters |
 | `stuck` | sessions preempted again without progress past their previous preemption |
 | `over_cap` | `null`, or `{queue, need}` when that queue's head asks for more than this pool's capacity at the end of the run |
