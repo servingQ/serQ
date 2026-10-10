@@ -93,8 +93,8 @@ fn vllm_as_an_engine_has_the_step_stages_ir() {
     assert_eq!(ir(&old512, Some(&base), &ov), ir(&new512, Some(&base), &ov));
 }
 
-/// SGLang's body and TGI's, which the kernel keeps as bodies. TGI's holds
-/// name `kv` first, so its device pool is admitted by the engine; SGLang's
+/// SGLang's body and TGI's, which the kernel keeps as bodies. TGI's
+/// device pool is admitted by its engine (`pool kv on tgi.gpu`); SGLang's
 /// `waiting.count` is the one queue its engine admits.
 #[test]
 fn sglang_and_tgi_as_engines_have_their_irs() {
