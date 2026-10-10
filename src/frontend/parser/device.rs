@@ -322,9 +322,10 @@ impl Parser {
         if KEYWORDS.contains(&name.as_str()) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
-        if prog.stages.iter().any(|s| s.name == name)
-            || prog.pools.iter().any(|p| p.name == name)
-            || self.devices.iter().any(|d| d.name == name)
+        if prog.pools.iter().any(|p| p.name == name) {
+            return self.err_at(at, one_name_space(&name));
+        }
+        if prog.stages.iter().any(|s| s.name == name) || self.devices.iter().any(|d| d.name == name)
         {
             return self.err_at(at, format!("`{name}` is declared twice"));
         }
