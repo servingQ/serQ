@@ -37,7 +37,7 @@ fn main() {
     }
     execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
-  pool kv on gpu { block 1; evict lru; preempt none; }   // the holds name it first: the engine admits it
+  pool kv on tgi.gpu { block 1; evict lru; preempt none; }
   stage tool : delay;
 
   workload {

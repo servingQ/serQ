@@ -58,7 +58,7 @@ check and the gateway's output cap limit request length.
 | the prefiller computes the prompt in chunks and samples one token, which the sidecar discards | `run P prefill (cost(P, prompt - c)) growing kv` | `scheduler.py:624-823`; the truncation for Mamba and MTP only, `nixl/base_scheduler.py:409-436` |
 | the request finishes on the prefiller: its slot is freed, its blocks are not — `request_finished` returns `delay_free_blocks` and a lease of `kv_lease_duration` (30 s), renewed by the decoder's heartbeats while the request waits | `} cache (prompt) lease kv (inf);` — the scope ends, the slot goes, the blocks stay the session's | `nixl/pull_scheduler.py:191-292`; `_free_request`, `scheduler.py:2628-2657`; the renewal, `nixl/base_scheduler.py:199-238`, `nixl/base_worker.py:3010-3030` |
 | the prefiller keeps every computed full block of the prompt cached once the lease ends | `cache (prompt)` on that hold, applied when the lease ends | `_connector_finished`, `scheduler.py:2929-2982`; `kv_cache_manager.py:610-619` |
-| the decoder's scheduler looks at its waiting queue only at a step with budget left and a running slot free | `pool reqs on D`, and `pool kv on gpu`, which `D` admits because the decoder's holds wait in it; `reqs (0) reserve (1)` — a slot must be free, none is taken | `scheduler.py:872-879` |
+| the decoder's scheduler looks at its waiting queue only at a step with budget left and a running slot free | `pool reqs on D` and `pool kv on D.gpu`: `D` admits both; `reqs (0) reserve (1)` — a slot must be free, none is taken | `scheduler.py:872-879` |
 | the decoder's local prefix hit, then the connector: for a remote prefill every prompt token beyond the local hit is external and loaded asynchronously | `kv (known) reserve (known)` with `reuse (reusable(known, bs))` in `D`'s `decode … from` entry; `c = cached` is the local hit | `scheduler.py:932-954`; `nixl/pull_scheduler.py:34-66` |
 | blocks are allocated for the whole prompt, and the request is parked, `WAITING_FOR_REMOTE_KVS`, holding them and no slot; one transfer per request | the hold on `kv`; `transferred` is `do_remote_prefill`, spent | `scheduler.py:1199-1226, 1264-1294`; `nixl/pull_scheduler.py:108-189` |
 | the worker reads the blocks from the prefiller over NIXL (pull mode: a NIXL READ issued by the decoder) | `transfer (prompt - c) from src to kv (prompt - 1 - c)` in `D`'s entry, and `D pull P latency x0 share maxmin;`: the decoder reads; a fixed wait, then the bytes out of the prefiller's NIC and into the decoder's at once, the two shared max-min fairly (a model, not a measurement: [Bandwidth sharing](https://github.com/servingQ/serQ/blob/main/docs/design/bandwidth-sharing.md)) | `nixl/pull_scheduler.py:168-177`; the worker's `_read_blocks`, `nixl/pull_worker.py:392-575` |
@@ -77,7 +77,7 @@ gateway selected by `gw.route();` in the server.
 ```
 queue gw : gateway { route { … } }                 // the router and the sidecar
 queue P[NP] : prefill { device gpu { … kv cap blocksP * bs; } engine on gpu { … } pool reqs on P { … } pool kv on gpu { … } nic ps(BwP); prefill (prompt) { … } }
-queue D[ND] : decode  { device gpu { … kv cap blocksD * bs; } engine on gpu { … } pool reqs on D { … } pool kv on gpu { … } nic ps(BwD); decode (prompt) { … } decode (prompt) from src { … } }
+queue D[ND] : decode  { device gpu { … kv cap blocksD * bs; } engine on gpu { … } pool reqs on D { … } pool kv on D.gpu { … } nic ps(BwD); decode (prompt) { … } decode (prompt) from src { … } }
 D pull P latency x0 share maxmin;                  // the decoder reads the KV from the prefiller
 stage tool : delay;
 ```
@@ -86,7 +86,9 @@ A queue's device, engine and pools are its members': `P[i].kv` is the KV of
 the i-th prefiller, `engine on gpu` is the member's engine, named after the
 queue (`P`), `pool reqs on P` means the member's own scheduler serves the
 pool, and `pool kv on gpu` counts the member's own blocks as its running
-requests' memory (`batch.kv_decode`, `batch.kv_prefill`). The family's size is the
+requests' memory (`batch.kv_decode`, `batch.kv_prefill`). A decoder's
+request waits for its blocks, not for a slot, so its pool is `on D.gpu`:
+the decoder's scheduler admits it in an iteration, as vLLM's does. The family's size is the
 `let` the router chooses over (`queue D[ND]`, `choose j in ND`), so the
 number is written once. Each pod's NIC is its own (`nic ps(BwD);`, the
 stage `D.nic`), and `D pull P latency x0 share maxmin;` is the transfer's

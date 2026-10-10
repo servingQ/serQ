@@ -38,6 +38,7 @@ item     := let NAME = expr ;
           | device NAME [ '[' N ']' ] { resource* }      -- what an engine runs on (below, *Engines on devices*)
           | engine NAME [ '[' N ']' ] on DEVICE { eitem* }   -- a step stage, written as what it does
           | pool NAME on OWNER { poolopt* }    -- a capacity of a device or an engine, as a pool
+          | pool NAME on ENGINE.DEVICE { poolopt* }   -- the device's capacity, whose queue the engine admits: the name before the dot is that engine
           | workload { wlitem* }
           | server block                      -- request handling; the session lives inside workload
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
@@ -52,6 +53,7 @@ qitem    := pool NAME { poolopt* }              -- the queue's own; only its ent
           | device NAME { resource* }           -- the member's device, `QUEUE.NAME`
           | engine on DEVICE { eitem* }         -- the queue's stage, named after the queue
           | pool NAME on OWNER { poolopt* }     -- on the queue's own device, or on the queue (its engine)
+          | pool NAME on QUEUE.DEVICE { poolopt* }   -- on the queue's own device, admitted by the queue's engine (named QUEUE)
           | serve kind [ latency expr ] ;       -- the queue's stage, named after the queue; `latency` a link's
           | nic kind ;                          -- the queue's NIC, the stage `QUEUE.nic`
           | VERB [ ( NAME, ... ) ] [ from NAME ] block   -- an entry of one of the queue's roles
@@ -831,7 +833,8 @@ pool reqs on vllm { queue fifo; }
 | Engine form | Kernel |
 |---|---|
 | `device D { f (x) = e; X cap c; }` | `f` is a definition read only inside the engine's `execute`; `X` is a capacity that some `pool X on D` must declare |
-| `pool X on D { rules }` | `pool X { cap c; rules }`, the engine's `memory` when `D` is its device; `admit via` the engine where a hold names `X` first |
+| `pool X on D { rules }` | `pool X { cap c; rules }`, the engine's `memory` when `D` is its device; a hold waiting for it is admitted as soon as it fits |
+| `pool X on E.D { rules }` | the same, `admit via E;`: engine `E`, running on `D`, admits a hold waiting for it in an iteration |
 | `pool X on E { rules }` | `pool X { cap c; rules; admit via E; }` for a capacity `X cap c` of engine `E` |
 | `tokens cap B;` | `budget B;` |
 | `execute (T);` | `cost T;` |

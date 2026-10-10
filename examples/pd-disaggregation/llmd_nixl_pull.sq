@@ -119,7 +119,7 @@ fn main() {
       execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
     }
     pool reqs on D { queue fifo; }
-    pool kv on gpu { block bs; evict lru; preempt lifo; }
+    pool kv on D.gpu { block bs; evict lru; preempt lifo; }
     nic ps(BwD);                          // the pod's NIC: the reads into it share it
 
     // Decode only: the pod prefills the prompt itself (examples/multi-turn/vllm.sq).
