@@ -24,6 +24,7 @@ One pool's report row. Obtain it from [`Report.pool`](report.md#pool),
 | `stuck` | `int` | Repeated preemptions without progress past the previous preemption. |
 | `over_cap` | `tuple[str, float]` or `None` | At run end, the waiting queue name and demand exceeding this pool's capacity; `None` when absent. |
 | `growing_at_end` | `int` | Holds waiting to grow in this pool when the run ends. |
+| `growing_stalled` | `bool` | Every session with an allocation in this pool waits to grow in it: none will free room. |
 
 Pool counters include warm-up; time averages and admission wait samples
 use the measured interval.

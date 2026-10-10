@@ -140,8 +140,13 @@ pub struct PoolReport {
     pub over_cap: Option<(String, f64)>,
     /// Holds waiting to grow in this pool when the run ends: a growth that
     /// did not fit and that the pool's `preempt` did not make room for
-    /// waits, for room another hold may never free (#238).
+    /// waits, for room another holder may free (#238).
     pub growing_at_end: u64,
+    /// Every session with an allocation in this pool is one of those
+    /// waiting to grow in it: none will free room, so they wait for ever
+    /// (a hold around one on the same pool, or holders waiting on each
+    /// other).
+    pub growing_stalled: bool,
 }
 
 /// A `claim`: what the run found of it on the path it ran.
@@ -479,13 +484,20 @@ impl Report {
                     );
                 }
                 if p.growing_at_end > 0 {
+                    let pool = label(&p.name, p.index);
+                    let why = if p.growing_stalled {
+                        format!(
+                            "and every holder of `{pool}` is one of them, so none will free room \
+                             (a hold around one on the same pool, or holders waiting on each \
+                             other)"
+                        )
+                    } else {
+                        "for room another holder may free".into()
+                    };
                     let _ = writeln!(
                         s,
-                        "grow: {} hold(s) wait to grow in pool `{}` when the run ends, for room \
-                         another hold may or may not free (a hold around one on the same pool may \
-                         keep what it needs)",
-                        p.growing_at_end,
-                        label(&p.name, p.index)
+                        "grow: {} hold(s) wait to grow in pool `{pool}` when the run ends, {why}",
+                        p.growing_at_end
                     );
                 }
                 if let Some((queue, need)) = &p.over_cap {
@@ -627,7 +639,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"over_cap\":{},\"growing_at_end\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"over_cap\":{},\"growing_at_end\":{},\"growing_stalled\":{}}}",
                 p.name,
                 index(p.index),
                 f(p.mean_used),
@@ -647,7 +659,8 @@ impl Report {
                         format!("{{\"queue\":\"{queue}\",\"need\":{}}}", f(*need)),
                     None => "null".into(),
                 },
-                p.growing_at_end
+                p.growing_at_end,
+                p.growing_stalled
             );
         }
         s.push_str("]}");

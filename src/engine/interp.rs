@@ -159,6 +159,20 @@ struct Lease<'p> {
     attrs: Option<Vec<f64>>,
 }
 
+/// Whether the session waits to grow in pool `pool`.
+fn grows_in(s: &Session, pool: usize) -> bool {
+    matches!(s.status, Status::Growing(q, ..) if q == pool)
+}
+
+/// Whether the session has an allocation in pool `pool`: a hold of it, or
+/// a lease, which frees it when it ends.
+fn allocates_in(s: &Session, pool: usize) -> bool {
+    s.holds
+        .iter()
+        .any(|h| h.pools.iter().any(|held| held.pool == pool))
+        || s.leases.iter().any(|l| l.pool == pool)
+}
+
 /// One pool a waiting hold asks for.
 #[derive(Clone, Debug)]
 struct Wanted<'p> {
@@ -4472,11 +4486,13 @@ impl<'p> Interp<'p> {
                     .iter()
                     .find(|(asked, _, _)| *asked == i)
                     .map(|&(_, q, need)| (label(q), need)),
-                growing_at_end: self
-                    .sessions
-                    .iter()
-                    .filter(|s| matches!(s.status, Status::Growing(pl, ..) if pl == i))
-                    .count() as u64,
+                growing_at_end: self.sessions.iter().filter(|s| grows_in(s, i)).count() as u64,
+                growing_stalled: self.sessions.iter().any(|s| grows_in(s, i))
+                    && self
+                        .sessions
+                        .iter()
+                        .filter(|s| allocates_in(s, i))
+                        .all(|s| grows_in(s, i)),
             })
             .collect();
         Report {

@@ -114,6 +114,7 @@ exact; quantiles are within 0.5 %, and exact for a single value.
 | `stuck` | sessions preempted again without progress past their previous preemption |
 | `over_cap` | `null`, or `{queue, need}` when that queue's head asks for more than this pool's capacity at the end of the run |
 | `growing_at_end` | holds waiting to grow in this pool when the run ends; the text report prints `grow:` |
+| `growing_stalled` | every session with an allocation in this pool is waiting to grow in it, so none will free room |
 
 A hold whose units or `reserve` depend on deployment state is not rejected
 when it joins the queue. If its demand remains above capacity at the end,

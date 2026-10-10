@@ -78,6 +78,7 @@ fn the_report_has_the_shape_its_version_names() {
             "evicted_entries",
             "evicted_units",
             "growing_at_end",
+            "growing_stalled",
             "index",
             "mean_cached",
             "mean_holders",
@@ -541,9 +542,12 @@ fn a_growth_left_waiting_is_noted() {
     )
     .unwrap();
     assert_eq!(r.pools[0].growing_at_end, 1);
+    assert!(r.pools[0].growing_stalled);
     assert!(
-        r.text()
-            .contains("grow: 1 hold(s) wait to grow in pool `kv` when the run ends"),
+        r.text().contains(
+            "grow: 1 hold(s) wait to grow in pool `kv` when the run ends, and every holder of \
+             `kv` is one of them"
+        ),
         "{}",
         r.text()
     );
