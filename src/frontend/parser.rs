@@ -5691,8 +5691,8 @@ mod tests {
             "stage E : fifo; pool E { cap 1; }",
             "pool E { cap 1; } stage E : fifo;",
             "pool E { cap 4; } queue E[2] : decode { pool kv { cap 10; } serve fifo; decode (n) { hold kv (cost(kv, n)) { run E (cost(E, 1)); } } }",
-            "pool E { cap 1; } device gpu { } engine E on gpu { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }",
-            "device gpu { } engine E on gpu { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } pool E { cap 1; }",
+            "pool E { cap 1; } device dev { } engine E on dev { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }",
+            "device dev { } engine E on dev { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } pool E { cap 1; }",
         ] {
             let e = err(&format!("{decls} {server}"));
             assert!(e.contains("a pool and a stage share one name space"), "{e}");

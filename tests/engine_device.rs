@@ -981,8 +981,16 @@ fn an_engine_reads_the_programs_own_names() {
     };
     let ov = common::horizon(10.0);
     assert_eq!(
-        ir(&format!("let attn = 1e-3;\n{}", with("attn")), None, &ov),
-        ir(&format!("let attn = 1e-3;\n{}", with("1e-3")), None, &ov),
+        step(
+            &compiled(&format!("let attn = 1e-3;\n{}", with("attn")), None, &ov),
+            "vllm"
+        )
+        .cost,
+        step(
+            &compiled(&format!("let attn = 1e-3;\n{}", with("1e-3")), None, &ov),
+            "vllm"
+        )
+        .cost,
     );
 }
 
