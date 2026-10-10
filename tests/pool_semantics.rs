@@ -10,6 +10,25 @@ fn run(src: &str, options: &Overrides) -> serq::Report {
     run_source(&common::main_source(src), options, None).unwrap()
 }
 
+/// A hold nested in another on the same pool leaves the outer hold's place
+/// among the holders when it ends: `holders(kv)` read 0 between the two
+/// releases, while the outer hold still held `kv`.
+#[test]
+fn an_inner_hold_leaves_the_outer_one_holding() {
+    let src = "pool kv { cap 100; }
+        stage svc : delay;
+        workload { arrive batch(1); }
+        server {
+          hold kv (cost(kv, 10)) {
+            hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); }
+            observe after_inner = holders(kv);
+            run svc (cost(svc, 1));
+          }
+        }";
+    let r = run(src, &common::horizon(10.0));
+    assert_eq!(r.observe("after_inner").unwrap().samples, [1.0]);
+}
+
 /// Three sessions with contexts 10, 20, 30 on a pool of 55: the third
 /// admission (30 with 30 cached) must evict one suspended session.
 /// Shortest-first drops the 10-token one; LRU drops the one released

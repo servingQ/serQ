@@ -2465,7 +2465,11 @@ impl<'p> Interp<'p> {
     ) {
         let serial = self.sessions[sid].serial;
         self.pools[q].used -= alloc;
-        self.pools[q].holders.retain(|&s| s != sid);
+        // one entry per admission: a hold nested in another on the same pool
+        // leaves the outer one's when it ends
+        if let Some(i) = self.pools[q].holders.iter().position(|&s| s == sid) {
+            self.pools[q].holders.remove(i);
+        }
         if let Some(c) = cache {
             let want = self.eval(c, &Ctx::session(sid), Which::Session).max(0.0);
             let keep = self.round_down(q, want.min(computed));
