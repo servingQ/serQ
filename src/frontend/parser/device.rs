@@ -850,10 +850,22 @@ impl Parser {
     }
 
     /// In an engine, the bare names its values replaced: the name for the
-    /// clause, or why the clause reads none.
-    pub(super) fn retired_in_engine(&self, at: usize, name: &str) -> PResult<()> {
+    /// clause, or why the clause reads none. A name renamed since (#139),
+    /// `ntok` for `tokens`, is answered with the engine's name for it. A
+    /// name the program declares (a `let`, an attribute, a `def`) is the
+    /// program's, as the linker reads it before a context variable.
+    pub(super) fn retired_in_engine(&self, at: usize, written: &str) -> PResult<()> {
         let Some(clause) = self.in_engine else {
             return Ok(());
+        };
+        if self.definitions.iter().any(|(d, _)| d == written)
+            || self.defs.iter().any(|d| d.name == written)
+        {
+            return Ok(());
+        }
+        let name = match RENAMED.iter().find(|(old, _)| *old == written) {
+            Some((_, new)) => *new,
+            None => written,
         };
         let named: Vec<_> = ENGINE_VALUES
             .iter()
@@ -865,11 +877,14 @@ impl Parser {
         match named.iter().find(|(_, _, cs)| cs.contains(&clause)) {
             Some((now, ..)) => self.err_at(
                 at,
-                format!("in an engine, `{name}` is `{now}` here: one value, one name"),
+                format!("in an engine, `{written}` is `{now}` here: one value, one name"),
             ),
             None => self.err_at(
                 at,
-                format!("`{name}` is `{value}`, and {}", not_read_in(value, clause)),
+                format!(
+                    "`{written}` is `{value}`, and {}",
+                    not_read_in(value, clause)
+                ),
             ),
         }
     }
@@ -1058,10 +1073,12 @@ impl Parser {
         }
     }
 
-    /// `pool NAME on OWNER`: the capacity it is, as `(cap, count, array)`.
+    /// `pool NAME on OWNER`: the capacity it is, as `(cap, count, array)`;
+    /// `at` is where NAME is written, `o_at` where OWNER is.
     pub(super) fn capacity_of(
         &self,
         at: usize,
+        o_at: usize,
         name: &str,
         owner: &str,
     ) -> PResult<(Expr, usize, bool)> {
@@ -1091,9 +1108,21 @@ impl Parser {
                 None => self.err_at(at, format!("`{owner}` has no capacity `{name}`")),
             };
         }
+        let help = crate::frontend::diagnostic::suggestion(
+            owner,
+            self.devices
+                .iter()
+                .map(|d| d.name.as_str())
+                .chain(self.engines.iter().map(|e| e.name.as_str()))
+                .filter(|n| !n.contains('.')),
+        )
+        .map(|n| format!("did you mean `{n}`?"))
+        .unwrap_or_else(|| "declare the device or the engine above the pool".into());
         self.err_at(
-            at,
-            format!("no device or engine `{owner}`: a pool is on one declared before it"),
+            o_at,
+            format!(
+                "no device or engine `{owner}`: a pool is on one declared before it\nhelp: {help}"
+            ),
         )
     }
 }

@@ -670,6 +670,34 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(bat
         &engine(ok).replace("on gpu {\n  reqs", "on cpu {\n  reqs"),
         "no device `cpu`",
     );
+    // a pool on a name nothing declares is pointed at that name, the owner
+    // (line 9, `pool kv on gpuu`, column 12), not the pool's
+    let e = error(&engine(ok).replace("pool kv on gpu", "pool kv on gpuu"));
+    assert!(e.starts_with("9:12: no device or engine `gpuu`"), "{e}");
+    assert!(e.contains("did you mean `gpu`?"), "{e}");
+    // a context variable's old name is answered with the engine's name
+    let e = error(&engine(ok).replace("execute (step_time(batch.tokens))", "execute (ntok)"));
+    assert!(
+        e.contains("in an engine, `ntok` is `batch.tokens` here"),
+        "{e}"
+    );
+}
+
+/// A name the program declares is the program's in an engine too, though a
+/// context variable once had it: `let attn` is not `attention` renamed.
+#[test]
+fn an_engine_reads_the_programs_own_names() {
+    let with = |c: &str| {
+        engine("advance running; admit waiting;").replace(
+            "execute (step_time(batch.tokens))",
+            &format!("execute (step_time(batch.tokens) + {c} * batch.attention)"),
+        )
+    };
+    let ov = common::horizon(10.0);
+    assert_eq!(
+        ir(&format!("let attn = 1e-3;\n{}", with("attn")), None, &ov),
+        ir(&format!("let attn = 1e-3;\n{}", with("1e-3")), None, &ov),
+    );
 }
 
 /// A family of devices: `pool kv on vllm.gpu` is `kv[N]`, an engine `E[N]`

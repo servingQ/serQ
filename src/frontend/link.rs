@@ -301,7 +301,7 @@ pub const AGGREGATES: [(&str, crate::ir::Agg); 5] = [
 
 /// Context variables renamed for what they mean (#139), for a program that
 /// still says the old name: it is refused with the new one.
-const RENAMED: [(&str, &str); 9] = [
+pub(crate) const RENAMED: [(&str, &str); 9] = [
     ("queued", "waiting"),
     ("n", "present"),
     ("ntok", "tokens"),
