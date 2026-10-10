@@ -393,10 +393,10 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("pool `kv`"), "{e}");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
-    // nor a stage's budget
+    // nor a stage's serve key, read for each resident
     let bad = "let bs = 16;
         pool kv { cap 1e5; block bs; evict lru; }
-        stage engine : step { budget 512 + o; cost 1e-3; memory kv; }
+        stage engine : step { budget 512; cost 1e-3; memory kv; serve by (o); }
         workload { arrive poisson(0.3); hidden o; turn { set n = ~exp(500); set o = ~exp(200) + 1; }
           session {  turn; end;
           }
@@ -435,6 +435,50 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
 
 /// The lints exist to be errors, which is only defensible if nothing real
 /// trips them.
+/// A stage's capacity, budget and cost, and an iteration body's guard, are
+/// read for the stage, where no one session is. `ps(1 + prompt)` linked and
+/// read the attribute as NaN: the run ended no session and said nothing.
+#[test]
+fn a_stage_reads_no_session_attribute() {
+    let ps = "stage svc : ps(1 + prompt);
+        workload { arrive poisson(0.5); init { set prompt = 2; } }
+        server { run svc (cost(svc, 1)); }";
+    let e = check(ps).expect_err("rejected");
+    assert!(e.contains("`prompt` is a session attribute"), "{e}");
+    assert!(e.contains("a ps stage's capacity"), "{e}");
+    let engine = |tokens: &str, schedule: &str, execute: &str| {
+        format!(
+            "device gpu {{ kv cap 100; }}
+            engine llm on gpu {{
+              tokens cap {tokens};
+              schedule {{ {schedule} }}
+              execute ({execute});
+            }}
+            pool kv on gpu {{ }}
+            workload {{ arrive poisson(0.5); init {{ set prompt = 2; }} }}
+            server {{ hold kv (cost(kv, prompt)) {{ run llm prefill (cost(llm, prompt)) growing kv; }} }}"
+        )
+    };
+    let vllm = "advance running; admit waiting while (running.preempted == 0);";
+    check(&engine("8", vllm, "1")).expect("links");
+    for (src, moment) in [
+        (engine("8 + prompt", vllm, "1"), "a step stage's budget"),
+        (engine("8", vllm, "1 + prompt"), "a step stage's cost"),
+        (
+            engine(
+                "8",
+                "branch (prompt > 0) { advance running; } admit waiting while (running.preempted == 0);",
+                "1",
+            ),
+            "a step stage's iteration body",
+        ),
+    ] {
+        let e = check(&src).expect_err("rejected");
+        assert!(e.contains("`prompt` is a session attribute"), "{e}");
+        assert!(e.contains(moment), "{e}");
+    }
+}
+
 #[test]
 fn no_false_positives_on_the_corpus() {
     for name in [

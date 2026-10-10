@@ -2171,6 +2171,16 @@ impl Validator<'_> {
                 "`{}` is a session attribute, and a gauge has no session",
                 self.p.attrs.get(*a).map_or("?", |s| s.as_str())
             )),
+            // a stage's capacity, budget, chunk, cost and an iteration body's
+            // guard are read for the stage, where no one session is: the
+            // interpreter would read the attribute as NaN
+            CExpr::Attr(a) if matches!(m, Moment::Ps | Moment::Budget | Moment::Step | Moment::Plan) => {
+                Err(format!(
+                    "`{}` is a session attribute, read in {m}, which has no session: it is \
+                     read for the stage",
+                    self.p.attrs.get(*a).map_or("?", |s| s.as_str())
+                ))
+            }
             CExpr::Sample(..) if m == Moment::Gauge => Err(
                 "a gauge may not draw (`~`): it reads the state, and a draw would move the run's streams"
                     .into(),

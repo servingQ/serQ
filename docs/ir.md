@@ -247,12 +247,12 @@ predicates and iteration-body guards, admission gates and assignments:
 | `Admit` | a hold's units, `reserve`, `reuse`, admission bindings | `Now` |
 | `Select` | a pool's queue keys, reevaluated for each waiting hold before every admission attempt | `Waited`, `Now` |
 | `Evict` | eviction keys, a spill's `work` and `when` | `Size`, `Age`, `Last`, `Queued`, `Now` |
-| `Ps` | a `ps` stage's capacity | `N`, `Now` |
-| `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents (a `BudgetLeft` is rejected: it is planned from a budget) | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
-| `Step` | a step stage's `cost`, evaluated after the iteration is scheduled | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
+| `Ps` | a `ps` stage's capacity, read for the stage's jobs (no `Attr`: no one session is read) | `N`, `Now` |
+| `Budget` | a step stage's `budget` and `chunk`, evaluated before the iteration from its residents (no `Attr`; a `BudgetLeft` is rejected: it is planned from a budget) | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` |
+| `Step` | a step stage's `cost`, evaluated after the iteration is scheduled (no `Attr`) | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Now` |
 | `Serve` | a step stage's `serve by` keys and `only`, evaluated for one resident at its turn, the totals as the residents stand then (a session the iteration admitted included) | `Decoding`, `Admission`, `Remaining`, `Nres`, `Ndec`, `Kvb`, `Kvp`, `Now` (`only` not `Now`) |
 | `Victim` | a pool's preemption keys, evaluated for each candidate when growth cannot fit | `Decoding`, `Admission`, `Position`, `Now` |
-| `Plan` | iteration-body branch guards, admission gates and register assignments | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Ntok`, `Npre`, `Admitted`, `Preempted` |
+| `Plan` | iteration-body branch guards, admission gates and register assignments (no `Attr`) | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Ntok`, `Npre`, `Admitted`, `Preempted` |
 | `Gauge` | a gauge, evaluated on the state an instant ends with and held until the next, with no session (an `Attr`, a `Sample`, `CachedIn`, `Now`, `Work` or `BudgetLeft` is rejected, and an index is a `Num` in range, so reading it cannot fail the run) | none |
 | `Given` | a claim's `given`, evaluated for each session once its `init` has run (and its preset attributes are set), on its attributes (`hidden` ones included: a claim is no scheduler) and the constants; no `Sample`, no `Call` but arithmetic | none (not `Now`) |
 | `Iteration` | a claim over the iterations of a step stage, evaluated when an iteration starts, after its batch is scheduled (where the cost is read); no `Attr`, no `Sample`, of the calls only arithmetic, `Queue`, `Busy`, `Used`, `Free`, `Holders`, `Queued`, an index a `Num` in range | `Ntok`, `Ndec`, `Npre`, `Nres`, `Kvb`, `Kvp`, `Attn`, `Demand`, `Served`, `Arrived`, `Now` |
