@@ -52,7 +52,8 @@ fn engine(
     )
 }
 
-/// vLLM's schedule: the residents, then the waiting while none was preempted.
+/// vLLM's schedule: the running requests, then the waiting while none was
+/// preempted (`scheduler.py:624`, `scheduler.py:869`).
 const VLLM: &str = "advance running; admit waiting while (running.preempted == 0);";
 
 fn run(src: &str, options: &Overrides) -> serq::Report {
@@ -149,9 +150,9 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
 /// with `computed` 0, not its 32-token allocation, so a program reading
 /// `computed` does not invent an output token it never produced (vLLM's
 /// `num_computed_tokens` is 0 for a request preempted before its first
-/// step). The pool is no engine's memory here: on the engine's device a
-/// holder away from the engine is not in its `running` list and is not a
-/// victim.
+/// step). The pool is no engine's memory here: were it on the engine's
+/// device (`pool kv on gpu`), a holder away from the engine would not be in
+/// its `running` list and would not be a victim.
 #[test]
 fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
     let src = r#"

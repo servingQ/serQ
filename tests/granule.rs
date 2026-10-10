@@ -14,13 +14,14 @@ use serq::{Overrides, compile_source, run_source};
 /// so the first iteration serves 6 alone (cost 1), the second the other 6
 /// (cost 1): first tokens at 1 and 2.
 fn prog(granule: &str) -> String {
-    scheduled(
+    program(
         granule,
         "advance running; admit waiting while (running.preempted == 0);",
     )
 }
 
-fn scheduled(granule: &str, schedule: &str) -> String {
+/// An engine with `granule` among its items and `schedule` as its schedule.
+fn program(granule: &str, schedule: &str) -> String {
     format!(
         r#"
         device gpu {{ }}
@@ -80,7 +81,7 @@ fn a_granule_is_above_zero() {
 
 /// A granule the stage could never give does not link: beside `exclusive
 /// prefill` a refused prefill blocks every decode for ever (the review of
-/// #373), and above a constant `chunk` a prompt longer than it
+/// #373), and above a constant `each at most` a prompt longer than it
 /// never gets a token (TensorRT-LLM refuses a chunk below its unit).
 #[test]
 fn a_granule_that_could_never_be_given_does_not_link() {
@@ -101,7 +102,7 @@ fn a_granule_that_could_never_be_given_does_not_link() {
             "chunk",
         ),
     ] {
-        let src = scheduled(granule, schedule);
+        let src = program(granule, schedule);
         let e = compile_source(&common::main_source(&src), &common::horizon(20.0)).unwrap_err();
         assert!(e.contains(message), "{schedule} {granule}: {e}");
     }
@@ -117,7 +118,7 @@ fn a_granule_that_could_never_be_given_does_not_link() {
 }
 
 /// The chunk caps first and the granule rounds what it leaves: a prefill of
-/// 10 under `chunk 6; granule 4;` gets 4 (6 rounded down), then the 6 left,
+/// 10 under `each at most (6)` and `granule 4` gets 4 (6 rounded down), then the 6 left,
 /// whole. Its first token is at the second iteration's end.
 #[test]
 fn the_chunk_caps_and_the_granule_rounds() {

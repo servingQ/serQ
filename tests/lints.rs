@@ -471,6 +471,8 @@ fn no_false_positives_on_the_corpus() {
 }
 
 /// A context variable renamed for what it means (#139) says its new name.
+/// In an engine that name is refused in turn; #428 answers with the
+/// engine's (`batch.tokens`).
 #[test]
 fn an_old_context_variable_name_says_the_new_one() {
     for (old, new) in [

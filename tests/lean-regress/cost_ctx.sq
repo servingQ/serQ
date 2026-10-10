@@ -1,5 +1,6 @@
 // An iteration cost that reads every context variable the Lean fragment has:
-// tokens, prefilled, decoders, kv_decode and attention (an even coefficient:
+// batch.tokens, batch.prefilled, batch.decoding, batch.kv_decode and
+// batch.attention (an even coefficient:
 // the fragment holds twice the attention work). The second prompt is longer
 // than the budget, so its chunks have positions; both decode while holding
 // what they prefilled. The Lean semantics must give the interpreter's

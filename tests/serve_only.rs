@@ -202,7 +202,7 @@ fn an_excluded_admission_waits_as_a_resident() {
 
 #[test]
 fn a_session_admitted_in_the_iteration_counts_among_the_residents() {
-    // `residents` and `decoders` are read on the residents as they stand: a
+    // `running.count` and `running.decoding` are read on the residents as they stand: a
     // session the iteration admits is one of them. All three arrive at an
     // empty engine. Read on the residents before the admission, the opposite
     // rule saw each as a prefill among none (0 < 0 is false), served it
@@ -298,7 +298,10 @@ fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
     assert!(error.contains("a third rule"), "{error}");
     for (p, message) in [
         ("~exp(1) > 1", "may not draw"),
-        ("batch.tokens > 0", "tokens"),
+        (
+            "batch.tokens > 0",
+            "`only` is read before the batch is formed",
+        ),
         ("now >= 5 || decoding", "may not read `now`"),
     ] {
         let error = compile_source(
@@ -324,5 +327,26 @@ fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
         Program::from_json(&p.to_json())
             .unwrap_err()
             .contains("takes back")
+    );
+    // and an `only` that reads the batch, which no program can spell: it is
+    // read for each resident before the batch is formed
+    let mut p = compile_source(
+        &common::main_source(&source(&only(FT))),
+        &common::horizon(20.0),
+    )
+    .unwrap();
+    let serq::ir::CStageKind::Step(st) = &mut p.stages[1].kind else {
+        panic!("engine is a step stage")
+    };
+    let Some(serq::ir::CIter::Serve { only: Some(e), .. }) =
+        st.iteration.as_mut().and_then(|b| b.first_mut())
+    else {
+        panic!("`only` is a body")
+    };
+    *e = serq::ir::CExpr::Ctx(serq::ir::CtxVar::Ntok);
+    let e = Program::from_json(&p.to_json()).unwrap_err();
+    assert!(
+        e.contains("`tokens` is read in a step stage's serve keys or `only`"),
+        "{e}"
     );
 }
