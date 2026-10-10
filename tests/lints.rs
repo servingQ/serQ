@@ -522,15 +522,16 @@ fn no_false_positives_on_the_corpus() {
     }
 }
 
-/// A context variable renamed for what it means (#139) says its new name.
-/// In an engine that name is refused in turn; #428 answers with the
-/// engine's (`batch.tokens`).
+/// A context variable renamed for what it means (#139) says its new name,
+/// and in an engine the engine's word for it (#428).
 #[test]
 fn an_old_context_variable_name_says_the_new_one() {
-    for (old, new) in [
-        ("ntok", "tokens"),
-        ("kvb", "kv_decode"),
-        ("queued", "waiting"),
+    // in an engine the old name is answered with the engine's word (#428);
+    // elsewhere with the context variable's new name
+    for (old, says) in [
+        ("ntok", "in an engine, `ntok` is `batch.tokens` here"),
+        ("kvb", "in an engine, `kvb` is `batch.kv_decode` here"),
+        ("queued", "`queued` is now `waiting`"),
     ] {
         let (key, cost) = if old == "queued" {
             (old, "1")
@@ -541,7 +542,7 @@ fn an_old_context_variable_name_says_the_new_one() {
             "device gpu {{ kv cap 10; }}\nengine e on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute ({cost}); }}\npool kv on gpu {{ evict by ({key}); }}\nworkload {{ session {{ turn; end; \n}} }}\nserver {{\n}}\n"
         );
         let e = compile_source(&common::main_source(&src), &common::horizon(500.0)).unwrap_err();
-        assert!(e.contains(&format!("`{old}` is now `{new}`")), "{e}");
+        assert!(e.contains(says), "{e}");
     }
 }
 
