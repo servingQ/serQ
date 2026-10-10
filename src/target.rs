@@ -221,7 +221,7 @@ fn vllm_chunk(p: &Program, e: &CExpr, slots: usize) -> Result<f64, String> {
     use crate::ir::{CArg, Fun};
     let refuse = || {
         Err(format!(
-            "not on vLLM's architecture: the `each at most` is `{}` (the IR's chunk); vLLM caps a prefill only while \
+            "not on vLLM's architecture: the `each at most` is `{}`; vLLM caps a prefill only while \
              another request is running or waiting (scheduler.py:606-616)\nhelp: in an \
              engine's schedule, `let threshold = running.count + waiting.count > 1 ? c : inf;` \
              and `each at most (threshold)`, or no `each at most` for no cap",

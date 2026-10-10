@@ -63,7 +63,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | preempt none ; | preempt lifo ;  -- what a failed growth does
           | preempt by ( expr , ... ) [requeue head | requeue tail] ;   -- the victim: least keys
           | queue fifo ; | queue by ( expr (, expr)* ) ; -- waiting selection
-          | admit via STAGE ;                -- the queue is served by a step stage's scheduler
+          | admit via STAGE ;                -- the queue is served by an engine's `schedule`
           | reserve held ;                   -- a hold's unallocated reservation counts against later admissions
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
@@ -797,7 +797,7 @@ admits, or a guard that reads `now`, does not link (an engine that
 schedules nothing waits for an event, and the clock moving is none); that
 is necessary, not sufficient, and an engine the linker could not see stall
 is named in the report when the run ends with its work unscheduled
-(`idle: stage …`). `state NAME = c;` gives the engine a register its
+(`idle: engine …`). `state NAME = c;` gives the engine a register its
 schedule sets (`set NAME = e;`) and the scheduler's expressions read
 between iterations; a set takes effect with its iteration (a try that
 schedules, preempts and admits nothing is undone), and a register is read

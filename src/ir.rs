@@ -180,24 +180,53 @@ pub enum Moment {
     End,
 }
 
-impl std::fmt::Display for Moment {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+impl Moment {
+    /// Where an expression read at this moment is written, in a source
+    /// program's words.
+    pub fn place(self) -> &'static str {
+        match self {
             Moment::Session => "a session statement, a run or a hold's cache",
-            Moment::Admit => "a hold's header, read at admission",
-            Moment::Select => "a pool's queue keys, read before selecting a waiting session",
+            Moment::Admit => "a hold's header",
+            Moment::Select => "a pool's queue keys",
             Moment::Evict => "an eviction key or spill clause",
             Moment::Ps => "a ps stage's capacity",
             Moment::Budget => "an engine's `tokens cap` or `each at most`",
             Moment::Step => "an engine's `execute`",
             Moment::Serve => "an engine's `advance running by (…)` keys or an `only`",
-            Moment::Victim => "a pool's preempt keys, read for each candidate victim",
+            Moment::Victim => "a pool's preempt keys",
             Moment::Plan => "an engine's `schedule`",
-            Moment::Gauge => "a gauge, read on the deployment's state with no session",
-            Moment::Given => "a claim's `given`, read on one session's attributes",
-            Moment::Iteration => "a claim over iterations, read when an iteration starts",
-            Moment::End => "a claim `at end`, read when the run ends",
-        })
+            Moment::Gauge => "a gauge",
+            Moment::Given => "a claim's `given`",
+            Moment::Iteration => "a claim over iterations",
+            Moment::End => "a claim `at end`",
+        }
+    }
+
+    /// When it is read: what keeps the sentence true for an IR reader, who
+    /// has no `tokens cap` or `schedule` to look for.
+    pub fn when(self) -> &'static str {
+        match self {
+            Moment::Session => "read when the session gets there",
+            Moment::Admit => "read at admission",
+            Moment::Select => "read before selecting a waiting session",
+            Moment::Evict => "read for one cache entry",
+            Moment::Ps => "read for the stage's jobs",
+            Moment::Budget => "read before the iteration is formed",
+            Moment::Step => "read after the iteration is formed",
+            Moment::Serve => "read for each running session",
+            Moment::Victim => "read for each candidate victim",
+            Moment::Plan => "read as the iteration is formed",
+            Moment::Gauge => "read on the deployment's state with no session",
+            Moment::Given => "read on one session's attributes",
+            Moment::Iteration => "read when an iteration starts",
+            Moment::End => "read when the run ends",
+        }
+    }
+}
+
+impl std::fmt::Display for Moment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}, {}", self.place(), self.when())
     }
 }
 
@@ -1984,7 +2013,7 @@ impl Validator<'_> {
     /// A step stage's iteration body: `serve`'s and `admit`'s `only` and
     /// keys are read as a serve key is, a guard and an `admit`'s `while` as
     /// the iteration is planned; none draws or reads the clock (an engine
-    /// whose body schedules nothing waits for an event, and the clock moving
+    /// whose `schedule` schedules nothing waits for an event, and the clock moving
     /// is none, #263), and a guard does not read this stage's
     /// `budget_left`, which plans the iteration the body is planning.
     fn iteration(&self, st: usize, body: &[CIter]) -> Result<(), String> {
@@ -1997,8 +2026,8 @@ impl Validator<'_> {
             }
             if reads_clock(e) {
                 return Err(format!(
-                    "{what} may not read `now` or `work(…)`: an engine whose body schedules \
-                     nothing waits for an event, and the clock moving is none"
+                    "{what} may not read `now` or `work(…)`: an engine whose `schedule` \
+                     schedules nothing waits for an event, and the clock moving is none"
                 ));
             }
             let own = |r: &CRef| (r.base..r.base + r.count).contains(&st);
@@ -2188,10 +2217,9 @@ impl Validator<'_> {
             // interpreter would read the attribute as NaN
             CExpr::Attr(a) if matches!(m, Moment::Ps | Moment::Budget | Moment::Step | Moment::Plan) => {
                 Err(format!(
-                    "`{}` is a session attribute, and {m} is read for the {}, with no \
-                     session",
+                    "`{}` is a session attribute, and {} has no session",
                     self.p.attrs.get(*a).map_or("?", |s| s.as_str()),
-                    if m == Moment::Ps { "stage" } else { "engine" }
+                    m.place()
                 ))
             }
             CExpr::Sample(..) if m == Moment::Gauge => Err(
@@ -2212,8 +2240,8 @@ impl Validator<'_> {
             // from it, this engine's or another's, plans from itself (#284)
             CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Budget => Err(
                 "an engine's `tokens cap` or `each at most` may not read `budget_left(…)`: \
-                 budget_left plans an iteration from a `tokens cap`, so a budget that reads it \
-                 can read itself"
+                 budget_left plans an iteration from a `tokens cap`, so a `tokens cap` that \
+                 reads it can read itself"
                     .into(),
             ),
             CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Victim => Err(
@@ -2243,8 +2271,9 @@ impl Validator<'_> {
             )),
             CExpr::Call(f, _) if matches!(m, Moment::Given | Moment::End) && !f.is_arithmetic() => {
                 Err(format!(
-                    "`{}(…)` reads the deployment's state, and {m} reads {}",
+                    "`{}(…)` reads the deployment's state, and {} reads {}",
                     f.name(),
+                    m.place(),
                     if m == Moment::Given {
                         "the session's attributes and the constants"
                     } else {

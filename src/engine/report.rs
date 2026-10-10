@@ -514,7 +514,7 @@ impl Report {
         for st in self.stages.iter().filter(|st| st.idle_with_work) {
             let _ = writeln!(
                 s,
-                "idle: stage `{}` ended with residents or waiting requests, its last iteration \
+                "idle: engine `{}` ended with residents or waiting requests, its last iteration \
                  scheduling nothing (a schedule or `only` that serves and admits nobody, a \
                  `granule` that refuses every prefill, or a run waiting to grow, `grow:`, waits \
                  for an event)",

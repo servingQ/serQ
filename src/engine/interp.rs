@@ -3530,7 +3530,7 @@ impl<'p> Interp<'p> {
         // step that merely preempted may cost 0 (`docs/language.md` §3).
         if ntok > 0.0 && cost <= 0.0 {
             self.error = Some(format!(
-                "engine `{}`: its `execute` reads {cost} for an iteration of {ntok} tokens; an iteration that \
+                "engine `{}`: its `execute` is {cost} for an iteration of {ntok} tokens; an iteration that \
                  schedules tokens lasts a positive time",
                 p.stages[st].name
             ));

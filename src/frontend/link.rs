@@ -476,7 +476,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             for (name, init) in &sp.state {
                 if s.count != 1 {
                     return Err(LinkError::new(format!(
-                        "engine `{}`: `state {name}` on an engine array; which member's register \
+                        "engine `{}`: `state {name}` on an engine family; which member's register \
                          an expression read would be a guess",
                         s.name
                     )));

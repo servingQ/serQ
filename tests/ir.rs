@@ -220,6 +220,31 @@ fn ir_that_skips_the_linker_meets_its_checks() {
     );
 }
 
+/// An IR reader has no `tokens cap` to look for: the moment's error says
+/// when the expression is read, so it holds for IR loaded from JSON too.
+#[test]
+fn a_moment_error_on_loaded_ir_says_when() {
+    let mut p = serq::load(&serq::program_path("vllm"), &common::horizon(10.0)).unwrap();
+    let st = p
+        .stages
+        .iter_mut()
+        .find_map(|s| match &mut s.kind {
+            serq::ir::CStageKind::Step(st) => Some(st),
+            _ => None,
+        })
+        .expect("a step stage");
+    st.budget = serq::ir::CExpr::Ctx(serq::ir::CtxVar::Ntok);
+    let e = Program::from_json(&p.to_json()).unwrap_err();
+    assert!(
+        e.contains(
+            "`tokens` is read in an engine's `tokens cap` or `each at most`, \
+             read before the iteration is formed, but it exists only in"
+        ),
+        "{e}"
+    );
+    assert!(e.contains("read after the iteration is formed"), "{e}");
+}
+
 #[test]
 fn malformed_ir_is_rejected() {
     let src = std::fs::read_to_string(serq::program_path("mg1")).unwrap();

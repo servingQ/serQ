@@ -370,7 +370,7 @@ fn an_engine_idle_with_work_is_named() {
         },
     );
     assert!(r.stages[0].idle_with_work, "{}", r.text());
-    assert!(r.text().contains("idle: stage `llm`"), "{}", r.text());
+    assert!(r.text().contains("idle: engine `llm`"), "{}", r.text());
 }
 
 /// A guard is a test: a value other than 1 or 0 fails the run.
@@ -678,7 +678,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
           schedule { advance running; admit waiting; }
           execute (1);
         }";
-    assert!(ok(arr, base).unwrap_err().contains("engine array"));
+    assert!(ok(arr, base).unwrap_err().contains("engine family"));
     let given = "claim c given (go == 0): at end (1);";
     assert!(ok(given, base).is_err());
 }
