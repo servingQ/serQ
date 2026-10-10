@@ -211,20 +211,32 @@ fn exprs_of(s: &CStmt) -> Vec<&CExpr> {
 /// always 0, and `reuse` bounds
 /// nothing. A hold that consumed and kept nothing, which is what the body
 /// used to see, is `cache (0)`.
+///
+/// `nested`: a hold inside the enclosing hold's body that was passed before
+/// this block, and set `cached` by its own admission (#237).
 fn cached_in_a_hold_without_cache(
     p: &Program,
     block: usize,
     hold: Option<(&str, bool)>,
+    nested: Option<String>,
     out: &mut Vec<String>,
 ) {
     let Some(stmts) = p.blocks.get(block) else {
         return;
     };
+    let mut nested = nested;
     for s in stmts {
-        if let Some((pool, false)) = hold
-            && exprs_of(s)
-                .into_iter()
-                .any(|e| mentions_attr(e, p.slot_cached))
+        let reads_cached = exprs_of(s)
+            .into_iter()
+            .any(|e| mentions_attr(e, p.slot_cached));
+        if let (Some((pool, _)), Some(inner), true) = (hold, &nested, reads_cached) {
+            out.push(format!(
+                "`cached` is read after the hold on `{inner}` in the body of the hold on \
+                 `{pool}`: every admission sets it, so here it is the admission of `{inner}`. \
+                 Read it above that hold (`set c = cached;`), as `llmd_nixl_pull.sq` does."
+            ));
+        } else if let Some((pool, false)) = hold
+            && reads_cached
         {
             out.push(format!(
                 "`cached` is read in a hold on `{pool}` that has no `cache` clause: such a \
@@ -251,18 +263,48 @@ fn cached_in_a_hold_without_cache(
                          nothing, or `cache (ℓ)` to keep ℓ."
                     ));
                 }
-                cached_in_a_hold_without_cache(p, *body, Some((&pool, cache.is_some())), out);
+                // its `cached` is its own admission's
+                let inner = Some((pool.as_str(), cache.is_some()));
+                cached_in_a_hold_without_cache(p, *body, inner, None, out);
             }
             CStmt::Branch(_, t, e) => {
-                cached_in_a_hold_without_cache(p, *t, hold, out);
-                cached_in_a_hold_without_cache(p, *e, hold, out);
+                cached_in_a_hold_without_cache(p, *t, hold, nested.clone(), out);
+                cached_in_a_hold_without_cache(p, *e, hold, nested.clone(), out);
             }
-            CStmt::Loop(b) | CStmt::While(_, b) => cached_in_a_hold_without_cache(p, *b, hold, out),
+            CStmt::Loop(b) | CStmt::While(_, b) => {
+                // a hold later in the body precedes the read in the next
+                // iteration
+                let seed = nested
+                    .clone()
+                    .or_else(|| hold.and_then(|_| first_hold_in(p, *b)));
+                cached_in_a_hold_without_cache(p, *b, hold, seed, out);
+            }
             // a leg holds nothing of the session's
-            CStmt::Fork(b) => cached_in_a_hold_without_cache(p, *b, None, out),
+            CStmt::Fork(b) => cached_in_a_hold_without_cache(p, *b, None, None, out),
             _ => {}
         }
+        if nested.is_none() {
+            nested = first_hold(p, s);
+        }
     }
+}
+
+/// The pool of the first hold a statement may admit, through its branches
+/// and loops: a fork's legs hold nothing of the session's.
+fn first_hold(p: &Program, s: &CStmt) -> Option<String> {
+    match s {
+        CStmt::Hold { pools, .. } => Some(p.show_pool_ref(&pools[0].0)),
+        CStmt::Branch(_, t, e) => first_hold_in(p, *t).or_else(|| first_hold_in(p, *e)),
+        CStmt::Loop(b) | CStmt::While(_, b) => first_hold_in(p, *b),
+        _ => None,
+    }
+}
+
+/// The pool of the first hold a block may admit.
+fn first_hold_in(p: &Program, b: usize) -> Option<String> {
+    p.blocks
+        .get(b)
+        .and_then(|stmts| stmts.iter().find_map(|s| first_hold(p, s)))
 }
 
 /// Every lint, over a linked program.
@@ -271,7 +313,7 @@ pub fn lint(p: &Program) -> Result {
     for block in [p.session, p.init, p.turn] {
         stale_header_read(p, block, &mut out);
         constant_probability_guard(p, block, &mut out);
-        cached_in_a_hold_without_cache(p, block, None, &mut out);
+        cached_in_a_hold_without_cache(p, block, None, None, &mut out);
     }
     out.dedup();
     if out.is_empty() {
