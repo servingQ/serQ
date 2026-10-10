@@ -22,11 +22,16 @@ let vdmax = 512;         // the largest output
 fn main() {
   let rate = args.number("rate", 0.00002);      // requests per µs (20 per second)
 
-  stage E : step {
-    budget bcol;
-    chunk bcol;
-    cost tlin * ceil(tokens / bcol) + tnl * tokens;
-    serve only (decoders >= bcol || decoders == residents ? decoding : !decoding);
+  device gpu { }   // the paper's cost is written whole in `execute`, and no memory binds
+  // Decode Mode when b_col requests decode or every one does, else Prefill Mode
+  def in_mode() { running.decoding >= bcol || running.decoding == running.count ? decoding : !decoding }
+  engine E on gpu {
+    tokens cap bcol;
+    schedule {
+      advance running only (in_mode()) each at most (bcol);
+      admit waiting only (in_mode()) while (running.preempted == 0) each at most (bcol);
+    }
+    execute (tlin * ceil(batch.tokens / bcol) + tnl * batch.tokens);
   }
 
   workload {
@@ -45,6 +50,9 @@ fn main() {
     observe response = now - t0;
   }
 
+  // A claim reads an iteration in the kernel's words (#437): `tokens` is
+  // `batch.tokens`, `decoders` `running.decoding`, `residents` `running.count`.
+  //
   // Theorem 1: under any scheduler a node completes at most one token per
   // tlin / bcol + tnl µs, so a load above it diverges.
   claim token_rate: every iteration of E (served * (tlin + tnl * bcol) <= bcol * now);

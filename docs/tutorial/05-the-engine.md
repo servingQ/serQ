@@ -1,7 +1,7 @@
 # 5. The engine
 
-Replace the per-turn service time with a `step` engine. Each iteration
-allocates a token budget across its residents and then admits waiting
+Replace the per-turn service time with an engine. Each iteration
+allocates a token budget across the requests it is running and then admits waiting
 requests with the remaining budget. This model allows prefill and decode
 to share an iteration.
 
@@ -15,40 +15,56 @@ Its deployment, drawn by [`serq draw`](../visualization/index.md):
 
 ![The engine as a queueing network](../assets/05-engine.deployment.svg)
 
-The figure is labelled in the words an engine is written in
-([Engines on devices](../language.md#engines-on-devices)), whichever form
-the program uses: `tokens cap` is the `budget` below, `pool reqs on
-engine` is `admit via engine`, and `pool kv on engine's device` is the
-stage's `memory`.
+## The engine on its device
 
-## The `step` stage
+The `stage engine` of chapters 3 and 4 is now an `engine`, and `engine` is
+the word that declares one, so the engine is named `llm`.
 
 ```serq
-stage engine : step {
-  budget B;
-  cost max(omega + beta * (kv_decode + kv_prefill), tokens * alpha);
-  memory kv;
+device gpu {
+  compute (t) = t * alpha;
+  hbm (k) = omega + beta * k;
+  kv cap blocks * bs;
 }
+engine llm on gpu {
+  reqs cap max_seqs;
+  tokens cap B;
+  schedule {
+    advance running;
+    admit waiting while (running.preempted == 0);
+  }
+  execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+}
+pool kv on gpu { block bs; evict lru; preempt lifo; }
+pool reqs on llm { queue fifo; }
 ```
 
-`budget` is the tokens one iteration may schedule (`max_num_batched_tokens`).
-`cost` is how long the iteration takes, as an expression in what it scheduled:
+The `device` says what the hardware offers: the time to compute `t`
+tokens, the time to read `k` tokens of KV, and the KV capacity. The
+`engine` says what runs on it. `reqs cap` is how many requests may run at
+once (`max_num_seqs`), `tokens cap` the tokens one iteration may schedule
+(`max_num_batched_tokens`). `schedule` is what each iteration does: give
+the running requests their tokens, then admit waiting ones while nothing
+was preempted. `execute` is how long the iteration takes, as an
+expression in what it scheduled:
 
-| Variable | Meaning |
+| Value | Meaning |
 |---|---|
-| `tokens` | tokens scheduled this iteration |
-| `decoders` | decoding residents scheduled |
-| `prefilled` | prefill tokens scheduled |
-| `residents` | residents, scheduled or not |
-| `kv_decode`, `kv_prefill` | memory held by the scheduled decode / prefill residents |
-| `attention` | attention work of the prefill chunks, \(\sum n(K + n/2)\) |
+| `batch.tokens` | tokens scheduled this iteration |
+| `batch.decoding` | decoding requests scheduled |
+| `batch.prefilled` | prefill tokens scheduled |
+| `batch.kv_decode`, `batch.kv_prefill` | memory held by the scheduled decode / prefill requests |
+| `batch.attention` | attention work of the prefill chunks, \(\sum n(K + n/2)\) |
 
 The cost is the larger of the time to read weights and KV memory and the
 time to compute the scheduled tokens. Fit these parameters to measurements
 of the engine you want to model.
 
-`chunk` limits each request's prefill allocation. `serve` controls resident
-order and selection; see the [stage reference](../api/stage.md).
+`pool kv on gpu` is the device's memory, with its rules: blocks, eviction,
+preemption. `pool reqs on llm` holds the engine's `reqs cap`: its running
+slots, and the queue of requests waiting for one, served `fifo`. `each at most (c)` limits each request's prefill in an
+iteration, and `advance running` takes an order and an `only`; see
+[Engines on devices](../language.md#engines-on-devices).
 
 ## The workload and the server
 
@@ -61,21 +77,21 @@ the server side.
 
 ```serq
 set hitmax = floor((prompt - 1) / bs) * bs;
-hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
      at admission (hit = min(cachedin(kv), hitmax)) {
   set c = min(cached, floor((prompt - 1) / bs) * bs);
-  run engine prefill (cost(engine, prompt - c)) growing kv;
-  run engine decode (cost(engine, o - 1)) growing kv;
+  run llm prefill (cost(llm, prompt - c)) growing kv;
+  run llm decode (cost(llm, o - 1)) growing kv;
 } cache (cost(reqs, kv, prompt + o));
 ```
 
 **`growing kv`** allocates additional blocks as the request advances instead
 of reserving its full memory at admission. With `preempt lifo`, a failed
-growth can preempt the most recently admitted engine resident. The hold is
+growth can preempt the most recently admitted running request. The hold is
 retried; see [preemption semantics](../language.md) for the state preserved
 across retries.
 
-**`budget_left(engine)`** is the token budget left after serving residents.
+**`budget_left(llm)`** is the token budget left after serving the running requests.
 The admission reserves memory for the cached prefix plus the prefill chunk
 that fits this budget, capped by `prompt`.
 
@@ -84,10 +100,9 @@ be evicted while the request waits, so reading the cache earlier in a `set`
 would use an outdated value. `at admission (hit = …)` names this value for
 the header.
 
-**`admit via engine`** on a pool (`reqs` in the program above, and in
-`examples/replay/vllm_replay.sq`) hands the pool's queue to the engine's
-scheduler: waiting requests are admitted at the start of an iteration, with
-the budget left, and never in an iteration that preempted.
+**`pool reqs on llm`** hands the pool's queue to the engine's
+scheduler: waiting requests are admitted by `admit waiting` in an
+iteration, with the budget left, and never in an iteration that preempted.
 
 ## Running it
 
@@ -104,14 +119,14 @@ hit       44301  0.7938  ±0.0032  0.260  1.0000
 ttft      44301  0.0182  ±0.0005  1.274  0.0798
 response  44301  0.0629  ±0.0009  0.638  0.2370
 
-stage   number   util   done    thru    wait  service    iters
-------  ------  -----  -----  ------  ------  -------  -------
-engine   0.153  0.138  88602  4.9223  0.0000   0.0311  9160680
-tool     5.851  0.997  35398  1.9666  0.0000   2.9755        0
+stage  number   util   done    thru    wait  service    iters
+-----  ------  -----  -----  ------  ------  -------  -------
+llm     0.153  0.138  88602  4.9223  0.0000   0.0311  9160680
+tool    5.851  0.997  35398  1.9666  0.0000   2.9755        0
 
-step    prefill only  decode only  mixed   idle  decodes  decode batch  decode step   itl p50   itl p99
-------  ------------  -----------  -----  -----  -------  ------------  -----------  --------  --------
-engine         0.036        0.096  0.006  0.862    0.110         1.079     0.000223  0.000209  0.000240
+step  prefill only  decode only  mixed   idle  decodes  decode batch  decode step   itl p50   itl p99
+----  ------------  -----------  -----  -----  -------  ------------  -----------  --------  --------
+llm          0.036        0.096  0.006  0.862    0.110         1.079     0.000223  0.000209  0.000240
 
 pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
@@ -119,7 +134,7 @@ kv    735.9  28664.1  0.000    0.153     NaN   49390       258   1935856        
 reqs    0.2      0.0  0.002    0.153  0.0007   49390         0         0        0      0    0      0
 ```
 
-`done 88602` at the engine against 44 301 turns — two runs per turn, prefill
+`done 88602` at `llm` against 44 301 turns — two runs per turn, prefill
 and decode.
 
 TTFT is now separately observable, and at 18 ms it is a different quantity from

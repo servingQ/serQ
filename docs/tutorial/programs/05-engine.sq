@@ -19,16 +19,24 @@ fn main() {
   let Lambda = args.number("Lambda", 0.5);
   let Z = args.number("Z", 3.0);
 
-  pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-  pool reqs { cap max_seqs; admit via engine; }
-
-  stage engine : step {
-    budget B;
-    // an iteration costs whichever is larger: reading the weights and the
-    // residents' KV, or computing the tokens it scheduled
-    cost max(omega + beta * (kv_decode + kv_prefill), tokens * alpha);
-    memory kv;
+  device gpu {
+    compute (t) = t * alpha;
+    hbm (k) = omega + beta * k;
+    kv cap blocks * bs;
   }
+  engine llm on gpu {
+    reqs cap max_seqs;
+    tokens cap B;
+    schedule {
+      advance running;
+      admit waiting while (running.preempted == 0);
+    }
+    // an iteration costs whichever is larger: reading the weights and the
+    // running requests' KV, or computing the tokens it scheduled
+    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
+  pool reqs on llm { queue fifo; }
   stage tool : delay;
 
   workload {
@@ -57,13 +65,13 @@ fn main() {
     // cache itself is read inside the hold's units, so it is read when the
     // request is admitted -- while it waits, its prefix is still evictable
     set hitmax = floor((prompt - 1) / bs) * bs;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
          at admission (hit = min(cachedin(kv), hitmax)) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;
-      run engine prefill (cost(engine, prompt - c)) growing kv;
+      run llm prefill (cost(llm, prompt - c)) growing kv;
       observe ttft = now - t0;
-      run engine decode (cost(engine, o - 1)) growing kv;
+      run llm decode (cost(llm, o - 1)) growing kv;
     } cache (cost(reqs, kv, prompt + o));
     observe response = now - t0;
   }
