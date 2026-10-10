@@ -896,8 +896,11 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
             StageKind::Step(sp) => {
                 out.extend([&sp.budget, &sp.cost, &sp.chunk]);
                 out.extend(sp.memory.iter().filter_map(|r| r.index.as_deref()));
-                if let Schedule::Procedure(p) = &sp.schedule {
-                    out.extend(p);
+                match &sp.schedule {
+                    Schedule::Procedure(only) => out.extend(only),
+                    // a body's guards read as the iteration is planned, and
+                    // the moments check what they read
+                    Schedule::Body(_) => {}
                 }
                 if let Serve::By(keys) = &sp.serve {
                     out.extend(keys);

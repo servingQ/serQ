@@ -657,8 +657,11 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                 expr(&mut s.cost);
                 expr(&mut s.chunk);
                 s.memory.iter_mut().for_each(reference);
-                if let Schedule::Procedure(Some(p)) = &mut s.schedule {
-                    expr(p);
+                match &mut s.schedule {
+                    Schedule::Procedure(only) => only.iter_mut().for_each(expr),
+                    // a body's statements keep their locations: a test of
+                    // equal programs compares procedures, not bodies
+                    Schedule::Body(_) => {}
                 }
                 if let Serve::By(keys) = &mut s.serve {
                     keys.iter_mut().for_each(expr);

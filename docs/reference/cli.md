@@ -185,7 +185,7 @@ refused, and the error names the construct:
   with `let threshold = long_prefill(c);` from `lib/vllm.sq`, or no `each
   at most` for no cap.
 
-`serve by` keys that vLLM's scheduler can observe are the programmable
+`advance running by` keys that vLLM's scheduler can observe are the programmable
 part. The configuration then also names `scheduler_cls:
 serq_vllm.SerqScheduler` (`tools/serq_vllm.py`), and `serve_by` carries
 the keys as IR. That scheduler is vLLM's own, except that each step's
