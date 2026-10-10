@@ -179,7 +179,7 @@ iteration); about twelve forms and ten link errors come.
   constant is what lets a cap of 0 or below be refused before the run, so
   a computed cap is only `max(k, e)` with `k > 0` constant, which keeps
   that and writes vLLM's adaptive threshold, `max(long_prefill_token_threshold,
-  input_budget // num_eligible_reqs)` (`scheduler.py:617-622`, off by
+  input_budget // num_eligible_reqs)` (`scheduler.py:609-622`, off by
   default). Rejected: `min(k, e)` or `e` checked at run time, since a cap
   of 0 or below would then be a run-time error the linker could have
   named.

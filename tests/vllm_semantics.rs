@@ -403,7 +403,7 @@ fn long_prefill_threshold_applies_only_with_company() {
     );
 }
 
-/// scheduler.py:617-622: with `adaptive_long_prefill_threshold`, the cap
+/// scheduler.py:609-622: with `adaptive_long_prefill_threshold`, the cap
 /// is floored at a fair share of the budget, `max(threshold, budget //
 /// num_eligible_reqs)`. An `each at most` computes it as `max(k, e)` with
 /// `k` a positive constant (#442).

@@ -1701,6 +1701,24 @@ impl Program {
                                  would never get a token"
                             )));
                         }
+                        // a `max(k, e)` chunk can always fall to its floor `k`,
+                        // where the same prompt gets nothing (#448)
+                        if let CExpr::Call(Fun::Max, args) = &st.chunk
+                            && let Some(k) = args
+                                .iter()
+                                .filter_map(|a| match a {
+                                    CArg::Expr(e) => constant(e),
+                                    _ => None,
+                                })
+                                .reduce(f64::max)
+                            && k > 0.0
+                            && g > k
+                        {
+                            return Err(at(format!(
+                                "granule {g} with chunk max({k}, …): a prompt longer than {k} \
+                                 would get no token in an iteration whose chunk is {k}"
+                            )));
+                        }
                     }
                     if let CServe::By(keys) = &st.serve {
                         for k in keys {

@@ -1599,6 +1599,13 @@ impl Linker<'_> {
         let Expr::Call(f, args) = unwrap(leaf) else {
             return Err(LinkError::new(format!("engine `{stage}`: {rule}")).at(span));
         };
+        if f == "min" {
+            return Err(LinkError::new(format!(
+                "engine `{stage}`: `each at most (min(…))` could give a run 0 or below; a cap \
+                 that shrinks writes its floor: `max(1, min(k, e))`; {rule}"
+            ))
+            .at(span));
+        }
         if f != "max" || args.len() != 2 {
             return Err(LinkError::new(format!("engine `{stage}`: {rule}")).at(span));
         }

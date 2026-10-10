@@ -894,7 +894,7 @@ fn the_design_refuses_what_it_says() {
     );
     refused(
         &engine("advance running each at most (min(4, running.count));"),
-        "`max(k, e)` with `k` a constant above 0",
+        "a cap that shrinks writes its floor: `max(1, min(k, e))`",
     );
     refused(
         &engine("advance running each at most (max(0, running.count));"),
