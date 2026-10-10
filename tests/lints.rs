@@ -546,20 +546,28 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
     );
     check(&src).expect("read above the inner hold, as llmd_nixl_pull.sq does");
     // read after the inner hold, in the outer body: the inner admission set
-    // it, so `c` was 0 every turn where 992 was kept (#237)
-    let src = format!(
-        "{CACHE_ENGINE} pool reqs {{ cap 4; }} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
-        }} }}
-        server {{ loop {{ run think (cost(think, 1));
-            hold kv (cost(kv, 1000)) {{ hold reqs (cost(reqs, 1)) {{ run think (cost(think, 0.01)); }} observe c = cached; }} cache (cost(kv, 1000));
-          }}
-        }} "
-    );
-    let e = check(&src).expect_err("rejected");
-    assert!(
-        e.contains("`cached` is read after the hold on `reqs` in the body of the hold on `kv`"),
-        "{e}"
-    );
+    // it, so `c` was 0 every turn where 992 was kept (#237); in a branch
+    // after it, and in a loop whose next iteration comes after it
+    let inner = "hold reqs (cost(reqs, 1)) { run think (cost(think, 0.01)); }";
+    for body in [
+        format!("{inner} observe c = cached;"),
+        format!("{inner} branch (1 > 0) {{ observe c = cached; }}"),
+        format!("loop {{ observe c = cached; {inner} }}"),
+    ] {
+        let src = format!(
+            "{CACHE_ENGINE} pool reqs {{ cap 4; }} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
+            }} }}
+            server {{ loop {{ run think (cost(think, 1));
+                hold kv (cost(kv, 1000)) {{ {body} }} cache (cost(kv, 1000));
+              }}
+            }} "
+        );
+        let e = check(&src).expect_err("rejected");
+        assert!(
+            e.contains("`cached` is read after the hold on `reqs` in the body of the hold on `kv`"),
+            "{body}\n{e}"
+        );
+    }
 }
 
 /// `reuse` bounds what the admission consumes; without `cache` it consumes nothing.
