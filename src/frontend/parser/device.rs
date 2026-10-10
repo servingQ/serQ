@@ -291,6 +291,7 @@ impl Parser {
             body,
             draws,
             assigns: vec![],
+            entry_calls: vec![],
             reads,
             calls,
             turn: false,

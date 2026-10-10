@@ -253,6 +253,10 @@ struct Def {
     /// `set`s, `choose`s and bindings, and `cached` and `computed` if it
     /// holds. An argument that reads one would read the body's value.
     assigns: Vec<String>,
+    /// The entry calls the body makes, itself or through a definition it
+    /// uses, as `(queue, verb)`: each writes its queue's marks and locals,
+    /// read at a use, where the queues are declared.
+    entry_calls: Vec<(String, String)>,
     /// The names the body reads other than its parameters, and the
     /// functions of pool or stage state it calls, itself or through a
     /// definition it uses: what an argument that uses it reads.
@@ -580,9 +584,9 @@ fn live_message(def: &str, p: &str, what: &str) -> String {
 
 /// An argument of `def` reads `n`, which the body assigns before it reads
 /// the parameter `p`.
-fn capture_message(def: &str, p: &str, n: &str) -> String {
+fn capture_message(p: &str, n: &str, by: &str) -> String {
     format!(
-        "the argument for `{p}` reads `{n}`, which `{def}` assigns: it would read the \
+        "the argument for `{p}` reads `{n}`, which {by}: it would read the \
          body's `{n}`, not this one\nhelp: `set` the value under another name first and \
          pass that; a key over a `choose` of the body is written where the `choose` is"
     )
@@ -609,6 +613,30 @@ fn assigned_tokens(b: &[Token]) -> Vec<String> {
         .any(|t| matches!(&t.tok, Tok::Ident(k) if k == "hold"));
     if holds {
         out.extend(["cached".to_string(), "computed".to_string()]);
+    }
+    out
+}
+
+/// The calls `Q.verb (` and `Q[i].verb (` in a body, as `(Q, verb)`: entry
+/// calls if `Q` is a queue with that entry, which is known at a use.
+fn entry_calls_of(b: &[Token]) -> Vec<(String, String)> {
+    let tok = |i: usize| b.get(i).map(|t| &t.tok);
+    let mut out = vec![];
+    for (k, t) in b.iter().enumerate() {
+        let Tok::Ident(q) = &t.tok else { continue };
+        // past a member's index, `Q[i]`
+        let mut i = k + 1;
+        if tok(i) == Some(&Tok::LBracket) {
+            while tok(i).is_some_and(|t| *t != Tok::RBracket) {
+                i += 1;
+            }
+            i += 1;
+        }
+        if let (Some(Tok::Dot), Some(Tok::Ident(v)), Some(Tok::LParen)) =
+            (tok(i), tok(i + 1), tok(i + 2))
+        {
+            out.push((q.clone(), v.clone()));
+        }
     }
     out
 }
@@ -2319,15 +2347,19 @@ impl Parser {
         let draws = body.iter().any(|t| t.tok == Tok::Tilde) || self.draws_through(&body);
         let used: Vec<&Def> = self.defs.iter().filter(|d| uses(&body, &d.name)).collect();
         let mut assigns = assigned_tokens(&body);
+        let mut entry_calls = entry_calls_of(&body);
         let mut turn = says(&body, "turn");
         let (mut reads, mut calls) = self.reads_of(&body, !stmts);
         reads.retain(|n| !params.contains(n));
         for d in &used {
             assigns.extend(d.assigns.iter().cloned());
+            entry_calls.extend(d.entry_calls.iter().cloned());
             turn |= d.turn;
         }
         assigns.sort();
         assigns.dedup();
+        entry_calls.sort();
+        entry_calls.dedup();
         calls.sort();
         calls.dedup();
         self.defs.push(Def {
@@ -2340,11 +2372,32 @@ impl Parser {
             body,
             draws,
             assigns,
+            entry_calls,
             reads,
             calls,
             turn,
         });
         Ok(())
+    }
+
+    /// The attributes a definition's entry calls write, with the call:
+    /// `Q.verb (…)` writes `Q`'s marks and its entries' locals, `Q.first`
+    /// and `Q.x`.
+    fn entry_marks(&self, d: &Def) -> Vec<(String, String, String)> {
+        let mut out = vec![];
+        for (q, v) in &d.entry_calls {
+            let Some(queue) = self.queues.iter().find(|d| d.name == *q) else {
+                continue;
+            };
+            if !queue.entries.iter().any(|e| e.verb == *v) {
+                continue;
+            }
+            let locals = queue.entries.iter().flat_map(|e| &e.locals);
+            for m in queue.marks.iter().chain(locals) {
+                out.push((format!("{q}.{m}"), q.clone(), v.clone()));
+            }
+        }
+        out
     }
 
     /// The names `toks` read and the functions of live state they call,
@@ -2423,6 +2476,14 @@ impl Parser {
                 }
             } else if !called && (expr || !KEYWORDS.contains(&n.as_str())) {
                 reads.push(n.clone());
+            }
+            // `E.first`, a queue's attribute, is one name: the lexer gave it
+            // as three tokens
+            if let (Some(Tok::Dot), Some(Tok::Ident(m))) = (
+                toks.get(k + 1).map(|t| &t.tok),
+                toks.get(k + 2).map(|t| &t.tok),
+            ) {
+                reads.push(format!("{n}.{m}"));
             }
         }
         for d in self.defs.iter().filter(|d| uses(toks, &d.name)) {
@@ -2509,7 +2570,15 @@ impl Parser {
             }
             let (reads, _) = self.reads_of(a, true);
             if let Some(n) = d.assigns.iter().find(|n| reads.contains(n)) {
-                return self.err_at(at, capture_message(&d.name, p, n));
+                return self.err_at(at, capture_message(p, n, &format!("`{}` assigns", d.name)));
+            }
+            if let Some((n, q, v)) = self
+                .entry_marks(&d)
+                .into_iter()
+                .find(|(n, ..)| reads.contains(n))
+            {
+                let by = format!("`{}`'s call of `{q}.{v}` writes", d.name);
+                return self.err_at(at, capture_message(p, &n, &by));
             }
             let uses = d
                 .body

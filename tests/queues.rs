@@ -366,6 +366,39 @@ fn a_keyword_named_attribute_is_a_read() {
     }
 }
 
+/// An argument that reads a queue's attribute, `E.first`, is checked against
+/// what the body's entry calls write, its own or a definition's it uses:
+/// `go(E.first)` read the `E.first` the body's own `E.decode` marked, 8 where
+/// the caller's was 4 (#218).
+#[test]
+fn an_argument_reading_a_queue_attribute_is_checked() {
+    let program = |defs: &str, call: &str| {
+        format!(
+            "{defs}
+            queue E : decode {{
+              pool kv {{ cap 100; }}
+              serve fifo;
+              decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run E (cost(E, prompt)); mark first; }} }}
+            }}
+            workload {{ arrive batch(1); init {{ set prompt = 4; }} }}
+            server {{ E.decode (prompt); {call} }}"
+        )
+    };
+    let direct = "def go(x) { E.decode (prompt); observe b = x; }";
+    let nested = "def inner() { E.decode (prompt); } def go(x) { inner(); observe b = x; }";
+    for defs in [direct, nested] {
+        refused(
+            &program(defs, "go(E.first);"),
+            "the argument for `x` reads `E.first`, which `go`'s call of `E.decode` writes",
+        );
+        compile_source(
+            &common::main_source(&program(defs, "set f = E.first; go(f);")),
+            &common::horizon(10.0),
+        )
+        .unwrap();
+    }
+}
+
 /// `latency` is a link's, a number or a constant, and not a called link's.
 #[test]
 fn a_latency_belongs_to_a_link() {
