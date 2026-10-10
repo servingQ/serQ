@@ -184,8 +184,8 @@ refused, and the error names the construct:
 - a pool count other than two;
 - a constant chunk cap: vLLM lifts the cap for a request alone
   (`scheduler.py:606-616`), so an engine writes `each at most (threshold)`
-  with `let threshold = long_prefill(c);` from `lib/vllm.sq`, or no `each
-  at most` for no cap.
+  with `let threshold = running.count + waiting.count > 1 ? c : inf;`, or
+  no `each at most` for no cap.
 
 `advance running by` keys that vLLM's scheduler can observe are the programmable
 part. The configuration then also names `scheduler_cls:

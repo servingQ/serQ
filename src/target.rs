@@ -211,9 +211,9 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
 /// applies the cap only while more than one request is running or waiting
 /// (scheduler.py:606-616), so a constant cap is not vLLM's: an engine writes
 /// `each at most (threshold)` with `let threshold = running.count +
-/// waiting.count > 1 ? c : inf;` (`long_prefill(c)`, lib/vllm.sq), or no
-/// `each at most` for no cap. In the IR that is the chunk
-/// `residents + queued(reqs) > 1 ? c : 0`, `reqs` the request-slot pool, or 0.
+/// waiting.count > 1 ? c : inf;`, or no `each at most` for no cap. In the IR
+/// that is the chunk `residents + queued(reqs) > 1 ? c : 0`, `reqs` the
+/// request-slot pool, or 0.
 fn vllm_chunk(p: &Program, e: &CExpr, slots: usize) -> Result<f64, String> {
     use crate::ir::{CArg, Fun};
     let refuse = || {

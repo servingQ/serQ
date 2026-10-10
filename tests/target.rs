@@ -148,7 +148,7 @@ fn observable_serve_keys_name_the_programmable_scheduler() {
 fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
     let src = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
     let dir = root().join("examples/multi-turn");
-    let rule = "let threshold = long_prefill(chunk_cap);";
+    let rule = "let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;";
     assert!(src.contains(rule), "the program's chunk moved");
     let p = serq::compile_source_at(
         &common::main_source(&src),

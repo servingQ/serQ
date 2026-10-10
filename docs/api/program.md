@@ -170,15 +170,9 @@ is reported in the library, with the uses it was expanded from.
 ```serq
 use "../../lib/vllm.sq";
 …
-engine vllm on gpu {
-  …
-  schedule {
-    let threshold = long_prefill(chunk_cap);
-    advance running each at most (threshold);
-    admit waiting while (running.preempted == 0) each at most (threshold);
-  }
-  …
-}
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))
+         at admission (known = computed < prompt ? prompt : computed + 1,
+                       hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
 ```
 
 (`examples/multi-turn/vllm.sq`; the library is `lib/vllm.sq`.) A program
