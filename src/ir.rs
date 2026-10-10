@@ -733,7 +733,7 @@ pub enum CIter {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         by: Option<Vec<CExpr>>,
     },
-    /// Admit the head of the queues the stage serves (`admit via`) and serve
+    /// Admit the head of the queues the stage serves (`admit_via`) and serve
     /// each newcomer that `only` (read at `Moment::Serve`) does not read as
     /// 0, one at a time, while budget is left, the head fits and `gate`
     /// (read at `Moment::Plan` before each) is 1. A newcomer `only`
@@ -1507,7 +1507,7 @@ impl Program {
     /// A register is read where its stage's iteration orders the read: in
     /// the stage's own expressions (budget, chunk, cost, serve keys, its
     /// body, a claim over its iterations), in those of a pool it admits
-    /// (`admit via`: queue, eviction and preempt keys, a spill, a hold's
+    /// (`admit_via`: queue, eviction and preempt keys, a spill, a hold's
     /// header whose pools it admits), and in a gauge or a claim `at end`.
     /// Elsewhere — another stage's, a `ps` capacity, a pool admitted at
     /// settle time — the read and the set happen at one instant in an order
@@ -1688,7 +1688,7 @@ impl Program {
                 let stage = &self.stages[s];
                 if !matches!(stage.kind, CStageKind::Step(_)) {
                     return Err(at(format!(
-                        "`admit via {}`, but `{}` is a {} stage: only an engine's `schedule` \
+                        "`admit_via` names `{}`, but `{}` is a {} stage: only an engine's `schedule` \
                          admits, and nothing would admit `{}`",
                         stage.name,
                         stage.name,

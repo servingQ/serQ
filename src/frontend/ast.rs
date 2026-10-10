@@ -259,7 +259,7 @@ pub struct PoolDecl {
     pub preempt: PreemptOrder,
     pub queue: QueueOrder,
     pub spill: Option<Spill>,
-    /// `admit via STAGE`: the queue is served by the stage's scheduler, at
+    /// The engine whose scheduler serves the queue (`pool X on E`, `on E.DEVICE`), at
     /// the start of its iterations, while the iteration has budget left.
     pub admit_via: Option<Ref>,
     /// `reserve held`: a hold's unallocated reservation counts against

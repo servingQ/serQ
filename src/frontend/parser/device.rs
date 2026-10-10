@@ -1,7 +1,7 @@
 //! Engines on devices (`docs/design/engine-device.md`): `device`, `engine …
 //! on`, `pool … on`, an engine's `schedule` and `execute`. All of it is
 //! parse-time sugar: an engine is a step stage, a pool on a device or an
-//! engine is a pool, and the links between them (`memory`, `admit via`,
+//! engine is a pool, and the links between them (`memory`, `admit_via`,
 //! `waiting.count`) are written once every declaration is read.
 
 use super::*;
@@ -23,6 +23,9 @@ pub(super) struct Capacity {
     pub name: String,
     pub cap: Expr,
     pub at: usize,
+    /// `NAME[N] cap c;` in an engine: a family of N pools, each a queue the
+    /// one engine admits.
+    pub family: Option<usize>,
 }
 
 /// `engine NAME [N] on DEVICE { … }`, read as the step stage `stages[stage]`.
@@ -227,6 +230,7 @@ impl Parser {
                     name: r,
                     cap,
                     at: r_at,
+                    family: None,
                 });
             }
         }
@@ -472,9 +476,24 @@ impl Parser {
                 if KEYWORDS.contains(&r.as_str()) {
                     return self.err_at(k_at, format!("`{r}` is a word of the language"));
                 }
+                let family = self.array_count()?;
+                if let Some(n) = family
+                    && dev_array
+                    && dev_count != 1
+                {
+                    return self.err_at(
+                        k_at,
+                        format!(
+                            "`{r}[{n}]` on `{name}`, a family of {dev_count}: {n} pools for \
+                             {dev_count} engines are joined neither one for one (`{r} cap c;` \
+                             already gives each member its own `{r}`) nor one for all (that \
+                             is one engine); a capacity family is the queues one engine admits"
+                        ),
+                    );
+                }
                 if !self.eat_kw("cap") {
                     return self.err(format!(
-                        "an engine holds capacities (`{r} cap expr;`), `tokens cap`, `granule`, \
+                        "an engine holds capacities (`{r} cap expr;`, `{r}[N] cap expr;`), `tokens cap`, `granule`, \
                          `state`, `schedule` and `execute`; found {}",
                         self.peek()
                     ));
@@ -488,6 +507,7 @@ impl Parser {
                     name: r,
                     cap,
                     at: k_at,
+                    family,
                 });
             }
         }
@@ -1100,6 +1120,12 @@ impl Parser {
                 .find(|d| d.name == e.device)
                 .map_or((1, false), |d| (d.count, d.array));
             return match e.caps.iter().find(|c| c.name == name) {
+                // `NAME[N] cap c;`: N pools, which the one engine admits
+                Some(Capacity {
+                    cap,
+                    family: Some(n),
+                    ..
+                }) => Ok((cap.clone(), *n, true)),
                 Some(c) => Ok((c.cap.clone(), count, array)),
                 None => self.err_at(at, format!("`{owner}` has no capacity `{name}`")),
             };

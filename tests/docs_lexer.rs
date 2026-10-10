@@ -85,12 +85,15 @@ fn the_docs_lexer_knows_every_keyword() {
     assert!(missing.is_empty(), "{file} is missing {missing:?}");
 }
 
-/// `admit` names the pool option and nothing else now, so the lexer must
-/// still colour it - and must not colour it as a statement.
+/// `admit` is a schedule's `admit waiting` now, so the lexer must still
+/// colour it.
 #[test]
-fn admit_is_an_option_not_a_statement() {
+fn admit_is_still_coloured() {
     let file = "docs/hooks/serq_lexer.py";
-    assert!(read(file).contains("admit"), "{file} dropped `admit via`");
+    assert!(
+        read(file).contains("admit"),
+        "{file} dropped `admit waiting`"
+    );
 }
 
 /// A `def` and its parameters may not be keywords, which the parser checks

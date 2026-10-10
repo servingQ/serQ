@@ -2109,7 +2109,7 @@ impl<'p> Interp<'p> {
 
     /// Admit the selected waiting hold while every pool of its hold
     /// has room; a selection that does not fit blocks the rest. A pool whose
-    /// queue is served by a stage (`admit via`) is admitted from there.
+    /// queue is served by a stage (`admit_via`) is admitted from there.
     fn try_admit(&mut self, pl: usize) {
         if self.p.pools[pl].admit_via.is_some() {
             return;

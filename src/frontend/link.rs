@@ -555,10 +555,10 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         };
         let admit_via = p.admit_via.as_ref().map(|n| lk.stage_span(n)).transpose()?;
         for i in 0..p.count {
-            // `pool q[N] { admit via S; }` with `stage S[N]`: q[i] is served
-            // by S[i]; with one stage, every q[i] by it
+            // `pool q on S` with `engine S[N]`: q[i] is served
+            // by S[i]; with one engine and its `q[N] cap c;`, every q[i] by it
             let admit_via = admit_via
-                .map(|(b, c)| member(b, c, i, p.count, &p.name, "admit via"))
+                .map(|(b, c)| member(b, c, i, p.count, &p.name, "on"))
                 .transpose()?;
             pools.push(CPool {
                 admit_via,
