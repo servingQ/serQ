@@ -1007,6 +1007,12 @@ resource counters.
 
 `stuck` counts sessions preempted again without advancing past their previous
 preemption. Such sessions do not contribute completed response samples.
+`growing_at_end` counts the holds still waiting to grow when the run ends
+(`grow:` in the text report): under `preempt none`, or with nothing the
+pool's `preempt` may take, a growth waits for room another holder frees.
+When every session holding the pool is one of those waiting
+(`growing_stalled`), none will: a hold around one on the same pool keeps
+what it needs, or the holders wait on each other (#238).
 A boolean observation that remains zero for at least 40 samples produces
 a report note, not an error.
 

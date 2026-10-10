@@ -138,6 +138,15 @@ pub struct PoolReport {
     /// units or `reserve` read the deployment's state is not rejected when
     /// it joins the queue, and waits (#364).
     pub over_cap: Option<(String, f64)>,
+    /// Holds waiting to grow in this pool when the run ends: a growth that
+    /// did not fit and that the pool's `preempt` did not make room for
+    /// waits, for room another holder may free (#238).
+    pub growing_at_end: u64,
+    /// Every session with an allocation in this pool is one of those
+    /// waiting to grow in it: none will free room, so they wait for ever
+    /// (a hold around one on the same pool, or holders waiting on each
+    /// other).
+    pub growing_stalled: bool,
 }
 
 /// A `claim`: what the run found of it on the path it ran.
@@ -474,6 +483,23 @@ impl Report {
                         label(&p.name, p.index)
                     );
                 }
+                if p.growing_at_end > 0 {
+                    let pool = label(&p.name, p.index);
+                    let why = if p.growing_stalled {
+                        format!(
+                            "and every holder of `{pool}` is one of them, so none will free room \
+                             (a hold around one on the same pool, or holders waiting on each \
+                             other)"
+                        )
+                    } else {
+                        "for room another holder may free".into()
+                    };
+                    let _ = writeln!(
+                        s,
+                        "grow: {} hold(s) wait to grow in pool `{pool}` when the run ends, {why}",
+                        p.growing_at_end
+                    );
+                }
                 if let Some((queue, need)) = &p.over_cap {
                     let _ = writeln!(
                         s,
@@ -489,8 +515,8 @@ impl Report {
             let _ = writeln!(
                 s,
                 "idle: stage `{}` ended with residents or waiting requests, its last iteration \
-                 scheduling nothing (a body or `serve only` that serves and admits nobody, or a \
-                 `granule` that refuses every prefill, waits \
+                 scheduling nothing (a schedule or `only` that serves and admits nobody, a \
+                 `granule` that refuses every prefill, or a run waiting to grow, `grow:`, waits \
                  for an event)",
                 label(&st.name, st.index)
             );
@@ -613,7 +639,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"over_cap\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"over_cap\":{},\"growing_at_end\":{},\"growing_stalled\":{}}}",
                 p.name,
                 index(p.index),
                 f(p.mean_used),
@@ -632,7 +658,9 @@ impl Report {
                     Some((queue, need)) =>
                         format!("{{\"queue\":\"{queue}\",\"need\":{}}}", f(*need)),
                     None => "null".into(),
-                }
+                },
+                p.growing_at_end,
+                p.growing_stalled
             );
         }
         s.push_str("]}");
