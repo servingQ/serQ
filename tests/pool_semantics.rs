@@ -10,9 +10,9 @@ fn run(src: &str, options: &Overrides) -> serq::Report {
     run_source(&common::main_source(src), options, None).unwrap()
 }
 
-/// A hold nested in another on the same pool leaves the outer hold's place
-/// among the holders when it ends: `holders(kv)` read 0 between the two
-/// releases, while the outer hold still held `kv`.
+/// `holders(p)` counts the sessions holding `p`: a session with a hold
+/// nested in another on the same pool is one, and stays one when the inner
+/// hold ends (it read 0 then, while the outer hold still held `kv`).
 #[test]
 fn an_inner_hold_leaves_the_outer_one_holding() {
     let src = "pool kv { cap 100; }
@@ -20,12 +20,14 @@ fn an_inner_hold_leaves_the_outer_one_holding() {
         workload { arrive batch(1); }
         server {
           hold kv (cost(kv, 10)) {
-            hold kv (cost(kv, 10)) { run svc (cost(svc, 1)); }
+            hold kv (cost(kv, 10)) { observe both = holders(kv); run svc (cost(svc, 1)); }
             observe after_inner = holders(kv);
             run svc (cost(svc, 1));
           }
         }";
     let r = run(src, &common::horizon(10.0));
+    // one session, holding the pool once or twice
+    assert_eq!(r.observe("both").unwrap().samples, [1.0]);
     assert_eq!(r.observe("after_inner").unwrap().samples, [1.0]);
 }
 

@@ -173,6 +173,15 @@ fn allocates_in(s: &Session, pool: usize) -> bool {
         || s.leases.iter().any(|l| l.pool == pool)
 }
 
+/// The sessions among a pool's `holders`, which has an entry per hold and
+/// per lease: a session holding the pool twice is one.
+fn sessions_in(holders: &[usize]) -> usize {
+    let mut v = holders.to_vec();
+    v.sort_unstable();
+    v.dedup();
+    v.len()
+}
+
 /// One pool a waiting hold asks for.
 #[derive(Clone, Debug)]
 struct Wanted<'p> {
@@ -1164,6 +1173,27 @@ impl<'p> Interp<'p> {
                 pl.cached,
                 self.now
             );
+            // one entry of `holders` per hold of the pool and per lease
+            let entries: usize = self
+                .sessions
+                .iter()
+                .map(|s| {
+                    s.holds
+                        .iter()
+                        .flat_map(|h| &h.pools)
+                        .filter(|e| e.pool == k)
+                        .count()
+                        + s.leases.iter().filter(|l| l.pool == k).count()
+                })
+                .sum();
+            debug_assert_eq!(
+                pl.holders.len(),
+                entries,
+                "pool `{}`: {} holders against {entries} holds and leases, at t = {}",
+                cp.name,
+                pl.holders.len(),
+                self.now
+            );
         }
         // An iteration starts only once every event of this instant has
         // been handled (a scheduler step sees all the arrivals up to it).
@@ -1224,7 +1254,7 @@ impl<'p> Interp<'p> {
             pl.used_avg.set(now, pl.used);
             pl.cached_avg.set(now, pl.cached);
             pl.queue_avg.set(now, pl.queue.len() as f64);
-            pl.holders_avg.set(now, pl.holders.len() as f64);
+            pl.holders_avg.set(now, sessions_in(&pl.holders) as f64);
         }
     }
 
@@ -1917,9 +1947,8 @@ impl<'p> Interp<'p> {
     /// What the live hold entries on `pl` reserved and have not allocated
     /// (`reserve held`), each counted once, but `own`. Read from the
     /// sessions' holds, not the pool's `holders`, which lists a session once
-    /// per admission and drops it whole at any release (the review of #371:
-    /// a nested hold was counted twice, and an outer one lost at the inner
-    /// one's end).
+    /// per hold or lease (the review of #371: a nested hold was counted
+    /// twice).
     fn outstanding(&self, pl: usize, own: Option<(usize, usize, usize)>) -> f64 {
         let mut sum = 0.0;
         for (sid, s) in self.sessions.iter().enumerate() {
@@ -2610,9 +2639,15 @@ impl<'p> Interp<'p> {
             .collect();
         let holders = self.pools[pl].holders.iter().copied();
         if engines.is_empty() {
-            return holders
-                .filter(|&s| self.sessions[s].innermost(pl).is_some())
-                .collect();
+            // a session holding the pool twice (a nested hold, or a hold and
+            // a lease) is one candidate, at its first place
+            let mut c: Vec<usize> = vec![];
+            for s in holders.filter(|&s| self.sessions[s].innermost(pl).is_some()) {
+                if !c.contains(&s) {
+                    c.push(s);
+                }
+            }
+            return c;
         }
         let mut c: Vec<usize> = holders
             .filter(|&s| {
@@ -2620,6 +2655,7 @@ impl<'p> Interp<'p> {
             })
             .collect();
         c.sort_by_key(|&s| self.sessions[s].adm_seq);
+        c.dedup();
         c
     }
 
@@ -4324,7 +4360,7 @@ impl<'p> Interp<'p> {
             }
             Fun::Holders => {
                 let p = pool(self, 0);
-                self.pools[p].holders.len() as f64
+                sessions_in(&self.pools[p].holders) as f64
             }
             Fun::Queued => {
                 let p = pool(self, 0);
