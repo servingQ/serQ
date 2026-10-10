@@ -288,14 +288,19 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
 
 #[test]
 fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
-    // a stage's `serve only` beside `exclusive prefill`, which only the
-    // kernel spelling can write
-    let kernel = source("").replace(
-        "device gpu { }\n        engine llm on gpu { tokens cap 8; schedule {  } execute (1); }",
-        "stage llm : step { budget 8; cost 1; serve only (decoding) exclusive prefill; }",
+    // `only` beside `exclusive prefill`: a schedule with `only` is a body,
+    // and the exclusive rule takes back decodes a body cannot
+    let error = compile_source(
+        &common::main_source(&source(
+            "advance running only (decoding); exclusive prefill; admit waiting while (running.preempted == 0);",
+        )),
+        &common::horizon(20.0),
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("`exclusive prefill` takes back decodes already chosen"),
+        "{error}"
     );
-    let error = compile_source(&common::main_source(&kernel), &common::horizon(20.0)).unwrap_err();
-    assert!(error.contains("a third rule"), "{error}");
     for (p, message) in [
         ("~exp(1) > 1", "may not draw"),
         (

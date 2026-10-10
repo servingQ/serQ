@@ -1,5 +1,6 @@
-//! A step stage's iteration as the program writes it (`iteration { … }`,
-//! #355): `serve`, `admit` and `branch`, run once each where written.
+//! An engine's schedule as a body (#355): `advance running`, `admit
+//! waiting`, `branch` and `set` lower to the step's `iteration`, each
+//! statement run once where written.
 
 mod common;
 
@@ -8,9 +9,6 @@ use serq::{Overrides, compile_source, run_source};
 fn run(src: &str, options: &Overrides) -> serq::Report {
     run_source(&common::main_source(src), options, None).unwrap()
 }
-
-/// vLLM's procedure, written out.
-const VLLM: &str = "iteration { serve; admit while (!preempted); }";
 
 /// A stage without a body runs vLLM's procedure: every program of the
 /// corpus whose engines' schedule is the procedure gives the same report
@@ -207,24 +205,21 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
     assert!(
         err("advance running; admit waiting while (budget_left(llm) > 0);").contains("budget_left")
     );
-    // a stage's `serve only` or `serve exclusive prefill` beside a body,
-    // which only the kernel spelling can write
-    for (serve, message) in [
-        ("serve only (decoding);", "two bodies"),
-        ("serve exclusive prefill;", "takes back"),
-    ] {
-        let kernel = prog("advance running; admit waiting;").replace(
-            "device gpu { }
-        engine llm on gpu { reqs cap 8; tokens cap 8; schedule { advance running; admit waiting; } execute (1); }
-        pool reqs on llm { }",
-            &format!(
-                "pool reqs {{ cap 8; admit via llm; }}
-        stage llm : step {{ budget 8; cost 1; {serve} iteration {{ serve; admit; }} }}"
-            ),
-        );
-        let e = compile_source(&common::main_source(&kernel), &common::horizon(20.0)).unwrap_err();
-        assert!(e.contains(message), "{serve}: {e}");
-    }
+    // `exclusive prefill` takes back decodes already chosen, which a body
+    // cannot: it is refused in a schedule other than its own form, and in
+    // the IR beside a body
+    assert!(err("exclusive prefill; admit waiting;").contains("takes back"));
+    let mut p = compile_source(
+        &common::main_source(&prog("advance running; admit waiting;")),
+        &common::horizon(20.0),
+    )
+    .unwrap();
+    let serq::ir::CStageKind::Step(st) = &mut p.stages[0].kind else {
+        panic!("engine is a step stage")
+    };
+    st.serve = serq::ir::CServe::ExclusivePrefill;
+    let e = serq::Program::from_json(&p.to_json()).unwrap_err();
+    assert!(e.contains("takes back"), "{e}");
     // `admitted` and `preempted` are a body's
     let src = prog("advance running; admit waiting;").replace(
         "run llm prefill (cost(llm, 2));",
@@ -236,23 +231,34 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
 /// The procedure and its body agree where serving is by keys and
 /// preemption takes residents the iteration already served (their tokens
 /// go back to the budget) or the grower itself, paths no example takes.
+/// The body is the procedure as both arms of a `branch`, its order on each
+/// `advance running` (`CIter::Serve`'s `by`) where the procedure's is the
+/// step's.
 #[test]
 fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
-    for serve in [
-        "serve by (-admission);",
-        "serve decode first;",
-        "serve by (decoding ? remaining : -admission);",
+    for order in [
+        " by (-admission)",
+        " decode first",
+        " by (decoding ? remaining : -admission)",
         "",
     ] {
         for (kv, chunk, budget) in [(24, 4, 8), (24, 0, 16), (40, 4, 16)] {
-            let prog = |body: &str| {
-                format!(
-                    r#"
-        pool reqs {{ cap 6; admit via engine; }}
-        pool kv {{ cap {kv}; preempt lifo; }}
-        stage engine : step {{
-          budget {budget}; chunk {chunk}; cost 1; memory kv; {serve} {body}
+            let cap = if chunk > 0 {
+                format!(" each at most ({chunk})")
+            } else {
+                String::new()
+            };
+            let src = format!(
+                r#"
+        device gpu {{ kv cap {kv}; }}
+        engine llm on gpu {{
+          reqs cap 6;
+          tokens cap {budget};
+          schedule {{ advance running{order}{cap}; admit waiting while (running.preempted == 0){cap}; }}
+          execute (1);
         }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ preempt lifo; }}
         workload {{ arrive renewal(1.5);
           session {{ turn;
             end;
@@ -262,83 +268,76 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
         server {{
           set n = 3 + serial - 5 * floor(serial / 5);
           hold reqs (cost(reqs, 1)), kv (cost(kv, 1)) {{
-            run engine prefill (cost(engine, n)) growing kv;
-            run engine decode (cost(engine, 6 + serial - 3 * floor(serial / 3))) growing kv;
+            run llm prefill (cost(llm, n)) growing kv;
+            run llm decode (cost(llm, 6 + serial - 3 * floor(serial / 3))) growing kv;
           }}
         }}
 
 "#
-                )
+            );
+            let options = Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(120.0)
             };
-            let a = run(
-                &prog(""),
-                &Overrides {
-                    warmup: Some(0.0),
-                    seed: Some(1),
-                    ..common::horizon(120.0)
-                },
-            );
-            let b = run(
-                &prog(VLLM),
-                &Overrides {
-                    warmup: Some(0.0),
-                    seed: Some(1),
-                    ..common::horizon(120.0)
-                },
-            );
+            let a = run(&src, &options);
+            let b = run(&procedure_as_body(&src).unwrap(), &options);
             if kv == 24 {
                 assert!(
                     a.pool("kv").unwrap().preemptions > 0,
-                    "{serve}\n{}",
+                    "{order}\n{}",
                     a.text()
                 );
             }
             assert_eq!(
                 a.text(),
                 b.text(),
-                "{serve} kv {kv} chunk {chunk} budget {budget}"
+                "{order} kv {kv} chunk {chunk} budget {budget}"
             );
         }
     }
 }
 
-/// The stage's `serve only (p)` is the body `serve only (p); admit only (p)
-/// while (!preempted);`: the linker writes the one as the other, so the
-/// two compile to one IR. That the body runs as the stage option ran,
-/// before it was lowered, was shown in #362 on this program and the two
-/// FasterTransformer ones, which are engines now (their `advance running
-/// only (p); admit waiting only (p) while …` is `serve only (p)`,
-/// `tests/engine_device.rs`); paths
-/// they do not take (a preemption beside `only`, `only` with `serve by`)
-/// were compared by reading the code, not by a run.
+/// A schedule whose `advance running` and `admit waiting` share an `only
+/// (p)` lowers to the body `[Serve only p, Admit only p while !preempted]`.
+/// That the body runs as the shared `only` ran before it was lowered to one
+/// (a stage option then), was shown in #362
+/// on this program and the two FasterTransformer ones; paths they do not
+/// take (a preemption beside `only`, `only` with `serve by`) were compared
+/// by reading the code, not by a run.
 #[test]
-fn a_stage_only_is_a_body() {
+fn an_engines_shared_only_lowers_to_the_serve_only_body() {
+    use serq::ir::{CExpr, CIter, CStageKind, CtxVar, UnOp};
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let file = "examples/papers/bari_rad.sq";
-    let p = "decoders >= bcol || decoders == residents ? decoding : !decoding";
     let path = root.join(file);
-    // the program's engine as the step stage it lowers to
     let text = std::fs::read_to_string(&path).unwrap();
-    let from = text.find("  device gpu { }").expect(file);
-    let to = from + text[from..].find("\n  }\n").expect(file) + "\n  }\n".len();
-    let stage = format!("serve only ({p});");
-    let src = format!(
-        "{}  stage E : step {{ budget bcol; chunk bcol; cost tlin * ceil(tokens / bcol) + tnl * tokens; {stage} }}\n{}",
-        &text[..from],
-        &text[to..]
-    );
-    let body = src.replace(
-        &stage,
-        &format!("iteration {{ serve only ({p}); admit only ({p}) while (!preempted); }}"),
-    );
-    let ov = common::horizon(20.0);
-    let ir = |s: &str| {
-        serq::compile_file(&common::main_source(s), &path, &ov)
-            .unwrap_or_else(|e| panic!("{file}: {e}"))
-            .to_json()
+    let p = serq::compile_file(&common::main_source(&text), &path, &common::horizon(20.0))
+        .unwrap_or_else(|e| panic!("{file}: {e}"));
+    let CStageKind::Step(st) = &p.stages[0].kind else {
+        panic!("{file}: `E` is an engine")
     };
-    assert_eq!(ir(&text), ir(&src), "{file}");
-    assert_eq!(ir(&src), ir(&body), "{file}");
+    let Some(
+        [
+            CIter::Serve {
+                only: Some(serve),
+                by: None,
+            },
+            CIter::Admit {
+                only: Some(admit),
+                gate: Some(gate),
+            },
+        ],
+    ) = st.iteration.as_deref()
+    else {
+        panic!("{file}: {:?}", st.iteration)
+    };
+    assert_eq!(serve, admit, "{file}");
+    assert_eq!(
+        *gate,
+        CExpr::Unary(UnOp::Not, Box::new(CExpr::Ctx(CtxVar::Preempted))),
+        "{file}"
+    );
 }
 
 /// A body the linker cannot see stall still says so: the engine that ends
@@ -346,13 +345,19 @@ fn a_stage_only_is_a_body() {
 #[test]
 fn an_engine_idle_with_work_is_named() {
     let src = r#"
-        pool reqs { cap 8; admit via engine; }
-        stage engine : step { budget 8; cost 1; iteration { serve; admit while (tokens > 0); } }
+        device gpu { }
+        engine llm on gpu {
+          reqs cap 8;
+          tokens cap 8;
+          schedule { advance running; admit waiting while (batch.tokens > 0); }
+          execute (1);
+        }
+        pool reqs on llm { }
         workload { arrive batch(3);
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)) { run engine prefill (cost(engine, 2)); }
+        server { hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 2)); }
         }
 
 "#;
@@ -365,7 +370,7 @@ fn an_engine_idle_with_work_is_named() {
         },
     );
     assert!(r.stages[0].idle_with_work, "{}", r.text());
-    assert!(r.text().contains("idle: stage `engine`"), "{}", r.text());
+    assert!(r.text().contains("idle: stage `llm`"), "{}", r.text());
 }
 
 /// A guard is a test: a value other than 1 or 0 fails the run.
@@ -545,7 +550,7 @@ fn a_register_is_the_stage_s_own() {
         )
         .is_ok()
     );
-    assert!(err("state k = 0; schedule { advance running; admit waiting while (running.preempted == 0); }", "").contains("nothing sets"));
+    assert!(err("state k = 0; schedule { advance running; admit waiting while (running.preempted == 0); }", "").contains("is set by nothing"));
     // an `only` is a body, but none that sets the register
     assert!(
         err(
@@ -553,7 +558,7 @@ fn a_register_is_the_stage_s_own() {
              admit waiting only (decoding) while (running.preempted == 0); }",
             ""
         )
-        .contains("nothing sets")
+        .contains("is set by nothing")
     );
     assert!(
         err(

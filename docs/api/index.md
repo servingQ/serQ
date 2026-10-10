@@ -9,7 +9,8 @@ operational semantics, see [The language](../language.md).
 |---|---|
 | [Program](program.md) | `let`, `def`, `use`, `pool`, `stage`, `workload`, `session`, `server`, `gauge`, `claim` |
 | [Pool](pool.md) | the options of `pool` |
-| [Stage](stage.md) | `fifo`, `ps`, `delay`, `step` |
+| [Stage](stage.md) | `fifo`, `ps`, `delay` |
+| [Engine](engine.md) | `device`, `engine … on`, `tokens cap`, `schedule`, `execute`, `pool … on` |
 | [Workload](workload.md) | `arrive`, `trace`, `init`, `turn`, `hidden` |
 | [Statements](statements.md) | the kernel: `hold`, `run`, `grow`, `branch`, … |
 | [Serving vocabulary](serving.md) | `transfer`, `tool` |
@@ -61,10 +62,10 @@ constructs that say it and a program that uses them.
 | what the scheduler reads at admission | [`at admission`](statements.md#hold), [moments](context.md) | `examples/multi-turn/vllm.sq` (`known`, `hit`) |
 | a prefix cache across turns | [`cache`](statements.md#hold), [`evict`](pool.md#evict), `cached` ([attributes](attributes.md)), [`drop`](statements.md#drop); [`cachedin`](functions.md#pool) for the lookup at admission | [tutorial 4](../tutorial/04-prefix-cache.md); `examples/multi-turn/vllm.sq` for `cachedin` |
 | an offload tier for evicted prefixes | [`spill`](pool.md#spill) | `tests/pool_semantics.rs` |
-| continuous batching and chunked prefill | [`step`](stage.md#step) (`budget`, `chunk`, `cost`), [`run E prefill`, `run E decode`, `growing`](statements.md#run) | [the vLLM use case](../use-cases/vllm.md); [tutorial 5](../tutorial/05-the-engine.md) |
-| the order requests are admitted and served in | [`queue by`](pool.md#queue), [`serve`](stage.md#serve) (`serve decode first`, `serve by (…)`) | `examples/multi-turn/replica.sq` (`serve decode first`); `examples/papers/kong_svf.sq` (`queue by`) |
+| continuous batching and chunked prefill | [`engine`](engine.md) (`tokens cap`, `each at most`, `execute`), [`run E prefill`, `run E decode`, `growing`](statements.md#run) | [the vLLM use case](../use-cases/vllm.md); [tutorial 5](../tutorial/05-the-engine.md) |
+| the order requests are admitted and served in | [`queue by`](pool.md#queue), [`advance running`](engine.md#orders-and-only) (`decode first`, `by (…)`) | `examples/multi-turn/replica.sq` (`decode first`); `examples/papers/kong_svf.sq` (`queue by`) |
 | preemption and recompute | [`preempt lifo`](pool.md#preempt), `computed` ([attributes](attributes.md)) | `examples/multi-turn/vllm.sq` (`known = computed …`) |
-| the scheduler's waiting loop and its budget | [`admit via`](pool.md#admit-via), [`budget_left`](functions.md#step-stage) | `examples/replay/vllm_replay.sq` (`admit via engine`); `examples/multi-turn/vllm.sq` (`pool reqs on vllm`, `budget_left`) |
+| the scheduler's waiting loop and its budget | [`pool … on`](engine.md#pools-on-a-device-or-an-engine), [`admit waiting`](engine.md#schedule), [`budget_left`](functions.md#engine) | `examples/multi-turn/vllm.sq` (`pool reqs on vllm`, `budget_left`) |
 | what the scheduler may not read | [`hidden`](workload.md#hidden) | every vLLM program hides the output length (`o`; `out` in the replay) |
 | prefill/decode disaggregation | [`lease`](statements.md#hold), [`release`](statements.md#release), [`load`](statements.md#load), [`transfer … from … to`](serving.md#transfer-from-to) | [the P/D use case](../use-cases/pd.md) |
 | a routing policy | [`choose`](statements.md#choose), [observables](functions.md#observables) | `examples/multi-turn/routing.sq` |

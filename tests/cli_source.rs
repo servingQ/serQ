@@ -49,14 +49,9 @@ fn names_and_bare_references_keep_their_locations() {
             "unknown name `typo`",
         ),
         (
-            "pool kv { admit via engin; }\nstage engine : step { cost 1; }\n",
+            "pool kv { admit via lm; }\ndevice gpu { }\nengine llm on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }\n",
             "1:33:",
-            "unknown stage `engin`",
-        ),
-        (
-            "pool kv { cap 10; }\nstage engine : step { memory kvv; cost 1; }\n",
-            "2:30:",
-            "unknown pool `kvv`",
+            "unknown stage `lm`",
         ),
         (
             "// 한글 주석\nlet 용량 = 10;\nworkload { session { turn; \n} }\nserver { set x = 용랑;\n}\n",
@@ -111,11 +106,12 @@ fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
     assert!(err.contains("unknown name `missing`"), "{err}");
     assert!(err.contains("6 |   engine.prefill (missing);"), "{err}");
 
-    let src = "queue engine : prefill {\n  pool kv { cap 10; admit via engin; }\n  serve step { cost 1; memory kv; }\n  prefill (prompt) { hold kv (cost(kv, prompt)) { run engine prefill (cost(engine, prompt)) growing kv; } }\n}\n";
+    // the queue's engine is its stage, declared where the queue is named
+    let src = "queue llm : prefill {\n  pool kv { cap 10; admit via lm; }\n  device gpu { }\n  engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }\n  prefill (prompt) { hold kv (cost(kv, prompt)) { run llm prefill (cost(llm, prompt)) growing kv; } }\n}\n";
     let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
     assert!(err.contains("2:31:"), "{err}");
-    assert!(err.contains("unknown stage `engin`"), "{err}");
-    assert!(err.contains("did you mean stage `engine`?"), "{err}");
+    assert!(err.contains("unknown stage `lm`"), "{err}");
+    assert!(err.contains("did you mean stage `llm`?"), "{err}");
     assert!(err.contains("declared at 1:19"), "{err}");
 }
 

@@ -593,11 +593,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             StageKind::Step(sp) => CStageKind::Step(CStep {
                 budget: lk.expr(&sp.budget)?,
                 cost: lk.expr(&sp.cost)?,
-                chunk: if sp.per_run {
-                    lk.per_run_cap(&sp.chunk, &s.name, None)?
-                } else {
-                    no_cap_is_zero(lk.expr(&sp.chunk)?)
-                },
+                chunk: lk.per_run_cap(&sp.chunk, &s.name, None)?,
                 granule: match &sp.granule {
                     None => None,
                     Some(g) => {
@@ -614,22 +610,23 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 },
                 serve: serve(&lk, &sp.serve)?,
                 memory: sp.memory.as_ref().map(|m| lk.pool_base(m)).transpose()?,
-                iteration: match (&sp.only, &sp.iteration) {
-                    (None, body) => body
-                        .as_ref()
-                        .map(|b| iteration(&lk, lk.stages[&s.name].0, b))
-                        .transpose()?,
-                    // `serve only (p)` is the body that serves only `p` and
-                    // admits while the iteration has not preempted, each
-                    // newcomer `p` excludes waiting unserved (#355)
-                    (Some(_), None) if !sp.state.is_empty() => {
+                iteration: match &sp.schedule {
+                    Schedule::Body(b) => Some(iteration(&lk, lk.stages[&s.name].0, b)?),
+                    // vLLM's procedure sets no register; one the program
+                    // declares would stay at its first value
+                    Schedule::Procedure(_) if !sp.state.is_empty() => {
                         return Err(LinkError::new(format!(
-                            "stage `{}`: `state` beside `serve only` and no `iteration` body: \
-                             nothing sets the register; write the body, with its `set`",
-                            s.name
+                            "engine `{}`: register `{}` is set by nothing: a schedule that \
+                             sets it is written with `set {} = …;`",
+                            s.name, sp.state[0].0, sp.state[0].0
                         )));
                     }
-                    (Some(p), None) => {
+                    Schedule::Procedure(None) => None,
+                    // `only (p)` shared by `advance running` and `admit
+                    // waiting` is the body that serves only `p` and admits
+                    // while the iteration has not preempted, each newcomer
+                    // `p` excludes waiting unserved (#355)
+                    Schedule::Procedure(Some(p)) => {
                         let p = lk.expr(p)?;
                         Some(vec![
                             CIter::Serve {
@@ -645,15 +642,6 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                             },
                         ])
                     }
-                    (Some(_), Some(_)) => {
-                        return Err(LinkError::new(format!(
-                            "stage `{}`: `serve only` and an `iteration` body: the stage's \
-                             `serve only (p)` is a body, `serve only (p); admit only (p) while \
-                             (!preempted);`, so the two would be two bodies; write `only` in \
-                             the body",
-                            s.name
-                        )));
-                    }
                 },
             }),
         };
@@ -663,8 +651,8 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         };
         for i in 0..s.count {
             let mut kind = kind.clone();
-            // `stage E[N] : step { memory kv; }` with `pool kv[N]`: E[i]'s
-            // memory is kv[i]; with one pool, every E[i]'s is it
+            // an engine family `E[N]` whose memory is `kv[N]`: E[i]'s memory
+            // is kv[i]; with one pool, every E[i]'s is it
             if let (CStageKind::Step(st), Some((b, c))) = (&mut kind, memory) {
                 st.memory = Some(member(b, c, i, s.count, &s.name, "memory")?);
             }
@@ -2023,19 +2011,4 @@ pub fn binop(op: BinOp, a: f64, b: f64) -> f64 {
 /// keeps its own.
 pub(crate) fn bind_index(e: &mut Expr, j: &str, k: f64) {
     e.substitute(&[(j.to_string(), Expr::Num(k))]);
-}
-
-/// A step's chunk as the kernel reads it: an outcome of `inf` (the whole
-/// chunk, or a branch of a `?:`) is no cap, which the kernel writes 0, as
-/// `min(remaining, inf)` would give.
-fn no_cap_is_zero(c: CExpr) -> CExpr {
-    match c {
-        CExpr::Num(v) if v == f64::INFINITY => CExpr::Num(0.0),
-        CExpr::Cond(k, a, b) => CExpr::Cond(
-            k,
-            Box::new(no_cap_is_zero(*a)),
-            Box::new(no_cap_is_zero(*b)),
-        ),
-        c => c,
-    }
 }

@@ -896,7 +896,12 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
             StageKind::Step(sp) => {
                 out.extend([&sp.budget, &sp.cost, &sp.chunk]);
                 out.extend(sp.memory.iter().filter_map(|r| r.index.as_deref()));
-                out.extend(&sp.only);
+                match &sp.schedule {
+                    Schedule::Procedure(only) => out.extend(only),
+                    // a body's guards read as the iteration is planned, and
+                    // the moments check what they read
+                    Schedule::Body(_) => {}
+                }
                 if let Serve::By(keys) = &sp.serve {
                     out.extend(keys);
                 }
@@ -3054,93 +3059,8 @@ impl Parser {
         })
     }
 
-    /// `{ stmt* }` of a step stage's `iteration`: `serve`, `admit` and
-    /// `branch`, and nothing else (no loop: an iteration ends).
-    fn iteration_body(&mut self) -> PResult<Vec<IterStmt>> {
-        self.expect(&Tok::LBrace)?;
-        let mut body = vec![];
-        while *self.peek() != Tok::RBrace {
-            body.push(self.iteration_stmt()?);
-        }
-        self.expect(&Tok::RBrace)?;
-        Ok(body)
-    }
-
-    fn iteration_stmt(&mut self) -> PResult<IterStmt> {
-        if self.eat_kw("serve") {
-            let mut only = None;
-            if self.eat_kw("only") {
-                self.expect(&Tok::LParen)?;
-                only = Some(self.expr()?);
-                self.expect(&Tok::RParen)?;
-            }
-            let order = if self.eat_kw("admission") {
-                Some(Serve::Admission)
-            } else if self.eat_kw("decode") {
-                self.expect_kw("first")?;
-                Some(Serve::DecodeFirst)
-            } else if self.eat_kw("by") {
-                self.expect(&Tok::LParen)?;
-                let mut keys = vec![self.expr()?];
-                while *self.peek() == Tok::Comma {
-                    self.expect(&Tok::Comma)?;
-                    keys.push(self.expr()?);
-                }
-                self.expect(&Tok::RParen)?;
-                Some(Serve::By(keys))
-            } else if self.is_kw("exclusive") {
-                return self.err(
-                    "`exclusive prefill` is a stage's rule (one prefill, the whole budget, \
-                     displacing the decodes already chosen), and a body cannot take back a serve: \
-                     write the rule on the stage without a body, or a body without the rule",
-                );
-            } else {
-                None
-            };
-            self.expect(&Tok::Semi)?;
-            Ok(IterStmt::Serve { only, order })
-        } else if self.eat_kw("admit") {
-            let mut only = None;
-            if self.eat_kw("only") {
-                self.expect(&Tok::LParen)?;
-                only = Some(self.expr()?);
-                self.expect(&Tok::RParen)?;
-            }
-            let mut gate = None;
-            if self.eat_kw("while") {
-                self.expect(&Tok::LParen)?;
-                gate = Some(self.expr()?);
-                self.expect(&Tok::RParen)?;
-            }
-            self.expect(&Tok::Semi)?;
-            Ok(IterStmt::Admit { only, gate })
-        } else if self.eat_kw("branch") {
-            self.expect(&Tok::LParen)?;
-            let guard = self.expr()?;
-            self.expect(&Tok::RParen)?;
-            let then = self.iteration_body()?;
-            let other = if self.eat_kw("else") {
-                self.iteration_body()?
-            } else {
-                vec![]
-            };
-            Ok(IterStmt::Branch(guard, then, other))
-        } else if self.eat_kw("set") {
-            let name = self.ident()?;
-            self.expect(&Tok::Assign)?;
-            let e = self.expr()?;
-            self.expect(&Tok::Semi)?;
-            Ok(IterStmt::Set(name, e))
-        } else {
-            self.err(format!(
-                "an iteration takes `serve`, `admit`, `branch` and `set`; found {}",
-                self.peek()
-            ))
-        }
-    }
-
-    /// A stage's kind, `fifo`, `ps (phi)`, `delay` or `step { … }`, with its
-    /// closing semicolon (none after `step { … }`).
+    /// A stage's kind, `fifo`, `ps (phi)` or `delay`, with its closing
+    /// semicolon. A step stage is an engine (`engine … on …`).
     fn stage_kind(&mut self) -> PResult<StageKind> {
         let kind = if self.eat_kw("fifo") {
             if *self.peek() == Tok::LParen {
@@ -3158,110 +3078,12 @@ impl Parser {
             StageKind::Ps(e)
         } else if self.eat_kw("delay") {
             StageKind::Delay
-        } else if self.eat_kw("step") {
-            self.expect(&Tok::LBrace)?;
-            let mut s = StepSpec {
-                budget: Expr::Num(f64::INFINITY),
-                cost: Expr::Num(0.0),
-                chunk: Expr::Num(0.0),
-                per_run: false,
-                granule: None,
-                serve: Serve::Admission,
-                only: None,
-                memory: None,
-                iteration: None,
-                state: vec![],
-            };
-            let mut has_cost = false;
-            let mut has_serve = false;
-            while *self.peek() != Tok::RBrace {
-                let key = self.ident()?;
-                match key.as_str() {
-                    "budget" => s.budget = self.expr()?,
-                    "cost" => {
-                        s.cost = self.expr()?;
-                        has_cost = true;
-                    }
-                    "chunk" => s.chunk = self.expr()?,
-                    "granule" => s.granule = Some(self.expr()?),
-                    "serve" => {
-                        if has_serve {
-                            return self.err(
-                                "`serve` twice: a step stage serves its residents in one way",
-                            );
-                        }
-                        has_serve = true;
-                        if self.eat_kw("only") {
-                            self.expect(&Tok::LParen)?;
-                            s.only = Some(self.expr()?);
-                            self.expect(&Tok::RParen)?;
-                            if *self.peek() == Tok::Semi {
-                                self.expect(&Tok::Semi)?;
-                                continue;
-                            }
-                            if self.is_kw("exclusive") {
-                                return self.err(
-                                    "`serve only (…) exclusive prefill`: the exclusive rule admits a waiting prefill in place of the decodes it displaces, and what `only` would do to either is a third rule",
-                                );
-                            }
-                        }
-                        s.serve = if self.eat_kw("admission") {
-                            Serve::Admission
-                        } else if self.eat_kw("decode") {
-                            self.expect_kw("first")?;
-                            Serve::DecodeFirst
-                        } else if self.eat_kw("exclusive") {
-                            self.expect_kw("prefill")?;
-                            Serve::ExclusivePrefill
-                        } else if self.eat_kw("by") {
-                            self.expect(&Tok::LParen)?;
-                            let mut keys = vec![self.expr()?];
-                            while *self.peek() == Tok::Comma {
-                                self.expect(&Tok::Comma)?;
-                                keys.push(self.expr()?);
-                            }
-                            self.expect(&Tok::RParen)?;
-                            Serve::By(keys)
-                        } else {
-                            return self.err(format!(
-                                "`serve` takes `admission`, `decode first`, `by (keys)` or `exclusive prefill`, the first three after an optional `only (expr)`; found {}",
-                                self.peek()
-                            ));
-                        };
-                    }
-                    "exclusive" => {
-                        return self.err(
-                            "`exclusive prefill;` is now `serve exclusive prefill;`: a step stage serves its residents in one way",
-                        );
-                    }
-                    "decode" => {
-                        return self.err(
-                            "`decode first;` is now `serve decode first;`: a step stage serves its residents in one way",
-                        );
-                    }
-                    "memory" => s.memory = Some(self.bare_reference()?),
-                    "state" => {
-                        let name = self.ident()?;
-                        self.expect(&Tok::Assign)?;
-                        s.state.push((name, self.expr()?));
-                    }
-                    "iteration" => {
-                        if s.iteration.is_some() {
-                            return self.err("`iteration` twice: a step stage has one iteration");
-                        }
-                        s.iteration = Some(self.iteration_body()?);
-                        // a block, like `step { … }`: no semicolon
-                        continue;
-                    }
-                    other => return self.err(format!("unknown step option `{other}`")),
-                }
-                self.expect(&Tok::Semi)?;
-            }
-            self.expect(&Tok::RBrace)?;
-            if !has_cost {
-                return self.err("a step stage needs `cost`");
-            }
-            StageKind::Step(Box::new(s))
+        } else if self.is_kw("step") {
+            return self.err(
+                "`step` is an engine's: write `device D { … }` and `engine NAME on D { tokens cap \
+                 B; schedule { … } execute (T); }`, in a queue `engine on D { … }` \
+                 (docs/language.md, Engines on devices)",
+            );
         } else {
             return self.err(format!("unknown stage kind {}", self.peek()));
         };
@@ -3273,10 +3095,7 @@ impl Parser {
                 "`latency` belongs to the `serve` of a queue that plays `link`: a link's fixed wait",
             );
         }
-        // `step { ... }` needs no semicolon
-        if *self.peek() == Tok::Semi || !matches!(kind, StageKind::Step(_)) {
-            self.expect(&Tok::Semi)?;
-        }
+        self.expect(&Tok::Semi)?;
         Ok(kind)
     }
 
@@ -3509,7 +3328,7 @@ impl Parser {
                 self.latency_ok = roles.iter().any(|r| r == "link");
                 let kind = self.stage_kind();
                 self.latency_ok = false;
-                let mut kind = kind?;
+                let kind = kind?;
                 if self.eat_kw("latency") {
                     let l_at = self.pos;
                     let e = self.expr()?;
@@ -3529,12 +3348,6 @@ impl Parser {
                     self.consts.push((lname.clone(), v));
                     prog.lets.push((lname.clone(), e));
                     self.queues[qi].latency = Some(Expr::Var(lname));
-                }
-                if let StageKind::Step(s) = &mut kind
-                    && let Some(m) = &mut s.memory
-                    && self.queues[qi].pools.contains(&m.name)
-                {
-                    m.name = format!("{name}.{}", m.name);
                 }
                 self.queues[qi].has_stage = true;
                 self.stages.push(name.clone());
@@ -5359,9 +5172,12 @@ mod tests {
         stage tool : delay;
     "#;
 
+    /// An engine `llm` with no token budget and a unit iteration, a memory
+    /// pool and a tool. The engine is one line, so the line a test asserts
+    /// an error at is the one the source counts.
     const ENGINE: &str = r#"
         pool kv { cap 100; }
-        stage engine : step { cost 1; }
+        device gpu { } engine llm on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         stage tool : delay;
     "#;
 
@@ -5423,7 +5239,7 @@ mod tests {
         // a word that named the stage and the mode at once: the run says both
         for (form, kw) in [
             ("prefill (n) growing kv;", "prefill"),
-            ("decode on engine (o);", "decode"),
+            ("decode on llm (o);", "decode"),
         ] {
             let e = parse(&main_source(&format!(
                 "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) {{ {form} }}\n}}"
@@ -5480,7 +5296,7 @@ mod tests {
         }} }}
         server {{
           hold kv (cost(kv, known)) at admission (known = computed < p ? p : computed + 1) {{
-            run engine prefill (cost(engine, known - cached)) growing kv;
+            run llm prefill (cost(llm, known - cached)) growing kv;
           }}
         }}"
             ),
@@ -5492,7 +5308,7 @@ mod tests {
         server {{
           hold kv (cost(kv, computed < p ? p : computed + 1)) {{
             set known = computed < p ? p : computed + 1;
-            run engine prefill (cost(engine, known - cached)) growing kv;
+            run llm prefill (cost(llm, known - cached)) growing kv;
           }}
         }}"
             ),
@@ -5547,7 +5363,7 @@ mod tests {
             ("", "now = 1", "a name the language supplies"),
             ("", "inf = 3", "a name the language supplies"),
             ("", "kv = 3", "a pool"),
-            ("", "engine = 3", "a stage"),
+            ("", "llm = 3", "a stage"),
             ("let bs = 4;", "bs = 2", "a `let` constant"),
             ("", "k = 7", "an attribute the program sets"),
         ] {
@@ -5600,7 +5416,7 @@ mod tests {
             assert!(e.msg.contains("outside the body"), "{after}: {}", e.msg);
         }
         let e = parse(&main_source(
-            "pool kv { cap 100; queue by (k); } stage engine : step { cost 1; }
+            "pool kv { cap 100; queue by (k); }
         workload { session { turn;
         } }
         server { hold kv (cost(kv, 1)) at admission (k = 2) { observe a = k; }
@@ -5665,13 +5481,15 @@ mod tests {
         );
         // statements, with references for pools and stages
         same(
-            "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
+            "pool kv[2] { cap 100; } device gpu[2] { }
+        engine E[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         def put(p, s, n) { hold p (cost(p, n)) { run s prefill (cost(s, n)) growing p; } cache (cost(p, n)); }
         workload { session { turn; end;
         } }
         server { choose j in 2 by (used(kv[j])); put(kv[j], E[j], k + 1);
         }",
-            "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
+            "pool kv[2] { cap 100; } device gpu[2] { }
+        engine E[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         workload { session { turn;
             end;
 
@@ -5684,13 +5502,13 @@ mod tests {
         // the side is the use's: a `hold` in a server
         same(
             &format!(
-                "{ENGINE} def take(n) {{ hold kv (cost(kv, n)) {{ run engine prefill (cost(engine, n)) growing kv; }} }}
+                "{ENGINE} def take(n) {{ hold kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }} }}
         workload {{ session {{ turn; end; }} }}
         server {{ take(4); }}"
             ),
             &format!(
                 "{ENGINE} workload {{ session {{ turn; end; }} }}
-        server {{ hold kv (cost(kv, 4)) {{ run engine prefill (cost(engine, 4)) growing kv; }} }}"
+        server {{ hold kv (cost(kv, 4)) {{ run llm prefill (cost(llm, 4)) growing kv; }} }}"
             ),
         );
     }
@@ -5876,8 +5694,8 @@ mod tests {
             "stage E : fifo; pool E { cap 1; }",
             "pool E { cap 1; } stage E : fifo;",
             "pool E { cap 4; } queue E[2] : decode { pool kv { cap 10; } serve fifo; decode (n) { hold kv (cost(kv, n)) { run E (cost(E, 1)); } } }",
-            "pool E { cap 1; } device gpu { } engine E on gpu { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }",
-            "device gpu { } engine E on gpu { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } pool E { cap 1; }",
+            "pool E { cap 1; } device dev { } engine E on dev { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }",
+            "device dev { } engine E on dev { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } pool E { cap 1; }",
         ] {
             let e = err(&format!("{decls} {server}"));
             assert!(e.contains("a pool and a stage share one name space"), "{e}");
@@ -5966,8 +5784,10 @@ mod tests {
                 .contains("several stages play `transfer` (link, transfer)"),
             "{e}"
         );
-        let e = parse(&main_source("stage engine : step { cost 1; } workload { session { turn; \n} }\nserver { transfer X;\n}",
-        )).unwrap_err();
+        let e = parse(&main_source(&format!(
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ transfer X;\n}}"
+        )))
+        .unwrap_err();
         assert!(
             e.msg.contains("no stage declared above plays `transfer`"),
             "{e}"
@@ -5980,9 +5800,14 @@ mod tests {
     }
 
     const DEPLOYMENT: &str = r#"
-        pool kv { cap 1000; block 16; evict lru; }
+        device gpu { kv cap 1000; }
+        engine llm on gpu {
+          tokens cap 64;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool kv on gpu { block 16; evict lru; }
         pool reqs { cap 4; }
-        stage engine : step { budget 64; cost 1; memory kv; }
         stage tool : delay;
     "#;
 
@@ -6007,10 +5832,10 @@ mod tests {
         }}
         server {{
           set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
           at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            run engine prefill (cost(engine, prompt - cached)) growing kv;
-            run engine decode (cost(engine, o - 1)) growing kv;
+            run llm prefill (cost(llm, prompt - cached)) growing kv;
+            run llm decode (cost(llm, o - 1)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
         }}"
             ),
@@ -6026,10 +5851,10 @@ mod tests {
         }}
         server {{
           set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
           at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            run engine prefill (cost(engine, prompt - cached)) growing kv;
-            run engine decode (cost(engine, o - 1)) growing kv;
+            run llm prefill (cost(llm, prompt - cached)) growing kv;
+            run llm decode (cost(llm, o - 1)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
           set K = prompt + o;
         }}"
@@ -6168,5 +5993,17 @@ mod tests {
             "stage s : fifo; server { run s (cost(s, 1)); } server { run s (cost(s, 1)); }",
             "duplicate server",
         );
+    }
+
+    #[test]
+    fn a_step_stage_is_written_as_an_engine() {
+        const WL: &str = "workload { session { turn; end; } } server { }";
+        for decl in [
+            "stage E : step { cost 1; }",
+            "queue Q { serve step { cost 1; } }",
+            "queue Q { nic step { cost 1; } }",
+        ] {
+            refused(&format!("{decl} {WL}"), "`step` is an engine's");
+        }
     }
 }

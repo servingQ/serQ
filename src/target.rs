@@ -29,7 +29,7 @@ fn number(p: &Program, e: &CExpr, what: &str) -> Result<f64, String> {
 /// The vLLM scheduler configuration that runs `p`, or the reason none does.
 pub fn vllm(p: &Program) -> Result<Value, String> {
     let refuse = |m: String| Err(format!("not on vLLM's architecture: {m}"));
-    // one step engine; delay stages are the environment's or the served path's
+    // one engine; delay stages are the environment's or the served path's
     let steps: Vec<_> = p
         .stages
         .iter()
@@ -40,7 +40,7 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
         .collect();
     let [(engine, step)] = steps.as_slice() else {
         return refuse(format!(
-            "vLLM is one step engine, and the program has {} step stage(s)",
+            "vLLM is one engine, and the program has {} engine(s)",
             steps.len()
         ));
     };
@@ -70,20 +70,21 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
         }
         _ => {
             return refuse(format!(
-                "`{}` serves exclusive prefill; vLLM mixes prefills and decodes in an iteration",
+                "`{}` schedules `exclusive prefill`; vLLM mixes prefills and decodes in an \
+                 iteration",
                 engine.name
             ));
         }
     };
     // vLLM's `schedule()`: the running first, then the waiting while the
     // step has not preempted (scheduler.py:624-823, 868-1128), which is the
-    // stage without a body or with the body that writes it out
+    // engine whose schedule lowers to no body, or a body that writes it out
     if let Some(body) = &step.iteration
         && !is_vllm_iteration(body)
     {
         return refuse(format!(
-            "`{}` has its own iteration; vLLM's is `iteration {{ serve; admit while \
-             (!preempted); }}`",
+            "`{}` has its own schedule; vLLM's is `advance running; admit waiting while \
+             (running.preempted == 0);`",
             engine.name
         ));
     }
@@ -210,9 +211,9 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
 /// applies the cap only while more than one request is running or waiting
 /// (scheduler.py:606-616), so a constant cap is not vLLM's: an engine writes
 /// `each at most (threshold)` with `let threshold = running.count +
-/// waiting.count > 1 ? c : inf;` (`long_prefill(c)`, lib/vllm.sq), a step
-/// stage `chunk residents + queued(reqs) > 1 ? c : 0` with `reqs` the
-/// request-slot pool, or `chunk 0` for no cap.
+/// waiting.count > 1 ? c : inf;` (`long_prefill(c)`, lib/vllm.sq), or no
+/// `each at most` for no cap. In the IR that is the chunk
+/// `residents + queued(reqs) > 1 ? c : 0`, `reqs` the request-slot pool, or 0.
 fn vllm_chunk(p: &Program, e: &CExpr, slots: usize) -> Result<f64, String> {
     use crate::ir::{CArg, Fun};
     let refuse = || {
@@ -220,10 +221,8 @@ fn vllm_chunk(p: &Program, e: &CExpr, slots: usize) -> Result<f64, String> {
             "not on vLLM's architecture: the chunk cap is `{}`; vLLM caps a prefill only while \
              another request is running or waiting (scheduler.py:606-616)\nhelp: in an \
              engine's schedule, `let threshold = running.count + waiting.count > 1 ? c : inf;` \
-             and `each at most (threshold)`, or no `each at most` for no cap; in a step stage, \
-             `chunk residents + queued({name}) > 1 ? c : 0`, or `chunk 0`",
+             and `each at most (threshold)`, or no `each at most` for no cap",
             p.show_expr(e),
-            name = p.pools[slots].name
         ))
     };
     match e {
@@ -264,8 +263,9 @@ fn observable(e: &CExpr) -> bool {
     }
 }
 
-/// `iteration { serve; admit while (!preempted); }`: vLLM's `schedule()`
-/// written out, the stage's own order and no `only`.
+/// The body `[Serve, Admit while !preempted]`, vLLM's `schedule()` written
+/// out: the engine's own order and no `only`. The frontend lowers that
+/// schedule to no body; an IR may still carry it as one.
 fn is_vllm_iteration(body: &[crate::ir::CIter]) -> bool {
     use crate::ir::{CIter, UnOp};
     let not_preempted = CExpr::Unary(UnOp::Not, Box::new(CExpr::Ctx(CtxVar::Preempted)));

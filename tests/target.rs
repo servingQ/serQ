@@ -66,19 +66,19 @@ fn the_vllm_programs_are_on_vllms_architecture() {
 #[test]
 fn another_policy_is_refused_with_its_construct() {
     for (path, why) in [
-        ("examples/vendors/rbln.sq", "serves exclusive prefill"),
+        ("examples/vendors/rbln.sq", "schedules `exclusive prefill`"),
         (
             "examples/single-turn/fastertransformer.sq",
-            "has its own iteration",
+            "has its own schedule",
         ),
-        ("examples/single-turn/mg1.sq", "vLLM is one step engine"),
+        ("examples/single-turn/mg1.sq", "vLLM is one engine"),
         (
             "examples/engines/tensorrt_llm.sq",
             "does not preempt as vLLM does",
         ),
         (
             "examples/pd-disaggregation/vllm_nixl_push.sq",
-            "vLLM is one step engine",
+            "vLLM is one engine",
         ),
     ] {
         let e = target(path).unwrap_err();
@@ -183,47 +183,87 @@ fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
 /// What vLLM's scheduler does not have since the iteration became a body:
 /// a body of its own (and with it a register), a held reservation, a
 /// request's legs.
-/// vLLM's body written out is vLLM.
+/// vLLM's schedule written out is vLLM: it lowers to no body.
 #[test]
-fn the_newer_constructs_are_refused_and_vllms_body_taken() {
-    let base = "pool kv { cap 160; block 16; evict lru; preempt lifo; }
-        pool reqs { cap 4; admit via engine; RESERVE }
-        stage engine : step { budget 64; cost 1; memory kv; ITER }
+fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
+    let base = "device gpu { kv cap 160; }
+        engine llm on gpu { reqs cap 4; tokens cap 64; STATE schedule { SCHEDULE } execute (1); }
+        pool kv on gpu { block 16; evict lru; preempt lifo; }
+        pool reqs on llm { RESERVE }
         workload { arrive batch(1); init { set n = 8; }
           session { turn; HOLD end;
           }
         }
         server {
         } ";
-    let hold = "hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run engine prefill (cost(engine, n)) growing kv; }";
-    let compile = |reserve: &str, iter: &str, h: &str| {
+    let hold = "hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; }";
+    let vllm = "advance running; admit waiting while (running.preempted == 0);";
+    let compile = |reserve: &str, state: &str, schedule: &str, h: &str| {
         let src = base
             .replace("RESERVE", reserve)
-            .replace("ITER", iter)
+            .replace("STATE", state)
+            .replace("SCHEDULE", schedule)
             .replace("HOLD", h);
         serq::compile_source(&common::main_source(&src), &common::horizon(10.0)).unwrap()
     };
-    let body = "iteration { serve; admit while (!preempted); }";
-    serq::target::vllm(&compile("", body, hold)).unwrap();
-    let legs = "fork { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run engine prefill (cost(engine, n)) growing kv; } } join;";
-    for (reserve, iter, h, why) in [
+    serq::target::vllm(&compile("", "", vllm, hold)).unwrap();
+    let legs = "fork { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; } } join;";
+    for (reserve, state, schedule, h, why) in [
         (
             "",
-            "iteration { serve; admit; }",
+            "",
+            "advance running; admit waiting;",
             hold,
-            "has its own iteration",
+            "has its own schedule",
         ),
         // a register is set by a body, so a program with one has its own
         (
             "",
-            "state k = 0; iteration { serve; admit while (!preempted); set k = k + 1; }",
+            "state k = 0;",
+            "advance running; admit waiting while (running.preempted == 0); set k = k + 1;",
             hold,
-            "has its own iteration",
+            "has its own schedule",
         ),
-        ("reserve held;", "", hold, "holds its reservations"),
-        ("", "", legs, "fork"),
+        ("reserve held;", "", vllm, hold, "holds its reservations"),
+        ("", "", vllm, legs, "fork"),
     ] {
-        let e = serq::target::vllm(&compile(reserve, iter, h)).unwrap_err();
-        assert!(e.contains(why), "{reserve} {iter} {h}: {e}");
+        let e = serq::target::vllm(&compile(reserve, state, schedule, h)).unwrap_err();
+        assert!(e.contains(why), "{reserve} {schedule} {h}: {e}");
     }
+}
+
+/// An IR may carry vLLM's schedule as the body that writes it out, which the
+/// frontend lowers to no body: the target takes that body as vLLM's too.
+#[test]
+fn vllms_schedule_written_out_as_a_body_is_vllm() {
+    use serq::ir::{CExpr, CIter, CStageKind, CtxVar, UnOp};
+    let mut p = serq::load(
+        &root().join("examples/multi-turn/vllm.sq"),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+    let want = serq::target::vllm(&p).unwrap();
+    let st = p
+        .stages
+        .iter_mut()
+        .find_map(|s| match &mut s.kind {
+            CStageKind::Step(st) => Some(st),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(st.iteration, None);
+    st.iteration = Some(vec![
+        CIter::Serve {
+            only: None,
+            by: None,
+        },
+        CIter::Admit {
+            only: None,
+            gate: Some(CExpr::Unary(
+                UnOp::Not,
+                Box::new(CExpr::Ctx(CtxVar::Preempted)),
+            )),
+        },
+    ]);
+    assert_eq!(serq::target::vllm(&p).unwrap(), want);
 }

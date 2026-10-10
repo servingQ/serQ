@@ -9,14 +9,15 @@ fn formatting_preserves_program_and_comments_and_is_idempotent() {
     let source = "let B=10;         // token budget\n\
         let C=10;         // pool capacity\n\
         // a paragraph\n\n\
-        pool kv { cap C; }\n\
-        stage engine : step { budget B; cost 1; memory kv; }\n\
+        device gpu { kv cap C; }\n\
+        engine llm on gpu { tokens cap B; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }\n\
+        pool kv on gpu { }\n\
         workload { arrive batch(1); session { turn; end; } }\n\
         server {\n\
           hold kv (cost(kv, 1))\n\
           at admission (hit = 1,\n\
           value = hit + 1) {\n\
-            run engine prefill (cost(engine, 1)) growing kv;\n\
+            run llm prefill (cost(llm, 1)) growing kv;\n\
           } cache (cost(kv, 1));\n\
         }\n\
         \n";

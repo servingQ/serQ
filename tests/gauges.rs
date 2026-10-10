@@ -390,9 +390,18 @@ fn a_budget_does_not_read_budget_left() {
             "{budget}: {e}"
         );
     }
-    // a chunk that reads it, which an engine's `each at most`, choosing
-    // among constants, cannot write
-    let src = "stage e : step { budget 128; chunk budget_left(e); cost 1; }
+    // nor a chunk: an engine's `each at most` chooses among constants, and
+    // the condition that chooses may read the iteration
+    let src = "device gpu { }
+        engine e on gpu {
+          tokens cap 128;
+          schedule {
+            let c = budget_left(e) > 1 ? 4 : 8;
+            advance running each at most (c);
+            admit waiting while (running.preempted == 0) each at most (c);
+          }
+          execute (1);
+        }
         workload { session { turn; end;
         } }
         server { run e prefill (cost(e, 1));

@@ -118,8 +118,8 @@ are rejected rather than silently omitted.
   zero where Rust produces infinity or NaN.
   Rust reports invalid guards
   at runtime; Lean's executable model has no corresponding error state.
-- The claims fragment also supports `serve only`, a chunk expression over
-  `residents` and `queued(p)`, one queue key on a pool that no run grows,
+- The claims fragment also supports the body an engine's shared `only (p)`
+  lowers to, a chunk expression over `residents` and `queued(p)`, one queue key on a pool that no run grows,
   and cost terms of the form `k * ceil(tokens / b)`.
 - Renewal arrivals, transfers between pools and flows over several stages
   are outside the executable fragment. Stochastic paper results use

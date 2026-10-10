@@ -53,7 +53,7 @@ A fitting waiting prefill can replace tentative resident decodes and use the
 full token budget. Cancelled decode work does not advance computed KV; its
 already acquired allocation stays held. A selected prefill stops further
 waiting admission. Ordinary capacity, budget-exhaustion and preemption gates
-still apply. See the [`serve` reference](../api/stage.md#serve).
+still apply. See the [`exclusive prefill` reference](../api/engine.md#exclusive-prefill).
 
 `reserve (known)` tests the current sequence's capacity (the prompt, or what a resumed request had computed), while the hold allocates
 only the initial chunk and `growing kv` extends it as computation advances.

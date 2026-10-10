@@ -206,8 +206,19 @@ A counted resource: KV memory, request slots, an offload tier. See [Pool](pool.m
 stage NAME [ '[' N ']' ] : kind;
 ```
 
-A place where time passes. `kind` is one of `fifo`, `ps`, `delay`, `step`;
-see [Stage](stage.md). `N` declares an array, as for `pool`.
+A place where time passes. `kind` is one of `fifo`, `ps`, `delay`; see
+[Stage](stage.md). `N` declares an array, as for `pool`. A stage that runs
+iterations is an [engine](engine.md) on a device.
+
+## `device` and `engine`
+
+```serq
+device NAME [ '[' N ']' ] { … }
+engine NAME [ '[' N ']' ] on DEVICE { … }
+```
+
+What an engine runs on, and the engine that runs iterations on it; see
+[Engine](engine.md).
 
 ## `workload`
 

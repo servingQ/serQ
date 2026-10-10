@@ -168,12 +168,14 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     assert!(e.contains("exists only in a step stage's cost"), "{e}");
     // every other moment refuses what it does not supply, and says where it
     // was read and where it exists
-    let engine = |pool: &str, stage: &str, session: &str| {
+    const LLM: &str = "tokens cap 512; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1e-3);";
+    let engine = |pool: &str, llm: &str, session: &str| {
         format!(
             "let bs = 16;
-        pool kv {{ cap 1e5; block bs; {pool} }}
+        device gpu {{ kv cap 1e5; }}
+        engine llm on gpu {{ {llm} }}
+        pool kv on gpu {{ block bs; {pool} }}
         pool reqs {{ cap 8; }}
-        stage engine : step {{ budget 512; cost 1e-3; memory kv; {stage} }}
         stage svc : ps (4);
         workload {{ arrive poisson(0.3); init {{ set K = 0; }}
           turn {{ set m = ~exp(500); set o = ~exp(200) + 1; }}
@@ -181,7 +183,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
           }}
         }}
 
-        server {{ {session} hold reqs (cost(reqs, 1)), kv (cost(kv, m)) {{ run engine prefill (cost(engine, m)) growing kv; }}
+        server {{ {session} hold reqs (cost(reqs, 1)), kv (cost(kv, m)) {{ run llm prefill (cost(llm, m)) growing kv; }}
         }}"
         )
     };
@@ -189,19 +191,19 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     // the ps capacity variable)
     for (src, where_read, exists) in [
         (
-            engine("evict by (tokens);", "", ""),
+            engine("evict by (tokens);", LLM, ""),
             "pool `kv`: `tokens` is read in an eviction key",
             "a step stage's cost",
         ),
         (
-            engine("queue by (age);", "", ""),
+            engine("queue by (age);", LLM, ""),
             "pool `kv`: `age` is read in a pool's queue keys, read before selecting a waiting session",
             "an eviction key",
         ),
         (
             engine(
                 "",
-                "",
+                LLM,
                 "hold kv (cost(kv, size)) { run svc (cost(svc, 1)); }",
             ),
             "session: `size` is read in a hold's header, read at admission",
@@ -210,36 +212,59 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         (
             engine(
                 "",
-                "",
+                LLM,
                 "hold kv (cost(kv, 1)) { run svc (cost(svc, present)); }",
             ),
             "session: `present` is read in a session statement",
             "a ps stage's capacity",
         ),
+        // an engine names the batch `batch.…`, which its parser refuses
+        // before the batch is formed; a variable of another moment is the
+        // linker's
         (
-            engine("", "budget tokens + 512;", ""),
-            "stage `engine`: `tokens` is read in a step stage's budget or chunk",
-            "a step stage's cost",
-        ),
-        (
-            engine("", "chunk attention;", ""),
-            "stage `engine`: `attention` is read in a step stage's budget or chunk",
-            "a step stage's cost",
-        ),
-        (
-            engine("", "cost age;", ""),
-            "stage `engine`: `age` is read in a step stage's cost",
+            engine(
+                "",
+                &LLM.replace("tokens cap 512", "tokens cap age + 512"),
+                "",
+            ),
+            "stage `llm`: `age` is read in a step stage's budget or chunk",
             "an eviction key",
         ),
         (
-            engine("", "", "set x = init_age; set y = age;"),
+            engine(
+                "",
+                &LLM.replace("tokens cap 512", "tokens cap batch.tokens + 512"),
+                "",
+            ),
+            "`tokens cap` is read before the batch is formed",
+            "`batch.tokens` is read in `execute`",
+        ),
+        (
+            engine(
+                "",
+                &LLM.replace(
+                    "advance running;",
+                    "advance running each at most (batch.attention);",
+                ),
+                "",
+            ),
+            "`each at most` is read before the batch is formed",
+            "`batch.attention` is read in `execute`",
+        ),
+        (
+            engine("", &LLM.replace("execute (1e-3)", "execute (age)"), ""),
+            "stage `llm`: `age` is read in a step stage's cost",
+            "an eviction key",
+        ),
+        (
+            engine("", LLM, "set x = init_age; set y = age;"),
             "init: `init_age`",
             "",
         ),
     ] {
         if where_read.starts_with("init:") {
             // an `init` statement is named as such
-            let src = engine("", "", "").replace("init { set K = 0; }", "init { set K = age; }");
+            let src = engine("", LLM, "").replace("init { set K = 0; }", "init { set K = age; }");
             let e = check(&src).expect_err("rejected");
             assert!(e.contains(": init: `age`"), "{e}");
             continue;
@@ -278,79 +303,57 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     check(src).expect("links");
 }
 
-/// `serve` is said once per step stage, in one of three spellings, and the
-/// two options it replaced are parse errors that name it.
-#[test]
-fn serve_is_one_order_said_once() {
-    let step = |opts: &str| {
-        format!(
-            "pool kv {{ cap 1e5; }}
-        stage engine : step {{ budget 512; cost 1; memory kv; {opts} }}
+/// A program whose engine `llm` serves its residents by `advance`, a
+/// schedule statement, and then admits as vLLM does.
+fn advancing(advance: &str) -> String {
+    format!(
+        "device gpu {{ kv cap 1e5; }}
+        engine llm on gpu {{ tokens cap 512; schedule {{ {advance} admit waiting while (running.preempted == 0); }} execute (1); }}
+        pool kv on gpu {{ }}
         workload {{ arrive batch(1);
           session {{ turn; end;
           }}
         }}
-        server {{ hold kv (cost(kv, 1)) {{ run engine prefill (cost(engine, 1)) growing kv; }}
+        server {{ hold kv (cost(kv, 1)) {{ run llm prefill (cost(llm, 1)) growing kv; }}
         }}
         "
-        )
-    };
-    for ok in [
-        "",
-        "serve admission;",
-        "serve decode first;",
-        "serve exclusive prefill;",
-    ] {
-        check(&step(ok)).unwrap_or_else(|e| panic!("{ok}: {e}"));
-    }
-    let e = check(&step("serve decode first; serve admission;")).expect_err("twice");
-    assert!(e.contains("`serve` twice"), "{e}");
-    for (old, new) in [
-        (
-            "decode first;",
-            "`decode first;` is now `serve decode first;`",
-        ),
-        (
-            "exclusive prefill;",
-            "`exclusive prefill;` is now `serve exclusive prefill;`",
-        ),
-    ] {
-        let e = check(&step(old)).expect_err(old);
-        assert!(e.contains(new), "the error names the new spelling: {e}");
-    }
-    let e = check(&step("serve shortest;")).expect_err("unknown");
-    assert!(e.contains("`serve` takes"), "{e}");
+    )
 }
 
-/// `serve admission` is `by` with no keys (every resident ties, and ties are
-/// admission order), so the IR knows one form; a serve key may read the
-/// residents' variables and may not draw.
+/// An engine whose schedule advances its residents says their order once, on
+/// `advance running`, in one of three spellings or as `exclusive prefill`.
+#[test]
+fn the_residents_order_is_said_on_advance_running() {
+    for ok in [
+        "advance running;",
+        "advance running admission;",
+        "advance running decode first;",
+        "exclusive prefill;",
+    ] {
+        check(&advancing(ok)).unwrap_or_else(|e| panic!("{ok}: {e}"));
+    }
+    let e = check(&advancing("advance running shortest;")).expect_err("unknown");
+    assert!(e.contains("found `shortest`"), "{e}");
+}
+
+/// `advance running admission` is `by` with no keys (every resident ties, and
+/// ties are admission order), so the IR knows one form; a serve key may read
+/// the residents' variables and may not draw.
 #[test]
 fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
-    let step = |opts: &str| {
-        format!(
-            "pool kv {{ cap 1e5; }}
-        stage engine : step {{ budget 512; cost 1; memory kv; {opts} }}
-        workload {{ arrive batch(1);
-          session {{ turn; end;
-          }}
-        }}
-        server {{ hold kv (cost(kv, 1)) {{ run engine prefill (cost(engine, 1)) growing kv; }}
-        }}
-        "
-        )
-    };
     let ir = |s: &str| {
-        serq::compile_source(&common::main_source(&step(s)), &common::horizon(10.0))
+        serq::compile_source(&common::main_source(&advancing(s)), &common::horizon(10.0))
             .unwrap()
             .to_json()
     };
-    assert_eq!(ir("serve admission;"), ir(""));
-    assert!(ir("serve admission;").contains("\"By\": []"));
-    check(&step("serve by (residents > 4 ? -remaining : admission);"))
-        .expect("the residents' variables are keys");
-    let e = check(&step("serve by (~uniform(0, 1));")).expect_err("a draw");
-    assert!(e.contains("stage `engine`"), "{e}");
+    assert_eq!(ir("advance running admission;"), ir("advance running;"));
+    assert!(ir("advance running admission;").contains("\"By\": []"));
+    check(&advancing(
+        "advance running by (running.count > 4 ? -remaining : admission);",
+    ))
+    .expect("the residents' variables are keys");
+    let e = check(&advancing("advance running by (~uniform(0, 1));")).expect_err("a draw");
+    assert!(e.contains("stage `llm`"), "{e}");
     assert!(e.contains("a serve key may not draw"), "{e}");
 }
 
@@ -413,19 +416,24 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("pool `kv`"), "{e}");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
-    // nor a stage's serve key, read for each resident
+    // nor an engine's serve key, read for each running request
     let bad = "let bs = 16;
-        pool kv { cap 1e5; block bs; evict lru; }
-        stage engine : step { budget 512; cost 1e-3; memory kv; serve by (o); }
+        device gpu { kv cap 1e5; }
+        engine llm on gpu {
+          tokens cap 512;
+          schedule { advance running by (o); admit waiting while (running.preempted == 0); }
+          execute (1e-3);
+        }
+        pool kv on gpu { block bs; evict lru; }
         workload { arrive poisson(0.3); hidden o; turn { set n = ~exp(500); set o = ~exp(200) + 1; }
           session {  turn; end;
           }
         }
 
-        server { hold kv (cost(kv, n)) { run engine prefill (cost(engine, n)) growing kv; }
+        server { hold kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; }
         }";
     let e = check(bad).expect_err("rejected");
-    assert!(e.contains("stage `engine`"), "{e}");
+    assert!(e.contains("stage `llm`"), "{e}");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
     // a name nothing sets is not an attribute
     let bad = "pool kv { cap 1e5; }

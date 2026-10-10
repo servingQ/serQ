@@ -208,4 +208,5 @@ iteration); about twelve forms and ten link errors come.
 - **Open**: names for a run's own attributes (`decoding`, `remaining`) and
   the eviction key's `waiting` (`src/frontend/link.rs:236`), which reads as
   the list; the queue a hold waits in; `exclusive
-  prefill`; `granule`; the name `stage`.
+  prefill`; `granule`. The name `stage` is now `fifo`, `ps` and `delay`'s
+  alone ([One engine, one spelling](one-engine-spelling.md)).

@@ -24,7 +24,7 @@ queues the sessions that do not yet fit. Every option is optional.
 | [`evict`](#evict) | `lru` \| `by (expr, …)` | `lru` | which cache entry goes first |
 | [`preempt`](#preempt) | `none` \| `by (expr, …) [requeue head \| tail]` \| `lifo` | `none` | what a failed `grow` does: whom it preempts, and where the victim goes back |
 | [`queue`](#queue) | `fifo` \| `by (expr, …)` | `fifo` | admission order |
-| [`admit via`](#admit-via) | `stage` | none | the queue is served by a step stage |
+| [`admit via`](#admit-via) | `engine` | none | the queue is served by an engine |
 | [`reserve held`](#reserve-held) | — | off | a hold's unallocated `reserve` counts against later admissions |
 | [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
 
@@ -173,20 +173,22 @@ that grows beyond its reservation follows the pool's `preempt` rule.
 ## `admit via`
 
 ```serq
-admit via STAGE;
+admit via ENGINE;
 ```
 
 | Argument | Type | Description |
 |---|---|---|
-| `STAGE` | `stage` (a `step` stage) | Serves this pool's queue at the start of each iteration, after the residents have taken their tokens, while budget is left, and not in an iteration that preempted under the default iteration procedure. |
+| `ENGINE` | an [engine](engine.md) | Serves this pool's queue in each iteration's `admit waiting`, after the running requests have taken their tokens, while budget is left, and, under vLLM's schedule, not in an iteration that preempted. |
 
-Without it, admission is attempted whenever the simulation settles an event. `budget_left(STAGE)` is
-meaningful in the hold's header. Arrays join member for member (`pool q[N]`
-with `stage S[N]`), a family of one is shared by every member, and any other
-pair of counts is a link error. A stage that serves several pools tries them in
-declaration order.
+Without it, admission is attempted whenever the simulation settles an event. `budget_left(ENGINE)` is
+meaningful in the hold's header. A pool on an engine (`pool reqs on E`) or on
+its device as `pool kv on E.gpu` is admitted by it without this option
+([Engine](engine.md#pools-on-a-device-or-an-engine)). Arrays join member for
+member (`pool q[N]` with `engine S[N]`), a family of one is shared by every
+member, and any other pair of counts is a link error. An engine that serves
+several pools tries them in declaration order.
 
-With `serve exclusive prefill`, selected prefills stop further admission;
+With `exclusive prefill`, selected prefills stop further admission;
 a fitting waiting prefill can displace tentative resident decodes. Its
 header sees the full token budget, since the cancelled decodes consume none.
 The usual fit, budget-exhaustion and preemption gates still apply.

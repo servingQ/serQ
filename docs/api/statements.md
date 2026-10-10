@@ -71,7 +71,7 @@ set NAME = expr;
 Assigns the session attribute `NAME`. Workload sizes are read-only in the
 server; use a separate server attribute for derived quantities. Every name assigned by `set` or `choose`
 in session code is an attribute of every session. In an iteration body,
-[`set`](stage.md#registers) instead assigns a stage register.
+[`set`](engine.md#registers) instead assigns an engine register.
 
 ## `observe`
 
