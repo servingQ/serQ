@@ -198,7 +198,7 @@ fn a_body_that_may_schedule_nothing_does_not_link() {
     };
     assert!(
         err("branch (running.count > 0) { advance running; }")
-            .contains("neither serves nor admits")
+            .contains("neither advances `running` nor admits `waiting`")
     );
     assert!(err("advance running; admit waiting while (now < 5);").contains("now"));
     assert!(err("advance running; admit waiting while (~bernoulli(0.5));").contains("draw"));
@@ -370,7 +370,7 @@ fn an_engine_idle_with_work_is_named() {
         },
     );
     assert!(r.stages[0].idle_with_work, "{}", r.text());
-    assert!(r.text().contains("idle: stage `llm`"), "{}", r.text());
+    assert!(r.text().contains("idle: engine `llm`"), "{}", r.text());
 }
 
 /// A guard is a test: a value other than 1 or 0 fails the run.
@@ -565,7 +565,7 @@ fn a_register_is_the_stage_s_own() {
             "schedule { advance running; admit waiting; set r = 1; }",
             ""
         )
-        .contains("another stage")
+        .contains("another engine")
     );
     assert!(err(body, "set x = k;").contains("register"));
     assert!(
@@ -645,7 +645,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
         "hold other (cost(other, 1)), reqs (cost(reqs, 1 + go)) { run b prefill (cost(b, 2)); }",
     )
     .unwrap_err();
-    assert!(e.contains("`go` is stage `b`'s register"), "{e}");
+    assert!(e.contains("`go` is engine `b`'s register"), "{e}");
     // a ps capacity, another stage, a hold on a pool admitted at settle time
     for (extra, hold) in [
         ("stage p : ps(1 + go);", base),
@@ -669,7 +669,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
         let e = ok(extra, hold)
             .err()
             .unwrap_or_else(|| panic!("{extra} {hold} linked"));
-        assert!(e.contains("`go` is stage `b`'s register"), "{e}");
+        assert!(e.contains("`go` is engine `b`'s register"), "{e}");
     }
     let arr = "device tpu[2] { }
         engine c[2] on tpu {
@@ -678,7 +678,7 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
           schedule { advance running; admit waiting; }
           execute (1);
         }";
-    assert!(ok(arr, base).unwrap_err().contains("stage array"));
+    assert!(ok(arr, base).unwrap_err().contains("engine family"));
     let given = "claim c given (go == 0): at end (1);";
     assert!(ok(given, base).is_err());
 }

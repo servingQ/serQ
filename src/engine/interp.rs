@@ -3570,7 +3570,7 @@ impl<'p> Interp<'p> {
         // step that merely preempted may cost 0 (`docs/language.md` §3).
         if ntok > 0.0 && cost <= 0.0 {
             self.error = Some(format!(
-                "stage `{}`: an iteration of {ntok} tokens costs {cost}; an iteration that \
+                "engine `{}`: its `execute` is {cost} for an iteration of {ntok} tokens; an iteration that \
                  schedules tokens lasts a positive time",
                 p.stages[st].name
             ));
@@ -3806,7 +3806,7 @@ impl<'p> Interp<'p> {
                 CIter::Admit { only, gate } => {
                     'admit: while plan.left > 0.0 && !plan.refused {
                         if let Some(g) = gate
-                            && !self.guard(g, plan, "an `admit`'s `while`")
+                            && !self.guard(g, plan, "`admit waiting while (…)`")
                         {
                             break;
                         }
@@ -3856,7 +3856,7 @@ impl<'p> Interp<'p> {
                     }
                 }
                 CIter::Branch(g, a, b) => {
-                    let taken = if self.guard(g, plan, "a `branch` in an iteration") {
+                    let taken = if self.guard(g, plan, "a `branch` in a `schedule`") {
                         a
                     } else {
                         b
@@ -3867,7 +3867,7 @@ impl<'p> Interp<'p> {
                     let v = self.plan_value(e, plan);
                     if !v.is_finite() && self.error.is_none() {
                         self.error = Some(format!(
-                            "stage `{}`: `set {}` read {v}; a register holds a finite number",
+                            "engine `{}`: `set {}` read {v}; a register holds a finite number",
                             self.p.stages[plan.st].name, self.p.registers[*r].name
                         ));
                     }
@@ -3887,7 +3887,7 @@ impl<'p> Interp<'p> {
         } else {
             if v != 0.0 && self.error.is_none() {
                 self.error = Some(format!(
-                    "stage `{}`: {what} read {v}; a test is 1 or 0",
+                    "engine `{}`: {what} read {v}; a test is 1 or 0",
                     self.p.stages[plan.st].name
                 ));
             }

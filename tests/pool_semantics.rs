@@ -505,7 +505,7 @@ fn admit_via_names_a_step_stage() {
             run_source(&common::main_source(&src), &common::horizon(100.0), None).unwrap_err();
         assert!(
             error.contains(&format!(
-                "`F` is {kind}: only a step stage's scheduler admits"
+                "`F` is {kind}: only an engine's `schedule` admits"
             )),
             "{error}"
         );

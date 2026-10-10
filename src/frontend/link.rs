@@ -476,7 +476,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
             for (name, init) in &sp.state {
                 if s.count != 1 {
                     return Err(LinkError::new(format!(
-                        "stage `{}`: `state {name}` on a stage array; which member's register \
+                        "engine `{}`: `state {name}` on an engine family; which member's register \
                          an expression read would be a guess",
                         s.name
                     )));
@@ -490,7 +490,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                     || lk.reg_index.contains_key(name);
                 if taken {
                     return Err(LinkError::new(format!(
-                        "stage `{}`: `state {name}`: the name is taken; a register's name is \
+                        "engine `{}`: `state {name}`: the name is taken; a register's name is \
                          its own",
                         s.name
                     )));
@@ -597,10 +597,10 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 granule: match &sp.granule {
                     None => None,
                     Some(g) => {
-                        let v = lk.const_eval(g, &format!("stage `{}`: granule", s.name))?;
+                        let v = lk.const_eval(g, &format!("engine `{}`: granule", s.name))?;
                         if v.is_nan() || v <= 0.0 {
                             return Err(LinkError::new(format!(
-                                "stage `{}`: granule {v}: a prefill takes a multiple of it, \
+                                "engine `{}`: granule {v}: a prefill takes a multiple of it, \
                                  so it is above 0 (`inf` for whole or nothing)",
                                 s.name
                             )));
@@ -911,16 +911,16 @@ fn iteration(lk: &Linker, stage: usize, body: &[IterStmt]) -> LResult<Vec<CIter>
                         .map_or("?", |(n, _)| n.as_str());
                     let Some(&r) = lk.reg_index.get(name) else {
                         return Err(LinkError::new(format!(
-                            "stage `{here}`: `set {name}` in its iteration: not one of its \
-                             registers; a body sets a register, not a session attribute \
+                            "engine `{here}`: `set {name}` in its schedule: not one of its \
+                             registers; a schedule sets a register, not a session attribute \
                              (declare it with `state {name} = …;`)"
                         )));
                     };
                     if lk.registers[r].stage != stage {
                         return Err(LinkError::new(format!(
-                            "stage `{here}`: `set {name}` in its iteration: the register is \
-                             another stage's; a \
-                             body sets its own stage's"
+                            "engine `{here}`: `set {name}` in its schedule: the register is \
+                             another engine's; a \
+                             schedule sets its own engine's"
                         )));
                     }
                     CIter::Set(r, lk.expr(e)?)

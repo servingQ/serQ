@@ -60,7 +60,7 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
         CServe::By(keys) => {
             if let Some(k) = keys.iter().find(|k| !observable(k)) {
                 return refuse(format!(
-                    "`{}` serves by `{}`; vLLM's scheduler observes `decoding` and `admission` of a \
+                    "`{}` advances running by `{}`; vLLM's scheduler observes `decoding` and `admission` of a \
                      running request, constants and arithmetic on them",
                     engine.name,
                     p.show_expr(k)
@@ -173,8 +173,11 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
             ))
         }
     };
-    let budget = count(number(p, &step.budget, "the budget")?, "the budget")?;
-    let chunk = count(vllm_chunk(p, &step.chunk, slots)?, "the chunk cap")?;
+    let budget = count(
+        number(p, &step.budget, "the `tokens cap`")?,
+        "the `tokens cap`",
+    )?;
+    let chunk = count(vllm_chunk(p, &step.chunk, slots)?, "the `each at most`")?;
     let (seqs, block, blocks) = (
         count(sp.cap, &format!("pool `{}`'s cap", sp.name))?,
         count(block, &format!("pool `{}`'s block", kvp.name))?,
@@ -218,7 +221,7 @@ fn vllm_chunk(p: &Program, e: &CExpr, slots: usize) -> Result<f64, String> {
     use crate::ir::{CArg, Fun};
     let refuse = || {
         Err(format!(
-            "not on vLLM's architecture: the chunk cap is `{}`; vLLM caps a prefill only while \
+            "not on vLLM's architecture: the `each at most` is `{}`; vLLM caps a prefill only while \
              another request is running or waiting (scheduler.py:606-616)\nhelp: in an \
              engine's schedule, `let threshold = running.count + waiting.count > 1 ? c : inf;` \
              and `each at most (threshold)`, or no `each at most` for no cap",

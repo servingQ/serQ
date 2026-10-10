@@ -96,7 +96,7 @@ On non-step stages, `iterations`, the time fractions and `mean_decodes` are
 An iteration that only preempts counts as idle. Step utilization measures
 time with a job present, so stalled residents can make it differ from the
 sum of the three active-time fractions. The text report marks
-`idle_with_work` as `idle: stage …`.
+`idle_with_work` as `idle: engine …`.
 
 Inter-token gaps follow one session and `turn_no`, even across stages:
 transfer time and preemption delays count. A prefill's end is the next token

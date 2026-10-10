@@ -63,7 +63,7 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | preempt none ; | preempt lifo ;  -- what a failed growth does
           | preempt by ( expr , ... ) [requeue head | requeue tail] ;   -- the victim: least keys
           | queue fifo ; | queue by ( expr (, expr)* ) ; -- waiting selection
-          | admit via STAGE ;                -- the queue is served by a step stage's scheduler
+          | admit via STAGE ;                -- the queue is served by an engine's `schedule`
           | reserve held ;                   -- a hold's unallocated reservation counts against later admissions
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
@@ -102,7 +102,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | release POOL ;                   -- give the enclosing hold's allocation on POOL back now, or end a lease of it
           | load POOL ( expr ) ;             -- the KV of expr tokens arrived: the enclosing hold's computed position advances
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
-                                             -- the mode: required on a step stage, refused on any other
+                                             -- the mode: required on an engine, refused on any other stage
                                              -- growing: inside a hold of POOL, which grows with the tokens
           | run STAGE , STAGE [, STAGE]* ( expr ) ;   -- one job holding every stage at once
           | run ( expr ) ;                   -- in a queue's entry: the queue's own stage
@@ -797,7 +797,7 @@ admits, or a guard that reads `now`, does not link (an engine that
 schedules nothing waits for an event, and the clock moving is none); that
 is necessary, not sufficient, and an engine the linker could not see stall
 is named in the report when the run ends with its work unscheduled
-(`idle: stage …`). `state NAME = c;` gives the engine a register its
+(`idle: engine …`). `state NAME = c;` gives the engine a register its
 schedule sets (`set NAME = e;`) and the scheduler's expressions read
 between iterations; a set takes effect with its iteration (a try that
 schedules, preempts and admits nothing is undone), and a register is read

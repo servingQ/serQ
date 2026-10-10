@@ -215,7 +215,7 @@ schedule {
 
 Without the `running.count == 0` condition, an empty engine with `just ==
 1` could never admit again: its unsuccessful attempt would undo the reset.
-The report flags an engine left in this state as `idle: stage …`.
+The report flags an engine left in this state as `idle: engine …`.
 
 ## Examples
 

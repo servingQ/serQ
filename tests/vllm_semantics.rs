@@ -279,7 +279,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
     assert!(e.contains("`by` is read before the batch is formed"), "{e}");
     let e = refused("by (age)");
     assert!(
-        e.contains("`age` is read in a step stage's serve keys"),
+        e.contains("`age` is read in an engine's `advance running by (…)` keys"),
         "{e}"
     );
 }
