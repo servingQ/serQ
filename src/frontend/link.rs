@@ -1354,6 +1354,15 @@ impl Linker<'_> {
         self.stage_span(r).map(|(base, _)| base)
     }
 
+    /// Whether the pool or stage `name` was declared as a family, `[N]`.
+    fn declared_family(&self, what: &str, name: &str) -> bool {
+        match what {
+            "pool" => self.prog.pools.iter().any(|p| p.name == name && p.array),
+            "stage" => self.prog.stages.iter().any(|s| s.name == name && s.array),
+            _ => false,
+        }
+    }
+
     fn cref(&self, r: &Ref, table: &HashMap<String, (usize, usize)>, what: &str) -> LResult<CRef> {
         let &(base, count) = table
             .get(&r.name)
@@ -1365,6 +1374,15 @@ impl Linker<'_> {
                         "{what} `{}` is an array; index it",
                         r.name
                     )));
+                }
+                // a family is indexed at every size, so a constant that sizes
+                // it does not change how the program is spelled (#220)
+                if self.declared_family(what, &r.name) {
+                    return Err(LinkError::new(format!(
+                        "{what} `{}` is a family of 1; index it, as at any size",
+                        r.name
+                    ))
+                    .at(r.span));
                 }
                 None
             }
