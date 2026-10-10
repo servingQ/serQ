@@ -32,7 +32,7 @@ fn main() {
       admit waiting while (running.preempted == 0);
     }
     // an iteration costs whichever is larger: reading the weights and the
-    // residents' KV, or computing the tokens it scheduled
+    // running requests' KV, or computing the tokens it scheduled
     execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }

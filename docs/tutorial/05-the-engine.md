@@ -1,7 +1,7 @@
 # 5. The engine
 
 Replace the per-turn service time with an engine. Each iteration
-allocates a token budget across its residents and then admits waiting
+allocates a token budget across the requests it is running and then admits waiting
 requests with the remaining budget. This model allows prefill and decode
 to share an iteration.
 
@@ -16,6 +16,9 @@ Its deployment, drawn by [`serq draw`](../visualization/index.md):
 ![The engine as a queueing network](../assets/05-engine.deployment.svg)
 
 ## The engine on its device
+
+The `stage engine` of chapters 3 and 4 is now an `engine`, and `engine` is
+the word that declares one, so the engine is named `llm`.
 
 ```serq
 device gpu {
@@ -58,8 +61,8 @@ time to compute the scheduled tokens. Fit these parameters to measurements
 of the engine you want to model.
 
 `pool kv on gpu` is the device's memory, with its rules: blocks, eviction,
-preemption. `pool reqs on llm` is the engine's running slots, and its
-waiting queue. `each at most (c)` limits each request's prefill in an
+preemption. `pool reqs on llm` holds the engine's `reqs cap`: its running
+slots, and the queue of requests waiting for one, served `fifo`. `each at most (c)` limits each request's prefill in an
 iteration, and `advance running` takes an order and an `only`; see
 [Engines on devices](../language.md#engines-on-devices).
 
@@ -74,17 +77,17 @@ the server side.
 
 ```serq
 set hitmax = floor((prompt - 1) / bs) * bs;
-hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(engine))))
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
      at admission (hit = min(cachedin(kv), hitmax)) {
   set c = min(cached, floor((prompt - 1) / bs) * bs);
-  run engine prefill (cost(engine, prompt - c)) growing kv;
-  run engine decode (cost(engine, o - 1)) growing kv;
+  run llm prefill (cost(llm, prompt - c)) growing kv;
+  run llm decode (cost(llm, o - 1)) growing kv;
 } cache (cost(reqs, kv, prompt + o));
 ```
 
 **`growing kv`** allocates additional blocks as the request advances instead
 of reserving its full memory at admission. With `preempt lifo`, a failed
-growth can preempt the most recently admitted engine resident. The hold is
+growth can preempt the most recently admitted running request. The hold is
 retried; see [preemption semantics](../language.md) for the state preserved
 across retries.
 

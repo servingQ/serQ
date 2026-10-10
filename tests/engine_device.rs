@@ -726,9 +726,10 @@ stage vllm[2] : step {{ budget 8; cost 1; memory kv; }}
 }
 
 /// Inside a `queue`, `device gpu` is the member's and `engine on gpu` is
-/// the queue's stage: `examples/pd-disaggregation/llmd_nixl_pull.sq`, which
-/// writes both pods so, has the IR of its pods written as `serve step`. The decoder's holds name `kv` first,
-/// so its device pool is admitted by its engine; the prefiller's are not.
+/// the queue's stage: `examples/pd-disaggregation/llmd_nixl_pull.sq` writes
+/// both pods as engines, and written as `serve step` they have the same IR.
+/// The decoder's holds name `kv` first, so its device pool is admitted by
+/// its engine; the prefiller's are not.
 #[test]
 fn a_queue_holds_its_engine() {
     let base = root().join("examples/pd-disaggregation");

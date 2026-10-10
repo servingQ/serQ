@@ -64,7 +64,7 @@ constructs that say it and a program that uses them.
 | continuous batching and chunked prefill | [`step`](stage.md#step) (`budget`, `chunk`, `cost`), [`run E prefill`, `run E decode`, `growing`](statements.md#run) | [the vLLM use case](../use-cases/vllm.md); [tutorial 5](../tutorial/05-the-engine.md) |
 | the order requests are admitted and served in | [`queue by`](pool.md#queue), [`serve`](stage.md#serve) (`serve decode first`, `serve by (…)`) | `examples/multi-turn/replica.sq` (`serve decode first`); `examples/papers/kong_svf.sq` (`queue by`) |
 | preemption and recompute | [`preempt lifo`](pool.md#preempt), `computed` ([attributes](attributes.md)) | `examples/multi-turn/vllm.sq` (`known = computed …`) |
-| the scheduler's waiting loop and its budget | [`admit via`](pool.md#admit-via), [`budget_left`](functions.md#step-stage) | `examples/replay/vllm_replay.sq` (`admit via engine`), [tutorial 5](../tutorial/05-the-engine.md); `examples/multi-turn/vllm.sq` (`budget_left`) |
+| the scheduler's waiting loop and its budget | [`admit via`](pool.md#admit-via), [`budget_left`](functions.md#step-stage) | `examples/replay/vllm_replay.sq` (`admit via engine`); `examples/multi-turn/vllm.sq` (`pool reqs on vllm`, `budget_left`) |
 | what the scheduler may not read | [`hidden`](workload.md#hidden) | every vLLM program hides the output length (`o`; `out` in the replay) |
 | prefill/decode disaggregation | [`lease`](statements.md#hold), [`release`](statements.md#release), [`load`](statements.md#load), [`transfer … from … to`](serving.md#transfer-from-to) | [the P/D use case](../use-cases/pd.md) |
 | a routing policy | [`choose`](statements.md#choose), [observables](functions.md#observables) | `examples/multi-turn/routing.sq` |
