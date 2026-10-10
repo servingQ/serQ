@@ -679,7 +679,6 @@ fn says(b: &[Token], w: &str) -> bool {
         .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
 }
 
-/// A function of the language: one the linker resolves or one it folds.
 /// A pool declared with a stage's name, or a stage with a pool's.
 fn one_name_space(name: &str) -> String {
     format!(
@@ -688,6 +687,7 @@ fn one_name_space(name: &str) -> String {
     )
 }
 
+/// A function of the language: one the linker resolves or one it folds.
 fn is_function(name: &str) -> bool {
     FUNCTIONS.contains(&name)
         || FOLDED.contains(&name)
@@ -3298,6 +3298,9 @@ impl Parser {
         if self.queues.iter().any(|q| q.name == name) {
             return self.err_at(at + 1, format!("duplicate queue `{name}`"));
         }
+        if prog.pools.iter().any(|p| p.name == name) {
+            return self.err_at(at + 1, one_name_space(&name));
+        }
         // a device or an engine declared after the queue is refused by its
         // own check, so one declared before is refused here: the order
         // changes nothing
@@ -5865,13 +5868,15 @@ mod tests {
             err("stage svc : fifo; def svc(x) { x } workload { session { turn; \n} }\nserver {\n}")
                 .contains("also a stage")
         );
-        // a pool and a stage of one name, in either order, and a pool after
-        // an engine (#409): `cost(E, …)` would read either
+        // a pool and a stage of one name, in either order, and a pool before
+        // or after an engine or a queue (#409): `cost(E, …)` would read either
         let server =
             "workload { arrive batch(1); }\nserver { hold E (cost(E, 1)) { run E (cost(E, 1)); } }";
         for decls in [
             "stage E : fifo; pool E { cap 1; }",
             "pool E { cap 1; } stage E : fifo;",
+            "pool E { cap 4; } queue E[2] : decode { pool kv { cap 10; } serve fifo; decode (n) { hold kv (cost(kv, n)) { run E (cost(E, 1)); } } }",
+            "pool E { cap 1; } device gpu { } engine E on gpu { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }",
             "device gpu { } engine E on gpu { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } pool E { cap 1; }",
         ] {
             let e = err(&format!("{decls} {server}"));
