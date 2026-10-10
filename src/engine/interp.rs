@@ -4472,6 +4472,11 @@ impl<'p> Interp<'p> {
                     .iter()
                     .find(|(asked, _, _)| *asked == i)
                     .map(|&(_, q, need)| (label(q), need)),
+                growing_at_end: self
+                    .sessions
+                    .iter()
+                    .filter(|s| matches!(s.status, Status::Growing(pl, ..) if pl == i))
+                    .count() as u64,
             })
             .collect();
         Report {

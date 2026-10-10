@@ -23,6 +23,7 @@ One pool's report row. Obtain it from [`Report.pool`](report.md#pool),
 | `rejected` | `int` | Requests rejected because static demand could never fit. |
 | `stuck` | `int` | Repeated preemptions without progress past the previous preemption. |
 | `over_cap` | `tuple[str, float]` or `None` | At run end, the waiting queue name and demand exceeding this pool's capacity; `None` when absent. |
+| `growing_at_end` | `int` | Holds waiting to grow in this pool when the run ends. |
 
 Pool counters include warm-up; time averages and admission wait samples
 use the measured interval.

@@ -77,6 +77,7 @@ fn the_report_has_the_shape_its_version_names() {
             "admissions",
             "evicted_entries",
             "evicted_units",
+            "growing_at_end",
             "index",
             "mean_cached",
             "mean_holders",
@@ -510,6 +511,42 @@ fn a_test_observe_that_never_held_is_noted() {
             "{name}: {t}"
         );
     }
+}
+
+/// A growth that waits for room a hold around it on the same pool keeps
+/// (#238): the outer hold takes 1008 of 2015, the inner one grows from 16
+/// to 1008, and with `preempt none` and no cache it waits for ever. The
+/// report said `stuck 0` and an `idle:` note that blamed the schedule.
+#[test]
+fn a_growth_left_waiting_is_noted() {
+    let src = "device gpu { kv cap 2015; }
+        engine llm on gpu {
+          tokens cap 8192;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1e-4 + 1e-5 * batch.tokens);
+        }
+        pool kv on gpu { block 16; evict lru; }
+        workload { arrive batch(1); session { loop { turn; } } }
+        server {
+          hold kv (cost(kv, 1000)) {
+            hold kv (cost(kv, hit + 8)) at admission (hit = min(cachedin(kv), 992)) {
+              run llm prefill (cost(llm, 1000 - cached)) growing kv;
+            } cache (cost(kv, 1000));
+          }
+        }
+        ";
+    let r = run_ir(
+        &compile_source(&common::main_source(src), &common::horizon(20.0)).unwrap(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(r.pools[0].growing_at_end, 1);
+    assert!(
+        r.text()
+            .contains("grow: 1 hold(s) wait to grow in pool `kv` when the run ends"),
+        "{}",
+        r.text()
+    );
 }
 
 /// The note is a line of text, not a lint error, because one shipped program
