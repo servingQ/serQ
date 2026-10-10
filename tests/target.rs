@@ -102,7 +102,8 @@ fn another_policy_is_refused_with_its_construct() {
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
     assert!(
-        e.contains("serves by `remaining`") && e.contains("observes `decoding` and `admission`"),
+        e.contains("advances running by `remaining`")
+            && e.contains("observes `decoding` and `admission`"),
         "{e}"
     );
 }
@@ -175,7 +176,8 @@ fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
     .unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
     assert!(
-        e.contains("the chunk cap is `512`") && e.contains("running.count + waiting.count > 1"),
+        e.contains("the `each at most` is `512`")
+            && e.contains("running.count + waiting.count > 1"),
         "{e}"
     );
 }

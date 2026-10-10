@@ -188,11 +188,11 @@ impl std::fmt::Display for Moment {
             Moment::Select => "a pool's queue keys, read before selecting a waiting session",
             Moment::Evict => "an eviction key or spill clause",
             Moment::Ps => "a ps stage's capacity",
-            Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
-            Moment::Step => "a step stage's cost, after the iteration",
-            Moment::Serve => "a step stage's serve keys or `only`",
+            Moment::Budget => "an engine's `tokens cap` or `each at most`",
+            Moment::Step => "an engine's `execute`",
+            Moment::Serve => "an engine's `advance running by (…)` keys or an `only`",
             Moment::Victim => "a pool's preempt keys, read for each candidate victim",
-            Moment::Plan => "a step stage's iteration body, read as the iteration is planned",
+            Moment::Plan => "an engine's `schedule`",
             Moment::Gauge => "a gauge, read on the deployment's state with no session",
             Moment::Given => "a claim's `given`, read on one session's attributes",
             Moment::Iteration => "a claim over iterations, read when an iteration starts",
@@ -780,6 +780,15 @@ impl CStageKind {
             k if k.is_delay() => "delay",
             CStageKind::Ps(_) => "ps",
             CStageKind::Step(_) => "step",
+        }
+    }
+
+    /// What a message calls the stage, as a program declares it: `engine`
+    /// for a step stage, `stage` for any other.
+    pub fn noun(&self) -> &'static str {
+        match self {
+            CStageKind::Step(_) => "engine",
+            _ => "stage",
         }
     }
 }
@@ -1486,9 +1495,9 @@ impl Program {
             let reg = &self.registers[*r];
             let owner = &self.stages[reg.stage].name;
             Err(format!(
-                "`{}` is stage `{owner}`'s register, and {place} would read it apart from \
+                "`{}` is engine `{owner}`'s register, and {place} would read it apart from \
                  `{owner}`'s iteration, in an order the declarations would decide; a register \
-                 is read by its stage, the keys of a pool it admits, the header of a hold whose \
+                 is read by its engine, the keys of a pool it admits, the header of a hold whose \
                  first pool (where it waits) it admits, a gauge or a claim",
                 reg.name
             ))
@@ -1533,7 +1542,7 @@ impl Program {
             }
         }
         for (si, s) in self.stages.iter().enumerate() {
-            let place = format!("stage `{}`", s.name);
+            let place = format!("{} `{}`", s.kind.noun(), s.name);
             let ok = of(si);
             match &s.kind {
                 CStageKind::Ps(e) => read(e, &|_| false, &format!("{place}'s capacity"))?,
@@ -1650,7 +1659,7 @@ impl Program {
                 let stage = &self.stages[s];
                 if !matches!(stage.kind, CStageKind::Step(_)) {
                     return Err(at(format!(
-                        "`admit via {}`, but `{}` is a {} stage: only a step stage's scheduler \
+                        "`admit via {}`, but `{}` is a {} stage: only an engine's `schedule` \
                          admits, and nothing would admit `{}`",
                         stage.name,
                         stage.name,
@@ -1661,7 +1670,7 @@ impl Program {
             }
         }
         for (si, s) in self.stages.iter().enumerate() {
-            let at = |e| format!("stage `{}`: {e}", s.name);
+            let at = |e| format!("{} `{}`: {e}", s.kind.noun(), s.name);
             match &s.kind {
                 CStageKind::Fifo(_) => {}
                 CStageKind::Ps(e) => v.expr(e, Moment::Ps).map_err(at)?,
@@ -1681,7 +1690,7 @@ impl Program {
                         };
                         if matches!(st.serve, CServe::ExclusivePrefill) {
                             return Err(at(
-                                "granule with serve exclusive prefill: a prefill the granule \
+                                "`granule` with `exclusive prefill`: a prefill the granule \
                                  refuses would still block every decode, and the engine would \
                                  stop"
                                     .into(),
@@ -1697,8 +1706,8 @@ impl Program {
                             && g > c
                         {
                             return Err(at(format!(
-                                "granule {g} with chunk {c}: a prompt longer than the chunk \
-                                 would never get a token"
+                                "granule {g} with `each at most ({c})`: a prompt longer than \
+                                 {c} tokens would never get a token"
                             )));
                         }
                     }
@@ -1707,7 +1716,7 @@ impl Program {
                             v.expr(k, Moment::Serve).map_err(at)?;
                             if draws(k) {
                                 return Err(at(
-                                    "a serve key may not draw (`~`): it is read for every \
+                                    "an `advance running by (…)` key may not draw (`~`): it is read for every \
                                      resident at every iteration, and the order would change \
                                      under the scheduler's feet"
                                         .into(),
@@ -1718,18 +1727,18 @@ impl Program {
                     if let Some(body) = &st.iteration {
                         if matches!(st.serve, CServe::ExclusivePrefill) {
                             return Err(at(
-                                "an `iteration` body with `serve exclusive prefill`: the rule \
-                                 takes back decodes already chosen, which a body cannot, and \
-                                 the two would answer one question twice"
+                                "`exclusive prefill` with a `schedule` body (the IR's `iteration`): \
+                                 the rule takes back decodes already chosen, which a body \
+                                 cannot, and the two would answer one question twice"
                                     .into(),
                             ));
                         }
                         v.iteration(si, body).map_err(at)?;
                         if !always_serves(body) {
                             return Err(at(
-                                "an `iteration` body with a path that neither serves nor admits: \
-                                 an engine whose body takes that path schedules nothing, and \
-                                 waits for an event that may never come"
+                                "a `schedule` with a path that neither advances `running` nor \
+                                 admits `waiting`: an engine whose schedule takes that path \
+                                 schedules nothing, and waits for an event that may never come"
                                     .into(),
                             ));
                         }
@@ -1747,10 +1756,11 @@ impl Program {
                 Some(CStageKind::Step(st)) if st.iteration.is_some() => {}
                 Some(CStageKind::Step(_)) => {
                     return Err(at(
-                        "a register of a stage without an `iteration` body, which nothing sets",
+                        "a register of an engine without a `schedule` body (the IR's `iteration`), \
+                         which nothing sets",
                     ));
                 }
-                _ => return Err(at("a register belongs to a step stage")),
+                _ => return Err(at("a register belongs to an engine (the IR's step stage)")),
             }
             if !r.init.is_finite() {
                 return Err(at("its first value is a finite number"));
@@ -1788,7 +1798,7 @@ impl Program {
                         None => s.name.clone(),
                     };
                     return Err(at(format!(
-                        "stage `{name}` is not a `step` stage: only a step stage has iterations"
+                        "stage `{name}` is not an engine: only an engine has iterations"
                     )));
                 }
             }
@@ -1997,8 +2007,8 @@ impl Validator<'_> {
                     if matches!(a.as_slice(), [CArg::Stage(r)] if own(r)))
             }) {
                 return Err(format!(
-                    "{what} may not read this stage's `budget_left(…)`: it plans an \
-                     iteration, and the body is the plan"
+                    "{what} may not read this engine's `budget_left(…)`: it plans an \
+                     iteration, and the schedule is the plan"
                 ));
             }
             Ok(())
@@ -2007,14 +2017,16 @@ impl Validator<'_> {
             self.expr(e, Moment::Serve)?;
             if draws(e) {
                 return Err(
-                    "a serve key or `only` may not draw (`~`): it is read for every \
+                    "an `advance running by (…)` key or an `only` may not draw (`~`): it is \
+                     read for every \
                             resident at every iteration"
                         .into(),
                 );
             }
             if reads_clock(e) {
                 return Err(
-                    "a serve key or `only` may not read `now` or `work(…)`: an engine \
+                    "an `advance running by (…)` key or an `only` may not read `now` or \
+                     `work(…)`: an engine \
                             whose residents it all excludes waits for an event, and the clock \
                             moving is none"
                         .into(),
@@ -2032,11 +2044,11 @@ impl Validator<'_> {
                 CIter::Admit { only, gate } => {
                     only.iter().try_for_each(served)?;
                     if let Some(g) = gate {
-                        plan(g, "an `admit`'s `while`")?;
+                        plan(g, "`admit waiting while (…)`")?;
                     }
                 }
                 CIter::Branch(g, a, b) => {
-                    plan(g, "a `branch` in an iteration")?;
+                    plan(g, "a `branch` in a `schedule`")?;
                     self.iteration(st, a)?;
                     self.iteration(st, b)?;
                 }
@@ -2046,7 +2058,7 @@ impl Validator<'_> {
                     };
                     if reg.stage != st {
                         return Err(format!(
-                            "`set {}`: the register is stage `{}`'s; a body sets its own stage's",
+                            "`set {}`: the register is engine `{}`'s; a schedule sets its own engine's",
                             reg.name, self.p.stages[reg.stage].name
                         ));
                     }
@@ -2176,9 +2188,10 @@ impl Validator<'_> {
             // interpreter would read the attribute as NaN
             CExpr::Attr(a) if matches!(m, Moment::Ps | Moment::Budget | Moment::Step | Moment::Plan) => {
                 Err(format!(
-                    "`{}` is a session attribute, and {m} is read for the stage, with no \
+                    "`{}` is a session attribute, and {m} is read for the {}, with no \
                      session",
-                    self.p.attrs.get(*a).map_or("?", |s| s.as_str())
+                    self.p.attrs.get(*a).map_or("?", |s| s.as_str()),
+                    if m == Moment::Ps { "stage" } else { "engine" }
                 ))
             }
             CExpr::Sample(..) if m == Moment::Gauge => Err(
@@ -2192,14 +2205,15 @@ impl Validator<'_> {
             ),
             CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Gauge => Err(
                 "a gauge may not read `budget_left(…)`: it plans the next iteration, which \
-                 evaluates the stage's budget and may draw"
+                 evaluates the engine's `tokens cap` and may draw"
                     .into(),
             ),
             // budget_left plans an iteration from a budget: a budget read
             // from it, this engine's or another's, plans from itself (#284)
             CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Budget => Err(
-                "a step's budget or chunk may not read `budget_left(…)`: budget_left plans an \
-                 iteration from a step's budget, so a budget that reads it can read itself"
+                "an engine's `tokens cap` or `each at most` may not read `budget_left(…)`: \
+                 budget_left plans an iteration from a `tokens cap`, so a budget that reads it \
+                 can read itself"
                     .into(),
             ),
             CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Victim => Err(
@@ -2219,7 +2233,7 @@ impl Validator<'_> {
                     .into())
             }
             CExpr::Attr(a) if m == Moment::Iteration => Err(format!(
-                "`{}` is a session attribute, and a claim over iterations reads the stage, \
+                "`{}` is a session attribute, and a claim over iterations reads the engine, \
                  not a session",
                 self.p.attrs.get(*a).map_or("?", |s| s.as_str())
             )),
@@ -2272,7 +2286,7 @@ impl Validator<'_> {
                 // `given` read the session's
                 if matches!(m, Moment::Session | Moment::Given) {
                     return Err(format!(
-                        "`{}` is a step stage's register (`state`), which the scheduler reads; \
+                        "`{}` is an engine's register (`state`), which its schedule reads; \
                          it is read in {m}",
                         self.p.registers[*r].name
                     ));
@@ -2347,8 +2361,8 @@ impl Validator<'_> {
                         format!("`{n}`")
                     };
                     return Err(format!(
-                        "`budget_left({n})`: {what} is a {kind} stage; only a step stage has \
-                         a token budget"
+                        "`budget_left({n})`: {what} is a {kind} stage; only an engine has \
+                         a token budget (`tokens cap`)"
                     ));
                 }
                 Ok(())
@@ -2534,12 +2548,12 @@ impl Validator<'_> {
                     .any(|i| step(i) != (*mode != RunMode::Plain))
                 {
                     return Err(
-                        "`prefill`/`decode` are required on a step stage and not allowed elsewhere"
+                        "`prefill`/`decode` are required on an engine and not allowed on another stage"
                             .into(),
                     );
                 }
                 if growing.is_some() && !members.clone().all(step) {
-                    return Err("`growing` needs a step stage".into());
+                    return Err("`growing` needs an engine".into());
                 }
                 for r in also {
                     self.cref(r, ns, "stage", m)?;

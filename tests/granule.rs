@@ -94,12 +94,12 @@ fn a_granule_that_could_never_be_given_does_not_link() {
         (
             "granule inf;",
             "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4);",
-            "chunk",
+            "`each at most (4)`",
         ),
         (
             "granule 4;",
             "advance running each at most (3); admit waiting while (running.preempted == 0) each at most (3);",
-            "chunk",
+            "`each at most (3)`",
         ),
     ] {
         let src = program(granule, schedule);

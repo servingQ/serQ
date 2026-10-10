@@ -351,7 +351,7 @@ fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
     *e = serq::ir::CExpr::Ctx(serq::ir::CtxVar::Ntok);
     let e = Program::from_json(&p.to_json()).unwrap_err();
     assert!(
-        e.contains("`tokens` is read in a step stage's serve keys or `only`"),
+        e.contains("`tokens` is read in an engine's `advance running by (…)` keys or an `only`"),
         "{e}"
     );
 }

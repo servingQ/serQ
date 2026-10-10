@@ -102,7 +102,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | release POOL ;                   -- give the enclosing hold's allocation on POOL back now, or end a lease of it
           | load POOL ( expr ) ;             -- the KV of expr tokens arrived: the enclosing hold's computed position advances
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
-                                             -- the mode: required on a step stage, refused on any other
+                                             -- the mode: required on an engine, refused on any other stage
                                              -- growing: inside a hold of POOL, which grows with the tokens
           | run STAGE , STAGE [, STAGE]* ( expr ) ;   -- one job holding every stage at once
           | run ( expr ) ;                   -- in a queue's entry: the queue's own stage

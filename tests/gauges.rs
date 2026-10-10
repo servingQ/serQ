@@ -386,7 +386,7 @@ fn a_budget_does_not_read_budget_left() {
         );
         let e = link_error(&src);
         assert!(
-            e.contains("a step's budget or chunk may not read `budget_left"),
+            e.contains("an engine's `tokens cap` or `each at most` may not read `budget_left"),
             "{budget}: {e}"
         );
     }
@@ -408,7 +408,7 @@ fn a_budget_does_not_read_budget_left() {
         } ";
     let e = link_error(src);
     assert!(
-        e.contains("a step's budget or chunk may not read `budget_left"),
+        e.contains("an engine's `tokens cap` or `each at most` may not read `budget_left"),
         "{e}"
     );
     // the rule is the Budget moment's: a cost, a serve key and a hold's

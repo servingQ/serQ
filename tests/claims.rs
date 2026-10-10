@@ -269,7 +269,7 @@ fn a_claim_reads_only_what_its_moment_supplies() {
         ),
         (
             "claim t: every iteration of tool (1);",
-            "stage `tool` is not a `step` stage",
+            "stage `tool` is not an engine",
         ),
         (
             "claim t: at end (1); claim t: at end (0);",

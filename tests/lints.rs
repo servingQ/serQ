@@ -165,7 +165,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     );
     assert!(e.contains("set x = tokens;\n"), "shows the line: {e}");
     assert!(e.contains("`tokens` is read in a session statement"), "{e}");
-    assert!(e.contains("exists only in a step stage's cost"), "{e}");
+    assert!(e.contains("exists only in an engine's `execute`"), "{e}");
     // every other moment refuses what it does not supply, and says where it
     // was read and where it exists
     const LLM: &str = "tokens cap 512; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1e-3);";
@@ -193,7 +193,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         (
             engine("evict by (tokens);", LLM, ""),
             "pool `kv`: `tokens` is read in an eviction key",
-            "a step stage's cost",
+            "an engine's `execute`",
         ),
         (
             engine("queue by (age);", LLM, ""),
@@ -227,7 +227,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
                 &LLM.replace("tokens cap 512", "tokens cap age + 512"),
                 "",
             ),
-            "stage `llm`: `age` is read in a step stage's budget or chunk",
+            "engine `llm`: `age` is read in an engine's `tokens cap` or `each at most`",
             "an eviction key",
         ),
         (
@@ -253,7 +253,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         ),
         (
             engine("", &LLM.replace("execute (1e-3)", "execute (age)"), ""),
-            "stage `llm`: `age` is read in a step stage's cost",
+            "engine `llm`: `age` is read in an engine's `execute`",
             "an eviction key",
         ),
         (
@@ -353,8 +353,11 @@ fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
     ))
     .expect("the residents' variables are keys");
     let e = check(&advancing("advance running by (~uniform(0, 1));")).expect_err("a draw");
-    assert!(e.contains("stage `llm`"), "{e}");
-    assert!(e.contains("a serve key may not draw"), "{e}");
+    assert!(e.contains("engine `llm`"), "{e}");
+    assert!(
+        e.contains("an `advance running by (…)` key may not draw"),
+        "{e}"
+    );
 }
 
 /// `hidden o;`: the scheduler does not know the output length (vLLM knows
@@ -433,7 +436,7 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
         server { hold kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; }
         }";
     let e = check(bad).expect_err("rejected");
-    assert!(e.contains("stage `llm`"), "{e}");
+    assert!(e.contains("engine `llm`"), "{e}");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
     // a name nothing sets is not an attribute
     let bad = "pool kv { cap 1e5; }
@@ -488,15 +491,15 @@ fn a_stage_reads_no_session_attribute() {
     let vllm = "advance running; admit waiting while (running.preempted == 0);";
     check(&engine("8", vllm, "1")).expect("links");
     for (src, moment) in [
-        (engine("8 + prompt", vllm, "1"), "a step stage's budget"),
-        (engine("8", vllm, "1 + prompt"), "a step stage's cost"),
+        (engine("8 + prompt", vllm, "1"), "an engine's `tokens cap`"),
+        (engine("8", vllm, "1 + prompt"), "an engine's `execute`"),
         (
             engine(
                 "8",
                 "branch (prompt > 0) { advance running; } admit waiting while (running.preempted == 0);",
                 "1",
             ),
-            "a step stage's iteration body",
+            "an engine's `schedule`",
         ),
     ] {
         let e = check(&src).expect_err("rejected");
