@@ -1177,3 +1177,31 @@ workload { arrive batch(1); session { turn; end; } } server { gw.route(); }
     assert_eq!((err.line, err.col), (2, 3));
     assert!(err.msg.contains("takes 1 argument(s), got 0"), "{err}");
 }
+
+/// A family is indexed at every size: `holders(E.kv)` linked while `N` was
+/// 1 and was refused at 2, so a constant changed how the program is spelled
+/// (#220).
+#[test]
+fn a_family_of_one_is_indexed() {
+    let program = |kv: &str| {
+        format!(
+            "let N = 1;
+            queue E[N] : decode {{
+              pool kv {{ cap 10; }}
+              serve fifo;
+              decode (n) {{ hold kv (cost(kv, n)) {{ run E (cost(E, 1)); }} }}
+            }}
+            workload {{ arrive batch(2); init {{ set n = 1; }} }}
+            server {{
+              choose j in N by (holders({kv}));
+              E[j].decode (n);
+            }}"
+        )
+    };
+    refused(&program("E.kv"), "pool `E.kv` is a family of 1; index it");
+    compile_source(
+        &common::main_source(&program("E[j].kv")),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+}
