@@ -68,7 +68,7 @@ use std::path::{Path, PathBuf};
 use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
-use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
+use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, RENAMED};
 use crate::frontend::queue::{self, QueueDecl};
 
 mod device;
@@ -2881,7 +2881,7 @@ impl Parser {
             if let Some(engine) = &admitted_by {
                 self.check_admitted_by(o_at, engine, &owner)?;
             }
-            let (c, n, a) = self.capacity_of(at, &name, &owner)?;
+            let (c, n, a) = self.capacity_of(at, o_at, &name, &owner)?;
             (cap, count, is_array) = (c, n, a);
             on = Some(device::On {
                 owner,

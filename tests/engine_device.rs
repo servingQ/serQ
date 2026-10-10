@@ -670,6 +670,16 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(bat
         &engine(ok).replace("on gpu {\n  reqs", "on cpu {\n  reqs"),
         "no device `cpu`",
     );
+    // a pool on a name nothing declares is pointed at that name
+    let e = error(&engine(ok).replace("pool kv on gpu", "pool kv on gpuu"));
+    assert!(e.contains("no device or engine `gpuu`"), "{e}");
+    assert!(e.contains("did you mean `gpu`?"), "{e}");
+    // a context variable's old name is answered with the engine's name
+    let e = error(&engine(ok).replace("execute (step_time(batch.tokens))", "execute (ntok)"));
+    assert!(
+        e.contains("`ntok` is now `tokens`; in an engine, `tokens` is `batch.tokens` here"),
+        "{e}"
+    );
 }
 
 /// A family of devices: `pool kv on vllm.gpu` is `kv[N]`, an engine `E[N]`
