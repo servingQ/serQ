@@ -28,7 +28,8 @@ fn main() {
     reqs cap max_seqs;
     tokens cap B;
     schedule {
-      // long_prefill_token_threshold binds only while another request is running or waiting (scheduler.py:606-616)
+      // long_prefill_token_threshold binds only while another request is
+      // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
       let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
       advance running each at most (threshold);
       admit waiting while (running.preempted == 0) each at most (threshold);
