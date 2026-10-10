@@ -38,7 +38,7 @@ item     := let NAME = expr ;
           | device NAME [ '[' N ']' ] { resource* }      -- what an engine runs on (below, *Engines on devices*)
           | engine NAME [ '[' N ']' ] on DEVICE { eitem* }   -- a step stage, written as what it does
           | pool NAME on OWNER { poolopt* }    -- a capacity of a device or an engine, as a pool
-          | pool NAME on ENGINE.DEVICE { poolopt* }   -- the device's capacity, whose queue the engine admits
+          | pool NAME on ENGINE.DEVICE { poolopt* }   -- the device's capacity, whose queue the engine admits: the name before the dot is that engine
           | workload { wlitem* }
           | server block                      -- request handling; the session lives inside workload
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
@@ -53,7 +53,7 @@ qitem    := pool NAME { poolopt* }              -- the queue's own; only its ent
           | device NAME { resource* }           -- the member's device, `QUEUE.NAME`
           | engine on DEVICE { eitem* }         -- the queue's stage, named after the queue
           | pool NAME on OWNER { poolopt* }     -- on the queue's own device, or on the queue (its engine)
-          | pool NAME on QUEUE.DEVICE { poolopt* }   -- on the queue's own device, admitted by its engine
+          | pool NAME on QUEUE.DEVICE { poolopt* }   -- on the queue's own device, admitted by the queue's engine (named QUEUE)
           | serve kind [ latency expr ] ;       -- the queue's stage, named after the queue; `latency` a link's
           | nic kind ;                          -- the queue's NIC, the stage `QUEUE.nic`
           | VERB [ ( NAME, ... ) ] [ from NAME ] block   -- an entry of one of the queue's roles

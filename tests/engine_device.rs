@@ -479,14 +479,14 @@ fn the_design_refuses_what_it_says() {
             "pool kv on gpu { preempt lifo; }",
             "pool kv on gpu { cap 5; }",
         ),
-        "takes `cap` from it",
+        "takes its capacity from it",
     );
     refused(
         &engine(ok).replace(
             "pool reqs on vllm { }",
             "pool reqs on vllm { admit via vllm; }",
         ),
-        "takes `admit` from it",
+        "who admits a pool on a device or an engine is said in its `on`",
     );
     refused(
         &engine(ok).replace("pool kv on gpu { preempt lifo; }", "pool kv[2] on gpu { }"),
@@ -749,6 +749,15 @@ fn a_pool_names_the_engine_that_admits_it() {
         &ok.replace("device gpu {", "device npu { kv cap 1; }\ndevice gpu {")
             .replace("pool kv on gpu", "pool kv on vllm.npu"),
         "`vllm` runs on `gpu`, not `npu`",
+    );
+    refused(
+        &ok.replace("pool kv on gpu", "pool kv on vllm.vllm"),
+        "`vllm` is not a device",
+    );
+    // the kernel's option is said in `on`, and the error says how
+    refused(
+        &ok.replace("pool kv on gpu { ", "pool kv on gpu { admit via vllm; "),
+        "`on ENGINE.DEVICE` are admitted by the engine",
     );
 }
 

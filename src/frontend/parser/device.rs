@@ -35,23 +35,21 @@ pub(super) struct EngineDecl {
 }
 
 /// What `pool NAME on …` names: the device or engine that owns the
-/// capacity, where it is written, and, for `on ENGINE.DEVICE`, the engine.
+/// capacity and where it is written.
 pub(super) struct On {
     pub owner: String,
     pub at: usize,
+    /// `on ENGINE.DEVICE`: the engine whose scheduler admits the pool's
+    /// queue. `on DEVICE` admits a waiting hold as soon as it fits.
     pub admitted_by: Option<String>,
 }
 
 /// `pool NAME on OWNER { … }`: `prog.pools[pool]` is OWNER's capacity NAME.
 pub(super) struct PoolOn {
     pub pool: usize,
-    pub owner: String,
     /// The capacity's name: the pool's, before a queue prefixes it.
     pub cap: String,
-    pub at: usize,
-    /// `on ENGINE.DEVICE`: the engine whose scheduler admits the pool's
-    /// queue. `on DEVICE` admits a waiting hold as soon as it fits.
-    pub admitted_by: Option<String>,
+    pub on: On,
 }
 
 /// A statement of a schedule, before it is written as the kernel's.
@@ -882,10 +880,10 @@ impl Parser {
     pub(super) fn link_engines(&mut self, prog: &mut Program) -> PResult<()> {
         for po in &self.pools_on {
             let name = prog.pools[po.pool].name.clone();
-            if self.engines.iter().any(|e| e.name == po.owner) {
+            if self.engines.iter().any(|e| e.name == po.on.owner) {
                 prog.pools[po.pool].admit_via = Some(Ref {
                     span: None,
-                    name: po.owner.clone(),
+                    name: po.on.owner.clone(),
                     index: None,
                 });
                 continue;
@@ -893,7 +891,7 @@ impl Parser {
             let on: Vec<&EngineDecl> = self
                 .engines
                 .iter()
-                .filter(|e| e.device == po.owner)
+                .filter(|e| e.device == po.on.owner)
                 .collect();
             let engine = match on[..] {
                 [] => continue,
@@ -903,7 +901,7 @@ impl Parser {
                         on[1].at,
                         format!(
                             "two engines on `{}`: who admits its pools would be ambiguous",
-                            po.owner
+                            po.on.owner
                         ),
                     );
                 }
@@ -913,11 +911,11 @@ impl Parser {
             };
             if let Some(m) = &s.memory {
                 return self.err_at(
-                    po.at,
+                    po.on.at,
                     format!(
                         "`{}` and `{name}` are both on `{}`: which is `{}`'s KV would be a \
                          choice the program did not make",
-                        m.name, po.owner, engine.name
+                        m.name, po.on.owner, engine.name
                     ),
                 );
             }
@@ -926,13 +924,11 @@ impl Parser {
                 name: name.clone(),
                 index: None,
             });
-            if po.admitted_by.is_some() {
-                prog.pools[po.pool].admit_via = Some(Ref {
-                    span: None,
-                    name: engine.name.clone(),
-                    index: None,
-                });
-            }
+            prog.pools[po.pool].admit_via = po.on.admitted_by.as_ref().map(|e| Ref {
+                span: None,
+                name: e.clone(),
+                index: None,
+            });
         }
         for (owner, caps) in self
             .devices
@@ -944,7 +940,7 @@ impl Parser {
                 let declared = self
                     .pools_on
                     .iter()
-                    .any(|po| po.owner == *owner && po.cap == c.name);
+                    .any(|po| po.on.owner == *owner && po.cap == c.name);
                 if !declared {
                     return self.err_at(
                         c.at,
@@ -1006,19 +1002,20 @@ impl Parser {
         Ok(())
     }
 
-    /// Record that `prog.pools[po.pool]` is `po.owner`'s capacity `po.cap`.
-    pub(super) fn pool_on(&mut self, po: PoolOn) -> PResult<()> {
+    /// Record that `prog.pools[pool]` is `on.owner`'s capacity `cap`.
+    pub(super) fn pool_on(&mut self, pool: usize, cap: String, on: On) -> PResult<()> {
+        let po = PoolOn { pool, cap, on };
         if self
             .pools_on
             .iter()
-            .any(|o| o.owner == po.owner && o.cap == po.cap)
+            .any(|o| o.on.owner == po.on.owner && o.cap == po.cap)
         {
             return self.err_at(
-                po.at,
+                po.on.at,
                 format!(
                     "`{}` of {} is declared as a pool twice",
                     po.cap,
-                    shown(&po.owner)
+                    shown(&po.on.owner)
                 ),
             );
         }
@@ -1029,6 +1026,15 @@ impl Parser {
     /// `pool NAME on ENGINE.DEVICE`: ENGINE is declared above and runs on
     /// DEVICE, whose engine it is.
     pub(super) fn check_admitted_by(&self, at: usize, engine: &str, device: &str) -> PResult<()> {
+        if !self.devices.iter().any(|d| d.name == device) {
+            return self.err_at(
+                at,
+                format!(
+                    "{} is not a device: `on ENGINE.DEVICE` is the device the engine runs on",
+                    shown(device)
+                ),
+            );
+        }
         match self.engines.iter().find(|e| e.name == engine) {
             Some(e) if e.device == device => Ok(()),
             Some(e) => self.err_at(
