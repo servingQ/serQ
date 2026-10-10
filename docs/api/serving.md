@@ -86,14 +86,19 @@ A complete program:
 
 ```serq
 fn main() {
-  stage engine : step { budget 8; cost 1; }
+  device gpu { }
+  engine llm on gpu {
+    tokens cap 8;
+    schedule { advance running; admit waiting while (running.preempted == 0); }
+    execute (1);
+  }
   stage tool : delay;
   workload {
     arrive batch(1);
   }
   server {
-    run engine prefill (cost(engine, 8));
-    run engine decode (cost(engine, 2));
+    run llm prefill (cost(llm, 8));
+    run llm decode (cost(llm, 2));
     tool (3);
     observe finished = now;
   }

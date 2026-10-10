@@ -14,11 +14,11 @@ Context-variable names are reserved and cannot be assigned by `set`,
 | `Select` | a pool's `queue by` keys | for every waiting hold before each selection |
 | `Evict` | an eviction key; a `spill` clause | for one cache entry |
 | `Ps` | a `ps` stage's capacity | for the stage's jobs |
-| `Budget` | a step stage's `budget` and `chunk` | before the iteration, from the residents |
-| `Step` | a step stage's `cost` | after the iteration is scheduled |
-| `Serve` | a step stage's `serve by` keys and `only` predicates | for one resident |
+| `Budget` | an engine's `tokens cap` and `each at most` | before the iteration, from the running requests |
+| `Step` | an engine's `execute` | after the iteration is scheduled |
+| `Serve` | an engine's `by` keys and `only` predicates | for one running request |
 | `Victim` | a pool's `preempt by` keys | for one candidate victim, when a growth does not fit |
-| `Plan` | a step stage's `iteration` body: a `branch` guard, an `admit`'s `while`, a register assignment | as the iteration is planned, from the residents and what it has done so far |
+| `Plan` | an engine's `schedule`: a `branch` guard, an `admit waiting`'s `while`, a register assignment | as the iteration is planned, from the running requests and what it has done so far |
 | `Gauge` | a gauge expression | after each instant settles, held until the next event |
 | `Given` | a claim's `given` | for each session, once its `init` has run |
 | `Iteration` | a claim over iterations | when an iteration starts, where the cost is read |
@@ -72,16 +72,17 @@ A complete program:
 
 ```serq
 fn main() {
-  stage engine : step {
-    budget 8;
-    cost 1 + 0.1 * tokens;
-    serve by (remaining);
+  device gpu { }
+  engine llm on gpu {
+    tokens cap 8;
+    schedule { advance running by (remaining); admit waiting while (running.preempted == 0); }
+    execute (1 + 0.1 * batch.tokens);
   }
   workload {
     arrive batch(2);
   }
   server {
-    run engine prefill (cost(engine, 8));
+    run llm prefill (cost(llm, 8));
     observe finished = now;
   }
 }

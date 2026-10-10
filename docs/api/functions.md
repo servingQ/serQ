@@ -45,7 +45,7 @@ See [types](index.md#types) and [evaluation moments](context.md).
 | [`holders(p: pool)`](#holders) | Sessions holding units in `p`. |
 | [`queued(p: pool)`](#queued) | Sessions waiting in `p`'s admission queue. |
 
-**[Step stage](#step-stage)**
+**[Engine](#engine)**
 
 | Function | Returns |
 |---|---|
@@ -315,7 +315,7 @@ queued(p: pool) -> number
 
 **Returns:** Sessions waiting in `p`'s admission queue.
 
-### Step stage
+### Engine
 
 #### `budget_left` {#budget_left}
 
@@ -323,9 +323,9 @@ queued(p: pool) -> number
 budget_left(s: stage) -> number
 ```
 
-**Returns:** Tokens available to admissions after planning service for the current residents.
+**Returns:** Tokens available to admissions after planning service for the running requests.
 
-The argument must name a `step` stage. In a hold header on a pool with `admit via s`, this is the next iteration's admission budget. Elsewhere it plans the next iteration.
+The argument must name an [engine](engine.md). In a hold header on a pool the engine admits (`pool reqs on s`, `pool kv on s.gpu`), this is the next iteration's admission budget. Elsewhere it plans the next iteration.
 
 ### Declarations
 

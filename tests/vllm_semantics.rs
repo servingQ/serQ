@@ -201,8 +201,8 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
     );
 }
 
-/// `serve by (keys)`: the order the iteration hands its budget out in is an
-/// expression over the residents, so a program can state a policy vLLM
+/// `advance running by (keys)`: the order the iteration hands its budget out
+/// in is an expression over the residents, so a program can state a policy vLLM
 /// does not have. With one token of budget per step, admission order gives
 /// everything to A until it is done (A: prompt + 9 decodes = step 10, then
 /// B: 11, 12, 13); shortest-remaining-first serves B as soon as it has
@@ -210,10 +210,12 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
 /// 13). `decode first` is `by (decoding ? 0 : 1)`.
 #[test]
 fn serve_by_orders_residents_by_the_declared_keys() {
-    let prog = |serve: &str| {
+    // `order` is what follows `advance running`
+    let prog = |order: &str| {
         format!(
-            "pool kv {{ cap 1000; }}
-        stage engine : step {{ budget 1; cost 1; memory kv; {serve} }}
+            "device gpu {{ kv cap 1000; }}
+        engine llm on gpu {{ tokens cap 1; schedule {{ advance running {order}; admit waiting while (running.preempted == 0); }} execute (1); }}
+        pool kv on gpu {{ }}
         workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }}
           session {{ turn;
             end;
@@ -222,8 +224,8 @@ fn serve_by_orders_residents_by_the_declared_keys() {
         }}
         server {{
           hold kv (cost(kv, 100)) {{
-            run engine prefill (cost(engine, 1)) growing kv;
-            run engine decode (cost(engine, o - 1)) growing kv;
+            run llm prefill (cost(llm, 1)) growing kv;
+            run llm decode (cost(llm, o - 1)) growing kv;
           }}
           observe done = now;
           observe order = serial;
@@ -231,7 +233,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
         "
         )
     };
-    let r = run(&prog("serve admission;"), &common::horizon(100.0));
+    let r = run(&prog("admission"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
     assert_eq!(
         r.observe("done").unwrap().samples,
@@ -239,7 +241,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
         "{}",
         r.text()
     );
-    let r = run(&prog("serve by (remaining);"), &common::horizon(100.0));
+    let r = run(&prog("by (remaining)"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![1.0, 0.0]);
     assert_eq!(
         r.observe("done").unwrap().samples,
@@ -249,14 +251,14 @@ fn serve_by_orders_residents_by_the_declared_keys() {
     );
     // ties fall to admission order: a constant key is admission order, and
     // a second key decides where the first is equal
-    let r = run(&prog("serve by (1);"), &common::horizon(100.0));
+    let r = run(&prog("by (1)"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
     assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
-    let r = run(&prog("serve by (1, remaining);"), &common::horizon(100.0));
+    let r = run(&prog("by (1, remaining)"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![1.0, 0.0]);
     assert_eq!(r.observe("done").unwrap().samples, vec![4.0, 13.0]);
     // and the opposite order is a program too
-    let r = run(&prog("serve by (-remaining);"), &common::horizon(100.0));
+    let r = run(&prog("by (-remaining)"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
     assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
     // `decode first` and its expansion are the same program
@@ -265,18 +267,19 @@ fn serve_by_orders_residents_by_the_declared_keys() {
             .unwrap()
             .to_json()
     };
-    assert_eq!(
-        ir("serve decode first;"),
-        ir("serve by (decoding ? 0 : 1);")
-    );
-    // a serve key is read at its own moment only
-    let e = serq::compile_source(
-        &common::main_source(&prog("serve by (tokens);")),
-        &common::horizon(100.0),
-    )
-    .unwrap_err();
+    assert_eq!(ir("decode first"), ir("by (decoding ? 0 : 1)"));
+    // a serve key is read at its own moment only: the engine refuses the
+    // batch, which is formed after the order, and the linker a variable of
+    // another moment
+    let refused = |order: &str| {
+        serq::compile_source(&common::main_source(&prog(order)), &common::horizon(100.0))
+            .unwrap_err()
+    };
+    let e = refused("by (tokens)");
+    assert!(e.contains("`by` is read before the batch is formed"), "{e}");
+    let e = refused("by (age)");
     assert!(
-        e.contains("`tokens` is read in a step stage's serve keys"),
+        e.contains("`age` is read in a step stage's serve keys"),
         "{e}"
     );
 }

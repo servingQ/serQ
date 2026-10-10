@@ -115,7 +115,7 @@ member; its initial value is finite. `CExpr::Reg(index)` reads it only in
 its stage's expressions and body, iteration claims, queue keys of pools
 that stage admits, hold headers whose first pool is such a pool, gauges,
 or `AtEnd` claims. Sets are undone when an attempt schedules, preempts and
-admits nothing. See [registers](api/stage.md#registers).
+admits nothing. See [registers](api/engine.md#registers).
 
 A claim's `kind` is `EveryIteration(stage)`, `SomeIteration(stage)` or
 `AtEnd`. Its expression is read at `Iteration` or `End`, respectively.

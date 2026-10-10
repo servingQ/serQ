@@ -72,6 +72,7 @@ here. This directory is the record of **applying** them.
 | [Bandwidth sharing](bandwidth-sharing.md) | A transfer holds the sender's and the receiver's link at once: `Run.also`, `share maxmin` or `bottleneck`, the flow solver | RFC #118, design before implementation |
 | [Client and server](workload-server.md) | One frontend structure: sessions inside workloads, explicit request handling, unchanged expanded IR | implemented |
 | [One admission](one-admission.md) | One spelling for one admission: `hold … at admission (…) … cache`; `enter`, `admit if … fit where` and `keep` retired, the serving name moved into a `def` | #136 |
+| [One engine, one spelling](one-engine-spelling.md) | A stage that runs iterations is written only as an engine on a device; `stage`, `serve` and `nic` take `fifo`, `ps`, `delay`; the IR's step stage unchanged | #421 |
 | [Separate prefill/decode batches](exclusive-prefill.md) | Whole-batch isolation and waiting-prefill takeover using the existing serve policy | untagged IR v8 semantics |
 | [Serving a subset](serve-only.md) | `serve only (p)`: which residents an iteration serves, beside the order that `by` gives; FasterTransformer's decode-only batches and their opposite | untagged IR 11, #261 |
 | [Waiting selection](waiting-selection.md) | Selection-time queue keys, elapsed wait and Ascend-style FCFS aging | IR v9 |

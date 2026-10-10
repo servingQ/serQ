@@ -48,18 +48,23 @@ pool kv {
 | `fifo` / `fifo(c)` | `c` servers, one job each at rate 1, arrival order |
 | `ps(φ)` | processor sharing: throughput `φ`, which may read `present` (jobs present), split equally |
 | `delay` | infinite servers — every job at rate 1, no waiting |
-| `step { … }` | an iterating engine (continuous batching) |
+
+An iterating engine (continuous batching) is an `engine` on a `device`:
 
 ```serq
-stage engine : step {
-  budget B;                   // tokens per iteration
-  cost <expr>;                // clock time per iteration (1: the step clock)
-  chunk C;                    // cap on one request's prefill chunk (0: none)
-  granule G;                  // a prefill gets all it has left or a multiple of G (inf: whole or nothing)
-  serve by (remaining);       // admission (default) | by (keys…) | decode first | exclusive prefill
-                              // | only (p) [order]: serve the residents where p holds
-  memory kv;                  // the pool that gives kv_decode / kv_prefill
+device gpu { kv cap K; }          // what the hardware offers
+engine llm on gpu {
+  reqs cap S;                     // running slots (max_num_seqs)
+  tokens cap B;                   // tokens per iteration (max_num_batched_tokens)
+  granule G;                      // a prefill gets all it has left or a multiple of G (inf: whole or nothing)
+  schedule {
+    advance running by (remaining) each at most (C);   // admission (default) | by (keys…) | decode first; only (p)
+    admit waiting while (running.preempted == 0) each at most (C);
+  }                               // or: exclusive prefill; admit waiting …
+  execute (<expr>);               // clock time per iteration, in batch.tokens, … (1: the step clock)
 }
+pool kv on gpu { … }              // the engine's memory, admitted as soon as it fits
+pool reqs on llm { … }            // its slots, admitted by the engine (`on llm.gpu` for memory it admits)
 ```
 
 ## Statements

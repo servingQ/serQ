@@ -36,7 +36,7 @@ item     := let NAME = expr ;
           | pool NAME [ '[' N ']' ] { poolopt* }
           | stage NAME [ '[' N ']' ] : kind ;
           | device NAME [ '[' N ']' ] { resource* }      -- what an engine runs on (below, *Engines on devices*)
-          | engine NAME [ '[' N ']' ] on DEVICE { eitem* }   -- a step stage, written as what it does
+          | engine NAME [ '[' N ']' ] on DEVICE { eitem* }   -- a stage that runs iterations (the IR's step stage)
           | pool NAME on OWNER { poolopt* }    -- a capacity of a device or an engine, as a pool
           | pool NAME on ENGINE.DEVICE { poolopt* }   -- the device's capacity, whose queue the engine admits: the name before the dot is that engine
           | workload { wlitem* }
@@ -69,15 +69,6 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
           | ps ( expr )                      -- throughput phi(present) shared equally; expr reads present
           | delay                            -- ps(present): every job at rate 1, no waiting
-          | step { cost expr ; [budget expr ;] [chunk expr ;] [granule c ;]     -- options in any order; budget inf by default
-                   [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
-                    | serve exclusive prefill ;
-                    | serve only ( expr ) [admission | by ( expr , ... ) | decode first] ;]
-                   [memory POOL ;] [state NAME = expr ;]* [iteration { istmt* }] }
-istmt    := serve [only ( expr )] [admission | by ( expr , ... ) | decode first] ;   -- the residents not yet served
-          | admit [only ( expr )] [while ( expr )] ;           -- the waiting, one at a time, each served
-          | branch ( expr ) { istmt* } [else { istmt* }]
-          | set NAME = expr ;                  -- one of the stage's registers (`state NAME = c ;` among its options)
 resource := NAME ( NAME , ... ) = expr ;           -- a time resource: a demand to time, read in `execute`
           | NAME cap expr ;                  -- a capacity, declared as a pool with `pool NAME on DEVICE`
 eitem    := NAME cap expr ;                  -- a capacity the engine holds (`reqs cap max_seqs;`)
@@ -352,9 +343,10 @@ whole:
 
 ```
 queue P[NP] : prefill {
-  pool reqs { cap max_seqsP; admit via P; }
-  pool kv { cap blocksP * bs; block bs; evict lru; preempt lifo; }
-  serve step { budget B; cost …; memory kv; }
+  device gpu { …; kv cap blocksP * bs; }
+  engine on gpu { reqs cap max_seqsP; tokens cap B; schedule { … } execute (…); }
+  pool reqs on P { queue fifo; }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
   prefill (prompt) {
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt))
          at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
@@ -366,7 +358,7 @@ queue P[NP] : prefill {
 ```
 
 The pools are the queue's (`P.kv` from outside, `kv` within), the stage is
-named after the queue (`admit via P`, `budget_left(P)`, `work(P[i])`), and
+named after the queue (`pool reqs on P`, `budget_left(P)`, `work(P[i])`), and
 an *entry* — one per verb of the queue's roles — holds what the station
 does with one request, with the role's parameters (`prefill (prompt)`). A
 queue declares its pools, then its `serve`, then its entries, each reading
@@ -588,16 +580,17 @@ else at the next try,
 so it is judged at every try and waits; a queue's head that, read as
 the run ends, still asks a pool for more than its cap is named (`over:`,
 the pool report's `over_cap`). One whose units or `reserve` are a constant does not
-link: it would be rejected whenever it is reached. A pool marked `admit via S` is not admitted at settle time: its queue is
-served by step stage `S`, at the start of an iteration, after the
-residents have taken their tokens, while the iteration has budget left, and
-not in an iteration that preempted (vLLM's waiting loop,
-`scheduler.py:868-1128`). Families are joined member for member: `pool
-q[N] { admit via S; }` next to `stage S[N]` serves `q[i]` by `S[i]`, and
-`stage E[N] : step { memory kv; }` next to `pool kv[N]` counts `kv[i]` for
-`E[i]`; next to a family of one, every member gets that one, and any other
-pair of counts is a link error (`examples/pd-disaggregation/llmd_nixl_pull.sq` is the xPyD case,
-`docs/use-cases/pd.md` §Writing xPyD). A stage that serves several queues tries them in
+link: it would be rejected whenever it is reached. A pool an engine `S` admits
+(`pool reqs on S`, `pool kv on S.gpu`, or `admit via S`) is not admitted at
+settle time: its queue is served by `S`'s `admit waiting`, in an
+iteration, after the running requests have taken their tokens, while the
+iteration has budget left, and, under vLLM's schedule, not in an iteration
+that preempted (vLLM's waiting loop, `scheduler.py:868-1128`). Families
+are joined member for member: `engine S[N] on gpu` next to `device gpu[N]`
+serves `reqs[i]` by `S[i]` and counts `kv[i]` for `S[i]`; next to a family
+of one, every member gets that one, and any other pair of counts is a link
+error (`examples/pd-disaggregation/llmd_nixl_pull.sq` is the xPyD case,
+`docs/use-cases/pd.md` §Writing xPyD). An engine that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
 stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.sq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
@@ -695,120 +688,129 @@ and a program with one declares its `share`, which has no default. A
 stage array held by some run with another is *shared* for the whole run:
 every job on it, a single-stage `run` included, is a flow of the policy,
 and its utilisation is the capacity its flows carry, `Σ rate / φ`. Every
-other `ps` stage serves as above. `step { budget B; cost C; }`: an engine that runs
-iterations. A plain `run`'s work is time at rate 1, the clock's unit; a step
-engine's `prefill` and `decode` work is in the unit of `B`, tokens. The
-clock itself has no unit: a program whose costs are seconds runs in seconds,
-and `examples/oracle/vllm_request.sq` runs on the step clock with `execute (1)`, so
-its times are iterations. The residents are served the way `serve` names, said once per
-stage: an order, `by (k₁, …)` (ascending keys evaluated for each resident
-with `decoding`, 1 for a decoding resident, `admission`, its admission
-sequence number, `remaining`, the tokens its run has left, and the
-totals `residents`, `decoders`, `kv_decode`, `kv_prefill`; ties in admission order; a key may
-not draw), or the rule `exclusive prefill`, below, which is not an order and
-so cannot be combined with one. `admission` (the order their sessions were
-admitted, vLLM's `running` list; the default) is `by` with no keys, where
-every resident ties, and `decode first` is `by (decoding ? 0 : 1)`; of the
-orders, the IR knows only `by`. A scheduler that serves the shortest
-remaining run first is `serve by (remaining)`, the opposite `serve by
-(-remaining)`. One token to a decoding job, up to `chunk` to a prefilling
-one (with a `granule g`, short of its remainder, a multiple of `g`, none
-when that is 0: such a prefill is passed over, and the iteration admits no
-one after it),
-until the budget is spent; a `growing` job first grows its hold to the
-position it will reach (block by block, preempting if needed); a victim
-the iteration has already served leaves it and its tokens return to the
-budget (scheduler.py:779-797) and its hold caches its position, not the
+other `ps` stage serves as above.
+
+### Engines
+
+An [engine](api/engine.md) runs iterations. A plain `run`'s work is time
+at rate 1, the clock's unit; an engine's `prefill` and `decode` work is in
+tokens, the unit of its `tokens cap`. The clock itself has no unit: a
+program whose costs are seconds runs in seconds, and
+`examples/oracle/vllm_request.sq` runs on the step clock with `execute
+(1)`, so its times are iterations.
+
+An iteration serves the running requests in the order its schedule's
+`advance running` names: `by (k₁, …)` (ascending keys evaluated for each
+request with `decoding`, 1 for a decoding request, `admission`, its
+admission sequence number, `remaining`, the tokens its run has left, and
+`running.count`, `running.decoding`, `running.kv_decode`,
+`running.kv_prefill`; ties in admission order; a key may not draw), or
+`admission` (the order their sessions were admitted, vLLM's `running`
+list; the default), which is `by` with no keys, where every request ties,
+or `decode first`, which is `by (decoding ? 0 : 1)`; of the orders, the IR
+knows only `by`. A scheduler that serves the shortest remaining run first
+is `advance running by (remaining)`, the opposite `by (-remaining)`. One
+token to a decoding run, up to `each at most` to a prefilling one (with a
+`granule g`, short of its remainder, a multiple of `g`, none when that is
+0: such a prefill is passed over, and the iteration admits no one after
+it), until `tokens cap` is spent; a `growing` run first grows its hold to
+the position it will reach (block by block, preempting if needed); a
+victim the iteration has already served leaves it and its tokens return to
+the budget (scheduler.py:779-797) and its hold caches its position, not the
 chunk the iteration gave it ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)); a grower that preempts itself ends the
-iteration's serving (scheduler.py:807-813); then the stage admits from the
-queues it serves. The iteration advances the clock by
-`C`, an expression in `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`; its
-tokens are applied when it ends. A run of zero work completes at once. An
-iteration that schedules no token is not an iteration, unless it preempted:
-then it is the scheduler step that only preempted (vLLM's `schedule()`
-admits nothing in a step with `preempted_reqs`, `scheduler.py:869`, and the
-oracle driver counts the step; the Lean model's `startIteration` gives that
-step its cost, and `step` re-admits at the next event), and the next
-iteration re-admits the victim. It lasts `C` at zero tokens, which is a
-modelling choice: the real engine skips the forward pass of an empty step,
-so the fixed part of `C` overstates it. A hold whose body can never fit
-then preempts itself forever (vLLM refuses such a KV cache at start-up,
-above); the `stuck` counter below reports it. A hold that reserves what it
-will need (`reserve (known)` after a preemption) is rejected instead, once
-the reservation is above the cap.
-`serve exclusive prefill` selects either one prefill alone or a decode-only
-batch: a resident prefill takes precedence, otherwise a waiting prefill that
+iteration's serving (scheduler.py:807-813); then `admit waiting` admits
+from the queues the engine admits. The iteration advances the clock by
+`execute`'s expression in `batch.tokens`, `batch.decoding`,
+`batch.prefilled`, `batch.kv_decode`, `batch.kv_prefill`,
+`batch.attention` and `running.count`; its tokens are applied when it
+ends. A run of zero work completes at once. An iteration that schedules no
+token is not an iteration, unless it preempted: then it is the scheduler
+step that only preempted (vLLM's `schedule()` admits nothing in a step
+with `preempted_reqs`, `scheduler.py:869`, and the oracle driver counts
+the step; the Lean model's `startIteration` gives that step its cost, and
+`step` re-admits at the next event), and the next iteration re-admits the
+victim. It lasts `execute`'s time at zero tokens, which is a modelling
+choice: the real engine skips the forward pass of an empty step, so the
+fixed part of the time overstates it. A hold whose body can never fit then
+preempts itself forever (vLLM refuses such a KV cache at start-up, above);
+the `stuck` counter below reports it. A hold that reserves what it will
+need (`reserve (known)` after a preemption) is rejected instead, once the
+reservation is above the cap.
+
+`exclusive prefill` selects either one prefill alone or a decode-only
+batch: a running prefill takes precedence, otherwise a waiting prefill that
 fits displaces the tentative decodes and takes the full budget, and once a
 prefill is selected nothing more is admitted in that iteration
-([Stage](api/stage.md)). Without
-a per-request chunk cap, serving in admission order *is* serving
-decode-first (`SerqLang.Serve.serve_eq_decode_first`; a cap breaks it,
+([Engine](api/engine.md#exclusive-prefill)). Without a per-request chunk
+cap, serving in admission order *is* serving decode-first
+(`SerqLang.Serve.serve_eq_decode_first`; a cap breaks it,
 `chunk_cap_breaks_shape`).
-`serve only (p)` says which residents the iteration serves; `by` says in
-what order:
 
-- `p` is read for each resident when its turn comes, from the variables a
-  key reads, and may not draw or read `now` or `work(…)`.
-- A key and `p` read the totals (`residents`, `decoders`, `kv_decode`,
-  `kv_prefill`) as the residents stand at that read. This counts a session
-  that the iteration admitted through `admit via` and leaves out one it
-  preempted.
-- A resident served earlier in the iteration is not reconsidered.
-- A resident that `p` reads as 0 gets no token this iteration. It keeps
+`only (p)` on `advance running` and `admit waiting` says which requests
+the iteration serves; the order says in what order:
+
+- `p` is read for each request when its turn comes, from the values a key
+  reads, and may not draw or read `now` or `work(…)`.
+- A key and `p` read `running.count`, `running.decoding` and
+  `running.kv_…` as the running requests stand at that read. This counts a
+  session the iteration admitted through `admit waiting` and leaves out one
+  it preempted.
+- A request served earlier in the iteration is not reconsidered.
+- A request that `p` reads as 0 gets no token this iteration. It keeps
   what it holds and advances no computed KV, as a displaced decode does
   under `exclusive prefill`. An admitted session that `p` excludes waits as
-  such a resident. How many are admitted is the pool's `cap` and the hold's
+  such a request. How many are admitted is the pool's `cap` and the hold's
   header, not `p`.
-- An engine whose residents `p` all excludes runs no iteration. It waits
+- An engine whose requests `p` all excludes runs no iteration. It waits
   for the next event of any kind, when `p` is read again; the clock moving
   is no event.
 - The order that follows (`admission` when none is written) orders the
   rest.
 
-FasterTransformer as Dai et al. model it (decode first, no mixed batching) is
-`serve only (decoders > 0 ? decoding : !decoding);`. Its opposite, prefills
-alone (as many as the budget takes) while one is resident, is
-`serve only (decoders < residents ? !decoding : decoding);`. A waiting
+FasterTransformer as Dai et al. model it (decode first, no mixed batching)
+reads `only (in_phase())` in both statements with `def in_phase() {
+running.decoding > 0 ? decoding : !decoding }`. Its opposite, prefills
+alone (as many as the budget takes) while one is running, is
+`running.decoding < running.count ? !decoding : decoding`. A waiting
 prefill admitted after a decode was served still joins that decode. Taking
-the served decode back is `exclusive prefill`'s admission rule. `only` cannot be combined with `exclusive prefill`.
-A stage's `serve only (p)` is the iteration body `serve only (p); admit only
-(p) while (!preempted);` (below), which the linker writes.
+the served decode back is `exclusive prefill`'s admission rule; `only`
+cannot be combined with it.
 
 ### The iteration as a program
 
-Everything above but `serve only` is one procedure, vLLM's
-`schedule()`: serve the residents, then, unless the iteration preempted
-(`scheduler.py:869`), admit the waiting with the budget left. `iteration { … }`
-on a step stage supplies an explicit body. Its statements run once each
-in order: `serve [only (p)] [order]` gives the residents not
-yet served their tokens, skipping and leaving unserved those `p` excludes;
-`admit [only (p)] [while (e)]` admits the heads of the queues the stage
-serves one at a time, each served at once unless `p` excludes it, while
-budget is left, the head fits and `e` is 1; and `branch (e) { … } else { …
-}`. A guard and a `while` read the residents' totals, what the iteration
-has scheduled so far (`tokens`, `prefilled`), `admitted` and `preempted`
-(counts). The procedure above is the body `serve; admit while
-(!preempted);`. A stage's `serve only (p)` expands to `serve only (p);
-admit only (p) while (!preempted);`. A body cannot be combined with `exclusive prefill` or a stage-level
-`only`. See [Stage](api/stage.md#iteration) for scheduling examples.
-A body with a path that neither serves nor admits, or a guard that reads
-`now`, does not link (an engine that schedules nothing waits for an event,
-and the clock moving is none); that is necessary, not sufficient, and an
-engine the linker could not see stall is named in the report when the run
-ends with its work unscheduled (`idle: stage …`). `state NAME = c;` gives
-the stage a register its body sets (`set NAME = e;`) and the scheduler's
-expressions read between iterations; a set
-takes effect with its iteration (a try that schedules, preempts and admits
-nothing is undone), and a register is read only by its stage, the keys of a
-pool it admits, the header of a hold whose first pool it admits, a gauge
-or a claim ([Stage](api/stage.md#registers)).
+vLLM's `schedule()` is the schedule `advance running; admit waiting while
+(running.preempted == 0);`: serve the running requests, then, unless the
+iteration preempted (`scheduler.py:869`), admit the waiting with the
+budget left. Any other schedule is written the same way. Its statements
+run once each in order: `advance running [only (p)] [order]` gives the
+running requests not yet served their tokens, skipping and leaving
+unserved those `p` excludes; `admit waiting [only (p)] [while (e)]` admits
+the heads of the queues the engine admits one at a time, each served at
+once unless `p` excludes it, while budget is left, the head fits and `e`
+is 1; and `branch (e) { … } else { … }`. A guard and a `while` read the
+running requests as they stand, what the iteration has scheduled so far
+(`batch.tokens`, `batch.prefilled`), `waiting.admitted` and
+`running.preempted` (counts). See [Engine](api/engine.md#schedule) for
+scheduling examples. A schedule with a path that neither advances nor
+admits, or a guard that reads `now`, does not link (an engine that
+schedules nothing waits for an event, and the clock moving is none); that
+is necessary, not sufficient, and an engine the linker could not see stall
+is named in the report when the run ends with its work unscheduled
+(`idle: stage …`). `state NAME = c;` gives the engine a register its
+schedule sets (`set NAME = e;`) and the scheduler's expressions read
+between iterations; a set takes effect with its iteration (a try that
+schedules, preempts and admits nothing is undone), and a register is read
+only by its engine, the keys of a pool it admits, the header of a hold
+whose first pool it admits, a gauge or a claim
+([Engine](api/engine.md#registers)).
 
 ### Engines on devices
 
-A step stage is usually written as an engine on a device
-([the design](design/engine-device.md)). The form is parse-time sugar: it
-lowers to a `step` stage and its pools, so the IR, the interpreter and
-the Lean model see only the kernel. From `examples/multi-turn/vllm.sq`:
+An engine is parse-time sugar for the IR's step stage
+([the design](design/engine-device.md)): it lowers to a `step` stage and
+its pools, so the IR, the interpreter and the Lean model see only the
+kernel, whose names the IR and the claims over iterations read. From
+`examples/multi-turn/vllm.sq`:
 
 ```serq
 device gpu {

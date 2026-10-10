@@ -111,6 +111,7 @@ nav:
       - Program: api/program.md
       - Pool: api/pool.md
       - Stage: api/stage.md
+      - Engine: api/engine.md
       - Workload: api/workload.md
       - Statements: api/statements.md
       - Serving vocabulary: api/serving.md
