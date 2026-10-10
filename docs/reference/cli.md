@@ -110,7 +110,7 @@ exact; quantiles are within 0.5 %, and exact for a single value.
 
 | Fields | Meaning |
 |---|---|
-| `mean_used`, `mean_cached`, `mean_queue`, `mean_holders` | time-average allocated units, cached units, waiting holds and holds that have it (a hold of two pools counts in both) |
+| `mean_used`, `mean_cached`, `mean_queue`, `mean_holders` | time-average allocated units, cached units, waiting holds, and sessions holding it (one holding it twice, by a nested hold or a lease, is one; a hold of two pools counts in both) |
 | `mean_wait` | mean wait from a hold joining this pool's queue to its admission, after warm-up; a hold waits in the queue of its first pool, so a later pool of the hold has none |
 | `admissions`, `evicted_entries`, `evicted_units`, `preemptions`, `spills`, `rejected` | admission, eviction, preemption, spill and rejection counters |
 | `stuck` | sessions preempted again without progress past their previous preemption |
