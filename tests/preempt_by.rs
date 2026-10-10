@@ -18,9 +18,15 @@ fn run(src: &str, options: &Overrides) -> serq::Report {
 fn three(preempt: &str) -> String {
     format!(
         r#"
-        pool reqs {{ cap 3; admit via engine; }}
-        pool kv {{ cap 40; {preempt} }}
-        stage engine : step {{ budget 64; cost 1; memory kv; }}
+        device gpu {{ kv cap 40; }}
+        engine llm on gpu {{
+          reqs cap 3;
+          tokens cap 64;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ {preempt} }}
         workload {{ arrive batch(3);
           session {{ turn;
             end;
@@ -31,8 +37,8 @@ fn three(preempt: &str) -> String {
           set prompt = serial == 0 ? 4 : serial == 1 ? 10 : 6;
           hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
             branch (computed > 0) {{ observe victim = serial; }}
-            run engine prefill (cost(engine, prompt)) growing kv;
-            run engine decode (cost(engine, 12)) growing kv;
+            run llm prefill (cost(llm, prompt)) growing kv;
+            run llm decode (cost(llm, 12)) growing kv;
           }} cache (cost(reqs, kv, 0));
         }}
 
@@ -85,9 +91,15 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
     ] {
         let src = format!(
             r#"
-        pool reqs {{ cap 2; admit via engine; }}
-        pool kv {{ cap 24; preempt by (-admission) {requeue}; }}
-        stage engine : step {{ budget 64; cost 1; memory kv; }}
+        device gpu {{ kv cap 24; }}
+        engine llm on gpu {{
+          reqs cap 2;
+          tokens cap 64;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ preempt by (-admission) {requeue}; }}
         workload {{ arrive batch(3);
           session {{ turn;
             end;
@@ -97,8 +109,8 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
         server {{
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {{
             observe admitted = serial;
-            run engine prefill (cost(engine, 4)) growing kv;
-            run engine decode (cost(engine, 10)) growing kv;
+            run llm prefill (cost(llm, 4)) growing kv;
+            run llm decode (cost(llm, 10)) growing kv;
           }} cache (cost(reqs, kv, 0));
         }}
 
@@ -127,9 +139,15 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
     let base = |preempt: &str, hidden: &str| {
         format!(
             r#"
-        pool reqs {{ cap 3; admit via engine; }}
-        pool kv {{ cap 40; {preempt} }}
-        stage engine : step {{ budget 64; cost 1; memory kv; }}
+        device gpu {{ kv cap 40; }}
+        engine llm on gpu {{
+          reqs cap 3;
+          tokens cap 64;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ {preempt} }}
         workload {{ arrive batch(3); {hidden}
           session {{ turn;
             end;
@@ -140,8 +158,8 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
           set prompt = 4;
           set o = 12;
           hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
-            run engine prefill (cost(engine, prompt)) growing kv;
-            run engine decode (cost(engine, o)) growing kv;
+            run llm prefill (cost(llm, prompt)) growing kv;
+            run llm decode (cost(llm, o)) growing kv;
           }} cache (cost(reqs, kv, 0));
         }}
 
@@ -161,7 +179,7 @@ fn a_preempt_key_reads_the_candidate_and_nothing_it_cannot_see() {
         .unwrap_or_else(|| panic!("`{preempt}` linked"))
     };
     assert!(err("preempt by (~exp(1));", "").contains("may not draw"));
-    assert!(err("preempt by (budget_left(engine));", "").contains("budget_left"));
+    assert!(err("preempt by (budget_left(llm));", "").contains("budget_left"));
     assert!(err("preempt by (o);", "hidden o;").contains("hidden"));
     assert!(err("preempt by (remaining);", "").contains("remaining"));
     // `position` is a preempt key's alone
@@ -244,9 +262,15 @@ fn lifo_is_by_minus_admission_on_a_pool_no_engine_reads() {
 #[test]
 fn a_tail_victim_is_ordered_by_the_queue_keys() {
     let src = r#"
-        pool reqs { cap 2; admit via engine; queue by (rank); }
-        pool kv { cap 24; preempt by (-admission) requeue tail; }
-        stage engine : step { budget 64; cost 1; memory kv; }
+        device gpu { kv cap 24; }
+        engine llm on gpu {
+          reqs cap 2;
+          tokens cap 64;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool reqs on llm { queue by (rank); }
+        pool kv on gpu { preempt by (-admission) requeue tail; }
         workload { arrive batch(3);
           session { turn;
             end;
@@ -257,8 +281,8 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
           set rank = serial == 2 ? 9 : serial;
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {
             observe admitted = serial;
-            run engine prefill (cost(engine, 4)) growing kv;
-            run engine decode (cost(engine, 10)) growing kv;
+            run llm prefill (cost(llm, 4)) growing kv;
+            run llm decode (cost(llm, 10)) growing kv;
           } cache (cost(reqs, kv, 0));
         }
 

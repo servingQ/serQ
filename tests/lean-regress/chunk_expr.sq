@@ -1,18 +1,24 @@
-// A step's `chunk` written over what an iteration's start reads, in a shape
-// that is not vLLM's: the cap holds only while more than two requests run or
-// wait for a slot, with the operands the other way round. Three requests of
-// 40 tokens start capped at 8 and run uncapped once one has left. The Lean
-// semantics reads the program's expression (`Deployment.chunkAt`) and must
-// give the interpreter's answer (lean/Serq/Regress.lean, README.md).
+// An engine's `each at most` written over what an iteration's start reads,
+// in a shape that is not vLLM's: the cap holds only while more than two
+// requests run or wait for a slot, with the operands the other way round.
+// Three requests of 40 tokens start capped at 8 and run uncapped once one
+// has left. The Lean semantics reads the program's expression
+// (`Deployment.chunkAt`) and must give the interpreter's answer
+// (lean/Serq/Regress.lean, README.md).
 fn main() {
-  pool kv { cap 160; block 16; evict lru; preempt lifo; }
-  pool slots { cap 2; admit via engine; }
-  stage engine : step {
-    budget 32;
-    chunk queued(slots) + residents > 2 ? 8 : 0;
-    cost 1;
-    memory kv;
+  device gpu { kv cap 160; }
+  engine llm on gpu {
+    slots cap 2;
+    tokens cap 32;
+    schedule {
+      let c = waiting.count + running.count > 2 ? 8 : inf;
+      advance running each at most (c);
+      admit waiting while (running.preempted == 0) each at most (c);
+    }
+    execute (1);
   }
+  pool kv on gpu { block 16; evict lru; preempt lifo; }
+  pool slots on llm { }
 
   workload {
     arrive batch(3);
@@ -22,9 +28,9 @@ fn main() {
 
   server {
     hold slots (cost(slots, 1)), kv (cost(kv, p)) {
-      run engine prefill (cost(engine, p)) growing kv;
+      run llm prefill (cost(llm, p)) growing kv;
       observe first = now;
-      run engine decode (cost(engine, o)) growing kv;
+      run llm decode (cost(llm, o)) growing kv;
       observe done = now;
     }
   }

@@ -151,9 +151,15 @@ fn an_iteration_with_tokens_and_zero_cost_is_an_error() {
 #[test]
 fn a_preempt_only_step_may_cost_zero() {
     run(
-        "pool reqs { cap 4; admit via engine; }
-        pool kv { cap 160; block 16; evict lru; preempt lifo; }
-        stage engine : step { budget 1000; chunk 0; cost tokens; memory kv; }
+        "device gpu { kv cap 160; }
+        engine llm on gpu {
+          reqs cap 4;
+          tokens cap 1000;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (batch.tokens);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { block 16; evict lru; preempt lifo; }
         workload { arrive batch(1);
           session { turn;
             end;
@@ -162,8 +168,8 @@ fn a_preempt_only_step_may_cost_zero() {
         }
         server {
           hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100)) {
-            run engine prefill (cost(engine, 100)) growing kv;
-            run engine decode (cost(engine, 100)) growing kv;
+            run llm prefill (cost(llm, 100)) growing kv;
+            run llm decode (cost(llm, 100)) growing kv;
           }
         }
         ",
@@ -182,9 +188,15 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
     let prog = |budget: u32| {
         format!(
             "let B = {budget};
-        pool kv {{ cap 1e6; block 16; evict lru; preempt lifo; }}
-        pool reqs {{ cap 16; admit via engine; }}
-        stage engine : step {{ budget B; cost 1e-4 + 1e-5 * tokens; memory kv; }}
+        device gpu {{ kv cap 1e6; }}
+        engine llm on gpu {{
+          reqs cap 16;
+          tokens cap B;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1e-4 + 1e-5 * batch.tokens);
+        }}
+        pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
+        pool reqs on llm {{ }}
         stage tool : delay;
         workload {{
           arrive poisson(0.3);
@@ -204,8 +216,8 @@ fn the_marks_of_a_session_turn_do_not_depend_on_the_machine() {
         server {{
           set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
-            run engine prefill (cost(engine, prompt)) growing kv;
-            run engine decode (cost(engine, o - 1)) growing kv;
+            run llm prefill (cost(llm, prompt)) growing kv;
+            run llm decode (cost(llm, o - 1)) growing kv;
           }} cache (cost(reqs, kv, prompt + o));
         }}
         "

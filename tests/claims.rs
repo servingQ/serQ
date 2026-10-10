@@ -15,23 +15,28 @@ let bmax = 128;
 let c = 1128;
 let a = 3547;
 let b0 = 128;
-stage engine : step { budget bmax; cost c + a * ceil(tokens / b0); SERVE }
+device gpu { }
+engine llm on gpu { tokens cap bmax; schedule { SCHEDULE } execute (c + a * ceil(batch.tokens / b0)); }
 workload { arrive renewal(46750); init { set t0 = now; }
   session { turn; end;
   }
 }
-server { run engine prefill (cost(engine, 290)); run engine decode (cost(engine, 990)); observe response = now - t0;
+server { run llm prefill (cost(llm, 290)); run llm decode (cost(llm, 990)); observe response = now - t0;
 }
-claim work_conserving: every iteration of engine (demand < bmax || tokens == bmax);
-claim token_rate: every iteration of engine (served * (c + a * ceil(bmax / b0)) <= bmax * now);
-claim starved: some iteration of engine (demand >= bmax && tokens < bmax);
+claim work_conserving: every iteration of llm (demand < bmax || tokens == bmax);
+claim token_rate: every iteration of llm (served * (c + a * ceil(bmax / b0)) <= bmax * now);
+claim starved: some iteration of llm (demand >= bmax && tokens < bmax);
 claim mean_ok: at end (total(response) <= 1000000 * count(response));
 
 ";
 
-fn engine(serve: &str) -> String {
-    ENGINE.replace("SERVE", serve)
+fn engine(schedule: &str) -> String {
+    ENGINE.replace("SCHEDULE", schedule)
 }
+
+/// The schedule that advances the residents' decodes first.
+const DECODE_FIRST: &str =
+    "advance running decode first; admit waiting while (running.preempted == 0);";
 
 fn run(src: &str, options: &Overrides) -> serq::Report {
     run_source(&common::main_source(src), options, None).unwrap()
@@ -45,13 +50,13 @@ fn result(r: &serq::Report, name: &str) -> ClaimResult {
     r.claim(name).unwrap().result
 }
 
-/// Under `serve decode first` the engine takes what it can: every
+/// Under `decode first` the engine takes what it can: every
 /// iteration whose residents could take a full batch schedules one, and
 /// the tokens it served never outrun a full batch per iteration's cost.
 #[test]
 fn a_work_conserving_engine_holds_its_claims() {
-    let r = run(&engine("serve decode first;"), &common::horizon(1000000.0));
-    let iterations = r.stage("engine").unwrap().iterations;
+    let r = run(&engine(DECODE_FIRST), &common::horizon(1000000.0));
+    let iterations = r.stage("llm").unwrap().iterations;
     assert!(iterations > 100, "{iterations}");
     for name in ["work_conserving", "token_rate"] {
         let c = r.claim(name).unwrap();
@@ -76,13 +81,17 @@ fn a_work_conserving_engine_holds_its_claims() {
     assert!(text.contains("not evaluated: "), "{text}");
 }
 
-/// `serve only` a prefill when no decode is resident and decodes alone
+/// `only` a prefill when no decode is resident and decodes alone
 /// otherwise: an iteration of decodes leaves the newcomers' prompts out,
 /// so the engine is not work conserving and an iteration starves.
 #[test]
 fn an_engine_that_serves_one_kind_fails_them() {
     let r = run(
-        &engine("serve only (decoders > 0 ? decoding : !decoding);"),
+        &engine(
+            "advance running only (running.decoding > 0 ? decoding : !decoding);
+             admit waiting only (running.decoding > 0 ? decoding : !decoding)
+               while (running.preempted == 0);",
+        ),
         &common::horizon(1000000.0),
     );
     let w = r.claim("work_conserving").unwrap();
@@ -104,12 +113,17 @@ fn an_engine_that_serves_one_kind_fails_them() {
 }
 
 const BATCH: &str = "
-        stage engine : step { budget 4; cost 1; }
+        device gpu { }
+        engine llm on gpu {
+          tokens cap 4;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
         workload { arrive batch(3); init { set n = serial == 0 ? 3 : serial; }
           session { turn; end;
           }
         }
-        server { run engine prefill (cost(engine, n)); observe x = n;
+        server { run llm prefill (cost(llm, n)); observe x = n;
         }
 
 ";
@@ -160,8 +174,8 @@ fn a_session_that_fails_given_puts_the_claim_out_of_scope() {
     let r = run(
         &format!(
             "{BATCH}
-         claim small given (n <= 2): every iteration of engine (tokens <= 2);
-         claim any given (n <= 3): every iteration of engine (tokens <= 4);"
+         claim small given (n <= 2): every iteration of llm (tokens <= 2);
+         claim any given (n <= 3): every iteration of llm (tokens <= 4);"
         ),
         &common::horizon(100.0),
     );
@@ -184,9 +198,9 @@ fn served_and_demand_are_read_as_the_iteration_starts() {
     let r = run(
         &format!(
             "{BATCH}
-         claim first: some iteration of engine (served == 0 && demand == 6 && tokens == 4);
-         claim second: some iteration of engine (served == 4 && demand == 2 && tokens == 2);
-         claim two: every iteration of engine (served < 6);"
+         claim first: some iteration of llm (served == 0 && demand == 6 && tokens == 4);
+         claim second: some iteration of llm (served == 4 && demand == 2 && tokens == 2);
+         claim two: every iteration of llm (served < 6);"
         ),
         &common::horizon(100.0),
     );
@@ -204,17 +218,22 @@ fn served_and_demand_are_read_as_the_iteration_starts() {
 fn arrived_counts_the_sessions_started_by_the_iteration() {
     let r = run(
         "
-        stage engine : step { budget 4; cost 1; }
+        device gpu { }
+        engine llm on gpu {
+          tokens cap 4;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
         workload { arrive renewal(10);
           session { turn; end;
           }
         }
-        server { run engine prefill (cost(engine, 3));
+        server { run llm prefill (cost(llm, 3));
         }
 
-        claim at_20: some iteration of engine (now == 20 && arrived == 2);
-        claim balance: every iteration of engine (arrived * 3 == served + tokens);
-        claim clock: every iteration of engine (arrived * 10 == now);",
+        claim at_20: some iteration of llm (now == 20 && arrived == 2);
+        claim balance: every iteration of llm (arrived * 3 == served + tokens);
+        claim clock: every iteration of llm (arrived * 10 == now);",
         &common::horizon(55.0),
     );
     assert_eq!(result(&r, "at_20"), ClaimResult::Witnessed);
@@ -233,7 +252,7 @@ fn a_claim_reads_only_what_its_moment_supplies() {
             "exists only in a claim over iterations",
         ),
         (
-            "claim a: every iteration of engine (n > 0);",
+            "claim a: every iteration of llm (n > 0);",
             "`n` is a session attribute, and a claim over iterations",
         ),
         (
@@ -245,7 +264,7 @@ fn a_claim_reads_only_what_its_moment_supplies() {
             "`total(y)`: `y` is not an `observe` of the program",
         ),
         (
-            "claim t: every iteration of engine (total(x) > 0);",
+            "claim t: every iteration of llm (total(x) > 0);",
             "read only by a claim `at end`",
         ),
         (
@@ -261,20 +280,20 @@ fn a_claim_reads_only_what_its_moment_supplies() {
             "a claim's `given` may not read `now`",
         ),
         (
-            "claim g given (busy(engine) > 0): at end (1);",
+            "claim g given (busy(llm) > 0): at end (1);",
             "`busy(…)` reads the deployment's state",
         ),
         (
-            "claim d: every iteration of engine (~exp(1) > 0);",
+            "claim d: every iteration of llm (~exp(1) > 0);",
             "a claim may not draw",
         ),
         (
-            "claim w: every iteration of engine (work(engine) > 0);",
+            "claim w: every iteration of llm (work(llm) > 0);",
             "may not read `work(…)`",
         ),
         ("claim e: at end (tokens > 0);", "exists only in"),
         (
-            "claim e: at end (busy(engine) == 0);",
+            "claim e: at end (busy(llm) == 0);",
             "`busy(…)` reads the deployment's state",
         ),
     ] {
@@ -297,14 +316,19 @@ fn a_claim_reads_only_what_its_moment_supplies() {
 #[test]
 fn a_claim_over_a_member_of_an_array() {
     let src = "
-        stage engine[2] : step { budget 4; cost 1; }
+        device gpu[2] { }
+        engine llm[2] on gpu {
+          tokens cap 4;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
         workload { arrive batch(2);
           session { turn; end;
           }
         }
-        server { run engine[serial] prefill (cost(engine, 3));
+        server { run llm[serial] prefill (cost(llm, 3));
         }
-        claim one: every iteration of engine[1] (tokens == 3);
+        claim one: every iteration of llm[1] (tokens == 3);
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     assert_eq!(p.claims[0].kind, serq::ir::ClaimKind::EveryIteration(1));
@@ -318,7 +342,7 @@ fn a_claim_over_a_member_of_an_array() {
 #[test]
 fn the_ir_keeps_the_claims() {
     let src = format!(
-        "{BATCH} claim small given (n <= 3): some iteration of engine (demand > served);
+        "{BATCH} claim small given (n <= 3): some iteration of llm (demand > served);
          claim p: at end (prefix_total(x) == 10);"
     );
     let p = compile_source(&common::main_source(&src), &common::horizon(100.0)).unwrap();
@@ -349,7 +373,7 @@ fn the_ir_keeps_the_claims() {
 /// `serq fmt` prints a claim back as it was written.
 #[test]
 fn the_formatter_keeps_a_claim() {
-    let src = engine("serve decode first;");
+    let src = engine(DECODE_FIRST);
     let formatted = serq::frontend::fmt::format(&common::main_source(&src)).unwrap();
     assert!(formatted.contains("claim work_conserving:"));
     assert_eq!(

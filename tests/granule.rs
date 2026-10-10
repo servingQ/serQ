@@ -14,10 +14,24 @@ use serq::{Overrides, compile_source, run_source};
 /// so the first iteration serves 6 alone (cost 1), the second the other 6
 /// (cost 1): first tokens at 1 and 2.
 fn prog(granule: &str) -> String {
+    scheduled(
+        granule,
+        "advance running; admit waiting while (running.preempted == 0);",
+    )
+}
+
+fn scheduled(granule: &str, schedule: &str) -> String {
     format!(
         r#"
-        pool reqs {{ cap 4; admit via engine; }}
-        stage engine : step {{ budget 8; cost 1 + max(0, tokens - 6); {granule} }}
+        device gpu {{ }}
+        engine llm on gpu {{
+          reqs cap 4;
+          tokens cap 8;
+          {granule}
+          schedule {{ {schedule} }}
+          execute (1 + max(0, batch.tokens - 6));
+        }}
+        pool reqs on llm {{ }}
         workload {{ arrive batch(2);
           session {{ turn;
             end;
@@ -27,7 +41,7 @@ fn prog(granule: &str) -> String {
         server {{
           set t0 = now;
           hold reqs (cost(reqs, 1)) {{
-            run engine prefill (cost(engine, 6));
+            run llm prefill (cost(llm, 6));
             observe ttft = now - t0;
           }}
         }}
@@ -70,14 +84,26 @@ fn a_granule_is_above_zero() {
 /// never gets a token (TensorRT-LLM refuses a chunk below its unit).
 #[test]
 fn a_granule_that_could_never_be_given_does_not_link() {
-    for (opts, message) in [
-        ("serve exclusive prefill; granule inf;", "exclusive prefill"),
-        ("chunk 4; granule inf;", "chunk"),
-        ("chunk 3; granule 4;", "chunk"),
+    for (granule, schedule, message) in [
+        (
+            "granule inf;",
+            "exclusive prefill; admit waiting while (running.preempted == 0);",
+            "exclusive prefill",
+        ),
+        (
+            "granule inf;",
+            "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4);",
+            "chunk",
+        ),
+        (
+            "granule 4;",
+            "advance running each at most (3); admit waiting while (running.preempted == 0) each at most (3);",
+            "chunk",
+        ),
     ] {
-        let src = prog(opts);
+        let src = scheduled(granule, schedule);
         let e = compile_source(&common::main_source(&src), &common::horizon(20.0)).unwrap_err();
-        assert!(e.contains(message), "{opts}: {e}");
+        assert!(e.contains(message), "{schedule} {granule}: {e}");
     }
     // above the budget is allowed: a prompt that fits the budget is run
     // whole, and a longer one is the workload's (it waits, `idle:`)
@@ -96,8 +122,18 @@ fn a_granule_that_could_never_be_given_does_not_link() {
 #[test]
 fn the_chunk_caps_and_the_granule_rounds() {
     let src = r#"
-        pool reqs { cap 4; admit via engine; }
-        stage engine : step { budget 8; chunk 6; granule 4; cost 1; }
+        device gpu { }
+        engine llm on gpu {
+          reqs cap 4;
+          tokens cap 8;
+          granule 4;
+          schedule {
+            advance running each at most (6);
+            admit waiting while (running.preempted == 0) each at most (6);
+          }
+          execute (1);
+        }
+        pool reqs on llm { }
         workload { arrive batch(1);
           session { turn;
             end;
@@ -106,7 +142,7 @@ fn the_chunk_caps_and_the_granule_rounds() {
         }
         server {
           set t0 = now;
-          hold reqs (cost(reqs, 1)) { run engine prefill (cost(engine, 10)); observe ttft = now - t0; }
+          hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 10)); observe ttft = now - t0; }
         }
 
 "#;
@@ -134,9 +170,16 @@ fn the_chunk_caps_and_the_granule_rounds() {
 #[test]
 fn a_refused_prefill_ends_the_admissions() {
     let src = r#"
-        pool reqs { cap 8; admit via engine; }
-        pool kv { cap 100; }
-        stage engine : step { budget 8; granule inf; cost 1; memory kv; }
+        device gpu { kv cap 100; }
+        engine llm on gpu {
+          reqs cap 8;
+          tokens cap 8;
+          granule inf;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { }
         workload { arrive batch(5);
           session { turn;
             end;
@@ -144,9 +187,9 @@ fn a_refused_prefill_ends_the_admissions() {
           }
         }
         server {
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(6, left))) at admission (left = budget_left(engine)) {
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(6, left))) at admission (left = budget_left(llm)) {
             observe admitted = now;
-            run engine prefill (cost(engine, 6)) growing kv;
+            run llm prefill (cost(llm, 6)) growing kv;
           }
         }
 

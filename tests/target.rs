@@ -87,13 +87,17 @@ fn another_policy_is_refused_with_its_construct() {
             "{path}: {e}"
         );
     }
-    let src = "pool kv { cap 160; block 16; evict lru; preempt lifo; } pool reqs { cap 4; }
-        stage engine : step { budget 64; cost 1; serve by (remaining); memory kv; }
+    let src = "device gpu { kv cap 160; } pool kv on gpu { block 16; evict lru; preempt lifo; } pool reqs { cap 4; }
+        engine llm on gpu {
+          tokens cap 64;
+          schedule { advance running by (remaining); admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
         workload { arrive batch(1); init { set n = 8; }
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run engine prefill (cost(engine, n)) growing kv; }
+        server { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; }
         } ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let e = serq::target::vllm(&p).unwrap_err();
@@ -107,13 +111,17 @@ fn another_policy_is_refused_with_its_construct() {
 /// `tools/serq_vllm.py`, as the IR writes them.
 #[test]
 fn observable_serve_keys_name_the_programmable_scheduler() {
-    let src = "pool kv { cap 160; block 16; evict lru; preempt lifo; } pool reqs { cap 4; }
-        stage engine : step { budget 64; cost 1; serve by (decoding ? 0 : 1, -admission); memory kv; }
+    let src = "device gpu { kv cap 160; } pool kv on gpu { block 16; evict lru; preempt lifo; } pool reqs { cap 4; }
+        engine llm on gpu {
+          tokens cap 64;
+          schedule { advance running by (decoding ? 0 : 1, -admission); admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
         workload { arrive batch(1); init { set n = 8; }
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run engine prefill (cost(engine, n)) growing kv; }
+        server { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; }
         } ";
     let p = serq::compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let t = serq::target::vllm(&p).unwrap();

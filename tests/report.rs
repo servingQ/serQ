@@ -163,10 +163,13 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
     // come at 1 (the prefill's end, its first), 2, 4, 5: gaps 1, 2, 1.
     // Mixed: A:p2, A:d1, A:d1+B:p3, A:d1+B:p1: tokens at 1, 2, 3, 4, gaps
     // 1, 1, 1. The gaps add up to the last token less the first.
-    let itl = |serve: &str| {
+    let itl = |schedule: &str| {
         let src = format!(
-            "pool reqs {{ cap 2; admit via engine; }} pool kv {{ cap 20; }} stage gate : delay;
-        stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
+            "stage gate : delay;
+        device gpu {{ kv cap 20; }}
+        engine llm on gpu {{ reqs cap 2; tokens cap 4; schedule {{ {schedule} }} execute (1); }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ }}
         workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
           session {{ turn;
             end;
@@ -176,9 +179,9 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
         server {{
           run gate (cost(gate, 2 * serial));
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
-          at admission (left = budget_left(engine)) {{
-            run engine prefill (cost(engine, prompt)) growing kv;
-            branch (serial == 0) {{ run engine decode (cost(engine, 3)) growing kv; }}
+          at admission (left = budget_left(llm)) {{
+            run llm prefill (cost(llm, prompt)) growing kv;
+            branch (serial == 0) {{ run llm decode (cost(llm, 3)) growing kv; }}
           }}
         }}
         "
@@ -193,13 +196,17 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
         )
         .unwrap();
         let r = run_ir(&p, None).unwrap();
-        let s = r.stage("engine").unwrap().clone();
+        let s = r.stage("llm").unwrap().clone();
         (s.mean_itl, s.itl_p99)
     };
-    let (mean, p99) = itl("serve exclusive prefill;");
+    let (mean, p99) = itl(
+        "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4);",
+    );
     assert_eq!(mean, 4.0 / 3.0);
     assert!(near(p99, 2.0), "{p99}");
-    let (mean, p99) = itl("");
+    let (mean, p99) = itl(
+        "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4);",
+    );
     assert_eq!(mean, 1.0);
     assert!(near(p99, 1.0), "{p99}");
 }
@@ -213,7 +220,19 @@ fn a_gap_holds_the_transfer_between_two_engines() {
     // the decodes at 8 and 9 have gaps 1 and 1.
     let itl = |recompute: &str| {
         let src = format!(
-            "stage p : step {{ cost 1; }} stage d : step {{ cost 1; }} stage link : delay;
+            "device gpu_p {{ }}
+        device gpu_d {{ }}
+        engine p on gpu_p {{
+          tokens cap inf;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        engine d on gpu_d {{
+          tokens cap inf;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        stage link : delay;
         workload {{ arrive batch(1);
           session {{ turn;
             end;
@@ -252,9 +271,15 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
     // recomputing (vLLM: the resumed prefill samples the next token). A
     // request's gaps then add up to its last token less its first, and the
     // engine's mean gap is the token-weighted TPOT, preemptions and all.
-    let src = "pool reqs { cap 64; admit via engine; }
-        pool kv { cap 6000; block 16; preempt lifo; admit via engine; }
-        stage engine : step { budget 2048; cost 0.001 + 1e-6 * tokens; memory kv; }
+    let src = "device gpu { kv cap 6000; }
+        engine llm on gpu {
+          reqs cap 64;
+          tokens cap 2048;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (0.001 + 1e-6 * batch.tokens);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { block 16; preempt lifo; }
         workload {
           arrive poisson(40);
           hidden o;
@@ -266,11 +291,11 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
           }
         }
         server {
-          hold kv (cost(kv, min(known, budget_left(engine)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
+          hold kv (cost(kv, min(known, budget_left(llm)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
           at admission (known = computed < prompt ? prompt : computed + 1) {
-            run engine prefill (cost(engine, known)) growing kv;
+            run llm prefill (cost(llm, known)) growing kv;
             branch (known == prompt) { set first = now; }
-            run engine decode (cost(engine, o - 1 - (known - prompt))) growing kv;
+            run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
           }
           observe span = now - first;
           observe gaps = o - 1;
@@ -293,7 +318,7 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
     );
     let sum = |name: &str| r.observe(name).unwrap().samples.iter().sum::<f64>();
     let tpot = sum("span") / sum("gaps");
-    let itl = r.stage("engine").unwrap().mean_itl;
+    let itl = r.stage("llm").unwrap().mean_itl;
     // every session drains (`arrivals`), so every gap is observed: exact
     assert!(
         (itl - tpot).abs() <= 1e-9 * tpot,
@@ -348,10 +373,13 @@ fn a_step_stage_reports_what_its_iterations_carried() {
     // examples/single-turn/separate_phases.sq: with the serve clause the
     // iterations are A:p2, B:p4, A:d1, A:d1 of a unit each; without it,
     // A:p2, then A:d1+B:p3 and A:d1+B:p1 mixed.
-    let src = |serve: &str| {
+    let src = |schedule: &str| {
         format!(
-            "pool reqs {{ cap 2; admit via engine; }} pool kv {{ cap 20; }} stage gate : delay;
-        stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
+            "stage gate : delay;
+        device gpu {{ kv cap 20; }}
+        engine llm on gpu {{ reqs cap 2; tokens cap 4; schedule {{ {schedule} }} execute (1); }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ }}
         workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
           session {{ turn;
             end;
@@ -361,17 +389,17 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         server {{
           run gate (cost(gate, serial));
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
-          at admission (left = budget_left(engine)) {{
-            run engine prefill (cost(engine, prompt)) growing kv;
-            branch (serial == 0) {{ run engine decode (cost(engine, 2)) growing kv; }}
+          at admission (left = budget_left(llm)) {{
+            run llm prefill (cost(llm, prompt)) growing kv;
+            branch (serial == 0) {{ run llm decode (cost(llm, 2)) growing kv; }}
           }}
         }}
         "
         )
     };
-    let stage = |serve: &str| {
+    let stage = |schedule: &str| {
         let p = compile_source(
-            &common::main_source(&src(serve)),
+            &common::main_source(&src(schedule)),
             &Overrides {
                 warmup: Some(0.0),
                 seed: Some(1),
@@ -380,7 +408,7 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         )
         .unwrap();
         let r = run_ir(&p, None).unwrap();
-        let s = r.stage("engine").unwrap().clone();
+        let s = r.stage("llm").unwrap().clone();
         (
             s.prefill_only,
             s.decode_only,
@@ -391,10 +419,17 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         )
     };
     assert_eq!(
-        stage("serve exclusive prefill;"),
+        stage(
+            "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4);"
+        ),
         (0.1, 0.1, 0.0, 0.1, 1.0, 1.0)
     );
-    assert_eq!(stage(""), (0.05, 0.0, 0.1, 0.1, 1.0, 1.0));
+    assert_eq!(
+        stage(
+            "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4);"
+        ),
+        (0.05, 0.0, 0.1, 0.1, 1.0, 1.0)
+    );
 }
 
 /// #232: the report says which serq produced it.

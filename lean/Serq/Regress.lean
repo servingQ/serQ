@@ -19,7 +19,7 @@ namespace Regress
 
 open Exec
 
-/-- `tests/lean-regress/chunk_expr.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = p, 10 = o. Observations: 0 = first, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = engine. -/
+/-- `tests/lean-regress/chunk_expr.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = p, 10 = o. Observations: 0 = first, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = llm. -/
 def chunkExpr : Prog := [route|
   turn;
   hold 1 (1), 0 (x.attr 9) {
@@ -39,7 +39,7 @@ theorem regress_chunk_expr :
     ([[(0, 5), (1, 5), (2, 11)], [(0, 9), (1, 11), (2, 13)]], 0) := by
   decide +kernel
 
-/-- `tests/lean-regress/cost_ctx.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = n, 10 = o, 11 = t0. Observations: 0 = ttft, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = engine, 1 = gate. -/
+/-- `tests/lean-regress/cost_ctx.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = n, 10 = o, 11 = t0. Observations: 0 = ttft, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = llm, 1 = gate. -/
 def costCtx : Prog := [route|
   turn;
   run 1 (x.attr 11);
@@ -60,7 +60,7 @@ theorem regress_cost_ctx :
     ([[(0, 1723), (1, 6934)], [(0, 7074), (1, 7159)]], 0) := by
   decide +kernel
 
-/-- `tests/lean-regress/preempt_delay.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = d. Observations: 0 = resumed, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = engine, 1 = tool. -/
+/-- `tests/lean-regress/preempt_delay.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = d. Observations: 0 = resumed, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = llm, 1 = tool. -/
 def preemptDelay : Prog := [route|
   turn;
   hold 1 (1), 0 (16) {

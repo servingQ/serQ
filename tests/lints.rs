@@ -14,10 +14,12 @@ fn check(src: &str) -> Result<(), String> {
     compile_source(&common::main_source(src), &common::horizon(500.0)).map(|_| ())
 }
 
+/// Five lines, as `a_context_variable_outside_its_moment_is_rejected` reads a
+/// line number below them.
 const ENGINE: &str = "let bs = 16;
-    pool kv { cap 1e5; block bs; evict lru; }
+    device gpu { kv cap 1e5; } pool kv on gpu { block bs; evict lru; }
     pool reqs { cap 8; }
-    stage engine : step { budget 512; cost 1e-3; memory kv; }
+    engine llm on gpu { tokens cap 512; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1e-3); }
 
     ";
 const ENGINE_WORKLOAD: &str = "arrive poisson(0.3); init { set K = 0; }
@@ -34,8 +36,8 @@ fn a_stale_header_read_is_rejected() {
         server {{
           set prompt = K + n;
           set c = min(cachedin(kv), prompt - 1);
-          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, budget_left(engine))))
-          {{ run engine prefill (cost(engine, prompt - cached)) growing kv; }} cache (cost(reqs, kv, prompt + o));
+          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, budget_left(llm))))
+          {{ run llm prefill (cost(llm, prompt - cached)) growing kv; }} cache (cost(reqs, kv, prompt + o));
         }}"
     );
     let e = check(&src).expect_err("rejected");
@@ -58,9 +60,9 @@ fn at_admission_is_the_way_through() {
         }} }}
         server {{
           set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, budget_left(engine))))
+          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, budget_left(llm))))
           at admission (c = min(cachedin(kv), prompt - 1))
-          {{ run engine prefill (cost(engine, prompt - cached)) growing kv; }} cache (cost(reqs, kv, prompt + o));
+          {{ run llm prefill (cost(llm, prompt - cached)) growing kv; }} cache (cost(reqs, kv, prompt + o));
         }}"
     );
     check(&src).expect("the clause is the way to say it");
@@ -76,7 +78,7 @@ fn a_reassignment_clears_the_lint() {
           set prompt = K + n;
           set c = min(cachedin(kv), prompt - 1);
           set c = 0;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, c + prompt)) {{ run engine prefill (cost(engine, prompt)) growing kv; }} cache (cost(reqs, kv, prompt));
+          hold reqs (cost(reqs, 1)), kv (cost(kv, c + prompt)) {{ run llm prefill (cost(llm, prompt)) growing kv; }} cache (cost(reqs, kv, prompt));
         }}"
     );
     check(&src).expect("the read no longer reaches the header");
@@ -93,7 +95,7 @@ fn a_read_inside_the_body_is_fine() {
           set prompt = K + n;
           hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) {{
             set c = min(cachedin(kv), prompt - 1);
-            observe hit = c; run engine prefill (cost(engine, prompt)) growing kv; }} cache (cost(reqs, kv, prompt));
+            observe hit = c; run llm prefill (cost(llm, prompt)) growing kv; }} cache (cost(reqs, kv, prompt));
         }}"
     );
     check(&src).expect("after admission is not stale");
@@ -152,7 +154,7 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         "{ENGINE} workload {{ {ENGINE_WORKLOAD} session {{  turn; end;
         }} }}
         server {{ set x = tokens;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run engine prefill (cost(engine, n)) growing kv; }}
+          hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }}
         }}"
     );
     let e = check(&src).expect_err("rejected");
@@ -351,21 +353,26 @@ fn serve_admission_is_by_with_no_keys_and_a_key_does_not_draw() {
 #[test]
 fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     let wl = "let bs = 16;
-        pool kv { cap 1e5; block bs; evict lru; }
+        device gpu { kv cap 1e5; }
+        engine llm on gpu {
+          tokens cap 512;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1e-3);
+        }
+        pool kv on gpu { block bs; evict lru; }
         pool reqs { cap 8; }
-        stage engine : step { budget 512; cost 1e-3; memory kv; }
 
         ";
     let wl_workload = "arrive poisson(0.3); hidden o; init { set K = 0; }
                    turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     // the body may read it
     let ok = format!(
-        "{wl} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run engine prefill (cost(engine, n)) growing kv; run engine decode (cost(engine, o - 1)) growing kv; }} cache (cost(reqs, kv, n + o));\n}}"
+        "{wl} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; run llm decode (cost(llm, o - 1)) growing kv; }} cache (cost(reqs, kv, n + o));\n}}"
     );
     check(&ok).expect("links");
     // a hold's header may not: the reservation is the scheduler's
     let bad = format!(
-        "{wl} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) reserve (cost(kv, n + o)) {{ run engine prefill (cost(engine, n)) growing kv; }}\n}}"
+        "{wl} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) reserve (cost(kv, n + o)) {{ run llm prefill (cost(llm, n)) growing kv; }}\n}}"
     );
     let e = check(&bad).expect_err("rejected");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
@@ -374,21 +381,26 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     // and the check sees the substituted expression
     let bad = format!(
         "{wl} workload {{ {wl_workload} session {{  turn; end; }} }}
-        server {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) reserve (cost(kv, need)) at admission (need = n + o) {{ run engine prefill (cost(engine, n)) growing kv; }} }}"
+        server {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) reserve (cost(kv, need)) at admission (need = n + o) {{ run llm prefill (cost(llm, n)) growing kv; }} }}"
     );
     let e = check(&bad).expect_err("rejected");
     assert!(e.contains("`o` is hidden from the scheduler"), "{e}");
     assert!(e.contains("read at admission"), "{e}");
     // nor a pool's queue key
     let bad = "let bs = 16;
-        pool kv { cap 1e5; block bs; evict lru; queue by (o); }
-        stage engine : step { budget 512; cost 1e-3; memory kv; }
+        device gpu { kv cap 1e5; }
+        engine llm on gpu {
+          tokens cap 512;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1e-3);
+        }
+        pool kv on gpu { block bs; evict lru; queue by (o); }
         workload { arrive poisson(0.3); hidden o; turn { set n = ~exp(500); set o = ~exp(200) + 1; }
           session {  turn; end;
           }
         }
 
-        server { hold kv (cost(kv, n)) { run engine prefill (cost(engine, n)) growing kv; }
+        server { hold kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; }
         }";
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("pool `kv`"), "{e}");
@@ -420,14 +432,14 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     let e = check(bad).expect_err("rejected");
     assert!(e.contains("hidden `nothing`"), "{e}");
     // what the scheduler sets cannot be hidden from it, and a name is hidden once
-    let bad = format!("{wl} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ hold kv (cost(kv, n)) {{ run engine prefill (cost(engine, n)) growing kv; }}\n}}")
+    let bad = format!("{wl} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ hold kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }}\n}}")
         .replace("hidden o;", "hidden computed;");
     let e = check(&bad).expect_err("rejected");
     assert!(
         e.contains("hidden `computed`: the scheduler sets it"),
         "{e}"
     );
-    let bad = format!("{wl} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ hold kv (cost(kv, n)) {{ run engine prefill (cost(engine, n)) growing kv; }}\n}}")
+    let bad = format!("{wl} workload {{ {wl_workload} session {{  turn; end; \n}} }}\nserver {{ hold kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }}\n}}")
         .replace("hidden o;", "hidden o, o;");
     let e = check(&bad).expect_err("rejected");
     assert!(e.contains("hidden `o` twice"), "{e}");
@@ -472,7 +484,7 @@ fn an_old_context_variable_name_says_the_new_one() {
             ("size", old)
         };
         let src = format!(
-            "pool kv {{ cap 10; evict by ({key}); }}\nstage e : step {{ cost {cost}; memory kv; }}\nworkload {{ session {{ turn; end; \n}} }}\nserver {{\n}}\n"
+            "device gpu {{ kv cap 10; }}\nengine e on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute ({cost}); }}\npool kv on gpu {{ evict by ({key}); }}\nworkload {{ session {{ turn; end; \n}} }}\nserver {{\n}}\n"
         );
         let e = compile_source(&common::main_source(&src), &common::horizon(500.0)).unwrap_err();
         assert!(e.contains(&format!("`{old}` is now `{new}`")), "{e}");

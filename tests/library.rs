@@ -24,7 +24,7 @@ fn compile(d: &Path, main: &str) -> Result<serq::Program, String> {
 }
 
 const PROGRAM: &str = "pool kv { cap 100; }
-stage engine : step { cost 1; }
+device gpu { } engine llm on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
 workload { arrive batch(1); init { set k = 3; } session { turn; end; } }
 server { take(twice(k)); }
 
@@ -37,7 +37,7 @@ fn a_program_uses_the_definitions_of_a_library() {
         &[
             (
                 "lib/a.sq",
-                "use \"b.sq\";\ndef take(n) { hold kv (cost(kv, n)) { run engine prefill (cost(engine, n)) growing kv; } }\n",
+                "use \"b.sq\";\ndef take(n) { hold kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; } }\n",
             ),
             ("lib/b.sq", "def twice(x) { 2 * x }\n"),
             (
@@ -51,7 +51,7 @@ fn a_program_uses_the_definitions_of_a_library() {
     let written = compile_source(
         &common::main_source(&PROGRAM.replace(
             "server { take(twice(k)); }",
-            "server { hold kv (cost(kv, 2 * k)) { run engine prefill (cost(engine, 2 * k)) growing kv; } }",
+            "server { hold kv (cost(kv, 2 * k)) { run llm prefill (cost(llm, 2 * k)) growing kv; } }",
         )),
         &common::horizon(10.0),
     )
@@ -282,7 +282,7 @@ def twice(x) {
   x > 0 ? (x * 2) : 0
 }
 def idle() {}
-def take(n) { hold kv (cost(kv, n)) { run engine prefill (cost(engine, n)) growing kv; } }
+def take(n) { hold kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; } }
 "#;
     let used = compile_source(
         &common::main_source(
@@ -294,7 +294,7 @@ def take(n) { hold kv (cost(kv, n)) { run engine prefill (cost(engine, n)) growi
     let written = compile_source(
         &common::main_source(&PROGRAM.replace(
             "take(twice(k));",
-            "hold kv (cost(kv, k > 0 ? (k * 2) : 0)) { run engine prefill (cost(engine, k > 0 ? (k * 2) : 0)) growing kv; }",
+            "hold kv (cost(kv, k > 0 ? (k * 2) : 0)) { run llm prefill (cost(llm, k > 0 ? (k * 2) : 0)) growing kv; }",
         )),
         &common::horizon(10.0),
     )

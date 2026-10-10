@@ -15,9 +15,15 @@ fn serq() -> Command {
 /// The program of `tests/pool_semantics.rs::a_hold_that_can_never_fit_is_reported_stuck`:
 /// a hold that fits at admission and can never grow to what its body needs.
 const STUCK: &str = r#"
-        pool reqs { cap 4; admit via engine; }
-        pool kv { cap 160; block 16; evict lru; preempt lifo; }
-        stage engine : step { budget 1000; chunk 0; cost 1; memory kv; }
+        device gpu { kv cap 160; }
+        engine llm on gpu {
+          reqs cap 4;
+          tokens cap 1000;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { block 16; evict lru; preempt lifo; }
         workload { arrive batch(1);
           session { turn;
             end;
@@ -26,8 +32,8 @@ const STUCK: &str = r#"
         }
         server {
           hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100)) {
-            run engine prefill (cost(engine, 100)) growing kv;
-            run engine decode (cost(engine, 100)) growing kv;
+            run llm prefill (cost(llm, 100)) growing kv;
+            run llm decode (cost(llm, 100)) growing kv;
           }
         }
 

@@ -7,21 +7,26 @@ use serq::ir::{CExpr, CtxVar, DistKind};
 use serq::{Program, compile_source, run_ir, run_source};
 
 fn aging_source(bound: bool, key: &str) -> String {
-    let via = if bound { "admit via engine;" } else { "" };
-    let stage = if bound {
-        "stage engine : step { budget 2; cost 1; }"
+    let (stage, pool) = if bound {
+        (
+            "device gpu { }
+        engine llm on gpu {
+          reqs cap 1;
+          tokens cap 2;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }",
+            "pool reqs on llm",
+        )
     } else {
-        "stage engine : fifo;"
+        ("stage llm : fifo;", "pool reqs")
     };
-    let run = if bound {
-        "run engine decode"
-    } else {
-        "run engine"
-    };
+    let cap = if bound { "" } else { "cap 1; " };
+    let run = if bound { "run llm decode" } else { "run llm" };
     format!(
         r#"
-        pool reqs {{ cap 1; queue by ({key}); {via} }}
         {stage}
+        {pool} {{ {cap}queue by ({key}); }}
         stage delay : delay;
         workload {{ arrive batch(6);
           session {{ turn;
@@ -37,7 +42,7 @@ fn aging_source(bound: bool, key: &str) -> String {
           hold reqs (cost(reqs, 1)) {{
             observe selected = serial;
             observe admitted = now;
-            {run} (cost(engine, serial == 0 ? 4 : 1));
+            {run} (cost(llm, serial == 0 ? 4 : 1));
           }}
         }}
 
@@ -94,10 +99,14 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
     // descending serial selects 3:p3. Budget is exhausted, so 2:p1 enters
     // at 2. Evaluating once per iteration would incorrectly select 2 next.
     let src = r#"
-        pool reqs { cap 4; admit via engine;
-          queue by (budget_left(engine) >= 4 ? serial : -serial);
+        device gpu { }
+        engine llm on gpu {
+          reqs cap 4;
+          tokens cap 5;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
         }
-        stage engine : step { budget 5; cost 1; }
+        pool reqs on llm { queue by (budget_left(llm) >= 4 ? serial : -serial); }
         stage delay : delay;
         workload { arrive batch(4);
           session { turn;
@@ -110,8 +119,8 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
           hold reqs (cost(reqs, 1)) {
             observe selected = serial;
             observe admitted = now;
-            branch (serial == 0) { run engine decode (cost(engine, 1)); }
-            else { run engine prefill (cost(engine, serial == 2 ? 1 : serial == 1 ? 2 : 3)); }
+            branch (serial == 0) { run llm decode (cost(llm, 1)); }
+            else { run llm prefill (cost(llm, serial == 2 ? 1 : serial == 1 ? 2 : 3)); }
           }
         }
 
@@ -242,9 +251,18 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
     // New request 2 queues at 3.25. At 5 request 0 is restored before 2,
     // despite 2's smaller key. After its two prefill chunks, 2 enters at 7.
     let src = r#"
-        pool reqs { cap 2; admit via engine; queue by (-serial); }
-        pool kv { cap 6; preempt lifo; }
-        stage engine : step { budget 4; chunk 2; cost 1; memory kv; serve exclusive prefill; }
+        device gpu { kv cap 6; }
+        engine llm on gpu {
+          reqs cap 2;
+          tokens cap 4;
+          schedule {
+            exclusive prefill each at most (2);
+            admit waiting while (running.preempted == 0) each at most (2);
+          }
+          execute (1);
+        }
+        pool reqs on llm { queue by (-serial); }
+        pool kv on gpu { preempt lifo; }
         stage delay : delay;
         workload { arrive batch(3);
           session { turn;
@@ -255,13 +273,13 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
         server {
           run delay (cost(delay, serial == 2 ? 3.25 : 0));
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, left))) reserve (cost(kv, known))
-          at admission (known = serial == 2 ? 0 : max(2, computed), left = budget_left(engine)) {
+          at admission (known = serial == 2 ? 0 : max(2, computed), left = budget_left(llm)) {
             observe selected = serial;
             observe admitted = now;
-            branch (serial == 2) { run engine decode (cost(engine, 1)); }
+            branch (serial == 2) { run llm decode (cost(llm, 1)); }
             else {
-              run engine prefill (cost(engine, known)) growing kv;
-              run engine decode (cost(engine, 3 - (known - 2))) growing kv;
+              run llm prefill (cost(llm, known)) growing kv;
+              run llm decode (cost(llm, 3 - (known - 2))) growing kv;
             }
           }
         }
