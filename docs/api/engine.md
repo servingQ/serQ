@@ -46,7 +46,7 @@ the [IR](../ir.md) and the Lean model see only that.
 | Item | Type | Read | Description |
 |---|---|---|---|
 | `CAP cap` | `expr` | | A capacity the engine holds (`reqs cap max_seqs`, vLLM's `max_num_seqs`), declared with `pool CAP on ENGINE`. |
-| `CAP[N] cap` | `expr`, `N` a constant | | N capacities of one kind, each `cap expr`: `pool CAP on ENGINE` is the N pools `CAP[0]`…`CAP[N-1]`, each a queue the engine admits, tried in index order. An engine family (`engine E[M]`) holds none: `CAP cap` is already one per member, and N pools for M engines join neither one for one nor one for all. |
+| `CAP[N] cap` | `expr`, `N` a constant | | N capacities of one kind, each `cap expr`: `pool CAP on ENGINE` is the N pools `CAP[0]`…`CAP[N-1]`, each a queue the engine admits, tried in index order. An engine family (`engine E[M]`, M > 1) holds none: each member would admit N queues, and `CAP cap` is already one per member; a family of one is one engine. A queue's engine holds none: its entries name their own pool without an index. |
 | `tokens cap` | `expr` | as the iteration starts | Tokens per iteration (vLLM's `max_num_batched_tokens`). Reads `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill` and `waiting.count`, not `batch.…`. |
 | `granule` | `const`, positive | | Prefill chunk alignment; see below. |
 | `state NAME = c` | `const` | | A register; see below. |

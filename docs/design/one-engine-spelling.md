@@ -65,14 +65,19 @@ an engine, one per device, cannot; no program here wrote it.
 **`admit via` on a plain pool.** A pool declared with its own `cap` and
 `admit via E` was admitted by engine `E`, which `pool X on E` also says: a
 second spelling of who admits (criterion 0). It is refused, and the error
-names the spellings that replace it (#439). One thing only it could say: a
-family of plain pools behind one engine, `pool reqs[2] { cap 4; admit via
+names the spellings that replace it (#439). It could say two things
+`on` cannot. The first is a family of plain pools behind one engine, `pool reqs[2] { cap 4; admit via
 llm; }`, both members admitted by `llm` (the counts' rule, one engine for
 all), since a pool `on` an engine is a family as the engine is. An engine
 now holds a capacity family, `reqs[2] cap 4;`, and `pool reqs on llm` is
 those two pools with the IR the old program had, byte for byte; an engine
-family holds none, since N pools for M engines join neither one for one
-nor one for all, and `reqs cap c` is already one per member. Two ways were
+family holds none, since each member would admit N queues and `reqs cap c`
+is already one per member. The second is lost: a top-level pool admitted
+by a queue's engine, `pool x { cap 3; admit via Q; }`, which in a family
+`queue Q[N]` was one pool every member admitted. `pool x on Q` is refused
+outside the queue, and inside it the pool is the member's, one per member.
+No program here wrote it; if one needs it, `on` would take the queue's
+family as an owner, rather than `admit via` coming back. Two ways were
 rejected. Refusing `admit via` and dropping the case leaves a program with
 N queues (one per tenant or priority class, picked by a computed index)
 with no spelling but N capacities of different names, fixed in the text, a

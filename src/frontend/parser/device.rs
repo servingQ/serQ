@@ -484,10 +484,19 @@ impl Parser {
                     return self.err_at(
                         k_at,
                         format!(
-                            "`{r}[{n}]` on `{name}`, a family of {dev_count}: {n} pools for \
-                             {dev_count} engines are joined neither one for one (`{r} cap c;` \
-                             already gives each member its own `{r}`) nor one for all (that \
-                             is one engine); a capacity family is the queues one engine admits"
+                            "`{r}[{n}]` in engine family `{name}[{dev_count}]`: each member \
+                             would admit {n} queues; `{r} cap c;` already gives each member \
+                             its own `{r}`"
+                        ),
+                    );
+                }
+                if let (Some(n), Some((q, _))) = (family, device.split_once('.')) {
+                    return self.err_at(
+                        k_at,
+                        format!(
+                            "`{r}[{n}]` in queue `{q}`'s engine: an entry of the queue names \
+                             its own pool without an index, so no entry could pick a member; \
+                             a queue's engine admits one `{r}`, written `{r} cap c;`"
                         ),
                     );
                 }
@@ -911,7 +920,7 @@ impl Parser {
     /// program is read: a pool on an engine, or on its device as
     /// `on ENGINE.DEVICE`, is admitted by the engine; the pool on a device is
     /// its engine's memory; `waiting.count` counts the queues the engine
-    /// admits.
+    /// admits, each member of a family.
     pub(super) fn link_engines(&mut self, prog: &mut Program) -> PResult<()> {
         for po in &self.pools_on {
             let name = prog.pools[po.pool].name.clone();
@@ -990,14 +999,22 @@ impl Parser {
             }
         }
         for e in &self.engines {
+            // a family's members are queues each, so each is counted
             let queues: Vec<Ref> = prog
                 .pools
                 .iter()
                 .filter(|p| p.admit_via.as_ref().is_some_and(|r| r.name == e.name))
-                .map(|p| Ref {
-                    span: None,
-                    name: p.name.clone(),
-                    index: None,
+                .flat_map(|p| {
+                    let members: Vec<Option<usize>> = if p.array {
+                        (0..p.count).map(Some).collect()
+                    } else {
+                        vec![None]
+                    };
+                    members.into_iter().map(|i| Ref {
+                        span: None,
+                        name: p.name.clone(),
+                        index: i.map(|i| Box::new(Expr::Num(i as f64))),
+                    })
                 })
                 .collect();
             let count = queues

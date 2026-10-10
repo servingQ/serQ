@@ -1139,13 +1139,13 @@ fn a_pool_names_the_engine_that_admits_it() {
 }
 
 /// N queues one engine admits: `reqs[2] cap 4;` in the engine and
-/// `pool reqs on llm` are two pools, each admitted by `llm` — the IR
-/// `pool reqs[2] { cap 4; admit via llm; }` wrote before #439, byte for
-/// byte. A hold picks its member with a computed index.
+/// `pool reqs on llm` are two pools, each admitted by `llm`, as
+/// `pool reqs[2] { cap 4; admit via llm; }` wrote before #439. A hold picks
+/// its member with a computed index, and `waiting.count` counts both.
 const QUEUES: &str = "device gpu { kv cap 1000; }
 engine llm on gpu {
   reqs[2] cap 4;
-  tokens cap 64;
+  tokens cap 64 + waiting.count;
   schedule { advance running; admit waiting while (running.preempted == 0); }
   execute (1);
 }
@@ -1187,7 +1187,31 @@ fn a_family_engine_holds_no_family_capacity() {
         &QUEUES
             .replace("device gpu {", "device gpu[2] {")
             .replace("engine llm on gpu", "engine llm[2] on gpu"),
-        "`reqs[2]` on `llm`, a family of 2",
+        "`reqs[2]` in engine family `llm[2]`: each member would admit 2 queues",
+    );
+}
+
+/// In a queue an entry names its own pool without an index (`reqs`, not
+/// `reqs[i]`), so a capacity family in a queue's engine could be declared
+/// and never held: it is refused where it is declared.
+#[test]
+fn a_queues_engine_holds_no_family_capacity() {
+    refused(
+        "queue Q : prefill {
+  device gpu { kv cap 1000; }
+  engine on gpu {
+    reqs[2] cap 4;
+    tokens cap 64;
+    schedule { advance running; admit waiting; }
+    execute (1);
+  }
+  pool kv on gpu { }
+  pool reqs on Q { }
+  entry prefill(n) { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run Q prefill (cost(Q, n)) growing kv; } }
+}
+workload { arrive poisson(1); init { set n = 10; } session { turn; end; } }
+server { call Q.prefill(n); }",
+        "`reqs[2]` in queue `Q`'s engine",
     );
 }
 

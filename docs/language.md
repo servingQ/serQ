@@ -587,13 +587,16 @@ iteration, after the running requests have taken their tokens, while the
 iteration has budget left, and, under vLLM's schedule, not in an iteration
 that preempted (vLLM's waiting loop, `scheduler.py:868-1128`). Families
 are joined member for member: `engine S[N] on gpu` next to `device gpu[N]`
-serves `reqs[i]` by `S[i]` and counts `kv[i]` for `S[i]`
-(`examples/pd-disaggregation/llmd_nixl_pull.sq` is the xPyD case,
+serves `reqs[i]` by `S[i]` and counts `kv[i]` for `S[i]`; next to a family
+of one, every member gets that one, and any other pair of counts is a link
+error (`examples/pd-disaggregation/llmd_nixl_pull.sq` is the xPyD case,
 `docs/use-cases/pd.md` §Writing xPyD). One engine that admits several
 queues of one kind declares them as a family, `reqs[N] cap c;`, and
-`pool reqs on S` is then N pools, every member admitted by `S`. An engine
-family holds no such family: N pools for M engines join neither one for one
-nor one for all. An engine that serves several queues tries them in
+`pool reqs on S` is then N pools, every member admitted by `S`, each
+counted in `S`'s `waiting.count`. An engine family of more than one holds
+no such family, since each member would admit N queues and `reqs cap c;`
+already gives each member its own; nor does a queue's engine, whose
+entries name their own pool without an index. An engine that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
 stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.sq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
