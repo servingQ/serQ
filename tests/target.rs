@@ -66,19 +66,19 @@ fn the_vllm_programs_are_on_vllms_architecture() {
 #[test]
 fn another_policy_is_refused_with_its_construct() {
     for (path, why) in [
-        ("examples/vendors/rbln.sq", "serves exclusive prefill"),
+        ("examples/vendors/rbln.sq", "schedules `exclusive prefill`"),
         (
             "examples/single-turn/fastertransformer.sq",
-            "has its own iteration",
+            "has its own schedule",
         ),
-        ("examples/single-turn/mg1.sq", "vLLM is one step engine"),
+        ("examples/single-turn/mg1.sq", "vLLM is one engine"),
         (
             "examples/engines/tensorrt_llm.sq",
             "does not preempt as vLLM does",
         ),
         (
             "examples/pd-disaggregation/vllm_nixl_push.sq",
-            "vLLM is one step engine",
+            "vLLM is one engine",
         ),
     ] {
         let e = target(path).unwrap_err();
@@ -214,7 +214,7 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
             "",
             "advance running; admit waiting;",
             hold,
-            "has its own iteration",
+            "has its own schedule",
         ),
         // a register is set by a body, so a program with one has its own
         (
@@ -222,7 +222,7 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
             "state k = 0;",
             "advance running; admit waiting while (running.preempted == 0); set k = k + 1;",
             hold,
-            "has its own iteration",
+            "has its own schedule",
         ),
         ("reserve held;", "", vllm, hold, "holds its reservations"),
         ("", "", vllm, legs, "fork"),
@@ -230,4 +230,40 @@ fn the_newer_constructs_are_refused_and_vllms_schedule_taken() {
         let e = serq::target::vllm(&compile(reserve, state, schedule, h)).unwrap_err();
         assert!(e.contains(why), "{reserve} {schedule} {h}: {e}");
     }
+}
+
+/// An IR may carry vLLM's schedule as the body that writes it out, which the
+/// frontend lowers to no body: the target takes that body as vLLM's too.
+#[test]
+fn vllms_schedule_written_out_as_a_body_is_vllm() {
+    use serq::ir::{CExpr, CIter, CStageKind, CtxVar, UnOp};
+    let mut p = serq::load(
+        &root().join("examples/multi-turn/vllm.sq"),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+    let want = serq::target::vllm(&p).unwrap();
+    let st = p
+        .stages
+        .iter_mut()
+        .find_map(|s| match &mut s.kind {
+            CStageKind::Step(st) => Some(st),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(st.iteration, None);
+    st.iteration = Some(vec![
+        CIter::Serve {
+            only: None,
+            by: None,
+        },
+        CIter::Admit {
+            only: None,
+            gate: Some(CExpr::Unary(
+                UnOp::Not,
+                Box::new(CExpr::Ctx(CtxVar::Preempted)),
+            )),
+        },
+    ]);
+    assert_eq!(serq::target::vllm(&p).unwrap(), want);
 }

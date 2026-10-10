@@ -24,7 +24,7 @@ and preempts nobody waits for the next event without running a timed
 iteration. A [`run E prefill` or `run E decode`](statements.md#run) puts
 work on engine `E`; the work is in tokens.
 
-`engine` is a keyword: an engine is named for what it models (`vllm`,
+An engine cannot be named `engine`: it is named for what it models (`vllm`,
 `sglang`, `tgi`) or `llm`. Inside a [`queue`](../language.md#queues), `device
 gpu` is the member's and `engine on gpu` is the queue's engine, named after
 the queue. One device runs one engine.
@@ -45,7 +45,7 @@ the [IR](../ir.md) and the Lean model see only that.
 | Item | Type | Read | Description |
 |---|---|---|---|
 | `CAP cap` | `expr` | | A capacity the engine holds (`reqs cap max_seqs`, vLLM's `max_num_seqs`), declared with `pool CAP on ENGINE`. |
-| `tokens cap` | `expr` | as the iteration starts | Tokens per iteration (vLLM's `max_num_batched_tokens`). Reads `running.…` and `waiting.count`, not `batch.…`. |
+| `tokens cap` | `expr` | as the iteration starts | Tokens per iteration (vLLM's `max_num_batched_tokens`). Reads `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill` and `waiting.count`, not `batch.…`. |
 | `granule` | `const`, positive | | Prefill chunk alignment; see below. |
 | `state NAME = c` | `const` | | A register; see below. |
 | `schedule` | statements | as the iteration is planned | Whom the iteration serves, in what order, and when it admits. |

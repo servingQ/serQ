@@ -1,5 +1,6 @@
-//! A step stage's iteration as the program writes it (`iteration { … }`,
-//! #355): `serve`, `admit` and `branch`, run once each where written.
+//! An engine's schedule as a body (#355): `advance running`, `admit
+//! waiting`, `branch` and `set` lower to the step's `iteration`, each
+//! statement run once where written.
 
 mod common;
 
@@ -298,14 +299,14 @@ fn the_vllm_body_is_the_procedure_under_keys_and_preemption() {
 }
 
 /// A schedule whose `advance running` and `admit waiting` share an `only
-/// (p)` lowers to the body `serve only (p); admit only (p) while
-/// (!preempted);`, which the kernel's `serve only (p)` was. That the body
-/// runs as the stage option ran, before it was lowered, was shown in #362
+/// (p)` lowers to the body `[Serve only p, Admit only p while !preempted]`.
+/// That the body runs as the shared `only` ran before it was lowered to one
+/// (a stage option then), was shown in #362
 /// on this program and the two FasterTransformer ones; paths they do not
 /// take (a preemption beside `only`, `only` with `serve by`) were compared
 /// by reading the code, not by a run.
 #[test]
-fn a_stage_only_is_a_body() {
+fn an_engines_shared_only_lowers_to_the_serve_only_body() {
     use serq::ir::{CExpr, CIter, CStageKind, CtxVar, UnOp};
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let file = "examples/papers/bari_rad.sq";
@@ -314,7 +315,7 @@ fn a_stage_only_is_a_body() {
     let p = serq::compile_file(&common::main_source(&text), &path, &common::horizon(20.0))
         .unwrap_or_else(|e| panic!("{file}: {e}"));
     let CStageKind::Step(st) = &p.stages[0].kind else {
-        panic!("{file}: `E` is a step stage")
+        panic!("{file}: `E` is an engine")
     };
     let Some(
         [
@@ -549,7 +550,7 @@ fn a_register_is_the_stage_s_own() {
         )
         .is_ok()
     );
-    assert!(err("state k = 0; schedule { advance running; admit waiting while (running.preempted == 0); }", "").contains("nothing sets"));
+    assert!(err("state k = 0; schedule { advance running; admit waiting while (running.preempted == 0); }", "").contains("is set by nothing"));
     // an `only` is a body, but none that sets the register
     assert!(
         err(
@@ -557,7 +558,7 @@ fn a_register_is_the_stage_s_own() {
              admit waiting only (decoding) while (running.preempted == 0); }",
             ""
         )
-        .contains("nothing sets")
+        .contains("is set by nothing")
     );
     assert!(
         err(

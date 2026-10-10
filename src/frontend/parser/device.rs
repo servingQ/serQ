@@ -394,12 +394,10 @@ impl Parser {
             budget: Expr::Num(f64::INFINITY),
             cost: Expr::Num(0.0),
             chunk: Expr::Var("inf".into()),
-            per_run: true,
             granule: None,
             serve: Serve::Admission,
-            only: None,
             memory: None,
-            iteration: None,
+            schedule: Schedule::Procedure(None),
             state: vec![],
         };
         let mut caps: Vec<Capacity> = vec![];
@@ -779,7 +777,7 @@ impl Parser {
                     } =>
                 {
                     s.serve = order.clone().unwrap_or(Serve::Admission);
-                    s.only = only.clone();
+                    s.schedule = Schedule::Procedure(only.clone());
                     return Ok(());
                 }
                 SStmt::Exclusive { .. } if a_only.is_none() => {
@@ -801,7 +799,7 @@ impl Parser {
                  (running.preempted == 0);`",
             );
         }
-        s.iteration = Some(kernel(body));
+        s.schedule = Schedule::Body(kernel(body));
         Ok(())
     }
 
@@ -1009,11 +1007,9 @@ impl Parser {
             if let Serve::By(keys) = &mut s.serve {
                 keys.iter_mut().for_each(|k| k.substitute(&binds));
             }
-            if let Some(o) = &mut s.only {
-                o.substitute(&binds);
-            }
-            if let Some(body) = &mut s.iteration {
-                substitute_body(body, &binds);
+            match &mut s.schedule {
+                Schedule::Procedure(o) => o.iter_mut().for_each(|o| o.substitute(&binds)),
+                Schedule::Body(body) => substitute_body(body, &binds),
             }
         }
         Ok(())
@@ -1283,6 +1279,8 @@ fn step_reads(s: &StepSpec, n: &str) -> bool {
         || reads_name(&s.cost, n)
         || reads_name(&s.chunk, n)
         || matches!(&s.serve, Serve::By(keys) if keys.iter().any(|e| reads_name(e, n)))
-        || s.only.iter().any(|e| reads_name(e, n))
-        || s.iteration.as_deref().is_some_and(|b| body_reads(b, n))
+        || match &s.schedule {
+            Schedule::Procedure(o) => o.iter().any(|e| reads_name(e, n)),
+            Schedule::Body(b) => body_reads(b, n),
+        }
 }

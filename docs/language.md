@@ -361,8 +361,9 @@ The pools are the queue's (`P.kv` from outside, `kv` within), the stage is
 named after the queue (`pool reqs on P`, `budget_left(P)`, `work(P[i])`), and
 an *entry* — one per verb of the queue's roles — holds what the station
 does with one request, with the role's parameters (`prefill (prompt)`). A
-queue declares its pools, then its `serve`, then its entries, each reading
-what is above it. The body is the server's statements; `run (cost(P, X))` with
+queue declares its device and pools, then its stage (its engine, or a
+`serve` of `fifo`, `ps` or `delay`), then its entries, each reading what is
+above it; a pool `on` the queue's device or engine may follow the engine. The body is the server's statements; `run (cost(P, X))` with
 no stage names the queue's own, and a step engine's run names it with its mode (`run P prefill (cost(P, T))`);
 the stages that are not a step engine (a link's, a delay) the body may name
 as a `server` does. `self` is the member's index in a family. A family's
@@ -596,7 +597,7 @@ stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.sq`
 decoder's queue of requests whose KV has arrived before its queue of new
 ones, as vLLM serves `skipped_waiting` before `waiting`
 (`scheduler.py:2383-2385`). `budget_left(S)` then evaluates to the budget
-left. Under `serve exclusive prefill`, a selected prefill ends admission;
+left. Under an `exclusive prefill` schedule, a selected prefill ends admission;
 otherwise a fitting waiting prefill can displace tentative decodes, and
 its header sees the full budget. Until then a waiting session's cached
 prefix is evictable: the *wait channel*.
@@ -658,8 +659,8 @@ the keys (`queue by`), compared in order and reevaluated before every
 selection, then the order the sessions joined the queue (`fifo`
 is that order alone); a preempted session re-enters at the head, ahead of
 the key, unless its pool says `requeue tail`. Eviction: the keys (`evict by`) or the release time (`lru`), then
-the order the entries were released. A step stage's residents: the
-`serve by` keys, then admission order. The preemption victim: the
+the order the entries were released. An engine's running requests: the
+`advance running by` keys, then admission order. The preemption victim: the
 `preempt by` keys, then the candidate admitted last (for a pool that is
 no engine's memory, the holder the pool admitted last). `choose`: the keys, in order, then the smallest
 index. A pool's growers: the order they stalled, the head blocking the
@@ -832,30 +833,34 @@ pool kv on gpu { block bs; evict lru; preempt lifo; }
 pool reqs on vllm { queue fifo; }
 ```
 
-| Engine form | Kernel |
+| Engine form | IR step stage (`CStep`) |
 |---|---|
-| `device D { f (x) = e; X cap c; }` | `f` is a definition read only inside the engine's `execute`; `X` is a capacity that some `pool X on D` must declare |
-| `pool X on D { rules }` | `pool X { cap c; rules }`, the engine's `memory` when `D` is its device; a hold waiting for it is admitted as soon as it fits |
-| `pool X on E.D { rules }` | the same, `admit via E;`: engine `E`, running on `D`, admits a hold waiting for it in an iteration |
-| `pool X on E { rules }` | `pool X { cap c; rules; admit via E; }` for a capacity `X cap c` of engine `E` |
-| `tokens cap B;` | `budget B;` |
-| `execute (T);` | `cost T;` |
-| `advance running …;` / `admit waiting …;` | `serve …;` / `admit …;` |
-| `each at most (e)` | `chunk e;`: one cap per run for the whole iteration; `inf` is no cap, which the linker writes 0 as the kernel reads it |
-| `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill`, `running.preempted`, `waiting.admitted` | `residents`, `decoders`, `kv_decode`, `kv_prefill`, `preempted`, `admitted` |
-| `batch.tokens`, `batch.prefilled`, `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | `tokens`, `prefilled`, `decoders`, `kv_decode`, `kv_prefill`, `attention` |
-| `waiting.count` | `queued(p)` summed over the pools the engine admits |
+| `device D { f (x) = e; X cap c; }` | no field: `f` is written out where `execute` reads it; `X cap c` is the `cap` of the `pool X on D` that must declare it |
+| `pool X on D { rules }` | a pool, `cap c` and the rules, no `admit_via`: a hold waiting for it is admitted as soon as it fits; `memory` when `D` is the engine's device |
+| `pool X on E.D { rules }` | the same, `admit_via` `E`: engine `E`, running on `D`, admits a hold waiting for it in an iteration |
+| `pool X on E { rules }` | a pool, `cap c` of `X cap c` in engine `E` and the rules, `admit_via` `E` |
+| `tokens cap B;` | `budget` `B` |
+| `execute (T);` | `cost` `T`, the device's time resources written out |
+| `each at most (e)` | `chunk` `e`: one cap per run for the whole iteration; `inf` is no cap, which the linker writes 0 as the kernel reads it |
+| `state NAME = c;` | a `Register` of the stage, `init` `c` |
+| `advance running [order]; admit waiting while (running.preempted == 0);` | `serve` `By([keys])` of the order (`By([])` for none, admission order), no `iteration` |
+| the same with `only (p)` on both statements | `serve` as above, `iteration` `[Serve {only: p}, Admit {only: p, gate: !preempted}]` |
+| `exclusive prefill; admit waiting while (running.preempted == 0);` | `serve` `ExclusivePrefill`, no `iteration` |
+| any other `schedule { … }` | `serve` `By([])`, `iteration` the body: `advance running` a `Serve`, `admit waiting` an `Admit`, `branch` a `Branch`, `set` a `Set` |
+| `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill`, `running.preempted`, `waiting.admitted` | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Preempted`, `Admitted` |
+| `batch.tokens`, `batch.prefilled`, `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | `Ntok`, `Npre`, `Ndec`, `Kvb`, `Kvp`, `Attn` |
+| `waiting.count` | `Queued` of each pool the engine admits, summed |
 
 The schedule `advance running [only (p)] [order]; admit waiting [only (p)]
-while (running.preempted == 0);` is vLLM's procedure and lowers to no
-iteration body: `serve [only (p)] [order];`, when both `p` are the same
-expression once each `def` is written out. A predicate both statements
+while (running.preempted == 0);` is vLLM's procedure: it lowers to no
+iteration body, or with `only (p)` to the two-statement body above, when
+both `p` are the same expression once each `def` is written out. A predicate both statements
 read is named with a `def` (`def in_phase() { running.decoding > 0 ? decoding : !decoding }`, then
 `only (in_phase())` twice), which is read where it stands, for each
 request; a schedule's `let` is read once as the iteration starts and only
 in `each at most`, so it cannot name one. `exclusive prefill; admit
-waiting while (running.preempted == 0);` is `serve exclusive prefill;`.
-Any other schedule is the stage's iteration body; `exclusive prefill`
+waiting while (running.preempted == 0);` is the `ExclusivePrefill` order.
+Any other schedule is the step's iteration body; `exclusive prefill`
 appears only in the form above, since it takes back decodes a body cannot.
 `each at most` chooses among constants (its condition may read the
 iteration), and one at or below 0 does not link: the kernel would read 0
@@ -1064,7 +1069,7 @@ own. `demand` is the tokens the stage's residents could take in this
 iteration if the budget were unlimited: one for a decode with work left,
 the remaining prompt (up to the `chunk`) for a prefill, summed over the
 residents after the batch is scheduled, the ones it admitted and the ones
-`serve only` leaves out included. `served` is the tokens the stage
+an `only` leaves out included. `served` is the tokens the stage
 scheduled in its earlier iterations, from the start of the run. `arrived`
 is the sessions the workload has started by the iteration's start, one
 arriving at that instant included, so `arrived * W - served` is the work
@@ -1114,7 +1119,7 @@ that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 | Program | Deployment | Checked by |
 |---|---|---|
 | `single-turn/mg1.sq`, `single-turn/ps.sq`, `multi-turn/closed.sq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | a run against the closed form, by hand, in [getting started](getting-started.md) and the [tutorial](tutorial/01-a-queue.md); no test |
-| `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`serve decode first`, `drop kv` before `end`) | — |
+| `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`advance running decode first`, `drop kv` before `end`) | — |
 | `multi-turn/routing.sq` | four replicas, five routing policies | — |
 | `multi-turn/vllm.sq` | vLLM v1's engine (`lib/vllm.sq`) under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
 | `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |
@@ -1227,9 +1232,9 @@ the A100 cost fit, calibration, comparison runs and their limitations.
 
 ## Known limitations {#9-known-limitations}
 
-* Continuous work and fluid rates at `fifo`/`ps`/`delay` stages; the
-  `step` stage is discrete. A fluid server is the step stage with the
-  budget filled to the memory time; at ω = 0.2 ms that is 5 000 iterations
+* Continuous work and fluid rates at `fifo`/`ps`/`delay` stages; an
+  engine is discrete. A fluid server is an engine whose `tokens cap` is
+  filled to the memory time; at ω = 0.2 ms that is 5 000 iterations
   per simulated second, so long horizons can be slow.
 * Cache entries are per session; cross-session prefix sharing (a common
   system prompt) needs a content-addressed cache.

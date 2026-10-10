@@ -159,7 +159,7 @@ serq target examples/multi-turn/vllm.sq
 ```
 
 ```json
-{"target": "vllm", "engine": "engine",
+{"target": "vllm", "engine": "vllm",
  "config": {"max_num_batched_tokens": 8192, "max_num_seqs": 16, "block_size": 16,
             "num_gpu_blocks": 10001, "long_prefill_token_threshold": 0,
             "enable_prefix_caching": true}}
@@ -170,21 +170,20 @@ cache clause on the KV pool is the prefix cache. The stages' `cost` is not
 read, because vLLM runs the model. A program with another policy is
 refused, and the error names the construct:
 
-- an `iteration` body other than vLLM's, `iteration { serve; admit while
-  (!preempted); }` (a stage without one is vLLM's), and so `serve only` and
-  a register;
-- `serve exclusive prefill`, or `serve by` keys that read anything but
+- a schedule other than vLLM's, `advance running [order]; admit waiting
+  while (running.preempted == 0);`, and so an `only` and a register;
+- `exclusive prefill`, or `advance running by` keys that read anything but
   `decoding`, `admission`, numbers and arithmetic on them;
 - a selection key, an eviction key or a spill on a pool, a `preempt` other
   than `lifo` (the latest admitted, re-queued at the head), or `reserve
   held`;
-- a `fifo` or `ps` stage, or a request's legs (`fork`);
+- an engine count other than one, a `fifo` or `ps` stage, or a request's
+  legs (`fork`);
 - a pool count other than two;
 - a constant chunk cap: vLLM lifts the cap for a request alone
   (`scheduler.py:606-616`), so an engine writes `each at most (threshold)`
   with `let threshold = long_prefill(c);` from `lib/vllm.sq`, or no `each
-  at most` for no cap; a step stage writes `residents + queued(reqs) > 1 ?
-  c : 0`, or `chunk 0`.
+  at most` for no cap.
 
 `serve by` keys that vLLM's scheduler can observe are the programmable
 part. The configuration then also names `scheduler_cls:

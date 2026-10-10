@@ -48,7 +48,7 @@ Context-variable names are reserved and cannot be assigned by `set`,
 | `admission` | number | `Serve`, `Victim` | the resident's admission sequence number (its place in vLLM's `running` list); at `Victim`, the candidate's place in the candidates' admission order |
 | `remaining` | number | `Serve` | tokens the resident's run has left |
 | `position` | number | `Victim` | the position the candidate's hold has computed on the pool: what `computed` becomes if it is the victim |
-| `demand` | number | `Iteration` | tokens the residents could take this iteration with no budget: `min(1, remaining)` per decode, the remaining work up to the `chunk` per prefill, over the residents after the batch is scheduled (those `serve only` leaves out included) |
+| `demand` | number | `Iteration` | tokens the residents could take this iteration with no budget: `min(1, remaining)` per decode, the remaining work up to the `chunk` per prefill, over the residents after the batch is scheduled (those an `only` leaves out included) |
 | `served` | number | `Iteration` | tokens the stage scheduled in its earlier iterations, from the start of the run |
 | `arrived` | number | `Iteration` | sessions the workload has started by the iteration's start, one arriving at that instant included |
 

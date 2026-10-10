@@ -285,27 +285,35 @@ pub struct StepSpec {
     pub budget: Expr,
     /// Seconds per iteration, in `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`.
     pub cost: Expr,
-    /// Cap on one request's prefill chunk (`long_prefill_token_threshold`,
-    /// 0 = none). The linker writes an `inf` outcome 0, the kernel's none.
+    /// An engine's `each at most`: the cap on one request's prefill chunk
+    /// (`long_prefill_token_threshold`). An outcome at or below 0 does not
+    /// link, and `inf` is no cap, which the linker writes 0.
     pub chunk: Expr,
-    /// The cap is an engine's `each at most`: an outcome at or below 0 does
-    /// not link, and `inf` is no cap, which the linker writes 0.
-    pub per_run: bool,
     /// `granule g`: a prefill gets all it has left or a multiple of `g`.
     pub granule: Option<Expr>,
-    /// The order the iteration serves its residents in (`serve …;`).
+    /// The order the iteration serves its residents in: `advance running`'s
+    /// order, or `exclusive prefill`.
     pub serve: Serve,
-    /// `serve only (expr)`: the residents the iteration serves.
-    pub only: Option<Expr>,
     /// Pool whose holdings of the scheduled residents give `kv_decode`.
     pub memory: Option<Ref>,
-    /// `iteration { … }`: the iteration as the program writes it.
-    pub iteration: Option<Vec<IterStmt>>,
+    /// The engine's `schedule`, as the kernel runs it.
+    pub schedule: Schedule,
     /// `state NAME = c;`: the stage's registers and their first values.
     pub state: Vec<(String, Expr)>,
 }
 
-/// A statement of a step stage's `iteration` body.
+/// An engine's `schedule` as the kernel runs it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Schedule {
+    /// vLLM's procedure, no body: advance running in `serve`'s order, then
+    /// admit waiting while nothing was preempted; `Some(p)` is the `only (p)`
+    /// both statements share.
+    Procedure(Option<Expr>),
+    /// Any other schedule, as its statements.
+    Body(Vec<IterStmt>),
+}
+
+/// A statement of an engine's `schedule` body, as the kernel runs it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum IterStmt {
     /// `serve [only (p)] [admission | decode first | by (k, …)];`
@@ -649,7 +657,9 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                 expr(&mut s.cost);
                 expr(&mut s.chunk);
                 s.memory.iter_mut().for_each(reference);
-                s.only.iter_mut().for_each(expr);
+                if let Schedule::Procedure(Some(p)) = &mut s.schedule {
+                    expr(p);
+                }
                 if let Serve::By(keys) = &mut s.serve {
                     keys.iter_mut().for_each(expr);
                 }

@@ -9,7 +9,8 @@ mod common;
 use std::path::Path;
 
 use serq::ir::{
-    BinOp, CArg, CExpr, CIter, CRef, CServe, CStageKind, CStep, CtxVar, Fun, Program, UnOp,
+    BinOp, CArg, CExpr, CIter, CRef, CServe, CStageKind, CStep, CtxVar, Fun, Program, Register,
+    UnOp,
 };
 use serq::{Overrides, compile_source_at};
 
@@ -162,10 +163,37 @@ fn serve_only(p: CExpr) -> Vec<CIter> {
     ]
 }
 
+/// `max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens))`
+/// with `hbm (k) = omega + beta * k` and `compute (t) = t * a`, the
+/// examples' constants: the `execute` of the three engines below.
+fn roofline() -> CExpr {
+    CExpr::Call(
+        Fun::Max,
+        vec![
+            CArg::Expr(bin(
+                BinOp::Add,
+                num(2e-4),
+                bin(
+                    BinOp::Mul,
+                    num(2e-9),
+                    bin(BinOp::Add, ctx(CtxVar::Kvb), ctx(CtxVar::Kvp)),
+                ),
+            )),
+            CArg::Expr(bin(BinOp::Mul, ctx(CtxVar::Ntok), num(2e-5))),
+        ],
+    )
+}
+
+fn reg(r: usize) -> CExpr {
+    CExpr::Reg(r)
+}
+
 /// `examples/multi-turn/vllm.sq` is vLLM's procedure on the kernel's step:
 /// no body, residents in admission order, its memory `kv` admitted as soon
-/// as it fits (`on gpu`) and `reqs` by the engine. The per-run cap is the
-/// kernel's `chunk`: `inf`, no cap, is its 0, and a cap of 512 is 512.
+/// as it fits (`on gpu`) and `reqs` by the engine. `tokens cap B` is the
+/// budget, `execute (c0 + …)` the cost, and the per-run cap the kernel's
+/// `chunk`, applied only while more than one request is in the engine
+/// (`long_prefill`): `inf`, no cap, is its 0, and a cap of 512 is 512.
 #[test]
 fn vllm_as_an_engine_is_the_procedure() {
     let text = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
@@ -186,12 +214,22 @@ fn vllm_as_an_engine_is_the_procedure() {
         assert_eq!(st.memory, Some(pool(&p, "kv", None)));
         assert_eq!(p.pools[pool(&p, "kv", None)].admit_via, None);
         let vllm = stage(&p, "vllm", None);
-        assert_eq!(p.pools[pool(&p, "reqs", None)].admit_via, Some(vllm));
-        // `residents + waiting > 1 ? cap : 0`: the cap applies only while
-        // more than one request is in the engine
-        let CExpr::Cond(_, cap, none) = &st.chunk else {
+        let reqs = pool(&p, "reqs", None);
+        assert_eq!(p.pools[reqs].admit_via, Some(vllm));
+        assert_eq!(st.budget, num(8192.0));
+        assert_eq!(st.cost, bin(BinOp::Add, num(0.0), roofline()));
+        // `running.count + waiting.count > 1 ? cap : inf`
+        let CExpr::Cond(more, cap, none) = &st.chunk else {
             panic!("{:?}", st.chunk)
         };
+        assert_eq!(
+            **more,
+            bin(
+                BinOp::Gt,
+                bin(BinOp::Add, ctx(CtxVar::Nres), queued(reqs)),
+                num(1.0)
+            )
+        );
         assert_eq!(**none, num(0.0));
         (**cap).clone()
     };
@@ -213,10 +251,36 @@ fn sglang_and_tgi_as_engines_are_bodies() {
         &ov,
     );
     let st = step(&tgi, "tgi");
-    assert!(st.iteration.is_some());
+    let e = stage(&tgi, "tgi", None);
+    // `state just = 0;`
+    let just = Register {
+        name: "just".into(),
+        stage: e,
+        init: 0.0,
+    };
+    assert_eq!(tgi.registers, vec![just]);
+    assert_eq!((&st.budget, &st.cost), (&num(4096.0), &roofline()));
+    // `advance running; branch (just == 0 || running.count == 0) { admit
+    // waiting; } set just = waiting.admitted > 0;`
+    assert_eq!(
+        st.iteration,
+        Some(vec![
+            serve(),
+            CIter::Branch(
+                bin(
+                    BinOp::Or,
+                    bin(BinOp::Eq, reg(0), num(0.0)),
+                    bin(BinOp::Eq, ctx(CtxVar::Nres), num(0.0)),
+                ),
+                vec![admit()],
+                vec![],
+            ),
+            CIter::Set(0, bin(BinOp::Gt, ctx(CtxVar::Admitted), num(0.0))),
+        ])
+    );
     let kv = pool(&tgi, "kv", None);
     assert_eq!(st.memory, Some(kv));
-    assert_eq!(tgi.pools[kv].admit_via, Some(stage(&tgi, "tgi", None)));
+    assert_eq!(tgi.pools[kv].admit_via, Some(e));
 
     let sglang = compiled(
         &std::fs::read_to_string(base.join("sglang.sq")).unwrap(),
@@ -224,19 +288,77 @@ fn sglang_and_tgi_as_engines_are_bodies() {
         &ov,
     );
     let st = step(&sglang, "sglang");
-    assert!(st.iteration.is_some());
+    let e = stage(&sglang, "sglang", None);
     let (kv, reqs) = (pool(&sglang, "kv", None), pool(&sglang, "reqs", None));
+    // the program's `r0`, `r_min`, `r_decay`, folded as it folds them
+    let r0 = 0.7;
+    let r_min = r0 * 0.14;
+    let r_decay = (r0 - r_min) / 600.0;
+    // `state ratio = r0; state backlog = 0;`
+    let state = |name: &str, init| Register {
+        name: name.into(),
+        stage: e,
+        init,
+    };
+    assert_eq!(
+        sglang.registers,
+        vec![state("ratio", r0), state("backlog", 0.0)]
+    );
+    let (ratio, backlog) = (0, 1);
+    let max = |a, b| CExpr::Call(Fun::Max, vec![CArg::Expr(a), CArg::Expr(b)]);
+    let min = |a, b| CExpr::Call(Fun::Min, vec![CArg::Expr(a), CArg::Expr(b)]);
+    assert_eq!((&st.budget, &st.cost), (&num(8192.0), &roofline()));
+    assert_eq!(
+        st.iteration,
+        Some(vec![
+            // branch (running.count == 0 && backlog == 0) { set ratio = r0; }
+            CIter::Branch(
+                bin(
+                    BinOp::And,
+                    bin(BinOp::Eq, ctx(CtxVar::Nres), num(0.0)),
+                    bin(BinOp::Eq, reg(backlog), num(0.0)),
+                ),
+                vec![CIter::Set(ratio, num(r0))],
+                vec![],
+            ),
+            // advance running only (!decoding);
+            CIter::Serve {
+                only: Some(not(ctx(CtxVar::Decoding))),
+                by: None,
+            },
+            // admit waiting;
+            admit(),
+            // branch (batch.tokens == 0) { advance running; branch … }
+            CIter::Branch(
+                bin(BinOp::Eq, ctx(CtxVar::Ntok), num(0.0)),
+                vec![
+                    serve(),
+                    CIter::Branch(
+                        bin(BinOp::Gt, ctx(CtxVar::Preempted), num(0.0)),
+                        // set ratio = max(r_min, min(1, retract_steps / M));
+                        vec![CIter::Set(
+                            ratio,
+                            max(
+                                num(r_min),
+                                min(num(1.0), bin(BinOp::Div, num(20.0), num(2048.0))),
+                            ),
+                        )],
+                        // set ratio = max(r_min, ratio - r_decay);
+                        vec![CIter::Set(
+                            ratio,
+                            max(num(r_min), bin(BinOp::Sub, reg(ratio), num(r_decay))),
+                        )],
+                    ),
+                ],
+                vec![],
+            ),
+            // set backlog = waiting.count > 0;
+            CIter::Set(backlog, bin(BinOp::Gt, queued(reqs), num(0.0))),
+        ])
+    );
     assert_eq!(st.memory, Some(kv));
     assert_eq!(sglang.pools[kv].admit_via, None);
-    assert_eq!(
-        sglang.pools[reqs].admit_via,
-        Some(stage(&sglang, "sglang", None))
-    );
-    // `set backlog = waiting.count > 0;`
-    let Some(CIter::Set(_, backlog)) = st.iteration.as_ref().and_then(|b| b.last()) else {
-        panic!("{:?}", st.iteration)
-    };
-    assert_eq!(*backlog, bin(BinOp::Gt, queued(reqs), num(0.0)));
+    assert_eq!(sglang.pools[reqs].admit_via, Some(e));
 }
 
 /// A small engine, for the forms below: its `reqs` admitted by it, its
@@ -627,6 +749,19 @@ fn a_def_names_the_predicate_advance_and_admit_share() {
 #[test]
 fn the_design_refuses_what_it_says() {
     let ok = "advance running; admit waiting while (running.preempted == 0);";
+    // vLLM's procedure, with or without a shared `only`, sets no register,
+    // so one it declares would keep its first value: one is set with `set`
+    for schedule in [
+        ok,
+        "advance running only (decoding); \
+         admit waiting only (decoding) while (running.preempted == 0);",
+    ] {
+        refused(
+            &engine(schedule).replace("tokens cap 8;", "tokens cap 8; state k = 0;"),
+            "engine `vllm`: register `k` is set by nothing: a schedule that sets it is \
+             written with `set k = …;`",
+        );
+    }
     // a device's time resource is read in an engine's `execute` only
     refused(
         &engine(ok).replace("tokens cap 8;", "tokens cap step_time(1);"),
@@ -960,7 +1095,10 @@ fn a_queue_holds_its_engine() {
         &common::horizon(100.0),
     );
     for (q, kv_admitted) in [("P", false), ("D", true)] {
-        for i in [0, 1] {
+        // `queue P[NP]`, `queue D[ND]`: one engine per member
+        let n = p.stages.iter().filter(|s| s.name == q).count() as u32;
+        assert!(n > 1, "{q} has {n} members");
+        for i in 0..n {
             let e = stage(&p, q, Some(i));
             let (reqs, kv) = (
                 pool(&p, &format!("{q}.reqs"), Some(i)),

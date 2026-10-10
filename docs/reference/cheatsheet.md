@@ -35,7 +35,7 @@ pool kv {
   evict lru;                  // or: evict by (k1, k2, …)  ascending
   preempt lifo;               // or: preempt none | preempt by (k1, …) [requeue tail]   whom a failed grow preempts
   queue fifo;                 // or: queue by (k1, …)     keys reevaluated at selection
-  admit via engine;           // the queue is served by a step stage's scheduler
+  admit via vllm;             // a waiting hold is admitted by engine vllm's schedule
   reserve held;               // a hold's unallocated reserve counts against later admissions
   spill tier via link (w) when (c);
 }

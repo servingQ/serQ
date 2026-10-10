@@ -225,7 +225,7 @@ work(s: stage) -> number
 
 **Returns:** Unfinished work at `s`, in the stage's work unit.
 
-Not permitted in a `serve only` predicate or iteration guard.
+Not permitted in an engine's `only` predicate or a schedule's `branch` guard.
 
 #### `est_lambda` {#est_lambda}
 
