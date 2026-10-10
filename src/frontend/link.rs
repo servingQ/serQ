@@ -645,15 +645,8 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                             },
                         ])
                     }
-                    (Some(_), Some(_)) => {
-                        return Err(LinkError::new(format!(
-                            "stage `{}`: `serve only` and an `iteration` body: the stage's \
-                             `serve only (p)` is a body, `serve only (p); admit only (p) while \
-                             (!preempted);`, so the two would be two bodies; write `only` in \
-                             the body",
-                            s.name
-                        )));
-                    }
+                    // an engine's schedule lowers to `only` or to a body, never both
+                    (Some(_), Some(_)) => unreachable!("an engine writes `only` or a body"),
                 },
             }),
         };
