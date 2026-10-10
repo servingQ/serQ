@@ -390,8 +390,8 @@ fn a_budget_does_not_read_budget_left() {
             "{budget}: {e}"
         );
     }
-    // nor a chunk: an engine's `each at most` chooses among constants, and
-    // the condition that chooses may read the iteration
+    // nor a chunk: an engine's `each at most` chooses among constants or a
+    // `max` above one, and the condition that chooses may read the iteration
     let src = "device gpu { }
         engine e on gpu {
           tokens cap 128;

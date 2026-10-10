@@ -117,6 +117,54 @@ fn a_granule_that_could_never_be_given_does_not_link() {
     );
 }
 
+/// A `max(k, e)` cap can always fall to its floor `k`: twenty prefills at
+/// once give `max(256, 4096 / 20)` = 256, under which a granule of 512
+/// gives the first prefill nothing and the run idles; the floor is checked
+/// as a constant cap is (#448). At the floor the same program runs.
+#[test]
+fn a_granule_above_a_computed_caps_floor_does_not_link() {
+    let src = |granule: usize| {
+        format!(
+            r#"
+        device gpu {{ }}
+        engine llm on gpu {{
+          reqs cap 32;
+          tokens cap 4096;
+          granule {granule};
+          schedule {{
+            let n = running.count + waiting.count;
+            advance running each at most (max(256, floor(4096 / n)));
+            admit waiting while (running.preempted == 0) each at most (max(256, floor(4096 / n)));
+          }}
+          execute (1);
+        }}
+        pool reqs on llm {{ }}
+        workload {{ arrive batch(20);
+          session {{ turn;
+            end;
+          }}
+        }}
+        server {{
+          set t0 = now;
+          hold reqs (cost(reqs, 1)) {{
+            run llm prefill (cost(llm, 1024));
+            observe ttft = now - t0;
+          }}
+        }}
+"#
+        )
+    };
+    let e = compile_source(&common::main_source(&src(512)), &common::horizon(100.0)).unwrap_err();
+    assert!(e.contains("granule 512 with chunk max(256, …)"), "{e}");
+    let r = run_source(
+        &common::main_source(&src(256)),
+        &common::horizon(100.0),
+        None,
+    )
+    .unwrap();
+    assert_eq!(r.observe("ttft").unwrap().samples.len(), 20, "{}", r.text());
+}
+
 /// The chunk caps first and the granule rounds what it leaves: a prefill of
 /// 10 under `each at most (6)` and `granule 4` gets 4 (6 rounded down), then the 6 left,
 /// whole. Its first token is at the second iteration's end.

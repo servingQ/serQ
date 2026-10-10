@@ -150,7 +150,21 @@ schedule {
 run for the whole iteration, so every statement that has one says the
 same. `inf` is no cap. `c` chooses among constants (its condition may
 read the running requests as the iteration starts, through a `let`), and
-one at or below 0 does not link.
+one at or below 0 does not link. A cap that follows the iteration is
+written `max(k, e)` with `k` a constant above 0: `e` reads what the
+condition reads, and `k` keeps every run above 0. vLLM's adaptive
+threshold (`scheduler.py:609-622`), with `threshold` and `budget` the
+program's constants, is
+
+```serq
+let n = running.count + waiting.count;
+let c = n > 1 ? max(threshold, floor(budget / n)) : inf;
+```
+
+It is vLLM's only when `budget` is the engine's `tokens cap`, vLLM's
+`max_num_batched_tokens` (`scheduler.py:580`). `max(0, e)`, `min(k, e)`
+or a bare `e` does not link; a cap that shrinks writes its floor,
+`max(1, min(k, e))`.
 
 ### `exclusive prefill`
 
@@ -179,7 +193,8 @@ After `each at most` caps the work, it is rounded down to that multiple;
 a result of 0 waits. `granule inf` schedules a whole prefill or none. A
 waiting prefill stays running: later requests may still be served, but
 the iteration admits no further requests. The constant must be positive,
-cannot exceed a constant `each at most`, and cannot be combined with
+cannot exceed a constant `each at most` or the floor `k` of a
+`max(k, e)` one, and cannot be combined with
 `exclusive prefill`.
 
 ### Registers

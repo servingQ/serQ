@@ -53,11 +53,12 @@ check; they were written as engines with the IR they had (#423, #438), and
 the tests of the kernel spelling's own messages went with it.
 
 **What the kernel spelling said that an engine cannot.** A `chunk` was
-any expression; an engine's `each at most` chooses among constants, so a
-cap that follows the number of requests, vLLM's adaptive threshold
+any expression; an engine's `each at most` chooses among constants or
+`max(k, e)` above a positive constant `k` (#442), which spells a cap that
+follows the number of requests, vLLM's adaptive threshold
 `max(long_prefill_token_threshold, input_budget // num_eligible_reqs)`
-(`scheduler.py:617-622`, off by default), has no spelling now; `max(k, e)`
-above a positive constant is the opening (#442). And `stage E[2] : step {
+(`scheduler.py:609-622`, off by default); any other computed cap is
+refused, so no run is given 0 or below. And `stage E[2] : step {
 memory kv; }` beside one `pool kv` let two engines share one memory, which
 an engine, one per device, cannot; no program here wrote it.
 
