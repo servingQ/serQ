@@ -83,7 +83,7 @@ identifies the resource and `index` its array member (`null` for a single resour
 | Fields | Meaning |
 |---|---|
 | `mean_number`, `utilization` | time-average jobs present and fraction of time occupied; on a shared stage, utilization is the time-average capacity carried by its flows |
-| `completed`, `throughput`, `mean_wait`, `mean_service` | runs completed after warm-up, runs per clock unit, mean wait from a run's arrival at the stage to its start, and mean time from its start to its end. They count runs, not requests: on an engine a request's `prefill` and `decode` are two runs, a run's service is its stay among the running requests, and its wait is 0, the wait for admission being the pool's `mean_wait` |
+| `completed`, `throughput`, `mean_wait`, `mean_service` | runs completed after warm-up, runs per clock unit, mean wait from a run's arrival at the stage to its start, and mean time from its start to its end. They count runs, not requests: on an engine a request that runs `prefill` then `decode` is two runs (a run of no work is not one), a run's service is its stay among the running requests, and its wait is 0, the wait for admission being the pool's `mean_wait` |
 | `iterations` | step iterations over the whole run, including warm-up |
 | `prefill_only`, `decode_only`, `mixed` | fractions of measured time running each kind of step iteration; the remainder is idle |
 | `mean_decodes` | time-average decodes in the running iteration, 0 while none runs |
