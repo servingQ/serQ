@@ -4,6 +4,7 @@
 device NAME [ '[' N ']' ] { RESOURCE (PARAM, …) = expr; CAP cap expr; … }
 engine NAME [ '[' N ']' ] on DEVICE {
   CAP cap expr;              // a capacity the engine holds, as a pool `on NAME`
+  CAP[N] cap expr;           // N of them: N queues the one engine admits
   tokens cap expr;           // required: the tokens one iteration computes (inf: no cap)
   granule c;                 // a prefill gets all it has left or a multiple of c
   state NAME = c;            // a register the schedule sets
@@ -45,6 +46,7 @@ the [IR](../ir.md) and the Lean model see only that.
 | Item | Type | Read | Description |
 |---|---|---|---|
 | `CAP cap` | `expr` | | A capacity the engine holds (`reqs cap max_seqs`, vLLM's `max_num_seqs`), declared with `pool CAP on ENGINE`. |
+| `CAP[N] cap` | `expr`, `N` a constant | | N capacities of one kind, each `cap expr`: `pool CAP on ENGINE` is the N pools `CAP[0]`…`CAP[N-1]`, each a queue the engine admits, tried in index order. An engine family (`engine E[M]`, M > 1) holds none: each member would admit N queues, and `CAP cap` is already one per member; a family of one is one engine. A queue's engine holds none: its entries name their own pool without an index. |
 | `tokens cap` | `expr` | as the iteration starts | Tokens per iteration (vLLM's `max_num_batched_tokens`). Reads `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill` and `waiting.count`, not `batch.…`. |
 | `granule` | `const`, positive | | Prefill chunk alignment; see below. |
 | `state NAME = c` | `const` | | A register; see below. |
@@ -67,6 +69,14 @@ for it is said where the pool is:
 | `pool reqs on llm` | by engine `llm`, in an iteration's `admit waiting` |
 | `pool kv on llm.gpu` | by engine `llm`, which runs on `gpu` |
 | `pool kv on gpu` | as soon as it fits |
+
+A pool on an engine is a family as the engine is, or as its `CAP[N]` is:
+`reqs[2] cap 4;` in `engine llm` and `pool reqs on llm { }` give `reqs[0]`
+and `reqs[1]`, both admitted by `llm`, and a hold picks one with a computed
+index (`hold reqs[t] (…)`).
+
+The pool option `admit via ENGINE;` is refused: who admits a pool is said
+where the pool is, in its `on`.
 
 The pool on the engine's device is the engine's memory either way: its
 holds give `running.kv_…` and `batch.kv_…`, and a growth that does not fit

@@ -49,9 +49,9 @@ fn names_and_bare_references_keep_their_locations() {
             "unknown name `typo`",
         ),
         (
-            "pool kv { admit via lm; }\ndevice gpu { }\nengine llm on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }\n",
-            "1:33:",
-            "unknown stage `lm`",
+            "device gpu { }\nengine llm on gpu { kv cap 1; tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }\npool kv on lm { }\n",
+            "3:12:",
+            "no device or engine `lm`",
         ),
         (
             "// 한글 주석\nlet 용량 = 10;\nworkload { session { turn; \n} }\nserver { set x = 용랑;\n}\n",
@@ -107,9 +107,9 @@ fn queue_expansion_keeps_argument_and_stage_declaration_locations() {
     assert!(err.contains("6 |   engine.prefill (missing);"), "{err}");
 
     // the queue's engine is its stage, declared where the queue is named
-    let src = "queue llm : prefill {\n  pool kv { cap 10; admit via lm; }\n  device gpu { }\n  engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }\n  prefill (prompt) { hold kv (cost(kv, prompt)) { run llm prefill (cost(llm, prompt)) growing kv; } }\n}\n";
+    let src = "queue llm : prefill {\n  device gpu { kv cap 10; }\n  engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }\n  pool kv on gpu { }\n  prefill (prompt) { hold kv (cost(kv, prompt)) { run lm prefill (cost(llm, prompt)) growing kv; } }\n}\nworkload { arrive batch(1); session { turn; end; } } server { llm.prefill (1); }\n";
     let err = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap_err();
-    assert!(err.contains("2:31:"), "{err}");
+    assert!(err.contains("5:55:"), "{err}");
     assert!(err.contains("unknown stage `lm`"), "{err}");
     assert!(err.contains("did you mean stage `llm`?"), "{err}");
     assert!(err.contains("declared at 1:19"), "{err}");

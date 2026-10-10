@@ -63,7 +63,6 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | preempt none ; | preempt lifo ;  -- what a failed growth does
           | preempt by ( expr , ... ) [requeue head | requeue tail] ;   -- the victim: least keys
           | queue fifo ; | queue by ( expr (, expr)* ) ; -- waiting selection
-          | admit via STAGE ;                -- the queue is served by an engine's `schedule`
           | reserve held ;                   -- a hold's unallocated reservation counts against later admissions
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
@@ -71,7 +70,7 @@ kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 
           | delay                            -- ps(present): every job at rate 1, no waiting
 resource := NAME ( NAME , ... ) = expr ;           -- a time resource: a demand to time, read in `execute`
           | NAME cap expr ;                  -- a capacity, declared as a pool with `pool NAME on DEVICE`
-eitem    := NAME cap expr ;                  -- a capacity the engine holds (`reqs cap max_seqs;`)
+eitem    := NAME [ '[' N ']' ] cap expr ;    -- a capacity the engine holds (`reqs cap max_seqs;`); `[N]`: N queues it admits
           | tokens cap expr ;                -- the tokens one iteration computes (required; `inf` for none)
           | granule expr ; | state NAME = expr ;
           | schedule { (let NAME = expr ;)* sstmt+ }   -- what each iteration does (required)
@@ -582,7 +581,7 @@ so it is judged at every try and waits; a queue's head that, read as
 the run ends, still asks a pool for more than its cap is named (`over:`,
 the pool report's `over_cap`). One whose units or `reserve` are a constant does not
 link: it would be rejected whenever it is reached. A pool an engine `S` admits
-(`pool reqs on S`, `pool kv on S.gpu`, or `admit via S`) is not admitted at
+(`pool reqs on S` or `pool kv on S.gpu`) is not admitted at
 settle time: its queue is served by `S`'s `admit waiting`, in an
 iteration, after the running requests have taken their tokens, while the
 iteration has budget left, and, under vLLM's schedule, not in an iteration
@@ -591,7 +590,13 @@ are joined member for member: `engine S[N] on gpu` next to `device gpu[N]`
 serves `reqs[i]` by `S[i]` and counts `kv[i]` for `S[i]`; next to a family
 of one, every member gets that one, and any other pair of counts is a link
 error (`examples/pd-disaggregation/llmd_nixl_pull.sq` is the xPyD case,
-`docs/use-cases/pd.md` §Writing xPyD). An engine that serves several queues tries them in
+`docs/use-cases/pd.md` §Writing xPyD). One engine that admits several
+queues of one kind declares them as a family, `reqs[N] cap c;`, and
+`pool reqs on S` is then N pools, every member admitted by `S`, each
+counted in `S`'s `waiting.count`. An engine family of more than one holds
+no such family, since each member would admit N queues and `reqs cap c;`
+already gives each member its own; nor does a queue's engine, whose
+entries name their own pool without an index. An engine that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
 stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.sq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
@@ -643,7 +648,7 @@ prompt alone says so by not reading `computed`.
 
 `queue by (k₁, …)` orders a pool's waiting holds
 by keys re-read before every admission attempt (after each admission under
-`admit via`, where `budget_left` is that attempt's budget); `waited` is
+an engine, where `budget_left` is that attempt's budget); `waited` is
 the seconds since the hold joined the queue, reset on re-entry. The chosen
 head that does not fit blocks the rest, a preempted hold re-enters ahead of
 the keys, a key may not draw or read a `hidden` attribute, and selection
@@ -838,7 +843,7 @@ pool reqs on vllm { queue fifo; }
 | `device D { f (x) = e; X cap c; }` | no field: `f` is written out where `execute` reads it; `X cap c` is the `cap` of the `pool X on D` that must declare it |
 | `pool X on D { rules }` | a pool, `cap c` and the rules, no `admit_via`: a hold waiting for it is admitted as soon as it fits; `memory` when `D` is the engine's device |
 | `pool X on E.D { rules }` | the same, `admit_via` `E`: engine `E`, running on `D`, admits a hold waiting for it in an iteration |
-| `pool X on E { rules }` | a pool, `cap c` of `X cap c` in engine `E` and the rules, `admit_via` `E` |
+| `pool X on E { rules }` | a pool, `cap c` of `X cap c` in engine `E` and the rules, `admit_via` `E`; with `X[N] cap c`, N such pools `X[0]`…`X[N-1]`, each `admit_via` `E` |
 | `tokens cap B;` | `budget` `B` |
 | `execute (T);` | `cost` `T`, the device's time resources written out |
 | `each at most (e)` | `chunk` `e`: one cap per run for the whole iteration; `inf` is no cap, which the linker writes 0 as the kernel reads it |

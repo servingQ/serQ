@@ -1,7 +1,7 @@
 //! Engines on devices (`docs/design/engine-device.md`): `device`, `engine …
 //! on`, `pool … on`, an engine's `schedule` and `execute`. All of it is
 //! parse-time sugar: an engine is a step stage, a pool on a device or an
-//! engine is a pool, and the links between them (`memory`, `admit via`,
+//! engine is a pool, and the links between them (`memory`, `admit_via`,
 //! `waiting.count`) are written once every declaration is read.
 
 use super::*;
@@ -23,6 +23,9 @@ pub(super) struct Capacity {
     pub name: String,
     pub cap: Expr,
     pub at: usize,
+    /// `NAME[N] cap c;` in an engine: a family of N pools, each a queue the
+    /// one engine admits.
+    pub family: Option<usize>,
 }
 
 /// `engine NAME [N] on DEVICE { … }`, read as the step stage `stages[stage]`.
@@ -227,6 +230,7 @@ impl Parser {
                     name: r,
                     cap,
                     at: r_at,
+                    family: None,
                 });
             }
         }
@@ -472,9 +476,33 @@ impl Parser {
                 if KEYWORDS.contains(&r.as_str()) {
                     return self.err_at(k_at, format!("`{r}` is a word of the language"));
                 }
+                let family = self.array_count()?;
+                if let Some(n) = family
+                    && dev_array
+                    && dev_count != 1
+                {
+                    return self.err_at(
+                        k_at,
+                        format!(
+                            "`{r}[{n}]` in engine family `{name}[{dev_count}]`: each member \
+                             would admit {n} queues; `{r} cap c;` already gives each member \
+                             its own `{r}`"
+                        ),
+                    );
+                }
+                if let (Some(n), Some((q, _))) = (family, device.split_once('.')) {
+                    return self.err_at(
+                        k_at,
+                        format!(
+                            "`{r}[{n}]` in queue `{q}`'s engine: an entry of the queue names \
+                             its own pool without an index, so no entry could pick a member; \
+                             a queue's engine admits one `{r}`, written `{r} cap c;`"
+                        ),
+                    );
+                }
                 if !self.eat_kw("cap") {
                     return self.err(format!(
-                        "an engine holds capacities (`{r} cap expr;`), `tokens cap`, `granule`, \
+                        "an engine holds capacities (`{r} cap expr;`, `{r}[N] cap expr;`), `tokens cap`, `granule`, \
                          `state`, `schedule` and `execute`; found {}",
                         self.peek()
                     ));
@@ -488,6 +516,7 @@ impl Parser {
                     name: r,
                     cap,
                     at: k_at,
+                    family,
                 });
             }
         }
@@ -891,7 +920,7 @@ impl Parser {
     /// program is read: a pool on an engine, or on its device as
     /// `on ENGINE.DEVICE`, is admitted by the engine; the pool on a device is
     /// its engine's memory; `waiting.count` counts the queues the engine
-    /// admits.
+    /// admits, each member of a family.
     pub(super) fn link_engines(&mut self, prog: &mut Program) -> PResult<()> {
         for po in &self.pools_on {
             let name = prog.pools[po.pool].name.clone();
@@ -970,14 +999,22 @@ impl Parser {
             }
         }
         for e in &self.engines {
+            // a family's members are queues each, so each is counted
             let queues: Vec<Ref> = prog
                 .pools
                 .iter()
                 .filter(|p| p.admit_via.as_ref().is_some_and(|r| r.name == e.name))
-                .map(|p| Ref {
-                    span: None,
-                    name: p.name.clone(),
-                    index: None,
+                .flat_map(|p| {
+                    let members: Vec<Option<usize>> = if p.array {
+                        (0..p.count).map(Some).collect()
+                    } else {
+                        vec![None]
+                    };
+                    members.into_iter().map(|i| Ref {
+                        span: None,
+                        name: p.name.clone(),
+                        index: i.map(|i| Box::new(Expr::Num(i as f64))),
+                    })
                 })
                 .collect();
             let count = queues
@@ -1100,6 +1137,12 @@ impl Parser {
                 .find(|d| d.name == e.device)
                 .map_or((1, false), |d| (d.count, d.array));
             return match e.caps.iter().find(|c| c.name == name) {
+                // `NAME[N] cap c;`: N pools, which the one engine admits
+                Some(Capacity {
+                    cap,
+                    family: Some(n),
+                    ..
+                }) => Ok((cap.clone(), *n, true)),
                 Some(c) => Ok((c.cap.clone(), count, array)),
                 None => self.err_at(at, format!("`{owner}` has no capacity `{name}`")),
             };

@@ -663,7 +663,7 @@ const RETIRED: [(&str, &str); 5] = [
     (
         "admit",
         "`admit if … fit where x = e { … } keep (ℓ)` is now `hold … at admission (x = e) \
-         { … } cache (ℓ)` (the pool option `admit via` is unchanged)",
+         { … } cache (ℓ)`",
     ),
     ("keep", "`keep` is now `cache`"),
     ("where", "`where x = e` is now `at admission (x = e)`"),
@@ -2882,7 +2882,8 @@ impl Parser {
             if array.is_some() {
                 return self.err_at(
                     at,
-                    "a pool on a device or an engine is a family as its owner is: write no `[N]`",
+                    "a pool on a device or an engine is a family as its owner is: write no \
+                     `[N]` (for N queues one engine admits, write `NAME[N] cap c;` in the engine)",
                 );
             }
             self.advance();
@@ -2958,12 +2959,13 @@ impl Parser {
                      `NAME cap c;` there",
                 );
             }
-            if on.is_some() && key == "admit" {
+            if key == "admit" {
                 return self.err_at(
                     self.pos - 1,
-                    "who admits a pool on a device or an engine is said in its `on`: `on \
-                     ENGINE` and `on ENGINE.DEVICE` are admitted by the engine, `on DEVICE` as \
-                     soon as it fits",
+                    "who admits a pool is said in its `on`: declare the capacity on the engine \
+                     (`NAME cap c;` in `engine E { … }`, or `NAME[N] cap c;` for N pools) and \
+                     write `pool NAME on E { … }`, or `pool NAME on E.DEVICE` for the device's; \
+                     `on DEVICE` is admitted as soon as it fits",
                 );
             }
             match key.as_str() {
@@ -3035,10 +3037,6 @@ impl Parser {
                 "reserve" => {
                     self.expect_kw("held")?;
                     d.reserve_held = true;
-                }
-                "admit" => {
-                    self.expect_kw("via")?;
-                    d.admit_via = Some(self.bare_reference()?);
                 }
                 "spill" => {
                     let to = self.bare_reference()?;

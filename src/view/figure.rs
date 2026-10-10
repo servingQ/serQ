@@ -90,7 +90,7 @@ pub enum EdgeStyle {
     Flow,
     /// A loop's back edge, or a feedback path.
     Back,
-    /// A relation that is not a path: `admit via`, `memory`.
+    /// A relation that is not a path: `admit_via`, `memory`.
     Relation,
 }
 

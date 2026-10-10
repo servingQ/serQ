@@ -702,9 +702,8 @@ fn fits_says_it_is_now_reserve() {
     assert!(e.contains("`fits` is now `reserve`"), "{e}");
 }
 
-/// `admit` was once this statement's name, then the server's `admit if`,
-/// and is now only the pool option. A program that still says it is told
-/// what to write, and that the pool option keeps the word.
+/// `admit` was once this statement's name, then the server's `admit if`.
+/// A program that still says it is told what to write.
 #[test]
 fn admit_as_a_statement_says_what_to_write() {
     let src = "pool kv { cap 100; } stage s : fifo;
@@ -718,10 +717,6 @@ fn admit_as_a_statement_says_what_to_write() {
     let e = serq::compile_source(&common::main_source(src), &common::horizon(10.0))
         .expect_err("rejected");
     assert!(e.contains("is now `hold … at admission"), "{e}");
-    assert!(
-        e.contains("admit via"),
-        "and says the pool option is unchanged: {e}"
-    );
 }
 
 /// `workload { session { … turn; … } }` with `server { … }` is the
@@ -807,17 +802,17 @@ fn the_request_boundary_preserves_size_ownership() {
     );
 }
 
-/// `enter … keep` is `hold … cache`, and the pool option `admit via` is a
-/// different keyword that the rename does not touch.
+/// `enter … keep` is `hold … cache`, next to a pool its engine admits.
 #[test]
-fn enter_is_hold_and_admit_via_survives() {
+fn enter_is_hold_next_to_a_pool_the_engine_admits() {
     let head = "device gpu { kv cap 1000; }
         engine llm on gpu {
+          reqs cap 4;
           tokens cap 64;
           schedule { advance running; admit waiting while (running.preempted == 0); }
           execute (1);
         }
-        pool kv on gpu { } pool reqs { cap 4; admit via llm; }
+        pool kv on gpu { } pool reqs on llm { }
 
         ";
     let head_workload = "arrive poisson(1); init { set n = 10; }";

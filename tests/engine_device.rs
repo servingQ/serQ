@@ -780,7 +780,7 @@ fn the_design_refuses_what_it_says() {
             "pool reqs on vllm { }",
             "pool reqs on vllm { admit via vllm; }",
         ),
-        "who admits a pool on a device or an engine is said in its `on`",
+        "who admits a pool is said in its `on`",
     );
     refused(
         &engine(ok).replace("pool kv on gpu { preempt lifo; }", "pool kv[2] on gpu { }"),
@@ -1134,8 +1134,105 @@ fn a_pool_names_the_engine_that_admits_it() {
     // the kernel's option is said in `on`, and the error says how
     refused(
         &ok.replace("pool kv on gpu { ", "pool kv on gpu { admit via vllm; "),
-        "`on ENGINE.DEVICE` are admitted by the engine",
+        "`pool NAME on E.DEVICE` for the device's",
     );
+}
+
+/// N queues one engine admits: `reqs[2] cap 4;` in the engine and
+/// `pool reqs on llm` are two pools, each admitted by `llm`, as
+/// `pool reqs[2] { cap 4; admit via llm; }` wrote before #439. A hold picks
+/// its member with a computed index, and `waiting.count` counts both.
+const QUEUES: &str = "device gpu { kv cap 1000; }
+engine llm on gpu {
+  reqs[2] cap 4;
+  tokens cap 64 + waiting.count;
+  schedule { advance running; admit waiting while (running.preempted == 0); }
+  execute (1);
+}
+pool kv on gpu { }
+pool reqs on llm { }
+workload { arrive poisson(1); init { set n = 10; set t = ~bernoulli(0.5); } session { turn; end; } }
+server { hold reqs[t] (cost(reqs[t], 1)), kv (cost(kv, n)) { run llm prefill (cost(llm, n)) growing kv; } }";
+
+#[test]
+fn an_engine_admits_a_family_of_queues() {
+    let ov = common::horizon(100.0);
+    let p = compiled(QUEUES, None, &ov);
+    let llm = stage(&p, "llm", None);
+    for i in 0..2 {
+        let q = &p.pools[pool(&p, "reqs", Some(i))];
+        assert_eq!(q.admit_via, Some(llm), "reqs[{i}]");
+        assert_eq!(q.cap, 4.0, "reqs[{i}]");
+    }
+    assert_eq!(p.pools[pool(&p, "kv", None)].admit_via, None);
+    let r = serq::run_source(&common::main_source(QUEUES), &ov, None).unwrap();
+    for i in 0..2 {
+        let row = r
+            .text()
+            .lines()
+            .find(|l| l.starts_with(&format!("reqs[{i}] ")))
+            .map(str::to_string)
+            .unwrap_or_else(|| panic!("no reqs[{i}] in\n{}", r.text()));
+        let admits: f64 = row.split_whitespace().nth(6).unwrap().parse().unwrap();
+        assert!(admits > 0.0, "reqs[{i}] admitted nothing: {row}");
+    }
+}
+
+/// An engine family already makes `reqs cap c;` one pool per member; a
+/// capacity family next to it would be N pools for M engines, which the
+/// counts' rule (one for one, one for all) does not join.
+#[test]
+fn a_family_engine_holds_no_family_capacity() {
+    refused(
+        &QUEUES
+            .replace("device gpu {", "device gpu[2] {")
+            .replace("engine llm on gpu", "engine llm[2] on gpu"),
+        "`reqs[2]` in engine family `llm[2]`: each member would admit 2 queues",
+    );
+}
+
+/// In a queue an entry names its own pool without an index (`reqs`, not
+/// `reqs[i]`), so a capacity family in a queue's engine could be declared
+/// and never held: it is refused where it is declared.
+#[test]
+fn a_queues_engine_holds_no_family_capacity() {
+    refused(
+        "queue Q : prefill {
+  device gpu { kv cap 1000; }
+  engine on gpu {
+    reqs[2] cap 4;
+    tokens cap 64;
+    schedule { advance running; admit waiting; }
+    execute (1);
+  }
+  pool kv on gpu { }
+  pool reqs on Q { }
+  entry prefill(n) { hold reqs (cost(reqs, 1)), kv (cost(kv, n)) { run Q prefill (cost(Q, n)) growing kv; } }
+}
+workload { arrive poisson(1); init { set n = 10; } session { turn; end; } }
+server { call Q.prefill(n); }",
+        "`reqs[2]` in queue `Q`'s engine",
+    );
+}
+
+/// The pool option `admit via` said again what `on` says: it is refused,
+/// and the error says how to write each case.
+#[test]
+fn admit_via_is_refused_and_says_what_to_write() {
+    let old = QUEUES.replace("  reqs[2] cap 4;\n", "").replace(
+        "pool reqs on llm { }",
+        "pool reqs[2] { cap 4; admit via llm; }",
+    );
+    let e = error(&old);
+    for part in [
+        "who admits a pool is said in its `on`",
+        "`NAME cap c;` in `engine E { … }`",
+        "`NAME[N] cap c;` for N pools",
+        "`pool NAME on E { … }`",
+        "`pool NAME on E.DEVICE`",
+    ] {
+        assert!(e.contains(part), "missing {part:?}:\n{e}");
+    }
 }
 
 /// Inside a `queue`, `device gpu` is the member's and `engine on gpu` is
