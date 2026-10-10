@@ -850,14 +850,21 @@ impl Parser {
 
     /// In an engine, the bare names its values replaced: the name for the
     /// clause, or why the clause reads none. A name renamed since (#139),
-    /// `ntok` for `tokens`, is answered with the engine's name for it.
-    pub(super) fn retired_in_engine(&self, at: usize, name: &str) -> PResult<()> {
+    /// `ntok` for `tokens`, is answered with the engine's name for it. A
+    /// name the program declares (a `let`, an attribute, a `def`) is the
+    /// program's, as the linker reads it before a context variable.
+    pub(super) fn retired_in_engine(&self, at: usize, written: &str) -> PResult<()> {
         let Some(clause) = self.in_engine else {
             return Ok(());
         };
-        let (renamed, name) = match RENAMED.iter().find(|(old, _)| *old == name) {
-            Some((_, new)) => (format!("`{name}` is now `{new}`; "), *new),
-            None => (String::new(), name),
+        if self.definitions.iter().any(|(d, _)| d == written)
+            || self.defs.iter().any(|d| d.name == written)
+        {
+            return Ok(());
+        }
+        let name = match RENAMED.iter().find(|(old, _)| *old == written) {
+            Some((_, new)) => *new,
+            None => written,
         };
         let named: Vec<_> = ENGINE_VALUES
             .iter()
@@ -869,12 +876,12 @@ impl Parser {
         match named.iter().find(|(_, _, cs)| cs.contains(&clause)) {
             Some((now, ..)) => self.err_at(
                 at,
-                format!("{renamed}in an engine, `{name}` is `{now}` here: one value, one name"),
+                format!("in an engine, `{written}` is `{now}` here: one value, one name"),
             ),
             None => self.err_at(
                 at,
                 format!(
-                    "{renamed}`{name}` is `{value}`, and {}",
+                    "`{written}` is `{value}`, and {}",
                     not_read_in(value, clause)
                 ),
             ),
