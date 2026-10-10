@@ -220,11 +220,21 @@ fn cached_in_a_hold_without_cache(
     let Some(stmts) = p.blocks.get(block) else {
         return;
     };
+    // a hold nested in this body, once passed, set `cached` by its own
+    // admission (#237)
+    let mut nested: Option<String> = None;
     for s in stmts {
-        if let Some((pool, false)) = hold
-            && exprs_of(s)
-                .into_iter()
-                .any(|e| mentions_attr(e, p.slot_cached))
+        let reads_cached = exprs_of(s)
+            .into_iter()
+            .any(|e| mentions_attr(e, p.slot_cached));
+        if let (Some((pool, _)), Some(inner), true) = (hold, &nested, reads_cached) {
+            out.push(format!(
+                "`cached` is read after the hold on `{inner}` in the body of the hold on \
+                 `{pool}`: every admission sets it, so here it is the admission of `{inner}`. \
+                 Read it above that hold (`set c = cached;`), as `llmd_nixl_pull.sq` does."
+            ));
+        } else if let Some((pool, false)) = hold
+            && reads_cached
         {
             out.push(format!(
                 "`cached` is read in a hold on `{pool}` that has no `cache` clause: such a \
@@ -262,6 +272,25 @@ fn cached_in_a_hold_without_cache(
             CStmt::Fork(b) => cached_in_a_hold_without_cache(p, *b, None, out),
             _ => {}
         }
+        if nested.is_none() {
+            nested = first_hold(p, s);
+        }
+    }
+}
+
+/// The pool of the first hold a statement may admit, through its branches
+/// and loops: a fork's legs hold nothing of the session's.
+fn first_hold(p: &Program, s: &CStmt) -> Option<String> {
+    let in_block = |b: &usize| {
+        p.blocks
+            .get(*b)
+            .and_then(|stmts| stmts.iter().find_map(|s| first_hold(p, s)))
+    };
+    match s {
+        CStmt::Hold { pools, .. } => Some(p.show_pool_ref(&pools[0].0)),
+        CStmt::Branch(_, t, e) => in_block(t).or_else(|| in_block(e)),
+        CStmt::Loop(b) | CStmt::While(_, b) => in_block(b),
+        _ => None,
     }
 }
 
