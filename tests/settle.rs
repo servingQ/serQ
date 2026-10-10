@@ -131,13 +131,14 @@ fn a_self_preempting_grow_is_a_run_time_error() {
 #[test]
 fn an_iteration_with_tokens_and_zero_cost_is_an_error() {
     let e = run(
-        "pool kv { cap 1000; block 16; evict lru; }
-        stage engine : step { budget 512; cost 0; memory kv; }
+        "device gpu { kv cap 1000; }
+        engine llm on gpu { tokens cap 512; schedule { advance running; admit waiting while (running.preempted == 0); } execute (0); }
+        pool kv on gpu { block 16; evict lru; }
         workload { arrive batch(1);
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, 100)) { run engine prefill (cost(engine, 100)) growing kv; }
+        server { hold kv (cost(kv, 100)) { run llm prefill (cost(llm, 100)) growing kv; }
         }
         ",
         &common::horizon(10.0),
@@ -275,13 +276,18 @@ fn the_machine_still_matters() {
     let src = |budget: u32| {
         format!(
             "let B = {budget};
-        pool kv {{ cap 1e6; block 16; evict lru; }}
-        stage engine : step {{ budget B; cost 1e-4 + 1e-5 * tokens; memory kv; }}
+        device gpu {{ kv cap 1e6; }}
+        engine llm on gpu {{
+          tokens cap B;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1e-4 + 1e-5 * batch.tokens);
+        }}
+        pool kv on gpu {{ block 16; evict lru; }}
         workload {{ arrive poisson(0.5); turn {{ set n = ~uniform(1000, 3000); }}
           session {{  turn; end;
           }}
         }}
-        server {{ set t0 = now; hold kv (cost(kv, n)) {{ run engine prefill (cost(engine, n)) growing kv; }}
+        server {{ set t0 = now; hold kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }}
           observe ttft = now - t0;
         }}
         "

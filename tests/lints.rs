@@ -253,13 +253,21 @@ fn a_context_variable_outside_its_moment_is_rejected() {
     }
     // what the table allows still links: `age`, `size` and a pool index in
     // an eviction key, `present` in a ps capacity, the residents' variables in a
-    // budget and a chunk, `tokens` in a cost, `now` at every moment
+    // `tokens cap` and an `each at most`, the batch's in `execute`, `now` at
+    // every moment
     let src =
-        "pool kv[2] { cap 1e5; evict by (age, size + used(kv[size > 1e9 ? 1 : 0]) * 0, now * 0); }
+        "device gpu[2] { kv cap 1e5; }
+        pool kv on gpu { evict by (age, size + used(kv[size > 1e9 ? 1 : 0]) * 0, now * 0); }
         stage svc : ps (min(present, 4) + now * 0);
-        stage engine[2] : step { budget 512 + residents + decoders + kv_decode * 0 + kv_prefill * 0 + now * 0;
-          chunk decoders > 0 ? 64 : 128;
-          cost 1e-3 * tokens + prefilled * 0 + attention * 0 + now * 0; memory kv; }
+        engine llm[2] on gpu {
+          tokens cap 512 + running.count + running.decoding + running.kv_decode * 0 + running.kv_prefill * 0 + now * 0;
+          schedule {
+            let c = running.decoding > 0 ? 64 : 128;
+            advance running each at most (c);
+            admit waiting while (running.preempted == 0) each at most (c);
+          }
+          execute (1e-3 * batch.tokens + batch.prefilled * 0 + batch.attention * 0 + now * 0);
+        }
         workload { arrive poisson(0.3); turn { set n = ~exp(500); }
           session {  turn; end;
           }
@@ -493,8 +501,13 @@ fn an_old_context_variable_name_says_the_new_one() {
     }
 }
 
-const CACHE_ENGINE: &str = "pool kv { cap 1e5; block 16; evict lru; }
-    stage engine : step { budget 512; cost 1e-3; memory kv; }
+const CACHE_ENGINE: &str = "device gpu { kv cap 1e5; }
+    engine llm on gpu {
+      tokens cap 512;
+      schedule { advance running; admit waiting while (running.preempted == 0); }
+      execute (1e-3);
+    }
+    pool kv on gpu { block 16; evict lru; }
     stage think : delay;
     ";
 const CACHE_ENGINE_WORKLOAD: &str = "arrive closed(1);";
@@ -508,7 +521,7 @@ fn cached_in_a_hold_without_cache_is_rejected() {
         "{CACHE_ENGINE} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
         }} }}
         server {{ loop {{ run think (cost(think, 1));
-            hold kv (cost(kv, 1000)) {{ observe hit = cached > 0; run engine prefill (cost(engine, 1000 - cached)) growing kv; }}
+            hold kv (cost(kv, 1000)) {{ observe hit = cached > 0; run llm prefill (cost(llm, 1000 - cached)) growing kv; }}
           }}
         }} "
     );
@@ -528,7 +541,7 @@ fn cache_zero_is_the_way_through() {
             "{CACHE_ENGINE} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
         }} }}
         server {{ loop {{ run think (cost(think, 1));
-            hold kv (cost(kv, 1000)) {{ observe hit = cached > 0; run engine prefill (cost(engine, 1000 - cached)) growing kv; }} {clause};
+            hold kv (cost(kv, 1000)) {{ observe hit = cached > 0; run llm prefill (cost(llm, 1000 - cached)) growing kv; }} {clause};
           }}
         }} "
         );
@@ -544,7 +557,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
         "{CACHE_ENGINE} pool reqs {{ cap 4; }} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
         }} }}
         server {{ loop {{ run think (cost(think, 1));
-            hold kv (cost(kv, 1000)) {{ hold reqs (cost(reqs, 1)) {{ run engine prefill (cost(engine, 1000 - cached)) growing kv; }} }} cache (cost(kv, 1000));
+            hold kv (cost(kv, 1000)) {{ hold reqs (cost(reqs, 1)) {{ run llm prefill (cost(llm, 1000 - cached)) growing kv; }} }} cache (cost(kv, 1000));
           }}
         }} "
     );
@@ -554,7 +567,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
         "{CACHE_ENGINE} pool reqs {{ cap 4; }} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
         }} }}
         server {{ loop {{ run think (cost(think, 1));
-            hold kv (cost(kv, 1000)) {{ set c = cached; hold reqs (cost(reqs, 1)) {{ run engine prefill (cost(engine, 1000 - c)) growing kv; }} }} cache (cost(kv, 1000));
+            hold kv (cost(kv, 1000)) {{ set c = cached; hold reqs (cost(reqs, 1)) {{ run llm prefill (cost(llm, 1000 - c)) growing kv; }} }} cache (cost(kv, 1000));
           }}
         }} "
     );
@@ -568,7 +581,7 @@ fn reuse_without_cache_is_rejected() {
         "{CACHE_ENGINE} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
         }} }}
         server {{ loop {{ run think (cost(think, 1));
-            hold kv (cost(kv, 1000)) reuse (cost(kv, 512)) {{ run engine prefill (cost(engine, 1000)) growing kv; }}
+            hold kv (cost(kv, 1000)) reuse (cost(kv, 512)) {{ run llm prefill (cost(llm, 1000)) growing kv; }}
           }}
         }} "
     );

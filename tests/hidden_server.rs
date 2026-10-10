@@ -9,8 +9,9 @@ use serq::compile_source;
 
 fn program(server: &str) -> String {
     format!(
-        "pool kv {{ cap 1000; block 16; }}
-        stage E : step {{ cost 1; memory kv; }}
+        "device gpu {{ kv cap 1000; }}
+        engine E on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+        pool kv on gpu {{ block 16; }}
         workload {{ arrive batch(1); hidden o;
           init {{ set prompt = 32; set o = 4; }}
           session {{ turn; end; }} }}
@@ -81,8 +82,9 @@ fn a_loop_carries_what_it_sets_round_to_its_start() {
 /// A top-level session used to bypass the server's hidden-attribute check.
 #[test]
 fn a_top_level_session_cannot_bypass_the_server_check() {
-    let src = "pool kv { cap 1000; block 16; }
-               stage E : step { cost 1; memory kv; }
+    let src = "device gpu { kv cap 1000; }
+               engine E on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+               pool kv on gpu { block 16; }
                workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; } }
                session { branch (o > 2) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { } end; }
                ";

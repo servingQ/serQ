@@ -404,8 +404,13 @@ fn a_budget_does_not_read_budget_left() {
     );
     // the rule is the Budget moment's: a cost, a serve key and a hold's
     // header read it and the run ends
-    let src = "pool kv { cap 64; }
-        stage e : step { budget 8; cost 1 + 0 * budget_left(e); serve by (budget_left(e)); memory kv; }
+    let src = "device gpu { kv cap 64; }
+        engine e on gpu {
+          tokens cap 8;
+          schedule { advance running by (budget_left(e)); admit waiting while (running.preempted == 0); }
+          execute (1 + 0 * budget_left(e));
+        }
+        pool kv on gpu { }
         workload { arrive batch(2);
           session { turn; end;
           }
