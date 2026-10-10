@@ -13,10 +13,9 @@ fn run(src: &str, options: &Overrides) -> serq::Report {
 const VLLM: &str = "iteration { serve; admit while (!preempted); }";
 
 /// A stage without a body runs vLLM's procedure: every program of the
-/// corpus whose engines have no `exclusive prefill`, no `serve only` and no body
-/// gives the same report with the procedure written as a body. An engine's
-/// schedule that is the procedure lowers to no body; as both arms of a
-/// `branch` it is a body.
+/// corpus whose engines' schedule is the procedure gives the same report
+/// with the procedure written as a body. An engine's schedule that is the
+/// procedure lowers to no body; as both arms of a `branch` it is a body.
 #[test]
 fn the_vllm_body_is_the_procedure() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -28,17 +27,7 @@ fn the_vllm_body_is_the_procedure() {
                 continue;
             }
             let src = std::fs::read_to_string(&path).unwrap();
-            let body = if src.contains("step {") {
-                if src.contains("serve exclusive")
-                    || src.contains("serve only")
-                    || src.contains("iteration {")
-                {
-                    continue;
-                }
-                src.replace("step {", &format!("step {{ {VLLM} "))
-            } else if let Some(body) = procedure_as_body(&src) {
-                body
-            } else {
+            let Some(body) = procedure_as_body(&src) else {
                 continue;
             };
             let ov = common::horizon(20.0);
@@ -80,12 +69,13 @@ fn procedure_as_body(src: &str) -> Option<String> {
 /// `exclusive prefill` takes one prefill an iteration.
 #[test]
 fn several_prefills_run_alone_in_one_iteration() {
-    let prog = |serve: &str| {
+    let prog = |schedule: &str| {
         format!(
             r#"
-        pool reqs {{ cap 8; admit via engine; }}
-        pool kv {{ cap 100; }}
-        stage engine : step {{ budget 8; cost 1; memory kv; {serve} }}
+        device gpu {{ kv cap 100; }}
+        engine llm on gpu {{ reqs cap 8; tokens cap 8; schedule {{ {schedule} }} execute (1); }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ }}
         workload {{ arrive batch(3);
           session {{ turn;
             end;
@@ -95,16 +85,17 @@ fn several_prefills_run_alone_in_one_iteration() {
         server {{
           set t0 = now;
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {{
-            run engine prefill (cost(engine, 2)) growing kv;
+            run llm prefill (cost(llm, 2)) growing kv;
             observe ttft = now - t0;
-            run engine decode (cost(engine, 2)) growing kv;
+            run llm decode (cost(llm, 2)) growing kv;
           }}
         }}
 
 "#
         )
     };
-    let sglang = "iteration { serve only (!decoding); admit; branch (tokens == 0) { serve; } }";
+    let sglang = "advance running only (!decoding); admit waiting; \
+                  branch (batch.tokens == 0) { advance running; }";
     let r = run(
         &prog(sglang),
         &Overrides {
@@ -120,7 +111,7 @@ fn several_prefills_run_alone_in_one_iteration() {
         r.text()
     );
     let r = run(
-        &prog("serve exclusive prefill;"),
+        &prog("exclusive prefill; admit waiting while (running.preempted == 0);"),
         &Overrides {
             warmup: Some(0.0),
             seed: Some(1),
@@ -140,11 +131,14 @@ fn several_prefills_run_alone_in_one_iteration() {
 #[test]
 fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
     let src = r#"
-        pool reqs { cap 8; admit via engine; }
-        stage engine : step {
-          budget 64; cost 1;
-          iteration { serve; branch (residents == 0) { admit; } }
+        device gpu { }
+        engine llm on gpu {
+          reqs cap 8;
+          tokens cap 64;
+          schedule { advance running; branch (running.count == 0) { admit waiting; } }
+          execute (1);
         }
+        pool reqs on llm { }
         stage gap : delay;
         workload { arrive batch(4);
           session { turn;
@@ -157,8 +151,8 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
           set t0 = now;
           hold reqs (cost(reqs, 1)) {
             observe start = now;
-            run engine prefill (cost(engine, 1));
-            run engine decode (cost(engine, 4));
+            run llm prefill (cost(llm, 1));
+            run llm decode (cost(llm, 4));
           }
         }
 
@@ -180,41 +174,61 @@ fn a_gate_on_the_residents_admits_only_into_an_empty_engine() {
 
 #[test]
 fn a_body_that_may_schedule_nothing_does_not_link() {
-    let prog = |body: &str| {
+    let prog = |schedule: &str| {
         format!(
             r#"
-        pool reqs {{ cap 8; admit via engine; }}
-        stage engine : step {{ budget 8; cost 1; {body} }}
+        device gpu {{ }}
+        engine llm on gpu {{ reqs cap 8; tokens cap 8; schedule {{ {schedule} }} execute (1); }}
+        pool reqs on llm {{ }}
         workload {{ arrive batch(1);
           session {{ turn; end;
           }}
         }}
-        server {{ hold reqs (cost(reqs, 1)) {{ run engine prefill (cost(engine, 2)); }}
+        server {{ hold reqs (cost(reqs, 1)) {{ run llm prefill (cost(llm, 2)); }}
         }}
 
 "#
         )
     };
-    let err = |body: &str| {
-        compile_source(&common::main_source(&prog(body)), &common::horizon(20.0))
-            .err()
-            .unwrap_or_else(|| panic!("`{body}` linked"))
+    let err = |schedule: &str| {
+        compile_source(
+            &common::main_source(&prog(schedule)),
+            &common::horizon(20.0),
+        )
+        .err()
+        .unwrap_or_else(|| panic!("`{schedule}` linked"))
     };
     assert!(
-        err("iteration { branch (residents > 0) { serve; } }")
+        err("branch (running.count > 0) { advance running; }")
             .contains("neither serves nor admits")
     );
-    assert!(err("iteration { serve; admit while (now < 5); }").contains("now"));
-    assert!(err("iteration { serve; admit while (~bernoulli(0.5)); }").contains("draw"));
+    assert!(err("advance running; admit waiting while (now < 5);").contains("now"));
+    assert!(err("advance running; admit waiting while (~bernoulli(0.5));").contains("draw"));
     assert!(
-        err("iteration { serve; admit while (budget_left(engine) > 0); }").contains("budget_left")
+        err("advance running; admit waiting while (budget_left(llm) > 0);").contains("budget_left")
     );
-    assert!(err("serve only (decoding); iteration { serve; admit; }").contains("two bodies"));
-    assert!(err("serve exclusive prefill; iteration { serve; admit; }").contains("takes back"));
+    // a stage's `serve only` or `serve exclusive prefill` beside a body,
+    // which only the kernel spelling can write
+    for (serve, message) in [
+        ("serve only (decoding);", "two bodies"),
+        ("serve exclusive prefill;", "takes back"),
+    ] {
+        let kernel = prog("advance running; admit waiting;").replace(
+            "device gpu { }
+        engine llm on gpu { reqs cap 8; tokens cap 8; schedule { advance running; admit waiting; } execute (1); }
+        pool reqs on llm { }",
+            &format!(
+                "pool reqs {{ cap 8; admit via llm; }}
+        stage llm : step {{ budget 8; cost 1; {serve} iteration {{ serve; admit; }} }}"
+            ),
+        );
+        let e = compile_source(&common::main_source(&kernel), &common::horizon(20.0)).unwrap_err();
+        assert!(e.contains(message), "{serve}: {e}");
+    }
     // `admitted` and `preempted` are a body's
-    let src = prog("iteration { serve; admit; }").replace(
-        "run engine prefill (cost(engine, 2));",
-        "run engine prefill (cost(engine, 2)); set x = admitted;",
+    let src = prog("advance running; admit waiting;").replace(
+        "run llm prefill (cost(llm, 2));",
+        "run llm prefill (cost(llm, 2)); set x = admitted;",
     );
     assert!(compile_source(&common::main_source(&src), &common::horizon(20.0)).is_err());
 }
@@ -358,13 +372,19 @@ fn an_engine_idle_with_work_is_named() {
 #[test]
 fn a_guard_that_is_not_a_test_fails_the_run() {
     let src = r#"
-        pool reqs { cap 8; admit via engine; }
-        stage engine : step { budget 8; cost 1; iteration { serve; admit while (residents + 2); } }
+        device gpu { }
+        engine llm on gpu {
+          reqs cap 8;
+          tokens cap 8;
+          schedule { advance running; admit waiting while (running.count + 2); }
+          execute (1);
+        }
+        pool reqs on llm { }
         workload { arrive batch(1);
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)) { run engine prefill (cost(engine, 2)); }
+        server { hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 2)); }
         }
 
 "#;
@@ -388,11 +408,12 @@ fn a_guard_that_is_not_a_test_fails_the_run() {
 /// with it every other one waits a second.
 #[test]
 fn a_register_remembers_the_last_iteration() {
-    let prog = |body: &str| {
+    let prog = |items: &str| {
         format!(
             r#"
-        pool reqs {{ cap 64; admit via engine; }}
-        stage engine : step {{ budget 64; cost 1; {body} }}
+        device gpu {{ }}
+        engine llm on gpu {{ reqs cap 64; tokens cap 64; {items} execute (1); }}
+        pool reqs on llm {{ }}
         workload {{ arrive renewal(1);
           session {{ turn;
             end;
@@ -403,17 +424,17 @@ fn a_register_remembers_the_last_iteration() {
           set t0 = now;
           hold reqs (cost(reqs, 1)) {{
             observe wait = now - t0;
-            run engine prefill (cost(engine, 1));
-            run engine decode (cost(engine, 30));
+            run llm prefill (cost(llm, 1));
+            run llm decode (cost(llm, 30));
           }}
         }}
 
 "#
         )
     };
-    let wait = |body: &str| {
+    let wait = |items: &str| {
         let r = run(
-            &prog(body),
+            &prog(items),
             &Overrides {
                 warmup: Some(0.0),
                 seed: Some(1),
@@ -422,11 +443,14 @@ fn a_register_remembers_the_last_iteration() {
         );
         r.observe("wait").unwrap().samples.clone()
     };
-    let every = wait("");
+    let every = wait("schedule { advance running; admit waiting while (running.preempted == 0); }");
     assert!(every.iter().all(|&w| w == 0.0), "{every:?}");
     let alternate = wait(
         "state just = 0; \
-         iteration { serve; branch (just == 0) { admit; } set just = admitted > 0; }",
+         schedule { \
+           advance running; branch (just == 0) { admit waiting; } \
+           set just = waiting.admitted > 0; \
+         }",
     );
     // the first arrives at 1 and is admitted (`just` 1); the one of 2 waits,
     // since that iteration does not admit (`just` 0); at 3 it is admitted
@@ -444,17 +468,24 @@ fn a_register_remembers_the_last_iteration() {
 #[test]
 fn a_set_in_an_iteration_that_is_none_is_undone() {
     let src = r#"
-        pool reqs { cap 1; admit via engine; }
-        stage engine : step {
-          budget 4; cost 1;
+        device gpu { }
+        engine llm on gpu {
+          reqs cap 1;
+          tokens cap 4;
           state n = 0;
-          iteration { set n = n + 1; serve only (decoding); admit while (residents == 0); }
+          schedule {
+            set n = n + 1;
+            advance running only (decoding);
+            admit waiting while (running.count == 0);
+          }
+          execute (1);
         }
+        pool reqs on llm { }
         workload { arrive renewal(1);
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)) { run engine prefill (cost(engine, 100)); }
+        server { hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 100)); }
         }
         gauge count = n;
 
@@ -475,31 +506,38 @@ fn a_set_in_an_iteration_that_is_none_is_undone() {
 
 #[test]
 fn a_register_is_the_stage_s_own() {
-    let prog = |stage: &str, session: &str| {
+    let prog = |items: &str, session: &str| {
         format!(
             r#"
-        pool reqs {{ cap 8; admit via engine; }}
-        stage engine : step {{ budget 8; cost 1; {stage} }}
-        stage other : step {{ budget 8; cost 1; state r = 0; iteration {{ serve; admit; }} }}
+        device gpu {{ }}
+        device tpu {{ }}
+        engine llm on gpu {{ reqs cap 8; tokens cap 8; {items} execute (1); }}
+        pool reqs on llm {{ }}
+        engine other on tpu {{
+          tokens cap 8;
+          state r = 0;
+          schedule {{ advance running; admit waiting; }}
+          execute (1);
+        }}
         workload {{ arrive batch(1);
           session {{ turn; end;
           }}
         }}
-        server {{ hold reqs (cost(reqs, 1)) {{ run engine prefill (cost(engine, 2)); }} {session}
+        server {{ hold reqs (cost(reqs, 1)) {{ run llm prefill (cost(llm, 2)); }} {session}
         }}
 
 "#
         )
     };
-    let err = |stage: &str, session: &str| {
+    let err = |items: &str, session: &str| {
         compile_source(
-            &common::main_source(&prog(stage, session)),
+            &common::main_source(&prog(items, session)),
             &common::horizon(20.0),
         )
         .err()
-        .unwrap_or_else(|| panic!("`{stage}` `{session}` linked"))
+        .unwrap_or_else(|| panic!("`{items}` `{session}` linked"))
     };
-    let body = "state k = 0; iteration { serve; admit; set k = k + 1; }";
+    let body = "state k = 0; schedule { advance running; admit waiting; set k = k + 1; }";
     assert!(
         compile_source(
             &common::main_source(&prog(body, "")),
@@ -507,13 +545,38 @@ fn a_register_is_the_stage_s_own() {
         )
         .is_ok()
     );
-    assert!(err("state k = 0;", "").contains("nothing sets"));
-    // a stage `serve only` is a body, but none that sets the register
-    assert!(err("state k = 0; serve only (decoding);", "").contains("nothing sets"));
-    assert!(err("iteration { serve; admit; set r = 1; }", "").contains("another stage"));
+    assert!(err("state k = 0; schedule { advance running; admit waiting while (running.preempted == 0); }", "").contains("nothing sets"));
+    // an `only` is a body, but none that sets the register
+    assert!(
+        err(
+            "state k = 0; schedule { advance running only (decoding); \
+             admit waiting only (decoding) while (running.preempted == 0); }",
+            ""
+        )
+        .contains("nothing sets")
+    );
+    assert!(
+        err(
+            "schedule { advance running; admit waiting; set r = 1; }",
+            ""
+        )
+        .contains("another stage")
+    );
     assert!(err(body, "set x = k;").contains("register"));
-    assert!(err("state cached = 0; iteration { serve; admit; }", "").contains("taken"));
-    assert!(err("state k = 0; iteration { serve; admit; set k = now; }", "").contains("now"));
+    assert!(
+        err(
+            "state cached = 0; schedule { advance running; admit waiting; }",
+            ""
+        )
+        .contains("taken")
+    );
+    assert!(
+        err(
+            "state k = 0; schedule { advance running; admit waiting; set k = now; }",
+            ""
+        )
+        .contains("now")
+    );
 }
 
 /// A register is read where its stage orders the read. Read by another
@@ -527,9 +590,16 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
     let prog = |extra: &str, hold: &str| {
         format!(
             r#"
-        pool reqs {{ cap 8; admit via b; }}
+        device gpu {{ }}
+        engine b on gpu {{
+          reqs cap 8;
+          tokens cap 8;
+          state go = 0;
+          schedule {{ advance running; admit waiting; set go = 1; }}
+          execute (1);
+        }}
+        pool reqs on b {{ }}
         pool other {{ cap 8; }}
-        stage b : step {{ budget 8; cost 1; state go = 0; iteration {{ serve; admit; set go = 1; }} }}
         {extra}
         workload {{ arrive batch(1);
           session {{ turn; end;
@@ -575,7 +645,15 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
     for (extra, hold) in [
         ("stage p : ps(1 + go);", base),
         (
-            "stage a : step { budget 8; cost 1; serve only (go == 1); }",
+            "device tpu { }
+        engine a on tpu {
+          tokens cap 8;
+          schedule {
+            advance running only (go == 1);
+            admit waiting only (go == 1) while (running.preempted == 0);
+          }
+          execute (1);
+        }",
             base,
         ),
         (
@@ -588,7 +666,13 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
             .unwrap_or_else(|| panic!("{extra} {hold} linked"));
         assert!(e.contains("`go` is stage `b`'s register"), "{e}");
     }
-    let arr = "stage c[2] : step { budget 8; cost 1; state q = 0; iteration { serve; admit; } }";
+    let arr = "device tpu[2] { }
+        engine c[2] on tpu {
+          tokens cap 8;
+          state q = 0;
+          schedule { advance running; admit waiting; }
+          execute (1);
+        }";
     assert!(ok(arr, base).unwrap_err().contains("stage array"));
     let given = "claim c given (go == 0): at end (1);";
     assert!(ok(given, base).is_err());
@@ -600,17 +684,24 @@ fn a_register_is_read_where_its_stage_orders_the_read() {
 #[test]
 fn a_try_that_admitted_keeps_its_sets() {
     let src = r#"
-        pool reqs { cap 4; admit via engine; }
-        stage engine : step {
-          budget 8; cost 1;
+        device gpu { }
+        engine llm on gpu {
+          reqs cap 4;
+          tokens cap 8;
           state k = 0;
-          iteration { serve only (decoding); set k = k + 1; admit only (decoding); }
+          schedule {
+            advance running only (decoding);
+            set k = k + 1;
+            admit waiting only (decoding);
+          }
+          execute (1);
         }
+        pool reqs on llm { }
         workload { arrive batch(2);
           session { turn; end;
           }
         }
-        server { hold reqs (cost(reqs, 1)) { run engine prefill (cost(engine, 2)); }
+        server { hold reqs (cost(reqs, 1)) { run llm prefill (cost(llm, 2)); }
         }
         gauge seen = k;
 
@@ -634,13 +725,16 @@ fn a_try_that_admitted_keeps_its_sets() {
 #[test]
 fn a_reserve_on_a_register_waits_for_the_iteration() {
     let src = r#"
-        pool reqs { cap 16; admit via engine; }
-        pool kv { cap 1000; evict lru; }
-        stage engine : step {
-          budget 512; cost 0.001 + tokens * 1e-5; memory kv;
+        device gpu { kv cap 1000; }
+        engine llm on gpu {
+          reqs cap 16;
+          tokens cap 512;
           state r = 5000;
-          iteration { set r = 10; serve; admit; }
+          schedule { set r = 10; advance running; admit waiting; }
+          execute (0.001 + batch.tokens * 1e-5);
         }
+        pool reqs on llm { }
+        pool kv on gpu { evict lru; }
         workload { arrive renewal(2);
           session { turn;
             end;
@@ -649,8 +743,8 @@ fn a_reserve_on_a_register_waits_for_the_iteration() {
         }
         server {
           hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100 + r)) {
-            run engine prefill (cost(engine, 100));
-            run engine decode (cost(engine, 9)) growing kv;
+            run llm prefill (cost(llm, 100));
+            run llm decode (cost(llm, 9)) growing kv;
           }
         }
 

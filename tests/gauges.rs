@@ -346,7 +346,12 @@ fn a_gauge_reads_the_end_of_an_instant() {
 /// which may draw, and the run would change.
 #[test]
 fn a_gauge_does_not_plan_an_iteration() {
-    let src = "stage e : step { budget ~uniform(1, 2); cost 1; }
+    let src = "device gpu { }
+        engine e on gpu {
+          tokens cap ~uniform(1, 2);
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
         workload { session { turn; end;
         } }
         server { run e prefill (cost(e, 1));
@@ -360,14 +365,20 @@ fn a_gauge_does_not_plan_an_iteration() {
 /// stack overflowed (#284).
 #[test]
 fn a_budget_does_not_read_budget_left() {
-    for (budget, chunk) in [
-        ("128 + budget_left(e)", "0"),
-        ("128", "budget_left(e)"),
-        ("128 + budget_left(f)", "0"),
-    ] {
+    for budget in ["128 + budget_left(e)", "128 + budget_left(f)"] {
         let src = format!(
-            "stage e : step {{ budget {budget}; chunk {chunk}; cost 1; }}
-        stage f : step {{ budget 64; cost 1; }}
+            "device gpu {{ }}
+        device tpu {{ }}
+        engine e on gpu {{
+          tokens cap {budget};
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        engine f on tpu {{
+          tokens cap 64;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
         workload {{ session {{ turn; end;
         }} }}
         server {{ run e prefill (cost(e, 1));
@@ -376,9 +387,21 @@ fn a_budget_does_not_read_budget_left() {
         let e = link_error(&src);
         assert!(
             e.contains("a step's budget or chunk may not read `budget_left"),
-            "{budget}; {chunk}: {e}"
+            "{budget}: {e}"
         );
     }
+    // a chunk that reads it, which an engine's `each at most`, choosing
+    // among constants, cannot write
+    let src = "stage e : step { budget 128; chunk budget_left(e); cost 1; }
+        workload { session { turn; end;
+        } }
+        server { run e prefill (cost(e, 1));
+        } ";
+    let e = link_error(src);
+    assert!(
+        e.contains("a step's budget or chunk may not read `budget_left"),
+        "{e}"
+    );
     // the rule is the Budget moment's: a cost, a serve key and a hold's
     // header read it and the run ends
     let src = "pool kv { cap 64; }

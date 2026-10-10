@@ -518,10 +518,12 @@ fn a_queue_posts_the_copies_of_one_relation() {
     refused(
         "queue P : prefill { pool kv { cap 10; } serve fifo; nic ps(1);
           prefill (p) { hold kv (cost(kv, p)) { run (cost(P, p)); } cache (cost(kv, p)) lease kv (inf); } }
-        queue D : decode { pool kv { cap 10; } serve step { cost 1; memory kv; } nic ps(1);
+        queue D : decode { device gpu { kv cap 10; } pool kv on gpu { }
+          engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } nic ps(1);
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
           decode (p) from src { hold kv (cost(kv, p)) { transfer (p) from src to kv (p); } } }
-        queue E : decode { pool kv { cap 10; } serve step { cost 1; memory kv; } nic ps(1);
+        queue E : decode { device gpu { kv cap 10; } pool kv on gpu { }
+          engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } nic ps(1);
           decode (p) { hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; } }
           decode (p) from src { hold kv (cost(kv, p)) { transfer (p) from src to kv (p); } } }
         P push D latency 1 share maxmin;

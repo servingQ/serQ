@@ -190,12 +190,12 @@ fn grow_and_growing_need_an_enclosing_hold() {
     for stmt in [
         "grow kv (cost(kv, 16));",
         "hold q (cost(q, 1)) { grow kv (cost(kv, 16)); }",
-        "run engine prefill (cost(engine, 8)) growing kv;",
-        "hold q (cost(q, 1)) { run engine prefill (cost(engine, 8)) growing kv; }",
+        "run llm prefill (cost(llm, 8)) growing kv;",
+        "hold q (cost(q, 1)) { run llm prefill (cost(llm, 8)) growing kv; }",
     ] {
         let src = format!(
-            "pool kv {{ cap 64; }} pool q {{ cap 10; }}
-        stage engine : step {{ budget 8; cost 1; memory kv; }}
+            "device gpu {{ kv cap 64; }} pool kv on gpu {{ }} pool q {{ cap 10; }}
+        engine llm on gpu {{ tokens cap 8; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
         workload {{ arrive batch(1);
           session {{ turn; end;
           }}
@@ -224,13 +224,13 @@ fn grow_and_growing_need_an_enclosing_hold() {
         "{e}"
     );
     // inside one, both link
-    let src = "pool kv { cap 64; }
-        stage engine : step { budget 8; cost 1; memory kv; }
+    let src = "device gpu { kv cap 64; } pool kv on gpu { }
+        engine llm on gpu { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         workload { arrive batch(1);
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, 8)) { grow kv (cost(kv, 8)); run engine prefill (cost(engine, 8)) growing kv; }
+        server { hold kv (cost(kv, 8)) { grow kv (cost(kv, 8)); run llm prefill (cost(llm, 8)) growing kv; }
         }
         ";
     check_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -242,9 +242,16 @@ fn grow_and_growing_need_an_enclosing_hold() {
 fn a_preemptible_hold_reads_no_moving_index() {
     let src = |preempt: &str| {
         format!(
-            "pool kv {{ cap 128; block 16; preempt {preempt}; }}
+            "device gpu {{ kv cap 128; }} pool kv on gpu {{ block 16; preempt {preempt}; }}
         pool aux[2] {{ cap 64; }}
-        stage engine : step {{ budget 128; chunk 128; cost 0.5; memory kv; }}
+        engine llm on gpu {{
+          tokens cap 128;
+          schedule {{
+            advance running each at most (128);
+            admit waiting while (running.preempted == 0) each at most (128);
+          }}
+          execute (0.5);
+        }}
         workload {{ arrive batch(4);
           session {{ turn;
             end;
@@ -253,7 +260,7 @@ fn a_preemptible_hold_reads_no_moving_index() {
         }}
         server {{
           hold kv (cost(kv, 16)), aux[1 - min(1, floor(now))] (cost(aux, 1)) {{
-            run engine prefill (cost(engine, 16)) growing kv; run engine decode (cost(engine, 200)) growing kv;
+            run llm prefill (cost(llm, 16)) growing kv; run llm decode (cost(llm, 200)) growing kv;
           }}
         }}
         "
@@ -276,8 +283,8 @@ fn a_preemptible_hold_reads_no_moving_index() {
         "hold kv (cost(kv, 16)) { hold aux[1 - min(1, floor(now))] (cost(aux, 1)) {",
     );
     let nested = nested.replace(
-        "run engine decode (cost(engine, 200)) growing kv;",
-        "run engine decode (cost(engine, 200)) growing kv; }",
+        "run llm decode (cost(llm, 200)) growing kv;",
+        "run llm decode (cost(llm, 200)) growing kv; }",
     );
     let e = check_source(&common::main_source(&nested), &common::horizon(500.0)).unwrap_err();
     assert!(e.contains("`kv` may preempt it"), "{e}");
@@ -513,9 +520,16 @@ fn an_engine_serves_its_queues_in_declaration_order() {
     let program = |first: &str, second: &str| {
         format!(
             r#"
-        pool {first} {{ cap 1; admit via engine; }}
-        pool {second} {{ cap 1; admit via engine; }}
-        stage engine : step {{ budget 1000; cost 1; }}
+        device gpu {{ }}
+        engine llm on gpu {{
+          a cap 1;
+          b cap 1;
+          tokens cap 1000;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        pool {first} on llm {{ }}
+        pool {second} on llm {{ }}
         stage gate : delay;
         workload {{ arrive batch(3);
           session {{ turn;
@@ -525,9 +539,9 @@ fn an_engine_serves_its_queues_in_declaration_order() {
         }}
         server {{
           run gate (cost(gate, serial));
-          branch (serial == 0) {{ hold a (cost(a, 1)) {{ run engine decode (cost(engine, 50)); }} }}
-          branch (serial == 1) {{ hold a (cost(a, 1)) {{ run engine decode (cost(engine, 1)); }} }}
-          branch (serial == 2) {{ hold b (cost(b, 1)) {{ observe b_admitted = now; run engine decode (cost(engine, 1)); }} }}
+          branch (serial == 0) {{ hold a (cost(a, 1)) {{ run llm decode (cost(llm, 50)); }} }}
+          branch (serial == 1) {{ hold a (cost(a, 1)) {{ run llm decode (cost(llm, 1)); }} }}
+          branch (serial == 2) {{ hold b (cost(b, 1)) {{ observe b_admitted = now; run llm decode (cost(llm, 1)); }} }}
         }}
 
 "#

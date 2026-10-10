@@ -509,9 +509,15 @@ fn admit_via_names_a_step_stage() {
 #[test]
 fn a_hold_that_can_never_fit_is_reported_stuck() {
     let src = r#"
-        pool reqs { cap 4; admit via engine; }
-        pool kv { cap 160; block 16; evict lru; preempt lifo; }
-        stage engine : step { budget 1000; chunk 0; cost 1; memory kv; }
+        device gpu { kv cap 160; }
+        engine llm on gpu {
+          reqs cap 4;
+          tokens cap 1000;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { block 16; evict lru; preempt lifo; }
         workload { arrive batch(1);
           session { turn;
             end;
@@ -520,8 +526,8 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
         }
         server {
           hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100)) {
-            run engine prefill (cost(engine, 100)) growing kv;
-            run engine decode (cost(engine, 100)) growing kv;
+            run llm prefill (cost(llm, 100)) growing kv;
+            run llm decode (cost(llm, 100)) growing kv;
           }
         }
 
@@ -535,7 +541,7 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
     assert_eq!(r.ended, 0, "{}", r.text());
     // one step per unit of time, and the step that starts at the horizon
     // is counted when it starts
-    assert_eq!(r.stage("engine").unwrap().iterations, 401, "{}", r.text());
+    assert_eq!(r.stage("llm").unwrap().iterations, 401, "{}", r.text());
 }
 
 /// The step that only preempted lasts `C` at zero tokens. With `cost tokens`
@@ -546,9 +552,15 @@ fn a_hold_that_can_never_fit_is_reported_stuck() {
 #[test]
 fn a_zero_cost_preempting_step_does_not_hang() {
     let src = r#"
-        pool reqs { cap 4; admit via engine; }
-        pool kv { cap 160; block 16; evict lru; preempt lifo; }
-        stage engine : step { budget 1000; chunk 0; cost tokens; memory kv; }
+        device gpu { kv cap 160; }
+        engine llm on gpu {
+          reqs cap 4;
+          tokens cap 1000;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (batch.tokens);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { block 16; evict lru; preempt lifo; }
         workload { arrive batch(1);
           session { turn;
             end;
@@ -557,8 +569,8 @@ fn a_zero_cost_preempting_step_does_not_hang() {
         }
         server {
           hold reqs (cost(reqs, 1)), kv (cost(kv, 100)) reserve (cost(kv, 100)) {
-            run engine prefill (cost(engine, 100)) growing kv;
-            run engine decode (cost(engine, 100)) growing kv;
+            run llm prefill (cost(llm, 100)) growing kv;
+            run llm decode (cost(llm, 100)) growing kv;
           }
         }
 
@@ -973,9 +985,15 @@ fn a_held_reservation_counts_against_later_admissions() {
     let prog = |held: &str| {
         format!(
             r#"
-        pool reqs {{ cap 8; admit via engine; }}
-        pool kv {{ cap 20; preempt lifo; {held} }}
-        stage engine : step {{ budget 64; cost 1; memory kv; }}
+        device gpu {{ kv cap 20; }}
+        engine llm on gpu {{
+          reqs cap 8;
+          tokens cap 64;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ preempt lifo; {held} }}
         workload {{ arrive batch(3);
           session {{ turn;
             end;
@@ -985,8 +1003,8 @@ fn a_held_reservation_counts_against_later_admissions() {
         server {{
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) reserve (cost(kv, 10)) {{
             observe admitted = now;
-            run engine prefill (cost(engine, 4)) growing kv;
-            run engine decode (cost(engine, 6)) growing kv;
+            run llm prefill (cost(llm, 4)) growing kv;
+            run llm decode (cost(llm, 6)) growing kv;
           }} cache (cost(reqs, kv, 0));
         }}
 
