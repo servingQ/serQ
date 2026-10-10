@@ -762,6 +762,12 @@ fn the_design_refuses_what_it_says() {
              written with `set k = …;`",
         );
     }
+    // `step_time (t) = 1` drops its argument, whose names are still resolved
+    // (#431)
+    refused(
+        &engine(ok).replace("step_time(batch.tokens)", "step_time(no_such_name)"),
+        "unknown name `no_such_name`",
+    );
     // a device's time resource is read in an engine's `execute` only
     refused(
         &engine(ok).replace("tokens cap 8;", "tokens cap step_time(1);"),
@@ -1302,5 +1308,41 @@ server {{ E.prefill (prompt); }}
                 "while (waiting.count > 0)",
             ),
         "its `waiting.count` would read every member's",
+    );
+}
+
+/// An argument a definition does not read is resolved where the use stands
+/// (#431), and is not in the IR.
+#[test]
+fn an_argument_its_definition_drops_is_resolved_where_the_use_stands() {
+    let one = |s: String| format!("def one(x) {{ 1 }}\n{s}");
+    let ok = "advance running; admit waiting while (running.preempted == 0);";
+    let ov = common::horizon(10.0);
+    let ir = |src: &str| serde_json::to_string(&compiled(src, None, &ov)).unwrap();
+    // a value of the engine, read in `execute`
+    let execute = |e: &str| {
+        one(engine(ok)).replace(
+            "step_time(batch.tokens)",
+            &format!("step_time(batch.tokens) + {e}"),
+        )
+    };
+    // never evaluated, it is not checked for its moment: `prompt` alone
+    // would be read for the stage, with no session
+    for unread in ["one(waiting.count)", "one(prompt)"] {
+        assert_eq!(ir(&execute(unread)), ir(&execute("1")));
+    }
+    // a schedule's `let`, read in `each at most`
+    let capped = |c: &str| {
+        one(engine(&format!(
+            "let L = 4; advance running each at most ({c}); admit waiting while \
+             (running.preempted == 0) each at most ({c});"
+        )))
+    };
+    assert_eq!(ir(&capped("one(L)")), ir(&capped("1")));
+    // the boundary: it is parsed where it stands, and the parser reads
+    // `batch.…` as a name the batch has not formed yet in `each at most`
+    refused(
+        &capped("L + one(batch.tokens)"),
+        "`each at most` is read before the batch is formed",
     );
 }

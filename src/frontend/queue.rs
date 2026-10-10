@@ -258,24 +258,11 @@ impl Ctx<'_> {
             }
             Expr::Call(f, args) => Expr::Call(
                 f.clone(),
-                args.iter()
-                    .map(|a| match a {
-                        Arg::Expr(x) => Ok(Arg::Expr(self.expr(x)?)),
-                        // a bare identifier argument names a parameter, a
-                        // local, `self`, or a pool or stage
-                        Arg::Ref(r) if r.index.is_none() => {
-                            let is_name = r.name == "self"
-                                || self.params.iter().any(|(p, _)| *p == r.name)
-                                || self.locals.iter().any(|l| l == &r.name);
-                            if is_name {
-                                Ok(Arg::Expr(self.var(&r.name)?))
-                            } else {
-                                Ok(Arg::Ref(self.reference(r)?))
-                            }
-                        }
-                        Arg::Ref(r) => Ok(Arg::Ref(self.reference(r)?)),
-                    })
-                    .collect::<Result<_, _>>()?,
+                args.iter().map(|a| self.arg(a)).collect::<Result<_, _>>()?,
+            ),
+            Expr::Unread(args, e) => Expr::Unread(
+                args.iter().map(|a| self.arg(a)).collect::<Result<_, _>>()?,
+                Box::new(self.expr(e)?),
             ),
             Expr::Unary(op, a) => Expr::Unary(*op, Box::new(self.expr(a)?)),
             Expr::Binary(op, a, b) => {
@@ -309,6 +296,25 @@ impl Ctx<'_> {
                     Box::new(self.expr(body)?),
                 )
             }
+        })
+    }
+
+    fn arg(&self, a: &Arg) -> Result<Arg, ExpandError> {
+        Ok(match a {
+            Arg::Expr(x) => Arg::Expr(self.expr(x)?),
+            // a bare identifier argument names a parameter, a local, `self`,
+            // or a pool or stage
+            Arg::Ref(r) if r.index.is_none() => {
+                let is_name = r.name == "self"
+                    || self.params.iter().any(|(p, _)| *p == r.name)
+                    || self.locals.iter().any(|l| l == &r.name);
+                if is_name {
+                    Arg::Expr(self.var(&r.name)?)
+                } else {
+                    Arg::Ref(self.reference(r)?)
+                }
+            }
+            Arg::Ref(r) => Arg::Ref(self.reference(r)?),
         })
     }
 
@@ -428,6 +434,9 @@ impl Ctx<'_> {
             Stmt::Declare(n, t) => Stmt::Declare(self.local(n), *t),
             Stmt::Set(n, e) => Stmt::Set(self.local(n), self.expr(e)?),
             Stmt::Observe(n, e) => Stmt::Observe(n.clone(), self.expr(e)?),
+            Stmt::Unread(args) => {
+                Stmt::Unread(args.iter().map(|a| self.arg(a)).collect::<Result<_, _>>()?)
+            }
             Stmt::Mark(n) => Stmt::Set(format!("{}.{n}", self.q.name), Expr::Var("now".into())),
             Stmt::Hold {
                 pools,

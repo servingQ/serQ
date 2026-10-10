@@ -125,7 +125,16 @@ in an expression or `NAME(arg, …);` as a statement, is replaced by the body
 with each parameter replaced by its argument, and parsed where it stands: a
 serving form in it finds its stage at the use, and a statement body follows
 the rules of the block it is used in (no `turn`, `end` or `request` in a
-`server`).
+`server`). An argument whose parameter the body does not read is left
+unread: it is resolved where the use stands, as an expression written there
+is, and never evaluated. `one(no_such_name)` with `def one(x) { 1 }` is
+refused for its unknown name, and `let n = one(kv);` is a constant though
+`kv` is a pool. It is not part of what the expression reads, so a check of
+what an expression reads at its moment ([Moments](../ir.md#moments)) does
+not see it, and a hold's body that passes a binding unread does not set it.
+An array size is resolved while the program is parsed, where only `let`
+constants are known, so an unread argument there must be one. The same
+holds for a device's time resource (`compute (t) = 1e-3;`).
 
 An expression definition's body can separately be given from outside: `--def NAME=expr` on the command line, `defs={"NAME": "expr"}` in
 pyserq. The program is then the one written with that body, so a

@@ -31,6 +31,10 @@ pub enum Expr {
     /// the linker writes it out with `j` a number, as binary `max`, `min`
     /// or `+`, so `n` is a constant.
     Over(Agg, String, Box<Expr>, Box<Expr>),
+    /// A definition's use whose body never reads some parameters: those
+    /// arguments, checked as if read where the use stands, then the body.
+    /// Parse-time only: the linker lowers the body alone.
+    Unread(Vec<Arg>, Box<Expr>),
 }
 
 /// What `Expr::Over` folds its terms with.
@@ -65,6 +69,44 @@ impl Agg {
 pub enum Arg {
     Expr(Expr),
     Ref(Ref),
+}
+
+impl Arg {
+    /// `Expr::any` in a call's argument: a reference's index.
+    pub fn any(&self, f: &impl Fn(&Expr) -> bool) -> bool {
+        match self {
+            Arg::Expr(x) => x.any(f),
+            Arg::Ref(r) => r.index.as_ref().is_some_and(|i| i.any(f)),
+        }
+    }
+
+    /// `Expr::for_each_mut` in a call's argument: a reference's index.
+    pub fn for_each_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
+        match self {
+            Arg::Expr(x) => x.for_each_mut(f),
+            Arg::Ref(r) => r.index.iter_mut().for_each(|i| i.for_each_mut(f)),
+        }
+    }
+
+    /// `Expr::substitute` in a call's argument.
+    pub fn substitute(&mut self, binds: &[(String, Expr)]) {
+        match self {
+            Arg::Expr(x) => x.substitute(binds),
+            Arg::Ref(r) => {
+                // a bare identifier argument is parsed as a reference (it
+                // may name a pool or a stage); when it names a binding it
+                // is the binding, else `min(known, …)` would read the
+                // attribute `known` and not the header's `known = …`
+                if r.index.is_none()
+                    && let Some((_, v)) = binds.iter().find(|(name, _)| *name == r.name)
+                {
+                    *self = Arg::Expr(v.clone());
+                } else if let Some(i) = &mut r.index {
+                    i.substitute(binds);
+                }
+            }
+        }
+    }
 }
 
 /// A pool or stage reference, possibly indexed into an array.
@@ -115,13 +157,33 @@ impl Expr {
                 Expr::Num(_) | Expr::Var(_) => false,
                 Expr::Located(_, x) | Expr::Unary(_, x) => x.any(f),
                 Expr::Sample(_, xs) => xs.iter().any(|x| x.any(f)),
-                Expr::Call(_, args) => args.iter().any(|a| match a {
-                    Arg::Expr(x) => x.any(f),
-                    Arg::Ref(r) => r.index.as_ref().is_some_and(|i| i.any(f)),
-                }),
+                Expr::Call(_, args) => args.iter().any(|a| a.any(f)),
+                // an unread argument is never evaluated
+                Expr::Unread(_, x) => x.any(f),
                 Expr::Binary(_, a, b) | Expr::Over(_, _, a, b) => a.any(f) || b.any(f),
                 Expr::Cond(c, a, b) => c.any(f) || a.any(f) || b.any(f),
             }
+    }
+
+    /// `f` on this expression, then on each one in it that `any` visits,
+    /// in the same order.
+    pub fn for_each_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
+        f(self);
+        match self {
+            Expr::Num(_) | Expr::Var(_) => {}
+            Expr::Located(_, x) | Expr::Unary(_, x) | Expr::Unread(_, x) => x.for_each_mut(f),
+            Expr::Sample(_, xs) => xs.iter_mut().for_each(|x| x.for_each_mut(f)),
+            Expr::Call(_, args) => args.iter_mut().for_each(|a| a.for_each_mut(f)),
+            Expr::Binary(_, a, b) | Expr::Over(_, _, a, b) => {
+                a.for_each_mut(f);
+                b.for_each_mut(f);
+            }
+            Expr::Cond(c, a, b) => {
+                c.for_each_mut(f);
+                a.for_each_mut(f);
+                b.for_each_mut(f);
+            }
+        }
     }
 
     /// Replace every `Var(name)` of `binds` by its expression: a header
@@ -138,22 +200,11 @@ impl Expr {
             }
             Expr::Num(_) => {}
             Expr::Sample(_, args) => args.iter_mut().for_each(|a| a.substitute(binds)),
-            Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
-                Arg::Expr(x) => x.substitute(binds),
-                Arg::Ref(r) => {
-                    // a bare identifier argument is parsed as a reference (it
-                    // may name a pool or a stage); when it names a binding it
-                    // is the binding, else `min(known, …)` would read the
-                    // attribute `known` and not the header's `known = …`
-                    if r.index.is_none()
-                        && let Some((_, v)) = binds.iter().find(|(name, _)| *name == r.name)
-                    {
-                        *a = Arg::Expr(v.clone());
-                    } else if let Some(i) = &mut r.index {
-                        i.substitute(binds);
-                    }
-                }
-            }),
+            Expr::Call(_, args) => args.iter_mut().for_each(|a| a.substitute(binds)),
+            Expr::Unread(args, x) => {
+                args.iter_mut().for_each(|a| a.substitute(binds));
+                x.substitute(binds);
+            }
             Expr::Unary(_, a) => a.substitute(binds),
             Expr::Binary(_, a, b) => {
                 a.substitute(binds);
@@ -174,6 +225,17 @@ impl Expr {
                 body.substitute(&inner);
             }
         }
+    }
+
+    /// `substitute` into the arguments of each `Unread` in it, and nowhere
+    /// else: a hold's body reads a binding as the attribute set at its top,
+    /// where an unread argument, which reads nothing, sees the binding.
+    pub fn bind_unread(&mut self, binds: &[(String, Expr)]) {
+        self.for_each_mut(&mut |x| {
+            if let Expr::Unread(args, _) = x {
+                args.iter_mut().for_each(|a| a.substitute(binds));
+            }
+        });
     }
 
     /// Whether the expression draws (`~`) anywhere.
@@ -467,6 +529,110 @@ pub enum Stmt {
     /// `mark x;` inside a queue's entry: the moment, as the attribute `Q.x`
     /// the caller reads. Parse-time only, as `Call`.
     Mark(String),
+    /// The arguments a statement definition's use passes to parameters
+    /// its body never reads (`Expr::Unread`). The linker resolves them and
+    /// lowers the statement to nothing.
+    Unread(Vec<Arg>),
+}
+
+/// What `each_part_mut` hands a visitor: each expression a statement holds,
+/// each pool, stage or queue it names, and each argument of a
+/// `Stmt::Unread`. What lies inside one (a reference's index, a nested
+/// expression) is the visitor's to walk.
+pub(crate) struct Parts<E, R, A> {
+    pub expr: E,
+    pub reference: R,
+    pub unread: A,
+}
+
+/// Hand every part of `stmts` to `parts`, a nested block's statements
+/// included, so that a walk over statements cannot pass over a place an
+/// expression stands: a reference's index is one (`hold g[n]`).
+pub(crate) fn each_part_mut<E, R, A>(stmts: &mut [Stmt], parts: &mut Parts<E, R, A>)
+where
+    E: FnMut(&mut Expr),
+    R: FnMut(&mut Ref),
+    A: FnMut(&mut Arg),
+{
+    for s in stmts {
+        match s {
+            Stmt::Side(_)
+            | Stmt::Declare(..)
+            | Stmt::Turn
+            | Stmt::Request
+            | Stmt::End
+            | Stmt::Join
+            | Stmt::Mark(_) => {}
+            Stmt::Set(_, e) | Stmt::Observe(_, e) => (parts.expr)(e),
+            Stmt::Unread(args) => args.iter_mut().for_each(&mut parts.unread),
+            Stmt::Hold {
+                pools,
+                reuse,
+                body,
+                cache,
+                lease,
+            } => {
+                for (r, e, reserve) in pools {
+                    (parts.reference)(r);
+                    (parts.expr)(e);
+                    reserve.iter_mut().for_each(&mut parts.expr);
+                }
+                reuse.iter_mut().for_each(&mut parts.expr);
+                cache.iter_mut().for_each(&mut parts.expr);
+                if let Some((r, duration)) = lease {
+                    (parts.reference)(r);
+                    (parts.expr)(duration);
+                }
+                each_part_mut(body, parts);
+            }
+            Stmt::Grow(r, e) | Stmt::Load(r, e) => {
+                (parts.reference)(r);
+                (parts.expr)(e);
+            }
+            Stmt::Drop(r) | Stmt::Release(r) => (parts.reference)(r),
+            Stmt::Run {
+                stage,
+                work,
+                growing,
+                also,
+                ..
+            } => {
+                (parts.reference)(stage);
+                also.iter_mut().for_each(&mut parts.reference);
+                (parts.expr)(work);
+                growing.iter_mut().for_each(&mut parts.reference);
+            }
+            Stmt::Branch(e, a, b) => {
+                (parts.expr)(e);
+                each_part_mut(a, parts);
+                each_part_mut(b, parts);
+            }
+            Stmt::While(e, b) => {
+                (parts.expr)(e);
+                each_part_mut(b, parts);
+            }
+            Stmt::Loop(b) | Stmt::Fork(b) => each_part_mut(b, parts),
+            Stmt::Choose { count, key, .. } => {
+                (parts.expr)(count);
+                key.iter_mut().for_each(&mut parts.expr);
+            }
+            Stmt::Call {
+                queue,
+                args,
+                from,
+                to,
+                ..
+            } => {
+                (parts.reference)(queue);
+                args.iter_mut().for_each(&mut parts.expr);
+                from.iter_mut().for_each(&mut parts.reference);
+                if let Some((r, e)) = to {
+                    (parts.reference)(r);
+                    (parts.expr)(e);
+                }
+            }
+        }
+    }
 }
 
 /// Execution settings parsed only from an external instance, never a model.
@@ -540,10 +706,11 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
         }
         match e {
             Expr::Sample(_, args) => args.iter_mut().for_each(expr),
-            Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
-                Arg::Expr(e) => expr(e),
-                Arg::Ref(r) => reference(r),
-            }),
+            Expr::Call(_, args) => args.iter_mut().for_each(arg),
+            Expr::Unread(args, e) => {
+                args.iter_mut().for_each(arg);
+                expr(e);
+            }
             Expr::Unary(_, e) => expr(e),
             Expr::Binary(_, a, b) => {
                 expr(a);
@@ -561,6 +728,12 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
             _ => {}
         }
     }
+    fn arg(a: &mut Arg) {
+        match a {
+            Arg::Expr(e) => expr(e),
+            Arg::Ref(r) => reference(r),
+        }
+    }
     fn reference(r: &mut Ref) {
         r.span = None;
         if let Some(e) = &mut r.index {
@@ -568,63 +741,14 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
         }
     }
     fn block(stmts: &mut [Stmt]) {
-        for s in stmts {
-            match s {
-                Stmt::Set(_, e) | Stmt::Observe(_, e) => expr(e),
-                Stmt::Hold {
-                    pools,
-                    reuse,
-                    body,
-                    cache,
-                    lease,
-                } => {
-                    for (r, e, reserve) in pools {
-                        reference(r);
-                        expr(e);
-                        reserve.iter_mut().for_each(expr);
-                    }
-                    reuse.iter_mut().for_each(expr);
-                    cache.iter_mut().for_each(expr);
-                    if let Some((r, duration)) = lease {
-                        reference(r);
-                        expr(duration);
-                    }
-                    block(body);
-                }
-                Stmt::Grow(r, e) | Stmt::Load(r, e) => {
-                    reference(r);
-                    expr(e);
-                }
-                Stmt::Drop(r) | Stmt::Release(r) => reference(r),
-                Stmt::Run {
-                    stage,
-                    work,
-                    growing,
-                    also,
-                    ..
-                } => {
-                    reference(stage);
-                    also.iter_mut().for_each(reference);
-                    expr(work);
-                    growing.iter_mut().for_each(reference);
-                }
-                Stmt::Branch(e, a, b) => {
-                    expr(e);
-                    block(a);
-                    block(b);
-                }
-                Stmt::While(e, b) => {
-                    expr(e);
-                    block(b);
-                }
-                Stmt::Loop(b) | Stmt::Fork(b) => block(b),
-                Stmt::Choose { count, key, .. } => {
-                    expr(count);
-                    key.iter_mut().for_each(expr);
-                }
-                _ => {}
-            }
-        }
+        each_part_mut(
+            stmts,
+            &mut Parts {
+                expr,
+                reference,
+                unread: arg,
+            },
+        );
     }
     p.definitions.clear();
     for (_, e) in &mut p.lets {
