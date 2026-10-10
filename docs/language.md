@@ -863,8 +863,10 @@ waiting while (running.preempted == 0);` is the `ExclusivePrefill` order.
 Any other schedule is the step's iteration body; `exclusive prefill`
 appears only in the form above, since it takes back decodes a body cannot.
 `each at most` chooses among constants (its condition may read the
-iteration), and one at or below 0 does not link: the kernel would read 0
-as no cap, so the program would mean one thing and run another. An engine
+iteration) or `max(k, e)`, `e` read as the condition is and `k` a
+constant above 0, and one at or below 0 does not link: the kernel would
+read 0 as no cap, so the program would mean one thing and run another;
+`k` keeps a computed cap above 0 whatever `e` reads. An engine
 names each value one way in all its clauses, and none by the kernel's
 bare name: `running.…` is the residents as they stand, `waiting.…` the
 queues, `batch.…` the iteration's batch.

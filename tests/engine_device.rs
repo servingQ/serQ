@@ -887,9 +887,59 @@ fn the_design_refuses_what_it_says() {
         &engine("let t = running.count > 1 ? -1 : inf; advance running each at most (t);"),
         "would be given nothing",
     );
+    // a computed cap is `max(k, e)` above a positive constant `k` (#442)
     refused(
         &engine("advance running each at most (running.count);"),
-        "chooses among constants",
+        "`max(k, e)` with `k` a constant above 0",
+    );
+    refused(
+        &engine("advance running each at most (min(4, running.count));"),
+        "`max(k, e)` with `k` a constant above 0",
+    );
+    refused(
+        &engine("advance running each at most (max(0, running.count));"),
+        "`each at most (max(0, …))`: a run could be given 0",
+    );
+    refused(
+        &engine("let k = 2 - 3; advance running each at most (max(running.count, k));"),
+        "`each at most (max(-1, …))`: a run could be given -1",
+    );
+    refused(
+        &engine("let k = inf; advance running each at most (max(k, running.count));"),
+        "`inf` inside an `each at most`'s arithmetic",
+    );
+    refused(
+        &format!(
+            "let k = inf;\n{}",
+            engine("advance running each at most (max(k, running.count));")
+        ),
+        "is no cap whatever it reads; write `inf`",
+    );
+    refused(
+        &engine("advance running each at most (max(running.count, waiting.count));"),
+        "`max(k, e)` with `k` a constant above 0",
+    );
+    refused(
+        &engine("advance running each at most (2 * max(2, running.count));"),
+        "`max(k, e)` with `k` a constant above 0",
+    );
+    assert_eq!(
+        lowered(
+            "let k = 2; let t = max(k, floor(8 / running.count)); \
+             advance running each at most (t); \
+             admit waiting while (running.preempted == 0) each at most (t);"
+        )
+        .chunk,
+        CExpr::Call(
+            Fun::Max,
+            vec![
+                CArg::Expr(num(2.0)),
+                CArg::Expr(CExpr::Call(
+                    Fun::Floor,
+                    vec![CArg::Expr(bin(BinOp::Div, num(8.0), ctx(CtxVar::Nres)))]
+                )),
+            ]
+        )
     );
     // a `let` reads the ones above it
     assert_eq!(

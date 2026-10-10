@@ -1537,8 +1537,10 @@ impl Linker<'_> {
 
     /// An engine's `each at most`: its condition may read the iteration's
     /// start, and each cap it chooses is a constant once the `let`s are
-    /// known, above 0 (`inf` for none, which the kernel writes 0). A cap of 0
-    /// or below would run as none, since the kernel reads 0 so.
+    /// known, above 0 (`inf` for none, which the kernel writes 0), or
+    /// `max(k, e)` with `k` such a constant and `e` read as the condition is
+    /// (vLLM's adaptive threshold). A cap of 0 or below would run as none,
+    /// since the kernel reads 0 so; `k` keeps every outcome above it.
     fn per_run_cap(&self, e: &Expr, stage: &str, span: Option<Span>) -> LResult<CExpr> {
         Ok(match e {
             Expr::Located(s, a) => self.per_run_cap(a, stage, Some(*s))?,
@@ -1556,15 +1558,11 @@ impl Linker<'_> {
             },
             leaf => {
                 // a name it does not know is that error, not this one
-                self.expr(leaf).map_err(|e| e.at(span))?;
-                let v = self.eval_const(leaf).map_err(|_| {
-                    LinkError::new(format!(
-                        "engine `{stage}`: an `each at most` chooses among constants: its \
-                         condition may read the iteration, the cap it gives a run may not \
-                         (write the `?:` outermost: `c ? 8 : 16`, not `(c ? 4 : 8) * 2`)"
-                    ))
-                    .at(span)
-                })?;
+                let lowered = self.expr(leaf).map_err(|e| e.at(span))?;
+                let v = match self.eval_const(leaf) {
+                    Ok(v) => v,
+                    Err(_) => return self.floored_cap(leaf, lowered, stage, span),
+                };
                 if v.is_nan() || v <= 0.0 {
                     return Err(LinkError::new(format!(
                         "engine `{stage}`: `each at most ({v})`: a run would be given nothing, \
@@ -1575,6 +1573,59 @@ impl Linker<'_> {
                 CExpr::Num(if v.is_infinite() { 0.0 } else { v })
             }
         })
+    }
+
+    /// A cap an `each at most` computes: `max(k, e)`, in either order, with
+    /// `k` a constant above 0 once the `let`s are known, so the run gets at
+    /// least `k` whatever `e` reads (a NaN `e` included: `max` gives `k`).
+    fn floored_cap(
+        &self,
+        leaf: &Expr,
+        lowered: CExpr,
+        stage: &str,
+        span: Option<Span>,
+    ) -> LResult<CExpr> {
+        let rule = "an `each at most` is a constant, `inf`, or `max(k, e)` with `k` a \
+                    constant above 0, so that no run is given 0 or below, which the kernel \
+                    reads as no cap; its condition may read the iteration (write the `?:` \
+                    outermost: `c ? 8 : 16`, not `(c ? 4 : 8) * 2`)";
+        let unwrap = |e: &Expr| -> Expr {
+            let mut e = e;
+            while let Expr::Located(_, a) = e {
+                e = a;
+            }
+            e.clone()
+        };
+        let Expr::Call(f, args) = unwrap(leaf) else {
+            return Err(LinkError::new(format!("engine `{stage}`: {rule}")).at(span));
+        };
+        if f != "max" || args.len() != 2 {
+            return Err(LinkError::new(format!("engine `{stage}`: {rule}")).at(span));
+        }
+        let floor = args
+            .iter()
+            .filter_map(|a| match a {
+                Arg::Expr(e) => self.eval_const(e).ok(),
+                Arg::Ref(r) if r.index.is_none() => {
+                    self.eval_const(&Expr::Var(r.name.clone())).ok()
+                }
+                Arg::Ref(_) => None,
+            })
+            .next();
+        match floor {
+            Some(k) if k > 0.0 && k.is_finite() => Ok(lowered),
+            Some(k) if k.is_infinite() && k > 0.0 => Err(LinkError::new(format!(
+                "engine `{stage}`: `each at most (max(inf, …))` is no cap whatever it \
+                 reads; write `inf`"
+            ))
+            .at(span)),
+            Some(k) => Err(LinkError::new(format!(
+                "engine `{stage}`: `each at most (max({k}, …))`: a run could be given \
+                 {k}; {rule}"
+            ))
+            .at(span)),
+            None => Err(LinkError::new(format!("engine `{stage}`: {rule}")).at(span)),
+        }
     }
 
     /// A constant that counts (sessions, arrivals): a whole number from `min`

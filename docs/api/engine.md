@@ -150,7 +150,18 @@ schedule {
 run for the whole iteration, so every statement that has one says the
 same. `inf` is no cap. `c` chooses among constants (its condition may
 read the running requests as the iteration starts, through a `let`), and
-one at or below 0 does not link.
+one at or below 0 does not link. A cap that follows the iteration is
+written `max(k, e)` with `k` a constant above 0: `e` reads what the
+condition reads, and `k` keeps every run above 0. vLLM's adaptive
+threshold (`scheduler.py:617-622`), with `threshold` and `budget` the
+program's constants, is
+
+```serq
+let n = running.count + waiting.count;
+let c = n > 1 ? max(threshold, floor(budget / n)) : inf;
+```
+
+`max(0, e)`, `min(k, e)` or a bare `e` does not link.
 
 ### `exclusive prefill`
 

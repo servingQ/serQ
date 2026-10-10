@@ -403,6 +403,36 @@ fn long_prefill_threshold_applies_only_with_company() {
     );
 }
 
+/// scheduler.py:617-622: with `adaptive_long_prefill_threshold`, the cap
+/// is floored at a fair share of the budget, `max(threshold, budget //
+/// num_eligible_reqs)`. An `each at most` computes it as `max(k, e)` with
+/// `k` a positive constant (#442).
+#[test]
+fn adaptive_long_prefill_threshold_floors_the_cap_at_a_fair_share() {
+    let adaptive = |threshold: usize| {
+        format!(
+            "let n = running.count + waiting.count;
+            let c = n > 1 ? max({threshold}, floor(4096 / n)) : inf;
+            advance running each at most (c);
+            admit waiting while (running.preempted == 0) each at most (c);"
+        )
+    };
+    let ttft = |schedule: &str| {
+        let r = run(
+            &engine(2, "3000", "1", 1000, 16, 4096, 16, schedule),
+            &common::horizon(1000.0),
+        );
+        r.observe("ttft").unwrap().samples.clone()
+    };
+    // the fair share binds: max(1000, 4096 // 2) = 2048 each, 2048 + 2048
+    // in the first step and the last 952 of each in the second; the
+    // constant 1000 takes three steps (above)
+    assert_eq!(ttft(&adaptive(1000)), vec![2.0, 2.0]);
+    // the threshold binds: max(3000, 2048) = 3000, the first prompt whole
+    // and 1096 of the second in the first step, its last 1904 in the second
+    assert_eq!(ttft(&adaptive(3000)), vec![1.0, 2.0]);
+}
+
 /// kv_cache_manager.py:289-300, block_pool.py:776-805: a finished request's
 /// full blocks stay cached; the next turn of the session reuses them (all
 /// full blocks of the prompt but the last token); the partial tail block

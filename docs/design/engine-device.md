@@ -175,13 +175,14 @@ iteration); about twelve forms and ten link errors come.
   option back on an engine's pool, or a word for the other case. Rejected:
   `pool reqs on E` already says by its owner who admits, and `on E.D` says
   it the same way for the device's capacity.
-- **An `each at most` that computes its cap**: the caps are constants, so
-  vLLM's adaptive threshold, `max(long_prefill_token_threshold,
+- **An `each at most` that computes its cap, any expression (#442)**: a
+  constant is what lets a cap of 0 or below be refused before the run, so
+  a computed cap is only `max(k, e)` with `k > 0` constant, which keeps
+  that and writes vLLM's adaptive threshold, `max(long_prefill_token_threshold,
   input_budget // num_eligible_reqs)` (`scheduler.py:617-622`, off by
-  default), cannot be written as an engine's, where a `chunk` could. Kept:
-  a constant is what lets a cap of 0 or below be refused before the run;
-  `max(k, e)` with `k > 0` constant would keep that and is the opening when
-  a program needs it.
+  default). Rejected: `min(k, e)` or `e` checked at run time, since a cap
+  of 0 or below would then be a run-time error the linker could have
+  named.
 - **A schedule `let` read in `only` (#412)**, to name the predicate
   `advance running` and `admit waiting` share: a `let` is read as the
   iteration starts, and `only` for each request with the residents as they
