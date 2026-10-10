@@ -92,14 +92,15 @@ fn ir_runs_like_text() {
 #[test]
 fn ir_that_skips_the_linker_meets_its_checks() {
     use serq::ir::{CArg, CExpr, CRef, CStmt, DistKind, Fun};
-    let src = "pool kv { cap 64; }
-        stage engine : step { budget 8; cost 1; memory kv; }
+    let src = "device gpu { kv cap 64; }
+        engine llm on gpu { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        pool kv on gpu { }
         stage d : delay;
         workload { arrive batch(1); init { set x = 1; }
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, 8)) { run engine prefill (cost(engine, 8)) growing kv; }
+        server { hold kv (cost(kv, 8)) { run llm prefill (cost(llm, 8)) growing kv; }
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();

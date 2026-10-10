@@ -64,9 +64,10 @@ fn texts(name: &str) -> Vec<String> {
 }
 
 /// A step stage is drawn in an engine's words, whichever form the program
-/// is written in (#413): `llmd_nixl_pull.sq`'s `serve step` is an engine
-/// with `tokens cap`; a pool it admits is on it, its memory on its device,
-/// and a memory it also admits (`D.kv`) says so among its options.
+/// is written in (#413): `llmd_nixl_pull.sq`'s engines are drawn with
+/// `tokens cap`; a pool an engine admits is on it, its memory on its
+/// device, and a memory it also admits (`D.kv`, `on D.gpu`) says so among
+/// its options.
 #[test]
 fn a_step_stage_is_drawn_in_an_engines_words() {
     let t = texts("llmd_nixl_pull");
@@ -186,8 +187,9 @@ fn compile(src: &str) -> Program {
 fn growing_is_found_through_nested_holds() {
     let p = compile(
         r#"
-        pool kv { cap 100000; } pool reqs { cap 8; } pool gate { cap 4; }
-        stage engine : step { budget 512; cost 1e-3; memory kv; }
+        device gpu { kv cap 100000; }
+        engine llm on gpu { tokens cap 512; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1e-3); }
+        pool kv on gpu { } pool reqs { cap 8; } pool gate { cap 4; }
         workload { arrive poisson(0.2); turn { set n = 100; set o = 2; }
           session {  turn;
             end;
@@ -195,7 +197,7 @@ fn growing_is_found_through_nested_holds() {
         }
         server {
           hold kv (cost(kv, 32)), reqs (cost(reqs, 1)) {
-            hold gate (cost(gate, 1)) { run engine prefill (cost(engine, n)) growing kv; }
+            hold gate (cost(gate, 1)) { run llm prefill (cost(llm, n)) growing kv; }
           } cache (cost(kv, reqs, n + o));
         }
 

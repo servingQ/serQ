@@ -653,7 +653,7 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
     let request =
         "hold kv (cost(kv, min(cachedin(kv), 992) + 8)) at admission (hit = min(cachedin(kv), 992)) {
                      observe hit = cached > 0;
-                     run engine prefill (cost(engine, 1000 - cached)) growing kv;
+                     run llm prefill (cost(llm, 1000 - cached)) growing kv;
                    } cache (cost(kv, 1000));";
     for (wrap, want_hit) in [
         (request.to_string(), 1.0),
@@ -669,8 +669,13 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
     ] {
         let src = format!(
             r#"
-        pool kv {{ cap 100000; block 16; evict lru; }}
-        stage engine : step {{ budget 8192; cost tokens * 1e-5 + 1e-4; memory kv; }}
+        device gpu {{ kv cap 100000; }}
+        engine llm on gpu {{
+          tokens cap 8192;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (batch.tokens * 1e-5 + 1e-4);
+        }}
+        pool kv on gpu {{ block 16; evict lru; }}
         stage think : delay;
         workload {{ arrive closed(1);
           session {{ turn;
@@ -820,7 +825,9 @@ fn bad_amounts_and_indices_fail_the_run() {
     // a decode is named as the kernel writes it (`run E decode (…)`)
     let e = run_source(
         &common::main_source(
-            "pool kv { cap 64; } stage eng : step { budget 8; cost 1; memory kv; }
+            "device gpu { kv cap 64; }
+        engine eng on gpu { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        pool kv on gpu { }
         workload { arrive batch(1); init { set z = 0; }
           session { turn; end;
           }
@@ -856,8 +863,13 @@ fn bad_amounts_and_indices_fail_the_run() {
 /// `used` once, and the release gave both back: `used` went negative (#309).
 #[test]
 fn a_hold_takes_a_pool_once() {
-    let src = "pool kv { cap 400; block 16; }
-        stage engine : step { budget 128; chunk 128; cost 0.001; memory kv; }
+    let src = "device gpu { kv cap 400; }
+        engine llm on gpu {
+          tokens cap 128;
+          schedule { advance running each at most (128); admit waiting while (running.preempted == 0) each at most (128); }
+          execute (0.001);
+        }
+        pool kv on gpu { block 16; }
         workload { arrive batch(3);
           session { turn;
             end;
@@ -866,7 +878,7 @@ fn a_hold_takes_a_pool_once() {
         }
         server {
           set prompt = 64;
-          hold kv (cost(kv, 16)), kv (cost(kv, 16)) { run engine prefill (cost(engine, prompt)) growing kv; run engine decode (cost(engine, 40)) growing kv; }
+          hold kv (cost(kv, 16)), kv (cost(kv, 16)) { run llm prefill (cost(llm, prompt)) growing kv; run llm decode (cost(llm, 40)) growing kv; }
         }
         ";
     let e = serq::compile_source(&common::main_source(src), &common::horizon(1.0)).unwrap_err();

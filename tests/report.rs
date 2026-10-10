@@ -356,8 +356,9 @@ fn a_queue_family_of_one_is_reported_by_index() {
     let src = "let ND = 1;
         queue gw : gateway { route { choose j in ND by (0); D[j].decode (prompt); } }
         queue D[ND] : decode {
-          pool kv { cap 100; }
-          serve step { cost 1; memory kv; }
+          device gpu { kv cap 100; }
+          engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+          pool kv on gpu { }
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         }
         workload { arrive batch(1); init { set prompt = 4; } session { turn; end; } } server { gw.route(); }

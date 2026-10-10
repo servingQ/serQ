@@ -483,9 +483,14 @@ fn decode_pressure_backs_into_the_prefill_pool() {
 fn a_re_executed_hold_releases_nothing_twice() {
     let src = r#"
         pool memP { cap 100; }
-        pool memD { cap 20; block 10; preempt lifo; }
+        device gpu { memD cap 20; }
+        pool memD on gpu { block 10; preempt lifo; }
         stage link : delay;
-        stage engine : step { budget 100; cost 1; memory memD; }
+        engine llm on gpu {
+          tokens cap 100;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
         workload { arrive batch(1);
           session { turn;
             end;
@@ -497,7 +502,7 @@ fn a_re_executed_hold_releases_nothing_twice() {
             hold memD (cost(memD, 10)) {
               transfer (1) from memP to memD (10);
               observe p_free = free(memP);
-              run engine decode (cost(engine, 25)) growing memD;
+              run llm decode (cost(llm, 25)) growing memD;
             }
           }
         }
@@ -665,8 +670,13 @@ fn release_and_load_name_the_pool_as_the_hold_does() {
 #[test]
 fn a_grow_with_nobody_to_preempt_waits() {
     let src = r#"
-        pool kv { cap 20; preempt lifo; }
-        stage engine : step { budget 100; cost 1; memory kv; }
+        device gpu { kv cap 20; }
+        engine llm on gpu {
+          tokens cap 100;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool kv on gpu { preempt lifo; }
         stage svc : delay;
         workload { arrive batch(2);
           session { turn;
