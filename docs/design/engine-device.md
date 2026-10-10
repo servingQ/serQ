@@ -45,9 +45,10 @@ pool reqs on vllm { queue fifo; }
 - **`device`**: time resources (demand to time, read in `execute`; functions
   because the fitted constants are times) and capacities.
 - **`pool X on D`** takes its name and `cap` from D's capacity `X`; its body
-  is the rules. A pool on an engine or on its device is admitted by that
-  engine, and the engine's KV is the pool on its device, so `admit via` and
-  `memory` go. Under `device gpu[N]`, `pool kv on gpu` is `kv[N]` and
+  is the rules. The engine's KV is the pool on its device, so `memory` goes.
+  Who admits a hold waiting for the pool is said where the pool is:
+  `pool reqs on E` and `pool kv on E.D` are admitted by engine `E` in an
+  iteration, `pool kv on D` as soon as it fits; so `admit via` goes. Under `device gpu[N]`, `pool kv on gpu` is `kv[N]` and
   `engine E[N] on gpu` pairs `E[i]` with `kv[i]`.
 - **`tokens cap B`** caps `tokens`, which starts at 0 each iteration and is
   what `execute` reads; a language name, so never a pool.
@@ -116,11 +117,10 @@ for statement and lowers to no `iteration`, as the oracle fragment requires
 No IR value moves, so the oracle and the Lean fragment read every program
 as before:
 
-- **`admit_via` where a queue is used.** A pool on an engine is admitted by
-  it. A pool on its device is admitted by it only where a hold names the
-  pool first, so waits in its queue; elsewhere that queue is empty, and the
-  pool is written without `admit_via`, as the 12 programs do today (and as
-  `deployment()` requires of an engine-admitted pool: no preemption).
+- **`admit_via` as the pool says.** A pool on an engine, or on its device
+  as `on E.D`, is admitted by it; `on D` is not. A program that held the
+  device pool first with no `admit via` (the tests' queues, settle-time
+  admission) and one that did (llm-d's decoder, TGI) are both written.
 - **`waiting.count`** is `queued(p)` summed over the pools whose `admit_via`
   is the engine, which is `queued(reqs)` where `long_prefill` read it.
 - **`inf` is written 0 by the linker**, once the `let`s have their values:
@@ -164,11 +164,17 @@ iteration); about twelve forms and ten link errors come.
   language, a second place for what is said, or (TGI) a pool that never grows.
 - **A device pool always engine-admitted, the Lean fragment taught it**:
   `deployment()` requires an engine-admitted pool to preempt nothing, and
-  `kv` preempts. Not needed: a device pool is admitted only where a hold
-  waits in its queue. The cost is that `pool kv on gpu` alone does not say
-  whether the IR has `admit_via`; the holds' order does, and with it which
-  pool's keys may read the engine's `state` (`src/ir.rs`, "the keys of a
-  pool it admits").
+  `kv` preempts. Not needed: `on D` is not engine-admitted.
+- **A device pool engine-admitted where a hold names it first** (#421): the
+  form this document first had. `pool kv on gpu` alone did not say whether
+  the IR had `admit_via`; the holds' order did, so a memory admitted as
+  soon as it fits, which the kernel writes and the queueing papers assume,
+  could not be written, and `kv cap inf` changed when a request entered.
+  The pool now says it, `on E.D`.
+- **`pool kv on gpu { admit via E; }`, or an opt-out word**: the kernel's
+  option back on an engine's pool, or a word for the other case. Rejected:
+  `pool reqs on E` already says by its owner who admits, and `on E.D` says
+  it the same way for the device's capacity.
 - **An `each at most` that computes its cap**: the caps are constants, so
   vLLM's adaptive threshold, `max(long_prefill_token_threshold,
   input_budget // num_eligible_reqs)` (`scheduler.py:617-622`, off by

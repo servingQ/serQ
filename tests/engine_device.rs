@@ -672,9 +672,10 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(bat
     );
 }
 
-/// A family of devices: `pool kv on gpu` is `kv[N]`, an engine `E[N]`
-/// reads `kv[i]` from `E[i]`, as `stage E[N] : step { memory kv; }` beside
-/// `pool kv[N]` does.
+/// A family of devices: `pool kv on vllm.gpu` is `kv[N]`, an engine `E[N]`
+/// reads `kv[i]` from `E[i]` and admits its queue, as `stage E[N] : step {
+/// memory kv; }` beside `pool kv[N] { admit via E; }` does; `pool kv on gpu`
+/// is the same memory, admitted as soon as it fits.
 #[test]
 fn a_family_follows_its_device() {
     let ov = common::horizon(20.0);
@@ -694,7 +695,7 @@ engine vllm[2] on gpu {{
   schedule {{ advance running; admit waiting while (running.preempted == 0); }}
   execute (step_time(batch.tokens));
 }}
-pool kv on gpu {{ }}
+pool kv on vllm.gpu {{ }}
 {work}"
     );
     let old = format!(
@@ -703,6 +704,10 @@ stage vllm[2] : step {{ budget 8; cost 1; memory kv; }}
 {work}"
     );
     assert_eq!(ir(&old, None, &ov), ir(&new, None, &ov));
+    assert_eq!(
+        ir(&old.replace(" admit via vllm;", ""), None, &ov),
+        ir(&new.replace("on vllm.gpu", "on gpu"), None, &ov)
+    );
     // a member's schedule cannot count every member's queues
     refused(
         &new.replace(
@@ -725,18 +730,44 @@ stage vllm[2] : step {{ budget 8; cost 1; memory kv; }}
     );
 }
 
+/// `on ENGINE.DEVICE` names the engine on the device, declared above the
+/// pool: that engine admits the pool's queue.
+#[test]
+fn a_pool_names_the_engine_that_admits_it() {
+    let ok = engine("advance running; admit waiting while (running.preempted == 0);");
+    let ov = common::horizon(20.0);
+    ir(
+        &ok.replace("pool kv on gpu", "pool kv on vllm.gpu"),
+        None,
+        &ov,
+    );
+    refused(
+        &ok.replace("pool kv on gpu", "pool kv on sglang.gpu"),
+        "no engine `sglang`",
+    );
+    refused(
+        &ok.replace("device gpu {", "device npu { kv cap 1; }\ndevice gpu {")
+            .replace("pool kv on gpu", "pool kv on vllm.npu"),
+        "`vllm` runs on `gpu`, not `npu`",
+    );
+}
+
 /// Inside a `queue`, `device gpu` is the member's and `engine on gpu` is
 /// the queue's stage: `examples/pd-disaggregation/llmd_nixl_pull.sq` writes
 /// both pods as engines, and written as `serve step` they have the same IR.
-/// The decoder's holds name `kv` first, so its device pool is admitted by
-/// its engine; the prefiller's are not.
+/// The decoder's holds wait in `kv`, which its engine admits (`on D.gpu`);
+/// the prefiller's wait in `reqs`.
 #[test]
 fn a_queue_holds_its_engine() {
     let base = root().join("examples/pd-disaggregation");
     let new = std::fs::read_to_string(base.join("llmd_nixl_pull.sq")).unwrap();
     let mut old = new.clone();
     for (q, cap, blocks) in [("P", "max_seqsP", "blocksP"), ("D", "max_seqsD", "blocksD")] {
-        let via = if q == "D" { " admit via D;" } else { "" };
+        let (on, via) = if q == "D" {
+            ("D.gpu", " admit via D;")
+        } else {
+            ("gpu", "")
+        };
         old = replaced(
             &old,
             &[(
@@ -749,7 +780,7 @@ fn a_queue_holds_its_engine() {
       execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
     }}
     pool reqs on {q} {{ queue fifo; }}
-    pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
+    pool kv on {on} {{ block bs; evict lru; preempt lifo; }}
 "
                 ),
                 &format!(
@@ -789,6 +820,11 @@ server {{ E.prefill (prompt); }}
     let ov = common::horizon(10.0);
     ir(
         &pod(&format!("{device} {engine} pool kv on gpu {{ }}")),
+        None,
+        &ov,
+    );
+    ir(
+        &pod(&format!("{device} {engine} pool kv on E.gpu {{ }}")),
         None,
         &ov,
     );

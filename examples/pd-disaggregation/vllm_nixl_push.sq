@@ -105,7 +105,7 @@ fn main() {
       execute (cD + aP * batch.prefilled + bP * batch.attention);
     }
     pool reqs on D { queue fifo; }
-    pool kv on gpu { block bs; evict lru; preempt lifo; }
+    pool kv on D.gpu { block bs; evict lru; preempt lifo; }
     nic ps(Bw);                           // the pod's NIC: the writes into it share it
 
     // Every request has a remote prefill: this entry is never called.

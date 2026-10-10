@@ -1676,12 +1676,13 @@ impl Parser {
                 prog.gauges.push((name, e));
             } else if self.eat_kw("pool") {
                 let (d, on) = self.pool(true)?;
-                if let Some((owner, at)) = on {
+                if let Some(on) = on {
                     self.pool_on(device::PoolOn {
                         pool: prog.pools.len(),
-                        owner,
+                        owner: on.owner,
                         cap: d.name.clone(),
-                        at,
+                        at: on.at,
+                        admitted_by: on.admitted_by,
                     })?;
                 }
                 prog.pools.push(d);
@@ -2757,7 +2758,7 @@ impl Parser {
 
     /// `pool NAME [N] { … }`, or `pool NAME on OWNER { … }` where `on` is
     /// allowed: OWNER's capacity NAME, with the owner and where it is named.
-    fn pool(&mut self, on_ok: bool) -> PResult<(PoolDecl, Option<(String, usize)>)> {
+    fn pool(&mut self, on_ok: bool) -> PResult<(PoolDecl, Option<device::On>)> {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
@@ -2779,6 +2780,14 @@ impl Parser {
             self.advance();
             let o_at = self.pos;
             let mut owner = self.ident()?;
+            // `on ENGINE.DEVICE`: the device's capacity, whose queue the
+            // engine running on it admits
+            let mut admitted_by = None;
+            if *self.peek() == Tok::Dot {
+                self.advance();
+                admitted_by = Some(owner);
+                owner = self.ident()?;
+            }
             if let Some(q) = &self.device_scope {
                 // a queue's pool is the member's: on the queue's own device,
                 // or on the queue's engine, which is named after the queue
@@ -2806,9 +2815,16 @@ impl Parser {
                     ),
                 );
             }
+            if let Some(engine) = &admitted_by {
+                self.check_admitted_by(o_at, engine, &owner)?;
+            }
             let (c, n, a) = self.capacity_of(at, &name, &owner)?;
             (cap, count, is_array) = (c, n, a);
-            on = Some((owner, o_at));
+            on = Some(device::On {
+                owner,
+                at: o_at,
+                admitted_by,
+            });
         }
         self.expect(&Tok::LBrace)?;
         let mut d = PoolDecl {
@@ -3365,16 +3381,17 @@ impl Parser {
                         format!("`{}` is declared twice in queue `{name}`", d.name),
                     );
                 }
-                if let Some((owner, o_at)) = on {
+                if let Some(on) = on {
                     if self.queues[qi].pools.contains(&d.name) {
                         return self.err(format!("duplicate pool `{}` in queue `{name}`", d.name));
                     }
                     self.queues[qi].pools.push(d.name.clone());
                     self.pool_on(device::PoolOn {
                         pool: prog.pools.len(),
-                        owner,
+                        owner: on.owner,
                         cap: d.name.clone(),
-                        at: o_at,
+                        at: on.at,
+                        admitted_by: on.admitted_by,
                     })?;
                     d.name = format!("{name}.{}", d.name);
                     prog.pools.push(d);

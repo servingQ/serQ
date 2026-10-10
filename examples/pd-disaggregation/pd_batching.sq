@@ -99,7 +99,7 @@ fn main() {
       execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
     }
     pool reqs on E { queue fifo; }
-    pool kv on gpu { block bs; evict lru; preempt lifo; }
+    pool kv on E.gpu { block bs; evict lru; preempt lifo; }
     decode (prompt) {
       hold kv (cost(kv, min(known, budget_left(E)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
            at admission (known = computed < prompt ? prompt : computed + 1) {
@@ -153,7 +153,7 @@ fn main() {
       execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
     }
     pool reqs on D { queue fifo; }
-    pool kv on gpu { block bs; evict lru; preempt lifo; }
+    pool kv on D.gpu { block bs; evict lru; preempt lifo; }
     nic ps(Bw);
     // The `decode` role asks for this entry; the gateway never calls it.
     decode (prompt) {

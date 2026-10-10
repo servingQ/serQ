@@ -34,6 +34,14 @@ pub(super) struct EngineDecl {
     pub caps: Vec<Capacity>,
 }
 
+/// What `pool NAME on …` names: the device or engine that owns the
+/// capacity, where it is written, and, for `on ENGINE.DEVICE`, the engine.
+pub(super) struct On {
+    pub owner: String,
+    pub at: usize,
+    pub admitted_by: Option<String>,
+}
+
 /// `pool NAME on OWNER { … }`: `prog.pools[pool]` is OWNER's capacity NAME.
 pub(super) struct PoolOn {
     pub pool: usize,
@@ -41,6 +49,9 @@ pub(super) struct PoolOn {
     /// The capacity's name: the pool's, before a queue prefixes it.
     pub cap: String,
     pub at: usize,
+    /// `on ENGINE.DEVICE`: the engine whose scheduler admits the pool's
+    /// queue. `on DEVICE` admits a waiting hold as soon as it fits.
+    pub admitted_by: Option<String>,
 }
 
 /// A statement of a schedule, before it is written as the kernel's.
@@ -864,13 +875,11 @@ impl Parser {
     }
 
     /// Link the engines, their devices and the pools on them, once the
-    /// program is read: a pool on an engine, or on its device where a hold
-    /// waits in its queue, is admitted by the engine; the pool on a device is
+    /// program is read: a pool on an engine, or on its device as
+    /// `on ENGINE.DEVICE`, is admitted by the engine; the pool on a device is
     /// its engine's memory; `waiting.count` counts the queues the engine
     /// admits.
     pub(super) fn link_engines(&mut self, prog: &mut Program) -> PResult<()> {
-        let mut first = vec![];
-        first_pools(&prog.session, &mut first);
         for po in &self.pools_on {
             let name = prog.pools[po.pool].name.clone();
             if self.engines.iter().any(|e| e.name == po.owner) {
@@ -917,9 +926,7 @@ impl Parser {
                 name: name.clone(),
                 index: None,
             });
-            // the engine admits the queue a hold waits in; where none does,
-            // the queue stays empty and the pool is written as it was
-            if first.contains(&name) {
+            if po.admitted_by.is_some() {
                 prog.pools[po.pool].admit_via = Some(Ref {
                     span: None,
                     name: engine.name.clone(),
@@ -1017,6 +1024,30 @@ impl Parser {
         }
         self.pools_on.push(po);
         Ok(())
+    }
+
+    /// `pool NAME on ENGINE.DEVICE`: ENGINE is declared above and runs on
+    /// DEVICE, whose engine it is.
+    pub(super) fn check_admitted_by(&self, at: usize, engine: &str, device: &str) -> PResult<()> {
+        match self.engines.iter().find(|e| e.name == engine) {
+            Some(e) if e.device == device => Ok(()),
+            Some(e) => self.err_at(
+                at,
+                format!(
+                    "`{engine}` runs on {}, not {}: `on ENGINE.DEVICE` is the device the \
+                     engine runs on",
+                    shown(&e.device),
+                    shown(device)
+                ),
+            ),
+            None => self.err_at(
+                at,
+                format!(
+                    "no engine `{engine}`: `on ENGINE.DEVICE` names the engine that admits the \
+                     pool's queue, declared above the pool"
+                ),
+            ),
+        }
     }
 
     /// `pool NAME on OWNER`: the capacity it is, as `(cap, count, array)`.
@@ -1194,26 +1225,6 @@ fn substitute_body(body: &mut [IterStmt], binds: &[(String, Expr)]) {
                 substitute_body(b, binds);
             }
             IterStmt::Set(_, e) => e.substitute(binds),
-        }
-    }
-}
-
-/// The pool each hold names first: the queue a hold waits in.
-fn first_pools(stmts: &[Stmt], out: &mut Vec<String>) {
-    for s in stmts {
-        match s {
-            Stmt::Hold { pools, body, .. } => {
-                if let Some((r, _, _)) = pools.first() {
-                    out.push(r.name.clone());
-                }
-                first_pools(body, out);
-            }
-            Stmt::Branch(_, a, b) => {
-                first_pools(a, out);
-                first_pools(b, out);
-            }
-            Stmt::Loop(b) | Stmt::While(_, b) | Stmt::Fork(b) => first_pools(b, out),
-            _ => {}
         }
     }
 }

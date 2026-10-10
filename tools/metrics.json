@@ -27,6 +27,7 @@
     "hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))",
     "hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))",
     "observe prefill_tokens = known - c;",
+    "pool kv on D.gpu { block bs; evict lru; preempt lifo; }",
     "pool kv on gpu { block bs; evict lru; preempt lifo; }",
     "pool reqs on vllm { queue fifo; }",
     "run D prefill (cost(D, known - c)) growing kv;",

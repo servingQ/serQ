@@ -77,7 +77,7 @@ gateway selected by `gw.route();` in the server.
 ```
 queue gw : gateway { route { … } }                 // the router and the sidecar
 queue P[NP] : prefill { device gpu { … kv cap blocksP * bs; } engine on gpu { … } pool reqs on P { … } pool kv on gpu { … } nic ps(BwP); prefill (prompt) { … } }
-queue D[ND] : decode  { device gpu { … kv cap blocksD * bs; } engine on gpu { … } pool reqs on D { … } pool kv on gpu { … } nic ps(BwD); decode (prompt) { … } decode (prompt) from src { … } }
+queue D[ND] : decode  { device gpu { … kv cap blocksD * bs; } engine on gpu { … } pool reqs on D { … } pool kv on D.gpu { … } nic ps(BwD); decode (prompt) { … } decode (prompt) from src { … } }
 D pull P latency x0 share maxmin;                  // the decoder reads the KV from the prefiller
 stage tool : delay;
 ```
@@ -86,7 +86,9 @@ A queue's device, engine and pools are its members': `P[i].kv` is the KV of
 the i-th prefiller, `engine on gpu` is the member's engine, named after the
 queue (`P`), `pool reqs on P` means the member's own scheduler serves the
 pool, and `pool kv on gpu` counts the member's own blocks as its running
-requests' memory (`batch.kv_decode`, `batch.kv_prefill`). The family's size is the
+requests' memory (`batch.kv_decode`, `batch.kv_prefill`). A decoder's
+request waits for its blocks, not for a slot, so its pool is `on D.gpu`:
+the decoder's scheduler admits it in an iteration, as vLLM's does. The family's size is the
 `let` the router chooses over (`queue D[ND]`, `choose j in ND`), so the
 number is written once. Each pod's NIC is its own (`nic ps(BwD);`, the
 stage `D.nic`), and `D pull P latency x0 share maxmin;` is the transfer's
