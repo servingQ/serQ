@@ -433,8 +433,6 @@ fn a_hidden_attribute_is_not_read_by_the_scheduler() {
     assert!(e.contains("hidden `o` twice"), "{e}");
 }
 
-/// The lints exist to be errors, which is only defensible if nothing real
-/// trips them.
 /// A stage's capacity, budget and cost, and an iteration body's guard, are
 /// read for the stage, where no one session is. `ps(1 + prompt)` linked and
 /// read the attribute as NaN: the run ended no session and said nothing.
@@ -479,6 +477,8 @@ fn a_stage_reads_no_session_attribute() {
     }
 }
 
+/// The lints exist to be errors, which is only defensible if nothing real
+/// trips them.
 #[test]
 fn no_false_positives_on_the_corpus() {
     for name in [

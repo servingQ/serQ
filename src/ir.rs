@@ -2176,8 +2176,8 @@ impl Validator<'_> {
             // interpreter would read the attribute as NaN
             CExpr::Attr(a) if matches!(m, Moment::Ps | Moment::Budget | Moment::Step | Moment::Plan) => {
                 Err(format!(
-                    "`{}` is a session attribute, read in {m}, which has no session: it is \
-                     read for the stage",
+                    "`{}` is a session attribute, and {m} is read for the stage, with no \
+                     session",
                     self.p.attrs.get(*a).map_or("?", |s| s.as_str())
                 ))
             }
