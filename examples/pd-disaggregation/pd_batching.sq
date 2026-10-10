@@ -22,7 +22,7 @@
 // (one prefill alone, or decodes only; a waiting prefill goes first), memory that never binds, a free and
 // instantaneous transfer, no specialisation. Each is a constant here, or
 // a line: `blocks*`, `Bw`, `x0`, `gP`, `gD`; mixed batches are this file
-// with `serve exclusive prefill;` deleted, and another split is this file
+// with `exclusive prefill` read as `advance running`, and another split is this file
 // with another `NP` (tools/pd_batching/sweep.py writes both).
 //
 // `mode = 0` sends every request to one of the N colocated engines;
@@ -88,15 +88,18 @@ fn main() {
 
   // A colocated engine: the prompt and the answer on one device.
   queue E[N] : decode {
-    pool reqs { cap max_seqs; admit via E; }
-    pool kv { cap blocksE * bs; block bs; evict lru; preempt lifo; admit via E; }
-    serve step {
-      budget B;
-      chunk chunk_cap;
-      cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-      memory kv;
-      serve exclusive prefill;
+    device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocksE * bs; }
+    engine on gpu {
+      reqs cap max_seqs;
+      tokens cap B;
+      schedule {
+        exclusive prefill each at most (chunk_cap);
+        admit waiting while (running.preempted == 0) each at most (chunk_cap);
+      }
+      execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
     }
+    pool reqs on E { queue fifo; }
+    pool kv on gpu { block bs; evict lru; preempt lifo; }
     decode (prompt) {
       hold kv (cost(kv, min(known, budget_left(E)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
            at admission (known = computed < prompt ? prompt : computed + 1) {
@@ -112,15 +115,18 @@ fn main() {
   // its whole prompt at admission (scheduler_reserve_full_isl), so it is
   // never preempted here.
   queue P[NP] : prefill {
-    pool reqs { cap max_seqs; admit via P; }
-    pool kv { cap blocksP * bs; block bs; evict lru; }
-    serve step {
-      budget B;
-      chunk chunk_cap;
-      cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a / gP);
-      memory kv;
-      serve exclusive prefill;
+    device gpu { compute (t) = t * a / gP; hbm (k) = omega + beta * k; kv cap blocksP * bs; }
+    engine on gpu {
+      reqs cap max_seqs;
+      tokens cap B;
+      schedule {
+        exclusive prefill each at most (chunk_cap);
+        admit waiting while (running.preempted == 0) each at most (chunk_cap);
+      }
+      execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
     }
+    pool reqs on P { queue fifo; }
+    pool kv on gpu { block bs; evict lru; }
     nic ps(Bw);
     prefill (prompt) {
       hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, budget_left(P)))) reserve (cost(kv, prompt)) {
@@ -134,16 +140,20 @@ fn main() {
   // waits for the read without a running slot, then decodes. A request
   // preempted here recomputes what it lost.
   queue D[ND] : decode {
-    pool reqs { cap max_seqs; admit via D; }
-    pool kv { cap blocksD * bs; block bs; evict lru; preempt lifo; admit via D; }
-    serve step {
-      budget B;
-      chunk chunk_cap;
-      cost c0 + max((omega + beta * (kv_decode + kv_prefill)) / gD, tokens * a);
-      memory kv;
+    device gpu { compute (t) = t * a; hbm (k) = (omega + beta * k) / gD; kv cap blocksD * bs; }
+    engine on gpu {
+      reqs cap max_seqs;
+      tokens cap B;
       // no exclusive steps: the one prompt token a decoder recomputes rides
       // with the decodes, as in vLLM
+      schedule {
+        advance running each at most (chunk_cap);
+        admit waiting while (running.preempted == 0) each at most (chunk_cap);
+      }
+      execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
     }
+    pool reqs on D { queue fifo; }
+    pool kv on gpu { block bs; evict lru; preempt lifo; }
     nic ps(Bw);
     // The `decode` role asks for this entry; the gateway never calls it.
     decode (prompt) {

@@ -303,9 +303,16 @@ fn a_stage_only_is_a_body() {
     let file = "examples/papers/bari_rad.sq";
     let p = "decoders >= bcol || decoders == residents ? decoding : !decoding";
     let path = root.join(file);
-    let src = std::fs::read_to_string(&path).unwrap();
+    // the program's engine as the step stage it lowers to
+    let text = std::fs::read_to_string(&path).unwrap();
+    let from = text.find("  device gpu { }").expect(file);
+    let to = from + text[from..].find("\n  }\n").expect(file) + "\n  }\n".len();
     let stage = format!("serve only ({p});");
-    assert!(src.contains(&stage), "{file}");
+    let src = format!(
+        "{}  stage E : step {{ budget bcol; chunk bcol; cost tlin * ceil(tokens / bcol) + tnl * tokens; {stage} }}\n{}",
+        &text[..from],
+        &text[to..]
+    );
     let body = src.replace(
         &stage,
         &format!("iteration {{ serve only ({p}); admit only ({p}) while (!preempted); }}"),
@@ -316,6 +323,7 @@ fn a_stage_only_is_a_body() {
             .unwrap_or_else(|e| panic!("{file}: {e}"))
             .to_json()
     };
+    assert_eq!(ir(&text), ir(&src), "{file}");
     assert_eq!(ir(&src), ir(&body), "{file}");
 }
 

@@ -726,29 +726,19 @@ stage vllm[2] : step {{ budget 8; cost 1; memory kv; }}
 }
 
 /// Inside a `queue`, `device gpu` is the member's and `engine on gpu` is
-/// the queue's stage: `examples/pd-disaggregation/llmd_nixl_pull.sq` with
-/// both pods written so has its IR. The decoder's holds name `kv` first,
+/// the queue's stage: `examples/pd-disaggregation/llmd_nixl_pull.sq`, which
+/// writes both pods so, has the IR of its pods written as `serve step`. The decoder's holds name `kv` first,
 /// so its device pool is admitted by its engine; the prefiller's are not.
 #[test]
 fn a_queue_holds_its_engine() {
     let base = root().join("examples/pd-disaggregation");
-    let old = std::fs::read_to_string(base.join("llmd_nixl_pull.sq")).unwrap();
-    let mut new = old.clone();
+    let new = std::fs::read_to_string(base.join("llmd_nixl_pull.sq")).unwrap();
+    let mut old = new.clone();
     for (q, cap, blocks) in [("P", "max_seqsP", "blocksP"), ("D", "max_seqsD", "blocksD")] {
         let via = if q == "D" { " admit via D;" } else { "" };
-        new = replaced(
-            &new,
+        old = replaced(
+            &old,
             &[(
-                &format!(
-                    "    pool reqs {{ cap {cap}; admit via {q}; }}
-    pool kv {{ cap {blocks} * bs; block bs; evict lru; preempt lifo;{via} }}
-    serve step {{
-      budget B;
-      cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-      memory kv;
-    }}
-"
-                ),
                 &format!(
                     "    device gpu {{ compute (t) = t * a; hbm (k) = omega + beta * k; kv cap {blocks} * bs; }}
     engine on gpu {{
@@ -759,6 +749,16 @@ fn a_queue_holds_its_engine() {
     }}
     pool reqs on {q} {{ queue fifo; }}
     pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
+"
+                ),
+                &format!(
+                    "    pool reqs {{ cap {cap}; admit via {q}; }}
+    pool kv {{ cap {blocks} * bs; block bs; evict lru; preempt lifo;{via} }}
+    serve step {{
+      budget B;
+      cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
+      memory kv;
+    }}
 "
                 ),
             )],

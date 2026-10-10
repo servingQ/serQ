@@ -13,7 +13,7 @@ preemption — and watched it fall off a cliff.
 | 2 | [Memory is a resource](02-memory.md) | requests also wait for *memory* | `pool`, `hold` |
 | 3 | [Sessions and turns](03-sessions.md) | a session is many turns with thinking in between | `loop`, `turn`, `branch`, `delay` |
 | 4 | [The prefix cache](04-prefix-cache.md) | a finished turn leaves its context behind | `cache`, `cached`, `evict`, `drop` |
-| 5 | [The engine](05-the-engine.md) | prefill and decode share one iteration | `step`, `budget`, `growing`, `preempt`, `admit via` |
+| 5 | [The engine](05-the-engine.md) | prefill and decode share one iteration | `device`, `engine`, `tokens cap`, `growing`, `preempt`, `pool … on` |
 | 6 | [The cliff](06-the-cliff.md) | the cache and the queue feed each other | — |
 
 The programs are in

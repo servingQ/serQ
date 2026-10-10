@@ -11,11 +11,11 @@ model, without a two-scheduler differential oracle or hardware validation.
 
 ![llm-d prefill/decode over NIXL as a queueing network](../assets/llmd_nixl_pull.deployment.svg)
 
-The figure is labelled in an engine's words
+The figure is labelled in the words the program is written in
 ([Engines on devices](../language.md#engines-on-devices)): `pool D.reqs on
-D` is `admit via D`, `pool D.kv on D's device` is `D`'s `memory`,
-`admitted by D` among its options, and `tokens cap` is the `budget` of
-`serve step`.
+D` is the engine's running slots, `pool D.kv on D's device` its memory,
+`admitted by D` among its options, and `tokens cap` the tokens of one
+iteration.
 
 The router picks a prefill instance and a decode instance, each a box with
 its engine, its NIC and its pools. The read crosses between them: it holds
@@ -76,16 +76,17 @@ gateway selected by `gw.route();` in the server.
 
 ```
 queue gw : gateway { route { … } }                 // the router and the sidecar
-queue P[NP] : prefill { pool reqs { … admit via P; } pool kv { … } serve step { … memory kv; } nic ps(BwP); prefill (prompt) { … } }
-queue D[ND] : decode  { pool reqs { … admit via D; } pool kv { … admit via D; } serve step { … memory kv; } nic ps(BwD); decode (prompt) { … } decode (prompt) from src { … } }
+queue P[NP] : prefill { device gpu { … kv cap blocksP * bs; } engine on gpu { … } pool reqs on P { … } pool kv on gpu { … } nic ps(BwP); prefill (prompt) { … } }
+queue D[ND] : decode  { device gpu { … kv cap blocksD * bs; } engine on gpu { … } pool reqs on D { … } pool kv on gpu { … } nic ps(BwD); decode (prompt) { … } decode (prompt) from src { … } }
 D pull P latency x0 share maxmin;                  // the decoder reads the KV from the prefiller
 stage tool : delay;
 ```
 
-A queue's pools are its members': `P[i].kv` is the KV of the i-th
-prefiller, `admit via P` inside `P` means the member's own scheduler serves
-the pool, and `memory kv` on its stage counts the member's own blocks as its
-residents' memory (`kv_decode`, `kv_prefill`). The family's size is the
+A queue's device, engine and pools are its members': `P[i].kv` is the KV of
+the i-th prefiller, `engine on gpu` is the member's engine, named after the
+queue (`P`), `pool reqs on P` means the member's own scheduler serves the
+pool, and `pool kv on gpu` counts the member's own blocks as its running
+requests' memory (`batch.kv_decode`, `batch.kv_prefill`). The family's size is the
 `let` the router chooses over (`queue D[ND]`, `choose j in ND`), so the
 number is written once. Each pod's NIC is its own (`nic ps(BwD);`, the
 stage `D.nic`), and `D pull P latency x0 share maxmin;` is the transfer's

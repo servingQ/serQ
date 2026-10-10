@@ -23,9 +23,9 @@ The paper models a GPU's batch time from how matrix multiplications are tiled. A
 | Paper | serQ |
 |---|---|
 | tiles $b_{col} = b_{row} = b_{red} = b_{lcm} = 128$ | `let bcol = 128;` |
-| batch time (7) without attention | `cost tlin * ceil(tokens / bcol) + tnl * tokens;` (µs) |
-| Prefill Mode: one chunk of $b_{lcm}$ of the oldest prefill | `budget bcol; chunk bcol;` with prefills served in admission order |
-| Decode Mode iff $\lvert D\rvert = b_{col}$ or $P = \emptyset$ | `serve only (decoders >= bcol \|\| decoders == residents ? decoding : !decoding);` |
+| batch time (7) without attention | `execute (tlin * ceil(batch.tokens / bcol) + tnl * batch.tokens);` (µs) |
+| Prefill Mode: one chunk of $b_{lcm}$ of the oldest prefill | `tokens cap bcol;` and `each at most (bcol)`, with prefills served in admission order |
+| Decode Mode iff $\lvert D\rvert = b_{col}$ or $P = \emptyset$ | `def in_mode() { running.decoding >= bcol \|\| running.decoding == running.count ? decoding : !decoding }`, read by `advance running only (in_mode())` and `admit waiting only (in_mode())` |
 | Assumption 3 | `set vp = bcol * floor(~uniform(1, vpmax + 1));` |
 | $N = \infty$ | no cycle counter |
 

@@ -28,7 +28,6 @@
     "hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))",
     "observe prefill_tokens = known - c;",
     "pool kv on gpu { block bs; evict lru; preempt lifo; }",
-    "pool kv { cap blocksD * bs; block bs; evict lru; preempt lifo; admit via D; }",
     "pool reqs on vllm { queue fifo; }",
     "run D prefill (cost(D, known - c)) growing kv;",
     "run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;",
