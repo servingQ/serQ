@@ -216,7 +216,7 @@ fn blocksize_is_the_pools_block() {
         (
             "pool kv[2] { cap 64; block 16; }",
             "blocksize(kv)",
-            "is an array",
+            "`kv` is a family of 2; index it",
         ),
         (
             "pool kv[2] { cap 64; block 16; }",

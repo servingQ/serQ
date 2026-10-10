@@ -1369,17 +1369,11 @@ impl Linker<'_> {
             .ok_or_else(|| self.unknown(what, &r.name).at(r.span))?;
         let index = match &r.index {
             None => {
-                if count != 1 {
-                    return Err(LinkError::new(format!(
-                        "{what} `{}` is an array; index it",
-                        r.name
-                    )));
-                }
                 // a family is indexed at every size, so a constant that sizes
                 // it does not change how the program is spelled (#220)
-                if self.declared_family(what, &r.name) {
+                if count != 1 || self.declared_family(what, &r.name) {
                     return Err(LinkError::new(format!(
-                        "{what} `{}` is a family of 1; index it, as at any size",
+                        "{what} `{}` is a family of {count}; index it",
                         r.name
                     ))
                     .at(r.span));
