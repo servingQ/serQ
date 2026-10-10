@@ -1875,6 +1875,28 @@ impl Parser {
             for q in &self.queues {
                 for e in &q.entries {
                     if let Some(n) = e.reads.iter().find(|n| !hidden.contains(n)) {
+                        // a name nothing sets is no attribute set outside
+                        // the queue: it is unknown, as it is anywhere (#444)
+                        let set = self.definitions.iter().any(|(d, _)| d == n)
+                            || BUILTIN_ATTRS.contains(&n.as_str())
+                            || self.body_binds.iter().any(|(_, b, _)| b == n);
+                        if !set {
+                            let help = crate::frontend::diagnostic::suggestion(
+                                n,
+                                self.definitions.iter().map(|(d, _)| d.as_str()),
+                            )
+                            .map(|d| format!("did you mean `{d}`?"))
+                            .unwrap_or_else(|| {
+                                "declare it, then pass it as a parameter or mark it `hidden`".into()
+                            });
+                            return self.err_at(
+                                e.at,
+                                format!(
+                                    "`{}.{}` reads `{n}`, which nothing sets: an unknown name\nhelp: {help}",
+                                    q.name, e.verb
+                                ),
+                            );
+                        }
                         return self.err_at(
                             e.at,
                             format!(

@@ -753,6 +753,16 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
         &common::horizon(10.0),
     )
     .unwrap();
+    // a name nothing sets is unknown, not an attribute set outside (#444);
+    // the language's own attributes are set
+    refused(
+        &program("").replace("cost(E, out)", "cost(E, ot)"),
+        "reads `ot`, which nothing sets: an unknown name\nhelp: did you mean `out`?",
+    );
+    refused(
+        &program("").replace("cost(E, out)", "cost(E, serial)"),
+        "reads `serial`, a session attribute set outside the queue",
+    );
 }
 
 /// A turn in a definition changes only the actual server's attributes;
