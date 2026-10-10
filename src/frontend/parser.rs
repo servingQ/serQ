@@ -680,6 +680,14 @@ fn says(b: &[Token], w: &str) -> bool {
 }
 
 /// A function of the language: one the linker resolves or one it folds.
+/// A pool declared with a stage's name, or a stage with a pool's.
+fn one_name_space(name: &str) -> String {
+    format!(
+        "`{name}` is declared twice: a pool and a stage share one name space, as \
+         `cost({name}, …)` reads either"
+    )
+}
+
 fn is_function(name: &str) -> bool {
     FUNCTIONS.contains(&name)
         || FOLDED.contains(&name)
@@ -1703,7 +1711,13 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 prog.gauges.push((name, e));
             } else if self.eat_kw("pool") {
+                let at = self.pos;
                 let (d, on) = self.pool(true)?;
+                if prog.stages.iter().any(|s| s.name == d.name)
+                    || self.queues.iter().any(|q| q.name == d.name)
+                {
+                    return self.err_at(at, one_name_space(&d.name));
+                }
                 if let Some(on) = on {
                     self.pool_on(prog.pools.len(), d.name.clone(), on)?;
                 }
@@ -1718,7 +1732,11 @@ impl Parser {
                 self.advance();
                 self.queue(&mut prog, at)?;
             } else if self.eat_kw("stage") {
+                let at = self.pos;
                 let d = self.stage()?;
+                if prog.pools.iter().any(|p| p.name == d.name) {
+                    return self.err_at(at, one_name_space(&d.name));
+                }
                 self.stages.push(d.name.clone());
                 prog.stages.push(d);
             } else if self.eat_kw("workload") {
@@ -5847,6 +5865,18 @@ mod tests {
             err("stage svc : fifo; def svc(x) { x } workload { session { turn; \n} }\nserver {\n}")
                 .contains("also a stage")
         );
+        // a pool and a stage of one name, in either order, and a pool after
+        // an engine (#409): `cost(E, …)` would read either
+        let server =
+            "workload { arrive batch(1); }\nserver { hold E (cost(E, 1)) { run E (cost(E, 1)); } }";
+        for decls in [
+            "stage E : fifo; pool E { cap 1; }",
+            "pool E { cap 1; } stage E : fifo;",
+            "device gpu { } engine E on gpu { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } pool E { cap 1; }",
+        ] {
+            let e = err(&format!("{decls} {server}"));
+            assert!(e.contains("a pool and a stage share one name space"), "{e}");
+        }
         // `engine` is the keyword of an engine's declaration
         assert!(
             err("def engine(x) { x } workload { session { turn; \n} }\nserver {\n}")
