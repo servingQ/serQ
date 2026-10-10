@@ -366,6 +366,34 @@ fn a_keyword_named_attribute_is_a_read() {
     }
 }
 
+/// An argument that reads a queue's attribute, `E.first`, is checked against
+/// what the body's entry calls assign: `go(E.first)` read the `E.first` the
+/// body's own `E.decode` marked, 8 where the caller's was 4 (#218).
+#[test]
+fn an_argument_reading_a_queue_attribute_is_checked() {
+    let program = |call: &str| {
+        format!(
+            "def go(x) {{ E.decode (prompt); observe b = x; }}
+            queue E : decode {{
+              pool kv {{ cap 100; }}
+              serve fifo;
+              decode (prompt) {{ hold kv (cost(kv, prompt)) {{ run E (cost(E, prompt)); mark first; }} }}
+            }}
+            workload {{ arrive batch(1); init {{ set prompt = 4; }} }}
+            server {{ E.decode (prompt); {call} }}"
+        )
+    };
+    refused(
+        &program("go(E.first);"),
+        "the argument for `x` reads `E.first`, which `go` assigns",
+    );
+    compile_source(
+        &common::main_source(&program("set f = E.first; go(f);")),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+}
+
 /// `latency` is a link's, a number or a constant, and not a called link's.
 #[test]
 fn a_latency_belongs_to_a_link() {

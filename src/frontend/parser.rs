@@ -2358,6 +2358,43 @@ impl Parser {
     /// definition's body), where a word that is also a keyword (`cap`,
     /// `latency`) can only be a name read; in statements it may be the
     /// keyword.
+    /// The attributes the entry calls in these tokens assign: a call
+    /// `Q.verb (…)` or `Q[i].verb (…)` writes the queue's marks and its
+    /// entries' locals, `Q.first` and `Q.x`. Read at a use, where the queues
+    /// a definition calls are declared.
+    fn entry_assigns(&self, toks: &[Token]) -> Vec<String> {
+        let tok = |i: usize| toks.get(i).map(|t| &t.tok);
+        let mut out = vec![];
+        for (k, t) in toks.iter().enumerate() {
+            let Tok::Ident(q) = &t.tok else { continue };
+            let Some(queue) = self.queues.iter().find(|d| d.name == *q) else {
+                continue;
+            };
+            // past a member's index, `Q[i]`
+            let mut i = k + 1;
+            if tok(i) == Some(&Tok::LBracket) {
+                while tok(i).is_some_and(|t| *t != Tok::RBracket) {
+                    i += 1;
+                }
+                i += 1;
+            }
+            let calls = tok(i) == Some(&Tok::Dot)
+                && matches!(tok(i + 1), Some(Tok::Ident(v)) if queue.entries.iter().any(|e| e.verb == *v))
+                && tok(i + 2) == Some(&Tok::LParen);
+            if calls {
+                out.extend(queue.marks.iter().map(|m| format!("{q}.{m}")));
+                out.extend(
+                    queue
+                        .entries
+                        .iter()
+                        .flat_map(|e| &e.locals)
+                        .map(|x| format!("{q}.{x}")),
+                );
+            }
+        }
+        out
+    }
+
     fn reads_of(&self, toks: &[Token], expr: bool) -> (Vec<String>, Vec<String>) {
         let mut reads = vec![];
         let mut calls = vec![];
@@ -2428,6 +2465,14 @@ impl Parser {
                 }
             } else if !called && (expr || !KEYWORDS.contains(&n.as_str())) {
                 reads.push(n.clone());
+            }
+            // `E.first`, a queue's attribute, is one name: the lexer gave it
+            // as three tokens
+            if let (Some(Tok::Dot), Some(Tok::Ident(m))) = (
+                toks.get(k + 1).map(|t| &t.tok),
+                toks.get(k + 2).map(|t| &t.tok),
+            ) {
+                reads.push(format!("{n}.{m}"));
             }
         }
         for d in self.defs.iter().filter(|d| uses(toks, &d.name)) {
@@ -2513,7 +2558,12 @@ impl Parser {
                 return self.err_at(at, format!("`{}`: the argument for `{p}` is empty", d.name));
             }
             let (reads, _) = self.reads_of(a, true);
-            if let Some(n) = d.assigns.iter().find(|n| reads.contains(n)) {
+            if let Some(n) = d
+                .assigns
+                .iter()
+                .chain(&self.entry_assigns(&d.body))
+                .find(|n| reads.contains(n))
+            {
                 return self.err_at(at, capture_message(&d.name, p, n));
             }
             let uses = d
