@@ -47,11 +47,12 @@ pub struct Entry {
     /// Names the body reads that are neither parameters, locals nor context:
     /// legal only as the workload's `hidden` attributes, which `assemble`
     /// checks once the workload is known; another place's pool or stage
-    /// among them it refuses as not the queue's own.
+    /// among them it refuses as not the queue's own, and a device as one.
     pub reads: Vec<String>,
     /// The first name the header reads that is neither a parameter nor the
     /// queue's own, refused in `assemble` once every place is declared: as
-    /// another place's pool or stage, or as a value to pass as a parameter.
+    /// another place's pool or stage, as a device, or as a value to pass as
+    /// a parameter.
     pub header_refused: Option<String>,
     /// Token position of the header, for errors.
     pub at: usize,

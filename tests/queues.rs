@@ -530,6 +530,52 @@ fn an_entry_reads_another_place_as_not_its_own() {
     }
 }
 
+/// A device is no value: what an entry reads of one is the pools on it, its
+/// queue's own or another's, in the header and the body alike (#461).
+#[test]
+fn an_entry_reads_a_device_as_a_device() {
+    for (size, body, name) in [
+        ("min(gpu, 1)", "", "gpu"),
+        ("min(g0, 1)", "", "g0"),
+        ("1", "set y = gpu;", "gpu"),
+        ("1", "set y = min(g0, 1);", "g0"),
+    ] {
+        refused(
+            &format!(
+                "device g0 {{ top cap 100; }} pool top on g0 {{ }}
+                 queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+                   decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; {body} }} }} }}
+                 {WORKLOAD}"
+            ),
+            &format!("`E.decode` reads `{name}`, a device: an entry reads its queue's pools"),
+        );
+    }
+}
+
+/// Inside its queue an own pool is named bare: `E.kv` is refused with the
+/// name to write, as `kv[…]` is (#461).
+#[test]
+fn an_entry_names_its_own_pool_bare() {
+    for (size, body) in [
+        ("queued(E.kv)", ""),
+        ("min(E.kv + 0, 1)", ""),
+        ("1", "set y = queued(E.kv);"),
+        ("1", "set y = holders(E.kv);"),
+        ("1", "set y = E.kv;"),
+    ] {
+        refused(
+            &format!(
+                "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+                   decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; {body} }} }} }}
+                 {WORKLOAD}"
+            ),
+            "`E.kv` inside queue `E`: an own pool is named without the queue; write `kv`",
+        );
+    }
+}
+
 #[test]
 fn an_entry_sees_its_parameters_and_its_queue() {
     let program = |entry: &str, gw: &str| {
