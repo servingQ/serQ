@@ -1383,11 +1383,11 @@ server {{ hold kv[j] (cost(kv, {size})) {{ run E[j] prefill (cost(E, 1)) growing
     };
     let ov = common::horizon(10.0);
     compiled(&src("min(prompt, 1000)"), None, &ov);
-    // a value read bare is itself, though a stage shares its name
-    compiled(
-        &src("min(E, 1)").replace("set j = 0;", "set j = 0; set E = 3;"),
-        None,
-        &ov,
+    // a value may not share a stage's name, so a bare `E` is the stage (#470)
+    let shared = error(&src("min(E, 1)").replace("set j = 0;", "set j = 0; set E = 3;"));
+    assert!(
+        shared.contains("an engine named `E` would make the one word mean two things"),
+        "{shared}"
     );
     let pool = "as a number, but a pool is none: read";
     let stage = "as a number, but a stage is none: read";

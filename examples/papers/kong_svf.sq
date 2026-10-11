@@ -30,7 +30,7 @@ fn main() {
   }
 
   server {
-    observe out = o;
+    observe output = o;
     observe vol = s * o + floor((o * o + o) / 2);
     hold kv (cost(kv, s + o)) {
       run llm decode (cost(llm, o));
@@ -44,7 +44,7 @@ fn main() {
   // Proposition 3.1 (OPT >= prefix_total(vol) / M, `examples/papers/Kong.lean`)
   // this is Theorem 3.2: TEL(SVF) <= (1 + 2 / (1 - alpha)) TEL(OPT).
   claim queueing_bound given (s + o <= P && o >= 1):
-    at end ((M - P) * (total(response) - total(out)) <= 2 * (prefix_total(vol) - total(vol)));
+    at end ((M - P) * (total(response) - total(output)) <= 2 * (prefix_total(vol) - total(vol)));
 
 
 }

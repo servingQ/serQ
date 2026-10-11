@@ -138,6 +138,10 @@ struct Parser {
     /// stage against.
     stages: Vec<String>,
     definitions: Vec<(String, Span)>,
+    /// Each declaration's name, with its position and its kind (`a stage`,
+    /// …): an attribute may not share it, which only the whole program says
+    /// (`check_declared_names`).
+    declared: Vec<(usize, String, &'static str)>,
     /// Composite costs lower to named scalar fields in declaration order.
     cost_records: std::collections::BTreeMap<String, Vec<String>>,
     /// Which side the statement being parsed is on.
@@ -1415,6 +1419,7 @@ impl Parser {
             pos: 0,
             stages: vec![],
             definitions: vec![],
+            declared: vec![],
             cost_records: Default::default(),
             side: Side::Session,
             wl_session: None,
@@ -1609,7 +1614,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.name()?;
-        self.own_name(at, &name, "a claim")?;
+        self.declare(at, &name, "a claim")?;
         let given = if self.eat_kw("given") {
             self.expect(&Tok::LParen)?;
             let e = self.expr()?;
@@ -1804,7 +1809,7 @@ impl Parser {
             } else if self.eat_kw("gauge") {
                 let at = self.pos;
                 let name = self.ident()?;
-                self.own_name(at, &name, "a gauge")?;
+                self.declare(at, &name, "a gauge")?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
@@ -1934,6 +1939,7 @@ impl Parser {
         self.link_engines(&mut prog)?;
         self.check_body_bindings(&prog)?;
         self.check_def_names(&prog)?;
+        self.check_declared_names(&prog)?;
         self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
         prog.cost_records = std::mem::take(&mut self.cost_records).into_iter().collect();
@@ -2381,6 +2387,47 @@ impl Parser {
         }
     }
 
+    /// A declaration's name: one the language supplies is refused here
+    /// (`own_name`), an attribute's once the whole program, every `set`
+    /// in it, has been read (`check_declared_names`).
+    fn declare(&mut self, at: usize, name: &str, kind: &'static str) -> PResult<()> {
+        self.own_name(at, name, kind)?;
+        self.declared.push((at, name.to_string(), kind));
+        Ok(())
+    }
+
+    /// A declaration may not share its name with an attribute, built in or
+    /// set (#470): `stage think` beside the attribute `think`, or `set svc`
+    /// beside `stage svc`, would have one word mean two things, and a bare
+    /// `E` passed where a stage or a number goes reads one or the other by
+    /// its place alone (#467). Writing a built-in attribute stays a `set`.
+    fn check_declared_names(&self, prog: &Program) -> PResult<()> {
+        for (at, name, kind) in &self.declared {
+            let attribute = if BUILTIN_ATTRS.contains(&name.as_str()) {
+                "a built-in attribute".to_string()
+            } else if let Some((_, span)) = self
+                .definitions
+                .iter()
+                .find(|(n, _)| n == name && !prog.lets.iter().any(|(l, _)| l == n))
+            {
+                format!(
+                    "an attribute the program sets at {}",
+                    self.place(span.file, span.line, span.col)
+                )
+            } else {
+                continue;
+            };
+            return self.err_at(
+                *at,
+                format!(
+                    "`{name}` is {attribute}; {kind} named `{name}` would make the one word \
+                     mean two things\nhelp: name the declaration otherwise"
+                ),
+            );
+        }
+        Ok(())
+    }
+
     /// `def name(x, …) { e }` or `def name(x, …) { … }`, after `def`.
     fn def(&mut self) -> PResult<()> {
         let at = self.pos;
@@ -2391,7 +2438,7 @@ impl Parser {
         {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
-        self.own_name(at, &name, "a definition")?;
+        self.declare(at, &name, "a definition")?;
         if let Some(now) = retired(&name) {
             return self.err_at(
                 at,
@@ -3093,7 +3140,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
-        self.own_name(at, &name, "a pool")?;
+        self.declare(at, &name, "a pool")?;
         let array = self.array_count()?;
         let mut on = None;
         let mut count = array.unwrap_or(1);
@@ -3294,7 +3341,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
-        self.own_name(at, &name, "a stage")?;
+        self.declare(at, &name, "a stage")?;
         let array = self.array_count()?;
         self.expect(&Tok::Colon)?;
         let kind = self.stage_kind()?;
@@ -3375,7 +3422,7 @@ impl Parser {
         {
             return self.err_at(at + 1, format!("`{name}` is declared twice"));
         }
-        self.own_name(at + 1, &name, "a queue")?;
+        self.declare(at + 1, &name, "a queue")?;
         // `Q[n]` is a family whatever `n`, called by index, and its pools and
         // stages are arrays; `Q` is one queue
         let array = self.array_count()?;
@@ -3469,7 +3516,7 @@ impl Parser {
                 if KEYWORDS.contains(&dev.as_str()) {
                     return self.err_at(d_at, format!("`{dev}` is a word of the language"));
                 }
-                self.own_name(d_at, &dev, "a device")?;
+                self.declare(d_at, &dev, "a device")?;
                 if dev == name {
                     return self.err_at(
                         d_at,
@@ -4390,7 +4437,7 @@ impl Parser {
                 self.advance();
                 let at = self.pos;
                 let name = self.ident()?;
-                self.own_name(at, &name, "an observation")?;
+                self.declare(at, &name, "an observation")?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
@@ -5961,12 +6008,17 @@ mod tests {
             err("def engine(x) { x } workload { session { turn; \n} }\nserver {\n}")
                 .contains("a word of the language")
         );
-        // the name of a statement body's attribute is not a use
-        parse(&main_source(&format!(
+        // the name of a statement body's attribute is not a use, but an
+        // attribute may not take its definition's name (#470)
+        let e = parse(&main_source(&format!(
             "{ENGINE} def c(x) {{ set c = x; }} workload {{ session {{ turn; \n}} }}\nserver {{ c(1);\n}}"
-        )
-        ))
-        .unwrap();
+        )))
+        .unwrap_err();
+        assert!(
+            e.msg.contains("a definition named `c` would make"),
+            "{}",
+            e.msg
+        );
         // an error in the body says where the definition was used
         let e =
             err("def take(n) { turn; } workload { session { turn; end; } } server { take(4); }");

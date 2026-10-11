@@ -697,12 +697,12 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
           execute (batch.tokens * 1e-5 + 1e-4);
         }}
         pool kv on gpu {{ block 16; evict lru; }}
-        stage think : delay;
+        stage user : delay;
         workload {{ arrive closed(1);
           session {{ turn;
           }}
         }}
-        server {{ loop {{ run think (cost(think, 1)); {wrap} }}
+        server {{ loop {{ run user (cost(user, 1)); {wrap} }}
         }}
 
 "#

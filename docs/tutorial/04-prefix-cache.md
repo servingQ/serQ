@@ -13,8 +13,8 @@ The prefix can be evicted while the session thinks or waits for admission.
 
 ```serq
 hold kv (cost(kv, K + n + o)) {
-  set hit = cached >= K;
-  run engine (cost(engine, (hit ? a * n : a * (K + n)) + d * o));
+  set warm = cached >= K;
+  run engine (cost(engine, (warm ? a * n : a * (K + n)) + d * o));
 } cache (cost(kv, K + n + o));
 ```
 

@@ -61,8 +61,8 @@ fn main() {
       // the router's own prefix-cache picture of the pod.
       choose j in ND by (holders(D[j].kv) + queued(D[j].kv));
       set hitD = min(cachedin(D[j].kv), reusable(prompt, bs));
-      set remote = prompt >= minp && prompt - hitD >= thr;
-      branch (remote) {
+      set remote_prefill = prompt >= minp && prompt - hitD >= thr;
+      branch (remote_prefill) {
         // Prefill profile: a pod that has the prefix (prefix-cache-affinity-filter),
         // then the least loaded (token-load-scorer).
         choose i in NP by (cachedin(P[i].kv) > 0 ? 0 : 1, work(P[i]) + queued(P[i].reqs));
@@ -74,7 +74,7 @@ fn main() {
         D[j].decode (prompt);
       }
       observe ttft = D.first_token - t0;
-      observe remote = remote;
+      observe remote = remote_prefill;
       observe response = now - t0;
     }
   }

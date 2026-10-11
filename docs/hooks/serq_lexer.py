@@ -87,9 +87,10 @@ BUILTINS = (
     "decoders", "prefilled", "residents", "kv_decode", "kv_prefill",
     "attention", "decoding", "admission", "remaining", "position", "demand",
     "served", "arrived", "admitted", "preempted", "inf",
-    # attributes the language sets (docs/api/attributes.md); `new` and `out`
-    # stay plain, as a program also names an `observe` so (`total(out)`)
-    "cached", "serial", "turn_no", "think", "more", "forced", "computed",
+    # attributes the language sets (docs/api/attributes.md), which no
+    # declaration may name (#470), so each is coloured wherever it stands
+    "cached", "serial", "turn_no", "new", "out", "think", "more", "forced",
+    "computed",
 )
 
 # A run's aggregates, which a claim `at end` reads: `count` and `total` are

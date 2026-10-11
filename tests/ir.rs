@@ -867,12 +867,12 @@ fn choose_compares_its_keys_in_order() {
           session {{ turn; end;
           }}
         }}
-        server {{ choose j in 4 by ({by}); observe j = j;
+        server {{ choose j in 4 by ({by}); observe picked = j;
         }}
         "
         );
         let r = run_source(&common::main_source(&src), &common::horizon(1.0), None).unwrap();
-        r.observe("j").unwrap().samples[0]
+        r.observe("picked").unwrap().samples[0]
     };
     // the first key ties 1 and 3; the second picks 3
     assert_eq!(pick("j == 1 || j == 3 ? 0 : 1, j == 3 ? 0 : 1"), 3.0);
