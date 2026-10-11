@@ -72,6 +72,7 @@ use crate::frontend::link::{
     AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, RENAMED, supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
+use crate::ir::{ArgKind, Fun};
 
 mod device;
 
@@ -1150,7 +1151,19 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
                 }
             }
         }
-        Expr::Call(_, args) => args.iter().for_each(|a| arg_names(a, vars, indexed, refs)),
+        // a bare name where the function takes a number (`min(kv, 1)`) is
+        // read as a number, as `min(kv + 0, 1)` is; where it takes a pool or
+        // a stage (`queued(kv)`), it is a reference
+        Expr::Call(f, args) => {
+            let kinds = Fun::from_name(f).map(|fun| fun.signature());
+            for (k, a) in args.iter().enumerate() {
+                let takes_number = kinds.is_some_and(|ks| ks.get(k) == Some(&ArgKind::Expr));
+                match a {
+                    Arg::Ref(r) if takes_number && r.index.is_none() => vars.push(r.name.clone()),
+                    _ => arg_names(a, vars, indexed, refs),
+                }
+            }
+        }
         Expr::Unread(args, e) => {
             args.iter().for_each(|a| arg_names(a, vars, indexed, refs));
             names_in(e, vars, indexed, refs);
@@ -1172,7 +1185,7 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
             names_in(body, &mut v, &mut i, &mut r);
             vars.extend(v.into_iter().filter(|x| x != j));
             indexed.extend(i.into_iter().filter(|x| x != j));
-            // a bare `j` argument (`max(j, 1)`) parses as a reference
+            // a bare `j` reference (`f(j)` to a definition that does not read it)
             refs.extend(r.into_iter().filter(|x| x.index.is_some() || x.name != *j));
         }
     }
@@ -3883,11 +3896,11 @@ impl Parser {
             }
             sources.push((vars, indexed, refs, false, false));
             for (mut vars, indexed, refs, header, in_index) in sources {
-                // a bare argument that is not the queue's own (`min(now, 1)`)
-                // is read under the same rule as `min(now + 0, 1)`: whether
-                // it names a pool or stage elsewhere, `assemble` tells once
-                // all are declared; a dotted or indexed one stays a
-                // reference, checked below
+                // a bare reference that is not the queue's own (`queued(gkv)`,
+                // or `f(now)` to a definition that does not read it) is read
+                // as a name: whether it names a pool or stage elsewhere,
+                // `assemble` tells once all are declared; a dotted or indexed
+                // one stays a reference, checked below
                 let (values, refs): (Vec<Ref>, Vec<Ref>) = refs
                     .into_iter()
                     .partition(|r| r.index.is_none() && !own_ref(r) && !r.name.contains('.'));

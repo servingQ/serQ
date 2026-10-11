@@ -179,7 +179,7 @@ is reported in the library, with the uses it was expanded from.
 ```serq
 use "../../lib/vllm.sq";
 …
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm)))) reserve (cost(kv, known))
          at admission (known = computed < prompt ? prompt : computed + 1,
                        hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
 ```

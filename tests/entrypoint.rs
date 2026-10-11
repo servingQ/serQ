@@ -245,4 +245,11 @@ fn a_fixed_shadow_can_size_an_array_but_an_input_dependent_shadow_cannot() {
             .unwrap_err()
             .contains("affects an array size")
     );
+    // passed bare to a function, the override is read as in a sum
+    let through_min = src.replace("let count = 3;", "let count = min(count, 4);");
+    assert!(
+        compile_source(&through_min, &ov)
+            .unwrap_err()
+            .contains("affects an array size")
+    );
 }
