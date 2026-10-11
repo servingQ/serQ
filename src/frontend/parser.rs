@@ -3526,7 +3526,7 @@ impl Parser {
     fn queue(&mut self, prog: &mut Program, at: usize) -> PResult<()> {
         let span = Some(self.span());
         let name = self.ident()?;
-        if Role::of(&name).is_some() || queue::ROLES.iter().any(|(r, _)| *r == name) {
+        if Role::of(&name).is_some() || queue::RoleSig::named(&name).is_some() {
             return self.err_at(
                 at + 1,
                 format!("`{name}` is a serving word; a queue needs another name"),
@@ -3547,7 +3547,7 @@ impl Parser {
             loop {
                 let r_at = self.pos;
                 let r = self.ident()?;
-                if !queue::ROLES.iter().any(|(name, _)| *name == r) {
+                if queue::RoleSig::named(&r).is_none() {
                     return self.err_at(
                         r_at,
                         format!(
@@ -3806,20 +3806,18 @@ impl Parser {
                 kind: StageKind::Delay,
             });
         }
-        // every role has one of its entries, and nothing else is there
+        // every role has one of its entries (a link may instead be its
+        // serve), and nothing else is there
         let q = &self.queues[qi];
         for r in &roles {
-            let (_, entries) = queue::ROLES.iter().find(|(n, _)| n == r).expect("a role");
+            let sig = queue::RoleSig::named(r).expect("a role");
             // one is enough: a decode pod that only decodes the KV it reads has
             // no `decode (prompt)`, and one that reads none has no `… from` (#229)
-            let has_one = entries
-                .iter()
-                .any(|&(v, _, from)| q.entry(v, from).is_some());
-            if has_one {
+            if sig.from.iter().any(|&f| q.entry(sig.verb, f).is_some()) {
                 continue;
             }
             // a link needs none when its `serve` is its cost (`transfer on L[k] (n) …`)
-            if *r == "link" {
+            if sig.name == "link" {
                 if !q.has_stage {
                     return self.err_at(
                         at,
@@ -3830,15 +3828,15 @@ impl Parser {
                     );
                 }
             } else {
-                let verb = entries[0].0;
-                return self.err_at(
-                    at,
-                    format!("queue `{name}` plays `{r}` and has no `{verb}` entry"),
-                );
+                let missing = match sig.from {
+                    [_] => format!("no `{}` entry", sig.verb),
+                    _ => format!("neither {} nor {}", sig.entry(false), sig.entry(true)),
+                };
+                return self.err_at(at, format!("queue `{name}` plays `{r}` and has {missing}"));
             }
         }
         for e in &q.entries {
-            let role = queue::role_of_verb(&e.verb, e.from.is_some());
+            let role = queue::role_of_verb(&e.verb, e.from.is_some()).map(|r| r.name);
             match role {
                 Some(r) if roles.iter().any(|x| x == r) => {}
                 Some(r) => {
@@ -3904,12 +3902,10 @@ impl Parser {
             return self.err_at(at, format!("queue `{qname}` has `{verb}` twice"));
         }
         // the role's signature: `prefill (prompt)`, not one of the program's
-        if let Some(&(_, n, _)) = queue::ROLES
-            .iter()
-            .flat_map(|(_, sigs)| sigs.iter())
-            .find(|(v, _, f)| *v == verb && *f == from.is_some())
-            && params.len() != n
+        if let Some(sig) = queue::role_of_verb(&verb, from.is_some())
+            && params.len() != sig.params
         {
+            let n = sig.params;
             return self.err_at(
                 at,
                 format!(

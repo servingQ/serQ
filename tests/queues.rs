@@ -813,15 +813,15 @@ fn a_decode_queue_needs_one_of_its_entries() {
     links(&program("D.decode (prompt);", local));
     refused(
         &program("D.decode (prompt);", remote),
-        "`D.decode`: queue `D` has no such entry: its `decode` needs `from`",
+        "`D.decode`: queue `D` has no such entry: `D` has only `decode (…) from …`",
     );
     refused(
         &program(remote_call, local),
-        "`D.decode`: queue `D` has no such entry: its `decode` takes no `from`",
+        "`D.decode`: queue `D` has no such entry: `D` has only `decode (…)`, without `from`",
     );
     refused(
         &program(remote_call, ""),
-        "queue `D` plays `decode` and has no `decode` entry",
+        "queue `D` plays `decode` and has neither `decode (…)` nor `decode (…) from Q`",
     );
 }
 
