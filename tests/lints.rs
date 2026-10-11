@@ -792,7 +792,9 @@ fn a_schedules_let_cannot_take_a_name_the_language_supplies() {
     );
     let e = check(&src).expect_err("rejected");
     assert!(
-        e.contains("a `let` constant of engine `llm`'s schedule named `inf` would make the one word mean two things"),
+        e.contains(
+            "a `let` of engine `llm`'s schedule named `inf` would make the one word mean two things"
+        ),
         "{e}"
     );
     check(&src.replace("let inf = 1; ", "")).expect("links");
@@ -1020,6 +1022,11 @@ fn a_declaration_cannot_share_its_name_with_another() {
             "`f` is a definition at 1:17; a `let` constant named `f`",
         ),
         (
+            "let f = 1; def f() { 1 }".to_string(),
+            "",
+            "`f` is a `let` constant at 1:17; a definition named `f`",
+        ),
+        (
             format!("let kv = 1; {QUEUE}"),
             "",
             "`kv` is a `let` constant at 1:17; a pool of queue `Q` named `kv`",
@@ -1033,7 +1040,13 @@ fn a_declaration_cannot_share_its_name_with_another() {
         (
             format!("def c() {{ 1 }} {}", schedule_let("c")),
             "",
-            "`c` is a definition at 1:17; a `let` constant of engine `Q`'s schedule named `c`",
+            "`c` is a definition at 1:17; a `let` of engine `Q`'s schedule named `c`",
+        ),
+        // and a program's `let`, which its own would shadow there
+        (
+            format!("let k = 2; {}", schedule_let("k")),
+            "",
+            "`k` is a `let` constant at 1:17; a `let` of engine `Q`'s schedule named `k`",
         ),
     ] {
         let e = refused(&decl, observe);

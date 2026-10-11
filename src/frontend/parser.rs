@@ -276,15 +276,16 @@ struct Declaration {
 }
 
 impl Declaration {
-    /// Whether `self` and `other`, of different kinds, would be one word
-    /// that means two things. Two of one kind are that kind's own check. A
-    /// queue's body and a schedule read the program's `def`s and `let`s
-    /// beside their own names, and none of the program's other declarations
-    /// (`docs/language.md`, Names).
+    /// Whether `self` and `other` would be one word that means two things.
+    /// Two of one kind in one scope are that kind's own check. A queue's
+    /// body and a schedule read the program's `def`s and `let`s beside
+    /// their own names, and none of the program's other declarations
+    /// (`docs/language.md`, Names): a schedule's `let c` beside a program's
+    /// `let c` would read one in `each at most` and the other above it.
     fn meets(&self, other: &Declaration) -> bool {
         let read_inside = |top: &Declaration| matches!(top.kind, Kind::Definition | Kind::Constant);
         self.name == other.name
-            && self.kind != other.kind
+            && (self.kind != other.kind || self.scope != other.scope)
             && match (&self.scope, &other.scope) {
                 (Scope::Program, Scope::Program) => true,
                 (_, Scope::Program) => read_inside(other),
@@ -314,7 +315,8 @@ impl Declaration {
         match &self.scope {
             Scope::Program => what.to_string(),
             Scope::Queue(q) => format!("{what} of queue `{q}`"),
-            Scope::Schedule(e) => format!("{what} of engine `{e}`'s schedule"),
+            // only a `let` is declared there
+            Scope::Schedule(e) => format!("a `let` of engine `{e}`'s schedule"),
         }
     }
 }

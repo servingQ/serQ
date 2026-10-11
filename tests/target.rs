@@ -192,8 +192,11 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
     let dir = root().join("examples/multi-turn");
     let rule = "let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;";
     assert!(src.contains(rule), "the program's chunk moved");
-    let target_as = |n: &str, threshold: &str| {
-        let src = src.replace(rule, &format!("let n = {n}; let threshold = {threshold};"));
+    let target_as = |count: &str, threshold: &str| {
+        let src = src.replace(
+            rule,
+            &format!("let r = {count}; let threshold = {threshold};"),
+        );
         let p = serq::compile_source_at(
             &common::main_source(&src),
             Some(&dir),
@@ -205,10 +208,10 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
     let target = |cap: &str| {
         target_as(
             "running.count + waiting.count",
-            &format!("n > 1 ? {cap} : inf"),
+            &format!("r > 1 ? {cap} : inf"),
         )
     };
-    for cap in ["max(1000, floor(B / n))", "max(floor(B / n), 1000)"] {
+    for cap in ["max(1000, floor(B / r))", "max(floor(B / r), 1000)"] {
         let c = target(cap).unwrap_or_else(|e| panic!("{cap}: {e}"))["config"].clone();
         assert_eq!(c["long_prefill_token_threshold"], 1000, "{cap}");
         assert_eq!(c["long_prefill_token_threshold_adaptive"], true, "{cap}");
@@ -216,14 +219,14 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
     // the count either way round
     let c = target_as(
         "waiting.count + running.count",
-        "n > 1 ? max(1000, floor(B / n)) : inf",
+        "r > 1 ? max(1000, floor(B / r)) : inf",
     )
     .unwrap()["config"]
         .clone();
     assert_eq!(c["long_prefill_token_threshold_adaptive"], true);
     // the share without the condition holds for a request alone, where
     // vLLM lifts the cap
-    let e = target_as("running.count + waiting.count", "max(1000, floor(B / n))").unwrap_err();
+    let e = target_as("running.count + waiting.count", "max(1000, floor(B / r))").unwrap_err();
     assert!(
         e.contains("write it under `n > 1 ? … : inf`") && e.contains("scheduler.py:609-616"),
         "{e}"
@@ -235,10 +238,10 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
     // another share: of a budget not the engine's, of another count, or
     // without the floor
     for cap in [
-        "max(1000, floor(4096 / n))",
-        "max(1000, floor(B / (n + 1)))",
-        "max(1000, B / n)",
-        "max(1000, floor(B / n) + 1)",
+        "max(1000, floor(4096 / r))",
+        "max(1000, floor(B / (r + 1)))",
+        "max(1000, B / r)",
+        "max(1000, floor(B / r) + 1)",
     ] {
         let e = target(cap).unwrap_err();
         assert!(

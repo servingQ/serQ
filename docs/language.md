@@ -182,8 +182,8 @@ The rules that are the language's, not the catalogue's:
   `let`. `def kv` or `let kv = 1;` beside queue `P`'s `pool kv` does not
   link; a top-level `pool kv` or `stage kv` beside it links. A schedule's
   `let` is read only in its `each at most`, which reads the program's
-  `def`s and `let`s, so it shares its name with a `def` no more than a
-  program's `let` does, and with a pool or a stage it may.
+  `def`s and `let`s, so it may not share its name with a `def` or a
+  program's `let`, and may with a pool or a stage.
 - **Constants** (a `let`, a `cap`, a `block`, a `fifo` count, the arrival
   rate or population) are numbers or `inf`; one that
   evaluates to NaN does not link.
