@@ -879,3 +879,128 @@ fn a_declaration_cannot_share_its_name_with_an_attribute() {
     );
     check(&set(&set(&observe("hit"), "warm"), "more")).expect("links");
 }
+
+/// #484: a hold header's binding the body does not read is no attribute,
+/// and no declaration may share its name either. vLLM's `at admission
+/// (hit = …)` was a token count, and `observe hit` three lines below a 0/1
+/// flag; a pool or a stage named so was refused only when the body read
+/// the binding.
+#[test]
+fn a_declaration_cannot_share_its_name_with_a_binding() {
+    const SRC: &str = "pool kv { cap 4; }
+        stage svc : fifo;
+        DECL
+        workload { arrive closed(2); session { turn; } }
+        server {
+          hold kv (cost(kv, k)) at admission (k = computed + 1) { run svc (cost(svc, 1)); }
+          observe response = now;
+        }
+        ";
+    let two_things = "would make the one word mean two things";
+    for (decl, kind) in [
+        ("def k(x) { x }", "a definition"),
+        ("gauge k = 1;", "a gauge"),
+        ("stage k : delay;", "a stage"),
+        ("pool k { cap 1; }", "a pool"),
+        ("stage k[2] : fifo;", "a stage"),
+    ] {
+        let e = check(&SRC.replace("DECL", decl)).expect_err(decl);
+        assert!(
+            e.contains(&format!(
+                "`k` is a hold's binding at 6:47; {kind} named `k` {two_things}"
+            )),
+            "{decl}: {e}"
+        );
+        assert!(
+            e.contains("help: rename the declaration or the binding"),
+            "{e}"
+        );
+    }
+    let src = SRC.replace("DECL", "");
+    let e = check(&src.replace("observe response", "observe k = 1; observe response"))
+        .expect_err("refused");
+    assert!(
+        e.contains(&format!("an observation named `k` {two_things}")),
+        "{e}"
+    );
+    // the binding is the hold's alone: another hold may bind the name again
+    check(&src.replace(
+        "observe response",
+        "hold kv (cost(kv, k)) at admission (k = 1) { run svc (cost(svc, 1)); } observe response",
+    ))
+    .expect("links");
+    // a queue's own pool is a declaration of the program too
+    let e = check(
+        "queue gw : gateway { route { E.decode (prompt); } }
+         queue E : decode { device gpu { kv cap 100; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+           decode (prompt) { hold kv (cost(kv, prompt)) at admission (kv = prompt) { run E prefill (cost(E, 1)) growing kv; } } }
+         workload { arrive batch(1); init { set prompt = 3; } session { turn; end; } } server { gw.route(); }
+         ",
+    )
+    .expect_err("refused");
+    assert!(
+        e.contains(&format!("a pool named `kv` {two_things}")),
+        "{e}"
+    );
+}
+
+/// #484: a binding the body does not read is substituted into the header,
+/// where a name the language supplies, a built-in attribute, a `let` or an
+/// attribute the program sets would read the binding instead of itself:
+/// `at admission (now = 1)` made `cost(kv, now)` read 1.
+#[test]
+fn a_binding_has_a_name_of_its_own() {
+    const SRC: &str = "PRE
+        pool kv { cap 4; }
+        stage svc : fifo;
+        workload { arrive closed(2); session { SET turn; } }
+        server {
+          hold kv (cost(kv, 1)) at admission (BIND) { run svc (cost(svc, 1)); }
+          observe response = now;
+        }
+        ";
+    let two_things = "would make the one word mean two things";
+    for (pre, set, bind, refused) in [
+        (
+            "",
+            "",
+            "now = 1",
+            "`now` is a name the language supplies, read in every expression; a binding named `now`",
+        ),
+        (
+            "",
+            "",
+            "computed = 1",
+            "`computed` is an attribute the scheduler sets; a binding named `computed`",
+        ),
+        (
+            "let k = 3;",
+            "",
+            "k = 1",
+            "`k` is a `let` constant; a binding named `k`",
+        ),
+        (
+            "",
+            "set k = 5;",
+            "k = 1",
+            "`k` is an attribute the program sets; a binding named `k`",
+        ),
+    ] {
+        let e = check(
+            &SRC.replace("PRE", pre)
+                .replace("SET", set)
+                .replace("BIND", bind),
+        )
+        .expect_err(bind);
+        assert!(
+            e.contains(&format!("{refused} {two_things}")),
+            "{bind}: {e}"
+        );
+    }
+    check(
+        &SRC.replace("PRE", "")
+            .replace("SET", "")
+            .replace("BIND", "k = 1"),
+    )
+    .expect("links");
+}
