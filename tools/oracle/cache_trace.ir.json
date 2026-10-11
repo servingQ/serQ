@@ -14,6 +14,7 @@
     "prevout",
     "t0",
     "prompt",
+    "kept",
     "hitmax",
     "known",
     "c"
@@ -34,6 +35,7 @@
     "Value",
     "Value",
     "Value",
+    "Value",
     "Value"
   ],
   "sides": [
@@ -44,6 +46,7 @@
       "Workload",
       "Workload",
       "Workload",
+      "Server",
       "Server",
       "Server",
       "Server",
@@ -61,6 +64,7 @@
       "Server",
       "Server",
       "Server",
+      "Server",
       "Server"
     ],
     [
@@ -77,9 +81,11 @@
       "Server",
       "Server",
       "Server",
+      "Server",
       "Server"
     ],
     [
+      "Server",
       "Server",
       "Server",
       "Server",
@@ -502,6 +508,14 @@
         ]
       },
       {
+        "Set": [
+          13,
+          {
+            "Attr": 12
+          }
+        ]
+      },
+      {
         "Run": {
           "stage": {
             "base": 1,
@@ -543,7 +557,7 @@
       },
       {
         "Set": [
-          13,
+          14,
           {
             "Cond": [
               {
@@ -674,7 +688,7 @@
                                   [
                                     {
                                       "Expr": {
-                                        "Attr": 13
+                                        "Attr": 14
                                       }
                                     },
                                     {
@@ -690,7 +704,47 @@
                                                     "Binary": [
                                                       "Div",
                                                       {
-                                                        "Attr": 8
+                                                        "Call": [
+                                                          "Max",
+                                                          [
+                                                            {
+                                                              "Expr": {
+                                                                "Cond": [
+                                                                  {
+                                                                    "Binary": [
+                                                                      "Gt",
+                                                                      {
+                                                                        "Attr": 13
+                                                                      },
+                                                                      {
+                                                                        "Attr": 12
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  {
+                                                                    "Binary": [
+                                                                      "Sub",
+                                                                      {
+                                                                        "Attr": 13
+                                                                      },
+                                                                      {
+                                                                        "Num": 1.0
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  {
+                                                                    "Num": 0.0
+                                                                  }
+                                                                ]
+                                                              }
+                                                            },
+                                                            {
+                                                              "Expr": {
+                                                                "Attr": 8
+                                                              }
+                                                            }
+                                                          ]
+                                                        ]
                                                       },
                                                       {
                                                         "Num": 16.0
@@ -723,32 +777,28 @@
                                 "Binary": [
                                   "Sub",
                                   {
-                                    "Cond": [
-                                      {
-                                        "Binary": [
-                                          "Lt",
-                                          {
-                                            "Attr": 8
-                                          },
-                                          {
-                                            "Attr": 12
+                                    "Call": [
+                                      "Max",
+                                      [
+                                        {
+                                          "Expr": {
+                                            "Attr": 13
                                           }
-                                        ]
-                                      },
-                                      {
-                                        "Attr": 12
-                                      },
-                                      {
-                                        "Binary": [
-                                          "Add",
-                                          {
-                                            "Attr": 8
-                                          },
-                                          {
-                                            "Num": 1.0
+                                        },
+                                        {
+                                          "Expr": {
+                                            "Binary": [
+                                              "Add",
+                                              {
+                                                "Attr": 8
+                                              },
+                                              {
+                                                "Num": 1.0
+                                              }
+                                            ]
                                           }
-                                        ]
-                                      }
+                                        }
+                                      ]
                                     ]
                                   },
                                   {
@@ -778,7 +828,7 @@
                                               [
                                                 {
                                                   "Expr": {
-                                                    "Attr": 13
+                                                    "Attr": 14
                                                   }
                                                 },
                                                 {
@@ -794,7 +844,47 @@
                                                                 "Binary": [
                                                                   "Div",
                                                                   {
-                                                                    "Attr": 8
+                                                                    "Call": [
+                                                                      "Max",
+                                                                      [
+                                                                        {
+                                                                          "Expr": {
+                                                                            "Cond": [
+                                                                              {
+                                                                                "Binary": [
+                                                                                  "Gt",
+                                                                                  {
+                                                                                    "Attr": 13
+                                                                                  },
+                                                                                  {
+                                                                                    "Attr": 12
+                                                                                  }
+                                                                                ]
+                                                                              },
+                                                                              {
+                                                                                "Binary": [
+                                                                                  "Sub",
+                                                                                  {
+                                                                                    "Attr": 13
+                                                                                  },
+                                                                                  {
+                                                                                    "Num": 1.0
+                                                                                  }
+                                                                                ]
+                                                                              },
+                                                                              {
+                                                                                "Num": 0.0
+                                                                              }
+                                                                            ]
+                                                                          }
+                                                                        },
+                                                                        {
+                                                                          "Expr": {
+                                                                            "Attr": 8
+                                                                          }
+                                                                        }
+                                                                      ]
+                                                                    ]
                                                                   },
                                                                   {
                                                                     "Num": 16.0
@@ -853,32 +943,28 @@
                     }
                   },
                   {
-                    "Cond": [
-                      {
-                        "Binary": [
-                          "Lt",
-                          {
-                            "Attr": 8
-                          },
-                          {
-                            "Attr": 12
+                    "Call": [
+                      "Max",
+                      [
+                        {
+                          "Expr": {
+                            "Attr": 13
                           }
-                        ]
-                      },
-                      {
-                        "Attr": 12
-                      },
-                      {
-                        "Binary": [
-                          "Add",
-                          {
-                            "Attr": 8
-                          },
-                          {
-                            "Num": 1.0
+                        },
+                        {
+                          "Expr": {
+                            "Binary": [
+                              "Add",
+                              {
+                                "Attr": 8
+                              },
+                              {
+                                "Num": 1.0
+                              }
+                            ]
                           }
-                        ]
-                      }
+                        }
+                      ]
                     ]
                   }
                 ]
@@ -909,7 +995,7 @@
                   [
                     {
                       "Expr": {
-                        "Attr": 13
+                        "Attr": 14
                       }
                     },
                     {
@@ -925,7 +1011,47 @@
                                     "Binary": [
                                       "Div",
                                       {
-                                        "Attr": 8
+                                        "Call": [
+                                          "Max",
+                                          [
+                                            {
+                                              "Expr": {
+                                                "Cond": [
+                                                  {
+                                                    "Binary": [
+                                                      "Gt",
+                                                      {
+                                                        "Attr": 13
+                                                      },
+                                                      {
+                                                        "Attr": 12
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "Binary": [
+                                                      "Sub",
+                                                      {
+                                                        "Attr": 13
+                                                      },
+                                                      {
+                                                        "Num": 1.0
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "Num": 0.0
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "Expr": {
+                                                "Attr": 8
+                                              }
+                                            }
+                                          ]
+                                        ]
                                       },
                                       {
                                         "Num": 16.0
@@ -1019,41 +1145,45 @@
     [
       {
         "Set": [
-          14,
+          15,
           {
-            "Cond": [
-              {
-                "Binary": [
-                  "Lt",
-                  {
-                    "Attr": 8
-                  },
-                  {
-                    "Attr": 12
+            "Call": [
+              "Max",
+              [
+                {
+                  "Expr": {
+                    "Attr": 13
                   }
-                ]
-              },
-              {
-                "Attr": 12
-              },
-              {
-                "Binary": [
-                  "Add",
-                  {
-                    "Attr": 8
-                  },
-                  {
-                    "Num": 1.0
+                },
+                {
+                  "Expr": {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Attr": 8
+                      },
+                      {
+                        "Num": 1.0
+                      }
+                    ]
                   }
-                ]
-              }
+                }
+              ]
             ]
           }
         ]
       },
       {
         "Set": [
-          15,
+          13,
+          {
+            "Attr": 15
+          }
+        ]
+      },
+      {
+        "Set": [
+          16,
           {
             "Attr": 0
           }
@@ -1063,7 +1193,7 @@
         "Observe": [
           0,
           {
-            "Attr": 15
+            "Attr": 16
           }
         ]
       },
@@ -1111,10 +1241,10 @@
                 "Binary": [
                   "Sub",
                   {
-                    "Attr": 14
+                    "Attr": 15
                   },
                   {
-                    "Attr": 15
+                    "Attr": 16
                   }
                 ]
               }
@@ -1133,7 +1263,7 @@
             "Binary": [
               "Eq",
               {
-                "Attr": 14
+                "Attr": 15
               },
               {
                 "Attr": 12
@@ -1178,7 +1308,7 @@
                     "Binary": [
                       "Sub",
                       {
-                        "Attr": 14
+                        "Attr": 15
                       },
                       {
                         "Attr": 12
@@ -1275,6 +1405,14 @@
         ]
       },
       {
+        "Set": [
+          13,
+          {
+            "Attr": 12
+          }
+        ]
+      },
+      {
         "Run": {
           "stage": {
             "base": 1,
@@ -1316,7 +1454,7 @@
       },
       {
         "Set": [
-          13,
+          14,
           {
             "Cond": [
               {
@@ -1447,7 +1585,7 @@
                                   [
                                     {
                                       "Expr": {
-                                        "Attr": 13
+                                        "Attr": 14
                                       }
                                     },
                                     {
@@ -1463,7 +1601,47 @@
                                                     "Binary": [
                                                       "Div",
                                                       {
-                                                        "Attr": 8
+                                                        "Call": [
+                                                          "Max",
+                                                          [
+                                                            {
+                                                              "Expr": {
+                                                                "Cond": [
+                                                                  {
+                                                                    "Binary": [
+                                                                      "Gt",
+                                                                      {
+                                                                        "Attr": 13
+                                                                      },
+                                                                      {
+                                                                        "Attr": 12
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  {
+                                                                    "Binary": [
+                                                                      "Sub",
+                                                                      {
+                                                                        "Attr": 13
+                                                                      },
+                                                                      {
+                                                                        "Num": 1.0
+                                                                      }
+                                                                    ]
+                                                                  },
+                                                                  {
+                                                                    "Num": 0.0
+                                                                  }
+                                                                ]
+                                                              }
+                                                            },
+                                                            {
+                                                              "Expr": {
+                                                                "Attr": 8
+                                                              }
+                                                            }
+                                                          ]
+                                                        ]
                                                       },
                                                       {
                                                         "Num": 16.0
@@ -1496,32 +1674,28 @@
                                 "Binary": [
                                   "Sub",
                                   {
-                                    "Cond": [
-                                      {
-                                        "Binary": [
-                                          "Lt",
-                                          {
-                                            "Attr": 8
-                                          },
-                                          {
-                                            "Attr": 12
+                                    "Call": [
+                                      "Max",
+                                      [
+                                        {
+                                          "Expr": {
+                                            "Attr": 13
                                           }
-                                        ]
-                                      },
-                                      {
-                                        "Attr": 12
-                                      },
-                                      {
-                                        "Binary": [
-                                          "Add",
-                                          {
-                                            "Attr": 8
-                                          },
-                                          {
-                                            "Num": 1.0
+                                        },
+                                        {
+                                          "Expr": {
+                                            "Binary": [
+                                              "Add",
+                                              {
+                                                "Attr": 8
+                                              },
+                                              {
+                                                "Num": 1.0
+                                              }
+                                            ]
                                           }
-                                        ]
-                                      }
+                                        }
+                                      ]
                                     ]
                                   },
                                   {
@@ -1551,7 +1725,7 @@
                                               [
                                                 {
                                                   "Expr": {
-                                                    "Attr": 13
+                                                    "Attr": 14
                                                   }
                                                 },
                                                 {
@@ -1567,7 +1741,47 @@
                                                                 "Binary": [
                                                                   "Div",
                                                                   {
-                                                                    "Attr": 8
+                                                                    "Call": [
+                                                                      "Max",
+                                                                      [
+                                                                        {
+                                                                          "Expr": {
+                                                                            "Cond": [
+                                                                              {
+                                                                                "Binary": [
+                                                                                  "Gt",
+                                                                                  {
+                                                                                    "Attr": 13
+                                                                                  },
+                                                                                  {
+                                                                                    "Attr": 12
+                                                                                  }
+                                                                                ]
+                                                                              },
+                                                                              {
+                                                                                "Binary": [
+                                                                                  "Sub",
+                                                                                  {
+                                                                                    "Attr": 13
+                                                                                  },
+                                                                                  {
+                                                                                    "Num": 1.0
+                                                                                  }
+                                                                                ]
+                                                                              },
+                                                                              {
+                                                                                "Num": 0.0
+                                                                              }
+                                                                            ]
+                                                                          }
+                                                                        },
+                                                                        {
+                                                                          "Expr": {
+                                                                            "Attr": 8
+                                                                          }
+                                                                        }
+                                                                      ]
+                                                                    ]
                                                                   },
                                                                   {
                                                                     "Num": 16.0
@@ -1626,32 +1840,28 @@
                     }
                   },
                   {
-                    "Cond": [
-                      {
-                        "Binary": [
-                          "Lt",
-                          {
-                            "Attr": 8
-                          },
-                          {
-                            "Attr": 12
+                    "Call": [
+                      "Max",
+                      [
+                        {
+                          "Expr": {
+                            "Attr": 13
                           }
-                        ]
-                      },
-                      {
-                        "Attr": 12
-                      },
-                      {
-                        "Binary": [
-                          "Add",
-                          {
-                            "Attr": 8
-                          },
-                          {
-                            "Num": 1.0
+                        },
+                        {
+                          "Expr": {
+                            "Binary": [
+                              "Add",
+                              {
+                                "Attr": 8
+                              },
+                              {
+                                "Num": 1.0
+                              }
+                            ]
                           }
-                        ]
-                      }
+                        }
+                      ]
                     ]
                   }
                 ]
@@ -1682,7 +1892,7 @@
                   [
                     {
                       "Expr": {
-                        "Attr": 13
+                        "Attr": 14
                       }
                     },
                     {
@@ -1698,7 +1908,47 @@
                                     "Binary": [
                                       "Div",
                                       {
-                                        "Attr": 8
+                                        "Call": [
+                                          "Max",
+                                          [
+                                            {
+                                              "Expr": {
+                                                "Cond": [
+                                                  {
+                                                    "Binary": [
+                                                      "Gt",
+                                                      {
+                                                        "Attr": 13
+                                                      },
+                                                      {
+                                                        "Attr": 12
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "Binary": [
+                                                      "Sub",
+                                                      {
+                                                        "Attr": 13
+                                                      },
+                                                      {
+                                                        "Num": 1.0
+                                                      }
+                                                    ]
+                                                  },
+                                                  {
+                                                    "Num": 0.0
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            {
+                                              "Expr": {
+                                                "Attr": 8
+                                              }
+                                            }
+                                          ]
+                                        ]
                                       },
                                       {
                                         "Num": 16.0
@@ -1783,41 +2033,45 @@
     [
       {
         "Set": [
-          14,
+          15,
           {
-            "Cond": [
-              {
-                "Binary": [
-                  "Lt",
-                  {
-                    "Attr": 8
-                  },
-                  {
-                    "Attr": 12
+            "Call": [
+              "Max",
+              [
+                {
+                  "Expr": {
+                    "Attr": 13
                   }
-                ]
-              },
-              {
-                "Attr": 12
-              },
-              {
-                "Binary": [
-                  "Add",
-                  {
-                    "Attr": 8
-                  },
-                  {
-                    "Num": 1.0
+                },
+                {
+                  "Expr": {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Attr": 8
+                      },
+                      {
+                        "Num": 1.0
+                      }
+                    ]
                   }
-                ]
-              }
+                }
+              ]
             ]
           }
         ]
       },
       {
         "Set": [
-          15,
+          13,
+          {
+            "Attr": 15
+          }
+        ]
+      },
+      {
+        "Set": [
+          16,
           {
             "Attr": 0
           }
@@ -1827,7 +2081,7 @@
         "Observe": [
           0,
           {
-            "Attr": 15
+            "Attr": 16
           }
         ]
       },
@@ -1875,10 +2129,10 @@
                 "Binary": [
                   "Sub",
                   {
-                    "Attr": 14
+                    "Attr": 15
                   },
                   {
-                    "Attr": 15
+                    "Attr": 16
                   }
                 ]
               }
@@ -1897,7 +2151,7 @@
             "Binary": [
               "Eq",
               {
-                "Attr": 14
+                "Attr": 15
               },
               {
                 "Attr": 12
@@ -1942,7 +2196,7 @@
                     "Binary": [
                       "Sub",
                       {
-                        "Attr": 14
+                        "Attr": 15
                       },
                       {
                         "Attr": 12

@@ -65,6 +65,7 @@ fn main() {
   server {
     set t0 = now;
     set prompt = new;
+    set kept = prompt;
     run front (cost(front, c0 + f * prompt));
     // reusable: the common prefix with the previous turn's computed tokens
     // (the previous prompt; the generated tokens are not in this prompt),
@@ -77,13 +78,18 @@ fn main() {
     // the admission needs room for the whole sequence (scheduler_reserve_full_isl,
     // kv_cache_manager.py:515-531) but allocates only the first chunk.
     // A preempted request keeps its generated tokens (scheduler.py:1560-1561):
-    // `known` is the prompt plus those, its own cached blocks up to `known - 1`
-    // are reusable again (a forced turn's included: they carry its nonce), and
-    // it generates only what is left
+    // `known` is the prompt plus those (`kept`, the most an attempt had), its
+    // own cached blocks are reusable again (a forced turn's included: they
+    // carry its nonce), `own`: up to where the last preemption caught it, or
+    // up to `kept - 1` once an attempt had outputs, which a later attempt
+    // stopped short of may have left cached; and it generates only what is
+    // left
     hold reqs (cost(reqs, 1)), kv (cost(kv, hit + min(known - hit, budget_left(vllm)))) reserve (cost(kv, known))
-         reuse (cost(reqs, kv, max(hitmax, floor(computed / bs) * bs)))
-         at admission (known = computed < prompt ? prompt : computed + 1,
-                       hit = min(cachedin(kv), max(hitmax, floor(computed / bs) * bs))) {
+         reuse (cost(reqs, kv, max(hitmax, own)))
+         at admission (known = max(kept, computed + 1),
+                       own = floor(max(kept > prompt ? kept - 1 : 0, computed) / bs) * bs,
+                       hit = min(cachedin(kv), max(hitmax, own))) {
+      set kept = known;
       set c = cached;
       observe cached_tokens = c;
       observe prefix = prev + prevout;

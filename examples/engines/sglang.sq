@@ -98,12 +98,14 @@ fn main() {
   server {
     set t0 = now;
     set prompt = K + n;
+    set kept = prompt;
     set fin = 0;
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(sglang))))
          reserve (cost(kv, known - hit + min(M - (known - prompt), clip) + 1
                   + ratio * min(M, clip) * holders(reqs)))
-         at admission (known = computed < prompt ? prompt : computed + 1,
+         at admission (known = max(kept, computed + 1),
                        hit = min(cachedin(kv), known - 1)) {
+      set kept = known;
       set c = min(cached, known - 1);
       run sglang prefill (cost(sglang, known - c)) growing kv;
       branch (known == prompt) { observe ttft = now - t0; }
