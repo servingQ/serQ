@@ -13,14 +13,17 @@ done
 
 | sessions/s | hit rate | TTFT (s) | preemptions | `stuck` | utilisation |
 |---|---|---|---|---|---|
-| 1.5 | 0.491 | 0.115 | 5,631 | 101 | 0.579 |
-| 1.7 | 0.416 | 0.235 | 19,884 | 320 | 0.713 |
-| 1.8 | 0.393 | 0.493 | 38,690 | 652 | 0.793 |
-| 1.9 | 0.381 | 1.482 | 67,731 | 1,079 | 0.883 |
-| 2.0 | 0.380 | 8.178 | 108,787 | 1,635 | 0.974 |
+| 1.5 | 0.472 | 0.115 | 614 | 92 | 0.580 |
+| 1.7 | 0.350 | 0.237 | 2,234 | 366 | 0.712 |
+| 1.8 | 0.265 | 0.480 | 3,584 | 606 | 0.792 |
+| 1.9 | 0.165 | 1.369 | 6,088 | 988 | 0.880 |
+| 2.0 | 0.051 | 7.500 | 9,614 | 1,567 | 0.968 |
 
 Between 1.9 and 2.0 sessions/s, a 5% load increase raises observed TTFT
-from 1.48 s to 8.18 s. These seed-1 runs also report `stuck` sessions:
+from 1.37 s to 7.50 s, and over the sweep the hit rate falls from 0.47
+to 0.05. At 1.9 the TTFT is a level: a run twice as long gives about the same.
+At 2.0 it keeps growing with the run length, so 7.50 s is one moment of a
+queue without bound, not a level. These seed-1 runs also report `stuck` sessions:
 requests preempted again without progress. The latency samples therefore
 do not describe all offered traffic. Inspect these counters before using
 a mean for capacity planning, and repeat the experiment across seeds.
@@ -37,12 +40,12 @@ serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --see
 
 | sessions/s | KV blocks | hit rate | TTFT (s) | `stuck` | utilisation |
 |---|---|---|---|---|---|
-| 2.0 | 4,000 | 0.380 | 8.178 | 1,635 | 0.974 |
+| 2.0 | 4,000 | 0.051 | 7.500 | 1,567 | 0.968 |
 | 2.0 | 40,000 | 0.800 | 0.020 | 0 | 0.470 |
 | 3.0 | 40,000 | 0.800 | 0.023 | 0 | 0.635 |
 
-At 2.0 sessions/s, the larger pool reduces observed TTFT from 8.18 s to
-0.020 s. Both larger-pool runs have no preemptions or `stuck` sessions.
+At 2.0 sessions/s, the larger pool turns a queue that grows without bound
+(7.50 s at this horizon) into a TTFT of 0.020 s. Both larger-pool runs have no preemptions or `stuck` sessions.
 Memory capacity changes the amount of recomputation, even with the same
 arrival rate and engine cost model.
 
