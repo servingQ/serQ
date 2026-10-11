@@ -53,6 +53,24 @@ fn the_server_may_not_decide_on_a_hidden_attribute() {
     );
 }
 
+/// A hidden attribute passed bare to a function that takes a number is read
+/// as it is in a sum: `min(o, 1)` decides on `o` as `min(o + 0, 1)` does.
+#[test]
+fn the_server_may_not_decide_on_a_hidden_attribute_passed_to_a_function() {
+    refused(
+        "branch (min(o, 1) > 0) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { observe skipped = 1; }",
+        &["`o` is hidden from the scheduler, but the server's branch reads it"],
+    );
+    refused(
+        "choose j in 2 by (min(o, 1)); hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; }",
+        &["server's choice reads it"],
+    );
+    refused(
+        "set y = min(o, 1); branch (y > 0) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { observe skipped = 1; }",
+        &["`y` is set from the hidden `o`", "branch"],
+    );
+}
+
 /// What the server sets from a hidden attribute is hidden as well:
 /// `Program::validate` sees only `long`, an attribute it may read.
 #[test]
