@@ -108,18 +108,11 @@ fn main() {
     pool kv on D.gpu { block bs; evict lru; preempt lifo; }
     nic ps(Bw);                           // the pod's NIC: the writes into it share it
 
-    // Every request has a remote prefill: this entry is never called.
-    decode (prompt) {
-      hold kv (cost(kv, prompt)) reserve (cost(kv, prompt)), reqs (cost(reqs, 1)) {
-        run D prefill (cost(D, prompt)) growing kv;
-        run D decode (cost(D, out - 1)) growing kv;
-      } cache (cost(kv, reqs, prompt + out));
-    }
-
-    // With remote KV. The decode request is taken when the whole prompt fits
-    // the blocks, at a step with budget left and a running slot free - it
-    // takes neither (the request is parked, not running) - and reuses the
-    // full blocks it has of the prompt.
+    // Every request has a remote prefill, so this is the only entry. The
+    // decode request is taken when the whole prompt fits the blocks, at a
+    // step with budget left and a running slot free - it takes neither (the
+    // request is parked, not running) - and reuses the full blocks it has of
+    // the prompt.
     decode (prompt) from src {
       set transferred = 0;   // one KV transfer per request
       hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))

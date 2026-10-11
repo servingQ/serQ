@@ -3806,14 +3806,20 @@ impl Parser {
                 kind: StageKind::Delay,
             });
         }
-        // every role's entries are there, and nothing else
+        // every role has one of its entries, and nothing else is there
         let q = &self.queues[qi];
         for r in &roles {
             let (_, entries) = queue::ROLES.iter().find(|(n, _)| n == r).expect("a role");
-            // a role's first entry is required; the others (`decode … from`) may be left out,
-            // and a link's too: its `serve` is its cost (`transfer on L[k] (n) …`)
-            let (verb, _, from) = entries[0];
-            if *r == "link" && q.entry(verb, from).is_none() {
+            // one is enough: a decode pod that only decodes the KV it reads has
+            // no `decode (prompt)`, and one that reads none has no `… from` (#229)
+            let has_one = entries
+                .iter()
+                .any(|&(v, _, from)| q.entry(v, from).is_some());
+            if has_one {
+                continue;
+            }
+            // a link needs none when its `serve` is its cost (`transfer on L[k] (n) …`)
+            if *r == "link" {
                 if !q.has_stage {
                     return self.err_at(
                         at,
@@ -3823,7 +3829,8 @@ impl Parser {
                         ),
                     );
                 }
-            } else if q.entry(verb, from).is_none() {
+            } else {
+                let verb = entries[0].0;
                 return self.err_at(
                     at,
                     format!("queue `{name}` plays `{r}` and has no `{verb}` entry"),
