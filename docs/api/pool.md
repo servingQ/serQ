@@ -8,7 +8,6 @@ pool NAME [ '[' N ']' ] {
   preempt none;  |  preempt lifo;  |  preempt by (expr, …) [requeue head | tail];
   queue fifo;  |  queue by (key, …);
   reserve held;
-  admit via STAGE;
   spill POOL via STAGE (expr) when (expr);
 }
 ```
@@ -24,7 +23,6 @@ queues the sessions that do not yet fit. Every option is optional.
 | [`evict`](#evict) | `lru` \| `by (expr, …)` | `lru` | which cache entry goes first |
 | [`preempt`](#preempt) | `none` \| `by (expr, …) [requeue head \| tail]` \| `lifo` | `none` | what a failed `grow` does: whom it preempts, and where the victim goes back |
 | [`queue`](#queue) | `fifo` \| `by (expr, …)` | `fifo` | admission order |
-| [`admit via`](#admit-via) | `engine` | none | the queue is served by an engine |
 | [`reserve held`](#reserve-held) | — | off | a hold's unallocated `reserve` counts against later admissions |
 | [`spill`](#spill) | `pool`, `stage`, `expr`, `expr` | none | evicted prefixes are written to a tier |
 
@@ -172,21 +170,15 @@ that grows beyond its reservation follows the pool's `preempt` rule.
 
 ## `admit via`
 
-```serq
-admit via ENGINE;
-```
-
-| Argument | Type | Description |
-|---|---|---|
-| `ENGINE` | an [engine](engine.md) | Serves this pool's queue in each iteration's `admit waiting`, after the running requests have taken their tokens, while budget is left, and, under vLLM's schedule, not in an iteration that preempted. |
-
-Without it, admission is attempted whenever the simulation settles an event. `budget_left(ENGINE)` is
-meaningful in the hold's header. A pool on an engine (`pool reqs on E`) or on
-its device as `pool kv on E.gpu` is admitted by it without this option
-([Engine](engine.md#pools-on-a-device-or-an-engine)). Arrays join member for
-member (`pool q[N]` with `engine S[N]`), a family of one is shared by every
-member, and any other pair of counts is a link error. An engine that serves
-several pools tries them in declaration order.
+The pool option `admit via ENGINE;` is refused. Who admits a pool is said in
+its `on`: declare the capacity on the engine and write `pool NAME on ENGINE`,
+`pool NAME on ENGINE.DEVICE` for the device's, or `NAME[N] cap c;` in the
+engine for N queues it admits ([Engine](engine.md#pools-on-a-device-or-an-engine)).
+A pool on an engine is served in each iteration's `admit waiting`, after the
+running requests have taken their tokens, while budget is left; without one,
+admission is attempted whenever the simulation settles an event.
+`budget_left(ENGINE)` is meaningful in the hold's header. An engine that
+serves several pools tries them in declaration order.
 
 With `exclusive prefill`, selected prefills stop further admission;
 a fitting waiting prefill can displace tentative resident decodes. Its

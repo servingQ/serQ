@@ -484,7 +484,8 @@ fn a_hold_larger_than_the_cap_is_refused_or_reported() {
 
 /// Only a step stage's scheduler admits: `admit via` a FIFO, PS or delay
 /// stage linked, and the pool's queue waited forever with nothing counted
-/// stuck (#418, the program as found).
+/// stuck (#418). The text can no longer say it (#439: a pool is admitted
+/// by the engine its `on` names), so the IR says it and is refused.
 #[test]
 fn admit_via_names_a_step_stage() {
     for (stage, kind) in [
@@ -493,7 +494,7 @@ fn admit_via_names_a_step_stage() {
         ("stage F : delay;", "a delay stage"),
     ] {
         let src = format!(
-            "pool reqs {{ cap 4; admit via F; }}
+            "pool reqs {{ cap 4; }}
   {stage}
   workload {{ arrive poisson(1); init {{ set t0 = now; }} }}
   server {{
@@ -501,8 +502,12 @@ fn admit_via_names_a_step_stage() {
     observe response = now - t0;
   }}"
         );
-        let error =
-            run_source(&common::main_source(&src), &common::horizon(100.0), None).unwrap_err();
+        let mut p =
+            serq::compile_source(&common::main_source(&src), &common::horizon(100.0)).unwrap();
+        let f = p.stages.iter().position(|s| s.name == "F").unwrap();
+        let reqs = p.pools.iter().position(|q| q.name == "reqs").unwrap();
+        p.pools[reqs].admit_via = Some(f);
+        let error = p.validate().unwrap_err();
         assert!(
             error.contains(&format!(
                 "`F` is {kind}: only an engine's `schedule` admits"

@@ -60,7 +60,7 @@ neither: a request arrives at `vllm` and goes out.
 | a pool a hold caches in | a grey strip under its row, or along the bottom of its box |
 | the queue a hold waits in | ahead of a dashed box, one per hold rather than per pool: a hold of several pools joins the queue of its first. A frame draws none: its pools are taken at its entrance |
 | a step stage's `memory` | `pool X on S's device` as the pool's title: the engine form's pool on the device, which the IR does not name; `admitted by T` among its options when a stage `T` admits it |
-| `admit via S` | `pool X on S` as the pool's title, unless it is `S`'s memory; from a dashed box, also a dashed edge from the queue to `S` |
+| a pool `S` admits (`admit_via` `S`: `pool X on S`, `on S.D`) | `pool X on S` as the pool's title, unless it is `S`'s memory; from a dashed box, also a dashed edge from the queue to `S` |
 
 A pool's eviction order is drawn only where something is cached in it: an order
 over an empty cache says nothing.
