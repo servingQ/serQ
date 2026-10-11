@@ -253,6 +253,46 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 23] = [
     ("preempted", CtxVar::Preempted),
 ];
 
+/// The names an engine reads its values under: `running.count`,
+/// `waiting.count`, `batch.tokens` (`parser/device.rs`).
+pub(crate) const LISTS: [&str; 3] = ["running", "waiting", "batch"];
+
+/// Where the language reads `name`, when it supplies it: a context
+/// variable at its moments, `inf` in every expression, an engine's list in
+/// the engine.
+fn read_in(name: &str) -> Option<String> {
+    let moments = if name == "inf" {
+        &[][..]
+    } else if let Some((_, var)) = CONTEXT_VARS.iter().find(|(n, _)| *n == name) {
+        var.moments()
+    } else {
+        return LISTS
+            .contains(&name)
+            .then(|| format!("an engine, as `{name}.…`"));
+    };
+    Some(match moments {
+        [] => "every expression".to_string(),
+        ms => ms
+            .iter()
+            .map(|m| m.to_string())
+            .collect::<Vec<_>>()
+            .join(", or "),
+    })
+}
+
+/// The refusal of `kind` (`a session attribute`, `a stage`, …) named
+/// `name`, when the language supplies that name. A program may not name its
+/// own thing so, an attribute or a `let` (`link`, #231) or a declaration or
+/// a parameter (`parser.rs`, #460): the one word would mean two things.
+pub(crate) fn takes_supplied(name: &str, kind: &str) -> Option<String> {
+    let read_in = read_in(name)?;
+    Some(format!(
+        "`{name}` is a name the language supplies, read in {read_in}; {kind} named \
+         `{name}` would make the one word mean two things\n\
+         help: name it otherwise (docs/api/context.md lists the names the language supplies)"
+    ))
+}
+
 /// The most terms the aggregates (`max j in n (e)`) of one program write
 /// out, nested ones included.
 pub(crate) const MAX_OVER: usize = 4096;
@@ -395,33 +435,11 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     // would make a stage's `ps(min(present, 16))` read the attribute, not
     // the jobs present, with no warning (#231: a PS service time off by 8×;
     // before it, the PD lecture's attribute `n`).
-    let supplied = CONTEXT_VARS
-        .iter()
-        .map(|(n, v)| (*n, v.moments()))
-        .chain(std::iter::once(("inf", &[][..])));
-    for (name, moments) in supplied {
-        let taken = if lk.attr_index.contains_key(name) {
-            Some("session attribute")
-        } else if prog.lets.iter().any(|(n, _)| n == name) {
-            Some("`let` constant")
-        } else {
-            None
-        };
-        if let Some(kind) = taken {
-            let read_in = match moments {
-                [] => "every expression".to_string(),
-                ms => ms
-                    .iter()
-                    .map(|m| m.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", or "),
-            };
-            return Err(LinkError::new(format!(
-                "`{name}` is a name the language supplies, read in {read_in}; a {kind} \
-                 named `{name}` would be read there instead\n\
-                 help: give the {kind} a name of its own (docs/api/context.md lists the \
-                 context variables)"
-            )));
+    let declared = lk.attrs.iter().map(|n| (n, "a session attribute"));
+    let declared = declared.chain(prog.lets.iter().map(|(n, _)| (n, "a `let` constant")));
+    for (name, kind) in declared {
+        if let Some(refusal) = takes_supplied(name, kind) {
+            return Err(LinkError::new(refusal));
         }
     }
     // Constants, in order; supplied inputs replace only their declared defaults.

@@ -68,11 +68,9 @@ ENGINE_VALUES = (
 )
 
 # Observables and arithmetic: things a program reads rather than declares.
-# A context variable's name is mostly the language's: since #231 the linker
-# refuses a `set`, `choose` or `let` that takes one. An `observe`, a stage, a
-# pool or a `def` may still take one, so a name a program declares as its own
-# (`observe admitted = now;` in examples/vendors/ascend.sq) is left plain
-# here; #460 proposes refusing such a declaration.
+# A context variable's name is the language's: the linker refuses a `set`,
+# `choose` or `let` that takes one (#231), and the parser a `def`, `observe`,
+# `stage`, `pool`, `device`, `engine`, `queue`, `gauge` or `claim` (#460).
 # Arithmetic is not a role: `min`, `floor` and `pow` are how a program
 # computes, not what it means, and they read as calls without help. Leaving
 # them plain is what lets the observable colour mean exactly one thing.
@@ -88,8 +86,7 @@ BUILTINS = (
     "now", "waited", "size", "age", "last", "waiting", "present", "tokens",
     "decoders", "prefilled", "residents", "kv_decode", "kv_prefill",
     "attention", "decoding", "admission", "remaining", "position", "demand",
-    "served", "arrived", "preempted", "inf",
-    # not `admitted`: examples/vendors/ascend.sq observes its own (#460)
+    "served", "arrived", "admitted", "preempted", "inf",
     # attributes the language sets (docs/api/attributes.md); `new` and `out`
     # stay plain, as a program also names an `observe` so (`total(out)`)
     "cached", "serial", "turn_no", "think", "more", "forced", "computed",

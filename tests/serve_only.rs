@@ -168,7 +168,7 @@ fn admitted(schedule: &str) -> String {
         server {{
           run gate (cost(gate, serial > 0 ? 1 : 0));
           hold reqs (cost(reqs, 1)) {{
-            observe admitted = now;
+            observe admitted_at = now;
             run llm prefill (cost(llm, 1));
             run llm decode (cost(llm, 2));
           }}
@@ -197,7 +197,7 @@ fn an_excluded_admission_waits_as_a_resident() {
     );
     let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
     assert_eq!(r.ended, 3);
-    assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 1.0, 1.0]);
+    assert_eq!(r.observe("admitted_at").unwrap().samples, [0.0, 1.0, 1.0]);
 }
 
 #[test]

@@ -270,7 +270,7 @@ fn grow_waits_under_preempt_none() {
           run gate (cost(gate, serial));
           hold kv (cost(kv, 50)) {
             run svc (cost(svc, 5));
-            branch (serial == 0) { set t = now; grow kv (cost(kv, 30)); observe waited = now - t; }
+            branch (serial == 0) { set t = now; grow kv (cost(kv, 30)); observe grow_wait = now - t; }
           }
           observe done = now;
         }
@@ -279,7 +279,7 @@ fn grow_waits_under_preempt_none() {
     let r = run(src, &common::horizon(100.0));
     // s0 asks for 30 more at t = 5 while s1 holds 50 until t = 6: waits 1
     assert_eq!(
-        r.observe("waited").unwrap().samples,
+        r.observe("grow_wait").unwrap().samples,
         vec![1.0],
         "{}",
         r.text()
@@ -1035,7 +1035,7 @@ fn a_held_reservation_counts_against_later_admissions() {
         }}
         server {{
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) reserve (cost(kv, 10)) {{
-            observe admitted = now;
+            observe admitted_at = now;
             run llm prefill (cost(llm, 4)) growing kv;
             run llm decode (cost(llm, 6)) growing kv;
           }} cache (cost(reqs, kv, 0));
@@ -1062,7 +1062,7 @@ fn a_held_reservation_counts_against_later_admissions() {
         },
     );
     assert_eq!(held.pool("kv").unwrap().preemptions, 0, "{}", held.text());
-    let admitted = &held.observe("admitted").unwrap().samples;
+    let admitted = &held.observe("admitted_at").unwrap().samples;
     // the first two at 0; the third when the first leaves, after its prefill
     // (1 iteration) and 6 decodes
     assert_eq!(admitted, &[0.0, 0.0, 7.0], "{}", held.text());
@@ -1095,7 +1095,7 @@ fn a_held_reservation_is_each_live_hold_s() {
             }}
           }}
           branch (serial == 1) {{
-            hold kv (cost(kv, {second})) {{ observe admitted = now; run gate (cost(gate, 1)); }}
+            hold kv (cost(kv, {second})) {{ observe admitted_at = now; run gate (cost(gate, 1)); }}
           }}
         }}
 
@@ -1111,7 +1111,7 @@ fn a_held_reservation_is_each_live_hold_s() {
                 ..common::horizon(100.0)
             },
         );
-        r.observe("admitted").unwrap().samples.clone()
+        r.observe("admitted_at").unwrap().samples.clone()
     };
     // 2 + 8 + 2 = 12: admitted on arrival, at 1
     assert_eq!(admitted(&prog("", 2)), [1.0]);

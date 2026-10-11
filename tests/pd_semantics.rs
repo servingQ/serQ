@@ -33,7 +33,7 @@ fn release_frees_the_pool_before_the_scope_ends() {
           run svc (cost(svc, serial));
           set t0 = now;
           hold kv (cost(kv, 10)) {
-            observe admitted = now - t0;
+            observe admitted_at = now - t0;
             run svc (cost(svc, 1));
             release kv;
             observe free_after = free(kv);
@@ -46,7 +46,7 @@ fn release_frees_the_pool_before_the_scope_ends() {
     let r = run(src, &common::horizon(100.0));
     // session 0 at 0; session 1 arrives at 1 and is admitted at the release
     // (not at 6): the pool is free for it and taken by it at once
-    assert_eq!(samples(&r, "admitted"), [0.0, 0.0]);
+    assert_eq!(samples(&r, "admitted_at"), [0.0, 0.0]);
     assert_eq!(samples(&r, "free_after"), [0.0, 10.0]);
     // the scope end has nothing left to give back: the units are not freed
     // twice (session 1 released at 2 and held nothing at 6)
@@ -433,7 +433,7 @@ fn decode_pressure_backs_into_the_prefill_pool() {
         }
         server {
           run gate (cost(gate, serial * 0.01));
-          hold memP (cost(memP, 10)) { run prefill (cost(prefill, 0.1)); observe prefilled = serial; } lease memP (inf);
+          hold memP (cost(memP, 10)) { run prefill (cost(prefill, 0.1)); observe prefilled_serial = serial; } lease memP (inf);
           hold memD (cost(memD, 10)) {
             transfer (0.1) from memP to memD (10);
             run decode (cost(decode, 10));
@@ -456,7 +456,7 @@ fn decode_pressure_backs_into_the_prefill_pool() {
         }
         server {
           run gate (cost(gate, serial * 0.01));
-          hold memP (cost(memP, 10)) { run prefill (cost(prefill, 0.1)); observe prefilled = serial; run link (cost(link, 0.1)); }
+          hold memP (cost(memP, 10)) { run prefill (cost(prefill, 0.1)); observe prefilled_serial = serial; run link (cost(link, 0.1)); }
           hold memD (cost(memD, 10)) { run decode (cost(decode, 10)); }
         }
 
@@ -467,9 +467,9 @@ fn decode_pressure_backs_into_the_prefill_pool() {
     // the decoder with their blocks leased, so only what the decoder drained
     // got prefilled.
     let r = run(nixl, &common::horizon(15.0));
-    let n = samples(&r, "prefilled").len();
+    let n = samples(&r, "prefilled_serial").len();
     let s = run(store_and_forward, &common::horizon(15.0));
-    let m = samples(&s, "prefilled").len();
+    let m = samples(&s, "prefilled_serial").len();
     assert_eq!(m, 6, "store-and-forward prefills everything at once");
     assert!(
         n < m,
@@ -720,7 +720,7 @@ fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
             hold kv (cost(kv, 10)) { observe hit = cached; } cache (cost(kv, 0));
           } else {
             run gate (cost(gate, 0.5));
-            hold kv (cost(kv, 10)) { observe admitted = now; }
+            hold kv (cost(kv, 10)) { observe admitted_at = now; }
           }
         }
 
@@ -731,7 +731,7 @@ fn an_untaken_lease_ends_at_its_bound_and_keeps_its_cache() {
         [10.0],
         "still allocated after the scope"
     );
-    assert_eq!(samples(&r, "admitted"), [3.0], "{}", r.text());
+    assert_eq!(samples(&r, "admitted_at"), [3.0], "{}", r.text());
     // session 1 held the whole pool at 3, which evicted session 0's cache
     assert_eq!(samples(&r, "hit"), [0.0]);
 }
@@ -756,13 +756,13 @@ fn a_lease_ends_with_the_session() {
             run svc (cost(svc, 1));
           } else {
             run svc (cost(svc, 0.5));
-            hold kv (cost(kv, 10)) { observe admitted = now; }
+            hold kv (cost(kv, 10)) { observe admitted_at = now; }
           }
         }
 
 "#;
     let r = run(src, &common::horizon(100.0));
-    assert_eq!(samples(&r, "admitted"), [2.0], "{}", r.text());
+    assert_eq!(samples(&r, "admitted_at"), [2.0], "{}", r.text());
 }
 
 /// A lease is never a preemption victim: with `preempt lifo` on a pool

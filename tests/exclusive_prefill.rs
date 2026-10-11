@@ -166,7 +166,7 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
         }
         server {
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) reserve (cost(kv, 6)) {
-            observe admitted = now;
+            observe admitted_at = now;
             run llm prefill (cost(llm, 6)) growing kv;
             run llm decode (cost(llm, 1)) growing kv;
           }
@@ -175,7 +175,7 @@ fn resident_prefill_chunks_do_not_admit_another_waiting_request() {
 "#;
     let r = run_source(&common::main_source(src), &common::horizon(20.0), None).unwrap();
     assert_eq!(r.ended, 3);
-    assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 2.0, 4.0]);
+    assert_eq!(r.observe("admitted_at").unwrap().samples, [0.0, 2.0, 4.0]);
     assert_eq!(r.stage("llm").unwrap().iterations, 7);
 }
 
@@ -202,7 +202,7 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
         }
         server {
           hold reqs (cost(reqs, 1)) {
-            observe admitted = now;
+            observe admitted_at = now;
             branch (serial < 2) {
               run llm decode (cost(llm, 2));
             } else {
@@ -215,7 +215,7 @@ fn an_exhausted_decode_budget_defers_waiting_prefill() {
 "#;
     let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
     assert_eq!(r.ended, 3);
-    assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 0.0, 2.0]);
+    assert_eq!(r.observe("admitted_at").unwrap().samples, [0.0, 0.0, 2.0]);
     assert_eq!(r.observe("done").unwrap().samples, [2.0, 2.0, 4.0]);
 }
 

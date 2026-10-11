@@ -38,7 +38,7 @@ fn engine(
         server {{
           set t0 = now;
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, {budget}))) {{
-            observe admitted = now - t0;
+            observe admitted_at = now - t0;
             observe who_admitted = serial;
             run llm prefill (cost(llm, prompt)) growing kv;
             observe ttft = now - t0;
@@ -346,7 +346,7 @@ fn admission_is_fcfs_with_head_of_line_blocking() {
     // with r0), r2: 16 (would fit). r2 must wait behind r1.
     let src = engine(3, "serial == 2 ? 16 : 96", "2", 10, 16, 1000, 16, VLLM);
     let r = run(&src, &common::horizon(1000.0));
-    let adm = &r.observe("admitted").unwrap().samples;
+    let adm = &r.observe("admitted_at").unwrap().samples;
     let order = &r.observe("who_admitted").unwrap().samples;
     // observations are in admission order; find r2
     let i2 = order.iter().position(|&s| s == 2.0).unwrap();
@@ -574,7 +574,7 @@ fn request_cap_is_a_slot_pool() {
         &engine(4, "16", "5", 1000, 16, 8192, 2, VLLM),
         &common::horizon(1000.0),
     );
-    let adm = &r.observe("admitted").unwrap().samples;
+    let adm = &r.observe("admitted_at").unwrap().samples;
     let mut a = adm.clone();
     a.sort_by(f64::total_cmp);
     assert_eq!(a, vec![0.0, 0.0, 5.0, 5.0], "{}", r.text());

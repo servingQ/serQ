@@ -983,7 +983,7 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(bat
     );
     refused(
         &format!("queue waiting : link {{ serve fifo; }} {}", engine(ok)),
-        "a queue needs another name",
+        "a queue named `waiting` would make the one word mean two things",
     );
     refused(
         &engine("advance running; branch (residents == 0) { admit waiting; }"),
