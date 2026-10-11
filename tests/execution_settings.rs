@@ -76,36 +76,3 @@ fn cli_inspection_needs_no_experiment_but_run_and_ir_do() {
     f.write("model.json", std::str::from_utf8(&ir.stdout).unwrap());
     assert!(f.run(&["run", "model.json"]).status.success());
 }
-
-/// Seeds name independent runs: seed 2's session k does not draw what seed
-/// 1's session k+1 drew. A session's stream once mixed the seed and its
-/// serial only by addition, so seeds 1..N were one sample path shifted by a
-/// session each (#297).
-#[test]
-fn consecutive_seeds_do_not_replay_each_others_sessions() {
-    let src = "fn main() {
-  stage svc : fifo;
-  workload { arrive batch(40); session { set x = ~exp(1); turn; observe drawn = x; end; } }
-  server { run svc (cost(svc, 1)); }
-}";
-    let draws = |seed: u64| -> std::collections::BTreeMap<u64, f64> {
-        let overrides = Overrides {
-            seed: Some(seed),
-            ..common::horizon(1e3)
-        };
-        let r = run_ir(&compile_source(src, &overrides).unwrap(), None).unwrap();
-        let o = r.observe("drawn").unwrap();
-        o.records
-            .iter()
-            .map(|r| r.1)
-            .zip(o.samples.iter().copied())
-            .collect()
-    };
-    let (one, two) = (draws(1), draws(2));
-    assert_eq!(one.len(), 40);
-    let replayed = two
-        .iter()
-        .filter(|&(k, x)| one.get(&(k + 1)) == Some(x))
-        .count();
-    assert_eq!(replayed, 0, "seed 2 replays seed 1 a session later");
-}

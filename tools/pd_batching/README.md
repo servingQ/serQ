@@ -52,9 +52,9 @@ the report's: the gaps between a request's successive tokens.
   two decode engines, the split is a symmetric queue whose mean sojourn
   is M/M/2's: 40.5, 44.1, 62.8 ms at λ = 5, 15, 30, and a 5000 s run
   (seed 1) gives 39.8 ± 0.5, 44.1 ± 0.5, 62.3 ± 1.2 — near the 40 ms of a
-  request alone on one engine at low load (seed 1 draws 198.2 output
-  tokens a request at λ = 5 against 201.5, which is the 1.7 % short). A station of capacity 2,
-  `ps(N * f)`, gives 22.3, 28.7, 50.3 ms (run: 21.9, 28.6, 49.8).
+  request alone on one engine at low load. 39.8 is 1.7 % under 40.5
+  because seed 1 draws 198.2 output tokens a request against 201.5. A
+  station of capacity 2, `ps(N * f)`, gives 22.3, 28.7, 50.3 ms (run: 21.9, 28.6, 49.8).
 - **With a 0.2 ms decode step the engines gain little at low load.** At
   λ = 20 a colocated engine is idle 61 % of the time, its decodes rarely
   wait for a prefill, and TPOT is 0.220 ms colocated against 0.208 ms
@@ -185,7 +185,7 @@ records each deployment's edits in `sessions.csv`.
 session streams were reseeded (#297) and were not regenerated with them:
 `sessions.py` now stops at the first colocated open run (`thr` past any
 prompt, 2 sessions/s, every seed) on the negative decode amount that
-[the P/D use case](../../docs/use-cases/pd.md) warns of.
+[the P/D use case](../../docs/use-cases/pd.md) warns of (#494).
 
 - **With prefix reuse the cache decides before the batching does.** At
   3 sessions/s (27 turns/s) TTFT is 167 ms colocated, 36 ms

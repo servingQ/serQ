@@ -20,9 +20,17 @@ done
 | 2.0 | 0.041 | 17.921 | 9,780 | 1,582 | 0.971 |
 
 A mean from one run is a level only if a longer run gives about the same.
-The same seed, longer horizons (TTFT in seconds):
+The same seed at longer horizons:
 
-| sessions/s | 20 000 | 40 000 | 80 000 | 160 000 | hit rate at 160 000 |
+```bash
+for H in 20000 40000 80000 160000; do
+  for L in 1.5 1.7 1.8 1.9 2.0; do
+    serq run docs/tutorial/programs/05-engine.sq --horizon $H --warmup 2000 --seed 1 --set Lambda=$L --json
+  done
+done
+```
+
+| sessions/s | TTFT (s) at 20 000 | 40 000 | 80 000 | 160 000 | hit rate at 160 000 |
 |---|---|---|---|---|---|
 | 1.5 | 0.145 | 0.130 | 0.128 | 0.132 | 0.459 |
 | 1.7 | 0.404 | 0.327 | 0.295 | 0.295 | 0.335 |
@@ -31,19 +39,21 @@ The same seed, longer horizons (TTFT in seconds):
 | 2.0 | 17.921 | 26.486 | 33.251 | 70.388 | 0.005 |
 
 Up to 1.7 the TTFT is a level: from 80 000 s on, a run twice as long gives
-the same. At 1.8 and 1.9 it falls as the run grows, towards about 0.6 s
-and below 2 s, and is not yet settled: the 20 000 s runs caught an early
-excursion that a longer run dilutes, and at 80 000 s seeds 1–4 give 0.60–0.78 s
-at 1.8 and 1.6–3.4 s at 1.9. At 2.0 it keeps growing with the run length,
-and the hit rate goes to zero, so 17.92 s is one moment of a queue without
-bound, not a level. The cliff is between 1.9 and 2.0 sessions/s, and the
-latency rises steeply before it: the long-run TTFT more than doubles from
-1.7 to 1.8 and again from 1.8 to 1.9, while the hit rate falls from 0.46
-to 0.15 over the sweep. These runs also report `stuck` sessions: requests
-preempted again without progress. The latency samples therefore do not
-describe all offered traffic. Inspect these counters, and the run length,
-before using a mean for capacity planning, and repeat the experiment
-across seeds.
+the same. At 1.8 and 1.9 it falls as the run grows and has not settled by
+160 000 s (0.615 s and 1.815 s there): the 20 000 s runs caught an early
+excursion that a longer run dilutes, and at 80 000 s seeds 1–4 give
+0.60–0.78 s at 1.8 and 1.6–3.4 s at 1.9. At 2.0 it keeps growing with the
+run length, so 17.92 s is one moment of a queue without bound, not a level.
+
+The cliff is between 1.9 and 2.0 sessions/s, and latency rises steeply
+before it: at 160 000 s the TTFT doubles from 1.7 to 1.8 and triples from
+1.8 to 1.9. The hit rate at 160 000 s falls from 0.46 at 1.5 to 0.15 at
+1.9, and to 0.005 at 2.0.
+
+These runs also report `stuck` sessions: requests preempted again without
+progress. The latency samples therefore do not describe all offered
+traffic. Inspect these counters, and the run length, before using a mean
+for capacity planning, and repeat the experiment across seeds.
 
 ## Is it just saturation?
 

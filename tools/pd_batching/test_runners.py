@@ -34,22 +34,23 @@ class Results(unittest.TestCase):
     rerun on seed 1, agree with it. A change that moves a seeded number
     moves them, and the file is regenerated with it (#492)."""
 
-    ROWS = [("ps", 0, 5, "-"), ("step", 0, 20, "fixed")]
+    ROWS = [("ps", "colocated", 5, "-"), ("step", "colocated", 20, "fixed")]
 
     def test_two_rows_reproduce(self):
         with open(sweep.HERE / "results.csv") as f:
             recorded = {(r["experiment"], r["mode"], r["lambda"], r["prompt"], r["seed"]): r for r in csv.DictReader(f)}
         for experiment, program, mode, lam, prompt, sets, defs, edits in sweep.grid():
-            if (experiment, mode, lam, prompt) not in self.ROWS:
+            name = "colocated" if mode == 0 else "split"
+            if (experiment, name, lam, prompt) not in self.ROWS:
                 continue
+            where = f"{experiment} {name} lambda {lam} {prompt}"
+            old = recorded.get((experiment, name, str(lam), prompt, "1"))
+            if old is None:
+                self.fail(f"{where}: no row in results.csv; regenerate with sweep.py")
             now = sweep.row(experiment, mode, lam, prompt, 1, sweep.run(program, sets, defs, 1, edits), edits)
-            old = recorded[(experiment, now["mode"], str(lam), prompt, "1")]
             for k, v in now.items():
                 if isinstance(v, float) and not math.isnan(v) and not math.isclose(v, float(old[k]), rel_tol=1e-9):
-                    self.fail(
-                        f"{experiment} {now['mode']} lambda {lam} {prompt}: {k} is {v}, results.csv has {old[k]}; "
-                        "regenerate with sweep.py",
-                    )
+                    self.fail(f"{where}: {k} is {v}, results.csv has {old[k]}; regenerate with sweep.py")
 
 
 if __name__ == "__main__":

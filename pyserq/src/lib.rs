@@ -404,9 +404,11 @@ fn read_trace(path: PathBuf) -> PyResult<Vec<Vec<(f64, f64, f64, f64)>>> {
 }
 
 /// The generator a run draws from: rand 0.9's `StdRng` (ChaCha12). A run
-/// seeded `s` draws its arrivals from `Rng(s)` and its workload from
-/// `Rng(s ^ 0x9e3779b97f4a7c15)`; a Python check that reproduces a run's
-/// draws, or needs rand's stream, uses this one rather than a port of it.
+/// seeded `s` draws its arrivals from `Rng(s)`; a session's draws come from
+/// `substream(s, serial, turn, kind)` (`src/engine/interp.rs`), seeded by
+/// splitmix64 over the seed mixed alone and then each of the three. A
+/// Python check that reproduces a run's draws, or needs rand's stream, uses
+/// this one rather than a port of it.
 #[pyclass(module = "pyserq")]
 struct Rng(StdRng);
 

@@ -286,9 +286,8 @@ impl Session<'_> {
 
 /// The stream of one (seed, session, turn, kind): splitmix64 over the four,
 /// so that no two sessions, turns or kinds share a stream. The seed is mixed
-/// on its own before the session's serial goes in: added in the same step,
-/// seed s+1's session k got seed s's session k+1, and seeds 1..N were one
-/// sample path shifted by a session each (#297).
+/// alone first, so that no (seed, serial) pair shares a stream with another
+/// seed's session (#297).
 fn substream(seed: u64, serial: u64, turn: u64, kind: u64) -> StdRng {
     let mut x = mix(seed);
     for v in [serial, turn, kind] {
