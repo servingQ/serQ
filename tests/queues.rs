@@ -814,7 +814,7 @@ fn server_routes_turns_to_gateways_before_their_declarations() {
     let queues = "
       workload { arrive batch(1); }
       server { branch (1) { second.route(); } else { first.route(); } }
-      queue unused : gateway { route { observe unused = 99; } }
+      queue unused : gateway { route { observe never = 99; } }
       queue first : gateway { route { observe selected = 1; } }
       queue second : gateway { route { observe selected = 2; } }
       ";

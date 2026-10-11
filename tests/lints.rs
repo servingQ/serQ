@@ -944,6 +944,63 @@ fn a_declaration_cannot_share_its_name_with_a_binding() {
     );
 }
 
+/// #486: nor may two declarations of different kinds share a name.
+/// `mg1.sq` declared `def service()`, the law, and `observe service = s`, a
+/// sample of it. Two of one kind are each kind's own check: `observe x`
+/// again is the one statistic recorded at another place, and a queue's pool
+/// is `Q.kv`, so two queues may each have a `kv`.
+#[test]
+fn a_declaration_cannot_share_its_name_with_another() {
+    const SRC: &str = "DECL
+        stage svc : fifo;
+        workload { arrive closed(2); session { turn; } }
+        server { run svc (cost(svc, 1)); OBSERVE observe response = now; }
+        ";
+    let two_things = "would make the one word mean two things";
+    for (decl, observe, refused) in [
+        (
+            "def service() { 1 }",
+            "observe service = 1;",
+            "`service` is a definition at 1:17; an observation named `service`",
+        ),
+        (
+            "",
+            "observe svc = 1;",
+            "`svc` is a stage at 2:15; an observation named `svc`",
+        ),
+        (
+            "gauge g = 1; claim g : at end (1 > 0);",
+            "",
+            "`g` is a gauge at 1:19; a claim named `g`",
+        ),
+        (
+            "def kv() { 1 } queue Q { pool kv { cap 1; } serve fifo; }",
+            "",
+            "`kv` is a definition at 1:17; a pool named `kv`",
+        ),
+    ] {
+        let e = check(&SRC.replace("DECL", decl).replace("OBSERVE", observe)).expect_err(decl);
+        assert!(
+            e.contains(&format!("{refused} {two_things}")),
+            "{decl} {observe}: {e}"
+        );
+        assert!(
+            e.contains("help: rename one of the two declarations"),
+            "{e}"
+        );
+    }
+    for decl in [
+        "queue P { pool kv { cap 1; } serve fifo; } queue D { pool kv { cap 1; } serve fifo; }",
+        "device gpu { kv cap 4; } pool kv on gpu { }",
+    ] {
+        check(
+            &SRC.replace("DECL", decl)
+                .replace("OBSERVE", "observe response = 1;"),
+        )
+        .expect(decl);
+    }
+}
+
 /// #484: a binding the body does not read is substituted into the header,
 /// where a name the language supplies, a built-in attribute, a `let` or an
 /// attribute the program sets would read the binding instead of itself:

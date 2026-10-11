@@ -138,10 +138,10 @@ struct Parser {
     /// stage against.
     stages: Vec<String>,
     definitions: Vec<(String, Span)>,
-    /// Each declaration's name, with its position and its kind (`a stage`,
-    /// …): an attribute may not share it, which only the whole program says
-    /// (`check_declared_names`).
-    declared: Vec<(usize, String, &'static str)>,
+    /// Each declaration, in the order read: an attribute or another
+    /// declaration may not share its name, which only the whole program
+    /// says (`check_declared_names`).
+    declared: Vec<Declaration>,
     /// Composite costs lower to named scalar fields in declaration order.
     cost_records: std::collections::BTreeMap<String, Vec<String>>,
     /// Which side the statement being parsed is on.
@@ -215,6 +215,16 @@ struct Parser {
     in_engine: Option<&'static str>,
     /// The queue whose body is being read: its `device gpu` is `Q.gpu`.
     device_scope: Option<String>,
+}
+
+/// A declaration's name as written, with its position, its kind (`a
+/// stage`, …) and the queue it is declared in, if any: a queue's pool or
+/// device `kv` is `Q.kv`, so two queues may each have one.
+struct Declaration {
+    at: usize,
+    name: String,
+    kind: &'static str,
+    queue: Option<String>,
 }
 
 /// A use of a `def` whose body says `turn;`, with the names
@@ -2403,21 +2413,42 @@ impl Parser {
     }
 
     /// A declaration's name: one the language supplies is refused here
-    /// (`own_name`), an attribute's once the whole program, every `set`
-    /// in it, has been read (`check_declared_names`).
+    /// (`own_name`), an attribute's or another declaration's once the
+    /// whole program, every `set` in it, has been read
+    /// (`check_declared_names`).
     fn declare(&mut self, at: usize, name: &str, kind: &'static str) -> PResult<()> {
+        self.declare_in(None, at, name, kind)
+    }
+
+    /// `declare`, for a declaration inside `queue` when it is one.
+    fn declare_in(
+        &mut self,
+        queue: Option<String>,
+        at: usize,
+        name: &str,
+        kind: &'static str,
+    ) -> PResult<()> {
         self.own_name(at, name, kind)?;
-        self.declared.push((at, name.to_string(), kind));
+        self.declared.push(Declaration {
+            at,
+            name: name.to_string(),
+            kind,
+            queue,
+        });
         Ok(())
     }
 
     /// A declaration may not share its name with an attribute, built in or
-    /// set (#470), or with a hold header's binding (#484): `stage think`
-    /// beside the attribute `think`, `set svc` beside `stage svc`, or
-    /// `observe hit` beside a header's token count `hit`, would have one
+    /// set (#470), with a hold header's binding (#484), or with another
+    /// declaration (#486): `stage think` beside the attribute `think`, `set
+    /// svc` beside `stage svc`, `observe hit` beside a header's token count
+    /// `hit`, or `observe service` beside `def service`, would have one
     /// word mean two things, and a bare `E` passed where a stage or a number
     /// goes reads one or the other by its place alone (#467). Writing a
-    /// built-in attribute stays a `set`.
+    /// built-in attribute stays a `set`. Two declarations of one kind are
+    /// left to that kind's own check: `observe x` written again records the
+    /// one statistic at another place, two `stage t` are refused as a
+    /// duplicate, and two queues' pools `kv` are `P.kv` and `D.kv`.
     fn check_declared_names(&self, prog: &Program) -> PResult<()> {
         let set_at = |name: &str| {
             self.definitions
@@ -2425,16 +2456,25 @@ impl Parser {
                 .find(|(n, _)| n == name && !prog.lets.iter().any(|(l, _)| l == n))
                 .map(|(_, span)| self.place(span.file, span.line, span.col))
         };
+        let token_at = |at: usize| {
+            let t = &self.toks[at];
+            self.place(t.file, t.line, t.col)
+        };
         let bound_at = |name: &str| {
             self.header_binds
                 .iter()
                 .find(|(_, n)| n == name)
-                .map(|(at, _)| {
-                    let t = &self.toks[*at];
-                    self.place(t.file, t.line, t.col)
-                })
+                .map(|(at, _)| token_at(*at))
         };
-        for (at, name, kind) in &self.declared {
+        for (i, d) in self.declared.iter().enumerate() {
+            let (at, name, kind) = (&d.at, &d.name, d.kind);
+            // a queue's declaration is `Q.x`, but its body reads it as `x`:
+            // it meets a top-level `x` and its own queue's, not another's
+            let earlier = self.declared[..i].iter().find(|e| {
+                e.name == d.name
+                    && e.kind != d.kind
+                    && (e.queue == d.queue || e.queue.is_none() || d.queue.is_none())
+            });
             let (other, help) = if BUILTIN_ATTRS.contains(&name.as_str()) {
                 (
                     "a built-in attribute".to_string(),
@@ -2450,6 +2490,11 @@ impl Parser {
                 (
                     format!("a hold's binding at {place}"),
                     "rename the declaration or the binding",
+                )
+            } else if let Some(e) = earlier {
+                (
+                    format!("{} at {}", e.kind, token_at(e.at)),
+                    "rename one of the two declarations",
                 )
             } else {
                 continue;
@@ -3177,7 +3222,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
-        self.declare(at, &name, "a pool")?;
+        self.declare_in(self.device_scope.clone(), at, &name, "a pool")?;
         let array = self.array_count()?;
         let mut on = None;
         let mut count = array.unwrap_or(1);
@@ -3551,7 +3596,7 @@ impl Parser {
                 if KEYWORDS.contains(&dev.as_str()) {
                     return self.err_at(d_at, format!("`{dev}` is a word of the language"));
                 }
-                self.declare(d_at, &dev, "a device")?;
+                self.declare_in(Some(name.clone()), d_at, &dev, "a device")?;
                 if dev == name {
                     return self.err_at(
                         d_at,

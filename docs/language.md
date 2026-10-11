@@ -173,7 +173,11 @@ The rules that are the language's, not the catalogue's:
   `stage`, a `pool`, a `device`, an `engine`, a `queue`, a `gauge` or a
   `claim` take a supplied name: `observe admitted = now;` does not link,
   nor an attribute's, built in or set (`stage think` does not link); a
-  program may still `set` a built-in attribute.
+  program may still `set` a built-in attribute. Two declarations of
+  different kinds do not share a name either (`observe svc` beside `stage
+  svc` does not link); an `observe` written again records the one
+  statistic at another place, and a queue's own pool or device is the
+  queue's (`P.kv`), so two queues may each have a `kv`.
 - **Constants** (a `let`, a `cap`, a `block`, a `fifo` count, the arrival
   rate or population) are numbers or `inf`; one that
   evaluates to NaN does not link.
