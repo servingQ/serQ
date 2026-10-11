@@ -26,8 +26,9 @@ fn main() {
   let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
   let chunk_cap = args.number("chunk_cap", inf);   // long_prefill_token_threshold (inf: none)
   let q = args.number("q", 0.3);           // a turn delegates instead of calling a tool
-  let W = args.number("W", 14.7);          // the wait for the subagents (s): the mean of the longest of k
-                         // `subagent` samples of a previous run (`--dump`)
+  let W = args.number("W", 15.4);          // the wait for the subagents (s): the mean of the longest of k
+                         // `subagent` samples of a previous run (`--dump`), iterated to its
+                         // fixed point at seed 1, horizon 10000 s, warm-up 1000 s
   let kids = q * k * p / (1 - p);   // subagents per agent session (a last turn does not delegate)
 
   device gpu {

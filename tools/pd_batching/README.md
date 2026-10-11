@@ -42,8 +42,9 @@ the report's: the gaps between a request's successive tokens.
 - **The PS identity holds and is exact in the model.** Split is colocated
   with arrival rate and capacity both multiplied by `N`: the decodes
   present at a station are the same (0.25, 0.67, 1.5, 4.0 at λ = 5–20, as
-  M/G/1-PS's ρ/(1 − ρ) with ρ = 0.2–0.8), and the decode time is divided
-  by 4.0 at every load. Per station: in the whole system, colocated has
+  M/G/1-PS's ρ/(1 − ρ) with ρ = 0.2–0.8; every interval of `summary.md`
+  covers them except split at λ = 10, 0.696 ± 0.026 against 0.667), and
+  the decode time is divided by about 4 (3.9–4.2) at every load. Per station: in the whole system, colocated has
   four times as many decoding. And the 4× holds at any load only because
   `f` is fixed: an idle colocated engine still decodes at a quarter of its
   speed. The identity needs `N f ≤ 1`: the split's `N f` engines give a

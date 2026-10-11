@@ -79,10 +79,10 @@ The approximation has three parts:
   one Poisson stream at rate `Lambda · (1 + kids)`, and marks an arrival as a
   subagent (`sub`) with probability `kids / (1 + kids)`.
 - **The parent waits a constant.** A delegating turn runs `run delegate (cost(delegate, W))`.
-  The supplied `W = 14.7` seconds is a model input; it does not track the
-  simulated children's completion times. To calibrate it, collect
-  `subagent` durations with `--dump` and estimate the mean maximum of `k`
-  durations under the intended delegation model.
+  The supplied `W = 15.4` seconds is a model input; it does not track the
+  simulated children's completion times. It was calibrated as the mean
+  maximum of `k` `subagent` durations collected with `--dump`, iterated
+  until it stopped moving (seed 1, 10 000 s, 1 000 s of warm-up).
 - **A subagent's context is its own.** It starts from `K ~ uniform(2000,
   6000)`, which stands for the parent's context it copies. The cache does not
   share entries across sessions, so the subagent misses that prefix.
@@ -98,7 +98,7 @@ arrival rate, so compare the rows within a pair, not across the table):
 | `vllm_chat` | 1.62 | 0.80 | 221 | 5 | 66 | 0.10 |
 | `vllm` | 2.94 | 0.89 | 727 | 16 | 62 | 0.16 |
 | `vllm_subagents --set q=0` | 0.90 | 0.89 | 665 | 13 | 58 | 0.05 |
-| `vllm_subagents` | 3.77 | 0.69 | 1 967 | 52 | 111 | 0.29 |
+| `vllm_subagents` | 3.77 | 0.68 | 1 997 | 53 | 112 | 0.29 |
 
 Delegation increases request traffic and the mean prefill work in this
 approximation. The first turn of each subagent misses its copied context;

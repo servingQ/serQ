@@ -19,14 +19,31 @@ done
 | 1.9 | 0.125 | 4.457 | 7,274 | 1,198 | 0.902 |
 | 2.0 | 0.041 | 17.921 | 9,780 | 1,582 | 0.971 |
 
-Between 1.9 and 2.0 sessions/s, a 5% load increase raises observed TTFT
-from 4.46 s to 17.92 s, and over the sweep the hit rate falls from 0.45
-to 0.04. At 1.9 the TTFT is a level: a run twice as long gives about the same.
-At 2.0 it keeps growing with the run length, so 17.92 s is one moment of a
-queue without bound, not a level. These seed-1 runs also report `stuck` sessions:
-requests preempted again without progress. The latency samples therefore
-do not describe all offered traffic. Inspect these counters before using
-a mean for capacity planning, and repeat the experiment across seeds.
+A mean from one run is a level only if a longer run gives about the same.
+The same seed, longer horizons (TTFT in seconds):
+
+| sessions/s | 20 000 | 40 000 | 80 000 | 160 000 | hit rate at 160 000 |
+|---|---|---|---|---|---|
+| 1.5 | 0.145 | 0.130 | 0.128 | 0.132 | 0.459 |
+| 1.7 | 0.404 | 0.327 | 0.295 | 0.295 | 0.335 |
+| 1.8 | 1.276 | 0.815 | 0.670 | 0.615 | 0.252 |
+| 1.9 | 4.457 | 2.682 | 2.175 | 1.815 | 0.145 |
+| 2.0 | 17.921 | 26.486 | 33.251 | 70.388 | 0.005 |
+
+Up to 1.7 the TTFT is a level: from 80 000 s on, a run twice as long gives
+the same. At 1.8 and 1.9 it falls as the run grows, towards about 0.6 s
+and below 2 s, and is not yet settled: the 20 000 s runs caught an early
+excursion that a longer run dilutes, and at 80 000 s seeds 1–4 give 0.60–0.78 s
+at 1.8 and 1.6–3.4 s at 1.9. At 2.0 it keeps growing with the run length,
+and the hit rate goes to zero, so 17.92 s is one moment of a queue without
+bound, not a level. The cliff is between 1.9 and 2.0 sessions/s, and the
+latency rises steeply before it: the long-run TTFT more than doubles from
+1.7 to 1.8 and again from 1.8 to 1.9, while the hit rate falls from 0.46
+to 0.15 over the sweep. These runs also report `stuck` sessions: requests
+preempted again without progress. The latency samples therefore do not
+describe all offered traffic. Inspect these counters, and the run length,
+before using a mean for capacity planning, and repeat the experiment
+across seeds.
 
 ## Is it just saturation?
 
