@@ -219,7 +219,7 @@ struct Linker<'a> {
     reg_index: HashMap<String, usize>,
     /// Terms the program's aggregates have written out so far, nested ones
     /// included, against `MAX_OVER`.
-    over_terms: std::cell::Cell<usize>,
+    terms_written: Cell<usize>,
 }
 
 /// The context variables by their source names (`docs/api/context.md`). A
@@ -399,7 +399,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         side: crate::ir::Side::Workload,
         spans: vec![],
         prog,
-        over_terms: std::cell::Cell::new(0),
+        terms_written: Cell::new(0),
         registers: vec![],
         reg_index: HashMap::new(),
     };
@@ -463,7 +463,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         } else {
             format!("`let {name}`")
         };
-        let v = lk.const_eval(e, &what).map_err(|mut error| {
+        let v = lk.eval_const_named(e, &what).map_err(|mut error| {
             if overridden {
                 // These spans refer to the override's expression, not the program.
                 error.message = format!(
@@ -514,7 +514,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                         s.name
                     )));
                 }
-                let init = lk.const_eval(init, &format!("`state {name}`"))?;
+                let init = lk.eval_const_named(init, &format!("`state {name}`"))?;
                 lk.reg_index.insert(name.clone(), lk.registers.len());
                 lk.registers.push(crate::ir::Register {
                     name: name.clone(),
@@ -528,11 +528,11 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     // Pools.
     let mut pools = vec![];
     for p in &prog.pools {
-        let cap = lk.const_eval(&p.cap, &format!("pool `{}`: cap", p.name))?;
+        let cap = lk.eval_const_named(&p.cap, &format!("pool `{}`: cap", p.name))?;
         let block = p
             .block
             .as_ref()
-            .map(|b| lk.const_eval(b, &format!("pool `{}`: block", p.name)))
+            .map(|b| lk.eval_const_named(b, &format!("pool `{}`: block", p.name)))
             .transpose()?;
         if let Some(b) = block
             && b <= 0.0
@@ -598,7 +598,8 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     for s in &prog.stages {
         let kind = match &s.kind {
             StageKind::Fifo(c) => {
-                let c = lk.const_eval(c, &format!("stage `{}`: fifo server count", s.name))?;
+                let c =
+                    lk.eval_const_named(c, &format!("stage `{}`: fifo server count", s.name))?;
                 if c < 1.0 || c.fract() != 0.0 {
                     return Err(LinkError::new(format!(
                         "stage `{}`: fifo servers must be a positive integer",
@@ -616,7 +617,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
                 granule: match &sp.granule {
                     None => None,
                     Some(g) => {
-                        let v = lk.const_eval(g, &format!("engine `{}`: granule", s.name))?;
+                        let v = lk.eval_const_named(g, &format!("engine `{}`: granule", s.name))?;
                         if v.is_nan() || v <= 0.0 {
                             return Err(LinkError::new(format!(
                                 "engine `{}`: granule {v}: a prefill takes a multiple of it, \
@@ -687,7 +688,9 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         None => (CArrival::None, None, false, vec![], vec![]),
         Some(w) => {
             let a = match &w.arrive {
-                Arrival::Poisson(e) => CArrival::Poisson(lk.const_eval(e, "the poisson rate")?),
+                Arrival::Poisson(e) => {
+                    CArrival::Poisson(lk.eval_const_named(e, "the poisson rate")?)
+                }
                 // a constant gap is folded, and `Program::validate` refuses
                 // one that is not a positive time; a drawn one is the run's
                 // to check (#269)
@@ -1395,21 +1398,21 @@ impl Linker<'_> {
                 None
             }
             Some(e) => {
-                let before = self.over_terms.get();
+                let before = self.terms_written.get();
                 let i = self.expr(e)?;
-                let after = self.over_terms.get();
+                let after = self.terms_written.get();
                 // a constant index (`kv[2]`, `kv[-1]`, `kv[N + 1]`, or one an
                 // aggregate wrote out) is checked here, where the program
                 // still has its names; one that reads state links as before
                 // the fold writes the index's aggregates out again: against
                 // the budget they met the first time, and without spending it
-                self.over_terms.set(before);
+                self.terms_written.set(before);
                 let folded = match i {
                     // already a number (`blocksize(p)` folds here, not in `eval_const`)
                     CExpr::Num(k) => Some(k),
                     _ => (!e.draws()).then(|| self.eval_const(e).ok()).flatten(),
                 };
-                self.over_terms.set(after);
+                self.terms_written.set(after);
                 if let Some(k) = folded
                     && !(k >= 0.0 && k.fract() == 0.0 && k < count as f64)
                 {
@@ -1528,7 +1531,7 @@ impl Linker<'_> {
             .find(|d| d.name == r.name)
             .ok_or_else(|| self.unknown("pool", &r.name).at(r.span))?;
         match &d.block {
-            Some(b) => self.const_eval(b, &format!("`blocksize({})`", r.name)),
+            Some(b) => self.eval_const_named(b, &format!("`blocksize({})`", r.name)),
             None => Err(LinkError::new(format!(
                 "`blocksize({})`: pool `{}` has no `block`",
                 r.name, r.name
@@ -1641,7 +1644,7 @@ impl Linker<'_> {
     /// to `max`. A cast would have made -1 a 0, 2.5 a 2 and 1e30 a run that
     /// never starts (#289).
     fn const_count(&self, e: &Expr, what: &str, min: usize, max: usize) -> LResult<usize> {
-        let v = self.const_eval(e, what)?;
+        let v = self.eval_const_named(e, what)?;
         if !(v.fract() == 0.0 && v >= min as f64 && v <= max as f64) {
             return Err(LinkError::new(format!(
                 "{what} is {v}: a count is a whole number from {min} to {max}"
@@ -2088,10 +2091,11 @@ pub(crate) trait Constants {
         })
     }
 
-    /// The constant `what` (`pool \`kv\`: cap`, `the horizon`, ...): a number or
+    /// `eval_const` for the constant `what` (`pool \`kv\`: cap`, `the horizon`,
+    /// ...), which names it when it refuses a NaN: a constant is a number or
     /// an infinity. No run means anything with a NaN constant, and the IR
     /// has no spelling for one.
-    fn const_eval(&self, e: &Expr, what: &str) -> LResult<f64> {
+    fn eval_const_named(&self, e: &Expr, what: &str) -> LResult<f64> {
         let v = self.eval_const(e)?;
         if v.is_nan() {
             // where the expression has a place (a call, a name), the error has it
@@ -2120,7 +2124,7 @@ pub(crate) trait Constants {
                 "{what}: `{j}` is also {c}\nhelp: give the index a name of its own"
             )));
         }
-        let count = self.const_eval(n, &format!("{what}'s count"))?;
+        let count = self.eval_const_named(n, &format!("{what}'s count"))?;
         if !(count >= 1.0 && count.fract() == 0.0 && count.is_finite()) {
             return Err(LinkError::new(format!(
                 "{what}'s count must be a positive integer, found {count}"
@@ -2179,13 +2183,13 @@ impl Constants for Linker<'_> {
     }
 
     fn terms_written(&self) -> &Cell<usize> {
-        &self.over_terms
+        &self.terms_written
     }
 }
 
 /// A constant function of constants: what a `let`, a `cap` or an array size
-/// may call. The parser folds a family's size with it, the linker every
-/// constant.
+/// may call. `Constants::eval_const` calls it, for the parser's array sizes
+/// and the linker's constants alike.
 pub fn const_call(f: &str, xs: &[f64]) -> Option<f64> {
     Some(match (f, xs) {
         ("min", [a, b]) => a.min(*b),
