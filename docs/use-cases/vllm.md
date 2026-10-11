@@ -22,7 +22,7 @@ The scheduler guards whether victim blocks can actually be freed and manages def
 --8<-- "examples/multi-turn/vllm.sq"
 ```
 
-The program's definitions, `reusable` and `long_prefill`, are a library the other vLLM programs share:
+The program's definition `reusable` is a library the other vLLM programs share:
 
 ```serq title="lib/vllm.sq"
 --8<-- "lib/vllm.sq"

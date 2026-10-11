@@ -3,7 +3,6 @@
 // of the Lean theorems about it (lean/Serq/Oracle.lean).
 // The constants are a scenario's engine; the requests are the workload
 // instance, given as explicit sessions in the IR (prompt, o, arrive).
-use "../../lib/vllm.sq";
 use "std/args";
 
 fn main() {
@@ -18,9 +17,9 @@ fn main() {
     reqs cap max_seqs;
     tokens cap B;
     schedule {
-      // the chunk cap holds only while more than one request is running or
-      // waiting (lib/vllm.sq's long_prefill): a request alone takes the whole budget
-      let threshold = long_prefill(chunk);
+      // long_prefill_token_threshold binds only while another request is
+      // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
+      let threshold = running.count + waiting.count > 1 ? chunk : inf;
       advance running each at most (threshold);
       admit waiting while (running.preempted == 0) each at most (threshold);
     }

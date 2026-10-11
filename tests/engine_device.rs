@@ -193,7 +193,7 @@ fn reg(r: usize) -> CExpr {
 /// as it fits (`on gpu`) and `reqs` by the engine. `tokens cap B` is the
 /// budget, `execute (c0 + …)` the cost, and the per-run cap the kernel's
 /// `chunk`, applied only while more than one request is in the engine
-/// (`long_prefill`): `inf`, no cap, is its 0, and a cap of 512 is 512.
+/// (vLLM's `long_prefill_token_threshold`): `inf`, no cap, is its 0, and a cap of 512 is 512.
 #[test]
 fn vllm_as_an_engine_is_the_procedure() {
     let text = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();

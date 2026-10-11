@@ -372,8 +372,7 @@ fn chunked_prefill_takes_ceil_prompt_over_budget_steps() {
 
 /// scheduler.py:606-616, 675-676: `long_prefill_token_threshold` caps one
 /// request's chunk only when it is not alone. The program says so in its
-/// `each at most` (`lib/vllm.sq`'s `long_prefill`); a constant cap is not
-/// vLLM's.
+/// `each at most`; a constant cap is not vLLM's.
 #[test]
 fn long_prefill_threshold_applies_only_with_company() {
     let chunk = "let c = running.count + queued(reqs) > 1 ? 1000 : inf;

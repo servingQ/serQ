@@ -1123,7 +1123,7 @@ that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 | `single-turn/mg1.sq`, `single-turn/ps.sq`, `multi-turn/closed.sq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | a run against the closed form, by hand, in [getting started](getting-started.md) and the [tutorial](tutorial/01-a-queue.md); no test |
 | `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`advance running decode first`, `drop kv` before `end`) | — |
 | `multi-turn/routing.sq` | four replicas, five routing policies | — |
-| `multi-turn/vllm.sq` | vLLM v1's engine (`lib/vllm.sq`) under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
+| `multi-turn/vllm.sq` | vLLM v1's engine under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
 | `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |
 | `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
 | `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
@@ -1152,7 +1152,7 @@ rather than from the previous prompt, and caches `prompt + o`.
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
 | admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(vllm))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `run vllm prefill (cost(vllm, n)) growing kv`, `each at most (threshold)` with `let threshold = long_prefill(c);`: the cap only while more than one request is running or waiting (`lib/vllm.sq`); a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
+| chunked prefill, `long_prefill_token_threshold` | `run vllm prefill (cost(vllm, n)) growing kv`, `each at most (threshold)` with `let threshold = running.count + waiting.count > 1 ? c : inf;`: the cap only while more than one request is running or waiting; `waiting.count` counts the queues the engine admits, as vLLM counts `waiting`, whose `skipped_waiting` these programs leave empty; a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
 | preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit waiting while (running.preempted == 0)` | `scheduler.py:742-813, 869, 1539-1582` |
 | a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `run vllm prefill (cost(vllm, known - c))`, `run vllm decode (cost(vllm, o - 1 - (known - prompt)))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |
@@ -1169,8 +1169,11 @@ the freed blocks return with their hashes, block_pool.py:776-805), though
 the step never computes their KV; serQ caches what was computed, the
 position ([Semantics](#3-semantics)).
 
-Not modelled: the watermark (0 by default), the adaptive long-prefill
-threshold (off by default), encoder inputs, speculative decoding, sliding
+The adaptive long-prefill threshold is off by default; it is expressible as
+`max(threshold, floor(budget / n))` (`scheduler.py:609-622`,
+[Engine](api/engine.md)), but no program here writes it.
+
+Not modelled: the watermark (0 by default), encoder inputs, speculative decoding, sliding
 window, the PRIORITY policy (its victim, the largest `(priority,
 arrival_time)`, `scheduler.py:761-765`, put back into a heap ordered by
 the same, `request_queue.py:159-164`, is `preempt by (-priority, -t0)
