@@ -1364,40 +1364,67 @@ fn a_def_may_not_be_named_each_or_most() {
     }
 }
 
-/// A function's number argument written with an index does not drop it
-/// (#469): `min(prompt[7], 1000)` linked as `min(prompt, 1000)`. An
-/// attribute has no members, and a pool or stage member is no number.
+/// A name passed where a function takes a number is read as written
+/// (#469): `min(prompt[7], 1000)` linked as `min(prompt, 1000)`. A value
+/// has no index, and a pool or stage, whole or a member, is no number;
+/// the same holds in a constant, through a definition's parameter, and
+/// for an argument the definition does not read.
 #[test]
-fn an_indexed_name_passed_as_a_number_is_refused() {
+fn a_name_passed_as_a_number_is_read_as_written() {
     let src = |size: &str| {
         format!(
-            "device gpu[2] {{ kv cap 100; }} pool kv on gpu {{ }}
+            "def g(x) {{ min(x, 1) }}
+def h(x) {{ 1 }}
+device gpu[2] {{ kv cap 100; }} pool kv on gpu {{ }}
 engine E[2] on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
 workload {{ arrive batch(1); init {{ set prompt = 32; set j = 0; }} }}
 server {{ hold kv[j] (cost(kv, {size})) {{ run E[j] prefill (cost(E, 1)) growing kv[j]; }} }}"
         )
     };
-    compiled(&src("min(prompt, 1000)"), None, &common::horizon(10.0));
+    let ov = common::horizon(10.0);
+    compiled(&src("min(prompt, 1000)"), None, &ov);
+    // a value read bare is itself, though a stage shares its name
+    compiled(
+        &src("min(E, 1)").replace("set j = 0;", "set j = 0; set E = 3;"),
+        None,
+        &ov,
+    );
+    let pool = "as a number, but a pool is none: read";
+    let stage = "as a number, but a stage is none: read";
+    let attribute = "`prompt[…]`: an attribute has no index: write `prompt`";
     for (size, message) in [
-        (
-            "min(prompt[7], 1000)",
-            "`min` reads `prompt[…]`, but an attribute has no index: write `prompt`",
-        ),
+        ("min(prompt[7], 1000)", attribute.to_string()),
         (
             "min(kv[j], 1)",
-            "`min` reads `kv[…]` as a number, but a pool is none: read `queued(kv[…])` or `holders(kv[…])`",
+            format!("`min` reads `kv[…]` {pool} `queued(kv[…])` or `holders(kv[…])`"),
         ),
         (
             "min(E[j], 1)",
-            "`min` reads `E[…]` as a number, but a stage is none: read `budget_left(E[…])` or `work(E[…])`",
+            format!("`min` reads `E[…]` {stage} `budget_left(E[…])` or `work(E[…])`"),
         ),
-        ("min(no_such_name[0], 1)", "unknown name `no_such_name`"),
+        (
+            "min(kv, 1)",
+            format!("`min` reads `kv` {pool} `queued(kv)` or `holders(kv)`"),
+        ),
+        (
+            "min(E, 1)",
+            format!("`min` reads `E` {stage} `budget_left(E)` or `work(E)`"),
+        ),
+        (
+            "g(kv[j])",
+            format!("`min` reads `kv[…]` {pool} `queued(kv[…])`"),
+        ),
+        ("h(prompt[zz])", attribute.to_string()),
+        (
+            "min(no_such_name[0], 1)",
+            "unknown name `no_such_name`".to_string(),
+        ),
     ] {
-        refused(&src(size), message);
+        refused(&src(size), &message);
     }
-    // a constant's function call too: `min(N[1], 4)` was `min(N, 4)`
+    // a constant's function call: `min(N[1], 4)` was `min(N, 4)`
     refused(
         &format!("let N = 2; let A = min(N[1], 4);\n{}", src("A")),
-        "`min` reads `N[…]`, but a number has no index: write `N`",
+        "`N[…]`: a number has no index: write `N`",
     );
 }
