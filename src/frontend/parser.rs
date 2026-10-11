@@ -1406,13 +1406,17 @@ fn collect_entry(
 }
 
 /// The expressions of an entry's body, the holds' headers apart from the
-/// rest: the header is the admission and sees less. The index of every
-/// reference the body names (`run nic[k]`, `hold kv`, `release src`) is in
-/// `indices`: read as the body reads, and the only place a `from` name may
-/// stand as a number. A `Stmt::Unread`'s arguments are in `unread`.
+/// rest: the header is the admission and sees less. Each header comes with
+/// the locals set above its hold (`set kept = prompt;` before it, in the
+/// entry's statement order: in both arms of a `branch`, not in a loop or a
+/// `fork` that may not have run), the only ones it reads. The index of every reference the body
+/// names (`run nic[k]`, `hold kv`, `release src`) is in `indices`: read as
+/// the body reads, and the only place a `from` name may stand as a number.
+/// A `Stmt::Unread`'s arguments are in `unread`.
 fn split_reads<'a>(
     stmts: &'a [Stmt],
-    headers: &mut Vec<&'a Expr>,
+    above: &mut Vec<String>,
+    headers: &mut Vec<(&'a Expr, Vec<String>)>,
     bodies: &mut Vec<&'a Expr>,
     indices: &mut Vec<&'a Expr>,
     unread: &mut Vec<&'a Arg>,
@@ -1431,7 +1435,11 @@ fn split_reads<'a>(
             | Stmt::Request
             | Stmt::Mark(_)
             | Stmt::Join => {}
-            Stmt::Set(_, e) | Stmt::Observe(_, e) => bodies.push(e),
+            Stmt::Set(n, e) => {
+                bodies.push(e);
+                above.push(n.clone());
+            }
+            Stmt::Observe(_, e) => bodies.push(e),
             Stmt::Unread(args) => unread.extend(args),
             Stmt::Grow(r, e) | Stmt::Load(r, e) => {
                 index(r, indices);
@@ -1447,13 +1455,13 @@ fn split_reads<'a>(
             } => {
                 for (r, e, f) in pools {
                     index(r, indices);
-                    headers.push(e);
+                    headers.push((e, above.clone()));
                     if let Some(f) = f {
-                        headers.push(f);
+                        headers.push((f, above.clone()));
                     }
                 }
                 if let Some(r) = reuse {
-                    headers.push(r);
+                    headers.push((r, above.clone()));
                 }
                 if let Some(c) = cache {
                     bodies.push(c);
@@ -1462,7 +1470,8 @@ fn split_reads<'a>(
                     index(r, indices);
                     bodies.push(t);
                 }
-                split_reads(body, headers, bodies, indices, unread);
+                // the body runs to its end before the next statement
+                split_reads(body, above, headers, bodies, indices, unread);
             }
             Stmt::Run {
                 stage,
@@ -1478,19 +1487,32 @@ fn split_reads<'a>(
                 }
                 bodies.push(work);
             }
+            // a branch sets after it what both arms set; a pass of a loop,
+            // or a fork beside the session, may not have run
             Stmt::Branch(p, a, b) => {
                 bodies.push(p);
-                split_reads(a, headers, bodies, indices, unread);
-                split_reads(b, headers, bodies, indices, unread);
+                let (mut in_a, mut in_b) = (above.clone(), above.clone());
+                split_reads(a, &mut in_a, headers, bodies, indices, unread);
+                split_reads(b, &mut in_b, headers, bodies, indices, unread);
+                for n in in_a {
+                    if in_b.contains(&n) && !above.contains(&n) {
+                        above.push(n);
+                    }
+                }
             }
             Stmt::While(e, b) => {
                 bodies.push(e);
-                split_reads(b, headers, bodies, indices, unread);
+                split_reads(b, &mut above.clone(), headers, bodies, indices, unread);
             }
-            Stmt::Loop(b) | Stmt::Fork(b) => split_reads(b, headers, bodies, indices, unread),
-            Stmt::Choose { count, key, .. } => {
+            Stmt::Loop(b) | Stmt::Fork(b) => {
+                split_reads(b, &mut above.clone(), headers, bodies, indices, unread)
+            }
+            Stmt::Choose {
+                var, count, key, ..
+            } => {
                 bodies.push(count);
                 bodies.extend(key);
+                above.push(var.clone());
             }
             Stmt::Call {
                 queue,
@@ -3971,13 +3993,16 @@ impl Parser {
         // the gateway's `route` is the deployment's and reads as a server
         // does; any other entry of a queue that is also a gateway is an entry
         let is_gateway = verb == "route" && q.roles.iter().any(|r| r == "gateway");
-        let allowed_var = |n: &str, header: bool| -> bool {
+        // `seen`: the locals a read sees, all of them in the body and in a
+        // header those set above its hold
+        let allowed_var = |n: &str, header: bool, seen: &[String]| -> bool {
             params.iter().any(|p| p == n)
                 || n == "self"
                 || n == "inf"
                 || self.consts.iter().any(|(c, _)| c == n)
                 || CONTEXT.contains(&n)
-                || (!header && (n == "now" || locals.contains(&n.to_string())))
+                || (!header && n == "now")
+                || seen.iter().any(|l| l == n)
         };
         let own_ref = |r: &Ref| -> bool {
             q.pools.contains(&r.name)
@@ -3990,7 +4015,14 @@ impl Parser {
             let mut bodies = vec![];
             let mut indices = vec![];
             let mut unread = vec![];
-            split_reads(&body, &mut headers, &mut bodies, &mut indices, &mut unread);
+            split_reads(
+                &body,
+                &mut vec![],
+                &mut headers,
+                &mut bodies,
+                &mut indices,
+                &mut unread,
+            );
             // an own pool, or the `from` name, is all an entry's statements hold
             let mut named = vec![];
             pools_named(&body, &mut named);
@@ -4012,23 +4044,23 @@ impl Parser {
                 );
             }
             let mut sources = vec![];
-            for (e, header, in_index) in headers
+            for (e, header, in_index, seen) in headers
                 .iter()
-                .map(|e| (e, true, false))
-                .chain(bodies.iter().map(|e| (e, false, false)))
-                .chain(indices.iter().map(|e| (e, false, true)))
+                .map(|(e, above)| (*e, true, false, above))
+                .chain(bodies.iter().map(|e| (*e, false, false, &locals)))
+                .chain(indices.iter().map(|e| (*e, false, true, &locals)))
             {
                 let (mut vars, mut indexed, mut refs) = (vec![], vec![], vec![]);
                 names_in(e, &mut vars, &mut indexed, &mut refs);
-                sources.push((vars, indexed, refs, header, in_index));
+                sources.push((vars, indexed, refs, header, in_index, seen));
             }
             // what a statement definition's use does not read is resolved as its body
             let (mut vars, mut indexed, mut refs) = (vec![], vec![], vec![]);
             for a in unread {
                 arg_names(a, &mut vars, &mut indexed, &mut refs);
             }
-            sources.push((vars, indexed, refs, false, false));
-            for (mut vars, indexed, refs, header, in_index) in sources {
+            sources.push((vars, indexed, refs, false, false, &locals));
+            for (mut vars, indexed, refs, header, in_index, seen) in sources {
                 // a bare reference that is not the queue's own (`queued(gkv)`,
                 // or `f(now)` to a definition that does not read it) is read
                 // as a name: whether it names a pool or stage elsewhere,
@@ -4056,12 +4088,12 @@ impl Parser {
                             ),
                         );
                     }
-                    if allowed_var(&v, header) {
+                    if allowed_var(&v, header, seen) {
                         continue;
                     }
                     if header && locals.contains(&v) {
                         return self.err_at(at, format!(
-                            "`{qname}.{verb}`: the admission header reads local `{v}`; it sees parameters and the queue's resources, not values calculated by its body. Write the resource conversion in the header or pass a quantity as a parameter"
+                            "`{qname}.{verb}`: the admission header reads local `{v}`, which the entry does not set above this hold; a header sees the parameters, the queue's resources and the locals set before its hold, not a value its own body or a later statement calculates\nhelp: set `{v}` before the hold, in both arms of a `branch` and not in a loop or `fork` that ends before it, or write its value in the header"
                         ));
                     }
                     if v.contains('.') {

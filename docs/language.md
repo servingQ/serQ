@@ -464,8 +464,14 @@ none may draw.
 
 An entry sees its own. Its header — the units, `reserve`, `reuse`, the
 `at admission` bindings — reads the parameters, the queue's pools and stage,
-the constants, and `cached` and `computed`; its body also reads `now`, what
-it sets itself and the request's `hidden` attributes, and nothing else the
+the constants, `cached` and `computed`, and what the entry sets above the
+hold, as a server's header reads an attribute set before it (`set kept =
+prompt;` before it, or in both arms of a `branch`; not in a loop or `fork`
+that may not have run). A local set only in the hold's body or after it is
+refused; one also set above is read at its latest value: after a
+preemption, the one the body set (this is what `kept` relies on). Its body
+also reads `now`, what it
+sets itself and the request's `hidden` attributes, and nothing else the
 session has set, nor another queue's
 `Q.x`; every index it writes (`run nic[k]`) reads as the body does. Its
 statements hold, grow, load and release only the queue's own pools and the
@@ -666,10 +672,10 @@ vLLM programs `set kept = prompt;` above the hold, write `known = max(kept,
 computed + 1)` (the token sampled at `computed` is the request's too) and
 `set kept = known;` at the top of the body, then `run vllm prefill
 (cost(vllm, known - c))` and `run vllm decode (cost(vllm, o - 1 - (known -
-prompt)))`. A queue entry cannot carry it: its header reads the parameters,
-not what its body sets, so the decoders of `examples/pd-disaggregation/`
-still read `known` from `computed` alone (#475). A program that recomputes
-from the prompt alone says so by not reading `computed`.
+prompt)))`. The decoders of `examples/pd-disaggregation/` carry it the same
+way: an entry's header reads what the entry sets above the hold (#475). A
+program that recomputes from the prompt alone says so by not reading
+`computed`.
 
 ### Waiting selection
 

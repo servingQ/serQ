@@ -101,8 +101,10 @@ fn main() {
     pool reqs on E { queue fifo; }
     pool kv on E.gpu { block bs; evict lru; preempt lifo; }
     decode (prompt) {
+      set kept = prompt;   // the most tokens an attempt had: a preemption keeps the outputs
       hold kv (cost(kv, min(known, budget_left(E)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
-           at admission (known = computed < prompt ? prompt : computed + 1) {
+           at admission (known = max(kept, computed + 1)) {
+        set kept = known;
         run E prefill (cost(E, known)) growing kv;
         branch (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
         run E decode (cost(E, o - 1 - (known - prompt))) growing kv;
@@ -158,8 +160,10 @@ fn main() {
     nic ps(Bw);
     decode (prompt) from src {
       set transferred = 0;
+      set kept = prompt;
       hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
-           at admission (known = computed < prompt ? prompt : computed + 1) {
+           at admission (known = max(kept, computed + 1)) {
+        set kept = known;
         set c = 0;
         branch (!transferred) {
           mark admitted;
