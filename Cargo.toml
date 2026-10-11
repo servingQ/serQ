@@ -20,8 +20,9 @@ version.workspace = true
 license.workspace = true
 edition = "2024"
 rust-version = "1.85"
-description = "serQ: serQ, a language for formal verification and simulation of LLM serving systems (interpreter and CLI)"
+description = "A language for formal verification and simulation of LLM serving systems (interpreter and CLI)"
 repository = "https://github.com/servingQ/serQ"
+homepage = "https://servingq.github.io/serQ/"
 readme = "README.md"
 keywords = ["llm", "serving", "queueing", "simulation", "vllm"]
 categories = ["simulation", "science"]
@@ -50,3 +51,8 @@ opt-level = 3
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

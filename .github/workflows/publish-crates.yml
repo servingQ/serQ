@@ -1,0 +1,24 @@
+name: Publish crate
+
+# dist's publish job (release.yml). Off by default: crates.io is public and
+# permanent. Enable with the repository variable PUBLISH_CRATES_IO=true and
+# the secret CARGO_REGISTRY_TOKEN.
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: "dist's manifest (unused)"
+        type: string
+        required: true
+
+jobs:
+  crates-io:
+    if: vars.PUBLISH_CRATES_IO == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -1,0 +1,39 @@
+name: Release notes
+
+# dist's post-announce job (release.yml). The release is titled `serQ vX.Y.Z`
+# and its notes are the tag message's body (what the release is, written by
+# hand), then dist's install section, then GitHub's generated list of the
+# pull requests since the previous release.
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: "dist's manifest (unused)"
+        type: string
+        required: true
+
+jobs:
+  notes:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the annotated tag
+        # actions/checkout leaves a lightweight tag behind; the message is
+        # only on the annotated one (actions/checkout#290)
+        run: git fetch --force origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+      - name: Rewrite the release's title and notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          {
+            git tag -l --format='%(contents:body)' "$TAG"
+            echo
+            gh release view "$TAG" --json body --jq .body
+            echo
+            gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+              -f tag_name="$TAG" --jq .body
+          } > notes.md
+          cat notes.md
+          gh release edit "$TAG" --title "serQ $TAG" --notes-file notes.md
