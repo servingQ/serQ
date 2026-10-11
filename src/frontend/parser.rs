@@ -706,6 +706,15 @@ fn pool_as_number(queue: &str, verb: &str, name: &str, pool: &str) -> String {
     )
 }
 
+/// The error for an entry that reads its own stage, named as its queue, as
+/// a number.
+fn stage_as_number(queue: &str, verb: &str) -> String {
+    format!(
+        "`{queue}.{verb}` reads `{queue}` as a number, but a stage is none: read \
+         `budget_left({queue})` or `work({queue})`"
+    )
+}
+
 /// The error for an entry that names its own pool through its queue
 /// (`queued(E.kv)` inside `E`).
 fn own_pool_dotted(queue: &str, verb: &str, name: &str, pool: &str) -> String {
@@ -1919,11 +1928,14 @@ impl Parser {
     }
 
     /// The refusal for an entry of `q` that reads `n` as a value when `n`
-    /// names a pool or stage: its own pool is no number, and another
-    /// place's is not its queue's own.
+    /// names a pool or stage: its own pool or stage is no number, and
+    /// another place's is not its queue's own.
     fn place_refusal(&self, prog: &Program, q: &QueueDecl, verb: &str, n: &str) -> Option<String> {
         if q.pools.iter().any(|p| p == n) {
             return Some(pool_as_number(&q.name, verb, n, n));
+        }
+        if q.name == n {
+            return Some(stage_as_number(&q.name, verb));
         }
         let some_place = prog.pools.iter().any(|p| p.name == n)
             || self.stages.iter().any(|s| s == n)

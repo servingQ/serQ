@@ -577,7 +577,7 @@ fn another_queues_device_leaves_its_name_to_an_attribute() {
 
 /// Inside its queue an own pool is named bare: `queued(E.kv)` is refused with
 /// the name to write, as `kv[…]` is; read as a number, bare or not, it is
-/// refused as a pool, which holds none (#461).
+/// refused as a pool, which holds none, and the own stage as a stage (#461).
 #[test]
 fn an_entry_names_its_own_pool_bare() {
     let program = |size: &str, body: &str| {
@@ -609,6 +609,13 @@ fn an_entry_names_its_own_pool_bare() {
             &format!(
                 "`E.decode` reads `{name}` as a number, but a pool is none: read `queued(kv)` or `holders(kv)`"
             ),
+        );
+    }
+    // the own stage, named as the queue, is no number either
+    for (size, body) in [("min(E + 0, 1)", ""), ("1", "set y = E;")] {
+        refused(
+            &program(size, body),
+            "`E.decode` reads `E` as a number, but a stage is none: read `budget_left(E)` or `work(E)`",
         );
     }
 }
