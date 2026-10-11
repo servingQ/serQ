@@ -79,8 +79,15 @@ impl FlowNote {
 }
 
 /// An instance: what the session addresses through one `choose`. A router
-/// that picks `i` picks a pod, and every stage and pool the session then
-/// indexes by `i` is that pod's (`P[i]`, `egress[i]`, `kvP[i]`).
+/// that picks `i` picks a pod, decided in this order:
+/// - its stages and pools are those the session indexes by exactly `i` and
+///   by nothing else (`P[i]`, `egress[i]`, `kvP[i]`; not `E` if `E[j]` or
+///   `E[0]` is run too) (`Walker::settle_instances`);
+/// - a pod of one station and nothing else is a choice, not a box
+///   (`keep_instances`);
+/// - a station whose flow the boxes would pull apart leaves its box
+///   (`contiguous_instances`);
+/// - its pools are drawn only inside its box (`Net::drawn_pools`).
 #[derive(Clone, Debug)]
 pub struct Instance {
     /// `choose i of NP`.
@@ -184,11 +191,11 @@ impl Net {
     pub fn instance_of(&self, node: usize) -> Option<usize> {
         self.instances.iter().position(|g| g.nodes.contains(&node))
     }
-    /// The pools drawn around a station: those held there, less a pool of
-    /// another instance, and none at a station of a transfer between two
-    /// instances. A transfer holds the sender's pool and the receiver's at
-    /// both NICs; the figure says so on the link between the instances
-    /// (`kvP[i] → kvD[j]`), not with boxes that cross.
+    /// The pools drawn around a station: those held there, less an
+    /// instance's pool anywhere but in its box, and none at a station of a
+    /// transfer between two instances. A transfer holds the sender's pool
+    /// and the receiver's at both NICs; the figure says so on the link
+    /// between the instances (`kvP[i] → kvD[j]`), not with boxes that cross.
     pub fn drawn_pools(&self, node: usize) -> Vec<usize> {
         let here = self.instance_of(node);
         if self.across(node) {
@@ -200,7 +207,8 @@ impl Net {
             .copied()
             .filter(
                 |&q| match self.instances.iter().position(|g| g.pools.contains(&q)) {
-                    Some(owner) => here.is_none_or(|h| h == owner),
+                    // outside the box, its enclosure would cross the box
+                    Some(owner) => here == Some(owner),
                     None => true,
                 },
             )
@@ -268,6 +276,11 @@ struct Walker<'a> {
     chosen: Vec<(usize, String)>,
     /// The instance each chosen slot made, by slot.
     instance_of_slot: Vec<(usize, usize)>,
+    /// Per station and per pool, the one instance every index addressed
+    /// it through; `None` once two indices disagree or one is no chosen
+    /// attribute, and then it is in no instance's box.
+    node_owners: Vec<(usize, Option<usize>)>,
+    pool_owners: Vec<(usize, Option<usize>)>,
     /// The flow just run, whose `load` and `release` follow it.
     last_flow: Option<usize>,
     /// Per block being probed, the ends it first reaches.
@@ -300,13 +313,30 @@ impl Walker<'_> {
         Some(k)
     }
 
-    /// Put a station in the instance its reference addresses; a station
-    /// reached through two is the first's.
+    /// Record the instance a station's reference addresses.
     fn place(&mut self, node: usize, r: &CRef) {
-        if let Some(k) = self.instance(r.index.as_deref())
-            && self.net.instance_of(node).is_none()
-        {
-            self.net.instances[k].nodes.push(node);
+        if r.index.is_some() {
+            let k = self.instance(r.index.as_deref());
+            own(&mut self.node_owners, node, k);
+        }
+    }
+
+    /// Give each instance the stations and pools it alone addresses: a
+    /// family two instances index (`E[i]`, then `E[j]`) is one node of the
+    /// projection, and neither box holds it.
+    fn settle_instances(&mut self) {
+        let sole = |owners: &[(usize, Option<usize>)], k: usize| -> Vec<usize> {
+            owners
+                .iter()
+                .filter(|(_, o)| *o == Some(k))
+                .map(|&(x, _)| x)
+                .collect()
+        };
+        for k in 0..self.net.instances.len() {
+            let mut nodes = sole(&self.node_owners, k);
+            nodes.sort_unstable();
+            self.net.instances[k].nodes = nodes;
+            self.net.instances[k].pools = sole(&self.pool_owners, k);
         }
     }
 
@@ -497,10 +527,9 @@ impl Walker<'_> {
                     for (r, units, _) in &pools {
                         let encloses = !self.value(units).is_some_and(|(v, _)| v == 0.0);
                         self.holds.push((r.base, id, encloses));
-                        if let Some(k) = self.instance(r.index.as_deref())
-                            && !self.net.instances.iter().any(|g| g.pools.contains(&r.base))
-                        {
-                            self.net.instances[k].pools.push(r.base);
+                        if r.index.is_some() {
+                            let k = self.instance(r.index.as_deref());
+                            own(&mut self.pool_owners, r.base, k);
                         }
                     }
                     self.walk(body);
@@ -560,17 +589,24 @@ impl Walker<'_> {
                     // after the branch a pool is held only where both arms
                     // still hold it
                     let held = self.holds.clone();
+                    // and from the flow before it: a `load` that opens the
+                    // else arm follows no transfer of the then arm
+                    let flow = self.last_flow;
                     let known = self.known.clone();
                     self.frontier = saved.clone();
                     self.arm = Some(self.p.show_guard(&c));
                     self.walk(t);
                     let then_out = std::mem::take(&mut self.frontier);
                     let then_held = std::mem::replace(&mut self.holds, held);
+                    let then_flow = std::mem::replace(&mut self.last_flow, flow);
                     let then_known = std::mem::replace(&mut self.known, known);
                     self.frontier = saved;
                     self.arm = Some("else".into());
                     self.walk(e);
                     self.holds.retain(|h| then_held.contains(h));
+                    if self.last_flow != then_flow {
+                        self.last_flow = None;
+                    }
                     // after the branch, what both arms leave the same
                     self.known.retain(|k| then_known.contains(k));
                     let mut out = then_out;
@@ -744,6 +780,8 @@ impl Walker<'_> {
             self.arm.clone(),
             self.chosen.clone(),
             self.instance_of_slot.clone(),
+            self.node_owners.clone(),
+            self.pool_owners.clone(),
             self.last_flow,
             self.known.clone(),
             self.next_hold,
@@ -762,6 +800,8 @@ impl Walker<'_> {
             self.arm,
             self.chosen,
             self.instance_of_slot,
+            self.node_owners,
+            self.pool_owners,
             self.last_flow,
             self.known,
             self.next_hold,
@@ -836,6 +876,16 @@ fn reaches_a_station(p: &Program, block: usize) -> bool {
             _ => false,
         })
     })
+}
+
+/// Record that `x` is addressed through `owner`: a second, different one
+/// leaves it in no box.
+fn own(owners: &mut Vec<(usize, Option<usize>)>, x: usize, owner: Option<usize>) {
+    match owners.iter_mut().find(|(y, _)| *y == x) {
+        Some((_, o)) if *o != owner => *o = None,
+        Some(_) => {}
+        None => owners.push((x, owner)),
+    }
 }
 
 /// The attributes a block `choose`s before any station, down every path,
@@ -974,12 +1024,15 @@ pub fn project(p: &Program) -> Net {
         arm: None,
         chosen: vec![],
         instance_of_slot: vec![],
+        node_owners: vec![],
+        pool_owners: vec![],
         last_flow: None,
         probes: vec![],
         decisions: vec![],
         known: vec![],
     };
     w.enter(p.session, false);
+    w.settle_instances();
     // Anything still on the frontier ran off the end of the session program.
     let frontier = std::mem::take(&mut w.frontier);
     for (from, label) in frontier {
@@ -1006,9 +1059,7 @@ pub fn project(p: &Program) -> Net {
     let mut net = w.net;
     fold_latencies(p, &mut net);
     decisions_first(&mut net);
-    // one station and nothing else is a choice, not an instance to box
-    net.instances
-        .retain(|g| g.nodes.len() + g.pools.len() >= 2 && !g.nodes.is_empty());
+    keep_instances(&mut net);
     adjacent_flows(&mut net);
     contiguous_instances(&mut net);
     // grouping may have moved a decision after the stations it sends to
@@ -1241,12 +1292,75 @@ fn adjacent_flows(net: &mut Net) {
     reorder(net, &order);
 }
 
+/// One station and nothing else is a choice, not an instance to box.
+fn keep_instances(net: &mut Net) {
+    net.instances
+        .retain(|g| g.nodes.len() + g.pools.len() >= 2 && !g.nodes.is_empty());
+}
+
 /// Put each instance's stations side by side, where its first stands, so
-/// that its box takes in no other station.
+/// that its box takes in no other station. Inside a box the stations a
+/// transfer between two instances arrives at come first and those it leaves
+/// from last, so that its stations stay side by side across the boundary.
+/// A flow inside one instance, or in and out of one, that the boxes would
+/// still pull apart takes its stations out of them, and is drawn where
+/// `adjacent_flows` put it; a transfer between two instances stays an arrow
+/// between their boxes, whichever way it points (a reply from `j` to `i`
+/// after `i` sent to `j`).
 fn contiguous_instances(net: &mut Net) {
-    if net.instances.is_empty() {
-        return;
+    // The loop ends: boxing moves only boxed stations, so a flow it pulls
+    // apart has a boxed station, and each pass takes at least one out.
+    loop {
+        if net.instances.is_empty() {
+            return;
+        }
+        let order = instance_order(net);
+        let mut at = vec![0; order.len()];
+        for (k, &i) in order.iter().enumerate() {
+            at[i] = k;
+        }
+        let together = |g: &[usize], pos: &dyn Fn(usize) -> usize| {
+            g.windows(2).all(|w| pos(w[1]) == pos(w[0]) + 1)
+        };
+        let now = |i: usize| i;
+        let boxed = |i: usize| at[i];
+        let broken: Vec<usize> = net
+            .flows
+            .iter()
+            .filter(|g| together(g, &now) && !together(g, &boxed) && !net.spans(g))
+            .flatten()
+            .copied()
+            .collect();
+        if broken.is_empty() {
+            reorder(net, &order);
+            return;
+        }
+        for g in &mut net.instances {
+            g.nodes.retain(|k| !broken.contains(k));
+        }
+        keep_instances(net);
     }
+}
+
+/// The order `contiguous_instances` puts the stations in.
+fn instance_order(net: &Net) -> Vec<usize> {
+    // 0: a transfer into the instance arrives here; 2: one out of it leaves
+    // from here; 1: neither, or both
+    let side = |k: usize| {
+        let (mut arrives, mut leaves) = (false, false);
+        for g in net.flows.iter().filter(|g| g.contains(&k) && net.spans(g)) {
+            if net.instance_of(k) == net.instance_of(g[0]) {
+                leaves = true;
+            } else {
+                arrives = true;
+            }
+        }
+        match (arrives, leaves) {
+            (true, false) => 0,
+            (false, true) => 2,
+            _ => 1,
+        }
+    };
     let n = net.nodes.len();
     let mut order: Vec<usize> = Vec::with_capacity(n);
     let mut placed = vec![false; n];
@@ -1256,7 +1370,9 @@ fn contiguous_instances(net: &mut Net) {
         }
         match net.instance_of(i) {
             Some(g) => {
-                for &k in &net.instances[g].nodes {
+                let mut nodes = net.instances[g].nodes.clone();
+                nodes.sort_by_key(|&k| (side(k), k));
+                for k in nodes {
                     if !placed[k] {
                         placed[k] = true;
                         order.push(k);
@@ -1269,7 +1385,7 @@ fn contiguous_instances(net: &mut Net) {
             }
         }
     }
-    reorder(net, &order);
+    order
 }
 
 /// For every `hold` with a `cache` clause, the pools that clause can leave
@@ -1695,7 +1811,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     }
 
     // Enclosures first, so stations and glyphs paint over them.
-    let mut enclosures: Vec<(usize, Rect)> = vec![];
+    let mut enclosures: Vec<(usize, usize, Rect)> = vec![];
     for (gi, g) in gs.iter().enumerate() {
         let pool = &p.pools[g.pool];
         let d = (max_depth - g.depth) as f64 * DEPTH_PAD;
@@ -1711,7 +1827,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             inner.h + 2.0 * (PAD + d) + extra,
         );
         f.boxed(r, BoxStyle::Enclosure, 8.0);
-        enclosures.push((g.first, r));
+        enclosures.push((g.first, g.last, r));
 
         // The queue glyph and the capacity, in the room reserved at the left.
         let gx = g.glyph_x;
@@ -1822,7 +1938,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     }
 
     // An instance's box: its stations with their names and notes, and the
-    // enclosures that start at them, under everything else.
+    // enclosures that stand wholly in it, under everything else.
     let prefill_only = |k: usize| {
         net.instances[k]
             .nodes
@@ -1848,8 +1964,8 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             })
             .reduce(|a, b| a.union(&b))
             .expect("an instance has a station");
-        for (first, e) in &enclosures {
-            if g.nodes.contains(first) {
+        for (first, last, e) in &enclosures {
+            if (*first..=*last).all(|i| g.nodes.contains(&i)) {
                 r = r.union(&e.pad(0.0));
             }
         }
@@ -1901,7 +2017,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     // and clear of every frame, and of every enclosure around one
     let floor = frames
         .iter()
-        .chain(enclosures.iter().map(|(_, r)| r))
+        .chain(enclosures.iter().map(|(_, _, r)| r))
         .map(|r| r.bottom())
         .fold(0.0, f64::max);
     let base = (row_y + STATION_H + deep + BACK_DROP).max(floor + 14.0);
