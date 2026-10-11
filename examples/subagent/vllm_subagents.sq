@@ -28,7 +28,8 @@ fn main() {
   let q = args.number("q", 0.3);           // a turn delegates instead of calling a tool
   let W = args.number("W", 15.4);          // the wait for the subagents (s): the mean of the longest of k
                          // `subagent` samples of a previous run (`--dump`), iterated to its
-                         // fixed point at seed 1, horizon 10000 s, warm-up 1000 s
+                         // fixed point at seed 1, horizon 10000 s, warm-up 1000 s; seeds 1-5
+                         // give 15.22 +- 0.25, so a move of this size is mostly seed noise
   let kids = q * k * p / (1 - p);   // subagents per agent session (a last turn does not delegate)
 
   device gpu {

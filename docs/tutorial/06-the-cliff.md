@@ -23,32 +23,33 @@ A mean from one run is a level only if a longer run gives about the same.
 The same seed at longer horizons:
 
 ```bash
-for H in 20000 40000 80000 160000; do
+for H in 20000 40000 80000 160000 320000; do
   for L in 1.5 1.7 1.8 1.9 2.0; do
     serq run docs/tutorial/programs/05-engine.sq --horizon $H --warmup 2000 --seed 1 --set Lambda=$L --json
   done
 done
 ```
 
-| sessions/s | TTFT (s) at 20 000 | 40 000 | 80 000 | 160 000 | hit rate at 160 000 |
-|---|---|---|---|---|---|
-| 1.5 | 0.145 | 0.130 | 0.128 | 0.132 | 0.459 |
-| 1.7 | 0.404 | 0.327 | 0.295 | 0.295 | 0.335 |
-| 1.8 | 1.276 | 0.815 | 0.670 | 0.615 | 0.252 |
-| 1.9 | 4.457 | 2.682 | 2.175 | 1.815 | 0.145 |
-| 2.0 | 17.921 | 26.486 | 33.251 | 70.388 | 0.005 |
+| sessions/s | TTFT (s) at 20 000 | 40 000 | 80 000 | 160 000 | 320 000 | hit rate at 320 000 |
+|---|---|---|---|---|---|---|
+| 1.5 | 0.145 | 0.130 | 0.128 | 0.132 | 0.133 | 0.455 |
+| 1.7 | 0.404 | 0.327 | 0.295 | 0.295 | 0.313 | 0.326 |
+| 1.8 | 1.276 | 0.815 | 0.670 | 0.615 | 0.647 | 0.240 |
+| 1.9 | 4.457 | 2.682 | 2.175 | 1.815 | 2.288 | 0.125 |
+| 2.0 | 17.921 | 26.486 | 33.251 | 70.388 | 195.907 | 0.002 |
 
-Up to 1.7 the TTFT is a level: from 80 000 s on, a run twice as long gives
-the same. At 1.8 and 1.9 it falls as the run grows and has not settled by
-160 000 s (0.615 s and 1.815 s there): the 20 000 s runs caught an early
-excursion that a longer run dilutes, and at 80 000 s seeds 1–4 give
-0.60–0.78 s at 1.8 and 1.6–3.4 s at 1.9. At 2.0 it keeps growing with the
-run length, so 17.92 s is one moment of a queue without bound, not a level.
+Up to 1.9 the TTFT has a level: about 0.13 s at 1.5, 0.30 s at 1.7,
+0.63 s at 1.8 and 2.2 s at 1.9. The 20 000 s runs at 1.8 and 1.9 caught an
+early excursion that a longer run dilutes. The level at 1.9 is reached
+slowly and is noisy: at 320 000 s, seeds 1–3 give 2.29, 2.22 and 2.08 s,
+each with a 95 % interval of ±0.5–0.6 s within its run (at 1.8 they give
+0.65, 0.62 and 0.61 s). Only 2.0 has no level: its TTFT keeps growing with
+the run length, so 17.92 s is one moment of a queue without bound.
 
 The cliff is between 1.9 and 2.0 sessions/s, and latency rises steeply
-before it: at 160 000 s the TTFT doubles from 1.7 to 1.8 and triples from
-1.8 to 1.9. The hit rate at 160 000 s falls from 0.46 at 1.5 to 0.15 at
-1.9, and to 0.005 at 2.0.
+before it: the level doubles from 1.7 to 1.8 and grows about 3.5 times
+from 1.8 to 1.9. The hit rate at 320 000 s falls from 0.46 at 1.5 to 0.13
+at 1.9, and to 0.002 at 2.0.
 
 These runs also report `stuck` sessions: requests preempted again without
 progress. The latency samples therefore do not describe all offered

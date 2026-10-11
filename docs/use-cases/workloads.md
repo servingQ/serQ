@@ -82,7 +82,8 @@ The approximation has three parts:
   The supplied `W = 15.4` seconds is a model input; it does not track the
   simulated children's completion times. It was calibrated as the mean
   maximum of `k` `subagent` durations collected with `--dump`, iterated
-  until it stopped moving (seed 1, 10 000 s, 1 000 s of warm-up).
+  until it stopped moving (seed 1, 10 000 s, 1 000 s of warm-up); seeds
+  1–5 give 15.22 ± 0.25 s.
 - **A subagent's context is its own.** It starts from `K ~ uniform(2000,
   6000)`, which stands for the parent's context it copies. The cache does not
   share entries across sessions, so the subagent misses that prefix.
