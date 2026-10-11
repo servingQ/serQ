@@ -253,10 +253,25 @@ clock is seconds; a `ps` stage serves it at `φ(present)/present`).
 A form finds its stage among the stages declared above
 it (declarations come first in every program here): the stage whose name
 is the role's, `link` (or `transfer`), `tool`. Exactly one must qualify:
-with none (`stage svc : fifo;` and `tool Z;`) or several (`link` and
+with none (`stage svc : fifo;` and `transfer (X) from P to Q (n);`, or
+`tool Z;` in the server) or several (`link` and
 `transfer`) the parser stops at the form and says so. `on STAGE` names the
 stage explicitly; with several instances of a role, `choose j …; tool[j] Z;`
-serves an array and `tool on S2 (Z);` stages that are not one. The run is
+serves an array and `tool on S2 (Z);` stages that are not one.
+
+A tool call in the workload needs no declaration. It is the client's time
+between turns, not a resource of the deployment: when no stage `tool` is
+declared above the workload's `tool Z;`, the parser supplies `stage tool :
+delay;` after the declared stages, and the call runs on that delay of the
+workload's own, an infinite server where no call waits for another. The IR
+is the one the declaration gives, and the report shows the stage `tool`.
+A tool server with capacity, which sessions share (a sandbox pool, a
+rate-limited API), is the deployment's: declare it, `stage sandbox[4] :
+fifo;`, and name it, `tool on sandbox[j] (Z);`. A declared stage `tool` of
+any kind is still the one `tool Z;` uses; one declared below the
+workload's `tool Z;` is refused, since the call has found no stage above it
+and the program would have two. A `tool` in the server, or indexed,
+`tool[j] Z;`, finds a declared stage as above. The run is
 plain: `transfer` and `tool` on a step engine are rejected by the linker as
 `run E (cost(E, X))` would be. A linker error inside a form (an unknown name
 in `Z`, say) speaks of the kernel statement.

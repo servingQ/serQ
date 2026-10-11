@@ -17,7 +17,6 @@ fn main() {
 
   pool kv { cap C; evict lru; }
   stage engine : fifo;
-  stage tool : delay;
 
   workload {
     arrive poisson(Lambda);
@@ -31,7 +30,7 @@ fn main() {
       loop {
         turn;
         set K = K + n + o;
-        branch with (p) { run tool (cost(tool, ~exp(Z))); } else { drop kv; end; }
+        branch with (p) { tool (~exp(Z)); } else { drop kv; end; }
       }
     }
   }

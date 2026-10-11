@@ -459,6 +459,81 @@ fn serving_forms_compile_to_the_kernel_ir() {
     assert_eq!(a.to_json(), b.to_json());
 }
 
+/// The workload's `tool` is the client's time, not a resource of the
+/// deployment (#500): with no stage `tool` declared, it runs on a delay the
+/// parser supplies after the declared stages, which links to the IR and the
+/// run of the program that declares `stage tool : delay;` last.
+#[test]
+fn a_workload_tool_runs_on_its_own_delay() {
+    let body = "workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
+          session { loop { turn; branch with (0.8) { tool (Z); } else { end; } } }
+        }
+        server { run svc (cost(svc, 1)); }";
+    let declared = format!("stage svc : fifo; stage tool : delay; {body}");
+    let implicit = format!("stage svc : fifo; {body}");
+    let ov = Overrides {
+        seed: Some(1),
+        ..common::horizon(200.0)
+    };
+    let a = compile_source(&common::main_source(&declared), &ov).unwrap();
+    let b = compile_source(&common::main_source(&implicit), &ov).expect("nothing to declare");
+    assert_eq!(a.to_json(), b.to_json());
+    let one = run_source(&common::main_source(&declared), &ov, None).unwrap();
+    let two = run_source(&common::main_source(&implicit), &ov, None).unwrap();
+    assert_eq!(one.text(), two.text());
+}
+
+/// A declared stage `tool` is still the one `tool Z;` uses, whatever its
+/// kind: a tool server with capacity is the deployment's.
+#[test]
+fn a_declared_fifo_tool_is_still_used() {
+    let src = "stage svc : fifo; stage tool : fifo;
+        workload { arrive poisson(0.5); turn { set Z = ~exp(3); }
+          session { loop { turn; branch with (0.8) { tool (Z); } else { end; } } }
+        }
+        server { run svc (cost(svc, 1)); }";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
+    let tools: Vec<_> = p.stages.iter().filter(|s| s.name == "tool").collect();
+    assert_eq!(tools.len(), 1, "no second, implicit `tool`");
+    assert!(!tools[0].kind.is_delay(), "the declared fifo, not a delay");
+}
+
+/// The workload's delay stands in only where nothing is declared: a stage
+/// `tool` below the call would be a second, and a server's or an indexed
+/// `tool` still names a declared stage.
+#[test]
+fn the_workload_delay_stands_in_only_for_an_undeclared_tool() {
+    let below = "stage svc : fifo;
+        workload { arrive batch(1); session { turn; tool (1); turn; } }
+        stage tool : fifo;
+        server { run svc (cost(svc, 1)); }";
+    let e = compile_source(&common::main_source(below), &common::horizon(10.0))
+        .expect_err("a stage `tool` below the call");
+    assert!(e.contains("declared below"), "{e}");
+    // the supplied stage's name is no other declaration's (#483)
+    let pool = "stage svc : fifo; pool tool { cap 4; }
+        workload { arrive batch(1); session { turn; tool (1); turn; } }
+        server { run svc (cost(svc, 1)); }";
+    let e = compile_source(&common::main_source(pool), &common::horizon(10.0))
+        .expect_err("a pool `tool` beside the supplied stage");
+    assert!(
+        e.contains("runs on a stage `tool` the parser supplies, and `tool` is a pool at"),
+        "{e}"
+    );
+    let server = "stage svc : fifo;
+        workload { arrive batch(1); }
+        server { run svc (cost(svc, 1)); tool (1); }";
+    let e = compile_source(&common::main_source(server), &common::horizon(10.0))
+        .expect_err("a server's tool is the deployment's");
+    assert!(e.contains("no stage declared above plays `tool`"), "{e}");
+    let indexed = "stage svc : fifo;
+        workload { arrive batch(1); session { turn; tool[0] (1); turn; } }
+        server { run svc (cost(svc, 1)); }";
+    let e = compile_source(&common::main_source(indexed), &common::horizon(10.0))
+        .expect_err("an indexed tool names an array");
+    assert!(e.contains("no stage declared above plays `tool`"), "{e}");
+}
+
 /// `delay` is `ps(present)`, every job at rate 1. The two spellings link to
 /// one IR, so the interpreter, the drawing and the Lean generator cannot
 /// tell them apart (#396).

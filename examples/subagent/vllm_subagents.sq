@@ -51,7 +51,7 @@ fn main() {
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on vllm { queue fifo; }   // the engine admits the waiting, FCFS
-  stage tool : delay;
+  stage tool : delay;      // declared, though a workload's `tool` needs none: it keeps its IR index before `delegate`
   stage delegate : delay;
 
   // --8<-- [start:workload]

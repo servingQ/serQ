@@ -92,7 +92,10 @@ Moment `Session`.
 
 Optional: describes the sequence of turns and the time between them.
 Without it, each arriving session makes one turn and finishes. See
-[Program](program.md#session).
+[Program](program.md#session). The time between turns, a tool call or a
+person reading, is [`tool Z;`](serving.md#tool): with no stage `tool`
+declared, it runs on a delay the workload owns (an infinite server, named
+`tool` in the report), so the deployment declares nothing for it.
 
 ## `hidden`
 

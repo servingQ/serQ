@@ -34,7 +34,6 @@ fn main() {
     execute (max(hbm(batch.kv_decode), compute(batch.tokens)));
   }
   pool kv on gpu { evict by (waiting, size); }
-  stage tool : delay;
 
   workload {
     arrive poisson(Lambda);
@@ -63,7 +62,7 @@ fn main() {
           set cold = 0;
           branch (K > maxctx) { drop kv; end; }
           // whether the session continues is decided when the tool returns
-          run tool (cost(tool, ~exp(Z)));
+          tool (~exp(Z));
           branch with (p) { } else { drop kv; end; }
         }
       }

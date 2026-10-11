@@ -54,7 +54,8 @@
 //! and `run` here, so the AST, the IR and the interpreter know only the
 //! kernel. A role finds its stage among the stages declared above the
 //! statement: the stage of the role's name (`link` or `transfer`, `tool`);
-//! `on STAGE` names it explicitly. The run is plain. Prefill and decode are
+//! `on STAGE` names it explicitly. The workload's `tool` with none declared
+//! runs on a delay the parser supplies, named `tool`. The run is plain. Prefill and decode are
 //! not roles: they are the mode of a `run` on a step engine.
 //!
 //! A workload's optional session describes complete turns and their continuation.
@@ -199,6 +200,10 @@ struct Parser {
     relation_share: Option<&'static str>,
     /// The queues whose relation gives the wait before each copy they post.
     posters: Vec<String>,
+    /// The token of the workload's first `tool` that found no stage `tool`
+    /// declared above it: it runs on the workload's own delay, which the
+    /// parser supplies after the declared stages.
+    implicit_tool: Option<usize>,
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
@@ -1616,6 +1621,7 @@ impl Parser {
             entry_gateway: false,
             relation_share: None,
             posters: vec![],
+            implicit_tool: None,
             latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
@@ -1721,7 +1727,12 @@ impl Parser {
     }
 
     fn span(&self) -> Span {
-        let t = &self.toks[self.pos];
+        self.span_at(self.pos)
+    }
+
+    /// The span of the token at `pos`.
+    fn span_at(&self, pos: usize) -> Span {
+        let t = &self.toks[pos];
         Span {
             line: t.line,
             col: t.col,
@@ -2081,6 +2092,51 @@ impl Parser {
             return self.err(
                 "`args` names the imported std/args module; give the declaration another name",
             );
+        }
+        // the workload's tool call is the client's time: a delay the
+        // workload owns, after every stage the deployment declares
+        if let Some(at) = self.implicit_tool {
+            // the supplied stage is a declaration too: its name is no
+            // other's (#483), and a stage `tool` below the call is a second
+            let supplied = Declaration {
+                at,
+                name: "tool".into(),
+                kind: Kind::Stage,
+                scope: Scope::Program,
+            };
+            if let Some(e) = self
+                .declared
+                .iter()
+                .find(|e| e.name == "tool" && (e.kind == Kind::Stage || e.meets(&supplied)))
+            {
+                let t = &self.toks[e.at];
+                let place = self.place(t.file, t.line, t.col);
+                let (is, help) = if e.kind == Kind::Stage {
+                    (
+                        "a stage declared below it".to_string(),
+                        "declare `stage tool` above the workload to use it, or remove that \
+                         declaration"
+                            .to_string(),
+                    )
+                } else {
+                    (e.described(), e.help(&supplied))
+                };
+                return self.err_at(
+                    at,
+                    format!(
+                        "the workload's `tool` runs on a stage `tool` the parser supplies, and \
+                         `tool` is {is} at {place}\nhelp: {help}"
+                    ),
+                );
+            }
+            self.stages.push("tool".into());
+            prog.stages.push(StageDecl {
+                span: Some(self.span_at(at)),
+                name: "tool".into(),
+                count: 1,
+                array: false,
+                kind: StageKind::Delay,
+            });
         }
         // a request runs the server or a named gateway's `route`, whose
         // admissions set `cached` and `computed`, and the entries it calls
@@ -5082,7 +5138,19 @@ impl Parser {
             } else {
                 None
             };
-            let name = self.role_stage(role, at)?;
+            // the workload's unindexed `tool` with none declared runs on a
+            // delay the parser supplies: the client's time between turns is
+            // no resource of the deployment
+            let name = if role == Role::Tool
+                && index.is_none()
+                && self.side == Side::WorkloadSession
+                && !self.stages.iter().any(|n| n == "tool")
+            {
+                self.implicit_tool.get_or_insert(at);
+                "tool".to_string()
+            } else {
+                self.role_stage(role, at)?
+            };
             Ref { span, name, index }
         };
         let raw_work = self.expr()?;
