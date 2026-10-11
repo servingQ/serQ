@@ -2,8 +2,10 @@
 
 A context variable is supplied at specific evaluation moments. Reading it
 elsewhere is a link error: a session cannot use `set x = tokens;`.
-Context-variable names are reserved and cannot be assigned by `set`,
-`choose` or `let`.
+Context-variable names are reserved: they cannot be assigned by `set`,
+`choose` or `let`, nor name a `def`, `observe`, `stage`, `pool`, `device`,
+`engine`, `queue`, `gauge` or `claim`. Those declarations cannot take an
+engine's list either, `running` or `waiting` (`running.count`).
 
 ## Moments
 

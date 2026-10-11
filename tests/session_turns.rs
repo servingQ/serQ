@@ -41,12 +41,12 @@ fn turns_wait_for_responses_and_accumulate_the_next_input() {
           observe history = k;
         }
       }
-      server { run svc (cost(svc, s)); observe served = s; }
+      server { run svc (cost(svc, s)); observe service = s; }
       ");
     // Requests cost 1, 2, 4; two think intervals cost 2 each: 11 total.
     assert_eq!(rep.observe("finished").unwrap().mean, 11.0);
     assert_eq!(rep.observe("history").unwrap().mean, 4.0);
-    assert_eq!(rep.observe("served").unwrap().mean, 7.0 / 3.0);
+    assert_eq!(rep.observe("service").unwrap().mean, 7.0 / 3.0);
 }
 
 #[test]

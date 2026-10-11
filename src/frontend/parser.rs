@@ -68,7 +68,9 @@ use std::path::{Path, PathBuf};
 use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
-use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, RENAMED};
+use crate::frontend::link::{
+    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, RENAMED, supplied,
+};
 use crate::frontend::queue::{self, QueueDecl};
 
 mod device;
@@ -1597,7 +1599,9 @@ impl Parser {
     /// every path, which reads and does not act.
     fn claim(&mut self) -> PResult<ClaimDecl> {
         let span = Some(self.span());
+        let at = self.pos;
         let name = self.name()?;
+        self.own_name(at, &name, "claim")?;
         let given = if self.eat_kw("given") {
             self.expect(&Tok::LParen)?;
             let e = self.expr()?;
@@ -1790,7 +1794,9 @@ impl Parser {
             } else if self.eat_kw("claim") {
                 prog.claims.push(self.claim()?);
             } else if self.eat_kw("gauge") {
+                let at = self.pos;
                 let name = self.ident()?;
+                self.own_name(at, &name, "gauge")?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
@@ -2356,6 +2362,26 @@ impl Parser {
         Ok(())
     }
 
+    /// A declaration may not take a name the language supplies, as a `set`
+    /// or a `let` may not (`link`, #231): `def now(x)` beside `now`, or
+    /// `observe admitted` beside `admitted`, would have one word mean two
+    /// things (#460).
+    fn own_name(&self, at: usize, name: &str, keyword: &str) -> PResult<()> {
+        let read_in = match supplied(name) {
+            Some(read_in) => read_in,
+            None if LISTS.contains(&name) => format!("an engine, as `{name}.…`"),
+            None => return Ok(()),
+        };
+        self.err_at(
+            at,
+            format!(
+                "`{name}` is a name the language supplies, read in {read_in}; `{keyword} \
+                 {name}` would make the one word mean two things\n\
+                 help: name it otherwise (docs/api/context.md lists the context variables)"
+            ),
+        )
+    }
+
     /// `def name(x, …) { e }` or `def name(x, …) { … }`, after `def`.
     fn def(&mut self) -> PResult<()> {
         let at = self.pos;
@@ -2366,6 +2392,7 @@ impl Parser {
         {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
+        self.own_name(at, &name, "def")?;
         if let Some(now) = retired(&name) {
             return self.err_at(
                 at,
@@ -3065,6 +3092,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
+        self.own_name(at, &name, "pool")?;
         let array = self.array_count()?;
         let mut on = None;
         let mut count = array.unwrap_or(1);
@@ -3263,7 +3291,9 @@ impl Parser {
 
     fn stage(&mut self) -> PResult<StageDecl> {
         let span = Some(self.span());
+        let at = self.pos;
         let name = self.ident()?;
+        self.own_name(at, &name, "stage")?;
         let array = self.array_count()?;
         self.expect(&Tok::Colon)?;
         let kind = self.stage_kind()?;
@@ -3344,12 +3374,7 @@ impl Parser {
         {
             return self.err_at(at + 1, format!("`{name}` is declared twice"));
         }
-        if LISTS.contains(&name.as_str()) {
-            return self.err_at(
-                at + 1,
-                format!("`{name}.…` is a value of an engine; a queue needs another name"),
-            );
-        }
+        self.own_name(at + 1, &name, "queue")?;
         // `Q[n]` is a family whatever `n`, called by index, and its pools and
         // stages are arrays; `Q` is one queue
         let array = self.array_count()?;
@@ -3443,6 +3468,7 @@ impl Parser {
                 if KEYWORDS.contains(&dev.as_str()) {
                     return self.err_at(d_at, format!("`{dev}` is a word of the language"));
                 }
+                self.own_name(d_at, &dev, "device")?;
                 if dev == name {
                     return self.err_at(
                         d_at,
@@ -4359,7 +4385,9 @@ impl Parser {
             }
             "observe" => {
                 self.advance();
+                let at = self.pos;
                 let name = self.ident()?;
+                self.own_name(at, &name, "observe")?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;

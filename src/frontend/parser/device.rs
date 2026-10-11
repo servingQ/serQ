@@ -169,6 +169,7 @@ impl Parser {
         if KEYWORDS.contains(&name.as_str()) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
+        self.own_name(at, &name, "device")?;
         // a queue is named whether or not it has a stage (a gateway has none)
         if self.devices.iter().any(|d| d.name == name)
             || prog.pools.iter().any(|p| p.name == name)
@@ -322,6 +323,7 @@ impl Parser {
         if KEYWORDS.contains(&name.as_str()) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
+        self.own_name(at, &name, "engine")?;
         if prog.pools.iter().any(|p| p.name == name) {
             return self.err_at(at, one_name_space(&name));
         }

@@ -108,7 +108,7 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
         }}
         server {{
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {{
-            observe admitted = serial;
+            observe admitted_at = serial;
             run llm prefill (cost(llm, 4)) growing kv;
             run llm decode (cost(llm, 10)) growing kv;
           }} cache (cost(reqs, kv, 0));
@@ -124,7 +124,7 @@ fn a_victim_requeues_at_the_head_or_the_tail() {
                 ..common::horizon(200.0)
             },
         );
-        let admitted = &r.observe("admitted").unwrap().samples;
+        let admitted = &r.observe("admitted_at").unwrap().samples;
         assert_eq!(
             admitted[..4],
             order,
@@ -280,7 +280,7 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
         server {
           set rank = serial == 2 ? 9 : serial;
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) {
-            observe admitted = serial;
+            observe admitted_at = serial;
             run llm prefill (cost(llm, 4)) growing kv;
             run llm decode (cost(llm, 10)) growing kv;
           } cache (cost(reqs, kv, 0));
@@ -295,7 +295,7 @@ fn a_tail_victim_is_ordered_by_the_queue_keys() {
             ..common::horizon(200.0)
         },
     );
-    let admitted = &r.observe("admitted").unwrap().samples;
+    let admitted = &r.observe("admitted_at").unwrap().samples;
     // serial 1 (rank 1) is the victim; at the tail of a keyed queue its key
     // puts it ahead of serial 2 (rank 9)
     assert_eq!(

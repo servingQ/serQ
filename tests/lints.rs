@@ -720,3 +720,43 @@ fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
     .unwrap();
     assert_eq!(r.stage("dec").unwrap().mean_service, 1.0, "{}", r.text());
 }
+
+/// #460: the same holds for a declaration. `def now(x)` beside `now`, or
+/// `observe admitted` beside `admitted`, linked, and one word meant the
+/// program's thing in one place and the language's in another. An engine's
+/// list (`running.count`) is the language's as well.
+#[test]
+fn a_declaration_cannot_take_a_name_the_language_supplies() {
+    const SRC: &str = "DECL
+        stage svc : fifo;
+        workload { arrive closed(2); session { turn; } }
+        server { run svc (cost(svc, 1)); observe response = now; }
+        ";
+    for (decl, refused) in [
+        ("def now(x) { x * 2 }", "`def now`"),
+        ("def running(x) { x * 2 }", "`def running`"),
+        ("gauge present = 1;", "`gauge present`"),
+        ("stage size : delay;", "`stage size`"),
+        ("pool position { cap 1; }", "`pool position`"),
+        ("claim tokens : at end (1);", "`claim tokens`"),
+    ] {
+        let e = check(&SRC.replace("DECL", decl)).expect_err(decl);
+        assert!(
+            e.contains(&format!(
+                "{refused} would make the one word mean two things"
+            )),
+            "{decl}: {e}"
+        );
+    }
+    let observe = SRC.replace("DECL", "").replace(
+        "observe response",
+        "observe admitted = now; observe response",
+    );
+    let e = check(&observe).expect_err("rejected");
+    assert!(
+        e.contains("`admitted` is a name the language supplies, read in an engine's `schedule`"),
+        "{e}"
+    );
+    // renamed, it links
+    check(&observe.replace("observe admitted", "observe admitted_at")).expect("links");
+}

@@ -207,18 +207,14 @@ fn the_function_list_is_every_function_the_linker_resolves() {
 
 /// The names the language supplies - context variables, functions, a run's
 /// aggregates, folded calls and the attributes it sets - are coloured as
-/// what a program reads, or, for arithmetic, listed to be left plain. Since
-/// #231 a `set`, `choose` or `let` may not take one, but an `observe`, a
-/// stage, a pool or a `def` still may: a name a shipped program declares as
-/// its own stays plain until #460 refuses that.
+/// what a program reads, or, for arithmetic, listed to be left plain. A
+/// program may not take a context variable's name for its own (#231, #460).
 #[test]
 fn the_docs_lexer_knows_every_name_the_language_supplies() {
     use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
     let supplied = CONTEXT_VARS
         .iter()
         .map(|(n, _)| *n)
-        // examples/vendors/ascend.sq: `observe admitted = now;` (#460)
-        .filter(|n| *n != "admitted")
         .chain(FUNCTIONS)
         .chain(AGGREGATES.iter().map(|(n, _)| *n))
         .chain(FOLDED)

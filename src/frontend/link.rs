@@ -253,6 +253,26 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 23] = [
     ("preempted", CtxVar::Preempted),
 ];
 
+/// Where the language reads `name`, when it supplies it: a context
+/// variable at its moments, `inf` in every expression. A program may not
+/// name its own thing so, an attribute or a `let` (`link`, #231) or a
+/// declaration (`parser.rs`, #460): the one word would mean two things.
+pub(crate) fn supplied(name: &str) -> Option<String> {
+    let moments = if name == "inf" {
+        &[][..]
+    } else {
+        CONTEXT_VARS.iter().find(|(n, _)| *n == name)?.1.moments()
+    };
+    Some(match moments {
+        [] => "every expression".to_string(),
+        ms => ms
+            .iter()
+            .map(|m| m.to_string())
+            .collect::<Vec<_>>()
+            .join(", or "),
+    })
+}
+
 /// The most terms the aggregates (`max j in n (e)`) of one program write
 /// out, nested ones included.
 pub(crate) const MAX_OVER: usize = 4096;
@@ -395,27 +415,10 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     // would make a stage's `ps(min(present, 16))` read the attribute, not
     // the jobs present, with no warning (#231: a PS service time off by 8×;
     // before it, the PD lecture's attribute `n`).
-    let supplied = CONTEXT_VARS
-        .iter()
-        .map(|(n, v)| (*n, v.moments()))
-        .chain(std::iter::once(("inf", &[][..])));
-    for (name, moments) in supplied {
-        let taken = if lk.attr_index.contains_key(name) {
-            Some("session attribute")
-        } else if prog.lets.iter().any(|(n, _)| n == name) {
-            Some("`let` constant")
-        } else {
-            None
-        };
-        if let Some(kind) = taken {
-            let read_in = match moments {
-                [] => "every expression".to_string(),
-                ms => ms
-                    .iter()
-                    .map(|m| m.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", or "),
-            };
+    let declared = lk.attrs.iter().map(|n| (n, "session attribute"));
+    let declared = declared.chain(prog.lets.iter().map(|(n, _)| (n, "`let` constant")));
+    for (name, kind) in declared {
+        if let Some(read_in) = supplied(name) {
             return Err(LinkError::new(format!(
                 "`{name}` is a name the language supplies, read in {read_in}; a {kind} \
                  named `{name}` would be read there instead\n\
