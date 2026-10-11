@@ -109,6 +109,19 @@ impl Arg {
     }
 }
 
+/// Does `f` take a number at argument `k` of `n`? There a bare name is a
+/// value, as the linker resolves it: `min(kv, 1)` reads `kv` as
+/// `min(kv + 0, 1)` does. Elsewhere it names a pool, a stage or an observe
+/// (`queued(kv)`, `total(latency)`). The function's signature says which,
+/// and `cost`'s last argument is the quantity it converts.
+pub fn takes_number(f: &str, k: usize, n: usize) -> bool {
+    if f == "cost" {
+        return k + 1 == n;
+    }
+    crate::ir::Fun::from_name(f)
+        .is_some_and(|fun| fun.signature().get(k) == Some(&crate::ir::ArgKind::Expr))
+}
+
 /// A pool or stage reference, possibly indexed into an array.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ref {

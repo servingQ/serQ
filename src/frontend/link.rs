@@ -1485,12 +1485,7 @@ impl Linker<'_> {
         let target = crate::ir::CostTarget::joint(targets);
         let value = match value {
             Arg::Expr(e) => self.expr(e)?,
-            Arg::Ref(r) if r.index.is_none() => self.expr(&Expr::Var(r.name.clone()))?,
-            _ => {
-                return Err(LinkError::new(
-                    "cost's last argument is an expression".into(),
-                ));
-            }
+            Arg::Ref(r) => self.expr(&self.number_name("cost", r)?)?,
         };
         Ok(CExpr::Cost(target, Box::new(value)))
     }
@@ -1714,27 +1709,24 @@ impl Linker<'_> {
                 self.eval_const(body)?
             }
             Expr::Call(f, args) => {
+                let not_constant = || {
+                    LinkError::new(format!(
+                        "`{f}` with {} argument(s) is not a constant function",
+                        args.len()
+                    ))
+                };
                 let xs: Vec<f64> = args
                     .iter()
-                    .map(|a| match a {
+                    .enumerate()
+                    .map(|(k, a)| match a {
                         Arg::Expr(e) => self.eval_const(e),
-                        Arg::Ref(r) => match self.not_a_number(f, r) {
-                            Some(e) => Err(e.at(r.span)),
-                            None => self
-                                .eval_const(&Expr::Var(r.name.clone()))
-                                .map_err(|e| e.at(r.span)),
-                        },
+                        Arg::Ref(r) if takes_number(f, k, args.len()) => {
+                            self.eval_const(&self.number_name(f, r)?)
+                        }
+                        Arg::Ref(_) => Err(not_constant()),
                     })
                     .collect::<LResult<_>>()?;
-                match const_call(f, &xs) {
-                    Some(x) => x,
-                    None => {
-                        return Err(LinkError::new(format!(
-                            "`{f}` with {} argument(s) is not a constant function",
-                            xs.len()
-                        )));
-                    }
-                }
+                const_call(f, &xs).ok_or_else(not_constant)?
             }
             Expr::Sample(..) => return Err(LinkError::new("a constant cannot sample".into())),
             Expr::Over(agg, j, n, body) => {
@@ -1842,39 +1834,44 @@ impl Linker<'_> {
         }
     }
 
-    /// Why a name passed where `f` takes a number is not one as written
-    /// (#469): a pool or a stage, whole or a member, is no number, and a
-    /// value has no index. `None` for a bare name the caller reads as a
-    /// value, or refuses as unknown or no constant: one that is not a
-    /// place, or reads a value though a stage shares its name (`set svc =
-    /// 3` beside `stage svc`).
-    fn not_a_number(&self, f: &str, r: &Ref) -> Option<LinkError> {
+    /// A name passed where `f` takes a number (`takes_number`), as the value
+    /// it names, or why it is none as written (#469): a pool or a stage,
+    /// whole or a member, is no number, and a value has no index. A bare
+    /// name that is no place, or reads a value though a stage shares its
+    /// name (`set svc = 3` beside `stage svc`), is the value: the caller
+    /// resolves it, or refuses it as unknown or no constant.
+    fn number_name(&self, f: &str, r: &Ref) -> LResult<Expr> {
         let n = &r.name;
         let value = self.expr(&Expr::Var(n.clone()));
         let place = self.pools.contains_key(n) || self.stages.contains_key(n);
         if r.index.is_none() && (value.is_ok() || !place) {
-            return None;
+            let var = Expr::Var(n.clone());
+            return Ok(match r.span {
+                Some(span) => Expr::Located(span, Box::new(var)),
+                None => var,
+            });
         }
         let written = match r.index {
             Some(_) => format!("{n}[…]"),
             None => n.clone(),
         };
-        if self.pools.contains_key(n) {
-            return Some(LinkError::new(format!(
+        let why = if self.pools.contains_key(n) {
+            LinkError::new(format!(
                 "`{f}` reads `{written}` as a number, but a pool is none: read \
                  `queued({written})` or `holders({written})`"
-            )));
-        }
-        if self.stages.contains_key(n) {
-            return Some(LinkError::new(format!(
+            ))
+        } else if self.stages.contains_key(n) {
+            LinkError::new(format!(
                 "`{f}` reads `{written}` as a number, but a stage is none: read \
                  `budget_left({written})` or `work({written})`"
-            )));
-        }
-        Some(match value {
-            Err(unknown) => unknown,
-            Ok(_) => self.indexed_value(r),
-        })
+            ))
+        } else {
+            match value {
+                Err(unknown) => unknown,
+                Ok(_) => self.indexed_value(r),
+            }
+        };
+        Err(why.at(r.span))
     }
 
     /// The refusal for `n[…]` where `n` names a value: it has no members.
@@ -1969,13 +1966,9 @@ impl Linker<'_> {
                 for (a, kind) in args.iter().zip(sig) {
                     cargs.push(match (kind, a) {
                         (ArgKind::Expr, Arg::Expr(e)) => CArg::Expr(self.expr(e)?),
-                        (ArgKind::Expr, Arg::Ref(r)) => match self.not_a_number(f, r) {
-                            Some(e) => return Err(e.at(r.span)),
-                            None => CArg::Expr(
-                                self.expr(&Expr::Var(r.name.clone()))
-                                    .map_err(|e| e.at(r.span))?,
-                            ),
-                        },
+                        (ArgKind::Expr, Arg::Ref(r)) => {
+                            CArg::Expr(self.expr(&self.number_name(f, r)?)?)
+                        }
                         (ArgKind::Pool, Arg::Ref(r)) => CArg::Pool(self.pool_ref(r)?),
                         (ArgKind::Stage, Arg::Ref(r)) => CArg::Stage(self.stage_ref(r)?),
                         (k, _) => {
