@@ -822,13 +822,13 @@ impl<'p> Interp<'p> {
             gauges: p.gauges.iter().map(|_| vec![]).collect(),
             claims: p.claims.iter().map(|_| ClaimState::default()).collect(),
             served: vec![0.0; p.stages.len()],
-            observed: {
-                let mut aggregated = vec![false; p.observes.len()];
-                for c in &p.claims {
-                    aggregates(&c.expr, &mut aggregated);
-                }
-                aggregated.iter().map(|&a| a.then(Vec::new)).collect()
-            },
+            // the values of an observation a claim aggregates (`total(o)`, …)
+            observed: (0..p.observes.len())
+                .map(|k| {
+                    let read = |e: &CExpr| matches!(e, CExpr::Agg(_, o) if *o == k);
+                    p.claims.iter().any(|c| c.expr.any(&read)).then(Vec::new)
+                })
+                .collect(),
             live: 0,
             live_avg: TimeAverage::new(0.0, 0.0),
             admit_budget: None,
@@ -4688,37 +4688,6 @@ fn static_key(e: &CExpr) -> bool {
         ),
         _ => false,
     })
-}
-
-/// Mark the observations an expression aggregates (`total(o)`, …).
-fn aggregates(e: &CExpr, out: &mut [bool]) {
-    match e {
-        CExpr::Agg(_, k) => out[*k] = true,
-        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) | CExpr::Reg(_) => {}
-        CExpr::Sample(_, xs) => xs.iter().for_each(|x| aggregates(x, out)),
-        CExpr::Call(_, args) => {
-            for a in args {
-                match a {
-                    CArg::Expr(x) => aggregates(x, out),
-                    CArg::Pool(r) | CArg::Stage(r) => {
-                        if let Some(i) = &r.index {
-                            aggregates(i, out);
-                        }
-                    }
-                }
-            }
-        }
-        CExpr::Unary(_, x) | CExpr::Cost(_, x) => aggregates(x, out),
-        CExpr::Binary(_, a, b) => {
-            aggregates(a, out);
-            aggregates(b, out);
-        }
-        CExpr::Cond(c, a, b) => {
-            aggregates(c, out);
-            aggregates(a, out);
-            aggregates(b, out);
-        }
-    }
 }
 
 fn lex_less(a: &[f64], b: &[f64]) -> bool {
