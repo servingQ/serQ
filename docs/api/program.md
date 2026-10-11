@@ -180,9 +180,9 @@ is reported in the library, with the uses it was expanded from.
 use "../../lib/vllm.sq";
 …
     set kept = prompt;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm)))) reserve (cost(kv, known))
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + budget_left(vllm)))) reserve (cost(kv, known))
          at admission (known = max(kept, computed + 1),
-                       hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
+                       reused = min(cachedin(kv), reusable(known, blocksize(kv)))) {
 ```
 
 (`examples/multi-turn/vllm.sq`; the library is `lib/vllm.sq`.) A program

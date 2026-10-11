@@ -921,9 +921,9 @@ header a place to name what it is written in terms of, as
 `examples/multi-turn/vllm.sq` does:
 
 ```
-hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm)))) reserve (cost(kv, known))
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + budget_left(vllm)))) reserve (cost(kv, known))
      at admission (known = max(kept, computed + 1),
-                   hit = min(cachedin(kv), reusable(known, blocksize(kv)))) { … }
+                   reused = min(cachedin(kv), reusable(known, blocksize(kv)))) { … }
 ```
 
 The bindings are substituted into the header's expressions by the parser, so
@@ -939,9 +939,10 @@ is in the AST and the IR like any other. A binding that reads live state —
 an observable such as `cachedin(kv)`, a context variable, or `cached`, which
 the admission itself sets — has another value there, so the body reading it
 is a parse error; the body reads `cached`, the units the admission consumed.
-The name of a binding the body reads is its own: not a builtin attribute, a
-pool or stage, a context variable, a `let` or an attribute the program sets,
-and not read outside the holds that bind it. A binding reads only the ones
+A binding's name is its own: no declaration (a `def`, an observation, a
+gauge, a pool, a stage, …) may share it. The name of one the body reads is
+not a builtin attribute, a context variable, a `let` or an attribute the
+program sets either, and is not read outside the holds that bind it. A binding reads only the ones
 before it in its clause.
 
 ### `hidden`
@@ -1167,7 +1168,7 @@ from the cache alone rather than from the previous prompt, and caches `prompt + 
 | a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `engine vllm on gpu { tokens cap B; schedule { advance running; admit waiting while (running.preempted == 0); } … }`, residents in admission order; `pool reqs on vllm` | `scheduler.py:577, 624-823, 868-1128` |
 | `max_num_seqs` | `reqs cap max_seqs;` in `engine vllm`, held as `pool reqs on vllm` | `scheduler.py:877-879` |
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
-| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(known − hit, budget_left(vllm))) reserve (known)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
+| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (reused + min(known − reused, budget_left(vllm))) reserve (known)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
 | chunked prefill, `long_prefill_token_threshold` | `run vllm prefill (cost(vllm, n)) growing kv`, `each at most (threshold)` with `let threshold = running.count + waiting.count > 1 ? c : inf;`: the cap only while more than one request is running or waiting; `waiting.count` counts the queues the engine admits, as vLLM counts `waiting`, whose `skipped_waiting` these programs leave empty; a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
@@ -1212,16 +1213,16 @@ when the scheduler admits the request, not when it queues. `known` is
 every token the request has: the prompt, or after a preemption the tokens
 it had computed plus the one sampled there, never fewer than an earlier
 attempt had (`known = max(kept, computed + 1)`, vLLM's
-`request.num_tokens`, `request.py:295-296`). The hit is the
-cached *full blocks* of those, never all of them, since the last token is
+`request.num_tokens`, `request.py:295-296`). `reused`, the prefix hit, is
+the cached *full blocks* of those, never all of them, since the last token is
 recomputed for its logits: `floor((known − 1) / bs) · bs`
 (`kv_cache_manager.py:289-300`). `cachedin(kv)` is read in the header, so
 it is read in the waiting loop (`scheduler.py:932-939`), and until then a
 waiting request's prefix is still evictable: the wait channel ([Semantics](#3-semantics)). The
-units are the hit plus the chunk the budget the running requests
-leave can take now, `min(known, hit + budget_left(vllm))`
+units are `reused` plus the chunk the budget the running requests
+leave can take now, `min(known, reused + budget_left(vllm))`
 (`scheduler.py:1078-1128, 1214-1226`): every known token, or as far as the
-hit and the budget reach, whichever is less. The rest is allocated as the
+reused tokens and the budget reach, whichever is less. The rest is allocated as the
 request runs (`growing kv`). The admission still needs room for every known
 token, `reserve (cost(kv, known))`: vLLM
 checks the whole sequence before it allocates the first chunk

@@ -879,3 +879,53 @@ fn a_declaration_cannot_share_its_name_with_an_attribute() {
     );
     check(&set(&set(&observe("hit"), "warm"), "more")).expect("links");
 }
+
+/// #484: a hold header's binding the body does not read is no attribute,
+/// and no declaration may share its name either. vLLM's `at admission
+/// (hit = …)` was a token count, and `observe hit` three lines below a 0/1
+/// flag; a pool or a stage named so was refused only when the body read
+/// the binding.
+#[test]
+fn a_declaration_cannot_share_its_name_with_a_binding() {
+    const SRC: &str = "pool kv { cap 4; }
+        stage svc : fifo;
+        DECL
+        workload { arrive closed(2); session { turn; } }
+        server {
+          hold kv (cost(kv, k)) at admission (k = computed + 1) { run svc (cost(svc, 1)); }
+          observe response = now;
+        }
+        ";
+    let two_things = "would make the one word mean two things";
+    for (decl, kind) in [
+        ("def k(x) { x }", "a definition"),
+        ("gauge k = 1;", "a gauge"),
+        ("stage k : delay;", "a stage"),
+        ("pool k { cap 1; }", "a pool"),
+    ] {
+        let e = check(&SRC.replace("DECL", decl)).expect_err(decl);
+        assert!(
+            e.contains(&format!(
+                "`k` is a hold's binding at 6:47; {kind} named `k` {two_things}"
+            )),
+            "{decl}: {e}"
+        );
+        assert!(
+            e.contains("help: rename the declaration or the binding"),
+            "{e}"
+        );
+    }
+    let src = SRC.replace("DECL", "");
+    let e = check(&src.replace("observe response", "observe k = 1; observe response"))
+        .expect_err("refused");
+    assert!(
+        e.contains(&format!("an observation named `k` {two_things}")),
+        "{e}"
+    );
+    // the binding is the hold's alone: another hold may bind the name again
+    check(&src.replace(
+        "observe response",
+        "hold kv (cost(kv, k)) at admission (k = 1) { run svc (cost(svc, 1)); } observe response",
+    ))
+    .expect("links");
+}

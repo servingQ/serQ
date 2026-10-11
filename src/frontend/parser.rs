@@ -156,6 +156,9 @@ struct Parser {
     /// the name: `set` at the top of the body, checked once the program's
     /// attributes are known (`check_body_bindings`).
     body_binds: Vec<(usize, String, Expr)>,
+    /// Every name a hold's header binds, with its position: a declaration
+    /// may not share it (`check_declared_names`).
+    header_binds: Vec<(usize, String)>,
     /// The token position of each name `bindings` read, in order.
     bind_at: Vec<usize>,
     /// The `def`s so far, in order: a use expands to its body in place.
@@ -1426,6 +1429,7 @@ impl Parser {
             server: None,
             share_at: None,
             body_binds: vec![],
+            header_binds: vec![],
             bind_at: vec![],
             defs: vec![],
             expanded: vec![],
@@ -2147,7 +2151,8 @@ impl Parser {
 
     /// A binding its hold's body reads was set at the top of the body. That
     /// is its admission value only if it reads attributes and constants, and
-    /// the `set` is the binding's alone only if nothing else has its name.
+    /// the `set` is the binding's alone only if no attribute or constant has
+    /// its name. A declaration's name is `check_declared_names`'s.
     fn check_body_bindings(&self, prog: &Program) -> PResult<()> {
         if self.body_binds.is_empty() {
             return Ok(());
@@ -2166,10 +2171,6 @@ impl Parser {
                 Some("an attribute the scheduler sets")
             } else if is_context_var(name) || name == "inf" {
                 Some("a name the language supplies")
-            } else if prog.pools.iter().any(|d| d.name == *name) {
-                Some("a pool")
-            } else if prog.stages.iter().any(|d| d.name == *name) {
-                Some("a stage")
             } else if lets.contains(name) {
                 Some("a `let` constant")
             } else if assigned.contains(name) {
@@ -2397,44 +2398,44 @@ impl Parser {
     }
 
     /// A declaration may not share its name with an attribute, built in or
-    /// set (#470): `stage think` beside the attribute `think`, or `set svc`
-    /// beside `stage svc`, would have one word mean two things, and a bare
-    /// `E` passed where a stage or a number goes reads one or the other by
-    /// its place alone (#467). A header's binding the body reads is set at
-    /// the top of the body, so it is an attribute too. Writing a built-in
-    /// attribute stays a `set`.
+    /// set (#470), or with a hold header's binding (#484): `stage think`
+    /// beside the attribute `think`, `set svc` beside `stage svc`, or
+    /// `observe hit` beside a header's token count `hit`, would have one
+    /// word mean two things, and a bare `E` passed where a stage or a number
+    /// goes reads one or the other by its place alone (#467). Writing a
+    /// built-in attribute stays a `set`.
     fn check_declared_names(&self, prog: &Program) -> PResult<()> {
         let set_at = |name: &str| {
-            let set = self
-                .definitions
+            self.definitions
                 .iter()
                 .find(|(n, _)| n == name && !prog.lets.iter().any(|(l, _)| l == n))
-                .map(|(_, span)| (span.file, span.line, span.col));
-            let bound = || {
-                self.body_binds
-                    .iter()
-                    .find(|(_, n, _)| n == name)
-                    .map(|(at, _, _)| {
-                        let t = &self.toks[*at];
-                        (t.file, t.line, t.col)
-                    })
-            };
-            set.or_else(bound)
+                .map(|(_, span)| self.place(span.file, span.line, span.col))
+        };
+        let bound_at = |name: &str| {
+            self.header_binds
+                .iter()
+                .find(|(_, n)| n == name)
+                .map(|(at, _)| {
+                    let t = &self.toks[*at];
+                    self.place(t.file, t.line, t.col)
+                })
         };
         for (at, name, kind) in &self.declared {
-            let (attribute, help) = if BUILTIN_ATTRS.contains(&name.as_str()) {
+            let (other, help) = if BUILTIN_ATTRS.contains(&name.as_str()) {
                 (
                     "a built-in attribute".to_string(),
                     "name the declaration otherwise (docs/api/attributes.md lists the \
                      built-in attributes)",
                 )
-            } else if let Some((file, line, col)) = set_at(name) {
+            } else if let Some(place) = set_at(name) {
                 (
-                    format!(
-                        "an attribute the program sets at {}",
-                        self.place(file, line, col)
-                    ),
+                    format!("an attribute the program sets at {place}"),
                     "rename the declaration or the attribute",
+                )
+            } else if let Some(place) = bound_at(name) {
+                (
+                    format!("a hold's binding at {place}"),
+                    "rename the declaration or the binding",
                 )
             } else {
                 continue;
@@ -2442,7 +2443,7 @@ impl Parser {
             return self.err_at(
                 *at,
                 format!(
-                    "`{name}` is {attribute}; {kind} named `{name}` would make the one word \
+                    "`{name}` is {other}; {kind} named `{name}` would make the one word \
                      mean two things\nhelp: {help}"
                 ),
             );
@@ -4682,6 +4683,7 @@ impl Parser {
         // once the program's attributes are known.
         let mut sets = vec![];
         for ((name, e), &at) in binds.iter().zip(&bind_at) {
+            self.header_binds.push((at, name.clone()));
             if body.iter().any(|s| stmt_reads(s, name)) {
                 sets.push(Stmt::Set(name.clone(), e.clone()));
                 self.body_binds.push((at, name.clone(), e.clone()));
@@ -5680,15 +5682,16 @@ mod tests {
     #[test]
     fn a_binding_the_body_reads_has_a_name_of_its_own() {
         // its `set` makes the name an attribute: one the scheduler, a `let`,
-        // the context or the program already has would be two things
+        // the context or the program already has would be two things, and a
+        // declaration may share no binding's name, read or not (#484)
         for (pre, binding, what) in [
             ("", "cached = 3", "an attribute the scheduler sets"),
             ("", "computed = 50", "an attribute the scheduler sets"),
             ("", "size = 5", "a name the language supplies"),
             ("", "now = 1", "a name the language supplies"),
             ("", "inf = 3", "a name the language supplies"),
-            ("", "kv = 3", "a pool"),
-            ("", "llm = 3", "a stage"),
+            ("", "kv = 3", "a pool named `kv`"),
+            ("", "llm = 3", "an engine named `llm`"),
             ("let bs = 4;", "bs = 2", "a `let` constant"),
             ("", "k = 7", "an attribute the program sets"),
         ] {

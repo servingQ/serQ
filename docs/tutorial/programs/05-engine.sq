@@ -68,8 +68,8 @@ fn main() {
     // scheduler_reserve_full_isl (config/scheduler.py:191): the `reserve`
     set hitmax = floor((prompt - 1) / bs) * bs;
     set sent = 0;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm)))) reserve (cost(kv, prompt))
-         at admission (hit = min(cachedin(kv), hitmax)) {
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(llm)))) reserve (cost(kv, prompt))
+         at admission (reused = min(cachedin(kv), hitmax)) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       // a request preempted runs this body again; count its hit once
       branch (computed == 0) { observe hit = c > 0; }

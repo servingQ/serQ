@@ -140,9 +140,11 @@ is also assigned at its start; such a binding may read only attributes and
 constants. A body cannot read a binding of live state (`cachedin(p)`,
 `cached`, `now`); use `cached` in the body to read the prefix actually reused.
 
-Binding names are local to the holds that bind them and must not conflict
-with builtin attributes, context variables, constants or attributes the
-program assigns. Bindings cannot draw.
+Binding names are local to the holds that bind them. No declaration (a
+`def`, an observation, a gauge, a pool, a stage, …) may share one, and the
+name of a binding the body reads must not conflict with builtin attributes,
+context variables, constants or attributes the program assigns. Bindings
+cannot draw.
 
 If the hold is preempted (`preempt lifo`, or `preempt by`) it re-enters the
 head of the queue (or, under `requeue tail`, the queue as a newcomer)

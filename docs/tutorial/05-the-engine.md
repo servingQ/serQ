@@ -77,8 +77,8 @@ the server side.
 
 ```serq
 set hitmax = floor((prompt - 1) / bs) * bs;
-hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm)))) reserve (cost(kv, prompt))
-     at admission (hit = min(cachedin(kv), hitmax)) {
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(llm)))) reserve (cost(kv, prompt))
+     at admission (reused = min(cachedin(kv), hitmax)) {
   set c = min(cached, floor((prompt - 1) / bs) * bs);
   run llm prefill (cost(llm, prompt - c)) growing kv;
   run llm decode (cost(llm, o - 1)) growing kv;
@@ -111,7 +111,7 @@ preemption count about tenfold.
 
 The header reads both the cache and the budget at admission. A prefix may
 be evicted while the request waits, so reading the cache earlier in a `set`
-would use an outdated value. `at admission (hit = …)` names this value for
+would use an outdated value. `at admission (reused = …)` names this value for
 the header.
 
 **`pool reqs on llm`** hands the pool's queue to the engine's

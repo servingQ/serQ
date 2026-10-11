@@ -672,7 +672,7 @@ fn a_boolean_guard_and_a_declared_draw_run() {
 #[test]
 fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
     let request =
-        "hold kv (cost(kv, min(cachedin(kv), 992) + 8)) at admission (hit = min(cachedin(kv), 992)) {
+        "hold kv (cost(kv, min(cachedin(kv), 992) + 8)) at admission (reused = min(cachedin(kv), 992)) {
                      observe hit = cached > 0;
                      run llm prefill (cost(llm, 1000 - cached)) growing kv;
                    } cache (cost(kv, 1000));";
