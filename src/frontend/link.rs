@@ -1916,6 +1916,9 @@ impl Linker<'_> {
                 for (a, kind) in args.iter().zip(sig) {
                     cargs.push(match (kind, a) {
                         (ArgKind::Expr, Arg::Expr(e)) => CArg::Expr(self.expr(e)?),
+                        (ArgKind::Expr, Arg::Ref(r)) if r.index.is_some() => {
+                            return Err(self.indexed_number(f, r).at(r.span));
+                        }
                         (ArgKind::Expr, Arg::Ref(r)) => CArg::Expr(
                             self.expr(&Expr::Var(r.name.clone()))
                                 .map_err(|e| e.at(r.span))?,
@@ -1943,6 +1946,37 @@ impl Linker<'_> {
             ),
             Expr::Over(agg, j, n, body) => self.over_expr(*agg, j, n, body)?,
         })
+    }
+
+    /// The refusal for an indexed name where `f` takes a number
+    /// (`min(prompt[7], 1)`, `min(kv[j], 1)`): a pool or stage member is
+    /// no number, and a number has no members to index.
+    fn indexed_number(&self, f: &str, r: &Ref) -> LinkError {
+        let n = &r.name;
+        if self.pools.contains_key(n) {
+            return LinkError::new(format!(
+                "`{f}` reads `{n}[…]` as a number, but a pool is none: read \
+                 `queued({n}[…])` or `holders({n}[…])`"
+            ));
+        }
+        if self.stages.contains_key(n) {
+            return LinkError::new(format!(
+                "`{f}` reads `{n}[…]` as a number, but a stage is none: read \
+                 `budget_left({n}[…])` or `work({n}[…])`"
+            ));
+        }
+        // an unknown name is refused as one, as it is without the index
+        if let Err(e) = self.expr(&Expr::Var(n.clone())) {
+            return e;
+        }
+        let what = if self.attr_index.contains_key(n) {
+            "an attribute"
+        } else {
+            "a number"
+        };
+        LinkError::new(format!(
+            "`{f}` reads `{n}[…]`, but {what} has no index: write `{n}`"
+        ))
     }
 
     fn observe_slot(&mut self, name: &str) -> usize {
