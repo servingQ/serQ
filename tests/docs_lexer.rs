@@ -12,14 +12,48 @@ fn read(rel: &str) -> String {
         .unwrap_or_else(|e| panic!("{rel}: {e}"))
 }
 
+/// The parser's sources: `parser.rs` and its submodules (`parser/device.rs`
+/// reads the engine form), each without its tests, which quote words that are
+/// not keywords.
+fn parser_sources() -> Vec<String> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/frontend/parser");
+    let mut files: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .map(|e| e.expect("a directory entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .map(|p| {
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            format!("src/frontend/parser/{name}")
+        })
+        .collect();
+    assert!(
+        !files.is_empty(),
+        "no parser submodule in {}",
+        dir.display()
+    );
+    files.sort();
+    files.insert(0, "src/frontend/parser.rs".to_string());
+    files
+        .iter()
+        .map(|f| {
+            let all = read(f);
+            all[..all.find("#[cfg(test)]").unwrap_or(all.len())].to_string()
+        })
+        .collect()
+}
+
 /// Every word the parser matches as a keyword.
 fn parser_keywords() -> BTreeSet<String> {
-    let all = read("src/frontend/parser.rs");
-    // the tests quote words that are not keywords
-    let src = all[..all.find("#[cfg(test)]").unwrap_or(all.len())].to_string();
     let mut out = BTreeSet::new();
+    for src in parser_sources() {
+        keywords_in(&src, &mut out);
+    }
+    out
+}
+
+fn keywords_in(src: &str, out: &mut BTreeSet<String>) {
     for (pat, skip) in [("eat_kw(\"", 8), ("is_kw(\"", 7), ("expect_kw(\"", 11)] {
-        let mut rest = src.as_str();
+        let mut rest = src;
         while let Some(i) = rest.find(pat) {
             rest = &rest[i + skip..];
             if let Some(j) = rest.find('"') {
@@ -47,21 +81,67 @@ fn parser_keywords() -> BTreeSet<String> {
             }
         }
     }
-    out
 }
 
-/// Words the lexer is not expected to carry, with the reason.
+const LEXER: &str = "docs/hooks/serq_lexer.py";
+
+/// The words of the lexer's tuple `NAME = (…)`, comments left out.
+fn lexer_list(name: &str) -> BTreeSet<String> {
+    let text = read(LEXER);
+    let head = format!("\n{name} = (");
+    let at = text
+        .find(&head)
+        .unwrap_or_else(|| panic!("{LEXER} has no `{name} = (`"));
+    let body = &text[at + head.len()..];
+    let body = &body[..body
+        .find("\n)")
+        .or_else(|| body.find(')'))
+        .expect("a closing paren")];
+    let code: String = body
+        .lines()
+        .map(|l| l.split_once('#').map_or(l, |(c, _)| c))
+        .collect::<Vec<_>>()
+        .join("\n");
+    code.split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Every word the lexer colours by name.
+fn coloured() -> BTreeSet<String> {
+    [
+        "STRUCTURE",
+        "STATEMENTS",
+        "OPTIONS",
+        "BUILTINS",
+        "AGGREGATES",
+    ]
+    .into_iter()
+    .flat_map(lexer_list)
+    .collect()
+}
+
+/// Words the lexer is not expected to list, with the reason.
 fn exempt(word: &str) -> bool {
     matches!(
         word,
         // kept only to tell an old program what its keyword became
         "fits"
-            // matched inside `pool`/`stage`/`workload` bodies as option values
-            // that are already covered by the option list under another name
-            | "lru" | "lifo" | "none" | "fcfs"
+            // a step stage's retired options, kept only to say what an
+            // engine writes instead (`parser/device.rs`)
+            | "budget" | "chunk" | "memory"
+            // a distribution, which the `~name` rule colours
+            | "exp" | "det" | "uniform" | "erlang" | "h2" | "bernoulli"
+            // an engine's lists, read as `running.count`, which the
+            // ENGINE_VALUES rule colours whole
+            | "running"
     ) || word.len() < 2
 }
 
+/// Every word the parser matches, and every word of `parser::KEYWORDS`, is
+/// in one of the lexer's lists.
 #[test]
 fn the_docs_lexer_knows_every_keyword() {
     let parser = parser_keywords();
@@ -70,44 +150,48 @@ fn the_docs_lexer_knows_every_keyword() {
         "keyword extraction found only {}",
         parser.len()
     );
-
-    let file = "docs/hooks/serq_lexer.py";
-    let text = read(file);
-    let missing: Vec<&String> = parser
+    let listed = coloured();
+    let missing: BTreeSet<&str> = parser
         .iter()
-        .filter(|w| !exempt(w))
-        .filter(|w| {
-            !text
-                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-                .any(|t| t == w.as_str())
-        })
+        .map(String::as_str)
+        .chain(serq::frontend::parser::KEYWORDS)
+        .filter(|w| !exempt(w) && !listed.contains(*w))
         .collect();
-    assert!(missing.is_empty(), "{file} is missing {missing:?}");
-}
-
-/// `admit` names the pool option and nothing else now, so the lexer must
-/// still colour it - and must not colour it as a statement.
-#[test]
-fn admit_is_an_option_not_a_statement() {
-    let file = "docs/hooks/serq_lexer.py";
-    assert!(read(file).contains("admit"), "{file} dropped `admit via`");
+    assert!(missing.is_empty(), "{LEXER} is missing {missing:?}");
 }
 
 /// A `def` and its parameters may not be keywords, which the parser checks
-/// against its own list: that list is every word it matches.
+/// against its own list: that list is every word it matches, but for the
+/// names a program reads, which a body's reads must still see.
 #[test]
 fn the_parser_keyword_list_is_every_keyword() {
-    let listed: BTreeSet<String> = serq::frontend::parser::KEYWORDS
-        .iter()
-        .map(|w| w.to_string())
-        .collect();
+    let listed: BTreeSet<&str> = serq::frontend::parser::KEYWORDS.into_iter().collect();
     let missing: Vec<String> = parser_keywords()
         .into_iter()
-        .filter(|w| w.len() >= 2 && !listed.contains(w))
+        .filter(|w| w.len() >= 2 && !listed.contains(w.as_str()))
+        // `running.count`, `waiting.count`, and the context variable `tokens`
+        // of `tokens cap`: a value, not only a keyword
+        .filter(|w| !matches!(w.as_str(), "running" | "waiting" | "tokens"))
         .collect();
     assert!(
         missing.is_empty(),
         "parser::KEYWORDS is missing {missing:?}"
+    );
+}
+
+/// An engine's values (`running.count`, `waiting.count`, `batch.tokens`)
+/// are what an engine reads, coloured whole: the lexer's list is the
+/// parser's `ENGINE_VALUES`, no more and no fewer.
+#[test]
+fn the_docs_lexer_knows_every_engine_value() {
+    let parser: BTreeSet<String> = serq::frontend::parser::ENGINE_VALUES
+        .iter()
+        .map(|(v, ..)| v.to_string())
+        .collect();
+    assert_eq!(
+        lexer_list("ENGINE_VALUES"),
+        parser,
+        "{LEXER}: ENGINE_VALUES"
     );
 }
 
@@ -123,8 +207,9 @@ fn the_function_list_is_every_function_the_linker_resolves() {
 
 /// The names the language supplies - context variables, functions, a run's
 /// aggregates, folded calls and the attributes it sets - are coloured as
-/// what a program reads. Since #231 none of them can be a program's own, so
-/// the lexer has no reason to leave one plain.
+/// what a program reads, or, for arithmetic, listed to be left plain. Since
+/// #231 none of them can be a program's own, so the lexer has no reason to
+/// leave one out.
 #[test]
 fn the_docs_lexer_knows_every_name_the_language_supplies() {
     use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
@@ -142,9 +227,31 @@ fn the_docs_lexer_knows_every_name_the_language_supplies() {
         )
         .chain(["inf"]);
 
-    let file = "docs/hooks/serq_lexer.py";
-    let text = read(file);
-    let quoted: BTreeSet<&str> = text.split('"').skip(1).step_by(2).collect();
-    let missing: Vec<&str> = supplied.filter(|w| !quoted.contains(w)).collect();
-    assert!(missing.is_empty(), "{file} does not colour {missing:?}");
+    let mut listed = coloured();
+    listed.extend(lexer_list("ARITHMETIC"));
+    let missing: Vec<&str> = supplied.filter(|w| !listed.contains(*w)).collect();
+    assert!(missing.is_empty(), "{LEXER} does not colour {missing:?}");
+}
+
+/// `each at most` is an engine's clause, so a `def` may not take its words:
+/// they were missing from `KEYWORDS` while the engine form read them, and
+/// `def each(x) { x }` linked.
+#[test]
+fn a_def_may_not_be_named_each_or_most() {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/tutorial/programs");
+    let src = read("docs/tutorial/programs/01-queue.sq");
+    for w in ["each", "most"] {
+        let prog = src.replacen(
+            "let S = 1.0;",
+            &format!("def {w}(x) {{ x }}\nlet S = 1.0;"),
+            1,
+        );
+        assert_ne!(prog, src);
+        let e = serq::compile_source_at(&prog, Some(&base), &serq::Overrides::default())
+            .expect_err("a def named after a keyword links");
+        assert!(
+            e.contains(&format!("`{w}` is a word of the language")),
+            "{e}"
+        );
+    }
 }

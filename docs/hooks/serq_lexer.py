@@ -1,8 +1,8 @@
 """Register a Pygments lexer for serQ, so ```serq fences highlight.
 
-Four roles, four colours. A program's shape is `workload`/`session`/`server`; what
-a session *does* is `hold`, `run`, `observe`; the knobs are `cap`,
-`evict`, `preempt`; and what it *reads* is `cachedin`, `budget_left`, `now`.
+Four roles, four colours. A program's shape is `engine`/`workload`/`server`;
+what a request *does* is `hold`, `run`, `observe`; the knobs are `cap`,
+`evict`, `schedule`; and what it *reads* is `cachedin`, `running.count`, `now`.
 A reader should be able to tell those apart before reading a word, so each
 lands in a different colour group, and `~` gets its own because that is where
 the randomness enters. Arithmetic stays plain: it is how a program computes,
@@ -54,6 +54,17 @@ OPTIONS = (
     "given", "every", "some", "iteration", "of",
 )
 
+# An engine's values, read as `list.field` and coloured whole as what a
+# program reads: `batch` alone is an option (`batch` arrivals), `running` alone
+# is nothing. `tests/docs_lexer.rs` holds this to the parser's `ENGINE_VALUES`.
+ENGINE_VALUES = (
+    "running.count", "running.decoding", "running.kv_decode", "running.kv_prefill",
+    "running.preempted",
+    "waiting.count", "waiting.admitted",
+    "batch.tokens", "batch.prefilled", "batch.decoding", "batch.kv_decode",
+    "batch.kv_prefill", "batch.attention",
+)
+
 # Observables and arithmetic: things a program reads rather than declares.
 # A context variable's name is the language's everywhere in a program: since
 # #231 the linker refuses an attribute or a `let` that takes one, so `tokens`
@@ -72,8 +83,8 @@ BUILTINS = (
     # context variables
     "now", "waited", "size", "age", "last", "waiting", "present", "tokens",
     "decoders", "prefilled", "residents", "kv_decode", "kv_prefill",
-    "attention", "decoding", "admission", "remaining", "demand", "served",
-    "arrived", "inf",
+    "attention", "decoding", "admission", "remaining", "position", "demand",
+    "served", "arrived", "admitted", "preempted", "inf",
     # attributes the language sets (docs/api/attributes.md); `new` and `out`
     # stay plain, as a program also names an `observe` so (`total(out)`)
     "cached", "serial", "turn_no", "think", "more", "forced", "computed",
@@ -106,6 +117,12 @@ class SerqLexer(RegexLexer):
             # `Keyword.Pseudo` alike - which most do, Material included -
             # would collapse them back into one, which is the whole point of
             # separating them.
+            (words(ENGINE_VALUES, prefix=r"\b", suffix=r"\b"), Name.Variable),
+            # a schedule's two statements are one phrase each: `running`
+            # and `waiting` there name the engine's lists, not a value
+            (r"\b(?:advance\s+running|admit\s+waiting)\b", Name.Function),
+            # `tokens cap B` is an engine's clause, not the context variable
+            (r"\btokens(?=\s+cap\b)", Name.Builtin),
             (words(STRUCTURE, suffix=r"\b"), Keyword),          # the skeleton
             (words(STATEMENTS, suffix=r"\b"), Name.Function),   # what a session does
             (words(OPTIONS, suffix=r"\b"), Name.Builtin),       # the knobs

@@ -73,7 +73,7 @@ use crate::frontend::queue::{self, QueueDecl};
 
 mod device;
 
-pub use device::engine_name;
+pub use device::{ENGINE_VALUES, engine_name};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -288,7 +288,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 113] = [
+pub const KEYWORDS: [&str; 115] = [
     "Cost",
     "Size",
     "admission",
@@ -316,6 +316,7 @@ pub const KEYWORDS: [&str; 113] = [
     "delay",
     "device",
     "drop",
+    "each",
     "else",
     "end",
     "engine",
@@ -354,6 +355,7 @@ pub const KEYWORDS: [&str; 113] = [
     "mark",
     "maxmin",
     "memory",
+    "most",
     "nic",
     "none",
     "observe",
