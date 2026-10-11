@@ -2722,11 +2722,9 @@ impl<'p> Interp<'p> {
             self.pools[pl].used += need;
             self.sessions[sid].holds[hi].pools[k].alloc += need;
             match resume {
-                Some((st, j)) => {
-                    self.sessions[sid].status = Status::InStage(st, j);
-                    // a growing job: the retried growth covers its pending tokens
-                    self.advance_pos(sid, pl, units);
-                }
+                // a growing job: the growth covers the tokens it stalled
+                // on, which move the position when they are computed (#482)
+                Some((st, j)) => self.sessions[sid].status = Status::InStage(st, j),
                 None => {
                     self.sessions[sid].status = Status::Ready;
                     self.ready.push_back(sid);
@@ -2746,11 +2744,6 @@ impl<'p> Interp<'p> {
         };
         let e = &self.sessions[sid].holds[hi].pools[k];
         (e.alloc, e.pos)
-    }
-
-    fn advance_pos(&mut self, sid: usize, pl: usize, tokens: f64) {
-        let (_, pos) = self.hold_alloc_pos(sid, pl);
-        self.set_pos(sid, pl, pos + tokens);
     }
 
     /// Put the innermost hold of `sid` on `pl` at position `pos`.
@@ -3521,6 +3514,12 @@ impl<'p> Interp<'p> {
             if let (Some((pl, end)), Some(sid)) = (j.growing, j.owner) {
                 let last = j.work - tokens <= EPS;
                 let (_, pos) = self.hold_alloc_pos(sid, pl);
+                // the end differs from the sum of the chunks by rounding only
+                debug_assert!(
+                    !last || (pos + tokens - end).abs() <= EPS * end.abs().max(1.0),
+                    "a growing run's chunks sum to {} but it ends at {end}",
+                    pos + tokens
+                );
                 let to = if last { end } else { pos + tokens };
                 self.set_pos(sid, pl, to);
             }

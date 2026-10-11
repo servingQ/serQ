@@ -1186,3 +1186,45 @@ fn a_run_ends_at_its_start_plus_its_work() {
         r.text()
     );
 }
+
+/// A growth that stalled and resumes does not move its hold's position: the
+/// tokens it stalled on move it once, when they are computed (#482). B's
+/// decode stalls on a token's growth (A holds 3 of 7 until its gate ends)
+/// and resumes when A releases; main counted the stalled token twice and B
+/// ended at 7, not 2 + 4. The run's end is checked against the sum of its
+/// chunks (a `debug_assert!` in the interpreter), so a position moved twice
+/// mid-run fails there too.
+#[test]
+fn a_resumed_growth_moves_the_position_once() {
+    let src = r#"
+        device gpu { kv cap 7; }
+        engine llm on gpu {
+          reqs cap 2;
+          tokens cap 4;
+          schedule {
+            advance running;
+            admit waiting;
+          }
+          execute (1);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { }
+        stage gate : delay;
+        workload { arrive batch(2); session { turn; end; } }
+        server {
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 0)) {
+            run llm prefill (cost(llm, 2)) growing kv;
+            branch (serial == 0) {
+              run llm decode (cost(llm, 1)) growing kv;
+              run gate (cost(gate, 5));
+            } else {
+              run llm decode (cost(llm, 4)) growing kv;
+            }
+          } cache (cost(reqs, kv, 100));
+          branch (serial == 1) { observe extent = cachedin(kv); }
+        }
+"#;
+    let r = run(src, &common::horizon(50.0));
+    assert_eq!(r.ended, 2, "{}", r.text());
+    assert_eq!(r.observe("extent").unwrap().samples, [6.0], "{}", r.text());
+}
