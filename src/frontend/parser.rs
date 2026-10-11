@@ -62,6 +62,7 @@
 //! statements. Omitting the session means one turn. Queue routing belongs to
 //! the server; lifecycle (`turn`, early `end`) belongs to the session.
 
+use std::cell::Cell;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -69,7 +70,8 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
-    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, LISTS, RENAMED, takes_supplied,
+    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, Constants, FOLDED, FUNCTIONS, LISTS, LResult,
+    LinkError, RENAMED, takes_supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
 
@@ -809,6 +811,45 @@ fn a_device(queue: &str, verb: &str, name: &str) -> String {
         "`{queue}.{verb}` reads `{name}`, a device, which holds no value: an entry reads \
          its queue's pools (`queued(p)`, `holders(p)`)"
     )
+}
+
+/// The constants the parser knows: the `let`s folded so far. It knows no
+/// other name, so an aggregate's index clashes with none here, and an
+/// aggregate's terms are bounded per expression. Its errors are never
+/// shown: an array size that is no constant says so itself, and a `let`
+/// the parser cannot fold, the linker says why.
+struct Lets<'a> {
+    consts: &'a [(String, f64)],
+    terms: Cell<usize>,
+}
+
+impl Constants for Lets<'_> {
+    fn constant(&self, name: &str) -> LResult<f64> {
+        let known = self.consts.iter().rev().find(|(c, _)| c == name);
+        known
+            .map(|(_, v)| *v)
+            .ok_or_else(|| LinkError::new(format!("`{name}` is not a `let` constant")))
+    }
+
+    fn ref_as_number(&self, f: &str, r: &Ref) -> LResult<Expr> {
+        match r.index {
+            None => Ok(Expr::Var(r.name.clone())),
+            Some(_) => Err(LinkError::new(format!("`{f}` reads `{}[…]`", r.name))),
+        }
+    }
+
+    /// An unread argument is the linker's to resolve.
+    fn resolve_unread(&self, _: &Arg) -> LResult<()> {
+        Ok(())
+    }
+
+    fn index_clash(&self, _: &str) -> Option<&'static str> {
+        None
+    }
+
+    fn terms_written(&self) -> &Cell<usize> {
+        &self.terms
+    }
 }
 
 /// The error for an entry that reads its own pool `pool`, written `name`,
@@ -3162,9 +3203,15 @@ impl Parser {
     }
 
     /// The value of a constant expression over numbers and `let` constants,
-    /// if it is one.
+    /// if it is one: the linker's evaluator over the `let`s folded so far,
+    /// so that a `let` the linker folds sizes an array here too (#274).
     fn const_value(&self, e: &Expr) -> Option<f64> {
-        self.fold(e, &std::cell::Cell::new(0))
+        Lets {
+            consts: &self.consts,
+            terms: Cell::new(0),
+        }
+        .eval_const(e)
+        .ok()
     }
 
     /// `a, …)` after a `Tok::Unread`'s `(` (and an expression's body).
@@ -3175,84 +3222,6 @@ impl Parser {
         }
         self.expect(&Tok::RParen)?;
         Ok(args)
-    }
-
-    /// `const_value` with the terms its aggregates have written out so far:
-    /// nested ones multiply, and like the linker's (`over_terms`) the total
-    /// is bounded, or a nest of three would run for minutes. Past the bound
-    /// this is not a constant here, and the linker says why.
-    fn fold(&self, e: &Expr, terms: &std::cell::Cell<usize>) -> Option<f64> {
-        Some(match e {
-            Expr::Located(_, inner) => self.fold(inner, terms)?,
-            Expr::Num(x) => *x,
-            Expr::Var(n) if n == "inf" => f64::INFINITY,
-            Expr::Var(n) => self.consts.iter().rev().find(|(c, _)| c == n)?.1,
-            Expr::Unary(UnOp::Neg, a) => -self.fold(a, terms)?,
-            Expr::Unary(UnOp::Not, a) => {
-                if self.fold(a, terms)? != 0.0 {
-                    0.0
-                } else {
-                    1.0
-                }
-            }
-            Expr::Binary(op, a, b) => {
-                crate::frontend::link::binop(*op, self.fold(a, terms)?, self.fold(b, terms)?)
-            }
-            Expr::Cond(c, a, b) => {
-                if self.fold(c, terms)? != 0.0 {
-                    self.fold(a, terms)?
-                } else {
-                    self.fold(b, terms)?
-                }
-            }
-            // folded as the linker writes it out, so that a `let` it folds
-            // sizes an array here too (#274)
-            Expr::Over(agg, j, n, body) => {
-                let count = self.fold(n, terms)?;
-                let total = terms.get() as f64 + count;
-                if !(count >= 1.0
-                    && count.fract() == 0.0
-                    && total <= crate::frontend::link::MAX_OVER as f64)
-                {
-                    return None;
-                }
-                terms.set(total as usize);
-                let mut acc: Option<f64> = None;
-                for k in 0..count as usize {
-                    let mut term = (**body).clone();
-                    crate::frontend::link::bind_index(&mut term, j, k as f64);
-                    let x = self.fold(&term, terms)?;
-                    acc = Some(match (acc, agg) {
-                        (None, _) => x,
-                        (Some(a), Agg::Sum) => a + x,
-                        (Some(a), Agg::Max) => a.max(x),
-                        (Some(a), Agg::Min) => a.min(x),
-                    });
-                }
-                acc?
-            }
-            // the linker's constant functions, so that a `let` the linker
-            // folds the parser folds too (`let N = min(2, 3); queue D[N]`)
-            Expr::Call(f, args) => {
-                let xs = args
-                    .iter()
-                    .enumerate()
-                    .map(|(k, a)| match a {
-                        Arg::Expr(e) => self.fold(e, terms),
-                        Arg::Ref(r) if r.index.is_none() && takes_number(f, k, args.len()) => {
-                            self.fold(&Expr::Var(r.name.clone()), terms)
-                        }
-                        Arg::Ref(_) => None,
-                    })
-                    .collect::<Option<Vec<f64>>>()?;
-                crate::frontend::link::const_call(f, &xs)?
-            }
-            // an unread argument is never evaluated: the linker resolves
-            // it where the expression goes (a `let`), and `array_count`
-            // where it goes nowhere
-            Expr::Unread(_, body) => self.fold(body, terms)?,
-            Expr::Sample(..) => return None,
-        })
     }
 
     /// `pool NAME [N] { … }`, or `pool NAME on OWNER { … }` where `on` is
