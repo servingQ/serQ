@@ -54,7 +54,8 @@
 //! and `run` here, so the AST, the IR and the interpreter know only the
 //! kernel. A role finds its stage among the stages declared above the
 //! statement: the stage of the role's name (`link` or `transfer`, `tool`);
-//! `on STAGE` names it explicitly. The run is plain. Prefill and decode are
+//! `on STAGE` names it explicitly. The workload's `tool` with none declared
+//! runs on a delay the parser supplies, named `tool`. The run is plain. Prefill and decode are
 //! not roles: they are the mode of a `run` on a step engine.
 //!
 //! A workload's optional session describes complete turns and their continuation.
@@ -199,6 +200,10 @@ struct Parser {
     relation_share: Option<&'static str>,
     /// The queues whose relation gives the wait before each copy they post.
     posters: Vec<String>,
+    /// The token of the workload's first `tool` that found no stage `tool`
+    /// declared above it: it runs on the workload's own delay, which the
+    /// parser supplies after the declared stages.
+    implicit_tool: Option<usize>,
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
@@ -1616,6 +1621,7 @@ impl Parser {
             entry_gateway: false,
             relation_share: None,
             posters: vec![],
+            implicit_tool: None,
             latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
@@ -2081,6 +2087,36 @@ impl Parser {
             return self.err(
                 "`args` names the imported std/args module; give the declaration another name",
             );
+        }
+        // the workload's tool call is the client's time: a delay the
+        // workload owns, after every stage the deployment declares
+        if let Some(at) = self.implicit_tool {
+            if let Some(d) = prog.stages.iter().find(|s| s.name == "tool") {
+                let line = d.span.map_or(0, |s| s.line);
+                return self.err_at(
+                    at,
+                    format!(
+                        "this `tool` found no stage `tool` declared above it and runs on the \
+                         workload's own delay, but a stage `tool` is declared below, on line {line}\n\
+                         help: declare the stage above the workload, or remove it"
+                    ),
+                );
+            }
+            let t = &self.toks[at];
+            let span = Span {
+                line: t.line,
+                col: t.col,
+                len: t.text.chars().count().max(1),
+                file: t.file,
+            };
+            self.stages.push("tool".into());
+            prog.stages.push(StageDecl {
+                span: Some(span),
+                name: "tool".into(),
+                count: 1,
+                array: false,
+                kind: StageKind::Delay,
+            });
         }
         // a request runs the server or a named gateway's `route`, whose
         // admissions set `cached` and `computed`, and the entries it calls
@@ -5082,7 +5118,7 @@ impl Parser {
             } else {
                 None
             };
-            let name = self.role_stage(role, at)?;
+            let name = self.role_stage(role, at, index.is_some())?;
             Ref { span, name, index }
         };
         let raw_work = self.expr()?;
@@ -5227,9 +5263,19 @@ impl Parser {
     }
 
     /// The stage a role names when none is given: the stage of the role's
-    /// name; exactly one.
-    fn role_stage(&self, role: Role, at: usize) -> PResult<String> {
+    /// name; exactly one. The workload's unindexed `tool` with none declared
+    /// runs on the workload's own delay, which the parser supplies: the
+    /// client's time between turns is no resource of the deployment.
+    fn role_stage(&mut self, role: Role, at: usize, indexed: bool) -> PResult<String> {
         let kw = role.keyword();
+        if role == Role::Tool
+            && !indexed
+            && self.side == Side::WorkloadSession
+            && !self.stages.iter().any(|n| n == "tool")
+        {
+            self.implicit_tool.get_or_insert(at);
+            return Ok("tool".into());
+        }
         let found: Vec<&str> = self
             .stages
             .iter()

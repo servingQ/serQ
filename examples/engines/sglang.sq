@@ -71,7 +71,6 @@ fn main() {
   }
   pool reqs on sglang { queue fifo; }
   pool kv on gpu { evict lru; preempt by (1 - decoding, position - prompt, -prompt) requeue tail; }
-  stage tool : delay;
 
   workload {
     arrive poisson(Lambda);
