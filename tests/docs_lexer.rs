@@ -52,10 +52,10 @@ fn parser_keywords() -> BTreeSet<String> {
 }
 
 fn keywords_in(src: &str, out: &mut BTreeSet<String>) {
-    for (pat, skip) in [("eat_kw(\"", 8), ("is_kw(\"", 7), ("expect_kw(\"", 11)] {
+    for pat in ["eat_kw(\"", "is_kw(\"", "expect_kw(\""] {
         let mut rest = src;
         while let Some(i) = rest.find(pat) {
-            rest = &rest[i + skip..];
+            rest = &rest[i + pat.len()..];
             if let Some(j) = rest.find('"') {
                 out.insert(rest[..j].to_string());
             }
@@ -208,14 +208,17 @@ fn the_function_list_is_every_function_the_linker_resolves() {
 /// The names the language supplies - context variables, functions, a run's
 /// aggregates, folded calls and the attributes it sets - are coloured as
 /// what a program reads, or, for arithmetic, listed to be left plain. Since
-/// #231 none of them can be a program's own, so the lexer has no reason to
-/// leave one out.
+/// #231 a `set`, `choose` or `let` may not take one, but an `observe`, a
+/// stage, a pool or a `def` still may: a name a shipped program declares as
+/// its own stays plain until #460 refuses that.
 #[test]
 fn the_docs_lexer_knows_every_name_the_language_supplies() {
     use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
     let supplied = CONTEXT_VARS
         .iter()
         .map(|(n, _)| *n)
+        // examples/vendors/ascend.sq: `observe admitted = now;` (#460)
+        .filter(|n| *n != "admitted")
         .chain(FUNCTIONS)
         .chain(AGGREGATES.iter().map(|(n, _)| *n))
         .chain(FOLDED)
@@ -231,27 +234,4 @@ fn the_docs_lexer_knows_every_name_the_language_supplies() {
     listed.extend(lexer_list("ARITHMETIC"));
     let missing: Vec<&str> = supplied.filter(|w| !listed.contains(*w)).collect();
     assert!(missing.is_empty(), "{LEXER} does not colour {missing:?}");
-}
-
-/// `each at most` is an engine's clause, so a `def` may not take its words:
-/// they were missing from `KEYWORDS` while the engine form read them, and
-/// `def each(x) { x }` linked.
-#[test]
-fn a_def_may_not_be_named_each_or_most() {
-    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/tutorial/programs");
-    let src = read("docs/tutorial/programs/01-queue.sq");
-    for w in ["each", "most"] {
-        let prog = src.replacen(
-            "let S = 1.0;",
-            &format!("def {w}(x) {{ x }}\nlet S = 1.0;"),
-            1,
-        );
-        assert_ne!(prog, src);
-        let e = serq::compile_source_at(&prog, Some(&base), &serq::Overrides::default())
-            .expect_err("a def named after a keyword links");
-        assert!(
-            e.contains(&format!("`{w}` is a word of the language")),
-            "{e}"
-        );
-    }
 }

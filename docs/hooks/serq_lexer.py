@@ -44,7 +44,9 @@ OPTIONS = (
     "granule", "serve", "latency", "nic", "exclusive", "first", "only", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden",
     "batch", "trace", "ordered", "init", "horizon", "warmup", "seed",
     "share", "maxmin", "bottleneck",
-    # an engine's schedule and execution
+    # an engine's schedule and execution; `advance`, `each` and `most` are
+    # read only in the phrases `advance running` and `each at most`, which
+    # the rules below colour whole, and are listed for tests/docs_lexer.rs
     "schedule", "advance", "each", "most", "execute",
     # no program writes `stage : step` any more, but the parser still matches
     # `step` to say an engine is written instead, and tests/docs_lexer.rs
@@ -66,9 +68,11 @@ ENGINE_VALUES = (
 )
 
 # Observables and arithmetic: things a program reads rather than declares.
-# A context variable's name is the language's everywhere in a program: since
-# #231 the linker refuses an attribute or a `let` that takes one, so `tokens`
-# is never a program's own and colouring it says something true.
+# A context variable's name is mostly the language's: since #231 the linker
+# refuses a `set`, `choose` or `let` that takes one. An `observe`, a stage, a
+# pool or a `def` may still take one, so a name a program declares as its own
+# (`observe admitted = now;` in examples/vendors/ascend.sq) is left plain
+# here; #460 proposes refusing such a declaration.
 # Arithmetic is not a role: `min`, `floor` and `pow` are how a program
 # computes, not what it means, and they read as calls without help. Leaving
 # them plain is what lets the observable colour mean exactly one thing.
@@ -84,7 +88,8 @@ BUILTINS = (
     "now", "waited", "size", "age", "last", "waiting", "present", "tokens",
     "decoders", "prefilled", "residents", "kv_decode", "kv_prefill",
     "attention", "decoding", "admission", "remaining", "position", "demand",
-    "served", "arrived", "admitted", "preempted", "inf",
+    "served", "arrived", "preempted", "inf",
+    # not `admitted`: examples/vendors/ascend.sq observes its own (#460)
     # attributes the language sets (docs/api/attributes.md); `new` and `out`
     # stay plain, as a program also names an `observe` so (`total(out)`)
     "cached", "serial", "turn_no", "think", "more", "forced", "computed",
@@ -121,6 +126,8 @@ class SerqLexer(RegexLexer):
             # a schedule's two statements are one phrase each: `running`
             # and `waiting` there name the engine's lists, not a value
             (r"\b(?:advance\s+running|admit\s+waiting)\b", Name.Function),
+            # and `each at most (e)` is one clause of either
+            (r"\beach\s+at\s+most\b", Name.Builtin),
             # `tokens cap B` is an engine's clause, not the context variable
             (r"\btokens(?=\s+cap\b)", Name.Builtin),
             (words(STRUCTURE, suffix=r"\b"), Keyword),          # the skeleton
