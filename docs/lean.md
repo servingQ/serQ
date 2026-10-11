@@ -120,7 +120,9 @@ are rejected rather than silently omitted.
   at runtime; Lean's executable model has no corresponding error state.
 - The claims fragment also supports the body an engine's shared `only (p)`
   lowers to, a chunk expression over `residents` and `queued(p)`, one queue key on a pool that no run grows,
-  and cost terms of the form `k * ceil(tokens / b)`.
+  and cost terms of the form `k * ceil(tokens / b)`. A claim read at the
+  end aggregates with `total`, `count` or `prefix_total`; `largest` and
+  `smallest` are rejected.
 - Renewal arrivals, transfers between pools and flows over several stages
   are outside the executable fragment. Stochastic paper results use
   separate constructions, rather than translating arbitrary stochastic

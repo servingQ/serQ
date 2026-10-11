@@ -348,7 +348,9 @@ into a successful Lean execution. For `Branch`, correspondence remains
 restricted to executions with valid 0/1 guards.
 
 The claims generator additionally accepts the body an engine's shared `only` lowers to,
-one queue key on a pool that no run grows, and supported tiled costs. See
+one queue key on a pool that no run grows, and supported tiled costs. A
+claim read at the end aggregates with `Total`, `Count` or `PrefixTotal`:
+`Largest` and `Smallest` are outside the fragment. See
 [the Lean guide](lean.md#what-is-not-covered-yet) for these restrictions.
 Arbitrary iteration bodies, registers, `reserve_held`, `granule` and
 preemption policies other than LIFO are not translated.

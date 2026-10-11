@@ -70,7 +70,7 @@ fn main() {
     arrive batch(1);
   }
   server {
-    run svc (duration);
+    run svc (cost(svc, duration));
     observe elapsed = now;
   }
 }

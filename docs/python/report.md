@@ -19,12 +19,12 @@ Its attributes are read-only.
 | `mean_live` | `float` | Time-average number of live sessions after warm-up. |
 | `observes` | `dict[str, Observe]` | Observations in program order. A new dictionary on each access. |
 | `gauges` | `dict[str, Gauge]` | Gauges in program order. A new dictionary on each access. |
+| `claims` | `dict[str, Claim]` | Claims in program order; empty when the program has none. A new dictionary on each access. |
 | `stages` | `list[Stage]` | One row per stage or array member. A new list on each access. |
 | `pools` | `list[Pool]` | One row per pool or array member. A new list on each access. |
 
 Python float attributes preserve NaN and infinities. JSON encodes these as
-`null`. The JSON also includes claim results and report metadata that do
-not have Python attribute wrappers.
+`null`.
 
 ## Methods
 
@@ -33,6 +33,7 @@ not have Python attribute wrappers.
 | [`json()`](#json) | `str` | JSON summary matching the CLI. |
 | [`observe(name)`](#observe) | `Observe` or `None` | Observation by name. |
 | [`gauge(name)`](#gauge) | `Gauge` or `None` | Gauge by name. |
+| [`claim(name)`](#claim) | `Claim` or `None` | Claim by name. |
 | [`stage(name)`](#stage) | `Stage` or `None` | First stage row with this name. |
 | [`stages_named(name)`](#stages_named) | `list[Stage]` | All stage array members, in index order. |
 | [`pool(name)`](#pool) | `Pool` or `None` | First pool row with this name. |
@@ -69,6 +70,14 @@ Report.gauge(self, name: str) -> Gauge | None
 ```
 
 Return the named [Gauge](gauge.md), or `None`.
+
+## claim
+
+```python
+Report.claim(self, name: str) -> Claim | None
+```
+
+Return the named [Claim](claim.md), or `None`.
 
 ## stage
 
@@ -119,7 +128,7 @@ fn main() {
   }
   server {
     set t0 = now;
-    hold reqs (1) { run svc (2); }
+    hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
     observe response = now - t0;
   }
   gauge occupied = used(reqs);
@@ -138,5 +147,5 @@ assert summary["ended"] == report.ended
 
 ## See also
 
-[`run`](run.md), [`Observe`](observe.md), [`Gauge`](gauge.md),
+[`run`](run.md), [`Observe`](observe.md), [`Gauge`](gauge.md), [`Claim`](claim.md),
 [`Stage`](stage.md), [`Pool`](pool.md), [report fields](../reference/cli.md#the-json-report).

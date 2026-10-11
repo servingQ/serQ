@@ -23,11 +23,11 @@ fn main() {
   stage svc : fifo;
   workload {
     arrive batch(4);
-    session { request; end; }
+    session { turn; end; }
   }
   server {
     set t0 = now;
-    hold reqs (1) { run svc (2); }
+    hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
     observe response = now - t0;
   }
   gauge occupied = used(reqs);
@@ -56,6 +56,7 @@ print(response.mean)
 | [`pyserq.Report`](python/report.md) | Run metadata, named lookups and JSON output. |
 | [`pyserq.Observe`](python/observe.md) | Sample statistics and per-session records. |
 | [`pyserq.Gauge`](python/gauge.md) | Time-weighted statistics and change points. |
+| [`pyserq.Claim`](python/claim.md) | What the run found of a claim. |
 | [`pyserq.Stage`](python/stage.md) | Queue, service, iteration and inter-token statistics. |
 | [`pyserq.Pool`](python/pool.md) | Allocation, cache, admission and preemption statistics. |
 
