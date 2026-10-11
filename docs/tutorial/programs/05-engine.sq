@@ -70,7 +70,8 @@ fn main() {
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm)))) reserve (cost(kv, prompt))
          at admission (hit = min(cachedin(kv), hitmax)) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
-      observe hit = c > 0;
+      // a request preempted runs this body again; count its hit once
+      branch (computed == 0) { observe hit = c > 0; }
       run llm prefill (cost(llm, prompt - c)) growing kv;
       observe ttft = now - t0;
       run llm decode (cost(llm, o - 1)) growing kv;

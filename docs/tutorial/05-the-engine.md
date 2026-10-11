@@ -89,7 +89,8 @@ hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm)))) re
 of reserving its full memory at admission. With `preempt lifo`, a failed
 growth can preempt the most recently admitted running request. The hold is
 retried; see [preemption semantics](../language.md) for the state preserved
-across retries.
+across retries. A retried hold runs its body again, so the program observes
+`hit` only on the first attempt, where `computed` is 0.
 
 **`budget_left(llm)`** is the token budget left after serving the running requests.
 The admission allocates memory for the cached prefix plus the prefill chunk
