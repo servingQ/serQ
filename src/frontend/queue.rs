@@ -48,6 +48,10 @@ pub struct Entry {
     /// nor context: legal only as the workload's `hidden` attributes, which
     /// `assemble` checks once the workload is known.
     pub reads: Vec<String>,
+    /// Names the header reads that are neither parameters nor the queue's
+    /// own: each is refused in `assemble`, as another place's pool or stage
+    /// or as a value to pass as a parameter.
+    pub header_reads: Vec<String>,
     /// Token position of the header, for errors.
     pub at: usize,
 }

@@ -679,6 +679,14 @@ fn says(b: &[Token], w: &str) -> bool {
         .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
 }
 
+/// The error for an entry that reads a pool or stage not its queue's.
+fn not_its_own(queue: &str, verb: &str, name: &str) -> String {
+    format!(
+        "`{queue}.{verb}` reads `{name}`, which is not a pool or stage of `{queue}`: \
+         a queue sees its own; the deployment reads across queues"
+    )
+}
+
 /// A pool declared with a stage's name, or a stage with a pool's.
 fn one_name_space(name: &str) -> String {
     format!(
@@ -1905,9 +1913,33 @@ impl Parser {
                 .as_ref()
                 .map(|w| w.hidden.clone())
                 .unwrap_or_default();
+            // a name some pool or stage has, its own or another queue's
+            let place = |n: &String| {
+                prog.pools.iter().any(|p| p.name == *n)
+                    || self.stages.contains(n)
+                    || self
+                        .queues
+                        .iter()
+                        .any(|q| q.name == *n || q.pools.contains(n))
+            };
             for q in &self.queues {
                 for e in &q.entries {
+                    if let Some(n) = e.header_reads.first() {
+                        let message = if place(n) {
+                            not_its_own(&q.name, &e.verb, n)
+                        } else {
+                            format!(
+                                "`{}.{}`: the header reads `{n}`; an entry's header sees its \
+                                 parameters and the queue's pools and stage. Pass `{n}` as a parameter",
+                                q.name, e.verb
+                            )
+                        };
+                        return self.err_at(e.at, message);
+                    }
                     if let Some(n) = e.reads.iter().find(|n| !hidden.contains(n)) {
+                        if place(n) {
+                            return self.err_at(e.at, not_its_own(&q.name, &e.verb, n));
+                        }
                         // a name nothing sets is no attribute set outside
                         // the queue: it is unknown, as it is anywhere (#444)
                         let set = self.definitions.iter().any(|(d, _)| d == n)
@@ -3699,6 +3731,7 @@ impl Parser {
         // the header sees the parameters and the queue's own; the body also
         // the context and the request's hidden attributes
         let mut reads = vec![];
+        let mut header_reads = vec![];
         // the gateway's `route` is the deployment's and reads as a server
         // does; any other entry of a queue that is also a gateway is an entry
         let is_gateway = verb == "route" && q.roles.iter().any(|r| r == "gateway");
@@ -3760,9 +3793,11 @@ impl Parser {
             }
             sources.push((vars, indexed, refs, false, false));
             for (mut vars, indexed, refs, header, in_index) in sources {
-                // a bare argument that is not a pool or stage (`min(now, 1)`)
-                // is a value, read under the same rule as `min(now + 0, 1)`;
-                // a dotted one is another queue's pool
+                // a bare argument that is not the queue's own (`min(now, 1)`)
+                // is read under the same rule as `min(now + 0, 1)`: whether
+                // it names a pool or stage elsewhere, `assemble` tells once
+                // all are declared; a dotted or indexed one stays a
+                // reference, checked below
                 let (values, refs): (Vec<Ref>, Vec<Ref>) = refs
                     .into_iter()
                     .partition(|r| r.index.is_none() && !own_ref(r) && !r.name.contains('.'));
@@ -3802,28 +3837,17 @@ impl Parser {
                             ),
                         );
                     }
-                    if header {
-                        return self.err_at(
-                            at,
-                            format!(
-                                "`{qname}.{verb}`: the header reads `{v}`; an entry's header sees its \
-                                 parameters and the queue's pools and stage. Pass `{v}` as a parameter",
-                            ),
-                        );
-                    }
-                    if !reads.contains(&v) {
-                        reads.push(v);
+                    let read = if header {
+                        &mut header_reads
+                    } else {
+                        &mut reads
+                    };
+                    if !read.contains(&v) {
+                        read.push(v);
                     }
                 }
                 if let Some(r) = refs.iter().find(|r| !own_ref(r)) {
-                    return self.err_at(
-                        at,
-                        format!(
-                            "`{qname}.{verb}` reads `{}`, which is not a pool or stage of `{qname}`: \
-                             a queue sees its own; the deployment reads across queues",
-                            r.name
-                        ),
-                    );
+                    return self.err_at(at, not_its_own(&qname, &verb, &r.name));
                 }
             }
         }
@@ -3845,6 +3869,7 @@ impl Parser {
             body,
             locals: if is_gateway { vec![] } else { locals },
             reads,
+            header_reads,
             at,
         });
         Ok(())
