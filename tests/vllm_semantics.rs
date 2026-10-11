@@ -256,6 +256,88 @@ fn a_request_preempted_twice_keeps_its_outputs() {
     );
 }
 
+/// `preempted_twice` as a queue entry, the form of the decoders in
+/// `examples/pd-disaggregation/`: `kept` is the entry's local, set above the
+/// hold whose header reads it (#475). B is the request with a 32-token
+/// prompt.
+fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> String {
+    format!(
+        r#"
+        let bs = 16;
+        queue D : decode {{
+          device gpu {{ kv cap 6 * bs; }}
+          engine on gpu {{
+            reqs cap 16;
+            tokens cap 64;
+            schedule {{
+              advance running each at most (8);
+              admit waiting while (running.preempted == 0) each at most (8);
+            }}
+            execute (1);
+          }}
+          pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
+          pool reqs on D {{ queue fifo; }}
+          decode (prompt) {{
+            set kept = prompt;
+            hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(D)))) reserve (cost(kv, known))
+            at admission (known = {known_is}) {{
+              {set_kept}
+              branch (prompt == 32) {{ observe known_at = known; observe at = computed; }}
+              run D prefill (cost(D, known)) growing kv;
+              branch (known == prompt) {{ observe first = prompt; }}
+              run D decode (cost(D, o - 1 - (known - prompt))) growing kv;
+            }}
+          }}
+        }}
+        workload {{ arrive batch(3); hidden o;
+          init {{ set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }}
+          session {{ turn;
+            end;
+
+          }}
+        }}
+        server {{
+          D.decode (prompt);
+          observe done = now;
+        }}
+
+"#
+    )
+}
+
+/// The same two preemptions of B in a decode queue's entry: reading `known`
+/// from `computed` alone, B comes back with its prompt after the second and
+/// records its first token twice; with `kept`, set above the hold and read
+/// by its header, it comes back with 33.
+#[test]
+fn a_request_preempted_twice_in_a_queue_keeps_its_outputs() {
+    let r = run(
+        &preempted_twice_in_a_queue("", "computed < prompt ? prompt : computed + 1"),
+        &common::horizon(1000.0),
+    );
+    assert_eq!(
+        r.observe("known_at").unwrap().samples,
+        vec![32.0, 33.0, 32.0, 33.0]
+    );
+    assert_eq!(
+        r.observe("first").unwrap().samples,
+        vec![16.0, 16.0, 32.0, 32.0]
+    );
+
+    let r = run(
+        &preempted_twice_in_a_queue("set kept = known;", "max(kept, computed + 1)"),
+        &common::horizon(1000.0),
+    );
+    assert_eq!(r.pool("D.kv").unwrap().preemptions, 2, "{}", r.text());
+    assert_eq!(r.observe("at").unwrap().samples, vec![0.0, 32.0, 24.0]);
+    assert_eq!(
+        r.observe("known_at").unwrap().samples,
+        vec![32.0, 33.0, 33.0]
+    );
+    assert_eq!(r.observe("first").unwrap().samples, vec![16.0, 16.0, 32.0]);
+    assert_eq!(r.observe("done").unwrap().samples, vec![31.0, 61.0, 74.0]);
+}
+
 /// A holder preempted before it computed anything resumes from nothing.
 /// B holds 32 tokens of the same pool for a fifo stage and is the latest
 /// admitted when A's decode needs a fifth block at step 2: B is the victim

@@ -670,10 +670,10 @@ vLLM programs `set kept = prompt;` above the hold, write `known = max(kept,
 computed + 1)` (the token sampled at `computed` is the request's too) and
 `set kept = known;` at the top of the body, then `run vllm prefill
 (cost(vllm, known - c))` and `run vllm decode (cost(vllm, o - 1 - (known -
-prompt)))`. A queue entry cannot carry it: its header reads the parameters,
-not what its body sets, so the decoders of `examples/pd-disaggregation/`
-still read `known` from `computed` alone (#475). A program that recomputes
-from the prompt alone says so by not reading `computed`.
+prompt)))`. The decoders of `examples/pd-disaggregation/` carry it the same
+way: an entry's header reads what the entry sets above the hold (#475). A
+program that recomputes from the prompt alone says so by not reading
+`computed`.
 
 ### Waiting selection
 

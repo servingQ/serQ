@@ -14,7 +14,7 @@
   "clones": [
     "admit waiting while (running.preempted == 0) each at most (threshold);",
     "advance running each at most (threshold);",
-    "at admission (known = computed < prompt ? prompt : computed + 1) {",
+    "at admission (known = max(kept, computed + 1)) {",
     "at admission (known = max(kept, computed + 1),",
     "branch (known == prompt) { mark first_token; }",
     "branch (known == prompt) { observe ttft = now - t0; }",
