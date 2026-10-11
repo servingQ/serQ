@@ -23,11 +23,11 @@ fn main() {
   stage svc : fifo;
   workload {
     arrive batch(4);
-    session { request; end; }
+    session { turn; end; }
   }
   server {
     set t0 = now;
-    hold reqs (1) { run svc (2); }
+    hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); }
     observe response = now - t0;
   }
   gauge occupied = used(reqs);

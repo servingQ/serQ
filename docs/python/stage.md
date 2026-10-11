@@ -50,7 +50,7 @@ fn main() {
     arrive batch(1);
   }
   server {
-    run svc[1] (2);
+    run svc[1] (cost(svc, 2));
   }
 }
 """, horizon=10))

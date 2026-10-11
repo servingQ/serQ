@@ -50,7 +50,7 @@ fn main() {
     arrive batch(1);
   }
   server {
-    run svc (2);
+    run svc (cost(svc, 2));
   }
 }
 """, format="svg")
