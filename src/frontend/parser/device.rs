@@ -172,7 +172,7 @@ impl Parser {
         if KEYWORDS.contains(&name.as_str()) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
-        self.declare(at, &name, "a device")?;
+        self.declare(at, &name, Kind::Device)?;
         if self.devices.iter().any(|d| d.name == name) {
             return self.err_at(at, format!("`{name}` is declared twice"));
         }
@@ -323,16 +323,16 @@ impl Parser {
         if KEYWORDS.contains(&name.as_str()) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
-        // a queue's engine is named after the queue: that one meets this
-        // as a queue, in `check_declared_names`
+        // a queue's engine is named after the queue: that one is refused as
+        // a queue, in `declare_in`
         if self
             .declared
             .iter()
-            .any(|d| d.name == name && d.kind == "an engine")
+            .any(|d| d.name == name && d.kind == Kind::Engine)
         {
             return self.err_at(at, format!("`{name}` is declared twice"));
         }
-        self.declare(at, &name, "an engine")?;
+        self.declare(at, &name, Kind::Engine)?;
         let array = self.array_count()?;
         self.expect_kw("on")?;
         let d_at = self.pos;

@@ -217,13 +217,49 @@ struct Parser {
     device_scope: Option<String>,
 }
 
-/// A declaration's name as written, with its position, its kind (`a
-/// stage`, …) and the queue it is declared in, if any: a queue's pool or
-/// device `kv` is `Q.kv`.
+/// What a declaration declares.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Definition,
+    Observation,
+    Gauge,
+    Claim,
+    Stage,
+    Engine,
+    Queue,
+    Pool,
+    Device,
+}
+
+impl Kind {
+    /// The kind as a message names one: `a pool`.
+    fn article(self) -> &'static str {
+        match self {
+            Kind::Definition => "a definition",
+            Kind::Observation => "an observation",
+            Kind::Gauge => "a gauge",
+            Kind::Claim => "a claim",
+            Kind::Stage => "a stage",
+            Kind::Engine => "an engine",
+            Kind::Queue => "a queue",
+            Kind::Pool => "a pool",
+            Kind::Device => "a device",
+        }
+    }
+
+    /// Whether `cost(NAME, …)` reads it as a stage.
+    fn is_stage(self) -> bool {
+        matches!(self, Kind::Stage | Kind::Engine | Kind::Queue)
+    }
+}
+
+/// A declaration's name as written, with its position, its kind and the
+/// queue it is declared in, if any: a queue's pool or device `kv` is
+/// `Q.kv`.
 struct Declaration {
     at: usize,
     name: String,
-    kind: &'static str,
+    kind: Kind,
     queue: Option<String>,
 }
 
@@ -234,7 +270,7 @@ impl Declaration {
     /// queue's body, which reads the program's `def`s beside it but not
     /// its other declarations (`docs/language.md`, Names).
     fn meets(&self, other: &Declaration) -> bool {
-        let readable_in_queue = |top: &Declaration| top.kind == "a definition";
+        let readable_in_queue = |top: &Declaration| top.kind == Kind::Definition;
         self.name == other.name
             && self.kind != other.kind
             && match (&self.queue, &other.queue) {
@@ -248,8 +284,8 @@ impl Declaration {
     /// Why `self` and `other` cannot share a name: a pool and a stage
     /// also because `cost(NAME, …)` reads either.
     fn help(&self, other: &Declaration) -> String {
-        let stage = |d: &Declaration| ["a stage", "an engine", "a queue"].contains(&d.kind);
-        if (self.kind == "a pool" && stage(other)) || (other.kind == "a pool" && stage(self)) {
+        let pool_and_stage = |a: Kind, b: Kind| a == Kind::Pool && b.is_stage();
+        if pool_and_stage(self.kind, other.kind) || pool_and_stage(other.kind, self.kind) {
             format!(
                 "rename one of the two declarations: a pool and a stage share one name \
                  space, as `cost({}, …)` reads either",
@@ -259,13 +295,21 @@ impl Declaration {
             "rename one of the two declarations".into()
         }
     }
+
+    /// What it declares, with its queue: `a pool of queue `E``.
+    fn described(&self) -> String {
+        match &self.queue {
+            Some(q) => format!("{} of queue `{q}`", self.kind.article()),
+            None => self.kind.article().to_string(),
+        }
+    }
 }
 
-/// The refusal of declaration `d`, whose name is already `other`'s.
-fn one_word(d: &Declaration, other: &str, help: &str) -> String {
-    let Declaration { name, kind, .. } = d;
+/// The refusal of declaration `d`, whose name already `is` something else.
+fn one_word(d: &Declaration, is: &str, help: &str) -> String {
+    let (name, what) = (&d.name, d.described());
     format!(
-        "`{name}` is {other}; {kind} named `{name}` would make the one word mean two \
+        "`{name}` is {is}; {what} named `{name}` would make the one word mean two \
          things\nhelp: {help}"
     )
 }
@@ -1663,7 +1707,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.name()?;
-        self.declare(at, &name, "a claim")?;
+        self.declare(at, &name, Kind::Claim)?;
         let given = if self.eat_kw("given") {
             self.expect(&Tok::LParen)?;
             let e = self.expr()?;
@@ -1858,7 +1902,7 @@ impl Parser {
             } else if self.eat_kw("gauge") {
                 let at = self.pos;
                 let name = self.ident()?;
-                self.declare(at, &name, "a gauge")?;
+                self.declare(at, &name, Kind::Gauge)?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
@@ -2437,7 +2481,7 @@ impl Parser {
     /// declaration's (`Declaration::meets`) is refused here, an
     /// attribute's once the whole program, every `set` in it, has been
     /// read (`check_declared_names`).
-    fn declare(&mut self, at: usize, name: &str, kind: &'static str) -> PResult<()> {
+    fn declare(&mut self, at: usize, name: &str, kind: Kind) -> PResult<()> {
         self.declare_in(None, at, name, kind)
     }
 
@@ -2447,9 +2491,9 @@ impl Parser {
         queue: Option<String>,
         at: usize,
         name: &str,
-        kind: &'static str,
+        kind: Kind,
     ) -> PResult<()> {
-        self.own_name(at, name, kind)?;
+        self.own_name(at, name, kind.article())?;
         let d = Declaration {
             at,
             name: name.to_string(),
@@ -2461,7 +2505,7 @@ impl Parser {
             let place = self.place(t.file, t.line, t.col);
             return self.err_at(
                 at,
-                one_word(&d, &format!("{} at {place}", e.kind), &e.help(&d)),
+                one_word(&d, &format!("{} at {place}", e.described()), &e.help(&d)),
             );
         }
         self.declared.push(d);
@@ -2527,7 +2571,7 @@ impl Parser {
         {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
-        self.declare(at, &name, "a definition")?;
+        self.declare(at, &name, Kind::Definition)?;
         if let Some(now) = retired(&name) {
             return self.err_at(
                 at,
@@ -3229,7 +3273,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
-        self.declare_in(self.device_scope.clone(), at, &name, "a pool")?;
+        self.declare_in(self.device_scope.clone(), at, &name, Kind::Pool)?;
         let array = self.array_count()?;
         let mut on = None;
         let mut count = array.unwrap_or(1);
@@ -3428,7 +3472,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
-        self.declare(at, &name, "a stage")?;
+        self.declare(at, &name, Kind::Stage)?;
         let array = self.array_count()?;
         self.expect(&Tok::Colon)?;
         let kind = self.stage_kind()?;
@@ -3499,7 +3543,7 @@ impl Parser {
         if self.queues.iter().any(|q| q.name == name) {
             return self.err_at(at + 1, format!("duplicate queue `{name}`"));
         }
-        self.declare(at + 1, &name, "a queue")?;
+        self.declare(at + 1, &name, Kind::Queue)?;
         // `Q[n]` is a family whatever `n`, called by index, and its pools and
         // stages are arrays; `Q` is one queue
         let array = self.array_count()?;
@@ -3593,7 +3637,7 @@ impl Parser {
                 if KEYWORDS.contains(&dev.as_str()) {
                     return self.err_at(d_at, format!("`{dev}` is a word of the language"));
                 }
-                self.declare_in(Some(name.clone()), d_at, &dev, "a device")?;
+                self.declare_in(Some(name.clone()), d_at, &dev, Kind::Device)?;
                 if dev == name {
                     return self.err_at(
                         d_at,
@@ -4502,7 +4546,7 @@ impl Parser {
                 self.advance();
                 let at = self.pos;
                 let name = self.ident()?;
-                self.declare(at, &name, "an observation")?;
+                self.declare(at, &name, Kind::Observation)?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;

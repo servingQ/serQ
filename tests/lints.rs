@@ -939,7 +939,7 @@ fn a_declaration_cannot_share_its_name_with_a_binding() {
     )
     .expect_err("refused");
     assert!(
-        e.contains(&format!("a pool named `kv` {two_things}")),
+        e.contains(&format!("a pool of queue `E` named `kv` {two_things}")),
         "{e}"
     );
 }
@@ -984,12 +984,12 @@ fn a_declaration_cannot_share_its_name_with_another() {
         (
             format!("def kv() {{ 1 }} {QUEUE}"),
             "",
-            "`kv` is a definition at 1:17; a pool named `kv`",
+            "`kv` is a definition at 1:17; a pool of queue `Q` named `kv`",
         ),
         (
             "queue D[2] { pool kv { cap 1; } serve fifo; } def kv() { 1 }".to_string(),
             "",
-            "`kv` is a pool at 1:31; a definition named `kv`",
+            "`kv` is a pool of queue `D` at 1:31; a definition named `kv`",
         ),
         (
             format!("{ENGINE} {QUEUE}"),

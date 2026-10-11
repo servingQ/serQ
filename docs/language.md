@@ -177,9 +177,9 @@ The rules that are the language's, not the catalogue's:
   different kinds do not share a name either (`observe svc` beside `stage
   svc` does not link); an `observe` written again records the one
   statistic at another place. A queue's own pool or device (`P.kv`)
-  meets only the names its body reads bare: another of the same queue,
-  and a `def` (`def kv` beside a queue's `pool kv` does not link, a
-  top-level `pool kv` or `stage kv` does).
+  shares its name only with what the queue's body reads bare: another of
+  the same queue, and a `def`. `def kv` beside queue `P`'s `pool kv` does
+  not link; a top-level `pool kv` or `stage kv` beside it links.
 - **Constants** (a `let`, a `cap`, a `block`, a `fifo` count, the arrival
   rate or population) are numbers or `inf`; one that
   evaluates to NaN does not link.

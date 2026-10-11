@@ -1383,7 +1383,7 @@ server {{ E.prefill (prompt); }}
     );
     refused(
         &pod(&format!("{device} {engine} pool kv on kv {{ }}").replace("gpu", "kv")),
-        "`kv` is a device at 2:10; a pool named `kv` would make the one word mean two things",
+        "`kv` is a device of queue `E` at 2:10; a pool of queue `E` named `kv` would make the one word mean two things",
     );
     // an error names a queue's device as the program does
     refused(
