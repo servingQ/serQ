@@ -189,8 +189,21 @@ fn a_gauge_reads_only_the_deployment() {
 fn a_gauge_has_a_name_of_its_own() {
     let e = link_error(&format!("{DEPLOYMENT} gauge x = 1; gauge x = 2;"));
     assert!(e.contains("declared twice"), "{e}");
+    // the text refuses the gauge as it refuses any two declarations of one
+    // name (#486), and IR that bypasses the text is refused too
     let src = DEPLOYMENT.replace("end;", "observe x = now; end;");
     let e = link_error(&format!("{src} gauge x = 1;"));
+    assert!(
+        e.contains("`x` is an observation at") && e.contains("a gauge named `x`"),
+        "{e}"
+    );
+    let mut p = compile_source(
+        &common::main_source(&format!("{src} gauge y = 1;")),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+    p.gauges[0].name = "x".into();
+    let e = p.validate().unwrap_err();
     assert!(e.contains("also an `observe`"), "{e}");
 }
 

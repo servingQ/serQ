@@ -166,19 +166,14 @@ pub(super) const WAITING_COUNT: &str = "waiting.count";
 
 impl Parser {
     /// `device` after the keyword.
-    pub(super) fn device(&mut self, prog: &Program) -> PResult<()> {
+    pub(super) fn device(&mut self) -> PResult<()> {
         let at = self.pos;
         let name = self.ident()?;
         if KEYWORDS.contains(&name.as_str()) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
-        self.declare(at, &name, "a device")?;
-        // a queue is named whether or not it has a stage (a gateway has none)
-        if self.devices.iter().any(|d| d.name == name)
-            || prog.pools.iter().any(|p| p.name == name)
-            || prog.stages.iter().any(|s| s.name == name)
-            || self.queues.iter().any(|q| q.name == name)
-        {
+        self.declare(at, &name, Kind::Device)?;
+        if self.devices.iter().any(|d| d.name == name) {
             return self.err_at(at, format!("`{name}` is declared twice"));
         }
         let array = self.array_count()?;
@@ -328,14 +323,16 @@ impl Parser {
         if KEYWORDS.contains(&name.as_str()) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
-        self.declare(at, &name, "an engine")?;
-        if prog.pools.iter().any(|p| p.name == name) {
-            return self.err_at(at, one_name_space(&name));
-        }
-        if prog.stages.iter().any(|s| s.name == name) || self.devices.iter().any(|d| d.name == name)
+        // a queue's engine is named after the queue: that one is refused as
+        // a queue, in `declare_in`
+        if self
+            .declared
+            .iter()
+            .any(|d| d.name == name && d.kind == Kind::Engine)
         {
             return self.err_at(at, format!("`{name}` is declared twice"));
         }
+        self.declare(at, &name, Kind::Engine)?;
         let array = self.array_count()?;
         self.expect_kw("on")?;
         let d_at = self.pos;

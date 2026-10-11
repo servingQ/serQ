@@ -33,11 +33,11 @@ serq run examples/single-turn/mg1.sq --horizon 250000 --warmup 25000 --seed 1
 ```text
 run: horizon 250000 end 250000 warmup 25000 seed 1 events 397862 arrivals 198931 ended 179177 turns 179176 mean live 3.899
 
-observe    count    mean   95% CI    cv2      p99
---------  ------  ------  -------  -----  -------
-response  179177  4.8967  ±0.2294  1.021  22.8477
-wait      179177  3.8991  ±0.2263  1.543  21.6881
-service   179177  0.9975  ±0.0051  1.002   4.5911
+observe        count    mean   95% CI    cv2      p99
+------------  ------  ------  -------  -----  -------
+response      179177  4.8967  ±0.2294  1.021  22.8477
+wait          179177  3.8991  ±0.2263  1.543  21.6881
+service_time  179177  0.9975  ±0.0051  1.002   4.5911
 
 stage  number   util    done    thru    wait  service  iters
 -----  ------  -----  ------  ------  ------  -------  -----

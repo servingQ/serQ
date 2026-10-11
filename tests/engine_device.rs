@@ -1355,12 +1355,15 @@ server {{ E.prefill (prompt); }}
     let top = "device E { t1 (x) = 1; z cap 2; } pool z on E { }\n";
     let queue = pod(&format!("{device} {engine} pool kv on gpu {{ }}"));
     let (decls, rest) = queue.split_at(queue.find("workload").unwrap());
-    refused(&format!("{top}{decls}{rest}"), "`E` is declared twice");
-    refused(&format!("{decls}{top}{rest}"), "`E` is declared twice");
+    let device_first =
+        "`E` is a device at 1:20; a queue named `E` would make the one word mean two things";
+    let queue_first = "a device named `E` would make the one word mean two things";
+    refused(&format!("{top}{decls}{rest}"), device_first);
+    refused(&format!("{decls}{top}{rest}"), queue_first);
     // a gateway has no stage, and is named all the same
     let gateway = "queue E : gateway { route () { } }\n";
-    refused(&format!("{top}{gateway}"), "`E` is declared twice");
-    refused(&format!("{gateway}{top}"), "`E` is declared twice");
+    refused(&format!("{top}{gateway}"), device_first);
+    refused(&format!("{gateway}{top}"), queue_first);
     // the names a declaration outside a queue may not take
     refused(
         &pod(&format!("{device} {engine} pool kv on E {{ }}").replace("gpu", "E")),
@@ -1380,7 +1383,7 @@ server {{ E.prefill (prompt); }}
     );
     refused(
         &pod(&format!("{device} {engine} pool kv on kv {{ }}").replace("gpu", "kv")),
-        "`kv` is declared twice in queue `E`",
+        "`kv` is a device of queue `E` at 2:10; a pool of queue `E` named `kv` would make the one word mean two things",
     );
     // an error names a queue's device as the program does
     refused(
