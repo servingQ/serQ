@@ -601,6 +601,9 @@ fn an_entry_names_its_own_pool_bare() {
     for (size, body, name) in [
         ("min(E.kv + 0, 1)", "", "E.kv"),
         ("min(kv + 0, 1)", "", "kv"),
+        // bare in a value argument, as in a sum (#463)
+        ("min(kv, 1)", "", "kv"),
+        ("1", "set y = max(kv, 1);", "kv"),
         ("1", "set y = E.kv;", "E.kv"),
         ("1", "set y = kv;", "kv"),
     ] {
@@ -612,12 +615,38 @@ fn an_entry_names_its_own_pool_bare() {
         );
     }
     // the own stage, named as the queue, is no number either
-    for (size, body) in [("min(E + 0, 1)", ""), ("1", "set y = E;")] {
+    for (size, body) in [
+        ("min(E + 0, 1)", ""),
+        ("min(E, 1)", ""),
+        ("1", "set y = E;"),
+    ] {
         refused(
             &program(size, body),
             "`E.decode` reads `E` as a number, but a stage is none: read `budget_left(E)` or `work(E)`",
         );
     }
+}
+
+/// A definition's parameter is what its body makes of it: the own pool
+/// passed to `queued(p)` is a reference, and to `min(p, 1)` a number (#463).
+#[test]
+fn a_definition_passes_an_own_pool_where_its_body_puts_it() {
+    let program = |def: &str| {
+        format!(
+            "{def}
+             queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               decode (prompt) {{ hold kv (1) {{ run E prefill (cost(E, 1)) growing kv; set y = go(kv); }} }} }}
+             {WORKLOAD}"
+        )
+    };
+    let src = common::main_source(&program("def go(p) { queued(p) }"));
+    let linked = parse(&src).map(|p| serq::frontend::link::link(&p, &common::horizon(100.0)));
+    assert!(matches!(linked, Ok(Ok(_))), "a pool passed to `queued`");
+    refused(
+        &program("def go(p) { min(p, 1) }"),
+        "`E.decode` reads `kv` as a number, but a pool is none: read `queued(kv)` or `holders(kv)`",
+    );
 }
 
 #[test]
