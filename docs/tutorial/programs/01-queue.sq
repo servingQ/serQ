@@ -1,23 +1,28 @@
 // Chapter 1: one queue.
 // Requests arrive as a Poisson process and are served one at a time,
 // first come first served. This is the M/M/1 queue of every textbook.
-let Lambda = 0.8;     // arrivals per second
+use "std/args";
+
 let S = 1.0;          // mean service time (s)
 
-stage server : fifo;
+fn main() {
+  let Lambda = args.number("Lambda", 0.8);     // arrivals per second
 
-workload {
-  arrive poisson(Lambda);
-  turn { set s = ~exp(S); }
+  stage svc : fifo;
+
+  workload {
+    arrive poisson(Lambda);
+    turn { Size work_size = ~exp(1); }
+
+  }
+
+  server {
+    Cost s = cost(svc, S * work_size);
+    set t0 = now;
+    run svc (s);
+    observe response = now - t0;
+    observe wait = now - t0 - S * work_size;
+  }
+
+
 }
-
-session {
-  turn;
-  set t0 = now;
-  run server (s);
-  observe response = now - t0;
-  observe wait = now - t0 - s;
-  end;
-}
-
-run { horizon 100000; warmup 5000; seed 1; }

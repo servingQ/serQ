@@ -228,8 +228,8 @@ Derived by hand, and checked by `tests/shared_stages.rs`:
   in the entry of one queue) runs in its own queue only; with this change
   the role's service is a flow over its own NIC and the other side's, which
   the role would name as it names the pool the KV arrives in.
-- **Push mode's concurrent legs** (the `book` reservation of
-  [The KV transfer](pd-transfer.md)) are a separate change; with this one,
+- **Push mode's concurrent legs** ([the push mode](push-mode.md), `fork`
+  and `join`) are a separate change; with this one,
   push and pull put a transfer on the same two stages and differ in who
   posts it and one notification.
 

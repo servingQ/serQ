@@ -4,7 +4,7 @@ The prefill/decode split of llm-d over vLLM's NIXL connector, checked
 against the source (llm-d `8a2f37d`, the router `13eebdb`, vLLM `0c87a197`),
 and what the language had to gain to state it. Before is the repository as
 it was; After runs (`examples/pd-disaggregation/llmd_pd.sq`, `tests/pd_semantics.rs`,
-`docs/case-study-pd.md`). IR version 5.
+`docs/use-cases/pd.md`). IR version 5.
 
 ## What the systems do
 
@@ -115,7 +115,7 @@ admit if kvD[j] (known) reserve (known), reqsD[j] (0) reserve (1) fit
 The program reads in the order the request travels: the prefiller's
 scope, the decoder's scope, and between them the one line that says what
 the prefiller's `}` does *not* free. Every line is one thing the source
-does (the case study has the table). `lease kvP[i] (inf)` is
+does ([the P/D use case](../use-cases/pd.md) has the table). `lease kvP[i] (inf)` is
 `delay_free_blocks` with a lease the decoder's heartbeats renew; `30` would
 be a prefiller nobody heartbeats. `reqsD[j] (0) reserve (1)` is the
 decoder's gate for a parked request: there must be a free running slot,
@@ -158,13 +158,11 @@ admit via D; }` and `stage D[2] : step { memory kvD; }` mean what they say.
 ## Why these and not others
 
 **Not `acquire`/`free` as separate statements.** That was the lecture's
-language, and v2 folded them into a scope so that balance is syntactic and
-the memory invariant is a lemma about one command. A lease is the one
-allocation that outlives its scope, and it is bounded three ways where a
+language, and v2 folded them into a scope so that balance is syntactic.
+A lease is the one allocation that outlives its scope, and it is bounded
+three ways where a
 free `acquire` was bounded by nothing: the lease names its pool at the
-scope, its expiry is a number, and the session's end collects it. The
-invariant `allocated + cached ≤ cap` is unchanged, since a lease's end is
-the same transition the scope's end performs.
+scope, its expiry is a number, and the session's end collects it.
 
 **Not the decoder's hold nested inside the prefiller's.** That was the
 first form of this change: `release reqsP` inside the prefiller's scope,
@@ -200,10 +198,12 @@ choose between them.
 
 ## Self-critique
 
-- **Push mode's concurrent legs are not written.** A session waits at one
-  pool at a time, so the decoder's admission is written after the prefill,
-  which is the serial dispatch. The exact form is a reservation the session
-  joins now and enters later:
+- **Push mode's concurrent legs were not written here.** A session waited
+  at one pool at a time, so the decoder's admission was written after the
+  prefill, which is the serial dispatch. [The push mode](push-mode.md)
+  writes them as two legs of the request (`fork`, `join`), not as the
+  reservation sketched here, which is a fork whose leg is one hold plus a
+  second meaning of hold:
 
   ```
   book kvD (prompt) reserve (prompt);            // join D's queue; the scheduler allocates when it gets there
@@ -223,7 +223,7 @@ choose between them.
   with a fake model runner; a P/D oracle drives two, with a fake connector
   that completes a read after a chosen number of steps, and checks the
   parked request's admission step, the prefiller's free step and the
-  decoder's first-token step. The case study's table is checked against
+  decoder's first-token step. The P/D use case's table is checked against
   the source by line; the program's answers are not yet checked against the
   scheduler's.
 

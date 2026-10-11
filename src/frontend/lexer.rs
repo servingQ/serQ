@@ -36,6 +36,9 @@ pub enum Tok {
     AndAnd,
     OrOr,
     Not,
+    /// What a definition's use expands to before the arguments its body
+    /// does not read (`Expr::Unread`); the lexer never makes one.
+    Unread,
     Eof,
 }
 

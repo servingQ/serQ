@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ir::{CArg, CArrival, CExpr, CRef, CStageKind, CStmt, Program, RunMode};
+use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, UnOp};
 use crate::view::figure::{
     Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
@@ -104,6 +104,29 @@ pub struct FlowNote {
     pub several: bool,
 }
 
+/// One `hold` the walk entered: the pool its request waits in, the pools it
+/// occupies, and the stations reached while it held them.
+#[derive(Clone, Debug)]
+pub struct HoldSpan {
+    /// The hold's first pool: a hold of several pools waits once, in this
+    /// pool's queue (`interp.rs` `enqueue_hold`, `first_pool`).
+    pub queue: usize,
+    /// The stations reached while it held a pool, as (pool, node). A pool
+    /// of no units occupies nothing and has none; a `release` ends one pool's
+    /// before the others', and a leased pool's runs on past the hold.
+    pub visits: Vec<(usize, usize)>,
+}
+
+impl HoldSpan {
+    /// The stations reached while it held `pool`.
+    pub fn nodes_of(&self, pool: usize) -> impl Iterator<Item = usize> + '_ {
+        self.visits
+            .iter()
+            .filter(move |&&(q, _)| q == pool)
+            .map(|&(_, n)| n)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Edge {
     pub from: End,
@@ -128,6 +151,8 @@ pub struct Net {
     pub flow_notes: Vec<FlowNote>,
     /// The instances, in the order the session reaches them.
     pub instances: Vec<Instance>,
+    /// Every `hold` the walk entered, by the order it entered them.
+    pub holds: Vec<HoldSpan>,
 }
 
 impl Net {
@@ -161,16 +186,12 @@ impl Net {
     }
     /// The pools drawn around a station: those held there, less an
     /// instance's pool anywhere but in its box, and none at a station of a
-    /// transfer between two instances. A transfer holds the sender's pool and the receiver's at
-    /// both NICs; the figure says so on the link between the instances
-    /// (`kvP[i] → kvD[j]`), not with boxes that cross.
+    /// transfer between two instances. A transfer holds the sender's pool
+    /// and the receiver's at both NICs; the figure says so on the link
+    /// between the instances (`kvP[i] → kvD[j]`), not with boxes that cross.
     pub fn drawn_pools(&self, node: usize) -> Vec<usize> {
         let here = self.instance_of(node);
-        let across = self
-            .flows
-            .iter()
-            .any(|g| g.contains(&node) && self.spans(g));
-        if across {
+        if self.across(node) {
             return vec![];
         }
         self.nodes[node]
@@ -186,6 +207,42 @@ impl Net {
             )
             .collect()
     }
+
+    /// Whether a station is one of a transfer between two instances.
+    fn across(&self, node: usize) -> bool {
+        self.flows
+            .iter()
+            .any(|g| g.contains(&node) && self.spans(g))
+    }
+
+    /// The pools drawn inside a station's own box: drawn at it, and every
+    /// hold that takes the pool there reaches no other station. A request
+    /// holds them only while it is there, so the figure draws them as that
+    /// station's. A transfer between instances does not count: it holds the
+    /// sender's pool and the receiver's, and its arrow says so
+    /// (`P.kv[i] → D.kv[j]`), so the prefiller's KV is the prefiller's.
+    pub fn resident_pools(&self, node: usize) -> Vec<usize> {
+        if self.nodes[node].stage.is_none() {
+            return vec![];
+        }
+        self.drawn_pools(node)
+            .into_iter()
+            .filter(|&q| {
+                self.holds
+                    .iter()
+                    .filter(|h| h.nodes_of(q).any(|n| n == node))
+                    .all(|h| h.nodes_of(q).all(|n| n == node || self.across(n)))
+            })
+            .collect()
+    }
+
+    /// Whether `pool`'s enclosure over the stations `first..=last` draws a
+    /// queue: a hold that waits in `pool` reaches one of them.
+    fn waits_in_enclosure(&self, pool: usize, first: usize, last: usize) -> bool {
+        self.holds
+            .iter()
+            .any(|h| h.queue == pool && h.visits.iter().any(|(_, n)| (first..=last).contains(n)))
+    }
 }
 
 struct Walker<'a> {
@@ -193,6 +250,9 @@ struct Walker<'a> {
     net: Net,
     /// Ends the next station will be reached from, with the label of the path.
     frontier: Vec<(At, Option<String>)>,
+    /// The ends of the legs forked and not yet joined: the station after
+    /// the `join` is reached from them as well.
+    forked: Vec<(At, Option<String>)>,
     /// Pools held right now, outermost first, each with the hold that took
     /// it (a `release` takes one off before its hold ends) and whether it
     /// encloses: a hold of no units only reserves, and occupies nothing.
@@ -216,11 +276,14 @@ struct Walker<'a> {
     pool_owners: Vec<(usize, Vec<Option<usize>>)>,
     /// The flow just run, whose `load` and `release` follow it.
     last_flow: Option<usize>,
-    /// Per loop being probed, the ends its body first reaches.
+    /// Per block being probed, the ends it first reaches.
     probes: Vec<Vec<End>>,
     /// The decision node of each loop body that has one, by body block: a
     /// loop walked twice (inside another) has one decision, not two.
     decisions: Vec<(usize, usize)>,
+    /// Attributes this path has set to a constant, by slot. A guard that
+    /// reads only these is decided, and only its arm is drawn.
+    known: Vec<(usize, f64)>,
 }
 
 impl Walker<'_> {
@@ -369,6 +432,12 @@ impl Walker<'_> {
                 self.net.nodes.len() - 1
             }
         };
+        for &(q, id, e) in &self.holds {
+            let visits = &mut self.net.holds[id].visits;
+            if e && !visits.contains(&(q, idx)) {
+                visits.push((q, idx));
+            }
+        }
         if let Some(n) = note
             && self.net.nodes[idx].note.is_none()
         {
@@ -398,7 +467,18 @@ impl Walker<'_> {
                     self.place(node, &stage);
                     let n = &mut self.net.nodes[node];
                     if n.modes.is_empty() {
-                        n.work = self.p.show_expr(&work);
+                        n.work = self.p.show_expr(work.cost_value());
+                        // a delay is its duration: written inside it, under
+                        // the shape of its density, when it is a
+                        // distribution or a constant and fits
+                        let fits = TextSize::Normal.width_of(&n.work) <= STATION_W - 12.0;
+                        if n.kind == StationKind::Delay
+                            && fits
+                            && crate::view::figure::density(&n.work, Rect::new(0.0, 0.0, 1.0, 1.0))
+                                .is_some()
+                        {
+                            n.inner = n.work.clone();
+                        }
                     }
                     if !n.modes.contains(&mode) {
                         n.modes.push(mode);
@@ -433,8 +513,12 @@ impl Walker<'_> {
                 } => {
                     let id = self.next_hold;
                     self.next_hold += 1;
+                    self.net.holds.push(HoldSpan {
+                        queue: pools[0].0.base,
+                        visits: vec![],
+                    });
                     for (r, units, _) in &pools {
-                        let encloses = !matches!(units, CExpr::Num(x) if *x == 0.0);
+                        let encloses = !self.value(units).is_some_and(|(v, _)| v == 0.0);
                         self.holds.push((r.base, id, encloses));
                         if r.index.is_some() {
                             let k = self.instance(r.index.as_deref());
@@ -473,6 +557,21 @@ impl Walker<'_> {
                     }
                 }
                 CStmt::Branch(c, t, e) => {
+                    // A guard this path has decided (`set transferred = 0;`
+                    // before `branch (!transferred)`) takes one arm. The
+                    // other may still run, when a hold is executed again
+                    // after a preemption: one with a station of its own is
+                    // drawn, as any arm. One with none only skips stations,
+                    // and its edge would join the station before the guard
+                    // to the one after, which the session never travels:
+                    // the hold executed again starts where it was.
+                    if let Some(v) = self.decided(&c) {
+                        let (taken, other) = if v != 0.0 { (t, e) } else { (e, t) };
+                        if !reaches_a_station(self.p, other) {
+                            self.walk(taken);
+                            continue;
+                        }
+                    }
                     // The guard labels the first edge the arm takes. An arm
                     // with no station of its own contributes no label, which
                     // is what keeps a chain of guards from multiplying out.
@@ -486,12 +585,14 @@ impl Walker<'_> {
                     // and from the flow before it: a `load` that opens the
                     // else arm follows no transfer of the then arm
                     let flow = self.last_flow;
+                    let known = self.known.clone();
                     self.frontier = saved.clone();
                     self.arm = Some(self.p.show_guard(&c));
                     self.walk(t);
                     let then_out = std::mem::take(&mut self.frontier);
                     let then_held = std::mem::replace(&mut self.holds, held);
                     let then_flow = std::mem::replace(&mut self.last_flow, flow);
+                    let then_known = std::mem::replace(&mut self.known, known);
                     self.frontier = saved;
                     self.arm = Some("else".into());
                     self.walk(e);
@@ -499,100 +600,51 @@ impl Walker<'_> {
                     if self.last_flow != then_flow {
                         self.last_flow = None;
                     }
+                    // after the branch, what both arms leave the same
+                    self.known.retain(|k| then_known.contains(k));
                     let mut out = then_out;
                     out.append(&mut self.frontier);
                     dedupe(&mut out);
                     self.frontier = out;
                     self.arm = outer;
                 }
-                CStmt::Loop(body) => {
-                    // A body that decides before its first station (several
-                    // first stations, or an `end` before any) is a router at
-                    // the top of every turn: one decision node the body
-                    // starts from and every pass returns to. A pass from a
-                    // mark at the body's start finds out what it reaches
-                    // first - a station, the one it was at included, or the
-                    // exit - and is undone whole.
-                    let saved = (
-                        self.net.clone(),
-                        self.frontier.clone(),
-                        self.holds.clone(),
-                        self.pending.clone(),
-                        self.arm.clone(),
-                        self.chosen.clone(),
-                        self.instance_of_slot.clone(),
-                        self.node_owners.clone(),
-                        self.pool_owners.clone(),
-                        self.last_flow,
-                        self.next_hold,
-                        self.decisions.clone(),
-                    );
-                    let k = self.probes.len();
-                    self.probes.push(vec![]);
-                    self.frontier = vec![(At::Probe(k), None)];
+                CStmt::Fork(body) => {
+                    // The leg starts where the session is and runs beside
+                    // it: the session goes on from the same ends. A leg
+                    // holds nothing of the session's; what it leases stays
+                    // held after it, until the session's `release`.
+                    let saved = self.frontier.clone();
+                    let held = std::mem::take(&mut self.holds);
                     self.walk(body);
-                    let entries = self.probes.pop().expect("pushed above");
-                    (
-                        self.net,
-                        self.frontier,
-                        self.holds,
-                        self.pending,
-                        self.arm,
-                        self.chosen,
-                        self.instance_of_slot,
-                        self.node_owners,
-                        self.pool_owners,
-                        self.last_flow,
-                        self.next_hold,
-                        self.decisions,
-                    ) = saved;
-                    let known = self
-                        .decisions
-                        .iter()
-                        .find(|(b, _)| *b == body)
-                        .map(|&(_, d)| d);
-                    if let Some(d) = known {
-                        self.attach(d);
-                        self.walk(body);
-                        self.attach(d);
-                    } else if entries.len() > 1 {
-                        // named by the `choose`s it makes before any station:
-                        // the router's name is the gateway's, which is the
-                        // parser's and not the IR's
-                        let mut slots = vec![];
-                        leading_chooses(self.p, body, &mut slots);
-                        let names: Vec<&str> = slots
-                            .iter()
-                            .map(|v| self.p.attrs.get(*v).map_or("?", String::as_str))
-                            .collect();
-                        let label = if names.is_empty() {
-                            String::new()
-                        } else {
-                            format!("choose {}", names.join(", "))
-                        };
-                        self.net.nodes.push(Node {
-                            stage: None,
-                            label,
-                            kind: StationKind::Decision,
-                            inner: String::new(),
-                            note: None,
-                            pools: vec![],
-                            work: String::new(),
-                            modes: vec![],
-                        });
-                        let d = self.net.nodes.len() - 1;
-                        self.decisions.push((body, d));
-                        self.attach(d);
-                        self.walk(body);
-                        self.attach(d);
-                    } else {
-                        // The second pass starts where the first ended, so
-                        // every way back into the body is drawn, from every
-                        // arm, with the guard of the arm it takes; edges
-                        // already there are not drawn twice.
-                        self.walk(body);
-                        self.walk(body);
-                    }
+                    let leg = std::mem::replace(&mut self.frontier, saved);
+                    let leased = std::mem::replace(&mut self.holds, held);
+                    self.holds.extend(leased);
+                    self.forked.extend(leg);
+                }
+                CStmt::Join => {
+                    let mut ends = std::mem::take(&mut self.forked);
+                    self.frontier.append(&mut ends);
+                    dedupe(&mut self.frontier);
+                }
+                CStmt::While(_, body) => {
+                    self.known.clear();
+                    let before = self.frontier.clone();
+                    let held = self.holds.clone();
+                    self.enter(body, true);
+                    self.frontier.extend(before);
+                    dedupe(&mut self.frontier);
+                    // The body may be skipped; its assignments and leases
+                    // are not unconditional facts after the loop.
+                    self.known.clear();
+                    self.holds.retain(|h| held.contains(h));
+                }
+                CStmt::Loop(body) => {
+                    // A full-session view (IR input or no unique request
+                    // body) includes client loops. Draw their way back so
+                    // no station is a dead end. Values set before the loop
+                    // are known only on its first pass.
+                    self.known.clear();
+                    self.enter(body, true);
                     self.frontier.clear();
                     // A loop is left only by `end`, which already recorded it.
                 }
@@ -623,6 +675,7 @@ impl Walker<'_> {
                     let name = self.p.attrs.get(var).map_or("?", String::as_str);
                     let label = format!("choose {name} of {}", self.p.show_expr(&count));
                     self.pending.retain(|(v, _)| *v != var);
+                    self.known.retain(|&(s, _)| s != var);
                     self.pending.push((var, label.clone()));
                     if !self.chosen.iter().any(|(v, _)| *v == var) {
                         self.chosen.push((var, label));
@@ -634,11 +687,188 @@ impl Walker<'_> {
                         self.net.flow_notes[k].note_to(pool);
                     }
                 }
-                CStmt::Turn | CStmt::Set(..) | CStmt::Observe(..) => {}
+                CStmt::Set(slot, e) => {
+                    let v = self.value(&e).map(|(v, _)| v);
+                    self.known.retain(|&(s, _)| s != slot);
+                    if let Some(v) = v {
+                        self.known.push((slot, v));
+                    }
+                }
+                // a turn draws the attributes of the `turn` block again
+                CStmt::Turn => self.known.clear(),
+                CStmt::Observe(..) => {}
                 CStmt::Grow(..) | CStmt::Drop(..) => {}
             }
         }
     }
+
+    /// The value of an expression that reads only constants and attributes
+    /// this path has set to constants, and whether it read an attribute. A
+    /// guard that reads none is not decided: a guard on a constant
+    /// (`mode == 0`) is the program's setting, which `--set` changes, and
+    /// the figure draws every setting.
+    fn value(&self, e: &CExpr) -> Option<(f64, bool)> {
+        fn eval(e: &CExpr, known: &[(usize, f64)], read: &mut bool) -> Option<f64> {
+            Some(match e {
+                CExpr::Cost(_, x) => eval(x, known, read)?,
+                CExpr::Num(x) => *x,
+                CExpr::Attr(s) => {
+                    *read = true;
+                    known.iter().find(|(k, _)| k == s)?.1
+                }
+                CExpr::Unary(op, a) => {
+                    let x = eval(a, known, read)?;
+                    match op {
+                        UnOp::Neg => -x,
+                        UnOp::Not => f64::from(x == 0.0),
+                    }
+                }
+                CExpr::Binary(op, a, b) => {
+                    crate::frontend::link::binop(*op, eval(a, known, read)?, eval(b, known, read)?)
+                }
+                CExpr::Cond(c, a, b) => {
+                    let (c, a, b) = (
+                        eval(c, known, read)?,
+                        eval(a, known, read)?,
+                        eval(b, known, read)?,
+                    );
+                    if c != 0.0 { a } else { b }
+                }
+                CExpr::Ctx(_)
+                | CExpr::Sample(..)
+                | CExpr::Call(..)
+                | CExpr::Agg(..)
+                | CExpr::Reg(_) => {
+                    return None;
+                }
+            })
+        }
+        let mut read = false;
+        let v = eval(e, &self.known, &mut read)?;
+        Some((v, read))
+    }
+
+    /// A guard this path decides: one `value` knows, that reads an attribute.
+    fn decided(&self, e: &CExpr) -> Option<f64> {
+        self.value(e).and_then(|(v, read)| read.then_some(v))
+    }
+
+    /// Walk a block that may decide before its first station: a loop's
+    /// body, or the program the view draws. One that does (several first
+    /// stations, or an `end` before any) is a router: one decision node the
+    /// block starts from. A pass from a mark at the block's start finds out
+    /// what it reaches first - a station, the one it was at included, or
+    /// the exit - and is undone whole.
+    ///
+    /// A loop's body is entered `again`: its last stations lead back to the
+    /// decision, or a second pass from where the first ended draws every
+    /// way back to the station it starts at, from every arm, with the guard
+    /// of the arm it takes; edges already there are not drawn twice.
+    fn enter(&mut self, body: usize, again: bool) {
+        let saved = (
+            self.net.clone(),
+            self.frontier.clone(),
+            self.holds.clone(),
+            self.pending.clone(),
+            self.arm.clone(),
+            self.chosen.clone(),
+            self.instance_of_slot.clone(),
+            self.node_owners.clone(),
+            self.pool_owners.clone(),
+            self.last_flow,
+            self.known.clone(),
+            self.next_hold,
+            self.decisions.clone(),
+        );
+        let k = self.probes.len();
+        self.probes.push(vec![]);
+        self.frontier = vec![(At::Probe(k), None)];
+        self.walk(body);
+        let entries = self.probes.pop().expect("pushed above");
+        (
+            self.net,
+            self.frontier,
+            self.holds,
+            self.pending,
+            self.arm,
+            self.chosen,
+            self.instance_of_slot,
+            self.node_owners,
+            self.pool_owners,
+            self.last_flow,
+            self.known,
+            self.next_hold,
+            self.decisions,
+        ) = saved;
+        let known = self
+            .decisions
+            .iter()
+            .find(|(b, _)| *b == body)
+            .map(|&(_, d)| d);
+        if let Some(d) = known {
+            self.attach(d);
+            self.walk(body);
+            if again {
+                self.attach(d);
+            }
+            return;
+        }
+        if entries.len() > 1 {
+            // named by the `choose`s it makes before any station: the
+            // router's name is the gateway's, which is the parser's and not
+            // the IR's
+            let mut slots = vec![];
+            leading_chooses(self.p, body, &mut slots);
+            let names: Vec<&str> = slots
+                .iter()
+                .map(|v| self.p.attrs.get(*v).map_or("?", String::as_str))
+                .collect();
+            let label = if names.is_empty() {
+                String::new()
+            } else {
+                format!("choose {}", names.join(", "))
+            };
+            self.net.nodes.push(Node {
+                stage: None,
+                label,
+                kind: StationKind::Decision,
+                inner: String::new(),
+                note: None,
+                pools: vec![],
+                work: String::new(),
+                modes: vec![],
+            });
+            let d = self.net.nodes.len() - 1;
+            self.decisions.push((body, d));
+            self.attach(d);
+            self.walk(body);
+            if again {
+                self.attach(d);
+            }
+            return;
+        }
+        self.walk(body);
+        if again {
+            // a later turn: what the first pass set may have changed
+            self.known.clear();
+            self.walk(body);
+        }
+    }
+}
+
+/// Does a block run at any station, at any depth?
+fn reaches_a_station(p: &Program, block: usize) -> bool {
+    p.blocks.get(block).is_some_and(|stmts| {
+        stmts.iter().any(|s| match s {
+            CStmt::Run { .. } => true,
+            CStmt::Hold { body, .. }
+            | CStmt::Loop(body)
+            | CStmt::While(_, body)
+            | CStmt::Fork(body) => reaches_a_station(p, *body),
+            CStmt::Branch(_, a, b) => reaches_a_station(p, *a) || reaches_a_station(p, *b),
+            _ => false,
+        })
+    })
 }
 
 /// Add `owner` to what `x` is addressed through.
@@ -673,7 +903,12 @@ fn leading_chooses(p: &Program, block: usize, out: &mut Vec<usize>) -> bool {
             }
             // a guard that walks the body: the chooses in it are collected
             // whether or not it reaches a station
-            CStmt::Hold { body, .. } | CStmt::Loop(body) if leading_chooses(p, *body, out) => {
+            CStmt::While(_, body) => {
+                leading_chooses(p, *body, out);
+            }
+            CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::Fork(body)
+                if leading_chooses(p, *body, out) =>
+            {
                 return true;
             }
             _ => {}
@@ -697,18 +932,7 @@ fn dedupe(frontier: &mut Vec<(At, Option<String>)>) {
 
 /// Does an expression read this attribute?
 fn reads_attr(e: &CExpr, slot: usize) -> bool {
-    match e {
-        CExpr::Attr(s) => *s == slot,
-        CExpr::Num(_) | CExpr::Ctx(_) => false,
-        CExpr::Sample(_, a) => a.iter().any(|x| reads_attr(x, slot)),
-        CExpr::Call(_, a) => a.iter().any(|x| match x {
-            CArg::Expr(x) => reads_attr(x, slot),
-            CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().is_some_and(|i| reads_attr(i, slot)),
-        }),
-        CExpr::Unary(_, a) => reads_attr(a, slot),
-        CExpr::Binary(_, a, b) => reads_attr(a, slot) || reads_attr(b, slot),
-        CExpr::Cond(c, a, b) => reads_attr(c, slot) || reads_attr(a, slot) || reads_attr(b, slot),
-    }
+    e.any(&|x| matches!(x, CExpr::Attr(s) if *s == slot))
 }
 
 fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>) {
@@ -717,13 +941,44 @@ fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>
             let note = (*c != 1).then(|| format!("{c} servers"));
             (StationKind::Fifo, "FIFO".into(), note)
         }
+        k if k.is_delay() => (StationKind::Delay, String::new(), Some("delay".into())),
         CStageKind::Ps(phi) => (StationKind::Ps, "PS".into(), Some(p.show_expr(phi))),
-        CStageKind::Delay => (StationKind::Delay, String::new(), Some("delay".into())),
         CStageKind::Step(s) => (
             StationKind::Step,
-            "step".into(),
-            Some(format!("budget {}", p.show_expr(&s.budget))),
+            "engine".into(),
+            Some(format!(
+                "tokens cap {}",
+                p.show_expr_with(&s.budget, list_names)
+            )),
         ),
+    }
+}
+
+/// A step stage is drawn in the words an engine is written in
+/// (`docs/language.md`, the engine form), whichever form the program used:
+/// the IR does not keep the form. Its budget is read as `tokens cap` reads
+/// it, the residents' totals by their list (#411, #416).
+fn list_names(v: CtxVar) -> &'static str {
+    crate::frontend::parser::engine_name(v.name(), "tokens cap").unwrap_or(v.name())
+}
+
+/// The step stage whose `memory` pool `i` is.
+fn memory_of(p: &Program, i: usize) -> Option<usize> {
+    p.stages
+        .iter()
+        .position(|s| matches!(&s.kind, CStageKind::Step(spec) if spec.memory == Some(i)))
+}
+
+/// A pool's title, with what it is on as an engine names it: an engine's
+/// memory is the pool on its device, which the IR does not name, and a pool
+/// it admits otherwise is a pool on the engine. A memory the engine also
+/// admits says so among its options (`pool_notes`).
+fn pool_title(p: &Program, i: usize) -> String {
+    let pool = &p.pools[i];
+    match (memory_of(p, i), pool.admit_via) {
+        (Some(s), _) => format!("pool {} on {}'s device", pool.name, p.stages[s].name),
+        (None, Some(e)) => format!("pool {} on {}", pool.name, p.stages[e].name),
+        (None, None) => format!("pool {}", pool.name),
     }
 }
 
@@ -754,6 +1009,7 @@ pub fn project(p: &Program) -> Net {
             ..Net::default()
         },
         frontier: vec![(At::End(End::Arrival), None)],
+        forked: vec![],
         holds: vec![],
         next_hold: 0,
         pending: vec![],
@@ -765,8 +1021,9 @@ pub fn project(p: &Program) -> Net {
         last_flow: None,
         probes: vec![],
         decisions: vec![],
+        known: vec![],
     };
-    w.walk(p.session);
+    w.enter(p.session, false);
     w.settle_instances();
     // Anything still on the frontier ran off the end of the session program.
     let frontier = std::mem::take(&mut w.frontier);
@@ -937,6 +1194,12 @@ fn remove_node(net: &mut Net, k: usize) {
             *i = at(*i);
         }
     }
+    for h in &mut net.holds {
+        h.visits.retain(|&(_, i)| i != k);
+        for (_, i) in h.visits.iter_mut() {
+            *i = at(*i);
+        }
+    }
 }
 
 /// Reorder the stations by a permutation: `order[k]` is the node that goes
@@ -978,6 +1241,11 @@ fn reorder(net: &mut Net, order: &[usize]) {
             *k = pos[*k];
         }
         g.nodes.sort_unstable();
+    }
+    for h in &mut net.holds {
+        for (_, k) in h.visits.iter_mut() {
+            *k = pos[*k];
+        }
     }
 }
 
@@ -1177,7 +1445,9 @@ pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
                     walk(p, *t, stack, out);
                     walk(p, *e, stack, out);
                 }
-                CStmt::Loop(b) => walk(p, *b, stack, out),
+                CStmt::Loop(b) | CStmt::While(_, b) => walk(p, *b, stack, out),
+                // a leg's holds are its own
+                CStmt::Fork(b) => walk(p, *b, &mut vec![], out),
                 _ => {}
             }
         }
@@ -1201,6 +1471,16 @@ const BACK_DROP: f64 = 26.0;
 const CACHE_ROOM: f64 = 20.0;
 /// Baseline-to-baseline for the stacked pool options.
 const NOTE_LINE: f64 = 11.0;
+/// A framed station: the room above its glyph for its name, its margin,
+/// and the height of one resident pool's row under it.
+const FRAME_HEAD: f64 = 26.0;
+const FRAME_PAD: f64 = 12.0;
+const ROW_H: f64 = 32.0;
+const QUEUE_W: f64 = 30.0;
+/// A pool's drum.
+const DRUM_W: f64 = 22.0;
+const DRUM_H: f64 = 26.0;
+
 /// An instance box's margin around what it holds, and the room for its title.
 const INST_PAD: f64 = 12.0;
 const INST_HEAD: f64 = 26.0;
@@ -1228,7 +1508,15 @@ struct Group {
 /// does not make.
 fn groups(net: &Net) -> Vec<Group> {
     let mut runs: Vec<(usize, usize, usize)> = vec![];
-    let drawn: Vec<Vec<usize>> = (0..net.nodes.len()).map(|i| net.drawn_pools(i)).collect();
+    // a pool held at one station alone is drawn inside it, not boxed
+    let drawn: Vec<Vec<usize>> = (0..net.nodes.len())
+        .map(|i| {
+            let resident = net.resident_pools(i);
+            let mut v = net.drawn_pools(i);
+            v.retain(|q| !resident.contains(q));
+            v
+        })
+        .collect();
     let pools: Vec<usize> = {
         let mut v: Vec<usize> = drawn.iter().flatten().copied().collect();
         v.sort_unstable();
@@ -1298,10 +1586,46 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     let mut gs = groups(net);
     let max_depth = gs.iter().map(|g| g.depth).max().unwrap_or(0);
     let boxed = !net.instances.is_empty();
+    // per station, the pools drawn inside it
+    let resident: Vec<Vec<usize>> = (0..net.nodes.len())
+        .map(|i| net.resident_pools(i))
+        .collect();
+    let framed = |i: usize| !resident[i].is_empty();
     let row_y = MARGIN
         + 34.0
         + (max_depth as f64 + 1.0) * DEPTH_PAD
-        + if boxed { INST_HEAD + INST_PAD } else { 0.0 };
+        + if boxed { INST_HEAD + INST_PAD } else { 0.0 }
+        // a frame's name sits inside it, above the glyph: room for that
+        // only where an enclosure or an instance box is drawn above it
+        + if (0..net.nodes.len()).any(framed) && (!gs.is_empty() || boxed) {
+            FRAME_HEAD
+        } else {
+            0.0
+        };
+    let row_notes = |q: usize| pool_notes(p, q, net.cached.contains(&q)).join(" · ");
+    let row_w = |q: usize| {
+        DRUM_W
+            + 10.0
+            + TextSize::Normal
+                .width_of(&pool_title(p, q))
+                .max(TextSize::Small.width_of(&row_notes(q)))
+    };
+    // under the glyph: its note, then a row per resident pool
+    let rows_top = |i: usize| {
+        STATION_H
+            + if net.nodes[i].note.is_some() {
+                24.0
+            } else {
+                10.0
+            }
+    };
+    let frame_h = |i: usize| {
+        let cached = resident[i]
+            .iter()
+            .filter(|q| net.cached.contains(q))
+            .count();
+        FRAME_HEAD + rows_top(i) + resident[i].len() as f64 * ROW_H + cached as f64 * 16.0 + 4.0
+    };
     // a transfer between two instances is drawn in the gap between their
     // boxes, with what it moves above and what it waits for below
     let flow_texts = |g: usize| -> (Option<String>, Option<String>) {
@@ -1349,6 +1673,8 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     // close around each station and for the pool glyphs inside them.
     let mut x = MARGIN + lead;
     let mut rects: Vec<Rect> = Vec::with_capacity(net.nodes.len());
+    // a station's outline: its frame when it has one, its glyph otherwise
+    let mut frames: Vec<Rect> = Vec::with_capacity(net.nodes.len());
     for i in 0..net.nodes.len() {
         let here = net.instance_of(i);
         let before = if i == 0 { None } else { net.instance_of(i - 1) };
@@ -1406,13 +1732,28 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         ]
         .into_iter()
         .fold(0.0, f64::max);
-        rects.push(Rect::new(
-            x + (slot - STATION_W) / 2.0,
-            row_y,
-            STATION_W,
-            STATION_H,
-        ));
-        x += slot;
+        if framed(i) {
+            // the frame is as wide as its glyph or its widest row
+            let rows = resident[i].iter().map(|&q| row_w(q)).fold(0.0, f64::max);
+            let w = (slot + 2.0 * FRAME_PAD).max(rows + 2.0 * FRAME_PAD);
+            rects.push(Rect::new(
+                x + (w - STATION_W) / 2.0,
+                row_y,
+                STATION_W,
+                STATION_H,
+            ));
+            frames.push(Rect::new(x, row_y - FRAME_HEAD, w, frame_h(i)));
+            x += w;
+        } else {
+            rects.push(Rect::new(
+                x + (slot - STATION_W) / 2.0,
+                row_y,
+                STATION_W,
+                STATION_H,
+            ));
+            frames.push(rects[i]);
+            x += slot;
+        }
         let mut closing: Vec<usize> = (0..gs.len()).filter(|&k| gs[k].last == i).collect();
         closing.sort_by_key(|&k| std::cmp::Reverse(gs[k].depth));
         for k in closing {
@@ -1462,7 +1803,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     for (gi, g) in gs.iter().enumerate() {
         let pool = &p.pools[g.pool];
         let d = (max_depth - g.depth) as f64 * DEPTH_PAD;
-        let inner = rects[g.first].union(&rects[g.last]);
+        let inner = (g.first..=g.last)
+            .map(|i| frames[i])
+            .reduce(|a, b| a.union(&b))
+            .unwrap();
         let extra = below[gi];
         let r = Rect::new(
             g.left,
@@ -1475,22 +1819,22 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
 
         // The queue glyph and the capacity, in the room reserved at the left.
         let gx = g.glyph_x;
-        let gy = inner.centre().y;
+        let gy = rects[g.first].centre().y;
         f.text(
             pt(gx, r.y - 5.0),
-            format!("pool {}", pool.name),
+            pool_title(p, g.pool),
             Anchor::Start,
             TextSize::Normal,
         );
-        f.push(Item::Queue {
-            rect: Rect::new(gx, gy - 11.0, 30.0, 22.0),
-            cells: 3,
-        });
-        let (cols, rows) = slot_grid(pool.cap);
-        f.push(Item::Slots {
-            rect: Rect::new(gx + 38.0, gy - 11.0, 28.0, 22.0),
-            cols,
-            rows,
+        // a hold of several pools waits in one queue, its first pool's
+        if net.waits_in_enclosure(g.pool, g.first, g.last) {
+            f.push(Item::Queue {
+                rect: Rect::new(gx, gy - 11.0, QUEUE_W, 22.0),
+                cells: 3,
+            });
+        }
+        f.push(Item::Drum {
+            rect: Rect::new(gx + 40.0, gy - DRUM_H / 2.0, DRUM_W, DRUM_H),
         });
         for (k, line) in pool_notes(p, g.pool, cached_here(g))
             .into_iter()
@@ -1512,6 +1856,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             );
         }
         if let Some(via) = pool.admit_via {
+            // the option among the notes says which; the edge says where
             if let Some(n) = net.node_of(via) {
                 f.push(Item::Edge {
                     pts: vec![
@@ -1521,7 +1866,39 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     style: EdgeStyle::Relation,
                     arrow: true,
                 });
-                f.note(pt(gx + 18.0, gy - 20.0), "admit via", Anchor::Start);
+            }
+        }
+    }
+
+    // A framed station: the pools held there alone, a row each under its
+    // glyph.
+    for i in (0..net.nodes.len()).filter(|&i| framed(i)) {
+        let fr = frames[i];
+        f.boxed(fr, BoxStyle::Frame, 8.0);
+        let mut y = row_y + rows_top(i);
+        for &q in &resident[i] {
+            let gx = fr.x + FRAME_PAD;
+            f.push(Item::Drum {
+                rect: Rect::new(gx, y + 1.0, DRUM_W, DRUM_H),
+            });
+            let tx = gx + DRUM_W + 10.0;
+            f.text(
+                pt(tx, y + 11.0),
+                pool_title(p, q),
+                Anchor::Start,
+                TextSize::Normal,
+            );
+            f.note(pt(tx, y + 23.0), row_notes(q), Anchor::Start);
+            y += ROW_H;
+            if net.cached.contains(&q) {
+                let strip = Rect::new(gx, y - 4.0, fr.right() - FRAME_PAD - gx, 11.0);
+                f.boxed(strip, BoxStyle::Cached, 2.0);
+                f.note(
+                    pt(strip.centre().x, strip.y + 8.5),
+                    "prefix cache",
+                    Anchor::Middle,
+                );
+                y += 16.0;
             }
         }
     }
@@ -1567,7 +1944,11 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             .iter()
             .map(|&i| {
                 let s = rects[i];
-                Rect::new(s.x, s.y - 20.0, s.w, s.h + 38.0)
+                if framed(i) {
+                    frames[i]
+                } else {
+                    Rect::new(s.x, s.y - 20.0, s.w, s.h + 38.0)
+                }
             })
             .reduce(|a, b| a.union(&b))
             .expect("an instance has a station");
@@ -1621,9 +2002,16 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
     // feedback, an early exit and a second entry point must not share one.
     let mut lanes = 0.0;
     let deep = below.iter().copied().fold(0.0, f64::max);
+    // and clear of every frame, and of every enclosure around one
+    let floor = frames
+        .iter()
+        .chain(enclosures.iter().map(|(_, _, r)| r))
+        .map(|r| r.bottom())
+        .fold(0.0, f64::max);
+    let base = (row_y + STATION_H + deep + BACK_DROP).max(floor + 14.0);
     let lane = |n: &mut f64| {
         *n += 1.0;
-        row_y + STATION_H + deep + BACK_DROP + *n * 22.0
+        base + *n * 22.0
     };
     let mut arrivals = 0;
     for e in &net.edges {
@@ -1649,7 +2037,12 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     let ly = lane(&mut lanes);
                     let x = r.x + r.w * 0.25;
                     f.push(Item::Edge {
-                        pts: vec![pt(MARGIN, y), pt(MARGIN, ly), pt(x, ly), pt(x, r.bottom())],
+                        pts: vec![
+                            pt(MARGIN, y),
+                            pt(MARGIN, ly),
+                            pt(x, ly),
+                            pt(x, frames[i].bottom()),
+                        ],
                         style: EdgeStyle::Flow,
                         arrow: true,
                     });
@@ -1657,7 +2050,9 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             }
             (End::Node(i), End::Exit) => {
                 let r = rects[i];
-                let text = label.map_or("ends".into(), |l| format!("ends ({l})"));
+                // a request leaving the deployment, or a session that ends
+                // inside it: both go out, and only the second has a guard
+                let text = label.map_or("out".into(), |l| format!("out ({l})"));
                 if i + 1 == net.nodes.len() {
                     // The last station leaves to the right.
                     f.edge(
@@ -1678,7 +2073,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                     let y = lane(&mut lanes);
                     f.push(Item::Edge {
                         pts: vec![
-                            pt(r.x + r.w * 0.75, r.bottom()),
+                            pt(r.x + r.w * 0.75, frames[i].bottom()),
                             pt(r.x + r.w * 0.75, y),
                             pt(row_right + 26.0, y),
                         ],
@@ -1698,10 +2093,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let (ax, bx) = (ra.x + ra.w * 0.625, rb.x + rb.w * 0.5);
                 f.push(Item::Edge {
                     pts: vec![
-                        pt(ax, ra.bottom()),
+                        pt(ax, frames[a].bottom()),
                         pt(ax, y),
                         pt(bx, y),
-                        pt(bx, rb.bottom()),
+                        pt(bx, frames[b].bottom()),
                     ],
                     style: EdgeStyle::Flow,
                     arrow: true,
@@ -1723,7 +2118,11 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 if let Some(l) = label {
                     // by the station it leaves: the pool glyphs before the
                     // next one stand in the middle
-                    f.note(pt(ra.right() + 6.0, ra.centre().y - 8.0), l, Anchor::Start);
+                    f.note(
+                        pt(frames[a].right() + 6.0, ra.centre().y - 8.0),
+                        l,
+                        Anchor::Start,
+                    );
                 }
             }
             (End::Node(a), End::Node(b)) => {
@@ -1732,10 +2131,10 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
                 let (ax, bx) = (ra.x + ra.w * 0.25, rb.x + rb.w * 0.25);
                 f.push(Item::Edge {
                     pts: vec![
-                        pt(ax, ra.bottom()),
+                        pt(ax, frames[a].bottom()),
                         pt(ax, y),
                         pt(bx, y),
-                        pt(bx, rb.bottom()),
+                        pt(bx, frames[b].bottom()),
                     ],
                     style: EdgeStyle::Back,
                     arrow: true,
@@ -1779,27 +2178,26 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
             )),
         }
     }
-    if pool.preempt == crate::ir::Preempt::Lifo {
-        parts.push("preempt lifo".into());
+    match &pool.preempt {
+        crate::ir::Preempt::None => {}
+        lifo if lifo.is_lifo() => parts.push("preempt lifo".into()),
+        crate::ir::Preempt::By { keys, tail } => parts.push(format!(
+            "preempt by ({}){}",
+            keys.iter()
+                .map(|k| p.show_expr(k))
+                .collect::<Vec<_>>()
+                .join(", "),
+            if *tail { " requeue tail" } else { "" }
+        )),
     }
-    if pool.admit_via.is_some() {
-        parts.push("admit via".into());
+    // the title says `on S` only for a pool that is no memory
+    if let (Some(_), Some(s)) = (memory_of(p, i), pool.admit_via) {
+        parts.push(format!("admitted by {}", p.stages[s].name));
+    }
+    if pool.reserve_held {
+        parts.push("reserve held".into());
     }
     parts
-}
-
-/// A readable grid for a capacity: exact cells when there are few enough.
-fn slot_grid(cap: f64) -> (usize, usize) {
-    if !cap.is_finite() || cap <= 0.0 {
-        return (4, 2);
-    }
-    let n = cap.min(32.0) as usize;
-    if cap <= 32.0 {
-        let rows = if n > 8 { 2 } else { 1 };
-        (n.div_ceil(rows), rows)
-    } else {
-        (4, 2)
-    }
 }
 
 /// The deployment figure of a program.

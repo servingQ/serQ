@@ -2,7 +2,7 @@
 """Check the `file.py:lines` citations of upstream vLLM against `ref/vllm`.
 
 `docs/language.md` §7 asserts a correspondence between vLLM's scheduler and
-`examples/multi-turn/vllm.sq`, and the evidence for each row is a citation into upstream
+`examples/replay/vllm_replay.sq`, and the evidence for each row is a citation into upstream
 source. Nothing checked them, so a citation could name a range that had moved,
 or a file that no longer existed, and the table would still read as proof.
 
@@ -54,9 +54,12 @@ PATHS = {
     "block_pool.py": "vllm/v1/core/block_pool.py",
     "kv_cache_utils.py": "vllm/v1/core/kv_cache_utils.py",
     "sched/utils.py": "vllm/v1/core/sched/utils.py",
+    "sched/interface.py": "vllm/v1/core/sched/interface.py",
     "input_processor.py": "vllm/v1/engine/input_processor.py",
     "nixl/push_worker.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/push_worker.py",
     "config/scheduler.py": "vllm/config/scheduler.py",
+    "config/vllm.py": "vllm/config/vllm.py",
+    "engine/core.py": "vllm/v1/engine/core.py",
     "request.py": "vllm/v1/request.py",
     # the NIXL connector's scheduler side (prefill/decode disaggregation)
     "nixl/base_scheduler.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_scheduler.py",
@@ -67,6 +70,8 @@ PATHS = {
     "nixl/base_worker.py": "vllm/distributed/kv_transfer/kv_connector/v1/nixl/base_worker.py",
     "kv_connector/v1/base.py": "vllm/distributed/kv_transfer/kv_connector/v1/base.py",
     "disagg_proxy_pushconnector_demo.py": "examples/disaggregated/disaggregated_serving/disagg_proxy_pushconnector_demo.py",
+    # the proxy vLLM's NIXL tests put in front of a prefiller and a decoder
+    "nixl_integration/toy_proxy_server.py": "tests/v1/kv_connector/nixl_integration/toy_proxy_server.py",
 }
 
 SOURCES = ["docs/**/*.md", "src/**/*.rs", "tests/**/*.rs", "examples/*/*.sq", "lib/*.sq", "README.md"]

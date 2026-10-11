@@ -1,0 +1,117 @@
+// SGLang (ref/sglang at b792228b) on one device, its defaults: FCFS, no
+// mixed chunk, prefill first (docs/design/engine-neutrality.md cites the
+// source rule by rule):
+//
+// - an iteration forms a prefill batch of the chunked request and every
+//   waiting request the budget and memory take, and runs it alone; with no
+//   prefill to run it runs the decode batch (the body);
+// - the admission test subtracts what every running request may still
+//   generate, scaled by `new_token_ratio` (the register `ratio`), which
+//   decays each decode step and is reset when the server is fully idle, no
+//   batch running and none waiting (`new_token_ratio_tracker.py`, reset at
+//   `scheduler.py` L4998 when `is_fully_idle`);
+// - a retraction takes, from the decode batch, the request with the fewest
+//   output tokens, then the longest prompt, and sends it to the back of the
+//   queue (`preempt by … requeue tail`).
+//
+// Where this program is not SGLang:
+// - the admission test sums one request's estimate times the running
+//   count, where SGLang sums each request's own remaining `max_new_tokens`;
+// - after a retraction SGLang sets the ratio to (survivors' outputs +
+//   20 n) / (n M + 1); without the survivors' outputs the program sets
+//   its lower bound, so it admits more boldly than SGLang after one;
+// - SGLang retracts only in a decode batch; here a chunked prefill's growth
+//   may preempt too, and its iteration does not move the ratio;
+// - the radix cache is shared across requests, and serQ's entries are a
+//   session's own (#374).
+
+let B = 8192;           // chunked_prefill_size
+let max_run = 256;      // max_running_requests
+let tokens_cap = 60000; // max_total_num_tokens (page size 1)
+let M = 2048;           // the clients' max_new_tokens
+let clip = 4096;        // SGLANG_CLIP_MAX_NEW_TOKENS_ESTIMATION
+let r0 = 0.7;           // SGLANG_INIT_NEW_TOKEN_RATIO times schedule_conservativeness 1.0
+let r_min = r0 * 0.14;  // SGLANG_MIN_NEW_TOKEN_RATIO_FACTOR
+let r_decay = (r0 - r_min) / 600;   // SGLANG_NEW_TOKEN_RATIO_DECAY_STEPS
+let retract_steps = 20; // SGLANG_RETRACT_DECODE_STEPS
+let a = 2e-5;           // compute per scheduled token (s)
+let omega = 2e-4;       // weights read per iteration (s)
+let beta = 2e-9;        // KV read per iteration per resident context token (s)
+let Lambda = 0.5;       // sessions per second
+let p = 0.9;            // continue after a turn
+let Z = 3.0;            // tool time (s)
+
+fn main() {
+  device gpu {
+    compute (t) = t * a;
+    hbm (k) = omega + beta * k;
+    kv cap tokens_cap;
+  }
+  engine sglang on gpu {
+    reqs cap max_run;
+    tokens cap B;
+    state ratio = r0;
+    state backlog = 0;    // requests were waiting when the last iteration ended
+    schedule {
+      // fully idle since the last iteration: no batch, and none waited
+      branch (running.count == 0 && backlog == 0) { set ratio = r0; }
+      advance running only (!decoding);                  // the chunked request
+      admit waiting;                                     // and new prefills, alone
+      branch (batch.tokens == 0) {                       // no prefill: a decode batch
+        advance running;
+        branch (running.preempted > 0) {
+          set ratio = max(r_min, min(1, retract_steps / M));   // the bound, see above
+        } else {
+          set ratio = max(r_min, ratio - r_decay);
+        }
+      }
+      set backlog = waiting.count > 0;
+    }
+    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
+  pool reqs on sglang { queue fifo; }
+  pool kv on gpu { evict lru; preempt by (1 - decoding, position - prompt, -prompt) requeue tail; }
+  stage tool : delay;
+
+  workload {
+    arrive poisson(Lambda);
+    hidden o;
+    init { set K = 0; }
+    turn {
+      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+      set o = min(M, floor(~exp(200)) + 1);
+      set more = ~bernoulli(p);
+    }
+    session {
+      loop {
+        turn;
+        set K = prompt + o;
+        branch (more) { tool (~exp(Z)); } else { end; }
+      }
+    }
+  }
+
+  // A retracted request keeps its output tokens and recomputes them; only its
+  // prompt stays in the cache (`fin` is 0 until the request finishes). The
+  // reservation grows with the running requests, as SGLang's test does; above
+  // the cap, the request waits for some to finish (#364).
+  server {
+    set t0 = now;
+    set prompt = K + n;
+    set fin = 0;
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(sglang))))
+         reserve (cost(kv, known - hit + min(M - (known - prompt), clip) + 1
+                  + ratio * min(M, clip) * holders(reqs)))
+         at admission (known = computed < prompt ? prompt : computed + 1,
+                       hit = min(cachedin(kv), known - 1)) {
+      set c = min(cached, known - 1);
+      run sglang prefill (cost(sglang, known - c)) growing kv;
+      branch (known == prompt) { observe ttft = now - t0; }
+      run sglang decode (cost(sglang, o - 1 - (known - prompt))) growing kv;
+      set fin = 1;
+    } cache (cost(reqs, kv, fin == 1 ? prompt + o : prompt));
+    observe response = now - t0;
+  }
+
+
+}

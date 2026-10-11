@@ -18,13 +18,17 @@
 //! in 1024-token chunks, later requests share what its last chunk leaves),
 //! `seqcap` (`max_num_seqs = 2` admits two of four), `hol` (FCFS with
 //! head-of-line blocking on memory), `mixed` (mixed lengths and arrivals
-//! on a small pool), `longchunk` (`long_prefill_token_threshold`).
+//! on a small pool), `longchunk` (`long_prefill_token_threshold`), `alone`
+//! (the cap is lifted while one request is eligible, scheduler.py:606-616:
+//! the first request takes the whole budget; CPU oracle only, no A100 run).
+
+mod common;
 
 use std::path::Path;
 
 use serde_json::Value;
 use serq::frontend::parser;
-use serq::{Overrides, compile_source, program_path, run_ir};
+use serq::{Overrides, compile_source_at, program_path, run_ir};
 
 fn dir() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tools/oracle")
@@ -45,17 +49,22 @@ fn oracle_ir(name: &str) -> serq::Program {
         serde_json::from_str(&std::fs::read_to_string(dir().join(format!("{name}.json"))).unwrap())
             .unwrap();
     let set = |k: &str, v: f64| (k.to_string(), parser::parse_expr(&format!("{v}")).unwrap());
+    let mut lets = vec![
+        set("bs", num(&sc, "block_size")),
+        set("B", num(&sc, "budget")),
+        set("blocks", num(&sc, "num_blocks") - 1.0), // the null block
+        set("max_seqs", num(&sc, "max_seqs")),
+    ];
+    // vLLM's 0 is no cap, which the program's default `inf` already is
+    if num(&sc, "chunk") > 0.0 {
+        lets.push(set("chunk", num(&sc, "chunk")));
+    }
     let ov = Overrides {
-        lets: vec![
-            set("bs", num(&sc, "block_size")),
-            set("B", num(&sc, "budget")),
-            set("blocks", num(&sc, "num_blocks") - 1.0), // the null block
-            set("max_seqs", num(&sc, "max_seqs")),
-            set("chunk", num(&sc, "chunk")),
-        ],
-        ..Default::default()
+        lets,
+        ..common::horizon(100000.0)
     };
-    let src = std::fs::read_to_string(program_path("vllm_request")).unwrap();
+    let path = program_path("vllm_request");
+    let src = std::fs::read_to_string(&path).unwrap();
     let reqs = sc["requests"].as_array().unwrap();
     let sessions: Vec<Vec<(&str, f64)>> = reqs
         .iter()
@@ -67,7 +76,8 @@ fn oracle_ir(name: &str) -> serq::Program {
             ]
         })
         .collect();
-    compile_source(&src, &ov)
+    // its `use` reads the library next to the program
+    compile_source_at(&common::main_source(&src), path.parent(), &ov)
         .unwrap()
         .with_sessions(&sessions)
         .unwrap()
@@ -126,7 +136,15 @@ fn scenarios() -> Vec<String> {
     names.sort();
     assert_eq!(
         names,
-        ["chunked", "hol", "longchunk", "mixed", "preempt", "seqcap"],
+        [
+            "alone",
+            "chunked",
+            "hol",
+            "longchunk",
+            "mixed",
+            "preempt",
+            "seqcap"
+        ],
         "the oracle scenarios"
     );
     names

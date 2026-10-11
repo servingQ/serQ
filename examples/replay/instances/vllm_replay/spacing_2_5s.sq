@@ -1,0 +1,4 @@
+// The 2.5 s run of docs/language.md §8, where the replica collapses.
+let spacing = 2.5;
+
+run { horizon 6000; warmup 0; seed 1; }

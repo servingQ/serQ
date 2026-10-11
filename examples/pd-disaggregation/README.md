@@ -1,6 +1,9 @@
 # Prefill/decode examples
 
-`llmd_nixl_pull.sq` describes a serving deployment.
+`llmd_nixl_pull.sq` describes a serving deployment. `vllm_nixl_push.sq`
+is vLLM's push proxy in front of one prefill and one decode instance on the
+A6000 testbed, replaying the short-context trace: the proxy's two legs as
+`fork` and `join`, and the copy as `P push D` (`docs/design/push-mode.md`).
 
 `pd_open.sq` and `pd_tandem.sq` are research comparison fixtures for
 serving-queue-theory's queueing models. The open model uses Poisson arrivals;
@@ -12,3 +15,9 @@ to its pinned serQ revision.
 link and decode tandem. Both modes use the same work draws. A deployment
 drawing shows all declared queues, including inactive ones: it depicts the
 comparison fixture, not a single active serving deployment.
+
+`pd_batching.sq` runs the same requests on N engines colocated or split
+into NP prefill and ND decode engines, with a free transfer, to see what
+the split does to the time per output token at equal throughput (#208);
+`pd_ps.sq` is the processor-sharing idealisation it is compared to.
+`tools/pd_batching/` sweeps both and keeps the results.

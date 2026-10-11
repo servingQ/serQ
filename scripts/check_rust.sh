@@ -13,8 +13,13 @@ cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo clippy -p pyserq --locked -- -D warnings
 cargo test --release --locked
+# every test again with debug assertions, which check the pools' memory
+# invariant and conservation at every instant (src/engine/interp.rs, #277)
+cargo test --locked --quiet
 cargo build --release --locked --quiet
-./target/release/serq fmt --check examples/*/*.sq lib/*.sq docs/tutorial/programs/*.sq
+./target/release/serq fmt --check examples/*/*.sq lib/*.sq docs/tutorial/programs/*.sq tests/lean-regress/*.sq
+# the interpreter's answers the Lean regressions state (lean/Serq/Regress.lean)
+python3 scripts/lean_regress.py
 n=0
 for f in examples/*/*.sq; do
   ./target/release/serq check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
@@ -36,6 +41,8 @@ for f in docs/tutorial/programs/*.sq; do
   ./target/release/serq check "$f" >/dev/null || { echo "FAIL: $f does not link"; exit 1; }
   t=$((t + 1))
 done
+# Experimental runners must explicitly select their execution conditions too.
+python3 tools/pd_batching/test_runners.py
 python3 scripts/check_oracle_gpu.py
 # The docs' `file.py:line` evidence for the vLLM correspondence. Skips loudly
 # where ref/vllm is absent (scripts/fetch_vllm_ref.sh --sparse: 4 MB, 2 s).

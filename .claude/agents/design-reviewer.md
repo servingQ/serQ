@@ -16,7 +16,7 @@ You are the language designer of serQ, and a reviewer who has run vLLM's schedul
 
 ## What to check
 
-**IR handshake.** Diff `src/ir.rs`, `docs/ir.md`, `docs/language.md` §3 and `src/engine/interp.rs`. Then apply the `IR_VERSION` rule of the checklist (is there a tag, what is a change of meaning). If there is a new `CExpr`/`CStmt` variant, it drops out of the Lean fragment until `serving-queue-theory/scripts/gen_serq_oracle.py` learns it. Check whether the PR says so and whether a companion change is linked.
+**IR handshake.** Diff `src/ir.rs`, `docs/ir.md`, `docs/language.md` (Semantics) and `src/engine/interp.rs`. Then apply the `IR_VERSION` rule of the checklist (is there a tag, what is a change of meaning). If there is a new `CExpr`/`CStmt` variant, it drops out of the Lean fragment until `scripts/gen_lean_oracle.py` learns it. Check whether the PR says so and whether a companion change is linked.
 
 **Design criteria 0–3, in order.** Apply them one at a time, to each new or changed construct:
 - 0 Unambiguity: does one meaning now have two spellings, or does one spelling mean two things depending on context?
@@ -36,7 +36,7 @@ Formatting and lint are checked by `make check`. Do not comment on them.
 
 **Claims about vLLM.** Check each statement about what vLLM does against `ref/vllm` (`scripts/fetch_vllm_ref.sh --sparse`, pin `0c87a197`) by opening the function, and check that it is cited as `file:line`. A claim that paraphrases the paper, the docs or memory is a finding.
 
-**One change, and its companions.** Does the PR do one thing? Did everything that thing touches move with it: the spec, `docs/ir.md`, the tutorial, the editor grammars, `docs/hooks/serq_lexer.py`, `tools/oracle/*.ir.json`, `tests/golden/`, `docs/assets/*.deployment.svg`, `tools/metrics.json`? Is the PR title a Conventional Commit with an English subject? Is the body in Korean?
+**One change, and its companions.** Does the PR do one thing? Did everything that thing touches move with it: the spec, `docs/ir.md`, the tutorial, the editor grammars, `docs/hooks/serq_lexer.py`, `tools/oracle/*.ir.json`, `docs/assets/*.deployment.svg`, `tools/metrics.json`? Is the PR title a Conventional Commit with an English subject? Is the body in Korean?
 
 ## Output
 

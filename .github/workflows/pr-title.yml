@@ -5,6 +5,9 @@ name: PR title
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  # a merge group has no title; the job reports skipped there, which a
+  # required check accepts, so the queue does not wait on it (#347)
+  merge_group:
 
 permissions:
   pull-requests: read
@@ -12,6 +15,7 @@ permissions:
 jobs:
   title:
     name: Conventional Commits
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-22.04
     steps:
       - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1

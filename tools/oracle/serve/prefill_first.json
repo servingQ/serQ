@@ -1,0 +1,2 @@
+{"budget": 64, "max_seqs": 8, "block_size": 16, "num_blocks": 1000, "chunk": 48, "serve": "decoding ? 1 : 0",
+ "requests": [{"prompt": 30, "out": 20}, {"prompt": 30, "out": 20}, {"prompt": 200, "out": 3, "arrive": 2}, {"prompt": 90, "out": 3, "arrive": 3}]}

@@ -69,7 +69,7 @@ def metrics():
         },
         "surface": {
             "keywords": array_len(parser, "KEYWORDS"),
-            "functions": array_len(link, "FUNCTIONS") + array_len(link, "FOLDED"),
+            "functions": array_len(link, "FUNCTIONS") + array_len(link, "FOLDED") + array_len(link, "AGGREGATES"),
             "context_variables": array_len(link, "CONTEXT_VARS"),
         },
         "clones": clones,

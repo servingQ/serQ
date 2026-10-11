@@ -1,0 +1,2 @@
+{"budget": 64, "max_seqs": 8, "block_size": 16, "num_blocks": 12, "chunk": 0, "serve": "admission",
+ "requests": [{"prompt": 40, "out": 30}, {"prompt": 40, "out": 30, "arrive": 1}, {"prompt": 40, "out": 30, "arrive": 2}, {"prompt": 40, "out": 30, "arrive": 3}]}

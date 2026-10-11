@@ -3,7 +3,7 @@
 
 use std::fmt::Write as _;
 
-use crate::engine::stats::Estimate;
+use crate::engine::stats::{CI_MIN_SAMPLES, Estimate};
 
 #[derive(Clone, Debug)]
 pub struct ObserveReport {
@@ -17,6 +17,26 @@ pub struct ObserveReport {
     pub samples: Vec<f64>,
     /// `(time, session serial, turn number)` of every sample.
     pub records: Vec<(f64, u64, u32)>,
+    /// The observed expression is a test (its outermost operator a
+    /// comparison, `&&`, `||` or `!`): 0 or 1 by construction
+    /// (`Program::observe_is_test`).
+    pub is_test: bool,
+}
+
+impl ObserveReport {
+    /// A test that never held: 0 over `CI_MIN_SAMPLES` or more samples. A
+    /// `hit` that was 0 all run long is a program to look at before its
+    /// means are (#230 was found that way, late), and the table alone does
+    /// not show it (cv2 is NaN for a constant 0). A test that always held
+    /// is not noted: a routing policy that hits by construction is a
+    /// correct program. The note is a line of text, not an error: one
+    /// program of the corpus earns it by design
+    /// (`tests/report.rs::the_corpus_earns_one_note`).
+    pub fn never_held(&self) -> bool {
+        self.is_test
+            && self.samples.len() >= CI_MIN_SAMPLES
+            && self.samples.iter().all(|&x| x == 0.0)
+    }
 }
 
 /// A `gauge`: the time average of a function of the deployment's state
@@ -56,6 +76,37 @@ pub struct StageReport {
     pub mean_service: f64,
     /// Step stages: iterations run (0 otherwise).
     pub iterations: u64,
+    /// Step stages: the fraction of the measured time an iteration of
+    /// prefill only, of decodes only, or of both was running (0 otherwise;
+    /// the rest of the time the engine was idle).
+    pub prefill_only: f64,
+    pub decode_only: f64,
+    pub mixed: f64,
+    /// Step stages: time-average decodes in the running iteration (0 while
+    /// none runs).
+    pub mean_decodes: f64,
+    /// Step stages: the decodes of an iteration that carried any, and its
+    /// duration, averaged over such iterations started after warm-up (NaN
+    /// otherwise): the batch a decode is in and the step it waits for.
+    pub mean_decode_batch: f64,
+    pub mean_decode_step: f64,
+    /// Step stages: the gaps between a turn's successive tokens (a session's
+    /// tokens with the same `turn_no`) that end on this stage after warm-up,
+    /// wherever the earlier token was: their mean, and their median and
+    /// 99th percentile within 0.5 % (NaN without any). A turn's tokens are
+    /// its decodes' and its prefills' ends; a prefill's end is the next
+    /// token after a decode, or after a preemption on the previous token's
+    /// stage, and its gap holds the preemption; otherwise it is the first,
+    /// and replaces any before it (a decoder's recompute replaces a
+    /// prefiller's dropped token). A turn's gaps add up to its last token
+    /// less its first.
+    pub mean_itl: f64,
+    pub itl_p50: f64,
+    pub itl_p99: f64,
+    /// Step stages: the run ended with the stage holding residents or a
+    /// waiting queue it serves, and its last try at an iteration scheduled
+    /// nothing (a body or `serve only` that served and admitted nobody).
+    pub idle_with_work: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +133,110 @@ pub struct PoolReport {
     /// Sessions preempted a second time without progress past their
     /// previous preemption: a livelock the run would otherwise hide.
     pub stuck: u64,
+    /// The run ended with the head of a queue asking this pool for more
+    /// than its cap: the queue's pool and what the head asks. A hold whose
+    /// units or `reserve` read the deployment's state is not rejected when
+    /// it joins the queue, and waits (#364).
+    pub over_cap: Option<(String, f64)>,
+    /// Holds waiting to grow in this pool when the run ends: a growth that
+    /// did not fit and that the pool's `preempt` did not make room for
+    /// waits, for room another holder may free (#238).
+    pub growing_at_end: u64,
+    /// Every session with an allocation in this pool is one of those
+    /// waiting to grow in it: none will free room, so they wait for ever
+    /// (a hold around one on the same pool, or holders waiting on each
+    /// other).
+    pub growing_stalled: bool,
+}
+
+/// A `claim`: what the run found of it on the path it ran.
+#[derive(Clone, Debug)]
+pub struct ClaimReport {
+    pub name: String,
+    pub kind: crate::ir::ClaimKind,
+    pub result: ClaimResult,
+    /// Iterations the claim was read at (an iteration claim), or 1 when a
+    /// claim `at end` was read.
+    pub checked: u64,
+    /// Of those, the ones it read as 0.
+    pub failures: u64,
+    /// The first failure of an `every` claim or one `at end` (the end), the
+    /// first witness of a `some` claim.
+    pub first: Option<f64>,
+    /// Why the claim was not read: the sessions live at the end, or the
+    /// session that failed its `given`.
+    pub note: Option<String>,
+}
+
+/// What a run says of a claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaimResult {
+    /// Every iteration read, or the end, satisfied it.
+    Holds,
+    /// Some iteration read, or the end, did not.
+    Fails,
+    /// A `some` claim: an iteration satisfied it.
+    Witnessed,
+    /// A `some` claim: no iteration read satisfied it.
+    NotWitnessed,
+    /// A claim `at end` with sessions live at the end: the run did not
+    /// reach the end the claim is about.
+    NotEvaluated,
+    /// A session failed the claim's `given`.
+    OutOfScope,
+}
+
+impl ClaimResult {
+    /// The JSON spelling.
+    pub fn name(self) -> &'static str {
+        match self {
+            ClaimResult::Holds => "holds",
+            ClaimResult::Fails => "fails",
+            ClaimResult::Witnessed => "witnessed",
+            ClaimResult::NotWitnessed => "not_witnessed",
+            ClaimResult::NotEvaluated => "not_evaluated",
+            ClaimResult::OutOfScope => "out_of_scope",
+        }
+    }
+}
+
+impl ClaimReport {
+    /// The JSON spelling of the kind.
+    pub fn kind_name(&self) -> &'static str {
+        match self.kind {
+            crate::ir::ClaimKind::EveryIteration(_) => "every_iteration",
+            crate::ir::ClaimKind::SomeIteration(_) => "some_iteration",
+            crate::ir::ClaimKind::AtEnd => "at_end",
+        }
+    }
+
+    /// The result as the text report says it.
+    fn said(&self) -> String {
+        let iterations = |n: u64| format!("{n} iteration{}", if n == 1 { "" } else { "s" });
+        let at = |t: Option<f64>| t.map_or(String::new(), |t| format!(" at {t:.4}"));
+        let at_end = matches!(self.kind, crate::ir::ClaimKind::AtEnd);
+        match self.result {
+            ClaimResult::Holds if at_end => "holds".into(),
+            ClaimResult::Holds => format!("holds ({})", iterations(self.checked)),
+            ClaimResult::Fails if at_end => "fails".into(),
+            ClaimResult::Fails => format!(
+                "fails{} ({} of {})",
+                at(self.first),
+                self.failures,
+                iterations(self.checked)
+            ),
+            ClaimResult::Witnessed => {
+                format!("witnessed{} ({})", at(self.first), iterations(self.checked))
+            }
+            ClaimResult::NotWitnessed => format!("not witnessed ({})", iterations(self.checked)),
+            ClaimResult::NotEvaluated => {
+                format!("not evaluated: {}", self.note.as_deref().unwrap_or(""))
+            }
+            ClaimResult::OutOfScope => {
+                format!("out of scope: {}", self.note.as_deref().unwrap_or(""))
+            }
+        }
+    }
 }
 
 /// Version of `Report::json`'s shape: the names of its fields, which
@@ -106,6 +261,9 @@ pub struct Report {
     pub mean_live: f64,
     pub observes: Vec<ObserveReport>,
     pub gauges: Vec<GaugeReport>,
+    /// The program's claims, in order; empty (and absent from the JSON)
+    /// when it has none.
+    pub claims: Vec<ClaimReport>,
     pub stages: Vec<StageReport>,
     pub pools: Vec<PoolReport>,
 }
@@ -143,6 +301,10 @@ impl Report {
 
     pub fn gauge(&self, name: &str) -> Option<&GaugeReport> {
         self.gauges.iter().find(|g| g.name == name)
+    }
+
+    pub fn claim(&self, name: &str) -> Option<&ClaimReport> {
+        self.claims.iter().find(|c| c.name == name)
     }
 
     pub fn stage(&self, name: &str) -> Option<&StageReport> {
@@ -194,6 +356,13 @@ impl Report {
                 &["observe", "count", "mean", "95% CI", "cv2", "p99"],
                 rows,
             );
+            for o in self.observes.iter().filter(|o| o.never_held()) {
+                let _ = writeln!(
+                    s,
+                    "note: observe {} is constant 0 over {} samples",
+                    o.name, o.count
+                );
+            }
         }
         if !self.gauges.is_empty() {
             let rows = self.gauges.iter().map(|g| {
@@ -206,6 +375,17 @@ impl Report {
                 ]
             });
             table(&mut s, &["gauge", "mean", "95% CI", "min", "max"], rows);
+        }
+        if !self.claims.is_empty() {
+            let rows = self.claims.iter().map(|c| {
+                let kind = match c.kind {
+                    crate::ir::ClaimKind::EveryIteration(_) => "every iteration",
+                    crate::ir::ClaimKind::SomeIteration(_) => "some iteration",
+                    crate::ir::ClaimKind::AtEnd => "at end",
+                };
+                vec![c.name.clone(), kind.into(), c.said()]
+            });
+            table_aligned(&mut s, &["claim", "kind", "result"], rows, true);
         }
         if !self.stages.is_empty() {
             let rows = self.stages.iter().map(|st| {
@@ -224,6 +404,38 @@ impl Report {
                 &mut s,
                 &[
                     "stage", "number", "util", "done", "thru", "wait", "service", "iters",
+                ],
+                rows,
+            );
+        }
+        if self.stages.iter().any(|st| st.iterations > 0) {
+            let rows = self.stages.iter().filter(|st| st.iterations > 0).map(|st| {
+                vec![
+                    label(&st.name, st.index),
+                    format!("{:.3}", st.prefill_only),
+                    format!("{:.3}", st.decode_only),
+                    format!("{:.3}", st.mixed),
+                    format!("{:.3}", 1.0 - st.prefill_only - st.decode_only - st.mixed),
+                    format!("{:.3}", st.mean_decodes),
+                    format!("{:.3}", st.mean_decode_batch),
+                    format!("{:.6}", st.mean_decode_step),
+                    format!("{:.6}", st.itl_p50),
+                    format!("{:.6}", st.itl_p99),
+                ]
+            });
+            table(
+                &mut s,
+                &[
+                    "step",
+                    "prefill only",
+                    "decode only",
+                    "mixed",
+                    "idle",
+                    "decodes",
+                    "decode batch",
+                    "decode step",
+                    "itl p50",
+                    "itl p99",
                 ],
                 rows,
             );
@@ -263,7 +475,51 @@ impl Report {
                         label(&p.name, p.index)
                     );
                 }
+                if p.rejected > 0 {
+                    let _ = writeln!(
+                        s,
+                        "rej: {} session(s) ended at pool `{}` asking for more than its cap",
+                        p.rejected,
+                        label(&p.name, p.index)
+                    );
+                }
+                if p.growing_at_end > 0 {
+                    let pool = label(&p.name, p.index);
+                    let why = if p.growing_stalled {
+                        format!(
+                            "and every holder of `{pool}` is one of them, so none will free room \
+                             (a hold around one on the same pool, or holders waiting on each \
+                             other)"
+                        )
+                    } else {
+                        "for room another holder may free".into()
+                    };
+                    let _ = writeln!(
+                        s,
+                        "grow: {} hold(s) wait to grow in pool `{pool}` when the run ends, {why}",
+                        p.growing_at_end
+                    );
+                }
+                if let Some((queue, need)) = &p.over_cap {
+                    let _ = writeln!(
+                        s,
+                        "over: the head of pool `{queue}`'s queue asks `{}` for {need}, above \
+                         its cap, when the run ends, and waits (its hold reads the \
+                         deployment's state, so joining the queue did not reject it)",
+                        label(&p.name, p.index)
+                    );
+                }
             }
+        }
+        for st in self.stages.iter().filter(|st| st.idle_with_work) {
+            let _ = writeln!(
+                s,
+                "idle: engine `{}` ended with residents or waiting requests, its last iteration \
+                 scheduling nothing (a schedule or `only` that serves and admits nobody, a \
+                 `granule` that refuses every prefill, or a run waiting to grow, `grow:`, waits \
+                 for an event)",
+                label(&st.name, st.index)
+            );
         }
         s
     }
@@ -280,6 +536,8 @@ impl Report {
             i.map_or("null".into(), |i| i.to_string())
         }
         let mut s = String::from("{");
+        // the interpreter that ran, for a record kept next to the IR
+        let _ = write!(s, "\"serq_version\":\"{}\",", crate::VERSION);
         let _ = write!(
             s,
             "\"horizon\":{},\"end\":{},\"warmup\":{},\"seed\":{},\"events\":{},\"arrivals\":{},\"ended\":{},\"turns\":{},\"mean_live\":{}",
@@ -324,14 +582,35 @@ impl Report {
                 f(g.max)
             );
         }
-        s.push_str("},\"stages\":[");
+        s.push('}');
+        if !self.claims.is_empty() {
+            s.push_str(",\"claims\":[");
+            for (i, c) in self.claims.iter().enumerate() {
+                if i > 0 {
+                    s.push(',');
+                }
+                let _ = write!(
+                    s,
+                    "{{\"name\":{},\"kind\":\"{}\",\"result\":\"{}\",\"checked\":{},\"failures\":{},\"first\":{},\"note\":{}}}",
+                    json_string(&c.name),
+                    c.kind_name(),
+                    c.result.name(),
+                    c.checked,
+                    c.failures,
+                    c.first.map_or("null".into(), f),
+                    c.note.as_deref().map_or("null".into(), json_string)
+                );
+            }
+            s.push(']');
+        }
+        s.push_str(",\"stages\":[");
         for (i, st) in self.stages.iter().enumerate() {
             if i > 0 {
                 s.push(',');
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{},\"prefill_only\":{},\"decode_only\":{},\"mixed\":{},\"mean_decodes\":{},\"mean_decode_batch\":{},\"mean_decode_step\":{},\"mean_itl\":{},\"itl_p50\":{},\"itl_p99\":{},\"idle_with_work\":{}}}",
                 st.name,
                 index(st.index),
                 f(st.mean_number),
@@ -340,7 +619,17 @@ impl Report {
                 f(st.throughput),
                 f(st.mean_wait),
                 f(st.mean_service),
-                st.iterations
+                st.iterations,
+                f(st.prefill_only),
+                f(st.decode_only),
+                f(st.mixed),
+                f(st.mean_decodes),
+                f(st.mean_decode_batch),
+                f(st.mean_decode_step),
+                f(st.mean_itl),
+                f(st.itl_p50),
+                f(st.itl_p99),
+                st.idle_with_work
             );
         }
         s.push_str("],\"pools\":[");
@@ -350,7 +639,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"over_cap\":{},\"growing_at_end\":{},\"growing_stalled\":{}}}",
                 p.name,
                 index(p.index),
                 f(p.mean_used),
@@ -364,7 +653,14 @@ impl Report {
                 p.preemptions,
                 p.spills,
                 p.rejected,
-                p.stuck
+                p.stuck,
+                match &p.over_cap {
+                    Some((queue, need)) =>
+                        format!("{{\"queue\":\"{queue}\",\"need\":{}}}", f(*need)),
+                    None => "null".into(),
+                },
+                p.growing_at_end,
+                p.growing_stalled
             );
         }
         s.push_str("]}");
@@ -384,6 +680,21 @@ fn label(name: &str, index: Option<u32>) -> String {
 /// the name column left-aligned and the numbers right-aligned, a rule under
 /// the header, a blank line above. The width is measured in `char`s, so `±` counts as one.
 fn table(s: &mut String, header: &[&str], rows: impl Iterator<Item = Vec<String>>) {
+    table_aligned(s, header, rows, false);
+}
+
+/// A string as JSON writes it.
+fn json_string(x: &str) -> String {
+    serde_json::to_string(x).expect("a string serialises")
+}
+
+/// `table`, every column left-aligned when `left` (a column of words).
+fn table_aligned(
+    s: &mut String,
+    header: &[&str],
+    rows: impl Iterator<Item = Vec<String>>,
+    left: bool,
+) {
     let rows: Vec<Vec<String>> = rows.collect();
     let width: Vec<usize> = (0..header.len())
         .map(|c| {
@@ -400,6 +711,8 @@ fn table(s: &mut String, header: &[&str], rows: impl Iterator<Item = Vec<String>
         for (c, (cell, w)) in cells.iter().zip(&width).enumerate() {
             if c == 0 {
                 let _ = write!(l, "{cell:<w$}");
+            } else if left {
+                let _ = write!(l, "  {cell:<w$}");
             } else {
                 let _ = write!(l, "  {cell:>w$}");
             }

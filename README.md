@@ -1,20 +1,20 @@
-# serQ
+<h1><img src="docs/assets/brand/serq-logo-on-dark.svg" alt="serQ" width="300"></h1>
 
 *pronounced "ser-Q" — **se**rving + **Q**ueue*
 
-A language in which an LLM serving deployment is a program: memory pools,
-stages, a workload and the policy every session runs, written once and both
-simulated and formally checked against the real system. `examples/multi-turn/vllm.sq`
-reproduces the upstream vLLM v1 scheduler request for request — the
-correspondence, cited `file:line` against `ref/vllm`, is
-[`docs/language.md` §7][language].
+A serving specification language: an LLM serving deployment is a program
+— memory pools, stages, a workload and the policy every session runs —
+written once and both simulated and formally checked against the real
+system. What P4 is to a packet switch, serQ is meant to be to a serving
+engine; running a program in place of the engine's scheduler is the next
+step ([the design](docs/design/serving-specification-language.md)).
 
-[![CI](https://github.com/vrvrv/serQ/actions/workflows/ci.yml/badge.svg)](https://github.com/vrvrv/serQ/actions/workflows/ci.yml)
-[![Docs](https://github.com/vrvrv/serQ/actions/workflows/docs.yml/badge.svg)](https://vrvrv.github.io/serQ/)
-[![Release](https://img.shields.io/pypi/v/pyserq?label=release)](https://github.com/vrvrv/serQ/releases)
+[![CI](https://github.com/servingQ/serQ/actions/workflows/ci.yml/badge.svg)](https://github.com/servingQ/serQ/actions/workflows/ci.yml)
+[![Docs](https://github.com/servingQ/serQ/actions/workflows/docs.yml/badge.svg)](https://servingq.github.io/serQ/)
+[![Release](https://img.shields.io/pypi/v/pyserq?label=release)](https://github.com/servingQ/serQ/releases)
 [![Rust](https://img.shields.io/badge/rust-1.98.1-orange.svg)](rust-toolchain.toml)
 
-**[Read the docs →](https://vrvrv.github.io/serQ/)**
+**[Read the docs →](https://servingq.github.io/serQ/)**
 
 ## Why
 
@@ -25,9 +25,8 @@ intermediate representation, the **IR** (`src/ir.rs`, [`docs/ir.md`][ir]) —
 a closed, versioned data structure that the interpreter runs, the Lean
 model is generated from, and tools build or edit as JSON. The text syntax
 ([`examples/*/*.sq`][examples], [`docs/language.md`][language]) is one
-frontend that compiles to it. The Lean formalisation lives in the
-companion research repository, `serving-queue-theory`
-(`lean/ServingQueueTheory/Seq*.lean`), where the vLLM scenarios below are
+frontend that compiles to it. The Lean formalisation is the package in
+`lean/` ([docs/lean.md](docs/lean.md)), where the vLLM scenarios below are
 theorems.
 
 [ir]: docs/ir.md
@@ -37,31 +36,30 @@ theorems.
 ## Quickstart
 
 ```bash
-cargo run --release -- run examples/multi-turn/vllm.sq --seed 2 --horizon 3000
-cargo run --release -- ir examples/multi-turn/vllm.sq > vllm.json      # the IR
+cargo run --release -- run examples/multi-turn/vllm.sq --seed 2 --horizon 3000 --warmup 200
+cargo run --release -- ir examples/multi-turn/vllm.sq --horizon 3000 > vllm.json      # the IR
 cargo run --release -- draw examples/multi-turn/vllm.sq --format svg --out vllm.svg   # experimental
 ```
+
+Source programs construct their deployment inside `fn main()`. Import
+`"std/args"` and use `let rate = args.number("rate", 0.3);` to expose a numeric
+input; pass it after `--`, as `serq run model.sq --horizon 10 -- --rate 0.5`. Ordinary
+`let` constants stay internal. See the [complete example](examples/single-turn/arguments.sq)
+and [input reference](docs/api/program.md#stdargs).
 
 As a dependency, pin a release tag:
 
 ```toml
-serq = { git = "https://github.com/vrvrv/serQ", tag = "v0.1.0" }
+serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.4" }
 ```
 
 Or install the CLI directly:
 
 ```bash
-cargo install --git https://github.com/vrvrv/serQ --tag v0.1.0 --locked --root <dir>
+cargo install --git https://github.com/servingQ/serQ --tag v0.1.4 --locked --root <dir>
 ```
 
-## Layout
-
-| | |
-|---|---|
-| `src/` | IR, text syntax (lexer/parser/AST), the linker, the interpreter, reporting, drawing |
-| `examples/` | example deployments by workload — `single-turn/`, `multi-turn/`, `subagent/`, `pd-disaggregation/`, `replay/` (trace replays, with their `data/`), `oracle/` (the vLLM scheduler oracle's program) |
-| `tools/` | the real vLLM v1 scheduler as an oracle, its recorded scenarios, the A100 cost-model sweeps |
-| `docs/` | [the IR definition][ir], [the text syntax and vLLM correspondence][language], the design record (`docs/review.md`, `docs/design/`) |
+Working on serQ itself, the gate is:
 
 ```
 make check   # fmt, clippy, tests, every program links and draws, the oracles agree

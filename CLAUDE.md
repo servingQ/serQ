@@ -15,8 +15,8 @@ tests read; `.sq` is one frontend. So:
   bumped 2); an added field a reader may ignore, or a stricter check, does
   not. The lines apply to a *tagged* version: while `IR_VERSION` has no tag,
   nothing bumps and the change goes in the coming tag's message;
-- `serving-queue-theory`'s `scripts/gen_serq_oracle.py` pins that version and
-  reads the IR by field name — it has to move in the same change;
+- `scripts/gen_lean_oracle.py` pins that version and reads the IR by field
+  name — it has to move in the same change, and `make lean` must pass;
 - a new `CExpr` or `CStmt` variant drops every oracle program that uses it
   out of the Lean fragment until the generator is taught it (the generator
   raises `Fragment` on a construct it does not know).
@@ -28,11 +28,12 @@ Price an IR version at a cross-repository handshake, not a line of code.
 ```
 make check        # fmt, clippy, tests, every program links and draws, oracles agree
 make oracle-ir    # regenerate tools/oracle/*.ir.json
-make draw-golden  # regenerate tests/golden/ and docs/assets/*.deployment.svg
+make draw-golden  # regenerate docs/assets/*.deployment.svg
+make lean         # the Lean model: oracle theorems current, lake build, no sorry, axiom audit
 ```
 
 `make check` is the gate. Generated files (`tools/oracle/*.ir.json`,
-`tests/golden/`, `docs/assets/*.deployment.svg`) are committed, so regenerate
+`docs/assets/*.deployment.svg`) are committed, so regenerate
 them in the change that moves them.
 
 ## Design criteria
@@ -73,6 +74,12 @@ not, and no oracle scenario exercised the path (#41 §5). If `ref/vllm` is not
 checked out, fetch it before answering; if the question is about a version
 other than the pinned one, say so and check out that revision.
 
+## Documentation
+
+Follow [Writing readable programs](docs/writing-programs.md) when writing or reorganizing `.sq` programs.
+Follow [.github/documentation.md](.github/documentation.md) when editing the site.
+See [.github/contributing.md](.github/contributing.md) for adding examples and oracle scenarios.
+
 ## Design documents
 
 `docs/design/` holds the design record: the philosophy, the frontend sketch,
@@ -85,14 +92,44 @@ request descriptions are written in Korean. A nav title that contains `#`
 must be quoted in `mkdocs.yml`, or YAML reads it as a comment and the strict
 build aborts.
 
+## When a bug is found
+
+A fix is not done until two more questions are answered, in the pull request
+or in the comment that reports the fix:
+
+1. **Why did it happen?** Name the assumption that was wrong, not just the
+   line that was wrong. #263 had two bugs. In the first, a serve predicate
+   read the resident totals from before the iteration, so a request admitted
+   in that same iteration was judged by totals that left it out. In the
+   second, an engine whose residents `only` all excluded waited for an
+   event, and nothing re-read a predicate that depended on `now`.
+2. **Should the language have refused the program?** Ask whether the bad
+   state is reachable only by a class of programs that a check could
+   recognise before the run: in the linker or `Program::validate`, from what
+   an expression reads at its moment (`docs/ir.md`, Moments). If so, add the
+   check with its own test and its reason in the error message. A program
+   that can only stall, loop or read a value it cannot see should not link.
+   Examples: a serve key may not draw, and since #259 a hold's header may not either; `only` may not
+   read `now` or `work(…)` (#263); a `Loop` that can pass without letting
+   time pass is refused (11).
+   If no static check can tell, the run must still fail loudly (a run-time
+   error, a report note, a `stuck` counter), never silently. If the program
+   was right and the interpreter wrong, as in the first #263 bug, say that
+   no check applies and why.
+
+A stricter check does not bump `IR_VERSION` (`docs/ir.md` §Stability). The
+regression test reproduces the bug as it was found. A rule rejected on the
+way goes in the design document's self-critique.
+
 ## Reviewing a change
 
 `.github/copilot-instructions.md` is the review checklist, for Copilot and
 for anyone else: the IR rules, the four design criteria, and six questions
 answered in order (purpose kept, simpler possible, complexity not grown,
 intention plainer, evidence is the code, one change). A review that does not
-answer all six is not done. Comments are in Korean, short: the finding and
-the evidence.
+answer all six is not done. A review that finds a bug also asks the two
+questions of §When a bug is found. Comments are in Korean, short: the
+finding and the evidence.
 
 Copilot reviews a pull request; when its review limit is reached, the
 subagents in `.claude/agents/` review instead, at most two in parallel.
@@ -110,7 +147,7 @@ GraphQL: Projects (classic) is being deprecated ... (repository.pullRequest.proj
 ```
 
 `gh` queries `projectCards` when it edits, and that field now errors. Use the
-REST API instead — `gh api -X PATCH repos/vrvrv/serQ/pulls/N --input -` with a
+REST API instead — `gh api -X PATCH repos/servingQ/serQ/pulls/N --input -` with a
 JSON body, or `.../issues/N`. Creating works; only editing is affected.
 
 PR titles are Conventional Commits, `type(scope): subject`, and the subject is

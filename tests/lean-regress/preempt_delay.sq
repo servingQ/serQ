@@ -1,0 +1,37 @@
+// A growth on the engine's memory while the other holder is in a delay
+// inside its hold. The victim is the resident of the engine admitted last
+// (the interpreter's `lifo_victim`, vLLM's `running[-1]`): the session in the
+// delay is not a resident, so the grower preempts itself and re-executes its
+// hold with `computed` at the position it had reached (`resumed`). The Lean
+// semantics must give the interpreter's answer (lean/Serq/Regress.lean,
+// generated from this program's IR and `serq run`'s output; README.md).
+fn main() {
+  device gpu { kv cap 48; }
+  engine llm on gpu {
+    slots cap 4;
+    tokens cap 64;
+    schedule { advance running; admit waiting while (running.preempted == 0); }
+    execute (1);
+  }
+  pool kv on gpu { block 16; evict lru; preempt lifo; }
+  pool slots on llm { }
+  stage tool : delay;
+
+  workload {
+    arrive batch(2);
+    init { set d = 0; }
+
+  }
+
+  server {
+    hold slots (cost(slots, 1)), kv (cost(kv, 16)) {
+      observe resumed = computed;
+      run llm prefill (cost(llm, 16)) growing kv;
+      run tool (cost(tool, d));
+      run llm decode (cost(llm, 20)) growing kv;
+      observe done = now;
+    }
+  }
+
+
+}

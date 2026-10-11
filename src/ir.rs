@@ -7,18 +7,53 @@
 //! version, and is checked on load (`Program::validate`). See `docs/ir.md`.
 
 pub mod trace;
+mod types;
 
 use serde::{Deserialize, Serialize};
 
-/// Version of the IR format. Bump on any change to the types below.
+/// Version of the IR meaning; see `docs/ir.md` for the tagged-version policy.
 /// 2 added the sessions' turns; 3 renamed `route` to `session`; 4 replaced
 /// `CStep`'s `exclusive_prefill` and `decode_first` by `serve`; 5 added
 /// `Release` and `Load`; 6 added renewal arrivals and finite open runs; 7
 /// makes `Choose.key` a list of keys, compared in order; 8 lets a `Run`
 /// hold several stages at once (`also`) under the program's `share` and
 /// makes `ExclusivePrefill` isolate the whole batch, including admissions;
-/// 9 reevaluates lexicographic queue keys at selection and supplies `Waited`.
-pub const IR_VERSION: u32 = 9;
+/// 9 reevaluates lexicographic queue keys at selection and supplies `Waited`;
+/// 10 makes `Hold.cache` the clause that admits a hold to the prefix cache
+/// (a hold without it consumes nothing of the session's own entry).
+/// 11 separates random streams by session and turn; 12 adds `While`,
+/// a guarded loop that continues after its body when the guard becomes zero.
+/// IR 12 also adds resource cost conversions and mandatory attribute types
+/// and workload/server statement authority. 13 removes `CStageKind::Delay`,
+/// which meant `Ps(present)` (`CStageKind::delay`).
+pub const IR_VERSION: u32 = 13;
+
+/// A reason `Program::validate` refuses a program, and the statement it is
+/// about (block, index in it) when it is about one.
+#[derive(Debug)]
+pub struct Invalid {
+    pub message: String,
+    pub at: Option<(BlockId, usize)>,
+}
+
+impl Invalid {
+    fn at(message: String, block: BlockId, index: usize) -> Self {
+        Self {
+            message,
+            at: Some((block, index)),
+        }
+    }
+}
+
+impl From<String> for Invalid {
+    fn from(message: String) -> Self {
+        Self { message, at: None }
+    }
+}
+
+/// The most sessions a workload may start at once (`closed`, `batch`): each
+/// is a state of its own, made before the run begins.
+pub const MAX_SESSIONS: usize = 1_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UnOp {
@@ -43,12 +78,42 @@ pub enum BinOp {
     Or,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Preempt {
     /// A failed growth waits.
     None,
-    /// A failed growth preempts the most recently admitted holder (vLLM).
-    Lifo,
+    /// A failed growth preempts the candidate with the least `keys`
+    /// (ascending, read at `Moment::Victim`; ties to the latest admitted),
+    /// and the victim's hold re-enters its queue at the head, or at the
+    /// tail as a newcomer when `tail`. The candidates are the residents of
+    /// the step stage the pool is the memory of, or, for a pool that is no
+    /// engine's memory, the sessions that hold it in a scope. `preempt
+    /// lifo` is `By { keys: [-admission], tail: false }` (vLLM's
+    /// `running[-1]`, re-queued with `prepend_request`).
+    By {
+        keys: Vec<CExpr>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        tail: bool,
+    },
+}
+
+impl Preempt {
+    /// `preempt lifo`: the latest admitted, re-queued at the head.
+    pub fn lifo() -> Self {
+        Preempt::By {
+            keys: vec![CExpr::Unary(
+                UnOp::Neg,
+                Box::new(CExpr::Ctx(CtxVar::Admission)),
+            )],
+            tail: false,
+        }
+    }
+
+    /// Whether this is `preempt lifo`, the only preemption the Lean
+    /// fragment knows.
+    pub fn is_lifo(&self) -> bool {
+        *self == Preempt::lifo()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,28 +149,84 @@ pub enum Moment {
     /// A step stage's `cost`: evaluated after the iteration is scheduled,
     /// from what it scheduled (`tokens`, `prefilled`, `attention` as well).
     Step,
-    /// A step stage's `serve by` keys: evaluated for one resident.
+    /// A step stage's `serve by` keys and `serve only` predicate:
+    /// evaluated for one resident.
     Serve,
+    /// A pool's `preempt by` keys: evaluated for one candidate victim when
+    /// a growth does not fit.
+    Victim,
+    /// A step stage's iteration body: a `branch` guard or an `admit`'s
+    /// `while`, read as the iteration is planned, from the residents and
+    /// what the iteration has done so far.
+    Plan,
     /// A `gauge`: evaluated on the state the deployment holds after every
     /// instant, with no session, job or resident, and held until the next
     /// one, so neither `now` nor `work(…)`, which move in between, nor
     /// `budget_left(…)`, which plans an iteration to answer.
     Gauge,
+    /// A claim's `given`: read for each session once its `init` block has
+    /// run (and an explicit session's preset attributes are set), from the
+    /// session's attributes and the constants only: no `now`, no draw, no
+    /// observable, no context variable.
+    Given,
+    /// A claim over the iterations of a step stage: read when an iteration
+    /// starts, after its batch is scheduled (the instant its cost is read),
+    /// from the cost's variables, `demand`, `served`, `now` and the pool and
+    /// stage observables that do not move between events; no attribute, no
+    /// draw, no `work(…)`, no `budget_left(…)`.
+    Iteration,
+    /// A claim `at end`: read once, when the run ends, from the constants,
+    /// `now` (the end) and the aggregates of the run's observations.
+    End,
+}
+
+impl Moment {
+    /// Where an expression read at this moment is written, in a source
+    /// program's words.
+    pub fn place(self) -> &'static str {
+        match self {
+            Moment::Session => "a session statement, a run or a hold's cache",
+            Moment::Admit => "a hold's header",
+            Moment::Select => "a pool's queue keys",
+            Moment::Evict => "an eviction key or spill clause",
+            Moment::Ps => "a ps stage's capacity",
+            Moment::Budget => "an engine's `tokens cap` or `each at most`",
+            Moment::Step => "an engine's `execute`",
+            Moment::Serve => "an engine's `advance running by (…)` keys or an `only`",
+            Moment::Victim => "a pool's preempt keys",
+            Moment::Plan => "an engine's `schedule`",
+            Moment::Gauge => "a gauge",
+            Moment::Given => "a claim's `given`",
+            Moment::Iteration => "a claim over iterations",
+            Moment::End => "a claim `at end`",
+        }
+    }
+
+    /// When it is read: what keeps the sentence true for an IR reader, who
+    /// has no `tokens cap` or `schedule` to look for.
+    pub fn when(self) -> &'static str {
+        match self {
+            Moment::Session => "read when the session gets there",
+            Moment::Admit => "read at admission",
+            Moment::Select => "read before selecting a waiting session",
+            Moment::Evict => "read for one cache entry",
+            Moment::Ps => "read for the stage's jobs",
+            Moment::Budget => "read before the iteration is formed",
+            Moment::Step => "read after the iteration is formed",
+            Moment::Serve => "read for each running session",
+            Moment::Victim => "read for each candidate victim",
+            Moment::Plan => "read as the iteration is formed",
+            Moment::Gauge => "read on the deployment's state with no session",
+            Moment::Given => "read on one session's attributes",
+            Moment::Iteration => "read when an iteration starts",
+            Moment::End => "read when the run ends",
+        }
+    }
 }
 
 impl std::fmt::Display for Moment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Moment::Session => "a session statement, a run or a hold's cache",
-            Moment::Admit => "a hold's header, read at admission",
-            Moment::Select => "a pool's queue keys, read before selecting a waiting session",
-            Moment::Evict => "an eviction key or spill clause",
-            Moment::Ps => "a ps stage's capacity",
-            Moment::Budget => "a step stage's budget or chunk, planned before the iteration",
-            Moment::Step => "a step stage's cost, after the iteration",
-            Moment::Serve => "a step stage's serve keys",
-            Moment::Gauge => "a gauge, read on the deployment's state with no session",
-        })
+        write!(f, "{}, {}", self.place(), self.when())
     }
 }
 
@@ -148,11 +269,33 @@ pub enum CtxVar {
     Admission,
     /// Serve keys: tokens the resident's run has left.
     Remaining,
+    /// Preempt keys: the position the candidate's hold has computed on the
+    /// pool, which `computed` becomes if it is the victim.
+    Position,
+    /// Iteration body: the sessions this iteration has admitted so far.
+    Admitted,
+    /// Iteration body: the residents this iteration has preempted so far.
+    Preempted,
+    /// Iteration claims: the tokens the stage's residents could take in
+    /// this iteration if the budget were unlimited (`min(1, remaining)` for
+    /// a decode, the remaining work up to the chunk for a prefill), summed
+    /// over the residents after the batch is scheduled, those `serve only`
+    /// excludes included.
+    Demand,
+    /// Iteration claims: the tokens the stage scheduled in its earlier
+    /// iterations, over the whole run.
+    Served,
+    /// Iteration claims: the sessions the workload has started by the
+    /// iteration's start (an arrival at that instant included).
+    Arrived,
 }
+
+/// How an expression's printer names a context variable (`show_expr_with`).
+pub type CtxNames = fn(CtxVar) -> &'static str;
 
 impl CtxVar {
     /// The source spelling (`link.rs` maps the same names).
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             CtxVar::Now => "now",
             CtxVar::Waited => "waited",
@@ -171,6 +314,12 @@ impl CtxVar {
             CtxVar::Decoding => "decoding",
             CtxVar::Admission => "admission",
             CtxVar::Remaining => "remaining",
+            CtxVar::Position => "position",
+            CtxVar::Admitted => "admitted",
+            CtxVar::Preempted => "preempted",
+            CtxVar::Demand => "demand",
+            CtxVar::Served => "served",
+            CtxVar::Arrived => "arrived",
         }
     }
 
@@ -186,11 +335,23 @@ impl CtxVar {
             // scheduled, the prefill tokens and the attention work only after
             // (the serve keys see the residents too: they are known when the
             // order is taken)
-            CtxVar::Nres | CtxVar::Ndec | CtxVar::Kvb | CtxVar::Kvp => {
-                &[Moment::Budget, Moment::Step, Moment::Serve]
-            }
-            CtxVar::Ntok | CtxVar::Npre | CtxVar::Attn => &[Moment::Step],
-            CtxVar::Decoding | CtxVar::Admission | CtxVar::Remaining => &[Moment::Serve],
+            // (a claim over iterations reads what the cost reads)
+            CtxVar::Nres | CtxVar::Ndec | CtxVar::Kvb | CtxVar::Kvp => &[
+                Moment::Budget,
+                Moment::Step,
+                Moment::Serve,
+                Moment::Plan,
+                Moment::Iteration,
+            ],
+            // in a body, what the iteration has scheduled so far
+            CtxVar::Ntok | CtxVar::Npre => &[Moment::Step, Moment::Plan, Moment::Iteration],
+            CtxVar::Attn => &[Moment::Step, Moment::Iteration],
+            CtxVar::Admitted | CtxVar::Preempted => &[Moment::Plan],
+            CtxVar::Remaining => &[Moment::Serve],
+            CtxVar::Decoding => &[Moment::Serve, Moment::Victim],
+            CtxVar::Admission => &[Moment::Serve, Moment::Victim],
+            CtxVar::Position => &[Moment::Victim],
+            CtxVar::Demand | CtxVar::Served | CtxVar::Arrived => &[Moment::Iteration],
         }
     }
 }
@@ -252,8 +413,36 @@ pub enum CArg {
     Stage(CRef),
 }
 
+/// The side executing a statement; requests lower to statements without
+/// losing the authority under which each statement runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Side {
+    Workload,
+    Server,
+}
+
+/// A cost belongs to a resource family. Members of an array share its units.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum CostTarget {
+    Joint(Vec<CostTarget>),
+    Pool { base: usize, count: usize },
+    Stage { base: usize, count: usize },
+}
+
+/// Request sizes are workload-owned; other scalar values are bookkeeping.
+/// Cost values cannot be assigned to either kind without a type error.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ValueType {
+    Size,
+    Value,
+    Cost(CostTarget),
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum CExpr {
+    /// Explicit conversion of a request quantity into this resource's cost.
+    /// The conversion preserves the value and evaluation moment.
+    Cost(CostTarget, Box<CExpr>),
     /// A constant. JSON has no infinity, so `inf` is written as the string
     /// `"inf"` (`-inf` as `"-inf"`) and read back from either form.
     Num(#[serde(with = "real")] f64),
@@ -264,6 +453,96 @@ pub enum CExpr {
     Unary(UnOp, Box<CExpr>),
     Binary(BinOp, Box<CExpr>, Box<CExpr>),
     Cond(Box<CExpr>, Box<CExpr>, Box<CExpr>),
+    /// An aggregate of every value the run observed under an observation
+    /// (its index), warm-up included: read only at `Moment::End`.
+    Agg(Agg, usize),
+    /// A step stage's register (`Program::registers`, its index): the value
+    /// its iteration body last set. Not a session's: not read in a session
+    /// statement or a claim's `given`.
+    Reg(usize),
+}
+
+/// The aggregates of a run's observations a claim `at end` reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Agg {
+    /// The sum of the values.
+    Total,
+    /// How many values.
+    Count,
+    /// The greatest value (0 when none).
+    Largest,
+    /// The least value (0 when none).
+    Smallest,
+    /// With the values sorted ascending `v1 <= … <= vn`, `Σ_k Σ_{i<=k} v_i`:
+    /// the least total of the completion times of jobs of these sizes run
+    /// one at a time (shortest first), whatever the order of ties.
+    PrefixTotal,
+}
+
+impl Agg {
+    /// The source spelling (`link.rs` maps the same names).
+    pub fn name(self) -> &'static str {
+        match self {
+            Agg::Total => "total",
+            Agg::Count => "count",
+            Agg::Largest => "largest",
+            Agg::Smallest => "smallest",
+            Agg::PrefixTotal => "prefix_total",
+        }
+    }
+
+    /// The aggregate of `values` (in any order).
+    pub fn of(self, values: &[f64]) -> f64 {
+        match self {
+            Agg::Total => values.iter().sum(),
+            Agg::Count => values.len() as f64,
+            Agg::Largest => values.iter().copied().reduce(f64::max).unwrap_or(0.0),
+            Agg::Smallest => values.iter().copied().reduce(f64::min).unwrap_or(0.0),
+            Agg::PrefixTotal => {
+                let mut v = values.to_vec();
+                v.sort_by(f64::total_cmp);
+                // v_i is in the prefix of every k >= i: n - i of them
+                let n = v.len();
+                v.iter().enumerate().map(|(i, x)| x * (n - i) as f64).sum()
+            }
+        }
+    }
+}
+
+impl CExpr {
+    /// The numerical expression inside a conversion, for readers that already
+    /// know the resource (for example a stage label in a deployment figure).
+    pub fn cost_value(&self) -> &Self {
+        match self {
+            Self::Cost(_, value) => value.cost_value(),
+            _ => self,
+        }
+    }
+
+    /// The first expression, this one or one in it, of which `f` holds,
+    /// outermost first and then left to right; the index of a pool or
+    /// stage reference is in it (#273).
+    pub fn find(&self, f: &impl Fn(&CExpr) -> bool) -> Option<&CExpr> {
+        if f(self) {
+            return Some(self);
+        }
+        match self {
+            CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) | CExpr::Agg(..) | CExpr::Reg(_) => None,
+            CExpr::Sample(_, xs) => xs.iter().find_map(|x| x.find(f)),
+            CExpr::Call(_, args) => args.iter().find_map(|a| match a {
+                CArg::Expr(x) => x.find(f),
+                CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().and_then(|i| i.find(f)),
+            }),
+            CExpr::Unary(_, x) | CExpr::Cost(_, x) => x.find(f),
+            CExpr::Binary(_, a, b) => a.find(f).or_else(|| b.find(f)),
+            CExpr::Cond(c, a, b) => c.find(f).or_else(|| a.find(f)).or_else(|| b.find(f)),
+        }
+    }
+
+    /// Whether `f` holds of this expression or of one in it.
+    pub fn any(&self, f: &impl Fn(&CExpr) -> bool) -> bool {
+        self.find(f).is_some()
+    }
 }
 
 /// An `f64` in JSON, infinities included: a number when finite, the string
@@ -350,12 +629,24 @@ pub enum CStmt {
     },
     Branch(CExpr, BlockId, BlockId),
     Loop(BlockId),
+    /// Test the guard before each pass; continue after the loop when it is zero.
+    While(CExpr, BlockId),
     Choose {
         var: usize,
         count: CExpr,
         key: Vec<CExpr>,
     },
     End,
+    /// Run the block beside the session, as a leg of the same request: it
+    /// starts now, with a copy of the session's attributes, at the same
+    /// time as the statements after the fork. vLLM's push proxy sends the
+    /// prefill and the decode request of one request at once this way. A
+    /// leg's holds are its own and its `set`s change only its copy, which
+    /// ends with it; the leases it leaves pass to the session when it ends.
+    /// A leg may not `turn`, `end`, fork or join.
+    Fork(BlockId),
+    /// Wait until every leg the session has forked has ended.
+    Join,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -385,6 +676,12 @@ pub struct CPool {
     pub queue: Option<Vec<CExpr>>,
     pub spill: Option<CSpill>,
     pub admit_via: Option<usize>,
+    /// `reserve held`: what a hold's `reserve` tested and it has not
+    /// allocated counts against every later admission while the hold lasts
+    /// (TensorRT-LLM's `GUARANTEED_NO_EVICT`), and the holder grows into
+    /// it. Without it a `reserve` is a test at admission alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reserve_held: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -398,10 +695,65 @@ pub struct CStep {
     pub budget: CExpr,
     pub cost: CExpr,
     pub chunk: CExpr,
+    /// `granule g`: a prefill gets the whole of what it has left, or a
+    /// multiple of `g` (rounded down; none when that is 0). `inf` schedules
+    /// a prefill whole or not at all (TensorRT-LLM without chunking), a
+    /// block size aligns its chunks. None is any amount (as `1` is, for
+    /// whole tokens). A prefill it refuses ends the iteration's admissions.
+    /// A constant above 0, `inf` included.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granule: Option<CExpr>,
     /// How the iteration serves its residents: an order, or the
     /// exclusive-prefill rule.
     pub serve: CServe,
     pub memory: Option<usize>,
+    /// The iteration as the program writes it (`iteration { … }`): which
+    /// residents are served, in what order, and when the waiting are
+    /// admitted, in the order the statements run. None is vLLM's procedure,
+    /// `serve` then the waiting admitted while the iteration has not
+    /// preempted, in the order above. Not with `ExclusivePrefill`, a rule a
+    /// body cannot write (it takes back decodes already chosen). A stage's
+    /// `serve only (p)` is the body `[Serve {only: p}, Admit {only: p, gate:
+    /// !preempted}]`, which the linker writes (#355).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iteration: Option<Vec<CIter>>,
+}
+
+/// A statement of a step stage's iteration body. Each runs once where it is
+/// written; the body has no loop, so an iteration ends.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CIter {
+    /// Serve the residents this iteration has not served yet, in `by`'s
+    /// order (the stage's `serve` order when None), skipping those `only`
+    /// reads as 0, which a later `Serve` may serve, while budget is left.
+    /// Both are read at `Moment::Serve`.
+    Serve {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        only: Option<CExpr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        by: Option<Vec<CExpr>>,
+    },
+    /// Admit the head of the queues the stage serves (`admit via`) and serve
+    /// each newcomer that `only` (read at `Moment::Serve`) does not read as
+    /// 0, one at a time, while budget is left, the head fits and `gate`
+    /// (read at `Moment::Plan` before each) is 1. A newcomer `only`
+    /// excludes is admitted and left unserved, as the stage's `serve only`
+    /// leaves it: `serve only (p)` on the stage is the body `serve only (p);
+    /// admit only (p) while (!preempted);`.
+    Admit {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        only: Option<CExpr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gate: Option<CExpr>,
+    },
+    /// A test read at `Moment::Plan`: the first body when 1, the second
+    /// when 0.
+    Branch(CExpr, Vec<CIter>, Vec<CIter>),
+    /// Set a register of this stage (`Program::registers`) to an expression
+    /// read at `Moment::Plan`. It takes effect with the iteration: an
+    /// iteration that schedules nothing and preempts nothing is none, and
+    /// its sets are undone.
+    Set(usize, CExpr),
 }
 
 /// A step stage's serving policy: resident order (`By(keys)`) or the rule
@@ -434,8 +786,40 @@ pub enum CServe {
 pub enum CStageKind {
     Fifo(usize),
     Ps(CExpr),
-    Delay,
     Step(CStep),
+}
+
+impl CStageKind {
+    /// `delay`: `ps(present)`, every job at rate 1 with no waiting, an
+    /// infinite server. The frontend's `delay` lowers to it; the interpreter
+    /// and the drawing recognise it (13).
+    pub fn delay() -> Self {
+        CStageKind::Ps(CExpr::Ctx(CtxVar::N))
+    }
+
+    pub fn is_delay(&self) -> bool {
+        matches!(self, CStageKind::Ps(CExpr::Ctx(CtxVar::N)))
+    }
+
+    /// The kind as a program writes it, for a message: `fifo`, `delay`,
+    /// `ps`, `step`.
+    pub fn word(&self) -> &'static str {
+        match self {
+            CStageKind::Fifo(_) => "fifo",
+            k if k.is_delay() => "delay",
+            CStageKind::Ps(_) => "ps",
+            CStageKind::Step(_) => "step",
+        }
+    }
+
+    /// What a message calls the stage, as a program declares it: `engine`
+    /// for a step stage, `stage` for any other.
+    pub fn noun(&self) -> &'static str {
+        match self {
+            CStageKind::Step(_) => "engine",
+            _ => "stage",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -473,6 +857,9 @@ pub struct Program {
     /// IR format version (`IR_VERSION`).
     pub version: u32,
     pub attrs: Vec<String>,
+    pub attr_types: Vec<ValueType>,
+    /// Mandatory, aligned with `blocks`, including every nested statement.
+    pub sides: Vec<Vec<Side>>,
     pub observes: Vec<String>,
     pub pools: Vec<CPool>,
     pub stages: Vec<CStage>,
@@ -524,6 +911,26 @@ pub struct Program {
     /// ignores them runs the same program (`docs/ir.md`, Stability).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gauges: Vec<Gauge>,
+    /// `claim NAME …;`: propositions about every path of the program, which
+    /// the interpreter checks on the path it runs and the report states.
+    /// They read and do not act, so a reader that ignores them runs the
+    /// same program (`docs/ir.md`, Stability).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub claims: Vec<Claim>,
+    /// `state NAME = c;` of the step stages: registers a stage's iteration
+    /// body sets and the scheduler's expressions read (`CExpr::Reg`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub registers: Vec<Register>,
+}
+
+/// A step stage's register: its name, the stage whose body sets it, and its
+/// value before the first iteration.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Register {
+    pub name: String,
+    pub stage: usize,
+    #[serde(with = "real")]
+    pub init: f64,
 }
 
 /// A gauge: a name and an expression evaluated at `Moment::Gauge`.
@@ -531,6 +938,51 @@ pub struct Program {
 pub struct Gauge {
     pub name: String,
     pub expr: CExpr,
+}
+
+/// A claim: `expr` holds of every iteration of a step stage, of some
+/// iteration of it, or at the end of the run (`kind`), on every path whose
+/// sessions all satisfy `given`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Claim {
+    pub name: String,
+    /// Read at `Moment::Given` for each session: a session for which it is
+    /// 0 puts the path out of the claim's scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub given: Option<CExpr>,
+    pub kind: ClaimKind,
+    /// Read at `Moment::Iteration` for an iteration claim, at `Moment::End`
+    /// for one `at end`.
+    pub expr: CExpr,
+}
+
+/// What a claim quantifies over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClaimKind {
+    /// Every iteration of the step stage (its index) satisfies the claim.
+    EveryIteration(usize),
+    /// Some iteration of the step stage (its index) satisfies the claim.
+    SomeIteration(usize),
+    /// The run's end satisfies the claim.
+    AtEnd,
+}
+
+impl ClaimKind {
+    /// The moment the claim's expression is read at.
+    pub fn moment(self) -> Moment {
+        match self {
+            ClaimKind::EveryIteration(_) | ClaimKind::SomeIteration(_) => Moment::Iteration,
+            ClaimKind::AtEnd => Moment::End,
+        }
+    }
+
+    /// The stage an iteration claim is about.
+    pub fn stage(self) -> Option<usize> {
+        match self {
+            ClaimKind::EveryIteration(s) | ClaimKind::SomeIteration(s) => Some(s),
+            ClaimKind::AtEnd => None,
+        }
+    }
 }
 
 /// The sharing policy of `share`: how flows that hold several `ps` stages at
@@ -585,6 +1037,227 @@ impl Program {
     /// (a flow is not described by the `n` a capacity could read), each
     /// stage array once (an index is known only when the run starts), and
     /// the program names its `share`; every run on a shared stage is plain.
+    /// Every block the program reaches from `init`, `turn` and `session` is
+    /// reached once: the blocks form a tree, as the linker builds them, so
+    /// the walks over them (`enclosed`, `lets_time_pass`) end. IR from JSON
+    /// could otherwise point a body at its own ancestor (#272).
+    fn blocks_are_a_tree(&self) -> Result<(), String> {
+        let mut seen = vec![false; self.blocks.len()];
+        let mut todo = vec![self.init, self.turn, self.session];
+        while let Some(b) = todo.pop() {
+            let Some(was) = seen.get_mut(b) else {
+                return Err(format!("block {b} out of range"));
+            };
+            if *was {
+                return Err(format!(
+                    "block {b} is reached twice: a program's blocks form a tree, each the body \
+                     of one statement"
+                ));
+            }
+            *was = true;
+            for st in &self.blocks[b] {
+                match st {
+                    CStmt::Hold { body, .. }
+                    | CStmt::Loop(body)
+                    | CStmt::While(_, body)
+                    | CStmt::Fork(body) => todo.push(*body),
+                    CStmt::Branch(_, a, c) => todo.extend([*a, *c]),
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `grow`, `load`, `release` and a `growing` run act on the innermost
+    /// hold of their pool around them, as the reference is written, index
+    /// included; `release` may instead end a lease of it; a hold leases
+    /// one of its own pools (#272). Holds nest as the blocks do.
+    ///
+    /// A hold's index is read at admission, again at every statement that
+    /// acts on the hold, and again when a preempted hold is admitted anew;
+    /// the readings must name one member (#282). So a hold's body may not
+    /// change an attribute its index reads (`set`, `choose`, `turn`, or a
+    /// hold inside it setting `cached` and `computed`), and an index read at
+    /// a statement inside reads only attributes and numbers, not the state
+    /// or the clock, which move between the readings.
+    fn enclosed<'a>(
+        &'a self,
+        b: BlockId,
+        held: &mut Vec<(&'a CRef, Option<&'static str>)>,
+        leased: &[&'a CRef],
+    ) -> Result<(), Invalid> {
+        let need =
+            |held: &[(&CRef, Option<&'static str>)], r: &CRef, what: &str, or_leased: bool| {
+                let name = &self.pools[r.base].name;
+                let shown = match &r.index {
+                    None => name.clone(),
+                    Some(_) => format!("{name}[…]"),
+                };
+                if let Some(&(h, moves)) = held.iter().rev().find(|(h, _)| *h == r) {
+                    return match moves {
+                        None => Ok(()),
+                        Some(read) => Err(format!(
+                            "`{what} {name}[{}]`: the hold's index reads {read}, which moves \
+                         between admission and this statement, so the two may name different \
+                         members; name the member in an attribute",
+                            h.index
+                                .as_ref()
+                                .map_or(String::new(), |i| self.show_expr(i))
+                        )),
+                    };
+                }
+                let leased: &[&CRef] = if or_leased { leased } else { &[] };
+                if leased.contains(&r) {
+                    return Ok(());
+                }
+                let hint = if held
+                    .iter()
+                    .map(|(h, _)| h)
+                    .chain(leased)
+                    .any(|h| h.base == r.base)
+                {
+                    ": write the pool as the hold does, index included"
+                } else if or_leased {
+                    ": it takes an enclosing hold's allocation, or a lease of it"
+                } else {
+                    ": it acts on an enclosing hold's allocation"
+                };
+                Err(format!(
+                    "`{what} {shown}` outside a hold of `{shown}`{hint}"
+                ))
+            };
+        for (k, s) in self.blocks[b].iter().enumerate() {
+            let here = |m: String| Invalid::at(m, b, k);
+            match s {
+                CStmt::Hold {
+                    pools, body, lease, ..
+                } => {
+                    if let Some((r, _)) = lease
+                        && !pools.iter().any(|(q, _, _)| q == r)
+                    {
+                        return Err(here(format!(
+                            "`lease {}`: the hold does not take that pool (write it as the hold \
+                             does, index included)",
+                            self.pools[r.base].name
+                        )));
+                    }
+                    let depth = held.len();
+                    // a hold that a pool of its own or of a hold around it may
+                    // preempt runs again, admitted anew: its indices are read
+                    // again, after admission set `cached` and the preemption
+                    // `computed` (#317)
+                    let preempter = held
+                        .iter()
+                        .map(|(h, _)| *h)
+                        .chain(pools.iter().map(|(r, _, _)| r))
+                        .flat_map(|r| &self.pools[r.base..r.base + r.count])
+                        .find(|q| q.preempt != Preempt::None);
+                    if let Some(q) = preempter
+                        && let Some((r, _, _)) = pools.iter().find(|(r, _, _)| {
+                            r.index.as_ref().is_some_and(|i| {
+                                moves(i)
+                                    || i.any(&|x| {
+                                        matches!(x, CExpr::Attr(a)
+                                            if *a == self.slot_cached || *a == self.slot_computed)
+                                    })
+                            })
+                        })
+                    {
+                        return Err(here(format!(
+                            "`hold {}`: `{}` may preempt it, and it is admitted anew and reads \
+                             the index again, which reads the state, the clock, or the `cached` \
+                             and `computed` that admission and preemption set; name the member \
+                             in another attribute",
+                            self.show_pool_ref(r),
+                            q.name
+                        )));
+                    }
+                    let set = self.assigned(*body);
+                    for (r, _, _) in pools {
+                        let Some(i) = &r.index else { continue };
+                        if let Some(&a) = set
+                            .iter()
+                            .find(|&&a| i.any(&|x| matches!(x, CExpr::Attr(s) if *s == a)))
+                        {
+                            return Err(here(format!(
+                                "`hold {}[{}]`: its body changes `{}`, which the index reads, so \
+                                 the member read at admission, at a statement inside and after a \
+                                 preemption may differ; set it before the hold",
+                                self.pools[r.base].name,
+                                self.show_expr(i),
+                                self.attrs.get(a).map_or("?", |s| s.as_str())
+                            )));
+                        }
+                    }
+                    held.extend(pools.iter().map(|(r, _, _)| {
+                        let moving = r
+                            .index
+                            .as_ref()
+                            .and_then(|i| moves(i).then_some("the state or the clock"));
+                        (r, moving)
+                    }));
+                    self.enclosed(*body, held, leased)?;
+                    held.truncate(depth);
+                }
+                CStmt::Grow(r, _) => need(held, r, "grow", false).map_err(here)?,
+                CStmt::Load(r, _) => need(held, r, "load", false).map_err(here)?,
+                CStmt::Release(r) => need(held, r, "release", true).map_err(here)?,
+                CStmt::Run {
+                    growing: Some(g), ..
+                } => need(held, g, "growing", false).map_err(here)?,
+                CStmt::Branch(_, a, c) => {
+                    self.enclosed(*a, held, leased)?;
+                    self.enclosed(*c, held, leased)?;
+                }
+                CStmt::Loop(x) | CStmt::While(_, x) => self.enclosed(*x, held, leased)?,
+                CStmt::Fork(x) => {
+                    // a preempted hold runs again from its start, and would
+                    // fork a second leg; the proxy sends each leg once
+                    if let Some(q) = held
+                        .iter()
+                        .flat_map(|(r, _)| &self.pools[r.base..r.base + r.count])
+                        .find(|q| q.preempt != Preempt::None)
+                    {
+                        return Err(here(format!(
+                            "`fork` inside a hold of `{}`, which may preempt it: the hold runs \
+                             again from its start and forks a second leg; fork before the hold",
+                            q.name
+                        )));
+                    }
+                    // a leg holds nothing of the session's: its holds are its own
+                    self.enclosed(*x, &mut vec![], leased)?
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// The attributes a block may change, in it or in a block in it: what it
+    /// sets or chooses, every attribute at a `turn` (the workload's `turn`
+    /// block and the scheduler's marks), and `cached` and `computed` at a hold.
+    fn assigned(&self, b: BlockId) -> Vec<usize> {
+        let mut out = vec![];
+        for s in &self.blocks[b] {
+            match s {
+                CStmt::Set(a, _) | CStmt::Choose { var: a, .. } => out.push(*a),
+                CStmt::Turn => out.extend(0..self.attrs.len()),
+                CStmt::Hold { body, .. } => {
+                    out.extend([self.slot_cached, self.slot_computed]);
+                    out.extend(self.assigned(*body));
+                }
+                CStmt::Loop(body) | CStmt::While(_, body) => out.extend(self.assigned(*body)),
+                CStmt::Branch(_, x, y) => {
+                    out.extend(self.assigned(*x));
+                    out.extend(self.assigned(*y));
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
     fn validate_flows(&self) -> Result<(), String> {
         let shared = self.shared_stages();
         let any = shared.iter().any(|&x| x);
@@ -753,12 +1426,28 @@ impl Program {
     /// linker runs it on what it produces; it also guards IR read from JSON
     /// or built by tools.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_located().map_err(|e| e.message)
+    }
+
+    /// `validate`, with the statement an error is about, which the linker
+    /// maps back to the program's text (#279).
+    pub fn validate_located(&self) -> Result<(), Invalid> {
+        self.validate_statements()?;
+        self.validate_declarations()?;
+        self.validate_types()?;
+        Ok(())
+    }
+
+    /// The checks of the blocks and their statements.
+    fn validate_statements(&self) -> Result<(), Invalid> {
         if self.version != IR_VERSION {
             return Err(format!(
                 "IR version {} (this interpreter reads {IR_VERSION})",
                 self.version
-            ));
+            )
+            .into());
         }
+        self.blocks_are_a_tree()?;
         let v = Validator { p: self };
         for (i, b) in self.blocks.iter().enumerate() {
             // a text program has no block numbers: name the block by its role
@@ -770,8 +1459,9 @@ impl Program {
             } else {
                 "session"
             };
-            for s in b {
-                v.stmt(s).map_err(|e| format!("{role}: {e}"))?;
+            for (k, s) in b.iter().enumerate() {
+                v.stmt(s)
+                    .map_err(|e| Invalid::at(format!("{role}: {e}"), i, k))?;
             }
         }
         for (k, blk) in [
@@ -781,6 +1471,165 @@ impl Program {
         ] {
             v.block(blk).map_err(|e| format!("{k}: {e}"))?;
         }
+        // the workload draws marks; time passes in the session (#272)
+        for (k, blk) in [("init", self.init), ("turn", self.turn)] {
+            if let Some(at) = self.blocks[blk]
+                .iter()
+                .position(|s| !matches!(s, CStmt::Set(..) | CStmt::Observe(..)))
+            {
+                return Err(Invalid::at(
+                    format!("{k}: workload blocks may only `set` and `observe`"),
+                    blk,
+                    at,
+                ));
+            }
+        }
+        let leased: Vec<&CRef> = self
+            .blocks
+            .iter()
+            .flatten()
+            .filter_map(|s| match s {
+                CStmt::Hold {
+                    lease: Some((r, _)),
+                    ..
+                } => Some(r),
+                _ => None,
+            })
+            .collect();
+        self.enclosed(self.session, &mut vec![], &leased)
+            .map_err(|e| Invalid {
+                message: format!("session: {}", e.message),
+                at: e.at,
+            })?;
+        Ok(())
+    }
+
+    /// A register is read where its stage's iteration orders the read: in
+    /// the stage's own expressions (budget, chunk, cost, serve keys, its
+    /// body, a claim over its iterations), in those of a pool it admits
+    /// (`admit via`: queue, eviction and preempt keys, a spill, a hold's
+    /// header whose pools it admits), and in a gauge or a claim `at end`.
+    /// Elsewhere — another stage's, a `ps` capacity, a pool admitted at
+    /// settle time — the read and the set happen at one instant in an order
+    /// that is the order of the declarations, and the answer would be that
+    /// order's (#367).
+    fn registers_read_in_place(&self) -> Result<(), String> {
+        if self.registers.is_empty() {
+            return Ok(());
+        }
+        let read = |e: &CExpr, ok: &dyn Fn(usize) -> bool, place: &str| -> Result<(), String> {
+            let Some(CExpr::Reg(r)) = e.find(&|x| matches!(x, CExpr::Reg(r) if !ok(*r))) else {
+                return Ok(());
+            };
+            let reg = &self.registers[*r];
+            let owner = &self.stages[reg.stage].name;
+            Err(format!(
+                "`{}` is engine `{owner}`'s register, and {place} would read it apart from \
+                 `{owner}`'s iteration, in an order the declarations would decide; a register \
+                 is read by its engine, the keys of a pool it admits, the header of a hold whose \
+                 first pool (where it waits) it admits, a gauge or a claim",
+                reg.name
+            ))
+        };
+        let of = |stage: usize| move |r: usize| self.registers[r].stage == stage;
+        let admitted_by = |pool: usize| {
+            move |r: usize| self.pools[pool].admit_via == Some(self.registers[r].stage)
+        };
+        for (pi, p) in self.pools.iter().enumerate() {
+            let place = format!("pool `{}`'s keys", p.name);
+            let ok = admitted_by(pi);
+            let mut exprs: Vec<&CExpr> = vec![];
+            exprs.extend(p.queue.iter().flatten());
+            if let CEvict::By(keys) = &p.evict {
+                exprs.extend(keys);
+            }
+            if let Preempt::By { keys, .. } = &p.preempt {
+                exprs.extend(keys);
+            }
+            if let Some(s) = &p.spill {
+                exprs.extend([&s.work, &s.when]);
+            }
+            for e in exprs {
+                read(e, &ok, &place)?;
+            }
+        }
+        fn body_exprs<'a>(body: &'a [CIter], out: &mut Vec<&'a CExpr>) {
+            for s in body {
+                match s {
+                    CIter::Serve { only, by } => {
+                        out.extend(only.iter());
+                        out.extend(by.iter().flatten());
+                    }
+                    CIter::Admit { only, gate } => out.extend(only.iter().chain(gate.iter())),
+                    CIter::Branch(g, a, b) => {
+                        out.push(g);
+                        body_exprs(a, out);
+                        body_exprs(b, out);
+                    }
+                    CIter::Set(_, e) => out.push(e),
+                }
+            }
+        }
+        for (si, s) in self.stages.iter().enumerate() {
+            let place = format!("{} `{}`", s.kind.noun(), s.name);
+            let ok = of(si);
+            match &s.kind {
+                CStageKind::Ps(e) => read(e, &|_| false, &format!("{place}'s capacity"))?,
+                CStageKind::Step(st) => {
+                    let mut exprs: Vec<&CExpr> = vec![&st.budget, &st.chunk, &st.cost];
+                    if let CServe::By(keys) = &st.serve {
+                        exprs.extend(keys);
+                    }
+                    if let Some(body) = &st.iteration {
+                        body_exprs(body, &mut exprs);
+                    }
+                    for e in exprs {
+                        read(e, &ok, &place)?;
+                    }
+                }
+                CStageKind::Fifo(_) => {}
+            }
+        }
+        for b in &self.blocks {
+            for s in b {
+                if let CStmt::Hold { pools, reuse, .. } = s {
+                    // a hold waits in its first pool's queue, and the stage
+                    // that admits that queue reads its header (the other
+                    // pools are only tested), so that is the stage whose
+                    // registers it may read (a hold has a pool: the parser
+                    // requires one)
+                    let Some((queue, _, _)) = pools.first() else {
+                        continue;
+                    };
+                    let first: Vec<usize> = (queue.base..queue.base + queue.count).collect();
+                    let ok = |reg: usize| {
+                        first
+                            .iter()
+                            .all(|&m| self.pools[m].admit_via == Some(self.registers[reg].stage))
+                    };
+                    for (_, units, reserve) in pools {
+                        read(units, &ok, "a hold's header")?;
+                        if let Some(r) = reserve {
+                            read(r, &ok, "a hold's header")?;
+                        }
+                    }
+                    if let Some(r) = reuse {
+                        read(r, &ok, "a hold's header")?;
+                    }
+                }
+            }
+        }
+        for c in &self.claims {
+            if let Some(st) = c.kind.stage() {
+                read(&c.expr, &of(st), &format!("claim `{}`", c.name))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The checks of the declarations and the run.
+    fn validate_declarations(&self) -> Result<(), String> {
+        let v = Validator { p: self };
         self.validate_flows()?;
         for p in &self.pools {
             let at = |e| format!("pool `{}`: {e}", p.name);
@@ -793,6 +1642,29 @@ impl Program {
                     if draws(key) {
                         return Err(at(
                             "a queue key may not draw; sample into an attribute first".to_string(),
+                        ));
+                    }
+                }
+            }
+            if let Preempt::By { keys, .. } = &p.preempt {
+                if keys.is_empty() {
+                    return Err(at("preempt by needs at least one key".to_string()));
+                }
+                for key in keys {
+                    v.expr(key, Moment::Victim).map_err(at)?;
+                    if draws(key) {
+                        return Err(at(
+                            "a preempt key may not draw (`~`): it is read for every candidate \
+                             at every growth that does not fit; sample into an attribute first"
+                                .to_string(),
+                        ));
+                    }
+                    if key.any(&|x| matches!(x, CExpr::Attr(a) if *a == self.slot_computed)) {
+                        return Err(at(
+                            "a preempt key reads `computed`, the position at the session's last \
+                             preemption (0 for one never preempted); a preempt key reads \
+                             `position`, where the candidate is now"
+                                .to_string(),
                         ));
                     }
                 }
@@ -810,34 +1682,128 @@ impl Program {
             }
             if let Some(s) = p.admit_via {
                 v.stage(s)?;
+                // only a step stage's scheduler admits a bound queue
+                // (`admit_bound`); named for any other stage, the queue is
+                // never served (#418)
+                let stage = &self.stages[s];
+                if !matches!(stage.kind, CStageKind::Step(_)) {
+                    return Err(at(format!(
+                        "`admit via {}`, but `{}` is a {} stage: only an engine's `schedule` \
+                         admits, and nothing would admit `{}`",
+                        stage.name,
+                        stage.name,
+                        stage.kind.word(),
+                        p.name
+                    )));
+                }
             }
         }
-        for s in &self.stages {
-            let at = |e| format!("stage `{}`: {e}", s.name);
+        for (si, s) in self.stages.iter().enumerate() {
+            let at = |e| format!("{} `{}`: {e}", s.kind.noun(), s.name);
             match &s.kind {
-                CStageKind::Fifo(_) | CStageKind::Delay => {}
+                CStageKind::Fifo(_) => {}
                 CStageKind::Ps(e) => v.expr(e, Moment::Ps).map_err(at)?,
                 CStageKind::Step(st) => {
                     v.expr(&st.budget, Moment::Budget).map_err(at)?;
                     v.expr(&st.chunk, Moment::Budget).map_err(at)?;
                     v.expr(&st.cost, Moment::Step).map_err(at)?;
-                    if let CServe::By(keys) = &st.serve {
-                        for k in keys {
-                            v.expr(k, Moment::Serve).map_err(at)?;
-                            if draws(k) {
-                                return Err(at(
-                                    "a serve key may not draw (`~`): it is read for every \
-                                     resident at every iteration, and the order would change \
-                                     under the scheduler's feet"
-                                        .into(),
-                                ));
+                    if let Some(g) = &st.granule {
+                        let g = match g {
+                            CExpr::Num(g) if *g > 0.0 => *g,
+                            _ => {
+                                return Err(at(format!(
+                                    "granule {}: a constant above 0, `inf` included",
+                                    self.show_expr(g)
+                                )));
                             }
+                        };
+                        if matches!(st.serve, CServe::ExclusivePrefill) {
+                            return Err(at(
+                                "`granule` with `exclusive prefill`: a prefill the granule \
+                                 refuses would still block every decode, and the engine would \
+                                 stop"
+                                    .into(),
+                            ));
+                        }
+                        // a prefill longer than a constant chunk only ever gets
+                        // part of it, at most the chunk, which the granule must
+                        // allow (TensorRT-LLM refuses a chunk below its unit,
+                        // microBatchScheduler.cpp L278-L282); a prompt longer
+                        // than the budget is the workload's, as it is there
+                        if let Some(c) = constant(&st.chunk)
+                            && c > 0.0
+                            && g > c
+                        {
+                            return Err(at(format!(
+                                "granule {g} with `each at most ({c})`: a prompt longer than \
+                                 {c} tokens would never get a token"
+                            )));
+                        }
+                        // a `max(k, e)` chunk can always fall to its floor `k`,
+                        // where the same prompt gets nothing (#448)
+                        if let CExpr::Call(Fun::Max, args) = &st.chunk
+                            && let Some(k) = args
+                                .iter()
+                                .filter_map(|a| match a {
+                                    CArg::Expr(e) => constant(e),
+                                    _ => None,
+                                })
+                                .reduce(f64::max)
+                            && k > 0.0
+                            && g > k
+                        {
+                            return Err(at(format!(
+                                "granule {g} with chunk max({k}, …): a prompt longer than {k} \
+                                 would get no token in an iteration whose chunk is {k}"
+                            )));
+                        }
+                    }
+                    if let CServe::By(keys) = &st.serve {
+                        keys.iter().try_for_each(|k| v.serve_key(k)).map_err(at)?;
+                    }
+                    if let Some(body) = &st.iteration {
+                        if matches!(st.serve, CServe::ExclusivePrefill) {
+                            return Err(at(
+                                "`exclusive prefill` with a `schedule` body (the IR's `iteration`): \
+                                 the rule takes back decodes already chosen, which a body \
+                                 cannot, and the two would answer one question twice"
+                                    .into(),
+                            ));
+                        }
+                        v.iteration(si, body).map_err(at)?;
+                        if !always_serves(body) {
+                            return Err(at(
+                                "a `schedule` with a path that neither advances `running` nor \
+                                 admits `waiting`: an engine whose schedule takes that path \
+                                 schedules nothing, and waits for an event that may never come"
+                                    .into(),
+                            ));
                         }
                     }
                     if let Some(m) = st.memory {
                         v.pool(m)?;
                     }
                 }
+            }
+        }
+        self.registers_read_in_place()?;
+        for (k, r) in self.registers.iter().enumerate() {
+            let at = |e: &str| format!("state `{}`: {e}", r.name);
+            match self.stages.get(r.stage).map(|s| &s.kind) {
+                Some(CStageKind::Step(st)) if st.iteration.is_some() => {}
+                Some(CStageKind::Step(_)) => {
+                    return Err(at(
+                        "a register of an engine without a `schedule` body (the IR's `iteration`), \
+                         which nothing sets",
+                    ));
+                }
+                _ => return Err(at("a register belongs to an engine (the IR's step stage)")),
+            }
+            if !r.init.is_finite() {
+                return Err(at("its first value is a finite number"));
+            }
+            if self.registers[..k].iter().any(|q| q.name == r.name) {
+                return Err(at("declared twice"));
             }
         }
         for (k, g) in self.gauges.iter().enumerate() {
@@ -852,6 +1818,29 @@ impl Program {
                 ));
             }
         }
+        for (k, c) in self.claims.iter().enumerate() {
+            let at = |e| format!("claim `{}`: {e}", c.name);
+            if self.claims[..k].iter().any(|d| d.name == c.name) {
+                return Err(at("declared twice".into()));
+            }
+            if let Some(g) = &c.given {
+                v.expr(g, Moment::Given).map_err(at)?;
+            }
+            if let Some(st) = c.kind.stage() {
+                v.stage(st).map_err(at)?;
+                if !matches!(self.stages[st].kind, CStageKind::Step(_)) {
+                    let s = &self.stages[st];
+                    let name = match s.index {
+                        Some(i) => format!("{}[{i}]", s.name),
+                        None => s.name.clone(),
+                    };
+                    return Err(at(format!(
+                        "stage `{name}` is not an engine: only an engine has iterations"
+                    )));
+                }
+            }
+            v.expr(&c.expr, c.kind.moment()).map_err(at)?;
+        }
         if let CArrival::Renewal(e) = &self.arrival {
             v.expr(e, Moment::Session)?;
             if !arrival_expr_is_pure(e) {
@@ -859,6 +1848,31 @@ impl Program {
                     "renewal arrival may use only constants and sampled distributions".into(),
                 );
             }
+            if let CExpr::Num(gap) = e
+                && !(gap.is_finite() && *gap > 0.0)
+            {
+                return Err(format!(
+                    "`arrive renewal({gap})`: an interarrival time must be positive"
+                ));
+            }
+        }
+        // a rate that is not positive draws gaps that are not: time runs
+        // backwards and the run never ends (#286)
+        if let CArrival::Poisson(rate) = self.arrival
+            && !(rate.is_finite() && rate > 0.0)
+        {
+            return Err(format!(
+                "`arrive poisson(…)`: the rate is {rate}; a rate must be positive and finite"
+            ));
+        }
+        // a workload starts its sessions before the run begins: a count is
+        // at least one and at most what can be made (#289)
+        if let CArrival::Closed(n) | CArrival::Batch(n) = self.arrival
+            && !(1..=MAX_SESSIONS).contains(&n)
+        {
+            return Err(format!(
+                "workload: {n} sessions: a closed population or a batch is from 1 to {MAX_SESSIONS}"
+            ));
         }
         if let Some(n) = self.arrivals {
             if n == 0 {
@@ -908,36 +1922,95 @@ impl Program {
     }
 }
 
+/// Whether every path through an iteration body reaches a `serve` or an
+/// `admit`.
+fn always_serves(body: &[CIter]) -> bool {
+    body.iter().any(|s| match s {
+        CIter::Serve { .. } | CIter::Admit { .. } => true,
+        CIter::Branch(_, a, b) => always_serves(a) && always_serves(b),
+        CIter::Set(..) => false,
+    })
+}
+
 /// Whether an expression samples a distribution anywhere.
 fn draws(e: &CExpr) -> bool {
+    e.any(&|x| matches!(x, CExpr::Sample(..)))
+}
+
+/// Whether an expression reads a value that moves while no event happens
+/// (`now`, `work(…)`).
+fn reads_clock(e: &CExpr) -> bool {
+    e.any(&|x| matches!(x, CExpr::Ctx(CtxVar::Now) | CExpr::Call(Fun::Work, _)))
+}
+
+/// The value of an expression of numbers and operators, if it is one.
+fn constant(e: &CExpr) -> Option<f64> {
     match e {
-        CExpr::Sample(..) => true,
-        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => false,
-        CExpr::Call(_, args) => args.iter().any(|a| match a {
-            CArg::Expr(x) => draws(x),
-            CArg::Pool(r) | CArg::Stage(r) => r.index.as_ref().is_some_and(|i| draws(i)),
-        }),
-        CExpr::Unary(_, x) => draws(x),
-        CExpr::Binary(_, a, b) => draws(a) || draws(b),
-        CExpr::Cond(c, a, b) => draws(c) || draws(a) || draws(b),
+        CExpr::Num(x) => Some(*x),
+        CExpr::Cost(_, x) => constant(x),
+        CExpr::Unary(UnOp::Neg, x) => constant(x).map(|x| -x),
+        CExpr::Binary(op, a, b) => Some(crate::frontend::link::binop(
+            *op,
+            constant(a)?,
+            constant(b)?,
+        )),
+        CExpr::Cond(c, a, b) => {
+            if constant(c)? != 0.0 {
+                constant(a)
+            } else {
+                constant(b)
+            }
+        }
+        // the linker's constant functions (`min`, `max`, …) of constants
+        CExpr::Call(f, args) => {
+            let xs = args
+                .iter()
+                .map(|a| match a {
+                    CArg::Expr(x) => constant(x),
+                    CArg::Pool(_) | CArg::Stage(_) => None,
+                })
+                .collect::<Option<Vec<f64>>>()?;
+            crate::frontend::link::const_call(f.name(), &xs)
+        }
+        _ => None,
     }
 }
 
-fn arrival_expr_is_pure(e: &CExpr) -> bool {
-    match e {
-        CExpr::Num(_) => true,
-        CExpr::Sample(_, args) => args.iter().all(arrival_expr_is_pure),
-        CExpr::Unary(_, x) => arrival_expr_is_pure(x),
-        CExpr::Binary(_, a, b) => arrival_expr_is_pure(a) && arrival_expr_is_pure(b),
-        CExpr::Cond(c, a, b) => {
-            arrival_expr_is_pure(c) && arrival_expr_is_pure(a) && arrival_expr_is_pure(b)
-        }
-        CExpr::Call(_, args) => args.iter().all(|arg| match arg {
-            CArg::Expr(x) => arrival_expr_is_pure(x),
-            CArg::Pool(_) | CArg::Stage(_) => false,
-        }),
-        CExpr::Attr(_) | CExpr::Ctx(_) => false,
+/// An amount a statement names (units, tokens, seconds) is not negative,
+/// and not NaN: a constant one that is does not link; a computed one fails
+/// the run (#270).
+fn amount(e: &CExpr, what: &str) -> Result<(), String> {
+    match constant(e) {
+        Some(x) if x.is_nan() || x < 0.0 => Err(format!(
+            "`{what} ({x})`: an amount of units, tokens or seconds is a number, and not negative"
+        )),
+        _ => Ok(()),
     }
+}
+
+/// Whether an expression's value moves while a session holds still: it
+/// reads the clock, the context, the state or a draw. An index that does
+/// is not the same member when read again (#282, #317), and a hold's units
+/// that do ask for something else at the next try (#364).
+pub(crate) fn moves(e: &CExpr) -> bool {
+    e.any(&|x| match x {
+        // a register moves at its stage's iterations (#377: read at the join,
+        // a reserve on one was judged on a value an iteration then lowered)
+        CExpr::Ctx(_) | CExpr::Reg(_) | CExpr::Sample(..) => true,
+        // a function of its arguments alone does not move
+        CExpr::Call(f, _) => !f.is_arithmetic(),
+        _ => false,
+    })
+}
+
+/// Whether a renewal gap reads only constants and draws: no attribute, no
+/// context variable, no pool or stage.
+fn arrival_expr_is_pure(e: &CExpr) -> bool {
+    !e.any(&|x| match x {
+        CExpr::Attr(_) | CExpr::Ctx(_) => true,
+        CExpr::Call(_, args) => args.iter().any(|a| !matches!(a, CArg::Expr(_))),
+        _ => false,
+    })
 }
 
 struct Validator<'a> {
@@ -945,6 +2018,110 @@ struct Validator<'a> {
 }
 
 impl Validator<'_> {
+    /// An `advance running by (…)` key, in either form of `schedule`: read
+    /// for every resident at every iteration, so it does not draw. It may
+    /// read the clock: a key orders the residents and excludes none.
+    fn serve_key(&self, k: &CExpr) -> Result<(), String> {
+        self.expr(k, Moment::Serve)?;
+        if draws(k) {
+            return Err(
+                "an `advance running by (…)` key may not draw (`~`): it is read for every \
+                 resident at every iteration, and the order would change under the \
+                 scheduler's feet"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// An `only` of `advance running` or `admit waiting`: read as a key is,
+    /// and not reading the clock either, since an engine whose residents it
+    /// all excludes waits for an event, and the clock moving is none (#263).
+    fn only(&self, e: &CExpr) -> Result<(), String> {
+        self.expr(e, Moment::Serve)?;
+        if draws(e) {
+            return Err(
+                "an `only` may not draw (`~`): it is read for every resident at every \
+                 iteration"
+                    .into(),
+            );
+        }
+        if reads_clock(e) {
+            return Err(
+                "an `only` may not read `now` or `work(…)`: an engine whose requests it \
+                 all excludes waits for the next event, and time passing is not one"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// A step stage's iteration body: its keys and `only`s as above, a
+    /// guard and an `admit`'s `while` as the iteration is planned, neither
+    /// drawing nor reading the clock (an engine whose `schedule` schedules
+    /// nothing waits for an event, and the clock moving is none, #263), and
+    /// a guard does not read this stage's `budget_left`, which plans the
+    /// iteration the body is planning.
+    fn iteration(&self, st: usize, body: &[CIter]) -> Result<(), String> {
+        let plan = |e: &CExpr, what: &str| -> Result<(), String> {
+            self.expr(e, Moment::Plan)?;
+            if draws(e) {
+                return Err(format!(
+                    "{what} may not draw (`~`): it is read at every iteration"
+                ));
+            }
+            if reads_clock(e) {
+                return Err(format!(
+                    "{what} may not read `now` or `work(…)`: an engine whose `schedule` \
+                     schedules nothing waits for an event, and the clock moving is none"
+                ));
+            }
+            let own = |r: &CRef| (r.base..r.base + r.count).contains(&st);
+            if e.any(&|x| {
+                matches!(x, CExpr::Call(Fun::BudgetLeft, a)
+                    if matches!(a.as_slice(), [CArg::Stage(r)] if own(r)))
+            }) {
+                return Err(format!(
+                    "{what} may not read this engine's `budget_left(…)`: it plans an \
+                     iteration, and the schedule is the plan"
+                ));
+            }
+            Ok(())
+        };
+        for s in body {
+            match s {
+                CIter::Serve { only, by } => {
+                    only.iter().try_for_each(|e| self.only(e))?;
+                    by.iter().flatten().try_for_each(|k| self.serve_key(k))?;
+                }
+                CIter::Admit { only, gate } => {
+                    only.iter().try_for_each(|e| self.only(e))?;
+                    if let Some(g) = gate {
+                        plan(g, "`admit waiting while (…)`")?;
+                    }
+                }
+                CIter::Branch(g, a, b) => {
+                    plan(g, "a `branch` in a `schedule`")?;
+                    self.iteration(st, a)?;
+                    self.iteration(st, b)?;
+                }
+                CIter::Set(r, e) => {
+                    let Some(reg) = self.p.registers.get(*r) else {
+                        return Err(format!("register {r} out of range"));
+                    };
+                    if reg.stage != st {
+                        return Err(format!(
+                            "`set {}`: the register is engine `{}`'s; a schedule sets its own engine's",
+                            reg.name, self.p.stages[reg.stage].name
+                        ));
+                    }
+                    plan(e, &format!("`set {}`", reg.name))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn block(&self, b: BlockId) -> Result<(), String> {
         if b < self.p.blocks.len() {
             Ok(())
@@ -990,19 +2167,34 @@ impl Validator<'_> {
                 r.base + r.count
             ));
         }
-        // a gauge names its members by number (an aggregate writes them so):
-        // an index read from the state could leave the array, and a gauge
-        // that fails the run would be one a reader ignoring gauges does not
-        if m == Moment::Gauge
+        // a gauge or a claim names its members by number (an aggregate
+        // writes them so): an index read from the state could leave the
+        // array, and a gauge or a claim that fails the run would be one a
+        // reader ignoring them does not
+        if matches!(m, Moment::Gauge | Moment::Iteration)
             && let Some(e) = &r.index
             && !matches!(**e, CExpr::Num(k) if k >= 0.0 && k.fract() == 0.0 && k < r.count as f64)
         {
+            let whose = if m == Moment::Gauge {
+                "a gauge"
+            } else {
+                "a claim"
+            };
             return Err(format!(
-                "a gauge's {what} index is a number in range (`kv[0]`, or an aggregate's `kv[k]`), \
+                "{whose}'s {what} index is a number in range (`kv[0]`, or an aggregate's `kv[k]`), \
                  not one read from the state"
             ));
         }
         if let Some(e) = &r.index {
+            if let Some(k) = constant(e)
+                && !(k >= 0.0 && k.fract() == 0.0 && k < r.count as f64)
+            {
+                return Err(format!(
+                    "{what} index {k}: a member of an array of {} is 0 to {}",
+                    r.count,
+                    r.count - 1
+                ));
+            }
             self.expr(e, m)?;
         }
         Ok(())
@@ -1010,12 +2202,21 @@ impl Validator<'_> {
     /// The expression is well formed and reads only what moment `m` supplies.
     fn expr(&self, e: &CExpr, m: Moment) -> Result<(), String> {
         match e {
+            CExpr::Cost(target, value) => {
+                self.p.validate_cost_target(target)?;
+                self.expr(value, m)
+            }
             CExpr::Num(_) => Ok(()),
             // a gauge is integrated as constant between events: what moves
             // between them would be read at the event and held
             CExpr::Ctx(CtxVar::Now) if m == Moment::Gauge => Err(
                 "a gauge may not read `now`: it changes between events, and a gauge is held \
                  constant between them"
+                    .into(),
+            ),
+            CExpr::Ctx(CtxVar::Now) if m == Moment::Given => Err(
+                "a claim's `given` may not read `now`: it is a condition on one session's \
+                 attributes"
                     .into(),
             ),
             CExpr::Ctx(v) => {
@@ -1035,6 +2236,16 @@ impl Validator<'_> {
                 "`{}` is a session attribute, and a gauge has no session",
                 self.p.attrs.get(*a).map_or("?", |s| s.as_str())
             )),
+            // a stage's capacity, budget, chunk, cost and an iteration body's
+            // guard are read for the stage, where no one session is: the
+            // interpreter would read the attribute as NaN
+            CExpr::Attr(a) if matches!(m, Moment::Ps | Moment::Budget | Moment::Step | Moment::Plan) => {
+                Err(format!(
+                    "`{}` is a session attribute, and {} has no session",
+                    self.p.attrs.get(*a).map_or("?", |s| s.as_str()),
+                    m.place()
+                ))
+            }
             CExpr::Sample(..) if m == Moment::Gauge => Err(
                 "a gauge may not draw (`~`): it reads the state, and a draw would move the run's streams"
                     .into(),
@@ -1046,15 +2257,100 @@ impl Validator<'_> {
             ),
             CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Gauge => Err(
                 "a gauge may not read `budget_left(…)`: it plans the next iteration, which \
-                 evaluates the stage's budget and may draw"
+                 evaluates the engine's `tokens cap` and may draw"
+                    .into(),
+            ),
+            // budget_left plans an iteration from a budget: a budget read
+            // from it, this engine's or another's, plans from itself (#284)
+            CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Budget => Err(
+                "an engine's `tokens cap` or `each at most` may not read `budget_left(…)`: \
+                 budget_left plans an iteration from a `tokens cap`, so a `tokens cap` that \
+                 reads it can read itself"
+                    .into(),
+            ),
+            CExpr::Call(Fun::BudgetLeft, _) if m == Moment::Victim => Err(
+                "a preempt key may not read `budget_left(…)`: a victim is chosen while the \
+                 iteration that would answer it is being planned"
                     .into(),
             ),
             CExpr::Call(Fun::CachedIn, _) if m == Moment::Gauge => Err(
                 "`cachedin` is the session's own cached prefix, and a gauge has no session".into(),
             ),
+            // a claim reads and does not act: no draw, and what its moment
+            // supplies (a `given` the session, an iteration claim the stage
+            // as the iteration starts, a claim `at end` the run)
+            CExpr::Sample(..) if matches!(m, Moment::Given | Moment::Iteration | Moment::End) => {
+                Err("a claim may not draw (`~`): it reads and does not act, and a draw would \
+                     move the run's streams"
+                    .into())
+            }
+            CExpr::Attr(a) if m == Moment::Iteration => Err(format!(
+                "`{}` is a session attribute, and a claim over iterations reads the engine, \
+                 not a session",
+                self.p.attrs.get(*a).map_or("?", |s| s.as_str())
+            )),
+            CExpr::Attr(a) if m == Moment::End => Err(format!(
+                "`{}` is a session attribute, and a claim `at end` reads the run, not a session",
+                self.p.attrs.get(*a).map_or("?", |s| s.as_str())
+            )),
+            CExpr::Call(f, _) if matches!(m, Moment::Given | Moment::End) && !f.is_arithmetic() => {
+                Err(format!(
+                    "`{}(…)` reads the deployment's state, and {} reads {}",
+                    f.name(),
+                    m.place(),
+                    if m == Moment::Given {
+                        "the session's attributes and the constants"
+                    } else {
+                        "the constants, `now` and the aggregates of the observations"
+                    }
+                ))
+            }
+            CExpr::Call(f, _)
+                if m == Moment::Iteration
+                    && !f.is_arithmetic()
+                    && !matches!(
+                        f,
+                        Fun::Queue | Fun::Busy | Fun::Used | Fun::Free | Fun::Holders | Fun::Queued
+                    ) =>
+            {
+                Err(format!(
+                    "a claim over iterations may not read `{}(…)`: it reads the deployment as the \
+                     iteration starts through `queue`, `busy`, `used`, `free`, `holders` and \
+                     `queued` (`work` drains between events, `budget_left` plans an iteration, \
+                     `cachedin` is a session's)",
+                    f.name()
+                ))
+            }
+            CExpr::Agg(a, k) => {
+                if m != Moment::End {
+                    return Err(format!(
+                        "`{}(…)` aggregates the run's observations and is read only by a claim \
+                         `at end`, but is read in {m}",
+                        a.name()
+                    ));
+                }
+                self.observe(*k)
+            }
+            CExpr::Reg(r) => {
+                if *r >= self.p.registers.len() {
+                    return Err(format!("register {r} out of range"));
+                }
+                // a register is the scheduler's: a session and a claim's
+                // `given` read the session's
+                if matches!(m, Moment::Session | Moment::Given) {
+                    return Err(format!(
+                        "`{}` is an engine's register (`state`), which its schedule reads; \
+                         it is read in {m}",
+                        self.p.registers[*r].name
+                    ));
+                }
+                Ok(())
+            }
             CExpr::Attr(a) => {
                 self.attr(*a)?;
-                if m != Moment::Session && self.p.hidden.contains(a) {
+                // a claim's `given` is no scheduler's: it may read anything
+                // the session has
+                if !matches!(m, Moment::Session | Moment::Given) && self.p.hidden.contains(a) {
                     return Err(format!(
                         "`{}` is hidden from the scheduler, but is read in {m}",
                         self.p.attrs[*a]
@@ -1062,12 +2358,68 @@ impl Validator<'_> {
                 }
                 Ok(())
             }
-            CExpr::Sample(_, xs) => xs.iter().try_for_each(|x| self.expr(x, m)),
-            CExpr::Call(_, args) => args.iter().try_for_each(|a| match a {
-                CArg::Expr(x) => self.expr(x, m),
-                CArg::Pool(r) => self.cref(r, self.p.pools.len(), "pool", m),
-                CArg::Stage(r) => self.cref(r, self.p.stages.len(), "stage", m),
-            }),
+            CExpr::Sample(d, xs) => {
+                if xs.len() != d.arity() {
+                    return Err(format!(
+                        "`~{}` takes {} argument(s), got {}",
+                        d.name(),
+                        d.arity(),
+                        xs.len()
+                    ));
+                }
+                xs.iter().try_for_each(|x| self.expr(x, m))
+            }
+            CExpr::Call(f, args) => {
+                let sig = f.signature();
+                if args.len() != sig.len() {
+                    return Err(format!(
+                        "`{}` takes {} argument(s), got {}",
+                        f.name(),
+                        sig.len(),
+                        args.len()
+                    ));
+                }
+                for (a, k) in args.iter().zip(sig) {
+                    let found = match a {
+                        CArg::Expr(_) => ArgKind::Expr,
+                        CArg::Pool(_) => ArgKind::Pool,
+                        CArg::Stage(_) => ArgKind::Stage,
+                    };
+                    if found != *k {
+                        let want = match k {
+                            ArgKind::Expr => "an expression",
+                            ArgKind::Pool => "a pool",
+                            ArgKind::Stage => "a stage",
+                        };
+                        return Err(format!("`{}` expects {want} here", f.name()));
+                    }
+                }
+                args.iter().try_for_each(|a| match a {
+                    CArg::Expr(x) => self.expr(x, m),
+                    CArg::Pool(r) => self.cref(r, self.p.pools.len(), "pool", m),
+                    CArg::Stage(r) => self.cref(r, self.p.stages.len(), "stage", m),
+                })?;
+                // the token budget is a step engine's: on any other stage
+                // there is none to read (#268)
+                if let (Fun::BudgetLeft, [CArg::Stage(r)]) = (f, args.as_slice())
+                    && let Some(s) = self.p.stages[r.base..r.base + r.count]
+                        .iter()
+                        .find(|s| !matches!(s.kind, CStageKind::Step(_)))
+                {
+                    let kind = s.kind.word();
+                    let n = &s.name;
+                    let what = if s.index.is_some() {
+                        format!("a member of `{n}`")
+                    } else {
+                        format!("`{n}`")
+                    };
+                    return Err(format!(
+                        "`budget_left({n})`: {what} is a {kind} stage; only an engine has \
+                         a token budget (`tokens cap`)"
+                    ));
+                }
+                Ok(())
+            }
             CExpr::Unary(_, x) => self.expr(x, m),
             CExpr::Binary(_, a, b) => {
                 self.expr(a, m)?;
@@ -1080,6 +2432,38 @@ impl Validator<'_> {
             }
         }
     }
+    /// Whether every path through block `b` reaches a statement that lets
+    /// time pass: a `run` (a constant zero work does not count; a computed
+    /// one is the run time's to catch), a `hold` whose body does, or `end`.
+    /// The condition under which a `loop` blocks on every pass
+    /// (`docs/design/stochastic-model.md`, Lemma 1). A `branch` counts when
+    /// both arms do; an inner `loop` is never left, so it counts when it does.
+    fn lets_time_pass(&self, b: BlockId) -> bool {
+        for s in &self.p.blocks[b] {
+            match s {
+                CStmt::End => return true,
+                CStmt::Run { work, .. } => {
+                    if !constant(work).is_some_and(|w| w <= 0.0) {
+                        return true;
+                    }
+                }
+                CStmt::Hold { body, .. } => {
+                    if self.lets_time_pass(*body) {
+                        return true;
+                    }
+                }
+                CStmt::Branch(_, a, c) => {
+                    if self.lets_time_pass(*a) && self.lets_time_pass(*c) {
+                        return true;
+                    }
+                }
+                CStmt::Loop(inner) => return self.lets_time_pass(*inner),
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn stmt(&self, s: &CStmt) -> Result<(), String> {
         let np = self.p.pools.len();
         let ns = self.p.stages.len();
@@ -1103,15 +2487,84 @@ impl Validator<'_> {
             } => {
                 // the header is read when the scheduler admits; `cache` when
                 // the session releases
-                for (r, u, reserve) in pools {
+                // and re-read at every admission attempt, so a draw there
+                // would be a different number each time the scheduler
+                // looked (the rule of a queue key)
+                let no_draw = |e: &CExpr, what: &str| {
+                    if draws(e) {
+                        Err(format!(
+                            "a hold's {what} may not draw; sample into an attribute first"
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                };
+                // a hold takes each pool once: two entries for one pool are
+                // two allocations the statements inside cannot tell apart
+                // (`grow kv` grew one and was given back twice, #309)
+                for (r, _, _) in pools {
                     self.cref(r, np, "pool", m)?;
+                }
+                for (k, (r, _, _)) in pools.iter().enumerate() {
+                    if pools[..k].iter().any(|(q, _, _)| q == r) {
+                        return Err(format!(
+                            "a hold takes `{}` twice; hold it once, with the units (and any \
+                             reserve) added",
+                            self.p.show_pool_ref(r)
+                        ));
+                    }
+                }
+                for (r, u, reserve) in pools {
                     self.expr(u, Moment::Admit)?;
+                    no_draw(u, "units")?;
+                    amount(u, &format!("hold {}", self.p.pools[r.base].name))?;
                     if let Some(f) = reserve {
                         self.expr(f, Moment::Admit)?;
+                        no_draw(f, "`reserve`")?;
+                    }
+                    // what admission waits for, when the program fixes it,
+                    // must fit some member the reference may name: one that
+                    // fits none is rejected whenever it is reached (#271)
+                    let need = [Some(u), reserve.as_ref()]
+                        .into_iter()
+                        .flatten()
+                        .filter_map(constant)
+                        .reduce(f64::max);
+                    let round = |q: &CPool, x: f64| q.block.map_or(x, |b| (x / b).ceil() * b);
+                    // the member a constant index names, or every member
+                    let members = match r.index.as_deref().and_then(constant) {
+                        Some(k) if k >= 0.0 && k.fract() == 0.0 && (k as usize) < r.count => {
+                            r.base + k as usize..r.base + k as usize + 1
+                        }
+                        _ => r.base..r.base + r.count,
+                    };
+                    let several = members.len() > 1;
+                    if let Some(need) = need
+                        && self.p.pools[members.clone()]
+                            .iter()
+                            .all(|q| round(q, need) > q.cap)
+                    {
+                        let q = &self.p.pools[members.start];
+                        let blocks = match q.block {
+                            Some(b) if round(q, need) != need => {
+                                format!(" ({} in blocks of {b})", round(q, need))
+                            }
+                            _ => String::new(),
+                        };
+                        let cap = if several {
+                            format!("the cap of every member (`{}`: {})", q.name, q.cap)
+                        } else {
+                            format!("its cap {}", q.cap)
+                        };
+                        return Err(format!(
+                            "a hold on pool `{}` waits for {need} units{blocks}, more than {cap}",
+                            q.name
+                        ));
                     }
                 }
                 if let Some(e) = reuse {
                     self.expr(e, Moment::Admit)?;
+                    no_draw(e, "`reuse`")?;
                 }
                 if let Some(e) = cache {
                     self.expr(e, m)?;
@@ -1124,25 +2577,42 @@ impl Validator<'_> {
             }
             CStmt::Grow(r, e) => {
                 self.cref(r, np, "pool", m)?;
-                self.expr(e, m)
+                self.expr(e, m)?;
+                amount(e, &format!("grow {}", self.p.pools[r.base].name))
             }
             CStmt::Drop(r) | CStmt::Release(r) => self.cref(r, np, "pool", m),
             CStmt::Load(r, e) => {
                 self.cref(r, np, "pool", m)?;
-                self.expr(e, m)
+                self.expr(e, m)?;
+                amount(e, &format!("load {}", self.p.pools[r.base].name))
             }
             CStmt::Run {
                 stage,
+                mode,
                 work,
                 growing,
                 also,
-                ..
             } => {
                 self.cref(stage, ns, "stage", m)?;
+                let step = |i: usize| matches!(self.p.stages[i].kind, CStageKind::Step(_));
+                let members = stage.base..stage.base + stage.count;
+                if members
+                    .clone()
+                    .any(|i| step(i) != (*mode != RunMode::Plain))
+                {
+                    return Err(
+                        "`prefill`/`decode` are required on an engine and not allowed on another stage"
+                            .into(),
+                    );
+                }
+                if growing.is_some() && !members.clone().all(step) {
+                    return Err("`growing` needs an engine".into());
+                }
                 for r in also {
                     self.cref(r, ns, "stage", m)?;
                 }
                 self.expr(work, m)?;
+                amount(work, &format!("run {}", self.p.stages[stage.base].name))?;
                 if let Some(g) = growing {
                     self.cref(g, np, "pool", m)?;
                 }
@@ -1153,7 +2623,34 @@ impl Validator<'_> {
                 self.block(*a)?;
                 self.block(*b)
             }
-            CStmt::Loop(b) => self.block(*b),
+            CStmt::While(c, b) => {
+                self.expr(c, m)?;
+                if let CExpr::Num(x) = c
+                    && *x != 0.0
+                    && *x != 1.0
+                {
+                    return Err(format!(
+                        "`while ({})`: the guard is not 0 or 1; write `~bernoulli(p)` for a continuation probability",
+                        show_num_exact(*x)
+                    ));
+                }
+                self.block(*b)?;
+                if !self.lets_time_pass(*b) {
+                    return Err("a `while` must let time pass on every pass through its body: a `run`, a `hold` whose body does, or `end` on every path".into());
+                }
+                Ok(())
+            }
+            CStmt::Loop(b) => {
+                self.block(*b)?;
+                if !self.lets_time_pass(*b) {
+                    return Err(
+                        "a `loop` must let time pass on every pass through its body: \
+                                a `run`, a `hold` whose body does, or `end` on every path"
+                            .into(),
+                    );
+                }
+                Ok(())
+            }
             CStmt::Choose { var, count, key } => {
                 self.attr(*var)?;
                 self.expr(count, m)?;
@@ -1162,7 +2659,59 @@ impl Validator<'_> {
                 }
                 key.iter().try_for_each(|k| self.expr(k, m))
             }
+            CStmt::Fork(b) => {
+                self.block(*b)?;
+                if !self
+                    .p
+                    .blocks
+                    .iter()
+                    .flatten()
+                    .any(|s| matches!(s, CStmt::Join))
+                {
+                    return Err(
+                        "a program that forks a leg and never joins: a session may not \
+                         end while its leg runs"
+                            .into(),
+                    );
+                }
+                if let Some(what) = self.leg_may_not(*b) {
+                    return Err(format!(
+                        "a `fork`'s leg may not {what}: a leg is a part of the request beside \
+                         it, and the session turns, ends, forks and joins"
+                    ));
+                }
+                Ok(())
+            }
+            CStmt::Join => {
+                if self
+                    .p
+                    .blocks
+                    .iter()
+                    .flatten()
+                    .any(|s| matches!(s, CStmt::Fork(_)))
+                {
+                    Ok(())
+                } else {
+                    Err("a `join` in a program that forks no leg waits for nothing".into())
+                }
+            }
         }
+    }
+
+    /// The first thing a leg's block does that only the session may: a
+    /// `turn`, an `end`, a `fork` or a `join`, in it or a block in it.
+    fn leg_may_not(&self, b: BlockId) -> Option<&'static str> {
+        self.p.blocks[b].iter().find_map(|s| match s {
+            CStmt::Turn => Some("`turn`"),
+            CStmt::End => Some("`end`"),
+            CStmt::Fork(_) => Some("fork"),
+            CStmt::Join => Some("`join`"),
+            CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::While(_, body) => {
+                self.leg_may_not(*body)
+            }
+            CStmt::Branch(_, x, y) => self.leg_may_not(*x).or_else(|| self.leg_may_not(*y)),
+            _ => None,
+        })
     }
 }
 
@@ -1221,45 +2770,143 @@ impl BinOp {
     }
 }
 
+/// What a function takes in one argument position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArgKind {
+    Expr,
+    Pool,
+    Stage,
+}
+
+use ArgKind::{Expr as E, Pool as P, Stage as S};
+
+/// Every function a call may name, for lookup by name; `Fun::entry` is
+/// the definition and a match, so a new `Fun` without one does not compile.
+const FUNS: [Fun; 22] = [
+    Fun::Min,
+    Fun::Max,
+    Fun::Abs,
+    Fun::Floor,
+    Fun::Ceil,
+    Fun::Sqrt,
+    Fun::Exp,
+    Fun::Ln,
+    Fun::Pow,
+    Fun::Queue,
+    Fun::Busy,
+    Fun::Work,
+    Fun::Used,
+    Fun::Free,
+    Fun::CachedIn,
+    Fun::Holders,
+    Fun::Queued,
+    Fun::Price,
+    Fun::BudgetLeft,
+    Fun::EstLambda,
+    Fun::EstRho,
+    Fun::EstWait,
+];
+
 impl Fun {
-    fn name(self) -> &'static str {
+    /// A function of its arguments alone (`min`, `ceil`, …), which reads
+    /// no state.
+    pub fn is_arithmetic(self) -> bool {
+        matches!(
+            self,
+            Fun::Min
+                | Fun::Max
+                | Fun::Abs
+                | Fun::Floor
+                | Fun::Ceil
+                | Fun::Sqrt
+                | Fun::Exp
+                | Fun::Ln
+                | Fun::Pow
+        )
+    }
+
+    /// The function's name in a program and the kind of each argument. The
+    /// linker resolves a call by it, and `Program::validate` checks one.
+    fn entry(self) -> (&'static str, &'static [ArgKind]) {
         match self {
-            Fun::Min => "min",
-            Fun::Max => "max",
-            Fun::Abs => "abs",
-            Fun::Floor => "floor",
-            Fun::Ceil => "ceil",
-            Fun::Sqrt => "sqrt",
-            Fun::Exp => "exp",
-            Fun::Ln => "ln",
-            Fun::Pow => "pow",
-            Fun::Queue => "queue",
-            Fun::Busy => "busy",
-            Fun::Work => "work",
-            Fun::Used => "used",
-            Fun::Free => "free",
-            Fun::CachedIn => "cachedin",
-            Fun::Holders => "holders",
-            Fun::Queued => "queued",
-            Fun::Price => "price",
-            Fun::BudgetLeft => "budget_left",
-            Fun::EstLambda => "est_lambda",
-            Fun::EstRho => "est_rho",
-            Fun::EstWait => "est_wait",
+            Fun::Min => ("min", &[E, E]),
+            Fun::Max => ("max", &[E, E]),
+            Fun::Abs => ("abs", &[E]),
+            Fun::Floor => ("floor", &[E]),
+            Fun::Ceil => ("ceil", &[E]),
+            Fun::Sqrt => ("sqrt", &[E]),
+            Fun::Exp => ("exp", &[E]),
+            Fun::Ln => ("ln", &[E]),
+            Fun::Pow => ("pow", &[E, E]),
+            Fun::Queue => ("queue", &[S]),
+            Fun::Busy => ("busy", &[S]),
+            Fun::Work => ("work", &[S]),
+            Fun::Used => ("used", &[P]),
+            Fun::Free => ("free", &[P]),
+            Fun::CachedIn => ("cachedin", &[P]),
+            Fun::Holders => ("holders", &[P]),
+            Fun::Queued => ("queued", &[P]),
+            Fun::Price => ("price", &[S, E, E]),
+            Fun::BudgetLeft => ("budget_left", &[S]),
+            Fun::EstLambda => ("est_lambda", &[S]),
+            Fun::EstRho => ("est_rho", &[S]),
+            Fun::EstWait => ("est_wait", &[S]),
         }
+    }
+
+    pub fn name(self) -> &'static str {
+        self.entry().0
+    }
+
+    /// The kind of each argument, in order.
+    pub fn signature(self) -> &'static [ArgKind] {
+        self.entry().1
+    }
+
+    pub fn from_name(name: &str) -> Option<Fun> {
+        FUNS.into_iter().find(|f| f.name() == name)
+    }
+
+    /// The names a call may use, in the table's order.
+    pub fn names() -> impl Iterator<Item = &'static str> {
+        FUNS.into_iter().map(Fun::name)
     }
 }
 
+/// Every distribution a draw may name, for lookup by name; `DistKind::entry`
+/// is the definition.
+const DISTS: [DistKind; 6] = [
+    DistKind::Exp,
+    DistKind::Det,
+    DistKind::Uniform,
+    DistKind::Erlang,
+    DistKind::H2,
+    DistKind::Bernoulli,
+];
+
 impl DistKind {
-    fn name(self) -> &'static str {
+    /// The distribution's name in a program and how many parameters it takes.
+    fn entry(self) -> (&'static str, usize) {
         match self {
-            DistKind::Exp => "exp",
-            DistKind::Det => "det",
-            DistKind::Uniform => "uniform",
-            DistKind::Erlang => "erlang",
-            DistKind::H2 => "h2",
-            DistKind::Bernoulli => "bernoulli",
+            DistKind::Exp => ("exp", 1),
+            DistKind::Det => ("det", 1),
+            DistKind::Uniform => ("uniform", 2),
+            DistKind::Erlang => ("erlang", 2),
+            DistKind::H2 => ("h2", 2),
+            DistKind::Bernoulli => ("bernoulli", 1),
         }
+    }
+
+    pub fn name(self) -> &'static str {
+        self.entry().0
+    }
+
+    pub fn arity(self) -> usize {
+        self.entry().1
+    }
+
+    pub fn from_name(name: &str) -> Option<DistKind> {
+        DISTS.into_iter().find(|d| d.name() == name)
     }
 }
 
@@ -1300,13 +2947,58 @@ pub fn show_num_exact(x: f64) -> String {
 }
 
 impl Program {
+    /// Whether every `observe` of slot `k` records a test: an expression
+    /// whose outermost operator is a comparison, `&&`, `||` or `!`, so 0 or
+    /// 1 by construction (`observe hit = c > 0`). A literal `1` (an event
+    /// counted), a time, and `c > 0 ? 1 : 0` are not, whatever values they
+    /// take: the report notes a test that never held, and a miss there
+    /// costs less than a note on a correct program.
+    pub fn observe_is_test(&self, k: usize) -> bool {
+        let mut seen = false;
+        for block in &self.blocks {
+            for s in block {
+                if let CStmt::Observe(slot, e) = s
+                    && *slot == k
+                {
+                    seen = true;
+                    let test = match e {
+                        CExpr::Binary(op, _, _) => matches!(
+                            op,
+                            BinOp::Lt
+                                | BinOp::Le
+                                | BinOp::Gt
+                                | BinOp::Ge
+                                | BinOp::Eq
+                                | BinOp::Ne
+                                | BinOp::And
+                                | BinOp::Or
+                        ),
+                        CExpr::Unary(UnOp::Not, _) => true,
+                        _ => false,
+                    };
+                    if !test {
+                        return false;
+                    }
+                }
+            }
+        }
+        seen
+    }
+
     /// An expression in source form, with attribute, pool and stage names.
     ///
     /// `let` constants were folded at link time, so they come back as their
     /// values: `cap blocks * bs` prints as `160000`.
     pub fn show_expr(&self, e: &CExpr) -> String {
+        self.show_expr_with(e, CtxVar::name)
+    }
+
+    /// An expression with its context variables named by `ctx`: a view
+    /// that writes a step stage in an engine's words names the residents'
+    /// totals by their list.
+    pub fn show_expr_with(&self, e: &CExpr, ctx: CtxNames) -> String {
         let mut s = String::new();
-        self.write_expr(&mut s, e, prec::COND);
+        self.write_expr(&mut s, e, prec::COND, ctx);
         s
     }
 
@@ -1347,9 +3039,14 @@ impl Program {
         self.attrs.get(slot).map_or("?", String::as_str)
     }
 
-    fn write_expr(&self, out: &mut String, e: &CExpr, min: u8) {
+    fn write_expr(&self, out: &mut String, e: &CExpr, min: u8, ctx: CtxNames) {
         use std::fmt::Write as _;
         match e {
+            CExpr::Cost(target, value) => {
+                let _ = write!(out, "cost({}, ", self.show_cost_target(target));
+                self.write_expr(out, value, prec::COND, ctx);
+                out.push(')');
+            }
             CExpr::Num(x) => {
                 // `pow()` parses `atom() '^' unary()`, so a folded negative
                 // constant on the left of `^` has to be bracketed or the
@@ -1361,21 +3058,28 @@ impl Program {
                 }
             }
             CExpr::Attr(slot) => out.push_str(self.attr_name(*slot)),
-            CExpr::Ctx(v) => out.push_str(v.name()),
+            CExpr::Ctx(v) => out.push_str(ctx(*v)),
             CExpr::Sample(d, args) => {
                 let _ = write!(out, "~{}(", d.name());
                 for (i, a) in args.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
                     }
-                    self.write_expr(out, a, prec::COND);
+                    self.write_expr(out, a, prec::COND, ctx);
                 }
                 out.push(')');
             }
             CExpr::Call(f, args) => {
                 let _ = write!(out, "{}(", f.name());
-                self.write_list(out, args);
+                self.write_list(out, args, ctx);
                 out.push(')');
+            }
+            CExpr::Agg(a, k) => {
+                let name = self.observes.get(*k).map_or("?", String::as_str);
+                let _ = write!(out, "{}({name})", a.name());
+            }
+            CExpr::Reg(r) => {
+                out.push_str(self.registers.get(*r).map_or("?", |g| g.name.as_str()));
             }
             CExpr::Unary(op, a) => {
                 let wrap = min > prec::UNARY;
@@ -1386,7 +3090,7 @@ impl Program {
                     UnOp::Neg => "-",
                     UnOp::Not => "!",
                 });
-                self.write_expr(out, a, prec::UNARY);
+                self.write_expr(out, a, prec::UNARY, ctx);
                 if wrap {
                     out.push(')');
                 }
@@ -1404,9 +3108,9 @@ impl Program {
                 } else {
                     (p, p + 1)
                 };
-                self.write_expr(out, a, l);
+                self.write_expr(out, a, l, ctx);
                 let _ = write!(out, " {} ", op.symbol());
-                self.write_expr(out, b, r);
+                self.write_expr(out, b, r, ctx);
                 if wrap {
                     out.push(')');
                 }
@@ -1416,11 +3120,11 @@ impl Program {
                 if wrap {
                     out.push('(');
                 }
-                self.write_expr(out, c, prec::OR);
+                self.write_expr(out, c, prec::OR, ctx);
                 out.push_str(" ? ");
-                self.write_expr(out, a, prec::COND);
+                self.write_expr(out, a, prec::COND, ctx);
                 out.push_str(" : ");
-                self.write_expr(out, b, prec::COND);
+                self.write_expr(out, b, prec::COND, ctx);
                 if wrap {
                     out.push(')');
                 }
@@ -1428,13 +3132,13 @@ impl Program {
         }
     }
 
-    fn write_list(&self, out: &mut String, args: &[CArg]) {
+    fn write_list(&self, out: &mut String, args: &[CArg], ctx: CtxNames) {
         for (i, a) in args.iter().enumerate() {
             if i > 0 {
                 out.push_str(", ");
             }
             match a {
-                CArg::Expr(e) => self.write_expr(out, e, prec::COND),
+                CArg::Expr(e) => self.write_expr(out, e, prec::COND, ctx),
                 CArg::Pool(r) => out.push_str(&self.show_pool_ref(r)),
                 CArg::Stage(r) => out.push_str(&self.show_stage_ref(r)),
             }

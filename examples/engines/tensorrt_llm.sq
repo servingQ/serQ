@@ -1,0 +1,82 @@
+// TensorRT-LLM (ref/TensorRT-LLM at bf414e37), PyTorch backend on a dense
+// model, its defaults: the C++ capacity scheduler under
+// GUARANTEED_NO_EVICT, then the micro-batch scheduler with chunked prefill
+// off and block reuse on (docs/design/engine-neutrality.md cites the
+// source rule by rule):
+//
+// - a request is admitted only if the free blocks, less what every running
+//   request still needs to reach prompt + max_tokens, cover its own
+//   prompt + max_tokens (`reserve held`): it allocates its prompt, grows as
+//   it decodes, and is never preempted;
+// - no chunking: a context runs whole or waits, and the first that does
+//   not fit ends the scan (`granule inf`);
+// - generation requests are served before contexts, as the capacity
+//   scheduler lists them first: a resident-first step.
+//
+// Where this program is not TensorRT-LLM: prefix-aware scheduling skips a
+// context whose first blocks a context admitted in the same pass will
+// contribute, which needs the cache shared across sessions (#374), so
+// this program is strict FCFS; the overlap scheduler schedules iteration
+// n+1 before it reads n's samples, so a request that stops at n is in
+// n+1's batch, which `run trtllm decode (cost(trtllm, o))` stands for.
+
+def reusable(x, bs) { floor((x - 1) / bs) * bs }
+
+let B = 8192;            // max_num_tokens
+let max_batch = 2048;    // max_batch_size
+let blocks = 10000;      // KV blocks
+let bs = 32;             // tokens_per_block
+let mt = 1024;           // max_tokens, known to the scheduler
+let a = 2e-5;            // compute per scheduled token (s)
+let omega = 2e-4;        // weights read per iteration (s)
+let beta = 2e-9;         // KV read per iteration per resident context token (s)
+let Lambda = 0.3;        // sessions per second
+let p = 0.9;             // continue after a turn
+let Z = 3.0;             // tool time (s)
+
+fn main() {
+  device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs; }
+  engine trtllm on gpu {
+    reqs cap max_batch;
+    tokens cap B;
+    granule inf;
+    schedule { advance running; admit waiting while (running.preempted == 0); }
+    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
+  pool kv on gpu { block bs; evict lru; preempt none; reserve held; }
+  pool reqs on trtllm { queue fifo; }
+  stage tool : delay;
+
+  workload {
+    arrive poisson(Lambda);
+    hidden o;
+    init { set K = 0; }
+    turn {
+      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+      set o = min(floor(~exp(200)) + 1, mt);
+      set more = ~bernoulli(p);
+    }
+    session {
+      loop {
+        turn;
+        set K = prompt + o;
+        branch (more) { tool (~exp(Z)); } else { end; }
+      }
+    }
+  }
+
+  server {
+    set t0 = now;
+    set prompt = K + n;
+    hold reqs (cost(reqs, 1)), kv (cost(kv, prompt)) reserve (cost(kv, prompt + mt))
+         at admission (hit = min(cachedin(kv), reusable(prompt, blocksize(kv)))) {
+      set c = min(cached, reusable(prompt, blocksize(kv)));
+      run trtllm prefill (cost(trtllm, prompt - c)) growing kv;
+      observe ttft = now - t0;
+      run trtllm decode (cost(trtllm, o)) growing kv;
+    } cache (cost(reqs, kv, prompt + o - 1));
+    observe response = now - t0;
+  }
+
+
+}

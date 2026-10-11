@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # a merge queue checks a PR on top of what is queued ahead of it (#347)
+  merge_group:
   workflow_dispatch:
   workflow_call:
 
@@ -16,6 +18,9 @@ jobs:
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install && cargo --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          # a merge group's ref is read by no other run
+          save-if: ${{ github.event_name != 'merge_group' }}
       - name: the vLLM source the docs cite (4 MB, sparse)
         run: scripts/fetch_vllm_ref.sh --sparse
       - name: fmt, clippy, tests, programs link, oracles agree, citations resolve
@@ -30,6 +35,9 @@ jobs:
       - name: Install pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install && cargo --version
       - uses: Swatinem/rust-cache@v2
+        with:
+          # a merge group's ref is read by no other run
+          save-if: ${{ github.event_name != 'merge_group' }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -41,3 +49,45 @@ jobs:
           python -m pip install --quiet dist/pyserq-*.whl
       - name: pyserq gives what the CLI gives
         run: python pyserq/tests/test_pyserq.py
+
+  lean:
+    name: Lean model (lean/) and differential testing against the interpreter
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && cargo --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # a merge group's ref is read by no other run
+          save-if: ${{ github.event_name != 'merge_group' }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install elan (the toolchain is pinned by lean/lean-toolchain)
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          # the dependencies only (Mathlib's oleans); the package itself is rebuilt
+          path: lean/.lake/packages
+          key: lean-${{ hashFiles('lean/lean-toolchain', 'lean/lake-manifest.json') }}
+      - name: Mathlib cache
+        working-directory: lean
+        run: lake exe cache get
+      - name: oracle theorems current, lake build (and serq-lean-bench), no sorry, axiom audit
+        run: scripts/check_lean.sh
+      - name: the interpreter
+        run: cargo build --release --locked
+      - name: differential testing (200 random cases, the 333-session trace on the step clock and with the A100 cost)
+        run: make drt
+      - name: keep the failing cases
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lean-drt-failures
+          path: target/lean-drt
+          if-no-files-found: ignore
+

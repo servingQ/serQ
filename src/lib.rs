@@ -8,15 +8,19 @@
 //! that compiles to it. `examples/` holds example deployments, among them
 //! vLLM v1.
 //!
-//! ```no_run
+//! ```
 //! let src = std::fs::read_to_string("examples/single-turn/mg1.sq").unwrap();
-//! let report = serq::run_source(&src, &serq::Overrides::default(), None).unwrap();
+//! let options = serq::Overrides {
+//!     horizon: Some(100.0), warmup: Some(10.0), ..Default::default()
+//! };
+//! let report = serq::run_source(&src, &options, None).unwrap();
 //! println!("{}", report.text());
 //! ```
 
 pub mod engine;
 pub mod frontend;
 pub mod ir;
+pub mod target;
 pub mod view;
 
 use std::path::Path;
@@ -27,7 +31,12 @@ pub use engine::stats::Estimate;
 pub use frontend::link::{Linked, Overrides};
 pub use ir::Program;
 
-/// Compile program text to IR (parse and link; `--set` overrides apply).
+/// Compile program text to IR (parse and link; declared inputs are bound).
+/// The version of this serq, as `serq --version` prints it and `Report::json`
+/// records it (`serq_version`): the one version of `Cargo.toml`
+/// (`scripts/version.py`), which pyserq inherits.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub fn compile_source(src: &str, ov: &Overrides) -> Result<ir::Program, String> {
     compile_source_at(src, None, ov)
 }
@@ -52,21 +61,39 @@ pub fn compile_source_at(
     finish(prog, src, ov)
 }
 
-/// The constants `--set` overrides, which the parser checks size no queue family.
+/// Static inspection needs a valid IR but does not choose an experiment's duration.
+/// This placeholder is used only by drawing; executing/exporting IR requires a horizon.
+fn inspection_options(ov: &Overrides) -> Overrides {
+    Overrides {
+        horizon: ov.horizon.or(Some(f64::MAX)),
+        ..ov.clone()
+    }
+}
+
+/// The supplied inputs, which the parser checks cannot change an array size.
 fn overridden(ov: &Overrides) -> Vec<String> {
     ov.lets.iter().map(|(name, _)| name.clone()).collect()
 }
 
 /// Link a parsed program and check its IR.
 fn finish(prog: frontend::ast::Program, src: &str, ov: &Overrides) -> Result<ir::Program, String> {
-    let mut p = frontend::link::link(&prog, ov).map_err(|e| e.render_in(src, &prog.libs))?;
+    let (mut p, spans) =
+        frontend::link::link_located(&prog, ov).map_err(|e| e.render_in(src, &prog.libs))?;
     if let Some(t) = &ov.trace {
         p.trace = Some(t.clone());
     }
     // The linker resolves names; the IR's own check is what knows which
     // moment supplies which context variable (`age` in a session statement,
-    // `tokens` in a queue key), so a text program meets it too.
-    p.validate()?;
+    // `tokens` in a queue key), so a text program meets it too. An error
+    // about a statement points at it in the text (#279).
+    p.validate_located().map_err(|e| {
+        let span =
+            e.at.and_then(|(b, k)| spans.get(b)?.get(k).copied().flatten());
+        match span {
+            Some(span) => span.render_in(src, &prog.libs, &e.message),
+            None => e.message,
+        }
+    })?;
     Ok(p)
 }
 
@@ -83,12 +110,16 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     if path.extension().is_some_and(|e| e == "json") {
         if !ov.lets.is_empty() {
-            return Err("--set applies to program text, not to IR (constants are folded)".into());
+            return Err("a program argument applies to program text, not to IR \
+                 (an IR's constants are already folded)\n\
+                 help: override the program text (.sq) this IR was compiled from"
+                .into());
         }
         if !ov.defs.is_empty() {
-            return Err(
-                "--def applies to program text, not to IR (definitions are expanded)".into(),
-            );
+            return Err("a `def` override applies to program text, not to IR \
+                 (an IR's definitions are already expanded)\n\
+                 help: override the program text (.sq) this IR was compiled from"
+                .into());
         }
         let mut p = ir::Program::from_json(&text)?;
         if let Some(h) = ov.horizon {
@@ -111,6 +142,69 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     } else {
         compile_file(&text, path, ov)
     }
+}
+
+/// The program the deployment view draws, from program text: what one
+/// request runs (the `server`, or a gateway's `route`) in place of the
+/// session. Whether a session comes back, and when it ends, belongs to the
+/// workload. A program with no unique request body is drawn whole.
+pub fn compile_drawn_file(src: &str, path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
+    let prog = frontend::parser::parse_file_with(src, path, &ov.defs, &overridden(ov))
+        .map_err(|e| e.render(src))?;
+    finish(drawn(prog), src, &inspection_options(ov))
+}
+
+/// `compile_drawn_file` for the text of a program file in `base`.
+pub fn compile_drawn_source_at(
+    src: &str,
+    base: Option<&Path>,
+    ov: &Overrides,
+) -> Result<ir::Program, String> {
+    let prog = frontend::parser::parse_at_with(src, base, &ov.defs, &overridden(ov))
+        .map_err(|e| e.render(src))?;
+    finish(drawn(prog), src, &inspection_options(ov))
+}
+
+/// `load`, for the deployment view: program text is compiled with
+/// `compile_drawn_file`; IR, which has no workload and server apart, is
+/// drawn whole.
+pub fn load_drawn(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
+    if path.extension().is_some_and(|e| e == "json") {
+        return load(path, ov);
+    }
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    compile_drawn_file(&text, path, ov)
+}
+
+/// The request in place of the session. What the server reads of the
+/// workload's attributes (`prev`, the previous prompt) is declared ahead of
+/// it, set to `now`: a value the view cannot know, so a server guard on a
+/// workload attribute (`branch (first)`) draws both arms.
+fn drawn(mut prog: frontend::ast::Program) -> frontend::ast::Program {
+    use frontend::ast::{Expr, Stmt};
+    use frontend::parser::assigned_in;
+    if prog.request.is_empty() {
+        return prog;
+    }
+    let request = std::mem::take(&mut prog.request);
+    let (mut workload, mut own) = (vec![], vec![]);
+    assigned_in(&prog.session, &mut workload);
+    assigned_in(&request, &mut own);
+    let mut session: Vec<Stmt> = vec![];
+    for name in workload {
+        if !own.contains(&name)
+            && !session
+                .iter()
+                .any(|s| matches!(s, Stmt::Set(n, _) if *n == name))
+        {
+            session.push(Stmt::Set(name, Expr::Var("now".into())));
+        }
+    }
+    session.push(Stmt::Side(ir::Side::Server));
+    session.extend(request);
+    prog.session = session;
+    prog
 }
 
 /// Run an IR program. A relative trace path is resolved against `base`
@@ -188,7 +282,8 @@ pub fn program_path(name: &str) -> std::path::PathBuf {
 }
 
 /// Convenience for tests: run `examples/*/<name>.sq` with overrides given
-/// as `name=expr` strings.
+/// as `name=expr` strings. Supply `Some(horizon)` for a source model; use
+/// `run_file` when the experiment also needs warm-up or an arrival limit.
 pub fn run_program(name: &str, sets: &[&str], seed: Option<u64>, horizon: Option<f64>) -> Report {
     let path = program_path(name);
     let mut ov = Overrides {
