@@ -63,9 +63,11 @@ fn main() {
     set prompt = K + n;
     // how much of the prompt the cache could supply, in whole blocks. The
     // cache itself is read inside the hold's units, so it is read when the
-    // request is admitted -- while it waits, its prefix is still evictable
+    // request is admitted -- while it waits, its prefix is still evictable.
+    // It is admitted only if the whole prompt fits, as vLLM's default
+    // scheduler_reserve_full_isl (config/scheduler.py:191): the `reserve`
     set hitmax = floor((prompt - 1) / bs) * bs;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm)))) reserve (cost(kv, prompt))
          at admission (hit = min(cachedin(kv), hitmax)) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       observe hit = c > 0;

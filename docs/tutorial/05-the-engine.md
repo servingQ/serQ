@@ -73,11 +73,11 @@ waits for a response before the client decides whether to continue. The `server`
 block describes how each request is served. The deployment figure shows
 the server side.
 
-## Three new pieces of the server
+## Four new pieces of the server
 
 ```serq
 set hitmax = floor((prompt - 1) / bs) * bs;
-hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm)))) reserve (cost(kv, prompt))
      at admission (hit = min(cachedin(kv), hitmax)) {
   set c = min(cached, floor((prompt - 1) / bs) * bs);
   run llm prefill (cost(llm, prompt - c)) growing kv;
@@ -92,8 +92,15 @@ retried; see [preemption semantics](../language.md) for the state preserved
 across retries.
 
 **`budget_left(llm)`** is the token budget left after serving the running requests.
-The admission reserves memory for the cached prefix plus the prefill chunk
+The admission allocates memory for the cached prefix plus the prefill chunk
 that fits this budget, capped by `prompt`.
+
+**`reserve (cost(kv, prompt))`** admits the request only if the whole
+prompt fits beside the memory the running requests hold, although only the first chunk
+is allocated. This is vLLM's default (`scheduler_reserve_full_isl`). Without
+it, a long prompt is admitted on its first chunk and its later chunks
+preempt other requests; at the loads of the next chapter, that raises the
+preemption count about tenfold.
 
 The header reads both the cache and the budget at admission. A prefix may
 be evicted while the request waits, so reading the cache earlier in a `set`
