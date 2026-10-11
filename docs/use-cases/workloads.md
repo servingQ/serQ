@@ -94,11 +94,11 @@ arrival rate, so compare the rows within a pair, not across the table):
 
 | program | requests/s | hit rate | prefill tokens | TTFT (ms) | response (ms) | engine busy |
 |---|---|---|---|---|---|---|
-| `vllm_single_turn` | 2.98 | 0.00 | 1 994 | 43 | 94 | 0.22 |
-| `vllm_chat` | 1.56 | 0.78 | 258 | 5 | 66 | 0.10 |
-| `vllm` | 3.07 | 0.89 | 770 | 18 | 65 | 0.17 |
-| `vllm_subagents --set q=0` | 0.82 | 0.88 | 706 | 14 | 57 | 0.05 |
-| `vllm_subagents` | 3.65 | 0.70 | 1 823 | 45 | 100 | 0.27 |
+| `vllm_single_turn` | 2.98 | 0.00 | 1 995 | 43 | 96 | 0.23 |
+| `vllm_chat` | 1.62 | 0.80 | 221 | 5 | 66 | 0.10 |
+| `vllm` | 2.94 | 0.89 | 727 | 16 | 62 | 0.16 |
+| `vllm_subagents --set q=0` | 0.90 | 0.89 | 665 | 13 | 58 | 0.05 |
+| `vllm_subagents` | 3.77 | 0.69 | 1 967 | 52 | 111 | 0.29 |
 
 Delegation increases request traffic and the mean prefill work in this
 approximation. The first turn of each subagent misses its copied context;

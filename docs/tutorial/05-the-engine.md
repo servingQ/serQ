@@ -125,30 +125,30 @@ serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --see
 ```
 
 ```text
-run: horizon 20000 end 20000 warmup 2000 seed 1 events 9210071 arrivals 9905 ended 8905 turns 44301 mean live 6.006
+run: horizon 20000 end 20000 warmup 2000 seed 1 events 9160272 arrivals 9905 ended 8905 turns 43948 mean live 6.012
 
 observe   count    mean   95% CI    cv2     p99
 --------  -----  ------  -------  -----  ------
-hit       44301  0.7938  ±0.0032  0.260  1.0000
-ttft      44301  0.0182  ±0.0005  1.274  0.0798
-response  44301  0.0629  ±0.0009  0.638  0.2370
+hit       43948  0.7932  ±0.0030  0.261  1.0000
+ttft      43948  0.0180  ±0.0004  1.329  0.0763
+response  43949  0.0627  ±0.0009  0.665  0.2384
 
 stage  number   util   done    thru    wait  service    iters
 -----  ------  -----  -----  ------  ------  -------  -------
-llm     0.153  0.138  88602  4.9223  0.0000   0.0311  9160680
-tool    5.851  0.997  35398  1.9666  0.0000   2.9755        0
+llm     0.151  0.136  87897  4.8832  0.0000   0.0310  9111287
+tool    5.859  0.999  35045  1.9469  0.0000   3.0093        0
 
 step  prefill only  decode only  mixed   idle  decodes  decode batch  decode step   itl p50   itl p99
 ----  ------------  -----------  -----  -----  -------  ------------  -----------  --------  --------
-llm          0.036        0.096  0.006  0.862    0.110         1.079     0.000223  0.000209  0.000240
+llm          0.036        0.095  0.006  0.864    0.109         1.078     0.000223  0.000209  0.000243
 
 pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    735.9  28664.1  0.000    0.153     NaN   49390       258   1935856        0      0    0      0
-reqs    0.2      0.0  0.002    0.153  0.0007   49390         0         0        0      0    0      0
+kv    723.3  28911.2  0.000    0.151     NaN   48984       198   1640352        0      0    0      0
+reqs    0.2      0.0  0.002    0.151  0.0007   48984         0         0        0      0    0      0
 ```
 
-`done 88602` at `llm` against 44 301 turns — two runs per turn, prefill
+`done 87897` at `llm` against 43 948 turns — two runs per turn, prefill
 and decode.
 
 TTFT is now separately observable, and at 18 ms it is a different quantity from

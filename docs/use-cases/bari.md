@@ -140,17 +140,17 @@ Claim-table excerpts, 20 requests/s first:
 
 ```
 claim           kind             result
-token_rate      every iteration  holds (23112 iterations)
-optimal_tiling  every iteration  holds (23112 iterations)
+token_rate      every iteration  holds (23110 iterations)
+optimal_tiling  every iteration  holds (23110 iterations)
 ```
 
 ```
 claim           kind             result
-token_rate      every iteration  holds (22162 iterations)
-optimal_tiling  every iteration  holds (22162 iterations)
+token_rate      every iteration  holds (22170 iterations)
+optimal_tiling  every iteration  holds (22170 iterations)
 ```
 
-Theorem 1's bound for this program is $128/4640$ tokens per µs. With a mean of about 760 tokens per request (576 prompt, about 185 output after the cap at 512) it is about 36 requests per second, and both loads are below it: 1 987 of 2 013 and 2 971 of 3 000 requests end within the horizon.
+Theorem 1's bound for this program is $128/4640$ tokens per µs. With a mean of about 760 tokens per request (576 prompt, about 185 output after the cap at 512) it is about 36 requests per second, and both loads are below it: 1 984 of 2 013 and 2 961 of 3 000 requests end within the horizon.
 
 ## What it leaves out
 

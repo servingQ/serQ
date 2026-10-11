@@ -31,22 +31,22 @@ serq run examples/single-turn/mg1.sq --horizon 250000 --warmup 25000 --seed 1
 ```
 
 ```text
-run: horizon 250000 end 250000 warmup 25000 seed 1 events 397862 arrivals 198931 ended 179177 turns 179176 mean live 3.899
+run: horizon 250000 end 250000 warmup 25000 seed 1 events 397859 arrivals 198931 ended 179174 turns 179176 mean live 3.862
 
 observe        count    mean   95% CI    cv2      p99
 ------------  ------  ------  -------  -----  -------
-response      179177  4.8967  ±0.2294  1.021  22.8477
-wait          179177  3.8991  ±0.2263  1.543  21.6881
-service_time  179177  0.9975  ±0.0051  1.002   4.5911
+response      179174  4.8492  ±0.1681  0.985  22.1083
+wait          179174  3.8499  ±0.1644  1.497  20.9580
+service_time  179174  0.9993  ±0.0051  0.995   4.6129
 
 stage  number   util    done    thru    wait  service  iters
 -----  ------  -----  ------  ------  ------  -------  -----
-svc     3.899  0.794  179177  0.7963  3.8991   0.9975      0
+svc     3.862  0.796  179174  0.7963  3.8499   0.9993      0
 ```
 
 That is an M/M/1 queue at 80 % utilisation. The closed form says the response
 time is \(S/(1-\rho) = 5.0\) seconds and the mean number in system is
-\(\rho/(1-\rho) = 4.0\); the run says `4.8967 ±0.2294` and `3.899`. The
+\(\rho/(1-\rho) = 4.0\); the run says `4.8492 ±0.1681` and `3.862`. The
 confidence interval covers the theoretical mean.
 
 ## Reading a report
@@ -56,7 +56,7 @@ The report starts with run settings, followed by observations and resource stati
 ### The run line
 
 ```text
-run: horizon 250000 end 250000 warmup 25000 seed 1 events 397862 arrivals 198931 ended 179177 ...
+run: horizon 250000 end 250000 warmup 25000 seed 1 events 397859 arrivals 198931 ended 179174 ...
 ```
 
 `horizon` is simulated time, `warmup` excludes the initial period from

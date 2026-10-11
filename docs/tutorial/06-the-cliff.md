@@ -13,16 +13,16 @@ done
 
 | sessions/s | hit rate | TTFT (s) | preemptions | `stuck` | utilisation |
 |---|---|---|---|---|---|
-| 1.5 | 0.472 | 0.114 | 614 | 92 | 0.580 |
-| 1.7 | 0.350 | 0.234 | 2,234 | 366 | 0.712 |
-| 1.8 | 0.265 | 0.473 | 3,584 | 606 | 0.792 |
-| 1.9 | 0.165 | 1.351 | 6,088 | 988 | 0.880 |
-| 2.0 | 0.051 | 7.465 | 9,614 | 1,567 | 0.968 |
+| 1.5 | 0.450 | 0.145 | 906 | 154 | 0.597 |
+| 1.7 | 0.327 | 0.404 | 2,439 | 406 | 0.725 |
+| 1.8 | 0.230 | 1.276 | 4,506 | 754 | 0.813 |
+| 1.9 | 0.125 | 4.457 | 7,274 | 1,198 | 0.902 |
+| 2.0 | 0.041 | 17.921 | 9,780 | 1,582 | 0.971 |
 
 Between 1.9 and 2.0 sessions/s, a 5% load increase raises observed TTFT
-from 1.35 s to 7.46 s, and over the sweep the hit rate falls from 0.47
-to 0.05. At 1.9 the TTFT is a level: a run twice as long gives about the same.
-At 2.0 it keeps growing with the run length, so 7.46 s is one moment of a
+from 4.46 s to 17.92 s, and over the sweep the hit rate falls from 0.45
+to 0.04. At 1.9 the TTFT is a level: a run twice as long gives about the same.
+At 2.0 it keeps growing with the run length, so 17.92 s is one moment of a
 queue without bound, not a level. These seed-1 runs also report `stuck` sessions:
 requests preempted again without progress. The latency samples therefore
 do not describe all offered traffic. Inspect these counters before using
@@ -40,12 +40,12 @@ serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --see
 
 | sessions/s | KV blocks | hit rate | TTFT (s) | `stuck` | utilisation |
 |---|---|---|---|---|---|
-| 2.0 | 4,000 | 0.051 | 7.465 | 1,567 | 0.968 |
+| 2.0 | 4,000 | 0.041 | 17.921 | 1,582 | 0.971 |
 | 2.0 | 40,000 | 0.800 | 0.020 | 0 | 0.470 |
-| 3.0 | 40,000 | 0.800 | 0.023 | 0 | 0.635 |
+| 3.0 | 40,000 | 0.800 | 0.023 | 0 | 0.633 |
 
 At 2.0 sessions/s, the larger pool turns a queue that grows without bound
-(7.46 s at this horizon) into a TTFT of 0.020 s. Both larger-pool runs have no preemptions or `stuck` sessions.
+(17.92 s at this horizon) into a TTFT of 0.020 s. Both larger-pool runs have no preemptions or `stuck` sessions.
 Memory capacity changes the amount of recomputation, even with the same
 arrival rate and engine cost model.
 

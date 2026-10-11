@@ -64,26 +64,26 @@ serq run docs/tutorial/programs/03-sessions.sq --horizon 20000 --warmup 2000 --s
 ```
 
 ```text
-run: horizon 20000 end 20000 warmup 2000 seed 1 events 98779 arrivals 9905 ended 8905 turns 44302 mean live 6.303
+run: horizon 20000 end 20000 warmup 2000 seed 1 events 97969 arrivals 9905 ended 8905 turns 43952 mean live 6.295
 
 observe   count       mean    95% CI    cv2         p99
 --------  -----  ---------  --------  -----  ----------
-response  44303     0.1832   ±0.0056  0.489      0.6364
-context   44303  4971.2672  ±84.4957  0.425  16116.3298
+response  43953     0.1784   ±0.0049  0.465      0.6027
+context   43953  4962.0292  ±93.0588  0.460  17100.8941
 
 stage   number   util   done    thru    wait  service  iters
 ------  ------  -----  -----  ------  ------  -------  -----
-engine   0.451  0.333  44303  2.4613  0.0480   0.1352      0
-tool     5.852  0.997  35399  1.9666  0.0000   2.9755      0
+engine   0.436  0.330  43953  2.4418  0.0434   0.1351      0
+tool     5.859  0.999  35049  1.9472  0.0000   3.0091      0
 ```
 
 With continuation probability $p = 0.8$, a complete session has an expected
 $1/(1-p) = 5$ turns. The report counts activity within the run's measurement
 window; it is not a sample of complete session lengths.
 
-The tool stage accounts for 5.852 of the 6.303 live sessions on average.
+The tool stage accounts for 5.859 of the 6.295 live sessions on average.
 Keeping their context between turns uses memory even while the engine is
-not serving them. The mean observed context is 4 971 tokens.
+not serving them. The mean observed context is 4 962 tokens.
 
 ## What to try
 

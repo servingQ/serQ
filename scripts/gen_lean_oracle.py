@@ -42,7 +42,8 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # pinned corpus (IR 12) is FIFO and stays inside the fragment.
 # 12 adds resource cost conversions, erased without changing numeric work.
 # 13 removes the `Delay` stage kind: a delay is `Ps` of `present`, every job
-# at rate 1, and `is_delay` reads either spelling.
+# at rate 1, and `is_delay` reads either spelling. It also reseeds the
+# session streams (serQ #297), which the fragment never reads, as for 11.
 IR_VERSION = 13
 SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, IR_VERSION)
 
