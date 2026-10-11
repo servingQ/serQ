@@ -904,7 +904,7 @@ header a place to name what it is written in terms of, as
 `examples/multi-turn/vllm.sq` does:
 
 ```
-hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm)))) reserve (cost(kv, known))
      at admission (known = computed < prompt ? prompt : computed + 1,
                    hit = min(cachedin(kv), reusable(known, blocksize(kv)))) { … }
 ```
@@ -1142,15 +1142,15 @@ runs vLLM 0.30.0, whose scheduler gives the same answers on the first six
 scenarios below). It is a correspondence under synchronous scheduling at that
 revision, not to the latest vLLM ([the vLLM use case](use-cases/vllm.md)).
 The `server` block of `examples/multi-turn/vllm.sq`, the engine of the
-workload examples, is a simpler one: it does not `reserve`, takes its hit from the cache alone
-rather than from the previous prompt, and caches `prompt + o`.
+workload examples, is a simpler one: it reserves `known` as this one does, but takes its hit
+from the cache alone rather than from the previous prompt, and caches `prompt + o`.
 
 | vLLM | serQ | Where |
 |---|---|---|
 | a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `engine vllm on gpu { tokens cap B; schedule { advance running; admit waiting while (running.preempted == 0); } … }`, residents in admission order; `pool reqs on vllm` | `scheduler.py:577, 624-823, 868-1128` |
 | `max_num_seqs` | `reqs cap max_seqs;` in `engine vllm`, held as `pool reqs on vllm` | `scheduler.py:877-879` |
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
-| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(vllm))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
+| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(known − hit, budget_left(vllm))) reserve (known)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
 | chunked prefill, `long_prefill_token_threshold` | `run vllm prefill (cost(vllm, n)) growing kv`, `each at most (threshold)` with `let threshold = running.count + waiting.count > 1 ? c : inf;`: the cap only while more than one request is running or waiting; `waiting.count` counts the queues the engine admits, as vLLM counts `waiting`, whose `skipped_waiting` these programs leave empty; a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
@@ -1204,7 +1204,11 @@ units are the hit plus the chunk the budget the running requests
 leave can take now, `min(known, hit + budget_left(vllm))`
 (`scheduler.py:1078-1128, 1214-1226`): every known token, or as far as the
 hit and the budget reach, whichever is less. The rest is allocated as the
-request runs (`growing kv`).
+request runs (`growing kv`). The admission still needs room for every known
+token, `reserve (cost(kv, known))`: vLLM
+checks the whole sequence before it allocates the first chunk
+(`scheduler_reserve_full_isl`, on by default, `config/scheduler.py:191`,
+`kv_cache_manager.py:515-531`, passed at `scheduler.py:1223`).
 
 ### How the correspondence is checked
 
