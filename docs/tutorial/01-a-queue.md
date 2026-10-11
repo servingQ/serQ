@@ -72,16 +72,16 @@ serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --see
 ```
 
 ```text
-run: horizon 100000 end 100000 warmup 5000 seed 1 events 158921 arrivals 79460 ended 75464 turns 75462 mean live 3.768
+run: horizon 100000 end 100000 warmup 5000 seed 1 events 158921 arrivals 79460 ended 75464 turns 75462 mean live 3.832
 
 observe   count    mean   95% CI    cv2      p99
 --------  -----  ------  -------  -----  -------
-response  75464  4.7432  ±0.2838  1.028  22.9285
-wait      75464  3.7458  ±0.2833  1.578  21.7495
+response  75464  4.8235  ±0.3537  0.995  22.2569
+wait      75464  3.8237  ±0.3462  1.516  21.1774
 
 stage  number   util   done    thru    wait  service  iters
 -----  ------  -----  -----  ------  ------  -------  -----
-svc     3.768  0.792  75464  0.7944  3.7458   0.9974      0
+svc     3.832  0.794  75464  0.7944  3.8237   0.9997      0
 ```
 
 ## Checking it against the textbook
@@ -97,10 +97,10 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
 
 | | closed form | run | |
 |---|---|---|---|
-| response | 5 | 4.7432 ±0.2838 | covered |
-| wait | 4 | 3.7458 ±0.2833 | covered |
-| number in system | 4 | 3.768 | |
-| utilisation | 0.8 | 0.792 | |
+| response | 5 | 4.8235 ±0.3537 | covered |
+| wait | 4 | 3.8237 ±0.3462 | covered |
+| number in system | 4 | 3.832 | |
+| utilisation | 0.8 | 0.794 | |
 
 !!! tip "Compare intervals across runs"
     This run's response-time interval includes the theoretical mean of 5.

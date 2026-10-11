@@ -147,10 +147,10 @@ At the defaults (seed 1, horizon 2 000 s, warm-up 200 s), the run gives:
 
 | Metric | Result |
 |---|---|
-| Remote-prefill fraction | 59.8% |
-| Mean TTFT | 28.8 ms |
-| Mean response | 71.3 ms |
-| Mean source lease | 13.4 ms |
+| Remote-prefill fraction | 57.8% |
+| Mean TTFT | 27.3 ms |
+| Mean response | 70.1 ms |
+| Mean source lease | 12.8 ms |
 | Rejected / stuck sessions | 0 / 0 |
 
 These are simulation observations, not hardware measurements or intervals

@@ -46,26 +46,26 @@ serq run docs/tutorial/programs/04-cache.sq --horizon 20000 --warmup 2000 --seed
 ```
 
 ```text
-run: horizon 20000 end 20000 warmup 2000 seed 1 events 98781 arrivals 9905 ended 8905 turns 44301 mean live 6.006
+run: horizon 20000 end 20000 warmup 2000 seed 1 events 97969 arrivals 9905 ended 8905 turns 43949 mean live 6.013
 
 observe   count    mean   95% CI    cv2     p99
 --------  -----  ------  -------  -----  ------
-response  44301  0.0629  ±0.0006  0.615  0.2317
-hit       35398  1.0000  ±0.0000  0.000  1.0000
+response  43949  0.0630  ±0.0006  0.625  0.2369
+hit       35046  1.0000  ±0.0000  0.000  1.0000
 
 stage   number   util   done    thru    wait  service  iters
 ------  ------  -----  -----  ------  ------  -------  -----
-engine   0.155  0.138  44301  2.4612  0.0070   0.0559      0
-tool     5.851  0.997  35398  1.9666  0.0000   2.9755      0
+engine   0.154  0.136  43949  2.4416  0.0072   0.0558      0
+tool     5.859  0.999  35046  1.9470  0.0000   3.0093      0
 
 pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    763.5  28966.3  0.000    0.155  0.0000   49390         0         0        0      0    0      0
+kv    754.7  29212.2  0.000    0.154  0.0000   48984         0         0        0      0    0      0
 ```
 
-A perfect hit rate, and the response time falls from 0.183 s to 0.063 s against
+A perfect hit rate, and the response time falls from 0.178 s to 0.063 s against
 chapter 3 — nearly a factor of three, from one clause. The pool is holding
-28 966 tokens of cache against a capacity of 200 000, so nothing is ever
+29 212 tokens of cache against a capacity of 200 000, so nothing is ever
 evicted.
 
 ## Vary cache capacity
@@ -78,20 +78,20 @@ done
 
 | `cap` | hit rate | response (s) | entries evicted | rejected |
 |---|---|---|---|---|
-| 200,000 | 1.000 | 0.0629 | 0 | 0 |
-| 60,000 | 0.980 | 0.0664 | 827 | 0 |
-| 40,000 | 0.854 | 0.0856 | 5,848 | 0 |
-| 30,000 | 0.699 | 0.1083 | 12,046 | 1 |
-| 20,000 | 0.472 | 0.1354 | 21,208 | 35 |
-| 15,000 | 0.346 | 0.1444 | 26,163 | 174 |
-| 10,000 | 0.256 | 0.1313 | 28,225 | 846 |
+| 200,000 | 1.000 | 0.0630 | 0 | 0 |
+| 60,000 | 0.984 | 0.0660 | 644 | 0 |
+| 40,000 | 0.868 | 0.0833 | 5,247 | 0 |
+| 30,000 | 0.717 | 0.1037 | 11,300 | 4 |
+| 20,000 | 0.486 | 0.1301 | 20,429 | 39 |
+| 15,000 | 0.364 | 0.1363 | 25,078 | 184 |
+| 10,000 | 0.261 | 0.1288 | 27,729 | 806 |
 
 At 10 000 units the mean response time is lower than at 15 000 despite a
-lower hit rate, but rejections rise from 174 to 846. Requests that cannot
+lower hit rate, but rejections rise from 184 to 806. Requests that cannot
 fit do not contribute completed response samples, so the lower mean alone
 does not establish better performance.
 
-The default run caches 28 966 tokens on average. Most live sessions are in
+The default run caches 29 212 tokens on average. Most live sessions are in
 the tool stage, so the cache stores context that the engine is not currently
 using. Reducing its capacity forces more of that context to be recomputed.
 

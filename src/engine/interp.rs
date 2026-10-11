@@ -285,16 +285,23 @@ impl Session<'_> {
 }
 
 /// The stream of one (seed, session, turn, kind): splitmix64 over the four,
-/// so that no two sessions, turns or kinds share a stream.
+/// so that no two sessions, turns or kinds share a stream. The seed is mixed
+/// alone first, so that no (seed, serial) pair shares a stream with another
+/// seed's session (#297).
 fn substream(seed: u64, serial: u64, turn: u64, kind: u64) -> StdRng {
-    let mut x = seed;
+    let mut x = mix(seed);
     for v in [serial, turn, kind] {
-        x = x.wrapping_add(0x9E37_79B9_7F4A_7C15).wrapping_add(v);
-        x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        x ^= x >> 31;
+        x = mix(x ^ v);
     }
     StdRng::seed_from_u64(x)
+}
+
+/// One splitmix64 step.
+fn mix(x: u64) -> u64 {
+    let mut x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
 }
 
 /// Kinds of a session's streams (`substream`).

@@ -41,20 +41,20 @@ serq run docs/tutorial/programs/02-memory.sq --horizon 100000 --warmup 5000 --se
 ```
 
 ```text
-run: horizon 100000 end 100000 warmup 5000 seed 1 events 158921 arrivals 79460 ended 75463 turns 75462 mean live 0.866
+run: horizon 100000 end 100000 warmup 5000 seed 1 events 158921 arrivals 79460 ended 75462 turns 75462 mean live 0.870
 
 observe     count    mean   95% CI     cv2     p99
 ----------  -----  ------  -------  ------  ------
-admit_wait  75462  0.0929  ±0.0072  13.811  1.8108
-response    75463  1.0903  ±0.0100   0.937  4.8689
+admit_wait  75462  0.0961  ±0.0056  13.711  1.8797
+response    75462  1.0958  ±0.0137   0.943  4.8861
 
 stage  number   util   done    thru    wait  service  iters
 -----  ------  -----  -----  ------  ------  -------  -----
-svc     0.792  0.559  75463  0.7943  0.0000   0.9974      0
+svc     0.794  0.559  75462  0.7943  0.0000   0.9997      0
 
 pool  used  cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  ----  ------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-mem    2.8     0.0  0.074    0.792  0.0929   79460         0         0        0      0    0      0
+mem    2.8     0.0  0.076    0.794  0.0961   79460         0         0        0      0    0      0
 ```
 
 Note `wait 0.0000` at the stage: nobody queues for a server. All the waiting
@@ -70,13 +70,13 @@ done
 
 | `cap` | admit wait | response | rejected |
 |---|---|---|---|
-| 4 | 1.1921 | 2.1893 | 19,957 |
-| 6 | 1.5078 | 2.5051 | 0 |
-| 10 | 0.0929 | 1.0903 | 0 |
-| 20 | 0.0006 | 1.0002 | 0 |
+| 4 | 1.2384 | 2.2379 | 19,803 |
+| 6 | 1.5808 | 2.5805 | 0 |
+| 10 | 0.0961 | 1.0958 | 0 |
+| 20 | 0.0006 | 1.0026 | 0 |
 
 At capacity 4, a request needing 5 units is rejected before it waits.
-The 19,957 rejected sessions explain why mean waiting time can look
+The 19,803 rejected sessions explain why mean waiting time can look
 better than at capacity 6: the means describe different admitted workloads.
 Compare rejection counts as well as latency.
 

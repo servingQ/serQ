@@ -320,6 +320,38 @@ fn the_machine_still_matters() {
     assert!(a < b, "a wider budget prefills faster: {a} vs {b}");
 }
 
+/// Seeds name independent runs: seed 2's session k does not draw what seed
+/// 1's session k+1 drew. A session's stream once added the seed and its
+/// serial in the same splitmix64 step, so seed s+1's session k was seed s's
+/// session k+1, and seeds 1..N were one sample path shifted by a session
+/// each (#297: 39 of 39 sessions here).
+#[test]
+fn consecutive_seeds_do_not_replay_each_others_sessions() {
+    let src = "stage svc : fifo;
+        workload { arrive batch(40); session { set x = ~exp(1); turn; observe drawn = x; end; } }
+        server { run svc (cost(svc, 1)); }";
+    let draws = |seed: u64| -> std::collections::BTreeMap<u64, f64> {
+        let overrides = Overrides {
+            seed: Some(seed),
+            ..common::horizon(1e3)
+        };
+        let r = run(src, &overrides).unwrap();
+        let o = r.observe("drawn").unwrap();
+        o.records
+            .iter()
+            .map(|r| r.1)
+            .zip(o.samples.iter().copied())
+            .collect()
+    };
+    let (one, two) = (draws(1), draws(2));
+    assert_eq!(one.len(), 40);
+    let replayed = two
+        .iter()
+        .filter(|&(k, x)| one.get(&(k + 1)) == Some(x))
+        .count();
+    assert_eq!(replayed, 0, "seed 2 replays seed 1 a session later");
+}
+
 // ------------------------------------------------------------ bounds ----
 
 /// The re-ready bound is per session: a batch of two thousand sessions that

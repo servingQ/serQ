@@ -31,21 +31,21 @@ the run settings, observations and pools:
 
 ```
 $ serq run examples/multi-turn/vllm.sq --horizon 300 --warmup 30
-run: horizon 300 end 300 warmup 30 seed 1 events 133894 arrivals 95 ended 87 turns 697 mean live 6.617
+run: horizon 300 end 300 warmup 30 seed 1 events 150579 arrivals 95 ended 86 turns 779 mean live 7.387
 
 observe         count      mean    95% CI    cv2        p99
 --------------  -----  --------  --------  -----  ---------
-hit               697    0.8723   ±0.0223  0.147     1.0000
-prefill_tokens    697  723.1133  ±53.2095  0.985  2890.0000
-ttft              697    0.0151   ±0.0010  0.952     0.0578
-response          697    0.0598   ±0.0032  0.602     0.2257
+hit               779    0.8858   ±0.0215  0.129     1.0000
+prefill_tokens    779  685.2439  ±56.1267  1.068  2883.0000
+ttft              779    0.0143   ±0.0012  1.070     0.0592
+response          779    0.0599   ±0.0040  0.567     0.1977
 
 …
 
 pool    used    cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  ------  --------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    1032.6  144255.8  0.000    0.153     NaN     719        70    500048        0      0    0      0
-reqs     0.2       0.0  0.002    0.153  0.0006     719         0         0        0      0    0      0
+kv    1251.5  144310.0  0.000    0.171     NaN     798        76    545120        0      0    0      0
+reqs     0.2       0.0  0.001    0.171  0.0005     798         0         0        0      0    0      0
 ```
 
 The metrics are the program's own: `ttft` is whatever the `observe ttft = …`

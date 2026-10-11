@@ -136,9 +136,9 @@ Selected report columns ($M=20\,000$, $P=2\,500$):
 
 ```
 observe        count         mean    cv2          p99
-output_tokens    200     252.8300  0.324     496.0000
-vol              200  304613.7000  0.645  895093.0000
-response         200    1144.9800  0.860    3760.0000
+output_tokens    200     239.2150  0.339     489.0000
+vol              200  290355.5500  0.657  983253.0000
+response         200    1091.3200  0.849    3576.0000
 
 claim           kind    result
 queueing_bound  at end  holds

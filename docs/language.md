@@ -1014,6 +1014,8 @@ a draw the machine makes — an eviction key, a spill predicate, a `cost`, a
 seed, provided the draw expressions and their inputs are unchanged.
 Changing a session's control flow or a distribution's parameters can still
 change its workload; a shared seed does not make those changes equivalent.
+Distinct seeds give unrelated streams for every session, so runs on seeds
+1..N are independent replications.
 
 ### Every instant settles
 
