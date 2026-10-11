@@ -474,6 +474,23 @@ fn an_admission_binding_sees_the_entry_only() {
     );
 }
 
+/// A bare name that is not a pool or stage is a value the header reads, and
+/// is refused as one: `min(now, 1)` as `min(now + 0, 1)` (#447).
+#[test]
+fn a_header_reads_a_bare_name_as_a_value() {
+    for size in ["min(now, 1)", "min(now + 0, 1)"] {
+        refused(
+            &format!(
+                "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+                   decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; }} }} }}
+                 {WORKLOAD}"
+            ),
+            "the header reads `now`",
+        );
+    }
+}
+
 #[test]
 fn an_entry_sees_its_parameters_and_its_queue() {
     let program = |entry: &str, gw: &str| {

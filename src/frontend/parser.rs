@@ -3759,7 +3759,14 @@ impl Parser {
                 arg_names(a, &mut vars, &mut indexed, &mut refs);
             }
             sources.push((vars, indexed, refs, false, false));
-            for (vars, indexed, refs, header, in_index) in sources {
+            for (mut vars, indexed, refs, header, in_index) in sources {
+                // a bare argument that is not a pool or stage (`min(now, 1)`)
+                // is a value, read under the same rule as `min(now + 0, 1)`;
+                // a dotted one is another queue's pool
+                let (values, refs): (Vec<Ref>, Vec<Ref>) = refs
+                    .into_iter()
+                    .partition(|r| r.index.is_none() && !own_ref(r) && !r.name.contains('.'));
+                vars.extend(values.into_iter().map(|r| r.name));
                 let tagged = vars
                     .into_iter()
                     .map(|v| (v, in_index))
@@ -3808,32 +3815,15 @@ impl Parser {
                         reads.push(v);
                     }
                 }
-                for r in refs {
-                    // a bare identifier argument may be a variable; a dotted
-                    // one is another queue's pool
-                    if r.index.is_none()
-                        && !own_ref(&r)
-                        && !r.name.contains('.')
-                        && allowed_var(&r.name, header)
-                    {
-                        continue;
-                    }
-                    if r.index.is_none() && !own_ref(&r) && !r.name.contains('.') && !header {
-                        if !reads.contains(&r.name) {
-                            reads.push(r.name.clone());
-                        }
-                        continue;
-                    }
-                    if !own_ref(&r) {
-                        return self.err_at(
-                            at,
-                            format!(
-                                "`{qname}.{verb}` reads `{}`, which is not a pool or stage of `{qname}`: \
-                                 a queue sees its own; the deployment reads across queues",
-                                r.name
-                            ),
-                        );
-                    }
+                if let Some(r) = refs.iter().find(|r| !own_ref(r)) {
+                    return self.err_at(
+                        at,
+                        format!(
+                            "`{qname}.{verb}` reads `{}`, which is not a pool or stage of `{qname}`: \
+                             a queue sees its own; the deployment reads across queues",
+                            r.name
+                        ),
+                    );
                 }
             }
         }
