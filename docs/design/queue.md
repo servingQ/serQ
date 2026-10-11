@@ -58,8 +58,10 @@ expr  += QUEUE [ '[' expr ']' ] . POOL            -- from outside, a pool's read
 **Three rules.**
 
 1. *An entry sees its own.* The header — the units, `reserve`, `reuse`, the
-   `at admission` bindings — reads the parameters, the queue's pools and stage and
-   the `let` constants. The body also reads `now`, `cached`, the context
+   `at admission` bindings — reads the parameters, the queue's pools and stage,
+   the `let` constants, and what the entry sets above the hold (#475: `set
+   kept = prompt;` before it, as a server's header reads an attribute; not
+   what the hold's body or a later statement sets). The body also reads `now`, `cached`, the context
    variables and the request's `hidden` attributes; any other session
    attribute, and another queue's `Q.x`, is an error at the entry, and so
    is one read in the index of a reference the body writes. The body holds

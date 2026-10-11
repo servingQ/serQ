@@ -464,8 +464,12 @@ none may draw.
 
 An entry sees its own. Its header — the units, `reserve`, `reuse`, the
 `at admission` bindings — reads the parameters, the queue's pools and stage,
-the constants, and `cached` and `computed`; its body also reads `now`, what
-it sets itself and the request's `hidden` attributes, and nothing else the
+the constants, `cached` and `computed`, and what the entry sets above the
+hold, as a server's header reads the session's attributes (`set kept =
+prompt;` before it, not inside a `branch` or loop that may not have run).
+What the hold's own body sets, or a statement after it, is not set when
+the header is read, and is refused. Its body also reads `now`, what it
+sets itself and the request's `hidden` attributes, and nothing else the
 session has set, nor another queue's
 `Q.x`; every index it writes (`run nic[k]`) reads as the body does. Its
 statements hold, grow, load and release only the queue's own pools and the
