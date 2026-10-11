@@ -393,7 +393,7 @@ Four roles are built into the parser, and a queue declares which it plays:
 |---|---|---|
 | `gateway` | `route { … }` | `Q.route();` enters this queue's `route`; each gateway is a single queue |
 | `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `cache`, a transfer) is the entry's |
-| `decode` | `decode (prompt)`, `decode (prompt) from Q` | a local prefill, or with the KV `Q`'s entry leased for this request |
+| `decode` | `decode (prompt)`, `decode (prompt) from Q`, either or both | a local prefill, or with the KV `Q`'s entry leased for this request; a pod that only decodes what it reads has no `decode (prompt)` |
 | `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost, and its `latency` a wait before it |
 
 The server selects a gateway with `gw.route();`. The parser checks the

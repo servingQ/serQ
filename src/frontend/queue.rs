@@ -13,24 +13,61 @@
 
 use crate::frontend::ast::{Arg, Expr, Ref, Span, Stmt};
 
-/// An entry a role asks for: `(verb, parameters, takes from)`.
-pub type EntrySig = (&'static str, usize, bool);
+/// A role of the serving vocabulary: its entries share one verb and its
+/// number of parameters, and are written without `from`, with it, or both.
+/// A queue of the role has at least one of them; a link may have none and
+/// be its `serve`.
+pub struct RoleSig {
+    pub name: &'static str,
+    pub verb: &'static str,
+    pub params: usize,
+    pub from: &'static [bool],
+}
 
-/// The four roles of the serving vocabulary and the entries each asks for.
-pub const ROLES: &[(&str, &[EntrySig])] = &[
-    ("gateway", &[("route", 0, false)]),
-    ("prefill", &[("prefill", 1, false)]),
-    ("decode", &[("decode", 1, false), ("decode", 1, true)]),
-    ("link", &[("transfer", 1, false)]),
+/// The four roles of the serving vocabulary: name, verb, parameters, and
+/// whether its entries are written without `from` or with it.
+pub const ROLES: &[RoleSig] = &[
+    RoleSig::new("gateway", "route", 0, &[false]),
+    RoleSig::new("prefill", "prefill", 1, &[false]),
+    RoleSig::new("decode", "decode", 1, &[false, true]),
+    RoleSig::new("link", "transfer", 1, &[false]),
 ];
 
-/// The verb of a call and, when it is a link's `transfer … from S to P (m)`,
-/// the load and release the linker writes around it.
-pub fn role_of_verb(verb: &str, from: bool) -> Option<&'static str> {
+impl RoleSig {
+    const fn new(
+        name: &'static str,
+        verb: &'static str,
+        params: usize,
+        from: &'static [bool],
+    ) -> RoleSig {
+        RoleSig {
+            name,
+            verb,
+            params,
+            from,
+        }
+    }
+
+    /// The role called `name`.
+    pub fn named(name: &str) -> Option<&'static RoleSig> {
+        ROLES.iter().find(|r| r.name == name)
+    }
+
+    /// An entry as a program writes it: `decode (…) from Q`.
+    pub fn entry(&self, from: bool) -> String {
+        let params = if self.params == 0 { "" } else { " (…)" };
+        let from = if from { " from Q" } else { "" };
+        format!("`{}{params}{from}`", self.verb)
+    }
+}
+
+/// The role whose entry is `verb`, written with `from` or without; a link's
+/// `transfer … from S to P (m)` is its entry without `from`, the load and
+/// release the linker writes around it.
+pub fn role_of_verb(verb: &str, from: bool) -> Option<&'static RoleSig> {
     ROLES
         .iter()
-        .find(|(_, entries)| entries.iter().any(|(v, _, f)| *v == verb && *f == from))
-        .map(|(role, _)| *role)
+        .find(|r| r.verb == verb && r.from.contains(&from))
 }
 
 #[derive(Clone, Debug)]
@@ -667,14 +704,16 @@ fn call(
         }
     };
     // a link's `from`/`to` are the call's, not the entry's
-    let is_transfer = role_of_verb(verb, false) == Some("link");
+    let is_transfer = role_of_verb(verb, false).is_some_and(|r| r.name == "link");
     let entry_from = from.is_some() && !is_transfer;
     let entry = match q.entry(verb, entry_from) {
         Some(e) => e,
         None => {
             let hint = match (q.entry(verb, !entry_from), from) {
-                (Some(_), Some(_)) => format!(": its `{verb}` takes no `from`"),
-                (Some(_), None) => format!(": its `{verb}` needs `from`"),
+                (Some(_), Some(_)) => {
+                    format!(": `{}` has only `{verb} (…)`, without `from`", q.name)
+                }
+                (Some(_), None) => format!(": `{}` has only `{verb} (…) from …`", q.name),
                 _ if is_transfer => format!(
                     "; its `serve` is its cost: `transfer on {}[…] (n) from S to P (m);`",
                     q.name

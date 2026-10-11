@@ -787,6 +787,44 @@ fn a_call_is_checked_against_the_entry() {
     );
 }
 
+/// A `decode` queue needs one of its two entries, not the local one (#229):
+/// a pod that only decodes KV it read leaves out `decode (prompt)`, and a
+/// call that would need the missing one names it.
+#[test]
+fn a_decode_queue_needs_one_of_its_entries() {
+    let engine = "device gpu { kv cap 10; } pool kv on gpu { } engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }";
+    let local = "decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }";
+    let remote =
+        "decode (p) from src { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }";
+    let program = |route: &str, entries: &str| {
+        format!(
+            "queue gw : gateway {{ route {{ {route} }} }}
+             queue P : prefill {{ pool kv {{ cap 10; }} serve fifo; prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} lease kv (inf); }} }}
+             queue D : decode {{ {engine} {entries} }}
+             workload {{ arrive batch(1); init {{ set prompt = 1; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
+        )
+    };
+    let remote_call = "P.prefill (prompt); D.decode (prompt) from P;";
+    let links = |src: &str| {
+        compile_source(&common::main_source(src), &common::horizon(100.0))
+            .unwrap_or_else(|e| panic!("{e}\n{src}"));
+    };
+    links(&program(remote_call, remote));
+    links(&program("D.decode (prompt);", local));
+    refused(
+        &program("D.decode (prompt);", remote),
+        "`D.decode`: queue `D` has no such entry: `D` has only `decode (…) from …`",
+    );
+    refused(
+        &program(remote_call, local),
+        "`D.decode`: queue `D` has no such entry: `D` has only `decode (…)`, without `from`",
+    );
+    refused(
+        &program(remote_call, ""),
+        "queue `D` plays `decode` and has neither `decode (…)` nor `decode (…) from Q`",
+    );
+}
+
 #[test]
 fn a_family_size_is_a_constant() {
     let rest = "queue gw : gateway { route { E[j].decode (1); } } workload { arrive batch(1); init { set j = 0; } session { turn; end; } } server { gw.route(); } ";
