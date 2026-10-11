@@ -27,7 +27,7 @@ the full session.
 | Station | A stage reached by a `run`; an array is labelled with its size. Consecutive prefill and decode runs at one engine share a station. |
 | Arrow | Request flow between stages, including branches and loop returns. Guards label alternatives; `out` marks an exit. |
 | Decision diamond | A branch or routing decision before the first station. |
-| Filled panel | An instance selected by `choose`, grouping the engine, NIC and pools indexed by exactly its variable. One the session also indexes otherwise (`E[j]`, `E[0]`) is in no panel; a panel takes in a dashed enclosure only when all of it stands inside. |
+| Filled panel | An instance selected by `choose`, grouping the engine, NIC and pools indexed by exactly its variable. One the session also indexes otherwise (`E[j]`, `E[0]`) is in no panel; a panel takes in a dashed enclosure only when all of it stands inside. An instance's pool is drawn only inside its panel, so a station outside it does not show that hold; a run between stations the panels would pull apart is drawn outside them. |
 | Dashed enclosure | A pool held across several stations. |
 | Unfilled frame | Pools held at one station, listed below its glyph. |
 | Transfer bracket | A job using both endpoints' NICs; its label names the source and destination KV. |

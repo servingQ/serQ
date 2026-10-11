@@ -1798,8 +1798,8 @@ fn an_instances_pool_is_drawn_only_in_its_box() {
     boxes_do_not_cross(&p, &net);
 }
 
-/// After a branch whose arms end on different flows, a `load` follows
-/// neither: the branch ends on no flow.
+/// After a branch whose arms end on different flows, a `load` is noted on
+/// neither.
 #[test]
 fn after_a_branch_a_load_follows_no_arms_transfer() {
     let (_, net) = instance_net(

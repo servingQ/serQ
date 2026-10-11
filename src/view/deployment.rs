@@ -79,8 +79,15 @@ impl FlowNote {
 }
 
 /// An instance: what the session addresses through one `choose`. A router
-/// that picks `i` picks a pod, and every stage and pool the session then
-/// indexes by `i` is that pod's (`P[i]`, `egress[i]`, `kvP[i]`).
+/// that picks `i` picks a pod, decided in this order:
+/// - its stages and pools are those the session indexes by exactly `i` and
+///   by nothing else (`P[i]`, `egress[i]`, `kvP[i]`; not `E` if `E[j]` or
+///   `E[0]` is run too) (`Walker::settle_instances`);
+/// - a pod of one station and nothing else is a choice, not a box
+///   (`keep_instances`);
+/// - a station whose flow the boxes would pull apart leaves its box
+///   (`contiguous_instances`);
+/// - its pools are drawn only inside its box (`Net::drawn_pools`).
 #[derive(Clone, Debug)]
 pub struct Instance {
     /// `choose i of NP`.
@@ -269,11 +276,11 @@ struct Walker<'a> {
     chosen: Vec<(usize, String)>,
     /// The instance each chosen slot made, by slot.
     instance_of_slot: Vec<(usize, usize)>,
-    /// Per station and per pool, every instance an index addressed it
-    /// through, `None` for an index that is no chosen attribute: one with
-    /// two owners is in no instance's box.
-    node_owners: Vec<(usize, Vec<Option<usize>>)>,
-    pool_owners: Vec<(usize, Vec<Option<usize>>)>,
+    /// Per station and per pool, the one instance every index addressed
+    /// it through; `None` once two indices disagree or one is no chosen
+    /// attribute, and then it is in no instance's box.
+    node_owners: Vec<(usize, Option<usize>)>,
+    pool_owners: Vec<(usize, Option<usize>)>,
     /// The flow just run, whose `load` and `release` follow it.
     last_flow: Option<usize>,
     /// Per block being probed, the ends it first reaches.
@@ -318,10 +325,10 @@ impl Walker<'_> {
     /// family two instances index (`E[i]`, then `E[j]`) is one node of the
     /// projection, and neither box holds it.
     fn settle_instances(&mut self) {
-        let sole = |owners: &[(usize, Vec<Option<usize>>)], k: usize| -> Vec<usize> {
+        let sole = |owners: &[(usize, Option<usize>)], k: usize| -> Vec<usize> {
             owners
                 .iter()
-                .filter(|(_, o)| o.as_slice() == [Some(k)])
+                .filter(|(_, o)| *o == Some(k))
                 .map(|&(x, _)| x)
                 .collect()
         };
@@ -871,12 +878,13 @@ fn reaches_a_station(p: &Program, block: usize) -> bool {
     })
 }
 
-/// Add `owner` to what `x` is addressed through.
-fn own(owners: &mut Vec<(usize, Vec<Option<usize>>)>, x: usize, owner: Option<usize>) {
+/// Record that `x` is addressed through `owner`: a second, different one
+/// leaves it in no box.
+fn own(owners: &mut Vec<(usize, Option<usize>)>, x: usize, owner: Option<usize>) {
     match owners.iter_mut().find(|(y, _)| *y == x) {
-        Some((_, o)) if !o.contains(&owner) => o.push(owner),
+        Some((_, o)) if *o != owner => *o = None,
         Some(_) => {}
-        None => owners.push((x, vec![owner])),
+        None => owners.push((x, owner)),
     }
 }
 
@@ -1300,6 +1308,8 @@ fn keep_instances(net: &mut Net) {
 /// between their boxes, whichever way it points (a reply from `j` to `i`
 /// after `i` sent to `j`).
 fn contiguous_instances(net: &mut Net) {
+    // The loop ends: boxing moves only boxed stations, so a flow it pulls
+    // apart has a boxed station, and each pass takes at least one out.
     loop {
         if net.instances.is_empty() {
             return;
@@ -1312,10 +1322,12 @@ fn contiguous_instances(net: &mut Net) {
         let together = |g: &[usize], pos: &dyn Fn(usize) -> usize| {
             g.windows(2).all(|w| pos(w[1]) == pos(w[0]) + 1)
         };
+        let now = |i: usize| i;
+        let boxed = |i: usize| at[i];
         let broken: Vec<usize> = net
             .flows
             .iter()
-            .filter(|g| together(g, &|i| i) && !together(g, &|i| at[i]) && !net.spans(g))
+            .filter(|g| together(g, &now) && !together(g, &boxed) && !net.spans(g))
             .flatten()
             .copied()
             .collect();
