@@ -2048,8 +2048,8 @@ impl Validator<'_> {
         }
         if reads_clock(e) {
             return Err(
-                "an `only` may not read `now` or `work(…)`: an engine whose residents it \
-                 all excludes waits for an event, and the clock moving is none"
+                "an `only` may not read `now` or `work(…)`: an engine whose requests it \
+                 all excludes waits for the next event, and time passing is not one"
                     .into(),
             );
         }

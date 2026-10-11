@@ -122,8 +122,9 @@ stage …` (`idle_with_work` in JSON).
 | `by (k1, …)` | ascending keys per request, ties by admission order |
 | `decode first` | decodes before prefills |
 
-Keys read `decoding`, `admission`, `remaining` and `running.count`,
-`running.decoding`, `running.kv_…`, and may not draw. `by (remaining)` is
+Keys read `decoding`, `admission`, `remaining`, `running.count`,
+`running.decoding`, `running.kv_…` and the clock (`now`, `work(…)`), and
+may not draw. `by (remaining)` is
 shortest-remaining-first; `by (-remaining)` is the opposite.
 
 `only (p)` is read for each request at its turn, on the running requests
