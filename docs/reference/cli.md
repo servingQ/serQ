@@ -185,7 +185,14 @@ refused, and the error names the construct:
 - a constant chunk cap: vLLM lifts the cap for a request alone
   (`scheduler.py:606-616`), so an engine writes `each at most (threshold)`
   with `let threshold = running.count + waiting.count > 1 ? c : inf;`, or
-  no `each at most` for no cap.
+  no `each at most` for no cap;
+- a computed chunk cap other than vLLM's adaptive threshold, `let n =
+  running.count + waiting.count;` and `let threshold = n > 1 ? max(c,
+  floor(B / n)) : inf;` with `B` the engine's `tokens cap`
+  (`scheduler.py:617-622`). That one is taken: the configuration has
+  `"long_prefill_token_threshold": c` and
+  `"long_prefill_token_threshold_adaptive": true`
+  (`config/scheduler.py:87-91`).
 
 `advance running by` keys that vLLM's scheduler can observe are the programmable
 part. The configuration then also names `scheduler_cls:
