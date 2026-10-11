@@ -249,6 +249,24 @@ fn an_aggregates_index_and_count_are_its_own() {
     }
 }
 
+/// An array size is folded by the parser and never reaches the linker, so
+/// the parser refuses an index that is also a `let` there, with the
+/// linker's words for the same aggregate in a `let` (#499).
+#[test]
+fn an_array_sizes_aggregate_index_is_its_own() {
+    for decl in [
+        "let N = 4; stage colo[sum N in 2 (1)] : delay;",
+        "let N = 4; let M = sum N in 2 (1);",
+    ] {
+        let e = link_error(&format!("{DEPLOYMENT}{decl}"));
+        assert!(
+            e.contains("`sum N in`: `N` is also a `let` constant")
+                && e.contains("give the index a name of its own"),
+            "{decl}: {e}"
+        );
+    }
+}
+
 /// Aggregate expansion must reach the index diagnostic on a bounded stack.
 /// 2100 units cannot index a two-member pool; min/max likewise produce 2.
 #[test]

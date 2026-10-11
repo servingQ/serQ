@@ -814,13 +814,15 @@ fn a_device(queue: &str, verb: &str, name: &str) -> String {
 }
 
 /// The constants the parser knows: the `let`s folded so far. It knows no
-/// other name, so an aggregate's index clashes with none here, and an
-/// aggregate's terms are bounded per expression. Its errors are never
-/// shown: an array size that is no constant says so itself, and a `let`
-/// the parser cannot fold, the linker says why.
+/// other name, so an aggregate's index clashes with a folded `let` only,
+/// and an aggregate's terms are bounded per expression. Of its errors only
+/// a clash is shown (#499): an array size or a `latency` that is no
+/// constant says so itself, and a `let` the parser cannot fold, the linker
+/// says why.
 struct Lets<'a> {
     consts: &'a [(String, f64)],
     terms: Cell<usize>,
+    clashed: Cell<bool>,
 }
 
 impl Constants for Lets<'_> {
@@ -843,8 +845,10 @@ impl Constants for Lets<'_> {
         Ok(())
     }
 
-    fn index_clash(&self, _: &str) -> Option<&'static str> {
-        None
+    fn index_clash(&self, j: &str) -> Option<&'static str> {
+        let clash = self.consts.iter().any(|(c, _)| c == j);
+        self.clashed.set(self.clashed.get() || clash);
+        clash.then_some("a `let` constant")
     }
 
     fn terms_written(&self) -> &Cell<usize> {
@@ -3155,7 +3159,11 @@ impl Parser {
                     ),
                 );
             }
-            let n = match self.const_value(&e) {
+            let n = match self.const_or_clash(&e) {
+                Err(clash) => return self.err_at(at, clash),
+                Ok(n) => n,
+            };
+            let n = match n {
                 Some(x) if x > MAX_FAMILY as f64 && x.fract() == 0.0 => {
                     return self.err_at(
                         at,
@@ -3206,12 +3214,23 @@ impl Parser {
     /// if it is one: the linker's evaluator over the `let`s folded so far,
     /// so that a `let` the linker folds sizes an array here too (#274).
     fn const_value(&self, e: &Expr) -> Option<f64> {
-        Lets {
+        self.const_or_clash(e).ok().flatten()
+    }
+
+    /// [`Self::const_value`], or the linker's error for an aggregate whose
+    /// index is also a `let` constant: an array size and a `latency` are
+    /// folded here and never reach the linker, which would refuse it (#499).
+    fn const_or_clash(&self, e: &Expr) -> Result<Option<f64>, String> {
+        let lets = Lets {
             consts: &self.consts,
             terms: Cell::new(0),
+            clashed: Cell::new(false),
+        };
+        match lets.eval_const(e) {
+            Ok(v) => Ok(Some(v)),
+            Err(err) if lets.clashed.get() => Err(err.message),
+            Err(_) => Ok(None),
         }
-        .eval_const(e)
-        .ok()
     }
 
     /// `a, …)` after a `Tok::Unread`'s `(` (and an expression's body).
@@ -3693,7 +3712,11 @@ impl Parser {
                 if self.eat_kw("latency") {
                     let l_at = self.pos;
                     let e = self.expr()?;
-                    let Some(v) = self.const_value(&e) else {
+                    let v = match self.const_or_clash(&e) {
+                        Err(clash) => return self.err_at(l_at, clash),
+                        Ok(v) => v,
+                    };
+                    let Some(v) = v else {
                         return self.err_at(
                             l_at,
                             "`latency` is a number or a constant over `let`s: a link's fixed wait, \
@@ -4904,7 +4927,11 @@ impl Parser {
         let latency = if self.eat_kw("latency") {
             let l_at = self.pos;
             let e = self.expr()?;
-            let Some(v) = self.const_value(&e) else {
+            let v = match self.const_or_clash(&e) {
+                Err(clash) => return self.err_at(l_at, clash),
+                Ok(v) => v,
+            };
+            let Some(v) = v else {
                 return self.err_at(
                     l_at,
                     "`latency` is a number or a constant over `let`s: the fixed wait of the \
