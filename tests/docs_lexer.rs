@@ -208,7 +208,8 @@ fn the_function_list_is_every_function_the_linker_resolves() {
 /// The names the language supplies - context variables, functions, a run's
 /// aggregates, folded calls and the attributes it sets - are coloured as
 /// what a program reads, or, for arithmetic, listed to be left plain. A
-/// program may not take a context variable's name for its own (#231, #460).
+/// program may not take a context variable's name for its own (#231, #460),
+/// nor a declaration an attribute's (#470).
 #[test]
 fn the_docs_lexer_knows_every_name_the_language_supplies() {
     use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
@@ -218,12 +219,7 @@ fn the_docs_lexer_knows_every_name_the_language_supplies() {
         .chain(FUNCTIONS)
         .chain(AGGREGATES.iter().map(|(n, _)| *n))
         .chain(FOLDED)
-        // `new` and `out` stay plain: a program also names an `observe` so
-        .chain(
-            BUILTIN_ATTRS
-                .into_iter()
-                .filter(|a| !matches!(*a, "new" | "out")),
-        )
+        .chain(BUILTIN_ATTRS)
         .chain(["inf"]);
 
     let mut listed = coloured();

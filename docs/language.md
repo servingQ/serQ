@@ -172,7 +172,9 @@ The rules that are the language's, not the catalogue's:
   `set present = …` does not link (a `ps` capacity reading `present` would
   read the attribute). Nor does a `def`, a parameter, an `observe`, a
   `stage`, a `pool`, a `device`, an `engine`, a `queue`, a `gauge` or a
-  `claim` take a supplied name: `observe admitted = now;` does not link.
+  `claim` take a supplied name: `observe admitted = now;` does not link,
+  nor an attribute's, built in or set (`stage think` does not link); a
+  program may still `set` a built-in attribute.
 - **Constants** (a `let`, a `cap`, a `block`, a `fifo` count, the arrival
   rate or population) are numbers or `inf`; one that
   evaluates to NaN does not link.

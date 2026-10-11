@@ -45,7 +45,7 @@
     ]
   ],
   "observes": [
-    "out",
+    "output_tokens",
     "vol",
     "response"
   ],

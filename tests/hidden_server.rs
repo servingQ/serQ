@@ -266,30 +266,37 @@ fn a_cost_family_annotation_does_not_reveal_its_index() {
 }
 
 /// A bare name reveals its attribute only where the function takes a
-/// number (#467): `work(E)` reads the engine `E`, so a run by it does not
-/// reveal a hidden attribute `E`, and a decision on `E` after it is the
-/// scheduler reading what it cannot see.
+/// number (#467): `work(E)` reads the engine `E`, so a run by it did not
+/// reveal a hidden attribute `E`. Since #470 no attribute may take the
+/// engine's name, and a run reveals a hidden attribute only where its work
+/// reads it.
 #[test]
 fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
-    let source = |work: &str| {
+    let source = |attribute: &str, work: &str| {
         format!(
             "fn main() {{
         device gpu {{ kv cap 1000; }}
         engine E on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
         pool kv on gpu {{ block 16; }}
-        workload {{ arrive batch(1); hidden E;
-          init {{ set prompt = 32; set E = 4; }}
+        workload {{ arrive batch(1); hidden {attribute};
+          init {{ set prompt = 32; set {attribute} = 4; }}
           session {{ turn; end; }} }}
         server {{ hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, {work})) growing kv; }}
-          branch (E > 2) {{ observe big = 1; }} else {{ observe small = 1; }} }}
+          branch ({attribute} > 2) {{ observe big = 1; }} else {{ observe small = 1; }} }}
         }}"
         )
     };
-    let e = compile_source(&source("prompt + 0 * work(E)"), &common::horizon(10.0)).unwrap_err();
+    let horizon = common::horizon(10.0);
+    let e = compile_source(&source("E", "prompt + 0 * work(E)"), &horizon).unwrap_err();
     assert!(
-        e.contains("`E` is hidden from the scheduler, but the server's branch reads it"),
+        e.contains("an engine named `E` would make the one word mean two things"),
+        "{e}"
+    );
+    let e = compile_source(&source("L", "prompt + 0 * work(E)"), &horizon).unwrap_err();
+    assert!(
+        e.contains("`L` is hidden from the scheduler, but the server's branch reads it"),
         "{e}"
     );
     // a run whose work reads the attribute reveals it
-    compile_source(&source("prompt + 0 * E"), &common::horizon(10.0)).unwrap();
+    compile_source(&source("L", "prompt + 0 * L"), &horizon).unwrap();
 }

@@ -117,7 +117,7 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         server {
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, 1000))) reserve (cost(kv, known))
           at admission (known = computed < prompt ? prompt : computed + 1) {
-            observe known = known;
+            observe known_at = known;
             run llm prefill (cost(llm, known)) growing kv;
             branch (known == prompt) { observe first = now; }
             run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
@@ -131,7 +131,10 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 1, "{}", r.text());
     assert_eq!(kv.stuck, 0, "{}", r.text());
-    assert_eq!(r.observe("known").unwrap().samples, vec![64.0, 48.0, 65.0]);
+    assert_eq!(
+        r.observe("known_at").unwrap().samples,
+        vec![64.0, 48.0, 65.0]
+    );
     // the first token is recorded once per request: B's re-prefill at 21 is
     // not a first token (vLLM's oracle records `first` once, too)
     assert_eq!(r.observe("first").unwrap().samples, vec![1.0, 1.0]);
@@ -175,7 +178,7 @@ fn preempted_twice(set_kept: &str, known_is: &str) -> String {
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(llm)))) reserve (cost(kv, known))
           at admission (known = {known_is}) {{
             {set_kept}
-            branch (serial == 2) {{ observe known = known; observe at = computed; }}
+            branch (serial == 2) {{ observe known_at = known; observe at = computed; }}
             run llm prefill (cost(llm, known)) growing kv;
             branch (known == prompt) {{ observe first = serial; }}
             run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
@@ -210,7 +213,7 @@ fn preempted_twice(set_kept: &str, known_is: &str) -> String {
 /// prompt (2 blocks fit): it has lost its output token, computes it again
 /// at step 39 and records its first token twice, and is preempted at 32 by
 /// the same lack of a block, to return at 62 with 33. `done` is the same in
-/// both forms, so the bug shows only in what is observed: `known` and
+/// both forms, so the bug shows only in what is observed: `known_at` and
 /// `first`. Carrying the most it had, `kept`, B comes back with 33, as vLLM
 /// does.
 #[test]
@@ -224,7 +227,7 @@ fn a_request_preempted_twice_keeps_its_outputs() {
         vec![0.0, 32.0, 24.0, 32.0]
     );
     assert_eq!(
-        r.observe("known").unwrap().samples,
+        r.observe("known_at").unwrap().samples,
         vec![32.0, 33.0, 32.0, 33.0]
     );
     assert_eq!(
@@ -240,7 +243,10 @@ fn a_request_preempted_twice_keeps_its_outputs() {
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 2, "{}", r.text());
     assert_eq!(r.observe("at").unwrap().samples, vec![0.0, 32.0, 24.0]);
-    assert_eq!(r.observe("known").unwrap().samples, vec![32.0, 33.0, 33.0]);
+    assert_eq!(
+        r.observe("known_at").unwrap().samples,
+        vec![32.0, 33.0, 33.0]
+    );
     assert_eq!(r.observe("first").unwrap().samples, vec![0.0, 1.0, 2.0]);
     assert_eq!(
         r.observe("done").unwrap().samples,
