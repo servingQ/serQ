@@ -394,6 +394,11 @@ struct Job {
     work: f64,
     mode: RunMode,
     growing: Option<usize>,
+    /// For a `growing` run, the position its hold reaches when the run
+    /// ends: the position it started at plus its work. The chunk that ends
+    /// the run puts the hold there, not at the sum of the chunks, which can
+    /// fall an ulp short (#479).
+    end: f64,
     enqueued: f64,
     started: Option<f64>,
 }
@@ -2745,11 +2750,16 @@ impl<'p> Interp<'p> {
     }
 
     fn advance_pos(&mut self, sid: usize, pl: usize, tokens: f64) {
+        self.move_pos(sid, pl, |pos| pos + tokens);
+    }
+
+    /// Move the position of `sid`'s innermost hold on `pl` to `to(pos)`.
+    fn move_pos(&mut self, sid: usize, pl: usize, to: impl FnOnce(f64) -> f64) {
         let (hi, k) = self.sessions[sid]
             .innermost(pl)
             .expect("a growing run is inside a hold of its pool");
         let h = &mut self.sessions[sid].holds[hi];
-        h.pools[k].pos += tokens;
+        h.pools[k].pos = to(h.pools[k].pos);
         h.grown = true;
     }
 
@@ -2897,12 +2907,17 @@ impl<'p> Interp<'p> {
         if let Some(sid) = owner {
             self.sessions[sid].status = Status::InStage(st, id);
         }
+        let end = match (growing, owner) {
+            (Some(pl), Some(sid)) => self.hold_alloc_pos(sid, pl).1 + work,
+            _ => 0.0,
+        };
         let stage = &mut self.stages[st];
         let job = Job {
             owner,
             work,
             mode,
             growing,
+            end,
             enqueued: now,
             started: None,
         };
@@ -2989,6 +3004,7 @@ impl<'p> Interp<'p> {
                     work,
                     mode: RunMode::Plain,
                     growing: None,
+                    end: 0.0,
                     enqueued: now,
                     started: Some(now),
                 },
@@ -3496,11 +3512,18 @@ impl<'p> Interp<'p> {
         }
         // Growth can preempt an earlier candidate. Only surviving, selected
         // jobs advance their holds' computed positions.
+        // The chunk that ends a run puts its hold at the run's end (the run
+        // ends when its work is within `EPS`, `on_iter_end`).
         assign.retain(|(id, _)| self.stages[st].jobs.contains_key(id));
         for &(id, tokens) in &assign {
             let j = &self.stages[st].jobs[&id];
             if let (Some(pl), Some(sid)) = (j.growing, j.owner) {
-                self.advance_pos(sid, pl, tokens);
+                if j.work - tokens <= EPS {
+                    let end = j.end;
+                    self.move_pos(sid, pl, |_| end);
+                } else {
+                    self.advance_pos(sid, pl, tokens);
+                }
             }
         }
         // An iteration that scheduled nothing is no iteration, unless it
