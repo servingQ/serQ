@@ -192,11 +192,8 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
     let dir = root().join("examples/multi-turn");
     let rule = "let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;";
     assert!(src.contains(rule), "the program's chunk moved");
-    let target = |cap: &str| {
-        let src = src.replace(
-            rule,
-            &format!("let n = running.count + waiting.count; let threshold = n > 1 ? {cap} : inf;"),
-        );
+    let target_as = |n: &str, threshold: &str| {
+        let src = src.replace(rule, &format!("let n = {n}; let threshold = {threshold};"));
         let p = serq::compile_source_at(
             &common::main_source(&src),
             Some(&dir),
@@ -205,11 +202,32 @@ fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
         .unwrap();
         serq::target::vllm(&p)
     };
+    let target = |cap: &str| {
+        target_as(
+            "running.count + waiting.count",
+            &format!("n > 1 ? {cap} : inf"),
+        )
+    };
     for cap in ["max(1000, floor(B / n))", "max(floor(B / n), 1000)"] {
         let c = target(cap).unwrap_or_else(|e| panic!("{cap}: {e}"))["config"].clone();
         assert_eq!(c["long_prefill_token_threshold"], 1000, "{cap}");
         assert_eq!(c["long_prefill_token_threshold_adaptive"], true, "{cap}");
     }
+    // the count either way round
+    let c = target_as(
+        "waiting.count + running.count",
+        "n > 1 ? max(1000, floor(B / n)) : inf",
+    )
+    .unwrap()["config"]
+        .clone();
+    assert_eq!(c["long_prefill_token_threshold_adaptive"], true);
+    // the share without the condition holds for a request alone, where
+    // vLLM lifts the cap
+    let e = target_as("running.count + waiting.count", "max(1000, floor(B / n))").unwrap_err();
+    assert!(
+        e.contains("write it under `n > 1 ? … : inf`") && e.contains("scheduler.py:609-616"),
+        "{e}"
+    );
     // a constant cap is not adaptive, and says nothing of it
     let c = target("1000").unwrap()["config"].clone();
     assert_eq!(c["long_prefill_token_threshold"], 1000);

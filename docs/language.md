@@ -1170,12 +1170,13 @@ the step never computes their KV; serQ caches what was computed, the
 position ([Semantics](#3-semantics)).
 
 The adaptive long-prefill threshold is off by default; it is expressible as
-`max(threshold, floor(budget / n))` (`scheduler.py:609-622`,
-[Engine](api/engine.md)), but no program here writes it. `serq target` takes
-`n > 1 ? max(c, floor(B / n)) : inf`, `n` the count above and `B` the
-`tokens cap`, as `long_prefill_token_threshold: c` with
-`long_prefill_token_threshold_adaptive: true` (`config/scheduler.py:87-91`),
-and refuses a cap that computes another share.
+`n > 1 ? max(threshold, floor(budget / n)) : inf`, with `n` =
+`running.count + waiting.count` and `budget` the engine's `tokens cap`
+(`scheduler.py:609-622`, [Engine](api/engine.md)), but no program here
+writes it. `serq target` exports that cap as `long_prefill_token_threshold:
+threshold` with `long_prefill_token_threshold_adaptive: true`
+(`config/scheduler.py:87-91`), and refuses a cap that computes another
+share.
 
 Not modelled: the watermark (0 by default), encoder inputs, speculative decoding, sliding
 window, the PRIORITY policy (its victim, the largest `(priority,

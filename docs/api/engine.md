@@ -163,7 +163,9 @@ let c = n > 1 ? max(threshold, floor(budget / n)) : inf;
 ```
 
 It is vLLM's only when `budget` is the engine's `tokens cap`, vLLM's
-`max_num_batched_tokens` (`scheduler.py:580`). `max(0, e)`, `min(k, e)`
+`max_num_batched_tokens` (`scheduler.py:580`); `serq target` exports it
+as `long_prefill_token_threshold` with
+`long_prefill_token_threshold_adaptive`. `max(0, e)`, `min(k, e)`
 or a bare `e` does not link; a cap that shrinks writes its floor,
 `max(1, min(k, e))`.
 

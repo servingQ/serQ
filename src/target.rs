@@ -177,8 +177,11 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
         number(p, &step.budget, "the `tokens cap`")?,
         "the `tokens cap`",
     )?;
-    let (chunk, adaptive) = vllm_chunk(p, &step.chunk, &step.budget, slots)?;
-    let chunk = count(chunk, "the `each at most`")?;
+    let Chunk {
+        threshold,
+        adaptive,
+    } = vllm_chunk(p, &step.chunk, &step.budget, slots)?;
+    let chunk = count(threshold, "the `each at most`")?;
     let (seqs, block, blocks) = (
         count(sp.cap, &format!("pool `{}`'s cap", sp.name))?,
         count(block, &format!("pool `{}`'s block", kvp.name))?,
@@ -226,26 +229,23 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
 /// vLLM floors a nonzero cap at a fair share of the budget, `max(c,
 /// input_budget // num_eligible_reqs)` (scheduler.py:617-622): the engine
 /// writes `n > 1 ? max(c, floor(B / n)) : inf`, `n` the count above and `B`
-/// its `tokens cap`. The second of the pair says the cap is adaptive.
-fn vllm_chunk(p: &Program, e: &CExpr, budget: &CExpr, slots: usize) -> Result<(f64, bool), String> {
+/// its `tokens cap`.
+fn vllm_chunk(p: &Program, e: &CExpr, budget: &CExpr, slots: usize) -> Result<Chunk, String> {
     use crate::ir::{CArg, Fun};
-    let refuse = |why: &str| {
+    const HELP: &str = "in an engine's schedule, `let threshold = running.count + \
+                        waiting.count > 1 ? c : inf;` and `each at most (threshold)`, or no \
+                        `each at most` for no cap";
+    let refuse = |why: &str, help: &str| {
         Err(format!(
-            "not on vLLM's architecture: the `each at most` is `{}`; {why}\nhelp: in an \
-             engine's schedule, `let threshold = running.count + waiting.count > 1 ? c : inf;` \
-             and `each at most (threshold)`, or no `each at most` for no cap; vLLM's adaptive \
-             threshold is `max(c, floor(B / (running.count + waiting.count)))` in place of `c`, \
-             `B` the `tokens cap`",
+            "not on vLLM's architecture: the `each at most` is `{}`; {why}\nhelp: {help}",
             p.show_expr(e),
         ))
     };
     let alone = "vLLM caps a prefill only while another request is running or waiting \
                  (scheduler.py:606-616)";
-    // `residents + queued(reqs)`, vLLM's `num_eligible_reqs`
-    let eligible = |n: &CExpr| {
-        if let CExpr::Binary(BinOp::Add, res, q) = n
-            && **res == CExpr::Ctx(CtxVar::Nres)
-            && let CExpr::Call(Fun::Queued, args) = &**q
+    // `residents + queued(reqs)`, either way round: vLLM's `num_eligible_reqs`
+    let queued = |q: &CExpr| {
+        if let CExpr::Call(Fun::Queued, args) = q
             && let [CArg::Pool(r)] = args.as_slice()
         {
             r.base == slots && r.count == 1 && r.index.is_none()
@@ -253,14 +253,35 @@ fn vllm_chunk(p: &Program, e: &CExpr, budget: &CExpr, slots: usize) -> Result<(f
             false
         }
     };
+    let eligible = |n: &CExpr| match n {
+        CExpr::Binary(BinOp::Add, a, b) => {
+            let res = |x: &CExpr| *x == CExpr::Ctx(CtxVar::Nres);
+            (res(a) && queued(b)) || (queued(a) && res(b))
+        }
+        _ => false,
+    };
     let (test, then) = match e {
-        CExpr::Num(x) if *x == 0.0 => return Ok((0.0, false)),
+        CExpr::Num(x) if *x == 0.0 => {
+            return Ok(Chunk {
+                threshold: 0.0,
+                adaptive: false,
+            });
+        }
         CExpr::Cond(test, then, other) if **other == CExpr::Num(0.0) => (test, then),
-        _ => return refuse(alone),
+        // the adaptive share alone holds at n = 1 too, where vLLM lifts the cap
+        CExpr::Call(Fun::Max, _) => {
+            return refuse(
+                "vLLM computes its adaptive threshold only while another request is running \
+                 or waiting: write it under `n > 1 ? … : inf`, as vLLM does \
+                 (scheduler.py:609-616)",
+                HELP,
+            );
+        }
+        _ => return refuse(alone, HELP),
     };
     match &**test {
         CExpr::Binary(BinOp::Gt, n, one) if **one == CExpr::Num(1.0) && eligible(n) => {}
-        _ => return refuse(alone),
+        _ => return refuse(alone, HELP),
     }
     // `floor(B / n)`, the fair share
     let share = |a: &CArg| {
@@ -277,22 +298,43 @@ fn vllm_chunk(p: &Program, e: &CExpr, budget: &CExpr, slots: usize) -> Result<(f
         CArg::Expr(CExpr::Num(c)) if *c > 0.0 => Some(*c),
         _ => None,
     };
+    let adaptive = |threshold| {
+        Ok(Chunk {
+            threshold,
+            adaptive: true,
+        })
+    };
+    let other = || {
+        refuse(
+            "the cap computes a share other than vLLM's (scheduler.py:617-622)",
+            &format!(
+                "{HELP}; vLLM's adaptive threshold is `max(c, floor(B / (running.count + \
+                 waiting.count)))` in place of `c`, `c` above 0 and `B` the `tokens cap`"
+            ),
+        )
+    };
     match &**then {
-        CExpr::Num(c) => Ok((*c, false)),
-        CExpr::Call(Fun::Max, args)
-            if let [a, b] = args.as_slice()
-                && let Some(c) = threshold(a)
-                    .filter(|_| share(b))
-                    .or_else(|| threshold(b).filter(|_| share(a))) =>
-        {
-            Ok((c, true))
-        }
-        _ => refuse(
-            "the cap computes a share other than vLLM's, which is a constant `c` or, adaptive, \
-             `max(c, floor(B / (running.count + waiting.count)))` with `c` above 0 and `B` the \
-             `tokens cap` (scheduler.py:617-622)",
-        ),
+        CExpr::Num(c) => Ok(Chunk {
+            threshold: *c,
+            adaptive: false,
+        }),
+        CExpr::Call(Fun::Max, args) => match args.as_slice() {
+            [a, b] => match (threshold(a), threshold(b)) {
+                (Some(c), _) if share(b) => adaptive(c),
+                (_, Some(c)) if share(a) => adaptive(c),
+                _ => other(),
+            },
+            _ => other(),
+        },
+        _ => other(),
     }
+}
+
+/// vLLM's long-prefill threshold: `long_prefill_token_threshold` and
+/// `long_prefill_token_threshold_adaptive` (config/scheduler.py:87-91).
+struct Chunk {
+    threshold: f64,
+    adaptive: bool,
 }
 
 /// A serve key `tools/serq_vllm.py` can evaluate on a running request:
