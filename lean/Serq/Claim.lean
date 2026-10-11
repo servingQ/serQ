@@ -10,7 +10,7 @@ program's family: the machines a run reaches event by event (`Reach`), the
 iteration record a claim over iterations reads (`Machine.last`), and the
 observations a claim at the end aggregates. `scripts/gen_lean_claims.py`
 writes each claim of the programs under `examples/papers/` as such a
-statement (`Serq/Claims.lean`), and `Serq/Papers/` proves them.
+statement (`Serq/Claims.lean`), and `examples/papers/` proves them.
 
 The module also proves what every program satisfies, whatever its claims:
 
@@ -274,6 +274,9 @@ theorem same_exec : ∀ (f : ℕ) (m : Machine) (i : ℕ), Same m (exec D f m i)
       · exact Same.key_trans (same_exec f _ i) rfl
       · exact Same.key_trans (same_exec f _ i) rfl
       · exact Same.key_trans (same_exec f _ i) rfl
+      · split
+        · exact Same.key_trans (same_exec f _ i) rfl
+        · exact Same.key_trans (same_exec f _ i) rfl
       · exact Same.key_trans (same_exec f _ i) rfl
       · split
         · exact Same.of_key rfl
@@ -297,8 +300,8 @@ theorem same_settleLoop : ∀ (f : ℕ) (m : Machine), Same m (settleLoop D f m)
   | f + 1, m => by
     unfold settleLoop
     simp only
-    have h : Same m (admitAll D (drain D 10000 m)) :=
-      (same_drain D 10000 m).trans (Same.of_key (key_admitAll D _))
+    have h : Same m (admitAll D (drain D (drainFuel m) m)) :=
+      (same_drain D _ m).trans (Same.of_key (key_admitAll D _))
     split
     · exact h
     · exact h.trans (same_settleLoop f _)
@@ -424,7 +427,7 @@ theorem admitVia_same (m : Machine) (left : ℕ) : Same m (admitVia D m left).1 
   · exact Same.refl m
   · split
     · split
-      · exact Same.key_trans (same_drain D 10000 _) (by rw [key_admit, key_setPool])
+      · exact Same.key_trans (same_drain D _ _) (by rw [key_admit, key_setPool])
       · exact Same.refl m
     · exact Same.refl m
 
@@ -559,8 +562,10 @@ theorem startIteration_inv {T R : ℕ} (hb : RateBound D T R) (m : Machine) (h :
   unfold startIteration
   simp only
   split
-  · obtain ⟨hs, htok⟩ := assign_same D m.preempts (m.jobs.length + 100000) { m with iter := [] } 0 D.budget
-    set m' := assign D (m.jobs.length + 100000) { m with iter := [] } 0 D.budget m.preempts with hm'
+  · obtain ⟨hs, htok⟩ := assign_same (iterDeployment D m) m.preempts (m.jobs.length + 100000)
+      { m with iter := [] } 0 D.budget
+    set m' := assign (iterDeployment D m) (m.jobs.length + 100000) { m with iter := [] } 0 D.budget
+      m.preempts with hm'
     have hn : m'.now = m.now := hs.now
     have hsv : m'.served = m.served := hs.served
     have hie : m'.iterEnd = none := hs.iterEnd.trans hi

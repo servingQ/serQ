@@ -1,43 +1,45 @@
 # Serving vocabulary
 
-Names for the parts of a request's life. An admission is the kernel's
-[`hold … at admission (…) { … } cache (…)`](statements.md#hold); these name what
-the request does once it is in.
+Names for the parts of a request's life that are not one engine run. An
+admission is the kernel's
+[`hold … at admission (…) { … } cache (…)`](statements.md#hold). Prefill and
+decode are the mode of a [`run`](statements.md#run) on a step engine,
+`run E prefill (cost(E, T));` and `run E decode (cost(E, T));`, so the
+engine is always written.
+
+Serving forms accept ordinary quantities and perform the named resource
+[`cost`](functions.md#cost) conversion before the primitive operation.
+An already converted cost belongs in `run` or `load` directly.
 
 | Form | The request… | Kernel |
 |---|---|---|
-| [`prefill W;`](#prefill-decode-tool) | computes its prompt's KV | `run prefill (W);` or `run E prefill (T);` |
-| [`decode W;`](#prefill-decode-tool) | generates its output, a token per iteration | `run decode (W);` or `run E decode (T);` |
-| [`tool Z;`](#prefill-decode-tool) | waits outside the engine (a tool call, a person reading) | `run tool (Z);` |
-| [`transfer (X) from P to Q (n);`](#transfer-from-to) | has its KV moved to another instance | `run link (X); load Q (n); release P;` |
+| [`tool Z;`](#tool) | waits outside the engine (a tool call, a person reading) | `run tool (cost(tool, Z));` |
+| [`transfer (X) from P to Q (n);`](#transfer-from-to) | has its KV moved to another instance | `run link (cost(link, X)); load Q (cost(Q, n)); release P;` |
 
-Each form is sugar: the parser rewrites it to the [kernel statement](statements.md)
-in the last column, so the AST, the IR and the interpreter know nothing of it.
+Each form is shorthand for the [kernel statements](statements.md) in the
+last column.
 
-## `prefill`, `decode`, `tool`
+## `tool`
 
 ```serq
-prefill [ '[' j ']' | on STAGE [, STAGE]* ] work [growing POOL];
-decode  [ '[' j ']' | on STAGE [, STAGE]* ] work [growing POOL];
-tool    [ '[' j ']' | on STAGE [, STAGE]* ] work;
+tool [ '[' j ']' | on STAGE [, STAGE]* ] work;
 ```
 
 | Argument | Type | Description |
 |---|---|---|
-| `[j]` | `expr` | Index into the role's stage array: `prefill[j] W;`. |
-| `on STAGE` | `stage` | Names the stage explicitly: `prefill on P2 (W);`. |
-| `work` | `expr` | `W`: clock time on a `fifo`, `ps` or `delay` stage. `T`: tokens on a `step` engine. |
-| `growing` | `pool` | `prefill` and `decode` on a step engine only. Passes through to the `run`; a form never adds it. |
+| `[j]` | `expr` | Index into the role's stage array: `tool[j] Z;`. |
+| `on STAGE` | `stage` | Names the stage explicitly: `tool on S2 (Z);`. |
+| `work` | `expr` | Clock time on a `fifo`, `ps` or `delay` stage. |
 
-**Which stage.** Without `[j]` or `on`, the form finds its stage among those
-declared above it: the stage named for the role (`prefill`, `link` or
-`transfer`, `decode`, `tool`); failing that, for `prefill` and `decode`, the
-`step` engine. Exactly one must qualify: with none or several the parser stops
-at the form. On a step engine the run gets the role's mode; elsewhere it is
-plain. `transfer` and `tool` on a step engine are link errors, so they take no
-`growing`, which needs one. `transfer` finds its stage by the same rule and
+### Stage selection
+
+Without `[j]` or `on`, the form finds its stage among those
+declared above it: the stage named for the role (`link` or `transfer`,
+`tool`). Exactly one must qualify: with none or several the parser stops
+at the form. The run is plain: `transfer` and `tool` on a step engine are
+link errors, so they take no `growing`, which needs one. `transfer` finds its stage by the same rule and
 always says where the KV goes ([below](#transfer-from-to)); a link that only
-takes time is `run link (X);`.
+takes time is `run link (cost(link, X));`.
 
 ## `transfer … from … to`
 
@@ -52,14 +54,14 @@ transfer [ '[' j ']' | on STAGE [, STAGE]* ] (X) from P to Q (n);
 | `Q` | `pool` | The session's hold the KV arrives in. |
 | `n` | `expr` | Tokens counted as computed at `Q`. |
 
-`run link (X); load Q (n); release P;`. The KV of a prefill/decode split lives
+`run link (cost(link, X)); load Q (cost(Q, n)); release P;`. The KV of a prefill/decode split lives
 in two pools whose lifetimes overlap without nesting: the decode instance
 allocates before the prefill instance frees. `on a, b` names several stages
-the read holds at once, the sender's link and the receiver's
+the transfer uses at once, the sender's link and the receiver's
 ([`run`](statements.md#run)): `transfer on egress[i], ingress[j] (X) from P to Q (n);`
-is `run egress[i], ingress[j] (X); load Q (n); release P;`. A link queue with
+is `run egress[i], ingress[j] (cost(egress, ingress, X)); load Q (cost(Q, n)); release P;`. A link queue with
 a `latency` (`serve ps(BwD) latency x0;`) is waited first: each named link
-that has one adds `run L.latency[k] (x0);` before the `run`, in the order
+that has one adds `run L.latency[k] (cost(L.latency, x0));` before the `run`, in the order
 named.
 
 ### Example
@@ -72,8 +74,43 @@ latency x0 share maxmin;` makes a `transfer` without `on` the read over
 `P.nic[i]` and `D.nic[j]`, after the decoder's wait `x0`:
 
 ```serq
-hold kv (known) reserve (known), reqs (0) reserve (1) … {
+hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1)) … {
   transfer (prompt - c) from src to kv (prompt - 1 - c);   // over P's NIC and this pod's
   …
-} cache (prompt + o);
+} cache (cost(kv, reqs, prompt + o));
 ```
+
+## Examples
+
+A complete program:
+
+```serq
+fn main() {
+  device gpu { }
+  engine llm on gpu {
+    tokens cap 8;
+    schedule { advance running; admit waiting while (running.preempted == 0); }
+    execute (1);
+  }
+  stage tool : delay;
+  workload {
+    arrive batch(1);
+  }
+  server {
+    run llm prefill (cost(llm, 8));
+    run llm decode (cost(llm, 2));
+    tool (3);
+    observe finished = now;
+  }
+}
+```
+
+Save as `model.sq`, then run:
+
+```sh
+serq run model.sq --horizon 10
+```
+
+## See also
+
+[Statements](statements.md), [stages](stage.md), [workloads](workload.md).

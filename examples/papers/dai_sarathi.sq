@@ -5,6 +5,7 @@
 // limit: CodeLlama-34B TP1, t_b = 11.28 + 35.47 ceil(b/128) ms, one request
 // every 467.5 ms with 290 prefill and 990 decode tokens. Time is in units of
 // 10 µs, so that every number of the model is an integer.
+
 let bmax = 128;          // token budget b_max
 let c = 1128;            // t_b = c + a ceil(b / b0), 10 µs
 let a = 3547;
@@ -13,35 +14,42 @@ let gap = 46750;         // one arrival every 467.5 ms
 let vp = 290;
 let vd = 990;
 
-stage engine : step {
-  budget bmax;
-  cost c + a * ceil(tokens / b0);
-  serve admission;       // admission order: decodes first, then the oldest prefills (no chunk cap)
+fn main() {
+  device gpu { compute (t) = a * ceil(t / b0); }
+  engine sarathi on gpu {
+    tokens cap bmax;
+    schedule {
+      // admission order: decodes first, then the oldest prefills (no chunk cap)
+      advance running admission;
+      admit waiting while (running.preempted == 0);
+    }
+    execute (c + compute(batch.tokens));
+  }
+
+  workload {
+    arrive renewal(gap);
+    init { set t0 = now; }
+
+  }
+
+  server {
+    run sarathi prefill (cost(sarathi, vp));
+    run sarathi decode (cost(sarathi, vd));
+    observe response = now - t0;
+  }
+
+  // (8)-(9): a batch is full whenever the residents could fill it. Sarathi is
+  // work-conserving (§4).
+  claim work_conserving: every iteration of sarathi (demand < bmax || tokens == bmax);
+
+  // Theorem 2(a): no scheduler serves more than b_max / t_{b_max} tokens per
+  // unit of time, so a load above it diverges.
+  claim token_rate: every iteration of sarathi (served * (c + a * bmax / b0) <= bmax * now);
+
+  // Theorem 2(b), pathwise: at this load (one request's tokens per gap, which is
+  // exactly b_max / t_{b_max}) the work that has arrived and not been served
+  // never exceeds b_max + 1 requests' worth, however many arrive.
+  claim bounded: every iteration of sarathi (arrived * (vp + vd) <= served + (bmax + 1) * (vp + vd));
+
+
 }
-
-workload {
-  arrive renewal(gap);
-  init { set t0 = now; }
-}
-
-session {
-  run engine prefill (vp);
-  run engine decode (vd);
-  observe response = now - t0;
-  end;
-}
-
-// (8)-(9): a batch is full whenever the residents could fill it. Sarathi is
-// work-conserving (§4).
-claim work_conserving: every iteration of engine (demand < bmax || tokens == bmax);
-
-// Theorem 2(a): no scheduler serves more than b_max / t_{b_max} tokens per
-// unit of time, so a load above it diverges.
-claim token_rate: every iteration of engine (served * (c + a * bmax / b0) <= bmax * now);
-
-// Theorem 2(b), pathwise: at this load (one request's tokens per gap, which is
-// exactly b_max / t_{b_max}) the work that has arrived and not been served
-// never exceeds b_max + 1 requests' worth, however many arrive.
-claim bounded: every iteration of engine (arrived * (vp + vd) <= served + (bmax + 1) * (vp + vd));
-
-run { horizon 5000000; warmup 0; seed 1; }

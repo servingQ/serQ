@@ -44,18 +44,18 @@ CASES = {
     "fixed_w10ms": ("2000", {"omega": 0.01}, [40, 60, 70]),
 }
 
-EXCLUSIVE = "    serve exclusive prefill;\n"
+EXCLUSIVE = ("        exclusive prefill each at most (chunk_cap);\n", "        advance running each at most (chunk_cap);\n")
 
 # The variations of the baseline, one at a time, on prompts of 2000
 # tokens: (title, the modes, the loads, `--set`s, edits of the program's
 # text). An edit is a line the program states and the variation states
-# otherwise: a policy (`serve exclusive prefill`) or a family's size
+# otherwise: a policy (`exclusive prefill`) or a family's size
 # (`NP`), which `--set` refuses.
 VARIATIONS = {
-    "mixed": ("mixed batches, whole prompts (`serve exclusive prefill` deleted)", [0, 1], [40, 60, 70], {}, [(EXCLUSIVE, "")]),
-    "mixed_c512": ("mixed batches, prompts in chunks of 512 (`chunk_cap = 512`)", [0, 1], [40, 60, 70], {"chunk_cap": 512}, [(EXCLUSIVE, "")]),
-    "mixed_w10ms": ("mixed batches, whole prompts, a 10 ms decode step (`omega = 0.01`)", [0, 1], [60], {"omega": 0.01}, [(EXCLUSIVE, "")]),
-    "mixed_c512_w10ms": ("mixed batches in chunks of 512, a 10 ms decode step", [0, 1], [60], {"omega": 0.01, "chunk_cap": 512}, [(EXCLUSIVE, "")]),
+    "mixed": ("mixed batches, whole prompts (`exclusive prefill` read as `advance running`)", [0, 1], [40, 60, 70], {}, [EXCLUSIVE]),
+    "mixed_c512": ("mixed batches, prompts in chunks of 512 (`chunk_cap = 512`)", [0, 1], [40, 60, 70], {"chunk_cap": 512}, [EXCLUSIVE]),
+    "mixed_w10ms": ("mixed batches, whole prompts, a 10 ms decode step (`omega = 0.01`)", [0, 1], [60], {"omega": 0.01}, [EXCLUSIVE]),
+    "mixed_c512_w10ms": ("mixed batches in chunks of 512, a 10 ms decode step", [0, 1], [60], {"omega": 0.01, "chunk_cap": 512}, [EXCLUSIVE]),
     "bw_2e5": ("a read over NICs of 2e5 tokens/s (10 ms a prompt) after 2 ms (`Bw`, `x0`)", [1], [60, 70], {"Bw": 2e5, "x0": 0.002}, []),
     "bw_1e5": ("NICs of 1e5 tokens/s (20 ms a prompt): the decode engine's NIC takes every read", [1], [40, 45], {"Bw": 1e5, "x0": 0.002}, []),
     "kv_d_16k": ("a decode engine of 16384 KV tokens (`blocksD = 1024`)", [1], [60, 70], {"blocksD": 1024}, []),
@@ -75,7 +75,7 @@ def run(program, sets, defs, seed, edits=()):
                 text = text.replace(old, new)
             program = Path(dump) / program.name
             program.write_text(text)
-        cmd = [SERQ, "run", str(program), "--json", "--seed", str(seed), "--dump", dump]
+        cmd = [SERQ, "run", str(program), "--horizon", "300", "--warmup", "30", "--json", "--seed", str(seed), "--dump", dump]
         for k, v in sets.items():
             cmd += ["--set", f"{k}={v}"]
         for k, v in defs.items():

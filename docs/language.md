@@ -1,15 +1,10 @@
 # serQ: the text syntax, the semantics, and the vLLM correspondence
 
-The definition of a serQ program is its IR (`docs/ir.md`, `src/ir.rs`).
-This document describes the text syntax, which compiles to the IR, the
-semantics of the IR's constructs, written in terms of that syntax, and the
-correspondence of the vLLM programs with vLLM's scheduler. The reference
-implementation is the crate at the repository root (the CLI is
-[`serq`](reference/cli.md)); the programs are `examples/*/*.sq` and the
-library `lib/*.sq`; `make check` is the gate. The formal model is the Lean
-package in `lean/` ([The Lean model](lean.md)).
+This reference defines the text syntax and its semantics. Text compiles to
+[the IR](ir.md), which the interpreter runs and the Lean generators read.
+For individual constructs and examples, use the [API reference](api/index.md).
 
-## 1. What serQ is for
+## Overview {#1-what-serq-is-for}
 
 A serving deployment is a program. The program names the resources of the
 deployment (memory pools, stages), says how sessions arrive and how a
@@ -26,28 +21,39 @@ whether it is KV memory or request slots; and the colocated engine that
 prefills in the compute its decode step leaves is a stage kind of its own
 (`step`).
 
-## 2. Syntax
+## Syntax {#2-syntax}
 
 ```
-program  := item*
+program  := (constant | definition | import)* fn main ( ) { item* }
+constant := let NAME = expr ;
+definition := def NAME ( NAME , ... ) ( { expr } | block )
+import   := use "file.sq" ; | use "std/args" ;
 item     := let NAME = expr ;
+          | let NAME = args.number ( "argument_name" , expr ) ;
           | use "file.sq" ;                  -- the definitions of a library, next to this file
-          | def NAME ( NAME , ... ) = expr ;   -- a name for an expression: NAME ( arg , ... )
+          | def NAME ( NAME , ... ) { expr }   -- a name for an expression: NAME ( arg , ... )
           | def NAME ( NAME , ... ) block      -- a name for statements: NAME ( arg , ... ) ;
           | pool NAME [ '[' N ']' ] { poolopt* }
           | stage NAME [ '[' N ']' ] : kind ;
+          | device NAME [ '[' N ']' ] { resource* }      -- what an engine runs on (below, *Engines on devices*)
+          | engine NAME [ '[' N ']' ] on DEVICE { eitem* }   -- a stage that runs iterations (the IR's step stage)
+          | pool NAME on OWNER { poolopt* }    -- a capacity of a device or an engine, as a pool
+          | pool NAME on ENGINE.DEVICE { poolopt* }   -- the device's capacity, whose queue the engine admits: the name before the dot is that engine
           | workload { wlitem* }
-          | session block                     -- the session, in one block
-          | server block                      -- or its server side, with the session inside workload
+          | server block                      -- request handling; the session lives inside workload
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
-          | run { ( horizon | warmup | seed | arrivals ) expr ; ... }   -- any of them, in any order
           | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
           | QUEUE pull QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the reader, its source, the read (below, *Queues*)
+          | QUEUE push QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the source, its reader, the write
           | gauge NAME = expr ;              -- the time average of a function of the state (Gauges)
           | claim NAME [given ( expr )] : every iteration of STAGE ( expr ) ;   -- a proposition about every path (Claims)
           | claim NAME [given ( expr )] : some iteration of STAGE ( expr ) ;
           | claim NAME [given ( expr )] : at end ( expr ) ;
 qitem    := pool NAME { poolopt* }              -- the queue's own; only its entries hold it
+          | device NAME { resource* }           -- the member's device, `QUEUE.NAME`
+          | engine on DEVICE { eitem* }         -- the queue's stage, named after the queue
+          | pool NAME on OWNER { poolopt* }     -- on the queue's own device, or on the queue (its engine)
+          | pool NAME on QUEUE.DEVICE { poolopt* }   -- on the queue's own device, admitted by the queue's engine (named QUEUE)
           | serve kind [ latency expr ] ;       -- the queue's stage, named after the queue; `latency` a link's
           | nic kind ;                          -- the queue's NIC, the stage `QUEUE.nic`
           | VERB [ ( NAME, ... ) ] [ from NAME ] block   -- an entry of one of the queue's roles
@@ -55,25 +61,35 @@ poolopt  := cap expr ;                       -- capacity in units (default inf)
           | block expr ;                     -- allocate and cache in blocks
           | evict lru ; | evict by ( expr , ... ) ;   -- eviction order (ascending keys)
           | preempt none ; | preempt lifo ;  -- what a failed growth does
+          | preempt by ( expr , ... ) [requeue head | requeue tail] ;   -- the victim: least keys
           | queue fifo ; | queue by ( expr (, expr)* ) ; -- waiting selection
-          | admit via STAGE ;                -- the queue is served by a step stage's scheduler
+          | admit via STAGE ;                -- the queue is served by an engine's `schedule`
+          | reserve held ;                   -- a hold's unallocated reservation counts against later admissions
           | spill POOL via STAGE ( expr ) when ( expr ) ;  -- write evicted prefixes to a tier
 kind     := fifo [ ( c ) ]                   -- c servers, one job each at rate 1
           | ps ( expr )                      -- throughput phi(present) shared equally; expr reads present
-          | delay                            -- every job at rate 1, no waiting
-          | step { cost expr ; [budget expr ;] [chunk expr ;]     -- options in any order; budget inf by default
-                   [serve admission ; | serve by ( expr , ... ) ; | serve decode first ;
-                    | serve exclusive prefill ;
-                    | serve only ( expr ) [admission | by ( expr , ... ) | decode first] ;]
-                   [memory POOL ;] }
+          | delay                            -- ps(present): every job at rate 1, no waiting
+resource := NAME ( NAME , ... ) = expr ;           -- a time resource: a demand to time, read in `execute`
+          | NAME cap expr ;                  -- a capacity, declared as a pool with `pool NAME on DEVICE`
+eitem    := NAME cap expr ;                  -- a capacity the engine holds (`reqs cap max_seqs;`)
+          | tokens cap expr ;                -- the tokens one iteration computes (required; `inf` for none)
+          | granule expr ; | state NAME = expr ;
+          | schedule { (let NAME = expr ;)* sstmt+ }   -- what each iteration does (required)
+          | execute ( expr ) ;               -- the batch's time over the device's resources (required)
+sstmt    := advance running [only ( expr )] [admission | by ( expr , ... ) | decode first] [each at most ( expr )] ;
+          | admit waiting [only ( expr )] [while ( expr )] [each at most ( expr )] ;
+          | exclusive prefill [each at most ( expr )] ;
+          | branch ( expr ) { sstmt* } [else { sstmt* }]
+          | set NAME = expr ;
 wlitem   := arrive poisson ( rate ) ; | arrive renewal ( expr ) ; | arrive closed ( n ) ; | arrive batch ( n ) ; | arrive none ;
           | trace "file.csv" [ordered] ;      -- replay sessions from a trace
-          | init block | turn block          -- only set / observe
-          | session block                    -- the session's side; says `request`
+          | init block | turn block          -- Size / set / observe
+          | session block                    -- optional: the sequence of completed turns
           | hidden NAME [, NAME]* ;           -- the scheduler may not read these
-stmt     := turn ;                           -- next turn's attributes (workload `turn`, trace)
-          | request ;                        -- the server block, once (workload `session` only)
-          | request QUEUE ;                  -- the named gateway's route, once (workload `session` only)
+stmt     := turn ;                           -- draw attributes, submit, wait for the response (session only)
+          | Size NAME = expr ;                -- workload request quantity
+          | Cost NAME = expr ;                -- expression must have a resource Cost type
+          | Cost NAME = { RESOURCE : expr [, RESOURCE : expr]* } ;
           | set NAME = expr ;
           | observe NAME = expr ;
           | hold POOL ( expr ) [reserve ( expr )] [, POOL ( expr ) [reserve ( expr )]]*
@@ -86,42 +102,50 @@ stmt     := turn ;                           -- next turn's attributes (workload
           | release POOL ;                   -- give the enclosing hold's allocation on POOL back now, or end a lease of it
           | load POOL ( expr ) ;             -- the KV of expr tokens arrived: the enclosing hold's computed position advances
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
+                                             -- the mode: required on an engine, refused on any other stage
                                              -- growing: inside a hold of POOL, which grows with the tokens
           | run STAGE , STAGE [, STAGE]* ( expr ) ;   -- one job holding every stage at once
           | run ( expr ) ;                   -- in a queue's entry: the queue's own stage
           | branch ( expr ) block [ else block ]          -- a test
           | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
+          | while ( expr ) block             -- test before each pass; continue after the block
           | loop block
+          | fork block                       -- the block runs beside the session: a leg of the request
+          | join ;                           -- wait until every leg forked so far has ended
           | choose NAME in expr by ( expr , ... ) ; -- NAME := argmin over 0..n, keys in order
           | end ;
           | QUEUE [ '[' expr ']' ] . VERB ( expr, ... ) [ from QUEUE [ '[' expr ']' ] ] [ to POOL ( expr ) ] ;
                                              -- a queue's entry, in its place (*Queues*)
           | mark NAME ;                        -- in an entry: the moment, read by the caller as QUEUE.NAME
           | serving                          -- the serving vocabulary, sugar for run
-serving  := prefill  [ '[' expr ']' | on STAGE [, STAGE]* ] expr [ growing POOL ] ;
-          | transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
+serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
-          | decode   [ '[' expr ']' | on STAGE [, STAGE]* ] expr [ growing POOL ] ;
           | tool     [ '[' expr ']' | on STAGE [, STAGE]* ] expr ;
 ```
 
-**Arrivals and the run.** `arrive renewal(e)` draws or gives each gap,
+### Arrivals and the run
+
+A model defines the deployment and workload. Execution settings are supplied by
+the CLI flags, an explicit instance file, or the host API; `run { ... }` is
+not a model declaration. The resolved IR includes the execution settings.
+
+`arrive renewal(e)` draws or gives each gap,
 which must be positive and finite (a constant gap that is not does not
 link; a drawn one stops the run), and the first renewal arrival comes after
 one gap; `poisson(rate)` (a positive, finite constant) arrives at time 0 and
-then after exponential gaps of mean `1 / rate`. `run { arrivals N; }` (or
-`--arrivals N`) runs exactly `N` open-workload arrivals and drains their
+then after exponential gaps of mean `1 / rate`. `--arrivals N` runs exactly `N` open-workload arrivals and drains their
 sessions; failing to by `horizon`, or draining at or before `warmup`, is an
 error. A count is a whole number, or the program does not link: `closed(n)`
-and `batch(n)` from 1 to a million sessions, `arrivals` from 1 and `seed`
-from 0, both up to 2⁵³. The
+and `batch(n)` from 1 to a million sessions. The external `arrivals` setting
+is a positive integer and `seed` is a nonnegative integer. The
 report keeps `horizon` as configured and gives the time the run ended as
 `end`; averages and rates are over `end - warmup`.
-([Workload](api/workload.md), [A finite run](api/program.md#a-finite-run),
-[the design](design/renewal-arrivals.md).)
+See [Workload](api/workload.md) and [A finite run](api/program.md#a-finite-run).
 
-**Expressions.** Arithmetic, comparisons (0/1), `&&`, `||`, `!` and
-`c ? a : b` (a non-zero operand is true; only a `branch` guard is held to 0
+### Expressions
+
+Arithmetic, comparisons (0/1), `&&`, `||`, `!` and
+`c ? a : b` (a non-zero operand is true; `branch` and `while` guards are held to 0
 or 1); the draws `~exp`, `~det`, `~uniform`, `~erlang`, `~h2`,
 `~bernoulli`; functions, observables of pools and stages, and aggregates
 over an index, `max j in n (e)`, `min j in n (e)`, `sum j in n (e)`: `n` is
@@ -135,147 +159,130 @@ variables](api/context.md), [attributes](api/attributes.md).
 
 The rules that are the language's, not the catalogue's:
 
-- A **context variable** exists only at the moments that supply it, and
-  reading it anywhere else is a link error, not a 0 (`set x = tokens;` in a
-  session does not link; `docs/ir.md`, Moments; the table is
-  [Context variables](api/context.md)). `now` is everywhere; `size`, `age`,
-  `last`, `waiting` are an eviction key's or a spill predicate's; `waited`
-  a pool's `queue by` keys'; `present` a `ps` capacity's; `residents`,
-  `decoders`, `kv_decode`, `kv_prefill` a step stage's budget, chunk, cost
-  and serve keys and a claim over its iterations; `tokens`, `prefilled`,
-  `attention` its cost's and that claim's (what the iteration scheduled);
-  `decoding`, `admission`, `remaining` its `serve by` keys' and `serve
-  only`'s; `demand`, `served`, `arrived` a claim over iterations'. The aggregates of a
-  run's observations, `total(o)`, `count(o)`, `largest(o)`, `smallest(o)`,
-  `prefix_total(o)`, are a claim `at end`'s.
-  `budget_left(step)` plans an iteration and is not read in that step's own
-  `budget` or `chunk`.
+- A **context variable** is available only at the evaluation moments that
+  supply it; reading it elsewhere is a link error. For example, a session
+  statement cannot read `tokens`. See [context variables](api/context.md)
+  and [IR moments](ir.md#moments) for the complete table. `now` is not
+  permitted in gauges, `given`, `only` predicates or iteration guards.
+  `budget_left(step)` plans an iteration and cannot be read by that
+  stage's own `budget` or `chunk`.
 - **Names** do not collide: session attributes, `let` constants and the
   names the language supplies (the context variables, `inf`) are kept
   apart, so `set present = …` does not link (a `ps` capacity reading
   `present` would read the attribute).
 - **Constants** (a `let`, a `cap`, a `block`, a `fifo` count, the arrival
-  rate or population, the `run` block) are numbers or `inf`; one that
+  rate or population) are numbers or `inf`; one that
   evaluates to NaN does not link.
 - **Attributes.** Every name a `set` or a `choose` assigns is a session
   attribute. The built-in ones are `serial`, `turn_no`, `cached` (the prefix
   consumed at the last admission; 0 after a hold without `cache`),
-  `computed` (the position a preempted hold had reached, 0 otherwise; §3),
+  `computed` (the position a preempted hold had reached, 0 otherwise; [Semantics](#3-semantics)),
   and with a trace `new`, `out`, `think`, `more`, `forced`.
+
+Workload assignments produce read-only-to-server `Size` attributes. A server
+computes separate bookkeeping values and explicitly interprets quantities
+with `cost(resource, expression)`. Resource primitives require this nominal
+cost type; serving vocabulary performs the named conversion itself. The
+contract applies to direct JSON IR as well as source. See
+[attribute types](api/attributes.md#sizes-values-and-costs) and
+[`cost`](api/functions.md#cost).
+
+### Entry point and external inputs
+
+Source programs declare exactly one `fn main()`. It constructs the deployment
+once; each arriving session executes its session body. Execution settings are supplied externally.
+Only imports, definitions and fixed constants may precede `main`. Declarations
+after it and nested or duplicate entry points are refused. Libraries provide
+definitions and imports, never an executable entry point.
+
+A plain `let` cannot be replaced externally. With `use "std/args";`, a
+`let` inside `main` may declare an input using
+`args.number("name", default)` as its entire initializer. CLI arguments after
+`--`, `--set`, instance bindings and API `sets` supply only those named
+inputs. Defaults and supplied expressions are resolved at link time; the
+result is the same IR as a program written with those values. An input that
+would change a parse-time array size is refused. See [Program](api/program.md)
+for the full input contract. Syntax snippets elsewhere may show just a main
+body or one of its nested blocks.
 
 ### The serving vocabulary
 
+`Size` and `Cost` declarations state attribute types explicitly. A composite
+Cost evaluates each field once in written order and stores a separate cost
+for that resource; `processing.mem` and `processing.svc` are scalar fields.
+The source lowers to existing assignments and conversions, with no new
+execution scope. See [attribute types](api/attributes.md#sizes-values-and-costs).
+
 The statements above are about resources: `hold` a pool, `run` a stage.
-The serving forms name the request's lifecycle instead (prefill, KV
-transfer, decode, tool call). They are sugar: the parser rewrites each to
-the kernel statement it stands for, so the IR (`serq ir` prints the
-kernel), the interpreter and the Lean model know nothing of them.
+The serving forms name a part of the request's lifecycle that is more than
+one run (a KV transfer) or that is not the engine's (a tool call). They are
+sugar: the parser rewrites each to the kernel statement it stands for, so
+the IR (`serq ir` prints the kernel), the interpreter and the Lean model
+know nothing of them. Prefill and decode are not forms: on a step engine
+they are the mode of the run, `run E prefill (cost(E, T));` and
+`run E decode (cost(E, T));`, which names the engine the request uses.
 
 | Serving form | Kernel |
 |---|---|
-| `prefill W;` | `run prefill (W);`, or on a step engine `E`: `run E prefill (T);` |
-| `transfer (X) from P to Q (n);` | `run link (X); load Q (n); release P;` — the KV of `n` tokens moves from the session's lease (or hold) on `P` to its hold on `Q`: the link takes the time, the tokens count as computed at `Q`, and `P` is given back (below, *A KV transfer*) |
-| `decode W;` | `run decode (W);`, or on a step engine `E`: `run E decode (T);` |
-| `tool Z;` | `run tool (Z);` |
-| `prefill (T) growing kv;` | `run E prefill (T) growing kv;` (`growing` passes through; a form never adds it) |
-| `prefill[j] W;` | `run prefill[j] (W);`, or `run prefill[j] prefill (T);` when the array is step engines (the index applies to the role's stage array) |
-| `prefill on P[j] (W);` | `run P[j] (W);`, or `run P[j] prefill (T);` when `P` is a step engine |
-| `transfer on egress[i], ingress[j] (X) from P to Q (n);` | `run egress[i], ingress[j] (X); load Q (n); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*) |
+| `transfer (X) from P to Q (n);` | `run link (cost(link, X)); load Q (cost(Q, n)); release P;` — the KV of `n` tokens moves from the session's lease (or hold) on `P` to its hold on `Q`: the link takes the time, the tokens count as computed at `Q`, and `P` is given back (below, *A KV transfer*) |
+| `tool Z;` | `run tool (cost(tool, Z));` |
+| `tool[j] Z;` | `run tool[j] (cost(tool, Z));` (the index applies to the role's stage array) |
+| `tool on S[j] (Z);` | `run S[j] (cost(S, Z));` |
+| `transfer on egress[i], ingress[j] (X) from P to Q (n);` | `run egress[i], ingress[j] (cost(egress, ingress, X)); load Q (cost(Q, n)); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*) |
 
-The argument is work in the unit of the stage it runs on, and the two
-metavariables say which: `W` is the time the job takes alone on a `fifo`,
-`ps` or `delay` stage (seconds, when the program's clock is seconds; a `ps`
-stage serves it at `φ(present)/present`), `T` is tokens on a step engine, the unit of
-its `budget`. The same form takes either; the Which-stage rule below
-decides.
+The argument is work in the unit of the stage it runs on: the time the job
+takes alone on a `fifo`, `ps` or `delay` stage (seconds, when the program's
+clock is seconds; a `ps` stage serves it at `φ(present)/present`).
 
-**Which stage.** A form finds its stage among the stages declared above
+#### Which stage
+
+A form finds its stage among the stages declared above
 it (declarations come first in every program here): the stage whose name
-is the role's, `prefill`, `link` (or `transfer`), `decode`, `tool`;
-failing that, for `prefill` and `decode`, the `step` engine, since prefill
-and decode share its iteration. Exactly one must qualify: with none
-(`stage svc : fifo;` and `prefill W;`) or several (two step engines) the
-parser stops at the form and says so. `on STAGE` names the stage
-explicitly; with several instances of a role, `choose j …; prefill[j] W;`
-serves an array and `prefill on P2 (W);` stages that are not one. On a
-step engine the run gets the role's mode (`run E prefill`), elsewhere it
-is plain, so the linker's rule (the mode is required on a step stage and
-forbidden elsewhere) is met by construction; `transfer` and `tool` on a
-step engine are rejected by the linker as `run E (X)` would be. A linker
-error inside a form (an unknown name in `W`, say) speaks of the kernel
-statement.
+is the role's, `link` (or `transfer`), `tool`. Exactly one must qualify:
+with none (`stage svc : fifo;` and `tool Z;`) or several (`link` and
+`transfer`) the parser stops at the form and says so. `on STAGE` names the
+stage explicitly; with several instances of a role, `choose j …; tool[j] Z;`
+serves an array and `tool on S2 (Z);` stages that are not one. The run is
+plain: `transfer` and `tool` on a step engine are rejected by the linker as
+`run E (cost(E, X))` would be. A linker error inside a form (an unknown name
+in `Z`, say) speaks of the kernel statement.
 
-`lib/vllm.sq`'s `vllm_request`, the engine of the vLLM programs, is written
-in these forms (`prefill on engine (known - c) growing kv;`). Each form
-compiles to the IR of its kernel statement (`src/frontend/parser.rs`'s
-tests, `tests/ir.rs`).
+#### A KV transfer
 
-**A KV transfer.** Written as two holds in a row,
-
-```
-hold memP (T) { prefill (n + K); run link (T / 100); } cache (T);
-hold memD (T) { decode (o); }
-```
-
-a session holds the prefill instance's memory through the transfer and
-queues for the decode instance's afterwards: a store-and-forward link with a
-buffer nobody has. The form `transfer` does not write this: without
-`from P to Q (n)` it is a parse error, and a link that stores and forwards is
-spelled with the kernel's `run`. A NIXL transfer between two vLLM instances
-has no buffer: the decode instance allocates the prompt's blocks *first*, the
-bytes are read into them, and the prefill instance frees its copy *after*. The prefiller's blocks outlive the
-request's scope — its slot is freed when the token is sampled, its blocks
-are *leased* until the decoder has read them — which is what `lease` says. In the kernel's spelling (a program writes the same
-with [queues](#queues), below):
-
-```
-hold reqsP (1), kvP (…) … {
-  prefill on P (prompt - c) growing kvP;
-} cache (prompt) lease kvP (inf);       // finished on P: the slot goes, the blocks wait for the decoder's read
-hold kvD (prompt) reserve (prompt), reqsD (0) reserve (1) … {
-  run setup (x0);
-  transfer on egress, ingress (prompt - c) from kvP to kvD (prompt - 1 - c);   // takes the lease, over both NICs
-  hold reqsD (1) { prefill on D (1) growing kvD; decode on D (o - 1) growing kvD; }
-} cache (prompt + o);
-```
+`transfer (X) from P to Q (n)` runs the link for `X`
+units of work, loads `n` computed tokens into the destination hold on `Q`,
+and releases the source hold or lease on `P`. Both allocations must exist
+during the copy. A transfer without `from P to Q (n)` is a parse error;
+use `run` directly to model link work without a KV copy.
 
 `lease P (t)` names one of the hold's pools whose allocation stays the
 session's after the scope's end, neither evictable nor a preemption
 victim, until the session's `release P` (a `transfer … from P` contains
 one), `t` seconds, or the session's end, and then `cache` applies (`inf`
-is a prefiller whose lease the decoder renews;
-[the KV transfer](design/pd-transfer.md) has vLLM's timeout and
-heartbeat). `release P` with a hold on `P` gives the innermost
+keeps the lease until an explicit release or the session's end). `release P` with a hold on `P` gives the innermost
 enclosing hold's allocation there back now, caching per that hold's `cache`,
-and the scope's end then has nothing left there. `load Q (n)` says the KV
+and the scope's end then has nothing left there. `load Q (cost(Q, n))` says the KV
 of `n` tokens arrived from outside the engine: the enclosing hold's
 computed position on `Q` advances by `n` (within its allocation), as a
 `growing` run's would token by token, so `cache` and `cached` count them.
 `transfer (X) from P to Q (n)` is the two around the link run.
-`examples/pd-disaggregation/llmd_nixl_pull.sq` is the whole path, and `docs/use-cases/pd.md` its
-line-by-line correspondence with llm-d and the NIXL connector.
+See the [prefill/decode example](use-cases/pd.md) for a complete program
+and its source correspondence.
 
-**Against vLLM.** Each form is one part of a request's life in the v1
-scheduler (`ref/vllm` at 0c87a197; §7 has the rule-by-rule table):
-
-| Form | In the lifecycle | vLLM |
-|---|---|---|
-| `hold reqs (1), kv (hit + …) at admission (hit = …) { … }` | admission: the waiting request is looked up in the prefix cache and gets the blocks of its first chunk | the waiting loop of `schedule()`, `scheduler.py:868-1128`; `get_computed_blocks`, `kv_cache_manager.py:264-321`; `allocate_slots`, `kv_cache_manager.py:371-608`, called at `scheduler.py:1214` |
-| `prefill (n) growing kv` | prefill in chunks of the budget, a block allocated as the request advances; a missing block preempts `running[-1]` | the running loop, `scheduler.py:624-823`; `allocate_slots` at `scheduler.py:743`; `_preempt_request`, `scheduler.py:1539-1582` (`preempt lifo`) |
-| `decode (o) growing kv` | one token per iteration, a block every `block_size` tokens | the same loop and `allocate_slots` with one new token |
-| `} cache (prompt) lease kvP (inf)` on the prefiller's hold, then `transfer (X) from kvP to kvD (n)` inside the decoder's | the KV of a prefilled request moves to the decode instance: the prefiller's blocks wait, the decoder allocates and reads, the prefiller frees | the KV connector, `examples/pd-disaggregation/llmd_nixl_pull.sq`: the decoder parks the request at `scheduler.py:1264-1294` (`WAITING_FOR_REMOTE_KVS`), its blocks allocated for the whole prompt; the read done, `_update_waiting_for_remote_kv`, `scheduler.py:3032-3077`; the prefiller keeps its blocks leased at `_connector_finished`, `scheduler.py:2929-2982`, and frees them at `scheduler.py:3135-3138` |
-| `} cache (prompt + o)` | release: the blocks go to the free queue, the full ones stay cached | `_free_request`, `scheduler.py:2628`; `free`, `kv_cache_manager.py:610-619`; `cache_blocks`, `kv_cache_manager.py:802-812` |
-| `tool Z; turn;` | the session thinks and comes back with a longer prompt | outside the engine: the session's next request, `add_request`, `scheduler.py:2536` |
-| `end` | the session leaves; its blocks stay in the free queue | `finish_requests`, `scheduler.py:2564` |
+The [vLLM correspondence](#7-vllm-v1-as-a-serq-program) maps serving
+constructs to the pinned scheduler source.
 
 ### The two sides
 
-A `session` block writes a session's whole life in one place: what the
-client does (arrive, think, decide whether to go on) next to what the
-deployment does with each request. A program can instead be written from
-its two sides, as `examples/multi-turn/vllm.sq` is:
+A workload describes arrivals, turn attributes and how turns follow one
+another. A server handles every turn. Omitting `session` means one turn
+per arriving session; there is no call or termination statement to write.
 
-```
+For a conversation, `turn;` draws the next turn's attributes, submits it
+to the server, and waits for its response. Statements after it see the
+completed turn. From `examples/multi-turn/vllm.sq`:
+
+```serq
 workload {
   arrive poisson(Lambda);
   hidden o;
@@ -283,10 +290,10 @@ workload {
   turn { … }
   session {
     turn;
-    loop {
-      request;
-      set K = prompt + o;
-      branch (more) { tool (~exp(Z)); turn; } else { end; }
+    while (more) {
+      set K = K + n + o;
+      tool (~exp(Z));
+      turn;
     }
   }
 }
@@ -294,40 +301,37 @@ workload {
 server {
   set t0 = now;
   set prompt = K + n;
-  vllm_request(reqs, kv, engine, prompt, o, t0);
+  hold reqs (cost(reqs, 1)), kv (…) at admission (…) {
+    …
+    run vllm prefill (cost(vllm, known - c)) growing kv;
+    …
+    run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
+  } cache (cost(reqs, kv, prompt + o));
   observe response = now - t0;
 }
 ```
 
-`request;` runs the server once. The parser splices the server's
-statements in its place, at any depth and as often as it is written, so the
-IR and everything downstream see one session: the two forms compile to the
-same IR (`tests/ir.rs`, `the_two_sides_compile_to_the_session_ir`).
+The end of the session block ends the session. `end;` is only needed for
+an early exit, including an exit from an unconditional `loop`.
 
-Each side owns its words, and the parser holds a program to that, because
-a decision written on both sides would be two constructs for one meaning:
+The parser expands each source `turn;` into the IR's attribute-drawing
+`Turn` followed by the server's statements. Client and server attributes
+remain shared; this expansion introduces no extra scope or dispatch.
 
-| | the session's side (`session` inside `workload`) | the server's side (`server`) |
+The IR retains statement sides and attribute types to enforce workload size
+ownership. The parser and IR validator enforce these boundaries:
+
+| | Session | Server |
 |---|---|---|
-| the next turn, the exit | `turn;`, `end;` | refused: a server is done with a request when its block is |
-| the request | `request;` | refused: a server does not request itself |
-| admission | `hold P (u), … at admission (x = e) { … } cache (ℓ)` | the same |
+| Turn lifecycle | `turn;`, optional early `end;` | Refused; completion is the end of its block |
+| Repetition | `while (condition) { … }`, `loop { … }` | The same, without session lifecycle statements |
+| Queue entry calls | Refused | `gw.route();`, `D[j].decode (prompt);`, … |
+| Admission | `hold … at admission (…) { … } cache (…)` | The same |
 
-An admission is written one way on both sides. The pools of a `hold` are
-the ones that must have room (`used + r ≤ cap`, §3), the units are what
-the admission takes, and the pools are the whole condition. The condition
-is not an expression on purpose. A free predicate would part the test from
-the allocation (a program could admit on 10 units and take 20, and nothing
-could check it), would have to be re-evaluated at every event rather than
-when a pool changes, and would leave the Lean fragment; where the test does
-differ from the allocation, `reserve` says so by name (vLLM's
-`scheduler_reserve_full_isl`). A serving program names its admission with a
-[`def`](api/program.md#def), as `lib/vllm.sq`'s `vllm_request` does.
-
-A `session` at top level is the kernel form. The two forms are exclusive in
-one program; a workload's `session` that neither says `request;` to a
-`server` nor `request Q;` to a gateway, or a `server` that is never
-requested, is an error.
+There is one `server` per workload. An explicit session must contain a
+turn, and `session` belongs inside `workload`. Gateway selection and
+routing belong in the server, for example `server { gw.route(); }`.
+Several gateways may be declared, but none implicitly becomes the server.
 
 ### Queues
 
@@ -339,26 +343,28 @@ whole:
 
 ```
 queue P[NP] : prefill {
-  pool reqs { cap max_seqsP; admit via P; }
-  pool kv { cap blocksP * bs; block bs; evict lru; preempt lifo; }
-  serve step { budget B; cost …; memory kv; }
+  device gpu { …; kv cap blocksP * bs; }
+  engine on gpu { reqs cap max_seqsP; tokens cap B; schedule { … } execute (…); }
+  pool reqs on P { queue fifo; }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
   prefill (prompt) {
-    hold reqs (1), kv (min(prompt, hit + budget_left(P))) reserve (prompt)
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt))
          at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
       set c = cached;
-      prefill (prompt - c) growing kv;
-    } cache (prompt) lease kv (inf);
+      run P prefill (cost(P, prompt - c)) growing kv;
+    } cache (cost(reqs, kv, prompt)) lease kv (inf);
   }
 }
 ```
 
 The pools are the queue's (`P.kv` from outside, `kv` within), the stage is
-named after the queue (`admit via P`, `budget_left(P)`, `work(P[i])`), and
+named after the queue (`pool reqs on P`, `budget_left(P)`, `work(P[i])`), and
 an *entry* — one per verb of the queue's roles — holds what the station
 does with one request, with the role's parameters (`prefill (prompt)`). A
-queue declares its pools, then its `serve`, then its entries, each reading
-what is above it. The body is the server's statements; `run (X)` with
-no stage names the queue's own, and a serving form with no `on` finds it;
+queue declares its device and pools, then its stage (its engine, or a
+`serve` of `fifo`, `ps` or `delay`), then its entries, each reading what is
+above it; a pool `on` the queue's device or engine may follow the engine. The body is the server's statements; `run (cost(P, X))` with
+no stage names the queue's own, and a step engine's run names it with its mode (`run P prefill (cost(P, T))`);
 the stages that are not a step engine (a link's, a delay) the body may name
 as a `server` does. `self` is the member's index in a family. A family's
 size may be a `let` constant (`queue D[ND]`), and a family of one is still
@@ -371,24 +377,20 @@ Four roles are built into the parser, and a queue declares which it plays:
 
 | Role | Entries | The queue |
 |---|---|---|
-| `gateway` | `route { … }` | `request Q;` enters this queue's `route`; each gateway is a single queue |
+| `gateway` | `route { … }` | `Q.route();` enters this queue's `route`; each gateway is a single queue |
 | `prefill` | `prefill (prompt)` | computes the prompt; how it leaves the KV (`lease`, `cache`, a transfer) is the entry's |
 | `decode` | `decode (prompt)`, `decode (prompt) from Q` | a local prefill, or with the KV `Q`'s entry leased for this request |
 | `link` | `transfer (n)`, or none | the NIC: the body is the time to read `n` tokens; without one, the `serve` is the cost, and its `latency` a wait before it |
 
-The workload names its entry point with `request gw;`, where `gw` is a
-queue declared with the `gateway` role. The parser checks that the target
-exists and plays that role, then expands its `route` at the request site.
-Declarations may follow the workload, and several gateways may coexist;
-there is no default gateway. Declaring a gateway does not execute it or
-register it as the `server`. Bare `request;` runs the `server { … }` block
-and fails without one.
+The server selects a gateway with `gw.route();`. The parser checks the
+queue and its entry, then expands the route at the call site. Declarations
+may follow the server and several gateways may coexist. Declaring a gateway
+does not execute it or register a default server.
 
-`queue`, `pool`, `serve`, `nic`, `pull`, `request` and `mark` are language
+`queue`, `pool`, `serve`, `nic`, `pull`, `turn` and `mark` are language
 syntax. The role names and their entry signatures in the table are
 predefined vocabulary; `gw`, `P` and `D` are names declared by this
-program. A program cannot declare a role of its own ([Explicit
-gateways](design/explicit-gateways.md)).
+program. User-defined roles are not supported.
 
 The deployment calls an entry where the request goes: `P[i].prefill
 (prompt);` and `D[j].decode (prompt) from P[i];`. `from P[i]` is the pool
@@ -426,6 +428,16 @@ an entry of `D` called `from` another queue is an error, and so is a
 `transfer` without `on` in a queue that pulls from none. A program with a
 relation does not also write `share` on its own.
 
+`P push D latency x0 share maxmin;` is the same copy written by the other
+side (NIXL push): the bytes cross the same two NICs, and the source's
+worker posts the write, so the wait before each copy is `P`'s, the delay
+stage `P.nic.latency`, indexed by the source member. A push says who moves
+the bytes, not when the decoder is asked for its blocks: that is the
+dispatch, written where it happens, with `fork` (below,
+`examples/pd-disaggregation/vllm_nixl_push.sq`). The wait is a delay, so a
+push and a pull of the same constants run the same numbers. A queue waits
+before the copies it posts for one relation: one `latency` per poster.
+
 `transfer on L[k], M[l] (n) from S to P (m)` names the stages itself, as
 a `server` does: link queues, or any `ps` stages. `latency x` on a link's
 `serve` is the wait before such a transfer: a delay stage
@@ -452,27 +464,24 @@ a moment the caller needs is `mark first_token;`, read afterwards as
 `route` reads the request's attributes as a `server` does and sets the ones
 the session reads back (`prompt`).
 
-Everything here is the parser's. A queue's pools and stage are the program's
-under their long names, an entry call is its body in place, `mark` is a
-`set`, and the linker, the IR and the interpreter see the program the
-`server` form compiled to. `stage` and top-level `pool` remain the kernel's
-forms; the client's `tool` is a stage, not a queue.
+Queues compile to named pools and stages; entry calls expand to their
+bodies, and `mark` becomes `set`. They add no IR constructs.
 
-## 3. Semantics
+## Semantics {#3-semantics}
 
-**Configuration.** Time; the live sessions with their attributes,
+### Configuration
+
+Time; the live sessions with their attributes,
 continuation (a stack of block frames), status (ready, queued at a pool,
-at a stage, waiting to grow, ended), active holds and leases (allocations
+at a stage, waiting to grow, at a `join`, ended), active holds and leases (allocations
 kept past their scope, with an expiry); for each pool its
 capacity, the allocations of its holders (in admission order), its cache
 (entries of units, release time and release order, per session or dead),
-its admission queue and its growers; for each stage its jobs. Read as one
-object, the configuration and the rules below are a generalised
-semi-Markov process, and in every program of `examples/` its only random
-clocks are the workload's; [the design
-document](design/stochastic-model.md) writes it out.
+its admission queue and its growers; for each stage its jobs.
 
-**Commands take no time**; they run whenever a session is ready, in the
+### Events and settling
+
+Commands take no time; they run whenever a session is ready, in the
 order sessions became ready. Flow lets time pass at the stages. After
 every event the interpreter *settles*: it runs every ready session, then
 retries growers and admissions at every pool not served by a stage, until
@@ -480,7 +489,31 @@ nothing changes; then it starts an iteration on every idle step stage that
 has residents or a waiting queue it serves, provided no other event is
 pending at the same instant (a scheduler step sees every arrival up to it).
 
-**Pools.** `hold m₁(u₁) reserve(r₁), m₂(u₂) … reuse(ρ) { body } cache(ℓ)`
+### Legs
+
+`fork { body }` starts a *leg* of the request: the body runs
+beside the session from the same instant, with a copy of the session's
+attributes. The leg's holds are its own (it acts on none of
+the session's, and a `fork` stands in no hold that may be preempted, which
+would run again and fork twice), its `set`s change only its copy, which
+ends with it (a lease it leaves caches by that copy), and its draws read a
+stream of its own; its observations are the program's. It
+shares the session's cached prefix, which is the request's. When the leg
+ends, what it leases passes to the session, whose `release` (a
+`transfer … from`) takes it. `join;` waits until every leg the session has
+forked has ended, and passes at once when none runs. A leg may not
+`turn`, `end`, fork or `join`; a program that forks joins somewhere, and
+a session may not end while a leg runs (a run-time error). A hold that can never fit refuses the request: the
+session ends, a refused leg ends its session, and the legs of an ended
+session run on and give back what they lease. A run that ends with
+sessions and legs waiting only for each other, one at a `join` and none for
+a lease that will expire, is an error: the leg waits for memory a lease holds, and the lease's session
+waits inside a hold the leg's session needs (a hold-and-wait cycle; a
+finite `lease` breaks it).
+
+### Pools
+
+`hold m₁(cost(m₁, u₁)) reserve(cost(m₁, r₁)), m₂(cost(m₂, u₂)) … reuse(cost(m₁, m₂, ρ)) { body } cache(cost(m₁, m₂, ℓ))`
 joins the queue of `m₁`. The unit expressions are evaluated *when the
 session is admitted* (observables such as the cache or an engine's budget
 change while a session waits), and re-evaluated at every attempt, so the units, `reserve`
@@ -490,8 +523,11 @@ key. The head of a queue is admitted when every pool of its hold
 has room for its `reserve` units next to the allocated units (`used + r ≤ cap`,
 `r = max(u, reserve)`; cached prefixes never block). `reserve` is the clause
 for "do not let me in until there is room for this", which is separate from
-how much the hold then takes; vLLM spells the same rule
-`scheduler_reserve_full_isl`; the first that does not
+how much the hold then takes. On a pool marked `reserve held`, what a
+hold reserved and has not allocated stays reserved while it lasts: a later
+admission needs `used + Σ max(0, rᵢ − allocᵢ) + r ≤ cap`, and the holder
+grows into its own reservation;
+cached prefixes still never block. The first that does not
 fit blocks the rest (head-of-line blocking). The `cache` clause is what
 makes a hold take part in the prefix cache. With it, on admission the
 session consumes at most `ρ` units of its own cached prefix (`cached :=`
@@ -500,14 +536,8 @@ entry with the same age, unusable, until evicted. Without it the hold is
 memory alone: it leaves the session's cached blocks where they are,
 evictable as before, and `cached` is 0 in its body (the linker rejects a
 body that reads it there, and a `reuse` there; `cache (0)` is the hold
-that consumes the prefix and keeps nothing). So a hold around the
-request's on the same pool, a reservation given back with `release`
-before the request's admission, say, does not touch what the request
-will find. vLLM's `enable_caching` switches the lookup and the caching
-on together (`prefix_cache_lookup_enabled`, `kv_cache_manager.py:249-251`;
-`cache_blocks`, `kv_cache_manager.py:802-812`), and a request may skip
-the lookup alone (`skip_reading_prefix_cache`, `request.py:314-324`),
-which is `reuse (0) cache (ℓ)` here. Other entries are evicted in the
+that consumes the prefix and keeps nothing). `reuse (0) cache (ℓ)` skips reuse while retaining caching on release.
+Other entries are evicted in the
 pool's order until allocations and cache fit; `u` units are allocated and
 the body runs. At the end of the body the units are released and
 `min(ℓ, computed)` units stay cached, rounded down to blocks (`computed`
@@ -520,7 +550,7 @@ preemption victim, until the session's `release m`, `t` seconds, or the
 session's end, and `cache` applies then; a `release m` outside any hold on
 `m` ends the lease. A session that holds and leases nothing on `m` releases
 nothing (a hold re-executed after a preemption reaches the statement
-again). `load m (n)` advances the innermost
+again). `load m (cost(m, n))` advances the innermost
 enclosing hold's position on `m` by `n` tokens, which its allocation must
 cover; the KV of a transfer counts as computed from then on. `grow`,
 `growing`, `load` and `release` stand inside a hold of the same pool
@@ -535,58 +565,68 @@ pool of its own or of a hold around it may preempt runs again, admitted
 anew, and reads its indices again: they read attributes and numbers, and
 not `cached` or `computed`, which admission and the preemption set. A hold
 names each pool once: the same reference twice does not link, and two
-indices that name one member at run time fail the run. The invariant
-`allocated + cached ≤ cap` is a theorem of the pool relation
-(`SerqLang.Step.invariant`), and every debug run of the interpreter checks
-it. `end` releases every hold but *keeps* the session's cached prefixes:
-the cache does not know that a session has left (vLLM keeps the blocks). A program that models dropping
+indices that name one member at run time fail the run. `end` releases every
+hold but *keeps* the session's cached prefixes:
+cached entries persist until explicitly dropped or evicted. A program that models dropping
 them writes `drop POOL;` before `end;`. Eviction is per entry, or per block
 from the tail of the entry when the pool has `block b`; `evict lru` orders
 by release time and then release order, `evict by (k₁, …)` by the keys and
 then release order. A request that can never fit — its units, or its
 `reserve` when that is larger, above the cap, as they evaluate when the
 session joins the queue — is rejected: the session ends, and the report
-says how many did. One whose units or `reserve` are a constant does not
-link: it would be rejected whenever it is reached. vLLM never
-schedules a request it could never hold either, by another measure: it
-refuses a prompt longer than `max_model_len` (and, for generation, one of
-exactly that length) before scheduling (`input_processor.py:512-536`), and
-does not start a KV cache that cannot hold one request of `max_model_len`
-(`kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742`), so a request it admits
-fits its pool. serQ judges the pool's cap directly.
-
-A pool marked `admit via S` is not admitted at settle time: its queue is
-served by step stage `S`, at the start of an iteration, after the
-residents have taken their tokens, while the iteration has budget left, and
-not in an iteration that preempted (vLLM's waiting loop,
-`scheduler.py:868-1128`). Families are joined member for member: `pool
-q[N] { admit via S; }` next to `stage S[N]` serves `q[i]` by `S[i]`, and
-`stage E[N] : step { memory kv; }` next to `pool kv[N]` counts `kv[i]` for
-`E[i]`; next to a family of one, every member gets that one, and any other
-pair of counts is a link error (`examples/pd-disaggregation/llmd_nixl_pull.sq` is the xPyD case,
-`docs/use-cases/pd.md` §Writing xPyD). A stage that serves several queues tries them in
+says how many did. Each of the units and the `reserve` that reads only
+attributes and numbers is judged then; one that reads the deployment's
+state (a pool or stage query, the clock, `budget_left`) asks for something
+else at the next try,
+so it is judged at every try and waits; a queue's head that, read as
+the run ends, still asks a pool for more than its cap is named (`over:`,
+the pool report's `over_cap`). One whose units or `reserve` are a constant does not
+link: it would be rejected whenever it is reached. A pool an engine `S` admits
+(`pool reqs on S`, `pool kv on S.gpu`, or `admit via S`) is not admitted at
+settle time: its queue is served by `S`'s `admit waiting`, in an
+iteration, after the running requests have taken their tokens, while the
+iteration has budget left, and, under vLLM's schedule, not in an iteration
+that preempted (vLLM's waiting loop, `scheduler.py:868-1128`). Families
+are joined member for member: `engine S[N] on gpu` next to `device gpu[N]`
+serves `reqs[i]` by `S[i]` and counts `kv[i]` for `S[i]`; next to a family
+of one, every member gets that one, and any other pair of counts is a link
+error (`examples/pd-disaggregation/llmd_nixl_pull.sq` is the xPyD case,
+`docs/use-cases/pd.md` §Writing xPyD). An engine that serves several queues tries them in
 the order their pools are declared, and the first head that does not fit
 stops the iteration's admissions; `examples/pd-disaggregation/llmd_nixl_pull.sq` declares the
 decoder's queue of requests whose KV has arrived before its queue of new
 ones, as vLLM serves `skipped_waiting` before `waiting`
 (`scheduler.py:2383-2385`). `budget_left(S)` then evaluates to the budget
-left. Under `serve exclusive prefill`, a selected prefill ends admission;
+left. Under an `exclusive prefill` schedule, a selected prefill ends admission;
 otherwise a fitting waiting prefill can displace tentative decodes, and
 its header sees the full budget. Until then a waiting session's cached
 prefix is evictable: the *wait channel*.
 
-`grow m (d)` enlarges the innermost hold on `m` by `d` (rounded to
+`grow m (cost(m, d))` enlarges the innermost hold on `m` by `d` (rounded to
 blocks). If it does not fit: with `preempt none` the session waits and
-resumes where it was; with `preempt lifo` the holder that is a
-resident of the step stage the pool is the memory of and was admitted last
-— by the session's latest admission, the residents' serving order — is
-preempted (vLLM `running[-1]`, `scheduler.py:742-813`: a holder away from
-the engine — a prefiller's finished request keeping its blocks leased, a
-decoder's request parked for a read — is in no `running` list; a pool that
-is no engine's memory preempts its most recently admitted holder): its job
-leaves its stage, its hold is released with its computed prefix cached, and
-it re-enters the head of the pool's queue with the hold statement to
-execute again. The grower
+resumes where it was; with `preempt by (k₁, …)` a candidate is
+preempted: the holders that are residents of the step stage the pool is the
+memory of (a holder away from the engine — a prefiller's finished request
+keeping its blocks leased, a decoder's request parked for a read — is in no
+`running` list, vLLM `scheduler.py:742-813`; for a pool that is no engine's
+memory, its holders in a scope), and of them the one with the least keys,
+read for each with its attributes, `decoding`, `position` (its hold's
+computed position on the pool) and `admission`, its place in the
+candidates' admission order — by the session's latest admission, the
+residents' serving order, or for a pool that is no engine's memory the
+order the pool admitted its holders — ties to the one admitted last; not
+`computed`, the position at the last preemption. `preempt lifo`
+is `preempt by (-admission)`, vLLM's `running[-1]`, and the parser writes
+it so; SGLang's retraction (from the decode batch, the fewest outputs, then
+the longest prompt) is
+`preempt by (1 - decoding, position - prompt, -prompt) requeue tail`. The victim's job
+leaves its stage, its hold is released with its computed prefix cached (its
+position: the cached prefix it consumed when no `growing` run or `load`
+advanced it, not its allocation), and
+it re-enters its queue with the hold statement to execute again: at the
+head (vLLM's `prepend_request`, `requeue head`, the default), or with
+`requeue tail` as a newcomer, at the back or where the queue's keys
+place it, `waited` from 0, in the queue of the hold's first pool. The grower
 itself can be the victim. The re-executed hold finds `computed` set to the
 position the hold had computed (0 on a first execution and after a hold
 completes), so a program can resume rather than restart: vLLM's
@@ -595,46 +635,47 @@ output tokens (`scheduler.py:1560-1561`), so the request is rescheduled with
 `num_tokens = prompt + outputs`, reserves and recomputes that many
 (`kv_cache_manager.py:515-531`) and generates only the rest. The vLLM
 programs write `known = computed < prompt ? prompt : computed + 1` (the token
-sampled at `computed` is the request's too), `prefill (known - c)` and
-`decode (o - 1 - (known - prompt))`. A program that recomputes from the
-prompt alone says so by not reading `computed`. The Lean fragment sets
-`computed` the same way (`Serq/Exec.lean`'s `preemptVictim`, and 0 when a
-hold completes) and picks the same victim (`Exec.victim`);
-`tests/lean-regress/preempt_delay.sq` observes both, and the generated
-`lean/Serq/Regress.lean` states the interpreter's answer for it.
+sampled at `computed` is the request's too), `run vllm prefill (cost(vllm, known - c))` and
+`run vllm decode (cost(vllm, o - 1 - (known - prompt)))`. A program that recomputes from the
+prompt alone says so by not reading `computed`.
 
-**Waiting selection.** `queue by (k₁, …)` orders a pool's waiting holds
+### Waiting selection
+
+`queue by (k₁, …)` orders a pool's waiting holds
 by keys re-read before every admission attempt (after each admission under
 `admit via`, where `budget_left` is that attempt's budget); `waited` is
 the seconds since the hold joined the queue, reset on re-entry. The chosen
 head that does not fit blocks the rest, a preempted hold re-enters ahead of
 the keys, a key may not draw or read a `hidden` attribute, and selection
-sets no timer ([Pool](api/pool.md), [the design](design/waiting-selection.md)).
+sets no timer. See [Pool](api/pool.md).
 
-**Ties.** Every order in the semantics is a declared key followed by a
+### Ties
+
+Every order in the semantics is a declared key followed by a
 declared number, the sequence number of a named event (for `choose`, the
 index), so that two items with equal keys never fall to the order a data
 structure happens to hold them in. A pool's queue:
 the keys (`queue by`), compared in order and reevaluated before every
 selection, then the order the sessions joined the queue (`fifo`
 is that order alone); a preempted session re-enters at the head, ahead of
-the key. Eviction: the keys (`evict by`) or the release time (`lru`), then
-the order the entries were released. A step stage's residents: the
-`serve by` keys, then admission order. The preemption victim: the engine
-resident admitted last (for a pool that is no engine's memory, the holder
-admitted last). `choose`: the keys, in order, then the smallest
+the key, unless its pool says `requeue tail`. Eviction: the keys (`evict by`) or the release time (`lru`), then
+the order the entries were released. An engine's running requests: the
+`advance running by` keys, then admission order. The preemption victim: the
+`preempt by` keys, then the candidate admitted last (for a pool that is
+no engine's memory, the holder the pool admitted last). `choose`: the keys, in order, then the smallest
 index. A pool's growers: the order they stalled, the head blocking the
 rest. Events at one instant: the order they were scheduled; sessions run
 in the order they became ready; jobs of a `ps` stage with equal finish
 tags finish in the order they started. Each pool has one queue, and a hold
 on several pools waits in its first pool's; where the heads of two queues
 both wait for room in one pool, or one stage serves several queues, the
-pool declared first is served first. A reader who finds an order not
-covered here has found a bug.
+pool declared first is served first.
 
-**Stages.** `fifo(c)`: `c` servers, jobs in arrival order at rate 1.
+### Stages
+
+`fifo(c)`: `c` servers, jobs in arrival order at rate 1.
 `ps(φ)`: every job at once, each at `φ(present)/present`. `delay`: every job on its
-own at rate 1. `run a, b (w)` is one job that holds `a` and `b` from its
+own at rate 1, which is `ps(present)` and links to it. `run a, b (cost(a, b, w))` is one job that holds `a` and `b` from its
 start to its end: a *flow*, whose work goes down at one rate at all its
 stages, set by the program's `share` from their capacities. `share maxmin`
 is max-min fair: every flow's rate rises together until a stage fills,
@@ -648,92 +689,222 @@ and a program with one declares its `share`, which has no default. A
 stage array held by some run with another is *shared* for the whole run:
 every job on it, a single-stage `run` included, is a flow of the policy,
 and its utilisation is the capacity its flows carry, `Σ rate / φ`. Every
-other `ps` stage serves as above. See `docs/design/bandwidth-sharing.md`. `step { budget B; cost C; }`: an engine that runs
-iterations. A plain `run`'s work is time at rate 1, the clock's unit; a step
-engine's `prefill` and `decode` work is in the unit of `B`, tokens. The
-clock itself has no unit: a program whose costs are seconds runs in seconds,
-and `examples/oracle/vllm_request.sq` runs on the step clock with `cost 1`, so
-its times are iterations. The residents are served the way `serve` names, said once per
-stage: an order, `by (k₁, …)` (ascending keys evaluated for each resident
-with `decoding`, 1 for a decoding resident, `admission`, its admission
-sequence number, `remaining`, the tokens its run has left, and the
-totals `residents`, `decoders`, `kv_decode`, `kv_prefill`; ties in admission order; a key may
-not draw), or the rule `exclusive prefill`, below, which is not an order and
-so cannot be combined with one. `admission` (the order their sessions were
-admitted, vLLM's `running` list; the default) is `by` with no keys, where
-every resident ties, and `decode first` is `by (decoding ? 0 : 1)`; of the
-orders, the IR knows only `by`. A scheduler that serves the shortest
-remaining run first is `serve by (remaining)`, the opposite `serve by
-(-remaining)`. One token to a decoding job, up to `chunk` to a prefilling
-one,
-until the budget is spent; a `growing` job first grows its hold to the
-position it will reach (block by block, preempting if needed); a victim
-the iteration has already served leaves it and its tokens return to the
-budget (scheduler.py:779-797), and a grower that preempts itself ends the
-iteration's serving (scheduler.py:807-813); then the stage admits from the
-queues it serves. The iteration advances the clock by
-`C`, an expression in `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`; its
-tokens are applied when it ends. A run of zero work completes at once. An
-iteration that schedules no token is not an iteration, unless it preempted:
-then it is the scheduler step that only preempted (vLLM's `schedule()`
-admits nothing in a step with `preempted_reqs`, `scheduler.py:869`, and the
-oracle driver counts the step; the Lean model's `startIteration` gives that
-step its cost, and `step` re-admits at the next event), and the next
-iteration re-admits the victim. It lasts `C` at zero tokens, which is a
-modelling choice: the real engine skips the forward pass of an empty step,
-so the fixed part of `C` overstates it. A hold whose body can never fit
-then preempts itself forever (vLLM refuses such a KV cache at start-up,
-above); the `stuck` counter below reports it. A hold that reserves what it
-will need (`reserve (known)` after a preemption) is rejected instead, once
-the reservation is above the cap.
-`serve exclusive prefill` selects either one prefill alone or a decode-only
-batch: a resident prefill takes precedence, otherwise a waiting prefill that
+other `ps` stage serves as above.
+
+### Engines
+
+An [engine](api/engine.md) runs iterations. A plain `run`'s work is time
+at rate 1, the clock's unit; an engine's `prefill` and `decode` work is in
+tokens, the unit of its `tokens cap`. The clock itself has no unit: a
+program whose costs are seconds runs in seconds, and
+`examples/oracle/vllm_request.sq` runs on the step clock with `execute
+(1)`, so its times are iterations.
+
+An iteration serves the running requests in the order its schedule's
+`advance running` names: `by (k₁, …)` (ascending keys evaluated for each
+request with `decoding`, 1 for a decoding request, `admission`, its
+admission sequence number, `remaining`, the tokens its run has left, and
+`running.count`, `running.decoding`, `running.kv_decode`,
+`running.kv_prefill`; ties in admission order; a key may not draw), or
+`admission` (the order their sessions were admitted, vLLM's `running`
+list; the default), which is `by` with no keys, where every request ties,
+or `decode first`, which is `by (decoding ? 0 : 1)`; of the orders, the IR
+knows only `by`. A scheduler that serves the shortest remaining run first
+is `advance running by (remaining)`, the opposite `by (-remaining)`. One
+token to a decoding run, up to `each at most` to a prefilling one (with a
+`granule g`, short of its remainder, a multiple of `g`, none when that is
+0: such a prefill is passed over, and the iteration admits no one after
+it), until `tokens cap` is spent; a `growing` run first grows its hold to
+the position it will reach (block by block, preempting if needed); a
+victim the iteration has already served leaves it and its tokens return to
+the budget (scheduler.py:779-797) and its hold caches its position, not the
+chunk the iteration gave it ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)); a grower that preempts itself ends the
+iteration's serving (scheduler.py:807-813); then `admit waiting` admits
+from the queues the engine admits. The iteration advances the clock by
+`execute`'s expression in `batch.tokens`, `batch.decoding`,
+`batch.prefilled`, `batch.kv_decode`, `batch.kv_prefill`,
+`batch.attention` and `running.count`; its tokens are applied when it
+ends. A run of zero work completes at once. An iteration that schedules no
+token is not an iteration, unless it preempted: then it is the scheduler
+step that only preempted (vLLM's `schedule()` admits nothing in a step
+with `preempted_reqs`, `scheduler.py:869`, and the oracle driver counts
+the step; the Lean model's `startIteration` gives that step its cost, and
+`step` re-admits at the next event), and the next iteration re-admits the
+victim. It lasts `execute`'s time at zero tokens, which is a modelling
+choice: the real engine skips the forward pass of an empty step, so the
+fixed part of the time overstates it. A hold whose body can never fit then
+preempts itself forever (vLLM refuses such a KV cache at start-up, above);
+the `stuck` counter below reports it. A hold that reserves what it will
+need (`reserve (known)` after a preemption) is rejected instead, once the
+reservation is above the cap.
+
+`exclusive prefill` selects either one prefill alone or a decode-only
+batch: a running prefill takes precedence, otherwise a waiting prefill that
 fits displaces the tentative decodes and takes the full budget, and once a
 prefill is selected nothing more is admitted in that iteration
-([Stage](api/stage.md), [the design](design/exclusive-prefill.md)). Without
-a per-request chunk cap, serving in admission order *is* serving
-decode-first (`SerqLang.Serve.serve_eq_decode_first`; a cap breaks it,
+([Engine](api/engine.md#exclusive-prefill)). Without a per-request chunk
+cap, serving in admission order *is* serving decode-first
+(`SerqLang.Serve.serve_eq_decode_first`; a cap breaks it,
 `chunk_cap_breaks_shape`).
-`serve only (p)` says which residents the iteration serves; `by` says in
-what order:
 
-- `p` is read for each resident when its turn comes, from the variables a
-  key reads, and may not draw or read `now` or `work(…)`.
-- A key and `p` read the totals (`residents`, `decoders`, `kv_decode`,
-  `kv_prefill`) as the residents stand at that read. This counts a session
-  that the iteration admitted through `admit via` and leaves out one it
-  preempted.
-- A resident served earlier in the iteration is not reconsidered.
-- A resident that `p` reads as 0 gets no token this iteration. It keeps
+`only (p)` on `advance running` and `admit waiting` says which requests
+the iteration serves; the order says in what order:
+
+- `p` is read for each request when its turn comes, from the values a key
+  reads, and may not draw or read `now` or `work(…)`.
+- A key and `p` read `running.count`, `running.decoding` and
+  `running.kv_…` as the running requests stand at that read. This counts a
+  session the iteration admitted through `admit waiting` and leaves out one
+  it preempted.
+- A request served earlier in the iteration is not reconsidered.
+- A request that `p` reads as 0 gets no token this iteration. It keeps
   what it holds and advances no computed KV, as a displaced decode does
   under `exclusive prefill`. An admitted session that `p` excludes waits as
-  such a resident. How many are admitted is the pool's `cap` and the hold's
+  such a request. How many are admitted is the pool's `cap` and the hold's
   header, not `p`.
-- An engine whose residents `p` all excludes runs no iteration. It waits
+- An engine whose requests `p` all excludes runs no iteration. It waits
   for the next event of any kind, when `p` is read again; the clock moving
   is no event.
 - The order that follows (`admission` when none is written) orders the
   rest.
 
-FasterTransformer as Dai et al. model it (decode first, no mixed batching) is
-`serve only (decoders > 0 ? decoding : !decoding);`. Its opposite, prefills
-alone (as many as the budget takes) while one is resident, is
-`serve only (decoders < residents ? !decoding : decoding);`. A waiting
+FasterTransformer as Dai et al. model it (decode first, no mixed batching)
+reads `only (in_phase())` in both statements with `def in_phase() {
+running.decoding > 0 ? decoding : !decoding }`. Its opposite, prefills
+alone (as many as the budget takes) while one is running, is
+`running.decoding < running.count ? !decoding : decoding`. A waiting
 prefill admitted after a decode was served still joins that decode. Taking
-the served decode back is `exclusive prefill`'s admission rule. That rule
-is why `only` does not combine with `exclusive prefill`: which of the two a
-predicate would exclude would be a third rule.
-[Serving a subset](design/serve-only.md) states the case and the numbers.
+the served decode back is `exclusive prefill`'s admission rule; `only`
+cannot be combined with it.
 
-**`at admission`.** Everything in a hold's header — the units, `reserve`,
+### The iteration as a program
+
+vLLM's `schedule()` is the schedule `advance running; admit waiting while
+(running.preempted == 0);`: serve the running requests, then, unless the
+iteration preempted (`scheduler.py:869`), admit the waiting with the
+budget left. Any other schedule is written the same way. Its statements
+run once each in order: `advance running [only (p)] [order]` gives the
+running requests not yet served their tokens, skipping and leaving
+unserved those `p` excludes; `admit waiting [only (p)] [while (e)]` admits
+the heads of the queues the engine admits one at a time, each served at
+once unless `p` excludes it, while budget is left, the head fits and `e`
+is 1; and `branch (e) { … } else { … }`. A guard and a `while` read the
+running requests as they stand, what the iteration has scheduled so far
+(`batch.tokens`, `batch.prefilled`), `waiting.admitted` and
+`running.preempted` (counts). See [Engine](api/engine.md#schedule) for
+scheduling examples. A schedule with a path that neither advances nor
+admits, or a guard that reads `now`, does not link (an engine that
+schedules nothing waits for an event, and the clock moving is none); that
+is necessary, not sufficient, and an engine the linker could not see stall
+is named in the report when the run ends with its work unscheduled
+(`idle: engine …`). `state NAME = c;` gives the engine a register its
+schedule sets (`set NAME = e;`) and the scheduler's expressions read
+between iterations; a set takes effect with its iteration (a try that
+schedules, preempts and admits nothing is undone), and a register is read
+only by its engine, the keys of a pool it admits, the header of a hold
+whose first pool it admits, a gauge or a claim
+([Engine](api/engine.md#registers)).
+
+### Engines on devices
+
+An engine is parse-time sugar for the IR's step stage
+([the design](design/engine-device.md)): it lowers to a `step` stage and
+its pools, so the IR, the interpreter and the Lean model see only the
+kernel, whose names the IR and the claims over iterations read. From
+`examples/multi-turn/vllm.sq`:
+
+```serq
+device gpu {
+  compute (t) = t * a;
+  hbm (k) = omega + beta * k;
+  kv cap blocks * bs;
+}
+engine vllm on gpu {
+  reqs cap max_seqs;
+  tokens cap B;
+  schedule {
+    let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
+    advance running each at most (threshold);
+    admit waiting while (running.preempted == 0) each at most (threshold);
+  }
+  execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+}
+pool kv on gpu { block bs; evict lru; preempt lifo; }
+pool reqs on vllm { queue fifo; }
+```
+
+| Engine form | IR step stage (`CStep`) |
+|---|---|
+| `device D { f (x) = e; X cap c; }` | no field: `f` is written out where `execute` reads it; `X cap c` is the `cap` of the `pool X on D` that must declare it |
+| `pool X on D { rules }` | a pool, `cap c` and the rules, no `admit_via`: a hold waiting for it is admitted as soon as it fits; `memory` when `D` is the engine's device |
+| `pool X on E.D { rules }` | the same, `admit_via` `E`: engine `E`, running on `D`, admits a hold waiting for it in an iteration |
+| `pool X on E { rules }` | a pool, `cap c` of `X cap c` in engine `E` and the rules, `admit_via` `E` |
+| `tokens cap B;` | `budget` `B` |
+| `execute (T);` | `cost` `T`, the device's time resources written out |
+| `each at most (e)` | `chunk` `e`: one cap per run for the whole iteration; `inf` is no cap, which the linker writes 0 as the kernel reads it |
+| `state NAME = c;` | a `Register` of the stage, `init` `c` |
+| `advance running [order]; admit waiting while (running.preempted == 0);` | `serve` `By([keys])` of the order (`By([])` for none, admission order), no `iteration` |
+| the same with `only (p)` on both statements | `serve` as above, `iteration` `[Serve {only: p}, Admit {only: p, gate: !preempted}]` |
+| `exclusive prefill; admit waiting while (running.preempted == 0);` | `serve` `ExclusivePrefill`, no `iteration` |
+| any other `schedule { … }` | `serve` `By([])`, `iteration` the body: `advance running` a `Serve`, `admit waiting` an `Admit`, `branch` a `Branch`, `set` a `Set` |
+| `running.count`, `running.decoding`, `running.kv_decode`, `running.kv_prefill`, `running.preempted`, `waiting.admitted` | `Nres`, `Ndec`, `Kvb`, `Kvp`, `Preempted`, `Admitted` |
+| `batch.tokens`, `batch.prefilled`, `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | `Ntok`, `Npre`, `Ndec`, `Kvb`, `Kvp`, `Attn` |
+| `waiting.count` | `Queued` of each pool the engine admits, summed |
+
+The schedule `advance running [only (p)] [order]; admit waiting [only (p)]
+while (running.preempted == 0);` is vLLM's procedure: it lowers to no
+iteration body, or with `only (p)` to the two-statement body above, when
+both `p` are the same expression once each `def` is written out. A predicate both statements
+read is named with a `def` (`def in_phase() { running.decoding > 0 ? decoding : !decoding }`, then
+`only (in_phase())` twice), which is read where it stands, for each
+request; a schedule's `let` is read once as the iteration starts and only
+in `each at most`, so it cannot name one. `exclusive prefill; admit
+waiting while (running.preempted == 0);` is the `ExclusivePrefill` order.
+Any other schedule is the step's iteration body; `exclusive prefill`
+appears only in the form above, since it takes back decodes a body cannot.
+`each at most` chooses among constants (its condition may read the
+iteration) or `max(k, e)`, `e` read as the condition is and `k` a
+constant above 0, and one at or below 0 does not link: the kernel would
+read 0 as no cap, so the program would mean one thing and run another;
+`k` keeps a computed cap above 0 whatever `e` reads. An engine
+names each value one way in all its clauses, and none by the kernel's
+bare name: `running.…` is the residents as they stand, `waiting.…` the
+queues, `batch.…` the iteration's batch.
+
+| Value | `tokens cap` | `schedule` | `execute` |
+|---|---|---|---|
+| `running.count`, `waiting.count` | yes | yes | yes |
+| `running.decoding`, `running.kv_decode`, `running.kv_prefill` | yes | yes | no: the batch's is `batch.…` |
+| `running.preempted`, `waiting.admitted` | no | yes | no |
+| `batch.tokens`, `batch.prefilled` | no | yes: the batch so far | yes |
+| `batch.decoding`, `batch.kv_decode`, `batch.kv_prefill`, `batch.attention` | no | no | yes |
+
+`schedule` is its statements: `branch`, `while` and `set`, read as the
+iteration is planned. A schedule's `only` and `by`, read for each resident
+at its turn, and its `each at most` and the `let`s it reads, read as the
+iteration starts, read what `tokens cap` reads: `running.count`,
+`running.decoding`, `running.kv_…` and `waiting.count`.
+
+`tokens cap` bounds the batch before it is formed, so it reads no
+`batch.…`. `execute` times the batch, which a budget or an `only` can
+leave short of the residents, so it reads the batch's decodes and KV, not
+the residents'. `running.preempted` and `waiting.admitted` say what the
+schedule did, so only `schedule` reads them. `engine` is a keyword: an
+engine is named for what it models (`vllm`, `sglang`, `tgi`) or `llm`.
+Inside a `queue`, `device gpu` is the member's and `engine on gpu` is the
+queue's stage, named after the queue, so its pool is `pool reqs on Q`.
+
+### `at admission`
+
+Everything in a hold's header — the units, `reserve`,
 `reuse` — is evaluated when the session is admitted, and a `set` above the
 hold is not (`cache` is read when the session releases, `Serq/Exec.lean`'s
 `release` and the interpreter agree). `at admission (x = e)` gives the
-header a place to name what it is written in terms of, as `lib/vllm.sq`
-does:
+header a place to name what it is written in terms of, as
+`examples/multi-turn/vllm.sq` does:
 
 ```
-hold reqs (1), kv (min(known, hit + budget_left(engine)))
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))
      at admission (known = computed < prompt ? prompt : computed + 1,
                    hit = min(cachedin(kv), reusable(known, blocksize(kv)))) { … }
 ```
@@ -756,34 +927,34 @@ pool or stage, a context variable, a `let` or an attribute the program sets,
 and not read outside the holds that bind it. A binding reads only the ones
 before it in its clause.
 
-**`hidden`.** The output length `o` is drawn at `turn`, before the request,
-and nothing else stops a hold's header, a queue key or a budget from
-reading it: `reserve (prompt + o)` is a program vLLM cannot be, since the
-scheduler knows `max_tokens` (scheduler.py:639) and learns the length only
-when `check_stop` sees EOS or the cap (sched/utils.py:98-119, called at
-scheduler.py:2426). `hidden o;` in the workload says so: a hidden attribute
-is read in a session statement, a run or a hold's `cache`, and is a link
-error wherever the scheduler reads ([Workload](api/workload.md) has the
-positions). An attribute the scheduler itself sets (`cached`, `computed`)
-cannot be hidden. The vLLM programs hide `o` (`out` in the replay).
+### `hidden`
 
-**`hold` and `admit via`.** An admission is the `hold` statement on
-either side (§2, the two sides). `admit` is the name of the *pool option*
-that hands a queue to a stage's scheduler (`admit via S`).
+In a `server`, hidden attributes may control run work, cache release and
+observations. Decisions and allocations may read them only after a run
+whose work reads them has ended. This also applies to attributes derived
+from hidden ones; both branch arms must reveal an attribute before it is
+known after the branch. See [the full rule](api/workload.md#hidden).
 
-**Branching.** `branch (e)` takes the first block when `e` is 1 and the
+`hidden o;` in a workload prevents scheduler expressions, such as a hold's
+header, queue keys or a budget, from reading `o`. Session statements,
+run work, a hold's `cache` and a claim's `given` may read it. Attributes
+set by the scheduler (`cached`, `computed`) cannot be hidden.
+See [Workload](api/workload.md#hidden) for the permitted positions.
+
+### Branching
+
+`branch (e)` takes the first block when `e` is 1 and the
 second when it is 0; any other value (a fraction, a count, a negative
 number, NaN) is a run-time error, since a guard is a test and a test has
 two answers. `branch with (p)` takes the first block with probability `p`,
 and is sugar the parser rewrites to `branch (~bernoulli(p))` — the IR, the
 interpreter and the Lean model know only the one form, and the draw is a
 0 or a 1 by the time the guard sees it. A constant guard that is not 0 or
-1 is refused at link time (one strictly between 0 and 1 reads as a test
-and was meant as a draw); a computed one is refused when it is evaluated.
-Write the draw as
-`branch with` so that the program, and the figure, say which one it is.
+1 is refused at link time; a computed one is refused when it is evaluated.
 
-**Amounts and indices.** The work of a `run`, the units of a `hold`, a
+### Amounts and indices
+
+The work of a `run`, the units of a `hold`, a
 `grow` and a `load` are amounts, and an amount is not negative and not NaN;
 an index names a member, a whole number from 0 below the array's count.
 Anything else is the program's error, not a value to round: a constant
@@ -792,8 +963,12 @@ is evaluated. Zero is an amount (a run of no work). The Lean model's
 fragment computes over ℕ, where a subtraction stops at 0, so it agrees with
 the interpreter on programs whose amounts are never negative.
 
-**Workload.** `init` runs at arrival, `turn` at every `turn` statement;
-with a `trace`, `turn` loads the next turn's `new`, `out`, `think`,
+### Workload
+
+`init` runs at arrival. Each source `turn;` draws its attributes and waits
+for the server; the `turn` block runs just before that submission.
+With no session block, this happens once per arrival;
+with a `trace`, it first loads the next turn's `new`, `out`, `think`,
 `forced` and sets `more` (`ordered`: session `i` replays trace session `i`
 modulo the trace's sessions).
 Random draws read separate streams: the arrival law reads the run's
@@ -803,12 +978,13 @@ turn), and the session's statements another, seeded from (seed, session);
 a draw the machine makes — an eviction key, a spill predicate, a `cost`, a
 `budget`, a `ps` capacity — reads the interpreter's stream for it. So a
 (session, turn) draws the same marks under every deployment run on one
-seed, whatever the schedule did before it: two programs that differ in the
-machine compare the same workload (common random numbers), and the only
-draws a machine change can move are a session's own, after its own path
-diverges (`docs/design/stochastic-model.md`, Proposition 1).
+seed, provided the draw expressions and their inputs are unchanged.
+Changing a session's control flow or a distribution's parameters can still
+change its workload; a shared seed does not make those changes equivalent.
 
-**Every instant settles.** A `loop` must let time pass on every pass
+### Every instant settles
+
+A `loop` or `while` must let time pass on every pass
 through its body: every path through it reaches a `run` (a constant zero
 work does not count), a `hold` whose body does, or `end`; the linker
 refuses a loop that does not (`loop { set w = w + 1; }`, or a `run` on one
@@ -821,33 +997,37 @@ iteration that schedules tokens lasts a positive time: a `cost` that
 evaluates to 0 on it is an error (the step that only preempted may cost 0,
 above).
 
-**Lints.** Linking rejects three programs that are well formed and almost
+### Lints
+
+Linking rejects three programs that are well formed and almost
 certainly not what their author meant: a `set` that reads live pool or
 stage state (`cachedin`, `budget_left`, `used`, …) and is then used in a
 hold's header, where the value is the one from before the session queued
 (`at admission` is the clause for it); a hold without `cache` that reads
 `cached` or writes `reuse`; and a constant `branch` guard other than 0 or 1
-(Branching, above). They are errors rather than warnings, and none has an
-instance in `examples/` (`tests/lints.rs`).
+(Branching, above). These are errors, not warnings.
 
-**Statistics.** `observe x = e` records a sample after warm-up with the
-time, session and turn (`--dump DIR` writes them), and the report gives its
-count, mean with a batch-means 95 % CI, cv2 and p99; per stage the
-time-average number present, utilisation, completions, throughput, mean wait
-and service, and for a step stage how its time divides between prefill,
-decode, mixed and idle iterations, its decode batch and the inter-token
-latency; per pool the time-average used, cached, queue and holders, the mean
-queue wait, admissions, evictions, preemptions, spills, rejections and
-`stuck` (the columns: [CLI](reference/cli.md)). `stuck` counts sessions
-preempted a second time without having advanced past their previous
-preemption: a hold that fits at admission but can never grow to what its
-body needs preempts itself and re-executes forever, and the report names
-the pool. An `observe` whose expression is a test and that was 0 over 40 or
-more samples gets a note under the table (`note: observe hit is constant 0
-over 5357 samples`); it is a note, not an error, because
-`vllm_single_turn.sq` earns it by design.
+### Statistics
 
-**Gauges.** `gauge x = e;` declares a function of the deployment's state
+`observe x = e` records a sample after warm-up with its
+time, session and turn. `--dump DIR` exports these samples. The
+[CLI reference](reference/cli.md) defines the reported statistics and
+resource counters.
+
+`stuck` counts sessions preempted again without advancing past their previous
+preemption. Such sessions do not contribute completed response samples.
+`growing_at_end` counts the holds still waiting to grow when the run ends
+(`grow:` in the text report): under `preempt none`, or with nothing the
+pool's `preempt` may take, a growth waits for room another holder frees.
+When every session holding the pool is one of those waiting
+(`growing_stalled`), none will: a hold around one on the same pool keeps
+what it needs, or the holders wait on each other (#238).
+A boolean observation that remains zero for at least 40 samples produces
+a report note, not an error.
+
+### Gauges
+
+`gauge x = e;` declares a function of the deployment's state
 and the report gives its time average over `[warmup, end]`, with a
 batch-means 95% CI over 20 windows, and the least and greatest value held for
 a positive time. An `observe` is a sample a session takes when it gets
@@ -865,15 +1045,16 @@ decoder is full is `gauge full = max j in N (free(reqs[j]) == 0);`, the
 spread `max j in N (used(kv[j])) - min j in N (used(kv[j]))`. `--dump DIR`
 writes each gauge's change points as `gauge/NAME.csv` (`time,value`).
 
-**Claims.** A claim is a proposition about every path of the program,
-written in the program. It reads and does not act: a program runs the same
+### Claims
+
+A claim states a property of the program's paths. It reads and does not act: a program runs the same
 with its claims removed. The interpreter checks each claim on the path it
 runs and the report says what it found; the same IR is the source of the
 claim's statement in Lean. There are three forms:
 
 ```
-claim work_conserving: every iteration of engine (demand < bmax || tokens == bmax);
-claim starved: some iteration of engine (demand >= bmax && tokens < bmax);
+claim work_conserving: every iteration of llm (demand < bmax || tokens == bmax);
+claim starved: some iteration of llm (demand >= bmax && tokens < bmax);
 claim mean_ok: at end (total(response) <= 1000000 * count(response));
 ```
 
@@ -890,7 +1071,7 @@ own. `demand` is the tokens the stage's residents could take in this
 iteration if the budget were unlimited: one for a decode with work left,
 the remaining prompt (up to the `chunk`) for a prefill, summed over the
 residents after the batch is scheduled, the ones it admitted and the ones
-`serve only` leaves out included. `served` is the tokens the stage
+an `only` leaves out included. `served` is the tokens the stage
 scheduled in its earlier iterations, from the start of the run. `arrived`
 is the sessions the workload has started by the iteration's start, one
 arriving at that instant included, so `arrived * W - served` is the work
@@ -911,22 +1092,11 @@ from the session's attributes and the constants (no `now`, no draw, no
 observable). A session that fails it puts the claim out of the run's
 scope, and the claim is checked no further.
 
-The report gives one line per claim:
-
-```
-claim            kind             result
----------------  ---------------  ---------------------------------------------
-work_conserving  every iteration  fails at 93500.0000 (1047 of 1060 iterations)
-token_rate       every iteration  holds (1060 iterations)
-starved          some iteration   witnessed at 93500.0000 (1060 iterations)
-mean_ok          at end           not evaluated: 105 sessions live at the end
-```
-
 A claim over iterations holds, or fails at the start of its first failing
 iteration; a `some` claim is witnessed at the first iteration that
 satisfies it, or not witnessed. A claim `at end` holds or fails, and is
 not evaluated when sessions are still live at the end, since the run did
-not reach the end the claim is about (`run { arrivals N; }` drains them).
+not reach the end the claim is about (`--arrivals N` drains them).
 A claim a session put out of scope says which session; the JSON fields are
 in the [CLI reference](reference/cli.md). A path that holds a claim is
 evidence, not a proof: the proof is the Lean statement's.
@@ -941,81 +1111,80 @@ of the program satisfies the claim (`every iteration`), some machine of
 some path does (`some iteration`, whose workload must not draw), or every
 machine at which every session has ended does (`at end`). The proofs are
 Lean files, and the build fails when a claim has none or the program has
-changed what it claims (`lean/Serq/ClaimsProved.lean`). The programs under
+changed what it claims (`examples/papers/ClaimsProved.lean`). The programs under
 `examples/papers/` are written this way: three papers' propositions, each
 stated in the program that is the paper's serving system and proved about
 that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 
-**Executable semantics in Lean.** `Serq/Exec.lean` defines the same rules
-for the fragment of pools and one step engine (values and time in ℕ), and
-moves time the way the interpreter does, from event to event: `Exec.run`
-interprets a `Prog` (`Route Env ℕ`, the syntax of a `session` block) for
-`n` sessions. It is the semantics the oracle theorems and the claims are
-about, and on the 333-session trace it gives every observation the
-interpreter gives (`scripts/lean_bench.py`). The fragment is in
-[the IR](ir.md) and [the Lean model](lean.md).
-
-## 4. Lineage
-
-serQ began as the language of a lecture on serving queues; `docs/review.md`
-§2 records what changed from it and why.
-
-## 5. Programs
+## Programs {#5-programs}
 
 | Program | Deployment | Checked by |
 |---|---|---|
 | `single-turn/mg1.sq`, `single-turn/ps.sq`, `multi-turn/closed.sq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | a run against the closed form, by hand, in [getting started](getting-started.md) and the [tutorial](tutorial/01-a-queue.md); no test |
-| `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`serve decode first`, `drop kv` before `end`) | — |
+| `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`advance running decode first`, `drop kv` before `end`) | — |
 | `multi-turn/routing.sq` | four replicas, five routing policies | — |
-| `multi-turn/vllm.sq` | vLLM v1's engine (`lib/vllm.sq`) under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
+| `multi-turn/vllm.sq` | vLLM v1's engine under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
 | `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |
-| `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle (§7), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
-| `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace (§8) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
+| `oracle/vllm_request.sq` | one vLLM v1 request on the step clock, compiled per scenario to `tools/oracle/{alone,chunked,hol,longchunk,mixed,preempt,seqcap}.ir.json` | the upstream oracle ([vLLM correspondence](#7-vllm-v1-as-a-serq-program)), `tests/vllm_oracle.rs`, the Lean theorems generated from the same IR |
+| `replay/vllm_replay.sq` | vLLM v1 on the A100 testbed replaying the short-context trace ([A100 testbed](#8-vllm-on-the-a100-testbed)) | the prefix-cache oracle `tools/oracle/cache_trace` (`tests/vllm_cache.rs`, theorem `vllm_cache_trace`) |
 | `pd-disaggregation/llmd_nixl_pull.sq` | llm-d's prefill/decode disaggregation with the NIXL connector, two prefill and two decode instances ([use case](use-cases/pd.md)) | the source (llm-d at 8a2f37d, the router at 13eebdb, vLLM at 0c87a197), `tests/pd_semantics.rs`; no scheduler oracle |
+| `pd-disaggregation/vllm_nixl_push.sq` | vLLM's push proxy in front of one prefill and one decode instance with the NIXL connector's push mode, on the A6000 testbed, replaying the short-context trace ([the push mode](https://github.com/servingQ/serQ/blob/main/docs/design/push-mode.md)) | the source (vLLM at 0c87a197), `tests/fork_join.rs`; no scheduler oracle |
 | `papers/*.sq` | three scheduling papers' serving systems | their claims, proved in Lean ([use cases](use-cases/index.md)) |
-| `single-turn/fastertransformer.sq`, `single-turn/separate_phases.sq`, `single-turn/ascend_aging.sq`, `vendors/*.sq`, the other `pd-disaggregation/*.sq` | the [use cases](use-cases/index.md) that describe them | `make check` links and draws them |
+| `engines/sglang.sq`, `engines/tensorrt_llm.sq`, `engines/tgi.sq` | SGLang, TensorRT-LLM and TGI with their defaults, as close as serQ writes them today ([engine neutrality](https://github.com/servingQ/serQ/blob/main/docs/design/engine-neutrality.md)) | the source, read; `make check` links and draws them; no oracle |
+| `single-turn/fastertransformer.sq`, `single-turn/separate_phases.sq`, `vendors/*.sq`, the other `pd-disaggregation/*.sq` | the [use cases](use-cases/index.md) that describe them | `make check` links and draws them |
 
-## 6. Other consumers
-
-The companion research repository, `serving-queue-theory`, requires the Lean
-package at a pinned commit and runs serQ programs in its own checks.
-
-## 7. vLLM v1 as a serQ program
+## vLLM v1 as a serQ program {#7-vllm-v1-as-a-serq-program}
 
 The table is `examples/replay/vllm_replay.sq` (and
 `examples/oracle/vllm_request.sq`, its one-request form) against vLLM's
 scheduler at the pinned revision (`ref/vllm` at 0c87a197; the A100 testbed
-runs vLLM 0.30.0, whose scheduler gives the same answers on the scenarios
-below). It is a correspondence under synchronous scheduling at that
+runs vLLM 0.30.0, whose scheduler gives the same answers on the first six
+scenarios below). It is a correspondence under synchronous scheduling at that
 revision, not to the latest vLLM ([the vLLM use case](use-cases/vllm.md)).
-`lib/vllm.sq`'s `vllm_request`, the engine of the workload examples, is a
-simpler one: it does not `reserve`, takes its hit from the cache alone
+The `server` block of `examples/multi-turn/vllm.sq`, the engine of the
+workload examples, is a simpler one: it does not `reserve`, takes its hit from the cache alone
 rather than from the previous prompt, and caches `prompt + o`.
 
 | vLLM | serQ | Where |
 |---|---|---|
-| a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `step { budget B }`, residents in admission order; `pool reqs { admit via engine; }` | `scheduler.py:577, 624-823, 868-1128` |
-| `max_num_seqs` | `pool reqs { cap max_seqs }` in the hold | `scheduler.py:877-879` |
+| a token budget per step, running requests first in `running` order, then waiting requests with the budget left | `engine vllm on gpu { tokens cap B; schedule { advance running; admit waiting while (running.preempted == 0); } … }`, residents in admission order; `pool reqs on vllm` | `scheduler.py:577, 624-823, 868-1128` |
+| `max_num_seqs` | `reqs cap max_seqs;` in `engine vllm`, held as `pool reqs on vllm` | `scheduler.py:877-879` |
 | FCFS, head-of-line blocking (`if new_blocks is None: break`) | pool queue `fifo`; the first request that does not fit blocks | `scheduler.py:1228-1235` |
-| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(engine))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
+| admission needs blocks for the whole prompt (`scheduler_reserve_full_isl = True`), but only the first chunk is allocated | `kv (hit + min(prompt − hit, budget_left(vllm))) reserve (prompt)` | `kv_cache_manager.py:515-531`, `config/scheduler.py:191` |
 | a waiting request's prefix is looked up and its blocks touched only when it is scheduled | units evaluated at admission; the queue served by the engine | `scheduler.py:932-939`, `block_pool.py:754-770` |
-| chunked prefill, `long_prefill_token_threshold` | `prefill (n) growing kv` (`run engine prefill (n) growing kv`), `chunk` | `scheduler.py:612-616, 675-676, 1115-1128` |
+| chunked prefill, `long_prefill_token_threshold` | `run vllm prefill (cost(vllm, n)) growing kv`, `each at most (threshold)` with `let threshold = running.count + waiting.count > 1 ? c : inf;`: the cap only while more than one request is running or waiting; `waiting.count` counts the queues the engine admits, as vLLM counts `waiting`, whose `skipped_waiting` these programs leave empty; a constant cap is not vLLM's, and `serq target` refuses it | `scheduler.py:606-616, 675-676, 1115-1128` |
 | `allocate_slots` block by block as the request advances | `growing kv` | `kv_cache_manager.py:371-608` |
-| preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit via` skips preempting iterations | `scheduler.py:742-813, 869, 1539-1582` |
-| a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `prefill (known - c)`, `decode (o - 1 - (known - prompt))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |
+| preemption of `running[-1]`, `waiting.prepend_request`, `num_computed_tokens = 0`, no admission in a step that preempted | `preempt lifo`, re-queued at the head, hold re-executed; `admit waiting while (running.preempted == 0)` | `scheduler.py:742-813, 869, 1539-1582` |
+| a preempted request keeps its output tokens: it is rescheduled with `num_tokens = prompt + outputs`, reserves and recomputes that many, and generates the rest | `computed` read by the re-executed hold: `known = computed < prompt ? prompt : computed + 1`, `run vllm prefill (cost(vllm, known - c))`, `run vllm decode (cost(vllm, o - 1 - (known - prompt)))` | `scheduler.py:1560-1561`, `kv_cache_manager.py:515-531` |
 | the scheduler reserves by `num_tokens` (prompt and generated so far), never by the final length: it knows `max_tokens` and learns the length when `check_stop` sees EOS or the cap | `hidden o;`: no header, key or budget reads `o` | `kv_cache_manager.py:517, 533-534`, `config/scheduler.py:191`, `scheduler.py:639, 2426`, `sched/utils.py:98-119` |
 | the prefix cache holds every *computed* full block, generated tokens included; a hit is the longest run of cached full blocks, at most `num_tokens − 1` | `cache (prompt + out − 1)`; `reuse (floor(min(prev prompt, prompt − 1)/bs)·bs)`; the unmatched blocks stay cached, dead | `kv_cache_manager.py:289-300, 602-606`, `single_type_kv_cache_manager.py:743-838` |
 | the free queue: freed blocks appended tail first (LRU), in the order requests finish | `evict lru` per block from the tail, ties by release order | `block_pool.py:776-805`, `single_type_kv_cache_manager.py:557-585` |
 | a finished session's blocks stay in the free queue | `end` keeps the cache | `block_pool.py:776-805` |
 | a forced miss (a nonce at the head of the prompt) matches nothing; the old blocks stay | `reuse (0)` | trace |
 
-Not modelled: the watermark (0 by default), the "alone" exception of the
-long-prefill threshold, encoder inputs, speculative decoding, sliding
-window, priority scheduling and its victims, the deferred free of in-flight
-blocks, asynchronous scheduling (§8), and cross-session prefix sharing
-(cache entries are per session, §9).
+Not modelled, on purpose: a victim the PRIORITY path takes out of a step that
+had scheduled it leaves the full blocks of that step's chunk hashed in the
+prefix cache (`allocate_slots` cached them, kv_cache_manager.py:602-606, and
+the freed blocks return with their hashes, block_pool.py:776-805), though
+the step never computes their KV; serQ caches what was computed, the
+position ([Semantics](#3-semantics)).
 
-**Admission.** The header of the `hold` in `lib/vllm.sq`'s `vllm_request` is the
+The adaptive long-prefill threshold is off by default; it is expressible as
+`max(threshold, floor(budget / n))` (`scheduler.py:609-622`,
+[Engine](api/engine.md)), but no program here writes it.
+
+Not modelled: the watermark (0 by default), encoder inputs, speculative decoding, sliding
+window, the PRIORITY policy (its victim, the largest `(priority,
+arrival_time)`, `scheduler.py:761-765`, put back into a heap ordered by
+the same, `request_queue.py:159-164`, is `preempt by (-priority, -t0)
+requeue tail` beside `queue by (priority, t0)`, but no program here writes
+the policy and no oracle scenario checks it), the deferred free of in-flight
+blocks, asynchronous scheduling ([A100 testbed](#8-vllm-on-the-a100-testbed)), and cross-session prefix sharing
+(cache entries are per session, [limitations](#9-known-limitations)).
+
+### Admission
+
+The header of the `hold` in `examples/multi-turn/vllm.sq`'s server is the
 prefix-cache lookup and the allocation of the first chunk, and both happen
 when the scheduler admits the request, not when it queues. `known` is
 every token the request has: the prompt, or after a preemption the tokens
@@ -1025,25 +1194,28 @@ cached *full blocks* of those, never all of them, since the last token is
 recomputed for its logits: `floor((known − 1) / bs) · bs`
 (`kv_cache_manager.py:289-300`). `cachedin(kv)` is read in the header, so
 it is read in the waiting loop (`scheduler.py:932-939`), and until then a
-waiting request's prefix is still evictable: the wait channel (§3). The
+waiting request's prefix is still evictable: the wait channel ([Semantics](#3-semantics)). The
 units are the hit plus the chunk the budget the running requests
-leave can take now, `min(known, hit + budget_left(engine))`
+leave can take now, `min(known, hit + budget_left(vllm))`
 (`scheduler.py:1078-1128, 1214-1226`): every known token, or as far as the
 hit and the budget reach, whichever is less. The rest is allocated as the
 request runs (`growing kv`).
 
-**How the correspondence is checked.**
+### How the correspondence is checked
+
+
 
 1. *Deterministic scenarios* (`tools/oracle/*.json`): the real scheduler
    driven by a fake model runner (`tools/vllm_oracle.py`), the real A100
    engine with Qwen3-8B stepped by hand (`tools/oracle/a100_engine.json`,
    `scripts/check_oracle_gpu.py`), the serQ program (`tests/vllm_oracle.rs`)
    and the Lean executable semantics (`Serq/Oracle.lean`, one theorem per
-   scenario, `decide +kernel`) give the same first-token step, last-token
-   step and preemption count for every request (6 scenarios:
+   scenario, `decide +kernel`) give the same first-token and last-token
+   step for every request, and the same number of preemptions (7 scenarios:
    self-preemption, chunked prefill sharing the budget, the request cap,
    head-of-line blocking, the chunk cap, six mixed requests with staggered
-   arrivals on 39 blocks). None of them uses the prefix cache.
+   arrivals on 39 blocks, and the chunk cap lifted for a request alone; the
+   A100 engine ran the first six). None of them uses the prefix cache.
 2. *The prefix cache* (`tools/oracle/cache_trace.*`): three sessions of the
    short-context trace with prefix hits, replayed by the real scheduler and
    KV-cache manager (`tools/vllm_replay_oracle.py`), by
@@ -1055,61 +1227,29 @@ request runs (`growing kv`).
    checks the excerpt of 2, and `scripts/lean_bench.py` checks that Lean
    and the interpreter agree on the full trace.
 
-The comparison is per request and per step, not of aggregates: an aggregate
-that matches can still be wrong for compensating reasons, and the search
-for the first step at which serQ and the scheduler disagree cannot be
-fooled that way.
+These comparisons check individual requests and steps, rather than only
+aggregate statistics.
 
-## 8. vLLM on the A100 testbed
+## vLLM on the A100 testbed {#8-vllm-on-the-a100-testbed}
 
-`examples/replay/vllm_replay.sq` replays the short-context trace
-(`examples/replay/data/short_base.csv`, 333 sessions) on the testbed's
-configuration: Qwen3-8B, block 16, budget 512, `max_num_seqs` 64, a
-128 160-token pool, prefix caching; session `i` is sent at `i·spacing`,
-turn `k+1` `think` seconds after turn `k`.
+The [measured replay example](use-cases/vllm.md#measured-replay) documents
+the A100 cost fit, calibration, comparison runs and their limitations.
 
-**Engine cost, measured.** 3 022 steps of the A100 engine stepped by hand
-(decode batches of 1–64 at contexts 256–32k, prefill chunks at contexts
-0–32k; `tools/a100/steps.jsonl`) fit `c + d·decoders + e·kv_decode +
-a·prefilled + b·attention` with MAPE 2.7 % (decode), 5.6 % (prefill), 5.7 %
-(mixed): c = 13.9 ms, d = 41 µs, e = 0.138 µs, a = 51.5 µs, b = 4.02 ns
-(`tools/a100/step_fit.json`).
+## Known limitations {#9-known-limitations}
 
-**Two overhead constants.** What the served path adds (asynchronous
-scheduling overlaps CPU work with the GPU; the API server tokenises the
-text prompt) is two constants of the program, `c_it` = 4 ms per step and
-`c0` = 40 ms per request, fitted on two light-load runs. The light-load
-runs alone do not identify the split between the two (on a wider grid
-`c_it` = 0, `c0` = 60 ms fits them better and the loaded runs worse), so
-the pair is an effective calibration, not a decomposition of the served
-path.
-
-**Measured runs.** With these, the program predicted the served engine's
-mean TTFT and full-hit rate on held-out runs, including the 2.5 s spacing
-where the replica collapses (TTFT 39.1 s predicted, 34.6 s measured), and,
-before the run, that pinning a waiting request's prefix would keep the
-2.5 s replay from collapsing (0.888 s predicted, 0.878 s measured). Not
-every point was as close: at 3.0 s the program predicted 0.605 s against
-0.441 s measured. Each point is one run, and the unpinned 2.5 s run was
-measured on another day without the step tracer the pinned one carried.
-The scripts are in `serving-queue-theory` (`scripts/exp/`); the run records
-are not published. [The cliff](tutorial/06-the-cliff.md) tells the story.
-
-## 9. Known limitations
-
-* Continuous work and fluid rates at `fifo`/`ps`/`delay` stages; the
-  `step` stage is discrete. A fluid server is the step stage with the
-  budget filled to the memory time; at ω = 0.2 ms that is 5 000 iterations
-  per simulated second, so long horizons are slow (a `fluid` option for the
-  step stage is the natural extension).
+* Continuous work and fluid rates at `fifo`/`ps`/`delay` stages; an
+  engine is discrete. A fluid server is an engine whose `tokens cap` is
+  filled to the memory time; at ω = 0.2 ms that is 5 000 iterations
+  per simulated second, so long horizons can be slow.
 * Cache entries are per session; cross-session prefix sharing (a common
   system prompt) needs a content-addressed cache.
-* A session is one sequence of statements, so it waits at one pool at a
-  time: NIXL's push mode, where the decoder allocates during the prefill,
-  needs a reservation a session joins now and enters later
-  ([the KV transfer](design/pd-transfer.md)).
+* A leg's lease does not expire when its session is slow to ask for it:
+  vLLM's prefiller frees a pushed request's blocks after its lease
+  duration when no decoder has registered, and the request fails; the
+  program's lease is one number, and a copy after it reads nothing
+  ([the push mode](https://github.com/servingQ/serQ/blob/main/docs/design/push-mode.md)).
 * A lease's bound is one number; the heartbeat that renews it is not a
-  construct ([the KV transfer](design/pd-transfer.md)).
+  construct ([the KV transfer](https://github.com/servingQ/serQ/blob/main/docs/design/pd-transfer.md)).
 * One eviction order per pool; a priced order uses `price(stage, …)` with
   the stage's online estimates.
 * The Lean model covers a fragment, and there is no proof that the

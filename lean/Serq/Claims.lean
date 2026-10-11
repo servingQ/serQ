@@ -7,7 +7,7 @@ program: its session program (after the workload's arrival delay and the
 `init` sets that do not draw), its deployment, the family of workloads its
 claims quantify over, and each claim as an `Exec.EveryIteration`,
 `Exec.SomeIteration` or `Exec.AtEnd` statement (`Serq/Claim.lean`). The
-proofs are in `Serq/Papers/`; `Serq/ClaimsProved.lean` checks that every
+proofs are in `examples/papers/`; `examples/papers/ClaimsProved.lean` checks that every
 claim has one.
 -/
 import Serq.Claim
@@ -33,7 +33,7 @@ def prog : Prog := [route|
   stop]
 
 def deployment : Deployment :=
-  ⟨[], 128, 128, none, fun st => 4000 * ((st.tokens + 127) / 128) + 5 * st.tokens, some fun e => (if ((e.decoders ≥ 128) ∨ (e.decoders = e.residents)) then e.decoding else (if (e.decoding ≠ 0) then 0 else 1))⟩
+  ⟨[], 128, 128, none, fun st => 4000 * ((st.tokens + 127) / 128) + 5 * st.tokens, some fun e => (if ((e.decoders ≥ 128) ∨ (e.decoders = e.residents)) then e.decoding else (if (e.decoding ≠ 0) then 0 else 1)), none⟩
 
 /-- The workloads `claim token_rate` quantifies over: its own `given` only. -/
 def family_token_rate (w : Workload) : Prop :=
@@ -76,7 +76,7 @@ def prog : Prog := [route|
   stop]
 
 def deployment : Deployment :=
-  ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), some fun e => (if (e.decoders > 0) then e.decoding else (if (e.decoding ≠ 0) then 0 else 1))⟩
+  ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), some fun e => (if (e.decoders > 0) then e.decoding else (if (e.decoding ≠ 0) then 0 else 1)), none⟩
 
 /-- The workloads `claim not_work_conserving` quantifies over: its own `given` only. -/
 def family_not_work_conserving (w : Workload) : Prop :=
@@ -120,7 +120,7 @@ def prog : Prog := [route|
   stop]
 
 def deployment : Deployment :=
-  ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), none⟩
+  ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), none, none⟩
 
 /-- The workloads `claim work_conserving` quantifies over: its own `given` only. -/
 def family_work_conserving (w : Workload) : Prop :=
@@ -167,7 +167,7 @@ end DaiSarathi
 
 namespace KongSvf
 
-/-- The session program of `examples/papers/kong_svf.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = s, 10 = o. Observations: 0 = out, 1 = vol, 2 = latency. -/
+/-- The session program of `examples/papers/kong_svf.sq`. Attributes: 0 = cached, 1 = serial, 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = s, 10 = o. Observations: 0 = out, 1 = vol, 2 = response. -/
 def prog : Prog := [route|
   observe 0 = x.attr 10;
   observe 1 = ((x.attr 9) * (x.attr 10)) + ((((x.attr 10) * (x.attr 10)) + (x.attr 10)) / 2);
@@ -179,7 +179,7 @@ def prog : Prog := [route|
   stop]
 
 def deployment : Deployment :=
-  ⟨[⟨20000, 1, false, some fun x => ((x.attr 9) * (x.attr 10)) + ((((x.attr 10) * (x.attr 10)) + (x.attr 10)) / 2)⟩], 1000000, 0, none, fun _ => 1, none⟩
+  ⟨[⟨20000, 1, false, some fun x => ((x.attr 9) * (x.attr 10)) + ((((x.attr 10) * (x.attr 10)) + (x.attr 10)) / 2)⟩], 1000000, 0, none, fun _ => 1, none, none⟩
 
 /-- The workloads `claim queueing_bound` quantifies over: its own `given` only. -/
 def family_queueing_bound (w : Workload) : Prop :=

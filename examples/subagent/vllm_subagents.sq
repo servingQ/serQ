@@ -7,11 +7,10 @@
 // `--set q=0` is the same agents without subagents.
 use "../../lib/vllm.sq";
 
+use "std/args";
+
 let B = 8192;          // max_num_batched_tokens
-let max_seqs = 16;     // max_num_seqs
-let blocks = 10000;    // num_gpu_blocks (less the null block)
 let bs = 16;           // block_size
-let chunk_cap = 0;     // long_prefill_token_threshold (0: none)
 let a = 2e-5;          // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
@@ -19,66 +18,96 @@ let c0 = 0;            // fixed cost per iteration (s)
 let Lambda = 0.1;      // agent sessions per second
 let p = 0.9;           // the agent continues after a turn
 let Z = 3.0;           // tool time (s)
-let q = 0.3;           // a turn delegates instead of calling a tool
 let k = 3;             // subagents per delegation
 let pc = 0.7;          // a subagent continues after a turn
-let W = 14.7;          // the wait for the subagents (s): the mean of the longest of k
-                       // `subagent` samples of a previous run (`--dump`)
-let kids = q * k * p / (1 - p);   // subagents per agent session (a last turn does not delegate)
 
-pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool reqs { cap max_seqs; admit via engine; }   // the engine's step admits the waiting, FCFS
+fn main() {
+  let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
+  let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
+  let chunk_cap = args.number("chunk_cap", inf);   // long_prefill_token_threshold (inf: none)
+  let q = args.number("q", 0.3);           // a turn delegates instead of calling a tool
+  let W = args.number("W", 14.7);          // the wait for the subagents (s): the mean of the longest of k
+                         // `subagent` samples of a previous run (`--dump`)
+  let kids = q * k * p / (1 - p);   // subagents per agent session (a last turn does not delegate)
 
-stage engine : step {
-  budget B;
-  chunk chunk_cap;
-  cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-  memory kv;
-}
-stage tool : delay;
-stage delegate : delay;
-
-// --8<-- [start:workload]
-// An arrival is a subagent with probability kids / (1 + kids), so the
-// stream carries both at the rate the parents would create them. A
-// subagent starts from a context of its own: the parent's context it
-// copies is not shared across sessions (docs/language.md §9).
-workload {
-  arrive poisson(Lambda * (1 + kids));
-  hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
-  init {
-    set sub = ~bernoulli(kids / (1 + kids));
-    set K = sub ? floor(~uniform(2000, 6000)) : 0;
-    set t_s = now;
+  device gpu {
+    compute (t) = t * a;
+    hbm (k) = omega + beta * k;
+    kv cap blocks * bs;
   }
-  turn {
-    set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
-    set o = floor(~exp(200)) + 1;
-    set more = ~bernoulli(sub ? pc : p);
-    set fan = sub ? 0 : ~bernoulli(q);
+  engine vllm on gpu {
+    reqs cap max_seqs;
+    tokens cap B;
+    schedule {
+      // long_prefill_token_threshold binds only while another request is
+      // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
+      let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
+      advance running each at most (threshold);
+      admit waiting while (running.preempted == 0) each at most (threshold);
+    }
+    execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
-  session {
-    turn;
-    loop {
-      request;
-      set K = prompt + o;
-      branch (more) {
-        branch (fan) { run delegate (W); } else { tool (~exp(Z)); }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
+  pool reqs on vllm { queue fifo; }   // the engine admits the waiting, FCFS
+  stage tool : delay;
+  stage delegate : delay;
+
+  // --8<-- [start:workload]
+  // An arrival is a subagent with probability kids / (1 + kids), so the
+  // stream carries both at the rate the parents would create them. A
+  // subagent starts from a context of its own: the parent's context it
+  // copies is not shared across sessions (docs/language.md §9).
+  workload {
+    arrive poisson(Lambda * (1 + kids));
+    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    init {
+      set sub = ~bernoulli(kids / (1 + kids));
+      set K = sub ? floor(~uniform(2000, 6000)) : 0;
+      set t_s = now;
+    }
+    turn {
+      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+      set o = floor(~exp(200)) + 1;
+      set more = ~bernoulli(sub ? pc : p);
+      set fan = sub ? 0 : ~bernoulli(q);
+    }
+    session {
+      loop {
         turn;
-      } else {
-        branch (sub) { observe subagent = now - t_s; }
-        end;
+        set K = prompt + o;
+        branch (more) {
+          branch (fan) { run delegate (cost(delegate, W)); } else { tool (~exp(Z)); }
+        } else {
+          branch (sub) { observe subagent = now - t_s; }
+          end;
+        }
       }
     }
   }
-}
-// --8<-- [end:workload]
+  // --8<-- [end:workload]
 
-server {
-  set t0 = now;
-  set prompt = K + n;
-  vllm_request(reqs, kv, engine, prompt, o, t0);
-  observe response = now - t0;
-}
+  server {
+    set t0 = now;
+    set prompt = K + n;
+    // A slot of `reqs` and the blocks of `kv`. The scheduler looks up the
+    // prefix hit when it admits (scheduler.py:932-939) and allocates the hit
+    // plus the chunk the budget allows (scheduler.py:1078-1128, 1214-1226);
+    // docs/language.md §7 "Admission" has the argument. `known` is every
+    // token the request has: the prompt, or after a preemption the position
+    // it had reached plus the token sampled there (vLLM keeps the generated
+    // tokens and drops only their KV, scheduler.py:1560-1561).
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))
+         at admission (known = computed < prompt ? prompt : computed + 1,
+                       hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
+      set c = min(cached, reusable(known, blocksize(kv)));
+      observe hit = c > 0;                    // any reused block, again after a preemption
+      observe prefill_tokens = known - c;
+      run vllm prefill (cost(vllm, known - c)) growing kv;
+      branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
+      run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
+    } cache (cost(reqs, kv, prompt + o));
+    observe response = now - t0;
+  }
 
-run { horizon 2000; warmup 200; seed 1; }
+
+}

@@ -4,65 +4,77 @@
 // requests it is already running — one token to each decoding request, a
 // chunk to each prefilling one — and then admits waiting requests with
 // whatever budget is left. Prefill and decode share the same iteration.
+use "std/args";
+
 let B = 2048;          // token budget per iteration (max_num_batched_tokens)
-let max_seqs = 16;     // how many requests may run at once
-let blocks = 4000;     // KV blocks
 let bs = 16;           // tokens per block
 let alpha = 2e-5;      // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident token (s)
-let Lambda = 0.5;
 let p = 0.8;
-let Z = 3.0;
 
-pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool reqs { cap max_seqs; admit via engine; }
+fn main() {
+  let max_seqs = args.number("max_seqs", 16);     // how many requests may run at once
+  let blocks = args.number("blocks", 4000);     // KV blocks
+  let Lambda = args.number("Lambda", 0.5);
+  let Z = args.number("Z", 3.0);
 
-stage engine : step {
-  budget B;
-  // an iteration costs whichever is larger: reading the weights and the
-  // residents' KV, or computing the tokens it scheduled
-  cost max(omega + beta * (kv_decode + kv_prefill), tokens * alpha);
-  memory kv;
-}
-stage tool : delay;
-
-workload {
-  arrive poisson(Lambda);
-  init { set K = 0; }
-  turn {
-    set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
-    set o = ~exp(200) + 1;
+  device gpu {
+    compute (t) = t * alpha;
+    hbm (k) = omega + beta * k;
+    kv cap blocks * bs;
   }
-  // the conversation: a request per turn, then a tool call and the next
-  // turn, or the end
-  session {
-    turn;
-    loop {
-      request;
-      set K = prompt + o;
-      branch with (p) { run tool (~exp(Z)); turn; } else { drop kv; end; }
+  engine llm on gpu {
+    reqs cap max_seqs;
+    tokens cap B;
+    schedule {
+      advance running;
+      admit waiting while (running.preempted == 0);
+    }
+    // an iteration costs whichever is larger: reading the weights and the
+    // running requests' KV, or computing the tokens it scheduled
+    execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
+  pool reqs on llm { queue fifo; }
+  stage tool : delay;
+
+  workload {
+    arrive poisson(Lambda);
+    init { set K = 0; }
+    turn {
+      set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);
+      set o = ~exp(200) + 1;
+    }
+    // the conversation: a request per turn, then a tool call and the next
+    // turn, or the end
+    session {
+      loop {
+        turn;
+        set K = prompt + o;
+        branch with (p) { run tool (cost(tool, ~exp(Z))); } else { drop kv; end; }
+      }
     }
   }
-}
 
-// the engine: what it does with one request
-server {
-  set t0 = now;
-  set prompt = K + n;
-  // how much of the prompt the cache could supply, in whole blocks. The
-  // cache itself is read inside the hold's units, so it is read when the
-  // request is admitted -- while it waits, its prefix is still evictable
-  set hitmax = floor((prompt - 1) / bs) * bs;
-  hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
-       at admission (hit = min(cachedin(kv), hitmax)) {
-    set c = min(cached, floor((prompt - 1) / bs) * bs);
-    observe hit = c > 0;
-    run engine prefill (prompt - c) growing kv;
-    observe ttft = now - t0;
-    run engine decode (o - 1) growing kv;
-  } cache (prompt + o);
-  observe response = now - t0;
-}
+  // the engine: what it does with one request
+  server {
+    set t0 = now;
+    set prompt = K + n;
+    // how much of the prompt the cache could supply, in whole blocks. The
+    // cache itself is read inside the hold's units, so it is read when the
+    // request is admitted -- while it waits, its prefix is still evictable
+    set hitmax = floor((prompt - 1) / bs) * bs;
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
+         at admission (hit = min(cachedin(kv), hitmax)) {
+      set c = min(cached, floor((prompt - 1) / bs) * bs);
+      observe hit = c > 0;
+      run llm prefill (cost(llm, prompt - c)) growing kv;
+      observe ttft = now - t0;
+      run llm decode (cost(llm, o - 1)) growing kv;
+    } cache (cost(reqs, kv, prompt + o));
+    observe response = now - t0;
+  }
 
-run { horizon 20000; warmup 2000; seed 1; }
+
+}

@@ -78,15 +78,13 @@ has the table. `tests/serve_only.rs` checks the schedule on a unit clock.
 
 ## The price
 
-- IR: one field, `CStep.only: Option<CExpr>`, omitted when absent, so every
-  existing IR file is unchanged, the seven oracle files included. It changes
-  what a program does, so on a tagged version it would have opened 12. 11
-  has no tag, so it goes in the coming tag's message (`docs/ir.md`
-  §Stability).
-- Lean: `scripts/gen_lean_oracle.py` raises `Fragment` on a stage with
-  `only`. The fragment serves every resident, and no oracle program uses
-  `only`.
-- Language: one keyword, `only`.
+- IR: no field of its own. `serve only (p)` is the iteration body `serve
+  only (p); admit only (p) while (!preempted);` (#355), which the linker
+  writes, so the IR has one form for it, `CIter`'s `only`.
+- Lean: the claims generator reads that body as the fragment's `only`
+  (`only_body`), so the papers' claims keep their statements; the oracle
+  generator raises `Fragment` on any body, and no oracle program has one.
+- Language: one keyword, `only`, in a `serve` and an `admit`.
 
 ## Self-critique
 

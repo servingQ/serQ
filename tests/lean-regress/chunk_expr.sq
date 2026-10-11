@@ -1,0 +1,39 @@
+// An engine's `each at most` written over what an iteration's start reads,
+// in a shape that is not vLLM's: the cap holds only while more than two
+// requests run or wait for a slot, with the operands the other way round.
+// Three requests of 40 tokens start capped at 8 and run uncapped once one
+// has left. The Lean semantics reads the program's expression
+// (`Deployment.chunkAt`) and must give the interpreter's answer
+// (lean/Serq/Regress.lean, README.md).
+fn main() {
+  device gpu { kv cap 160; }
+  engine llm on gpu {
+    slots cap 2;
+    tokens cap 32;
+    schedule {
+      let c = waiting.count + running.count > 2 ? 8 : inf;
+      advance running each at most (c);
+      admit waiting while (running.preempted == 0) each at most (c);
+    }
+    execute (1);
+  }
+  pool kv on gpu { block 16; evict lru; preempt lifo; }
+  pool slots on llm { }
+
+  workload {
+    arrive batch(3);
+    init { set p = 0; set o = 0; }
+
+  }
+
+  server {
+    hold slots (cost(slots, 1)), kv (cost(kv, p)) {
+      run llm prefill (cost(llm, p)) growing kv;
+      observe first = now;
+      run llm decode (cost(llm, o)) growing kv;
+      observe done = now;
+    }
+  }
+
+
+}

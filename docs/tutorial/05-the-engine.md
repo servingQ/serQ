@@ -1,15 +1,9 @@
 # 5. The engine
 
-The `fifo` stage of chapters 3 and 4 served one turn at a time, start to
-finish. No LLM engine works like that. A real engine runs **iterations**: each
-one hands a token budget to the requests already running — one token to each
-decoding request, a chunk to each prefilling one — and then admits waiting
-requests with whatever budget is left. Prefill and decode are not phases. They
-are the same iteration.
-
-vLLM's scheduler puts it plainly: there is *"no decoding phase nor prefill
-phase"*. serQ has one stage kind for this, and it is the one the lecture's
-language could not express.
+Replace the per-turn service time with an engine. Each iteration
+allocates a token budget across the requests it is running and then admits waiting
+requests with the remaining budget. This model allows prefill and decode
+to share an iteration.
 
 ## The program
 
@@ -21,136 +15,134 @@ Its deployment, drawn by [`serq draw`](../visualization/index.md):
 
 ![The engine as a queueing network](../assets/05-engine.deployment.svg)
 
-## The `step` stage
+## The engine on its device
+
+The `stage engine` of chapters 3 and 4 is now an `engine`, and `engine` is
+the word that declares one, so the engine is named `llm`.
 
 ```serq
-stage engine : step {
-  budget B;
-  cost max(omega + beta * (kv_decode + kv_prefill), tokens * alpha);
-  memory kv;
+device gpu {
+  compute (t) = t * alpha;
+  hbm (k) = omega + beta * k;
+  kv cap blocks * bs;
 }
+engine llm on gpu {
+  reqs cap max_seqs;
+  tokens cap B;
+  schedule {
+    advance running;
+    admit waiting while (running.preempted == 0);
+  }
+  execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+}
+pool kv on gpu { block bs; evict lru; preempt lifo; }
+pool reqs on llm { queue fifo; }
 ```
 
-`budget` is the tokens one iteration may schedule (`max_num_batched_tokens`).
-`cost` is how long the iteration takes, as an expression in what it scheduled:
+The `device` says what the hardware offers: the time to compute `t`
+tokens, the time to read `k` tokens of KV, and the KV capacity. The
+`engine` says what runs on it. `reqs cap` is how many requests may run at
+once (`max_num_seqs`), `tokens cap` the tokens one iteration may schedule
+(`max_num_batched_tokens`). `schedule` is what each iteration does: give
+the running requests their tokens, then admit waiting ones while nothing
+was preempted. `execute` is how long the iteration takes, as an
+expression in what it scheduled:
 
-| Variable | Meaning |
+| Value | Meaning |
 |---|---|
-| `tokens` | tokens scheduled this iteration |
-| `decoders` | decoding residents scheduled |
-| `prefilled` | prefill tokens scheduled |
-| `residents` | residents, scheduled or not |
-| `kv_decode`, `kv_prefill` | memory held by the scheduled decode / prefill residents |
-| `attention` | attention work of the prefill chunks, \(\sum n(K + n/2)\) |
+| `batch.tokens` | tokens scheduled this iteration |
+| `batch.decoding` | decoding requests scheduled |
+| `batch.prefilled` | prefill tokens scheduled |
+| `batch.kv_decode`, `batch.kv_prefill` | memory held by the scheduled decode / prefill requests |
+| `batch.attention` | attention work of the prefill chunks, \(\sum n(K + n/2)\) |
 
-The cost above is the standard roofline: an iteration takes either the time to
-read the weights and the residents' KV, or the time to compute the tokens it
-scheduled, whichever is larger. On an A100 with Qwen3-8B, fitting
-`c + d·decoders + e·kv_decode + a·prefilled + b·attention` to 3 022 measured steps gives a MAPE of
-2.7 % for decode and 5.6 % for prefill — the cost expression is where a real
-measurement enters the model.
+The cost is the larger of the time to read weights and KV memory and the
+time to compute the scheduled tokens. Fit these parameters to measurements
+of the engine you want to model.
 
-Other options: `chunk` caps one request's prefill chunk
-(`long_prefill_token_threshold`), and `serve` names the one order the
-iteration serves its residents in: `serve admission` (vLLM's `running` list,
-the default), `serve by (keys)` (ascending keys per resident, from
-`decoding`, `admission` and `remaining`; `serve decode first` is
-`serve by (decoding ? 0 : 1)`), or `serve exclusive prefill` (a prefill
-chunk runs alone and stalls every decode, the RBLN stack). `serve only (p)`
-before an order serves only the residents for which `p` holds:
-`serve only (decoders > 0 ? decoding : !decoding)` is FasterTransformer's
-decode-only batches.
+`pool kv on gpu` is the device's memory, with its rules: blocks, eviction,
+preemption. `pool reqs on llm` holds the engine's `reqs cap`: its running
+slots, and the queue of requests waiting for one, served `fifo`. `each at most (c)` limits each request's prefill in an
+iteration, and `advance running` takes an order and an `only`; see
+[Engines on devices](../language.md#engines-on-devices).
 
-## Two sides: the workload and the server
+## The workload and the server
 
-From this chapter the program is written from its two sides. The session
-inside `workload` is the conversation: a `request;` per turn, then the tool
-call and the next turn, or the end. `server` is what the engine does with
-one request, and the parser splices it in at `request;`, so the session
-that runs is the one of chapters 3 and 4. The split says which part is the
-deployment, and `serq draw` draws only that part.
+The `session` inside `workload` describes the conversation: each `turn;`
+waits for a response before the client decides whether to continue. The `server`
+block describes how each request is served. The deployment figure shows
+the server side.
 
 ## Three new pieces of the server
 
 ```serq
 set hitmax = floor((prompt - 1) / bs) * bs;
-hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
+hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
      at admission (hit = min(cachedin(kv), hitmax)) {
-  run engine prefill (prompt - c) growing kv;
-  run engine decode (o - 1) growing kv;
-} cache (prompt + o);
+  set c = min(cached, floor((prompt - 1) / bs) * bs);
+  run llm prefill (cost(llm, prompt - c)) growing kv;
+  run llm decode (cost(llm, o - 1)) growing kv;
+} cache (cost(reqs, kv, prompt + o));
 ```
 
-**`growing kv`** — the request does not take all its memory up front. It is
-admitted with the blocks for the chunk it can run now, and grows block by
-block as it decodes. When growth finds no free block, `preempt lifo` throws
-out the most recently admitted request: its blocks are freed *to the cache*, it
-goes back to the head of the queue, and it recomputes what it lost. That is
-vLLM's `_preempt_request`, and in serQ it is just "abort the scope and re-run
-the statement" — which is what made `hold` a scope in chapter 2.
+**`growing kv`** allocates additional blocks as the request advances instead
+of reserving its full memory at admission. With `preempt lifo`, a failed
+growth can preempt the most recently admitted running request. The hold is
+retried; see [preemption semantics](../language.md) for the state preserved
+across retries.
 
-**`budget_left(engine)`** — how many tokens the next iteration leaves after
-its residents. The admission asks for the hit's blocks plus the chunk that
-budget can take *now*.
+**`budget_left(llm)`** is the token budget left after serving the running requests.
+The admission reserves memory for the cached prefix plus the prefill chunk
+that fits this budget, capped by `prompt`.
 
-Both are read **when the request is admitted**, not when it queues — the rule
-chapter 2 flagged, and this is the program that needs it. That is why
-`cachedin(kv)` appears inside the units rather than in a `set` above them: a
-`set` would read the cache while the request was still queueing, and a waiting
-request's prefix is exactly what is still evictable. `at admission (hit = …)`
-is where a header names what it is written in terms of — the parser
-substitutes it, so the program that uses it and the program that inlines by
-hand have the same IR.
+The header reads both the cache and the budget at admission. A prefix may
+be evicted while the request waits, so reading the cache earlier in a `set`
+would use an outdated value. `at admission (hit = …)` names this value for
+the header.
 
-The units then read `min(prompt, hit + budget)` — the whole prompt, or as far
-as the hit and the budget reach, whichever is less.
-
-**`admit via engine`** on a pool (`reqs` in the program above, and in
-`examples/replay/vllm_replay.sq`) hands the pool's queue to the engine's
-scheduler: waiting requests are admitted at the start of an iteration, with
-the budget left, and never in an iteration that preempted.
+**`pool reqs on llm`** hands the pool's queue to the engine's
+scheduler: waiting requests are admitted by `admit waiting` in an
+iteration, with the budget left, and never in an iteration that preempted.
 
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/05-engine.sq
+serq run docs/tutorial/programs/05-engine.sq --horizon 20000 --warmup 2000 --seed 1
 ```
 
 ```text
-run: horizon 20000 end 20000 warmup 2000 seed 1 events 9212861 arrivals 9905 ended 8903 turns 43947 mean live 5.977
+run: horizon 20000 end 20000 warmup 2000 seed 1 events 9210071 arrivals 9905 ended 8905 turns 44301 mean live 6.006
 
 observe   count    mean   95% CI    cv2     p99
 --------  -----  ------  -------  -----  ------
-hit       43947  0.7927  ±0.0040  0.262  1.0000
-ttft      43947  0.0181  ±0.0007  1.276  0.0798
-response  43947  0.0633  ±0.0011  0.645  0.2429
+hit       44301  0.7938  ±0.0032  0.260  1.0000
+ttft      44301  0.0182  ±0.0005  1.274  0.0798
+response  44301  0.0629  ±0.0009  0.638  0.2370
 
-stage   number   util   done    thru    wait  service    iters
-------  ------  -----  -----  ------  ------  -------  -------
-engine   0.153  0.138  87894  4.8830  0.0000   0.0313  9164050
-tool     5.822  0.998  35044  1.9469  0.0000   2.9903        0
+stage  number   util   done    thru    wait  service    iters
+-----  ------  -----  -----  ------  ------  -------  -------
+llm     0.153  0.138  88602  4.9223  0.0000   0.0311  9160680
+tool    5.851  0.997  35398  1.9666  0.0000   2.9755        0
+
+step  prefill only  decode only  mixed   idle  decodes  decode batch  decode step   itl p50   itl p99
+----  ------------  -----------  -----  -----  -------  ------------  -----------  --------  --------
+llm          0.036        0.096  0.006  0.862    0.110         1.079     0.000223  0.000209  0.000240
 
 pool   used   cached  queue  holders    wait  admits  evict(n)  evict(u)  preempt  spill  rej  stuck
 ----  -----  -------  -----  -------  ------  ------  --------  --------  -------  -----  ---  -----
-kv    729.8  28515.4  0.000    0.153     NaN   48810       218   1760208        0      0    0      0
-reqs    0.2      0.0  0.002    0.153  0.0007   48810         0         0        0      0    0      0
+kv    735.9  28664.1  0.000    0.153     NaN   49390       258   1935856        0      0    0      0
+reqs    0.2      0.0  0.002    0.153  0.0007   49390         0         0        0      0    0      0
 ```
 
-**9 164 050 iterations.** That is what `step` costs you: the engine is
-simulated iteration by iteration, and at ~2 ms each a 20 000-second horizon is
-nine million of them. Nothing else in serQ is this expensive.
-
-`done 87894` at the engine against 43 947 turns — two runs per turn, prefill
+`done 88602` at `llm` against 44 301 turns — two runs per turn, prefill
 and decode.
 
 TTFT is now separately observable, and at 18 ms it is a different quantity from
-the 63 ms response. Separating them is the whole reason to model the engine at
-iteration granularity instead of as one service time.
+the 63 ms response. Iteration-level simulation lets the program measure both.
 
 !!! note "`wait NaN` on the `kv` pool"
     A hold on several pools joins the queue of the **first** one, so `kv` never
-    has a queue of its own and its mean wait is 0/0. Cosmetic; the queueing is
-    all on `reqs`.
+    has a queue of its own and has no queue-wait samples. Read the wait on `reqs`.
 
 ---
 

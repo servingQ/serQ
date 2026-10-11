@@ -1,34 +1,51 @@
 //! `gauge NAME = e;`: the time average of a function of the deployment's
 //! state, and `max j in n (e)` / `min` / `sum`, which the linker writes out.
 
+mod common;
+
 use serq::{Overrides, compile_source, run_source};
 
 const DEPLOYMENT: &str = "
-    pool kv[2] { cap 100; }
-    stage svc[2] : fifo;
-    workload { arrive poisson(1.5); }
-    session {
-      choose j in 2 by (holders(kv[j]));
-      set n = ~uniform(1, 20);
-      hold kv[j] (n) { run svc[j] (~exp(0.5)); }
-      end;
-    }
-    run { horizon 4000; warmup 100; seed 3; }
+        pool kv[2] { cap 100; }
+        stage svc[2] : fifo;
+        workload { arrive poisson(1.5);
+          session { turn;
+            end;
+
+          }
+        }
+        server {
+          choose j in 2 by (holders(kv[j]));
+          set n = ~uniform(1, 20);
+          hold kv[j] (cost(kv, n)) { run svc[j] (cost(svc, ~exp(0.5))); }
+        }
+
 ";
 
 fn run(gauges: &str) -> serq::Report {
     run_source(
-        &format!("{DEPLOYMENT}{gauges}"),
-        &Overrides::default(),
+        &common::main_source(&format!("{DEPLOYMENT}{gauges}")),
+        &Overrides {
+            warmup: Some(100.0),
+            seed: Some(3),
+            ..common::horizon(4000.0)
+        },
         None,
     )
     .unwrap()
 }
 
 fn link_error(src: &str) -> String {
-    compile_source(src, &Overrides::default())
-        .unwrap_err()
-        .to_string()
+    compile_source(
+        &common::main_source(src),
+        &Overrides {
+            warmup: Some(100.0),
+            seed: Some(3),
+            ..common::horizon(4000.0)
+        },
+    )
+    .unwrap_err()
+    .to_string()
 }
 
 /// A gauge of a pool's `used` is the pool's time-average `used`: the two
@@ -76,7 +93,15 @@ fn the_spread_is_read_at_one_moment() {
 #[test]
 fn an_aggregate_is_written_out() {
     let ir = |g: &str| {
-        let p = compile_source(&format!("{DEPLOYMENT}{g}"), &Overrides::default()).unwrap();
+        let p = compile_source(
+            &common::main_source(&format!("{DEPLOYMENT}{g}")),
+            &Overrides {
+                warmup: Some(100.0),
+                seed: Some(3),
+                ..common::horizon(4000.0)
+            },
+        )
+        .unwrap();
         serde_json::to_value(&p.gauges).unwrap()
     };
     assert_eq!(
@@ -86,6 +111,24 @@ fn an_aggregate_is_written_out() {
     assert_eq!(
         ir("gauge x = sum k in 2 (holders(kv[k]));"),
         ir("gauge x = holders(kv[0]) + holders(kv[1]);")
+    );
+    // Keep the left fold in the IR: balancing sums changes floating-point
+    // rounding, and reordering terms can change which draw an operand reads.
+    for (aggregate, expanded) in [
+        ("sum", "(0 + 1) + 2"),
+        ("min", "min(min(0, 1), 2)"),
+        ("max", "max(max(0, 1), 2)"),
+    ] {
+        assert_eq!(
+            ir(&format!("gauge x = {aggregate} k in 3 (k);")),
+            ir(&format!("gauge x = {expanded};")),
+        );
+    }
+    // The same order applies during constant folding: (1e16 - 1e16) + 1
+    // is 1, whereas 1e16 + (-1e16 + 1) rounds to 0.
+    assert_eq!(
+        ir("let N = sum k in 3 (k == 0 ? 1e16 : k == 1 ? -1e16 : 1); gauge x = N;"),
+        ir("gauge x = 1;"),
     );
 }
 
@@ -101,12 +144,17 @@ fn an_aggregate_let_sizes_an_array() {
     ] {
         let src = format!(
             "let N = {n};
-             stage s[N] : delay;
-             workload {{ arrive batch(1); }}
-             session {{ run s[0] (N); end; }}
-             run {{ horizon 10; }}"
+        stage s[N] : delay;
+        workload {{ arrive batch(1);
+          session {{ turn; end;
+          }}
+        }}
+        server {{ run s[0] (cost(s, N));
+        }}
+        "
         );
-        let p = compile_source(&src, &Overrides::default()).unwrap_or_else(|e| panic!("{n}: {e}"));
+        let p = compile_source(&common::main_source(&src), &common::horizon(10.0))
+            .unwrap_or_else(|e| panic!("{n}: {e}"));
         assert_eq!(p.stages.len(), size, "{n}");
     }
     // nested aggregates share the program's budget of terms, in the parser
@@ -114,7 +162,10 @@ fn an_aggregate_let_sizes_an_array() {
     // counts of 4096 ran for minutes before the linker could say so
     let e = link_error(
         "let N = sum i in 64 (sum j in 64 (sum k in 64 (0))) + 1;
-         session { end; } run { horizon 1; }",
+        workload { session { turn; end;
+        } }
+        server {
+        } ",
     );
     assert!(e.contains("terms, at most 4096"), "{e}");
 }
@@ -185,6 +236,28 @@ fn an_aggregates_index_and_count_are_its_own() {
     }
 }
 
+/// Aggregate expansion must reach the index diagnostic on a bounded stack.
+/// 2100 units cannot index a two-member pool; min/max likewise produce 2.
+#[test]
+fn large_aggregate_indices_report_errors_on_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(1024 * 1024)
+        .spawn(|| {
+            for expression in [
+                "sum k in 2100 (1)",
+                "sum k in 4096 (1)",
+                "min k in 4096 (2)",
+                "max k in 4096 (2)",
+            ] {
+                let e = link_error(&format!("{DEPLOYMENT} gauge x = used(kv[{expression}]);"));
+                assert!(e.contains("out of range"), "{expression}: {e}");
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
 /// `--dump` writes a gauge's change points; their integral is the mean.
 #[test]
 fn the_dump_is_the_signal() {
@@ -225,8 +298,14 @@ fn a_gauges_index_is_a_number() {
     assert!(e.contains("index is a number in range"), "{e}");
     // a constant expression is folded to one
     let p = compile_source(
-        &format!("{DEPLOYMENT} let N = 2; gauge x = used(kv[N - 1]);"),
-        &Overrides::default(),
+        &common::main_source(&format!(
+            "{DEPLOYMENT} let N = 2; gauge x = used(kv[N - 1]);"
+        )),
+        &Overrides {
+            warmup: Some(100.0),
+            seed: Some(3),
+            ..common::horizon(4000.0)
+        },
     )
     .unwrap();
     assert_eq!(
@@ -243,15 +322,19 @@ fn a_gauge_reads_the_end_of_an_instant() {
     let src = "
         pool kv { cap 10; }
         stage gate : delay;
-        workload { arrive batch(2); }
-        session {
-          run gate (serial == 0 ? 0 : 1);
-          hold kv (1) { run gate (1); }
-          end;
+        workload { arrive batch(2);
+          session { turn;
+            end;
+
+          }
+        }
+        server {
+          run gate (cost(gate, serial == 0 ? 0 : 1));
+          hold kv (cost(kv, 1)) { run gate (cost(gate, 1)); }
         }
         gauge n = holders(kv);
-        run { horizon 3; }";
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+        ";
+    let r = run_source(&common::main_source(src), &common::horizon(3.0), None).unwrap();
     // [0, 1): session 0 holds; at 1 it releases and session 1 takes, and
     // in between the instant has two holders, which no gauge reads
     let n = r.gauge("n").unwrap();
@@ -263,8 +346,16 @@ fn a_gauge_reads_the_end_of_an_instant() {
 /// which may draw, and the run would change.
 #[test]
 fn a_gauge_does_not_plan_an_iteration() {
-    let src = "stage e : step { budget ~uniform(1, 2); cost 1; }
-        session { run e prefill (1); end; } run { horizon 1; }
+    let src = "device gpu { }
+        engine e on gpu {
+          tokens cap ~uniform(1, 2);
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        workload { session { turn; end;
+        } }
+        server { run e prefill (cost(e, 1));
+        }
         gauge g = budget_left(e);";
     assert!(link_error(src).contains("may not read `budget_left"));
 }
@@ -274,30 +365,69 @@ fn a_gauge_does_not_plan_an_iteration() {
 /// stack overflowed (#284).
 #[test]
 fn a_budget_does_not_read_budget_left() {
-    for (budget, chunk) in [
-        ("128 + budget_left(e)", "0"),
-        ("128", "budget_left(e)"),
-        ("128 + budget_left(f)", "0"),
-    ] {
+    for budget in ["128 + budget_left(e)", "128 + budget_left(f)"] {
         let src = format!(
-            "stage e : step {{ budget {budget}; chunk {chunk}; cost 1; }}
-             stage f : step {{ budget 64; cost 1; }}
-             session {{ run e prefill (1); end; }} run {{ horizon 1; }}"
+            "device gpu {{ }}
+        device tpu {{ }}
+        engine e on gpu {{
+          tokens cap {budget};
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        engine f on tpu {{
+          tokens cap 64;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        workload {{ session {{ turn; end;
+        }} }}
+        server {{ run e prefill (cost(e, 1));
+        }} "
         );
         let e = link_error(&src);
         assert!(
-            e.contains("a step's budget or chunk may not read `budget_left"),
-            "{budget}; {chunk}: {e}"
+            e.contains("an engine's `tokens cap` or `each at most` may not read `budget_left"),
+            "{budget}: {e}"
         );
     }
+    // nor a chunk: an engine's `each at most` chooses among constants or a
+    // `max` above one, and the condition that chooses may read the iteration
+    let src = "device gpu { }
+        engine e on gpu {
+          tokens cap 128;
+          schedule {
+            let c = budget_left(e) > 1 ? 4 : 8;
+            advance running each at most (c);
+            admit waiting while (running.preempted == 0) each at most (c);
+          }
+          execute (1);
+        }
+        workload { session { turn; end;
+        } }
+        server { run e prefill (cost(e, 1));
+        } ";
+    let e = link_error(src);
+    assert!(
+        e.contains("an engine's `tokens cap` or `each at most` may not read `budget_left"),
+        "{e}"
+    );
     // the rule is the Budget moment's: a cost, a serve key and a hold's
     // header read it and the run ends
-    let src = "pool kv { cap 64; }
-        stage e : step { budget 8; cost 1 + 0 * budget_left(e); serve by (budget_left(e)); memory kv; }
-        workload { arrive batch(2); }
-        session { hold kv (min(8, budget_left(e))) { run e prefill (4); } end; }
-        run { horizon 10; }";
-    run_source(src, &Overrides::default(), None).unwrap();
+    let src = "device gpu { kv cap 64; }
+        engine e on gpu {
+          tokens cap 8;
+          schedule { advance running by (budget_left(e)); admit waiting while (running.preempted == 0); }
+          execute (1 + 0 * budget_left(e));
+        }
+        pool kv on gpu { }
+        workload { arrive batch(2);
+          session { turn; end;
+          }
+        }
+        server { hold kv (cost(kv, min(8, budget_left(e)))) { run e prefill (cost(e, 4)); }
+        }
+        ";
+    run_source(&common::main_source(src), &common::horizon(1.0), None).unwrap();
 }
 
 /// Inside a queue's entry an aggregate's index is the aggregate's, not a
@@ -307,11 +437,11 @@ fn a_budget_does_not_read_budget_left() {
 fn an_aggregate_in_a_queue_entry_reads_its_own_index() {
     let src = "queue engine : prefill {
           serve fifo;
-          prefill (prompt) { run (sum k in 2 (max(k, 1)) * prompt); }
+          prefill (prompt) { run (cost(engine, sum k in 2 (max(k, 1)) * prompt)); }
         }
         queue gw : gateway { route { engine.prefill (1); } }
-        workload { arrive batch(1); session { request gw; end; } }
-        run { horizon 10; }";
-    let r = run_source(src, &Overrides::default(), None).unwrap();
+        workload { arrive batch(1); session { turn; end; } } server { gw.route(); }
+        ";
+    let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
     assert!((r.stage("engine").unwrap().mean_service - 2.0).abs() < 1e-12);
 }

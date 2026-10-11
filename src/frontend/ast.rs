@@ -3,13 +3,13 @@
 //! A program is a *deployment* (pools and stages), a *workload* (how
 //! sessions arrive and how a session's attributes evolve from turn to
 //! turn) and a *session* (the statements every session executes). A
-//! program written as `workload { … session { … request; … } }` and
+//! program written as `workload { … session { … turn; … } }` and
 //! `server { … }` arrives here with the server spliced into the session:
 //! the split is the parser's. See `docs/language.md` for the semantics.
 
 pub use crate::frontend::diagnostic::Span;
 
-pub use crate::ir::{BinOp, Preempt, RunMode, UnOp};
+pub use crate::ir::{BinOp, RunMode, UnOp};
 
 /// Expressions are evaluated to `f64`. Booleans are 0 / 1.
 #[derive(Clone, Debug, PartialEq)]
@@ -31,6 +31,10 @@ pub enum Expr {
     /// the linker writes it out with `j` a number, as binary `max`, `min`
     /// or `+`, so `n` is a constant.
     Over(Agg, String, Box<Expr>, Box<Expr>),
+    /// A definition's use whose body never reads some parameters: those
+    /// arguments, checked as if read where the use stands, then the body.
+    /// Parse-time only: the linker lowers the body alone.
+    Unread(Vec<Arg>, Box<Expr>),
 }
 
 /// What `Expr::Over` folds its terms with.
@@ -67,6 +71,44 @@ pub enum Arg {
     Ref(Ref),
 }
 
+impl Arg {
+    /// `Expr::any` in a call's argument: a reference's index.
+    pub fn any(&self, f: &impl Fn(&Expr) -> bool) -> bool {
+        match self {
+            Arg::Expr(x) => x.any(f),
+            Arg::Ref(r) => r.index.as_ref().is_some_and(|i| i.any(f)),
+        }
+    }
+
+    /// `Expr::for_each_mut` in a call's argument: a reference's index.
+    pub fn for_each_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
+        match self {
+            Arg::Expr(x) => x.for_each_mut(f),
+            Arg::Ref(r) => r.index.iter_mut().for_each(|i| i.for_each_mut(f)),
+        }
+    }
+
+    /// `Expr::substitute` in a call's argument.
+    pub fn substitute(&mut self, binds: &[(String, Expr)]) {
+        match self {
+            Arg::Expr(x) => x.substitute(binds),
+            Arg::Ref(r) => {
+                // a bare identifier argument is parsed as a reference (it
+                // may name a pool or a stage); when it names a binding it
+                // is the binding, else `min(known, …)` would read the
+                // attribute `known` and not the header's `known = …`
+                if r.index.is_none()
+                    && let Some((_, v)) = binds.iter().find(|(name, _)| *name == r.name)
+                {
+                    *self = Arg::Expr(v.clone());
+                } else if let Some(i) = &mut r.index {
+                    i.substitute(binds);
+                }
+            }
+        }
+    }
+}
+
 /// A pool or stage reference, possibly indexed into an array.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ref {
@@ -89,6 +131,21 @@ impl Ref {
 }
 
 impl Expr {
+    /// Serving vocabulary is a named conversion from request quantities into
+    /// work at its stage(s). Primitive `run` requires an explicit conversion.
+    pub(crate) fn cost(resources: &[Ref], value: Expr) -> Expr {
+        let mut args: Vec<_> = resources
+            .iter()
+            .cloned()
+            .map(|mut r| {
+                r.index = None;
+                Arg::Ref(r)
+            })
+            .collect();
+        args.push(Arg::Expr(value));
+        Expr::Call("cost".into(), args)
+    }
+
     /// Whether `f` holds of this expression or of one in it: the operand of
     /// a `Located`, a reference's index and an aggregate's count and body
     /// included (#280). Names are not resolved: an aggregate's index is not
@@ -100,13 +157,33 @@ impl Expr {
                 Expr::Num(_) | Expr::Var(_) => false,
                 Expr::Located(_, x) | Expr::Unary(_, x) => x.any(f),
                 Expr::Sample(_, xs) => xs.iter().any(|x| x.any(f)),
-                Expr::Call(_, args) => args.iter().any(|a| match a {
-                    Arg::Expr(x) => x.any(f),
-                    Arg::Ref(r) => r.index.as_ref().is_some_and(|i| i.any(f)),
-                }),
+                Expr::Call(_, args) => args.iter().any(|a| a.any(f)),
+                // an unread argument is never evaluated
+                Expr::Unread(_, x) => x.any(f),
                 Expr::Binary(_, a, b) | Expr::Over(_, _, a, b) => a.any(f) || b.any(f),
                 Expr::Cond(c, a, b) => c.any(f) || a.any(f) || b.any(f),
             }
+    }
+
+    /// `f` on this expression, then on each one in it that `any` visits,
+    /// in the same order.
+    pub fn for_each_mut(&mut self, f: &mut impl FnMut(&mut Expr)) {
+        f(self);
+        match self {
+            Expr::Num(_) | Expr::Var(_) => {}
+            Expr::Located(_, x) | Expr::Unary(_, x) | Expr::Unread(_, x) => x.for_each_mut(f),
+            Expr::Sample(_, xs) => xs.iter_mut().for_each(|x| x.for_each_mut(f)),
+            Expr::Call(_, args) => args.iter_mut().for_each(|a| a.for_each_mut(f)),
+            Expr::Binary(_, a, b) | Expr::Over(_, _, a, b) => {
+                a.for_each_mut(f);
+                b.for_each_mut(f);
+            }
+            Expr::Cond(c, a, b) => {
+                c.for_each_mut(f);
+                a.for_each_mut(f);
+                b.for_each_mut(f);
+            }
+        }
     }
 
     /// Replace every `Var(name)` of `binds` by its expression: a header
@@ -123,22 +200,11 @@ impl Expr {
             }
             Expr::Num(_) => {}
             Expr::Sample(_, args) => args.iter_mut().for_each(|a| a.substitute(binds)),
-            Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
-                Arg::Expr(x) => x.substitute(binds),
-                Arg::Ref(r) => {
-                    // a bare identifier argument is parsed as a reference (it
-                    // may name a pool or a stage); when it names a binding it
-                    // is the binding, else `min(known, …)` would read the
-                    // attribute `known` and not the header's `known = …`
-                    if r.index.is_none()
-                        && let Some((_, v)) = binds.iter().find(|(name, _)| *name == r.name)
-                    {
-                        *a = Arg::Expr(v.clone());
-                    } else if let Some(i) = &mut r.index {
-                        i.substitute(binds);
-                    }
-                }
-            }),
+            Expr::Call(_, args) => args.iter_mut().for_each(|a| a.substitute(binds)),
+            Expr::Unread(args, x) => {
+                args.iter_mut().for_each(|a| a.substitute(binds));
+                x.substitute(binds);
+            }
             Expr::Unary(_, a) => a.substitute(binds),
             Expr::Binary(_, a, b) => {
                 a.substitute(binds);
@@ -161,12 +227,23 @@ impl Expr {
         }
     }
 
+    /// `substitute` into the arguments of each `Unread` in it, and nowhere
+    /// else: a hold's body reads a binding as the attribute set at its top,
+    /// where an unread argument, which reads nothing, sees the binding.
+    pub fn bind_unread(&mut self, binds: &[(String, Expr)]) {
+        self.for_each_mut(&mut |x| {
+            if let Expr::Unread(args, _) = x {
+                args.iter_mut().for_each(|a| a.substitute(binds));
+            }
+        });
+    }
+
     /// Whether the expression draws (`~`) anywhere.
     pub fn draws(&self) -> bool {
         self.any(&|x| matches!(x, Expr::Sample(..)))
     }
 
-    fn same_syntax(&self, other: &Self) -> bool {
+    pub(crate) fn same_syntax(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Located(_, a), b) => a.same_syntax(b),
             (a, Self::Located(_, b)) => a.same_syntax(b),
@@ -205,6 +282,17 @@ pub enum EvictOrder {
     By(Vec<Expr>),
 }
 
+/// What a growth that does not fit does (`preempt …`).
+#[derive(Clone, Debug, PartialEq)]
+pub enum PreemptOrder {
+    /// `preempt none`: the grower waits.
+    None,
+    /// `preempt by (k, …) [requeue head | requeue tail]`: the candidate
+    /// with the least keys is the victim; `tail` re-queues it as a
+    /// newcomer. `preempt lifo` is `By { keys: [-admission], tail: false }`.
+    By { keys: Vec<Expr>, tail: bool },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueueOrder {
     Fifo,
@@ -230,12 +318,15 @@ pub struct PoolDecl {
     pub cap: Expr,
     pub block: Option<Expr>,
     pub evict: EvictOrder,
-    pub preempt: Preempt,
+    pub preempt: PreemptOrder,
     pub queue: QueueOrder,
     pub spill: Option<Spill>,
     /// `admit via STAGE`: the queue is served by the stage's scheduler, at
     /// the start of its iterations, while the iteration has budget left.
     pub admit_via: Option<Ref>,
+    /// `reserve held`: a hold's unallocated reservation counts against
+    /// later admissions while it lasts.
+    pub reserve_held: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -256,15 +347,51 @@ pub struct StepSpec {
     pub budget: Expr,
     /// Seconds per iteration, in `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`.
     pub cost: Expr,
-    /// Cap on one request's prefill chunk (`long_prefill_token_threshold`,
-    /// 0 = none).
+    /// An engine's `each at most`: the cap on one request's prefill chunk
+    /// (`long_prefill_token_threshold`). An outcome at or below 0 does not
+    /// link, and `inf` is no cap, which the linker writes 0.
     pub chunk: Expr,
-    /// The order the iteration serves its residents in (`serve …;`).
+    /// `granule g`: a prefill gets all it has left or a multiple of `g`.
+    pub granule: Option<Expr>,
+    /// The order the iteration serves its residents in: `advance running`'s
+    /// order, or `exclusive prefill`.
     pub serve: Serve,
-    /// `serve only (expr)`: the residents the iteration serves.
-    pub only: Option<Expr>,
     /// Pool whose holdings of the scheduled residents give `kv_decode`.
     pub memory: Option<Ref>,
+    /// The engine's `schedule`, as the kernel runs it.
+    pub schedule: Schedule,
+    /// `state NAME = c;`: the stage's registers and their first values.
+    pub state: Vec<(String, Expr)>,
+}
+
+/// An engine's `schedule` as the kernel runs it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Schedule {
+    /// vLLM's procedure, no body: advance running in `serve`'s order, then
+    /// admit waiting while nothing was preempted; `Some(p)` is the `only (p)`
+    /// both statements share.
+    Procedure(Option<Expr>),
+    /// Any other schedule, as its statements.
+    Body(Vec<IterStmt>),
+}
+
+/// A statement of an engine's `schedule` body, as the kernel runs it.
+#[derive(Clone, Debug, PartialEq)]
+pub enum IterStmt {
+    /// `serve [only (p)] [admission | decode first | by (k, …)];`
+    Serve {
+        only: Option<Expr>,
+        order: Option<Serve>,
+    },
+    /// `admit [only (p)] [while (e)];`
+    Admit {
+        only: Option<Expr>,
+        gate: Option<Expr>,
+    },
+    /// `branch (e) { … } [else { … }]`
+    Branch(Expr, Vec<IterStmt>, Vec<IterStmt>),
+    /// `set NAME = e;`: one of the stage's registers.
+    Set(String, Expr),
 }
 
 /// `serve` of a step stage: one order, where two booleans (`exclusive
@@ -323,12 +450,22 @@ pub struct Workload {
     pub hidden: Vec<String>,
 }
 
+/// Source declarations are checked by the linker and erased before execution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DeclaredType {
+    Size,
+    Cost,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Stmt {
+    /// Parse-time boundary, retained as per-statement authority in the IR.
+    Side(crate::ir::Side),
+    Declare(String, DeclaredType),
     /// Draw the next turn's attributes from the workload.
     Turn,
-    /// `request;` in a workload's `session`: the request runs the `server`
-    /// block. Parse-time only: the parser splices the server's statements
+    /// Internal marker after a source `turn;`: splice the `server` block.
+    /// Parse-time only: the parser splices the server's statements
     /// in its place before it returns, so the linker never sees one.
     Request,
     Set(String, Expr),
@@ -366,6 +503,7 @@ pub enum Stmt {
     },
     Branch(Expr, Vec<Stmt>, Vec<Stmt>),
     Loop(Vec<Stmt>),
+    While(Expr, Vec<Stmt>),
     /// `choose j in 0..n by (k1, …)`: `j := argmin`, keys in order.
     Choose {
         var: String,
@@ -373,6 +511,11 @@ pub enum Stmt {
         key: Vec<Expr>,
     },
     End,
+    /// `fork { … }`: the block runs beside the session, as a leg of the
+    /// same request (`CStmt::Fork`).
+    Fork(Vec<Stmt>),
+    /// `join;`: wait until every leg forked so far has ended.
+    Join,
     /// `Q[i].verb (args) [from S[k]] [to P (m)];`: a queue's entry. Parse-time
     /// only: `assemble` puts the entry's body in its place (`crate::frontend::queue`),
     /// so the linker never sees one.
@@ -386,8 +529,113 @@ pub enum Stmt {
     /// `mark x;` inside a queue's entry: the moment, as the attribute `Q.x`
     /// the caller reads. Parse-time only, as `Call`.
     Mark(String),
+    /// The arguments a statement definition's use passes to parameters
+    /// its body never reads (`Expr::Unread`). The linker resolves them and
+    /// lowers the statement to nothing.
+    Unread(Vec<Arg>),
 }
 
+/// What `each_part_mut` hands a visitor: each expression a statement holds,
+/// each pool, stage or queue it names, and each argument of a
+/// `Stmt::Unread`. What lies inside one (a reference's index, a nested
+/// expression) is the visitor's to walk.
+pub(crate) struct Parts<E, R, A> {
+    pub expr: E,
+    pub reference: R,
+    pub unread: A,
+}
+
+/// Hand every part of `stmts` to `parts`, a nested block's statements
+/// included, so that a walk over statements cannot pass over a place an
+/// expression stands: a reference's index is one (`hold g[n]`).
+pub(crate) fn each_part_mut<E, R, A>(stmts: &mut [Stmt], parts: &mut Parts<E, R, A>)
+where
+    E: FnMut(&mut Expr),
+    R: FnMut(&mut Ref),
+    A: FnMut(&mut Arg),
+{
+    for s in stmts {
+        match s {
+            Stmt::Side(_)
+            | Stmt::Declare(..)
+            | Stmt::Turn
+            | Stmt::Request
+            | Stmt::End
+            | Stmt::Join
+            | Stmt::Mark(_) => {}
+            Stmt::Set(_, e) | Stmt::Observe(_, e) => (parts.expr)(e),
+            Stmt::Unread(args) => args.iter_mut().for_each(&mut parts.unread),
+            Stmt::Hold {
+                pools,
+                reuse,
+                body,
+                cache,
+                lease,
+            } => {
+                for (r, e, reserve) in pools {
+                    (parts.reference)(r);
+                    (parts.expr)(e);
+                    reserve.iter_mut().for_each(&mut parts.expr);
+                }
+                reuse.iter_mut().for_each(&mut parts.expr);
+                cache.iter_mut().for_each(&mut parts.expr);
+                if let Some((r, duration)) = lease {
+                    (parts.reference)(r);
+                    (parts.expr)(duration);
+                }
+                each_part_mut(body, parts);
+            }
+            Stmt::Grow(r, e) | Stmt::Load(r, e) => {
+                (parts.reference)(r);
+                (parts.expr)(e);
+            }
+            Stmt::Drop(r) | Stmt::Release(r) => (parts.reference)(r),
+            Stmt::Run {
+                stage,
+                work,
+                growing,
+                also,
+                ..
+            } => {
+                (parts.reference)(stage);
+                also.iter_mut().for_each(&mut parts.reference);
+                (parts.expr)(work);
+                growing.iter_mut().for_each(&mut parts.reference);
+            }
+            Stmt::Branch(e, a, b) => {
+                (parts.expr)(e);
+                each_part_mut(a, parts);
+                each_part_mut(b, parts);
+            }
+            Stmt::While(e, b) => {
+                (parts.expr)(e);
+                each_part_mut(b, parts);
+            }
+            Stmt::Loop(b) | Stmt::Fork(b) => each_part_mut(b, parts),
+            Stmt::Choose { count, key, .. } => {
+                (parts.expr)(count);
+                key.iter_mut().for_each(&mut parts.expr);
+            }
+            Stmt::Call {
+                queue,
+                args,
+                from,
+                to,
+                ..
+            } => {
+                (parts.reference)(queue);
+                args.iter_mut().for_each(&mut parts.expr);
+                from.iter_mut().for_each(&mut parts.reference);
+                if let Some((r, e)) = to {
+                    (parts.reference)(r);
+                    (parts.expr)(e);
+                }
+            }
+        }
+    }
+}
+
+/// Execution settings parsed only from an external instance, never a model.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct RunOpts {
     pub horizon: Option<Expr>,
@@ -399,8 +647,15 @@ pub struct RunOpts {
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Program {
+    /// The source declares its executable entry point. Libraries have none.
+    pub has_main: bool,
+    /// (external argument name, declaration index in `lets`), from std/args.
+    /// A name can be shadowed; inputs belong to declarations, not spellings.
+    pub inputs: Vec<(String, usize)>,
     /// Locations of constants and assigned attributes, for diagnostic notes.
     pub definitions: Vec<(String, Span)>,
+    /// Composite Cost names and resource fields; source-only namespace data.
+    pub cost_records: Vec<(String, Vec<String>)>,
     /// The libraries `use` read, for the spans that point into them.
     pub libs: Vec<crate::frontend::diagnostic::Source>,
     pub lets: Vec<(String, Expr)>,
@@ -410,11 +665,9 @@ pub struct Program {
     pub session: Vec<Stmt>,
     /// What one request runs, as the session runs it at its `request`: the
     /// server, or a gateway's `route`, expanded like the session. Empty when
-    /// the program does not split its session into a workload and a server,
-    /// or requests more than one thing. The deployment view draws this; the
-    /// session is what runs.
+    /// no request body exists, or the session requests more than one thing.
+    /// The deployment view draws this; the session is what runs.
     pub request: Vec<Stmt>,
-    pub run: RunOpts,
     /// `share maxmin;` or `share bottleneck;`
     pub share: Option<crate::ir::Share>,
     /// `gauge NAME = e;`, in order.
@@ -453,10 +706,11 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
         }
         match e {
             Expr::Sample(_, args) => args.iter_mut().for_each(expr),
-            Expr::Call(_, args) => args.iter_mut().for_each(|a| match a {
-                Arg::Expr(e) => expr(e),
-                Arg::Ref(r) => reference(r),
-            }),
+            Expr::Call(_, args) => args.iter_mut().for_each(arg),
+            Expr::Unread(args, e) => {
+                args.iter_mut().for_each(arg);
+                expr(e);
+            }
             Expr::Unary(_, e) => expr(e),
             Expr::Binary(_, a, b) => {
                 expr(a);
@@ -474,6 +728,12 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
             _ => {}
         }
     }
+    fn arg(a: &mut Arg) {
+        match a {
+            Arg::Expr(e) => expr(e),
+            Arg::Ref(r) => reference(r),
+        }
+    }
     fn reference(r: &mut Ref) {
         r.span = None;
         if let Some(e) = &mut r.index {
@@ -481,59 +741,14 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
         }
     }
     fn block(stmts: &mut [Stmt]) {
-        for s in stmts {
-            match s {
-                Stmt::Set(_, e) | Stmt::Observe(_, e) => expr(e),
-                Stmt::Hold {
-                    pools,
-                    reuse,
-                    body,
-                    cache,
-                    lease,
-                } => {
-                    for (r, e, reserve) in pools {
-                        reference(r);
-                        expr(e);
-                        reserve.iter_mut().for_each(expr);
-                    }
-                    reuse.iter_mut().for_each(expr);
-                    cache.iter_mut().for_each(expr);
-                    if let Some((r, duration)) = lease {
-                        reference(r);
-                        expr(duration);
-                    }
-                    block(body);
-                }
-                Stmt::Grow(r, e) | Stmt::Load(r, e) => {
-                    reference(r);
-                    expr(e);
-                }
-                Stmt::Drop(r) | Stmt::Release(r) => reference(r),
-                Stmt::Run {
-                    stage,
-                    work,
-                    growing,
-                    also,
-                    ..
-                } => {
-                    reference(stage);
-                    also.iter_mut().for_each(reference);
-                    expr(work);
-                    growing.iter_mut().for_each(reference);
-                }
-                Stmt::Branch(e, a, b) => {
-                    expr(e);
-                    block(a);
-                    block(b);
-                }
-                Stmt::Loop(b) => block(b),
-                Stmt::Choose { count, key, .. } => {
-                    expr(count);
-                    key.iter_mut().for_each(expr);
-                }
-                _ => {}
-            }
-        }
+        each_part_mut(
+            stmts,
+            &mut Parts {
+                expr,
+                reference,
+                unread: arg,
+            },
+        );
     }
     p.definitions.clear();
     for (_, e) in &mut p.lets {
@@ -566,7 +781,12 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
                 expr(&mut s.cost);
                 expr(&mut s.chunk);
                 s.memory.iter_mut().for_each(reference);
-                s.only.iter_mut().for_each(expr);
+                match &mut s.schedule {
+                    Schedule::Procedure(only) => only.iter_mut().for_each(expr),
+                    // a body's statements keep their locations: a test of
+                    // equal programs compares procedures, not bodies
+                    Schedule::Body(_) => {}
+                }
                 if let Serve::By(keys) = &mut s.serve {
                     keys.iter_mut().for_each(expr);
                 }
@@ -586,10 +806,6 @@ pub(crate) fn without_locations(mut p: Program) -> Program {
     }
     block(&mut p.session);
     block(&mut p.request);
-    p.run.horizon.iter_mut().for_each(expr);
-    p.run.warmup.iter_mut().for_each(expr);
-    p.run.seed.iter_mut().for_each(expr);
-    p.run.arrivals.iter_mut().for_each(expr);
     for c in &mut p.claims {
         c.span = None;
         c.given.iter_mut().for_each(expr);

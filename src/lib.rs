@@ -8,15 +8,19 @@
 //! that compiles to it. `examples/` holds example deployments, among them
 //! vLLM v1.
 //!
-//! ```no_run
+//! ```
 //! let src = std::fs::read_to_string("examples/single-turn/mg1.sq").unwrap();
-//! let report = serq::run_source(&src, &serq::Overrides::default(), None).unwrap();
+//! let options = serq::Overrides {
+//!     horizon: Some(100.0), warmup: Some(10.0), ..Default::default()
+//! };
+//! let report = serq::run_source(&src, &options, None).unwrap();
 //! println!("{}", report.text());
 //! ```
 
 pub mod engine;
 pub mod frontend;
 pub mod ir;
+pub mod target;
 pub mod view;
 
 use std::path::Path;
@@ -27,7 +31,7 @@ pub use engine::stats::Estimate;
 pub use frontend::link::{Linked, Overrides};
 pub use ir::Program;
 
-/// Compile program text to IR (parse and link; `--set` overrides apply).
+/// Compile program text to IR (parse and link; declared inputs are bound).
 /// The version of this serq, as `serq --version` prints it and `Report::json`
 /// records it (`serq_version`): the one version of `Cargo.toml`
 /// (`scripts/version.py`), which pyserq inherits.
@@ -57,7 +61,16 @@ pub fn compile_source_at(
     finish(prog, src, ov)
 }
 
-/// The constants `--set` overrides, which the parser checks size no queue family.
+/// Static inspection needs a valid IR but does not choose an experiment's duration.
+/// This placeholder is used only by drawing; executing/exporting IR requires a horizon.
+fn inspection_options(ov: &Overrides) -> Overrides {
+    Overrides {
+        horizon: ov.horizon.or(Some(f64::MAX)),
+        ..ov.clone()
+    }
+}
+
+/// The supplied inputs, which the parser checks cannot change an array size.
 fn overridden(ov: &Overrides) -> Vec<String> {
     ov.lets.iter().map(|(name, _)| name.clone()).collect()
 }
@@ -97,12 +110,16 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     if path.extension().is_some_and(|e| e == "json") {
         if !ov.lets.is_empty() {
-            return Err("--set applies to program text, not to IR (constants are folded)".into());
+            return Err("a program argument applies to program text, not to IR \
+                 (an IR's constants are already folded)\n\
+                 help: override the program text (.sq) this IR was compiled from"
+                .into());
         }
         if !ov.defs.is_empty() {
-            return Err(
-                "--def applies to program text, not to IR (definitions are expanded)".into(),
-            );
+            return Err("a `def` override applies to program text, not to IR \
+                 (an IR's definitions are already expanded)\n\
+                 help: override the program text (.sq) this IR was compiled from"
+                .into());
         }
         let mut p = ir::Program::from_json(&text)?;
         if let Some(h) = ov.horizon {
@@ -129,14 +146,12 @@ pub fn load(path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
 
 /// The program the deployment view draws, from program text: what one
 /// request runs (the `server`, or a gateway's `route`) in place of the
-/// session, when the program splits its session into a workload and a
-/// server. Whether a session comes back, and when it ends, is the
-/// workload's and not the deployment's. A program written as one session
-/// is drawn whole.
+/// session. Whether a session comes back, and when it ends, belongs to the
+/// workload. A program with no unique request body is drawn whole.
 pub fn compile_drawn_file(src: &str, path: &Path, ov: &Overrides) -> Result<ir::Program, String> {
     let prog = frontend::parser::parse_file_with(src, path, &ov.defs, &overridden(ov))
         .map_err(|e| e.render(src))?;
-    finish(drawn(prog), src, ov)
+    finish(drawn(prog), src, &inspection_options(ov))
 }
 
 /// `compile_drawn_file` for the text of a program file in `base`.
@@ -147,7 +162,7 @@ pub fn compile_drawn_source_at(
 ) -> Result<ir::Program, String> {
     let prog = frontend::parser::parse_at_with(src, base, &ov.defs, &overridden(ov))
         .map_err(|e| e.render(src))?;
-    finish(drawn(prog), src, ov)
+    finish(drawn(prog), src, &inspection_options(ov))
 }
 
 /// `load`, for the deployment view: program text is compiled with
@@ -186,6 +201,7 @@ fn drawn(mut prog: frontend::ast::Program) -> frontend::ast::Program {
             session.push(Stmt::Set(name, Expr::Var("now".into())));
         }
     }
+    session.push(Stmt::Side(ir::Side::Server));
     session.extend(request);
     prog.session = session;
     prog
@@ -266,7 +282,8 @@ pub fn program_path(name: &str) -> std::path::PathBuf {
 }
 
 /// Convenience for tests: run `examples/*/<name>.sq` with overrides given
-/// as `name=expr` strings.
+/// as `name=expr` strings. Supply `Some(horizon)` for a source model; use
+/// `run_file` when the experiment also needs warm-up or an arrival limit.
 pub fn run_program(name: &str, sets: &[&str], seed: Option<u64>, horizon: Option<f64>) -> Report {
     let path = program_path(name);
     let mut ov = Overrides {

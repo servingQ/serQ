@@ -69,6 +69,11 @@ extra_javascript:
   - javascripts/mathjax.js
   - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
 
+# Contributor design records stay in Git, outside the reader-facing site.
+exclude_docs: |
+  /design/
+  /review.md
+
 nav:
   - Home: index.md
   - User Guide:
@@ -82,6 +87,7 @@ nav:
           - 5. The engine: tutorial/05-the-engine.md
           - 6. The cliff: tutorial/06-the-cliff.md
       - Working with a program: development.md
+      - Writing readable programs: writing-programs.md
       - The Lean model: lean.md
       - Visualization:
           - visualization/index.md
@@ -105,6 +111,7 @@ nav:
       - Program: api/program.md
       - Pool: api/pool.md
       - Stage: api/stage.md
+      - Engine: api/engine.md
       - Workload: api/workload.md
       - Statements: api/statements.md
       - Serving vocabulary: api/serving.md
@@ -120,21 +127,17 @@ nav:
       - reference/cli.md
   - Python Reference:
       - python.md
-  - Design:
-      - design/index.md
-      - Philosophy: design/philosophy.md
-      - The stochastic process: design/stochastic-model.md
-      - Frontend: design/frontend.md
-      - Subagents: design/subagents.md
-      - The KV transfer: design/pd-transfer.md
-      - Renewal arrivals: design/renewal-arrivals.md
-      - Bandwidth sharing: design/bandwidth-sharing.md
-      - One admission: design/one-admission.md
-      - Separate prefill/decode batches: design/exclusive-prefill.md
-      - Serving a subset: design/serve-only.md
-      - Claims: design/claims.md
-      - Stability: design/stability.md
-      - Waiting selection: design/waiting-selection.md
-      - Queues: design/queue.md
-      - Explicit gateways: design/explicit-gateways.md
-      - The pull relation: design/pull-relation.md
+      - Compilation and execution:
+          - pyserq.compile: python/compile.md
+          - pyserq.Program: python/program.md
+          - pyserq.run: python/run.md
+      - Results:
+          - pyserq.Report: python/report.md
+          - pyserq.Observe: python/observe.md
+          - pyserq.Gauge: python/gauge.md
+          - pyserq.Stage: python/stage.md
+          - pyserq.Pool: python/pool.md
+      - Visualization and inputs:
+          - pyserq.draw: python/draw.md
+          - pyserq.read_trace: python/read-trace.md
+          - pyserq.Rng: python/rng.md

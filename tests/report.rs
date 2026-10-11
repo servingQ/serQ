@@ -2,6 +2,8 @@
 //! renamed, removed or retyped field is a change of `REPORT_VERSION`, an
 //! added one is recorded here (`docs/ir.md`, Stability).
 
+mod common;
+
 use serq::engine::report::REPORT_VERSION;
 use serq::{Overrides, compile_source, run_ir};
 
@@ -14,11 +16,15 @@ fn keys(v: &serde_json::Value) -> Vec<String> {
 #[test]
 fn the_report_has_the_shape_its_version_names() {
     let src = "pool kv { cap 10; } stage svc : fifo;
-        workload { arrive poisson(1); }
-        session { hold kv (1) { run svc (~exp(0.5)); } observe x = now; end; }
+        workload { arrive poisson(1);
+          session { turn; end;
+          }
+        }
+        server { hold kv (cost(kv, 1)) { run svc (cost(svc, ~exp(0.5))); } observe x = now;
+        }
         gauge g = used(kv);
-        run { horizon 100; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let j: serde_json::Value = serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
     let shape = (
         keys(&j),
@@ -49,6 +55,7 @@ fn the_report_has_the_shape_its_version_names() {
         vec![
             "completed",
             "decode_only",
+            "idle_with_work",
             "index",
             "iterations",
             "itl_p50",
@@ -70,6 +77,8 @@ fn the_report_has_the_shape_its_version_names() {
             "admissions",
             "evicted_entries",
             "evicted_units",
+            "growing_at_end",
+            "growing_stalled",
             "index",
             "mean_cached",
             "mean_holders",
@@ -77,6 +86,7 @@ fn the_report_has_the_shape_its_version_names() {
             "mean_used",
             "mean_wait",
             "name",
+            "over_cap",
             "preemptions",
             "rejected",
             "spills",
@@ -102,10 +112,14 @@ fn the_report_has_the_shape_its_version_names() {
 #[test]
 fn an_array_member_is_reported_with_its_index() {
     let src = "pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
-        workload { arrive poisson(1); }
-        session { set j = ~bernoulli(0.5); hold reqs (1) { hold kv[j] (1) { run svc[j] (~exp(0.5)); } } end; }
-        run { horizon 100; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+        workload { arrive poisson(1);
+          session { turn; end;
+          }
+        }
+        server { set j = ~bernoulli(0.5); hold reqs (cost(reqs, 1)) { hold kv[j] (cost(kv, 1)) { run svc[j] (cost(svc, ~exp(0.5))); } }
+        }
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let r = run_ir(&p, None).unwrap();
     let j: serde_json::Value = serde_json::from_str(&r.json()).unwrap();
     let rows = |k: &str| -> Vec<(String, serde_json::Value)> {
@@ -151,31 +165,50 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
     // come at 1 (the prefill's end, its first), 2, 4, 5: gaps 1, 2, 1.
     // Mixed: A:p2, A:d1, A:d1+B:p3, A:d1+B:p1: tokens at 1, 2, 3, 4, gaps
     // 1, 1, 1. The gaps add up to the last token less the first.
-    let itl = |serve: &str| {
+    let itl = |schedule: &str| {
         let src = format!(
-            "pool reqs {{ cap 2; admit via engine; }} pool kv {{ cap 20; }} stage gate : delay;
-             stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
-             workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} }}
-             session {{
-               run gate (2 * serial);
-               hold reqs (1), kv (min(prompt, left)) reserve (prompt)
-                    at admission (left = budget_left(engine)) {{
-                 prefill prompt growing kv;
-                 branch (serial == 0) {{ decode (3) growing kv; }}
-               }}
-               end;
-             }}
-             run {{ horizon 20; warmup 0; seed 1; }}"
+            "stage gate : delay;
+        device gpu {{ kv cap 20; }}
+        engine llm on gpu {{ reqs cap 2; tokens cap 4; schedule {{ {schedule} }} execute (1); }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ }}
+        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
+          session {{ turn;
+            end;
+
+          }}
+        }}
+        server {{
+          run gate (cost(gate, 2 * serial));
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
+          at admission (left = budget_left(llm)) {{
+            run llm prefill (cost(llm, prompt)) growing kv;
+            branch (serial == 0) {{ run llm decode (cost(llm, 3)) growing kv; }}
+          }}
+        }}
+        "
         );
-        let p = compile_source(&src, &Overrides::default()).unwrap();
+        let p = compile_source(
+            &common::main_source(&src),
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(20.0)
+            },
+        )
+        .unwrap();
         let r = run_ir(&p, None).unwrap();
-        let s = r.stage("engine").unwrap().clone();
+        let s = r.stage("llm").unwrap().clone();
         (s.mean_itl, s.itl_p99)
     };
-    let (mean, p99) = itl("serve exclusive prefill;");
+    let (mean, p99) = itl(
+        "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4);",
+    );
     assert_eq!(mean, 4.0 / 3.0);
     assert!(near(p99, 2.0), "{p99}");
-    let (mean, p99) = itl("");
+    let (mean, p99) = itl(
+        "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4);",
+    );
     assert_eq!(mean, 1.0);
     assert!(near(p99, 1.0), "{p99}");
 }
@@ -189,25 +222,49 @@ fn a_gap_holds_the_transfer_between_two_engines() {
     // the decodes at 8 and 9 have gaps 1 and 1.
     let itl = |recompute: &str| {
         let src = format!(
-            "stage p : step {{ cost 1; }} stage d : step {{ cost 1; }} stage link : delay;
-             workload {{ arrive batch(1); }}
-             session {{
-               prefill on p (2);
-               run link (5);
-               {recompute}
-               decode on d (2);
-               end;
-             }}
-             run {{ horizon 20; warmup 0; seed 1; }}"
+            "device gpu_p {{ }}
+        device gpu_d {{ }}
+        engine p on gpu_p {{
+          tokens cap inf;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        engine d on gpu_d {{
+          tokens cap inf;
+          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+          execute (1);
+        }}
+        stage link : delay;
+        workload {{ arrive batch(1);
+          session {{ turn;
+            end;
+
+          }}
+        }}
+        server {{
+          run p prefill (cost(p, 2));
+          run link (cost(link, 5));
+          {recompute}
+          run d decode (cost(d, 2));
+        }}
+        "
         );
-        let p = compile_source(&src, &Overrides::default()).unwrap();
+        let p = compile_source(
+            &common::main_source(&src),
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(20.0)
+            },
+        )
+        .unwrap();
         let r = run_ir(&p, None).unwrap();
         let (p, d) = (r.stage("p").unwrap(), r.stage("d").unwrap());
         assert!(p.mean_itl.is_nan(), "a first token has no gap");
         d.mean_itl
     };
     assert_eq!(itl(""), 3.5);
-    assert_eq!(itl("prefill on d (1);"), 1.0);
+    assert_eq!(itl("run d prefill (cost(d, 1));"), 1.0);
 }
 
 #[test]
@@ -216,27 +273,46 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
     // recomputing (vLLM: the resumed prefill samples the next token). A
     // request's gaps then add up to its last token less its first, and the
     // engine's mean gap is the token-weighted TPOT, preemptions and all.
-    let src = "pool reqs { cap 64; admit via engine; }
-        pool kv { cap 6000; block 16; preempt lifo; admit via engine; }
-        stage engine : step { budget 2048; cost 0.001 + 1e-6 * tokens; memory kv; }
+    let src = "device gpu { kv cap 6000; }
+        engine llm on gpu {
+          reqs cap 64;
+          tokens cap 2048;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (0.001 + 1e-6 * batch.tokens);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { block 16; preempt lifo; }
         workload {
           arrive poisson(40);
           hidden o;
           init { set prompt = floor(~uniform(500, 1500)); set o = floor(~exp(100)) + 2; }
+
+          session { turn;
+            end;
+
+          }
         }
-        session {
-          hold kv (min(known, budget_left(engine))) reserve (known), reqs (1)
-               at admission (known = computed < prompt ? prompt : computed + 1) {
-            prefill (known) growing kv;
+        server {
+          hold kv (cost(kv, min(known, budget_left(llm)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
+          at admission (known = computed < prompt ? prompt : computed + 1) {
+            run llm prefill (cost(llm, known)) growing kv;
             branch (known == prompt) { set first = now; }
-            decode (o - 1 - (known - prompt)) growing kv;
+            run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
           }
           observe span = now - first;
           observe gaps = o - 1;
-          end;
         }
-        run { horizon 1e6; warmup 0; seed 1; arrivals 8000; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+        ";
+    let p = compile_source(
+        &common::main_source(src),
+        &Overrides {
+            warmup: Some(0.0),
+            seed: Some(1),
+            arrivals: Some(8000),
+            ..common::horizon(1e6)
+        },
+    )
+    .unwrap();
     let r = run_ir(&p, None).unwrap();
     assert!(
         r.pool("kv").unwrap().preemptions > 0,
@@ -244,7 +320,7 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
     );
     let sum = |name: &str| r.observe(name).unwrap().samples.iter().sum::<f64>();
     let tpot = sum("span") / sum("gaps");
-    let itl = r.stage("engine").unwrap().mean_itl;
+    let itl = r.stage("llm").unwrap().mean_itl;
     // every session drains (`arrivals`), so every gap is observed: exact
     assert!(
         (itl - tpot).abs() <= 1e-9 * tpot,
@@ -258,10 +334,14 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
 #[test]
 fn a_one_member_array_keeps_its_index() {
     let src = "pool kv[1] { cap 10; } pool reqs { cap 4; } stage svc[1] : fifo;
-        workload { arrive poisson(1); }
-        session { hold reqs (1) { hold kv[0] (1) { run svc[0] (~exp(2)); } } end; }
-        run { horizon 100; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+        workload { arrive poisson(1);
+          session { turn; end;
+          }
+        }
+        server { hold reqs (cost(reqs, 1)) { hold kv[0] (cost(kv, 1)) { run svc[0] (cost(svc, ~exp(2))); } }
+        }
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap();
     let r = run_ir(&p, None).unwrap();
     assert_eq!(r.pools_named("kv")[0].index, Some(0));
     assert_eq!(r.pools_named("reqs")[0].index, None);
@@ -278,13 +358,14 @@ fn a_queue_family_of_one_is_reported_by_index() {
     let src = "let ND = 1;
         queue gw : gateway { route { choose j in ND by (0); D[j].decode (prompt); } }
         queue D[ND] : decode {
-          pool kv { cap 100; }
-          serve step { cost 1; memory kv; }
-          decode (p) { hold kv (p) { prefill (p) growing kv; } }
+          device gpu { kv cap 100; }
+          engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+          pool kv on gpu { }
+          decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
         }
-        workload { arrive batch(1); init { set prompt = 4; } session { request gw; end; } }
-        run { horizon 10; }";
-    let p = compile_source(src, &Overrides::default()).unwrap();
+        workload { arrive batch(1); init { set prompt = 4; } session { turn; end; } } server { gw.route(); }
+        ";
+    let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
     let r = run_ir(&p, None).unwrap();
     assert_eq!(r.pools_named("D.kv")[0].index, Some(0));
     assert_eq!(r.stages_named("D")[0].index, Some(0));
@@ -295,27 +376,42 @@ fn a_step_stage_reports_what_its_iterations_carried() {
     // examples/single-turn/separate_phases.sq: with the serve clause the
     // iterations are A:p2, B:p4, A:d1, A:d1 of a unit each; without it,
     // A:p2, then A:d1+B:p3 and A:d1+B:p1 mixed.
-    let src = |serve: &str| {
+    let src = |schedule: &str| {
         format!(
-            "pool reqs {{ cap 2; admit via engine; }} pool kv {{ cap 20; }} stage gate : delay;
-             stage engine : step {{ budget 4; chunk 4; cost 1; memory kv; {serve} }}
-             workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }} }}
-             session {{
-               run gate (serial);
-               hold reqs (1), kv (min(prompt, left)) reserve (prompt)
-                    at admission (left = budget_left(engine)) {{
-                 prefill prompt growing kv;
-                 branch (serial == 0) {{ decode (2) growing kv; }}
-               }}
-               end;
-             }}
-             run {{ horizon 20; warmup 0; seed 1; }}"
+            "stage gate : delay;
+        device gpu {{ kv cap 20; }}
+        engine llm on gpu {{ reqs cap 2; tokens cap 4; schedule {{ {schedule} }} execute (1); }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ }}
+        workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
+          session {{ turn;
+            end;
+
+          }}
+        }}
+        server {{
+          run gate (cost(gate, serial));
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
+          at admission (left = budget_left(llm)) {{
+            run llm prefill (cost(llm, prompt)) growing kv;
+            branch (serial == 0) {{ run llm decode (cost(llm, 2)) growing kv; }}
+          }}
+        }}
+        "
         )
     };
-    let stage = |serve: &str| {
-        let p = compile_source(&src(serve), &Overrides::default()).unwrap();
+    let stage = |schedule: &str| {
+        let p = compile_source(
+            &common::main_source(&src(schedule)),
+            &Overrides {
+                warmup: Some(0.0),
+                seed: Some(1),
+                ..common::horizon(20.0)
+            },
+        )
+        .unwrap();
         let r = run_ir(&p, None).unwrap();
-        let s = r.stage("engine").unwrap().clone();
+        let s = r.stage("llm").unwrap().clone();
         (
             s.prefill_only,
             s.decode_only,
@@ -326,18 +422,25 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         )
     };
     assert_eq!(
-        stage("serve exclusive prefill;"),
+        stage(
+            "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4);"
+        ),
         (0.1, 0.1, 0.0, 0.1, 1.0, 1.0)
     );
-    assert_eq!(stage(""), (0.05, 0.0, 0.1, 0.1, 1.0, 1.0));
+    assert_eq!(
+        stage(
+            "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4);"
+        ),
+        (0.05, 0.0, 0.1, 0.1, 1.0, 1.0)
+    );
 }
 
 /// #232: the report says which serq produced it.
 #[test]
 fn the_report_records_the_serq_version() {
-    let p = compile_source(
-        "stage svc : delay; workload { arrive batch(1); } session { run svc (1); end; } run { horizon 2; }",
-        &Overrides::default(),
+    let p = compile_source(&common::main_source(
+        "stage svc : delay; workload { arrive batch(1); \n  session { turn; end; \n  }\n} server { run svc (cost(svc, 1));\n} "),
+        &common::horizon(2.0),
     )
     .unwrap();
     let j: serde_json::Value = serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
@@ -364,10 +467,10 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
         defs: vec![("prompt_len".into(), "2000".into())],
         warmup: Some(0.0),
         arrivals: Some(4000),
-        ..Default::default()
+        ..common::horizon(300.0)
     };
     let src = include_str!("../examples/pd-disaggregation/pd_batching.sq");
-    let p = compile_source(src, &ov).unwrap();
+    let p = compile_source(&common::main_source(src), &ov).unwrap();
     let r = run_ir(&p, None).unwrap();
     assert!(
         r.pool("D.kv").unwrap().preemptions > 0,
@@ -402,10 +505,15 @@ fn a_decoders_gaps_add_up_through_its_preemptions() {
 /// but only for the 10 serials below 10.
 #[test]
 fn a_test_observe_that_never_held_is_noted() {
-    let src = "def below(x) = x < 0;
-        stage svc : delay; workload { arrive batch(40); }
-        session {
-          run svc (serial);
+    let src = "def below(x) { x < 0 }
+        stage svc : delay; workload { arrive batch(40);
+          session { turn;
+            end;
+
+          }
+        }
+        server {
+          run svc (cost(svc, serial));
           observe never = serial < 0;
           observe neither = !(serial >= 0);
           observe both = serial < 0 && serial > 100;
@@ -416,10 +524,13 @@ fn a_test_observe_that_never_held_is_noted() {
           observe cond = serial < 0 ? 1 : 0;
           branch (serial < 20) { observe mixed = serial < 0; } else { observe mixed = 0; }
           branch (serial < 10) { observe few = serial > 100; }
-          end;
         }
-        run { horizon 100; }";
-    let r = run_ir(&compile_source(src, &Overrides::default()).unwrap(), None).unwrap();
+        ";
+    let r = run_ir(
+        &compile_source(&common::main_source(src), &common::horizon(100.0)).unwrap(),
+        None,
+    )
+    .unwrap();
     assert_eq!(r.observe("never").unwrap().count, 40);
     assert_eq!(r.observe("few").unwrap().count, 10);
     let t = r.text();
@@ -437,6 +548,45 @@ fn a_test_observe_that_never_held_is_noted() {
             "{name}: {t}"
         );
     }
+}
+
+/// A growth that waits for room a hold around it on the same pool keeps
+/// (#238): the outer hold takes 1008 of 2015, the inner one grows from 16
+/// to 1008, and with `preempt none` and no cache it waits for ever. The
+/// report said `stuck 0` and an `idle:` note that blamed the schedule.
+#[test]
+fn a_growth_left_waiting_is_noted() {
+    let src = "device gpu { kv cap 2015; }
+        engine llm on gpu {
+          tokens cap 8192;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1e-4 + 1e-5 * batch.tokens);
+        }
+        pool kv on gpu { block 16; evict lru; }
+        workload { arrive batch(1); session { loop { turn; } } }
+        server {
+          hold kv (cost(kv, 1000)) {
+            hold kv (cost(kv, hit + 8)) at admission (hit = min(cachedin(kv), 992)) {
+              run llm prefill (cost(llm, 1000 - cached)) growing kv;
+            } cache (cost(kv, 1000));
+          }
+        }
+        ";
+    let r = run_ir(
+        &compile_source(&common::main_source(src), &common::horizon(20.0)).unwrap(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(r.pools[0].growing_at_end, 1);
+    assert!(r.pools[0].growing_stalled);
+    assert!(
+        r.text().contains(
+            "grow: 1 hold(s) wait to grow in pool `kv` when the run ends, and every holder of \
+             `kv` is one of them"
+        ),
+        "{}",
+        r.text()
+    );
 }
 
 /// The note is a line of text, not a lint error, because one shipped program
@@ -463,14 +613,18 @@ fn the_corpus_earns_one_note() {
     programs.sort();
     assert!(programs.len() >= 25, "{programs:?}");
     let mut noted = vec![];
-    // nor does any reject a session (the `rej:` note, #271)
+    // nor does any reject a session (the `rej:` note, #271), nor end with an
+    // engine idle with work (the `idle:` note, #355)
     let mut rejected = vec![];
     for p in &programs {
-        let r = serq::run_file(p, &Overrides::default())
+        let r = serq::run_file(p, &common::horizon(100.0))
             .unwrap_or_else(|e| panic!("{}: {e}", p.display()));
         let name = p.strip_prefix(root).unwrap().to_string_lossy().into_owned();
         for o in r.observes.iter().filter(|o| o.never_held()) {
             noted.push((name.clone(), o.name.clone()));
+        }
+        for s in r.stages.iter().filter(|s| s.idle_with_work) {
+            rejected.push((name.clone(), format!("idle {}", s.name)));
         }
         for q in r.pools.iter().filter(|q| q.rejected > 0) {
             rejected.push((name.clone(), q.name.clone()));

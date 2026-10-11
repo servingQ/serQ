@@ -13,6 +13,7 @@ semantics of that program.
 -/
 import Serq.Claims
 import Serq.Work
+import Serq.Steps
 
 namespace SerqLang
 namespace Papers
@@ -86,6 +87,8 @@ theorem radOK_sub {q : Prog} (h : Sub Pr q) : RadOK q := by
   | no _ ih => exact ih.elim
   | branchK _ ih => exact ih.elim
   | loopBody _ ih => exact ih.elim
+  | whileBody _ ih => exact ih.elim
+  | whileK _ ih => exact ih.elim
 
 /-- Session `i` of an array, as `getS` reads it. -/
 def sg (ss : Array Sess) (i : ℕ) : Sess := ss.getD i ⟨i, ⟨fun _ => 0, []⟩, 0, .stop, [], .ended, 0, 0⟩
@@ -164,9 +167,6 @@ theorem R.stack_get {m : Machine} (h : R m) (i : ℕ) : (getS m i).stack = [] :=
   · exact h.stack _ (getS_mem m hi)
   · simp [getS, Array.getD_eq_getD_getElem?, hi]
 
-theorem attr_upd10 (a : Attrs) (k v : ℕ) (hk : k ≠ 10) : (a.upd k v).get 10 = a.get 10 := by
-  rw [Attrs.get_upd]; simp [Function.update, Ne.symm hk]
-
 theorem rad_exec : ∀ (f : ℕ) (m : Machine) (i : ℕ), Inv Pr m → R m → R (exec Dr f m i)
   | 0, _, _, _, h => h
   | f + 1, m, i, hI, h => by
@@ -196,12 +196,13 @@ theorem rad_exec : ∀ (f : ℕ) (m : Machine) (i : ℕ), Inv Pr m → R m → R
         refine rad_exec f _ i (hI.upd' i _ fun ho => ⟨Sub.set (hp ▸ ho.1), ho.2⟩) ?_
         refine h.upd i _ hne ?_ ?_ hstk
         · simpa using hne
-        · simp only; rw [attr_upd10 _ _ _ hrad.1]; exact h.attr_get i
+        · simp only; rw [Attrs.get_upd_ne _ _ (Ne.symm hrad.1)]; exact h.attr_get i
       · rename_i n e k hp
         refine rad_exec f _ i (hI.upd' i _ fun ho => ⟨Sub.observe (hp ▸ ho.1), ho.2⟩) ?_
         refine h.upd i _ hne ?_ (h.attr_get i) hstk
         simpa using hne
       · rename_i p a b k hp; rw [hp] at hrad; exact hrad.elim
+      · rename_i p b k hp; rw [hp] at hrad; exact hrad.elim
       · rename_i b hp; rw [hp] at hrad; exact hrad.elim
       · rename_i st md w g k hp
         rw [hp] at hrad
@@ -292,10 +293,10 @@ theorem rad_settle (m : Machine) (hI : Inv Pr m) (h : R m) : R (settle Dr m) := 
     intro m hI h
     unfold settleLoop
     simp only [admitAll_rad]
-    have h1 := rad_drain 10000 m hI h
+    have h1 := rad_drain (drainFuel m) m hI h
     split
     · exact h1
-    · exact ih _ (inv_drain Dr 10000 m hI) h1
+    · exact ih _ (inv_drain Dr _ m hI) h1
 
 theorem R.upd_free {m : Machine} (h : R m) (i : ℕ) (s : Sess) (hj : ∀ j ∈ m.jobs, j.owner ≠ i)
     (he : m.iter = []) (ha : 128 ∣ s.attr.get 10) (hk : s.stack = []) : R (setS m i s) := by
@@ -497,7 +498,8 @@ theorem rad_start (m : Machine) (h : R m) :
   have hR : R { m with iter := fillIter Dr (m.jobs.filter (serves Dr m)) 128 } :=
     R.mk' h.jobs h.nodup h.attr h.stack hT hS
   unfold startIteration
-  simp only
+  -- the deployment has no `chunkAt`: every iteration runs it as it is
+  simp only [iterDeployment_of_none _ (rfl : Claims.BariRad.deployment.chunkAt = none)]
   split
   · have hb : Claims.BariRad.deployment.budget = 128 := rfl
     rw [hb, ha]

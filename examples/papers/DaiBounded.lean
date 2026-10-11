@@ -8,8 +8,8 @@ b_max · gap`). Before every iteration the tokens that have arrived and not
 been served are at most `(b_max + 1) W`, a bound that does not depend on
 how many requests arrive (the family allows up to 500).
 -/
-import Serq.Papers.Dai
-import Serq.Papers.Kong
+import papers.Dai
+import Serq.Steps
 
 namespace SerqLang
 namespace Papers
@@ -29,7 +29,7 @@ def P1 : Prog := .set 9 (fun x => x.now) P2
 
 theorem prog_eq : Pd = .run 1 .plain (fun x => x.attr 10) none P1 := rfl
 
-theorem deployment_eq : Dd = ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), none⟩ := rfl
+theorem deployment_eq : Dd = ⟨[], 128, 0, none, fun st => 1128 + 3547 * ((st.tokens + 127) / 128), none, none⟩ := rfl
 
 /-! ### The state of a request -/
 
@@ -72,9 +72,6 @@ def Shape (s : Sess) : Cat → Prop
   | .e => s.status = .ended
 
 def arr (w : Workload) (i : ℕ) : ℕ := w.attr i 10
-
-/-- The tokens a list of batch entries gives request `i`. -/
-def shareOf (it : List (ℕ × ℕ)) (i : ℕ) : ℕ := ((it.filter fun e => decide (e.1 = i)).map (·.2)).sum
 
 section
 variable (w : Workload) (g : Ghost)
@@ -123,36 +120,6 @@ structure DInv (w : Workload) (g : Ghost) (m : Machine) : Prop where
 
 /-! ### Machine helpers -/
 
-theorem getS_setS (m : Machine) {i : ℕ} (s : Sess) (hi : i < m.sess.size) (j : ℕ) :
-    getS (setS m i s) j = if j = i then s else getS m j := by
-  split_ifs with h
-  · subst h; exact KongSvf.getS_setS_self m s hi
-  · exact getS_setS_ne m s (Ne.symm h)
-
-@[simp] theorem setS_size (m : Machine) (i : ℕ) (s : Sess) : (setS m i s).sess.size = m.sess.size := by
-  simp [setS]
-
-theorem Attrs.upd_base (a : Attrs) (k v : ℕ) : (a.upd k v).base = a.base := by
-  unfold Attrs.upd; split <;> rfl
-
-theorem attr_upd10 (a : Attrs) (k v : ℕ) (hk : k ≠ 10) : (a.upd k v).get 10 = a.get 10 := by
-  rw [Attrs.get_upd]; simp [Function.update, Ne.symm hk]
-
-theorem exec_set (D : Deployment) (f : ℕ) (m : Machine) (i slot : ℕ) (e : Env → ℕ) (k : Prog)
-    (hs : (getS m i).status = .ready) (hp : (getS m i).prog = .set slot e k) :
-    exec D (f + 1) m i =
-      exec D f (setS m i { getS m i with attr := (getS m i).attr.upd slot (evalE m i e), prog := k }) i := by
-  rw [exec]; simp [hs, hp]
-
-theorem exec_runDelay (D : Deployment) (f : ℕ) (m : Machine) (i st : ℕ) (md : Mode) (e : Env → ℕ) (k : Prog)
-    (hs : (getS m i).status = .ready) (hp : (getS m i).prog = .run st md e none k) (hw : evalE m i e ≠ 0)
-    (hst : st ≠ 0) :
-    exec D (f + 1) m i =
-      { setS m i { getS m i with prog := k, status := .delay (m.now + evalE m i e) m.nextDelay } with
-        nextDelay := m.nextDelay + 1
-        delays := insertDelay (m.now + evalE m i e, m.nextDelay, i) m.delays } := by
-  rw [exec]; simp [hs, hp, hw, hst]
-
 /-- The update of a request's place and its job's tokens. -/
 def Ghost.set (g : Ghost) (i : ℕ) (k : Cat) (l : ℕ) : Ghost :=
   ⟨Function.update g.c i k, Function.update g.left i l⟩
@@ -183,25 +150,6 @@ theorem Fr_congr (w : Workload) {g g' : Ghost} (h : ∀ j < w.init.length, fresh
     (t : ℕ) : Fr w g' t = Fr w g t := by
   unfold Fr; congr 1
   exact Finset.filter_congr fun j hj => by rw [h j (Finset.mem_range.mp hj)]
-
-/-- One term of a sum over `range n` changes. -/
-theorem sum_update {n i : ℕ} (hi : i < n) (f f' : ℕ → ℕ) (h : ∀ j, j ≠ i → f' j = f j) :
-    ∑ j ∈ Finset.range n, f' j + f i = ∑ j ∈ Finset.range n, f j + f' i := by
-  rw [← Finset.add_sum_erase _ _ (Finset.mem_range.mpr hi), ← Finset.add_sum_erase _ f (Finset.mem_range.mpr hi)]
-  rw [Finset.sum_congr rfl fun j hj => h j (Finset.ne_of_mem_erase hj)]
-  ring
-
-/-- One more index satisfies the filter. -/
-theorem card_update {n i : ℕ} (hi : i < n) (p p' : ℕ → Prop) [DecidablePred p] [DecidablePred p']
-    (hpi : ¬ p i) (hp'i : p' i) (h : ∀ j, j ≠ i → (p' j ↔ p j)) :
-    ((Finset.range n).filter p').card = ((Finset.range n).filter p).card + 1 := by
-  have : (Finset.range n).filter p' = insert i ((Finset.range n).filter p) := by
-    ext j
-    simp only [Finset.mem_filter, Finset.mem_range, Finset.mem_insert]
-    by_cases hj : j = i
-    · subst hj; simp [hi, hp'i]
-    · simp [hj, h j hj]
-  rw [this, Finset.card_insert_of_notMem (by simp [hpi])]
 
 /-! ### One request's commands -/
 
@@ -366,28 +314,6 @@ theorem dinv_addJob {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) {
       · exact rem_set g i k L j h
     rw [hSt, hWn]; exact hI.cons
 
-theorem exec_runEngine' (D : Deployment) (f : ℕ) (m : Machine) (i : ℕ) (md : Mode) (e : Env → ℕ) (k : Prog)
-    (hs : (getS m i).status = .ready) (hp : (getS m i).prog = .run 0 md e none k) (hw : evalE m i e ≠ 0) :
-    ∃ a b, a ++ b = m.jobs ∧ exec D (f + 1) m i =
-      { setS m i { getS m i with prog := k, status := .engine } with
-        jobs := a ++ ⟨i, md, evalE m i e, none⟩ :: b } :=
-  ⟨_, _, by rw [List.span_eq_takeWhile_dropWhile, List.takeWhile_append_dropWhile],
-    KongSvf.exec_runEngine D f m i md e k hs hp hw⟩
-
-/-- What a step of one ready request leaves alone. -/
-structure Keeps (M m : Machine) : Prop where
-  now : M.now = m.now
-  iter : M.iter = m.iter
-  iterEnd : M.iterEnd = m.iterEnd
-  served : M.served = m.served
-  last : M.last = m.last
-
-theorem Keeps.trans {a b c : Machine} (h1 : Keeps b a) (h2 : Keeps c b) : Keeps c a :=
-  ⟨h2.now.trans h1.now, h2.iter.trans h1.iter, h2.iterEnd.trans h1.iterEnd, h2.served.trans h1.served,
-    h2.last.trans h1.last⟩
-
-theorem Keeps.refl (m : Machine) : Keeps m m := ⟨rfl, rfl, rfl, rfl, rfl⟩
-
 /-- An arrived request sets `t0` and starts its prefill. -/
 theorem exec_r1 {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) {i : ℕ} {rest : List ℕ}
     (hr : m.ready = i :: rest) (hc : g.c i = .r1) :
@@ -408,7 +334,7 @@ theorem exec_r1 {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) {i : 
   set s1 : Sess := { getS m0 i with attr := (getS m0 i).attr.upd 9 (evalE m0 i fun x => x.now), prog := P2 }
     with hs1
   set m1 := setS m0 i s1 with hm1
-  have hg1 : getS m1 i = s1 := KongSvf.getS_setS_self m0 s1 (by simpa using hisz)
+  have hg1 : getS m1 i = s1 := Exec.getS_setS_self m0 s1 (by simpa using hisz)
   obtain ⟨a, b, hab, he⟩ := exec_runEngine' Dd 9998 m1 i .prefill (fun _ => 290) P3
     (by rw [hg1]; exact hst) (by rw [hg1]; rfl) (by simp [evalE])
   rw [he]
@@ -426,7 +352,7 @@ theorem exec_r1 {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) {i : 
   · rw [hs2, hg1, hs1]
     refine ⟨⟨rfl, rfl⟩, hstk, ?_, ?_⟩
     · simp only [hg0, Attrs.upd_base]; exact hb
-    · simp only [hg0]; rw [attr_upd10 _ _ _ (by norm_num)]; exact h10
+    · simp only [hg0]; rw [Attrs.get_upd_ne _ _ (by norm_num)]; exact h10
 
 /-- A prefilled request starts its decode. -/
 theorem exec_r3 {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) {i : ℕ} {rest : List ℕ}
@@ -474,13 +400,13 @@ theorem exec_r4 {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) {i : 
   set m0 : Machine := { m with ready := rest } with hm0
   have hg0 : ∀ j, getS m0 j = getS m j := fun _ => rfl
   rw [show (10000 : ℕ) = 9998 + 1 + 1 from rfl,
-    KongSvf.exec_observe Dd _ m0 i 0 (fun x => x.now - x.attr 9) .stop (by rw [hg0]; exact hst)
+    Exec.exec_observe Dd _ m0 i 0 (fun x => x.now - x.attr 9) .stop (by rw [hg0]; exact hst)
       (by rw [hg0, hp]; rfl)]
   set m1 : Machine := { setS m0 i { getS m0 i with prog := .stop } with
     obs := (0, (getS m0 i).serial, m0.now, evalE m0 i fun x => x.now - x.attr 9) :: m0.obs } with hm1
   have hg1 : getS m1 i = { getS m0 i with prog := .stop } :=
-    KongSvf.getS_setS_self m0 _ (by simpa using hisz)
-  rw [KongSvf.exec_stop Dd _ m1 i (by rw [hg1]; exact hst) (by rw [hg1]) (by rw [hg1]; exact hstk)]
+    Exec.getS_setS_self m0 _ (by simpa using hisz)
+  rw [Exec.exec_stop Dd _ m1 i (by rw [hg1]; exact hst) (by rw [hg1]) (by rw [hg1]; exact hstk)]
   set s' : Sess := { getS m1 i with status := .ended, stack := [] } with hs'
   have hget : ∀ j, getS (setS m1 i s') j = if j = i then s' else getS m j := by
     intro j
@@ -586,14 +512,6 @@ theorem exec_r4 {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) {i : 
       · subst h; simp [rem, hgc, hc]
       · exact rem_set g i .e 0 j h
     rw [hSt, hWn]; exact hI.cons
-
-theorem insertDelay_perm (d : ℕ × ℕ × ℕ) : ∀ l : List (ℕ × ℕ × ℕ), (insertDelay d l).Perm (d :: l)
-  | [] => List.Perm.refl _
-  | x :: xs => by
-    unfold insertDelay
-    split
-    · exact List.Perm.refl _
-    · exact ((insertDelay_perm d xs).cons x).trans (List.Perm.swap d x xs)
 
 /-- A request at its first command starts waiting for its arrival. -/
 theorem dinv_wait {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) {i : ℕ} {rest : List ℕ}
@@ -814,7 +732,7 @@ theorem admitAll_dai (m : Machine) : admitAll Dd m = m := by
 
 theorem DInv.ready_short {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) :
     m.ready.length ≤ w.init.length :=
-  KongSvf.length_le_of_nodup_lt hI.ready fun x hx => ((hI.readyMem x).mp hx).1
+  Exec.length_le_of_nodup_lt hI.ready fun x hx => ((hI.readyMem x).mp hx).1
 
 /-- **Settling an instant.** -/
 theorem settle_dinv {w : Workload} (harr : ∀ i < w.init.length, 0 < arr w i) (hn : w.init.length ≤ 500)
@@ -822,8 +740,8 @@ theorem settle_dinv {w : Workload} (harr : ∀ i < w.init.length, 0 < arr w i) (
     ∃ g', DInv w g' (settle Dd m) ∧ (settle Dd m).ready = [] ∧ Keeps (settle Dd m) m ∧
       Same3 w.init.length g g' ∧
       ((∀ j < w.init.length, g.c j ≠ .s0) → (settle Dd m).delays = m.delays ∧ (settle Dd m).nextDelay = m.nextDelay) := by
-  obtain ⟨g', h1, h2, h3, h4, h5⟩ := drain_dinv harr 10000 g m hI (by have := hI.ready_short; omega)
-  have hs : settle Dd m = drain Dd 10000 m := by
+  obtain ⟨g', h1, h2, h3, h4, h5⟩ := drain_dinv harr (drainFuel m) g m hI (by unfold drainFuel; omega)
+  have hs : settle Dd m = drain Dd (drainFuel m) m := by
     unfold settle
     rw [show (1000 : ℕ) = 999 + 1 from rfl, settleLoop]
     simp only [admitAll_dai, h2, List.isEmpty_nil, ↓reduceIte]
@@ -832,57 +750,6 @@ theorem settle_dinv {w : Workload} (harr : ∀ i < w.init.length, 0 < arr w i) (
 
 
 /-! ### The batch -/
-
-theorem shareOf_nil (i : ℕ) : shareOf [] i = 0 := rfl
-
-theorem shareOf_cons (e : ℕ × ℕ) (l : List (ℕ × ℕ)) (i : ℕ) :
-    shareOf (e :: l) i = (if e.1 = i then e.2 else 0) + shareOf l i := by
-  unfold shareOf
-  by_cases h : e.1 = i <;> simp [h]
-
-/-- The batch gives a request at most what its jobs want. -/
-theorem shareOf_fillIter (D : Deployment) : ∀ (js : List Job) (B o : ℕ),
-    shareOf (fillIter D js B) o ≤ ((js.filter fun j => decide (j.owner = o)).map (wantOf D)).sum
-  | [], _, _ => by simp [fillIter, shareOf]
-  | j :: js, B, o => by
-    have ih := shareOf_fillIter D js
-    have hw : (((j :: js).filter fun j => decide (j.owner = o)).map (wantOf D)).sum =
-        (if j.owner = o then wantOf D j else 0) + ((js.filter fun j => decide (j.owner = o)).map (wantOf D)).sum := by
-      by_cases h : j.owner = o <;> simp [h]
-    rw [hw]
-    have key : ∀ t ≤ wantOf D j, ∀ l, shareOf l o ≤ ((js.filter fun j => decide (j.owner = o)).map (wantOf D)).sum →
-        shareOf ((j.owner, t) :: l) o ≤
-          (if j.owner = o then wantOf D j else 0) + ((js.filter fun j => decide (j.owner = o)).map (wantOf D)).sum := by
-      intro t ht l hl; rw [shareOf_cons]; dsimp only; split_ifs <;> omega
-    unfold fillIter
-    by_cases h0 : min (wantOf D j) B = 0
-    · rw [if_pos h0]; have := ih B o; split_ifs <;> omega
-    · rw [if_neg h0]
-      by_cases h1 : B - min (wantOf D j) B = 0
-      · rw [if_pos h1]; exact key _ (min_le_left _ _) [] (by simp [shareOf])
-      · rw [if_neg h1]; exact key _ (min_le_left _ _) _ (ih _ o)
-
-/-- A request's share of a batch of entries with distinct owners. -/
-theorem filter_owner_eq {js : List Job} (hn : (js.map (·.owner)).Nodup) {j : Job} (hj : j ∈ js) :
-    js.filter (fun x => decide (x.owner = j.owner)) = [j] := by
-  induction js with
-  | nil => simp at hj
-  | cons x xs ih =>
-    simp only [List.map_cons, List.nodup_cons] at hn
-    rcases List.mem_cons.mp hj with rfl | hj'
-    · rw [List.filter_cons_of_pos (by simp), List.filter_eq_nil_iff.mpr]
-      intro y hy
-      simp only [decide_eq_true_eq]
-      intro he; exact hn.1 (he ▸ List.mem_map.mpr ⟨y, hy, rfl⟩)
-    · have hne : x.owner ≠ j.owner := fun h => hn.1 (h ▸ List.mem_map.mpr ⟨j, hj', rfl⟩)
-      rw [List.filter_cons_of_neg (by simpa using hne)]
-      exact ih hn.2 hj'
-
-theorem fillIter_ne_nil (D : Deployment) (j : Job) (js : List Job) (B : ℕ) (hw : 0 < wantOf D j) (hB : 0 < B) :
-    fillIter D (j :: js) B ≠ [] := by
-  unfold fillIter
-  rw [if_neg (by omega)]
-  split_ifs <;> simp
 
 /-- The sum of `f` over the owners of the jobs is the sum over the requests,
 if `f` vanishes off the jobs. -/
@@ -977,33 +844,6 @@ theorem fr_zero {w : Workload} {g : Ghost} {s : ℕ}
   intro i hi h
   have := hfut i (Finset.mem_range.mp hi) h.1
   omega
-
-/-- With the engine idle and nothing due now, every delay ends later. -/
-theorem not_pending {m : Machine} (hie : m.iterEnd = none) (hp : pendingBy m m.now = false)
-    (hs : m.delays.Pairwise (fun a b => a.1 ≤ b.1)) : ∀ d ∈ m.delays, m.now < d.1 := by
-  unfold pendingBy nextEvent at hp
-  rw [hie] at hp
-  intro d hd
-  rcases hdl : m.delays with _ | ⟨⟨t, q, i⟩, rest⟩
-  · rw [hdl] at hd; simp at hd
-  · rw [hdl] at hp hd hs
-    simp only [List.head?_cons, Option.any_some, decide_eq_false_iff_not, not_le] at hp
-    rcases List.mem_cons.mp hd with rfl | hd
-    · exact hp
-    · exact lt_of_lt_of_le hp ((List.pairwise_cons.mp hs).1 d hd)
-
-theorem sess_toList (m : Machine) : m.sess.toList = (List.range m.sess.size).map (getS m) := by
-  apply List.ext_getElem
-  · simp
-  · intro k h1 h2
-    simp [getS, Array.getD_eq_getD_getElem?]
-    have : k < m.sess.size := by simpa using h1
-    simp [this]
-
-theorem card_range_filter (n : ℕ) (q : ℕ → Prop) [DecidablePred q] :
-    ((List.range n).filter fun i => decide (q i)).length = ((Finset.range n).filter q).card := by
-  rw [← List.toFinset_card_of_nodup (List.nodup_range.filter _), List.toFinset_filter, List.toFinset_range]
-  simp
 
 /-- The claim's `arrived`: the requests whose arrival time has come. -/
 theorem arrived_eq {w : Workload} {g : Ghost} {m : Machine} (hI : DInv w g m) (t : ℕ) :
@@ -1114,6 +954,8 @@ theorem start_bnd {w : Workload} (hF : Fam w) {g : Ghost} {m : Machine} (hI : DI
   rw [hiter0] at hcons
   simp only [tokSum, List.map_nil, List.sum_nil, Nat.add_zero] at hcons
   unfold startIteration
+  -- the deployment has no `chunkAt`: every iteration runs it as it is
+  simp only [iterDeployment_of_none _ (rfl : Claims.DaiSarathi.deployment.chunkAt = none)]
   rw [hvia, Bool.or_false]
   by_cases hjs : m.jobs = []
   · have he0 : m.jobs.isEmpty = true := by simp [hjs]
@@ -1481,25 +1323,6 @@ def Ghost.tick (g : Ghost) (it : List (ℕ × ℕ)) : Ghost :=
   ⟨fun i => if isJob (g.c i) = true ∧ g.left i ≤ shareOf it i then (if g.c i = .p then .r3 else .r4) else g.c i,
    fun i => g.left i - shareOf it i⟩
 
-theorem sum_shareOf (n : ℕ) : ∀ L : List (ℕ × ℕ), (∀ e ∈ L, e.1 < n) →
-    ∑ i ∈ Finset.range n, shareOf L i = tokSum L
-  | [], _ => by simp [shareOf, tokSum]
-  | e :: L, h => by
-    simp only [shareOf_cons, Finset.sum_add_distrib]
-    rw [sum_shareOf n L fun x hx => h x (List.mem_cons_of_mem _ hx)]
-    rw [Finset.sum_ite_eq (Finset.range n) e.1 (fun _ => e.2)]
-    rw [if_pos (Finset.mem_range.mpr (h e List.mem_cons_self))]
-    simp [tokSum]
-
-theorem readyAll_other : ∀ (done : List ℕ) (m : Machine),
-    (KongSvf.readyAll done m).nextDelay = m.nextDelay ∧ (KongSvf.readyAll done m).served = m.served ∧
-      (KongSvf.readyAll done m).last = m.last
-  | [], m => ⟨rfl, rfl, rfl⟩
-  | i :: rest, m => by
-    have := readyAll_other rest { setS m i { getS m i with status := .ready } with ready := m.ready ++ [i] }
-    simp only [KongSvf.readyAll, List.foldl_cons] at this ⊢
-    exact this
-
 /-- **An iteration ends.** Its tokens leave the backlog; the potential
 projected to its end becomes the idle engine's, now. -/
 theorem end_pre {w : Workload} {g : Ghost} {m : Machine} (hB : Bnd w g m) {a qa : ℕ}
@@ -1586,10 +1409,10 @@ theorem end_pre {w : Workload} {g : Ghost} {m : Machine} (hB : Bnd w g m) {a qa 
   have hdb : ∀ i ∈ done, i < M1.sess.size := fun i hi => by
     show i < m.sess.size
     rw [hI.size]; exact ((hmemd i).mp hi).1
-  obtain ⟨f1, f2, -, -, f5, f6, f7, f8, f9, f10, f11⟩ := KongSvf.readyAll_fields done M1 hdn hdb
+  obtain ⟨f1, f2, -, -, f5, f6, f7, f8, f9, f10, f11⟩ := Exec.readyAll_fields done M1 hdn hdb
   obtain ⟨o1, o2, o3⟩ := readyAll_other done M1
-  change Pre w g' (KongSvf.readyAll done M1)
-  set R := KongSvf.readyAll done M1 with hR
+  change Pre w g' (Exec.readyAll done M1)
+  set R := Exec.readyAll done M1 with hR
   have hgetR : ∀ j, getS R j = if j ∈ done then { getS m j with status := .ready } else getS m j := f11
   have hfinc : ∀ j < w.init.length, j ∈ done → (g.c j = .p ∧ g'.c j = .r3) ∨ (g.c j = .d ∧ g'.c j = .r4) := by
     intro j hj hd

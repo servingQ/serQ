@@ -11,44 +11,57 @@
 // in Prefill Mode and runs a chunk of b_lcm tokens of the oldest prefill.
 // A prefill completes only in Prefill Mode, so |D| never exceeds b_col: the
 // b_col active requests of Assumption 4.
+use "std/args";
+
 let bcol = 128;          // b_col = b_row = b_red = b_lcm
 let tlin = 4000;         // µs per pass over a tile, 1 / c_Lin
 let tnl = 5;             // µs per token of non-linear operations, 1 / c_nLin
 let vpmax = 8;           // prompts are 1 .. vpmax tiles (Assumption 3)
 let vdmax = 512;         // the largest output
-let rate = 0.00002;      // requests per µs (20 per second)
 
-stage E : step {
-  budget bcol;
-  chunk bcol;
-  cost tlin * ceil(tokens / bcol) + tnl * tokens;
-  serve only (decoders >= bcol || decoders == residents ? decoding : !decoding);
-}
+fn main() {
+  let rate = args.number("rate", 0.00002);      // requests per µs (20 per second)
 
-workload {
-  arrive poisson(rate);
-  init {
-    set t0 = now;
-    set vp = bcol * floor(~uniform(1, vpmax + 1));
-    set vd = min(floor(~exp(200)) + 1, vdmax);
+  device gpu { }   // the paper's cost is written whole in `execute`, and no memory binds
+  // Decode Mode when b_col requests decode or every one does, else Prefill Mode
+  def in_mode() { running.decoding >= bcol || running.decoding == running.count ? decoding : !decoding }
+  engine E on gpu {
+    tokens cap bcol;
+    schedule {
+      advance running only (in_mode()) each at most (bcol);
+      admit waiting only (in_mode()) while (running.preempted == 0) each at most (bcol);
+    }
+    execute (tlin * ceil(batch.tokens / bcol) + tnl * batch.tokens);
   }
+
+  workload {
+    arrive poisson(rate);
+    init {
+      set t0 = now;
+      set vp = bcol * floor(~uniform(1, vpmax + 1));
+      set vd = min(floor(~exp(200)) + 1, vdmax);
+    }
+
+  }
+
+  server {
+    run E prefill (cost(E, vp));
+    run E decode (cost(E, vd));
+    observe response = now - t0;
+  }
+
+  // A claim reads an iteration in the kernel's words (#437): `tokens` is
+  // `batch.tokens`, `decoders` `running.decoding`, `residents` `running.count`.
+  //
+  // Theorem 1: under any scheduler a node completes at most one token per
+  // tlin / bcol + tnl µs, so a load above it diverges.
+  claim token_rate: every iteration of E (served * (tlin + tnl * bcol) <= bcol * now);
+
+  // Optimal GeMM tiling (§4.2): with prompts a multiple of b_lcm (Assumption 3),
+  // every batch fills its tile, unless every request decodes and fewer than
+  // b_col of them do.
+  claim optimal_tiling given (vp == bcol * floor(vp / bcol)):
+    every iteration of E (tokens == bcol || decoders == residents);
+
+
 }
-
-session {
-  run E prefill (vp);
-  run E decode (vd);
-  observe response = now - t0;
-  end;
-}
-
-// Theorem 1: under any scheduler a node completes at most one token per
-// tlin / bcol + tnl µs, so a load above it diverges.
-claim token_rate: every iteration of E (served * (tlin + tnl * bcol) <= bcol * now);
-
-// Optimal GeMM tiling (§4.2): with prompts a multiple of b_lcm (Assumption 3),
-// every batch fills its tile, unless every request decodes and fewer than
-// b_col of them do.
-claim optimal_tiling given (vp == bcol * floor(vp / bcol)):
-  every iteration of E (tokens == bcol || decoders == residents);
-
-run { horizon 100000000; warmup 0; seed 1; }

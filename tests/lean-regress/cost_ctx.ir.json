@@ -37,6 +37,20 @@
    }
   ]
  },
+ "attr_types": [
+  "Value",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Value",
+  "Size",
+  "Size",
+  "Size"
+ ],
  "attrs": [
   "cached",
   "serial",
@@ -80,6 +94,7 @@
   ],
   [],
   [
+   "Turn",
    {
     "Run": {
      "growing": null,
@@ -90,7 +105,17 @@
       "index": null
      },
      "work": {
-      "Attr": 11
+      "Cost": [
+       {
+        "Stage": {
+         "base": 1,
+         "count": 1
+        }
+       },
+       {
+        "Attr": 11
+       }
+      ]
      }
     }
    },
@@ -107,7 +132,17 @@
         "index": null
        },
        {
-        "Num": 1.0
+        "Cost": [
+         {
+          "Pool": {
+           "base": 1,
+           "count": 1
+          }
+         },
+         {
+          "Num": 1.0
+         }
+        ]
        },
        null
       ],
@@ -118,35 +153,55 @@
         "index": null
        },
        {
-        "Call": [
-         "Min",
-         [
-          {
-           "Expr": {
-            "Attr": 9
-           }
-          },
-          {
-           "Expr": {
-            "Call": [
-             "BudgetLeft",
-             [
-              {
-               "Stage": {
-                "base": 0,
-                "count": 1,
-                "index": null
-               }
-              }
-             ]
-            ]
-           }
+        "Cost": [
+         {
+          "Pool": {
+           "base": 0,
+           "count": 1
           }
-         ]
+         },
+         {
+          "Call": [
+           "Min",
+           [
+            {
+             "Expr": {
+              "Attr": 9
+             }
+            },
+            {
+             "Expr": {
+              "Call": [
+               "BudgetLeft",
+               [
+                {
+                 "Stage": {
+                  "base": 0,
+                  "count": 1,
+                  "index": null
+                 }
+                }
+               ]
+              ]
+             }
+            }
+           ]
+          ]
+         }
         ]
        },
        {
-        "Attr": 9
+        "Cost": [
+         {
+          "Pool": {
+           "base": 0,
+           "count": 1
+          }
+         },
+         {
+          "Attr": 9
+         }
+        ]
        }
       ]
      ],
@@ -170,7 +225,17 @@
       "index": null
      },
      "work": {
-      "Attr": 9
+      "Cost": [
+       {
+        "Stage": {
+         "base": 0,
+         "count": 1
+        }
+       },
+       {
+        "Attr": 9
+       }
+      ]
      }
     }
    },
@@ -204,7 +269,17 @@
       "index": null
      },
      "work": {
-      "Attr": 10
+      "Cost": [
+       {
+        "Stage": {
+         "base": 0,
+         "count": 1
+        }
+       },
+       {
+        "Attr": 10
+       }
+      ]
      }
     }
    },
@@ -232,7 +307,20 @@
    "cap": 2048.0,
    "evict": "Lru",
    "name": "kv",
-   "preempt": "Lifo",
+   "preempt": {
+    "By": {
+     "keys": [
+      {
+       "Unary": [
+        "Neg",
+        {
+         "Ctx": "Admission"
+        }
+       ]
+      }
+     ]
+    }
+   },
    "queue": null,
    "spill": null
   },
@@ -249,6 +337,26 @@
  ],
  "seed": 1,
  "session": 2,
+ "sides": [
+  [
+   "Workload",
+   "Workload",
+   "Workload"
+  ],
+  [],
+  [
+   "Workload",
+   "Server",
+   "Server",
+   "Workload"
+  ],
+  [
+   "Server",
+   "Server",
+   "Server",
+   "Server"
+  ]
+ ],
  "slot_cached": 0,
  "slot_computed": 8,
  "slot_forced": 7,
@@ -333,16 +441,20 @@
      }
     }
    },
-   "name": "engine"
+   "name": "llm"
   },
   {
-   "kind": "Delay",
+   "kind": {
+    "Ps": {
+     "Ctx": "N"
+    }
+   },
    "name": "gate"
   }
  ],
  "trace": null,
  "trace_ordered": false,
  "turn": 1,
- "version": 11,
+ "version": 13,
  "warmup": 0.0
 }

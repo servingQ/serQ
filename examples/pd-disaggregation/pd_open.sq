@@ -1,4 +1,5 @@
 // Open-arrival aggregated pool vs prefill -> KV link -> decode tandem.
+
 let N = 32;
 let NP = 11;
 let Lambda = 1.0;
@@ -12,31 +13,34 @@ let K = 1.0;
 let mode = 1; // 0 aggregated, 1 disaggregated
 
 // the laws, by name (`--def prefill_work='~erlang(4, sP)'`)
-def prefill_work() = ~exp(sP);
-def decode_work() = ~exp(sD);
-def kv_tokens() = ~exp(K);
+def prefill_work() { ~exp(sP) }
+def decode_work() { ~exp(sD) }
+def kv_tokens() { ~exp(K) }
 
-stage agg : fifo(max(N, 1));
-stage prefill : fifo(max(NP, 1));
-stage link : fifo;
-stage decode : fifo(max(N - NP, 1));
+fn main() {
+  stage agg : fifo(max(N, 1));
+  stage prefill : fifo(max(NP, 1));
+  stage link : fifo;
+  stage decode : fifo(max(N - NP, 1));
 
-workload { arrive poisson(Lambda); }
-
-session {
-  set t0 = now;
-  set sp = prefill_work();
-  set sd = decode_work();
-  set kv = kv_tokens();
-  branch (mode == 0) {
-    run agg (sp + sd + I);
-  } else {
-    run prefill (sp / gP);
-    run link (kv / bnet);
-    run decode (sd / gD);
+  workload {
+    arrive poisson(Lambda);
   }
-  observe latency = now - t0;
-  end;
-}
 
-run { horizon 20000; warmup 2000; seed 1; }
+  server {
+    set t0 = now;
+    set sp = prefill_work();
+    set sd = decode_work();
+    set kv = kv_tokens();
+    branch (mode == 0) {
+      run agg (cost(agg, sp + sd + I));
+    } else {
+      run prefill (cost(prefill, sp / gP));
+      run link (cost(link, kv / bnet));
+      run decode (cost(decode, sd / gD));
+    }
+    observe response = now - t0;
+  }
+
+
+}

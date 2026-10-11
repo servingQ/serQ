@@ -3,6 +3,7 @@
 // `dai_sarathi.sq`. Decode first and no mixed batches: while a request
 // decodes, an iteration batches only decodes and the prefills wait. Time is
 // in units of 10 µs.
+
 let bmax = 128;
 let c = 1128;
 let a = 3547;
@@ -11,29 +12,37 @@ let gap = 46750;
 let vp = 290;
 let vd = 990;
 
-stage engine : step {
-  budget bmax;
-  cost c + a * ceil(tokens / b0);
-  serve only (decoders > 0 ? decoding : !decoding);
+fn main() {
+  device gpu { compute (t) = a * ceil(t / b0); }
+  // decodes while any request decodes, else prefills: never both
+  def in_phase() { running.decoding > 0 ? decoding : !decoding }
+  engine fastertransformer on gpu {
+    tokens cap bmax;
+    schedule {
+      advance running only (in_phase());
+      admit waiting only (in_phase()) while (running.preempted == 0);
+    }
+    execute (c + compute(batch.tokens));
+  }
+
+  workload {
+    arrive renewal(gap);
+    init { set t0 = now; }
+
+  }
+
+  server {
+    run fastertransformer prefill (cost(fastertransformer, vp));
+    run fastertransformer decode (cost(fastertransformer, vd));
+    observe response = now - t0;
+  }
+
+  // §4: FasterTransformer is not work-conserving. Some batch is not full
+  // although the residents could fill it.
+  claim not_work_conserving: some iteration of fastertransformer (demand >= bmax && tokens < bmax);
+
+  // Theorem 2(a) holds for it as for every scheduler.
+  claim token_rate: every iteration of fastertransformer (served * (c + a * bmax / b0) <= bmax * now);
+
+
 }
-
-workload {
-  arrive renewal(gap);
-  init { set t0 = now; }
-}
-
-session {
-  run engine prefill (vp);
-  run engine decode (vd);
-  observe response = now - t0;
-  end;
-}
-
-// §4: FasterTransformer is not work-conserving. Some batch is not full
-// although the residents could fill it.
-claim not_work_conserving: some iteration of engine (demand >= bmax && tokens < bmax);
-
-// Theorem 2(a) holds for it as for every scheduler.
-claim token_rate: every iteration of engine (served * (c + a * bmax / b0) <= bmax * now);
-
-run { horizon 5000000; warmup 0; seed 1; }

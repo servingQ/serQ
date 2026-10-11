@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate lean/Serq/Claims.lean, the claims of the programs under
 examples/papers/ as Lean statements about the executable semantics, and
-lean/Serq/ClaimsProved.lean, which checks that lean/Serq/Papers/ proves
+examples/papers/ClaimsProved.lean, which checks that examples/papers/ proves
 every one of them.
 
 The input is the IR of each program (tools/claims/<name>.ir.json, written
@@ -33,15 +33,17 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from gen_lean_oracle import Fragment, Lean, affine, nat, one_ref, COST_VARS  # noqa: E402
+from gen_lean_oracle import (  # noqa: E402
+    Expr, Fragment, Lean, affine, chunk_rule, fold, nat, one_ref, COST_VARS, is_delay, is_lifo, only_body,
+)
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
 CDIR = os.path.join(ROOT, "tools", "claims")
 OUT = os.path.join(ROOT, "lean", "Serq", "Claims.lean")
-PROVED = os.path.join(ROOT, "lean", "Serq", "ClaimsProved.lean")
-IR_VERSION = 11
+PROVED = os.path.join(ROOT, "examples", "papers", "ClaimsProved.lean")
+IR_VERSION = 13
 # the fragment's bound on the number of sessions, under which the fuel of
-# `settleLoop`, `drain` and `admitHeads` is shown to suffice (Serq/Papers/Kong.lean)
+# `settleLoop`, `drain` and `admitHeads` is shown to suffice (examples/papers/Kong.lean)
 MAX_SESSIONS = 500
 
 
@@ -57,93 +59,6 @@ def has_sample(e):
     if isinstance(e, list):
         return any(has_sample(v) for v in e)
     return False
-
-
-def fold(e):
-    """The value of a constant expression, as a natural number when it is one."""
-    if "Num" in e:
-        return e["Num"]
-    if "Binary" in e:
-        op, a, b = e["Binary"]
-        x, y = fold(a), fold(b)
-        if x is None or y is None:
-            return None
-        if op == "Div":
-            return x / y if y != 0 else None
-        return {"Add": x + y, "Sub": max(x - y, 0), "Mul": x * y}.get(op)
-    if "Call" in e:
-        f, args = e["Call"]
-        vals = [fold(a["Expr"]) if "Expr" in a else None for a in args]
-        if any(v is None for v in vals):
-            return None
-        import math
-        if f == "Ceil" and len(vals) == 1:
-            return float(math.ceil(vals[0]))
-        if f == "Floor" and len(vals) == 1:
-            return float(math.floor(vals[0]))
-        if f in ("Min", "Max") and len(vals) == 2:
-            return min(vals) if f == "Min" else max(vals)
-    return None
-
-
-REL = {"Lt": "<", "Le": "≤", "Gt": ">", "Ge": "≥", "Eq": "=", "Ne": "≠"}
-ARITH = {"Add": "+", "Sub": "-", "Mul": "*"}
-
-
-class Expr:
-    """An IR expression as a Lean term over natural numbers: `nat` gives a
-    term of type ℕ (a boolean is 1 or 0), `prop` a proposition (the
-    expression is not 0). `leaf` translates what is specific to the moment."""
-
-    def __init__(self, leaf):
-        self.leaf = leaf
-
-    def nat(self, e):
-        v = fold(e)
-        if v is not None:
-            return str(nat(v, "constant"))
-        if "Binary" in e:
-            op, a, b = e["Binary"]
-            if op in ARITH:
-                return f"({self.nat(a)} {ARITH[op]} {self.nat(b)})"
-            if op in REL or op in ("And", "Or"):
-                return f"(if {self.prop(e)} then 1 else 0)"
-            raise Fragment(f"operator {op} (a division must be under floor, or exact between constants)")
-        if "Unary" in e:
-            op, a = e["Unary"]
-            if op == "Not":
-                return f"(if {self.prop(a)} then 0 else 1)"
-            raise Fragment(f"unary {op}")
-        if "Cond" in e:
-            c, a, b = e["Cond"]
-            return f"(if {self.prop(c)} then {self.nat(a)} else {self.nat(b)})"
-        if "Call" in e:
-            f, args = e["Call"]
-            if f == "Floor" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
-                op, a, b = args[0]["Expr"]["Binary"]
-                if op == "Div":
-                    return f"({self.nat(a)} / {self.nat(b)})"
-            if f == "Ceil" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
-                op, a, b = args[0]["Expr"]["Binary"]
-                if op == "Div" and fold(b) is not None:
-                    k = nat(fold(b), "ceil divisor")
-                    return f"(({self.nat(a)} + {k - 1}) / {k})"
-            if f in ("Min", "Max") and len(args) == 2:
-                return f"({f.lower()} {self.nat(args[0]['Expr'])} {self.nat(args[1]['Expr'])})"
-        return self.leaf(e)
-
-    def prop(self, e):
-        if "Binary" in e:
-            op, a, b = e["Binary"]
-            if op in REL:
-                return f"({self.nat(a)} {REL[op]} {self.nat(b)})"
-            if op == "And":
-                return f"({self.prop(a)} ∧ {self.prop(b)})"
-            if op == "Or":
-                return f"({self.prop(a)} ∨ {self.prop(b)})"
-        if "Unary" in e and e["Unary"][0] == "Not":
-            return f"(¬ {self.prop(e['Unary'][1])})"
-        return f"({self.nat(e)} ≠ 0)"
 
 
 def iter_leaf(e):
@@ -205,6 +120,17 @@ class Program:
         self.init = ir["blocks"][ir["init"]]
         if ir["blocks"][ir["turn"]]:
             raise Fragment(f"{name}: a turn block")
+        # This fragment fixes w.turns = [] and w.turnSlot = none. A Turn
+        # with no turn block is a pure continuation step (exec_empty_turn).
+        # The counter must be unobserved everywhere, including claims and
+        # scheduler expressions; otherwise the family would omit meaning.
+        def reads_turn(value):
+            if isinstance(value, dict):
+                return value.get("Attr") == ir["slot_turn"] or any(reads_turn(v) for v in value.values())
+            return isinstance(value, list) and any(reads_turn(v) for v in value)
+        if reads_turn(ir):
+            raise Fragment(f"{name}: turn_no is outside the empty-turn claim fragment")
+        self.lean.empty_turns = True
         self.drawn = set()
         self.defs = {}  # attribute -> its init expression, for `given`
         for st in self.init:
@@ -240,21 +166,26 @@ class Program:
     def deployment(self):
         ir = self.ir
         st = ir["stages"]
-        if not st or "Step" not in st[0]["kind"] or any(s["kind"] != "Delay" for s in st[1:]):
+        if not st or "Step" not in st[0]["kind"] or any(not is_delay(s["kind"]) for s in st[1:]):
             raise Fragment("stages must be one step engine (stage 0) and delays")
         step = st[0]["kind"]["Step"]
+        if step.get("granule") is not None:
+            raise Fragment("granule: the fragment gives a prefill any amount")
         if step["serve"] not in ({"By": []}, "DecodeFirst"):
             raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order")
+        only_expr = only_body(step.get("iteration"))
         cost = cost_fn(step["cost"])
         only = "none"
-        if step.get("only") is not None:
-            only = f"some fun e => {Expr(serve_leaf).nat(step['only'])}"
+        if only_expr is not None:
+            only = f"some fun e => {Expr(serve_leaf).nat(only_expr)}"
         grown = self.grown_pools()
         pools = []
         for i, p in enumerate(ir["pools"]):
+            if p.get("reserve_held"):
+                raise Fragment(f"pool {p['name']}: reserve held")
             if p["evict"] != "Lru" or p["spill"] is not None or p["admit_via"] is not None:
                 raise Fragment(f"pool {p['name']}: LRU eviction, no spill, no admit via")
-            if i in grown and (p["preempt"] != "Lifo" or step["memory"] != i):
+            if i in grown and (not is_lifo(p["preempt"]) or step["memory"] != i):
                 raise Fragment(f"pool {p['name']}: a grown pool is the engine's memory under preempt lifo")
             key = "none"
             if p["queue"] is not None:
@@ -264,9 +195,11 @@ class Program:
                     raise Fragment(f"pool {p['name']}: one queue key")
                 key = f"some fun x => {self.lean.top(p['queue'][0])}"
             pools.append(f"⟨{nat(p['cap'], 'cap')}, {nat(p['block'] or 1, 'block')}, false, {key}⟩")
+        chunk, at = chunk_rule(step["chunk"])
         return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
-                f"{nat(fold(step['chunk']), 'chunk')}, "
-                f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, {only}⟩")
+                f"{nat(chunk, 'chunk')}, "
+                f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, {only}, "
+                f"{at or 'none'}⟩")
 
     def grown_pools(self):
         out = set()
@@ -282,8 +215,10 @@ class Program:
                     walk(v["body"])
                 if k == "Branch":
                     walk(v[1]); walk(v[2])
-                if k == "Loop":
+                if k in ("Loop", "Fork"):
                     walk(v)
+                if k == "While":
+                    walk(v[1])
         walk(self.ir["session"])
         return out
 
@@ -402,7 +337,7 @@ program: its session program (after the workload's arrival delay and the
 `init` sets that do not draw), its deployment, the family of workloads its
 claims quantify over, and each claim as an `Exec.EveryIteration`,
 `Exec.SomeIteration` or `Exec.AtEnd` statement (`Serq/Claim.lean`). The
-proofs are in `Serq/Papers/`; `Serq/ClaimsProved.lean` checks that every
+proofs are in `examples/papers/`; `examples/papers/ClaimsProved.lean` checks that every
 claim has one.
 -/
 import Serq.Claim
@@ -426,16 +361,20 @@ def gen():
 # Every claim of the paper programs is proved
 
 Generated by `scripts/gen_lean_claims.py`. Do not edit. Each line states a
-claim of `Serq/Claims.lean` and names its proof in `Serq/Papers/`: the build
+claim of `Serq/Claims.lean` and names its proof in `examples/papers/`: the build
 fails if a claim has no proof, or if a proof proves something else than
 what the program now claims.
 -/
 import Serq.Claims
-import Serq.Papers
+{IMPORTS}
 
 namespace SerqLang
 namespace ClaimsProved
 ''']
+    papers = os.path.join(ROOT, "examples", "papers")
+    stems = sorted(f[:-len(".lean")] for f in os.listdir(papers)
+                   if f.endswith(".lean") and f != "ClaimsProved.lean")
+    proved[0] = proved[0].replace("{IMPORTS}", "\n".join(f"import papers.{s}" for s in stems))
     for name in names():
         ir = json.load(open(os.path.join(CDIR, name + ".ir.json")))
         p = Program(name, ir)

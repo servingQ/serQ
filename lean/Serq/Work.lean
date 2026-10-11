@@ -93,9 +93,12 @@ theorem startIteration_wc (hD : D.only = none) (hv : ∀ p, (pdef D p).viaEngine
     (m : Machine) (hg : ∀ j ∈ m.jobs, j.growing = none) :
     (startIteration D m).iterEnd.isSome →
       (startIteration D m).last.stats.tokens = min D.budget (startIteration D m).last.demand := by
-  have hq : engineQueuesEmpty D m := fun p hp => by simp [hv p] at hp
-  have ha := assign_eq_fillIter D hD m hq hg m.preempts (m.jobs.length + 100000) 0 D.budget []
-    (by omega)
+  -- the iteration runs `iterDeployment D m`, which is `D` up to its chunk cap
+  have hq : engineQueuesEmpty (iterDeployment D m) m := fun p hp => by
+    simp [iterDeployment_pdef, hv p] at hp
+  have hD' : (iterDeployment D m).only = none := (iterDeployment_only D m).trans hD
+  have ha := assign_eq_fillIter (iterDeployment D m) hD' m hq hg m.preempts
+    (m.jobs.length + 100000) 0 D.budget [] (by omega)
   unfold startIteration
   simp only
   split
@@ -104,7 +107,7 @@ theorem startIteration_wc (hD : D.only = none) (hv : ∀ p, (pdef D p).viaEngine
     split
     · intro _
       simp only [iterRec, iterStats_tokens]
-      exact tokSum_fillIter D m.jobs D.budget
+      exact tokSum_fillIter (iterDeployment D m) m.jobs D.budget
     · intro h; simp at h
   · intro h; simp at h
 

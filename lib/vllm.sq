@@ -1,42 +1,9 @@
 // vLLM v1 (ref/vllm at 0c87a197, `vllm/v1/core/sched/scheduler.py`,
-// `kv_cache_manager.py`, `block_pool.py`) as definitions a program uses:
-// `use "…/lib/vllm.sq";`. docs/language.md §7 has the line-by-line
-// correspondence, for `examples/replay/vllm_replay.sq`; this engine is a
-// simpler one, and §7 says how.
+// `kv_cache_manager.py`, `block_pool.py`): the rule a program states as an
+// expression, `use "…/lib/vllm.sq";`. docs/language.md §7 has the
+// line-by-line correspondence, for `examples/replay/vllm_replay.sq`.
 
 // What a cache hit may cover of a request of x tokens: its full blocks of
 // `bs` tokens, and never the last token, which is computed for its logits
 // (kv_cache_manager.py:289-300).
-def reusable(x, bs) = floor((x - 1) / bs) * bs;
-
-// One request of `prompt` tokens that wants `o` back, sent at `t0`, through
-// vLLM's scheduler and one engine: a slot of `reqs` and the blocks of `kv`,
-// continuous batching with chunked prefill on `engine`.
-//
-// The prefix hit (full blocks, never the whole prompt) is looked up when
-// the scheduler admits (scheduler.py:932-939), and the admission takes the
-// hit plus the chunk the budget allows (scheduler.py:1078-1128, 1214-1226);
-// docs/language.md §7 "Admission" has the argument. `known` is every token
-// the request has: the prompt, or after a preemption the position it had
-// reached plus the token sampled there (vLLM keeps the generated tokens and
-// drops only their KV, scheduler.py:1560-1561); the hit can cover all but
-// the last of them.
-//
-// A definition's names are the program's: the request binds `known` in its
-// admission, sets the attribute `c`, and observes at each admission (again
-// after a preemption) `hit` (c > 0: any reused block counts, a turn that
-// lost only its tail blocks too) and `prefill_tokens` (known - c; on a first
-// admission known = prompt, and the share the cache supplied, c / prompt,
-// is not observed), and `ttft` (time to first token, from `t0`).
-def vllm_request(reqs, kv, engine, prompt, o, t0) {
-  hold reqs (1), kv (min(known, hit + budget_left(engine)))
-       at admission (known = computed < prompt ? prompt : computed + 1,
-                     hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
-    set c = min(cached, reusable(known, blocksize(kv)));
-    observe hit = c > 0;
-    observe prefill_tokens = known - c;
-    prefill on engine (known - c) growing kv;
-    branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
-    decode on engine (o - 1 - (known - prompt)) growing kv;
-  } cache (prompt + o);
-}
+def reusable(x, bs) { floor((x - 1) / bs) * bs }

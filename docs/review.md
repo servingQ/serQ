@@ -96,9 +96,8 @@ What it misses or gets wrong:
   atomically on several pools, which is how vLLM checks slots and
   blocks together.
 * **Scoped holds.** `hold … { body } cache (ℓ)` replaces `admit`/`free`.
-  Balance becomes syntactic, the memory invariant is a lemma about one
-  command, and preemption is "abort the scope and re-execute the
-  statement", which is exactly `_preempt_request`
+  Balance becomes syntactic, and preemption is "abort the scope and
+  re-execute the statement", which is exactly `_preempt_request`
   (`num_computed_tokens = 0`, `waiting.prepend_request`): the prefix the
   hold computed is cached, so the re-execution finds a partial hit.
 * **The `step` stage.** Budget, chunk cap, cost expression in the
@@ -123,7 +122,7 @@ What it misses or gets wrong:
 
 Kept from the lecture: the syntax's three parts (deployment, workload, and
 the per-session program, which the lecture called the route and v2 calls
-`session`); commands take no time, flow at stages; the memory invariant; the
+`session`); commands take no time, flow at stages; the
 hit decided at admission; sessions as the unit that moves.
 
 ## 3. What the validation found (self-review)

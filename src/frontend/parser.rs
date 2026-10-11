@@ -1,15 +1,13 @@
 //! Recursive-descent parser for serQ programs.
 //!
 //! ```text
-//! program  := item*
+//! program  := (let | def | use)* 'fn' 'main' '(' ')' '{' item* '}'
 //! item     := 'let' IDENT '=' expr ';'
 //!           | 'pool' IDENT ('[' NUM ']')? '{' poolopt* '}'
 //!           | 'stage' IDENT ('[' NUM ']')? ':' kind ';'
 //!           | 'workload' '{' wlitem* '}'
-//!           | 'session' block
 //!           | 'server' block
 //!           | 'queue' IDENT ('[' expr ']')? (':' IDENT (',' IDENT)*)? '{' qitem* '}'
-//!           | 'run' '{' ('horizon' | 'warmup' | 'seed' | 'arrivals') expr ';' ... '}'
 //!           | 'gauge' IDENT '=' expr ';'      -- a time average of the deployment's state
 //!           | 'claim' IDENT ('given' '(' expr ')')? ':'
 //!                 ('every' | 'some') 'iteration' 'of' ref '(' expr ')' ';'
@@ -18,7 +16,7 @@
 //!           | IDENT ('(' IDENT (',' IDENT)* ')')? ('from' IDENT)? block   -- an entry (crate::frontend::queue)
 //! poolopt  := 'cap' expr ';' | 'block' expr ';'
 //!           | 'evict' ('lru' | 'by' '(' expr (',' expr)* ')') ';'
-//!           | 'preempt' ('lifo' | 'none') ';'
+//!           | 'preempt' ('lifo' | 'none' | 'by' '(' expr (',' expr)* ')' ('requeue' ('head' | 'tail'))?) ';'
 //!           | 'queue' ('fifo' | 'by' '(' expr (',' expr)* ')') ';'
 //!           | 'spill' IDENT 'via' IDENT '(' expr ')' 'when' '(' expr ')' ';'
 //! kind     := 'fifo' ('(' expr ')')? | 'ps' '(' expr ')' | 'delay'
@@ -31,10 +29,10 @@
 //!           | 'memory' IDENT ';'
 //! wlitem   := 'arrive' ('poisson' '(' expr ')' | 'renewal' '(' expr ')' | 'closed' '(' expr ')' | 'batch' '(' expr ')' | 'none') ';'
 //!           | 'trace' STRING ('ordered')? ';' | 'init' block | 'turn' block
-//!           | 'session' block                  -- the session's side, with 'request'
+//!           | 'session' block                  -- optional sequence of completed turns
 //!           | 'hidden' IDENT (',' IDENT)* ';'
 //! block    := '{' stmt* '}'
-//! stmt     := 'turn' ';' | 'request' IDENT? ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
+//! stmt     := 'turn' ';' | 'set' IDENT '=' expr ';' | 'observe' IDENT '=' expr ';'
 //!           | 'hold' ref '(' expr ')' ('reserve' '(' expr ')')?
 //!                 (',' ref '(' expr ')' ('reserve' '(' expr ')')?)* ('reuse' '(' expr ')')?
 //!                 ('at' 'admission' '(' IDENT '=' expr (',' IDENT '=' expr)* ')')?
@@ -45,9 +43,8 @@
 //!           | 'loop' block | 'end' ';'
 //!           | 'choose' IDENT 'in' expr 'by' '(' expr (',' expr)* ')' ';'
 //!           | serving
-//! serving  := role ('[' expr ']' | 'on' ref)? expr ('growing' ref)? ';'
+//! serving  := 'tool' ('[' expr ']' | 'on' ref)? expr ';'
 //!           | 'transfer' ('[' expr ']' | 'on' ref)? expr 'from' ref 'to' ref '(' expr ')' ';'
-//! role     := 'prefill' | 'decode' | 'tool'
 //! ref      := IDENT ('[' expr ']')?
 //! atom     := NUM | '(' expr ')' | IDENT | IDENT '(' arg (',' arg)* ')' | over
 //! over     := ('max' | 'min' | 'sum') IDENT 'in' (NUM | IDENT | '(' expr ')') '(' expr ')'
@@ -56,20 +53,14 @@
 //! The serving forms (`serving`) are sugar: they are rewritten to `hold`
 //! and `run` here, so the AST, the IR and the interpreter know only the
 //! kernel. A role finds its stage among the stages declared above the
-//! statement: the stage of the role's name (`prefill`, `link` or
-//! `transfer`, `decode`, `tool`), else, for `prefill` and `decode`, the
-//! `step` engine; `on STAGE` names it explicitly. On a step engine the run
-//! gets the role's mode (`run E prefill (S)`), elsewhere it is plain.
+//! statement: the stage of the role's name (`link` or `transfer`, `tool`);
+//! `on STAGE` names it explicitly. The run is plain. Prefill and decode are
+//! not roles: they are the mode of a `run` on a step engine.
 //!
-//! The two sides. `workload { … session { … request; … } }` and
-//! `server { … }` are one session written from its two sides: the client's
-//! (arrivals, turns, thinking, whether to go on) and the server's (what
-//! the deployment does with one request). The parser splices the server's
-//! statements in place of every `request;`, so the AST holds one session
-//! and the IR is the one the same program written as `session { … }`
-//! compiles to. Each side has its words: `request`, `turn` and `end` are
-//! the session's and are refused in a `server`. An admission is written
-//! one way on both sides: `hold … at admission (…) { … } cache (…)`.
+//! A workload's optional session describes complete turns and their continuation.
+//! Each source `turn;` becomes an attribute draw followed by the one server's
+//! statements. Omitting the session means one turn. Queue routing belongs to
+//! the server; lifecycle (`turn`, early `end`) belongs to the session.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -77,8 +68,12 @@ use std::path::{Path, PathBuf};
 use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
-use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
+use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, RENAMED};
 use crate::frontend::queue::{self, QueueDecl};
+
+mod device;
+
+pub use device::engine_name;
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -100,7 +95,7 @@ impl fmt::Display for ParseError {
 
 impl ParseError {
     pub fn render(&self, source: &str) -> String {
-        // an error about the command line (`--def`) has no place in the text
+        // an error about an override (a `def`'s body) has no place in the text
         if self.line == 0 {
             return self.msg.clone();
         }
@@ -133,12 +128,16 @@ impl From<LexError> for ParseError {
 type PResult<T> = Result<T, ParseError>;
 
 struct Parser {
+    args_imported: bool,
+    supplied_inputs: Vec<String>,
     toks: Vec<Token>,
     pos: usize,
-    /// The stages declared so far, (name, is a step engine): what the
-    /// serving forms resolve their stage against.
-    stages: Vec<(String, bool)>,
+    /// The stages declared so far: what the serving forms resolve their
+    /// stage against.
+    stages: Vec<String>,
     definitions: Vec<(String, Span)>,
+    /// Composite costs lower to named scalar fields in declaration order.
+    cost_records: std::collections::BTreeMap<String, Vec<String>>,
     /// Which side the statement being parsed is on.
     side: Side,
     /// The workload's `session` block and the `server` block, each with the
@@ -158,7 +157,7 @@ struct Parser {
     /// The token ranges uses were expanded into, innermost last, to say
     /// where an error inside one was used.
     expanded: Vec<Expanded>,
-    /// Uses whose arguments read names a `turn;` or `request;` in the body
+    /// Uses whose arguments read names a `turn;` in the body
     /// might assign, which only the whole program says: checked at its end.
     deferred: Vec<Deferred>,
     /// The directory of the program's file, which a `use` reads next to;
@@ -171,33 +170,45 @@ struct Parser {
     /// Each library's directory as the program named it, for display.
     lib_shown_dirs: Vec<PathBuf>,
     read: Vec<PathBuf>,
-    /// `--def name=expr`: the body an expression definition has instead of
+    /// The `def` overrides: the body an expression definition has instead of
     /// its own, and whether the program defined it.
     def_overrides: Vec<(String, String, bool)>,
     /// The queues declared so far; their entries are expanded in `assemble`.
     queues: Vec<QueueDecl>,
     /// `let` constants with a constant value, for a family's size.
     consts: Vec<(String, f64)>,
-    /// Constants whose values can change through --set, including dependents.
+    /// Constants whose values a `let` override can change, including dependents.
     structural_overrides: Vec<String>,
     /// The queue whose entry is being parsed.
     in_queue: Option<usize>,
     /// The `from` name of the entry being parsed.
     entry_from: Option<String>,
-    /// The program's `share` was given by a pull relation.
-    relation_share: bool,
+    entry_gateway: bool,
+    /// The verb of the relation that gave the program's `share`.
+    relation_share: Option<&'static str>,
+    /// The queues whose relation gives the wait before each copy they post.
+    posters: Vec<String>,
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
-    dotted_reads: Vec<(usize, String)>,
+    dotted_reads: Vec<(usize, String, Option<String>)>,
     /// `Q[i].x` references, checked once the queues are known: `x` must be
     /// a pool of `Q`.
     indexed_dotted: Vec<(usize, String)>,
-    /// Request sites and their explicit gateway, resolved after declarations.
-    requests: Vec<(usize, Option<String>)>,
+    /// `device`s, `engine … on` them and `pool … on` either, linked once
+    /// the program is read (`device::link_engines`).
+    devices: Vec<device::DeviceDecl>,
+    engines: Vec<device::EngineDecl>,
+    pools_on: Vec<device::PoolOn>,
+    /// The engine clause being parsed, `tokens cap`, `execute`, `schedule`
+    /// or one of the schedule's own (`only`, `by`, `each at most`), where
+    /// `running.…`, `waiting.…` and `batch.…` are read.
+    in_engine: Option<&'static str>,
+    /// The queue whose body is being read: its `device gpu` is `Q.gpu`.
+    device_scope: Option<String>,
 }
 
-/// A use of a `def` whose body says `turn;` or `request;`, with the names
+/// A use of a `def` whose body says `turn;`, with the names
 /// its arguments read.
 struct Deferred {
     name: String,
@@ -206,113 +217,13 @@ struct Deferred {
     file: usize,
     reads: Vec<String>,
     turn: bool,
-    /// Where its `request`s go.
-    request: Vec<Sends>,
 }
 
-/// Where a `request` in a `def` body goes.
-#[derive(Clone, Debug, PartialEq)]
-enum Sends {
-    /// `request;`: the anonymous server.
-    Server,
-    /// `request gw;`: the gateway `gw`.
-    Gateway(String),
-    /// `request p;` with `p` the definition's `k`-th parameter: the
-    /// gateway its argument names.
-    Param(usize),
-    /// A gateway an argument names other than by its name: any of them.
-    Any,
-}
-
-impl Sends {
-    /// The statement, as an error names it.
-    fn says(&self) -> String {
-        match self {
-            Sends::Server => "`request;`".into(),
-            Sends::Gateway(g) => format!("`request {g};`"),
-            Sends::Param(_) | Sends::Any => "`request`".into(),
-        }
-    }
-
-    /// Where it goes at a use with these arguments, `params` being those
-    /// of the definition the use is in (none at the top level).
-    fn at(&self, args: &[Vec<Token>], params: &[String]) -> Sends {
-        let Sends::Param(i) = self else {
-            return self.clone();
-        };
-        match args.get(*i).map(Vec::as_slice) {
-            Some([t]) => match &t.tok {
-                Tok::Ident(g) => match params.iter().position(|p| p == g) {
-                    Some(j) => Sends::Param(j),
-                    None => Sends::Gateway(g.clone()),
-                },
-                _ => Sends::Any,
-            },
-            _ => Sends::Any,
-        }
-    }
-}
-
-/// The arguments of each use `name(a, …)` in these tokens, split at the
-/// commas outside brackets.
-fn uses_args(toks: &[Token], name: &str) -> Vec<Vec<Vec<Token>>> {
-    let mut out = vec![];
-    for (k, w) in toks.windows(2).enumerate() {
-        if !(matches!(&w[0].tok, Tok::Ident(n) if n == name) && w[1].tok == Tok::LParen) {
-            continue;
-        }
-        let mut args = vec![];
-        let mut cur = vec![];
-        let mut depth = 0usize;
-        for t in &toks[k + 2..] {
-            match t.tok {
-                Tok::RParen if depth == 0 => break,
-                Tok::Comma if depth == 0 => {
-                    args.push(std::mem::take(&mut cur));
-                    continue;
-                }
-                Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
-                Tok::RParen | Tok::RBracket | Tok::RBrace => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-            cur.push(t.clone());
-        }
-        if !cur.is_empty() || !args.is_empty() {
-            args.push(cur);
-        }
-        out.push(args);
-    }
-    out
-}
-
-/// What a request assigns, by where it goes.
+/// The attributes one completed turn may change in the serving path.
 #[derive(Default)]
 struct Served {
-    /// Whatever it goes to: `cached`, `computed`, the entries' locals and
-    /// marks.
     shared: Vec<String>,
-    /// The server's assignments.
     server: Vec<String>,
-    /// Each gateway's `route`'s.
-    gateways: Vec<(String, Vec<String>)>,
-}
-
-impl Served {
-    /// Does a request sent `to` assign `n`?
-    fn assigns(&self, to: &Sends, n: &str) -> bool {
-        let n = n.to_string();
-        self.shared.contains(&n)
-            || match to {
-                Sends::Server => self.server.contains(&n),
-                Sends::Gateway(g) => self
-                    .gateways
-                    .iter()
-                    .any(|(q, names)| q == g && names.contains(&n)),
-                Sends::Param(_) | Sends::Any => {
-                    self.server.contains(&n) || self.gateways.iter().any(|(_, ns)| ns.contains(&n))
-                }
-            }
-    }
 }
 
 /// The tokens a use of a `def` became, and where it was used.
@@ -325,7 +236,7 @@ struct Expanded {
     file: usize,
 }
 
-/// `def name(x, y) = e;` or `def name(x, y) { statements }`: a name for
+/// `def name(x, y) { e }` or `def name(x, y) { statements }`: a name for
 /// source a program would otherwise repeat. A use is replaced by the body's
 /// tokens, each parameter by its argument's, and parsed where it stands, so
 /// the AST, the IR and everything after know nothing of it.
@@ -333,7 +244,7 @@ struct Expanded {
 struct Def {
     name: String,
     params: Vec<String>,
-    /// An expression (`= e;`) or statements (`{ … }`).
+    /// A single expression or statements, both enclosed in braces.
     stmts: bool,
     body: Vec<Token>,
     /// The body draws, itself or through a definition it uses.
@@ -342,6 +253,10 @@ struct Def {
     /// `set`s, `choose`s and bindings, and `cached` and `computed` if it
     /// holds. An argument that reads one would read the body's value.
     assigns: Vec<String>,
+    /// The entry calls the body makes, itself or through a definition it
+    /// uses, as `(queue, verb)`: each writes its queue's marks and locals,
+    /// read at a use, where the queues are declared.
+    entry_calls: Vec<(String, String)>,
     /// The names the body reads other than its parameters, and the
     /// functions of pool or stage state it calls, itself or through a
     /// definition it uses: what an argument that uses it reads.
@@ -349,8 +264,6 @@ struct Def {
     calls: Vec<String>,
     /// The body says `turn;`, itself or through a definition.
     turn: bool,
-    /// Where the body's `request`s go, itself or through a definition.
-    request: Vec<Sends>,
     /// Where the name is written.
     line: usize,
     col: usize,
@@ -360,6 +273,10 @@ struct Def {
 /// Tokens a program may expand to. Definitions use only earlier ones, so
 /// an expansion ends; one can still double at every level.
 const MAX_TOKENS: usize = 100_000;
+
+/// The names an engine reads its values under: `running.count`,
+/// `waiting.count`, `batch.tokens` (`parser/device.rs`).
+const LISTS: [&str; 3] = ["running", "waiting", "batch"];
 
 /// The most members a family (`pool p[N]`, `queue D[N]`) may have.
 const MAX_FAMILY: usize = 10_000;
@@ -371,9 +288,12 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 95] = [
+pub const KEYWORDS: [&str; 113] = [
+    "Cost",
+    "Size",
     "admission",
     "admit",
+    "advance",
     "arrivals",
     "arrive",
     "at",
@@ -394,26 +314,35 @@ pub const KEYWORDS: [&str; 95] = [
     "decode",
     "def",
     "delay",
+    "device",
     "drop",
     "else",
     "end",
+    "engine",
     "every",
     "evict",
     "exclusive",
+    "execute",
     "fifo",
     "first",
     "fits",
+    "fn",
+    "fork",
     "from",
     "gauge",
     "given",
+    "granule",
     "grow",
     "growing",
+    "head",
+    "held",
     "hidden",
     "hold",
     "horizon",
     "in",
     "init",
     "iteration",
+    "join",
     "latency",
     "lease",
     "let",
@@ -438,13 +367,16 @@ pub const KEYWORDS: [&str; 95] = [
     "prefill",
     "ps",
     "pull",
+    "push",
     "queue",
     "release",
     "renewal",
     "request",
+    "requeue",
     "reserve",
     "reuse",
     "run",
+    "schedule",
     "seed",
     "serve",
     "server",
@@ -454,8 +386,10 @@ pub const KEYWORDS: [&str; 95] = [
     "some",
     "spill",
     "stage",
+    "state",
     "step",
     "sum",
+    "tail",
     "to",
     "tool",
     "trace",
@@ -465,12 +399,12 @@ pub const KEYWORDS: [&str; 95] = [
     "via",
     "warmup",
     "when",
+    "while",
     "with",
     "workload",
 ];
 
-/// Where a statement sits: a top-level `session`, the `session` inside
-/// `workload` (the only place `request` is a statement) or `server`.
+/// Where a statement sits: declarations, the workload session, or a server.
 #[derive(Clone, Copy, PartialEq)]
 enum Side {
     Session,
@@ -479,21 +413,18 @@ enum Side {
 }
 
 /// A serving form: a statement that desugars to `run` on the stage that
-/// plays the role.
+/// plays the role. Prefill and decode are not among them: on a step engine
+/// they are the run's mode, written `run E prefill (…)`.
 #[derive(Clone, Copy, PartialEq)]
 enum Role {
-    Prefill,
     Transfer,
-    Decode,
     Tool,
 }
 
 impl Role {
     fn of(kw: &str) -> Option<Role> {
         match kw {
-            "prefill" => Some(Role::Prefill),
             "transfer" => Some(Role::Transfer),
-            "decode" => Some(Role::Decode),
             "tool" => Some(Role::Tool),
             _ => None,
         }
@@ -501,9 +432,7 @@ impl Role {
 
     fn keyword(self) -> &'static str {
         match self {
-            Role::Prefill => "prefill",
             Role::Transfer => "transfer",
-            Role::Decode => "decode",
             Role::Tool => "tool",
         }
     }
@@ -511,19 +440,8 @@ impl Role {
     /// The stage names that play the role by default.
     fn names(self) -> &'static [&'static str] {
         match self {
-            Role::Prefill => &["prefill"],
             Role::Transfer => &["link", "transfer"],
-            Role::Decode => &["decode"],
             Role::Tool => &["tool"],
-        }
-    }
-
-    /// The run mode on a step engine, for the roles an engine plays.
-    fn step_mode(self) -> Option<RunMode> {
-        match self {
-            Role::Prefill => Some(RunMode::Prefill),
-            Role::Decode => Some(RunMode::Decode),
-            Role::Transfer | Role::Tool => None,
         }
     }
 }
@@ -538,8 +456,8 @@ pub fn parse_at(src: &str, base: Option<&Path>) -> PResult<Program> {
     parse_with(src, base, None, &[], &[])
 }
 
-/// `parse_at`, with the bodies `--def` gives expression definitions and
-/// the constants `--set` overrides, which may not size a queue family.
+/// `parse_at`, with the bodies `def` overrides give expression definitions
+/// and the constants `let` overrides replace, which may not size a queue family.
 pub fn parse_at_with(
     src: &str,
     base: Option<&Path>,
@@ -581,7 +499,7 @@ fn parse_with(
         .iter()
         .map(|(n, e)| (n.clone(), e.clone(), false))
         .collect();
-    p.structural_overrides = lets.to_vec();
+    p.supplied_inputs = lets.to_vec();
     let prog = p.program()?;
     let unknown: Vec<&str> = p
         .def_overrides
@@ -601,7 +519,7 @@ fn parse_with(
             line: 0,
             col: 0,
             msg: format!(
-                "unknown --def `{name}`\nhelp: --def replaces the body of a declared `def NAME(...) = expr;`; \
+                "unknown `def` override `{name}`\nhelp: an override replaces the body of a declared `def NAME(...) {{ expr }}`; \
                  the program declares: {}",
                 if known.is_empty() {
                     "none".to_string()
@@ -615,7 +533,14 @@ fn parse_with(
     Ok(prog)
 }
 
-/// Parse a standalone expression (used by `--set name=expr` on the CLI).
+/// Parse an instance file (`--instance`): the values of a program's
+/// constants, as `let` bindings, and its run options, as a `run` block.
+pub fn parse_instance(src: &str) -> PResult<(Vec<(String, Expr)>, RunOpts)> {
+    let toks = lex(src)?;
+    Parser::new(toks).instance()
+}
+
+/// Parse a standalone expression (an override's: `--set name=expr`, `sets=`).
 pub fn parse_expr(src: &str) -> PResult<Expr> {
     let toks = lex(src)?;
     let mut p = Parser::new(toks);
@@ -629,7 +554,10 @@ pub(crate) fn assigned_in(stmts: &[Stmt], out: &mut Vec<String>) {
     for s in stmts {
         match s {
             Stmt::Set(n, _) | Stmt::Choose { var: n, .. } => out.push(n.clone()),
-            Stmt::Hold { body, .. } | Stmt::Loop(body) => assigned_in(body, out),
+            Stmt::Hold { body, .. }
+            | Stmt::Loop(body)
+            | Stmt::While(_, body)
+            | Stmt::Fork(body) => assigned_in(body, out),
             Stmt::Branch(_, a, b) => {
                 assigned_in(a, out);
                 assigned_in(b, out);
@@ -656,9 +584,9 @@ fn live_message(def: &str, p: &str, what: &str) -> String {
 
 /// An argument of `def` reads `n`, which the body assigns before it reads
 /// the parameter `p`.
-fn capture_message(def: &str, p: &str, n: &str) -> String {
+fn capture_message(p: &str, n: &str, by: &str) -> String {
     format!(
-        "the argument for `{p}` reads `{n}`, which `{def}` assigns: it would read the \
+        "the argument for `{p}` reads `{n}`, which {by}: it would read the \
          body's `{n}`, not this one\nhelp: `set` the value under another name first and \
          pass that; a key over a `choose` of the body is written where the `choose` is"
     )
@@ -685,6 +613,30 @@ fn assigned_tokens(b: &[Token]) -> Vec<String> {
         .any(|t| matches!(&t.tok, Tok::Ident(k) if k == "hold"));
     if holds {
         out.extend(["cached".to_string(), "computed".to_string()]);
+    }
+    out
+}
+
+/// The calls `Q.verb (` and `Q[i].verb (` in a body, as `(Q, verb)`: entry
+/// calls if `Q` is a queue with that entry, which is known at a use.
+fn entry_calls_of(b: &[Token]) -> Vec<(String, String)> {
+    let tok = |i: usize| b.get(i).map(|t| &t.tok);
+    let mut out = vec![];
+    for (k, t) in b.iter().enumerate() {
+        let Tok::Ident(q) = &t.tok else { continue };
+        // past a member's index, `Q[i]`
+        let mut i = k + 1;
+        if tok(i) == Some(&Tok::LBracket) {
+            while tok(i).is_some_and(|t| *t != Tok::RBracket) {
+                i += 1;
+            }
+            i += 1;
+        }
+        if let (Some(Tok::Dot), Some(Tok::Ident(v)), Some(Tok::LParen)) =
+            (tok(i), tok(i + 1), tok(i + 2))
+        {
+            out.push((q.clone(), v.clone()));
+        }
     }
     out
 }
@@ -727,26 +679,12 @@ fn says(b: &[Token], w: &str) -> bool {
         .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
 }
 
-/// Where the `request;` and `request gw;` these tokens say go, `params`
-/// being the definition's.
-fn sends_of(b: &[Token], params: &[String]) -> Vec<Sends> {
-    let mut out = vec![];
-    for (k, t) in b.iter().enumerate() {
-        if t.tok != Tok::Ident("request".into()) {
-            continue;
-        }
-        match (b.get(k + 1).map(|t| &t.tok), b.get(k + 2).map(|t| &t.tok)) {
-            (Some(Tok::Semi), _) => out.push(Sends::Server),
-            (Some(Tok::Ident(g)), Some(Tok::Semi)) => {
-                out.push(match params.iter().position(|p| p == g) {
-                    Some(i) => Sends::Param(i),
-                    None => Sends::Gateway(g.clone()),
-                })
-            }
-            _ => {}
-        }
-    }
-    out
+/// A pool declared with a stage's name, or a stage with a pool's.
+fn one_name_space(name: &str) -> String {
+    format!(
+        "`{name}` is declared twice: a pool and a stage share one name space, as \
+         `cost({name}, …)` reads either"
+    )
 }
 
 /// A function of the language: one the linker resolves or one it folds.
@@ -803,6 +741,8 @@ fn expr_reads(e: &Expr, n: &str) -> bool {
             Arg::Expr(x) => expr_reads(x, n),
             Arg::Ref(r) => ref_reads(r, n) || (r.index.is_none() && r.name == n),
         }),
+        // an unread argument is resolved where it stands, not read
+        Expr::Unread(_, e) => expr_reads(e, n),
         Expr::Unary(_, a) => expr_reads(a, n),
         Expr::Binary(_, a, b) => expr_reads(a, n) || expr_reads(b, n),
         Expr::Cond(c, a, b) => expr_reads(c, n) || expr_reads(a, n) || expr_reads(b, n),
@@ -818,7 +758,13 @@ fn ref_reads(r: &Ref, n: &str) -> bool {
 fn stmt_reads(s: &Stmt, n: &str) -> bool {
     let block = |b: &[Stmt]| b.iter().any(|s| stmt_reads(s, n));
     match s {
-        Stmt::Turn | Stmt::Request | Stmt::End => false,
+        Stmt::Declare(..)
+        | Stmt::Side(_)
+        | Stmt::Turn
+        | Stmt::Request
+        | Stmt::End
+        | Stmt::Join
+        | Stmt::Unread(_) => false,
         Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
         Stmt::Hold { body, .. } => {
             // a nested hold that binds `n` itself gives its body its own `n`
@@ -839,7 +785,8 @@ fn stmt_reads(s: &Stmt, n: &str) -> bool {
                 || growing.as_ref().is_some_and(|g| ref_reads(g, n))
         }
         Stmt::Branch(c, a, b) => expr_reads(c, n) || block(a) || block(b),
-        Stmt::Loop(b) => block(b),
+        Stmt::While(e, b) => expr_reads(e, n) || block(b),
+        Stmt::Loop(b) | Stmt::Fork(b) => block(b),
         Stmt::Choose { count, key, .. } => {
             expr_reads(count, n) || key.iter().any(|k| expr_reads(k, n))
         }
@@ -883,6 +830,20 @@ fn header_reads(s: &Stmt, n: &str) -> bool {
             .is_some_and(|(r, t)| ref_reads(r, n) || expr_reads(t, n))
 }
 
+/// `Expr::bind_unread` in every part of `stmts` (`each_part_mut`): its
+/// expressions, the index of each reference, and a `Stmt::Unread`'s
+/// arguments, which are unread whole.
+fn bind_unread(stmts: &mut [Stmt], binds: &[(String, Expr)]) {
+    each_part_mut(
+        stmts,
+        &mut Parts {
+            expr: |e: &mut Expr| e.bind_unread(binds),
+            reference: |r: &mut Ref| r.index.iter_mut().for_each(|i| i.bind_unread(binds)),
+            unread: |a: &mut Arg| a.substitute(binds),
+        },
+    );
+}
+
 /// Does this hold body begin with the `set` of a binding `n`? The parser
 /// puts a binding the body reads there, and nothing else sets its name.
 fn binds_in_body(body: &[Stmt], n: &str) -> bool {
@@ -910,7 +871,10 @@ fn stray_read(stmts: &[Stmt], bound: &[String], scope: &[String]) -> Option<Stri
             Stmt::Branch(c, a, b) => outside(s, &|_, n| expr_reads(c, n))
                 .or_else(|| stray_read(a, bound, scope))
                 .or_else(|| stray_read(b, bound, scope)),
-            Stmt::Loop(b) => stray_read(b, bound, scope),
+            Stmt::While(e, b) => {
+                outside(s, &|_, n| expr_reads(e, n)).or_else(|| stray_read(b, bound, scope))
+            }
+            Stmt::Loop(b) | Stmt::Fork(b) => stray_read(b, bound, scope),
             // the binding's own `set`, at the top of its hold's body
             Stmt::Set(v, _) if bound.contains(v) && scope.contains(v) => None,
             _ => outside(s, &stmt_reads),
@@ -952,7 +916,12 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
             StageKind::Step(sp) => {
                 out.extend([&sp.budget, &sp.cost, &sp.chunk]);
                 out.extend(sp.memory.iter().filter_map(|r| r.index.as_deref()));
-                out.extend(&sp.only);
+                match &sp.schedule {
+                    Schedule::Procedure(only) => out.extend(only),
+                    // a body's guards read as the iteration is planned, and
+                    // the moments check what they read
+                    Schedule::Body(_) => {}
+                }
                 if let Serve::By(keys) = &sp.serve {
                     out.extend(keys);
                 }
@@ -967,12 +936,6 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
             Arrival::None => {}
         }
     }
-    let r = &prog.run;
-    out.extend(
-        [&r.horizon, &r.warmup, &r.seed, &r.arrivals]
-            .into_iter()
-            .flatten(),
-    );
     out
 }
 
@@ -1001,6 +964,8 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
                 Arg::Ref(_) => None,
             })
         }
+        // an unread argument is never evaluated
+        Expr::Unread(_, e) => live_read(e, attrs, lets),
         Expr::Unary(_, a) => live_read(a, attrs, lets),
         Expr::Binary(_, a, b) => live_read(a, attrs, lets).or_else(|| live_read(b, attrs, lets)),
         Expr::Cond(c, a, b) => live_read(c, attrs, lets)
@@ -1010,21 +975,16 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
     }
 }
 
-/// The distinct requests `stmts` makes, at any depth: `request;`, or a
-/// gateway's `route` (`request gw;`), each once.
-///
-/// A request is made inside the holds the workload's session has around it
-/// (`replica.sq`'s `hold live (1)`, a session's slot for its whole
-/// conversation): each site comes wrapped in them, outermost first, since
-/// the deployment holds them while it serves the request.
+/// Find turn sites, wrapped in their session-wide holds, for the deployment view.
+/// The internal `Request` marker is inserted after each source turn and is
+/// replaced by the server before the linker sees the AST.
 fn request_sites(stmts: &[Stmt], holds: &[&Stmt], out: &mut Vec<Stmt>) {
-    // Two sites are one request when they name the same server or gateway
+    // All turns use the same server. Two sites have the same serving path
     // inside holds of the same pools; the units held do not change what the
     // figure draws, so `hold live (1)` and `hold live (2)` are one.
     fn same(a: &Stmt, b: &Stmt) -> bool {
         match (a, b) {
             (Stmt::Request, Stmt::Request) => true,
-            (Stmt::Call { queue: a, .. }, Stmt::Call { queue: b, .. }) => a.same_target(b),
             (
                 Stmt::Hold {
                     pools: p, body: x, ..
@@ -1042,8 +1002,7 @@ fn request_sites(stmts: &[Stmt], holds: &[&Stmt], out: &mut Vec<Stmt>) {
     }
     for s in stmts {
         match s {
-            Stmt::Call { verb, .. } if verb != "route" => {}
-            Stmt::Request | Stmt::Call { .. } => {
+            Stmt::Request => {
                 let mut site = s.clone();
                 for &h in holds.iter().rev() {
                     let mut h = h.clone();
@@ -1062,7 +1021,9 @@ fn request_sites(stmts: &[Stmt], holds: &[&Stmt], out: &mut Vec<Stmt>) {
                 inner.push(s);
                 request_sites(body, &inner, out);
             }
-            Stmt::Loop(body) => request_sites(body, holds, out),
+            Stmt::Loop(body) | Stmt::While(_, body) | Stmt::Fork(body) => {
+                request_sites(body, holds, out)
+            }
             Stmt::Branch(_, a, b) => {
                 request_sites(a, holds, out);
                 request_sites(b, holds, out);
@@ -1072,7 +1033,7 @@ fn request_sites(stmts: &[Stmt], holds: &[&Stmt], out: &mut Vec<Stmt>) {
     }
 }
 
-/// Replace every `request;` in `stmts`, at any depth, by the server's
+/// Replace every internal request marker, at any depth, by the server's
 /// statements. Returns how many were replaced.
 fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
     let mut n = 0;
@@ -1081,10 +1042,15 @@ fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
         match &mut s {
             Stmt::Request => {
                 n += 1;
+                out.push(Stmt::Side(crate::ir::Side::Server));
                 out.extend(server.iter().cloned());
+                out.push(Stmt::Side(crate::ir::Side::Workload));
                 continue;
             }
-            Stmt::Hold { body, .. } | Stmt::Loop(body) => n += splice(body, server),
+            Stmt::Hold { body, .. }
+            | Stmt::Loop(body)
+            | Stmt::While(_, body)
+            | Stmt::Fork(body) => n += splice(body, server),
             Stmt::Branch(_, a, b) => {
                 n += splice(a, server);
                 n += splice(b, server);
@@ -1098,10 +1064,25 @@ fn splice(stmts: &mut Vec<Stmt>, server: &[Stmt]) -> usize {
 }
 
 /// The names an expression reads: variables and references.
-fn names(e: &Expr, vars: &mut Vec<String>, refs: &mut Vec<Ref>) {
+pub(crate) fn names(e: &Expr, vars: &mut Vec<String>, refs: &mut Vec<Ref>) {
     let mut indexed = vec![];
     names_in(e, vars, &mut indexed, refs);
     vars.extend(indexed);
+}
+
+/// `names_in` of a call's argument: a reference, with its index's names.
+fn arg_names(a: &Arg, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &mut Vec<Ref>) {
+    match a {
+        Arg::Expr(x) => names_in(x, vars, indexed, refs),
+        Arg::Ref(r) => {
+            if let Some(i) = &r.index {
+                let mut inner = vec![];
+                names_in(i, &mut inner, indexed, refs);
+                indexed.extend(inner);
+            }
+            refs.push(r.clone());
+        }
+    }
 }
 
 /// `names`, with the names read inside a reference's index (`cachedin(P[i].kv)`)
@@ -1112,17 +1093,19 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
         Expr::Num(_) => {}
         Expr::Var(n) => vars.push(n.clone()),
         Expr::Sample(_, args) => args.iter().for_each(|a| names_in(a, vars, indexed, refs)),
-        Expr::Call(_, args) => args.iter().for_each(|a| match a {
-            Arg::Expr(x) => names_in(x, vars, indexed, refs),
-            Arg::Ref(r) => {
-                if let Some(i) = &r.index {
-                    let mut inner = vec![];
-                    names_in(i, &mut inner, indexed, refs);
-                    indexed.extend(inner);
+        Expr::Call(f, args) if f == "cost" => {
+            if let Some(arg) = args.last() {
+                match arg {
+                    Arg::Expr(e) => names_in(e, vars, indexed, refs),
+                    Arg::Ref(r) => vars.push(r.name.clone()),
                 }
-                refs.push(r.clone());
             }
-        }),
+        }
+        Expr::Call(_, args) => args.iter().for_each(|a| arg_names(a, vars, indexed, refs)),
+        Expr::Unread(args, e) => {
+            args.iter().for_each(|a| arg_names(a, vars, indexed, refs));
+            names_in(e, vars, indexed, refs);
+        }
         Expr::Unary(_, a) => names_in(a, vars, indexed, refs),
         Expr::Binary(_, a, b) => {
             names_in(a, vars, indexed, refs);
@@ -1200,7 +1183,9 @@ fn collect_entry(
                 }
                 collect_entry(body, locals, marks, leased);
             }
-            Stmt::Loop(body) => collect_entry(body, locals, marks, leased),
+            Stmt::Loop(body) | Stmt::While(_, body) | Stmt::Fork(body) => {
+                collect_entry(body, locals, marks, leased)
+            }
             Stmt::Branch(_, a, b) => {
                 collect_entry(a, locals, marks, leased);
                 collect_entry(b, locals, marks, leased);
@@ -1214,12 +1199,13 @@ fn collect_entry(
 /// rest: the header is the admission and sees less. The index of every
 /// reference the body names (`run nic[k]`, `hold kv`, `release src`) is in
 /// `indices`: read as the body reads, and the only place a `from` name may
-/// stand as a number.
+/// stand as a number. A `Stmt::Unread`'s arguments are in `unread`.
 fn split_reads<'a>(
     stmts: &'a [Stmt],
     headers: &mut Vec<&'a Expr>,
     bodies: &mut Vec<&'a Expr>,
     indices: &mut Vec<&'a Expr>,
+    unread: &mut Vec<&'a Arg>,
 ) {
     let index = |r: &'a Ref, indices: &mut Vec<&'a Expr>| {
         if let Some(i) = &r.index {
@@ -1228,8 +1214,15 @@ fn split_reads<'a>(
     };
     for s in stmts {
         match s {
-            Stmt::Turn | Stmt::End | Stmt::Request | Stmt::Mark(_) => {}
+            Stmt::Declare(..)
+            | Stmt::Side(_)
+            | Stmt::Turn
+            | Stmt::End
+            | Stmt::Request
+            | Stmt::Mark(_)
+            | Stmt::Join => {}
             Stmt::Set(_, e) | Stmt::Observe(_, e) => bodies.push(e),
+            Stmt::Unread(args) => unread.extend(args),
             Stmt::Grow(r, e) | Stmt::Load(r, e) => {
                 index(r, indices);
                 bodies.push(e);
@@ -1259,7 +1252,7 @@ fn split_reads<'a>(
                     index(r, indices);
                     bodies.push(t);
                 }
-                split_reads(body, headers, bodies, indices);
+                split_reads(body, headers, bodies, indices, unread);
             }
             Stmt::Run {
                 stage,
@@ -1277,10 +1270,14 @@ fn split_reads<'a>(
             }
             Stmt::Branch(p, a, b) => {
                 bodies.push(p);
-                split_reads(a, headers, bodies, indices);
-                split_reads(b, headers, bodies, indices);
+                split_reads(a, headers, bodies, indices, unread);
+                split_reads(b, headers, bodies, indices, unread);
             }
-            Stmt::Loop(b) => split_reads(b, headers, bodies, indices),
+            Stmt::While(e, b) => {
+                bodies.push(e);
+                split_reads(b, headers, bodies, indices, unread);
+            }
+            Stmt::Loop(b) | Stmt::Fork(b) => split_reads(b, headers, bodies, indices, unread),
             Stmt::Choose { count, key, .. } => {
                 bodies.push(count);
                 bodies.extend(key);
@@ -1343,7 +1340,7 @@ fn pools_named<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Ref>) {
                 pools_named(a, out);
                 pools_named(b, out);
             }
-            Stmt::Loop(b) => pools_named(b, out),
+            Stmt::Loop(b) | Stmt::While(_, b) | Stmt::Fork(b) => pools_named(b, out),
             Stmt::Call {
                 to: Some((r, _)), ..
             } => out.push(r),
@@ -1355,10 +1352,13 @@ fn pools_named<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Ref>) {
 impl Parser {
     fn new(toks: Vec<Token>) -> Parser {
         Parser {
+            args_imported: false,
+            supplied_inputs: vec![],
             toks,
             pos: 0,
             stages: vec![],
             definitions: vec![],
+            cost_records: Default::default(),
             side: Side::Session,
             wl_session: None,
             server: None,
@@ -1379,11 +1379,17 @@ impl Parser {
             structural_overrides: vec![],
             in_queue: None,
             entry_from: None,
-            relation_share: false,
+            entry_gateway: false,
+            relation_share: None,
+            posters: vec![],
             latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
-            requests: vec![],
+            devices: vec![],
+            engines: vec![],
+            pools_on: vec![],
+            in_engine: None,
+            device_scope: None,
         }
     }
 
@@ -1452,6 +1458,15 @@ impl Parser {
 
     fn is_kw(&self, kw: &str) -> bool {
         matches!(self.peek(), Tok::Ident(s) if s == kw)
+    }
+
+    fn eat(&mut self, token: &Tok) -> bool {
+        if self.peek() == token {
+            self.advance();
+            true
+        } else {
+            false
+        }
     }
 
     fn eat_kw(&mut self, kw: &str) -> bool {
@@ -1581,9 +1596,91 @@ impl Parser {
         })
     }
 
+    /// `{ horizon e; warmup e; seed e; arrivals e; }`, after `run`.
+    fn run_block(&mut self, run: &mut RunOpts) -> PResult<()> {
+        self.expect(&Tok::LBrace)?;
+        while *self.peek() != Tok::RBrace {
+            let key = self.ident()?;
+            let e = self.expr()?;
+            self.expect(&Tok::Semi)?;
+            match key.as_str() {
+                "horizon" => run.horizon = Some(e),
+                "warmup" => run.warmup = Some(e),
+                "seed" => run.seed = Some(e),
+                "arrivals" => run.arrivals = Some(e),
+                other => return self.err(format!("unknown run option `{other}`")),
+            }
+        }
+        self.expect(&Tok::RBrace)?;
+        Ok(())
+    }
+
+    /// An instance: `let` bindings of the program's inputs and at most
+    /// one `run` block, nothing that adds to the program's structure.
+    fn instance(&mut self) -> PResult<(Vec<(String, Expr)>, RunOpts)> {
+        let (mut lets, mut run, mut ran) =
+            (Vec::<(String, Expr)>::new(), RunOpts::default(), false);
+        while *self.peek() != Tok::Eof {
+            if self.eat_kw("let") {
+                let at = self.pos;
+                let name = self.ident()?;
+                if lets.iter().any(|(n, _)| *n == name) {
+                    return self.err_at(at, format!("`{name}` is bound twice in this instance"));
+                }
+                self.expect(&Tok::Assign)?;
+                let e = self.expr()?;
+                self.expect(&Tok::Semi)?;
+                lets.push((name, e));
+            } else if self.is_kw("run") && !ran {
+                self.pos += 1;
+                self.run_block(&mut run)?;
+                ran = true;
+            } else {
+                return self.err(format!(
+                    "an instance binds values: found {} where `let` or `run` goes\n\
+                     help: an instance gives the program's declared inputs their values \
+                     (`let NAME = expr;`) and the run its options (`run {{ … }}`, once); \
+                     pools, stages, the workload and definitions belong to the program",
+                    self.peek()
+                ));
+            }
+        }
+        Ok((lets, run))
+    }
+
     fn program(&mut self) -> PResult<Program> {
         let mut prog = Program::default();
+        let mut in_main = false;
         while *self.peek() != Tok::Eof {
+            if self.toks[self.pos].file == 0 {
+                if self.eat_kw("fn") {
+                    if in_main || prog.has_main {
+                        return self.err("a program has exactly one `fn main()`; nested or duplicate entry points are not allowed");
+                    }
+                    let name = self.ident()?;
+                    if name != "main" {
+                        return self
+                            .err("the entry point is `fn main()`; reusable definitions use `def`");
+                    }
+                    self.expect(&Tok::LParen)?;
+                    self.expect(&Tok::RParen)?;
+                    self.expect(&Tok::LBrace)?;
+                    prog.has_main = true;
+                    in_main = true;
+                    continue;
+                }
+                if in_main && *self.peek() == Tok::RBrace {
+                    self.advance();
+                    in_main = false;
+                    continue;
+                }
+                if !in_main && !self.is_kw("use") && !self.is_kw("def") && !self.is_kw("let") {
+                    return self.err("executable declarations belong inside `fn main() { … }`; only `use`, `def` and constants belong outside it");
+                }
+                if prog.has_main && !in_main {
+                    return self.err("declarations belong before `fn main()`; its local names are not visible after it");
+                }
+            }
             if self.toks[self.pos].file != 0 && !self.is_kw("def") && !self.is_kw("use") {
                 return self.err(format!(
                     "a library holds definitions: found {} where `def` or `use` goes",
@@ -1598,13 +1695,43 @@ impl Parser {
             if self.eat_kw("let") {
                 let name = self.definition()?;
                 self.expect(&Tok::Assign)?;
-                let e = self.expr()?;
+                let mut supplied_input = false;
+                let e = if matches!(self.peek(), Tok::Ident(n) if n == "args")
+                    && *self.peek_at(1) == Tok::Dot
+                {
+                    if !in_main || !self.args_imported {
+                        return self.err("`args.number` needs `use \"std/args\";` and a `let` inside `fn main()`");
+                    }
+                    self.advance();
+                    self.advance();
+                    let function = self.ident()?;
+                    if function != "number" {
+                        return self.err(format!("std/args has no function `{function}`; use `args.number(\"name\", default)`"));
+                    }
+                    self.expect(&Tok::LParen)?;
+                    let key = self.string()?;
+                    crate::frontend::args::check_name(&key).or_else(|e| self.err(e))?;
+                    if prog.inputs.iter().any(|(n, _)| *n == key) {
+                        return self.err(format!(
+                            "argument `{key}` is declared twice; read it once and reuse its binding"
+                        ));
+                    }
+                    self.expect(&Tok::Comma)?;
+                    let default = self.expr()?;
+                    self.expect(&Tok::RParen)?;
+                    supplied_input = self.supplied_inputs.contains(&key);
+                    prog.inputs.push((key, prog.lets.len()));
+                    default
+                } else {
+                    self.expr()?
+                };
                 self.expect(&Tok::Semi)?;
                 let mut vars = vec![];
                 names(&e, &mut vars, &mut Vec::new());
-                if vars.iter().any(|v| self.structural_overrides.contains(v))
-                    && !self.structural_overrides.contains(&name)
-                {
+                let varies =
+                    supplied_input || vars.iter().any(|v| self.structural_overrides.contains(v));
+                self.structural_overrides.retain(|n| n != &name);
+                if varies {
                     self.structural_overrides.push(name.clone());
                 }
                 if let Some(v) = self.const_value(&e) {
@@ -1622,27 +1749,41 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 prog.gauges.push((name, e));
             } else if self.eat_kw("pool") {
-                prog.pools.push(self.pool()?);
+                let at = self.pos;
+                let (d, on) = self.pool(true)?;
+                if prog.stages.iter().any(|s| s.name == d.name)
+                    || self.queues.iter().any(|q| q.name == d.name)
+                {
+                    return self.err_at(at, one_name_space(&d.name));
+                }
+                if let Some(on) = on {
+                    self.pool_on(prog.pools.len(), d.name.clone(), on)?;
+                }
+                prog.pools.push(d);
+            } else if self.eat_kw("device") {
+                self.device(&prog)?;
+            } else if self.at_engine() {
+                self.advance();
+                self.engine(&mut prog)?;
             } else if self.is_kw("queue") {
                 let at = self.pos;
                 self.advance();
                 self.queue(&mut prog, at)?;
             } else if self.eat_kw("stage") {
+                let at = self.pos;
                 let d = self.stage()?;
-                self.stages
-                    .push((d.name.clone(), matches!(d.kind, StageKind::Step(_))));
+                if prog.pools.iter().any(|p| p.name == d.name) {
+                    return self.err_at(at, one_name_space(&d.name));
+                }
+                self.stages.push(d.name.clone());
                 prog.stages.push(d);
             } else if self.eat_kw("workload") {
                 if prog.workload.is_some() {
                     return self.err("duplicate workload");
                 }
                 prog.workload = Some(self.workload()?);
-            } else if self.eat_kw("session") {
-                if !prog.session.is_empty() {
-                    return self.err("duplicate session");
-                }
-                self.side = Side::Session;
-                prog.session = self.block()?;
+            } else if self.is_kw("session") {
+                return self.err("`session` belongs inside `workload`; put request handling in `server` and describe its turns with `turn;`");
             } else if self.is_kw("server") {
                 let at = self.pos;
                 self.advance();
@@ -1654,18 +1795,18 @@ impl Parser {
                 self.side = Side::Session;
                 self.server = Some((at, body));
             } else if matches!(self.peek(), Tok::Ident(_))
-                && *self.peek_at(1) == Tok::Ident("pull".into())
+                && (*self.peek_at(1) == Tok::Ident("pull".into())
+                    || *self.peek_at(1) == Tok::Ident("push".into()))
             {
-                self.pull_relation(&mut prog)?;
+                self.copy_relation(&mut prog)?;
             } else if self.is_kw("share") {
                 let at = self.pos;
                 self.advance();
                 if let Some(first) = self.share_at {
                     let line = self.toks[first].line;
-                    let what = if self.relation_share {
-                        "the pull relation on line"
-                    } else {
-                        "the first is on line"
+                    let what = match self.relation_share {
+                        Some(verb) => format!("the {verb} relation on line"),
+                        None => "the first is on line".into(),
                     };
                     return self.err_at(at, format!("`share` is given twice: {what} {line}"));
                 }
@@ -1682,20 +1823,7 @@ impl Parser {
                 });
                 self.expect(&Tok::Semi)?;
             } else if self.eat_kw("run") {
-                self.expect(&Tok::LBrace)?;
-                while *self.peek() != Tok::RBrace {
-                    let key = self.ident()?;
-                    let e = self.expr()?;
-                    self.expect(&Tok::Semi)?;
-                    match key.as_str() {
-                        "horizon" => prog.run.horizon = Some(e),
-                        "warmup" => prog.run.warmup = Some(e),
-                        "seed" => prog.run.seed = Some(e),
-                        "arrivals" => prog.run.arrivals = Some(e),
-                        other => return self.err(format!("unknown run option `{other}`")),
-                    }
-                }
-                self.expect(&Tok::RBrace)?;
+                return self.err("execution settings do not belong in a model\nhelp: supply --horizon T (and --warmup, --seed, --arrivals) or --instance FILE; `run STAGE (work);` belongs in a session or server");
             } else {
                 return self.err(format!("unexpected {} at top level", self.peek()));
             }
@@ -1710,6 +1838,20 @@ impl Parser {
                 );
             }
         }
+        if in_main {
+            return self.err("unclosed `fn main()`; expected `}`");
+        }
+        if self.args_imported
+            && (prog.lets.iter().any(|(n, _)| n == "args")
+                || prog.pools.iter().any(|p| p.name == "args")
+                || prog.stages.iter().any(|s| s.name == "args")
+                || self.queues.iter().any(|q| q.name == "args")
+                || self.defs.iter().any(|d| d.name == "args"))
+        {
+            return self.err(
+                "`args` names the imported std/args module; give the declaration another name",
+            );
+        }
         // a request runs the server or a named gateway's `route`, whose
         // admissions set `cached` and `computed`, and the entries it calls
         // set and mark (`D.first_token`)
@@ -1720,58 +1862,31 @@ impl Parser {
         }
         for q in &self.queues {
             for e in &q.entries {
-                if e.verb == "route" {
-                    let mut names = vec![];
-                    assigned_in(&e.body, &mut names);
-                    served.gateways.push((q.name.clone(), names));
-                } else {
+                if e.verb != "route" {
                     shared.extend(e.locals.iter().map(|l| format!("{}.{l}", q.name)));
                 }
             }
             shared.extend(q.marks.iter().map(|m| format!("{}.{m}", q.name)));
         }
         served.shared = shared;
-        self.assemble(&mut prog)?;
+        self.assemble(&mut prog, &mut served)?;
+        self.link_engines(&mut prog)?;
         self.check_body_bindings(&prog)?;
         self.check_def_names(&prog)?;
         self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
+        prog.cost_records = std::mem::take(&mut self.cost_records).into_iter().collect();
         prog.libs = self.libs.clone();
         Ok(prog)
     }
 
-    /// Resolve named gateway requests, then expand entries and splice the
-    /// anonymous server at bare `request;` sites. The workload's session
-    /// becomes the program's session; a second top-level session is an error.
-    fn assemble(&mut self, prog: &mut Program) -> PResult<()> {
-        for (at, target) in &self.requests {
-            match target {
-                Some(name) => {
-                    let Some(q) = self.queues.iter().find(|q| q.name == *name) else {
-                        return self.err_at(
-                            *at,
-                            format!("`request {name}`: no queue `{name}` is declared"),
-                        );
-                    };
-                    if !q.roles.iter().any(|role| role == "gateway") {
-                        return self.err_at(
-                            *at,
-                            format!("`request {name}`: queue `{name}` does not play `gateway`"),
-                        );
-                    }
-                }
-                None if self.server.is_none() => {
-                    return self.err_at(
-                        *at,
-                        "`request;` needs a `server` block; name a gateway with `request NAME;`",
-                    );
-                }
-                None => {}
+    /// Expand queue entries, then insert the server after each turn draw.
+    fn assemble(&mut self, prog: &mut Program, served: &mut Served) -> PResult<()> {
+        if self.wl_session.is_none() && self.server.is_some() {
+            if prog.workload.is_none() {
+                return self.err("`server` needs a `workload`: its default session is one turn");
             }
-        }
-        if self.wl_session.is_some() && !prog.session.is_empty() {
-            return self
-                .err("a program has one session: inside `workload` or at top level, not both");
+            self.wl_session = Some((self.pos, vec![Stmt::Turn, Stmt::Request]));
         }
         // what one request runs, before either side is expanded: the one
         // thing every `request` of the workload's session names
@@ -1784,7 +1899,7 @@ impl Parser {
         }
         // Queues first: every entry call in place, so the sides are plain
         // statements when they are put together.
-        if !self.queues.is_empty() {
+        {
             let hidden: Vec<String> = prog
                 .workload
                 .as_ref()
@@ -1793,6 +1908,28 @@ impl Parser {
             for q in &self.queues {
                 for e in &q.entries {
                     if let Some(n) = e.reads.iter().find(|n| !hidden.contains(n)) {
+                        // a name nothing sets is no attribute set outside
+                        // the queue: it is unknown, as it is anywhere (#444)
+                        let set = self.definitions.iter().any(|(d, _)| d == n)
+                            || BUILTIN_ATTRS.contains(&n.as_str())
+                            || self.body_binds.iter().any(|(_, b, _)| b == n);
+                        if !set {
+                            let help = crate::frontend::diagnostic::suggestion(
+                                n,
+                                self.definitions.iter().map(|(d, _)| d.as_str()),
+                            )
+                            .map(|d| format!("did you mean `{d}`?"))
+                            .unwrap_or_else(|| {
+                                "declare it, then pass it as a parameter or mark it `hidden`".into()
+                            });
+                            return self.err_at(
+                                e.at,
+                                format!(
+                                    "`{}.{}` reads `{n}`, which nothing sets: an unknown name\nhelp: {help}",
+                                    q.name, e.verb
+                                ),
+                            );
+                        }
                         return self.err_at(
                             e.at,
                             format!(
@@ -1820,16 +1957,21 @@ impl Parser {
                     );
                 }
             }
-            for (at, name) in std::mem::take(&mut self.dotted_reads) {
+            for (at, name, scope) in std::mem::take(&mut self.dotted_reads) {
                 let (qn, field) = name.split_once('.').expect("a dotted name");
-                let ok = self.queues.iter().any(|q| {
-                    q.name == qn
-                        && (q.marks.iter().any(|m| m == field)
-                            || q.pools.iter().any(|p| p == field)
-                            || q.entries
-                                .iter()
-                                .any(|e| e.locals.iter().any(|l| l == field)))
-                });
+                let record = scope.map_or_else(|| qn.to_string(), |q| format!("{q}.{qn}"));
+                let ok = self
+                    .cost_records
+                    .get(&record)
+                    .is_some_and(|fields| fields.iter().any(|f| f == field))
+                    || self.queues.iter().any(|q| {
+                        q.name == qn
+                            && (q.marks.iter().any(|m| m == field)
+                                || q.pools.iter().any(|p| p == field)
+                                || q.entries
+                                    .iter()
+                                    .any(|e| e.locals.iter().any(|l| l == field)))
+                    });
                 if !ok {
                     return self.err_at(
                         at,
@@ -1853,35 +1995,33 @@ impl Parser {
             if let Some((_, s)) = &mut self.server {
                 expand(s)?;
             }
-            expand(&mut prog.session)?;
             expand(&mut request)?;
         }
+        if let Some((_, server)) = &self.server {
+            assigned_in(server, &mut served.server);
+        }
         match (self.wl_session.take(), self.server.take()) {
+            (None, None) if prog.workload.is_some() => self.err("a workload needs a `server` block to handle its turns"),
             (None, None) => Ok(()),
-            (Some((_, session)), None)
-                if self.requests.iter().any(|(_, target)| target.is_some()) =>
-            {
-                prog.session = session;
-                prog.request = request;
-                Ok(())
-            }
             (Some((at, _)), None) => self.err_at(
                 at,
-                "a `session` inside `workload` is written against a `server` block; \
-                 name a gateway with `request NAME;`, or write `session` at top level",
+                "a `session` inside `workload` is written against a `server` block; add `server { … }`",
             ),
             (None, Some((at, _))) => self.err_at(
                 at,
-                "`server` needs a `session` inside `workload` that says `request;`",
+                "`server` needs a `workload`",
             ),
             (Some((_, mut session)), Some((v_at, server))) => {
                 if splice(&mut session, &server) == 0 {
                     return self.err_at(
                         v_at,
-                        "`server` is never requested: the workload's session has no `request;`",
+                        "the workload's session has no `turn;`: each turn uses the server",
                     );
                 }
                 splice(&mut request, &server);
+                if !matches!(session.last(), Some(Stmt::End)) {
+                    session.push(Stmt::End);
+                }
                 prog.session = session;
                 prog.request = request;
                 Ok(())
@@ -1979,7 +2119,7 @@ impl Parser {
         Ok(())
     }
 
-    /// A use whose body says `turn;` or `request;` may not pass an argument
+    /// A use whose body says `turn;` may not pass an argument
     /// that reads what the workload's `turn` or the server assigns.
     fn check_deferred(&self, prog: &Program, served: &Served) -> PResult<()> {
         // a turn draws the workload's `turn` block, or a trace's attributes
@@ -2006,12 +2146,11 @@ impl Parser {
                 });
             }
             let found = u.reads.iter().find_map(|n| {
-                if u.turn && turned.contains(n) {
-                    Some((n, "`turn;`".to_string()))
-                } else {
-                    let s = u.request.iter().find(|s| served.assigns(s, n))?;
-                    Some((n, s.says()))
-                }
+                (u.turn
+                    && (turned.contains(n)
+                        || served.server.contains(n)
+                        || served.shared.contains(n)))
+                .then_some((n, "`turn;`"))
             });
             if let Some((n, by)) = found {
                 return Err(ParseError {
@@ -2038,6 +2177,10 @@ impl Parser {
         self.advance();
         let path = self.string()?;
         self.expect(&Tok::Semi)?;
+        if path == "std/args" {
+            self.args_imported = true;
+            return Ok(());
+        }
         let file = self.toks[at].file;
         let dir = match file.checked_sub(1) {
             Some(i) => Some(self.lib_dirs[i].clone()),
@@ -2117,7 +2260,7 @@ impl Parser {
         Ok(())
     }
 
-    /// `def name(x, …) = e;` or `def name(x, …) { … }`, after `def`.
+    /// `def name(x, …) { e }` or `def name(x, …) { … }`, after `def`.
     fn def(&mut self) -> PResult<()> {
         let at = self.pos;
         let name = self.ident()?;
@@ -2131,6 +2274,12 @@ impl Parser {
             return self.err_at(
                 at,
                 format!("`{name}` is a retired word and names nothing: {now}"),
+            );
+        }
+        if self.is_time_resource(&name) {
+            return self.err_at(
+                at,
+                format!("`{name}` is a device's time resource: name the definition otherwise"),
             );
         }
         if self.defs.iter().any(|d| d.name == name) {
@@ -2170,23 +2319,18 @@ impl Parser {
             }
         }
         self.expect(&Tok::RParen)?;
-        let stmts = match self.peek() {
-            Tok::Assign => false,
-            Tok::LBrace => true,
-            other => {
-                return self.err(format!(
-                    "expected `= expression;` or `{{ statements }}` after `def {name}(…)`, found {other}"
-                ));
-            }
-        };
-        self.advance();
+        if *self.peek() == Tok::Assign {
+            return self.err(
+                "expression definitions use `def name(…) { expression }` without a semicolon",
+            );
+        }
+        self.expect(&Tok::LBrace)?;
         let start = self.pos;
         let mut depth = 0usize;
         loop {
             match self.peek() {
                 Tok::Eof => return self.err_at(at, format!("`def {name}` is not closed")),
-                Tok::RBrace if depth == 0 && stmts => break,
-                Tok::Semi if depth == 0 && !stmts => break,
+                Tok::RBrace if depth == 0 => break,
                 Tok::LParen | Tok::LBracket | Tok::LBrace => depth += 1,
                 Tok::RParen | Tok::RBracket | Tok::RBrace => {
                     if depth == 0 {
@@ -2200,12 +2344,26 @@ impl Parser {
         }
         let mut body = self.toks[start..self.pos].to_vec();
         self.advance();
+        // Expressions contain no statement terminators or blocks. Empty
+        // definitions remain statement definitions, as do nested blocks.
+        let stmts = body.is_empty()
+            || body
+                .iter()
+                .any(|t| matches!(t.tok, Tok::Semi | Tok::LBrace));
+        if stmts
+            && body
+                .last()
+                .is_some_and(|t| !matches!(t.tok, Tok::Semi | Tok::RBrace))
+        {
+            return self.err_at(at, "a definition contains either one expression without a semicolon or statements; a statement body cannot end with a result expression");
+        }
+
         if let Some(i) = self.def_overrides.iter().position(|d| d.0 == name) {
             if stmts {
                 return self.err_at(
                     at,
                     format!(
-                        "--def {name}: `def {name}` is statements; --def replaces the body of an \
+                        "the `def` override `{name}`: `def {name}` is statements; an override replaces the body of an \
                          expression definition"
                     ),
                 );
@@ -2218,7 +2376,7 @@ impl Parser {
                 .map_err(|e| ParseError {
                     line,
                     col,
-                    msg: format!("--def {name}: {}", e.msg),
+                    msg: format!("the `def` override `{name}`: {}", e.msg),
                     origin: None,
                 })?
                 .into_iter()
@@ -2267,21 +2425,19 @@ impl Parser {
         let draws = body.iter().any(|t| t.tok == Tok::Tilde) || self.draws_through(&body);
         let used: Vec<&Def> = self.defs.iter().filter(|d| uses(&body, &d.name)).collect();
         let mut assigns = assigned_tokens(&body);
+        let mut entry_calls = entry_calls_of(&body);
         let mut turn = says(&body, "turn");
-        let mut request = sends_of(&body, &params);
         let (mut reads, mut calls) = self.reads_of(&body, !stmts);
         reads.retain(|n| !params.contains(n));
         for d in &used {
             assigns.extend(d.assigns.iter().cloned());
+            entry_calls.extend(d.entry_calls.iter().cloned());
             turn |= d.turn;
-            // a parameter of `d` is whatever this body passes it
-            for args in uses_args(&body, &d.name) {
-                request.extend(d.request.iter().map(|s| s.at(&args, &params)));
-            }
         }
         assigns.sort();
         assigns.dedup();
-        request.dedup();
+        entry_calls.sort();
+        entry_calls.dedup();
         calls.sort();
         calls.dedup();
         self.defs.push(Def {
@@ -2294,12 +2450,32 @@ impl Parser {
             body,
             draws,
             assigns,
+            entry_calls,
             reads,
             calls,
             turn,
-            request,
         });
         Ok(())
+    }
+
+    /// The attributes a definition's entry calls write, with the call:
+    /// `Q.verb (…)` writes `Q`'s marks and its entries' locals, `Q.first`
+    /// and `Q.x`.
+    fn entry_marks(&self, d: &Def) -> Vec<(String, String, String)> {
+        let mut out = vec![];
+        for (q, v) in &d.entry_calls {
+            let Some(queue) = self.queues.iter().find(|d| d.name == *q) else {
+                continue;
+            };
+            if !queue.entries.iter().any(|e| e.verb == *v) {
+                continue;
+            }
+            let locals = queue.entries.iter().flat_map(|e| &e.locals);
+            for m in queue.marks.iter().chain(locals) {
+                out.push((format!("{q}.{m}"), q.clone(), v.clone()));
+            }
+        }
+        out
     }
 
     /// The names `toks` read and the functions of live state they call,
@@ -2379,6 +2555,14 @@ impl Parser {
             } else if !called && (expr || !KEYWORDS.contains(&n.as_str())) {
                 reads.push(n.clone());
             }
+            // `E.first`, a queue's attribute, is one name: the lexer gave it
+            // as three tokens
+            if let (Some(Tok::Dot), Some(Tok::Ident(m))) = (
+                toks.get(k + 1).map(|t| &t.tok),
+                toks.get(k + 2).map(|t| &t.tok),
+            ) {
+                reads.push(format!("{n}.{m}"));
+            }
         }
         for d in self.defs.iter().filter(|d| uses(toks, &d.name)) {
             reads.extend(d.reads.iter().cloned());
@@ -2456,21 +2640,36 @@ impl Parser {
                 ),
             );
         }
+        // how many times the body reads each parameter: an argument read
+        // twice is evaluated twice, and one never read is left unread
+        let uses: Vec<usize> = d
+            .params
+            .iter()
+            .map(|p| {
+                d.body
+                    .iter()
+                    .filter(|t| t.tok == Tok::Ident(p.clone()))
+                    .count()
+            })
+            .collect();
         // the names the body assigns: an argument that reads one would read
         // the body's value, not the one at the use
-        for (p, a) in d.params.iter().zip(&args) {
+        for ((p, a), &uses) in d.params.iter().zip(&args).zip(&uses) {
             if a.is_empty() {
                 return self.err_at(at, format!("`{}`: the argument for `{p}` is empty", d.name));
             }
             let (reads, _) = self.reads_of(a, true);
             if let Some(n) = d.assigns.iter().find(|n| reads.contains(n)) {
-                return self.err_at(at, capture_message(&d.name, p, n));
+                return self.err_at(at, capture_message(p, n, &format!("`{}` assigns", d.name)));
             }
-            let uses = d
-                .body
-                .iter()
-                .filter(|t| t.tok == Tok::Ident(p.clone()))
-                .count();
+            if let Some((n, q, v)) = self
+                .entry_marks(&d)
+                .into_iter()
+                .find(|(n, ..)| reads.contains(n))
+            {
+                let by = format!("`{}`'s call of `{q}.{v}` writes", d.name);
+                return self.err_at(at, capture_message(p, &n, &by));
+            }
             if uses > 1 && (a.iter().any(|t| t.tok == Tok::Tilde) || self.draws_through(a)) {
                 return self.err_at(
                     at,
@@ -2491,8 +2690,6 @@ impl Parser {
             }
         }
         let turn = d.turn;
-        // a parameter's gateway is the argument's name
-        let request: Vec<Sends> = d.request.iter().map(|s| s.at(&args, &[])).collect();
         if d.stmts {
             let mut reads: Vec<String> =
                 args.iter().flat_map(|a| self.reads_of(a, true).0).collect();
@@ -2505,7 +2702,6 @@ impl Parser {
                 file: use_file,
                 reads,
                 turn,
-                request,
             });
         }
         let mut end = self.pos;
@@ -2552,6 +2748,34 @@ impl Parser {
         if !d.stmts {
             out.push(paren(Tok::RParen, ")", &self.toks[end - 1]));
         }
+        // an argument the body never reads stays, to be resolved here:
+        // `Unread((body), a, …)`, or `Unread(a, …); body`
+        let unread: Vec<&Vec<Token>> = args
+            .iter()
+            .zip(&uses)
+            .filter(|(_, n)| **n == 0)
+            .map(|(a, _)| a)
+            .collect();
+        if !unread.is_empty() {
+            let like = &self.toks[at];
+            let mut head = vec![paren(Tok::Unread, "", like), paren(Tok::LParen, "(", like)];
+            if !d.stmts {
+                head.append(&mut out);
+                head.push(paren(Tok::Comma, ",", like));
+            }
+            for (k, a) in unread.into_iter().enumerate() {
+                if k > 0 {
+                    head.push(paren(Tok::Comma, ",", &a[0]));
+                }
+                head.extend(a.iter().cloned());
+            }
+            head.push(paren(Tok::RParen, ")", &self.toks[end - 1]));
+            if d.stmts {
+                head.push(paren(Tok::Semi, ";", &self.toks[end - 1]));
+                head.append(&mut out);
+            }
+            out = head;
+        }
         if self.toks.len() - (end - at) + out.len() > MAX_TOKENS {
             return self.err_at(at, "the definitions expand to more than a program can hold");
         }
@@ -2586,14 +2810,17 @@ impl Parser {
             let at = self.pos;
             let e = self.expr()?;
             let mut vars = vec![];
-            names(&e, &mut vars, &mut Vec::new());
+            let mut refs = vec![];
+            names(&e, &mut vars, &mut refs);
             if let Some(name) = vars
                 .iter()
                 .find(|name| self.structural_overrides.contains(*name))
             {
                 return self.err_at(
                     at,
-                    format!("--set {name} affects an array size resolved during parsing"),
+                    format!(
+                        "the `let` override `{name}` affects an array size resolved during parsing"
+                    ),
                 );
             }
             let n = match self.const_value(&e) {
@@ -2620,6 +2847,22 @@ impl Parser {
                     );
                 }
             };
+            // the size folded, so a name that is no constant is an argument
+            // a definition does not read; the linker never sees an array
+            // size, so it is resolved here, where only constants are known
+            if let Some(name) = vars
+                .iter()
+                .chain(refs.iter().map(|r| &r.name))
+                .find(|n| self.const_value(&Expr::Var(n.to_string())).is_none())
+            {
+                return self.err_at(
+                    at,
+                    format!(
+                        "array size: `{name}` is not a `let` constant, and an array size is \
+                         resolved during parsing, where no other name is known"
+                    ),
+                );
+            }
             self.expect(&Tok::RBracket)?;
             Ok(Some(n))
         } else {
@@ -2631,6 +2874,16 @@ impl Parser {
     /// if it is one.
     fn const_value(&self, e: &Expr) -> Option<f64> {
         self.fold(e, &std::cell::Cell::new(0))
+    }
+
+    /// `a, …)` after a `Tok::Unread`'s `(` (and an expression's body).
+    fn unread_args(&mut self) -> PResult<Vec<Arg>> {
+        let mut args = vec![self.arg()?];
+        while self.eat(&Tok::Comma) {
+            args.push(self.arg()?);
+        }
+        self.expect(&Tok::RParen)?;
+        Ok(args)
     }
 
     /// `const_value` with the terms its aggregates have written out so far:
@@ -2702,30 +2955,116 @@ impl Parser {
                     .collect::<Option<Vec<f64>>>()?;
                 crate::frontend::link::const_call(f, &xs)?
             }
+            // an unread argument is never evaluated: the linker resolves
+            // it where the expression goes (a `let`), and `array_count`
+            // where it goes nowhere
+            Expr::Unread(_, body) => self.fold(body, terms)?,
             Expr::Sample(..) => return None,
         })
     }
 
-    fn pool(&mut self) -> PResult<PoolDecl> {
+    /// `pool NAME [N] { … }`, or `pool NAME on OWNER { … }` where `on` is
+    /// allowed: OWNER's capacity NAME, with the owner and where it is named.
+    fn pool(&mut self, on_ok: bool) -> PResult<(PoolDecl, Option<device::On>)> {
         let span = Some(self.span());
+        let at = self.pos;
         let name = self.ident()?;
         let array = self.array_count()?;
+        let mut on = None;
+        let mut count = array.unwrap_or(1);
+        let mut is_array = array.is_some();
+        let mut cap = Expr::Num(f64::INFINITY);
+        if self.is_kw("on") {
+            if !on_ok {
+                return self.err("a queue's pool is its own: `pool NAME on …` is a deployment's");
+            }
+            if array.is_some() {
+                return self.err_at(
+                    at,
+                    "a pool on a device or an engine is a family as its owner is: write no `[N]`",
+                );
+            }
+            self.advance();
+            let o_at = self.pos;
+            let mut owner = self.ident()?;
+            // `on ENGINE.DEVICE`: the device's capacity, whose queue the
+            // engine running on it admits
+            let mut admitted_by = None;
+            if *self.peek() == Tok::Dot {
+                self.advance();
+                admitted_by = Some(owner);
+                owner = self.ident()?;
+            }
+            if let Some(q) = &self.device_scope {
+                // a queue's pool is the member's: on the queue's own device,
+                // or on the queue's engine, which is named after the queue
+                let scoped = format!("{q}.{owner}");
+                if self.devices.iter().any(|d| d.name == scoped) {
+                    owner = scoped;
+                } else if owner != *q {
+                    return self.err_at(
+                        o_at,
+                        format!(
+                            "a queue's pool is on its own device or its engine: `{owner}` is \
+                             not a device or the engine of queue `{q}`; write `on DEVICE` for a \
+                             `device` above, or `on {q}`"
+                        ),
+                    );
+                }
+            } else if self.queues.iter().any(|q| q.name == owner)
+                && self.engines.iter().any(|e| e.name == owner)
+            {
+                return self.err_at(
+                    o_at,
+                    format!(
+                        "`{owner}` is a queue's engine, which admits the queue's own pools: \
+                         declare `pool {name} on {owner}` in queue `{owner}`"
+                    ),
+                );
+            }
+            if let Some(engine) = &admitted_by {
+                self.check_admitted_by(o_at, engine, &owner)?;
+            }
+            let (c, n, a) = self.capacity_of(at, o_at, &name, &owner)?;
+            (cap, count, is_array) = (c, n, a);
+            on = Some(device::On {
+                owner,
+                at: o_at,
+                admitted_by,
+            });
+        }
         self.expect(&Tok::LBrace)?;
         let mut d = PoolDecl {
             span,
             name,
-            count: array.unwrap_or(1),
-            array: array.is_some(),
-            cap: Expr::Num(f64::INFINITY),
+            count,
+            array: is_array,
+            cap,
             block: None,
             evict: EvictOrder::Lru,
-            preempt: Preempt::None,
+            preempt: PreemptOrder::None,
             queue: QueueOrder::Fifo,
             spill: None,
             admit_via: None,
+            reserve_held: false,
         };
         while *self.peek() != Tok::RBrace {
             let key = self.ident()?;
+            if on.is_some() && key == "cap" {
+                return self.err_at(
+                    self.pos - 1,
+                    "a pool on a device or an engine takes its capacity from it: write \
+                     `NAME cap c;` there",
+                );
+            }
+            if on.is_some() && key == "admit" {
+                return self.err_at(
+                    self.pos - 1,
+                    "who admits a pool on a device or an engine is said in its `on`: `on \
+                     ENGINE` and `on ENGINE.DEVICE` are admitted by the engine, `on DEVICE` as \
+                     soon as it fits",
+                );
+            }
             match key.as_str() {
                 "cap" => d.cap = self.expr()?,
                 "block" => d.block = Some(self.expr()?),
@@ -2746,10 +3085,35 @@ impl Parser {
                 }
                 "preempt" => {
                     d.preempt = if self.eat_kw("lifo") {
-                        Preempt::Lifo
+                        // the latest admitted, back at the head: vLLM's
+                        // `running[-1]` and `prepend_request`
+                        let admission = Expr::Var("admission".into());
+                        PreemptOrder::By {
+                            keys: vec![Expr::Unary(UnOp::Neg, Box::new(admission))],
+                            tail: false,
+                        }
+                    } else if self.eat_kw("by") {
+                        self.expect(&Tok::LParen)?;
+                        let mut keys = vec![self.expr()?];
+                        while *self.peek() == Tok::Comma {
+                            self.advance();
+                            keys.push(self.expr()?);
+                        }
+                        self.expect(&Tok::RParen)?;
+                        let tail = if self.eat_kw("requeue") {
+                            if self.eat_kw("tail") {
+                                true
+                            } else {
+                                self.expect_kw("head")?;
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        PreemptOrder::By { keys, tail }
                     } else {
                         self.expect_kw("none")?;
-                        Preempt::None
+                        PreemptOrder::None
                     }
                 }
                 "queue" => {
@@ -2766,6 +3130,10 @@ impl Parser {
                         self.expect(&Tok::RParen)?;
                         QueueOrder::By(keys)
                     }
+                }
+                "reserve" => {
+                    self.expect_kw("held")?;
+                    d.reserve_held = true;
                 }
                 "admit" => {
                     self.expect_kw("via")?;
@@ -2794,7 +3162,7 @@ impl Parser {
             self.expect(&Tok::Semi)?;
         }
         self.expect(&Tok::RBrace)?;
-        Ok(d)
+        Ok((d, on))
     }
 
     fn stage(&mut self) -> PResult<StageDecl> {
@@ -2812,8 +3180,8 @@ impl Parser {
         })
     }
 
-    /// A stage's kind, `fifo`, `ps (phi)`, `delay` or `step { … }`, with its
-    /// closing semicolon (none after `step { … }`).
+    /// A stage's kind, `fifo`, `ps (phi)` or `delay`, with its closing
+    /// semicolon. A step stage is an engine (`engine … on …`).
     fn stage_kind(&mut self) -> PResult<StageKind> {
         let kind = if self.eat_kw("fifo") {
             if *self.peek() == Tok::LParen {
@@ -2831,92 +3199,12 @@ impl Parser {
             StageKind::Ps(e)
         } else if self.eat_kw("delay") {
             StageKind::Delay
-        } else if self.eat_kw("step") {
-            self.expect(&Tok::LBrace)?;
-            let mut s = StepSpec {
-                budget: Expr::Num(f64::INFINITY),
-                cost: Expr::Num(0.0),
-                chunk: Expr::Num(0.0),
-                serve: Serve::Admission,
-                only: None,
-                memory: None,
-            };
-            let mut has_cost = false;
-            let mut has_serve = false;
-            while *self.peek() != Tok::RBrace {
-                let key = self.ident()?;
-                match key.as_str() {
-                    "budget" => s.budget = self.expr()?,
-                    "cost" => {
-                        s.cost = self.expr()?;
-                        has_cost = true;
-                    }
-                    "chunk" => s.chunk = self.expr()?,
-                    "serve" => {
-                        if has_serve {
-                            return self.err(
-                                "`serve` twice: a step stage serves its residents in one way",
-                            );
-                        }
-                        has_serve = true;
-                        if self.eat_kw("only") {
-                            self.expect(&Tok::LParen)?;
-                            s.only = Some(self.expr()?);
-                            self.expect(&Tok::RParen)?;
-                            if *self.peek() == Tok::Semi {
-                                self.expect(&Tok::Semi)?;
-                                continue;
-                            }
-                            if self.is_kw("exclusive") {
-                                return self.err(
-                                    "`serve only (…) exclusive prefill`: the exclusive rule admits a waiting prefill in place of the decodes it displaces, and what `only` would do to either is a third rule",
-                                );
-                            }
-                        }
-                        s.serve = if self.eat_kw("admission") {
-                            Serve::Admission
-                        } else if self.eat_kw("decode") {
-                            self.expect_kw("first")?;
-                            Serve::DecodeFirst
-                        } else if self.eat_kw("exclusive") {
-                            self.expect_kw("prefill")?;
-                            Serve::ExclusivePrefill
-                        } else if self.eat_kw("by") {
-                            self.expect(&Tok::LParen)?;
-                            let mut keys = vec![self.expr()?];
-                            while *self.peek() == Tok::Comma {
-                                self.expect(&Tok::Comma)?;
-                                keys.push(self.expr()?);
-                            }
-                            self.expect(&Tok::RParen)?;
-                            Serve::By(keys)
-                        } else {
-                            return self.err(format!(
-                                "`serve` takes `admission`, `decode first`, `by (keys)` or `exclusive prefill`, the first three after an optional `only (expr)`; found {}",
-                                self.peek()
-                            ));
-                        };
-                    }
-                    "exclusive" => {
-                        return self.err(
-                            "`exclusive prefill;` is now `serve exclusive prefill;`: a step stage serves its residents in one way",
-                        );
-                    }
-                    "decode" => {
-                        return self.err(
-                            "`decode first;` is now `serve decode first;`: a step stage serves its residents in one way",
-                        );
-                    }
-                    "memory" => s.memory = Some(self.bare_reference()?),
-                    other => return self.err(format!("unknown step option `{other}`")),
-                }
-                self.expect(&Tok::Semi)?;
-            }
-            self.expect(&Tok::RBrace)?;
-            if !has_cost {
-                return self.err("a step stage needs `cost`");
-            }
-            StageKind::Step(Box::new(s))
+        } else if self.is_kw("step") {
+            return self.err(
+                "`step` is an engine's: write `device D { … }` and `engine NAME on D { tokens cap \
+                 B; schedule { … } execute (T); }`, in a queue `engine on D { … }` \
+                 (docs/language.md, Engines on devices)",
+            );
         } else {
             return self.err(format!("unknown stage kind {}", self.peek()));
         };
@@ -2928,10 +3216,7 @@ impl Parser {
                 "`latency` belongs to the `serve` of a queue that plays `link`: a link's fixed wait",
             );
         }
-        // `step { ... }` needs no semicolon
-        if *self.peek() == Tok::Semi || !matches!(kind, StageKind::Step(_)) {
-            self.expect(&Tok::Semi)?;
-        }
+        self.expect(&Tok::Semi)?;
         Ok(kind)
     }
 
@@ -2940,7 +3225,7 @@ impl Parser {
     /// `queue NAME [N] [: ROLE, …] { pool …; serve kind; VERB (params) [from NAME] block; … }`
     /// after the keyword. The pools go to the program as `NAME.pool`, the
     /// stage as `NAME`, and the entries wait for their calls (`assemble`).
-    /// A gateway's `route` body is selected explicitly by `request NAME;`.
+    /// A gateway's `route` body is called from the server with `NAME.route();`.
     fn queue(&mut self, prog: &mut Program, at: usize) -> PResult<()> {
         let span = Some(self.span());
         let name = self.ident()?;
@@ -2952,6 +3237,22 @@ impl Parser {
         }
         if self.queues.iter().any(|q| q.name == name) {
             return self.err_at(at + 1, format!("duplicate queue `{name}`"));
+        }
+        if prog.pools.iter().any(|p| p.name == name) {
+            return self.err_at(at + 1, one_name_space(&name));
+        }
+        // a device or an engine declared after the queue is refused by its
+        // own check, so one declared before is refused here: the order
+        // changes nothing
+        if self.devices.iter().any(|d| d.name == name) || prog.stages.iter().any(|s| s.name == name)
+        {
+            return self.err_at(at + 1, format!("`{name}` is declared twice"));
+        }
+        if LISTS.contains(&name.as_str()) {
+            return self.err_at(
+                at + 1,
+                format!("`{name}.…` is a value of an engine; a queue needs another name"),
+            );
         }
         // `Q[n]` is a family whatever `n`, called by index, and its pools and
         // stages are arrays; `Q` is one queue
@@ -3002,22 +3303,24 @@ impl Parser {
             marks: vec![],
             latency: None,
             nic: false,
-            pulls: None,
+            takes: None,
             at,
         });
         let qi = self.queues.len() - 1;
         self.expect(&Tok::LBrace)?;
         while *self.peek() != Tok::RBrace {
-            // pools, then the stage, then the entries: each reads what is above it
+            // pools and devices, then the stage, then the entries: each reads
+            // what is above it; a pool on a device or the engine may follow
+            // the engine
             let item_at = self.pos;
+            let pool_on =
+                self.is_kw("pool") && matches!(self.peek_at(2), Tok::Ident(k) if k == "on");
             if self.is_kw("pool")
-                && (self.queues[qi].has_stage || !self.queues[qi].entries.is_empty())
+                && (!self.queues[qi].entries.is_empty() || (self.queues[qi].has_stage && !pool_on))
             {
                 return self.err_at(
                     item_at,
-                    format!(
-                        "queue `{name}` declares its pools first, above its `serve` and entries"
-                    ),
+                    format!("queue `{name}` declares its pools first, above its stage and entries"),
                 );
             }
             if self.is_kw("serve") && !self.queues[qi].entries.is_empty() {
@@ -3026,9 +3329,98 @@ impl Parser {
                     format!("queue `{name}` declares its `serve` above its entries"),
                 );
             }
-            if self.eat_kw("pool") {
+            if self.is_kw("device") {
+                self.advance();
+                if self.queues[qi].has_stage || !self.queues[qi].entries.is_empty() {
+                    return self.err_at(
+                        item_at,
+                        format!("queue `{name}` declares its device above its engine and entries"),
+                    );
+                }
+                let d_at = self.pos;
+                let dev = self.ident()?;
+                if *self.peek() == Tok::LBracket {
+                    return self.err(format!(
+                        "a queue's device is the member's, one per member of `{name}`: write `device {dev}`"
+                    ));
+                }
+                if KEYWORDS.contains(&dev.as_str()) {
+                    return self.err_at(d_at, format!("`{dev}` is a word of the language"));
+                }
+                if dev == name {
+                    return self.err_at(
+                        d_at,
+                        format!(
+                            "`{dev}` names queue `{name}`'s engine, so `on {dev}` would mean \
+                             two things: a queue's device needs another name"
+                        ),
+                    );
+                }
+                let scoped = format!("{name}.{dev}");
+                if self.devices.iter().any(|d| d.name == scoped)
+                    || self.queues[qi].pools.contains(&dev)
+                {
+                    return self
+                        .err_at(d_at, format!("`{dev}` is declared twice in queue `{name}`"));
+                }
+                self.device_body(scoped, count, family)?;
+            } else if self.is_kw("engine") && matches!(self.peek_at(1), Tok::Ident(k) if k == "on")
+            {
+                let e_at = self.pos;
+                self.advance();
+                self.advance();
+                if self.queues[qi].has_stage {
+                    return self.err_at(
+                        e_at,
+                        format!("queue `{name}` has one stage: its engine or its `serve`"),
+                    );
+                }
+                if KEYWORDS.contains(&name.as_str()) {
+                    return self.err_at(
+                        at + 1,
+                        format!(
+                            "`{name}` is a word of the language, and a queue's engine is named \
+                             after the queue: name the queue for what it models"
+                        ),
+                    );
+                }
+                let d_at = self.pos;
+                let dev = self.ident()?;
+                let scoped = format!("{name}.{dev}");
+                let Some(di) = self.devices.iter().position(|d| d.name == scoped) else {
+                    return self.err_at(
+                        d_at,
+                        format!("no device `{dev}` in queue `{name}`: declare `device {dev} {{ … }}` above the engine"),
+                    );
+                };
+                self.engine_body(prog, span, e_at, name.clone(), di)?;
+                self.queues[qi].has_stage = true;
+            } else if self.eat_kw("pool") {
                 let p_at = self.pos;
-                let mut d = self.pool()?;
+                self.device_scope = Some(name.clone());
+                let parsed = self.pool(true);
+                self.device_scope = None;
+                let (mut d, on) = parsed?;
+                if self
+                    .devices
+                    .iter()
+                    .any(|dv| dv.name == format!("{name}.{}", d.name))
+                {
+                    return self.err_at(
+                        p_at,
+                        format!("`{}` is declared twice in queue `{name}`", d.name),
+                    );
+                }
+                if let Some(on) = on {
+                    if self.queues[qi].pools.contains(&d.name) {
+                        return self.err(format!("duplicate pool `{}` in queue `{name}`", d.name));
+                    }
+                    self.queues[qi].pools.push(d.name.clone());
+                    self.pool_on(prog.pools.len(), d.name.clone(), on)?;
+                    d.name = format!("{name}.{}", d.name);
+                    prog.pools.push(d);
+                    continue;
+                }
                 if d.count != 1 {
                     return self.err_at(
                         p_at,
@@ -3057,7 +3449,7 @@ impl Parser {
                 self.latency_ok = roles.iter().any(|r| r == "link");
                 let kind = self.stage_kind();
                 self.latency_ok = false;
-                let mut kind = kind?;
+                let kind = kind?;
                 if self.eat_kw("latency") {
                     let l_at = self.pos;
                     let e = self.expr()?;
@@ -3078,15 +3470,8 @@ impl Parser {
                     prog.lets.push((lname.clone(), e));
                     self.queues[qi].latency = Some(Expr::Var(lname));
                 }
-                if let StageKind::Step(s) = &mut kind
-                    && let Some(m) = &mut s.memory
-                    && self.queues[qi].pools.contains(&m.name)
-                {
-                    m.name = format!("{name}.{}", m.name);
-                }
                 self.queues[qi].has_stage = true;
-                self.stages
-                    .push((name.clone(), matches!(kind, StageKind::Step(_))));
+                self.stages.push(name.clone());
                 prog.stages.push(StageDecl {
                     span,
                     name: name.clone(),
@@ -3109,7 +3494,7 @@ impl Parser {
                 let kind = self.stage_kind()?;
                 self.queues[qi].nic = true;
                 let nname = format!("{name}.nic");
-                self.stages.push((nname.clone(), false));
+                self.stages.push(nname.clone());
                 prog.stages.push(StageDecl {
                     span,
                     name: nname,
@@ -3121,7 +3506,8 @@ impl Parser {
                 self.entry(qi, verb)?;
             } else {
                 return self.err(format!(
-                    "expected `pool`, `serve` or an entry in queue `{name}`, found {}",
+                    "expected `pool`, `device`, `engine on`, `serve` or an entry in queue \
+                     `{name}`, found {}",
                     self.peek()
                 ));
             }
@@ -3140,7 +3526,7 @@ impl Parser {
                 );
             }
             let lname = format!("{name}.latency");
-            self.stages.push((lname.clone(), false));
+            self.stages.push(lname.clone());
             prog.stages.push(StageDecl {
                 span,
                 name: lname,
@@ -3259,31 +3645,16 @@ impl Parser {
             );
         }
         let outer_side = self.side;
-        let outer_stages = std::mem::take(&mut self.stages);
-        // the body's serving forms find the queue's own step engine; the
-        // stages that are not one (a link's, a delay) it may name
-        let own = self.queues[qi].has_stage.then(|| {
-            outer_stages
-                .iter()
-                .rev()
-                .find(|(n, _)| *n == qname)
-                .cloned()
-                .expect("the queue's stage")
-        });
-        self.stages = outer_stages
-            .iter()
-            .filter(|(n, step)| !step && own.as_ref().is_none_or(|o| o.0 != *n))
-            .cloned()
-            .chain(own.clone())
-            .collect();
         self.side = Side::Server;
         self.in_queue = Some(qi);
         self.entry_from = from.clone();
+        self.entry_gateway =
+            verb == "route" && self.queues[qi].roles.iter().any(|r| r == "gateway");
         let body = self.block();
         self.entry_from = None;
+        self.entry_gateway = false;
         self.in_queue = None;
         self.side = outer_side;
-        self.stages = outer_stages;
         let body = body?;
         // what the body sets is the entry's; what it marks the caller reads;
         // what it leases a `from` takes
@@ -3349,7 +3720,8 @@ impl Parser {
             let mut headers = vec![];
             let mut bodies = vec![];
             let mut indices = vec![];
-            split_reads(&body, &mut headers, &mut bodies, &mut indices);
+            let mut unread = vec![];
+            split_reads(&body, &mut headers, &mut bodies, &mut indices, &mut unread);
             // an own pool, or the `from` name, is all an entry's statements hold
             let mut named = vec![];
             pools_named(&body, &mut named);
@@ -3370,16 +3742,24 @@ impl Parser {
                     ),
                 );
             }
+            let mut sources = vec![];
             for (e, header, in_index) in headers
                 .iter()
                 .map(|e| (e, true, false))
                 .chain(bodies.iter().map(|e| (e, false, false)))
                 .chain(indices.iter().map(|e| (e, false, true)))
             {
-                let mut vars = vec![];
-                let mut indexed = vec![];
-                let mut refs = vec![];
+                let (mut vars, mut indexed, mut refs) = (vec![], vec![], vec![]);
                 names_in(e, &mut vars, &mut indexed, &mut refs);
+                sources.push((vars, indexed, refs, header, in_index));
+            }
+            // what a statement definition's use does not read is resolved as its body
+            let (mut vars, mut indexed, mut refs) = (vec![], vec![], vec![]);
+            for a in unread {
+                arg_names(a, &mut vars, &mut indexed, &mut refs);
+            }
+            sources.push((vars, indexed, refs, false, false));
+            for (vars, indexed, refs, header, in_index) in sources {
                 let tagged = vars
                     .into_iter()
                     .map(|v| (v, in_index))
@@ -3400,6 +3780,11 @@ impl Parser {
                     }
                     if allowed_var(&v, header) {
                         continue;
+                    }
+                    if header && locals.contains(&v) {
+                        return self.err_at(at, format!(
+                            "`{qname}.{verb}`: the admission header reads local `{v}`; it sees parameters and the queue's resources, not values calculated by its body. Write the resource conversion in the header or pass a quantity as a parameter"
+                        ));
                     }
                     if v.contains('.') {
                         return self.err_at(
@@ -3558,10 +3943,15 @@ impl Parser {
     /// One statement into `out`. A serving form is parsed here because
     /// `transfer … from P to Q (n)` stands for three kernel statements.
     fn stmt_into(&mut self, out: &mut Vec<Stmt>) -> PResult<()> {
+        if self.eat(&Tok::Unread) {
+            self.expect(&Tok::LParen)?;
+            out.push(Stmt::Unread(self.unread_args()?));
+            return self.expect(&Tok::Semi);
+        }
         if let Some(i) = self.use_of_def() {
             if !self.defs[i].stmts {
                 return self.err(format!(
-                    "`{}` is an expression (`def {0}(…) = …;`), not statements",
+                    "`{}` is an expression (`def {0}(…) {{ … }}`), not statements",
                     self.defs[i].name
                 ));
             }
@@ -3573,7 +3963,96 @@ impl Parser {
             out.extend(self.serving(role)?);
             return Ok(());
         }
-        out.push(self.stmt()?);
+        if let Tok::Ident(s) = self.peek()
+            && (s == "prefill" || s == "decode")
+        {
+            let s = s.clone();
+            return self.err(format!(
+                "`{s}` is the mode of a `run` on a step engine, not a statement\n\
+                 help: write `run E {s} (cost(E, T));` on the step engine `E`, or `run S (cost(S, W));` on another stage"
+            ));
+        }
+        if self.is_kw("Size") || self.is_kw("Cost") {
+            return self.typed_declaration(out);
+        }
+        let stmt = self.stmt()?;
+        let turn = matches!(stmt, Stmt::Turn);
+        out.push(stmt);
+        if turn {
+            out.push(Stmt::Request);
+        }
+        Ok(())
+    }
+
+    fn cost_scope(&self) -> Option<String> {
+        self.in_queue
+            .filter(|_| !self.entry_gateway)
+            .map(|qi| self.queues[qi].name.clone())
+    }
+
+    /// Typed declarations are source sugar; each field retains a resource cost.
+    fn typed_declaration(&mut self, out: &mut Vec<Stmt>) -> PResult<()> {
+        let is_size = self.eat_kw("Size");
+        if !is_size {
+            self.expect_kw("Cost")?;
+        }
+        if is_size && self.side == Side::Server {
+            return self
+                .err("a server cannot declare a request Size; calculate a separate value or Cost");
+        }
+        let name = self.definition()?;
+        self.expect(&Tok::Assign)?;
+        let kind = if is_size {
+            DeclaredType::Size
+        } else {
+            DeclaredType::Cost
+        };
+        if !is_size && self.eat(&Tok::LBrace) {
+            let mut fields = vec![];
+            loop {
+                if *self.peek() == Tok::RBrace {
+                    break;
+                }
+                let r = self.reference()?;
+                if r.index.is_some() {
+                    return self.err("a Cost field names a resource family without a member index");
+                }
+                if fields.contains(&r.name) {
+                    return self.err(format!("Cost `{name}` repeats resource `{}`", r.name));
+                }
+                self.expect(&Tok::Colon)?;
+                let value = self.expr()?;
+                let field = format!("{name}.{}", r.name);
+                fields.push(r.name.clone());
+                out.push(Stmt::Declare(field.clone(), kind));
+                out.push(Stmt::Set(field, Expr::cost(&[r], value)));
+                if !self.eat(&Tok::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Tok::RBrace)?;
+            self.expect(&Tok::Semi)?;
+            if fields.is_empty() {
+                return self.err("a Cost record must name at least one resource");
+            }
+            let record = self
+                .cost_scope()
+                .map_or_else(|| name.clone(), |q| format!("{q}.{name}"));
+            if let Some(previous) = self.cost_records.get(&record) {
+                if previous != &fields {
+                    return self.err(format!(
+                        "Cost `{name}` is redeclared with different resource fields or order"
+                    ));
+                }
+            } else {
+                self.cost_records.insert(record, fields);
+            }
+        } else {
+            let value = self.expr()?;
+            self.expect(&Tok::Semi)?;
+            out.push(Stmt::Declare(name.clone(), kind));
+            out.push(Stmt::Set(name, value));
+        }
         Ok(())
     }
 
@@ -3628,6 +4107,10 @@ impl Parser {
 
     /// `Q[i].verb (args) [from S[k]] [to P (m)];`
     fn call(&mut self) -> PResult<Stmt> {
+        if self.side == Side::WorkloadSession {
+            return self
+                .err("queue entries belong in `server`; a session describes turns with `turn;`");
+        }
         let at = self.pos;
         let span = Some(self.span());
         let name = self.ident()?;
@@ -3774,37 +4257,7 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 Ok(Stmt::End)
             }
-            "request" => {
-                match self.side {
-                    Side::WorkloadSession => {}
-                    Side::Server => {
-                        return self.err("`request` inside a server or queue entry: a server does not request itself");
-                    }
-                    Side::Session => {
-                        return self
-                            .err("`request` is a statement of the `session` inside `workload`");
-                    }
-                }
-                let at = self.pos;
-                self.advance();
-                if *self.peek() == Tok::Semi {
-                    self.advance();
-                    self.requests.push((at, None));
-                    Ok(Stmt::Request)
-                } else {
-                    let target_at = self.pos;
-                    let queue = self.bare_reference()?;
-                    self.expect(&Tok::Semi)?;
-                    self.requests.push((target_at, Some(queue.name.clone())));
-                    Ok(Stmt::Call {
-                        queue,
-                        verb: "route".into(),
-                        args: vec![],
-                        from: None,
-                        to: None,
-                    })
-                }
-            }
+            "request" => self.err("`request` is replaced by `turn;`: a turn draws its attributes and waits for the server; put gateway routing in `server { gw.route(); }`"),
             "set" => {
                 self.advance();
                 let name = self.definition()?;
@@ -3917,9 +4370,25 @@ impl Parser {
                 };
                 Ok(Stmt::Branch(guard, then, els))
             }
+            "while" => {
+                self.advance();
+                let guard = self.paren_expr()?;
+                Ok(Stmt::While(guard, self.block()?))
+            }
             "loop" => {
                 self.advance();
                 Ok(Stmt::Loop(self.block()?))
+            }
+            // `fork { … }`: the block runs beside the session, a leg of the
+            // same request; `join;` waits for every leg forked so far
+            "fork" => {
+                self.advance();
+                Ok(Stmt::Fork(self.block()?))
+            }
+            "join" => {
+                self.advance();
+                self.expect(&Tok::Semi)?;
+                Ok(Stmt::Join)
             }
             "choose" => {
                 self.advance();
@@ -4013,6 +4482,8 @@ impl Parser {
         }
         let bind_at = std::mem::take(&mut self.bind_at);
         let mut body = self.block()?;
+        // an unread argument reads nothing, and sees the binding as written
+        bind_unread(&mut body, &binds);
         // A binding the body reads is set at the top of the body, to the
         // value it had at the admission: the body runs at the admission's
         // instant, so an expression of attributes and constants reads the
@@ -4128,71 +4599,97 @@ impl Parser {
     /// `D pull P latency x share maxmin;`: the KV the entries of `D` take
     /// `from P` is read by `D`, over `P`'s NIC and `D`'s at once, after `D`
     /// waits `x`; concurrent reads divide the two NICs by the policy, which
-    /// is the program's `share`.
-    fn pull_relation(&mut self, prog: &mut Program) -> PResult<()> {
+    /// is the program's `share`. `P push D latency x share maxmin;`: the
+    /// same copy over the same two NICs, written by `P` (NIXL's push mode),
+    /// so the wait `x` before each write is `P`'s.
+    fn copy_relation(&mut self, prog: &mut Program) -> PResult<()> {
         let at = self.pos;
         let span = Some(self.span());
-        let puller = self.ident()?;
-        self.advance(); // `pull`
+        let first = self.ident()?;
+        let push = *self.peek() == Tok::Ident("push".into());
+        let verb = if push { "push" } else { "pull" };
+        self.advance(); // `pull` or `push`
         let s_at = self.pos;
-        let source = self.ident()?;
-        for (q, q_at) in [(&puller, at), (&source, s_at)] {
+        let second = self.ident()?;
+        let (reader, source) = if push {
+            (second.clone(), first.clone())
+        } else {
+            (first.clone(), second.clone())
+        };
+        let written = format!("`{first} {verb} {second}`");
+        let copies = if push { "writes" } else { "reads" };
+        for (q, q_at) in [(&first, at), (&second, s_at)] {
             let Some(d) = self.queues.iter().find(|d| d.name == *q) else {
-                return self.err_at(
-                    q_at,
-                    format!("`{puller} pull {source}`: no queue `{q}` is declared above"),
-                );
+                return self.err_at(q_at, format!("{written}: no queue `{q}` is declared above"));
             };
             if !d.nic {
                 return self.err_at(
                     q_at,
                     format!(
-                        "`{puller} pull {source}`: queue `{q}` has no `nic`; a read runs over \
+                        "{written}: queue `{q}` has no `nic`; a copy runs over \
                          the source's NIC and the reader's"
                     ),
                 );
             }
         }
-        if puller == source {
-            return self.err_at(
-                s_at,
-                format!("`{puller} pull {source}`: a queue reads from another"),
-            );
+        if reader == source {
+            return self.err_at(s_at, format!("{written}: a queue copies the KV to another"));
         }
         let qi = self
             .queues
             .iter()
-            .position(|d| d.name == puller)
+            .position(|d| d.name == reader)
             .expect("checked above");
-        if let Some((other, _)) = &self.queues[qi].pulls {
+        if let Some(r) = &self.queues[qi].takes {
             return self.err_at(
                 at,
-                format!("`{puller}` pulls from `{other}` already: one relation per reader"),
+                format!(
+                    "`{reader}` takes the KV from `{}` already: one relation per reader",
+                    r.source
+                ),
             );
         }
+        // the side that posts the copy waits before each one
+        let poster = if push { &source } else { &reader };
+        let pi = self
+            .queues
+            .iter()
+            .position(|d| d.name == *poster)
+            .expect("checked above");
         let latency = if self.eat_kw("latency") {
             let l_at = self.pos;
             let e = self.expr()?;
             let Some(v) = self.const_value(&e) else {
                 return self.err_at(
                     l_at,
-                    "`latency` is a number or a constant over `let`s: the reader's fixed wait \
-                     before each read",
+                    "`latency` is a number or a constant over `let`s: the fixed wait of the \
+                     side that posts each copy",
                 );
             };
             // a constant of its own (see the link's `latency`), and a delay
-            // stage of the reader's, one per member
-            let lname = format!("{puller}.pull.time");
+            // stage of the side that posts, one per member
+            let lname = format!("{poster}.{verb}.time");
+            let sname = format!("{poster}.nic.latency");
+            // the wait is the poster's, one delay stage per poster
+            if self.posters.contains(poster) {
+                return self.err_at(
+                    l_at,
+                    format!(
+                        "{written}: `{poster}` waits before the copies of another relation \
+                         already, at `{sname}`: one `latency` per poster"
+                    ),
+                );
+            }
+            self.posters.push(poster.clone());
             self.consts.push((lname.clone(), v));
             prog.lets.push((lname.clone(), e));
-            let count = self.queues[qi].count;
-            let sname = format!("{puller}.nic.latency");
-            self.stages.push((sname.clone(), false));
+            let count = self.queues[pi].count;
+            self.stages.push(sname.clone());
             prog.stages.push(StageDecl {
                 span,
                 name: sname,
                 count,
-                array: self.queues[qi].family,
+                array: self.queues[pi].family,
                 kind: StageKind::Delay,
             });
             Some(Expr::Var(lname))
@@ -4202,7 +4699,7 @@ impl Parser {
         // the policy is the relation's: written here, not left to a default
         if !self.eat_kw("share") {
             return self.err(format!(
-                "`{puller} pull {source}` names how concurrent reads divide the NICs: \
+                "{written} names how concurrent {copies} divide the NICs: \
                  `share maxmin` or `share bottleneck`, found {}",
                 self.peek()
             ));
@@ -4226,7 +4723,7 @@ impl Parser {
                      `share` names the same",
                 );
             }
-            Some(_) if !self.relation_share => {
+            Some(_) if self.relation_share.is_none() => {
                 return self.err_at(
                     at,
                     "`share` is declared on its own and on the relation: the relation names it",
@@ -4235,14 +4732,18 @@ impl Parser {
             _ => {}
         }
         prog.share = Some(policy);
-        self.relation_share = true;
+        self.relation_share = Some(verb);
         self.share_at.get_or_insert(at);
-        self.queues[qi].pulls = Some((source, latency));
+        self.queues[qi].takes = Some(queue::Takes {
+            source,
+            latency,
+            push,
+        });
         Ok(())
     }
 
-    /// `prefill S;`, `transfer[j] X from P to Q (n);`, `decode on E (D)
-    /// growing kv;`, ...: a `run` on the stage that plays the role.
+    /// `tool Z;`, `transfer[j] X from P to Q (n);`, `tool on S (Z);`: a
+    /// `run` on the stage that plays the role.
     fn serving(&mut self, role: Role) -> PResult<Vec<Stmt>> {
         let at = self.pos;
         let span = Some(self.span());
@@ -4280,15 +4781,16 @@ impl Parser {
             let name = self.role_stage(role, at)?;
             Ref { span, name, index }
         };
-        let is_step = self
-            .stages
-            .iter()
-            .any(|(n, step)| *n == stage.name && *step);
-        let mode = match role.step_mode() {
-            Some(m) if is_step => m,
-            _ => RunMode::Plain,
+        let raw_work = self.expr()?;
+        let resources: Vec<_> = std::iter::once(&stage)
+            .chain(also.iter())
+            .cloned()
+            .collect();
+        let work = if pulled {
+            raw_work
+        } else {
+            Expr::cost(&resources, raw_work)
         };
-        let work = self.expr()?;
         let growing = if self.eat_kw("growing") {
             Some(self.own_pool("growing")?)
         } else {
@@ -4336,7 +4838,14 @@ impl Parser {
                             index: r.index.clone(),
                         },
                         mode: RunMode::Plain,
-                        work: q.latency.clone()?,
+                        work: Expr::cost(
+                            &[Ref {
+                                span: r.span,
+                                name: format!("{}.latency", q.name),
+                                index: None,
+                            }],
+                            q.latency.clone()?,
+                        ),
                         growing: None,
                         also: vec![],
                     })
@@ -4345,12 +4854,12 @@ impl Parser {
             out.extend([
                 Stmt::Run {
                     stage,
-                    mode,
+                    mode: RunMode::Plain,
                     work,
                     growing: None,
                     also,
                 },
-                Stmt::Load(to, units),
+                Stmt::Load(to.clone(), Expr::cost(&[to], units)),
                 Stmt::Release(from),
             ]);
             return Ok(out);
@@ -4367,14 +4876,14 @@ impl Parser {
                 at,
                 format!(
                     "`transfer` without `from P to Q (n)`: a KV transfer leaves the lease (or hold) on P and enters the hold on Q\n\
-                     help: write `transfer (w) from P to Q (n);`, or `run {at_stage} (w);` for a link that only takes time"
+                     help: write `transfer (w) from P to Q (n);`, or `run {at_stage} (cost({}, w));` for a link that only takes time", stage.name
                 ),
             );
         }
         self.expect(&Tok::Semi)?;
         Ok(vec![Stmt::Run {
             stage,
-            mode,
+            mode: RunMode::Plain,
             work,
             growing,
             also,
@@ -4385,10 +4894,10 @@ impl Parser {
     fn declared_stage(&mut self, kw: &str) -> PResult<Ref> {
         let ref_at = self.pos;
         let r = self.reference()?;
-        if !self.stages.iter().any(|(n, _)| *n == r.name) {
+        if !self.stages.contains(&r.name) {
             let help = crate::frontend::diagnostic::suggestion(
                 &r.name,
-                self.stages.iter().map(|(name, _)| name.as_str()),
+                self.stages.iter().map(String::as_str),
             )
             .map(|name| format!("did you mean stage `{name}`?"))
             .unwrap_or_else(|| "declare the stage above this statement".into());
@@ -4414,23 +4923,15 @@ impl Parser {
     }
 
     /// The stage a role names when none is given: the stage of the role's
-    /// name, else (for `prefill` and `decode`) the step engine; exactly one.
+    /// name; exactly one.
     fn role_stage(&self, role: Role, at: usize) -> PResult<String> {
         let kw = role.keyword();
-        let mut found: Vec<&str> = self
+        let found: Vec<&str> = self
             .stages
             .iter()
-            .filter(|(n, _)| role.names().contains(&n.as_str()))
-            .map(|(n, _)| n.as_str())
+            .filter(|n| role.names().contains(&n.as_str()))
+            .map(String::as_str)
             .collect();
-        if found.is_empty() && role.step_mode().is_some() {
-            found = self
-                .stages
-                .iter()
-                .filter(|(_, step)| *step)
-                .map(|(n, _)| n.as_str())
-                .collect();
-        }
         match found.len() {
             1 => Ok(found[0].to_string()),
             0 => {
@@ -4440,15 +4941,10 @@ impl Parser {
                     .map(|n| format!("`{n}`"))
                     .collect::<Vec<_>>()
                     .join(" or ");
-                let engine = if role.step_mode().is_some() {
-                    ", declare a `step` engine"
-                } else {
-                    ""
-                };
                 self.err_at(
                     at,
                     format!(
-                        "no stage declared above plays `{kw}`: name a stage {names}{engine}, or write `{kw} on STAGE (...)`"
+                        "no stage declared above plays `{kw}`: name a stage {names}, or write `{kw} on STAGE (...)`"
                     ),
                 )
             }
@@ -4594,6 +5090,12 @@ impl Parser {
         let span = self.span();
         match self.advance() {
             Tok::Num(x) => Ok(Expr::Num(x)),
+            Tok::Unread => {
+                self.expect(&Tok::LParen)?;
+                let body = self.expr()?;
+                self.expect(&Tok::Comma)?;
+                Ok(Expr::Unread(self.unread_args()?, Box::new(body)))
+            }
             Tok::LParen => {
                 let e = self.expr()?;
                 self.expect(&Tok::RParen)?;
@@ -4644,7 +5146,39 @@ impl Parser {
                         }
                     }
                     self.expect(&Tok::RParen)?;
+                    if self.is_time_resource(&name) {
+                        return self.err_at(
+                            at,
+                            format!(
+                                "`{name}` is a device's time resource, read in an engine's `execute`"
+                            ),
+                        );
+                    }
+                    if name == "cost" {
+                        let resources = args.len().saturating_sub(1);
+                        for arg in &mut args[..resources] {
+                            if let Arg::Ref(r) = arg {
+                                if r.index.as_deref().is_some_and(Expr::draws) {
+                                    return self.err_at(at, "a cost names a resource family; its type annotation cannot draw a member index");
+                                }
+                            }
+                        }
+                        if let Some(last @ Arg::Ref(_)) = args.last_mut() {
+                            let Arg::Ref(r) = last else { unreachable!() };
+                            if r.index.is_none() {
+                                *last = Arg::Expr(Expr::Located(
+                                    r.span.unwrap_or(span),
+                                    Box::new(Expr::Var(r.name.clone())),
+                                ));
+                            }
+                        }
+                    }
                     Ok(Expr::Located(span, Box::new(Expr::Call(name, args))))
+                } else if LISTS.contains(&name.as_str()) && *self.peek() == Tok::Dot {
+                    let at = self.pos - 1;
+                    self.advance();
+                    let e = self.list_value(at, &name)?;
+                    Ok(Expr::Located(span, Box::new(e)))
                 } else if *self.peek() == Tok::Dot
                     || (*self.peek() == Tok::LBracket && self.in_expr_index_dot())
                 {
@@ -4658,15 +5192,20 @@ impl Parser {
                         );
                     }
                     self.expect(&Tok::Dot)?;
-                    let field = self.ident()?;
-                    let name = format!("{name}.{field}");
-                    self.dotted_reads.push((at, name.clone()));
+                    let mut name = format!("{name}.{}", self.ident()?);
+                    while self.eat(&Tok::Dot) {
+                        name.push('.');
+                        name.push_str(&self.ident()?);
+                    }
+                    self.dotted_reads
+                        .push((at, name.clone(), self.cost_scope()));
                     Ok(Expr::Located(span, Box::new(Expr::Var(name))))
                 } else {
                     if name == "self" && self.in_queue.is_none() {
                         self.pos -= 1;
                         return self.err("`self` is a queue entry's word: the member's own index");
                     }
+                    self.retired_in_engine(self.pos - 1, &name)?;
                     Ok(Expr::Located(span, Box::new(Expr::Var(name))))
                 }
             }
@@ -4684,7 +5223,10 @@ impl Parser {
         let span = Some(self.span());
         if let Tok::Ident(name) = self.peek().clone() {
             match self.peek_at(1) {
+                // an engine's list value is a value, not a queue's reference
+                Tok::Dot if LISTS.contains(&name.as_str()) => {}
                 Tok::Comma | Tok::RParen => {
+                    self.retired_in_engine(self.pos, &name)?;
                     self.advance();
                     return Ok(Arg::Ref(Ref {
                         span,
@@ -4708,37 +5250,52 @@ impl Parser {
 mod tests {
     use super::*;
 
+    /// Existing semantic fixtures describe a main body; complete example files
+    /// already contain their entry point. The entrypoint tests use the public API
+    /// directly, so this builder cannot make an implicit program pass those checks.
+    pub fn main_source(body: &str) -> String {
+        if body.contains("fn main()") {
+            body.to_string()
+        } else {
+            format!("fn main() {{ {body}\n}}")
+        }
+    }
+
     #[test]
     fn parses_a_small_program() {
         let src = r#"
-            let a = 2e-5;
-            pool kv { cap 3e5; evict lru; preempt lifo; }
-            stage prefill : fifo;
-            stage decode : ps(min(present, 8));
-            stage tool : delay;
-            workload {
-              arrive poisson(0.3);
-              init { set K = 0; set n = ~uniform(1e4, 3e4); }
-              turn { set K = K + n + o; set n = ~exp(1000); }
+        let a = 2e-5;
+        pool kv { cap 3e5; evict lru; preempt lifo; }
+        stage prefill : fifo;
+        stage decode : ps(min(present, 8));
+        stage tool : delay;
+        workload {
+          arrive poisson(0.3);
+          init { set K = 0; set n = ~uniform(1e4, 3e4); }
+          turn { set K = K + n + o; set n = ~exp(1000); }
+
+          session {
+
+            loop { turn;
+              branch with (0.9) { run tool (cost(tool, Z));  } else { end; }
             }
-            session {
-              turn;
-              loop {
-                hold kv (K + n + o) {
-                  run prefill (a * (K + n - cached));
-                  observe ttft = now - t0;
-                  run decode (o * 2e-4);
-                } cache (K + n + o);
-                branch with (0.9) { run tool (Z); turn; } else { end; }
-              }
-            }
-            run { horizon 1000; warmup 100; seed 1; }
-        "#;
-        let p = parse(src).unwrap();
+
+          }
+        }
+        server {
+          hold kv (cost(kv, K + n + o)) {
+            run prefill (cost(prefill, a * (K + n - cached)));
+            observe ttft = now - t0;
+            run decode (cost(decode, o * 2e-4));
+          } cache (cost(kv, K + n + o));
+        }
+
+"#;
+        let p = parse(&main_source(src)).unwrap();
         assert_eq!(p.pools.len(), 1);
         assert_eq!(p.stages.len(), 3);
         assert_eq!(p.lets[0].0, "a");
-        assert!(matches!(p.session[1], Stmt::Loop(_)));
+        assert!(matches!(p.session[0], Stmt::Loop(_)));
     }
 
     #[test]
@@ -4758,19 +5315,40 @@ mod tests {
         stage tool : delay;
     "#;
 
+    /// An engine `llm` with no token budget and a unit iteration, a memory
+    /// pool and a tool. The engine is one line, so the line a test asserts
+    /// an error at is the one the source counts.
     const ENGINE: &str = r#"
         pool kv { cap 100; }
-        stage engine : step { cost 1; }
+        device gpu { } engine llm on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
         stage tool : delay;
     "#;
 
-    /// The same program runs: the same session. What one request runs, kept
-    /// for the deployment view, is not compared: one spelling splits the
-    /// session into a workload and a server, and the other does not.
+    /// Compare executable expansion, erasing authority markers only in this
+    /// parser test. `size_cost` and IR tests check the retained authority;
+    /// moving a size assignment across it is no longer a valid equivalence.
     fn same(a: &str, b: &str) {
-        let run = |s: &str| Program {
-            request: vec![],
-            ..without_locations(parse(s).unwrap())
+        fn executable(stmts: &mut Vec<Stmt>) {
+            stmts.retain(|s| !matches!(s, Stmt::Side(_)));
+            for s in stmts {
+                match s {
+                    Stmt::Hold { body, .. }
+                    | Stmt::Loop(body)
+                    | Stmt::While(_, body)
+                    | Stmt::Fork(body) => executable(body),
+                    Stmt::Branch(_, a, b) => {
+                        executable(a);
+                        executable(b);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let run = |s: &str| {
+            let mut p = without_locations(parse(&main_source(s)).unwrap());
+            p.request.clear();
+            executable(&mut p.session);
+            p
         };
         assert_eq!(run(a), run(b));
     }
@@ -4779,64 +5357,73 @@ mod tests {
     fn serving_forms_desugar_to_the_kernel() {
         same(
             &format!(
-                "{PD} session {{
-                    hold kv (K) {{ prefill S; }} cache (K) lease kv (inf);
-                    hold kvD (K) {{ transfer X from kv to kvD (K); }}
-                    hold kv (K) reserve (F) reuse (R) {{ decode D; }}
-                    branch with (p) {{ tool Z; turn; }} else {{ end; }}
-                }}"
+                "{PD} workload {{ session {{ turn;
+            branch with (p) {{ tool Z;  }} else {{ end; }}
+
+        }} }}
+        server {{
+          hold kvD (cost(kvD, K)) {{ transfer X from kv to kvD (K); }}
+        }}"
             ),
             &format!(
-                "{PD} session {{
-                    hold kv (K) {{ run prefill (S); }} cache (K) lease kv (inf);
-                    hold kvD (K) {{ run link (X); load kvD (K); release kv; }}
-                    hold kv (K) reserve (F) reuse (R) {{ run decode (D); }}
-                    branch with (p) {{ run tool (Z); turn; }} else {{ end; }}
-                }}"
+                "{PD} workload {{ session {{ turn;
+            branch with (p) {{ run tool (cost(tool, Z));  }} else {{ end; }}
+
+        }} }}
+        server {{
+          hold kvD (cost(kvD, K)) {{ run link (cost(link, X)); load kvD (cost(kvD, K)); release kv; }}
+        }}"
             ),
         );
     }
 
     #[test]
-    fn serving_forms_on_a_step_engine() {
-        same(
-            &format!(
-                "{ENGINE} session {{
-                    hold kv (c) {{ prefill (n) growing kv; decode (o - 1) growing kv; }} cache (c);
-                    tool (~exp(Z));
-                }}"
-            ),
-            &format!(
-                "{ENGINE} session {{
-                    hold kv (c) {{ run engine prefill (n) growing kv; run engine decode (o - 1) growing kv; }} cache (c);
-                    run tool (~exp(Z));
-                }}"
-            ),
-        );
+    fn prefill_and_decode_are_the_mode_of_a_run() {
+        // a word that named the stage and the mode at once: the run says both
+        for (form, kw) in [
+            ("prefill (n) growing kv;", "prefill"),
+            ("decode on llm (o);", "decode"),
+        ] {
+            let e = parse(&main_source(&format!(
+                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) {{ {form} }}\n}}"
+            )))
+            .unwrap_err();
+            assert!(
+                e.msg.contains(&format!("`{kw}` is the mode of a `run`")),
+                "{e}"
+            );
+            assert!(
+                e.msg.contains(&format!("`run E {kw} (cost(E, T));`")),
+                "{e}"
+            );
+            assert_eq!((e.line, e.col), (7, 34), "{e}");
+        }
     }
 
     #[test]
     fn serving_forms_name_their_stage_explicitly() {
         // the role's stage array, indexed
         same(
-            "stage prefill[2] : fifo; session { choose j in 2 by (work(prefill[j])); prefill[j] S; }",
-            "stage prefill[2] : fifo; session { choose j in 2 by (work(prefill[j])); run prefill[j] (S); }",
+            "stage tool[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(tool[j])); tool[j] S;\n}",
+            "stage tool[2] : fifo; workload { session { turn; \n} }\nserver { choose j in 2 by (work(tool[j])); run tool[j] (cost(tool, S));\n}",
         );
-        // any stage, with the mode a step engine needs
+        // any stage
         same(
-            &format!(
-                "{ENGINE} stage rep[2] : fifo; session {{ prefill on rep[1] S; decode on engine (D); }}"
-            ),
-            &format!(
-                "{ENGINE} stage rep[2] : fifo; session {{ run rep[1] (S); run engine decode (D); }}"
-            ),
+            "stage rep[2] : fifo; workload { session { turn; \n} }\nserver { tool on rep[1] S;\n}",
+            "stage rep[2] : fifo; workload { session { turn; \n} }\nserver { run rep[1] (cost(rep, S));\n}",
         );
         // a stage named `transfer` plays transfer
         same(
             "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
-             session { hold b (1) { hold a (1) { transfer X from a to b (1); } } }",
+        workload { session { turn;
+        } }
+        server { hold b (cost(b, 1)) { hold a (cost(a, 1)) { transfer X from a to b (1); } }
+        }",
             "pool a { cap 1; } pool b { cap 1; } stage transfer : fifo;
-             session { hold b (1) { hold a (1) { run transfer (X); load b (1); release a; } } }",
+        workload { session { turn;
+        } }
+        server { hold b (cost(b, 1)) { hold a (cost(a, 1)) { run transfer (cost(transfer, X)); load b (cost(b, 1)); release a; } }
+        }",
         );
     }
 
@@ -4846,27 +5433,37 @@ mod tests {
         // and constants is the value it has at the top of the body
         same(
             &format!(
-                "{ENGINE} session {{
-                    hold kv (known) at admission (known = computed < p ? p : computed + 1) {{
-                        prefill (known - cached) growing kv;
-                    }}
-                    end;
-                }}"
+                "{ENGINE} workload {{ session {{ turn;
+            end;
+
+        }} }}
+        server {{
+          hold kv (cost(kv, known)) at admission (known = computed < p ? p : computed + 1) {{
+            run llm prefill (cost(llm, known - cached)) growing kv;
+          }}
+        }}"
             ),
             &format!(
-                "{ENGINE} session {{
-                    hold kv (computed < p ? p : computed + 1) {{
-                        set known = computed < p ? p : computed + 1;
-                        run engine prefill (known - cached) growing kv;
-                    }}
-                    end;
-                }}"
+                "{ENGINE} workload {{ session {{ turn;
+            end;
+
+        }} }}
+        server {{
+          hold kv (cost(kv, computed < p ? p : computed + 1)) {{
+            set known = computed < p ? p : computed + 1;
+            run llm prefill (cost(llm, known - cached)) growing kv;
+          }}
+        }}"
             ),
         );
         // a binding the body does not read stays in the header
         same(
-            &format!("{ENGINE} session {{ hold kv (h) at admission (h = 1) {{ }} }}"),
-            &format!("{ENGINE} session {{ hold kv (1) {{ }} }}"),
+            &format!(
+                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, h)) at admission (h = 1) {{ }}\n}}"
+            ),
+            &format!(
+                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) {{ }}\n}}"
+            ),
         );
     }
 
@@ -4879,8 +5476,9 @@ mod tests {
             ("hit = cached", "read `cached`"),
             ("hit = now", "with a `set` in the body"),
         ] {
-            let e = parse(&format!(
-                "{ENGINE} session {{ hold kv (hit) at admission ({binding}) {{ observe h = hit; }} }}"
+            let e = parse(&main_source(&format!(
+                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, hit)) at admission ({binding}) {{ observe h = hit; }}\n}}"
+            )
             ))
             .unwrap_err();
             assert!(
@@ -4892,9 +5490,9 @@ mod tests {
         }
         // `n` is a context variable unless the program assigns it
         let src = format!(
-            "{ENGINE} session {{ set n = 3; hold kv (m) at admission (m = n + 1) {{ observe x = m; }} }}"
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ set n = 3; hold kv (cost(kv, m)) at admission (m = n + 1) {{ observe x = m; }}\n}}"
         );
-        parse(&src).unwrap();
+        parse(&main_source(&src)).unwrap();
     }
 
     #[test]
@@ -4908,7 +5506,7 @@ mod tests {
             ("", "now = 1", "a name the language supplies"),
             ("", "inf = 3", "a name the language supplies"),
             ("", "kv = 3", "a pool"),
-            ("", "engine = 3", "a stage"),
+            ("", "llm = 3", "a stage"),
             ("let bs = 4;", "bs = 2", "a `let` constant"),
             ("", "k = 7", "an attribute the program sets"),
         ] {
@@ -4918,25 +5516,29 @@ mod tests {
                 ""
             };
             let name = binding.split(' ').next().unwrap();
-            let e = parse(&format!(
-                "{pre} {ENGINE} session {{ {assign} hold kv (1) at admission ({binding}) {{ observe a = {name}; }} }}"
+            let e = parse(&main_source(&format!(
+                "{pre} {ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ {assign} hold kv (cost(kv, 1)) at admission ({binding}) {{ observe a = {name}; }}\n}}"
+            )
             ))
             .unwrap_err();
             assert!(e.msg.contains(what), "{binding}: {}", e.msg);
         }
-        let e = parse(&format!(
-            "{ENGINE} session {{ hold kv (1) at admission (k = k + 1) {{ observe a = k; }} }}"
+        let e = parse(&main_source(&format!(
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) at admission (k = k + 1) {{ observe a = k; }}\n}}"
+        )
         ))
         .unwrap_err();
         assert!(e.msg.contains("reads itself"), "{}", e.msg);
-        let e = parse(&format!(
-            "{ENGINE} session {{ hold kv (1) at admission (j = k, k = 5) {{ observe a = j; }} }}"
+        let e = parse(&main_source(&format!(
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) at admission (j = k, k = 5) {{ observe a = j; }}\n}}"
+        )
         ))
         .unwrap_err();
         assert!(e.msg.contains("bound after it"), "{}", e.msg);
         // an attribute the body sets itself is not the binding
-        let e = parse(&format!(
-            "{ENGINE} session {{ hold kv (hit) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }} }}"
+        let e = parse(&main_source(&format!(
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, hit)) at admission (hit = min(cachedin(kv), 1)) {{ set hit = cached; observe h = hit; }}\n}}"
+        )
         ))
         .unwrap_err();
         assert!(e.msg.contains("an attribute the program sets"), "{}", e.msg);
@@ -4946,32 +5548,39 @@ mod tests {
     fn a_binding_is_read_only_in_its_hold() {
         for after in [
             "observe b = k;",
-            "hold kv (k) { }",
+            "hold kv (cost(kv, k)) { }",
             "branch (k > 1) { } else { }",
         ] {
-            let e = parse(&format!(
-                "{ENGINE} session {{ hold kv (1) at admission (k = 2) {{ observe a = k; }} {after} }}"
+            let e = parse(&main_source(&format!(
+                "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, 1)) at admission (k = 2) {{ observe a = k; }} {after}\n}}"
+            )
             ))
             .unwrap_err();
             assert!(e.msg.contains("outside the body"), "{after}: {}", e.msg);
         }
-        let e = parse(
-            "pool kv { cap 100; queue by (k); } stage engine : step { cost 1; }
-             session { hold kv (1) at admission (k = 2) { observe a = k; } }",
-        )
+        let e = parse(&main_source(
+            "pool kv { cap 100; queue by (k); }
+        workload { session { turn;
+        } }
+        server { hold kv (cost(kv, 1)) at admission (k = 2) { observe a = k; }
+        }",
+        ))
         .unwrap_err();
         assert!(e.msg.contains("outside the body"), "{}", e.msg);
         // two holds may bind one name, and a nested hold may bind it again
         // over a live outer binding its body does not read
-        parse(&format!(
-            "{ENGINE} session {{
-                hold kv (1) at admission (k = 2) {{ observe a = k; }}
-                hold kv (1) at admission (k = 3) {{ observe b = k; }}
-                hold kv (h) at admission (h = cachedin(kv)) {{
-                    hold kv (1) at admission (h = 1) {{ observe c = h; }}
-                }}
-            }}"
-        ))
+        parse(&main_source(&format!(
+            "{ENGINE} workload {{ session {{ turn;
+
+        }} }}
+        server {{
+          hold kv (cost(kv, 1)) at admission (k = 2) {{ observe a = k; }}
+          hold kv (cost(kv, 1)) at admission (k = 3) {{ observe b = k; }}
+          hold kv (cost(kv, h)) at admission (h = cachedin(kv)) {{
+            hold kv (cost(kv, 1)) at admission (h = 1) {{ observe c = h; }}
+          }}
+        }}"
+        )))
         .unwrap();
     }
 
@@ -4980,190 +5589,290 @@ mod tests {
         // an expression: the argument in parentheses, the body too
         same(
             &format!(
-                "{ENGINE} def full(x) = floor((x - 1) / bs) * bs;
-                 session {{ set h = full(a + b) * 2; set g = min(full(k), 3); }}"
+                "{ENGINE} def full(x) {{ floor((x - 1) / bs) * bs }}
+        workload {{ session {{ turn;
+        }} }}
+        server {{ set h = full(a + b) * 2; set g = min(full(k), 3);
+        }}"
             ),
             &format!(
-                "{ENGINE} session {{
-                    set h = (floor(((a + b) - 1) / bs) * bs) * 2;
-                    set g = min(floor((k - 1) / bs) * bs, 3);
-                 }}"
+                "{ENGINE} workload {{ session {{ turn;
+
+        }} }}
+        server {{
+          set h = (floor(((a + b) - 1) / bs) * bs) * 2;
+          set g = min(floor((k - 1) / bs) * bs, 3);
+        }}"
             ),
         );
-        // statements, with references for pools and stages; the use is
-        // parsed where it stands, so a serving form finds its stage there
+        // a serving form in a def finds its stage where the def is used
         same(
-            "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
-             def put(p, s, n) { hold p (n) { prefill on s (n) growing p; } cache (n); }
-             session { choose j in 2 by (used(kv[j])); put(kv[j], E[j], k + 1); end; }",
-            "pool kv[2] { cap 100; } stage E[2] : step { cost 1; }
-             session {
-                choose j in 2 by (used(kv[j]));
-                hold kv[j] ((k + 1)) { run E[j] prefill ((k + 1)) growing kv[j]; } cache ((k + 1));
-                end;
-             }",
+            "stage T[2] : fifo; def put(s, n) { tool on s (n); }
+        workload { session { turn; end;
+        } }
+        server { choose j in 2 by (work(T[j])); put(T[j], 3);
+        }",
+            "stage T[2] : fifo;
+        workload { session { turn;
+            end;
+
+        } }
+        server {
+          choose j in 2 by (work(T[j]));
+          run T[j] (cost(T, 3));
+        }",
+        );
+        // statements, with references for pools and stages
+        same(
+            "pool kv[2] { cap 100; } device gpu[2] { }
+        engine E[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        def put(p, s, n) { hold p (cost(p, n)) { run s prefill (cost(s, n)) growing p; } cache (cost(p, n)); }
+        workload { session { turn; end;
+        } }
+        server { choose j in 2 by (used(kv[j])); put(kv[j], E[j], k + 1);
+        }",
+            "pool kv[2] { cap 100; } device gpu[2] { }
+        engine E[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        workload { session { turn;
+            end;
+
+        } }
+        server {
+          choose j in 2 by (used(kv[j]));
+          hold kv[j] (cost(kv[j], (k + 1))) { run E[j] prefill (cost(E[j], (k + 1))) growing kv[j]; } cache (cost(kv[j], (k + 1)));
+        }",
         );
         // the side is the use's: a `hold` in a server
         same(
             &format!(
-                "{ENGINE} def take(n) {{ hold kv (n) {{ prefill (n) growing kv; }} }}
-                 workload {{ session {{ request; end; }} }}
-                 server {{ take(4); }}"
+                "{ENGINE} def take(n) {{ hold kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }} }}
+        workload {{ session {{ turn; end; }} }}
+        server {{ take(4); }}"
             ),
             &format!(
-                "{ENGINE} workload {{ session {{ request; end; }} }}
-                 server {{ hold kv (4) {{ prefill (4) growing kv; }} }}"
+                "{ENGINE} workload {{ session {{ turn; end; }} }}
+        server {{ hold kv (cost(kv, 4)) {{ run llm prefill (cost(llm, 4)) growing kv; }} }}"
             ),
         );
     }
 
     #[test]
     fn a_def_says_what_goes_wrong() {
-        let err = |src: &str| parse(&format!("{ENGINE} {src}")).unwrap_err().msg;
-        assert!(err("def f(x) = x; session { f(1); }").contains("is an expression"));
-        assert!(err("def f(x) { end; } session { set a = f(1); }").contains("is statements"));
+        let err = |src: &str| {
+            parse(&main_source(&format!("{ENGINE} {src}")))
+                .unwrap_err()
+                .msg
+        };
         assert!(
-            err("def f(x) = x; session { set a = f(1, 2); }")
+            err("def f(x) { x } workload { session { turn; \n} }\nserver { f(1);\n}")
+                .contains("is an expression")
+        );
+        assert!(
+            err("def f(x) { end; } workload { session { turn; \n} }\nserver { set a = f(1);\n}")
+                .contains("is statements")
+        );
+        assert!(
+            err("def f(x) { x } workload { session { turn; \n} }\nserver { set a = f(1, 2);\n}")
                 .contains("takes 1 argument(s), got 2")
         );
         assert!(
-            err("def f(x) = x + x; session { set a = f(~exp(1)); }").contains("would draw 2 times")
+            err("def f(x) { x + x } workload { session { turn; \n} }\nserver { set a = f(~exp(1));\n}").contains("would draw 2 times")
         );
-        assert!(err("def f(x) = f(x); session { }").contains("uses itself"));
-        assert!(err("def min(x) = x; session { }").contains("a word of the language"));
-        assert!(err("def uniform(x) = x; session { }").contains("a word of the language"));
-        assert!(err("def f(on) = on; session { }").contains("a word of the language"));
-        assert!(err("def f(min) = min(min, 1); session { }").contains("a word of the language"));
+        assert!(
+            err("def f(x) { f(x) } workload { session { turn; \n} }\nserver {\n}")
+                .contains("uses itself")
+        );
+        assert!(
+            err("def min(x) { x } workload { session { turn; \n} }\nserver {\n}")
+                .contains("a word of the language")
+        );
+        assert!(
+            err("def uniform(x) { x } workload { session { turn; \n} }\nserver {\n}")
+                .contains("a word of the language")
+        );
+        assert!(
+            err("def f(on) { on } workload { session { turn; \n} }\nserver {\n}")
+                .contains("a word of the language")
+        );
+        assert!(
+            err("def f(min) { min(min, 1) } workload { session { turn; \n} }\nserver {\n}")
+                .contains("a word of the language")
+        );
         // a definition uses only the ones before it: no recursion
         assert!(
-            err("def g(x) = f(x); def f(x) = g(x); session { set a = g(1); }")
+            err("def g(x) { f(x) } def f(x) { g(x) } workload { session { turn; \n} }\nserver { set a = g(1);\n}")
                 .contains("`g` uses `f`, which is defined after it")
         );
         assert!(
-            err("def g(x) { f(x); } def f(x) { g(x); } session { g(1); }")
+            err("def g(x) { f(x); } def f(x) { g(x); } workload { session { turn; \n} }\nserver { g(1);\n}")
                 .contains("defined after it")
         );
         // a stray closer
-        assert!(err("def f(x) = x; session { set a = f(1]); }").contains("unmatched"));
+        assert!(
+            err("def f(x) { x } workload { session { turn; \n} }\nserver { set a = f(1]);\n}")
+                .contains("unmatched")
+        );
         // a definition that draws draws when it is an argument
         assert!(
-            err("def d() = ~exp(1); def twice(x) = x + x; session { set a = twice(d()); }")
+            err("def d() { ~exp(1) } def twice(x) { x + x } workload { session { turn; \n} }\nserver { set a = twice(d());\n}")
                 .contains("would draw 2 times")
         );
         // an argument the body would capture
         assert!(
-            err("def f(x) { set s = 10; observe o = x; } session { f(s + 1); }")
+            err("def f(x) { set s = 10; observe o = x; } workload { session { turn; \n} }\nserver { f(s + 1);\n}")
                 .contains("which `f` assigns")
         );
         // an observation's name is not captured
-        parse(&format!(
-            "{ENGINE} def f(x) {{ observe s = 10; observe o = x; }} session {{ f(s + 1); }}"
+        parse(&main_source(&format!(
+            "{ENGINE} def f(x) {{ observe s = 10; observe o = x; }} workload {{ session {{ turn; \n}} }}\nserver {{ f(s + 1);\n}}"
+        )
         ))
         .unwrap();
-        assert!(err("def f(p) { set p = 1; } session { f(2); }").contains("is a parameter"));
+        assert!(
+            err("def f(p) { set p = 1; } workload { session { turn; \n} }\nserver { f(2);\n}")
+                .contains("is a parameter")
+        );
         assert!(
             err(
-                "def f(h) { hold kv (h) at admission (h = 3) { observe a = h; } } session { f(2); }"
+                "def f(h) { hold kv (cost(kv, h)) at admission (h = 3) { observe a = h; } } workload { session { turn; \n} }\nserver { f(2);\n}"
             )
             .contains("is a parameter")
         );
         // a parameter may not be an aggregate's index, and a count may be one
         assert!(
-            err("def tally(k) = sum k in 2 (k); session { set x = tally(7); }")
+            err("def tally(k) { sum k in 2 (k) } workload { session { turn; \n} }\nserver { set x = tally(7);\n}")
                 .contains("is a parameter")
         );
-        parse("def tally(n) = sum k in n (k); session { set x = tally(2); }").unwrap();
+        parse(&main_source("def tally(n) { sum k in n (k) } workload { session { turn; \n} }\nserver { set x = tally(2);\n}",
+        )).unwrap();
         // a parenthesised count: the body's `k` is still the aggregate's
-        parse(
-            "def tally() = sum k in (1 + 1) (k); def next(x) { turn; observe p = x; } \
-               workload { turn { set k = 1; } } session { next(tally()); end; }",
+        parse(&main_source(
+            "def tally() { sum k in (1 + 1) (k) } def next(x) { turn; observe p = x; } workload { turn { set k = 1; }
+          session { next(tally()); turn; end; }
+        } server {}",
+        )
         )
         .unwrap();
         // an aggregate's index is its own, not a name the argument reads
-        parse(
-            "def tally() = sum i in 2 (i); def next(x) { turn; observe p = x; } \
-               workload { turn { set i = 1; } } session { next(tally()); end; }",
+        parse(&main_source(
+            "def tally() { sum i in 2 (i) } def next(x) { turn; observe p = x; } workload { turn { set i = 1; }
+          session { next(tally()); turn; end; }
+        } server {}",
+        )
         )
         .unwrap();
         // what a turn, a request or an admission assigns is captured too
         assert!(
-            err("def next(x) { turn; observe p = x; } workload { turn { set n = 1; } } session { next(n); end; }")
+            err("def next(x) { turn; observe p = x; } workload { turn { set n = 1; } \n  session { next(n); turn; end; } } server {}")
                 .contains("which its `turn;` assigns")
         );
         assert!(
-            err("def go(x) { request; observe b = x; } workload { init { set t0 = 0; } session { go(t0); end; } } server { set t0 = now; }")
-                .contains("which its `request;` assigns")
+            err("def go(x) { turn; observe b = x; } workload { init { set t0 = 0; } session { go(t0); end; } } server { set t0 = now; }")
+                .contains("which its `turn;` assigns")
         );
         assert!(
-            err("def take(x) { hold kv (4) { observe got = x; } } session { take(cached); }")
+            err("def take(x) { hold kv (cost(kv, 4)) { observe got = x; } } workload { session { turn; \n} }\nserver { take(cached);\n}")
                 .contains("which `take` assigns")
         );
         // the clock and live state are read where the body reads them
         assert!(
-            err("stage svc : fifo; def timed(t) { run svc (1); observe took = now - t; } session { timed(now); }")
+            err("stage svc : fifo; def timed(t) { run svc (cost(svc, 1)); observe took = now - t; } workload { session { turn; \n} }\nserver { timed(now);\n}")
                 .contains("reads `now`, which changes")
         );
         assert!(
-            err("def f(q) { observe b = q; } session { f(used(kv)); }").contains("reads `used(…)`")
+            err("def f(q) { observe b = q; } workload { session { turn; \n} }\nserver { f(used(kv));\n}").contains("reads `used(…)`")
         );
         // an expression's argument is read where the expression is
-        parse(&format!(
-            "{ENGINE} def g(x) = x + 1; session {{ set a = g(now); }}"
+        parse(&main_source(&format!(
+            "{ENGINE} def g(x) {{ x + 1 }} workload {{ session {{ turn; \n}} }}\nserver {{ set a = g(now);\n}}"
+        )
         ))
         .unwrap();
         // `n` is an attribute when the program sets it
-        parse(&format!(
-            "{ENGINE} def f(x) {{ observe b = x; }} session {{ set n = 1; f(n); }}"
+        parse(&main_source(&format!(
+            "{ENGINE} def f(x) {{ observe b = x; }} workload {{ session {{ turn; \n}} }}\nserver {{ set n = 1; f(n);\n}}"
+        )
         ))
         .unwrap();
         // and through an expression the argument uses
         assert!(
-            err("stage svc : fifo; def clock() = now; def timed(t) { run svc (1); observe took = now - t; } session { timed(clock()); }")
+            err("stage svc : fifo; def clock() { now } def timed(t) { run svc (cost(svc, 1)); observe took = now - t; } workload { session { turn; \n} }\nserver { timed(clock());\n}")
                 .contains("reads `now`")
         );
         assert!(
-            err("def occ(p) = used(p); def f(q) { observe b = q; } session { f(occ(kv)); }")
+            err("def occ(p) { used(p) } def f(q) { observe b = q; } workload { session { turn; \n} }\nserver { f(occ(kv));\n}")
                 .contains("reads `used(…)`")
         );
         assert!(
-            err("def plus(x) = s + x; def f(v) { set s = 10; observe o = v; } session { f(plus(1)); }")
+            err("def plus(x) { s + x } def f(v) { set s = 10; observe o = v; } workload { session { turn; \n} }\nserver { f(plus(1));\n}")
                 .contains("which `f` assigns")
         );
         // and through a definition the body uses
         assert!(
-            err("def reset() { set s = 10; } def f(x) { reset(); observe o = x; } session { f(s + 1); }")
+            err("def reset() { set s = 10; } def f(x) { reset(); observe o = x; } workload { session { turn; \n} }\nserver { f(s + 1);\n}")
                 .contains("which `f` assigns")
         );
         assert!(
-            err("def adv() { turn; } def next(x) { adv(); observe p = x; } workload { turn { set n = 1; } } session { next(n); end; }")
+            err("def adv() { turn; } def next(x) { adv(); observe p = x; } workload { turn { set n = 1; } \n  session { next(n); turn; end; } } server {}")
                 .contains("which its `turn;` assigns")
         );
         assert!(
-            err("def ask() { request; } def go(x) { ask(); observe b = x; } workload { session { go(cached); end; } } server { }")
-                .contains("which its `request;` assigns")
+            err("def ask() { turn; } def go(x) { ask(); observe b = x; } workload { session { go(cached); end; } } server { }")
+                .contains("which its `turn;` assigns")
         );
         // a name that is a declaration's
-        assert!(err("def kv(x) = x; session { }").contains("also a pool"));
-        assert!(err("def engine(x) = x; session { }").contains("also a stage"));
+        assert!(
+            err("def kv(x) { x } workload { session { turn; \n} }\nserver {\n}")
+                .contains("also a pool")
+        );
+        assert!(
+            err("stage svc : fifo; def svc(x) { x } workload { session { turn; \n} }\nserver {\n}")
+                .contains("also a stage")
+        );
+        // a pool and a stage of one name, in either order, and a pool before
+        // or after an engine or a queue (#409): `cost(E, …)` would read either
+        let server =
+            "workload { arrive batch(1); }\nserver { hold E (cost(E, 1)) { run E (cost(E, 1)); } }";
+        for decls in [
+            "stage E : fifo; pool E { cap 1; }",
+            "pool E { cap 1; } stage E : fifo;",
+            "pool E { cap 4; } queue E[2] : decode { pool kv { cap 10; } serve fifo; decode (n) { hold kv (cost(kv, n)) { run E (cost(E, 1)); } } }",
+            "pool E { cap 1; } device dev { } engine E on dev { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }",
+            "device dev { } engine E on dev { tokens cap 1; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } pool E { cap 1; }",
+        ] {
+            let e = err(&format!("{decls} {server}"));
+            assert!(e.contains("a pool and a stage share one name space"), "{e}");
+        }
+        // `engine` is the keyword of an engine's declaration
+        assert!(
+            err("def engine(x) { x } workload { session { turn; \n} }\nserver {\n}")
+                .contains("a word of the language")
+        );
         // the name of a statement body's attribute is not a use
-        parse(&format!(
-            "{ENGINE} def c(x) {{ set c = x; }} session {{ c(1); }}"
+        parse(&main_source(&format!(
+            "{ENGINE} def c(x) {{ set c = x; }} workload {{ session {{ turn; \n}} }}\nserver {{ c(1);\n}}"
+        )
         ))
         .unwrap();
         // an error in the body says where the definition was used
         let e =
-            err("def take(n) { turn; } workload { session { request; end; } } server { take(4); }");
+            err("def take(n) { turn; } workload { session { turn; end; } } server { take(4); }");
         assert!(e.contains("note: in `take`, used at"), "{e}");
-        assert!(err("def f(x) = x; def f(y) = y; session { }").contains("defined twice"));
+        assert!(
+            err("def f(x) { x } def f(y) { y } workload { session { turn; \n} }\nserver {\n}")
+                .contains("defined twice")
+        );
         // an argument used once may draw
-        parse(&format!(
-            "{ENGINE} def f(x) = x + 1; session {{ set a = f(~exp(1)); }}"
+        parse(&main_source(&format!(
+            "{ENGINE} def f(x) {{ x + 1 }} workload {{ session {{ turn; \n}} }}\nserver {{ set a = f(~exp(1));\n}}"
+        )
         ))
         .unwrap();
         // a def used before it is defined is a call of an unknown function,
         // which the linker reports
-        parse(&format!(
-            "{ENGINE} session {{ set a = f(1); }} def f(x) = x;"
+        parse(&main_source(&format!(
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ set a = f(1);\n}} def f(x) {{ x }}"
+        )
         ))
         .unwrap();
     }
@@ -5172,96 +5881,126 @@ mod tests {
     fn a_transfer_says_where_the_kv_goes() {
         // without `from P to Q` it would be a link that stores and forwards,
         // which is the kernel's `run`, not a transfer
-        let e = parse(&format!("{PD} session {{ hold kv (K) {{ transfer X; }} }}")).unwrap_err();
+        let e = parse(&main_source(&format!(
+            "{PD} workload {{ session {{ turn; \n}} }}\nserver {{ hold kv (cost(kv, K)) {{ transfer X; }}\n}}"
+        )))
+        .unwrap_err();
         assert!(
             e.msg.contains("`transfer` without `from P to Q (n)`"),
             "{e}"
         );
-        assert!(e.msg.contains("`run link (w);`"), "{e}");
-        let e = parse("stage link[2] : ps(1); session { transfer[0] X; }").unwrap_err();
-        assert!(e.msg.contains("`run link[…] (w);`"), "{e}");
-        let e = parse(
-            "pool kv { cap 1; } stage nic : ps(1); session { transfer on nic X growing kv; }",
+        assert!(e.msg.contains("`run link (cost(link, w));`"), "{e}");
+        let e = parse(&main_source(
+            "stage link[2] : ps(1); workload { session { turn; \n} }\nserver { transfer[0] X;\n}",
+        ))
+        .unwrap_err();
+        assert!(e.msg.contains("`run link[…] (cost(link, w));`"), "{e}");
+        let e = parse(&main_source(
+            "pool kv { cap 1; } stage nic : ps(1); workload { session { turn; \n} }\nserver { transfer on nic X growing kv;\n}",
+        )
         )
         .unwrap_err();
         assert!(
             e.msg.contains("`transfer` without `from P to Q (n)`"),
             "{e}"
         );
-        assert!(e.msg.contains("`run nic (w);`"), "{e}");
+        assert!(e.msg.contains("`run nic (cost(nic, w));`"), "{e}");
     }
 
     #[test]
     fn serving_forms_need_exactly_one_stage() {
-        let e = parse("stage svc : fifo; session { prefill S; }").unwrap_err();
+        let e = parse(&main_source(
+            "stage svc : fifo; workload { session { turn; \n} }\nserver { tool S;\n}",
+        ))
+        .unwrap_err();
         assert!(
-            e.msg.contains("no stage declared above plays `prefill`"),
+            e.msg.contains("no stage declared above plays `tool`"),
             "{e}"
         );
-        assert_eq!((e.line, e.col), (1, 29));
+        assert_eq!((e.line, e.col), (3, 10));
         let e =
-            parse("stage a : step { cost 1; } stage b : step { cost 1; } session { decode D; }")
+            parse(&main_source("pool a { cap 1; } pool b { cap 1; } stage link : fifo; stage transfer : fifo; workload { session { turn; \n} }\nserver { transfer X from a to b (1);\n}",
+        ))
                 .unwrap_err();
-        assert!(e.msg.contains("several stages play `decode` (a, b)"), "{e}");
-        let e = parse("stage engine : step { cost 1; } session { transfer X; }").unwrap_err();
+        assert!(
+            e.msg
+                .contains("several stages play `transfer` (link, transfer)"),
+            "{e}"
+        );
+        let e = parse(&main_source(&format!(
+            "{ENGINE} workload {{ session {{ turn; \n}} }}\nserver {{ transfer X;\n}}"
+        )))
+        .unwrap_err();
         assert!(
             e.msg.contains("no stage declared above plays `transfer`"),
             "{e}"
         );
-        let e = parse("stage tool : delay; session { tool on other Z; }").unwrap_err();
+        let e = parse(&main_source(
+            "stage tool : delay; workload { session { turn; \n} }\nserver { tool on other Z;\n}",
+        ))
+        .unwrap_err();
         assert!(e.msg.contains("no stage `other` is declared above"), "{e}");
     }
 
     const DEPLOYMENT: &str = r#"
-        pool kv { cap 1000; block 16; evict lru; }
+        device gpu { kv cap 1000; }
+        engine llm on gpu {
+          tokens cap 64;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool kv on gpu { block 16; evict lru; }
         pool reqs { cap 4; }
-        stage engine : step { budget 64; cost 1; memory kv; }
         stage tool : delay;
     "#;
 
     const CLIENT: &str =
         "arrive poisson(1); init { set K = 0; } turn { set n = 10; set o = 5; set more = 1; }";
 
-    /// `workload { session { … request; … } }` and `server { … }` parse to
+    /// `workload { session { … turn; … } }` and `server { … }` parse to
     /// the session block that has the server in place of the request.
     #[test]
     fn the_two_sides_are_one_session() {
         same(
             &format!(
                 "{DEPLOYMENT} workload {{ {CLIENT}
-                    session {{
-                      turn;
-                      loop {{
-                        request;
-                        set K = prompt + o;
-                        branch (more) {{ tool 3; turn; }} else {{ end; }}
-                      }}
-                    }}
-                }}
-                server {{
-                  set prompt = K + n;
-                  hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
-                        at admission (hit = min(cachedin(kv), prompt - 1)) {{
-                    prefill (prompt - cached) growing kv;
-                    decode (o - 1) growing kv;
-                  }} cache (prompt + o);
-                }}"
+          session {{
+
+            loop {{
+              turn;
+              set K = prompt + o;
+              branch (more) {{ tool 3;  }} else {{ end; }}
+            }}
+          }}
+        }}
+        server {{
+          set prompt = K + n;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
+          at admission (hit = min(cachedin(kv), prompt - 1)) {{
+            run llm prefill (cost(llm, prompt - cached)) growing kv;
+            run llm decode (cost(llm, o - 1)) growing kv;
+          }} cache (cost(reqs, kv, prompt + o));
+        }}"
             ),
             &format!(
-                "{DEPLOYMENT} workload {{ {CLIENT} }}
-                session {{
-                  turn;
-                  loop {{
-                    set prompt = K + n;
-                    hold reqs (1), kv (min(prompt, hit + budget_left(engine)))
-                          at admission (hit = min(cachedin(kv), prompt - 1)) {{
-                      prefill (prompt - cached) growing kv;
-                      decode (o - 1) growing kv;
-                    }} cache (prompt + o);
-                    set K = prompt + o;
-                    branch (more) {{ tool 3; turn; }} else {{ end; }}
-                  }}
-                }}"
+                "{DEPLOYMENT} workload {{ {CLIENT}
+          session {{
+
+            loop {{ turn;
+              branch (more) {{ tool 3;  }} else {{ end; }}
+            }}
+
+          }}
+        }}
+        server {{
+          set prompt = K + n;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
+          at admission (hit = min(cachedin(kv), prompt - 1)) {{
+            run llm prefill (cost(llm, prompt - cached)) growing kv;
+            run llm decode (cost(llm, o - 1)) growing kv;
+          }} cache (cost(reqs, kv, prompt + o));
+          set K = prompt + o;
+        }}"
             ),
         );
     }
@@ -5269,30 +6008,44 @@ mod tests {
     #[test]
     fn request_is_spliced_at_any_depth_and_as_often_as_written() {
         same(
-            "stage s : fifo; workload { session { branch (x) { request; } else { loop { request; end; } } } }
-             server { run s (1); }",
-            "stage s : fifo; workload { } session { branch (x) { run s (1); } else { loop { run s (1); end; } } }",
+            "stage s : fifo; workload { session { branch (x) { turn; } else { loop { turn; end; } } } }
+        server { run s (cost(s, 1)); }",
+            "stage s : fifo; workload { \n  session { branch (x) { turn; } else { loop { turn; end; } } \n  }\n} server { run s (cost(s, 1));\n}",
         );
         // the kernel is written on either side
         same(
-            "pool kv { cap 1; } workload { session { request; end; } } server { hold kv (1) { } }",
-            "pool kv { cap 1; } workload { } session { hold kv (1) { } end; }",
+            "pool kv { cap 1; } workload { session { turn; end; } } server { hold kv (cost(kv, 1)) { } }",
+            "pool kv { cap 1; } workload { \n  session { turn; end; \n  }\n} server { hold kv (cost(kv, 1)) { }\n}",
         );
         // the order of the blocks does not matter
         same(
-            "stage s : fifo; server { run s (1); } workload { session { request; end; } }",
-            "stage s : fifo; workload { } session { run s (1); end; }",
+            "stage s : fifo; server { run s (cost(s, 1)); } workload { session { turn; end; } }",
+            "stage s : fifo; workload { \n  session { turn; end; \n  }\n} server { run s (cost(s, 1));\n}",
         );
     }
 
     fn refused(src: &str, needle: &str) {
-        let e = parse(src).unwrap_err();
+        let e = parse(&main_source(src)).unwrap_err();
         assert!(e.msg.contains(needle), "{src}\n  {e}");
     }
 
     #[test]
+    fn a_session_belongs_only_inside_workload() {
+        for source in [
+            "session {}",
+            "session { end; }",
+            "workload { arrive batch(1); } session { end; }",
+            "session {} workload { session { turn; end; } } server {}",
+            "workload { session { turn; end; } } server {} session {}",
+        ] {
+            refused(source, "`session` belongs inside `workload`");
+            refused(source, "describe its turns with `turn;`");
+        }
+    }
+
+    #[test]
     fn each_side_keeps_its_words() {
-        const WL: &str = "workload { session { request; } }";
+        const WL: &str = "workload { session { turn; } }";
         // the session's words in a server
         refused(
             &format!("stage s : fifo; {WL} server {{ turn; }}"),
@@ -5304,48 +6057,55 @@ mod tests {
         );
         refused(
             &format!("stage s : fifo; {WL} server {{ request; }}"),
-            "does not request itself",
+            "`request` is replaced",
         );
         refused(
-            "pool kv { cap 1; } session { request; }",
-            "`session` inside `workload`",
+            "pool kv { cap 1; } session { turn; }",
+            "`session` belongs inside `workload`",
         );
     }
 
     #[test]
     fn one_admission_is_written_one_way() {
         // the words #136 took out say what a program writes instead
-        const WL: &str = "workload { session { request; } }";
+        const WL: &str = "workload { session { turn; } }";
         for (src, now) in [
-            ("session { enter kv (1) { } }", "`enter` is now `hold`"),
+            (
+                "workload { session { turn; \n} }\nserver { enter kv (1) { }\n}",
+                "`enter` is now `hold`",
+            ),
             (
                 &*format!("{WL} server {{ admit if kv (1) fit {{ }} }}"),
                 "is now `hold … at admission",
             ),
             (
-                "session { hold kv (1) { } keep (1); }",
+                "workload { session { turn; \n} }\nserver { hold kv (cost(kv, 1)) { } keep (1);\n}",
                 "`keep` is now `cache`",
             ),
             (
-                "session { hold kv (1) where x = 1 { } }",
+                "workload { session { turn; \n} }\nserver { hold kv (cost(kv, 1)) where x = 1 { }\n}",
                 "`where x = e` is now `at admission (x = e)`",
             ),
-            ("session { hold kv (1) fit { } }", "`fit` is gone"),
+            (
+                "workload { session { turn; \n} }\nserver { hold kv (cost(kv, 1)) fit { }\n}",
+                "`fit` is gone",
+            ),
         ] {
             refused(&format!("pool kv {{ cap 1; }} {src}"), now);
         }
         // and none of them names anything, so a name never means two things
         for src in [
-            "def keep(n) { observe k = n; } session { end; }",
-            "def f(where) = where; session { end; }",
-            "session { set fit = 1; end; }",
-            "session { hold kv (1) at admission (enter = 1) { observe e = enter; } end; }",
+            "def keep(n) { observe k = n; } workload { session { turn; end; \n} }\nserver {\n}",
+            "def f(where) { where } workload { session { turn; end; \n} }\nserver {\n}",
+            "workload { session { turn; end; \n} }\nserver { set fit = 1;\n}",
+            "workload { session { turn; end; \n} }\nserver { hold kv (cost(kv, 1)) at admission (enter = 1) { observe e = enter; }\n}",
         ] {
             refused(&format!("pool kv {{ cap 1; }} {src}"), "is a retired word");
         }
         // `hold` is written on either side, with its bindings
-        parse(&format!(
-            "pool kv {{ cap 1; }} {WL} server {{ hold kv (x) at admission (x = 1) {{ }} cache (1); }}"
+        parse(&main_source(&format!(
+            "pool kv {{ cap 1; }} {WL} server {{ hold kv (cost(kv, x)) at admission (x = 1) {{ }} cache (cost(kv, 1)); }}"
+        )
         ))
         .unwrap();
     }
@@ -5353,28 +6113,40 @@ mod tests {
     #[test]
     fn a_side_needs_the_other() {
         refused(
-            "stage s : fifo; workload { session { run s (1); } }",
+            "stage s : fifo; workload { session { run s (cost(s, 1)); } }",
             "written against a `server` block",
         );
         refused(
-            "stage s : fifo; server { run s (1); }",
-            "`server` needs a `session` inside `workload`",
+            "stage s : fifo; server { run s (cost(s, 1)); }",
+            "`server` needs a `workload`",
         );
         refused(
-            "stage s : fifo; workload { session { run s (1); } } server { run s (1); }",
-            "never requested",
+            "stage s : fifo; workload { session { run s (cost(s, 1)); } } server { run s (cost(s, 1)); }",
+            "session has no `turn;`",
         );
         refused(
-            "stage s : fifo; workload { session { request; } } server { run s (1); } session { run s (1); }",
-            "one session",
+            "stage s : fifo; workload { session { turn; } } server { run s (cost(s, 1)); } session { run s (cost(s, 1)); }",
+            "`session` belongs inside `workload`",
         );
         refused(
-            "stage s : fifo; session { run s (1); } workload { session { request; } } server { run s (1); }",
-            "one session",
+            "stage s : fifo; session { run s (cost(s, 1)); } workload { session { turn; } } server { run s (cost(s, 1)); }",
+            "`session` belongs inside `workload`",
         );
         refused(
-            "stage s : fifo; server { run s (1); } server { run s (1); }",
+            "stage s : fifo; server { run s (cost(s, 1)); } server { run s (cost(s, 1)); }",
             "duplicate server",
         );
+    }
+
+    #[test]
+    fn a_step_stage_is_written_as_an_engine() {
+        const WL: &str = "workload { session { turn; end; } } server { }";
+        for decl in [
+            "stage E : step { cost 1; }",
+            "queue Q { serve step { cost 1; } }",
+            "queue Q { nic step { cost 1; } }",
+        ] {
+            refused(&format!("{decl} {WL}"), "`step` is an engine's");
+        }
     }
 }

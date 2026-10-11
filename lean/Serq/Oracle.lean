@@ -32,13 +32,14 @@ namespace Oracle
 
 open Exec
 
-/-- The vLLM request program (serQ `examples/oracle/vllm_request.sq`), translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prompt, 10 = o, 11 = arrive, 12 = known. Observations: 0 = first, 1 = done. Pools: 0 = reqs, 1 = kv. Stages: 0 = engine, 1 = gate. -/
+/-- The vLLM request program (serQ `examples/oracle/vllm_request.sq`), translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prompt, 10 = o, 11 = arrive, 12 = known. Observations: 0 = first, 1 = done. Pools: 0 = reqs, 1 = kv. Stages: 0 = vllm, 1 = gate. -/
 def vllmRequest : Prog := [route|
   run 1 (x.attr 11);
-  hold 0 (1), 1 (min (if (if (x.attr 8) < (x.attr 9) then 1 else 0) ≠ 0 then (x.attr 9) else ((x.attr 8) + 1)) x.budgetLeft) fits (if (if (x.attr 8) < (x.attr 9) then 1 else 0) ≠ 0 then (x.attr 9) else ((x.attr 8) + 1)) {
-    set 12 = if (if (x.attr 8) < (x.attr 9) then 1 else 0) ≠ 0 then (x.attr 9) else ((x.attr 8) + 1);
+  turn;
+  hold 0 (1), 1 (min (if ((x.attr 8) < (x.attr 9)) then (x.attr 9) else ((x.attr 8) + 1)) x.budgetLeft) fits (if ((x.attr 8) < (x.attr 9)) then (x.attr 9) else ((x.attr 8) + 1)) {
+    set 12 = if ((x.attr 8) < (x.attr 9)) then (x.attr 9) else ((x.attr 8) + 1);
     run 0 prefill (x.attr 12) growing 1;
-    branch (if (x.attr 12) = (x.attr 9) then 1 else 0) {
+    branch (if ((x.attr 12) = (x.attr 9)) then 1 else 0) {
       observe 0 = x.now;
       done
     } else {
@@ -58,69 +59,101 @@ def outcome (D : Deployment) (horizon : ℕ) (w : Workload) :
   let m := Exec.runW D horizon w vllmRequest
   (observed m 0, observed m 1, m.preempts)
 
+/-- serQ `tools/oracle/alone.ir.json`: 4 requests, 10 blocks of 16, budget 32, 8 slots, chunk 24; the deployment and the workload are the IR's. -/
+theorem vllm_alone :
+    outcome ⟨[⟨8, 1, true, none⟩, ⟨144, 16, false, none⟩], 32, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 24 else 0⟩ 53
+      ⟨[[(9, 60), (10, 12), (11, 1)], [(9, 60), (10, 24), (11, 4)], [(9, 60), (10, 12), (11, 0)], [(9, 30), (10, 6), (11, 1)]], [], none, 0, some 8, none⟩ =
+    ([(0, 5), (1, 25), (2, 3), (3, 17)], [(0, 23), (1, 48), (2, 14), (3, 22)], 2) := by
+  decide +kernel
+
 /-- serQ `tools/oracle/chunked.ir.json`: 3 requests, 1000 blocks of 16, budget 1024, 16 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_chunked :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none⟩ 13
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none⟩ 13
       ⟨[[(9, 3000), (10, 2), (11, 0)], [(9, 700), (10, 5), (11, 1)], [(9, 100), (10, 3), (11, 1)]], [], none, 0, some 8, none⟩ =
     ([(0, 3), (1, 4), (2, 4)], [(0, 4), (1, 8), (2, 6)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/hol.ir.json`: 3 requests, 11 blocks of 16, budget 1024, 16 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_hol :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none⟩ 25
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none⟩ 25
       ⟨[[(9, 96), (10, 10), (11, 0)], [(9, 96), (10, 10), (11, 0)], [(9, 16), (10, 3), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 11), (2, 11)], [(0, 10), (1, 20), (2, 13)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/longchunk.ir.json`: 2 requests, 1000 blocks of 16, budget 4096, 16 slots, chunk 1000; the deployment and the workload are the IR's. -/
 theorem vllm_longchunk :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 4096, 1000, some 1, fun _ => 1, none⟩ 9
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨15984, 16, false, none⟩], 4096, 0, some 1, fun _ => 1, none, some fun c => if ((c.residents + (c.queued 0)) > 1) then 1000 else 0⟩ 9
       ⟨[[(9, 3000), (10, 2), (11, 0)], [(9, 3000), (10, 2), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 3), (1, 3)], [(0, 4), (1, 4)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/mixed.ir.json`: 6 requests, 40 blocks of 16, budget 512, 4 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_mixed :
-    outcome ⟨[⟨4, 1, true, none⟩, ⟨624, 16, false, none⟩], 512, 0, some 1, fun _ => 1, none⟩ 105
+    outcome ⟨[⟨4, 1, true, none⟩, ⟨624, 16, false, none⟩], 512, 0, some 1, fun _ => 1, none, none⟩ 105
       ⟨[[(9, 300), (10, 40), (11, 0)], [(9, 200), (10, 30), (11, 2)], [(9, 250), (10, 20), (11, 3)], [(9, 150), (10, 60), (11, 3)], [(9, 400), (10, 10), (11, 5)], [(9, 100), (10, 25), (11, 9)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 3), (2, 33), (3, 41), (4, 53), (5, 63)], [(0, 40), (1, 32), (2, 52), (3, 100), (4, 62), (5, 87)], 0) := by
   decide +kernel
 
 /-- serQ `tools/oracle/preempt.ir.json`: 2 requests, 11 blocks of 16, budget 100, 16 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_preempt :
-    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 100, 0, some 1, fun _ => 1, none⟩ 65
+    outcome ⟨[⟨16, 1, true, none⟩, ⟨160, 16, false, none⟩], 100, 0, some 1, fun _ => 1, none, none⟩ 65
       ⟨[[(9, 80), (10, 30), (11, 0)], [(9, 80), (10, 30), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 31)], [(0, 30), (1, 60)], 1) := by
   decide +kernel
 
 /-- serQ `tools/oracle/seqcap.ir.json`: 4 requests, 1000 blocks of 16, budget 1024, 2 slots, chunk 0; the deployment and the workload are the IR's. -/
 theorem vllm_seqcap :
-    outcome ⟨[⟨2, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none⟩ 18
+    outcome ⟨[⟨2, 1, true, none⟩, ⟨15984, 16, false, none⟩], 1024, 0, some 1, fun _ => 1, none, none⟩ 18
       ⟨[[(9, 1024), (10, 5), (11, 0)], [(9, 1024), (10, 5), (11, 0)], [(9, 1024), (10, 5), (11, 0)], [(9, 1024), (10, 5), (11, 0)]], [], none, 0, some 8, none⟩ =
     ([(0, 1), (1, 3), (2, 7), (3, 9)], [(0, 5), (1, 7), (2, 11), (3, 13)], 0) := by
   decide +kernel
 
 /-! ### A multi-turn scenario with a prefix cache -/
 
-/-- The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prev, 10 = prevout, 11 = t0, 12 = prompt, 13 = hitmax, 14 = known, 15 = c. Observations: 0 = cached_tokens, 1 = prefix, 2 = sent, 3 = ttft, 4 = latency. Pools: 0 = kv, 1 = reqs. Stages: 0 = engine, 1 = front, 2 = gate, 3 = tool. -/
+/-- The vLLM replay program (serQ `examples/replay/vllm_replay.sq`) on a unit step clock, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = prev, 10 = prevout, 11 = t0, 12 = prompt, 13 = hitmax, 14 = known, 15 = c. Observations: 0 = cached_tokens, 1 = prefix, 2 = sent, 3 = ttft, 4 = response. Pools: 0 = kv, 1 = reqs. Stages: 0 = vllm, 1 = front, 2 = gate, 3 = tool. -/
 def vllmTurn : Prog := [route|
   run 2 (x.serial * 3);
   set 9 = 0;
   set 10 = 0;
   turn;
-  loop {
+  set 11 = x.now;
+  set 12 = x.attr 3;
+  run 1 (0);
+  set 13 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
+  hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16))) + (min ((if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16)))) x.budgetLeft)) fits (if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1)) reuse (max (x.attr 13) (((x.attr 8) / 16) * 16)) {
+    set 14 = if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1);
+    set 15 = x.cached;
+    observe 0 = x.attr 15;
+    observe 1 = (x.attr 9) + (x.attr 10);
+    observe 2 = x.attr 11;
+    run 0 prefill ((x.attr 14) - (x.attr 15)) growing 0;
+    branch (if ((x.attr 14) = (x.attr 12)) then 1 else 0) {
+      observe 3 = x.now - (x.attr 11);
+      done
+    } else {
+      done
+    };
+    run 0 decode (((x.attr 4) - 1) - ((x.attr 14) - (x.attr 12))) growing 0;
+    done
+  } cache (((x.attr 12) + (x.attr 4)) - 1);
+  observe 4 = x.now - (x.attr 11);
+  while (x.attr 6) {
+    set 9 = x.attr 3;
+    set 10 = x.attr 4;
+    run 3 (x.attr 5);
+    turn;
     set 11 = x.now;
     set 12 = x.attr 3;
-    run 1 (0 + (0 * (x.attr 12)));
-    set 13 = if (x.attr 7) ≠ 0 then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
-    hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16))) + (min ((if (if (x.attr 8) < (x.attr 12) then 1 else 0) ≠ 0 then (x.attr 12) else ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16)))) x.budgetLeft)) fits (if (if (x.attr 8) < (x.attr 12) then 1 else 0) ≠ 0 then (x.attr 12) else ((x.attr 8) + 1)) reuse (max (x.attr 13) (((x.attr 8) / 16) * 16)) {
-      set 14 = if (if (x.attr 8) < (x.attr 12) then 1 else 0) ≠ 0 then (x.attr 12) else ((x.attr 8) + 1);
+    run 1 (0);
+    set 13 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
+    hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16))) + (min ((if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 13) (((x.attr 8) / 16) * 16)))) x.budgetLeft)) fits (if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1)) reuse (max (x.attr 13) (((x.attr 8) / 16) * 16)) {
+      set 14 = if ((x.attr 8) < (x.attr 12)) then (x.attr 12) else ((x.attr 8) + 1);
       set 15 = x.cached;
       observe 0 = x.attr 15;
       observe 1 = (x.attr 9) + (x.attr 10);
       observe 2 = x.attr 11;
       run 0 prefill ((x.attr 14) - (x.attr 15)) growing 0;
-      branch (if (x.attr 14) = (x.attr 12) then 1 else 0) {
+      branch (if ((x.attr 14) = (x.attr 12)) then 1 else 0) {
         observe 3 = x.now - (x.attr 11);
         done
       } else {
@@ -130,17 +163,9 @@ def vllmTurn : Prog := [route|
       done
     } cache (((x.attr 12) + (x.attr 4)) - 1);
     observe 4 = x.now - (x.attr 11);
-    set 9 = x.attr 12;
-    set 10 = x.attr 4;
-    branch (x.attr 6) {
-      run 3 (x.attr 5);
-      turn;
-      done
-    } else {
-      stop
-    };
     done
-  }]
+  };
+  stop]
 
 theorem vllmTurn_wf : vllmTurn.wf = true := by decide
 
@@ -148,7 +173,7 @@ theorem vllmTurn_wf : vllmTurn.wf = true := by decide
 `cache_trace.csv`; the deployment and the workload are the IR's. Per turn:
 send step, time to first token, latency, cached tokens at admission. -/
 theorem vllm_cache_trace :
-    let m := Exec.runW ⟨[⟨320, 16, false, none⟩, ⟨4, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none⟩ 43
+    let m := Exec.runW ⟨[⟨320, 16, false, none⟩, ⟨4, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none, none⟩ 43
       ⟨[[], [], []], [[[(3, 100), (4, 3), (5, 2), (7, 0)], [(3, 150), (4, 3), (5, 2), (7, 0)], [(3, 210), (4, 3), (5, 0), (7, 0)]], [[(3, 120), (4, 3), (5, 2), (7, 0)], [(3, 180), (4, 3), (5, 2), (7, 0)], [(3, 230), (4, 3), (5, 0), (7, 0)]], [[(3, 90), (4, 3), (5, 2), (7, 0)], [(3, 140), (4, 3), (5, 2), (7, 0)], [(3, 200), (4, 3), (5, 0), (7, 0)]]], some 2, 6, some 8, none⟩ vllmTurn
     (observed m 2, observed m 3, observed m 4, observed m 0) =
       ([(0, 0), (0, 6), (0, 13), (1, 3), (1, 9), (1, 17), (2, 6), (2, 12), (2, 22)],

@@ -90,6 +90,7 @@ inductive Route (Env V : Type)
       (cache : Option (Env → V)) (k : Route Env V)
   | branch (p : Env → V) (yes no : Route Env V) (k : Route Env V)
   | loop (body : Route Env V)
+  | whileLoop (p : Env → V) (body k : Route Env V)
 
 namespace Route
 
@@ -106,6 +107,7 @@ def hasRun : Route Env V → Bool
   | hold _ _ body _ k => hasRun body || hasRun k
   | branch _ a b k => hasRun a || hasRun b || hasRun k
   | loop body => hasRun body
+  | whileLoop _ body k => hasRun body || hasRun k
 
 /-- Well formed: every loop body runs a stage, so that between two flow
 steps a session executes finitely many commands (the condition under
@@ -120,6 +122,7 @@ def wf : Route Env V → Bool
   | hold _ _ body _ k => wf body && wf k
   | branch _ a b k => wf a && wf b && wf k
   | loop body => hasRun body && wf body
+  | whileLoop _ body k => hasRun body && wf body && wf k
 
 end Route
 
@@ -160,6 +163,7 @@ syntax &"hold" routePool,+ (&"reuse" "(" term ")")? "{" route "}" (&"cache" "(" 
   route : route
 syntax &"branch" "(" term ")" "{" route "}" &"else" "{" route "}" ";" route : route
 syntax &"loop" "{" route "}" : route
+syntax &"while" "(" term ")" "{" route "}" ";" route : route
 syntax "[route|" route "]" : term
 syntax "[routePool|" routePool "]" : term
 
@@ -211,6 +215,9 @@ macro_rules
       let x := mkIdent `x
       `(Route.branch (fun $x => $p) [route| $a] [route| $b] [route| $k])
   | `([route| loop { $body }]) => `(Route.loop [route| $body])
+  | `([route| while ($p) { $body }; $k]) =>
+      let x := mkIdent `x
+      `(Route.whileLoop (fun $x => $p) [route| $body] [route| $k])
 
 /-! ## Stage rates (Eq. L1:eq:rates) -/
 

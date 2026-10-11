@@ -6,10 +6,10 @@ gives what the `serq` CLI gives.
 
 ```python
 import pyserq
-p = pyserq.compile("mg1.sq", sets={"lam": 0.8}, seed=10)
+p = pyserq.compile("mg1.sq", sets={"lam": 0.8}, seed=10, horizon=250000, warmup=25000)
 r = pyserq.run(p)            # the GIL is released while it runs
 r.json()                     # what `serq run --json` prints
-o = r.observe("sojourn")     # o.mean, o.ci, o.samples, o.times
+o = r.observe("response")     # o.mean, o.ci, o.samples, o.times
 pyserq.draw("mg1.sq", format="svg")  # what `serq draw --format svg` prints
 ```
 

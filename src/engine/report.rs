@@ -103,6 +103,10 @@ pub struct StageReport {
     pub mean_itl: f64,
     pub itl_p50: f64,
     pub itl_p99: f64,
+    /// Step stages: the run ended with the stage holding residents or a
+    /// waiting queue it serves, and its last try at an iteration scheduled
+    /// nothing (a body or `serve only` that served and admitted nobody).
+    pub idle_with_work: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -129,6 +133,20 @@ pub struct PoolReport {
     /// Sessions preempted a second time without progress past their
     /// previous preemption: a livelock the run would otherwise hide.
     pub stuck: u64,
+    /// The run ended with the head of a queue asking this pool for more
+    /// than its cap: the queue's pool and what the head asks. A hold whose
+    /// units or `reserve` read the deployment's state is not rejected when
+    /// it joins the queue, and waits (#364).
+    pub over_cap: Option<(String, f64)>,
+    /// Holds waiting to grow in this pool when the run ends: a growth that
+    /// did not fit and that the pool's `preempt` did not make room for
+    /// waits, for room another holder may free (#238).
+    pub growing_at_end: u64,
+    /// Every session with an allocation in this pool is one of those
+    /// waiting to grow in it: none will free room, so they wait for ever
+    /// (a hold around one on the same pool, or holders waiting on each
+    /// other).
+    pub growing_stalled: bool,
 }
 
 /// A `claim`: what the run found of it on the path it ran.
@@ -465,7 +483,43 @@ impl Report {
                         label(&p.name, p.index)
                     );
                 }
+                if p.growing_at_end > 0 {
+                    let pool = label(&p.name, p.index);
+                    let why = if p.growing_stalled {
+                        format!(
+                            "and every holder of `{pool}` is one of them, so none will free room \
+                             (a hold around one on the same pool, or holders waiting on each \
+                             other)"
+                        )
+                    } else {
+                        "for room another holder may free".into()
+                    };
+                    let _ = writeln!(
+                        s,
+                        "grow: {} hold(s) wait to grow in pool `{pool}` when the run ends, {why}",
+                        p.growing_at_end
+                    );
+                }
+                if let Some((queue, need)) = &p.over_cap {
+                    let _ = writeln!(
+                        s,
+                        "over: the head of pool `{queue}`'s queue asks `{}` for {need}, above \
+                         its cap, when the run ends, and waits (its hold reads the \
+                         deployment's state, so joining the queue did not reject it)",
+                        label(&p.name, p.index)
+                    );
+                }
             }
+        }
+        for st in self.stages.iter().filter(|st| st.idle_with_work) {
+            let _ = writeln!(
+                s,
+                "idle: engine `{}` ended with residents or waiting requests, its last iteration \
+                 scheduling nothing (a schedule or `only` that serves and admits nobody, a \
+                 `granule` that refuses every prefill, or a run waiting to grow, `grow:`, waits \
+                 for an event)",
+                label(&st.name, st.index)
+            );
         }
         s
     }
@@ -556,7 +610,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{},\"prefill_only\":{},\"decode_only\":{},\"mixed\":{},\"mean_decodes\":{},\"mean_decode_batch\":{},\"mean_decode_step\":{},\"mean_itl\":{},\"itl_p50\":{},\"itl_p99\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_number\":{},\"utilization\":{},\"completed\":{},\"throughput\":{},\"mean_wait\":{},\"mean_service\":{},\"iterations\":{},\"prefill_only\":{},\"decode_only\":{},\"mixed\":{},\"mean_decodes\":{},\"mean_decode_batch\":{},\"mean_decode_step\":{},\"mean_itl\":{},\"itl_p50\":{},\"itl_p99\":{},\"idle_with_work\":{}}}",
                 st.name,
                 index(st.index),
                 f(st.mean_number),
@@ -574,7 +628,8 @@ impl Report {
                 f(st.mean_decode_step),
                 f(st.mean_itl),
                 f(st.itl_p50),
-                f(st.itl_p99)
+                f(st.itl_p99),
+                st.idle_with_work
             );
         }
         s.push_str("],\"pools\":[");
@@ -584,7 +639,7 @@ impl Report {
             }
             let _ = write!(
                 s,
-                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{}}}",
+                "{{\"name\":\"{}\",\"index\":{},\"mean_used\":{},\"mean_cached\":{},\"mean_queue\":{},\"mean_holders\":{},\"mean_wait\":{},\"admissions\":{},\"evicted_entries\":{},\"evicted_units\":{},\"preemptions\":{},\"spills\":{},\"rejected\":{},\"stuck\":{},\"over_cap\":{},\"growing_at_end\":{},\"growing_stalled\":{}}}",
                 p.name,
                 index(p.index),
                 f(p.mean_used),
@@ -598,7 +653,14 @@ impl Report {
                 p.preemptions,
                 p.spills,
                 p.rejected,
-                p.stuck
+                p.stuck,
+                match &p.over_cap {
+                    Some((queue, need)) =>
+                        format!("{{\"queue\":\"{queue}\",\"need\":{}}}", f(*need)),
+                    None => "null".into(),
+                },
+                p.growing_at_end,
+                p.growing_stalled
             );
         }
         s.push_str("]}");

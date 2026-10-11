@@ -1,8 +1,7 @@
 # 1. A queue
 
-Before there are tokens, there is a queue. A serving system is, at bottom, a
-thing that makes requests wait — and the whole of queueing theory is about how
-long.
+Model requests arriving at one server, then compare their simulated waiting
+and response times with the M/M/1 queue's closed forms.
 
 ## The program
 
@@ -10,12 +9,12 @@ long.
 --8<-- "docs/tutorial/programs/01-queue.sq"
 ```
 
-Four blocks, and every serQ program has the same four.
+This program has four blocks:
 
 ### `stage`
 
 ```serq
-stage server : fifo;
+stage svc : fifo;
 ```
 
 A **stage** is where time passes. `fifo` serves one job at a time in arrival
@@ -24,63 +23,65 @@ sharing — everyone at once, sharing the throughput), `delay` (everyone at once
 no waiting at all) and `step`, the LLM engine, which arrives in
 [chapter 5](05-the-engine.md).
 
-### `workload`
+### `workload` and its `session`
 
 ```serq
 workload {
   arrive poisson(Lambda);
-  turn { set s = ~exp(S); }
+  turn { Size work_size = ~exp(1); }
 }
 ```
 
 `arrive` says how sessions show up. `turn` is the block that draws the next
-turn's attributes; `~exp(S)` is a fresh draw from an exponential with mean `S`.
+turn's sizes; `~exp(1)` draws normalized work with mean one.
 The other distributions are `~det`, `~uniform`, `~erlang`, `~h2` and
 `~bernoulli`.
 
-### `session`
+With no `session` block, each arrival draws one turn, waits for the response,
+and finishes. The `server` below handles that turn.
+
+### `server`
 
 ```serq
-session {
-  turn;
+server {
+  Cost s = cost(svc, S * work_size);
   set t0 = now;
-  run server (s);
+  run svc (s);
   observe response = now - t0;
-  observe wait = now - t0 - s;
-  end;
+  observe wait = now - t0 - S * work_size;
 }
 ```
 
-A `session` block is what one session does, from arrival to `end`.
-`run server (s)` is `s` seconds of work at `server`. `now` is the clock. `observe name = expr` records
-a sample — this is how the program says what it measures, rather than the
-interpreter guessing.
+The `server` block converts the requested work into a `svc` cost: `S` seconds
+per unit. The workload owns `work_size`; the server cannot overwrite it.
+The `server` block handles one request. `run svc (cost(svc, s))` is `s` seconds of work
+at the FIFO stage named `svc`. `now` is the clock. `observe name = expr`
+records a sample — the program says what it measures.
 
-### `run`
+### Execution settings
 
-```serq
-run { horizon 100000; warmup 5000; seed 1; }
-```
-
-How long to simulate, how much to throw away first, and the seed.
+The model says what each request does. The invocation says how long to
+simulate, how much warm-up to exclude, and which random seed to use.
+The command below supplies these values with `--horizon`, `--warmup` and
+`--seed`; they are not part of `fn main()`.
 
 ## Running it
 
 ```bash
-serq run docs/tutorial/programs/01-queue.sq
+serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1
 ```
 
 ```text
-run: horizon 100000 end 100000 warmup 5000 seed 1 events 158920 arrivals 79460 ended 75464 turns 75462 mean live 3.816
+run: horizon 100000 end 100000 warmup 5000 seed 1 events 158921 arrivals 79460 ended 75464 turns 75462 mean live 3.768
 
 observe   count    mean   95% CI    cv2      p99
 --------  -----  ------  -------  -----  -------
-response  75464  4.8040  ±0.2377  0.916  20.4865
-wait      75464  3.8023  ±0.2330  1.394  19.3448
+response  75464  4.7432  ±0.2838  1.028  22.9285
+wait      75464  3.7458  ±0.2833  1.578  21.7495
 
-stage   number   util   done    thru    wait  service  iters
-------  ------  -----  -----  ------  ------  -------  -----
-server   3.816  0.796  75464  0.7944  3.8023   1.0017      0
+stage  number   util   done    thru    wait  service  iters
+-----  ------  -----  -----  ------  ------  -------  -----
+svc     3.768  0.792  75464  0.7944  3.7458   0.9974      0
 ```
 
 ## Checking it against the textbook
@@ -96,25 +97,24 @@ This is M/M/1 with \(\lambda = 0.8\) and \(\mathbb{E}[S] = 1\), so
 
 | | closed form | run | |
 |---|---|---|---|
-| response | 5 | 4.8040 ±0.2377 | covered |
-| wait | 4 | 3.8023 ±0.2330 | covered |
-| number in system | 4 | 3.816 | |
-| utilisation | 0.8 | 0.796 | |
+| response | 5 | 4.7432 ±0.2838 | covered |
+| wait | 4 | 3.7458 ±0.2833 | covered |
+| number in system | 4 | 3.768 | |
+| utilisation | 0.8 | 0.792 | |
 
-!!! warning "Read the interval, not the mean"
-    `4.8040` is not 5, and it is not supposed to be. The interval is what makes
-    the claim: `±0.2377` covers 5. A run whose interval does *not* cover the
-    closed form is a bug — in the program, or in serQ. Check
-    `examples/single-turn/ps.sq` and `examples/multi-turn/closed.sq` against
-    theirs the same way; no test does it for you.
+!!! tip "Compare intervals across runs"
+    This run's response-time interval includes the theoretical mean of 5.
+    A 95% confidence interval can miss the true mean even for a correct
+    model. If discrepancies persist across seeds and longer runs, check the
+    model assumptions, warm-up and implementation.
 
 ## What to try
 
-`--set` overrides any `let`, so the whole stability curve is one loop:
+`Lambda` is declared with `args.number`, so the whole stability curve is one loop:
 
 ```bash
 for L in 0.5 0.8 0.9 0.95 0.99; do
-  serq run docs/tutorial/programs/01-queue.sq --set Lambda=$L --json
+  serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1 --set Lambda=$L --json
 done
 ```
 

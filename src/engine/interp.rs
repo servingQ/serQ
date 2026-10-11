@@ -18,10 +18,11 @@ use crate::engine::dist::Dist;
 use crate::engine::report::*;
 use crate::engine::stats::*;
 
-use crate::frontend::ast::{BinOp, Preempt, RunMode, UnOp};
+use crate::frontend::ast::{BinOp, RunMode, UnOp};
 use crate::frontend::link::*;
-use crate::ir::ClaimKind;
+use crate::ir::Preempt;
 use crate::ir::trace::Corpus;
+use crate::ir::{CIter, ClaimKind};
 
 /// The tolerance of a comparison of amounts that sums of floats produce
 /// (units, tokens, work): below it, two amounts are equal.
@@ -100,6 +101,8 @@ enum Status {
     /// A failed `grow` waiting for room (pool policy `none`); resumes at
     /// the stage job it was in, if any.
     Growing(usize, f64, Option<(usize, u64)>),
+    /// At a `join`, until the legs the session forked have ended.
+    Joining,
     Ended,
 }
 
@@ -112,6 +115,10 @@ struct Held {
     /// Advanced by `growing` runs and `load`; starts at the consumed
     /// cached prefix.
     pos: f64,
+    /// The units the admission tested (`reserve`, or the units): under the
+    /// pool's `reserve held`, what it has not allocated of them counts
+    /// against every later admission while the hold lasts.
+    reserved: f64,
 }
 
 impl Held {
@@ -144,6 +151,35 @@ struct Lease<'p> {
     alloc: f64,
     computed: f64,
     cache: Option<&'p CExpr>,
+    /// When it expires (`inf`: only a `release` or the end takes it).
+    expires: f64,
+    /// The attributes of the leg that leased it, which `cache` reads when
+    /// the lease ends: a leg's attributes are its own, and its lease passes
+    /// to the session when it ends.
+    attrs: Option<Vec<f64>>,
+}
+
+/// Whether the session waits to grow in pool `pool`.
+fn grows_in(s: &Session, pool: usize) -> bool {
+    matches!(s.status, Status::Growing(q, ..) if q == pool)
+}
+
+/// Whether the session has an allocation in pool `pool`: a hold of it, or
+/// a lease, which frees it when it ends.
+fn allocates_in(s: &Session, pool: usize) -> bool {
+    s.holds
+        .iter()
+        .any(|h| h.pools.iter().any(|held| held.pool == pool))
+        || s.leases.iter().any(|l| l.pool == pool)
+}
+
+/// The sessions among a pool's `holders`, which has an entry per hold and
+/// per lease: a session holding the pool twice is one.
+fn sessions_in(holders: &[usize]) -> usize {
+    let mut v = holders.to_vec();
+    v.sort_unstable();
+    v.dedup();
+    v.len()
 }
 
 /// One pool a waiting hold asks for.
@@ -172,6 +208,18 @@ struct Pending<'p> {
     lease: Option<(usize, &'p CExpr)>,
     body: BlockId,
     queued_at: f64,
+}
+
+/// A session, or a leg of one (`fork`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Leg {
+    /// A session.
+    No,
+    /// A leg of the session in this slot. The slot stays until the leg
+    /// ends: a session may not end before its legs.
+    Of(usize),
+    /// A leg of a session that was refused and has ended.
+    Orphan,
 }
 
 #[derive(Clone, Debug)]
@@ -216,6 +264,12 @@ struct Session<'p> {
     /// keeps becoming ready without time passing is a loop that never
     /// blocks (`READIES_PER_INSTANT`).
     readies: (f64, u64),
+    /// Whether this is a leg (`fork`), and of which session.
+    leg: Leg,
+    /// Legs forked and not yet ended, and forks so far (the key of a leg's
+    /// stream).
+    legs: u32,
+    forks: u64,
 }
 
 impl Session<'_> {
@@ -246,6 +300,7 @@ fn substream(seed: u64, serial: u64, turn: u64, kind: u64) -> StdRng {
 /// Kinds of a session's streams (`substream`).
 const STREAM_WORKLOAD: u64 = 1;
 const STREAM_SESSION: u64 = 2;
+const STREAM_LEG: u64 = 3;
 
 /// Statements a session may execute without blocking before the run is an
 /// error: a loop that never reaches a `run`, a `hold` that waits, or `end`
@@ -394,6 +449,10 @@ struct StageState {
     wait: Welford,
     service: Welford,
     iterations: u64,
+    /// A step stage whose last try at an iteration scheduled nothing while it
+    /// had residents or a waiting queue it serves, and none since: an engine
+    /// waiting for an event that may not come (#263).
+    idle_with_work: bool,
     steps: StepStats,
 }
 
@@ -454,6 +513,45 @@ enum Which {
     Evict,
 }
 
+/// An iteration being planned by a step stage's body: what it has served
+/// and scheduled so far, and the budget left.
+struct Plan<'p> {
+    st: usize,
+    spec: &'p CStep,
+    chunk: f64,
+    left: f64,
+    served: BTreeSet<u64>,
+    assign: Vec<(u64, f64)>,
+    attn_by: Vec<(u64, f64)>,
+    admitted: f64,
+    /// A prefill the `granule` refused: the iteration admits no one after.
+    refused: bool,
+}
+
+/// `exclusive prefill`'s rule, as `give` applies it: whether a prefill is
+/// resident as the iteration starts, and the whole budget a selected
+/// prefill takes.
+#[derive(Clone, Copy)]
+struct Exclusive {
+    resident_prefill: bool,
+    budget: f64,
+}
+
+/// What giving a resident its tokens came to.
+enum Give {
+    /// No tokens: none wanted, none left, or a stalled grower.
+    Skipped,
+    /// No tokens: a prefill the `granule` refuses what is left. The
+    /// iteration admits no one after it, as TensorRT-LLM's scan stops at
+    /// the first context that does not fit (`microBatchScheduler.cpp`
+    /// L428-L431 at bf414e37).
+    Refused,
+    /// Its tokens, in this mode.
+    Gave(RunMode),
+    /// It preempted itself, or the run failed: serving stops here.
+    Stopped,
+}
+
 #[derive(Clone, Default)]
 struct Ctx {
     sid: Option<usize>,
@@ -474,6 +572,9 @@ struct Ctx {
     decoding: f64,
     admission: f64,
     remaining: f64,
+    position: f64,
+    admitted: f64,
+    preempted: f64,
     demand: f64,
     served: f64,
     arrived: f64,
@@ -569,6 +670,12 @@ pub struct Interp<'p> {
     /// began (vLLM's `preempted_reqs`, scheduler.py:869): set by `preempt`,
     /// cleared where `start_iteration` begins to serve its residents.
     preempted: bool,
+    /// How many residents the iteration being scheduled has preempted so far
+    /// (`preempted` in an iteration body).
+    preempted_now: f64,
+    /// The step stages' registers (`state`), as their iteration bodies last
+    /// set them.
+    regs: Vec<f64>,
     next_adm: u64,
     next_release: u64,
     arrivals: u64,
@@ -628,6 +735,9 @@ impl<'p> Interp<'p> {
                         active: vec![],
                     },
                     CStageKind::Ps(CExpr::Num(cap)) if shared[k] => Kind::Shared { cap: *cap },
+                    // `ps(present)` gives every job rate 1: a finish event
+                    // each, no virtual time to re-share at every arrival
+                    _ if cs.kind.is_delay() => Kind::Delay,
                     CStageKind::Ps(_) => Kind::Ps {
                         v: 0.0,
                         v_last: 0.0,
@@ -636,7 +746,6 @@ impl<'p> Interp<'p> {
                         epoch: 0,
                         dirty: false,
                     },
-                    CStageKind::Delay => Kind::Delay,
                     CStageKind::Step(_) => Kind::Step {
                         residents: vec![],
                         iter: None,
@@ -651,6 +760,7 @@ impl<'p> Interp<'p> {
                 wait: Welford::new(),
                 service: Welford::new(),
                 iterations: 0,
+                idle_with_work: false,
                 steps: StepStats::new(),
             })
             .collect();
@@ -713,7 +823,9 @@ impl<'p> Interp<'p> {
             admit_budget: None,
             next_dead: 0,
             next_lease: 0,
+            regs: p.registers.iter().map(|r| r.init).collect(),
             preempted: false,
+            preempted_now: 0.0,
             next_adm: 0,
             next_release: 0,
             arrivals: 0,
@@ -821,6 +933,20 @@ impl<'p> Interp<'p> {
         if let Some(error) = self.error.take() {
             return Err(error);
         }
+        let stuck = self.waiting_for_each_other();
+        if stuck
+            .iter()
+            .any(|&s| self.sessions[s].status == Status::Joining)
+        {
+            let who: Vec<String> = stuck.iter().map(|&s| self.waiting_at(s)).collect();
+            return Err(format!(
+                "the run ends with sessions that wait for each other: {}. A leg waits for \
+                 memory that a lease holds until its session's copy, and the session waits \
+                 for the leg inside a hold another leg needs: a hold-and-wait cycle, which a \
+                 finite `lease` (the prefiller's lease expiry) breaks",
+                who.join("; ")
+            ));
+        }
         if let Some(n) = p.arrivals {
             if self.arrivals < n as u64 {
                 return Err(format!(
@@ -906,10 +1032,18 @@ impl<'p> Interp<'p> {
             Ev::Finish { stage, job, epoch } => self.on_finish(stage, job, epoch),
             Ev::IterEnd { stage, epoch } => self.on_iter_end(stage, epoch),
             Ev::LeaseEnd { sid, serial, id } => {
-                if self.sessions[sid].serial == serial
-                    && let Some(i) = self.sessions[sid].leases.iter().position(|l| l.id == id)
-                {
-                    self.end_lease(sid, i);
+                // a leg's lease has passed to its session when the leg ended
+                let owner = std::iter::once(sid)
+                    .chain(self.by_serial.get(&serial).copied())
+                    .find_map(|s| {
+                        let ss = &self.sessions[s];
+                        (ss.serial == serial)
+                            .then(|| ss.leases.iter().position(|l| l.id == id))
+                            .flatten()
+                            .map(|i| (s, i))
+                    });
+                if let Some((s, i)) = owner {
+                    self.end_lease(s, i);
                     self.try_admit_all();
                 }
             }
@@ -977,6 +1111,24 @@ impl<'p> Interp<'p> {
                 self.now
             );
         }
+        // `reserve held`'s promise: what is allocated and what the live holds
+        // reserved and have not allocated fit the cap, so a hold growing
+        // within its reservation always finds room (#371).
+        #[cfg(debug_assertions)]
+        for (k, (cp, pl)) in self.p.pools.iter().zip(&self.pools).enumerate() {
+            if cp.reserve_held {
+                let out = self.outstanding(k, None);
+                debug_assert!(
+                    pl.used + out <= pl.cap + 1e-6,
+                    "pool `{}`: used {} + reserved {} > cap {} at t = {}",
+                    cp.name,
+                    pl.used,
+                    out,
+                    pl.cap,
+                    self.now
+                );
+            }
+        }
         // Conservation (#277): a pool's `used` is what the sessions' holds
         // and leases have allocated on it, and its `cached` the sizes of its
         // entries. The counters are kept apart from those records, so an
@@ -1019,6 +1171,27 @@ impl<'p> Interp<'p> {
                 cp.name,
                 pl.used,
                 pl.cached,
+                self.now
+            );
+            // one entry of `holders` per hold of the pool and per lease
+            let entries: usize = self
+                .sessions
+                .iter()
+                .map(|s| {
+                    s.holds
+                        .iter()
+                        .flat_map(|h| &h.pools)
+                        .filter(|e| e.pool == k)
+                        .count()
+                        + s.leases.iter().filter(|l| l.pool == k).count()
+                })
+                .sum();
+            debug_assert_eq!(
+                pl.holders.len(),
+                entries,
+                "pool `{}`: {} holders against {entries} holds and leases, at t = {}",
+                cp.name,
+                pl.holders.len(),
                 self.now
             );
         }
@@ -1081,7 +1254,7 @@ impl<'p> Interp<'p> {
             pl.used_avg.set(now, pl.used);
             pl.cached_avg.set(now, pl.cached);
             pl.queue_avg.set(now, pl.queue.len() as f64);
-            pl.holders_avg.set(now, pl.holders.len() as f64);
+            pl.holders_avg.set(now, sessions_in(&pl.holders) as f64);
         }
     }
 
@@ -1126,6 +1299,9 @@ impl<'p> Interp<'p> {
             rng: substream(self.p.seed, serial, 0, STREAM_SESSION),
             turn_count: 0,
             readies: (f64::NAN, 0),
+            leg: Leg::No,
+            legs: 0,
+            forks: 0,
         };
         let sid = match self.free.pop() {
             Some(i) => {
@@ -1246,6 +1422,17 @@ impl<'p> Interp<'p> {
         if self.sessions[sid].status == Status::Ended {
             return;
         }
+        if self.sessions[sid].leg != Leg::No {
+            self.end_leg(sid);
+            return;
+        }
+        if self.sessions[sid].legs > 0 {
+            self.error = Some(format!(
+                "session {} ends at t = {} while a leg it forked runs: `join` before the end",
+                self.sessions[sid].serial, self.now
+            ));
+            return;
+        }
         self.detach(sid);
         while let Some(h) = self.sessions[sid].holds.pop() {
             self.release_hold(sid, &h);
@@ -1272,6 +1459,204 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// `fork`: a leg of the session, ready now, with a copy of its
+    /// attributes and a stream of its own.
+    fn fork(&mut self, sid: usize, body: BlockId) {
+        let p = self.p;
+        let s = &mut self.sessions[sid];
+        let n = s.forks;
+        s.forks += 1;
+        s.legs += 1;
+        let leg = Session {
+            serial: s.serial,
+            attrs: s.attrs.clone(),
+            frames: vec![Frame {
+                block: body,
+                pc: 0,
+                kind: FrameKind::Plain,
+            }],
+            status: Status::Ready,
+            holds: vec![],
+            pending: None,
+            trace: None,
+            script: None,
+            adm_seq: u64::MAX,
+            preempt_pos: HashMap::new(),
+            stuck: false,
+            leases: vec![],
+            last_token: None,
+            rng_wl: s.rng_wl.clone(),
+            rng: substream(p.seed, s.serial, n, STREAM_LEG),
+            turn_count: s.turn_count,
+            readies: (f64::NAN, 0),
+            leg: Leg::Of(sid),
+            legs: 0,
+            forks: 0,
+        };
+        let lid = match self.free.pop() {
+            Some(i) => {
+                self.sessions[i] = leg;
+                i
+            }
+            None => {
+                self.sessions.push(leg);
+                self.sessions.len() - 1
+            }
+        };
+        self.ready.push_back(lid);
+    }
+
+    /// A hold that can never fit refuses the request: the session ends,
+    /// and so does the session of a refused leg. The legs of an ended
+    /// session run on as orphans (vLLM's push proxy awaits the prefill leg
+    /// whatever the decode leg's fate) and give back what they lease when
+    /// they end (the prefiller frees blocks no registration will claim,
+    /// nixl/push_scheduler.py:233-245).
+    fn refuse(&mut self, sid: usize) {
+        let session = match self.sessions[sid].leg {
+            Leg::No => Some(sid),
+            Leg::Of(parent) => {
+                self.end_leg(sid);
+                Some(parent)
+            }
+            Leg::Orphan => {
+                self.end_leg(sid);
+                None
+            }
+        };
+        if let Some(s) = session {
+            for leg in self.sessions.iter_mut() {
+                if leg.leg == Leg::Of(s) && leg.status != Status::Ended {
+                    leg.leg = Leg::Orphan;
+                }
+            }
+            self.sessions[s].legs = 0;
+            self.end_session(s);
+        }
+    }
+
+    /// A leg reached the end of its block: what it leased passes to its
+    /// session, and a session waiting at a `join` for its last leg goes on.
+    /// An orphan's leases end with it.
+    fn end_leg(&mut self, sid: usize) {
+        self.detach(sid);
+        while let Some(h) = self.sessions[sid].holds.pop() {
+            self.release_hold(sid, &h);
+        }
+        let Leg::Of(parent) = self.sessions[sid].leg else {
+            while !self.sessions[sid].leases.is_empty() {
+                self.end_lease(sid, 0);
+            }
+            self.sessions[sid].status = Status::Ended;
+            self.sessions[sid].frames.clear();
+            self.free.push(sid);
+            return;
+        };
+        let mut leases = std::mem::take(&mut self.sessions[sid].leases);
+        for l in &mut leases {
+            l.attrs
+                .get_or_insert_with(|| self.sessions[sid].attrs.clone());
+            for h in self.pools[l.pool].holders.iter_mut().filter(|h| **h == sid) {
+                *h = parent;
+            }
+        }
+        self.sessions[parent].leases.extend(leases);
+        self.sessions[sid].status = Status::Ended;
+        self.sessions[sid].frames.clear();
+        self.free.push(sid);
+        let ps = &mut self.sessions[parent];
+        ps.legs -= 1;
+        if ps.legs == 0 && ps.status == Status::Joining {
+            ps.status = Status::Ready;
+            self.ready.push_back(parent);
+        }
+    }
+
+    /// The sessions and legs that wait for each other and nothing else: a
+    /// hold that does not fit a pool every holder of which is one of them
+    /// (a lease's holder is its session), and a `join` whose live legs all
+    /// are. No event will release what they wait for.
+    fn waiting_for_each_other(&self) -> Vec<usize> {
+        let n = self.sessions.len();
+        let live_legs = |s: usize| {
+            self.sessions
+                .iter()
+                .enumerate()
+                .filter(move |(_, x)| x.leg == Leg::Of(s) && x.status != Status::Ended)
+                .map(|(l, _)| l)
+        };
+        let mut stuck: Vec<bool> = self
+            .sessions
+            .iter()
+            .map(|x| matches!(x.status, Status::Queued(_) | Status::Joining))
+            .collect();
+        loop {
+            let mut changed = false;
+            for s in 0..n {
+                if !stuck[s] {
+                    continue;
+                }
+                let keep = match &self.sessions[s].status {
+                    Status::Joining => {
+                        live_legs(s).next().is_some() && live_legs(s).all(|l| stuck[l])
+                    }
+                    Status::Queued(_) => {
+                        let pending = self.sessions[s].pending.as_ref().expect("queued");
+                        let short: Vec<usize> = pending
+                            .pools
+                            .iter()
+                            // `need` as admission last read it, or the units
+                            // as the hold asked for them
+                            .filter(|w| {
+                                !self.fits(w.pool, self.round_up(w.pool, w.need.max(w.units)))
+                            })
+                            .map(|w| w.pool)
+                            .collect();
+                        // a lease that expires frees its pool without an event
+                        // of theirs
+                        let expiring = |pl: usize| {
+                            self.sessions.iter().any(|x| {
+                                x.leases
+                                    .iter()
+                                    .any(|l| l.pool == pl && l.expires.is_finite())
+                            })
+                        };
+                        !short.is_empty()
+                            && short.iter().all(|&pl| {
+                                let holders = &self.pools[pl].holders;
+                                !holders.is_empty()
+                                    && holders.iter().all(|&h| stuck[h])
+                                    && !expiring(pl)
+                            })
+                    }
+                    _ => false,
+                };
+                if !keep {
+                    stuck[s] = false;
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        (0..n).filter(|&s| stuck[s]).collect()
+    }
+
+    /// What a stuck session waits at, for an error.
+    fn waiting_at(&self, s: usize) -> String {
+        let x = &self.sessions[s];
+        let who = if x.leg != Leg::No {
+            format!("a leg of session {}", x.serial)
+        } else {
+            format!("session {}", x.serial)
+        };
+        match x.status {
+            Status::Queued(pl) => format!("{who} waits at `{}`", self.p.pools[pl].name),
+            _ => format!("{who} waits at a `join`"),
+        }
+    }
+
     /// Take the session out of whatever it is waiting for or running at.
     fn detach(&mut self, sid: usize) {
         match self.sessions[sid].status.clone() {
@@ -1286,7 +1671,7 @@ impl<'p> Interp<'p> {
                     self.remove_job(st, j);
                 }
             }
-            Status::Ready | Status::Ended => {}
+            Status::Ready | Status::Joining | Status::Ended => {}
         }
         self.sessions[sid].status = Status::Ready;
     }
@@ -1359,6 +1744,32 @@ impl<'p> Interp<'p> {
                 CStmt::End => {
                     self.end_session(sid);
                     return;
+                }
+                CStmt::Fork(b) => self.fork(sid, *b),
+                CStmt::Join => {
+                    if self.sessions[sid].legs > 0 {
+                        self.sessions[sid].status = Status::Joining;
+                        return;
+                    }
+                }
+                CStmt::While(c, b) => {
+                    let v = self.eval(c, &Ctx::session(sid), Which::Session);
+                    if v != 0.0 && v != 1.0 {
+                        self.error = Some(format!(
+                            "`while ({})`: the guard is {v}, not 0 or 1",
+                            self.p.show_expr(c)
+                        ));
+                        return;
+                    }
+                    if v == 1.0 {
+                        // Retest the guard after this plain body frame returns.
+                        self.sessions[sid].frames.last_mut().unwrap().pc -= 1;
+                        self.sessions[sid].frames.push(Frame {
+                            block: *b,
+                            pc: 0,
+                            kind: FrameKind::Plain,
+                        });
+                    }
                 }
                 CStmt::Loop(b) => self.sessions[sid].frames.push(Frame {
                     block: *b,
@@ -1466,7 +1877,7 @@ impl<'p> Interp<'p> {
                     also,
                 } => {
                     let st = self.session_index(stage, sid);
-                    // the kernel's spelling: `decode on E (…)` is `run E decode (…)`
+                    // the kernel's spelling: `run E decode (…)`
                     let m = match mode {
                         RunMode::Plain => "",
                         RunMode::Prefill => " prefill",
@@ -1517,7 +1928,39 @@ impl<'p> Interp<'p> {
     /// Whether `units` more fit pool `pl` beside what is allocated (the
     /// cache not counted: it is evicted to make room).
     fn fits(&self, pl: usize, units: f64) -> bool {
-        self.pools[pl].used + units <= self.pools[pl].cap + EPS
+        self.fits_for(pl, units, None)
+    }
+
+    /// Whether `units` more fit pool `pl`: next to what is allocated, and
+    /// under `reserve held` next to what the live holds' reservations have
+    /// not allocated yet, the one hold entry `own` (session, hold, pool
+    /// entry: a hold growing into its own reservation) left out.
+    fn fits_for(&self, pl: usize, units: f64, own: Option<(usize, usize, usize)>) -> bool {
+        let held = if self.p.pools[pl].reserve_held {
+            self.outstanding(pl, own)
+        } else {
+            0.0
+        };
+        self.pools[pl].used + held + units <= self.pools[pl].cap + EPS
+    }
+
+    /// What the live hold entries on `pl` reserved and have not allocated
+    /// (`reserve held`), each counted once, but `own`. Read from the
+    /// sessions' holds, not the pool's `holders`, which lists a session once
+    /// per hold or lease (the review of #371: a nested hold was counted
+    /// twice).
+    fn outstanding(&self, pl: usize, own: Option<(usize, usize, usize)>) -> f64 {
+        let mut sum = 0.0;
+        for (sid, s) in self.sessions.iter().enumerate() {
+            for (hi, h) in s.holds.iter().enumerate() {
+                for (k, e) in h.pools.iter().enumerate() {
+                    if e.pool == pl && own != Some((sid, hi, k)) {
+                        sum += (e.reserved - e.alloc).max(0.0);
+                    }
+                }
+            }
+        }
+        sum
     }
 
     fn round_up(&self, pl: usize, units: f64) -> f64 {
@@ -1573,17 +2016,26 @@ impl<'p> Interp<'p> {
     fn enqueue_hold(&mut self, sid: usize, pending: Pending<'p>, front: bool) -> bool {
         for w in &pending.pools {
             let pl = w.pool;
-            // what admission waits for: the units, or the reservation above them
-            let need = match w.reserve {
-                Some(f) => {
-                    let what = format!("hold {} reserve", self.p.pools[pl].name);
-                    self.amount(f, sid, &what).max(w.units)
-                }
-                None => w.units,
-            };
+            // What admission waits for is the units, or the reservation
+            // above them. A part that reads the deployment's state (a pool
+            // or stage query, the clock, `budget_left`) may ask for less
+            // later, so it is not judged now; one still over the cap when
+            // the run ends is named (`head_fits`, #364). A part of
+            // attributes and numbers asks the same at every try: above the
+            // cap, the request can never fit, and is rejected.
+            let mut need: f64 = 0.0;
+            if !crate::ir::moves(w.expr) {
+                need = w.units;
+            }
+            if let Some(f) = w.reserve
+                && !crate::ir::moves(f)
+            {
+                let what = format!("hold {} reserve", self.p.pools[pl].name);
+                need = need.max(self.amount(f, sid, &what));
+            }
             if self.round_up(pl, need) > self.pools[pl].cap {
                 self.pools[pl].rejected += 1;
-                self.end_session(sid);
+                self.refuse(sid);
                 return false;
             }
         }
@@ -1664,18 +2116,49 @@ impl<'p> Interp<'p> {
         }
         while let Some((index, sid)) = self.next_waiter(pl) {
             let pending = self.pending_now(sid);
-            // The guard counts only allocated units: cached prefixes never
-            // block an admission (they are evicted as needed).
-            let reserve = pending
-                .pools
-                .iter()
-                .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need)));
-            if !reserve {
+            if !self.fits_all(&pending) {
                 break;
             }
             self.pools[pl].queue.remove(index);
             self.admit(sid, pending);
         }
+    }
+
+    /// Whether a hold, evaluated now, fits every pool it names. The guard
+    /// counts only allocated units: cached prefixes never block an
+    /// admission (they are evicted as needed).
+    fn fits_all(&self, pending: &Pending<'p>) -> bool {
+        pending
+            .pools
+            .iter()
+            .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need)))
+    }
+
+    /// The pools whose cap the head of a queue, evaluated as the run ends,
+    /// asks more than: `(the pool asked, the queue's pool, what it asks)`.
+    /// A hold whose units or `reserve` read the deployment's state was not
+    /// rejected when it joined (#364); one that still cannot fit is named
+    /// here, whether or not an admission tried it.
+    fn heads_over_cap(&mut self) -> Vec<(usize, usize, f64)> {
+        let error = self.error.clone();
+        let mut over = vec![];
+        for q in 0..self.pools.len() {
+            if self.pools[q].queue.is_empty() {
+                continue;
+            }
+            let Some((_, sid)) = self.next_waiter(q) else {
+                continue;
+            };
+            let pending = self.pending_now(sid);
+            for w in &pending.pools {
+                if self.round_up(w.pool, w.need) > self.pools[w.pool].cap {
+                    over.push((w.pool, q, w.need));
+                }
+            }
+        }
+        // a read at the end is the report's, not the run's
+        self.error = error;
+        over
     }
 
     fn own_entry_size(&self, pl: usize, sid: usize) -> f64 {
@@ -1743,6 +2226,9 @@ impl<'p> Interp<'p> {
                 pool: q,
                 alloc: need,
                 pos: own,
+                // what the admission tested, held against later ones under
+                // `reserve held`
+                reserved: self.round_up(q, w.need),
             });
         }
         let pl = first_pool(&pending);
@@ -1806,7 +2292,7 @@ impl<'p> Interp<'p> {
             }
         }
         debug_assert!(
-            self.fits(pl, need),
+            self.pools[pl].used + need <= self.pools[pl].cap + EPS,
             "make_room called without a passing guard"
         );
     }
@@ -1970,6 +2456,8 @@ impl<'p> Interp<'p> {
                         alloc,
                         computed,
                         cache: h.cache,
+                        expires: self.now + t,
+                        attrs: None,
                     });
                     if t.is_finite() {
                         let serial = self.sessions[sid].serial;
@@ -1984,7 +2472,14 @@ impl<'p> Interp<'p> {
     /// A lease ends: the units go back, `cache` applies.
     fn end_lease(&mut self, sid: usize, i: usize) {
         let l = self.sessions[sid].leases.remove(i);
+        // a leg's lease caches by the leg's attributes, not the session's
+        let saved = l
+            .attrs
+            .map(|a| std::mem::replace(&mut self.sessions[sid].attrs, a));
         self.release_units(sid, l.pool, l.alloc, l.computed, l.cache);
+        if let Some(a) = saved {
+            self.sessions[sid].attrs = a;
+        }
     }
 
     /// Give `alloc` units of `q` back, keeping `min(cache, computed)` of them
@@ -1999,7 +2494,11 @@ impl<'p> Interp<'p> {
     ) {
         let serial = self.sessions[sid].serial;
         self.pools[q].used -= alloc;
-        self.pools[q].holders.retain(|&s| s != sid);
+        // one entry per admission: a hold nested in another on the same pool
+        // leaves the outer one's when it ends
+        if let Some(i) = self.pools[q].holders.iter().position(|&s| s == sid) {
+            self.pools[q].holders.remove(i);
+        }
         if let Some(c) = cache {
             let want = self.eval(c, &Ctx::session(sid), Which::Session).max(0.0);
             let keep = self.round_down(q, want.min(computed));
@@ -2083,15 +2582,16 @@ impl<'p> Interp<'p> {
             return true;
         }
         loop {
-            if self.fits(pl, need) {
+            if self.fits_for(pl, need, Some((sid, hi, k))) {
                 self.make_room(pl, need);
                 self.pools[pl].used += need;
                 self.sessions[sid].holds[hi].pools[k].alloc += need;
                 return true;
             }
-            let victim = match self.p.pools[pl].preempt {
+            let p = self.p;
+            let victim = match &p.pools[pl].preempt {
                 Preempt::None => None,
-                Preempt::Lifo => self.lifo_victim(pl),
+                Preempt::By { keys, .. } => self.victim(pl, keys),
             };
             match victim {
                 Some(victim) => {
@@ -2114,20 +2614,21 @@ impl<'p> Interp<'p> {
         }
     }
 
-    /// vLLM's `running[-1]` (scheduler.py:742-813): among the holders of
-    /// `pl` that are residents of a step stage whose memory `pl` is, the one
-    /// admitted last - by the session's latest admission, which is the
-    /// residents' serving order (`running` is in order of scheduling, and a
-    /// request that queued once more for a slot after its KV arrived took
-    /// its place then, not when its blocks were allocated). A holder that
-    /// has left the engine is not preempted: a prefiller's finished request
-    /// keeps its blocks leased for the decoder's read and is in no `running`
-    /// list, and a decoder's request waiting for that read
-    /// (`WAITING_FOR_REMOTE_KVS`) holds its blocks and is not in `running`
-    /// either; with no resident holding the pool there is nobody to preempt
-    /// and the grower waits. A pool that is no engine's memory: its most
-    /// recently admitted holder.
-    fn lifo_victim(&self, pl: usize) -> Option<usize> {
+    /// Who a growth on `pl` may preempt, in admission order, so that the
+    /// last is vLLM's `running[-1]` (scheduler.py:742-813): the holders of
+    /// `pl` that are residents of a step stage whose memory `pl` is, by the
+    /// session's latest admission, which is the residents' serving order
+    /// (`running` is in order of scheduling, and a request that queued once
+    /// more for a slot after its KV arrived took its place then, not when
+    /// its blocks were allocated). A holder that has left the engine is not
+    /// a candidate: a prefiller's finished request keeps its blocks leased
+    /// for the decoder's read and is in no `running` list, and a decoder's
+    /// request waiting for that read (`WAITING_FOR_REMOTE_KVS`) holds its
+    /// blocks and is not in `running` either; with no resident holding the
+    /// pool there is nobody to preempt and the grower waits. A pool that is
+    /// no engine's memory: its holders that hold it in a scope (a lease is
+    /// not preempted), in the order the pool admitted them.
+    fn candidates(&self, pl: usize) -> Vec<usize> {
         let engines: Vec<usize> = self
             .p
             .stages
@@ -2136,23 +2637,66 @@ impl<'p> Interp<'p> {
             .filter(|(_, s)| matches!(&s.kind, CStageKind::Step(st) if st.memory == Some(pl)))
             .map(|(i, _)| i)
             .collect();
-        let holders = &self.pools[pl].holders;
+        let holders = self.pools[pl].holders.iter().copied();
         if engines.is_empty() {
-            // the last holder that holds the pool in a scope: a lease is
-            // not preempted
-            return holders
-                .iter()
-                .copied()
-                .rev()
-                .find(|&s| self.sessions[s].innermost(pl).is_some());
+            // a session holding the pool twice (a nested hold, or a hold and
+            // a lease) is one candidate, at its first place
+            let mut c: Vec<usize> = vec![];
+            for s in holders.filter(|&s| self.sessions[s].innermost(pl).is_some()) {
+                if !c.contains(&s) {
+                    c.push(s);
+                }
+            }
+            return c;
         }
-        holders
-            .iter()
-            .copied()
+        let mut c: Vec<usize> = holders
             .filter(|&s| {
                 matches!(self.sessions[s].status, Status::InStage(x, _) if engines.contains(&x))
             })
-            .max_by_key(|&s| self.sessions[s].adm_seq)
+            .collect();
+        c.sort_by_key(|&s| self.sessions[s].adm_seq);
+        c.dedup();
+        c
+    }
+
+    /// `preempt by (keys)`: the candidate with the least keys, read for
+    /// each (`Moment::Victim`: its attributes, `admission`, its place in
+    /// the candidates' admission order, `decoding`, and its `position` on
+    /// `pl`), ties to the one admitted last. `admission` is the place, not
+    /// the session's sequence number, so that `preempt lifo`, `by
+    /// (-admission)`, is the last candidate on a pool that is no engine's
+    /// memory too, where the order is the pool's and a session's latest
+    /// admission may have been to another pool.
+    fn victim(&mut self, pl: usize, keys: &[CExpr]) -> Option<usize> {
+        let mut best: Option<(KeyOrd, usize)> = None;
+        for (place, s) in self.candidates(pl).into_iter().enumerate() {
+            let position = self.sessions[s]
+                .innermost(pl)
+                .map_or(0.0, |(hi, k)| self.sessions[s].holds[hi].pools[k].pos);
+            let decoding = match self.sessions[s].status {
+                Status::InStage(st, j) => self.stages[st]
+                    .jobs
+                    .get(&j)
+                    .is_some_and(|job| job.mode == RunMode::Decode),
+                _ => false,
+            };
+            let ctx = Ctx {
+                sid: Some(s),
+                admission: place as f64,
+                decoding: if decoding { 1.0 } else { 0.0 },
+                position,
+                ..Default::default()
+            };
+            let key = KeyOrd(
+                keys.iter()
+                    .map(|k| self.eval(k, &ctx, Which::Session))
+                    .collect(),
+            );
+            if best.as_ref().is_none_or(|(old, _)| key <= *old) {
+                best = Some((key, s));
+            }
+        }
+        best.map(|(_, s)| s)
     }
 
     fn retry_growers(&mut self, pl: usize) {
@@ -2166,7 +2710,7 @@ impl<'p> Interp<'p> {
                 .expect("a growing session holds the pool");
             let alloc_now = self.sessions[sid].holds[hi].pools[k].alloc;
             let need = self.round_up(pl, alloc_now + units) - alloc_now;
-            if !self.fits(pl, need) {
+            if !self.fits_for(pl, need, Some((sid, hi, k))) {
                 break;
             }
             self.pools[pl].growers.pop_front();
@@ -2249,10 +2793,20 @@ impl<'p> Interp<'p> {
         let slot_computed = self.p.slot_computed;
         self.sessions[victim].attrs[slot_computed] = computed;
         self.detach(victim);
-        // unwind holds inner to `hi` (nested holds), then `hi` itself
+        // unwind holds inner to `hi` (nested holds), then `hi` itself. A
+        // preempted hold caches what it computed, its position, not its
+        // allocation: the scope's end counts a hold without a `growing` run
+        // as having computed what it holds, but a preemption cuts the body
+        // short. vLLM caches what it schedules (kv_cache_manager.py:602-606)
+        // and counts it computed right after (`_update_after_schedule`,
+        // scheduler.py:1584-1597), and its victim, `running.pop()`, is one
+        // this step has not scheduled (scheduler.py:742-813): what stays
+        // cached is the full blocks of `num_computed_tokens`, the position
         while self.sessions[victim].holds.len() > hi {
             let h = self.sessions[victim].holds.pop().unwrap();
-            self.release_hold(victim, &h);
+            for e in &h.pools {
+                self.release_units(victim, e.pool, e.alloc, e.pos, h.cache);
+            }
             // pop frames down to and including that hold's frame
             while let Some(f) = self.sessions[victim].frames.pop() {
                 if f.kind == FrameKind::Hold && f.block == h.body {
@@ -2298,6 +2852,7 @@ impl<'p> Interp<'p> {
         let (cache, reuse) = cache;
         self.pools[pl].preemptions += 1;
         self.preempted = true;
+        self.preempted_now += 1.0;
         let pending = Pending {
             pools: h_pools,
             reuse,
@@ -2306,7 +2861,10 @@ impl<'p> Interp<'p> {
             body,
             queued_at: self.now,
         };
-        self.enqueue_hold(victim, pending, true);
+        // back at the head (vLLM's `prepend_request`), or with `requeue
+        // tail` at the back, a newcomer to the queue's keys and `waited`
+        let tail = matches!(self.p.pools[pl].preempt, Preempt::By { tail: true, .. });
+        self.enqueue_hold(victim, pending, !tail);
     }
 
     // -------------------------------------------------------- stages ----
@@ -2859,120 +3417,81 @@ impl<'p> Interp<'p> {
             .iter()
             .any(|&j| self.stages[st].jobs[&j].mode == RunMode::Prefill);
         self.preempted = false;
+        self.preempted_now = 0.0;
         // each served prefill's attention work, summed over those still in
         // the batch when the iteration is costed
         let mut attn_by: Vec<(u64, f64)> = vec![];
-        loop {
-            let residents = self.serving_order(st, spec);
-            let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
-                // the running requests are served; admit waiting ones with
-                // the budget left, unless this iteration preempted
-                // (scheduler.py:869, `if not preempted_reqs`)
-                let preempted = self.preempted;
-                // A local prefill admitted after tentative decodes replaces
-                // them and uses the whole budget (RBLN guard D). Its hold
-                // must therefore see that budget, not the decode remainder.
-                let admit_left = if exclusive { budget } else { left };
-                if left > 0.0 && !preempted && self.admit_bound(st, admit_left) {
-                    continue;
-                }
-                break;
+        // a body's `set`s take effect with its iteration (below)
+        let regs_before = spec.iteration.as_ref().map(|_| self.regs.clone());
+        let mut admitted_any = false;
+        if let Some(body) = &spec.iteration {
+            let mut plan = Plan {
+                st,
+                spec,
+                chunk,
+                left: budget,
+                served: BTreeSet::new(),
+                assign: vec![],
+                attn_by: vec![],
+                admitted: 0.0,
+                refused: false,
             };
-            served.insert(id);
-            if let Some(only) = &spec.only {
-                if !self.serves(st, id, only, spec.memory) {
-                    continue;
-                }
+            self.run_body(&mut plan, body);
+            if self.error.is_some() {
+                return;
             }
-            let (mode, remaining, growing, owner) = {
-                let j = &self.stages[st].jobs[&id];
-                (j.mode, j.work, j.growing, j.owner)
-            };
-            let want = match mode {
-                RunMode::Decode => 1.0f64.min(remaining),
-                RunMode::Prefill => {
-                    if chunk > 0.0 {
-                        remaining.min(chunk)
-                    } else {
-                        remaining
+            assign = plan.assign;
+            attn_by = plan.attn_by;
+            admitted_any = plan.admitted > 0.0;
+        } else {
+            // a prefill the granule refused ends the admissions
+            let mut refused = false;
+            loop {
+                let residents = self.serving_order(st, spec);
+                let Some(id) = residents.iter().copied().find(|j| !served.contains(j)) else {
+                    // the running requests are served; admit waiting ones with
+                    // the budget left, unless this iteration preempted
+                    // (scheduler.py:869, `if not preempted_reqs`)
+                    let preempted = self.preempted;
+                    // A local prefill admitted after tentative decodes replaces
+                    // them and uses the whole budget (RBLN guard D). Its hold
+                    // must therefore see that budget, not the decode remainder.
+                    let admit_left = if exclusive { budget } else { left };
+                    if left > 0.0 && !preempted && !refused && self.admit_bound(st, admit_left) {
+                        continue;
                     }
-                }
-                RunMode::Plain => unreachable!(),
-            };
-            let blocked = exclusive && resident_prefill && mode == RunMode::Decode;
-            let available = if exclusive && mode == RunMode::Prefill {
-                budget
-            } else {
-                left
-            };
-            let tokens = if blocked { 0.0 } else { want.min(available) };
-            if tokens <= 0.0 {
-                continue;
-            }
-            // growth before the tokens are committed: the hold must cover
-            // the sequence position after this iteration (vLLM
-            // `allocate_slots`), block by block
-            if let (Some(pl), Some(sid)) = (growing, owner) {
-                if matches!(self.sessions[sid].status, Status::Growing(..)) {
-                    // stalled from an earlier iteration: no tokens
-                    continue;
-                }
-                let (alloc, pos) = self.hold_alloc_pos(sid, pl);
-                if self.error.is_some() {
-                    return;
-                }
-                let need = pos + tokens - alloc;
-                let grew = need <= EPS || self.grow(sid, pl, need);
-                // The growth may have preempted a resident this iteration has
-                // already served: under `serve by` the latest admitted, the
-                // victim, need not be the last served. It leaves the batch
-                // and its tokens return to the budget (vLLM's PRIORITY path,
-                // scheduler.py:779-797, which keeps the victim apart from the
-                // visiting order as serQ does).
-                let jobs = &self.stages[st].jobs;
-                assign.retain(|&(j, t)| {
-                    let keep = jobs.contains_key(&j);
-                    if !keep {
-                        left += t;
-                    }
-                    keep
+                    break;
+                };
+                served.insert(id);
+                let rule = exclusive.then_some(Exclusive {
+                    resident_prefill,
+                    budget,
                 });
-                if !grew {
-                    // waiting (none): stalls as a resident, no tokens, and the
-                    // next resident is served
-                    if matches!(self.sessions[sid].status, Status::Growing(..)) {
+                match self.give(st, id, chunk, rule, &mut left, &mut assign, &mut attn_by) {
+                    Give::Skipped => continue,
+                    Give::Refused => {
+                        refused = true;
                         continue;
                     }
                     // preempted itself (lifo): vLLM stops serving the running
                     // requests for this step (scheduler.py:807-813, `break`).
                     // In admission order the grower is then the last resident
                     // anyway; under `serve by` it need not be.
-                    break;
+                    Give::Stopped => {
+                        if self.error.is_some() {
+                            return;
+                        }
+                        break;
+                    }
+                    Give::Gave(mode) => {
+                        if left <= 0.0 || (exclusive && mode == RunMode::Prefill) {
+                            // A selected prefill is a lone batch. In particular do
+                            // not admit another waiting request with its leftover
+                            // budget.
+                            break;
+                        }
+                    }
                 }
-                if mode == RunMode::Prefill {
-                    attn_by.push((id, tokens * (pos + tokens / 2.0)));
-                }
-                // The computed position advances when the iteration is
-                // settled, below, for the residents still in it: a resident
-                // preempted later in this iteration keeps the position it had
-                // (vLLM advances `num_computed_tokens` after `schedule`,
-                // `_update_after_schedule`, scheduler.py:1584-1597), and exclusive-prefill
-                // decodes are candidates until waiting admission has finished.
-            } else if mode == RunMode::Prefill {
-                attn_by.push((id, tokens * tokens / 2.0));
-            }
-            if exclusive && mode == RunMode::Prefill {
-                // Keep any allocation made for displaced decodes, as RBLN
-                // keeps pending runner block deltas; cancel only their work.
-                assign.clear();
-                left = budget;
-            }
-            assign.push((id, tokens));
-            left -= tokens;
-            if left <= 0.0 || (exclusive && mode == RunMode::Prefill) {
-                // A selected prefill is a lone batch. In particular do not
-                // admit another waiting request with its leftover budget.
-                break;
             }
         }
         // Growth can preempt an earlier candidate. Only surviving, selected
@@ -2994,8 +3513,20 @@ impl<'p> Interp<'p> {
         // no event to wake it.
         let preempted = self.preempted;
         if assign.is_empty() && !preempted {
+            // work it did not schedule: waiting for an event, which the
+            // report names if none came (#263)
+            let work = !self.residents(st).is_empty() || self.bound_waiting(st);
+            self.stages[st].idle_with_work = work;
+            // no iteration: what its body set did not happen either, unless
+            // the try admitted someone, which stays, and the sets with it
+            if let Some(regs) = regs_before
+                && !admitted_any
+            {
+                self.regs = regs;
+            }
             return;
         }
+        self.stages[st].idle_with_work = false;
         let ntok: f64 = assign.iter().map(|a| a.1).sum();
         let attn: f64 = attn_by
             .iter()
@@ -3039,7 +3570,7 @@ impl<'p> Interp<'p> {
         // step that merely preempted may cost 0 (`docs/language.md` §3).
         if ntok > 0.0 && cost <= 0.0 {
             self.error = Some(format!(
-                "stage `{}`: an iteration of {ntok} tokens costs {cost}; an iteration that \
+                "engine `{}`: its `execute` is {cost} for an iteration of {ntok} tokens; an iteration that \
                  schedules tokens lasts a positive time",
                 p.stages[st].name
             ));
@@ -3097,6 +3628,288 @@ impl<'p> Interp<'p> {
                 epoch: g,
             },
         );
+    }
+
+    /// Give resident `id` its tokens in the iteration being planned: one for
+    /// a decode, up to `chunk` for a prefill, no more than is `left`; a
+    /// `growing` job first grows its hold to the position it will reach,
+    /// which may preempt. `rule` is `exclusive prefill`'s, under which a
+    /// prefill takes the whole budget and the decodes it displaces give
+    /// theirs back.
+    #[allow(clippy::too_many_arguments)]
+    fn give(
+        &mut self,
+        st: usize,
+        id: u64,
+        chunk: f64,
+        rule: Option<Exclusive>,
+        left: &mut f64,
+        assign: &mut Vec<(u64, f64)>,
+        attn_by: &mut Vec<(u64, f64)>,
+    ) -> Give {
+        let (mode, remaining, growing, owner) = {
+            let j = &self.stages[st].jobs[&id];
+            (j.mode, j.work, j.growing, j.owner)
+        };
+        let want = match mode {
+            RunMode::Decode => 1.0f64.min(remaining),
+            RunMode::Prefill => {
+                if chunk > 0.0 {
+                    remaining.min(chunk)
+                } else {
+                    remaining
+                }
+            }
+            RunMode::Plain => unreachable!(),
+        };
+        let blocked = rule.is_some_and(|r| r.resident_prefill) && mode == RunMode::Decode;
+        let available = if let Some(r) = rule
+            && mode == RunMode::Prefill
+        {
+            r.budget
+        } else {
+            *left
+        };
+        let mut tokens = if blocked { 0.0 } else { want.min(available) };
+        // `granule g`: a prefill short of its remainder takes a multiple of
+        // `g` (none under `inf`: whole or nothing)
+        if mode == RunMode::Prefill
+            && tokens < remaining
+            && let CStageKind::Step(spec) = &self.p.stages[st].kind
+            && let Some(CExpr::Num(g)) = &spec.granule
+        {
+            tokens = if g.is_finite() {
+                (tokens / g).floor() * g
+            } else {
+                0.0
+            };
+            if tokens <= 0.0 {
+                return Give::Refused;
+            }
+        }
+        if tokens <= 0.0 {
+            return Give::Skipped;
+        }
+        // growth before the tokens are committed: the hold must cover
+        // the sequence position after this iteration (vLLM
+        // `allocate_slots`), block by block
+        if let (Some(pl), Some(sid)) = (growing, owner) {
+            if matches!(self.sessions[sid].status, Status::Growing(..)) {
+                // stalled from an earlier iteration: no tokens
+                return Give::Skipped;
+            }
+            let (alloc, pos) = self.hold_alloc_pos(sid, pl);
+            if self.error.is_some() {
+                return Give::Stopped;
+            }
+            let need = pos + tokens - alloc;
+            let grew = need <= EPS || self.grow(sid, pl, need);
+            // The growth may have preempted a resident this iteration has
+            // already served: under `serve by` the latest admitted, the
+            // victim, need not be the last served. It leaves the batch
+            // and its tokens return to the budget (vLLM's PRIORITY path,
+            // scheduler.py:779-797, which keeps the victim apart from the
+            // visiting order as serQ does).
+            let jobs = &self.stages[st].jobs;
+            assign.retain(|&(j, t)| {
+                let keep = jobs.contains_key(&j);
+                if !keep {
+                    *left += t;
+                }
+                keep
+            });
+            if !grew {
+                // waiting (none): stalls as a resident, no tokens, and the
+                // next resident is served
+                if matches!(self.sessions[sid].status, Status::Growing(..)) {
+                    return Give::Skipped;
+                }
+                // preempted itself
+                return Give::Stopped;
+            }
+            if mode == RunMode::Prefill {
+                attn_by.push((id, tokens * (pos + tokens / 2.0)));
+            }
+            // The computed position advances when the iteration is
+            // settled, below, for the residents still in it: a resident
+            // preempted later in this iteration keeps the position it had
+            // (vLLM advances `num_computed_tokens` after `schedule`,
+            // `_update_after_schedule`, scheduler.py:1584-1597), and exclusive-prefill
+            // decodes are candidates until waiting admission has finished.
+        } else if mode == RunMode::Prefill {
+            attn_by.push((id, tokens * tokens / 2.0));
+        }
+        if let Some(r) = rule
+            && mode == RunMode::Prefill
+        {
+            // Keep any allocation made for displaced decodes, as RBLN
+            // keeps pending runner block deltas; cancel only their work.
+            assign.clear();
+            *left = r.budget;
+        }
+        assign.push((id, tokens));
+        *left -= tokens;
+        Give::Gave(mode)
+    }
+
+    /// Run a step stage's iteration body (`iteration { … }`) on the
+    /// iteration being planned. Each statement runs once where it is
+    /// written; a resident is served at most once in the iteration.
+    fn run_body(&mut self, plan: &mut Plan<'p>, body: &'p [CIter]) {
+        for s in body {
+            if self.error.is_some() {
+                return;
+            }
+            match s {
+                CIter::Serve { only, by } => {
+                    let keys = match by {
+                        Some(keys) => keys.as_slice(),
+                        None => match &plan.spec.serve {
+                            CServe::By(keys) => keys.as_slice(),
+                            CServe::ExclusivePrefill => unreachable!("refused with a body"),
+                        },
+                    };
+                    // the residents `only` reads as 0 here: unserved, a
+                    // later `serve` may take them
+                    let mut skipped: BTreeSet<u64> = BTreeSet::new();
+                    while plan.left > 0.0 {
+                        let order = self.order_by(plan.st, keys, plan.spec.memory);
+                        let Some(id) = order
+                            .into_iter()
+                            .find(|j| !plan.served.contains(j) && !skipped.contains(j))
+                        else {
+                            break;
+                        };
+                        if let Some(p) = only
+                            && !self.serves(plan.st, id, p, plan.spec.memory)
+                        {
+                            skipped.insert(id);
+                            continue;
+                        }
+                        plan.served.insert(id);
+                        let given = self.give(
+                            plan.st,
+                            id,
+                            plan.chunk,
+                            None,
+                            &mut plan.left,
+                            &mut plan.assign,
+                            &mut plan.attn_by,
+                        );
+                        match given {
+                            Give::Stopped => break,
+                            Give::Refused => plan.refused = true,
+                            _ => {}
+                        }
+                    }
+                }
+                CIter::Admit { only, gate } => {
+                    'admit: while plan.left > 0.0 && !plan.refused {
+                        if let Some(g) = gate
+                            && !self.guard(g, plan, "`admit waiting while (…)`")
+                        {
+                            break;
+                        }
+                        let before: BTreeSet<u64> = self.residents(plan.st).into_iter().collect();
+                        if !self.admit_bound(plan.st, plan.left) {
+                            break;
+                        }
+                        plan.admitted += 1.0;
+                        // the newcomer, in the stage's order: what it brought
+                        // to the engine, served now with the budget left
+                        let newcomers: Vec<u64> = self
+                            .serving_order(plan.st, plan.spec)
+                            .into_iter()
+                            .filter(|j| !before.contains(j) && !plan.served.contains(j))
+                            .collect();
+                        for id in newcomers {
+                            if plan.left <= 0.0 {
+                                break 'admit;
+                            }
+                            // one `only` excludes is admitted and waits,
+                            // unserved, as under the stage's `serve only`
+                            if let Some(p) = only
+                                && !self.serves(plan.st, id, p, plan.spec.memory)
+                            {
+                                continue;
+                            }
+                            plan.served.insert(id);
+                            let given = self.give(
+                                plan.st,
+                                id,
+                                plan.chunk,
+                                None,
+                                &mut plan.left,
+                                &mut plan.assign,
+                                &mut plan.attn_by,
+                            );
+                            match given {
+                                Give::Stopped => break 'admit,
+                                // the granule refused it: no one after it
+                                Give::Refused => {
+                                    plan.refused = true;
+                                    break 'admit;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                CIter::Branch(g, a, b) => {
+                    let taken = if self.guard(g, plan, "a `branch` in a `schedule`") {
+                        a
+                    } else {
+                        b
+                    };
+                    self.run_body(plan, taken);
+                }
+                CIter::Set(r, e) => {
+                    let v = self.plan_value(e, plan);
+                    if !v.is_finite() && self.error.is_none() {
+                        self.error = Some(format!(
+                            "engine `{}`: `set {}` read {v}; a register holds a finite number",
+                            self.p.stages[plan.st].name, self.p.registers[*r].name
+                        ));
+                    }
+                    self.regs[*r] = v;
+                }
+            }
+        }
+    }
+
+    /// A guard of an iteration body, read on the residents as they stand
+    /// and what the iteration has done so far (`Moment::Plan`): 1 or 0, and
+    /// anything else fails the run, as a session's `branch` does.
+    fn guard(&mut self, e: &CExpr, plan: &Plan, what: &str) -> bool {
+        let v = self.plan_value(e, plan);
+        if v == 1.0 {
+            true
+        } else {
+            if v != 0.0 && self.error.is_none() {
+                self.error = Some(format!(
+                    "engine `{}`: {what} read {v}; a test is 1 or 0",
+                    self.p.stages[plan.st].name
+                ));
+            }
+            false
+        }
+    }
+
+    /// An expression of an iteration body (`Moment::Plan`), read on the
+    /// residents as they stand and what the iteration has done so far.
+    fn plan_value(&mut self, e: &CExpr, plan: &Plan) -> f64 {
+        let mut ctx = self.resident_totals(plan.st, plan.spec.memory);
+        ctx.ntok = plan.assign.iter().map(|a| a.1).sum();
+        ctx.npre = plan
+            .assign
+            .iter()
+            // every job in `assign` is a resident: `give` drops a victim from it
+            .filter(|(j, _)| self.stages[plan.st].jobs[j].mode == RunMode::Prefill)
+            .map(|a| a.1)
+            .sum();
+        ctx.admitted = plan.admitted;
+        ctx.preempted = self.preempted_now;
+        self.eval(e, &ctx, Which::Session)
     }
 
     /// Read the claims over the iterations of stage `st` as an iteration
@@ -3172,11 +3985,7 @@ impl<'p> Interp<'p> {
             };
             let pending = self.pending_now(sid);
             self.admit_budget = None;
-            let reserve = pending
-                .pools
-                .iter()
-                .all(|w| self.fits(w.pool, self.round_up(w.pool, w.need)));
-            if !reserve {
+            if !self.fits_all(&pending) {
                 return false;
             }
             self.pools[pl].queue.remove(index);
@@ -3201,14 +4010,19 @@ impl<'p> Interp<'p> {
     /// list; no keys is that list). `ExclusivePrefill` keeps admission order
     /// and stalls the decodes in the loop instead.
     fn serving_order(&mut self, st: usize, spec: &CStep) -> Vec<u64> {
+        match &spec.serve {
+            CServe::By(keys) => self.order_by(st, keys, spec.memory),
+            CServe::ExclusivePrefill => self.residents(st),
+        }
+    }
+
+    /// The residents in ascending `keys`, ties in admission order.
+    fn order_by(&mut self, st: usize, keys: &[CExpr], memory: Option<usize>) -> Vec<u64> {
         let mut r = self.residents(st);
-        let CServe::By(keys) = &spec.serve else {
-            return r;
-        };
         if keys.is_empty() {
             return r;
         }
-        let totals = self.resident_totals(st, spec.memory);
+        let totals = self.resident_totals(st, memory);
         let mut keyed: Vec<(Vec<f64>, u64)> = r
             .drain(..)
             .map(|id| {
@@ -3338,7 +4152,9 @@ impl<'p> Interp<'p> {
 
     fn eval(&mut self, e: &CExpr, ctx: &Ctx, w: Which) -> f64 {
         match e {
+            CExpr::Cost(_, x) => self.eval(x, ctx, w),
             CExpr::Num(x) => *x,
+            CExpr::Reg(r) => self.regs[*r],
             CExpr::Attr(i) => match (&ctx.snap, ctx.sid) {
                 (Some(s), _) => s[*i],
                 (None, Some(sid)) => self.sessions[sid].attrs[*i],
@@ -3362,6 +4178,9 @@ impl<'p> Interp<'p> {
                 CtxVar::Decoding => ctx.decoding,
                 CtxVar::Admission => ctx.admission,
                 CtxVar::Remaining => ctx.remaining,
+                CtxVar::Position => ctx.position,
+                CtxVar::Admitted => ctx.admitted,
+                CtxVar::Preempted => ctx.preempted,
                 CtxVar::Demand => ctx.demand,
                 CtxVar::Served => ctx.served,
                 CtxVar::Arrived => ctx.arrived,
@@ -3541,7 +4360,7 @@ impl<'p> Interp<'p> {
             }
             Fun::Holders => {
                 let p = pool(self, 0);
-                self.pools[p].holders.len() as f64
+                sessions_in(&self.pools[p].holders) as f64
             }
             Fun::Queued => {
                 let p = pool(self, 0);
@@ -3666,6 +4485,7 @@ impl<'p> Interp<'p> {
                 mean_wait: s.wait.mean(),
                 mean_service: s.service.mean(),
                 iterations: s.iterations,
+                idle_with_work: s.idle_with_work,
                 prefill_only: s.steps.prefill_only.mean(now),
                 decode_only: s.steps.decode_only.mean(now),
                 mixed: s.steps.mixed.mean(now),
@@ -3677,11 +4497,17 @@ impl<'p> Interp<'p> {
                 itl_p99: s.steps.itl.quantile(0.99),
             })
             .collect();
+        let over = self.heads_over_cap();
+        let label = |q: usize| match p.pools[q].index {
+            Some(i) => format!("{}[{i}]", p.pools[q].name),
+            None => p.pools[q].name.clone(),
+        };
         let pools = self
             .pools
             .iter()
             .zip(&p.pools)
-            .map(|(pl, cp)| PoolReport {
+            .enumerate()
+            .map(|(i, (pl, cp))| PoolReport {
                 name: cp.name.clone(),
                 index: cp.index,
                 mean_used: pl.used_avg.mean(now),
@@ -3696,6 +4522,17 @@ impl<'p> Interp<'p> {
                 spills: pl.spills,
                 rejected: pl.rejected,
                 stuck: pl.stuck,
+                over_cap: over
+                    .iter()
+                    .find(|(asked, _, _)| *asked == i)
+                    .map(|&(_, q, need)| (label(q), need)),
+                growing_at_end: self.sessions.iter().filter(|s| grows_in(s, i)).count() as u64,
+                growing_stalled: self.sessions.iter().any(|s| grows_in(s, i))
+                    && self
+                        .sessions
+                        .iter()
+                        .filter(|s| allocates_in(s, i))
+                        .all(|s| grows_in(s, i)),
             })
             .collect();
         Report {
@@ -3829,7 +4666,7 @@ fn static_key(e: &CExpr) -> bool {
 fn aggregates(e: &CExpr, out: &mut [bool]) {
     match e {
         CExpr::Agg(_, k) => out[*k] = true,
-        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) => {}
+        CExpr::Num(_) | CExpr::Attr(_) | CExpr::Ctx(_) | CExpr::Reg(_) => {}
         CExpr::Sample(_, xs) => xs.iter().for_each(|x| aggregates(x, out)),
         CExpr::Call(_, args) => {
             for a in args {
@@ -3843,7 +4680,7 @@ fn aggregates(e: &CExpr, out: &mut [bool]) {
                 }
             }
         }
-        CExpr::Unary(_, x) => aggregates(x, out),
+        CExpr::Unary(_, x) | CExpr::Cost(_, x) => aggregates(x, out),
         CExpr::Binary(_, a, b) => {
             aggregates(a, out);
             aggregates(b, out);

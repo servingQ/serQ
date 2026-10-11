@@ -17,6 +17,7 @@ serQ tests run. The translation accepts the fragment of the IR that the
 executable semantics (lean/Serq/Exec.lean) covers and fails on anything else.
 `--check` fails if the committed file is stale."""
 import json
+import math
 import os
 import sys
 
@@ -38,13 +39,54 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # for every file the generator has read. 11 changed what a `seed` names
 # (per-session random streams), which the fragment never reads: its
 # programs draw nothing, so a 10 file and an 11 file translate alike. The
-# pinned corpus (IR 11) is FIFO and stays inside the fragment.
-IR_VERSION = 11
-SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, IR_VERSION)
+# pinned corpus (IR 12) is FIFO and stays inside the fragment.
+# 12 adds resource cost conversions, erased without changing numeric work.
+# 13 removes the `Delay` stage kind: a delay is `Ps` of `present`, every job
+# at rate 1, and `is_delay` reads either spelling.
+IR_VERSION = 13
+SUPPORTED_IR_VERSIONS = (7, 8, 9, 10, 11, 12, IR_VERSION)
+
+
+def is_delay(kind):
+    """A delay stage: `Delay` up to IR 12, `ps(present)` from 13."""
+    return kind == "Delay" or kind == {"Ps": {"Ctx": "N"}}
 
 
 class Fragment(Exception):
     """An IR construct outside the Lean executable fragment."""
+
+
+# `preempt lifo`, which the parser writes as `preempt by (-admission)`: the
+# latest admitted resident, back at the head (`Exec.victim`). The fragment
+# knows no other victim order and no `requeue tail`.
+LIFO_KEYS = [{"Unary": ["Neg", {"Ctx": "Admission"}]}]
+
+
+def is_lifo(preempt):
+    """Whether a pool's `preempt` is `lifo`: the keys `[-admission]`, back
+    at the head (`tail` absent or false)."""
+    by = preempt.get("By") if isinstance(preempt, dict) else None
+    return by is not None and by.get("keys") == LIFO_KEYS and not by.get("tail", False)
+
+
+NOT_PREEMPTED = {"Unary": ["Not", {"Ctx": "Preempted"}]}
+
+
+def only_body(body):
+    """The `p` of a step stage's body, when the body is the stage's `serve
+    only (p)` (`[Serve {only: p}, Admit {only: p, gate: !preempted}]`, which
+    the linker writes), the fragment's `only`; None for no body. Any other
+    body is outside the fragment."""
+    if body is None:
+        return None
+    if (len(body) == 2 and "Serve" in body[0] and "Admit" in body[1]
+            and body[0]["Serve"].get("by") is None
+            and body[0]["Serve"].get("only") is not None
+            and body[1]["Admit"].get("only") == body[0]["Serve"]["only"]
+            and body[1]["Admit"].get("gate") == NOT_PREEMPTED):
+        return body[0]["Serve"]["only"]
+    raise Fragment("iteration: the fragment runs vLLM's procedure or a stage's `serve only`, "
+                   "not another body")
 
 
 def nat(v, what):
@@ -61,7 +103,13 @@ def one_ref(r, what):
 
 def fold(e):
     """The value of an expression that does not depend on the session or the
-    context (constants, and products with a zero constant), else None."""
+    context, else None: constants, products with a zero constant, and the
+    arithmetic, division and rounding of constants, as the interpreter
+    computes them (a negative difference stays negative, and `nat` refuses
+    a negative result: a budget or a chunk folds to the interpreter's
+    value, not to ℕ's)."""
+    if "Cost" in e:
+        return fold(e["Cost"][1])
     if "Num" in e:
         return e["Num"]
     if "Binary" in e:
@@ -71,8 +119,162 @@ def fold(e):
             return 0.0
         if x is None or y is None:
             return None
+        if op == "Div":
+            return x / y if y != 0 else None
         return {"Add": x + y, "Sub": x - y, "Mul": x * y}.get(op)
+    if "Call" in e:
+        f, args = e["Call"]
+        vals = [fold(a["Expr"]) if "Expr" in a else None for a in args]
+        if any(v is None for v in vals):
+            return None
+        if f == "Ceil" and len(vals) == 1:
+            return float(math.ceil(vals[0]))
+        if f == "Floor" and len(vals) == 1:
+            return float(math.floor(vals[0]))
+        if f in ("Min", "Max") and len(vals) == 2:
+            return min(vals) if f == "Min" else max(vals)
     return None
+
+
+REL = {"Lt": "<", "Le": "≤", "Gt": ">", "Ge": "≥", "Eq": "=", "Ne": "≠"}
+ARITH = {"Add": "+", "Sub": "-", "Mul": "*"}
+
+
+def subtracts(e):
+    """Whether an expression has a difference anywhere in it."""
+    if isinstance(e, dict):
+        if "Binary" in e and e["Binary"][0] == "Sub":
+            return True
+        return any(subtracts(v) for v in e.values())
+    if isinstance(e, list):
+        return any(subtracts(v) for v in e)
+    return False
+
+
+def erase_costs(e):
+    """Conversions preserve values, including under syntax-sensitive rounding."""
+    if isinstance(e, dict):
+        if "Cost" in e:
+            return erase_costs(e["Cost"][1])
+        return {k: erase_costs(v) for k, v in e.items()}
+    if isinstance(e, list):
+        return [erase_costs(v) for v in e]
+    return e
+
+
+def unsafe_division(e):
+    """A divisor without a positive constant natural value is not proven
+    safe in Nat: Rust yields infinity/NaN at zero, whereas Nat yields 0."""
+    if isinstance(e, dict):
+        if "Binary" in e and e["Binary"][0] == "Div":
+            divisor = fold(e["Binary"][2])
+            if (divisor is None or not math.isfinite(divisor)
+                    or divisor <= 0 or not float(divisor).is_integer()):
+                return True
+        return any(unsafe_division(v) for v in e.values())
+    if isinstance(e, list):
+        return any(unsafe_division(v) for v in e)
+    return False
+
+
+class Expr:
+    """An IR expression as a Lean term over natural numbers: `nat` gives a
+    term of type ℕ (a boolean is 1 or 0), `prop` a proposition (the
+    expression is not 0). The arithmetic, comparisons, conditions and
+    rounding are the same at every moment; `leaf` translates what is
+    specific to one (an attribute, a context variable, an observable).
+    `sub=False` refuses a difference where ℕ, which stops at 0, would part
+    from the interpreter, which goes negative."""
+
+    def __init__(self, leaf, sub=True):
+        self.leaf, self.sub = leaf, sub
+
+    def nat(self, e):
+        e = erase_costs(e)
+        if not self.sub and subtracts(e):
+            raise Fragment("a difference: ℕ stops at 0 where the interpreter goes negative")
+        v = fold(e)
+        if v is not None:
+            return str(nat(v, "constant"))
+        if "Binary" in e:
+            op, a, b = e["Binary"]
+            if op in ARITH:
+                return f"({self.nat(a)} {ARITH[op]} {self.nat(b)})"
+            if op in REL or op in ("And", "Or"):
+                return f"(if {self.prop(e)} then 1 else 0)"
+            raise Fragment(f"operator {op} (a division must be under floor, or exact between constants)")
+        if "Unary" in e:
+            op, a = e["Unary"]
+            if op == "Not":
+                return f"(if {self.prop(a)} then 0 else 1)"
+            raise Fragment(f"unary {op}")
+        if "Cond" in e:
+            c, a, b = e["Cond"]
+            return f"(if {self.prop(c)} then {self.nat(a)} else {self.nat(b)})"
+        if "Call" in e:
+            f, args = e["Call"]
+            if f == "Floor" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
+                op, a, b = args[0]["Expr"]["Binary"]
+                if op == "Div":
+                    return f"({self.nat(a)} / {self.nat(b)})"
+            if f == "Ceil" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
+                op, a, b = args[0]["Expr"]["Binary"]
+                if op == "Div" and fold(b) is not None:
+                    k = nat(fold(b), "ceil divisor")
+                    if k == 0:
+                        raise Fragment("ceil of a division by 0")
+                    return f"(({self.nat(a)} + {k - 1}) / {k})"
+            if f in ("Min", "Max") and len(args) == 2 and all("Expr" in a for a in args):
+                return f"({f.lower()} {self.nat(args[0]['Expr'])} {self.nat(args[1]['Expr'])})"
+        return self.leaf(e)
+
+    def prop(self, e):
+        if "Binary" in e:
+            op, a, b = e["Binary"]
+            if op in REL:
+                return f"({self.nat(a)} {REL[op]} {self.nat(b)})"
+            if op == "And":
+                return f"({self.prop(a)} ∧ {self.prop(b)})"
+            if op == "Or":
+                return f"({self.prop(a)} ∨ {self.prop(b)})"
+        if "Unary" in e and e["Unary"][0] == "Not":
+            return f"(¬ {self.prop(e['Unary'][1])})"
+        return f"({self.nat(e)} ≠ 0)"
+
+    def top(self, e):
+        """An expression in statement position: drop one pair of outer parentheses."""
+        t = self.nat(e)
+        return t[1:-1] if t.startswith("(") and t.endswith(")") else t
+
+
+def chunk_leaf(e):
+    """What a step's `chunk` reads as an iteration starts (`Exec.ChunkEnv`)."""
+    if "Ctx" in e:
+        if e["Ctx"] == "Nres":
+            return "c.residents"
+        raise Fragment(f"chunk reads {e['Ctx']}: `residents` and `queued(p)` only")
+    if "Call" in e:
+        f, args = e["Call"]
+        if f == "Queued" and len(args) == 1 and "Pool" in args[0]:
+            return f"(c.queued {one_ref(args[0]['Pool'], 'queued')})"
+        raise Fragment(f"chunk calls {f}")
+    raise Fragment(f"chunk {e}")
+
+
+def chunk_rule(e):
+    """A step's chunk as `Exec.Deployment`'s `chunk` and `chunkAt`: a
+    constant cap, or the program's expression over what an iteration's
+    start reads, `residents` and `queued(p)`, as a Lean function of
+    `Exec.ChunkEnv` (vLLM's `residents + queued(p) > 1 ? c : 0`,
+    scheduler.py:606-616, is one)."""
+    c = fold(e)
+    if c is None and "Cond" in e:
+        # a rule whose two outcomes are one constant is that constant
+        a, b = fold(e["Cond"][1]), fold(e["Cond"][2])
+        c = a if a is not None and a == b else None
+    if c is not None:
+        return c, None
+    return 0, f"some fun c => {Expr(chunk_leaf, sub=False).top(e)}"
 
 
 # the context variables an iteration cost may read, and the field of
@@ -147,16 +349,12 @@ class Lean:
 
     def __init__(self, ir):
         self.ir = ir
+        self.empty_turns = False
         self.builtin = {ir["slot_cached"]: "x.cached", ir["slot_serial"]: "x.serial"}
 
-    def arg(self, a):
-        if "Expr" not in a:
-            raise Fragment(f"argument {a}")
-        return self.expr(a["Expr"])
-
-    def expr(self, e):
-        if "Num" in e:
-            return str(nat(e["Num"], "constant"))
+    def leaf(self, e):
+        """What a session statement reads: attributes, `now`, the engine's
+        budget left and a pool's cached prefix."""
         if "Attr" in e:
             k = e["Attr"]
             return self.builtin.get(k, f"(x.attr {k})")
@@ -166,37 +364,88 @@ class Lean:
             raise Fragment(f"context variable {e['Ctx']}")
         if "Call" in e:
             f, args = e["Call"]
-            if f in ("Min", "Max") and len(args) == 2:
-                return f"({f.lower()} {self.arg(args[0])} {self.arg(args[1])})"
             if f == "BudgetLeft" and len(args) == 1 and "Stage" in args[0]:
                 if one_ref(args[0]["Stage"], "budget_left") != 0:
                     raise Fragment("budget_left of a stage other than the engine")
                 return "x.budgetLeft"
             if f == "CachedIn" and len(args) == 1 and "Pool" in args[0]:
                 return f"(x.cachedIn {one_ref(args[0]['Pool'], 'cachedin')})"
-            if f == "Floor" and len(args) == 1 and "Binary" in args[0].get("Expr", {}):
-                op, a, b = args[0]["Expr"]["Binary"]
-                if op == "Div":
-                    return f"({self.expr(a)} / {self.expr(b)})"
             raise Fragment(f"call {f}")
-        if "Binary" in e:
-            op, a, b = e["Binary"]
-            sym = {"Add": "+", "Sub": "-", "Mul": "*"}.get(op)
-            if sym:
-                return f"({self.expr(a)} {sym} {self.expr(b)})"
-            rel = {"Lt": "<", "Le": "≤", "Gt": ">", "Ge": "≥", "Eq": "=", "Ne": "≠"}.get(op)
-            if rel:
-                return f"(if {self.expr(a)} {rel} {self.expr(b)} then 1 else 0)"
-            raise Fragment(f"operator {op}")
-        if "Cond" in e:
-            c, a, b = e["Cond"]
-            return f"(if {self.expr(c)} ≠ 0 then {self.expr(a)} else {self.expr(b)})"
         raise Fragment(f"expression {e}")
 
     def top(self, e):
         """An expression in statement position: drop one pair of outer parentheses."""
-        t = self.expr(e)
-        return t[1:-1] if t.startswith("(") and t.endswith(")") else t
+        return Expr(self.leaf).top(e)
+
+    def boolean_guard(self, e):
+        """Only translate guards whose range is 0/1: Exec has no runtime
+        error for Rust's invalid-guard case. This is deliberately conservative,
+        not a general dataflow proof for mutable attributes."""
+        if "Num" in e:
+            return e["Num"] in (0, 1)
+        if "Binary" in e:
+            return e["Binary"][0] in (*REL, "And", "Or")
+        if "Unary" in e:
+            return e["Unary"][0] == "Not"
+        if "Cond" in e:
+            return all(self.boolean_guard(x) for x in e["Cond"][1:])
+        if e != {"Attr": self.ir["slot_more"]}:
+            return False
+        # The trace sets more to 0/1, but source assignments and explicit
+        # session/turn presets can overwrite it. Inspect all of them, even
+        # in a nested body or before the first Turn.
+        slot = self.ir["slot_more"]
+        if any(slot == self.ir[k] for k in
+               ("slot_cached", "slot_serial", "slot_turn", "slot_computed")):
+            return False
+        arrival = self.ir["arrival"]
+        sessions = arrival.get("Sessions") if isinstance(arrival, dict) else None
+        if not sessions or self.ir["trace"] is not None:
+            return False
+        if any(isinstance(st, dict) and "Set" in st and st["Set"][0] == slot
+               for block in self.ir["blocks"] for st in block):
+            return False
+        return all(value in (0, 1)
+                   for session in sessions
+                   for attrs in [session["attrs"], *session.get("turns", [])]
+                   for key, value in attrs if key == slot)
+
+    def while_guard(self, e):
+        if not self.boolean_guard(e):
+            raise Fragment("while guard is not guaranteed to be 0 or 1; "
+                           "the Lean fragment does not model invalid-guard errors")
+        # A boolean result does not make Nat arithmetic agree with Rust:
+        # prompt - 2 < 0 can be true in Rust and false in Lean. Check both
+        # the guard and every assignment feeding it, including alias chains
+        # and loop-carried values. A visited set terminates cyclic aliases.
+        pending, seen = [e], set()
+
+        def attributes(value):
+            if isinstance(value, dict):
+                if "Attr" in value:
+                    yield value["Attr"]
+                for child in value.values():
+                    yield from attributes(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from attributes(child)
+
+        while pending:
+            value = pending.pop()
+            if subtracts(value):
+                raise Fragment("while guard depends on subtraction: Lean naturals truncate "
+                               "at 0 where Rust can go negative")
+            if unsafe_division(value):
+                raise Fragment("while guard depends on division without a positive constant "
+                               "natural divisor: Lean division by 0 differs from Rust")
+            for slot in attributes(value):
+                if slot not in seen:
+                    seen.add(slot)
+                    pending.extend(st["Set"][1]
+                                   for block in self.ir["blocks"] for st in block
+                                   if isinstance(st, dict) and "Set" in st
+                                   and st["Set"][0] == slot)
+        return self.top(e)
 
     def block(self, b, ind):
         pad = "  " * ind
@@ -206,8 +455,12 @@ class Lean:
                 out.append(pad + "stop")
                 return "\n".join(out)
             if st == "Turn":
+                if self.empty_turns:
+                    continue
                 out.append(pad + "turn;")
                 continue
+            if st == "Join":
+                raise Fragment("statement Join (a request's legs)")
             (kind, v), = st.items()
             if kind == "Set":
                 slot, e = v
@@ -251,6 +504,11 @@ class Lean:
                 out.append(f"{pad}}} else {{")
                 out.append(self.block(f, ind + 1))
                 out.append(f"{pad}}};")
+            elif kind == "While":
+                c, body = v
+                out.append(f"{pad}while ({self.while_guard(c)}) {{")
+                out.append(self.block(body, ind + 1))
+                out.append(f"{pad}}};")
             elif kind == "Loop":
                 out.append(f"{pad}loop {{")
                 out.append(self.block(v, ind + 1))
@@ -264,29 +522,36 @@ class Lean:
     def deployment(self):
         ir = self.ir
         st = ir["stages"]
-        if not st or "Step" not in st[0]["kind"] or any(s["kind"] != "Delay" for s in st[1:]):
+        if not st or "Step" not in st[0]["kind"] or any(not is_delay(s["kind"]) for s in st[1:]):
             raise Fragment("stages must be one step engine (stage 0) and delays")
         step = st[0]["kind"]["Step"]
         cost = cost_fn(step["cost"])
+        if step.get("granule") is not None:
+            raise Fragment("granule: the fragment gives a prefill any amount")
         if step["serve"] != {"By": []}:
             raise Fragment(f"serve {step['serve']}: the fragment serves residents in admission order (`By([])`)")
-        if step.get("only") is not None:
-            raise Fragment("serve only: the fragment serves every resident")
+        if step.get("iteration") is not None:
+            raise Fragment("iteration: the oracle fragment runs vLLM's procedure, not a body "
+                           "(a stage's `serve only` is one)")
         pools = []
         for i, p in enumerate(ir["pools"]):
+            if p.get("reserve_held"):
+                raise Fragment(f"pool {p['name']}: reserve held")
             if p["evict"] != "Lru" or p["queue"] is not None or p["spill"] is not None:
                 raise Fragment(f"pool {p['name']}: only LRU eviction, FIFO queue, no spill")
             via = p["admit_via"] is not None
             if via and p["admit_via"] != 0:
                 raise Fragment(f"pool {p['name']}: admitted by a stage other than the engine")
-            if p["preempt"] != ("None" if via else "Lifo"):
+            if not (p["preempt"] == "None" if via else is_lifo(p["preempt"])):
                 raise Fragment(f"pool {p['name']}: preemption {p['preempt']}")
             if not via and step["memory"] != i:
                 raise Fragment(f"pool {p['name']}: not the engine's memory")
             pools.append(f"⟨{nat(p['cap'], 'cap')}, {nat(p['block'] or 1, 'block')}, {'true' if via else 'false'}, none⟩")
+        chunk, at = chunk_rule(step["chunk"])
         return (f"⟨[{', '.join(pools)}], {nat(fold(step['budget']), 'budget')}, "
-                f"{nat(fold(step['chunk']), 'chunk')}, "
-                f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, none⟩")
+                f"{nat(chunk, 'chunk')}, "
+                f"{'none' if step['memory'] is None else 'some ' + str(step['memory'])}, {cost}, none, "
+                f"{at or 'none'}⟩")
 
     def workload(self):
         """`Exec.Workload` of the IR's explicit sessions."""
@@ -443,7 +708,7 @@ def gen_cache():
     keys = sorted(rows)
     horizon = max(r[2] for r in rows.values()) + 5
     ob = {n: i for i, n in enumerate(ir["observes"])}
-    for n in ("sent", "ttft", "latency", "cached_tokens"):
+    for n in ("sent", "ttft", "response", "cached_tokens"):
         if n not in ob:
             raise Fragment(f"cache_trace: no observation `{n}`")
 
@@ -459,7 +724,7 @@ send step, time to first token, latency, cached tokens at admission. -/
 theorem vllm_cache_trace :
     let m := Exec.runW {lean.deployment()} {horizon}
       {lean.workload()} vllmTurn
-    (observed m {ob["sent"]}, observed m {ob["ttft"]}, observed m {ob["latency"]}, observed m {ob["cached_tokens"]}) =
+    (observed m {ob["sent"]}, observed m {ob["ttft"]}, observed m {ob["response"]}, observed m {ob["cached_tokens"]}) =
       ({col(lambda r: r[0])},
        {col(lambda r: r[1] - r[0])},
        {col(lambda r: r[2] - r[0])},

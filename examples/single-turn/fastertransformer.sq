@@ -5,7 +5,8 @@
 // LLM queueing model (§3.1) at the operating point C of §6.2: CodeLlama-34B
 // TP1, t_b = 11.28 + 35.47 ceil(b/128) ms, k_max = 100, one request every
 // 467.5 ms with 290 prefill and 990 decode tokens.
-let bmax = 128;          // token budget b_max
+use "std/args";
+
 let kmax = 100;          // batch size limit k_max (§6)
 let c = 11.28e-3;        // s
 let a = 35.47e-3;        // s per step of b0 tokens
@@ -14,28 +15,38 @@ let gap = 0.4675;        // fixed inter-arrival time (s)
 let vp = 290;
 let vd = 990;
 
-pool reqs { cap kmax; }
+fn main() {
+  let bmax = args.number("bmax", 128);          // token budget b_max
 
-stage engine : step {
-  budget bmax;
-  cost c + a * ceil(tokens / b0);
-  serve only (decoders > 0 ? decoding : !decoding);
-}
+  pool reqs { cap kmax; }
 
-workload {
-  arrive renewal(gap);
-  init { set t0 = now; }
-}
-
-session {
-  hold reqs (1) {
-    run engine prefill (vp);
-    run engine decode (vd);
+  device gpu { compute (t) = a * ceil(t / b0); }
+  // decodes while any request decodes, else prefills: never both
+  def in_phase() { running.decoding > 0 ? decoding : !decoding }
+  engine fastertransformer on gpu {
+    tokens cap bmax;
+    schedule {
+      advance running only (in_phase());
+      admit waiting only (in_phase()) while (running.preempted == 0);
+    }
+    execute (c + compute(batch.tokens));
   }
-  observe response = now - t0;
-  end;
+
+  workload {
+    arrive renewal(gap);
+    init { set t0 = now; }
+
+  }
+
+  server {
+    hold reqs (cost(reqs, 1)) {
+      run fastertransformer prefill (cost(fastertransformer, vp));
+      run fastertransformer decode (cost(fastertransformer, vd));
+    }
+    observe response = now - t0;
+  }
+
+  gauge pending = holders(reqs) + queued(reqs);
+
+
 }
-
-gauge pending = holders(reqs) + queued(reqs);
-
-run { horizon 500; warmup 0; seed 1; }

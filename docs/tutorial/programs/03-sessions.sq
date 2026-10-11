@@ -1,34 +1,44 @@
 // Chapter 3: a session is many turns.
 // A session prefills its context, decodes an answer, calls a tool, and
 // comes back with a longer context. It continues with probability p.
+use "std/args";
+
 let Lambda = 0.5;     // new sessions per second
 let p = 0.8;          // continue after a turn
-let Z = 3.0;          // mean tool time (s)
 let a = 2e-5;         // prefill: seconds per token
 let d = 2e-4;         // decode: seconds per token
 
-stage engine : fifo;
-stage tool : delay;
+fn main() {
+  let Z = args.number("Z", 3.0);          // mean tool time (s)
 
-workload {
-  arrive poisson(Lambda);
-  init { set K = 0; }                                 // context so far
-  turn {
-    set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);  // new tokens
-    set o = ~exp(200);                                  // output tokens
+  stage engine : fifo;
+  stage tool : delay;
+
+  workload {
+    arrive poisson(Lambda);
+    init { set K = 0; }                                 // context so far
+    turn {
+      set n = K == 0 ? ~uniform(1000, 3000) : ~exp(500);  // new tokens
+      set o = ~exp(200);                                  // output tokens
+    }
+
+    session {
+      turn;
+      observe context = K + n + o;
+      while (~bernoulli(p)) {
+        set K = K + n + o;
+        run tool (cost(tool, ~exp(Z)));
+        turn;
+        observe context = K + n + o;
+      }
+    }
   }
-}
 
-session {
-  turn;
-  loop {
+  server {
     set t0 = now;
-    run engine (a * (K + n) + d * o);
+    run engine (cost(engine, a * (K + n) + d * o));
     observe response = now - t0;
-    set K = K + n + o;
-    observe context = K;
-    branch with (p) { run tool (~exp(Z)); turn; } else { end; }
   }
-}
 
-run { horizon 20000; warmup 2000; seed 1; }
+
+}

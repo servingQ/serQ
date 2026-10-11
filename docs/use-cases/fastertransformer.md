@@ -1,39 +1,39 @@
 # FasterTransformer
 
-FasterTransformer is the first of the four schedulers that Dai, Deng, Li and Peng, *Throughput-Optimal Scheduling Algorithms for LLM Inference and AI Agents* ([arXiv 2504.07347](https://arxiv.org/abs/2504.07347)), compare. It is also the one serQ could not write before `serve only` (#261). This page puts the paper's description, the library's source and the program side by side, and runs the program at the paper's operating point C.
+This example models decode-prioritized scheduling without mixed batching,
+as described by Dai et al. in [Throughput-Optimal Scheduling Algorithms for
+LLM Inference and AI Agents, §4](https://arxiv.org/html/2504.07347v3#S4).
+Whenever a decode is resident, prefills wait even if the decode batch does
+not fill the token budget.
 
-## What the paper says it does
+## Model and library boundary
 
-§4 of the paper, verbatim:
+The program follows the paper's token-budget model. NVIDIA's library at
+`release/v5.3_tag` takes a caller-supplied batch, runs its context phase,
+then generates tokens in a loop. The batch is fixed within that call.
+See [`ParallelGpt.cc`](https://github.com/NVIDIA/FasterTransformer/blob/release/v5.3_tag/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc):
+`batch_size` comes from the output tensor shape, `gpt_context_decoder_->forward`
+performs prefill, and the loop over `step_` generates output.
 
-> FasterTransformer is a decode-prioritized scheduler without mixed batching. Whenever there are requests in the decoding stage, it batches as many decode tokens as possible (up to the token budget $b_{\max}$) and processes them, leaving requests in the prefill queue untouched. It is *not* work-conserving: prefill tokens wait while the GPU processes decode-only batches.
-
-Table 1 of the paper puts it beside the other three:
-
-| Scheduler | Priority | Batching | serQ |
-|---|---|---|---|
-| FasterTransformer | decode first | no mixed batching | `serve only (decoders > 0 ? decoding : !decoding);` |
-| vanilla vLLM | prefill first | no mixed batching | `serve exclusive prefill;` |
-| Orca | prefill first | mixed | `serve by (decoding ? 1 : 0);` |
-| Sarathi-Serve | decode first | chunked prefill, mixed | `serve decode first;` |
-
-## What the library does
-
-[NVIDIA/FasterTransformer](https://github.com/NVIDIA/FasterTransformer) is a library, not a server. Its last tag is `release/v5.3_tag`. In the GPT model, a call to `ParallelGpt::forward` takes one batch whose size the caller's tensors fix ([`ParallelGpt.cc#L637`](https://github.com/NVIDIA/FasterTransformer/blob/release/v5.3_tag/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc#L637)). It runs the context (prefill) phase for that batch ([`#L1084`](https://github.com/NVIDIA/FasterTransformer/blob/release/v5.3_tag/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc#L1084)), then the generation loop one step at a time ([`#L1191`](https://github.com/NVIDIA/FasterTransformer/blob/release/v5.3_tag/src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc#L1191)). A request cannot join a call that is already running. That is request-level batching: decodes run while a prefill waits for the next call, and no step mixes the two. The paper's rule shares the two properties, decode first and no mixing, but it differs from the library in one way that matters at point C. The paper splits prefills by the token budget $b_{\max}$, and the library prefills a batch's whole prompts in one context phase. The program follows the paper. Results at point C shows what the split costs.
+The distinction matters: the serQ example splits prefill by `bmax`, whereas
+the library's context phase handles the batch's prompts together. This page
+simulates the former and uses a large-budget variant to illustrate the
+latter; it does not emulate the library's caller or serving backend.
 
 ## The program
 
-The deployment is the paper's basic LLM queueing model (§3.1) at operating point C of §6.2, the program of #257 with FasterTransformer's `serve`:
+The example uses 290 prefill tokens and 990 decode tokens per request, one
+arrival every 0.4675 seconds, and at most 100 residents:
 
 ```serq title="examples/single-turn/fastertransformer.sq"
 --8<-- "examples/single-turn/fastertransformer.sq"
 ```
 
-`only` says which residents an iteration serves. Its predicate is read for every resident, from the totals before the iteration (`decoders`) and the resident's own `decoding`. While any request decodes, only decodes are served. A request that is still prefilling stays resident and keeps its slot of `reqs`, but gets no token. With nothing decoding, only prefills are served.
+`only` says which residents an iteration serves. Its predicate is read for every resident, from the current resident totals (`running.decoding`) and the resident's own `decoding`. While any request decodes, only decodes are served. A request that is still prefilling stays resident and keeps its slot of `reqs`, but gets no token. With nothing decoding, only prefills are served.
 
 ## Results at point C
 
-`serq run`, seed 1, horizon 500 s, 1069 arrivals. Each row changes only the `serve` line, and the last row also sets `bmax`. `pending` is the time average of `holders(reqs) + queued(reqs)`.
+`serq run`, seed 1, horizon 500 s, 1069 arrivals. Each row writes the listed policy in the engine's `schedule`, with `bmax` overrides shown below. `pending` is the time average of `holders(reqs) + queued(reqs)`.
 
 | Scheduler | `b_max` | pending mean | pending max | decode batch | batches |
 |---|---|---|---|---|---|
@@ -44,26 +44,33 @@ The deployment is the paper's basic LLM queueing model (§3.1) at operating poin
 | FasterTransformer | 1024 | 519.7 | 1037 | 3.3 | 99.3 % decode only, 0 mixed |
 | FasterTransformer, whole prompts | 10⁶ | 200.3 | 330 | 89.2 | 0 mixed |
 
-Only Sarathi-128 is stable, as in the paper's Figure 14. The first three rows are #257's numbers, reproduced. The process is deterministic (fixed gaps, fixed lengths), so the seed does not move them. Sarathi-128 sits exactly on the boundary: its token load is $\lambda (290 + 990) / (b_{\max} / t_{b_{\max}}) = 1.000$, and it holds only because nothing varies.
+The deterministic Sarathi-128 model runs at token load 1:
+$1280/0.4675 = 128/t_{128}$ tokens per second. Its bounded queue in this
+run should not be read as a stability result for variable arrivals. See
+[the Dai example](dai.md) for the formal result and its assumptions.
 
-FasterTransformer diverges for the reason the paper gives in §4: "When decode requests have token loads below $b_0$, they are processed sequentially without utilizing the GPU's parallel processing capabilities, while incoming prefill requests remain blocked." The iteration trace (`SERQ_TRACE_ITER=1`) shows how this happens at $b_{\max} = 128$:
+With FasterTransformer's rule and `bmax = 128`, completing one prefill
+starts a decode-only period. That request takes 990 iterations of
+$11.28+35.47=46.75$ ms while other prefills wait. Only ten sessions finish
+in 500 seconds. At `bmax = 1024`, more prefills finish together, but the
+mean decode batch is still only 3.3. The large-budget variant gives much
+larger decode batches; it also leaves a substantial backlog in this run.
 
-- A prompt of 290 tokens is split across iterations of 128.
-- The first request whose prefill completes starts to decode, and from then on every other prefill waits, including one already partly prefilled.
-- That request decodes its 990 tokens alone, one 46.75 ms iteration per token ($t_1 = c + a$), about 46 s. In that time 99 requests arrive.
-- Ten sessions end in 500 s.
+To reproduce a row, replace the example's `advance running only …; admit
+waiting only …` with the listed policy (`advance running decode first;`,
+`exclusive prefill;`, … then `admit waiting while (running.preempted ==
+0);`) and pass `--set bmax=…`. These finite runs compare queue accumulation;
+they do not by themselves prove stability or divergence.
 
-At $b_{\max} = 1024$, three or four prefills complete in the same iteration. The decode batch then averages 3.3, and the program is no less unstable.
+## Validation
 
-The last row prefills whole prompts in one iteration, which approximates the library's request-level batching. Then up to `k_max` = 100 requests decode together (89 on average) in each cycle of 54 s: 8.1 s of prefill, then 46.3 s of decode. In that time about 116 requests arrive, so it still diverges, but more slowly. Over horizons of 500, 1000 and 2000 s, pending averages 200, 280 and 432. The split by $b_{\max}$ in the paper's rule turns that slow growth into a batch of one.
-
-## What it checks
-
-- `tests/serve_only.rs` runs the rule on a unit clock. A resident prefill waits until the last decode is done, where `decode first` mixes it in. The opposite rule (prefills alone while one is resident) is written with the same construct. `only` composes with `by`. An excluded admission waits as a resident. A session admitted in the iteration counts among the residents. An engine that excludes every resident waits for the next arrival. The program refuses `only` with `exclusive prefill`, and it refuses a predicate that draws, reads `tokens` or reads `now`.
-- `tests/ir.rs` round-trips the example through the IR, and the check gate links and draws it.
+The six table rows were run with the stated settings. `tests/serve_only.rs`
+checks subset serving, predicate restrictions and excluded residents;
+`tests/ir.rs` checks IR round-trips. No differential comparison with the
+FasterTransformer library was performed.
 
 ## What it leaves out
 
 - **The library's batch boundary.** In FasterTransformer, the caller decides which requests make up a batch, and the batch's prompts are prefilled whole. The whole-prompts row approximates that but does not model the caller. Whether the Triton backend batches this way is not checked here.
 - **Memory.** The paper's model has no KV cache, and neither does the program. `k_max = 100` is the only cap.
-- **Proof.** That the program is not work-conserving is now a Lean theorem about `examples/papers/dai_fastertransformer.sq`, the basic model without `k_max` ([Dai et al.](dai.md)). This program, with `k_max`, is outside the claims' fragment only for its non-integer clock.
+- **Proof.** Non-work-conservation is proved for `examples/papers/dai_fastertransformer.sq`, the basic model without `k_max` ([Dai et al.](dai.md)). That theorem does not directly cover this program's resident cap and fractional clock.

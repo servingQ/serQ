@@ -1,12 +1,34 @@
 # Program
 
 ```
-program := item*
-item    := let | def | use | pool | stage | workload | session | server | share | run | gauge | claim
+program := (let | def | use)* fn main() { item* }
+item    := let | def | use | pool | stage | queue | workload | server | share | gauge | claim
 ```
+
+`fn main()` is the single execution entry point: it constructs the deployment and
+workload. The session body then runs for each arrival.
+Top-level constants and definitions do not execute a simulation. Libraries
+contain definitions and imports, and cannot declare a `main` or a deployment.
+There are no arguments or return value on `main`; use `std/args` for inputs.
 
 Items are read in order and declarations come first: a [serving form](serving.md)
 finds its stage among the stages declared above it.
+
+| Declaration | Description |
+|---|---|
+| `fn main()` | Construct the deployment and workload. |
+| [`let`](#let) | Declare a constant. |
+| [`args.number`](#stdargs) | Declare a numeric program input. |
+| [`def`](#def) | Define a reusable expression or statement body. |
+| [`use`](#use) | Import a library relative to a source file. |
+| [`pool`](#pool) | Declare resource capacity, cache and admission policy. |
+| [`stage`](#stage) | Declare a server or step engine. |
+| [`workload`](#workload) | Define arrivals and request attributes. |
+| [`session`](#session) | Define the request's sequence of actions. |
+| [`server`](#server) | Define the scheduler side of a two-sided program. |
+| [`share`](#share) | Select rate sharing for flows across stages. |
+| [`gauge`](#gauge) | Measure a function of deployment state over time. |
+| [`claim`](#claim) | State a property of the program's paths. |
 
 ## `let`
 
@@ -14,37 +36,113 @@ finds its stage among the stages declared above it.
 let NAME = expr;
 ```
 
-A named constant, folded at link time and overridable from the command line
-(`--set NAME=value`; see the [CLI reference](../reference/cli.md)).
+A named constant, folded at link time. A plain `let` is internal to the
+program: CLI options and instances cannot replace it.
 
 | Argument | Type | Description |
 |---|---|---|
 | `NAME` | identifier | May not also be a session attribute: the linker rejects it. |
 | `expr` | `const` | May read earlier constants. |
 
+### `std/args`
+
+```serq
+use "std/args";
+
+fn main() {
+  let rate = args.number("arrival_rate", 0.3);
+  stage svc : delay;
+  workload {
+    arrive poisson(rate);  }
+  server {
+    run svc (cost(svc, 1));
+    }
+}
+```
+
+`args.number("name", default)` declares a numeric input as the entire
+initializer of a `let` inside `main`. Its external name is an identifier;
+its local binding may have a different name. Read each input once and reuse
+that binding. The default is a constant expression and may read earlier
+constants. Values are numbers (including `inf`), never NaN. Strings,
+positional arguments and implicit access to the host environment are not
+part of this numeric library.
+
+`serq run model.sq --horizon 10 -- --arrival_rate 0.5` supplies the value. The separator
+keeps the program's options apart from the interpreter's `--seed`,
+`--horizon`, and other run settings. `--arrival_rate=0.5` works too;
+repeated options use the last value. Unknown names, missing values and
+invalid numbers fail before simulation. `--set arrival_rate=0.5`,
+instances and Python `sets={"arrival_rate": 0.5}` bind the same declared
+input. `--set` and API strings can also supply a constant expression.
+
+The frontend provides `std/args` on every installation; it does not read a
+file or the process environment. Inputs become constants before IR is
+produced. Runtime expressions cannot call `args.number`. Array sizes are
+resolved during parsing, so supplying an input that affects an array size
+is refused, including through a derived constant.
+
+### Instances
+
+An instance supplies the model's declared inputs and its execution conditions.
+It may contain `let NAME = expr;` for inputs declared with `args.number` and
+one `run` configuration block with numeric values. It cannot declare pools,
+stages, workloads or definitions. The configuration block belongs only to
+an instance; a model's `run STAGE (cost(STAGE, work));` performs stage work.
+
+```serq
+// experiment.sq
+let spacing = 3.0;
+run { horizon 6000; warmup 0; seed 2; }
+```
+
+```sh
+serq run examples/replay/vllm_replay.sq --instance experiment.sq
+```
+
+This supplies the same inputs and execution conditions as
+`--set spacing=3.0 --horizon 6000 --warmup 0 --seed 2`. Flags and instances
+apply in command-line order; later values win.
+
+Example commands state their execution conditions directly. An instance is
+optional: use one to name an experiment, and select it explicitly with
+`--instance`. Settings files are never auto-loaded.
+
 ## `def`
 
 ```serq
-def NAME ( PARAM, … ) = expr;
+def NAME ( PARAM, … ) { expr }
 def NAME ( PARAM, … ) { statement* }
 ```
+
+Both forms enclose the body in braces. A value definition contains one
+expression without a trailing semicolon. A statement definition contains
+statements, or is empty. Statements followed by a result expression are
+not supported; definitions do not introduce local variables or `return`.
 
 A name for source the program would otherwise repeat. A use, `NAME(arg, …)`
 in an expression or `NAME(arg, …);` as a statement, is replaced by the body
 with each parameter replaced by its argument, and parsed where it stands: a
 serving form in it finds its stage at the use, and a statement body follows
 the rules of the block it is used in (no `turn`, `end` or `request` in a
-`server`). The AST and the IR hold the expansion, so a program with a `def`
-has the IR of the one written out.
+`server`). An argument whose parameter the body does not read is left
+unread: it is resolved where the use stands, as an expression written there
+is, and never evaluated. `one(no_such_name)` with `def one(x) { 1 }` is
+refused for its unknown name, and `let n = one(kv);` is a constant though
+`kv` is a pool. It is not part of what the expression reads, so a check of
+what an expression reads at its moment ([Moments](../ir.md#moments)) does
+not see it, and a hold's body that passes a binding unread does not set it.
+An array size is resolved while the program is parsed, where only `let`
+constants are known, so an unread argument there must be one. The same
+holds for a device's time resource (`compute (t) = 1e-3;`).
 
-An expression definition's body can be given from outside, as a `let`'s
-value can: `--def NAME=expr` on the command line, `defs={"NAME": "expr"}` in
+An expression definition's body can separately be given from outside: `--def NAME=expr` on the command line, `defs={"NAME": "expr"}` in
 pyserq. The program is then the one written with that body, so a
 distribution or a key the program leaves open is a parameter of the run
-(`def service() = ~exp(1);`, run with `--def service='~erlang(4, 1)'`).
+(`def service() { ~exp(1) }`, run with `--def service='~erlang(4, 1)'`).
 
 ```serq
-def reusable(x, bs) = floor((x - 1) / bs) * bs;
+def reusable(x, bs) { floor((x - 1) / bs) * bs }
 set hitD = min(cachedin(D[j].kv), reusable(prompt, bs));
 ```
 
@@ -56,16 +154,16 @@ set hitD = min(cachedin(D[j].kv), reusable(prompt, bs));
 | `PARAM` | identifier | Not a keyword or a function, and not a name the body assigns or binds (`set p =`, `choose p`, `p =` in a binding). |
 | `arg` | `expr` or reference | A reference (`kv`, `kvD[j]`) is put in as written, so it may name a pool or a stage; any other argument is put in inside parentheses. An argument that draws (itself, or through a definition that draws) may be passed only to a parameter the body reads once, and an argument may not read a name the body assigns. |
 
-Only the parameters are the definition's own. Every other name in the body is
-the program's: an attribute the body sets is the session's attribute, as it
-would be written out. So that a use reads as a call, an argument that reads
-a name the body assigns is refused rather than read after the assignment:
-a `set`, `choose` or binding of the body, the attributes a hold's admission
-sets (`cached`, `computed`) when the body holds, and what a `turn;` or
-`request;` in the body assigns, directly or through a definition the body uses. A `request gw;` assigns what `gw`'s `route` does, not what another gateway's does; when the gateway is a parameter, it is the one the argument names, at the use and through every definition that passes it on; an argument that is not a name stands for any gateway. For the same reason an argument of statements may not read the clock or
-live state (`now`, `used(kv)`): the body would read it after its runs. Name
-the value with `set` first and pass the name. An error in
-an expansion is reported in the body, with a note naming the use.
+Definitions do not create local attributes: names other than parameters
+refer to the program's names. Arguments cannot read names the body may
+assign, including assignments through nested definitions, hold admission,
+`turn` or `request`. For a named gateway request, this includes the selected
+gateway's routing assignments.
+
+A statement-definition argument also cannot read the clock or live state
+(`now`, `used(kv)`), since the body may use it after time passes. Capture
+such a value with `set` first and pass the attribute. Errors in an expansion
+identify both the body and its use.
 
 ## `use`
 
@@ -81,12 +179,9 @@ is reported in the library, with the uses it was expanded from.
 ```serq
 use "../../lib/vllm.sq";
 …
-server {
-  set t0 = now;
-  set prompt = K + n;
-  vllm_request(reqs, kv, engine, prompt, o, t0);
-  observe response = now - t0;
-}
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))
+         at admission (known = computed < prompt ? prompt : computed + 1,
+                       hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
 ```
 
 (`examples/multi-turn/vllm.sq`; the library is `lib/vllm.sq`.) A program
@@ -114,8 +209,19 @@ A counted resource: KV memory, request slots, an offload tier. See [Pool](pool.m
 stage NAME [ '[' N ']' ] : kind;
 ```
 
-A place where time passes. `kind` is one of `fifo`, `ps`, `delay`, `step`;
-see [Stage](stage.md). `N` declares an array, as for `pool`.
+A place where time passes. `kind` is one of `fifo`, `ps`, `delay`; see
+[Stage](stage.md). `N` declares an array, as for `pool`. A stage that runs
+iterations is an [engine](engine.md) on a device.
+
+## `device` and `engine`
+
+```serq
+device NAME [ '[' N ']' ] { … }
+engine NAME [ '[' N ']' ] on DEVICE { … }
+```
+
+What an engine runs on, and the engine that runs iterations on it; see
+[Engine](engine.md).
 
 ## `workload`
 
@@ -128,20 +234,23 @@ At most one per program (a second is `duplicate workload`).
 
 ## `session`
 
+An optional block inside `workload` describing the sequence of turns.
+Omit it for a single turn. `turn;` draws attributes and waits for the
+server's response; reaching the end of the block ends the session.
+
 ```serq
-session block
+session {
+  turn;
+  while (more) {
+    set K = K + n + o;
+    tool (~exp(Z));
+    turn;
+  }
+}
 ```
 
-What every session does, written as one block: the client's side (`turn`,
-`end`) next to the deployment's (`hold`, `prefill`, …). At top level it is the
-kernel form; inside a `workload` it is the session's side of a
-[two-sided program](../language.md#the-two-sides) and says `request;` where the
-server runs.
-
-| | |
-|---|---|
-| Statements allowed | any [statement](statements.md); `request;` only inside `workload` |
-| Moment | `Session` |
+This is an excerpt of the [multi-turn program](../use-cases/vllm.md).
+Use `end;` only to exit early. Queue entry calls belong in the server.
 
 ## `server`
 
@@ -149,17 +258,14 @@ server runs.
 server block
 ```
 
-The deployment's side of a request, run at every `request;` of the workload's
-`session`. The parser splices the block in place of `request;`, so the IR is
-that of the one-block `session`.
+The deployment's handling of each turn. Every workload uses one server;
+the server may route to queues, for example `server { gw.route(); }`.
+It completes a turn when its block finishes. It cannot draw another turn
+or end the client's session (`turn;` and `end;` are refused).
 
-| | |
-|---|---|
-| Refused in a `server` | `turn`, `end`, `request` |
-| Admission is written | `hold … at admission (…)` |
-
-A workload `session` without a `server`, a `server` that is never requested,
-and a `server` next to a top-level `session` are errors.
+An explicit session must contain a turn. A top-level `session` is an error.
+The default session is `session { turn; }`.
+See [the two sides](../language.md#the-two-sides).
 
 ## `share`
 
@@ -186,7 +292,7 @@ gauge NAME = expr;
 A function of the deployment's state whose time average over
 `[warmup, end]` the report gives, with a batch-means 95 % CI and the least
 and greatest value held; `--dump` writes its change points
-(`gauge/NAME.csv`). See [the language](../language.md), *Gauges*.
+(`gauge/NAME.csv`). See [Gauges](../language.md#gauges).
 
 | Argument | Type | Description |
 |---|---|---|
@@ -201,10 +307,11 @@ claim NAME [given (expr)]: some iteration of STAGE (expr);
 claim NAME [given (expr)]: at end (expr);
 ```
 
-A proposition about every path of the program, which reads and does not
-act. The interpreter checks it on the path it runs and the report says
-whether it held, failed (and when first), was witnessed, or was not
-evaluated. See [the language](../language.md), *Claims*.
+A property of the program’s paths. Claims do not change execution. The
+interpreter checks each claim on the path it runs; the report records the
+result, first failure or witness, and whether the claim was evaluated.
+A simulation result alone is not a proof over all paths. See
+[Claims](../language.md#claims).
 
 | Argument | Type | Description |
 |---|---|---|
@@ -214,22 +321,31 @@ evaluated. See [the language](../language.md), *Claims*.
 | `expr` | `expr`, at the `Iteration` moment | The cost's variables, `demand`, `served`, `arrived`, `now`, and `queue`, `busy`, `used`, `free`, `holders`, `queued` by a number; not an attribute or a draw. |
 | `expr` (`at end`) | `expr`, at the `End` moment | Constants, `now` and `total`, `count`, `largest`, `smallest`, `prefix_total` of an `observe`. |
 
-## `run`
+## Execution settings {#run}
 
-```serq
-run { horizon expr; warmup expr; seed expr; arrivals expr; }
+Supply execution settings through [CLI flags](../reference/cli.md), an
+explicit [instance](#instances), or [`pyserq.compile`](../python/compile.md).
+They are not declarations inside `fn main()`. In a model, `run STAGE (cost(STAGE, work));`
+performs work on a stage.
+
+```sh
+serq run model.sq --horizon 10 --warmup 0 --seed 1
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `horizon` | `const` | required | End of the simulation, in the program's clock unit. |
-| `warmup` | `const` | `0` | Samples before this time are discarded. Must be below `horizon`. |
-| `seed` | `const` | `1` | Seed of the random streams. Arrivals, the workload, the session, eviction and trace sampling each draw from their own. |
-| `arrivals` | `const`, a positive integer | none | Stop after exactly this many arrivals and run until their sessions have all ended. Only with an open workload (`poisson` or `renewal`). |
+| `horizon` | number | required | End of the simulation, in the program's clock unit. |
+| `warmup` | number | `0` | Measured statistics exclude earlier samples; claims still include them. Must be below `horizon`. |
+| `seed` | number | `1` | Seed of the random streams. Arrivals, the workload, the session, eviction and trace sampling each draw from their own. |
+| `arrivals` | positive integer | none | Stop after exactly this many arrivals and run until their sessions have all ended. Only with an open workload (`poisson` or `renewal`). |
 
-`--horizon`, `--warmup`, `--seed` and `--arrivals` override them ([CLI](../reference/cli.md)).
+A source model requires an explicit horizon for execution or IR export.
+`check`, `draw`, `target` and `fmt` do not require execution settings.
+A serialized IR already contains them; flags can replace them when loading it.
 
 ### A finite run
+
+For example: `serq run model.sq --horizon 1e5 --arrivals 1000`.
 
 Without `arrivals` the run ends at `horizon`. With it, the run ends when the
 `N`-th session has arrived and every session has ended, and `horizon` is the
@@ -239,10 +355,38 @@ arrivals or with a session still live, and if the run drains at or before
 run ended as `end`, and its rates and time averages are over `end − warmup`.
 
 ```serq
-workload { arrive renewal(~h2(2, 4)); … }
-run { horizon 1e5; warmup 0; arrivals 1000; }
+workload {
+    arrive renewal(~h2(2, 4)); … }
 ```
 
-!!! note
-    The `run` *statement* ([`run STAGE …`](statements.md#run)) and the `run`
-    *block* here are unrelated constructs that share a keyword.
+## Examples
+
+A complete program:
+
+```serq
+fn main() {
+  let duration = 2;
+  stage svc : fifo;
+  workload {
+    arrive batch(2);
+  }
+  server {
+    set t0 = now;
+    run svc (cost(svc, duration));
+    observe response = now - t0;
+  }
+  gauge jobs = queue(svc);
+  claim done : at end (count(response) == 2);
+}
+```
+
+Save as `model.sq`, then run:
+
+```sh
+serq run model.sq --horizon 10 --seed 1
+```
+
+## See also
+
+[Pools](pool.md), [stages](stage.md), [workloads](workload.md),
+[`pyserq.compile`](../python/compile.md).

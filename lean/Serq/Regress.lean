@@ -19,8 +19,29 @@ namespace Regress
 
 open Exec
 
-/-- `tests/lean-regress/cost_ctx.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = n, 10 = o, 11 = t0. Observations: 0 = ttft, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = engine, 1 = gate. -/
+/-- `tests/lean-regress/chunk_expr.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = p, 10 = o. Observations: 0 = first, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = llm. -/
+def chunkExpr : Prog := [route|
+  turn;
+  hold 1 (1), 0 (x.attr 9) {
+    run 0 prefill (x.attr 9) growing 0;
+    observe 0 = x.now;
+    run 0 decode (x.attr 10) growing 0;
+    observe 1 = x.now;
+    done
+  };
+  stop]
+
+/-- `serq run`: first, done per session, and 0 preemptions. -/
+theorem regress_chunk_expr :
+    let m := Exec.runW ⟨[⟨160, 16, false, none⟩, ⟨2, 1, true, none⟩], 32, 0, some 0, fun _ => 1, none, some fun c => if (((c.queued 1) + c.residents) > 2) then 8 else 0⟩ 1000
+      ⟨[[(9, 40), (10, 4)], [(9, 40), (10, 6)], [(9, 40), (10, 2)]], [], none, 0, some 8, none⟩ chunkExpr
+    ([observed m 0, observed m 1], m.preempts) =
+    ([[(0, 5), (1, 5), (2, 11)], [(0, 9), (1, 11), (2, 13)]], 0) := by
+  decide +kernel
+
+/-- `tests/lean-regress/cost_ctx.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = n, 10 = o, 11 = t0. Observations: 0 = ttft, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = llm, 1 = gate. -/
 def costCtx : Prog := [route|
+  turn;
   run 1 (x.attr 11);
   hold 1 (1), 0 (min (x.attr 9) x.budgetLeft) fits (x.attr 9) {
     run 0 prefill (x.attr 9) growing 0;
@@ -33,14 +54,15 @@ def costCtx : Prog := [route|
 
 /-- `serq run`: ttft, done per session, and 0 preemptions. -/
 theorem regress_cost_ctx :
-    let m := Exec.runW ⟨[⟨2048, 16, false, none⟩, ⟨4, 1, true, none⟩], 48, 0, some 0, fun st => 3 + 1 * st.tokens + 2 * st.prefilled + 1 * st.decoders + 1 * st.kvDecode + 1 * st.attention2, none⟩ 100000
+    let m := Exec.runW ⟨[⟨2048, 16, false, none⟩, ⟨4, 1, true, none⟩], 48, 0, some 0, fun st => 3 + 1 * st.tokens + 2 * st.prefilled + 1 * st.decoders + 1 * st.kvDecode + 1 * st.attention2, none, none⟩ 100000
       ⟨[[(9, 40), (10, 3), (11, 0)], [(9, 70), (10, 2), (11, 5)]], [], none, 0, some 8, none⟩ costCtx
     ([observed m 0, observed m 1], m.preempts) =
     ([[(0, 1723), (1, 6934)], [(0, 7074), (1, 7159)]], 0) := by
   decide +kernel
 
-/-- `tests/lean-regress/preempt_delay.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = d. Observations: 0 = resumed, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = engine, 1 = tool. -/
+/-- `tests/lean-regress/preempt_delay.sq`, translated from its IR. Attributes: 2 = turn_no, 3 = new, 4 = out, 5 = think, 6 = more, 7 = forced, 8 = computed, 9 = d. Observations: 0 = resumed, 1 = done. Pools: 0 = kv, 1 = slots. Stages: 0 = llm, 1 = tool. -/
 def preemptDelay : Prog := [route|
+  turn;
   hold 1 (1), 0 (16) {
     observe 0 = x.attr 8;
     run 0 prefill (16) growing 0;
@@ -53,7 +75,7 @@ def preemptDelay : Prog := [route|
 
 /-- `serq run`: resumed, done per session, and 8 preemptions. -/
 theorem regress_preempt_delay :
-    let m := Exec.runW ⟨[⟨48, 16, false, none⟩, ⟨4, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none⟩ 1000
+    let m := Exec.runW ⟨[⟨48, 16, false, none⟩, ⟨4, 1, true, none⟩], 64, 0, some 0, fun _ => 1, none, none⟩ 1000
       ⟨[[(9, 1)], [(9, 10)]], [], none, 0, some 8, none⟩ preemptDelay
     ([observed m 0, observed m 1], m.preempts) =
     ([[(0, 0), (0, 32), (0, 18), (0, 16), (0, 16), (0, 16), (0, 16), (0, 16), (1, 0), (1, 16)], [(0, 65), (1, 43)]], 8) := by

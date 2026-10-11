@@ -1,5 +1,5 @@
 {
-  "version": 11,
+  "version": 13,
   "attrs": [
     "cached",
     "serial",
@@ -13,6 +13,35 @@
     "t0",
     "vp",
     "vd"
+  ],
+  "attr_types": [
+    "Value",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Size",
+    "Value",
+    "Size",
+    "Size",
+    "Size"
+  ],
+  "sides": [
+    [
+      "Workload",
+      "Workload",
+      "Workload"
+    ],
+    [],
+    [
+      "Workload",
+      "Server",
+      "Server",
+      "Server",
+      "Workload"
+    ]
   ],
   "observes": [
     "response"
@@ -76,49 +105,109 @@
           "serve": {
             "By": []
           },
-          "only": {
-            "Cond": [
-              {
-                "Binary": [
-                  "Or",
-                  {
-                    "Binary": [
-                      "Ge",
-                      {
-                        "Ctx": "Ndec"
-                      },
-                      {
-                        "Num": 128.0
-                      }
-                    ]
-                  },
-                  {
-                    "Binary": [
-                      "Eq",
-                      {
-                        "Ctx": "Ndec"
-                      },
-                      {
-                        "Ctx": "Nres"
-                      }
-                    ]
-                  }
-                ]
-              },
-              {
-                "Ctx": "Decoding"
-              },
-              {
-                "Unary": [
-                  "Not",
-                  {
-                    "Ctx": "Decoding"
-                  }
-                ]
+          "memory": null,
+          "iteration": [
+            {
+              "Serve": {
+                "only": {
+                  "Cond": [
+                    {
+                      "Binary": [
+                        "Or",
+                        {
+                          "Binary": [
+                            "Ge",
+                            {
+                              "Ctx": "Ndec"
+                            },
+                            {
+                              "Num": 128.0
+                            }
+                          ]
+                        },
+                        {
+                          "Binary": [
+                            "Eq",
+                            {
+                              "Ctx": "Ndec"
+                            },
+                            {
+                              "Ctx": "Nres"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "Ctx": "Decoding"
+                    },
+                    {
+                      "Unary": [
+                        "Not",
+                        {
+                          "Ctx": "Decoding"
+                        }
+                      ]
+                    }
+                  ]
+                }
               }
-            ]
-          },
-          "memory": null
+            },
+            {
+              "Admit": {
+                "only": {
+                  "Cond": [
+                    {
+                      "Binary": [
+                        "Or",
+                        {
+                          "Binary": [
+                            "Ge",
+                            {
+                              "Ctx": "Ndec"
+                            },
+                            {
+                              "Num": 128.0
+                            }
+                          ]
+                        },
+                        {
+                          "Binary": [
+                            "Eq",
+                            {
+                              "Ctx": "Ndec"
+                            },
+                            {
+                              "Ctx": "Nres"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "Ctx": "Decoding"
+                    },
+                    {
+                      "Unary": [
+                        "Not",
+                        {
+                          "Ctx": "Decoding"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "gate": {
+                  "Unary": [
+                    "Not",
+                    {
+                      "Ctx": "Preempted"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
         }
       }
     }
@@ -233,6 +322,7 @@
     ],
     [],
     [
+      "Turn",
       {
         "Run": {
           "stage": {
@@ -242,7 +332,17 @@
           },
           "mode": "Prefill",
           "work": {
-            "Attr": 10
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 0,
+                  "count": 1
+                }
+              },
+              {
+                "Attr": 10
+              }
+            ]
           },
           "growing": null
         }
@@ -256,7 +356,17 @@
           },
           "mode": "Decode",
           "work": {
-            "Attr": 11
+            "Cost": [
+              {
+                "Stage": {
+                  "base": 0,
+                  "count": 1
+                }
+              },
+              {
+                "Attr": 11
+              }
+            ]
           },
           "growing": null
         }

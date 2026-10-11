@@ -1,25 +1,29 @@
 # Language cheatsheet
 
-The complete specification is [the language](../language.md). This is the
-one-page version.
+Common syntax at a glance. See the [API reference](../api/index.md) for
+argument rules and [The language](../language.md) for complete semantics.
 
 ## Shape of a program
 
 ```serq
-let NAME = expr;                    // constants, overridable with --set
-def NAME(x, …) = expr;              // a name for an expression, expanded where it is used
+let NAME = expr;                    // fixed constants
+def NAME(x, …) { expr }              // a name for an expression, expanded where it is used
 def NAME(x, …) { … }                // a name for statements: NAME(a, …);
 use "file.sq";                     // the defs of a library, relative to this file
 
-pool NAME [ '[' N ']' ] { … }       // a counted resource
-stage NAME [ '[' N ']' ] : kind;    // where time passes
+use "std/args";
+fn main() {
+  let RATE = args.number("rate", 0.3); // explicit external input
 
-workload { … }                      // how sessions arrive and turns evolve
-session { … }                         // what every session does
-share maxmin;                       // or bottleneck: how a run over several stages divides them
-run { horizon …; warmup …; seed …; arrivals …; }
-gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
-claim NAME: every iteration of E (demand < B || tokens == B);   // checked on the run; also `some iteration of`, `at end`
+  pool NAME [ '[' N ']' ] { … }       // a counted resource
+  stage NAME [ '[' N ']' ] : kind;    // where time passes
+
+  workload { …  }  // arrivals, turns and client actions
+  server { … }                       // what one request runs
+  share maxmin;                       // or bottleneck: how a run over several stages divides them
+  gauge NAME = expr;                  // a time average of the state: max k in N (used(kv[k]))
+  claim NAME: every iteration of E (demand < B || tokens == B);   // checked on the run; also `some iteration of`, `at end`
+}
 ```
 
 ## Pools
@@ -29,9 +33,10 @@ pool kv {
   cap 160000;                 // capacity in units (default: inf)
   block 16;                   // allocate and cache in blocks
   evict lru;                  // or: evict by (k1, k2, …)  ascending
-  preempt lifo;               // or: preempt none          what a failed grow does
+  preempt lifo;               // or: preempt none | preempt by (k1, …) [requeue tail]   whom a failed grow preempts
   queue fifo;                 // or: queue by (k1, …)     keys reevaluated at selection
-  admit via engine;           // the queue is served by a step stage's scheduler
+  admit via vllm;             // a waiting hold is admitted by engine vllm's schedule
+  reserve held;               // a hold's unallocated reserve counts against later admissions
   spill tier via link (w) when (c);
 }
 ```
@@ -43,51 +48,59 @@ pool kv {
 | `fifo` / `fifo(c)` | `c` servers, one job each at rate 1, arrival order |
 | `ps(φ)` | processor sharing: throughput `φ`, which may read `present` (jobs present), split equally |
 | `delay` | infinite servers — every job at rate 1, no waiting |
-| `step { … }` | an iterating engine (continuous batching) |
+
+An iterating engine (continuous batching) is an `engine` on a `device`:
 
 ```serq
-stage engine : step {
-  budget B;                   // tokens per iteration
-  cost <expr>;                // clock time per iteration (1: the step clock)
-  chunk C;                    // cap on one request's prefill chunk (0: none)
-  serve by (remaining);       // admission (default) | by (keys…) | decode first | exclusive prefill
-                              // | only (p) [order]: serve the residents where p holds
-  memory kv;                  // the pool that gives kv_decode / kv_prefill
+device gpu { kv cap K; }          // what the hardware offers
+engine llm on gpu {
+  reqs cap S;                     // running slots (max_num_seqs)
+  tokens cap B;                   // tokens per iteration (max_num_batched_tokens)
+  granule G;                      // a prefill gets all it has left or a multiple of G (inf: whole or nothing)
+  schedule {
+    advance running by (remaining) each at most (C);   // admission (default) | by (keys…) | decode first; only (p)
+    admit waiting while (running.preempted == 0) each at most (C);
+  }                               // or: exclusive prefill; admit waiting …
+  execute (<expr>);               // clock time per iteration, in batch.tokens, … (1: the step clock)
 }
+pool kv on gpu { … }              // the engine's memory, admitted as soon as it fits
+pool reqs on llm { … }            // its slots, admitted by the engine (`on llm.gpu` for memory it admits)
 ```
 
 ## Statements
 
 ```serq
-turn;                              // draw the next turn's attributes
-request;                           // workload session: run the anonymous server block
-request gw;                        // workload session: run the named gateway's route
+turn;                              // draw attributes and wait for the response
+while (more) { … }                 // continue while the condition holds
+// server { gw.route(); }          // select a gateway outside the workload
+Size items = expr;                 // workload request quantity
+Cost duration = cost(svc, expr);    // scalar stage cost
+Cost processing = { mem: expr, svc: expr }; // independent resource costs
+hold mem(processing.mem) { run svc(processing.svc); }
 set x = expr;                      // a session attribute
 observe name = expr;               // record a sample
 
-hold P (u) [reserve (r)] [, Q (v)]* [reuse (ρ)]
-     [at admission (name = e, …)]      // names for the header, read at admission; the body sees them
+hold P (cost(P, u)) [reserve (r)] [, Q (v)]* [reuse (cost(P, ρ))]
+     [at admission (name = e, …)]      // names evaluated at admission; body access is restricted
      { … } [cache (ℓ)] [lease P (t)];   // lease: P's units outlive the scope until released, t seconds, or the end
-grow P (d);                        // enlarge the innermost hold
+grow P (cost(P, d));                        // enlarge the innermost hold
 drop P;                            // discard the own cached prefix
 release P;                         // give the enclosing hold's units of P back now, or end a lease of P
-load P (n);                        // the KV of n tokens arrived: computed position += n
+load P (cost(P, n));                        // the KV of n tokens arrived: computed position += n
 
 run S [prefill|decode] (w) [growing P];
-run S, T (w);                      // one job holding ps stages S and T at once, at the rate share gives
+run S, T (cost(S, T, w));                      // one job holding ps stages S and T at once, at the rate share gives
 
 // the serving vocabulary: the same statements, named by the request lifecycle
-prefill W;  decode W;  tool Z;     // run on the stage of that name: W is
-                                   // time on a fifo/ps/delay stage (seconds)
-prefill T;  decode T;              // on a step engine: T is tokens, the budget's unit
+tool Z;                            // run on the stage `tool`: Z is time (seconds)
 transfer (X) from P to Q (n);      // run link (X); load Q (n); release P
-transfer on S, T (X) from P to Q (n);   // the read holds the sender's link and the receiver's
-prefill[j] W;  prefill on P (W);   // an instance of an array; an explicit stage
+transfer on S, T (X) from P to Q (n);   // uses both links for the transfer
+tool[j] Z;  tool on S (Z);         // an instance of an array; an explicit stage
 
 branch (e) { … } [else { … }]      // a test: e is 0 or 1
 branch with (p) { … } [else { … }] // a draw: with probability p
 loop { … }
-choose j in n by (k1, …);          // j := argmin over 0..n, keys in order
+choose j in n by (k1, …);          // least key over indices 0 through n-1
 end;
 ```
 
@@ -108,19 +121,14 @@ Arithmetic, comparisons (0/1), `&&`, `||`, `!`, `c ? a : b`.
 | `est_lambda(s)` `est_rho(s)` `est_wait(s)` | `cachedin(p)` `holders(p)` `queued(p)` | |
 | `price(s, s_hit, ds)` | `blocksize(p)` (folded) | |
 
-**Context variables**
-
-| Where | Names |
-|---|---|
-| anywhere | `now` |
-| eviction keys, spill predicates | `size` `age` `last` `waiting` |
-| `ps` capacity | `present` |
-| `step` budget and chunk | `residents` `decoders` `kv_decode` `kv_prefill` (the residents, before the iteration) |
-| `step` cost | `tokens` `decoders` `prefilled` `residents` `kv_decode` `kv_prefill` `attention` |
-| `step` `serve by` keys and `serve only` | `decoding` `admission` `remaining` (per resident), and `residents` `decoders` `kv_decode` `kv_prefill` |
+[Context variables](../api/context.md) depend on the evaluation moment:
+`waited` in queue keys, `size` and `age` in eviction keys, `present` in `ps`
+capacity, `tokens` in step cost, and `decoding` in serve and preemption keys.
+`now` is the clock, but is forbidden in gauges, `given`, `only` predicates
+and iteration guards.
 
 **Built-in session attributes** `serial` `turn_no` `cached` `computed` (what a
-preempted hold had computed; 0 otherwise), and with a trace `new` `out`
+preempted hold had computed; 0 initially and after the hold completes), and with a trace `new` `out`
 `think` `more` `forced`.
 
 ## Workload
@@ -146,4 +154,3 @@ workload {
 5. **Cached units never block an admission**; they are evicted to make room.
 6. **`end` keeps the session's cached prefixes.** Write `drop P;` first if you
    want them gone.
-7. **`allocated + cached ≤ cap`** holds in every reachable configuration.

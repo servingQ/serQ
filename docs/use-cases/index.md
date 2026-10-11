@@ -1,6 +1,6 @@
 # Use cases
 
-Serving systems, workloads and scheduling papers written as serQ programs, in two kinds: programs whose runs are the point, and programs whose claims are also proved.
+Examples of serving deployments, workloads and scheduling policies, with simulation results and formal verification where available.
 
 ## Simulation
 
@@ -14,15 +14,13 @@ the program, what the runs show, and what the program leaves out.
 | [Input shapes and padding](input-shapes.md) | How scheduler output becomes compiled device inputs, per vendor |
 | [Different workloads](workloads.md) | One engine under single-turn, chat and subagent traffic |
 | [Prefill/decode over NIXL](pd.md) | llm-d's prefill/decode disaggregation with the KV transfer |
-| [FasterTransformer](fastertransformer.md) | Decode first, no mixed batching (`serve only`), unstable where Sarathi is stable |
+| [FasterTransformer](fastertransformer.md) | Decode-only batches and their queueing cost (`only`) |
 
 ## Formal verification
 
-A scheduling paper's serving system as a program, the paper's propositions as
-`claim`s of it, and the Lean proof of the claims about every path of the
-program. Each page follows one shape: the paper, its contributions, the
-serving system it assumes, that system as a serQ program, the propositions,
-the claims, and the proof.
+Each example states its model assumptions, expresses properties as program
+claims and identifies the Lean proofs. The pages distinguish pathwise
+claims from stochastic results and list the assumptions each proof needs.
 
 | Page | What it proves |
 |---|---|
@@ -32,34 +30,22 @@ the claims, and the proof.
 
 ## Vendor plugins
 
-vLLM is the baseline the plugins are compared against. The vendor pages examine the latest version tags checked on **2026-09-30**, including release candidates and alpha tags. They cover **full attention only** and distinguish the plugin version from its upstream vLLM dependency. Features from development branches or older schedulers are not mixed into the comparison.
-
-The examples were verified with IR v9. They are reduced specifications, not vendor scheduler oracles. Their capacities and cost constants are illustrative, not hardware measurements.
+The vendor examples model selected **full-attention** scheduling rules.
+Their capacities and costs are illustrative. They have been run in serQ,
+without vendor SDKs, hardware or differential scheduler tests. The
+[vLLM oracle corpus](../language.md#7-vllm-v1-as-a-serq-program) uses a
+separate pinned reference and does not validate these plugin versions.
 
 ### Version basis
 
-| Repository | Latest version tag | Upstream vLLM basis | Evidence |
+| Repository | Source version | Upstream vLLM basis | Evidence |
 |---|---|---|---|
 | vLLM | `v0.31.0rc2` (RC) | Same tag | [Tag](https://github.com/vllm-project/vllm/tree/v0.31.0rc2) |
 | vllm-ascend | `v0.27.1rc1` (RC) | `v0.27.1` | [Release](https://github.com/vllm-project/vllm-ascend/releases/tag/v0.27.1rc1) |
 | vllm-rbln | `v0.11.3a21` (alpha) | `0.26.0+cpu` | [Dependency](https://github.com/rebellions-sw/vllm-rbln/blob/v0.11.3a21/pyproject.toml#L41) |
 
-### Vendor models
-
-| Repository | Tagged implementation features | Executable serQ model | Remaining refinement |
-|---|---|---|---|
-| [vLLM](vllm.md) | Token budget, prefix lookup, priority/FCFS preemption, deferred free | Existing synchronous engine and request library | Content-key sharing, priority victims, asynchronous scheduling |
-| [vllm-ascend](ascend.md) | Short-request classes and aging, job predictors, offload/recompute routing | FCFS classes with selection-time aging | Shared policy history, priority lanes, connector failure |
-| [vllm-rbln](rbln.md) | Native phase isolation, PP decode caps, sub-block prefix copy | Whole-batch phase isolation and full-sequence admission gate | PP/remote-KV guards, copy references and cache units |
-
-### Device input constraints
-
-[Input shapes and padding](input-shapes.md) follows scheduler output into
-runner inputs: compiled buckets, token/request padding, uniform query
-lengths and dummy metadata. Each vendor
-page now includes the specific tagged path. Real progress and padded device
-work must not be conflated. **Padding/shape IR extensions are deferred**;
-the audit is retained as source research, not an implementation commitment.
+For compiled buckets and dummy tokens, see [Input shapes and padding](input-shapes.md).
+The individual pages describe each model's rules and limitations.
 
 ### Run an example
 
@@ -71,12 +57,3 @@ cargo run --release -- run examples/vendors/rbln.sq --json
 ```
 
 Replace `rbln` with `ascend`. Both use a finite batch of six requests and observe completed responses. The pages include these files directly, and the regular check gate links and draws them.
-
-### What has been verified
-
-The pages separate tagged-source findings, executable approximations, remaining gaps and proposed oracle scenarios. The examples have been checked and run. Vendor SDKs and hardware were not exercised, and no vendor differential tests were run. The existing [vLLM oracle corpus](../language.md#7-vllm-v1-as-a-serq-program) does not validate these vendor tags.
-
-Each vendor page records the limitations of its executable example.
-The [waiting-selection design](../design/waiting-selection.md) describes the
-implemented FCFS class precedence and aging in IR v9. The vendor documentation
-adds no language semantics.

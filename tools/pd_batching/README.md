@@ -100,8 +100,11 @@ the report's: the gaps between a request's successive tokens.
 
 One change to the baseline at a time, prompts of 2000 tokens; the last
 table of `summary.md`. A policy or a family's size is a line of the
-program, which `sweep.py` edits in a copy (`serve exclusive prefill;`
-deleted, `let NP = 2;`) and records in `results.csv`; the rest are `--set`.
+program, which `sweep.py` edits in a copy (`exclusive prefill` read as
+`advance running`, `let NP = 2;`) and records in `results.csv`; the rest are `--set`.
+The committed `results.csv` and `summary.md` record the edit as it was
+written before the engines were (#422): deleting `serve exclusive
+prefill;`, which has the IR of the edit above.
 
 - **Mixed batches help the colocated engines only when a decode step is
   long.** Without exclusive steps a decode rides in the step of a whole

@@ -1,0 +1,18 @@
+// Only main constructs an executable deployment. The library supplies inputs.
+use "std/args";
+
+let seconds_per_unit = 1;
+def service_time(units) { units * seconds_per_unit }
+
+fn main() {
+  let requests = args.number("requests", 2);
+  let units = args.number("service", 3);
+
+  stage worker : delay;
+  workload { arrive batch(requests); }
+  server {
+    run worker (cost(worker, service_time(units)));
+    observe elapsed = now;
+  }
+
+}

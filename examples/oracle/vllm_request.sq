@@ -3,42 +3,58 @@
 // of the Lean theorems about it (lean/Serq/Oracle.lean).
 // The constants are a scenario's engine; the requests are the workload
 // instance, given as explicit sessions in the IR (prompt, o, arrive).
-let bs = 16;           // block_size
-let B = 1024;          // max_num_batched_tokens
-let blocks = 999;      // num_gpu_blocks less the null block
-let max_seqs = 16;     // max_num_seqs
-let chunk = 0;         // long_prefill_token_threshold (0: none)
+use "std/args";
 
-pool reqs { cap max_seqs; admit via engine; }
-pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-stage engine : step { budget B; chunk chunk; cost 1; memory kv; }
-stage gate : delay;
+fn main() {
+  let bs = args.number("bs", 16);           // block_size
+  let B = args.number("B", 1024);          // max_num_batched_tokens
+  let blocks = args.number("blocks", 999);      // num_gpu_blocks less the null block
+  let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
+  let chunk = args.number("chunk", inf);       // long_prefill_token_threshold (inf: none)
 
-workload {
-  arrive batch(1);
-  hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
-  init { set prompt = 1; set o = 1; set arrive = 0; }
-  session { run gate (arrive); request; end; }
-}
-
-server {
-  // the scheduler admits with the blocks of the chunk the budget the
-  // running requests leave allows, if the whole sequence fits
-  // (scheduler_reserve_full_isl: `request.num_tokens`, prompt and generated
-  // tokens, kv_cache_manager.py:515-531), and grows from there.
-  // A preempted request keeps its generated tokens and only its computed KV
-  // is dropped (scheduler.py:1560-1561): re-executed, the server recomputes
-  // every token it has (`known`: the prompt, or the position it had reached
-  // plus the token sampled there) and generates only what is left
-  hold reqs (1), kv (min(known, budget_left(engine))) reserve (known)
-       at admission (known = computed < prompt ? prompt : computed + 1) {
-    prefill (known) growing kv;
-    // the first token is sampled when the prompt is computed; a resumed
-    // request's prefill recomputes tokens it had already produced
-    branch (known == prompt) { observe first = now; }
-    decode (o - 1 - (known - prompt)) growing kv;
+  device gpu { kv cap blocks * bs; }
+  engine vllm on gpu {
+    reqs cap max_seqs;
+    tokens cap B;
+    schedule {
+      // long_prefill_token_threshold binds only while another request is
+      // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
+      let threshold = running.count + waiting.count > 1 ? chunk : inf;
+      advance running each at most (threshold);
+      admit waiting while (running.preempted == 0) each at most (threshold);
+    }
+    execute (1);
   }
-  observe done = now;
-}
+  pool reqs on vllm { queue fifo; }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
+  stage gate : delay;
 
-run { horizon 100000; }
+  workload {
+    arrive batch(1);
+    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    init { set prompt = 1; set o = 1; set arrive = 0; }
+    session { run gate (cost(gate, arrive)); turn; }
+  }
+
+  server {
+    // the scheduler admits with the blocks of the chunk the budget the
+    // running requests leave allows, if the whole sequence fits
+    // (scheduler_reserve_full_isl: `request.num_tokens`, prompt and generated
+    // tokens, kv_cache_manager.py:515-531), and grows from there.
+    // A preempted request keeps its generated tokens and only its computed KV
+    // is dropped (scheduler.py:1560-1561): re-executed, the server recomputes
+    // every token it has (`known`: the prompt, or the position it had reached
+    // plus the token sampled there) and generates only what is left
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(vllm)))) reserve (cost(kv, known))
+         at admission (known = computed < prompt ? prompt : computed + 1) {
+      run vllm prefill (cost(vllm, known)) growing kv;
+      // the first token is sampled when the prompt is computed; a resumed
+      // request's prefill recomputes tokens it had already produced
+      branch (known == prompt) { observe first = now; }
+      run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
+    }
+    observe done = now;
+  }
+
+
+}

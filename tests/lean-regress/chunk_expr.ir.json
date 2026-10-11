@@ -1,0 +1,357 @@
+{
+ "arrival": {
+  "Sessions": [
+   {
+    "attrs": [
+     [
+      9,
+      40.0
+     ],
+     [
+      10,
+      4.0
+     ]
+    ],
+    "turns": []
+   },
+   {
+    "attrs": [
+     [
+      9,
+      40.0
+     ],
+     [
+      10,
+      6.0
+     ]
+    ],
+    "turns": []
+   },
+   {
+    "attrs": [
+     [
+      9,
+      40.0
+     ],
+     [
+      10,
+      2.0
+     ]
+    ],
+    "turns": []
+   }
+  ]
+ },
+ "attr_types": [
+  "Value",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Value",
+  "Size",
+  "Size"
+ ],
+ "attrs": [
+  "cached",
+  "serial",
+  "turn_no",
+  "new",
+  "out",
+  "think",
+  "more",
+  "forced",
+  "computed",
+  "p",
+  "o"
+ ],
+ "blocks": [
+  [
+   {
+    "Set": [
+     9,
+     {
+      "Num": 0.0
+     }
+    ]
+   },
+   {
+    "Set": [
+     10,
+     {
+      "Num": 0.0
+     }
+    ]
+   }
+  ],
+  [],
+  [
+   "Turn",
+   {
+    "Hold": {
+     "body": 3,
+     "cache": null,
+     "lease": null,
+     "pools": [
+      [
+       {
+        "base": 1,
+        "count": 1,
+        "index": null
+       },
+       {
+        "Cost": [
+         {
+          "Pool": {
+           "base": 1,
+           "count": 1
+          }
+         },
+         {
+          "Num": 1.0
+         }
+        ]
+       },
+       null
+      ],
+      [
+       {
+        "base": 0,
+        "count": 1,
+        "index": null
+       },
+       {
+        "Cost": [
+         {
+          "Pool": {
+           "base": 0,
+           "count": 1
+          }
+         },
+         {
+          "Attr": 9
+         }
+        ]
+       },
+       null
+      ]
+     ],
+     "reuse": null
+    }
+   },
+   "End"
+  ],
+  [
+   {
+    "Run": {
+     "growing": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     },
+     "mode": "Prefill",
+     "stage": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     },
+     "work": {
+      "Cost": [
+       {
+        "Stage": {
+         "base": 0,
+         "count": 1
+        }
+       },
+       {
+        "Attr": 9
+       }
+      ]
+     }
+    }
+   },
+   {
+    "Observe": [
+     0,
+     {
+      "Ctx": "Now"
+     }
+    ]
+   },
+   {
+    "Run": {
+     "growing": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     },
+     "mode": "Decode",
+     "stage": {
+      "base": 0,
+      "count": 1,
+      "index": null
+     },
+     "work": {
+      "Cost": [
+       {
+        "Stage": {
+         "base": 0,
+         "count": 1
+        }
+       },
+       {
+        "Attr": 10
+       }
+      ]
+     }
+    }
+   },
+   {
+    "Observe": [
+     1,
+     {
+      "Ctx": "Now"
+     }
+    ]
+   }
+  ]
+ ],
+ "hidden": [],
+ "horizon": 1000.0,
+ "init": 0,
+ "observes": [
+  "first",
+  "done"
+ ],
+ "pools": [
+  {
+   "admit_via": null,
+   "block": 16.0,
+   "cap": 160.0,
+   "evict": "Lru",
+   "name": "kv",
+   "preempt": {
+    "By": {
+     "keys": [
+      {
+       "Unary": [
+        "Neg",
+        {
+         "Ctx": "Admission"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "queue": null,
+   "spill": null
+  },
+  {
+   "admit_via": 0,
+   "block": null,
+   "cap": 2.0,
+   "evict": "Lru",
+   "name": "slots",
+   "preempt": "None",
+   "queue": null,
+   "spill": null
+  }
+ ],
+ "seed": 1,
+ "session": 2,
+ "sides": [
+  [
+   "Workload",
+   "Workload"
+  ],
+  [],
+  [
+   "Workload",
+   "Server",
+   "Workload"
+  ],
+  [
+   "Server",
+   "Server",
+   "Server",
+   "Server"
+  ]
+ ],
+ "slot_cached": 0,
+ "slot_computed": 8,
+ "slot_forced": 7,
+ "slot_more": 6,
+ "slot_new": 3,
+ "slot_out": 4,
+ "slot_serial": 1,
+ "slot_think": 5,
+ "slot_turn": 2,
+ "stages": [
+  {
+   "kind": {
+    "Step": {
+     "budget": {
+      "Num": 32.0
+     },
+     "chunk": {
+      "Cond": [
+       {
+        "Binary": [
+         "Gt",
+         {
+          "Binary": [
+           "Add",
+           {
+            "Call": [
+             "Queued",
+             [
+              {
+               "Pool": {
+                "base": 1,
+                "count": 1,
+                "index": null
+               }
+              }
+             ]
+            ]
+           },
+           {
+            "Ctx": "Nres"
+           }
+          ]
+         },
+         {
+          "Num": 2.0
+         }
+        ]
+       },
+       {
+        "Num": 8.0
+       },
+       {
+        "Num": 0.0
+       }
+      ]
+     },
+     "cost": {
+      "Num": 1.0
+     },
+     "memory": 0,
+     "serve": {
+      "By": []
+     }
+    }
+   },
+   "name": "llm"
+  }
+ ],
+ "trace": null,
+ "trace_ordered": false,
+ "turn": 1,
+ "version": 13,
+ "warmup": 0.0
+}

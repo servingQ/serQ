@@ -5,25 +5,33 @@
 // hold with `computed` at the position it had reached (`resumed`). The Lean
 // semantics must give the interpreter's answer (lean/Serq/Regress.lean,
 // generated from this program's IR and `serq run`'s output; README.md).
-pool kv { cap 48; block 16; evict lru; preempt lifo; }
-pool slots { cap 4; admit via engine; }
-stage engine : step { budget 64; cost 1; memory kv; }
-stage tool : delay;
-
-workload {
-  arrive batch(2);
-  init { set d = 0; }
-}
-
-session {
-  hold slots (1), kv (16) {
-    observe resumed = computed;
-    run engine prefill (16) growing kv;
-    run tool (d);
-    run engine decode (20) growing kv;
-    observe done = now;
+fn main() {
+  device gpu { kv cap 48; }
+  engine llm on gpu {
+    slots cap 4;
+    tokens cap 64;
+    schedule { advance running; admit waiting while (running.preempted == 0); }
+    execute (1);
   }
-  end;
-}
+  pool kv on gpu { block 16; evict lru; preempt lifo; }
+  pool slots on llm { }
+  stage tool : delay;
 
-run { horizon 1000; }
+  workload {
+    arrive batch(2);
+    init { set d = 0; }
+
+  }
+
+  server {
+    hold slots (cost(slots, 1)), kv (cost(kv, 16)) {
+      observe resumed = computed;
+      run llm prefill (cost(llm, 16)) growing kv;
+      run tool (cost(tool, d));
+      run llm decode (cost(llm, 20)) growing kv;
+      observe done = now;
+    }
+  }
+
+
+}

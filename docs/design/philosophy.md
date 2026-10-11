@@ -16,9 +16,8 @@ where the stochastic process algebras (PEPA, Modest) are. "Commands take no
 time and only flow does" is then the computational rule that separates
 instantaneous from timed transitions.
 
-**`hold` is the archetype.** Folding admit and free into one scope turned the
-memory invariant from something to check into something that cannot be
-violated, the same move as RAII and the scoped ownership of separation
+**`hold` is the archetype.** Folding admit and free into one scope makes
+release automatic, as in RAII and the scoped ownership of separation
 logic. The question for a new IR node is: which property does this node
 guarantee structurally? Without an answer it stays sugar.
 

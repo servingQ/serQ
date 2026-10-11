@@ -9,6 +9,7 @@
 //          2 least loaded, fetch over the link when cheaper than a recompute
 //          3 myopic: min_j W_j + S_j
 //          4 lookahead: min_j W_j + S_j with migrate-or-recompute off home
+
 let J = 4;
 let rate = 0.9;      // sessions per second
 let hot = 0.5;
@@ -23,79 +24,81 @@ let bw = 2e6;        // migration link, tokens/s
 let dv = 0.0;        // decode KV-read cost, seconds/token^2
 
 // the laws, by name (`--def new_tokens='~erlang(2, 500)'`)
-def initial_tokens() = ~uniform(5000, 15000);
-def new_tokens() = ~exp(500);
-def output_tokens() = ~exp(200);
-def tool_time() = ~exp(Z);
+def initial_tokens() { ~uniform(5000, 15000) }
+def new_tokens() { ~exp(500) }
+def output_tokens() { ~exp(200) }
+def tool_time() { ~exp(Z) }
 
-stage rep[4] : fifo;
-stage link : fifo;
-stage tool : delay;
+fn main() {
+  stage rep[4] : fifo;
+  stage link : fifo;
+  stage tool : delay;
 
-workload {
-  arrive poisson(rate);
-  init {
-    set home = ~bernoulli(hot) ? 0 : floor(~uniform(0, J));
-    set K = 0;
-    set first = 1;
-  }
-  turn {
-    set n = first ? initial_tokens() : new_tokens();
-    set o = output_tokens();
-  }
-  // the conversation: a request per turn, then a tool call or the end
-  session {
-    loop {
-      turn;
-      request;
-      set first = 0;
-      set K = K + n + o;
-      branch with (p) { run tool (tool_time()); } else { end; }
+  workload {
+    arrive poisson(rate);
+    init {
+      set initial_home = ~bernoulli(hot) ? 0 : floor(~uniform(0, J));
+      set K = 0;
+      set first = 1;
+    }
+    turn {
+      set n = first ? initial_tokens() : new_tokens();
+      set o = output_tokens();
+    }
+    // the conversation: a request per turn, then a tool call or the end
+    session {
+      loop {
+        turn;
+        set first = 0;
+        set K = K + n + o;
+        branch with (p) { run tool (cost(tool, tool_time())); } else { end; }
+      }
     }
   }
+
+  // the router and the replicas: where a turn is served, and the KV's new home
+  server {
+    set t0 = now;
+    set hit = s0 + a * n + b * n * (K + n / 2) + o * (d + dv * (K + n));
+    set miss = s0 + a * (K + n) + b * (K + n) * (K + n) / 2 + o * (d + dv * (K + n));
+    set mig = work(link) + K / bw;
+    set mv = 0;
+    branch (first) {
+      set home = initial_home;
+      set j = home;
+      set S = miss;
+    } else {
+      branch (policy == 0) { set j = home; set S = hit; }
+      branch (policy == 1) {
+        choose j in J by (work(rep[j]));
+        set S = j == home ? hit : miss;
+      }
+      branch (policy == 2) {
+        choose j in J by (work(rep[j]));
+        set mv = j != home && mig < miss - hit;
+        set S = (j == home || mv) ? hit : miss;
+      }
+      branch (policy == 3) {
+        choose j in J by (work(rep[j]) + (j == home ? hit : miss));
+        set S = j == home ? hit : miss;
+      }
+      branch (policy == 4) {
+        choose j in J by (j == home ? work(rep[j]) + hit
+                                    : min(max(work(rep[j]), mig) + hit, work(rep[j]) + miss));
+        set mv = j != home && max(work(rep[j]), mig) + hit < work(rep[j]) + miss;
+        set S = (j == home || mv) ? hit : miss;
+      }
+    }
+    branch (mv) { run link (cost(link, K / bw)); observe migration = 1; }
+    run rep[j] (cost(rep, S));
+    set home = j;
+    branch (!first) {
+      observe response = now - t0;
+      observe hit = S == hit;
+      observe context = K;
+    }
+    observe service = S;
+  }
+
+
 }
-
-// the router and the replicas: where a turn is served, and the KV's new home
-server {
-  set t0 = now;
-  set hit = s0 + a * n + b * n * (K + n / 2) + o * (d + dv * (K + n));
-  set miss = s0 + a * (K + n) + b * (K + n) * (K + n) / 2 + o * (d + dv * (K + n));
-  set mig = work(link) + K / bw;
-  set mv = 0;
-  branch (first) {
-    set j = home;
-    set S = miss;
-  } else {
-    branch (policy == 0) { set j = home; set S = hit; }
-    branch (policy == 1) {
-      choose j in J by (work(rep[j]));
-      set S = j == home ? hit : miss;
-    }
-    branch (policy == 2) {
-      choose j in J by (work(rep[j]));
-      set mv = j != home && mig < miss - hit;
-      set S = (j == home || mv) ? hit : miss;
-    }
-    branch (policy == 3) {
-      choose j in J by (work(rep[j]) + (j == home ? hit : miss));
-      set S = j == home ? hit : miss;
-    }
-    branch (policy == 4) {
-      choose j in J by (j == home ? work(rep[j]) + hit
-                                  : min(max(work(rep[j]), mig) + hit, work(rep[j]) + miss));
-      set mv = j != home && max(work(rep[j]), mig) + hit < work(rep[j]) + miss;
-      set S = (j == home || mv) ? hit : miss;
-    }
-  }
-  branch (mv) { run link (K / bw); observe migration = 1; }
-  run rep[j] (S);
-  set home = j;
-  branch (!first) {
-    observe response = now - t0;
-    observe hitrate = S == hit;
-    observe context = K;
-  }
-  observe service = S;
-}
-
-run { horizon 10500; warmup 500; seed 1; }

@@ -10,6 +10,8 @@
 //! of serving-queue-theory is generated from the same IR file.
 //! `SERQ_BLESS=1` rewrites the IR file (`make oracle-ir`).
 
+mod common;
+
 use std::path::Path;
 
 use serq::frontend::parser;
@@ -23,7 +25,7 @@ fn dir() -> std::path::PathBuf {
 fn cache_ir() -> Program {
     let mut ov = Overrides {
         trace: Some(dir().join("cache_trace.csv").display().to_string()),
-        ..Default::default()
+        ..common::horizon(6000.0)
     };
     for (k, v) in [
         ("N", "3"),
@@ -43,7 +45,7 @@ fn cache_ir() -> Program {
             .push((k.to_string(), parser::parse_expr(v).unwrap()));
     }
     let src = std::fs::read_to_string(program_path("vllm_replay")).unwrap();
-    let p = serq::compile_source(&src, &ov).unwrap();
+    let p = serq::compile_source(&common::main_source(&src), &ov).unwrap();
     inline_trace(p, None).unwrap()
 }
 
@@ -81,7 +83,7 @@ fn cache_trace_matches_the_real_scheduler() {
     let (sent, ttft, lat, cached) = (
         get("sent"),
         get("ttft"),
-        get("latency"),
+        get("response"),
         get("cached_tokens"),
     );
     let want = std::fs::read_to_string(dir().join("cache_trace.out.csv")).unwrap();

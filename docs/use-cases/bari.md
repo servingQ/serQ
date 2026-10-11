@@ -1,17 +1,10 @@
 # RAD: optimal tiling (Bari et al.)
 
-Bari, Hegde, de Veciana, *Optimal Scheduling Algorithms for LLM Inference: Theory and Practice* ([arXiv 2508.01002](https://arxiv.org/abs/2508.01002), POMACS 9(3), SIGMETRICS 2026). This page writes the paper's inference node running its scheduler RAD as a serQ program, states two of its propositions as claims, and proves them in Lean about the program's paths. Issue #260.
+Bari, Hegde, de Veciana, *Optimal Scheduling Algorithms for LLM Inference: Theory and Practice* ([arXiv 2508.01002](https://arxiv.org/abs/2508.01002), POMACS 9(3), SIGMETRICS 2026). This page writes the paper's inference node running its scheduler RAD as a serQ program, states two of its propositions as claims, and proves them in Lean about the program's paths.
 
 ## The paper
 
 The paper models a GPU's batch time from how matrix multiplications are tiled. A batch of $n$ tokens passes over $\lceil n/b_{col}\rceil$ output tiles of the linear layers, plus non-linear operations per token and attention terms, its equation (7). A batch whose token count is not a multiple of the tile wastes the rest of the last tile. The paper asks which planner (routing across nodes) and which scheduler (batching on a node) reach the highest request rate the hardware carries.
-
-## Key contributions
-
-- **An upper bound for every planner and scheduler** (Theorem 1): with $\bar d_a$ the expected time a request needs under optimal tiling, a load $\lambda \bar d_a > g$ on $g$ nodes diverges.
-- **Two design principles**: *optimal tiling* (batches that fill whole tiles) and *dynamic resource allocation* (splitting a node's time between prefill and decode as the traffic needs).
-- **RAD** (Algorithm 1), a scheduler that follows both, and Theorem 2: with a uniformly random planner, RAD is stable (positive-recurrent) below the bound of Theorem 1.
-- **SLAI**, a heuristic for latency targets, evaluated on traces.
 
 ## The serving system it assumes
 
@@ -30,9 +23,9 @@ The paper models a GPU's batch time from how matrix multiplications are tiled. A
 | Paper | serQ |
 |---|---|
 | tiles $b_{col} = b_{row} = b_{red} = b_{lcm} = 128$ | `let bcol = 128;` |
-| batch time (7) without attention | `cost tlin * ceil(tokens / bcol) + tnl * tokens;` (µs) |
-| Prefill Mode: one chunk of $b_{lcm}$ of the oldest prefill | `budget bcol; chunk bcol;` with prefills served in admission order |
-| Decode Mode iff $\lvert D\rvert = b_{col}$ or $P = \emptyset$ | `serve only (decoders >= bcol \|\| decoders == residents ? decoding : !decoding);` |
+| batch time (7) without attention | `execute (tlin * ceil(batch.tokens / bcol) + tnl * batch.tokens);` (µs) |
+| Prefill Mode: one chunk of $b_{lcm}$ of the oldest prefill | `tokens cap bcol;` and `each at most (bcol)`, with prefills served in admission order |
+| Decode Mode iff $\lvert D\rvert = b_{col}$ or $P = \emptyset$ | `def in_mode() { running.decoding >= bcol \|\| running.decoding == running.count ? decoding : !decoding }`, read by `advance running only (in_mode())` and `admit waiting only (in_mode())` |
 | Assumption 3 | `set vp = bcol * floor(~uniform(1, vpmax + 1));` |
 | $N = \infty$ | no cycle counter |
 
@@ -40,8 +33,28 @@ A prefill completes only in Prefill Mode, which runs only while fewer than $b_{c
 
 ## The key propositions
 
-1. **Theorem 1.** Under any planner and scheduler, a node completes at most one token per $t_{Lin}/b_{col} + 1/c_{nLin}$ of time (the paper's $\bar d_a$ per request divides this by the request's tokens), so a load above it diverges.
-2. **Optimal tiling (§4.2).** With prompts a multiple of the tile (Assumption 3), every batch RAD schedules fills its tile, unless every request at the node decodes and fewer than $b_{col}$ of them do.
+Let $S(t)$ count tokens served before an iteration starting at time $t$.
+The program uses $b_{col}=128$, $t_{Lin}=4000$ µs per tile and
+$t_{nl}=5$ µs per token, omitting attention costs.
+
+!!! theorem "Theorem 1 — Per-node token-rate bound"
+    For any scheduler obeying the batch budget and tiled cost,
+
+    $$S(t)\,(t_{Lin}+t_{nl}b_{col}) \le b_{col}\,t.$$
+
+    Here the capacity bound is $128/4640$ tokens per µs. The claim is a
+    pathwise rate bound; divergence above capacity also depends on the
+    arrival process.
+
+!!! proposition "Optimal tiling — RAD with no cycle limit"
+    If every prompt length is a multiple of 128, each batch is a full
+    tile unless every resident is decoding:
+
+    $$\mathrm{tokens}=128
+      \quad\text{or}\quad \mathrm{decoders}=\mathrm{residents}.$$
+
+    In the exceptional case, fewer than 128 decoding residents can leave
+    the batch partially filled. The program uses $N=\infty$.
 
 ## The propositions in serQ
 
@@ -54,29 +67,76 @@ claim optimal_tiling given (vp == bcol * floor(vp / bcol)):
   every iteration of E (tokens == bcol || decoders == residents);
 ```
 
-`given` restricts the claim to workloads whose every request satisfies Assumption 3. The drawn prompt lengths are otherwise any natural numbers in the Lean statement. `decoders == residents` says the batch decoded every request at the node: no request was left to prefill.
+`given` restricts the claim to workloads whose every request satisfies Assumption 3. The drawn prompt lengths are otherwise any natural numbers in the Lean statement. `decoders == residents` says no resident was left to prefill.
 
 ## The proof in Lean
 
-The generated statement (`lean/Serq/Claims.lean`):
+`examples/papers/Bari.lean` proves both generated claims over every path in
+their workload families, with up to 500 sessions. Arrival times and output
+lengths range over natural numbers; `given` restricts prompt lengths to
+whole tiles. These pathwise statements do not assume a Poisson law.
 
-```lean
-def family_optimal_tiling (w : Workload) : Prop :=
-    w.init.length ≤ 500 ∧ w.turns = [] ∧ w.turnSlot = none ∧ w.computedSlot = some 8 ∧
-    ∀ i < w.init.length, (((w.attr i 10) = (128 * ((w.attr i 10) / 128))))
+The rate proof bounds each batch's tokens by its cost. The tiling proof
+maintains that every remaining prefill is a multiple of 128. In Prefill
+Mode, the oldest prefill supplies a full tile; in Decode Mode, the engine
+serves one token per decoding resident. A prefill can finish only while
+fewer than 128 requests decode, preserving the decoder-count bound.
 
-def optimal_tiling : Prop :=
-  EveryIteration deployment family_optimal_tiling prog fun r => ((r.stats.tokens = 128) ∨ (r.stats.decoders = r.residents))
-```
+### Random arrivals
 
-The arrival times are any natural numbers (the program's `poisson`), and the output lengths any. The proofs are in `lean/Serq/Papers/Bari.lean`.
+The stochastic proofs use separate Markov kernels. Their request types
+have prompt lengths from 128 to 1 024 in whole tiles and output lengths
+from 1 to 512. All files below are under `examples/papers/`.
 
-- **`token_rate`** is `Exec.served_rate` (as for Dai et al.), with `tiled_rate`: a batch of $b \le b_{col}$ tokens lasts $t_{Lin}\lceil b/b_{col}\rceil + t_{nl}\,b \ge b\,(t_{Lin}/b_{col} + t_{nl})$. Attention terms only lengthen a batch, so the bound holds with them too.
-- **`optimal_tiling`** uses `every_iteration_of` with an invariant `R` of the run. Every job at the engine has work left. A prefill's work is a multiple of 128: it starts at `vp`, and the program never sets `vp` (`RadOK`, read from the program through `Serq/Inv.lean`'s sub-program invariant). The jobs' owners are distinct and at the engine. An entry of the running batch is a full tile or a decode's token. The invariant is checked for each command a session can run (`rad_exec`), for settling an instant (`rad_settle`), and for the end of an iteration (`rad_handle`). There a prefill loses exactly one tile, so its work stays a multiple of 128. At an iteration's start, `assign_eq_fillIter_only` (`Serq/Work.lean`) says the batch is the greedy fill of the residents `serve only` admits, and `rad_batch` splits on the mode. In Decode Mode the batch is one token for each of up to 128 decodes: 128, or fewer when every resident decodes. In Prefill Mode it is one chunk of the oldest prefill, whose work is at least 128.
+!!! theorem "Theorem 2 — One node with a fixed slot-arrival distribution"
+    Let $L$ be the expected number of arriving tokens per slot, with the
+    slot's request list drawn from a finite distribution of these types.
+    If $L<128$, every reachable state of the job-list chain is positive
+    recurrent.
+
+    Proof: `BariRecurrent.lean`, `positive_recurrent`.
+
+A full batch changes backlog by arriving work minus 128 tokens. A partial
+batch has fewer than 128 decoding requests and no prefill, so its backlog
+is bounded. `BariStable.lean` uses the resulting negative drift to bound
+expected hitting times. `BariSim.lean` proves the one-step projection from
+the machine to the job list; `BariProgram.lean` bounds returns to an empty
+engine on the machine chain.
+
+!!! theorem "Theorem 2 — Uniform random routing across g nodes"
+    Suppose $g>0$, each arrival is routed independently and uniformly, and
+    all nodes advance one iteration per shared slot. If $L<128g$, each
+    node's reachable job-list states are positive recurrent.
+
+    If a slot also has positive probability of bringing **no requests**,
+    the joint machine chain returns to all engines empty in bounded
+    expected time, uniformly over empty starting machines.
+
+    Proof: `BariNodes.lean`, `positive_recurrent` and `return_idle`.
+
+The extra empty-slot assumption is required for the joint result. Capacity
+alone does not imply it when $g>1$. The construction uses synchronised
+slots and a finite arrival distribution, not asynchronous Poisson arrivals
+across nodes.
+
+For a single node with compound Poisson arrivals, `BariPoisson.lean` proves
+bounded expected return time to an empty engine under
+
+$$4640\,\lambda\,\mathbb{E}[v_p+v_d]<128,$$
+
+where $\lambda$ is the arrival rate per µs. This result concerns the
+machine chain, not recurrence of every state of a Poisson job-list chain.
 
 ## On the run
 
-`serq run`, seed 1, 100 s, at 20 and 30 requests per second:
+Run for 100 s with seed 1, at 20 and 30 requests per second:
+
+```bash
+serq run examples/papers/bari_rad.sq --horizon 100000000 --warmup 0 --seed 1
+serq run examples/papers/bari_rad.sq --horizon 100000000 --warmup 0 --seed 1 --set rate=0.00003
+```
+
+Claim-table excerpts, 20 requests/s first:
 
 ```
 claim           kind             result
@@ -94,7 +154,14 @@ Theorem 1's bound for this program is $128/4640$ tokens per µs. With a mean of 
 
 ## What it leaves out
 
-- **Theorem 2, RAD's stability.** Positive recurrence needs a Markov kernel of the program. Foster's criterion on such a kernel needs no path measure (`lean/Serq/Foster.lean`, `docs/design/stability.md`), and the step from `Exec` to the kernel is open (#305). RAD is not work-conserving in Dai et al.'s sense (Prefill Mode serves one chunk, Decode Mode leaves prefills waiting), so its drift is not the backlog's alone. The run is evidence, not proof.
-- **The cycle parameter $N$.** The program takes $N = \infty$. A finite $N$ ends a cycle by finishing the active requests, with batches that may not fill a tile, and the paper's tiling principle excepts them in the same way.
-- **Attention.** The cost omits (7)'s attention terms, whose coefficients are not integers in µs. The Lean fragment reads `attention` with even integer coefficients only.
-- **Several nodes.** The fragment has one engine. Theorem 1 for $g$ nodes is the sum of the per-node bound.
+- **Machine-state recurrence.** Clocks and ended sessions are retained, so
+  complete machine states do not repeat. The results concern job-list
+  states or returns to the empty-engine set.
+- **Finite cycles and SLAI.** The program uses RAD with $N=\infty$;
+  finite-cycle draining and the paper's SLAI latency heuristic are not
+  modelled here.
+- **Attention.** The program omits attention costs. The Lean fragment
+  accepts attention terms only with even integer coefficients.
+- **Multiple engines in serQ.** The executable fragment has one engine.
+  The multi-node planner and synchronised slots are defined in
+  `BariNodes.lean`, not in this `.sq` program.

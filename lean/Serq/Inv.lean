@@ -33,6 +33,8 @@ inductive Sub (P : Prog) : Prog → Prop
   | no {p a b k} : Sub P (.branch p a b k) → Sub P b
   | branchK {p a b k} : Sub P (.branch p a b k) → Sub P k
   | loopBody {b} : Sub P (.loop b) → Sub P b
+  | whileBody {p b k} : Sub P (.whileLoop p b k) → Sub P b
+  | whileK {p b k} : Sub P (.whileLoop p b k) → Sub P k
 
 /-- A frame of the stack holds sub-programs. -/
 def FrameOK (P : Prog) : Frame → Prop
@@ -254,6 +256,13 @@ theorem inv_exec {P : Prog} : ∀ (f : ℕ) (m : Machine) (i : ℕ), Inv P m →
         · rcases List.mem_cons.mp hg with rfl | hg
           · exact Sub.branchK (hp ▸ ho.1)
           · exact ho.2 g hg
+      · rename_i p body k hp
+        split
+        · refine inv_exec f _ i (h.upd' i _ fun ho => ⟨Sub.whileBody (hp ▸ ho.1), fun g hg => ?_⟩)
+          rcases List.mem_cons.mp hg with rfl | hg
+          · exact hp ▸ ho.1
+          · exact ho.2 g hg
+        · exact inv_exec f _ i (h.upd' i _ fun ho => ⟨Sub.whileK (hp ▸ ho.1), ho.2⟩)
       · rename_i body hp
         refine inv_exec f _ i (h.upd' i _ fun ho => ⟨Sub.loopBody (hp ▸ ho.1), fun g hg => ?_⟩)
         rcases List.mem_cons.mp hg with rfl | hg
@@ -292,7 +301,7 @@ theorem inv_settleLoop {P : Prog} : ∀ (f : ℕ) (m : Machine), Inv P m → Inv
   | f + 1, m, h => by
     unfold settleLoop
     simp only
-    have h1 := inv_admitAll D _ (inv_drain D 10000 m h)
+    have h1 := inv_admitAll D _ (inv_drain D (drainFuel m) m h)
     split
     · exact h1
     · exact inv_settleLoop f _ h1
@@ -346,7 +355,7 @@ theorem inv_unwind {P : Prog} (p v : ℕ) :
   | .hold hr k :: fs, m, hf, h => by
     unfold preemptVictim.unwind
     simp only
-    have h1 := h.of_skey (skey_release D m v hr)
+    have h1 := h.of_skey (skey_release D m v { hr with grown := true })
     split
     · exact inv_enqueue _ v true (Inv.upd' h1 v _ fun ho =>
         ⟨(hf _ List.mem_cons_self).1, fun f hf' => hf f (List.mem_cons_of_mem _ hf')⟩)
@@ -398,7 +407,7 @@ theorem inv_admitVia {P : Prog} (m : Machine) (left : ℕ) (h : Inv P m) : Inv P
   · exact h
   · split
     · split
-      · exact inv_drain D 10000 _ (inv_admit D _ _ _ (inv_setPool h _ _))
+      · exact inv_drain D _ _ (inv_admit D _ _ _ (inv_setPool h _ _))
       · exact h
     · exact h
 
@@ -458,7 +467,8 @@ theorem inv_startIteration {P : Prog} (m : Machine) (h : Inv P m) : Inv P (start
   unfold startIteration
   simp only
   split
-  · have h1 := inv_assign D m.preempts (m.jobs.length + 100000) { m with iter := [] } 0 D.budget h
+  · have h1 := inv_assign (iterDeployment D m) m.preempts (m.jobs.length + 100000)
+      { m with iter := [] } 0 D.budget h
     split
     · exact h1
     · exact h1
@@ -537,6 +547,7 @@ def Route.grows : Prog → Bool
   | .hold _ _ b _ k => Route.grows b || Route.grows k
   | .branch _ a b k => Route.grows a || Route.grows b || Route.grows k
   | .loop b => Route.grows b
+  | .whileLoop _ b k => Route.grows b || Route.grows k
 
 theorem grows_sub {P q : Prog} (h : Sub P q) (hg : Route.grows P = false) : Route.grows q = false := by
   induction h with
@@ -551,6 +562,8 @@ theorem grows_sub {P q : Prog} (h : Sub P q) (hg : Route.grows P = false) : Rout
   | no _ ih => simp [Route.grows] at ih; exact ih.1.2
   | branchK _ ih => simp [Route.grows] at ih; exact ih.2
   | loopBody _ ih => simpa [Route.grows] using ih
+  | whileBody _ ih => simp [Route.grows] at ih; exact ih.1
+  | whileK _ ih => simp [Route.grows] at ih; exact ih.2
 
 /-- A program without `growing` has no growing job. -/
 theorem jobs_not_growing {w : Workload} {P : Prog} {m : Machine} (hr : Reach D w P m)

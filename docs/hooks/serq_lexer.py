@@ -1,8 +1,8 @@
 """Register a Pygments lexer for serQ, so ```serq fences highlight.
 
-Four roles, four colours. A program's shape is `pool`/`stage`/`session`; what
-a session *does* is `hold`, `prefill`, `observe`; the knobs are `cap`,
-`evict`, `budget`; and what it *reads* is `cachedin`, `budget_left`, `now`.
+Four roles, four colours. A program's shape is `workload`/`session`/`server`; what
+a session *does* is `hold`, `run`, `observe`; the knobs are `cap`,
+`evict`, `preempt`; and what it *reads* is `cachedin`, `budget_left`, `now`.
 A reader should be able to tell those apart before reading a word, so each
 lands in a different colour group, and `~` gets its own because that is where
 the randomness enters. Arithmetic stays plain: it is how a program computes,
@@ -26,24 +26,30 @@ from pygments.lexers import _mapping
 from pygments.token import Comment, Keyword, Name, Number, Operator, Punctuation, String, Text
 
 # The blocks a program is made of.
-STRUCTURE = ("let", "def", "use", "pool", "stage", "workload", "session", "server", "run", "queue", "gateway", "link", "route", "pull", "gauge", "claim")
+STRUCTURE = ("fn", "let", "def", "use", "device", "engine", "pool", "stage", "workload", "session", "server", "queue", "gateway", "link", "route", "pull", "push", "gauge", "claim")
 
 # Statements, in the session and server blocks.
 STATEMENTS = (
-    "turn", "request", "set", "observe", "hold", "admit", "mark", "self", "grow", "drop", "release", "load", "lease", "from", "to", "branch", "with",
-    "loop", "choose", "end", "run", "reserve", "reuse", "cache",
+    "Size", "Cost", "turn", "request", "set", "observe", "hold", "admit", "mark", "self", "grow", "drop", "release", "load", "lease", "from", "to", "branch", "with",
+    "while", "loop", "fork", "join", "choose", "end", "run", "reserve", "reuse", "cache",
     "at", "admission", "growing", "on", "in", "by", "else", "sum",
     # the serving vocabulary: sugar over hold and run
     "prefill", "transfer", "decode", "tool",
 )
 
-# Pool and stage options, and workload forms.
+# Pool and stage options, workload forms, and the resource cost constructor.
 OPTIONS = (
-    "cap", "block", "evict", "lru", "preempt", "lifo", "none", "queue", "fifo",
-    "admit", "via", "spill", "when", "ps", "delay", "step", "budget", "cost",
-    "chunk", "serve", "latency", "nic", "exclusive", "first", "only", "memory", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden",
+    "cap", "block", "evict", "lru", "preempt", "lifo", "held", "requeue", "head", "tail", "none", "queue", "fifo",
+    "admit", "while", "state", "via", "spill", "when", "ps", "delay", "cost",
+    "granule", "serve", "latency", "nic", "exclusive", "first", "only", "arrive", "arrivals", "poisson", "renewal", "closed", "hidden",
     "batch", "trace", "ordered", "init", "horizon", "warmup", "seed",
     "share", "maxmin", "bottleneck",
+    # an engine's schedule and execution
+    "schedule", "advance", "each", "most", "execute",
+    # no program writes `stage : step` any more, but the parser still matches
+    # `step` to say an engine is written instead, and tests/docs_lexer.rs
+    # asks the lexer for every word the parser matches
+    "step",
     # a claim's forms
     "given", "every", "some", "iteration", "of",
 )

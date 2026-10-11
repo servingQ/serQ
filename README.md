@@ -2,9 +2,12 @@
 
 *pronounced "ser-Q" — **se**rving + **Q**ueue*
 
-A language in which an LLM serving deployment is a program: memory pools,
-stages, a workload and the policy every session runs, written once and both
-simulated and formally checked against the real system.
+A serving specification language: an LLM serving deployment is a program
+— memory pools, stages, a workload and the policy every session runs —
+written once and both simulated and formally checked against the real
+system. What P4 is to a packet switch, serQ is meant to be to a serving
+engine; running a program in place of the engine's scheduler is the next
+step ([the design](docs/design/serving-specification-language.md)).
 
 [![CI](https://github.com/servingQ/serQ/actions/workflows/ci.yml/badge.svg)](https://github.com/servingQ/serQ/actions/workflows/ci.yml)
 [![Docs](https://github.com/servingQ/serQ/actions/workflows/docs.yml/badge.svg)](https://servingq.github.io/serQ/)
@@ -33,21 +36,27 @@ theorems.
 ## Quickstart
 
 ```bash
-cargo run --release -- run examples/multi-turn/vllm.sq --seed 2 --horizon 3000
-cargo run --release -- ir examples/multi-turn/vllm.sq > vllm.json      # the IR
+cargo run --release -- run examples/multi-turn/vllm.sq --seed 2 --horizon 3000 --warmup 200
+cargo run --release -- ir examples/multi-turn/vllm.sq --horizon 3000 > vllm.json      # the IR
 cargo run --release -- draw examples/multi-turn/vllm.sq --format svg --out vllm.svg   # experimental
 ```
+
+Source programs construct their deployment inside `fn main()`. Import
+`"std/args"` and use `let rate = args.number("rate", 0.3);` to expose a numeric
+input; pass it after `--`, as `serq run model.sq --horizon 10 -- --rate 0.5`. Ordinary
+`let` constants stay internal. See the [complete example](examples/single-turn/arguments.sq)
+and [input reference](docs/api/program.md#stdargs).
 
 As a dependency, pin a release tag:
 
 ```toml
-serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.2" }
+serq = { git = "https://github.com/servingQ/serQ", tag = "v0.1.4" }
 ```
 
 Or install the CLI directly:
 
 ```bash
-cargo install --git https://github.com/servingQ/serQ --tag v0.1.2 --locked --root <dir>
+cargo install --git https://github.com/servingQ/serQ --tag v0.1.4 --locked --root <dir>
 ```
 
 Working on serQ itself, the gate is:

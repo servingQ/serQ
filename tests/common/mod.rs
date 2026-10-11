@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub const PROGRAM: &str = "let rate = 1;\nstage svc : fifo;\nworkload { arrive batch(1); }\nsession { run svc (rate); end; }\nrun { horizon 10; warmup 0; seed 1; }\n";
+pub const PROGRAM: &str = "use \"std/args\"; let rate = args.number(\"rate\", 1);\nstage svc : fifo;\nworkload { arrive batch(1); session { turn; end; } }\nserver { run svc (cost(svc, rate)); }\n\n";
 
 pub struct Fixture(pub PathBuf);
 
@@ -47,5 +47,24 @@ pub fn failure(output: &Output, code: i32, fragments: &[&str]) {
     assert!(output.stdout.is_empty(), "{:?}", output.stdout);
     for fragment in fragments {
         assert!(stderr.contains(fragment), "missing {fragment:?}: {stderr}");
+    }
+}
+
+/// Existing semantic fixtures describe a main body; complete example files
+/// already contain their entry point. The entrypoint tests use the public API
+/// directly, so this builder cannot make an implicit program pass those checks.
+pub fn main_source(body: &str) -> String {
+    if body.contains("fn main()") {
+        body.to_string()
+    } else {
+        format!("fn main() {{ {body}\n}}")
+    }
+}
+
+/// Execution conditions belong to the test, separately from its model text.
+pub fn horizon(horizon: f64) -> serq::Overrides {
+    serq::Overrides {
+        horizon: Some(horizon),
+        ..Default::default()
     }
 }

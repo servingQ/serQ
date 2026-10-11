@@ -3,11 +3,14 @@
 //! `ref/vllm/vllm/v1/core/sched/scheduler.py` (line numbers at commit
 //! 0c87a197). Iteration cost is 1, so times are scheduler steps.
 
+mod common;
+
 use serq::{Overrides, run_source};
 
 /// `n` requests present at t = 0 (closed population, one turn each), with
 /// prompt `prompt` and `out` output tokens, on a device of `blocks` blocks
-/// of `bs` tokens, budget `budget`, cap `max_seqs`.
+/// of `bs` tokens, budget `budget`, cap `max_seqs`, scheduled by
+/// `schedule`.
 #[allow(clippy::too_many_arguments)]
 fn engine(
     n: usize,
@@ -17,35 +20,44 @@ fn engine(
     bs: usize,
     budget: usize,
     max_seqs: usize,
-    extra: &str,
+    schedule: &str,
 ) -> String {
     format!(
         r#"
         let bs = {bs};
-        pool kv {{ cap {blocks} * bs; block bs; evict lru; preempt lifo; }}
+        device gpu {{ kv cap {blocks} * bs; }}
+        engine llm on gpu {{ tokens cap {budget}; schedule {{ {schedule} }} execute (1); }}
+        pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
         pool reqs {{ cap {max_seqs}; }}
-        stage engine : step {{ budget {budget}; cost 1; memory kv; {extra} }}
-        workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }} }}
-        session {{
+        workload {{ arrive batch({n}); init {{ set prompt = {prompt}; set o = {out}; }}
+          session {{ turn;
+            end;
+
+          }}
+        }}
+        server {{
           set t0 = now;
-          hold reqs (1), kv (min(prompt, {budget})) {{
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, {budget}))) {{
             observe admitted = now - t0;
             observe who_admitted = serial;
-            run engine prefill (prompt) growing kv;
+            run llm prefill (cost(llm, prompt)) growing kv;
             observe ttft = now - t0;
-            run engine decode (o - 1) growing kv;
+            run llm decode (cost(llm, o - 1)) growing kv;
           }}
           observe done = now - t0;
           observe order = serial;
-          end;
         }}
-        run {{ horizon 1000; }}
-        "#
+
+"#
     )
 }
 
-fn run(src: &str) -> serq::Report {
-    run_source(src, &Overrides::default(), None).unwrap()
+/// vLLM's schedule: the running requests, then the waiting while none was
+/// preempted (`scheduler.py:624`, `scheduler.py:869`).
+const VLLM: &str = "advance running; admit waiting while (running.preempted == 0);";
+
+fn run(src: &str, options: &Overrides) -> serq::Report {
+    run_source(&common::main_source(src), options, None).unwrap()
 }
 
 /// scheduler.py:742-813 (`test_preempt_during_execution`): two 80-token
@@ -54,16 +66,10 @@ fn run(src: &str) -> serq::Report {
 /// preempted (`self.running[-1]`), freeing its blocks; it resumes after.
 #[test]
 fn growth_preempts_the_last_admitted_request() {
-    let r = run(&engine(
-        2,
-        "80",
-        "serial == 0 ? 20 : 3",
-        10,
-        16,
-        100,
-        16,
-        "",
-    ));
+    let r = run(
+        &engine(2, "80", "serial == 0 ? 20 : 3", 10, 16, 100, 16, VLLM),
+        &common::horizon(1000.0),
+    );
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 1, "{}", r.text());
     let done = &r.observe("done").unwrap().samples;
@@ -94,25 +100,34 @@ fn growth_preempts_the_last_admitted_request() {
 fn a_request_preempted_during_decode_resumes_from_its_outputs() {
     let src = r#"
         let bs = 16;
-        pool kv { cap 10 * bs; block bs; evict lru; preempt lifo; }
+        device gpu { kv cap 10 * bs; }
+        engine llm on gpu {
+          tokens cap 1000;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs { cap 16; }
-        stage engine : step { budget 1000; cost 1; memory kv; }
-        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; } }
-        session {
-          hold reqs (1), kv (min(known, 1000)) reserve (known)
-               at admission (known = computed < prompt ? prompt : computed + 1) {
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 48; set o = serial == 0 ? 20 : 40; }
+          session { turn;
+            end;
+
+          }
+        }
+        server {
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, 1000))) reserve (cost(kv, known))
+          at admission (known = computed < prompt ? prompt : computed + 1) {
             observe known = known;
-            run engine prefill (known) growing kv;
+            run llm prefill (cost(llm, known)) growing kv;
             branch (known == prompt) { observe first = now; }
-            run engine decode (o - 1 - (known - prompt)) growing kv;
+            run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
           }
           observe done = now;
           observe order = serial;
-          end;
         }
-        run { horizon 1000; }
-    "#;
-    let r = run(src);
+
+"#;
+    let r = run(src, &common::horizon(1000.0));
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 1, "{}", r.text());
     assert_eq!(kv.stuck, 0, "{}", r.text());
@@ -135,31 +150,41 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
 /// with `computed` 0, not its 32-token allocation, so a program reading
 /// `computed` does not invent an output token it never produced (vLLM's
 /// `num_computed_tokens` is 0 for a request preempted before its first
-/// step). The pool is no engine's memory here: with `memory kv` a holder
-/// away from the engine is not in its `running` list and is not a victim.
+/// step). The pool is no engine's memory here: were it on the engine's
+/// device (`pool kv on gpu`), a holder away from the engine would not be in
+/// its `running` list and would not be a victim.
 #[test]
 fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
     let src = r#"
         let bs = 16;
         pool kv { cap 6 * bs; block bs; evict lru; preempt lifo; }
-        stage engine : step { budget 1000; cost 1; }
+        device gpu { }
+        engine llm on gpu {
+          tokens cap 1000;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
         stage svc : fifo;
-        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; } }
-        session {
+        workload { arrive batch(2); init { set prompt = serial == 0 ? 64 : 32; set o = 20; }
+          session { turn;
+            end;
+
+          }
+        }
+        server {
           branch (serial == 0) {
-            hold kv (prompt) reserve (prompt) {
-              run engine prefill (prompt) growing kv;
-              run engine decode (o - 1) growing kv;
+            hold kv (cost(kv, prompt)) reserve (cost(kv, prompt)) {
+              run llm prefill (cost(llm, prompt)) growing kv;
+              run llm decode (cost(llm, o - 1)) growing kv;
             }
           } else {
-            hold kv (prompt) { observe c2 = computed; run svc (100); }
+            hold kv (cost(kv, prompt)) { observe c2 = computed; run svc (cost(svc, 100)); }
           }
           observe done = now;
-          end;
         }
-        run { horizon 200; }
-    "#;
-    let r = run(src);
+
+"#;
+    let r = run(src, &common::horizon(200.0));
     assert_eq!(r.pool("kv").unwrap().preemptions, 1, "{}", r.text());
     // first execution, then the re-execution after A frees its blocks at 20
     assert_eq!(
@@ -176,8 +201,8 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
     );
 }
 
-/// `serve by (keys)`: the order the iteration hands its budget out in is an
-/// expression over the residents, so a program can state a policy vLLM
+/// `advance running by (keys)`: the order the iteration hands its budget out
+/// in is an expression over the residents, so a program can state a policy vLLM
 /// does not have. With one token of budget per step, admission order gives
 /// everything to A until it is done (A: prompt + 9 decodes = step 10, then
 /// B: 11, 12, 13); shortest-remaining-first serves B as soon as it has
@@ -185,24 +210,30 @@ fn a_holder_preempted_before_its_first_step_has_computed_nothing() {
 /// 13). `decode first` is `by (decoding ? 0 : 1)`.
 #[test]
 fn serve_by_orders_residents_by_the_declared_keys() {
-    let prog = |serve: &str| {
+    // `order` is what follows `advance running`
+    let prog = |order: &str| {
         format!(
-            "pool kv {{ cap 1000; }}
-            stage engine : step {{ budget 1; cost 1; memory kv; {serve} }}
-            workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }} }}
-            session {{
-              hold kv (100) {{
-                run engine prefill (1) growing kv;
-                run engine decode (o - 1) growing kv;
-              }}
-              observe done = now;
-              observe order = serial;
-              end;
-            }}
-            run {{ horizon 100; }}"
+            "device gpu {{ kv cap 1000; }}
+        engine llm on gpu {{ tokens cap 1; schedule {{ advance running {order}; admit waiting while (running.preempted == 0); }} execute (1); }}
+        pool kv on gpu {{ }}
+        workload {{ arrive batch(2); init {{ set o = serial == 0 ? 10 : 3; }}
+          session {{ turn;
+            end;
+
+          }}
+        }}
+        server {{
+          hold kv (cost(kv, 100)) {{
+            run llm prefill (cost(llm, 1)) growing kv;
+            run llm decode (cost(llm, o - 1)) growing kv;
+          }}
+          observe done = now;
+          observe order = serial;
+        }}
+        "
         )
     };
-    let r = run(&prog("serve admission;"));
+    let r = run(&prog("admission"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
     assert_eq!(
         r.observe("done").unwrap().samples,
@@ -210,7 +241,7 @@ fn serve_by_orders_residents_by_the_declared_keys() {
         "{}",
         r.text()
     );
-    let r = run(&prog("serve by (remaining);"));
+    let r = run(&prog("by (remaining)"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![1.0, 0.0]);
     assert_eq!(
         r.observe("done").unwrap().samples,
@@ -220,30 +251,35 @@ fn serve_by_orders_residents_by_the_declared_keys() {
     );
     // ties fall to admission order: a constant key is admission order, and
     // a second key decides where the first is equal
-    let r = run(&prog("serve by (1);"));
+    let r = run(&prog("by (1)"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
     assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
-    let r = run(&prog("serve by (1, remaining);"));
+    let r = run(&prog("by (1, remaining)"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![1.0, 0.0]);
     assert_eq!(r.observe("done").unwrap().samples, vec![4.0, 13.0]);
     // and the opposite order is a program too
-    let r = run(&prog("serve by (-remaining);"));
+    let r = run(&prog("by (-remaining)"), &common::horizon(100.0));
     assert_eq!(r.observe("order").unwrap().samples, vec![0.0, 1.0]);
     assert_eq!(r.observe("done").unwrap().samples, vec![10.0, 13.0]);
     // `decode first` and its expansion are the same program
     let ir = |s: &str| {
-        serq::compile_source(&prog(s), &Overrides::default())
+        serq::compile_source(&common::main_source(&prog(s)), &common::horizon(100.0))
             .unwrap()
             .to_json()
     };
-    assert_eq!(
-        ir("serve decode first;"),
-        ir("serve by (decoding ? 0 : 1);")
-    );
-    // a serve key is read at its own moment only
-    let e = serq::compile_source(&prog("serve by (tokens);"), &Overrides::default()).unwrap_err();
+    assert_eq!(ir("decode first"), ir("by (decoding ? 0 : 1)"));
+    // a serve key is read at its own moment only: the engine refuses the
+    // batch, which is formed after the order, and the linker a variable of
+    // another moment
+    let refused = |order: &str| {
+        serq::compile_source(&common::main_source(&prog(order)), &common::horizon(100.0))
+            .unwrap_err()
+    };
+    let e = refused("by (tokens)");
+    assert!(e.contains("`by` is read before the batch is formed"), "{e}");
+    let e = refused("by (age)");
     assert!(
-        e.contains("`tokens` is read in a step stage's serve keys"),
+        e.contains("`age` is read in an engine's `advance running by (…)` keys"),
         "{e}"
     );
 }
@@ -259,24 +295,34 @@ fn serve_by_orders_residents_by_the_declared_keys() {
 #[test]
 fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
     let src = r#"
-        pool reqs { cap 8; admit via engine; }
-        pool kv { cap 1e5; }
-        stage engine : step { budget 2; cost 1; memory kv; serve by (remaining); }
+        device gpu { kv cap 1e5; }
+        engine llm on gpu {
+          reqs cap 8;
+          tokens cap 2;
+          schedule { advance running by (remaining); admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { }
         stage gate : delay;
-        workload { arrive batch(2); init { set arrive = serial; set o = serial == 0 ? 4 : 1; } }
-        session {
-          run gate (arrive);
-          hold reqs (1), kv (10) {
-            run engine prefill (1) growing kv;
-            run engine decode (o - 1) growing kv;
+        workload { arrive batch(2); init { set arrive = serial; set o = serial == 0 ? 4 : 1; }
+          session { turn;
+            end;
+
+          }
+        }
+        server {
+          run gate (cost(gate, arrive));
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 10)) {
+            run llm prefill (cost(llm, 1)) growing kv;
+            run llm decode (cost(llm, o - 1)) growing kv;
           }
           observe done = now;
           observe order = serial;
-          end;
         }
-        run { horizon 50; }
-    "#;
-    let r = run(src);
+
+"#;
+    let r = run(src, &common::horizon(50.0));
     assert_eq!(
         r.observe("order").unwrap().samples,
         vec![1.0, 0.0],
@@ -298,8 +344,8 @@ fn a_resident_admitted_mid_iteration_is_served_once_under_serve_by() {
 fn admission_is_fcfs_with_head_of_line_blocking() {
     // blocks: 10 of 16 = 160 tokens. r0: 96 (6 blocks), r1: 96 (does not fit
     // with r0), r2: 16 (would fit). r2 must wait behind r1.
-    let src = engine(3, "serial == 2 ? 16 : 96", "2", 10, 16, 1000, 16, "");
-    let r = run(&src);
+    let src = engine(3, "serial == 2 ? 16 : 96", "2", 10, 16, 1000, 16, VLLM);
+    let r = run(&src, &common::horizon(1000.0));
     let adm = &r.observe("admitted").unwrap().samples;
     let order = &r.observe("who_admitted").unwrap().samples;
     // observations are in admission order; find r2
@@ -316,19 +362,74 @@ fn admission_is_fcfs_with_head_of_line_blocking() {
 /// steps; the first token is out at the end of the last chunk.
 #[test]
 fn chunked_prefill_takes_ceil_prompt_over_budget_steps() {
-    let r = run(&engine(1, "3000", "1", 1000, 16, 1024, 16, ""));
+    let r = run(
+        &engine(1, "3000", "1", 1000, 16, 1024, 16, VLLM),
+        &common::horizon(1000.0),
+    );
     let ttft = r.observe("ttft").unwrap().samples[0];
     assert_eq!(ttft, 3.0, "{}", r.text());
 }
 
-/// scheduler.py:612-616, 675-676: `long_prefill_token_threshold` caps one
-/// request's chunk only when it is not alone.
+/// scheduler.py:606-616, 675-676: `long_prefill_token_threshold` caps one
+/// request's chunk only when it is not alone. The program says so in its
+/// `each at most`; a constant cap is not vLLM's.
 #[test]
 fn long_prefill_threshold_applies_only_with_company() {
-    let alone = run(&engine(1, "3000", "1", 1000, 16, 4096, 16, "chunk 1000;"));
-    assert_eq!(alone.observe("ttft").unwrap().samples[0], 3.0);
-    // serQ applies `chunk` unconditionally: the "alone" exception of vLLM
-    // (num_eligible_reqs > 1) is not modelled; document it.
+    let chunk = "let c = running.count + queued(reqs) > 1 ? 1000 : inf;
+        advance running each at most (c);
+        admit waiting while (running.preempted == 0) each at most (c);";
+    // alone: uncapped, the whole 3000-token prompt in one 4096-token step
+    let alone = run(
+        &engine(1, "3000", "1", 1000, 16, 4096, 16, chunk),
+        &common::horizon(1000.0),
+    );
+    assert_eq!(
+        alone.observe("ttft").unwrap().samples,
+        vec![1.0],
+        "{}",
+        alone.text()
+    );
+    // with company: 1000 tokens each per step, three steps
+    let two = run(
+        &engine(2, "3000", "1", 1000, 16, 4096, 16, chunk),
+        &common::horizon(1000.0),
+    );
+    assert_eq!(
+        two.observe("ttft").unwrap().samples,
+        vec![3.0, 3.0],
+        "{}",
+        two.text()
+    );
+}
+
+/// scheduler.py:609-622: with `adaptive_long_prefill_threshold`, the cap
+/// is floored at a fair share of the budget, `max(threshold, budget //
+/// num_eligible_reqs)`. An `each at most` computes it as `max(k, e)` with
+/// `k` a positive constant (#442).
+#[test]
+fn adaptive_long_prefill_threshold_floors_the_cap_at_a_fair_share() {
+    let adaptive = |threshold: usize| {
+        format!(
+            "let n = running.count + waiting.count;
+            let c = n > 1 ? max({threshold}, floor(4096 / n)) : inf;
+            advance running each at most (c);
+            admit waiting while (running.preempted == 0) each at most (c);"
+        )
+    };
+    let ttft = |schedule: &str| {
+        let r = run(
+            &engine(2, "3000", "1", 1000, 16, 4096, 16, schedule),
+            &common::horizon(1000.0),
+        );
+        r.observe("ttft").unwrap().samples.clone()
+    };
+    // the fair share binds: max(1000, 4096 // 2) = 2048 each, 2048 + 2048
+    // in the first step and the last 952 of each in the second; the
+    // constant 1000 takes three steps (above)
+    assert_eq!(ttft(&adaptive(1000)), vec![2.0, 2.0]);
+    // the threshold binds: max(3000, 2048) = 3000, the first prompt whole
+    // and 1096 of the second in the first step, its last 1904 in the second
+    assert_eq!(ttft(&adaptive(3000)), vec![1.0, 2.0]);
 }
 
 /// kv_cache_manager.py:289-300, block_pool.py:776-805: a finished request's
@@ -339,28 +440,35 @@ fn long_prefill_threshold_applies_only_with_company() {
 fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
     let src = r#"
         let bs = 16;
-        pool kv { cap 1000 * bs; block bs; evict lru; preempt lifo; }
+        device gpu { kv cap 1000 * bs; }
+        engine llm on gpu {
+          tokens cap 8192;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs { cap 16; }
-        stage engine : step { budget 8192; cost 1; memory kv; }
-        workload { arrive batch(1); init { set K = 0; set turns = 0; } }
-        session {
-          loop {
-            set prompt = K + 100;
-            hold reqs (1), kv (c + min(prompt - c, 8192))
-                 at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
-              observe cached_seen = cached;
-              observe prefill_tokens = prompt - min(cached, floor((prompt - 1) / bs) * bs);
-              run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
-              run engine decode (9) growing kv;
-            } cache (prompt + 10);
-            set K = prompt + 10;
-            set turns = turns + 1;
-            branch (turns >= 3) { end; }
+        workload { arrive batch(1); init { set K = 0; set turns = 0; }
+          session {
+            loop { turn; set K = prompt + 10; set turns = turns + 1;
+              branch (turns >= 3) { end; }
+            }
+
           }
         }
-        run { horizon 1000; }
-    "#;
-    let r = run(src);
+        server {
+          set prompt = K + 100;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, 8192)))
+          at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
+            observe cached_seen = cached;
+            observe prefill_tokens = prompt - min(cached, floor((prompt - 1) / bs) * bs);
+            run llm prefill (cost(llm, prompt - min(cached, floor((prompt - 1) / bs) * bs))) growing kv;
+            run llm decode (cost(llm, 9)) growing kv;
+          } cache (cost(reqs, kv, prompt + 10));
+        }
+
+"#;
+    let r = run(src, &common::horizon(1000.0));
     let seen = &r.observe("cached_seen").unwrap().samples;
     let pre = &r.observe("prefill_tokens").unwrap().samples;
     // turn 1: nothing cached, prefill 100; context after = 110 -> 6 full
@@ -377,32 +485,39 @@ fn next_turn_reuses_full_blocks_of_the_cached_prefix() {
 fn lru_eviction_drops_tail_blocks_first() {
     let src = r#"
         let bs = 16;
-        pool kv { cap 20 * bs; block bs; evict lru; preempt lifo; }
+        device gpu { kv cap 20 * bs; }
+        engine llm on gpu {
+          tokens cap 8192;
+          schedule { advance running; admit waiting while (running.preempted == 0); }
+          execute (1);
+        }
+        pool kv on gpu { block bs; evict lru; preempt lifo; }
         pool reqs { cap 16; }
-        stage engine : step { budget 8192; cost 1; memory kv; }
         stage gate : delay;
-        workload { arrive batch(2); init { set K = 0; set turns = 0; } }
-        session {
-          // session 0 runs first (160 tokens -> 10 blocks cached), then session 1
-          // takes 12 blocks, evicting 2 of session 0's from its tail; session 0's
-          // second turn then reuses 8 blocks.
-          run gate (serial * 2);
-          loop {
-            set prompt = serial == 0 ? K + 160 : 192;
-            hold reqs (1), kv (c + min(prompt - c, 8192))
-                 at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
-              branch (serial == 0) { observe cached0 = cached; }
-              run engine prefill (prompt - min(cached, floor((prompt - 1) / bs) * bs)) growing kv;
-            } cache (prompt);
-            set K = prompt;
-            set turns = turns + 1;
-            branch (turns >= 2 || serial == 1) { end; }
-            run gate (10);
+        workload { arrive batch(2); init { set K = 0; set turns = 0; }
+          session {
+            // session 0 runs first (160 tokens -> 10 blocks cached), then session 1
+            // takes 12 blocks, evicting 2 of session 0's from its tail; session 0's
+            // second turn then reuses 8 blocks.
+            run gate (cost(gate, serial * 2));
+            loop { turn; set K = prompt; set turns = turns + 1;
+              branch (turns >= 2 || serial == 1) { end; }
+              run gate (cost(gate, 10));
+            }
+
           }
         }
-        run { horizon 1000; }
-    "#;
-    let r = run(src);
+        server {
+          set prompt = serial == 0 ? K + 160 : 192;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, c + min(prompt - c, 8192)))
+          at admission (c = min(cachedin(kv), floor((prompt - 1) / bs) * bs)) {
+            branch (serial == 0) { observe cached0 = cached; }
+            run llm prefill (cost(llm, prompt - min(cached, floor((prompt - 1) / bs) * bs))) growing kv;
+          } cache (cost(reqs, kv, prompt));
+        }
+
+"#;
+    let r = run(src, &common::horizon(1000.0));
     let c0 = &r.observe("cached0").unwrap().samples;
     assert_eq!(c0, &[0.0, 128.0], "{}", r.text());
     // 2 blocks of session 0 for session 1's turn, then session 1's 12 blocks
@@ -420,26 +535,32 @@ fn exclusive_prefill_stalls_decodes() {
         let done = &r.observe("done").unwrap().samples;
         done[order.iter().position(|&s| s == who).unwrap()]
     };
-    let shared = run(&engine(
-        2,
-        "serial == 0 ? 1 : 2048",
-        "serial == 0 ? 10 : 1",
-        1000,
-        16,
-        1024,
-        16,
-        "",
-    ));
-    let excl = run(&engine(
-        2,
-        "serial == 0 ? 1 : 2048",
-        "serial == 0 ? 10 : 1",
-        1000,
-        16,
-        1024,
-        16,
-        "serve exclusive prefill;",
-    ));
+    let shared = run(
+        &engine(
+            2,
+            "serial == 0 ? 1 : 2048",
+            "serial == 0 ? 10 : 1",
+            1000,
+            16,
+            1024,
+            16,
+            VLLM,
+        ),
+        &common::horizon(1000.0),
+    );
+    let excl = run(
+        &engine(
+            2,
+            "serial == 0 ? 1 : 2048",
+            "serial == 0 ? 10 : 1",
+            1000,
+            16,
+            1024,
+            16,
+            "exclusive prefill; admit waiting while (running.preempted == 0);",
+        ),
+        &common::horizon(1000.0),
+    );
     // request 0: 1 prefill step + 9 decode steps = 10 when sharing; with
     // exclusive prefill it waits for request 1's two chunks: 12
     assert_eq!(done_of(&shared, 0.0), 10.0, "{}", shared.text());
@@ -449,7 +570,10 @@ fn exclusive_prefill_stalls_decodes() {
 /// scheduler.py:877-879: `max_num_seqs` caps the running set.
 #[test]
 fn request_cap_is_a_slot_pool() {
-    let r = run(&engine(4, "16", "5", 1000, 16, 8192, 2, ""));
+    let r = run(
+        &engine(4, "16", "5", 1000, 16, 8192, 2, VLLM),
+        &common::horizon(1000.0),
+    );
     let adm = &r.observe("admitted").unwrap().samples;
     let mut a = adm.clone();
     a.sort_by(f64::total_cmp);

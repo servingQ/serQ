@@ -74,6 +74,12 @@ not, and no oracle scenario exercised the path (#41 §5). If `ref/vllm` is not
 checked out, fetch it before answering; if the question is about a version
 other than the pinned one, say so and check out that revision.
 
+## Documentation
+
+Follow [Writing readable programs](docs/writing-programs.md) when writing or reorganizing `.sq` programs.
+Follow [.github/documentation.md](.github/documentation.md) when editing the site.
+See [.github/contributing.md](.github/contributing.md) for adding examples and oracle scenarios.
+
 ## Design documents
 
 `docs/design/` holds the design record: the philosophy, the frontend sketch,

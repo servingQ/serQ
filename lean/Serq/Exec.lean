@@ -97,11 +97,19 @@ structure IterStats where
   kvDecode : ℕ
   attention2 : ℕ
 
+/-- What a step stage's `chunk` reads as an iteration starts (serQ's
+`Budget` moment): the engine's jobs (`residents`) and each pool's waiting
+requests (`queued p`). -/
+structure ChunkEnv where
+  residents : ℕ
+  queued : ℕ → ℕ
+
 /-- A deployment: pools, the step engine (stage 0) and a delay stage (1). -/
 structure Deployment where
   pools : List PoolDef
   budget : ℕ
-  /-- per-request chunk cap (`long_prefill_token_threshold`), 0 = none -/
+  /-- per-request chunk cap, 0 = none; the iteration's when `chunkAt` is
+  `none` -/
   chunk : ℕ
   /-- the engine's memory pool (`memory` of the step stage), if any -/
   memory : Option ℕ
@@ -111,6 +119,10 @@ structure Deployment where
   /-- `serve only (p)`: a resident for which `p` is 0 gets no token in the
   iteration; `none` serves every resident -/
   only : Option (ServeEnv → ℕ)
+  /-- `some f`: the program's `chunk` expression, read as each iteration
+  starts; vLLM's `chunk (residents + queued(p) > 1 ? c : 0)` (scheduler.py:606-616)
+  is one. `none`: the constant `chunk`. -/
+  chunkAt : Option (ChunkEnv → ℕ)
 
 /-- What a claim over iterations reads (serQ `Moment::Iteration`): the
 iteration's start, the tokens the engine scheduled before it (`served`), its
@@ -881,6 +893,10 @@ def exec : ℕ → Machine → ℕ → Machine
     | .branch p a b k =>
       let c := evalE m i p
       exec f (setS m i { s with prog := if c ≠ 0 then a else b, stack := List.cons (Frame.seq k) s.stack }) i
+    | .whileLoop p body k =>
+      if evalE m i p ≠ 0 then
+        exec f (setS m i { s with prog := body, stack := .seq (.whileLoop p body k) :: s.stack }) i
+      else exec f (setS m i { s with prog := k }) i
     | .loop body => exec f (setS m i { s with prog := body, stack := List.cons (Frame.loop body) s.stack }) i
     | .run st mode w g k =>
       let work := evalE m i w
@@ -906,12 +922,19 @@ def drain : ℕ → Machine → Machine
     | [] => m
     | i :: rest => drain f (exec D 10000 { m with ready := rest } i)
 
+/-- The rounds `drain` is given: one per session ready when it starts, and
+10 000 for the sessions their commands make ready. It grows with the ready
+list, so that however many sessions are ready at once each runs its
+commands before the pools admit, as in the interpreter's `settle`, which
+drains the ready list to the end before `try_admit`. -/
+def drainFuel (m : Machine) : ℕ := m.ready.length + 10000
+
 /-- Run every ready session, then admit at every pool not served by the
 engine, until nothing is ready (the interpreter's `settle`). -/
 def settleLoop : ℕ → Machine → Machine
   | 0, m => m
   | f + 1, m =>
-    let m := admitAll D (drain D 10000 m)
+    let m := admitAll D (drain D (drainFuel m) m)
     if m.ready.isEmpty then m else settleLoop f m
 
 def settle (m : Machine) : Machine := settleLoop D 1000 m
@@ -971,7 +994,10 @@ def preemptVictim (m : Machine) (p : ℕ) : Machine × Option ℕ :=
     let rec unwind (m : Machine) : List Frame → Machine
       | [] => m
       | .hold h _ :: fs =>
-        let m := release D m v h
+        -- a preempted hold caches what it computed, its position, not its
+        -- allocation (serQ `interp.rs` `preempt`): released as a hold whose
+        -- position is what it computed
+        let m := release D m v { h with grown := true }
         if h.pools.any (·.1 = p) then
           let m := setS m v { getS m v with prog := h.stmt, stack := fs, status := .ready }
           enqueue m v true
@@ -1011,7 +1037,8 @@ def admitVia (m : Machine) (left : ℕ) : Machine × Bool :=
     | i :: q =>
       if fitsAll D m (holdNeeds m i left (getS m i).prog) then
         let m := setPool m p { pst m p with queue := q }
-        (drain D 10000 (admit D m i left), true)
+        let m := admit D m i left
+        (drain D (drainFuel m) m, true)
       else (m, false)
     | [] => (m, false)
 
@@ -1100,6 +1127,29 @@ def iterRec (m : Machine) (st : IterStats) : IterRec :=
     holders := (List.range D.pools.length).map fun p => (pst m p).holders.length,
     used := (List.range D.pools.length).map fun p => (pst m p).used }
 
+/-- The deployment an iteration starting in `m` runs: its chunk cap is
+`chunkAt` read on the engine's jobs and the pools' waiting requests as they
+stand before the iteration (the interpreter reads `residents` and `queued`
+at the `Budget` moment). -/
+def iterDeployment (m : Machine) : Deployment :=
+  match D.chunkAt with
+  | some f => { D with chunk := f ⟨m.jobs.length, fun p => (pst m p).queue.length⟩ }
+  | none => D
+
+/-- Without `chunkAt` an iteration runs `D` itself. -/
+theorem iterDeployment_of_none (h : D.chunkAt = none) (m : Machine) : iterDeployment D m = D := by
+  unfold iterDeployment; rw [h]
+
+/-- The iteration's deployment differs from `D` in its chunk cap only. -/
+theorem iterDeployment_pools (m : Machine) : (iterDeployment D m).pools = D.pools := by
+  unfold iterDeployment; split <;> rfl
+
+theorem iterDeployment_only (m : Machine) : (iterDeployment D m).only = D.only := by
+  unfold iterDeployment; split <;> rfl
+
+theorem iterDeployment_pdef (m : Machine) (p : ℕ) : pdef (iterDeployment D m) p = pdef D p := by
+  unfold pdef; rw [iterDeployment_pools]
+
 /-- Start an iteration on the idle engine. It lasts `cost` (at least one
 clock unit) if it serves a token or preempted; otherwise the engine stays
 idle until the next event. -/
@@ -1107,13 +1157,15 @@ def startIteration (m : Machine) : Machine :=
   let busy := !m.jobs.isEmpty ||
     (List.range D.pools.length).any fun p => (pdef D p).viaEngine && !(pst m p).queue.isEmpty
   if busy then
-    let m' := assign D (m.jobs.length + 100000) { m with iter := [] } 0 D.budget m.preempts
+    -- the chunk cap as it holds for this iteration, read before it starts
+    let Di := iterDeployment D m
+    let m' := assign Di (m.jobs.length + 100000) { m with iter := [] } 0 D.budget m.preempts
     if !m'.iter.isEmpty || m'.preempts ≠ m.preempts then
       let st := iterStats D m'
       { m' with iterEnd := some (m'.now + max 1 (D.cost st), m'.nextDelay)
                 nextDelay := m'.nextDelay + 1
                 served := m'.served + st.tokens
-                last := iterRec D m' st }
+                last := iterRec Di m' st }
     else { m' with iterEnd := none }
   else { m with iter := [], iterEnd := none }
 

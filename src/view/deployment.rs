@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, Program, RunMode, UnOp};
+use crate::ir::{CArrival, CExpr, CRef, CStageKind, CStmt, CtxVar, Program, RunMode, UnOp};
 use crate::view::figure::{
     Anchor, BoxStyle, EdgeStyle, Figure, Item, Rect, StationKind, TextSize, pt,
 };
@@ -249,6 +249,9 @@ struct Walker<'a> {
     net: Net,
     /// Ends the next station will be reached from, with the label of the path.
     frontier: Vec<(At, Option<String>)>,
+    /// The ends of the legs forked and not yet joined: the station after
+    /// the `join` is reached from them as well.
+    forked: Vec<(At, Option<String>)>,
     /// Pools held right now, outermost first, each with the hold that took
     /// it (a `release` takes one off before its hold ends) and whether it
     /// encloses: a hold of no units only reserves, and occupies nothing.
@@ -441,7 +444,7 @@ impl Walker<'_> {
                     self.place(node, &stage);
                     let n = &mut self.net.nodes[node];
                     if n.modes.is_empty() {
-                        n.work = self.p.show_expr(&work);
+                        n.work = self.p.show_expr(work.cost_value());
                         // a delay is its duration: written inside it, under
                         // the shape of its density, when it is a
                         // distribution or a constant and fits
@@ -492,7 +495,7 @@ impl Walker<'_> {
                         visits: vec![],
                     });
                     for (r, units, _) in &pools {
-                        let encloses = !matches!(units, CExpr::Num(x) if *x == 0.0);
+                        let encloses = !self.value(units).is_some_and(|(v, _)| v == 0.0);
                         self.holds.push((r.base, id, encloses));
                         if let Some(k) = self.instance(r.index.as_deref())
                             && !self.net.instances.iter().any(|g| g.pools.contains(&r.base))
@@ -576,15 +579,41 @@ impl Walker<'_> {
                     self.frontier = out;
                     self.arm = outer;
                 }
+                CStmt::Fork(body) => {
+                    // The leg starts where the session is and runs beside
+                    // it: the session goes on from the same ends. A leg
+                    // holds nothing of the session's; what it leases stays
+                    // held after it, until the session's `release`.
+                    let saved = self.frontier.clone();
+                    let held = std::mem::take(&mut self.holds);
+                    self.walk(body);
+                    let leg = std::mem::replace(&mut self.frontier, saved);
+                    let leased = std::mem::replace(&mut self.holds, held);
+                    self.holds.extend(leased);
+                    self.forked.extend(leg);
+                }
+                CStmt::Join => {
+                    let mut ends = std::mem::take(&mut self.forked);
+                    self.frontier.append(&mut ends);
+                    dedupe(&mut self.frontier);
+                }
+                CStmt::While(_, body) => {
+                    self.known.clear();
+                    let before = self.frontier.clone();
+                    let held = self.holds.clone();
+                    self.enter(body, true);
+                    self.frontier.extend(before);
+                    dedupe(&mut self.frontier);
+                    // The body may be skipped; its assignments and leases
+                    // are not unconditional facts after the loop.
+                    self.known.clear();
+                    self.holds.retain(|h| held.contains(h));
+                }
                 CStmt::Loop(body) => {
-                    // Every loop is the session's: a server cannot write
-                    // `end`, so a loop in one could never be left, and the
-                    // request `serq draw` draws of a program with a server
-                    // has none. A program written as one session cannot
-                    // tell its workload from its deployment and is drawn
-                    // whole: its way back too, so that no station is a dead
-                    // end. What was set before it holds on the first pass
-                    // only.
+                    // A full-session view (IR input or no unique request
+                    // body) includes client loops. Draw their way back so
+                    // no station is a dead end. Values set before the loop
+                    // are known only on its first pass.
                     self.known.clear();
                     self.enter(body, true);
                     self.frontier.clear();
@@ -652,6 +681,7 @@ impl Walker<'_> {
     fn value(&self, e: &CExpr) -> Option<(f64, bool)> {
         fn eval(e: &CExpr, known: &[(usize, f64)], read: &mut bool) -> Option<f64> {
             Some(match e {
+                CExpr::Cost(_, x) => eval(x, known, read)?,
                 CExpr::Num(x) => *x,
                 CExpr::Attr(s) => {
                     *read = true;
@@ -675,7 +705,11 @@ impl Walker<'_> {
                     );
                     if c != 0.0 { a } else { b }
                 }
-                CExpr::Ctx(_) | CExpr::Sample(..) | CExpr::Call(..) | CExpr::Agg(..) => {
+                CExpr::Ctx(_)
+                | CExpr::Sample(..)
+                | CExpr::Call(..)
+                | CExpr::Agg(..)
+                | CExpr::Reg(_) => {
                     return None;
                 }
             })
@@ -794,7 +828,10 @@ fn reaches_a_station(p: &Program, block: usize) -> bool {
     p.blocks.get(block).is_some_and(|stmts| {
         stmts.iter().any(|s| match s {
             CStmt::Run { .. } => true,
-            CStmt::Hold { body, .. } | CStmt::Loop(body) => reaches_a_station(p, *body),
+            CStmt::Hold { body, .. }
+            | CStmt::Loop(body)
+            | CStmt::While(_, body)
+            | CStmt::Fork(body) => reaches_a_station(p, *body),
             CStmt::Branch(_, a, b) => reaches_a_station(p, *a) || reaches_a_station(p, *b),
             _ => false,
         })
@@ -824,7 +861,12 @@ fn leading_chooses(p: &Program, block: usize, out: &mut Vec<usize>) -> bool {
             }
             // a guard that walks the body: the chooses in it are collected
             // whether or not it reaches a station
-            CStmt::Hold { body, .. } | CStmt::Loop(body) if leading_chooses(p, *body, out) => {
+            CStmt::While(_, body) => {
+                leading_chooses(p, *body, out);
+            }
+            CStmt::Hold { body, .. } | CStmt::Loop(body) | CStmt::Fork(body)
+                if leading_chooses(p, *body, out) =>
+            {
                 return true;
             }
             _ => {}
@@ -857,13 +899,44 @@ fn station_of(p: &Program, stage: usize) -> (StationKind, String, Option<String>
             let note = (*c != 1).then(|| format!("{c} servers"));
             (StationKind::Fifo, "FIFO".into(), note)
         }
+        k if k.is_delay() => (StationKind::Delay, String::new(), Some("delay".into())),
         CStageKind::Ps(phi) => (StationKind::Ps, "PS".into(), Some(p.show_expr(phi))),
-        CStageKind::Delay => (StationKind::Delay, String::new(), Some("delay".into())),
         CStageKind::Step(s) => (
             StationKind::Step,
-            "step".into(),
-            Some(format!("budget {}", p.show_expr(&s.budget))),
+            "engine".into(),
+            Some(format!(
+                "tokens cap {}",
+                p.show_expr_with(&s.budget, list_names)
+            )),
         ),
+    }
+}
+
+/// A step stage is drawn in the words an engine is written in
+/// (`docs/language.md`, the engine form), whichever form the program used:
+/// the IR does not keep the form. Its budget is read as `tokens cap` reads
+/// it, the residents' totals by their list (#411, #416).
+fn list_names(v: CtxVar) -> &'static str {
+    crate::frontend::parser::engine_name(v.name(), "tokens cap").unwrap_or(v.name())
+}
+
+/// The step stage whose `memory` pool `i` is.
+fn memory_of(p: &Program, i: usize) -> Option<usize> {
+    p.stages
+        .iter()
+        .position(|s| matches!(&s.kind, CStageKind::Step(spec) if spec.memory == Some(i)))
+}
+
+/// A pool's title, with what it is on as an engine names it: an engine's
+/// memory is the pool on its device, which the IR does not name, and a pool
+/// it admits otherwise is a pool on the engine. A memory the engine also
+/// admits says so among its options (`pool_notes`).
+fn pool_title(p: &Program, i: usize) -> String {
+    let pool = &p.pools[i];
+    match (memory_of(p, i), pool.admit_via) {
+        (Some(s), _) => format!("pool {} on {}'s device", pool.name, p.stages[s].name),
+        (None, Some(e)) => format!("pool {} on {}", pool.name, p.stages[e].name),
+        (None, None) => format!("pool {}", pool.name),
     }
 }
 
@@ -894,6 +967,7 @@ pub fn project(p: &Program) -> Net {
             ..Net::default()
         },
         frontier: vec![(At::End(End::Arrival), None)],
+        forked: vec![],
         holds: vec![],
         next_hold: 0,
         pending: vec![],
@@ -1267,7 +1341,9 @@ pub(crate) fn cache_targets(p: &Program) -> BTreeMap<usize, Vec<usize>> {
                     walk(p, *t, stack, out);
                     walk(p, *e, stack, out);
                 }
-                CStmt::Loop(b) => walk(p, *b, stack, out),
+                CStmt::Loop(b) | CStmt::While(_, b) => walk(p, *b, stack, out),
+                // a leg's holds are its own
+                CStmt::Fork(b) => walk(p, *b, &mut vec![], out),
                 _ => {}
             }
         }
@@ -1427,7 +1503,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         DRUM_W
             + 10.0
             + TextSize::Normal
-                .width_of(&format!("pool {}", p.pools[q].name))
+                .width_of(&pool_title(p, q))
                 .max(TextSize::Small.width_of(&row_notes(q)))
     };
     // under the glyph: its note, then a row per resident pool
@@ -1642,7 +1718,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
         let gy = rects[g.first].centre().y;
         f.text(
             pt(gx, r.y - 5.0),
-            format!("pool {}", pool.name),
+            pool_title(p, g.pool),
             Anchor::Start,
             TextSize::Normal,
         );
@@ -1704,7 +1780,7 @@ pub fn layout(p: &Program, net: &Net) -> Figure {
             let tx = gx + DRUM_W + 10.0;
             f.text(
                 pt(tx, y + 11.0),
-                format!("pool {}", p.pools[q].name),
+                pool_title(p, q),
                 Anchor::Start,
                 TextSize::Normal,
             );
@@ -1998,11 +2074,24 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
             )),
         }
     }
-    if pool.preempt == crate::ir::Preempt::Lifo {
-        parts.push("preempt lifo".into());
+    match &pool.preempt {
+        crate::ir::Preempt::None => {}
+        lifo if lifo.is_lifo() => parts.push("preempt lifo".into()),
+        crate::ir::Preempt::By { keys, tail } => parts.push(format!(
+            "preempt by ({}){}",
+            keys.iter()
+                .map(|k| p.show_expr(k))
+                .collect::<Vec<_>>()
+                .join(", "),
+            if *tail { " requeue tail" } else { "" }
+        )),
     }
-    if let Some(s) = pool.admit_via {
-        parts.push(format!("admit via {}", p.stages[s].name));
+    // the title says `on S` only for a pool that is no memory
+    if let (Some(_), Some(s)) = (memory_of(p, i), pool.admit_via) {
+        parts.push(format!("admitted by {}", p.stages[s].name));
+    }
+    if pool.reserve_held {
+        parts.push("reserve held".into());
     }
     parts
 }

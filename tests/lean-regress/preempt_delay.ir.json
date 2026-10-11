@@ -21,6 +21,18 @@
    }
   ]
  },
+ "attr_types": [
+  "Value",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Size",
+  "Value",
+  "Size"
+ ],
  "attrs": [
   "cached",
   "serial",
@@ -46,6 +58,7 @@
   ],
   [],
   [
+   "Turn",
    {
     "Hold": {
      "body": 3,
@@ -59,7 +72,17 @@
         "index": null
        },
        {
-        "Num": 1.0
+        "Cost": [
+         {
+          "Pool": {
+           "base": 1,
+           "count": 1
+          }
+         },
+         {
+          "Num": 1.0
+         }
+        ]
        },
        null
       ],
@@ -70,7 +93,17 @@
         "index": null
        },
        {
-        "Num": 16.0
+        "Cost": [
+         {
+          "Pool": {
+           "base": 0,
+           "count": 1
+          }
+         },
+         {
+          "Num": 16.0
+         }
+        ]
        },
        null
       ]
@@ -103,7 +136,17 @@
       "index": null
      },
      "work": {
-      "Num": 16.0
+      "Cost": [
+       {
+        "Stage": {
+         "base": 0,
+         "count": 1
+        }
+       },
+       {
+        "Num": 16.0
+       }
+      ]
      }
     }
    },
@@ -117,7 +160,17 @@
       "index": null
      },
      "work": {
-      "Attr": 9
+      "Cost": [
+       {
+        "Stage": {
+         "base": 1,
+         "count": 1
+        }
+       },
+       {
+        "Attr": 9
+       }
+      ]
      }
     }
    },
@@ -135,7 +188,17 @@
       "index": null
      },
      "work": {
-      "Num": 20.0
+      "Cost": [
+       {
+        "Stage": {
+         "base": 0,
+         "count": 1
+        }
+       },
+       {
+        "Num": 20.0
+       }
+      ]
      }
     }
    },
@@ -163,7 +226,20 @@
    "cap": 48.0,
    "evict": "Lru",
    "name": "kv",
-   "preempt": "Lifo",
+   "preempt": {
+    "By": {
+     "keys": [
+      {
+       "Unary": [
+        "Neg",
+        {
+         "Ctx": "Admission"
+        }
+       ]
+      }
+     ]
+    }
+   },
    "queue": null,
    "spill": null
   },
@@ -180,6 +256,24 @@
  ],
  "seed": 1,
  "session": 2,
+ "sides": [
+  [
+   "Workload"
+  ],
+  [],
+  [
+   "Workload",
+   "Server",
+   "Workload"
+  ],
+  [
+   "Server",
+   "Server",
+   "Server",
+   "Server",
+   "Server"
+  ]
+ ],
  "slot_cached": 0,
  "slot_computed": 8,
  "slot_forced": 7,
@@ -208,16 +302,20 @@
      }
     }
    },
-   "name": "engine"
+   "name": "llm"
   },
   {
-   "kind": "Delay",
+   "kind": {
+    "Ps": {
+     "Ctx": "N"
+    }
+   },
    "name": "tool"
   }
  ],
  "trace": null,
  "trace_ordered": false,
  "turn": 1,
- "version": 11,
+ "version": 13,
  "warmup": 0.0
 }

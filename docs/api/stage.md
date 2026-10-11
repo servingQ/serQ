@@ -11,10 +11,10 @@ A stage is where time passes, and where a [`run`](statements.md#run) takes it.
 | [`fifo(c)`](#fifo) | `c`, one job each | clock time at rate 1 |
 | [`ps(φ)`](#ps) | all jobs at once | clock time, at rate `φ(present)/present` per job |
 | [`delay`](#delay) | infinite | clock time at rate 1 |
-| [`step { … }`](#step) | an iterating engine | the unit of `budget` (tokens) |
 
-The clock has no unit of its own: costs in seconds run in seconds, and
-`cost 1` runs on the step clock.
+The clock has no unit of its own: costs in seconds run in seconds. A stage
+that runs iterations, whose work is tokens, is an [engine](engine.md) on a
+device, written `engine NAME on DEVICE { … }`.
 
 ## `fifo`
 
@@ -51,81 +51,35 @@ split.
 delay
 ```
 
-Every job proceeds at rate 1 with no waiting.
+Every job proceeds at rate 1 with no waiting. It is `ps(present)`, each of
+`present` jobs at `present/present`, and links to the same IR: the run, the
+drawing and the Lean model read the two spellings alike.
 
-## `step`
+## Examples
+
+A complete program:
 
 ```serq
-step {
-  budget expr;
-  cost expr;
-  chunk expr;
-  serve admission;  |  serve by (expr, …);  |  serve decode first;  |  serve exclusive prefill;
-  serve only (expr) [admission | by (expr, …) | decode first];
-  memory POOL;
+fn main() {
+  stage svc : fifo;
+  workload {
+    arrive poisson(0.5);
+  }
+  server {
+    set t0 = now;
+    run svc (cost(svc, ~exp(1)));
+    observe response = now - t0;
+  }
 }
 ```
 
-An engine that runs iterations (continuous batching). An iteration serves its
-residents one token per decoding job and up to `chunk` per prefilling job until
-`budget` is spent. A `growing` job first grows its hold to the position it will
-reach. Then the stage admits from the pools that name it in [`admit via`](pool.md#admit-via). The
-iteration lasts `cost`, and its tokens are applied when it ends. An iteration
-that schedules no token is not one, unless it preempted.
+Save as `model.sq`, then run:
 
-| Clause | Type | Moment | Default | Description |
-|---|---|---|---|---|
-| `budget` | `expr` | `Budget` | `inf` | Tokens per iteration. Reads `residents`, `decoders`, `kv_decode`, `kv_prefill`. |
-| `cost` | `expr` | `Step` | required (a parse error without it) | Clock time of the iteration. Reads `tokens`, `decoders`, `prefilled`, `residents`, `kv_decode`, `kv_prefill`, `attention`. |
-| `chunk` | `expr` | `Budget` | `0` (no cap) | Cap on one request's prefill tokens in an iteration. |
-| `serve` | see below | `Serve` | `admission` | Which residents are served (`only`) and in what order, or an exclusive-prefill batch policy. At most once. |
-| `memory` | `pool` | | none | The pool whose holds give `kv_decode` and `kv_prefill`, and whose `preempt lifo` victims come from this stage. |
-
-### `serve`
-
-| Form | Meaning | IR (`CServe`) |
-|---|---|---|
-| `admission` | admission order (vLLM's `running` list) | `By([])` |
-| `by (k1, …)` | ascending keys per resident, ties by admission order | `By(keys)` |
-| `decode first` | decodes before prefills | `By([decoding ? 0 : 1])` |
-| `exclusive prefill` | one prefill alone, or a decode-only batch; a fitting waiting prefill displaces tentative resident decodes | `ExclusivePrefill` |
-| `only (p)` then an order | only the residents for which `p` is nonzero, in that order (`admission` when none is written) | `CStep.only = Some(p)` beside the order's `By` |
-
-Keys read `decoding`, `admission`, `remaining` and the totals `residents`,
-`decoders`, `kv_decode`, `kv_prefill`, and may not draw. `serve by (remaining)` is
-shortest-remaining-first; `serve by (-remaining)` is the opposite.
-`exclusive prefill` is not an order and cannot be combined with one. A
-resident prefill takes precedence and runs alone. Otherwise residents are
-considered for decode; while budget is left, a fitting waiting prefill can
-replace that selection and use the full budget. A selected prefill admits
-no further waiting request in that iteration. Cancelled decode work neither
-runs nor advances computed KV; any capacity already allocated remains held.
-During these admissions `budget_left` supplies the full budget. Ordinary
-fit, queue-head and no-admission-after-preemption gates still apply. This
-policy does not supply vendor PP caps or remote-KV admission rules. See
-[Separate prefill/decode batches](../design/exclusive-prefill.md).
-
-`only (p)` is read for each resident at its turn, from the variables a key
-reads, the totals as the residents stand at that read (a session the
-iteration admitted included). Unlike a key it may not read `now` or
-`work(…)`: an engine whose residents it all excludes waits for the next
-event, and the clock moving is none. It may not draw. A resident it
-excludes gets no token this iteration, keeps its allocation and advances no
-computed KV; an admitted session it excludes waits as such a resident.
-`serve only (decoders > 0 ? decoding : !decoding);` is FasterTransformer's decode-only batches
-([FasterTransformer](../use-cases/fastertransformer.md)). `only` does not
-combine with `exclusive prefill`. See
-[Serving a subset](../design/serve-only.md).
-
-### Example
-
-From `examples/multi-turn/vllm.sq`:
-
-```serq
-stage engine : step {
-  budget B;
-  chunk chunk_cap;
-  cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-  memory kv;
-}
+```sh
+serq run model.sq --horizon 10
 ```
+
+## See also
+
+[Engine](engine.md), [`run`](statements.md#run), [context variables](context.md),
+[`pyserq.Stage`](../python/stage.md).

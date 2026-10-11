@@ -22,20 +22,20 @@
 <rect class="frame" fill="none" stroke="#4b5563" stroke-width="1.1" x="162" y="51" width="286.4" height="186" rx="8"/>
 <path class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" d="M 174 158 L 174 176 A 11 4 0 0 0 196 176 L 196 158 Z"/>
 <ellipse class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="185" cy="158" rx="11" ry="4"/>
-<text x="206" y="164" text-anchor="start" font-size="10" fill="#1d2021">pool reqs</text>
-<text x="206" y="176" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 16 · admit via engine</text>
+<text x="206" y="164" text-anchor="start" font-size="10" fill="#1d2021">pool reqs on vllm</text>
+<text x="206" y="176" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 16</text>
 <path class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" d="M 174 190 L 174 208 A 11 4 0 0 0 196 208 L 196 190 Z"/>
 <ellipse class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" cx="185" cy="190" rx="11" ry="4"/>
-<text x="206" y="196" text-anchor="start" font-size="10" fill="#1d2021">pool kv</text>
+<text x="206" y="196" text-anchor="start" font-size="10" fill="#1d2021">pool kv on vllm's device</text>
 <text x="206" y="208" text-anchor="start" font-size="8" fill="#6b7280" class="dim">cap 160000 · block 16 · evict lru · preempt lifo</text>
 <rect class="cached" fill="#e6e2da" stroke="none" x="174" y="213" width="262.4" height="11" rx="2"/>
 <text x="305.2" y="221.5" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">prefix cache</text>
 <rect class="station" fill="#d8e6e4" stroke="#4b5563" stroke-width="1.3" x="263.2" y="77" width="84" height="52" rx="3"/>
 <rect class="cell" fill="#ffffff" stroke="#4b5563" stroke-width=".8" x="271.2" y="116" width="68" height="6"/>
 <rect class="solid" fill="#eef2f5" stroke="#4b5563" stroke-width="1.1" x="271.2" y="116" width="42.16" height="6"/>
-<text x="305.2" y="99" text-anchor="middle" font-size="10" fill="#1d2021">step</text>
-<text x="305.2" y="69" text-anchor="middle" font-size="10" fill="#1d2021">engine</text>
-<text x="305.2" y="142" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">budget 8192</text>
+<text x="305.2" y="99" text-anchor="middle" font-size="10" fill="#1d2021">engine</text>
+<text x="305.2" y="69" text-anchor="middle" font-size="10" fill="#1d2021">vllm</text>
+<text x="305.2" y="142" text-anchor="middle" font-size="8" fill="#6b7280" class="dim">tokens cap 8192</text>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M28 103 L263.2 103" marker-end="url(#a)"/>
 <text x="28" y="93" text-anchor="start" font-size="8" fill="#6b7280" class="dim">new sessions: Poisson 0.3</text>
 <path class="flow" fill="none" stroke="#4b5563" stroke-width="1.3" d="M347.2 103 L474.4 103" marker-end="url(#a)"/>

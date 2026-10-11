@@ -4,11 +4,10 @@
 // (docs/use-cases/workloads.md).
 use "../../lib/vllm.sq";
 
+use "std/args";
+
 let B = 8192;          // max_num_batched_tokens
-let max_seqs = 16;     // max_num_seqs
-let blocks = 10000;    // num_gpu_blocks (less the null block)
 let bs = 16;           // block_size
-let chunk_cap = 0;     // long_prefill_token_threshold (0: none)
 let a = 2e-5;          // compute per scheduled token (s)
 let omega = 2e-4;      // weights read per iteration (s)
 let beta = 2e-9;       // KV read per iteration per resident context token (s)
@@ -17,45 +16,77 @@ let Lambda = 0.3;      // conversations per second
 let p = 0.8;           // the person asks again
 let Z = 20.0;          // reading and typing time (s)
 
-pool kv { cap blocks * bs; block bs; evict lru; preempt lifo; }
-pool reqs { cap max_seqs; admit via engine; }   // the engine's step admits the waiting, FCFS
+fn main() {
+  let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
+  let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
+  let chunk_cap = args.number("chunk_cap", inf);   // long_prefill_token_threshold (inf: none)
 
-stage engine : step {
-  budget B;
-  chunk chunk_cap;
-  cost c0 + max(omega + beta * (kv_decode + kv_prefill), tokens * a);
-  memory kv;
-}
-stage user : delay;
-
-// --8<-- [start:workload]
-// Each turn resends the conversation so far (`K`) with a short message;
-// the gap between turns is a person, not a tool.
-workload {
-  arrive poisson(Lambda);
-  hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
-  init { set K = 0; }
-  turn {
-    set n = ceil(K == 0 ? ~uniform(200, 1000) : ~exp(100));
-    set o = floor(~exp(300)) + 1;
-    set more = ~bernoulli(p);
+  device gpu {
+    compute (t) = t * a;
+    hbm (k) = omega + beta * k;
+    kv cap blocks * bs;
   }
-  session {
-    turn;
-    loop {
-      request;
-      set K = prompt + o;
-      branch (more) { run user (~exp(Z)); turn; } else { end; }
+  engine vllm on gpu {
+    reqs cap max_seqs;
+    tokens cap B;
+    schedule {
+      // long_prefill_token_threshold binds only while another request is
+      // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
+      let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
+      advance running each at most (threshold);
+      admit waiting while (running.preempted == 0) each at most (threshold);
+    }
+    execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
+  pool reqs on vllm { queue fifo; }   // the engine admits the waiting, FCFS
+  stage user : delay;
+
+  // --8<-- [start:workload]
+  // Each turn resends the conversation so far (`K`) with a short message;
+  // the gap between turns is a person, not a tool.
+  workload {
+    arrive poisson(Lambda);
+    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    init { set K = 0; }
+    turn {
+      set n = ceil(K == 0 ? ~uniform(200, 1000) : ~exp(100));
+      set o = floor(~exp(300)) + 1;
+      set more = ~bernoulli(p);
+    }
+    session {
+      turn;
+      while (more) {
+        set K = K + n + o;
+        run user (cost(user, ~exp(Z)));
+        turn;
+      }
     }
   }
-}
-// --8<-- [end:workload]
+  // --8<-- [end:workload]
 
-server {
-  set t0 = now;
-  set prompt = K + n;
-  vllm_request(reqs, kv, engine, prompt, o, t0);
-  observe response = now - t0;
-}
+  server {
+    set t0 = now;
+    set prompt = K + n;
+    // A slot of `reqs` and the blocks of `kv`. The scheduler looks up the
+    // prefix hit when it admits (scheduler.py:932-939) and allocates the hit
+    // plus the chunk the budget allows (scheduler.py:1078-1128, 1214-1226);
+    // docs/language.md §7 "Admission" has the argument. `known` is every
+    // token the request has: the prompt, or after a preemption the position
+    // it had reached plus the token sampled there (vLLM keeps the generated
+    // tokens and drops only their KV, scheduler.py:1560-1561).
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))
+         at admission (known = computed < prompt ? prompt : computed + 1,
+                       hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
+      set c = min(cached, reusable(known, blocksize(kv)));
+      observe hit = c > 0;                    // any reused block, again after a preemption
+      observe prefill_tokens = known - c;
+      run vllm prefill (cost(vllm, known - c)) growing kv;
+      branch (known == prompt) { observe ttft = now - t0; }   // not a resumed request's re-prefill
+      run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
+    } cache (cost(reqs, kv, prompt + o));
+    observe response = now - t0;
+  }
 
-run { horizon 2000; warmup 200; seed 1; }
+
+}
