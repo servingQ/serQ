@@ -741,6 +741,8 @@ fn expr_reads(e: &Expr, n: &str) -> bool {
             Arg::Expr(x) => expr_reads(x, n),
             Arg::Ref(r) => ref_reads(r, n) || (r.index.is_none() && r.name == n),
         }),
+        // an unread argument is resolved where it stands, not read
+        Expr::Unread(_, e) => expr_reads(e, n),
         Expr::Unary(_, a) => expr_reads(a, n),
         Expr::Binary(_, a, b) => expr_reads(a, n) || expr_reads(b, n),
         Expr::Cond(c, a, b) => expr_reads(c, n) || expr_reads(a, n) || expr_reads(b, n),
@@ -756,9 +758,13 @@ fn ref_reads(r: &Ref, n: &str) -> bool {
 fn stmt_reads(s: &Stmt, n: &str) -> bool {
     let block = |b: &[Stmt]| b.iter().any(|s| stmt_reads(s, n));
     match s {
-        Stmt::Declare(..) | Stmt::Side(_) | Stmt::Turn | Stmt::Request | Stmt::End | Stmt::Join => {
-            false
-        }
+        Stmt::Declare(..)
+        | Stmt::Side(_)
+        | Stmt::Turn
+        | Stmt::Request
+        | Stmt::End
+        | Stmt::Join
+        | Stmt::Unread(_) => false,
         Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
         Stmt::Hold { body, .. } => {
             // a nested hold that binds `n` itself gives its body its own `n`
@@ -822,6 +828,20 @@ fn header_reads(s: &Stmt, n: &str) -> bool {
         || lease
             .as_ref()
             .is_some_and(|(r, t)| ref_reads(r, n) || expr_reads(t, n))
+}
+
+/// `Expr::bind_unread` in every part of `stmts` (`each_part_mut`): its
+/// expressions, the index of each reference, and a `Stmt::Unread`'s
+/// arguments, which are unread whole.
+fn bind_unread(stmts: &mut [Stmt], binds: &[(String, Expr)]) {
+    each_part_mut(
+        stmts,
+        &mut Parts {
+            expr: |e: &mut Expr| e.bind_unread(binds),
+            reference: |r: &mut Ref| r.index.iter_mut().for_each(|i| i.bind_unread(binds)),
+            unread: |a: &mut Arg| a.substitute(binds),
+        },
+    );
 }
 
 /// Does this hold body begin with the `set` of a binding `n`? The parser
@@ -944,6 +964,8 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
                 Arg::Ref(_) => None,
             })
         }
+        // an unread argument is never evaluated
+        Expr::Unread(_, e) => live_read(e, attrs, lets),
         Expr::Unary(_, a) => live_read(a, attrs, lets),
         Expr::Binary(_, a, b) => live_read(a, attrs, lets).or_else(|| live_read(b, attrs, lets)),
         Expr::Cond(c, a, b) => live_read(c, attrs, lets)
@@ -1048,6 +1070,21 @@ pub(crate) fn names(e: &Expr, vars: &mut Vec<String>, refs: &mut Vec<Ref>) {
     vars.extend(indexed);
 }
 
+/// `names_in` of a call's argument: a reference, with its index's names.
+fn arg_names(a: &Arg, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &mut Vec<Ref>) {
+    match a {
+        Arg::Expr(x) => names_in(x, vars, indexed, refs),
+        Arg::Ref(r) => {
+            if let Some(i) = &r.index {
+                let mut inner = vec![];
+                names_in(i, &mut inner, indexed, refs);
+                indexed.extend(inner);
+            }
+            refs.push(r.clone());
+        }
+    }
+}
+
 /// `names`, with the names read inside a reference's index (`cachedin(P[i].kv)`)
 /// apart in `indexed`.
 fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &mut Vec<Ref>) {
@@ -1064,17 +1101,11 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
                 }
             }
         }
-        Expr::Call(_, args) => args.iter().for_each(|a| match a {
-            Arg::Expr(x) => names_in(x, vars, indexed, refs),
-            Arg::Ref(r) => {
-                if let Some(i) = &r.index {
-                    let mut inner = vec![];
-                    names_in(i, &mut inner, indexed, refs);
-                    indexed.extend(inner);
-                }
-                refs.push(r.clone());
-            }
-        }),
+        Expr::Call(_, args) => args.iter().for_each(|a| arg_names(a, vars, indexed, refs)),
+        Expr::Unread(args, e) => {
+            args.iter().for_each(|a| arg_names(a, vars, indexed, refs));
+            names_in(e, vars, indexed, refs);
+        }
         Expr::Unary(_, a) => names_in(a, vars, indexed, refs),
         Expr::Binary(_, a, b) => {
             names_in(a, vars, indexed, refs);
@@ -1168,12 +1199,13 @@ fn collect_entry(
 /// rest: the header is the admission and sees less. The index of every
 /// reference the body names (`run nic[k]`, `hold kv`, `release src`) is in
 /// `indices`: read as the body reads, and the only place a `from` name may
-/// stand as a number.
+/// stand as a number. A `Stmt::Unread`'s arguments are in `unread`.
 fn split_reads<'a>(
     stmts: &'a [Stmt],
     headers: &mut Vec<&'a Expr>,
     bodies: &mut Vec<&'a Expr>,
     indices: &mut Vec<&'a Expr>,
+    unread: &mut Vec<&'a Arg>,
 ) {
     let index = |r: &'a Ref, indices: &mut Vec<&'a Expr>| {
         if let Some(i) = &r.index {
@@ -1190,6 +1222,7 @@ fn split_reads<'a>(
             | Stmt::Mark(_)
             | Stmt::Join => {}
             Stmt::Set(_, e) | Stmt::Observe(_, e) => bodies.push(e),
+            Stmt::Unread(args) => unread.extend(args),
             Stmt::Grow(r, e) | Stmt::Load(r, e) => {
                 index(r, indices);
                 bodies.push(e);
@@ -1219,7 +1252,7 @@ fn split_reads<'a>(
                     index(r, indices);
                     bodies.push(t);
                 }
-                split_reads(body, headers, bodies, indices);
+                split_reads(body, headers, bodies, indices, unread);
             }
             Stmt::Run {
                 stage,
@@ -1237,14 +1270,14 @@ fn split_reads<'a>(
             }
             Stmt::Branch(p, a, b) => {
                 bodies.push(p);
-                split_reads(a, headers, bodies, indices);
-                split_reads(b, headers, bodies, indices);
+                split_reads(a, headers, bodies, indices, unread);
+                split_reads(b, headers, bodies, indices, unread);
             }
             Stmt::While(e, b) => {
                 bodies.push(e);
-                split_reads(b, headers, bodies, indices);
+                split_reads(b, headers, bodies, indices, unread);
             }
-            Stmt::Loop(b) | Stmt::Fork(b) => split_reads(b, headers, bodies, indices),
+            Stmt::Loop(b) | Stmt::Fork(b) => split_reads(b, headers, bodies, indices, unread),
             Stmt::Choose { count, key, .. } => {
                 bodies.push(count);
                 bodies.extend(key);
@@ -2607,9 +2640,21 @@ impl Parser {
                 ),
             );
         }
+        // how many times the body reads each parameter: an argument read
+        // twice is evaluated twice, and one never read is left unread
+        let uses: Vec<usize> = d
+            .params
+            .iter()
+            .map(|p| {
+                d.body
+                    .iter()
+                    .filter(|t| t.tok == Tok::Ident(p.clone()))
+                    .count()
+            })
+            .collect();
         // the names the body assigns: an argument that reads one would read
         // the body's value, not the one at the use
-        for (p, a) in d.params.iter().zip(&args) {
+        for ((p, a), &uses) in d.params.iter().zip(&args).zip(&uses) {
             if a.is_empty() {
                 return self.err_at(at, format!("`{}`: the argument for `{p}` is empty", d.name));
             }
@@ -2625,11 +2670,6 @@ impl Parser {
                 let by = format!("`{}`'s call of `{q}.{v}` writes", d.name);
                 return self.err_at(at, capture_message(p, &n, &by));
             }
-            let uses = d
-                .body
-                .iter()
-                .filter(|t| t.tok == Tok::Ident(p.clone()))
-                .count();
             if uses > 1 && (a.iter().any(|t| t.tok == Tok::Tilde) || self.draws_through(a)) {
                 return self.err_at(
                     at,
@@ -2708,6 +2748,34 @@ impl Parser {
         if !d.stmts {
             out.push(paren(Tok::RParen, ")", &self.toks[end - 1]));
         }
+        // an argument the body never reads stays, to be resolved here:
+        // `Unread((body), a, …)`, or `Unread(a, …); body`
+        let unread: Vec<&Vec<Token>> = args
+            .iter()
+            .zip(&uses)
+            .filter(|(_, n)| **n == 0)
+            .map(|(a, _)| a)
+            .collect();
+        if !unread.is_empty() {
+            let like = &self.toks[at];
+            let mut head = vec![paren(Tok::Unread, "", like), paren(Tok::LParen, "(", like)];
+            if !d.stmts {
+                head.append(&mut out);
+                head.push(paren(Tok::Comma, ",", like));
+            }
+            for (k, a) in unread.into_iter().enumerate() {
+                if k > 0 {
+                    head.push(paren(Tok::Comma, ",", &a[0]));
+                }
+                head.extend(a.iter().cloned());
+            }
+            head.push(paren(Tok::RParen, ")", &self.toks[end - 1]));
+            if d.stmts {
+                head.push(paren(Tok::Semi, ";", &self.toks[end - 1]));
+                head.append(&mut out);
+            }
+            out = head;
+        }
         if self.toks.len() - (end - at) + out.len() > MAX_TOKENS {
             return self.err_at(at, "the definitions expand to more than a program can hold");
         }
@@ -2742,7 +2810,8 @@ impl Parser {
             let at = self.pos;
             let e = self.expr()?;
             let mut vars = vec![];
-            names(&e, &mut vars, &mut Vec::new());
+            let mut refs = vec![];
+            names(&e, &mut vars, &mut refs);
             if let Some(name) = vars
                 .iter()
                 .find(|name| self.structural_overrides.contains(*name))
@@ -2778,6 +2847,22 @@ impl Parser {
                     );
                 }
             };
+            // the size folded, so a name that is no constant is an argument
+            // a definition does not read; the linker never sees an array
+            // size, so it is resolved here, where only constants are known
+            if let Some(name) = vars
+                .iter()
+                .chain(refs.iter().map(|r| &r.name))
+                .find(|n| self.const_value(&Expr::Var(n.to_string())).is_none())
+            {
+                return self.err_at(
+                    at,
+                    format!(
+                        "array size: `{name}` is not a `let` constant, and an array size is \
+                         resolved during parsing, where no other name is known"
+                    ),
+                );
+            }
             self.expect(&Tok::RBracket)?;
             Ok(Some(n))
         } else {
@@ -2789,6 +2874,16 @@ impl Parser {
     /// if it is one.
     fn const_value(&self, e: &Expr) -> Option<f64> {
         self.fold(e, &std::cell::Cell::new(0))
+    }
+
+    /// `a, …)` after a `Tok::Unread`'s `(` (and an expression's body).
+    fn unread_args(&mut self) -> PResult<Vec<Arg>> {
+        let mut args = vec![self.arg()?];
+        while self.eat(&Tok::Comma) {
+            args.push(self.arg()?);
+        }
+        self.expect(&Tok::RParen)?;
+        Ok(args)
     }
 
     /// `const_value` with the terms its aggregates have written out so far:
@@ -2860,6 +2955,10 @@ impl Parser {
                     .collect::<Option<Vec<f64>>>()?;
                 crate::frontend::link::const_call(f, &xs)?
             }
+            // an unread argument is never evaluated: the linker resolves
+            // it where the expression goes (a `let`), and `array_count`
+            // where it goes nowhere
+            Expr::Unread(_, body) => self.fold(body, terms)?,
             Expr::Sample(..) => return None,
         })
     }
@@ -3621,7 +3720,8 @@ impl Parser {
             let mut headers = vec![];
             let mut bodies = vec![];
             let mut indices = vec![];
-            split_reads(&body, &mut headers, &mut bodies, &mut indices);
+            let mut unread = vec![];
+            split_reads(&body, &mut headers, &mut bodies, &mut indices, &mut unread);
             // an own pool, or the `from` name, is all an entry's statements hold
             let mut named = vec![];
             pools_named(&body, &mut named);
@@ -3642,16 +3742,24 @@ impl Parser {
                     ),
                 );
             }
+            let mut sources = vec![];
             for (e, header, in_index) in headers
                 .iter()
                 .map(|e| (e, true, false))
                 .chain(bodies.iter().map(|e| (e, false, false)))
                 .chain(indices.iter().map(|e| (e, false, true)))
             {
-                let mut vars = vec![];
-                let mut indexed = vec![];
-                let mut refs = vec![];
+                let (mut vars, mut indexed, mut refs) = (vec![], vec![], vec![]);
                 names_in(e, &mut vars, &mut indexed, &mut refs);
+                sources.push((vars, indexed, refs, header, in_index));
+            }
+            // what a statement definition's use does not read is resolved as its body
+            let (mut vars, mut indexed, mut refs) = (vec![], vec![], vec![]);
+            for a in unread {
+                arg_names(a, &mut vars, &mut indexed, &mut refs);
+            }
+            sources.push((vars, indexed, refs, false, false));
+            for (vars, indexed, refs, header, in_index) in sources {
                 let tagged = vars
                     .into_iter()
                     .map(|v| (v, in_index))
@@ -3835,6 +3943,11 @@ impl Parser {
     /// One statement into `out`. A serving form is parsed here because
     /// `transfer … from P to Q (n)` stands for three kernel statements.
     fn stmt_into(&mut self, out: &mut Vec<Stmt>) -> PResult<()> {
+        if self.eat(&Tok::Unread) {
+            self.expect(&Tok::LParen)?;
+            out.push(Stmt::Unread(self.unread_args()?));
+            return self.expect(&Tok::Semi);
+        }
         if let Some(i) = self.use_of_def() {
             if !self.defs[i].stmts {
                 return self.err(format!(
@@ -4369,6 +4482,8 @@ impl Parser {
         }
         let bind_at = std::mem::take(&mut self.bind_at);
         let mut body = self.block()?;
+        // an unread argument reads nothing, and sees the binding as written
+        bind_unread(&mut body, &binds);
         // A binding the body reads is set at the top of the body, to the
         // value it had at the admission: the body runs at the admission's
         // instant, so an expression of attributes and constants reads the
@@ -4975,6 +5090,12 @@ impl Parser {
         let span = self.span();
         match self.advance() {
             Tok::Num(x) => Ok(Expr::Num(x)),
+            Tok::Unread => {
+                self.expect(&Tok::LParen)?;
+                let body = self.expr()?;
+                self.expect(&Tok::Comma)?;
+                Ok(Expr::Unread(self.unread_args()?, Box::new(body)))
+            }
             Tok::LParen => {
                 let e = self.expr()?;
                 self.expect(&Tok::RParen)?;

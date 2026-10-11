@@ -844,6 +844,7 @@ fn stmt_span(s: &Stmt) -> Option<Span> {
                 .or_else(|| expr_span(a))
                 .or_else(|| expr_span(b)),
             Expr::Sample(_, xs) => xs.iter().find_map(expr_span),
+            Expr::Unread(_, x) => expr_span(x),
             Expr::Call(_, args) => args.iter().find_map(|a| match a {
                 Arg::Expr(x) => expr_span(x),
                 Arg::Ref(r) => r.span,
@@ -971,7 +972,8 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
     /// right side of a short-circuit operator need not be evaluated.
     fn certain(e: &Expr, t: &Taint) -> BTreeSet<String> {
         match e {
-            Expr::Located(_, e) | Expr::Unary(_, e) => certain(e, t),
+            // an unread argument is checked, never evaluated
+            Expr::Located(_, e) | Expr::Unary(_, e) | Expr::Unread(_, e) => certain(e, t),
             Expr::Cond(c, a, b) => {
                 let mut out = certain(c, t);
                 out.extend(certain(a, t).intersection(&certain(b, t)).cloned());
@@ -1179,6 +1181,7 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                 | Stmt::Request
                 | Stmt::Call { .. }
                 | Stmt::Mark(_)
+                | Stmt::Unread(_)
                 | Stmt::Join => {}
             }
         }
@@ -1684,6 +1687,14 @@ impl Linker<'_> {
                         .into(),
                 ));
             }
+            // an unread argument is resolved, as in any expression, and
+            // never evaluated: it need not be a constant (`one(kv)`)
+            Expr::Unread(args, body) => {
+                for a in args {
+                    self.unread(a)?;
+                }
+                self.eval_const(body)?
+            }
             Expr::Call(f, args) => {
                 let xs: Vec<f64> = args
                     .iter()
@@ -1786,9 +1797,35 @@ impl Linker<'_> {
         })
     }
 
+    /// Resolve an argument a use does not read (`Expr::Unread`) where it
+    /// stands, and discard it: a pool or a stage as a reference, any other
+    /// name as a value. Never evaluated, it is not checked for its moment.
+    fn unread(&self, a: &Arg) -> LResult<()> {
+        match a {
+            Arg::Expr(e) => self.expr(e).map(drop),
+            Arg::Ref(r)
+                if self.pools.contains_key(&r.name) || self.stages.contains_key(&r.name) =>
+            {
+                r.index
+                    .as_deref()
+                    .map_or(Ok(()), |i| self.expr(i).map(drop))
+            }
+            Arg::Ref(r) => self
+                .expr(&Expr::Var(r.name.clone()))
+                .map(drop)
+                .map_err(|e| e.at(r.span)),
+        }
+    }
+
     fn expr(&self, e: &Expr) -> LResult<CExpr> {
         Ok(match e {
             Expr::Located(span, inner) => self.expr(inner).map_err(|e| e.at(Some(*span)))?,
+            Expr::Unread(args, body) => {
+                for a in args {
+                    self.unread(a)?;
+                }
+                self.expr(body)?
+            }
             Expr::Num(x) => CExpr::Num(*x),
             Expr::Var(n) => {
                 if let Some(&i) = self.attr_index.get(n) {
@@ -1912,6 +1949,12 @@ impl Linker<'_> {
                 self.declarations.push((self.attr_index[name], *kind));
                 continue;
             }
+            if let Stmt::Unread(args) = s {
+                for a in args {
+                    self.unread(a)?;
+                }
+                continue;
+            }
             if let Stmt::Side(side) = s {
                 match side {
                     crate::ir::Side::Server => {
@@ -1934,7 +1977,7 @@ impl Linker<'_> {
                 }
                 Stmt::Turn => CStmt::Turn,
                 Stmt::End => CStmt::End,
-                Stmt::Declare(..) | Stmt::Side(_) => unreachable!(),
+                Stmt::Declare(..) | Stmt::Side(_) | Stmt::Unread(_) => unreachable!(),
                 Stmt::Request => {
                     return Err(LinkError::new(
                         "`request` survived parsing: the parser splices the server in its place"
