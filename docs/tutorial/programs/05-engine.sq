@@ -73,7 +73,8 @@ fn main() {
       // a request preempted runs this body again; count its hit once
       branch (computed == 0) { observe hit = c > 0; }
       run llm prefill (cost(llm, prompt - c)) growing kv;
-      observe ttft = now - t0;
+      // and its first token once: not again if it was preempted after it
+      branch (computed < prompt) { observe ttft = now - t0; }
       run llm decode (cost(llm, o - 1)) growing kv;
     } cache (cost(reqs, kv, prompt + o));
     observe response = now - t0;
