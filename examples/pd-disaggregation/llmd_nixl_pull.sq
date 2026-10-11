@@ -145,7 +145,7 @@ fn main() {
     decode (prompt) from src {
       set produced = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
       set transferred = 0;   // one KV transfer per request (nixl/pull_scheduler.py:187-189)
-      set kept = prompt;
+      set kept = prompt;     // the most tokens an attempt had: a preemption keeps the outputs
       hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
            reuse (cost(kv, reqs, reusable(known, bs)))
            at admission (known = max(kept, computed + 1)) {

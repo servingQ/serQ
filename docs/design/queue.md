@@ -60,8 +60,10 @@ expr  += QUEUE [ '[' expr ']' ] . POOL            -- from outside, a pool's read
 1. *An entry sees its own.* The header — the units, `reserve`, `reuse`, the
    `at admission` bindings — reads the parameters, the queue's pools and stage,
    the `let` constants, and what the entry sets above the hold (#475: `set
-   kept = prompt;` before it, as a server's header reads an attribute; not
-   what the hold's body or a later statement sets). The body also reads `now`, `cached`, the context
+   kept = prompt;` before it, as a server's header reads an attribute set
+   before it). A local set only in the hold's body or after it is refused;
+   one also set above is read at its latest value: after a preemption, the
+   one the body set (this is what `kept` relies on). The body also reads `now`, `cached`, the context
    variables and the request's `hidden` attributes; any other session
    attribute, and another queue's `Q.x`, is an error at the entry, and so
    is one read in the index of a reference the body writes. The body holds

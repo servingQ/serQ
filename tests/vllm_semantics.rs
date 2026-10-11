@@ -309,6 +309,15 @@ fn preempted_twice_in_a_queue(set_kept: &str, known_is: &str) -> String {
 /// from `computed` alone, B comes back with its prompt after the second and
 /// records its first token twice; with `kept`, set above the hold and read
 /// by its header, it comes back with 33.
+///
+/// The steps are `a_request_preempted_twice_keeps_its_outputs`'s. `at` is
+/// where each execution of B's hold finds it: 0 on the first; 32 after
+/// step 5, when B, the last admitted, needs a third block with its prompt
+/// computed and its first token sampled; 24 after step 35, when C's token
+/// 49 needs a block and B, re-admitted at step 32, is three chunks into its
+/// 33. `done`: A ends at step 31 (its prefill, then 29 decodes from step
+/// 3), C at 61, and B, admitted again at 62, recomputes its 33 tokens in
+/// 5 chunks and decodes the 8 left by 74.
 #[test]
 fn a_request_preempted_twice_in_a_queue_keeps_its_outputs() {
     let r = run(

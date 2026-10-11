@@ -475,7 +475,7 @@ fn an_admission_binding_sees_the_entry_only() {
 }
 
 /// A local the entry sets above a hold is the header's, as a session
-/// attribute is a server hold's (#475): the entry is the server, its
+/// attribute set before it is a server hold's (#475): the entry is the server, its
 /// `kept` and `known` renamed `E.kept` and `E.known`.
 #[test]
 fn a_header_reads_a_local_set_above_its_hold() {
@@ -512,8 +512,24 @@ fn a_header_reads_a_local_set_above_its_hold() {
     );
 }
 
-/// What the hold's body sets, a statement after it, or an arm or a loop
-/// above it that may not have run, is not set when the header is read.
+/// A local both arms of a branch set is set after the branch.
+#[test]
+fn a_header_reads_a_local_both_arms_set() {
+    let src = format!(
+        "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+         queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+           decode (prompt) {{
+             branch (prompt > 1) {{ set kept = prompt; }} else {{ set kept = 1; }}
+             hold kv (cost(kv, kept)) {{ run E prefill (cost(E, 1)) growing kv; }}
+           }} }}
+         {WORKLOAD}"
+    );
+    compile_source(&common::main_source(&src), &common::horizon(100.0))
+        .unwrap_or_else(|e| panic!("{e}\n{src}"));
+}
+
+/// What the hold's body sets, a statement after it, or one arm, a loop or a
+/// fork above it that may not have run, is not set when the header is read.
 #[test]
 fn a_header_does_not_read_a_local_set_below_or_beside_it() {
     for (above, inside, below) in [
@@ -521,6 +537,12 @@ fn a_header_does_not_read_a_local_set_below_or_beside_it() {
         ("", "", "set kept = prompt;"),
         ("branch (prompt > 1) { set kept = prompt; }", "", ""),
         ("while (prompt > 100) { set kept = prompt; }", "", ""),
+        (
+            "branch (prompt > 1) { set kept = prompt; } else { set other = 1; }",
+            "",
+            "",
+        ),
+        ("fork { set kept = prompt; } join;", "", ""),
     ] {
         refused(
             &format!(

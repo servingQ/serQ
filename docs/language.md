@@ -465,10 +465,12 @@ none may draw.
 An entry sees its own. Its header — the units, `reserve`, `reuse`, the
 `at admission` bindings — reads the parameters, the queue's pools and stage,
 the constants, `cached` and `computed`, and what the entry sets above the
-hold, as a server's header reads the session's attributes (`set kept =
-prompt;` before it, not inside a `branch` or loop that may not have run).
-What the hold's own body sets, or a statement after it, is not set when
-the header is read, and is refused. Its body also reads `now`, what it
+hold, as a server's header reads an attribute set before it (`set kept =
+prompt;` before it, or in both arms of a `branch`; not in a loop or `fork`
+that may not have run). A local set only in the hold's body or after it is
+refused; one also set above is read at its latest value: after a
+preemption, the one the body set (this is what `kept` relies on). Its body
+also reads `now`, what it
 sets itself and the request's `hidden` attributes, and nothing else the
 session has set, nor another queue's
 `Q.x`; every index it writes (`run nic[k]`) reads as the body does. Its

@@ -1408,8 +1408,8 @@ fn collect_entry(
 /// The expressions of an entry's body, the holds' headers apart from the
 /// rest: the header is the admission and sees less. Each header comes with
 /// the locals set above its hold (`set kept = prompt;` before it, in the
-/// entry's statement order and not inside a branch or loop that may not
-/// have run), the only ones it reads. The index of every reference the body
+/// entry's statement order: in both arms of a `branch`, not in a loop or a
+/// `fork` that may not have run), the only ones it reads. The index of every reference the body
 /// names (`run nic[k]`, `hold kv`, `release src`) is in `indices`: read as
 /// the body reads, and the only place a `from` name may stand as a number.
 /// A `Stmt::Unread`'s arguments are in `unread`.
@@ -1487,11 +1487,18 @@ fn split_reads<'a>(
                 }
                 bodies.push(work);
             }
-            // what an arm or a pass sets is not set after it on every path
+            // a branch sets after it what both arms set; a pass of a loop,
+            // or a fork beside the session, may not have run
             Stmt::Branch(p, a, b) => {
                 bodies.push(p);
-                split_reads(a, &mut above.clone(), headers, bodies, indices, unread);
-                split_reads(b, &mut above.clone(), headers, bodies, indices, unread);
+                let (mut in_a, mut in_b) = (above.clone(), above.clone());
+                split_reads(a, &mut in_a, headers, bodies, indices, unread);
+                split_reads(b, &mut in_b, headers, bodies, indices, unread);
+                for n in in_a {
+                    if in_b.contains(&n) && !above.contains(&n) {
+                        above.push(n);
+                    }
+                }
             }
             Stmt::While(e, b) => {
                 bodies.push(e);
@@ -4086,7 +4093,7 @@ impl Parser {
                     }
                     if header && locals.contains(&v) {
                         return self.err_at(at, format!(
-                            "`{qname}.{verb}`: the admission header reads local `{v}`, which the entry does not set above this hold; a header sees the parameters, the queue's resources and the locals set before its hold, not a value its own body or a later statement calculates\nhelp: set `{v}` before the hold, not in a `branch` or loop that ends before it, or write its value in the header"
+                            "`{qname}.{verb}`: the admission header reads local `{v}`, which the entry does not set above this hold; a header sees the parameters, the queue's resources and the locals set before its hold, not a value its own body or a later statement calculates\nhelp: set `{v}` before the hold, in both arms of a `branch` and not in a loop or `fork` that ends before it, or write its value in the header"
                         ));
                     }
                     if v.contains('.') {
