@@ -72,7 +72,6 @@ use crate::frontend::link::{
     AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, LISTS, RENAMED, takes_supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
-use crate::ir::{ArgKind, Fun};
 
 mod device;
 
@@ -783,6 +782,9 @@ fn expr_reads(e: &Expr, n: &str) -> bool {
         Expr::Var(v) => v == n,
         Expr::Num(_) => false,
         Expr::Sample(_, args) => args.iter().any(|a| expr_reads(a, n)),
+        // a bare name in any position, not only where `takes_number`: a
+        // binding named as a pool (`queued(kw)`) must reach the check that
+        // the body would not say which it means
         Expr::Call(_, args) => args.iter().any(|a| match a {
             Arg::Expr(x) => expr_reads(x, n),
             Arg::Ref(r) => ref_reads(r, n) || (r.index.is_none() && r.name == n),
@@ -1004,9 +1006,9 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
             if !PURE.contains(&f.as_str()) {
                 return Some(format!("{f}(…)"));
             }
-            args.iter().find_map(|a| match a {
+            args.iter().enumerate().find_map(|(k, a)| match a {
                 Arg::Expr(x) => live_read(x, attrs, lets),
-                Arg::Ref(r) if r.index.is_none() => var(&r.name),
+                Arg::Ref(r) if r.index.is_none() && takes_number(f, k, args.len()) => var(&r.name),
                 Arg::Ref(_) => None,
             })
         }
@@ -1139,23 +1141,20 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
         Expr::Num(_) => {}
         Expr::Var(n) => vars.push(n.clone()),
         Expr::Sample(_, args) => args.iter().for_each(|a| names_in(a, vars, indexed, refs)),
-        Expr::Call(f, args) if f == "cost" => {
-            if let Some(arg) = args.last() {
-                match arg {
-                    Arg::Expr(e) => names_in(e, vars, indexed, refs),
-                    Arg::Ref(r) => vars.push(r.name.clone()),
-                }
-            }
-        }
-        // a bare name where the function takes a number (`min(kv, 1)`) is
-        // read as a number, as `min(kv + 0, 1)` is; where it takes a pool or
-        // a stage (`queued(kv)`), it is a reference
+        // a bare name where the function takes a number is a value
+        // (`takes_number`), elsewhere a reference; `cost`'s resources are
+        // its type, not what it reads
         Expr::Call(f, args) => {
-            let kinds = Fun::from_name(f).map(|fun| fun.signature());
-            for (k, a) in args.iter().enumerate() {
-                let takes_number = kinds.is_some_and(|ks| ks.get(k) == Some(&ArgKind::Expr));
+            let resources = if f == "cost" {
+                args.len().saturating_sub(1)
+            } else {
+                0
+            };
+            for (k, a) in args.iter().enumerate().skip(resources) {
                 match a {
-                    Arg::Ref(r) if takes_number && r.index.is_none() => vars.push(r.name.clone()),
+                    Arg::Ref(r) if r.index.is_none() && takes_number(f, k, args.len()) => {
+                        vars.push(r.name.clone())
+                    }
                     _ => arg_names(a, vars, indexed, refs),
                 }
             }
@@ -3069,9 +3068,10 @@ impl Parser {
             Expr::Call(f, args) => {
                 let xs = args
                     .iter()
-                    .map(|a| match a {
+                    .enumerate()
+                    .map(|(k, a)| match a {
                         Arg::Expr(e) => self.fold(e, terms),
-                        Arg::Ref(r) if r.index.is_none() => {
+                        Arg::Ref(r) if r.index.is_none() && takes_number(f, k, args.len()) => {
                             self.fold(&Expr::Var(r.name.clone()), terms)
                         }
                         Arg::Ref(_) => None,
@@ -5283,15 +5283,6 @@ impl Parser {
                                 if r.index.as_deref().is_some_and(Expr::draws) {
                                     return self.err_at(at, "a cost names a resource family; its type annotation cannot draw a member index");
                                 }
-                            }
-                        }
-                        if let Some(last @ Arg::Ref(_)) = args.last_mut() {
-                            let Arg::Ref(r) = last else { unreachable!() };
-                            if r.index.is_none() {
-                                *last = Arg::Expr(Expr::Located(
-                                    r.span.unwrap_or(span),
-                                    Box::new(Expr::Var(r.name.clone())),
-                                ));
                             }
                         }
                     }

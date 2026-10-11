@@ -9,7 +9,7 @@
 
 pub use crate::frontend::diagnostic::Span;
 
-pub use crate::ir::{BinOp, RunMode, UnOp};
+pub use crate::ir::{ArgKind, BinOp, Fun, RunMode, UnOp};
 
 /// Expressions are evaluated to `f64`. Booleans are 0 / 1.
 #[derive(Clone, Debug, PartialEq)]
@@ -109,6 +109,18 @@ impl Arg {
     }
 }
 
+/// Does `f` take a number at argument `k` of `n`? There a bare name is a
+/// value, as the linker resolves it: `min(o, 1)` reads `o` as
+/// `min(o + 0, 1)` does. Elsewhere it names a pool, a stage or an observe
+/// (`queued(kv)`, `total(latency)`). The function's signature says which,
+/// and `cost`'s last argument is the quantity it converts.
+pub fn takes_number(f: &str, k: usize, n: usize) -> bool {
+    if f == "cost" {
+        return k + 1 == n;
+    }
+    Fun::from_name(f).is_some_and(|fun| fun.signature().get(k) == Some(&ArgKind::Expr))
+}
+
 /// A pool or stage reference, possibly indexed into an array.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ref {
@@ -142,7 +154,23 @@ impl Expr {
                 Arg::Ref(r)
             })
             .collect();
-        args.push(Arg::Expr(value));
+        // a bare name as the kernel text parses it, `cost(E, S)`, so that
+        // the linker reads it as any argument that `takes_number`
+        let bare = |span, name| {
+            Arg::Ref(Ref {
+                span,
+                name,
+                index: None,
+            })
+        };
+        args.push(match value {
+            Expr::Var(name) => bare(None, name),
+            Expr::Located(span, inner) => match *inner {
+                Expr::Var(name) => bare(Some(span), name),
+                inner => Arg::Expr(Expr::Located(span, Box::new(inner))),
+            },
+            value => Arg::Expr(value),
+        });
         Expr::Call("cost".into(), args)
     }
 
