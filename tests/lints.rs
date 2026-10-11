@@ -792,7 +792,7 @@ fn a_schedules_let_cannot_take_a_name_the_language_supplies() {
     );
     let e = check(&src).expect_err("rejected");
     assert!(
-        e.contains("a schedule's `let` named `inf` would make the one word mean two things"),
+        e.contains("a `let` constant of engine `llm`'s schedule named `inf` would make the one word mean two things"),
         "{e}"
     );
     check(&src.replace("let inf = 1; ", "")).expect("links");
@@ -960,6 +960,8 @@ fn a_declaration_cannot_share_its_name_with_another() {
         ";
     const ENGINE: &str = "device gpu { } engine Q on gpu { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }";
     const QUEUE: &str = "queue Q { pool kv { cap 1; } serve fifo; }";
+    let schedule_let =
+        |l: &str| ENGINE.replace("schedule { ", &format!("schedule {{ let {l} = 1; "));
     let two_things = "would make the one word mean two things";
     let rename = "help: rename one of the two declarations";
     let refused = |decl: &str, observe: &str| {
@@ -1001,6 +1003,38 @@ fn a_declaration_cannot_share_its_name_with_another() {
             "",
             "`Q` is a queue at 1:19; an engine named `Q`",
         ),
+        // a `let` is read everywhere, a queue's body too (#488)
+        (
+            "let svc = 1;".to_string(),
+            "",
+            "`svc` is a `let` constant at 1:17; a stage named `svc`",
+        ),
+        (
+            "let p = 1; pool p { cap 1; }".to_string(),
+            "",
+            "`p` is a `let` constant at 1:17; a pool named `p`",
+        ),
+        (
+            "def f() { 1 } let f = 1;".to_string(),
+            "",
+            "`f` is a definition at 1:17; a `let` constant named `f`",
+        ),
+        (
+            format!("let kv = 1; {QUEUE}"),
+            "",
+            "`kv` is a `let` constant at 1:17; a pool of queue `Q` named `kv`",
+        ),
+        (
+            format!("{QUEUE} let kv = 1;"),
+            "",
+            "`kv` is a pool of queue `Q` at 1:28; a `let` constant named `kv`",
+        ),
+        // a schedule's `let` is read in its `each at most`, as a `def` is
+        (
+            format!("def c() {{ 1 }} {}", schedule_let("c")),
+            "",
+            "`c` is a definition at 1:17; a `let` constant of engine `Q`'s schedule named `c`",
+        ),
     ] {
         let e = refused(&decl, observe);
         assert!(e.contains(&format!("{want} {two_things}")), "{decl}: {e}");
@@ -1025,6 +1059,8 @@ fn a_declaration_cannot_share_its_name_with_another() {
         format!("pool kv {{ cap 1; }} {QUEUE}"),
         format!("stage kv : fifo; {QUEUE}"),
         "device gpu { kv cap 4; } pool kv on gpu { }".to_string(),
+        // nor a stage, which a schedule's `each at most` does not read
+        schedule_let("svc"),
     ] {
         check(
             &SRC.replace("DECL", &decl)

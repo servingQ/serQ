@@ -283,9 +283,6 @@ impl Parser {
         let (mut reads, calls) = self.reads_of(&body, true);
         reads.retain(|n| !params.contains(n));
         Ok(Def {
-            line: self.toks[at].line,
-            col: self.toks[at].col,
-            file: self.toks[at].file,
             name,
             params,
             stmts: false,
@@ -437,7 +434,7 @@ impl Parser {
                     return self.err_at(k_at, "`schedule` twice: an engine has one schedule");
                 }
                 schedule = true;
-                self.schedule(&mut s)?;
+                self.schedule(&name, &mut s)?;
             } else if self.eat_kw("execute") {
                 if execute {
                     return self.err_at(k_at, "`execute` twice: a batch takes one time");
@@ -551,11 +548,11 @@ impl Parser {
         Ok(())
     }
 
-    /// `{ let …; stmt* }` of an engine's `schedule`, written into `s`.
-    fn schedule(&mut self, s: &mut StepSpec) -> PResult<()> {
+    /// `{ let …; stmt* }` of engine `engine`'s `schedule`, written into `s`.
+    fn schedule(&mut self, engine: &str, s: &mut StepSpec) -> PResult<()> {
         let at = self.pos;
         self.expect(&Tok::LBrace)?;
-        let (lets, mut body) = self.engine_expr("schedule", |p| p.schedule_items())?;
+        let (lets, mut body) = self.engine_expr("schedule", |p| p.schedule_items(engine))?;
         self.expect(&Tok::RBrace)?;
         if body.is_empty() {
             return self.err_at(at, "a schedule needs a statement: what the iteration does");
@@ -622,8 +619,11 @@ impl Parser {
         self.write_schedule(at, s, body)
     }
 
-    /// The `let`s at the top of a schedule, then its statements.
-    fn schedule_items(&mut self) -> PResult<(Lets, Vec<SStmt>)> {
+    /// The `let`s at the top of a schedule, then its statements. A `let`
+    /// is read only in the schedule's `each at most`, which reads the
+    /// program's `def`s and `let`s beside it: one may not share its name
+    /// with a `def` (`Declaration::meets`).
+    fn schedule_items(&mut self, engine: &str) -> PResult<(Lets, Vec<SStmt>)> {
         let mut lets = vec![];
         let mut body = vec![];
         while *self.peek() != Tok::RBrace {
@@ -640,7 +640,7 @@ impl Parser {
                 if KEYWORDS.contains(&n.as_str()) || lets.iter().any(|(l, _)| *l == n) {
                     return self.err_at(n_at, format!("`{n}` cannot name a `let` here"));
                 }
-                self.own_name(n_at, &n, "a schedule's `let`")?;
+                self.declare_in(Scope::Schedule(engine.into()), n_at, &n, Kind::Constant)?;
                 self.expect(&Tok::Assign)?;
                 let e = self.engine_expr("each at most", |p| p.expr())?;
                 self.expect(&Tok::Semi)?;

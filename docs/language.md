@@ -174,12 +174,16 @@ The rules that are the language's, not the catalogue's:
   `claim` take a supplied name: `observe admitted = now;` does not link,
   nor an attribute's, built in or set (`stage think` does not link); a
   program may still `set` a built-in attribute. Two declarations of
-  different kinds do not share a name either (`observe svc` beside `stage
-  svc` does not link); an `observe` written again records the one
-  statistic at another place. A queue's own pool or device (`P.kv`)
-  shares its name only with what the queue's body reads bare: another of
-  the same queue, and a `def`. `def kv` beside queue `P`'s `pool kv` does
-  not link; a top-level `pool kv` or `stage kv` beside it links.
+  different kinds, a `let` among them, do not share a name either
+  (`observe svc` or `let svc = 1;` beside `stage svc` does not link); an
+  `observe` written again records the one statistic at another place. A
+  queue's own pool or device (`P.kv`) shares its name only with what the
+  queue's body reads bare: another of the same queue, a `def` and a
+  `let`. `def kv` or `let kv = 1;` beside queue `P`'s `pool kv` does not
+  link; a top-level `pool kv` or `stage kv` beside it links. A schedule's
+  `let` is read only in its `each at most`, which reads the program's
+  `def`s and `let`s, so it shares its name with a `def` no more than a
+  program's `let` does, and with a pool or a stage it may.
 - **Constants** (a `let`, a `cap`, a `block`, a `fifo` count, the arrival
   rate or population) are numbers or `inf`; one that
   evaluates to NaN does not link.

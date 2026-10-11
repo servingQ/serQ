@@ -221,6 +221,7 @@ struct Parser {
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Definition,
+    Constant,
     Observation,
     Gauge,
     Claim,
@@ -236,6 +237,7 @@ impl Kind {
     fn article(self) -> &'static str {
         match self {
             Kind::Definition => "a definition",
+            Kind::Constant => "a `let` constant",
             Kind::Observation => "an observation",
             Kind::Gauge => "a gauge",
             Kind::Claim => "a claim",
@@ -253,31 +255,41 @@ impl Kind {
     }
 }
 
-/// A declaration's name as written, with its position, its kind and the
-/// queue it is declared in, if any: a queue's pool or device `kv` is
-/// `Q.kv`.
+/// Where a declaration's name is read by itself.
+#[derive(PartialEq)]
+enum Scope {
+    /// Anywhere in the program.
+    Program,
+    /// In the body of queue `Q`: its pools and devices, `Q.kv` elsewhere.
+    Queue(String),
+    /// In the `each at most` of engine `E`'s schedule: its `let`s.
+    Schedule(String),
+}
+
+/// A declaration's name as written, with its position, its kind and where
+/// it is read by itself.
 struct Declaration {
     at: usize,
     name: String,
     kind: Kind,
-    queue: Option<String>,
+    scope: Scope,
 }
 
 impl Declaration {
     /// Whether `self` and `other`, of different kinds, would be one word
     /// that means two things. Two of one kind are that kind's own check. A
-    /// queue's own pool or device is read by its bare name only in that
-    /// queue's body, which reads the program's `def`s beside it but not
-    /// its other declarations (`docs/language.md`, Names).
+    /// queue's body and a schedule read the program's `def`s and `let`s
+    /// beside their own names, and none of the program's other declarations
+    /// (`docs/language.md`, Names).
     fn meets(&self, other: &Declaration) -> bool {
-        let readable_in_queue = |top: &Declaration| top.kind == Kind::Definition;
+        let read_inside = |top: &Declaration| matches!(top.kind, Kind::Definition | Kind::Constant);
         self.name == other.name
             && self.kind != other.kind
-            && match (&self.queue, &other.queue) {
-                (None, None) => true,
-                (Some(a), Some(b)) => a == b,
-                (Some(_), None) => readable_in_queue(other),
-                (None, Some(_)) => readable_in_queue(self),
+            && match (&self.scope, &other.scope) {
+                (Scope::Program, Scope::Program) => true,
+                (_, Scope::Program) => read_inside(other),
+                (Scope::Program, _) => read_inside(self),
+                (a, b) => a == b,
             }
     }
 
@@ -296,11 +308,13 @@ impl Declaration {
         }
     }
 
-    /// What it declares, with its queue: `a pool of queue `E``.
+    /// What it declares, with where: `a pool of queue `E``.
     fn described(&self) -> String {
-        match &self.queue {
-            Some(q) => format!("{} of queue `{q}`", self.kind.article()),
-            None => self.kind.article().to_string(),
+        let what = self.kind.article();
+        match &self.scope {
+            Scope::Program => what.to_string(),
+            Scope::Queue(q) => format!("{what} of queue `{q}`"),
+            Scope::Schedule(e) => format!("{what} of engine `{e}`'s schedule"),
         }
     }
 }
@@ -370,10 +384,6 @@ struct Def {
     calls: Vec<String>,
     /// The body says `turn;`, itself or through a definition.
     turn: bool,
-    /// Where the name is written.
-    line: usize,
-    col: usize,
-    file: usize,
 }
 
 /// Tokens a program may expand to. Definitions use only earlier ones, so
@@ -1850,7 +1860,9 @@ impl Parser {
                 continue;
             }
             if self.eat_kw("let") {
+                let at = self.pos;
                 let name = self.definition()?;
+                self.declare(at, &name, Kind::Constant)?;
                 self.expect(&Tok::Assign)?;
                 let mut supplied_input = false;
                 let e = if matches!(self.peek(), Tok::Ident(n) if n == "args")
@@ -2022,7 +2034,6 @@ impl Parser {
         self.link_engines(&mut prog)?;
         self.check_binding_names(&prog)?;
         self.check_body_bindings(&prog)?;
-        self.check_def_names(&prog)?;
         self.check_declared_names(&prog)?;
         self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
@@ -2448,24 +2459,6 @@ impl Parser {
         Ok(())
     }
 
-    /// A `def` named like a `let` would be one name for two things; one
-    /// named like another declaration is `check_declared_names`'.
-    fn check_def_names(&self, prog: &Program) -> PResult<()> {
-        let Some(d) = self
-            .defs
-            .iter()
-            .find(|d| prog.lets.iter().any(|(n, _)| *n == d.name))
-        else {
-            return Ok(());
-        };
-        Err(ParseError {
-            line: d.line,
-            col: d.col,
-            msg: format!("`{}` is defined, and is also a `let` constant", d.name),
-            origin: self.origin(d.file),
-        })
-    }
-
     /// A declaration or a parameter may not take a name the language
     /// supplies, as a `set` or a `let` may not (`link`, #231): `def now(x)`
     /// beside `now`, or `observe admitted` beside `admitted`, would have one
@@ -2482,24 +2475,18 @@ impl Parser {
     /// attribute's once the whole program, every `set` in it, has been
     /// read (`check_declared_names`).
     fn declare(&mut self, at: usize, name: &str, kind: Kind) -> PResult<()> {
-        self.declare_in(None, at, name, kind)
+        self.declare_in(Scope::Program, at, name, kind)
     }
 
-    /// `declare`, for a declaration inside `queue` when it is one.
-    fn declare_in(
-        &mut self,
-        queue: Option<String>,
-        at: usize,
-        name: &str,
-        kind: Kind,
-    ) -> PResult<()> {
-        self.own_name(at, name, kind.article())?;
+    /// `declare`, for a declaration read by itself only in `scope`.
+    fn declare_in(&mut self, scope: Scope, at: usize, name: &str, kind: Kind) -> PResult<()> {
         let d = Declaration {
             at,
             name: name.to_string(),
             kind,
-            queue,
+            scope,
         };
+        self.own_name(at, name, &d.described())?;
         if let Some(e) = self.declared.iter().find(|e| e.meets(&d)) {
             let t = &self.toks[e.at];
             let place = self.place(t.file, t.line, t.col);
@@ -2519,7 +2506,9 @@ impl Parser {
     /// word mean two things, and a bare `E` passed where a stage or a number
     /// goes reads one or the other by its place alone (#467). Writing a
     /// built-in attribute stays a `set`. Another declaration's name is
-    /// refused where it is declared (`declare_in`, #486).
+    /// refused where it is declared (`declare_in`, #486). A `let`'s against
+    /// an attribute's is the linker's (#231), and a schedule's `each at
+    /// most` reads no attribute.
     fn check_declared_names(&self, prog: &Program) -> PResult<()> {
         let set_at = |name: &str| {
             self.definitions
@@ -2536,7 +2525,7 @@ impl Parser {
                     self.place(t.file, t.line, t.col)
                 })
         };
-        for d in &self.declared {
+        for d in self.declared.iter().filter(|d| d.kind != Kind::Constant) {
             let (other, help) = if BUILTIN_ATTRS.contains(&d.name.as_str()) {
                 (
                     "a built-in attribute".to_string(),
@@ -2744,9 +2733,6 @@ impl Parser {
         calls.sort();
         calls.dedup();
         self.defs.push(Def {
-            line: self.toks[at].line,
-            col: self.toks[at].col,
-            file: self.toks[at].file,
             name,
             params,
             stmts,
@@ -3273,7 +3259,11 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
-        self.declare_in(self.device_scope.clone(), at, &name, Kind::Pool)?;
+        let scope = self
+            .device_scope
+            .clone()
+            .map_or(Scope::Program, Scope::Queue);
+        self.declare_in(scope, at, &name, Kind::Pool)?;
         let array = self.array_count()?;
         let mut on = None;
         let mut count = array.unwrap_or(1);
@@ -3637,7 +3627,7 @@ impl Parser {
                 if KEYWORDS.contains(&dev.as_str()) {
                     return self.err_at(d_at, format!("`{dev}` is a word of the language"));
                 }
-                self.declare_in(Some(name.clone()), d_at, &dev, Kind::Device)?;
+                self.declare_in(Scope::Queue(name.clone()), d_at, &dev, Kind::Device)?;
                 if dev == name {
                     return self.err_at(
                         d_at,
