@@ -327,7 +327,9 @@ with expressions built from integer constants, attributes, `Now`,
 `CachedIn`, `BudgetLeft`, `min`, `max`, `+`, `-` (truncated at 0), `*`,
 `floor(a / b)`, `ceil(a / k)` with a constant `k`, comparisons, `!`, `&&`,
 `||` and conditionals; an expression of constants alone is folded first,
-as the interpreter computes it. In a cost, a context
+as the interpreter computes it. A claim read at the end aggregates with
+`Total`, `Count` or `PrefixTotal`: `Largest` and `Smallest` are outside the
+fragment. In a cost, a context
 variable with a zero coefficient (the replay's cost at `a = b = 0`) is
 dropped. Its generator translates an IR file into Lean and
 fails on anything outside the fragment. Lean uses a nonzero test for
