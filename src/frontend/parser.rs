@@ -692,21 +692,29 @@ fn not_its_own(queue: &str, verb: &str, name: &str) -> String {
 /// The error for an entry that reads a device, which holds no value.
 fn a_device(queue: &str, verb: &str, name: &str) -> String {
     format!(
-        "`{queue}.{verb}` reads `{name}`, a device: an entry reads its queue's pools \
-         (`queued(p)`, `holders(p)`), not the device they are on"
+        "`{queue}.{verb}` reads `{name}`, a device, which holds no value: an entry reads \
+         its queue's pools (`queued(p)`, `holders(p)`)"
     )
 }
 
-/// The error for an own pool named through its queue (`E.kv` inside `E`),
-/// if `name` is one.
-fn own_pool_dotted(queue: &str, pools: &[String], name: &str) -> Option<String> {
-    let pool = name.strip_prefix(queue)?.strip_prefix('.')?;
-    pools.iter().any(|p| p == pool).then(|| {
-        format!(
-            "`{name}` inside queue `{queue}`: an own pool is named without the queue; \
-             write `{pool}`"
-        )
-    })
+/// The error for an entry that reads its own pool `pool`, written `name`,
+/// as a number.
+fn pool_as_number(queue: &str, verb: &str, name: &str, pool: &str) -> String {
+    format!(
+        "`{queue}.{verb}` reads `{name}` as a number, but a pool is none: read \
+         `queued({pool})` or `holders({pool})`"
+    )
+}
+
+/// The error for an entry that names its own pool through its queue
+/// (`queued(E.kv)` inside `E`).
+fn own_pool_dotted(queue: &str, verb: &str, name: &str, pool: &str) -> String {
+    format!("`{queue}.{verb}` reads `{name}`, its own pool: inside the queue write `{pool}`")
+}
+
+/// The part of `name` after `queue.`, when `name` is written through the queue.
+fn through_queue<'a>(queue: &str, name: &'a str) -> Option<&'a str> {
+    name.strip_prefix(queue)?.strip_prefix('.')
 }
 
 /// A pool declared with a stage's name, or a stage with a pool's.
@@ -1910,6 +1918,30 @@ impl Parser {
         Ok(prog)
     }
 
+    /// The refusal for an entry of `q` that reads `n` as a value when `n`
+    /// names a pool or stage: its own pool is no number, and another
+    /// place's is not its queue's own.
+    fn place_refusal(&self, prog: &Program, q: &QueueDecl, verb: &str, n: &str) -> Option<String> {
+        if q.pools.iter().any(|p| p == n) {
+            return Some(pool_as_number(&q.name, verb, n, n));
+        }
+        let some_place = prog.pools.iter().any(|p| p.name == n)
+            || self.stages.iter().any(|s| s == n)
+            || self
+                .queues
+                .iter()
+                .any(|o| o.name == n || o.pools.iter().any(|p| p == n));
+        some_place.then(|| not_its_own(&q.name, verb, n))
+    }
+
+    /// Whether `n`, read bare in an entry of `q`, names a device: the
+    /// queue's own (`Q.n`) or a top-level one. Another queue's device is
+    /// not in scope, so its name is free for an attribute.
+    fn names_device(&self, q: &QueueDecl, n: &str) -> bool {
+        let own = format!("{}.{n}", q.name);
+        self.devices.iter().any(|d| d.name == n || d.name == own)
+    }
+
     /// Expand queue entries, then insert the server after each turn draw.
     fn assemble(&mut self, prog: &mut Program, served: &mut Served) -> PResult<()> {
         if self.wl_session.is_none() && self.server.is_some() {
@@ -1935,46 +1967,24 @@ impl Parser {
                 .as_ref()
                 .map(|w| w.hidden.clone())
                 .unwrap_or_default();
-            // a name some pool or stage has, its own or another queue's
-            let is_pool_or_stage = |n: &String| {
-                prog.pools.iter().any(|p| p.name == *n)
-                    || self.stages.contains(n)
-                    || self
-                        .queues
-                        .iter()
-                        .any(|q| q.name == *n || q.pools.contains(n))
-            };
-            // a name some device has, at the top level or in a queue (`Q.gpu`)
-            let is_device = |n: &String| {
-                self.devices.iter().any(|d| {
-                    d.name == *n || d.name.split_once('.').is_some_and(|(_, bare)| bare == n)
-                })
-            };
             for q in &self.queues {
                 for e in &q.entries {
-                    // a read that names a place is refused as that place,
-                    // in the header and the body alike
-                    let a_place = |n: &String| {
-                        if is_pool_or_stage(n) {
-                            Some(not_its_own(&q.name, &e.verb, n))
-                        } else if is_device(n) {
-                            Some(a_device(&q.name, &e.verb, n))
-                        } else {
-                            None
-                        }
-                    };
+                    // the header sees no attribute: a device it reads is one
                     if let Some(n) = &e.header_refused {
-                        let message = a_place(n).unwrap_or_else(|| {
-                            format!(
-                                "`{}.{}`: the header reads `{n}`; an entry's header sees its \
-                                 parameters and the queue's pools and stage. Pass `{n}` as a parameter",
-                                q.name, e.verb
-                            )
-                        });
+                        let message = self
+                            .place_refusal(prog, q, &e.verb, n)
+                            .or_else(|| self.names_device(q, n).then(|| a_device(&q.name, &e.verb, n)))
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "`{}.{}`: the header reads `{n}`; an entry's header sees its \
+                                     parameters and the queue's pools and stage. Pass `{n}` as a parameter",
+                                    q.name, e.verb
+                                )
+                            });
                         return self.err_at(e.at, message);
                     }
                     if let Some(n) = e.reads.iter().find(|n| !hidden.contains(n)) {
-                        if let Some(message) = a_place(n) {
+                        if let Some(message) = self.place_refusal(prog, q, &e.verb, n) {
                             return self.err_at(e.at, message);
                         }
                         // a name nothing sets is no attribute set outside
@@ -1982,6 +1992,11 @@ impl Parser {
                         let set = self.definitions.iter().any(|(d, _)| d == n)
                             || BUILTIN_ATTRS.contains(&n.as_str())
                             || self.body_binds.iter().any(|(_, b, _)| b == n);
+                        // the body sees attributes: a device is one only
+                        // when nothing sets the name
+                        if !set && self.names_device(q, n) {
+                            return self.err_at(e.at, a_device(&q.name, &e.verb, n));
+                        }
                         if !set {
                             let help = crate::frontend::diagnostic::suggestion(
                                 n,
@@ -3866,12 +3881,18 @@ impl Parser {
                         ));
                     }
                     if v.contains('.') {
-                        let message = own_pool_dotted(&qname, &q.pools, &v).unwrap_or_else(|| {
-                            format!(
+                        let message = match through_queue(&qname, &v) {
+                            Some(p) if q.pools.iter().any(|o| o == p) => {
+                                pool_as_number(&qname, &verb, &v, p)
+                            }
+                            Some(_) if self.devices.iter().any(|d| d.name == v) => {
+                                a_device(&qname, &verb, &v)
+                            }
+                            _ => format!(
                                 "`{qname}.{verb}` reads `{v}`, another queue's: an entry sees its own; \
                                  the gateway reads across queues and passes what an entry needs"
-                            )
-                        });
+                            ),
+                        };
                         return self.err_at(at, message);
                     }
                     if header {
@@ -3881,8 +3902,15 @@ impl Parser {
                     }
                 }
                 if let Some(r) = refs.iter().find(|r| !own_ref(r)) {
-                    let message = own_pool_dotted(&qname, &q.pools, &r.name)
-                        .unwrap_or_else(|| not_its_own(&qname, &verb, &r.name));
+                    let message = match through_queue(&qname, &r.name) {
+                        Some(p) if q.pools.iter().any(|o| o == p) => {
+                            own_pool_dotted(&qname, &verb, &r.name, p)
+                        }
+                        Some(_) if self.devices.iter().any(|d| d.name == r.name) => {
+                            a_device(&qname, &verb, &r.name)
+                        }
+                        _ => not_its_own(&qname, &verb, &r.name),
+                    };
                     return self.err_at(at, message);
                 }
             }
