@@ -100,7 +100,7 @@ const RESIDENTS: &[&str] = &[
 /// the residents' before the batch is formed and as the batch's in `cost`
 /// (#416), so the engine names them twice. Within a schedule, `only`, `by`
 /// and `each at most` are read at their own moments, not the statements'.
-const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
+pub const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
     ("running.count", "residents", RESIDENTS),
     ("running.decoding", "decoders", AS_THEY_STAND),
     ("running.kv_decode", "kv_decode", AS_THEY_STAND),

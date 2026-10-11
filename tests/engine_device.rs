@@ -1346,3 +1346,20 @@ fn an_argument_its_definition_drops_is_resolved_where_the_use_stands() {
         "`each at most` is read before the batch is formed",
     );
 }
+
+/// `each at most` is an engine's clause, so its words are the language's:
+/// they were missing from `KEYWORDS` while the engine form read them, and
+/// `def each(x) { x }` linked.
+#[test]
+fn a_def_may_not_be_named_each_or_most() {
+    let src = std::fs::read_to_string(root().join("docs/tutorial/programs/01-queue.sq")).unwrap();
+    for w in ["each", "most"] {
+        let prog = src.replacen(
+            "let S = 1.0;",
+            &format!("def {w}(x) {{ x }}\nlet S = 1.0;"),
+            1,
+        );
+        assert_ne!(prog, src);
+        refused(&prog, &format!("`{w}` is a word of the language"));
+    }
+}
