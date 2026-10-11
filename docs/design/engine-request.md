@@ -7,9 +7,9 @@ when it finishes. The client says what it sends and what it measures. The
 
 This document is the design for #501's three steps. Step 1 is specified
 completely; it lowers at parse time to the kernel the server writes today,
-so every program's IR is the one it has. Steps 2 and 3 are sketched, and
-the sketch found that they do not keep `serq ir` byte-identical
-(*What steps 2 and 3 move in the IR*, below).
+but for the first-token mark, which becomes a `set` the caller reads.
+Steps 2 and 3 are sketched. Every step is checked by the report, not the
+IR text (*How a step is checked*, below).
 
 ## The problem
 
@@ -188,7 +188,7 @@ statement keeps the side `Server` it has in `sides`.
 | the statements | the hold's body | `Session` |
 | `prefill (e) growing P;` | `run E prefill (cost(E, e)) growing P;` | `Session` |
 | `decode (e) growing P;` | `run E decode (cost(E, e)) growing P;` | `Session` |
-| `mark m;` with `observe y = f(E.m);` after the call | `observe y = f(now);` at the mark | `Session`, at the mark |
+| `mark m;` | `set E.m = now;`, read by the caller afterwards as `E.m` | `Session`, at the mark |
 | `release cache (e);` | the hold's `cache (cost(P₁, …, e))` over every pool taken | `Session`, at the release |
 
 A request's own names (its `state`s, bindings and `set`s) keep their names
@@ -197,28 +197,22 @@ name that shares one does not link. A queue's entry renames its own
 (`D.known`); a request cannot without moving every attribute name of the
 IR.
 
-**The mark.** A queue's `mark m` lowers to `set Q.m = now`, which the
-caller reads afterwards. The request's cannot: the server today records
-`ttft` inside the hold, `branch (known == prompt) { observe ttft = now -
-t0; }`, and a `set` would add a statement and an attribute. So an
-observation that reads `E.m` is recorded at the mark: it follows the call
-directly (other such observations aside), it reads besides `E.m` only
-constants and attributes the request does not set, and it reads neither
-`now` nor a draw; it lowers to the same observation with `now` for `E.m`,
-at each `mark m;` the request reaches. A request that never reaches the
-mark records nothing (a resumed request's re-prefill does not: `branch
-(known == prompt)` is false then); one that reaches it twice records twice.
-This is a second lowering of `mark`, beside the queue's, and the decision
-this document asks for (*Open decisions*).
+**The mark.** A request's `mark m` lowers as a queue's does, to `set E.m
+= now`, and the caller reads `E.m` afterwards: `observe ttft =
+vllm.first_token - t0;` after the call. One construct, one lowering. The
+server today records `ttft` inside the hold, `branch (known == prompt) {
+observe ttft = now - t0; }`; step 1 moves that observation after the hold,
+and the IR gains the attribute `vllm.first_token`, its `Set` in the branch
+where the `Observe` was, and the `Observe` after the hold.
 
 Applied to the After of step 1, the call `vllm (prompt, o);` with
-`prompt ↦ prompt` and `output ↦ o` writes the Before's server, line for
-line: `set kept = prompt;`, the hold with the header of `taking`, the
-bindings in `at admission`, the body with its runs and the observation of
-`ttft` at the branch, and `cache (cost(reqs, kv, prompt + o))`. The
-observation names keep their order (`hit`, `prefill_tokens`, `ttft`,
-`response`), and so do the attribute slots (`t0`, `prompt`, `kept`,
-`known`, `c`).
+`prompt ↦ prompt` and `output ↦ o` writes the Before's server otherwise
+line for line: `set kept = prompt;`, the hold with the header of `taking`,
+the bindings in `at admission`, the body with its runs, and `cache
+(cost(reqs, kv, prompt + o))`. The observation names keep their order
+(`hit`, `prefill_tokens`, `ttft`, `response`), and so do the attribute
+slots (`t0`, `prompt`, `kept`, `known`, `c`), with `vllm.first_token`
+after them.
 
 Why the server keeps `set prompt = K + n;` and calls `vllm (prompt, o)`
 rather than `vllm (K + n, o)`: a parameter is substituted, so `K + n`
@@ -227,12 +221,44 @@ would be written where the IR reads the attribute `prompt` today
 `vllm_subagents.sq`'s session also reads `prompt` back (`set K = prompt +
 o;`).
 
-**What checks it.** `serq ir` of the four programs is compared with the
-IR before the change, byte for byte; `tests/workloads.rs` compares the
-`engine vllm` block of the four instead of the server; and `make check`
-and `make lean` pass with no oracle IR regenerated.
+## How a step is checked
 
-## What steps 2 and 3 move in the IR
+The report decides. For every converted program, `serq run` before and
+after the step prints the same report, byte for byte, over several seeds
+and horizons. The IR may differ only where this document says the step
+moves something, and a script checks that: it rewrites the IR before the
+step by the expected moves and compares the result with the IR after,
+exactly. The expected moves:
+
+- step 1: the first-token mark (above): the attribute `vllm.first_token`
+  (`Value`), its `Set` where the `Observe` of `ttft` was, and that
+  `Observe`, reading it, after the hold;
+- steps 2 and 3: `sides`, `attr_types` and statement order where ownership
+  moves from the server to the client (*What steps 2 and 3 move*, below).
+
+`tests/workloads.rs` compares the `engine vllm` block of the four vLLM
+programs instead of their server, and `make check` and `make lean` pass.
+
+**The mark moves the `ttft` report at the run's edges.** A hand-written
+`vllm.sq` with `set first_token = now;` in the branch and `observe ttft =
+first_token - t0;` after the hold, which is what step 1 lowers to, was run
+against `vllm.sq` with seeds 1 to 3 and horizons 100, 300 and 1000
+(warm-up 10, 50, 100). Seven of the nine reports are identical. Two differ
+in one line, the count of `ttft`:
+
+```
+seed 2, --horizon 300 --warmup 50:   ttft  554 → 555   (mean 0.0132, CI, cv², p99 unchanged)
+seed 2, --horizon 1000 --warmup 100: ttft 2408 → 2407  (mean 0.0142, CI, cv², p99 unchanged)
+```
+
+An observation is counted when it is recorded after the warm-up
+(`observe_for` in `src/engine/interp.rs`). Recorded at the hold's end, a
+request whose first token came before the warm-up and whose last after it
+is counted, and one still decoding at the horizon is not. The two rules of
+#501's decision, one lowering of `mark` and a report identical for every
+program, cannot both hold for `ttft` (*Open decisions*).
+
+## What steps 2 and 3 move
 
 `sides` marks each statement `Workload` or `Server`, and `attr_types` gives
 an attribute set by the workload the type `Size` and one set by the server
@@ -247,10 +273,8 @@ does. Two hand-written variants of `vllm.sq`, compiled with the current
 
 So a move from the server to the client is recorded in the IR, as it
 should be: `sides` is the record of who owns a statement. Step 2 keeps the
-blocks and the run, not the bytes; step 3 keeps the run. An observation of
-`vllm.first_token` written in the client and recorded at the mark lands
-among the server's statements, so its side would be the lowering's choice
-and not what the text says. And with the server gone, the stamp `t0` must
+blocks and the run, not the bytes; step 3 keeps the run. These are the
+moves the check of steps 2 and 3 allows. And with the server gone, the stamp `t0` must
 be set by someone: the client before its `turn` (the second row), or a
 `turn` form that stamps a name the program gives it on the server side.
 
@@ -355,32 +379,42 @@ and its unit twice per run; `prefill (e)` says the mode, which is all that
 differs. `growing kv` stays written, since an engine may run without
 growing (`tgi.sq`, `ascend.sq`).
 
-**A parameter copied, not substituted.** `vllm (K + n, o)` could set
-`prompt = K + n` at the call, and step 3's `turn vllm (K + n, o)` would need
-that. Substitution is the queue entries' rule; a second rule for engines
-would be two meanings of one parameter. Step 1 keeps substitution, and the
-server keeps `set prompt = K + n;`.
+**A parameter copied, not substituted, in step 1.** `vllm (K + n, o)`
+could set `prompt = K + n` at the call. Substitution is the queue entries'
+rule; a second rule for engines in step 1 would be two meanings of one
+parameter. Step 1 substitutes, and the server keeps `set prompt = K + n;`.
+Copying comes with step 3's `turn vllm (K + n, o)`, where the client has
+no `set` on the server's side to write (#501).
 
 **The word `request`.** `request;` was a session statement and is refused
 with its replacement; inside an engine `request (…) { … }` declares
 vLLM's `Request`. `serve` is a queue's item and `handle` says nothing.
-Kept, and open to another name.
+
+**The mark recorded at the mark.** An `observe` after the call that reads
+`E.m` could be lowered to the same observation with `now` for `E.m`, at
+each `mark m;` the request reaches. It keeps today's IR and report. It is
+a second lowering of `mark` beside the queue's `set Q.m = now`, so one
+statement would mean two things by where it stands (criterion 0), and an
+observation written after the call would be recorded before it ends.
+Rejected (#501), with the cost above: the `ttft` count at the run's edges.
+
+**Byte-identical IR as the check.** It holds for step 1 only if the mark
+keeps its second lowering, and for no step that moves a statement to the
+client, since `sides` records who owns it. The report is what a program
+claims; the IR may move where a step says it does.
 
 ## Open decisions
 
-1. **The mark of a request.** Step 1 records an observation that reads
-   `vllm.first_token` at the mark, so that the IR stays identical. A
-   queue's mark is a `set` read afterwards. Either keep two lowerings,
-   move queues to the observation rule (their IR moves), or make the
-   request's mark a `set` (step 1's IR gains `vllm.first_token` and its
-   `Set`, and the `ttft` observation moves after the hold).
-2. **The check for steps 2 and 3.** Byte-identical `serq ir` cannot hold
-   when statements move from the server to the client. Either the check
-   becomes "the same `blocks`, `sides` and `attr_types` moved only where
-   the step moves ownership, and the same report" (`workload-server.md`
-   validated its migration after normalizing names), or the client's
-   measurements are lowered as server statements, which is not what
-   `sides` says they are.
-3. **P/D.** Per-entry `taking` on `admit waiting` or `taking` in the entry;
-   and the parked decode's second admission.
-4. **The name** `request`.
+1. **`ttft` at the run's edges.** With the mark a `set`, the observation
+   of `ttft` is recorded when the request ends, not when its first token
+   comes, and its count moves by one at a warm-up or horizon edge (*How a
+   step is checked*). Either the report check allows that one line for
+   step 1 (the measured `ttft` values are the same; which requests count
+   is when the observation is recorded); or the observation stays at the
+   mark, which takes a second lowering of `mark` (an `observe` of `E.m`
+   after the call recorded at the mark), refused above; or the request
+   records it itself, which needs the stamp `t0` passed to the engine as a
+   parameter (`vllm (prompt, o, t0)`), a client's value in the engine.
+2. **P/D.** Per-entry `taking` on `admit waiting` or `taking` in the entry;
+   and the parked decode's second admission. Decided with the P/D
+   programs' conversion, its own step.
