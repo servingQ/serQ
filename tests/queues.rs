@@ -777,11 +777,11 @@ fn a_call_is_checked_against_the_entry() {
     refused(&program("X.decode (prompt);"), "no queue `X` is declared");
     // `self` is a member's word
     refused(
-        "stage s : fifo; workload { session { turn; end; \n} }\nserver { observe s = self;\n} ",
+        "stage s : fifo; workload { session { turn; end; \n} }\nserver { observe member = self;\n} ",
         "`self` is a queue entry's word",
     );
     refused(
-        "queue gw : gateway { route { observe s = self; } } stage s : fifo;
+        "queue gw : gateway { route { observe member = self; } } stage s : fifo;
          workload { arrive batch(1); session { turn; end; } } server { gw.route(); } ",
         "not a family",
     );

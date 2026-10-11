@@ -219,12 +219,55 @@ struct Parser {
 
 /// A declaration's name as written, with its position, its kind (`a
 /// stage`, …) and the queue it is declared in, if any: a queue's pool or
-/// device `kv` is `Q.kv`, so two queues may each have one.
+/// device `kv` is `Q.kv`.
 struct Declaration {
     at: usize,
     name: String,
     kind: &'static str,
     queue: Option<String>,
+}
+
+impl Declaration {
+    /// Whether `self` and `other`, of different kinds, would be one word
+    /// that means two things. Two of one kind are that kind's own check. A
+    /// queue's own pool or device is read by its bare name only in that
+    /// queue's body, which reads the program's `def`s beside it but not
+    /// its other declarations (`docs/language.md`, Names).
+    fn meets(&self, other: &Declaration) -> bool {
+        let readable_in_queue = |top: &Declaration| top.kind == "a definition";
+        self.name == other.name
+            && self.kind != other.kind
+            && match (&self.queue, &other.queue) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a == b,
+                (Some(_), None) => readable_in_queue(other),
+                (None, Some(_)) => readable_in_queue(self),
+            }
+    }
+
+    /// Why `self` and `other` cannot share a name: a pool and a stage
+    /// also because `cost(NAME, …)` reads either.
+    fn help(&self, other: &Declaration) -> String {
+        let stage = |d: &Declaration| ["a stage", "an engine", "a queue"].contains(&d.kind);
+        if (self.kind == "a pool" && stage(other)) || (other.kind == "a pool" && stage(self)) {
+            format!(
+                "rename one of the two declarations: a pool and a stage share one name \
+                 space, as `cost({}, …)` reads either",
+                self.name
+            )
+        } else {
+            "rename one of the two declarations".into()
+        }
+    }
+}
+
+/// The refusal of declaration `d`, whose name is already `other`'s.
+fn one_word(d: &Declaration, other: &str, help: &str) -> String {
+    let Declaration { name, kind, .. } = d;
+    format!(
+        "`{name}` is {other}; {kind} named `{name}` would make the one word mean two \
+         things\nhelp: {help}"
+    )
 }
 
 /// A use of a `def` whose body says `turn;`, with the names
@@ -739,14 +782,6 @@ fn own_pool_dotted(queue: &str, verb: &str, name: &str, pool: &str) -> String {
 /// The part of `name` after `queue.`, when `name` is written through the queue.
 fn through_queue<'a>(queue: &str, name: &'a str) -> Option<&'a str> {
     name.strip_prefix(queue)?.strip_prefix('.')
-}
-
-/// A pool declared with a stage's name, or a stage with a pool's.
-fn one_name_space(name: &str) -> String {
-    format!(
-        "`{name}` is declared twice: a pool and a stage share one name space, as \
-         `cost({name}, …)` reads either"
-    )
 }
 
 /// A function of the language: one the linker resolves or one it folds.
@@ -1829,19 +1864,13 @@ impl Parser {
                 self.expect(&Tok::Semi)?;
                 prog.gauges.push((name, e));
             } else if self.eat_kw("pool") {
-                let at = self.pos;
                 let (d, on) = self.pool(true)?;
-                if prog.stages.iter().any(|s| s.name == d.name)
-                    || self.queues.iter().any(|q| q.name == d.name)
-                {
-                    return self.err_at(at, one_name_space(&d.name));
-                }
                 if let Some(on) = on {
                     self.pool_on(prog.pools.len(), d.name.clone(), on)?;
                 }
                 prog.pools.push(d);
             } else if self.eat_kw("device") {
-                self.device(&prog)?;
+                self.device()?;
             } else if self.at_engine() {
                 self.advance();
                 self.engine(&mut prog)?;
@@ -1850,11 +1879,7 @@ impl Parser {
                 self.advance();
                 self.queue(&mut prog, at)?;
             } else if self.eat_kw("stage") {
-                let at = self.pos;
                 let d = self.stage()?;
-                if prog.pools.iter().any(|p| p.name == d.name) {
-                    return self.err_at(at, one_name_space(&d.name));
-                }
                 self.stages.push(d.name.clone());
                 prog.stages.push(d);
             } else if self.eat_kw("workload") {
@@ -2379,26 +2404,22 @@ impl Parser {
         Ok(())
     }
 
-    /// A `def` named like a declaration would be one name for two things.
+    /// A `def` named like a `let` would be one name for two things; one
+    /// named like another declaration is `check_declared_names`'.
     fn check_def_names(&self, prog: &Program) -> PResult<()> {
-        for d in &self.defs {
-            let what = if prog.pools.iter().any(|x| x.name == d.name) {
-                "a pool"
-            } else if prog.stages.iter().any(|x| x.name == d.name) {
-                "a stage"
-            } else if prog.lets.iter().any(|(n, _)| *n == d.name) {
-                "a `let` constant"
-            } else {
-                continue;
-            };
-            return Err(ParseError {
-                line: d.line,
-                col: d.col,
-                msg: format!("`{}` is defined, and is also {what}", d.name),
-                origin: self.origin(d.file),
-            });
-        }
-        Ok(())
+        let Some(d) = self
+            .defs
+            .iter()
+            .find(|d| prog.lets.iter().any(|(n, _)| *n == d.name))
+        else {
+            return Ok(());
+        };
+        Err(ParseError {
+            line: d.line,
+            col: d.col,
+            msg: format!("`{}` is defined, and is also a `let` constant", d.name),
+            origin: self.origin(d.file),
+        })
     }
 
     /// A declaration or a parameter may not take a name the language
@@ -2412,10 +2433,10 @@ impl Parser {
         }
     }
 
-    /// A declaration's name: one the language supplies is refused here
-    /// (`own_name`), an attribute's or another declaration's once the
-    /// whole program, every `set` in it, has been read
-    /// (`check_declared_names`).
+    /// A declaration's name: one the language supplies or another
+    /// declaration's (`Declaration::meets`) is refused here, an
+    /// attribute's once the whole program, every `set` in it, has been
+    /// read (`check_declared_names`).
     fn declare(&mut self, at: usize, name: &str, kind: &'static str) -> PResult<()> {
         self.declare_in(None, at, name, kind)
     }
@@ -2429,26 +2450,32 @@ impl Parser {
         kind: &'static str,
     ) -> PResult<()> {
         self.own_name(at, name, kind)?;
-        self.declared.push(Declaration {
+        let d = Declaration {
             at,
             name: name.to_string(),
             kind,
             queue,
-        });
+        };
+        if let Some(e) = self.declared.iter().find(|e| e.meets(&d)) {
+            let t = &self.toks[e.at];
+            let place = self.place(t.file, t.line, t.col);
+            return self.err_at(
+                at,
+                one_word(&d, &format!("{} at {place}", e.kind), &e.help(&d)),
+            );
+        }
+        self.declared.push(d);
         Ok(())
     }
 
     /// A declaration may not share its name with an attribute, built in or
-    /// set (#470), with a hold header's binding (#484), or with another
-    /// declaration (#486): `stage think` beside the attribute `think`, `set
-    /// svc` beside `stage svc`, `observe hit` beside a header's token count
-    /// `hit`, or `observe service` beside `def service`, would have one
+    /// set (#470), or with a hold header's binding (#484): `stage think`
+    /// beside the attribute `think`, `set svc` beside `stage svc`, or
+    /// `observe hit` beside a header's token count `hit`, would have one
     /// word mean two things, and a bare `E` passed where a stage or a number
     /// goes reads one or the other by its place alone (#467). Writing a
-    /// built-in attribute stays a `set`. Two declarations of one kind are
-    /// left to that kind's own check: `observe x` written again records the
-    /// one statistic at another place, two `stage t` are refused as a
-    /// duplicate, and two queues' pools `kv` are `P.kv` and `D.kv`.
+    /// built-in attribute stays a `set`. Another declaration's name is
+    /// refused where it is declared (`declare_in`, #486).
     fn check_declared_names(&self, prog: &Program) -> PResult<()> {
         let set_at = |name: &str| {
             self.definitions
@@ -2456,56 +2483,36 @@ impl Parser {
                 .find(|(n, _)| n == name && !prog.lets.iter().any(|(l, _)| l == n))
                 .map(|(_, span)| self.place(span.file, span.line, span.col))
         };
-        let token_at = |at: usize| {
-            let t = &self.toks[at];
-            self.place(t.file, t.line, t.col)
-        };
         let bound_at = |name: &str| {
             self.header_binds
                 .iter()
                 .find(|(_, n)| n == name)
-                .map(|(at, _)| token_at(*at))
+                .map(|(at, _)| {
+                    let t = &self.toks[*at];
+                    self.place(t.file, t.line, t.col)
+                })
         };
-        for (i, d) in self.declared.iter().enumerate() {
-            let (at, name, kind) = (&d.at, &d.name, d.kind);
-            // a queue's declaration is `Q.x`, but its body reads it as `x`:
-            // it meets a top-level `x` and its own queue's, not another's
-            let earlier = self.declared[..i].iter().find(|e| {
-                e.name == d.name
-                    && e.kind != d.kind
-                    && (e.queue == d.queue || e.queue.is_none() || d.queue.is_none())
-            });
-            let (other, help) = if BUILTIN_ATTRS.contains(&name.as_str()) {
+        for d in &self.declared {
+            let (other, help) = if BUILTIN_ATTRS.contains(&d.name.as_str()) {
                 (
                     "a built-in attribute".to_string(),
                     "name the declaration otherwise (docs/api/attributes.md lists the \
                      built-in attributes)",
                 )
-            } else if let Some(place) = set_at(name) {
+            } else if let Some(place) = set_at(&d.name) {
                 (
                     format!("an attribute the program sets at {place}"),
                     "rename the declaration or the attribute",
                 )
-            } else if let Some(place) = bound_at(name) {
+            } else if let Some(place) = bound_at(&d.name) {
                 (
                     format!("a hold's binding at {place}"),
                     "rename the declaration or the binding",
                 )
-            } else if let Some(e) = earlier {
-                (
-                    format!("{} at {}", e.kind, token_at(e.at)),
-                    "rename one of the two declarations",
-                )
             } else {
                 continue;
             };
-            return self.err_at(
-                *at,
-                format!(
-                    "`{name}` is {other}; {kind} named `{name}` would make the one word \
-                     mean two things\nhelp: {help}"
-                ),
-            );
+            return self.err_at(d.at, one_word(d, &other, help));
         }
         Ok(())
     }
@@ -3492,16 +3499,6 @@ impl Parser {
         if self.queues.iter().any(|q| q.name == name) {
             return self.err_at(at + 1, format!("duplicate queue `{name}`"));
         }
-        if prog.pools.iter().any(|p| p.name == name) {
-            return self.err_at(at + 1, one_name_space(&name));
-        }
-        // a device or an engine declared after the queue is refused by its
-        // own check, so one declared before is refused here: the order
-        // changes nothing
-        if self.devices.iter().any(|d| d.name == name) || prog.stages.iter().any(|s| s.name == name)
-        {
-            return self.err_at(at + 1, format!("`{name}` is declared twice"));
-        }
         self.declare(at + 1, &name, "a queue")?;
         // `Q[n]` is a family whatever `n`, called by index, and its pools and
         // stages are arrays; `Q` is one queue
@@ -3607,9 +3604,7 @@ impl Parser {
                     );
                 }
                 let scoped = format!("{name}.{dev}");
-                if self.devices.iter().any(|d| d.name == scoped)
-                    || self.queues[qi].pools.contains(&dev)
-                {
+                if self.devices.iter().any(|d| d.name == scoped) {
                     return self
                         .err_at(d_at, format!("`{dev}` is declared twice in queue `{name}`"));
                 }
@@ -3651,16 +3646,6 @@ impl Parser {
                 let parsed = self.pool(true);
                 self.device_scope = None;
                 let (mut d, on) = parsed?;
-                if self
-                    .devices
-                    .iter()
-                    .any(|dv| dv.name == format!("{name}.{}", d.name))
-                {
-                    return self.err_at(
-                        p_at,
-                        format!("`{}` is declared twice in queue `{name}`", d.name),
-                    );
-                }
                 if let Some(on) = on {
                     if self.queues[qi].pools.contains(&d.name) {
                         return self.err(format!("duplicate pool `{}` in queue `{name}`", d.name));
@@ -6067,11 +6052,11 @@ mod tests {
         // a name that is a declaration's
         assert!(
             err("def kv(x) { x } workload { session { turn; \n} }\nserver {\n}")
-                .contains("also a pool")
+                .contains("a definition named `kv` would make the one word mean two things")
         );
         assert!(
             err("stage svc : fifo; def svc(x) { x } workload { session { turn; \n} }\nserver {\n}")
-                .contains("also a stage")
+                .contains("a definition named `svc` would make the one word mean two things")
         );
         // a pool and a stage of one name, in either order, and a pool before
         // or after an engine or a queue (#409): `cost(E, …)` would read either

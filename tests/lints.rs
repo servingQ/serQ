@@ -947,8 +947,10 @@ fn a_declaration_cannot_share_its_name_with_a_binding() {
 /// #486: nor may two declarations of different kinds share a name.
 /// `mg1.sq` declared `def service()`, the law, and `observe service = s`, a
 /// sample of it. Two of one kind are each kind's own check: `observe x`
-/// again is the one statistic recorded at another place, and a queue's pool
-/// is `Q.kv`, so two queues may each have a `kv`.
+/// again is the one statistic recorded at another place. A queue's own pool
+/// is `Q.kv`, read bare only in the queue's body, which reads a `def` but
+/// no other top-level declaration. The refusal names both places, whatever
+/// the order (`engine Q` above or below `queue Q`).
 #[test]
 fn a_declaration_cannot_share_its_name_with_another() {
     const SRC: &str = "DECL
@@ -956,48 +958,79 @@ fn a_declaration_cannot_share_its_name_with_another() {
         workload { arrive closed(2); session { turn; } }
         server { run svc (cost(svc, 1)); OBSERVE observe response = now; }
         ";
+    const ENGINE: &str = "device gpu { } engine Q on gpu { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }";
+    const QUEUE: &str = "queue Q { pool kv { cap 1; } serve fifo; }";
     let two_things = "would make the one word mean two things";
-    for (decl, observe, refused) in [
+    let rename = "help: rename one of the two declarations";
+    let refused = |decl: &str, observe: &str| {
+        check(&SRC.replace("DECL", decl).replace("OBSERVE", observe)).expect_err(decl)
+    };
+    for (decl, observe, want) in [
         (
-            "def service() { 1 }",
+            "def service() { 1 }".to_string(),
             "observe service = 1;",
             "`service` is a definition at 1:17; an observation named `service`",
         ),
         (
-            "",
+            String::new(),
             "observe svc = 1;",
             "`svc` is a stage at 2:15; an observation named `svc`",
         ),
         (
-            "gauge g = 1; claim g : at end (1 > 0);",
+            "gauge g = 1; claim g : at end (1 > 0);".to_string(),
             "",
             "`g` is a gauge at 1:19; a claim named `g`",
         ),
         (
-            "def kv() { 1 } queue Q { pool kv { cap 1; } serve fifo; }",
+            format!("def kv() {{ 1 }} {QUEUE}"),
             "",
             "`kv` is a definition at 1:17; a pool named `kv`",
         ),
+        (
+            "queue D[2] { pool kv { cap 1; } serve fifo; } def kv() { 1 }".to_string(),
+            "",
+            "`kv` is a pool at 1:31; a definition named `kv`",
+        ),
+        (
+            format!("{ENGINE} {QUEUE}"),
+            "",
+            "`Q` is an engine at 1:35; a queue named `Q`",
+        ),
+        (
+            format!("{QUEUE} {ENGINE}"),
+            "",
+            "`Q` is a queue at 1:19; an engine named `Q`",
+        ),
     ] {
-        let e = check(&SRC.replace("DECL", decl).replace("OBSERVE", observe)).expect_err(decl);
-        assert!(
-            e.contains(&format!("{refused} {two_things}")),
-            "{decl} {observe}: {e}"
-        );
-        assert!(
-            e.contains("help: rename one of the two declarations"),
-            "{e}"
-        );
+        let e = refused(&decl, observe);
+        assert!(e.contains(&format!("{want} {two_things}")), "{decl}: {e}");
+        assert!(e.contains(rename), "{e}");
     }
+    // a pool and a stage are refused for the reason `cost(NAME, …)` gives
+    let e = refused("pool p { cap 1; } stage p : fifo;", "");
+    assert!(
+        e.contains(&format!(
+            "`p` is a pool at 1:18; a stage named `p` {two_things}\n"
+        )),
+        "{e}"
+    );
+    assert!(
+        e.contains(&format!(
+            "{rename}: a pool and a stage share one name space, as `cost(p, …)` reads either"
+        )),
+        "{e}"
+    );
     for decl in [
-        "queue P { pool kv { cap 1; } serve fifo; } queue D { pool kv { cap 1; } serve fifo; }",
-        "device gpu { kv cap 4; } pool kv on gpu { }",
+        format!("{QUEUE} queue D {{ pool kv {{ cap 1; }} serve fifo; }}"),
+        format!("pool kv {{ cap 1; }} {QUEUE}"),
+        format!("stage kv : fifo; {QUEUE}"),
+        "device gpu { kv cap 4; } pool kv on gpu { }".to_string(),
     ] {
         check(
-            &SRC.replace("DECL", decl)
+            &SRC.replace("DECL", &decl)
                 .replace("OBSERVE", "observe response = 1;"),
         )
-        .expect(decl);
+        .expect(&decl);
     }
 }
 
