@@ -6,6 +6,7 @@
 //! are stored in an arena so that a session's continuation is a stack of
 //! `(block, pc)` frames.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 
@@ -20,7 +21,7 @@ pub struct LinkError {
 }
 
 impl LinkError {
-    fn new(message: String) -> Self {
+    pub(crate) fn new(message: String) -> Self {
         Self {
             message,
             span: None,
@@ -58,7 +59,7 @@ impl fmt::Display for LinkError {
 
 impl std::error::Error for LinkError {}
 
-type LResult<T> = Result<T, LinkError>;
+pub(crate) type LResult<T> = Result<T, LinkError>;
 
 pub use crate::ir::{
     BlockId, CArg, CArrival, CEvict, CExpr, CPool, CRef, CServe, CSpill, CStage, CStageKind, CStep,
@@ -1536,25 +1537,6 @@ impl Linker<'_> {
         }
     }
 
-    /// The constant `what` (`pool \`kv\`: cap`, `the horizon`, ...): a number or
-    /// an infinity. No run means anything with a NaN constant, and the IR
-    /// has no spelling for one.
-    fn const_eval(&self, e: &Expr, what: &str) -> LResult<f64> {
-        let v = self.eval_const(e)?;
-        if v.is_nan() {
-            // where the expression has a place (a call, a name), the error has it
-            let span = match e {
-                Expr::Located(span, _) => Some(*span),
-                _ => None,
-            };
-            return Err(LinkError::new(format!(
-                "{what} is NaN\nhelp: a constant is a number or `inf`; `0/0` and `inf - inf` are not"
-            ))
-            .at(span));
-        }
-        Ok(v)
-    }
-
     /// An engine's `each at most`: its condition may read the iteration's
     /// start, and each cap it chooses is a constant once the `let`s are
     /// known, above 0 (`inf` for none, which the kernel writes 0), or
@@ -1666,136 +1648,6 @@ impl Linker<'_> {
             )));
         }
         Ok(v as usize)
-    }
-
-    /// Evaluate a constant expression (no attributes, no samples).
-    fn eval_const(&self, e: &Expr) -> LResult<f64> {
-        Ok(match e {
-            Expr::Located(span, inner) => self.eval_const(inner).map_err(|e| e.at(Some(*span)))?,
-            Expr::Num(x) => *x,
-            Expr::Var(n) => match n.as_str() {
-                "inf" => f64::INFINITY,
-                _ => *self
-                    .consts
-                    .get(n)
-                    .ok_or_else(|| self.unknown("constant", n))?,
-            },
-            Expr::Unary(UnOp::Neg, a) => -self.eval_const(a)?,
-            Expr::Unary(UnOp::Not, a) => {
-                if self.eval_const(a)? != 0.0 {
-                    0.0
-                } else {
-                    1.0
-                }
-            }
-            Expr::Binary(op, a, b) => binop(*op, self.eval_const(a)?, self.eval_const(b)?),
-            Expr::Cond(c, a, b) => {
-                if self.eval_const(c)? != 0.0 {
-                    self.eval_const(a)?
-                } else {
-                    self.eval_const(b)?
-                }
-            }
-            Expr::Call(f, _) if f == "blocksize" => {
-                return Err(LinkError::new(
-                    "`blocksize` is not a constant: in a constant position (a `let`, `cap`, \
-                     `block`, an array size, `horizon`, a rate) name the value with a `let` \
-                     both use"
-                        .into(),
-                ));
-            }
-            // an unread argument is resolved, as in any expression, and
-            // never evaluated: it need not be a constant (`one(kv)`)
-            Expr::Unread(args, body) => {
-                for a in args {
-                    self.unread(a)?;
-                }
-                self.eval_const(body)?
-            }
-            Expr::Call(f, args) => {
-                let not_constant = || {
-                    LinkError::new(format!(
-                        "`{f}` with {} argument(s) is not a constant function",
-                        args.len()
-                    ))
-                };
-                let xs: Vec<f64> = args
-                    .iter()
-                    .enumerate()
-                    .map(|(k, a)| match a {
-                        Arg::Expr(e) => self.eval_const(e),
-                        Arg::Ref(r) if takes_number(f, k, args.len()) => {
-                            self.eval_const(&self.as_number(f, r)?)
-                        }
-                        Arg::Ref(_) => Err(not_constant()),
-                    })
-                    .collect::<LResult<_>>()?;
-                const_call(f, &xs).ok_or_else(not_constant)?
-            }
-            Expr::Sample(..) => return Err(LinkError::new("a constant cannot sample".into())),
-            Expr::Over(agg, j, n, body) => {
-                let terms = self.over_terms(*agg, j, n, body)?;
-                let mut values = terms.iter().map(|e| self.eval_const(e));
-                let first = values.next().expect("positive aggregate count")?;
-                values.try_fold(first, |acc, value| {
-                    let value = value?;
-                    Ok(match agg {
-                        Agg::Sum => acc + value,
-                        Agg::Min => acc.min(value),
-                        Agg::Max => acc.max(value),
-                    })
-                })?
-            }
-        })
-    }
-
-    /// `max j in n (e)` written out as separate terms, with `j` = 0, 1, …,
-    /// n-1. Callers fold left after linking/evaluating each term: constructing
-    /// a deep source tree first makes linking consume one stack frame per term.
-    /// `n` is a constant, and `j` a name of its
-    /// own: a constant, an attribute, a pool, a stage or a context variable
-    /// of the same name would leave the body saying two things.
-    fn over_terms(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Vec<Expr>> {
-        let what = format!("`{} {j} in`", agg.name());
-        let clash = if self.prog.lets.iter().any(|(n, _)| n == j) {
-            Some("a `let` constant")
-        } else if self.attr_index.contains_key(j) {
-            Some("a session attribute")
-        } else if self.pools.contains_key(j) {
-            Some("a pool")
-        } else if self.stages.contains_key(j) {
-            Some("a stage")
-        } else if CONTEXT_VARS.iter().any(|(name, _)| *name == j) || j == "inf" {
-            Some("a name the language supplies")
-        } else {
-            None
-        };
-        if let Some(c) = clash {
-            return Err(LinkError::new(format!(
-                "{what}: `{j}` is also {c}\nhelp: give the index a name of its own"
-            )));
-        }
-        let count = self.const_eval(n, &format!("{what}'s count"))?;
-        if !(count >= 1.0 && count.fract() == 0.0 && count.is_finite()) {
-            return Err(LinkError::new(format!(
-                "{what}'s count must be a positive integer, found {count}"
-            )));
-        }
-        // the terms are written out, nested aggregates' included: the
-        // program's total is bounded, so no count makes the linker run away
-        let total = self.over_terms.get() as f64 + count;
-        if total > MAX_OVER as f64 {
-            return Err(LinkError::new(format!(
-                "{what}: the program's aggregates write out {total} terms, at most {MAX_OVER}"
-            )));
-        }
-        self.over_terms.set(total as usize);
-        let term = |k: usize| {
-            let mut e = body.clone();
-            bind_index(&mut e, j, k as f64);
-            e
-        };
-        Ok((0..count as usize).map(term).collect())
     }
 
     fn over_expr(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<CExpr> {
@@ -2138,6 +1990,196 @@ impl Linker<'_> {
         self.blocks[id] = out;
         self.side = initial_side;
         Ok(id)
+    }
+}
+
+/// What a constant expression may name. The one constant evaluator,
+/// `eval_const`, and the aggregates' `over_terms` read it: the linker's
+/// knows the whole program, the parser's (`Lets`) only the `let`s folded so
+/// far, with which it sizes an array the linker never sees.
+pub(crate) trait Constants {
+    /// The value of the constant `name`, or why there is none.
+    fn constant(&self, name: &str) -> LResult<f64>;
+    /// A reference `f` takes as a number (`min(N, 2)`), as the name it reads.
+    fn ref_as_number(&self, f: &str, r: &Ref) -> LResult<Expr>;
+    /// Resolve an argument a use does not read (`Expr::Unread`).
+    fn resolve_unread(&self, a: &Arg) -> LResult<()>;
+    /// What else an aggregate's index `j` names, if anything.
+    fn index_clash(&self, j: &str) -> Option<&'static str>;
+    /// The terms aggregates have written out so far, against `MAX_OVER`.
+    fn terms_written(&self) -> &Cell<usize>;
+
+    /// The value of a constant expression: numbers, `inf` and constants,
+    /// combined by the operators, the constant functions (`const_call`), a
+    /// condition and an aggregate written out. An attribute, a draw or
+    /// `blocksize` is no constant; an unread argument is resolved, as in
+    /// any expression, and never evaluated, so it need not be one
+    /// (`one(kv)`).
+    fn eval_const(&self, e: &Expr) -> LResult<f64> {
+        Ok(match e {
+            Expr::Located(span, inner) => self.eval_const(inner).map_err(|e| e.at(Some(*span)))?,
+            Expr::Num(x) => *x,
+            Expr::Var(n) if n == "inf" => f64::INFINITY,
+            Expr::Var(n) => self.constant(n)?,
+            Expr::Unary(UnOp::Neg, a) => -self.eval_const(a)?,
+            Expr::Unary(UnOp::Not, a) => {
+                if self.eval_const(a)? != 0.0 {
+                    0.0
+                } else {
+                    1.0
+                }
+            }
+            Expr::Binary(op, a, b) => binop(*op, self.eval_const(a)?, self.eval_const(b)?),
+            Expr::Cond(c, a, b) => {
+                if self.eval_const(c)? != 0.0 {
+                    self.eval_const(a)?
+                } else {
+                    self.eval_const(b)?
+                }
+            }
+            Expr::Call(f, _) if f == "blocksize" => {
+                return Err(LinkError::new(
+                    "`blocksize` is not a constant: in a constant position (a `let`, `cap`, \
+                     `block`, an array size, `horizon`, a rate) name the value with a `let` \
+                     both use"
+                        .into(),
+                ));
+            }
+            Expr::Unread(args, body) => {
+                for a in args {
+                    self.resolve_unread(a)?;
+                }
+                self.eval_const(body)?
+            }
+            Expr::Call(f, args) => {
+                let not_constant = || {
+                    LinkError::new(format!(
+                        "`{f}` with {} argument(s) is not a constant function",
+                        args.len()
+                    ))
+                };
+                let xs: Vec<f64> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(k, a)| match a {
+                        Arg::Expr(e) => self.eval_const(e),
+                        Arg::Ref(r) if takes_number(f, k, args.len()) => {
+                            self.eval_const(&self.ref_as_number(f, r)?)
+                        }
+                        Arg::Ref(_) => Err(not_constant()),
+                    })
+                    .collect::<LResult<_>>()?;
+                const_call(f, &xs).ok_or_else(not_constant)?
+            }
+            Expr::Sample(..) => return Err(LinkError::new("a constant cannot sample".into())),
+            Expr::Over(agg, j, n, body) => {
+                let terms = self.over_terms(*agg, j, n, body)?;
+                let mut values = terms.iter().map(|e| self.eval_const(e));
+                let first = values.next().expect("positive aggregate count")?;
+                values.try_fold(first, |acc, value| {
+                    let value = value?;
+                    Ok(match agg {
+                        Agg::Sum => acc + value,
+                        Agg::Min => acc.min(value),
+                        Agg::Max => acc.max(value),
+                    })
+                })?
+            }
+        })
+    }
+
+    /// The constant `what` (`pool \`kv\`: cap`, `the horizon`, ...): a number or
+    /// an infinity. No run means anything with a NaN constant, and the IR
+    /// has no spelling for one.
+    fn const_eval(&self, e: &Expr, what: &str) -> LResult<f64> {
+        let v = self.eval_const(e)?;
+        if v.is_nan() {
+            // where the expression has a place (a call, a name), the error has it
+            let span = match e {
+                Expr::Located(span, _) => Some(*span),
+                _ => None,
+            };
+            return Err(LinkError::new(format!(
+                "{what} is NaN\nhelp: a constant is a number or `inf`; `0/0` and `inf - inf` are not"
+            ))
+            .at(span));
+        }
+        Ok(v)
+    }
+
+    /// `max j in n (e)` written out as separate terms, with `j` = 0, 1, …,
+    /// n-1. Callers fold left after linking/evaluating each term: constructing
+    /// a deep source tree first makes linking consume one stack frame per term.
+    /// `n` is a constant, and `j` a name of its
+    /// own: a constant, an attribute, a pool, a stage or a context variable
+    /// of the same name would leave the body saying two things.
+    fn over_terms(&self, agg: Agg, j: &str, n: &Expr, body: &Expr) -> LResult<Vec<Expr>> {
+        let what = format!("`{} {j} in`", agg.name());
+        if let Some(c) = self.index_clash(j) {
+            return Err(LinkError::new(format!(
+                "{what}: `{j}` is also {c}\nhelp: give the index a name of its own"
+            )));
+        }
+        let count = self.const_eval(n, &format!("{what}'s count"))?;
+        if !(count >= 1.0 && count.fract() == 0.0 && count.is_finite()) {
+            return Err(LinkError::new(format!(
+                "{what}'s count must be a positive integer, found {count}"
+            )));
+        }
+        // the terms are written out, nested aggregates' included: the
+        // program's total is bounded, so no count makes the linker run away
+        let total = self.terms_written().get() as f64 + count;
+        if total > MAX_OVER as f64 {
+            return Err(LinkError::new(format!(
+                "{what}: the program's aggregates write out {total} terms, at most {MAX_OVER}"
+            )));
+        }
+        self.terms_written().set(total as usize);
+        let term = |k: usize| {
+            let mut e = body.clone();
+            bind_index(&mut e, j, k as f64);
+            e
+        };
+        Ok((0..count as usize).map(term).collect())
+    }
+}
+
+/// The linker's constants: the program's `let`s, and every name it declares
+/// for an aggregate's index to clash with.
+impl Constants for Linker<'_> {
+    fn constant(&self, name: &str) -> LResult<f64> {
+        self.consts
+            .get(name)
+            .copied()
+            .ok_or_else(|| self.unknown("constant", name))
+    }
+
+    fn ref_as_number(&self, f: &str, r: &Ref) -> LResult<Expr> {
+        self.as_number(f, r)
+    }
+
+    fn resolve_unread(&self, a: &Arg) -> LResult<()> {
+        self.unread(a)
+    }
+
+    fn index_clash(&self, j: &str) -> Option<&'static str> {
+        if self.prog.lets.iter().any(|(n, _)| n == j) {
+            Some("a `let` constant")
+        } else if self.attr_index.contains_key(j) {
+            Some("a session attribute")
+        } else if self.pools.contains_key(j) {
+            Some("a pool")
+        } else if self.stages.contains_key(j) {
+            Some("a stage")
+        } else if CONTEXT_VARS.iter().any(|(name, _)| *name == j) || j == "inf" {
+            Some("a name the language supplies")
+        } else {
+            None
+        }
+    }
+
+    fn terms_written(&self) -> &Cell<usize> {
+        &self.over_terms
     }
 }
 
