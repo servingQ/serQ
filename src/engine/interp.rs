@@ -393,12 +393,11 @@ struct Job {
     /// Remaining work (fifo, delay, step) or the virtual finish tag (ps).
     work: f64,
     mode: RunMode,
-    growing: Option<usize>,
-    /// For a `growing` run, the position its hold reaches when the run
-    /// ends: the position it started at plus its work. The chunk that ends
-    /// the run puts the hold there, not at the sum of the chunks, which can
-    /// fall an ulp short (#479).
-    end: f64,
+    /// A `growing` run's pool, and the position its hold reaches when the
+    /// run ends: the position it started at plus its work. The chunk that
+    /// ends the run puts the hold there, not at the sum of the chunks, which
+    /// can fall an ulp short (#479).
+    growing: Option<(usize, f64)>,
     enqueued: f64,
     started: Option<f64>,
 }
@@ -2750,16 +2749,17 @@ impl<'p> Interp<'p> {
     }
 
     fn advance_pos(&mut self, sid: usize, pl: usize, tokens: f64) {
-        self.move_pos(sid, pl, |pos| pos + tokens);
+        let (_, pos) = self.hold_alloc_pos(sid, pl);
+        self.set_pos(sid, pl, pos + tokens);
     }
 
-    /// Move the position of `sid`'s innermost hold on `pl` to `to(pos)`.
-    fn move_pos(&mut self, sid: usize, pl: usize, to: impl FnOnce(f64) -> f64) {
+    /// Put the innermost hold of `sid` on `pl` at position `pos`.
+    fn set_pos(&mut self, sid: usize, pl: usize, pos: f64) {
         let (hi, k) = self.sessions[sid]
             .innermost(pl)
             .expect("a growing run is inside a hold of its pool");
         let h = &mut self.sessions[sid].holds[hi];
-        h.pools[k].pos = to(h.pools[k].pos);
+        h.pools[k].pos = pos;
         h.grown = true;
     }
 
@@ -2907,17 +2907,19 @@ impl<'p> Interp<'p> {
         if let Some(sid) = owner {
             self.sessions[sid].status = Status::InStage(st, id);
         }
-        let end = match (growing, owner) {
-            (Some(pl), Some(sid)) => self.hold_alloc_pos(sid, pl).1 + work,
-            _ => 0.0,
-        };
+        // the linker refuses `growing` outside a hold of the pool
+        let growing = growing.zip(owner).map(|(pl, sid)| {
+            let (hi, k) = self.sessions[sid]
+                .innermost(pl)
+                .expect("a growing run is inside a hold of its pool");
+            (pl, self.sessions[sid].holds[hi].pools[k].pos + work)
+        });
         let stage = &mut self.stages[st];
         let job = Job {
             owner,
             work,
             mode,
             growing,
-            end,
             enqueued: now,
             started: None,
         };
@@ -3004,7 +3006,6 @@ impl<'p> Interp<'p> {
                     work,
                     mode: RunMode::Plain,
                     growing: None,
-                    end: 0.0,
                     enqueued: now,
                     started: Some(now),
                 },
@@ -3517,13 +3518,11 @@ impl<'p> Interp<'p> {
         assign.retain(|(id, _)| self.stages[st].jobs.contains_key(id));
         for &(id, tokens) in &assign {
             let j = &self.stages[st].jobs[&id];
-            if let (Some(pl), Some(sid)) = (j.growing, j.owner) {
-                if j.work - tokens <= EPS {
-                    let end = j.end;
-                    self.move_pos(sid, pl, |_| end);
-                } else {
-                    self.advance_pos(sid, pl, tokens);
-                }
+            if let (Some((pl, end)), Some(sid)) = (j.growing, j.owner) {
+                let last = j.work - tokens <= EPS;
+                let (_, pos) = self.hold_alloc_pos(sid, pl);
+                let to = if last { end } else { pos + tokens };
+                self.set_pos(sid, pl, to);
             }
         }
         // An iteration that scheduled nothing is no iteration, unless it
@@ -3672,7 +3671,7 @@ impl<'p> Interp<'p> {
     ) -> Give {
         let (mode, remaining, growing, owner) = {
             let j = &self.stages[st].jobs[&id];
-            (j.mode, j.work, j.growing, j.owner)
+            (j.mode, j.work, j.growing.map(|(pl, _)| pl), j.owner)
         };
         let want = match mode {
             RunMode::Decode => 1.0f64.min(remaining),
