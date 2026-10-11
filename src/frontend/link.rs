@@ -1718,9 +1718,12 @@ impl Linker<'_> {
                     .iter()
                     .map(|a| match a {
                         Arg::Expr(e) => self.eval_const(e),
-                        Arg::Ref(r) => self
-                            .eval_const(&Expr::Var(r.name.clone()))
-                            .map_err(|e| e.at(r.span)),
+                        Arg::Ref(r) => match self.not_a_number(f, r) {
+                            Some(e) => Err(e.at(r.span)),
+                            None => self
+                                .eval_const(&Expr::Var(r.name.clone()))
+                                .map_err(|e| e.at(r.span)),
+                        },
                     })
                     .collect::<LResult<_>>()?;
                 match const_call(f, &xs) {
@@ -1828,11 +1831,61 @@ impl Linker<'_> {
                     .as_deref()
                     .map_or(Ok(()), |i| self.expr(i).map(drop))
             }
-            Arg::Ref(r) => self
-                .expr(&Expr::Var(r.name.clone()))
-                .map(drop)
-                .map_err(|e| e.at(r.span)),
+            Arg::Ref(r) => {
+                self.expr(&Expr::Var(r.name.clone()))
+                    .map_err(|e| e.at(r.span))?;
+                match r.index {
+                    Some(_) => Err(self.indexed_value(r).at(r.span)),
+                    None => Ok(()),
+                }
+            }
         }
+    }
+
+    /// Why a name passed where `f` takes a number is not one as written
+    /// (#469): a pool or a stage, whole or a member, is no number, and a
+    /// value has no index. `None` for a bare name the caller reads as a
+    /// value, or refuses as unknown or no constant: one that is not a
+    /// place, or reads a value though a stage shares its name (`set svc =
+    /// 3` beside `stage svc`).
+    fn not_a_number(&self, f: &str, r: &Ref) -> Option<LinkError> {
+        let n = &r.name;
+        let value = self.expr(&Expr::Var(n.clone()));
+        let place = self.pools.contains_key(n) || self.stages.contains_key(n);
+        if r.index.is_none() && (value.is_ok() || !place) {
+            return None;
+        }
+        let written = match r.index {
+            Some(_) => format!("{n}[…]"),
+            None => n.clone(),
+        };
+        if self.pools.contains_key(n) {
+            return Some(LinkError::new(format!(
+                "`{f}` reads `{written}` as a number, but a pool is none: read \
+                 `queued({written})` or `holders({written})`"
+            )));
+        }
+        if self.stages.contains_key(n) {
+            return Some(LinkError::new(format!(
+                "`{f}` reads `{written}` as a number, but a stage is none: read \
+                 `budget_left({written})` or `work({written})`"
+            )));
+        }
+        Some(match value {
+            Err(unknown) => unknown,
+            Ok(_) => self.indexed_value(r),
+        })
+    }
+
+    /// The refusal for `n[…]` where `n` names a value: it has no members.
+    fn indexed_value(&self, r: &Ref) -> LinkError {
+        let n = &r.name;
+        let what = if self.attr_index.contains_key(n) {
+            "an attribute"
+        } else {
+            "a number"
+        };
+        LinkError::new(format!("`{n}[…]`: {what} has no index: write `{n}`"))
     }
 
     fn expr(&self, e: &Expr) -> LResult<CExpr> {
@@ -1916,10 +1969,13 @@ impl Linker<'_> {
                 for (a, kind) in args.iter().zip(sig) {
                     cargs.push(match (kind, a) {
                         (ArgKind::Expr, Arg::Expr(e)) => CArg::Expr(self.expr(e)?),
-                        (ArgKind::Expr, Arg::Ref(r)) => CArg::Expr(
-                            self.expr(&Expr::Var(r.name.clone()))
-                                .map_err(|e| e.at(r.span))?,
-                        ),
+                        (ArgKind::Expr, Arg::Ref(r)) => match self.not_a_number(f, r) {
+                            Some(e) => return Err(e.at(r.span)),
+                            None => CArg::Expr(
+                                self.expr(&Expr::Var(r.name.clone()))
+                                    .map_err(|e| e.at(r.span))?,
+                            ),
+                        },
                         (ArgKind::Pool, Arg::Ref(r)) => CArg::Pool(self.pool_ref(r)?),
                         (ArgKind::Stage, Arg::Ref(r)) => CArg::Stage(self.stage_ref(r)?),
                         (k, _) => {
