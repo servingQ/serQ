@@ -403,9 +403,25 @@ impl Parser {
         };
         let mut caps: Vec<Capacity> = vec![];
         let (mut tokens, mut schedule, mut execute) = (false, false, false);
+        let mut request: Option<request::RequestSrc> = None;
+        let mut release: Option<(usize, Vec<Token>)> = None;
+        self.takings.clear();
         while *self.peek() != Tok::RBrace {
             let k_at = self.pos;
-            if self.eat_kw("tokens") {
+            if self.is_kw("request") {
+                if request.is_some() {
+                    return self.err_at(
+                        k_at,
+                        "`request` twice: an engine says once what it does with one",
+                    );
+                }
+                request = Some(self.request_src(&name, &device, dev_array)?);
+            } else if self.eat_kw("release") {
+                if release.is_some() {
+                    return self.err_at(k_at, "`release cache` twice: a request leaves one cache");
+                }
+                release = Some((k_at, self.release_src()?));
+            } else if self.eat_kw("tokens") {
                 if tokens {
                     return self.err_at(k_at, "`tokens cap` twice: an iteration has one budget");
                 }
@@ -540,12 +556,12 @@ impl Parser {
         });
         prog.stages.push(StageDecl {
             span,
-            name,
+            name: name.clone(),
             count: dev_count,
             array: dev_array,
             kind: StageKind::Step(Box::new(s)),
         });
-        Ok(())
+        self.engine_request(&name, request, release)
     }
 
     /// `{ let …; stmt* }` of engine `engine`'s `schedule`, written into `s`.
@@ -719,6 +735,7 @@ impl Parser {
                 None
             };
             let cap = self.each_at_most()?;
+            self.taking_src()?;
             self.expect(&Tok::Semi)?;
             Ok(SStmt::Admit { only, gate, cap })
         } else if self.eat_kw("exclusive") {

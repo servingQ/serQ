@@ -3,8 +3,9 @@
 //! The use case's claim is that the single-turn, chat and subagent programs
 //! run `examples/multi-turn/vllm.sq`'s engine and differ from it only in the client.
 //! The engine is the text a reader would compare: the constants from `B` to
-//! `c0`, the declarations from `device gpu` to `pool reqs on vllm`, and the
-//! `server` block. Held to the text, not the IR, because the server is spliced
+//! `c0`, the declarations from `device gpu` to `pool reqs on vllm`, among
+//! them the `engine vllm` block with its `request`, and the `server` that
+//! calls it. Held to the text, not the IR, because the request is spliced
 //! into the session and the IR has no engine to compare.
 
 use serq::program_path;

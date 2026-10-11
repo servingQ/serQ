@@ -117,6 +117,9 @@ pub struct QueueDecl {
     pub nic: bool,
     /// `Q pull S …;` or `S push Q …;`: where its entries take the KV from.
     pub takes: Option<Takes>,
+    /// An engine's request (`docs/design/engine-request.md`), its one
+    /// entry `request`: it keeps its names and its pools are the program's.
+    pub engine: bool,
     pub at: usize,
 }
 
@@ -192,6 +195,9 @@ impl Ctx<'_> {
                 );
             }
             return Ok(src.clone());
+        }
+        if self.q.engine && self.q.pools.contains(&r.name) {
+            return Ok(r.clone());
         }
         if self.q.pools.contains(&r.name) {
             if r.index.is_some() {

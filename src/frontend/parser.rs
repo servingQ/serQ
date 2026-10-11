@@ -76,6 +76,7 @@ use crate::frontend::link::{
 use crate::frontend::queue::{self, QueueDecl};
 
 mod device;
+mod request;
 
 pub use device::{ENGINE_VALUES, engine_name};
 
@@ -217,6 +218,16 @@ struct Parser {
     in_engine: Option<&'static str>,
     /// The queue whose body is being read: its `device gpu` is `Q.gpu`.
     device_scope: Option<String>,
+    /// The `taking` of each `admit waiting` of the engine being read, with
+    /// its position: its request's admission (`request::engine_request`).
+    takings: Vec<(usize, Option<Vec<Token>>)>,
+    /// The engine whose request is being read: `prefill (e)` is its run.
+    in_request: Option<String>,
+    /// The `state`s of the request being read, which its header reads.
+    request_states: Vec<String>,
+    /// Each engine's request: the engine, where the request is, and the
+    /// names it sets, which are its own.
+    request_locals: Vec<(String, usize, Vec<String>)>,
 }
 
 /// What a declaration declares.
@@ -404,7 +415,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 115] = [
+pub const KEYWORDS: [&str; 116] = [
     "Cost",
     "Size",
     "admission",
@@ -508,6 +519,7 @@ pub const KEYWORDS: [&str; 115] = [
     "step",
     "sum",
     "tail",
+    "taking",
     "to",
     "tool",
     "trace",
@@ -1602,6 +1614,10 @@ impl Parser {
             pools_on: vec![],
             in_engine: None,
             device_scope: None,
+            takings: vec![],
+            in_request: None,
+            request_states: vec![],
+            request_locals: vec![],
         }
     }
 
@@ -2077,6 +2093,7 @@ impl Parser {
             shared.extend(q.marks.iter().map(|m| format!("{}.{m}", q.name)));
         }
         served.shared = shared;
+        self.check_request_names(&prog)?;
         self.assemble(&mut prog, &mut served)?;
         self.link_engines(&mut prog)?;
         self.check_binding_names(&prog)?;
@@ -3297,7 +3314,7 @@ impl Parser {
                         ),
                     );
                 }
-            } else if self.queues.iter().any(|q| q.name == owner)
+            } else if self.queues.iter().any(|q| q.name == owner && !q.engine)
                 && self.engines.iter().any(|e| e.name == owner)
             {
                 return self.err_at(
@@ -3574,6 +3591,7 @@ impl Parser {
             latency: None,
             nic: false,
             takes: None,
+            engine: false,
             at,
         });
         let qi = self.queues.len() - 1;
@@ -3971,8 +3989,10 @@ impl Parser {
         // the gateway's `route` is the deployment's and reads as a server
         // does; any other entry of a queue that is also a gateway is an entry
         let is_gateway = verb == "route" && q.roles.iter().any(|r| r == "gateway");
+        let states = self.request_states.clone();
         let allowed_var = |n: &str, header: bool| -> bool {
             params.iter().any(|p| p == n)
+                || (header && states.iter().any(|s| s == n))
                 || n == "self"
                 || n == "inf"
                 || self.consts.iter().any(|(c, _)| c == n)
@@ -4109,13 +4129,18 @@ impl Parser {
             }
         }
         let leases = always_leases(&body);
+        let engine = q.engine;
+        if engine {
+            self.request_locals.push((qname, at, locals.clone()));
+        }
+        let q = &mut self.queues[qi];
         q.entries.push(queue::Entry {
             verb,
             params,
             from,
             leases,
             body,
-            locals: if is_gateway { vec![] } else { locals },
+            locals: if is_gateway || engine { vec![] } else { locals },
             reads,
             header_refused,
             at,
@@ -4226,6 +4251,20 @@ impl Parser {
             out.extend(self.serving(role)?);
             return Ok(());
         }
+        if let Some(engine) = self.in_request.clone() {
+            if matches!(self.peek(), Tok::Ident(s) if s == "prefill" || s == "decode")
+                && *self.peek_at(1) == Tok::LParen
+            {
+                out.push(self.request_run(&engine)?);
+                return Ok(());
+            }
+            if matches!(self.peek(), Tok::Ident(_)) && *self.peek_at(1) == Tok::Assign {
+                return self.err(
+                    "a request's admission binding stands above its statements: it is read \
+                     when the request is admitted",
+                );
+            }
+        }
         if let Tok::Ident(s) = self.peek()
             && (s == "prefill" || s == "decode")
         {
@@ -4249,7 +4288,7 @@ impl Parser {
 
     fn cost_scope(&self) -> Option<String> {
         self.in_queue
-            .filter(|_| !self.entry_gateway)
+            .filter(|&qi| !self.entry_gateway && !self.queues[qi].engine)
             .map(|qi| self.queues[qi].name.clone())
     }
 
@@ -4684,6 +4723,10 @@ impl Parser {
             }
             // `Q.verb (…);`, `Q[i].verb (…) from S[k] to p (m);`: a queue's entry
             _ if matches!(self.peek_at(1), Tok::Dot | Tok::LBracket) => self.call(),
+            // `E (a, …);`: engine `E`'s request
+            _ if *self.peek_at(1) == Tok::LParen && self.engines.iter().any(|e| e.name == kw) => {
+                self.engine_call()
+            }
             // the serving forms (`prefill`, `transfer`, `decode`, `tool`) are
             // parsed by `stmt_into`, since one of them stands for several
             // statements

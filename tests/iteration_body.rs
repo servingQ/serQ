@@ -49,7 +49,12 @@ fn procedure_as_body(src: &str) -> Option<String> {
     let first = i + src[i..].find(';')? + 1;
     let rest = &src[first..];
     let admit = "admit waiting while (running.preempted == 0)";
-    if !rest.trim_start().starts_with(admit) || src[i..first].contains(" only ") {
+    // the comments between the two statements say what `admit` takes
+    let next = rest
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with("//"))?;
+    if !next.starts_with(admit) || src[i..first].contains(" only ") {
         return None;
     }
     let j = first + rest.find(admit)?;

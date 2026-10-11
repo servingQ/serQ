@@ -239,24 +239,28 @@ exactly. The expected moves:
 `tests/workloads.rs` compares the `engine vllm` block of the four vLLM
 programs instead of their server, and `make check` and `make lean` pass.
 
-**The mark moves the `ttft` report at the run's edges.** A hand-written
-`vllm.sq` with `set first_token = now;` in the branch and `observe ttft =
-first_token - t0;` after the hold, which is what step 1 lowers to, was run
-against `vllm.sq` with seeds 1 to 3 and horizons 100, 300 and 1000
-(warm-up 10, 50, 100). Seven of the nine reports are identical. Two differ
-in one line, the count of `ttft`:
+**The mark moves the `ttft` line of the report.** The four vLLM programs
+of step 1 were run before and after it with seeds 1 to 5 and horizons 100,
+300 and 1000 (warm-up 10, 50, 100): sixty reports. Thirty-three are
+identical. In the other twenty-seven every line but `ttft` is identical,
+and in `ttft` the count moves by one or two, the confidence interval in its
+last digit, and in a few the cv² and the mean in their last digit, for
+example:
 
 ```
-seed 2, --horizon 300 --warmup 50:   ttft  554 → 555   (mean 0.0132, CI, cv², p99 unchanged)
-seed 2, --horizon 1000 --warmup 100: ttft 2408 → 2407  (mean 0.0142, CI, cv², p99 unchanged)
+vllm.sq, seed 2, --horizon 300 --warmup 50:           ttft  554 → 555,  mean 0.0132, CI ±0.0011
+vllm.sq, seed 5, --horizon 100 --warmup 10:           ttft  186 → 185,  CI ±0.0028 → ±0.0029, cv² 1.006 → 1.015
+vllm_subagents.sq, seed 3, --horizon 100 --warmup 10: ttft  213 → 214,  CI ±0.0047 → ±0.0055, cv² 1.416 → 1.405
 ```
 
 An observation is counted when it is recorded after the warm-up
-(`observe_for` in `src/engine/interp.rs`). Recorded at the hold's end, a
-request whose first token came before the warm-up and whose last after it
-is counted, and one still decoding at the horizon is not. The two rules of
-#501's decision, one lowering of `mark` and a report identical for every
-program, cannot both hold for `ttft` (*Open decisions*).
+(`observe_for` in `src/engine/interp.rs`), and the batch-means interval
+reads the samples in the order they were recorded. Recorded at the hold's
+end, a request whose first token came before the warm-up and whose last
+after it is counted, one still decoding at the horizon is not, and the
+samples come in the order the requests end. The two rules of #501's
+decision, one lowering of `mark` and a report identical for every program,
+cannot both hold for `ttft` (*Open decisions*).
 
 ## What steps 2 and 3 move
 
@@ -405,12 +409,13 @@ claims; the IR may move where a step says it does.
 
 ## Open decisions
 
-1. **`ttft` at the run's edges.** With the mark a `set`, the observation
-   of `ttft` is recorded when the request ends, not when its first token
-   comes, and its count moves by one at a warm-up or horizon edge (*How a
-   step is checked*). Either the report check allows that one line for
-   step 1 (the measured `ttft` values are the same; which requests count
-   is when the observation is recorded); or the observation stays at the
+1. **The `ttft` line.** With the mark a `set`, the observation of `ttft`
+   is recorded when the request ends, not when its first token comes, so
+   its count moves at a warm-up or horizon edge and its interval with the
+   order of the samples (*How a step is checked*). Either the report check
+   allows that one line for step 1 (each request's `ttft` is the same
+   value; which requests count, and in what order, is when the
+   observation is recorded); or the observation stays at the
    mark, which takes a second lowering of `mark` (an `observe` of `E.m`
    after the call recorded at the mark), refused above; or the request
    records it itself, which needs the stamp `t0` passed to the engine as a
