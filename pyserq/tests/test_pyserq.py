@@ -30,6 +30,13 @@ workload { arrive poisson(1);  }
 server { set j = ~bernoulli(0.5); hold reqs (cost(reqs, 1)) { hold kv[j] (cost(kv, 1)) { run svc[j] (cost(svc, ~exp(0.5))); } } }
  }"""
 
+# a claim the run cannot read (`note`, sessions live at the end) or that fails (`first`, the end)
+CLAIMED = """fn main() { pool reqs { cap 2; } stage svc : fifo;
+workload { arrive ARRIVE; }
+server { set t0 = now; hold reqs (cost(reqs, 1)) { run svc (cost(svc, 2)); } observe response = now - t0; }
+claim none : at end (count(response) == 0);
+ }"""
+
 
 def cli(path, *args):
     d = tempfile.mkdtemp(prefix="pyserq-")
@@ -99,7 +106,11 @@ def test_the_report_is_its_json_by_name():
     assert [p.index for p in arrays.pools_named("kv")] == [0, 1] and arrays.pool("reqs").index is None
     replay = pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}, horizon=6000))
     kong = pyserq.run(pyserq.compile(KONG, horizon=100000))  # a program with claims
-    for r in [pyserq.run(pyserq.compile(MG1, seed=4, horizon=20000.0, warmup=1000.0)), arrays, replay, kong]:
+    live = pyserq.run(pyserq.compile(source=CLAIMED.replace("ARRIVE", "poisson(5)"), horizon=100))
+    fails = pyserq.run(pyserq.compile(source=CLAIMED.replace("ARRIVE", "batch(2)"), horizon=100))
+    assert live.claim("none").result == "not_evaluated" and "live" in live.claim("none").note
+    assert fails.claim("none").result == "fails" and fails.claim("none").first == fails.end
+    for r in [pyserq.run(pyserq.compile(MG1, seed=4, horizon=20000.0, warmup=1000.0)), arrays, replay, kong, live, fails]:
         js = json.loads(r.json())
         scalars = {k: v for k, v in js.items() if k not in ("observes", "gauges", "claims", "stages", "pools")}
         # every field, both ways: nothing JSON has is missing, nothing it lacks is added

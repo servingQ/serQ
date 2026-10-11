@@ -12,7 +12,7 @@
 //! g = pyserq.run(pyserq.compile("examples/pd-disaggregation/llmd_nixl_pull.sq", horizon=2000, warmup=200)).gauge("load_spread")
 //! g.mean, g.ci, g.min, g.max  # g.times, g.values: what `--dump` writes
 //! r.stage("svc").utilization; r.observes, r.gauges, r.claims, r.stages, r.pools: all of them
-//! r.claim("bound").result     # "holds", "fails", ...: what `serq run` says of the claim
+//! pyserq.run(pyserq.compile("examples/papers/kong_svf.sq", horizon=100000)).claim("queueing_bound").result  # "holds", ...
 //! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 //! pyserq.draw("examples/multi-turn/vllm.sq")  # what `serq draw` prints
 //! ```
