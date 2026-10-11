@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CLI = os.environ.get("SERQ_CLI", str(ROOT / "target" / "release" / "serq"))
 MG1 = ROOT / "examples" / "single-turn" / "mg1.sq"
 REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
+KONG = ROOT / "examples" / "papers" / "kong_svf.sq"
 ARRAYS = """fn main() { pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
 workload { arrive poisson(1);  }
 server { set j = ~bernoulli(0.5); hold reqs (cost(reqs, 1)) { hold kv[j] (cost(kv, 1)) { run svc[j] (cost(svc, ~exp(0.5))); } } }
@@ -90,17 +91,17 @@ def attrs(x):
 
 
 SAMPLES = {"samples", "times", "sessions", "turns"}
-LOOKUPS = {"json", "observes", "gauges", "stages", "pools", "observe", "gauge", "stage", "stages_named", "pool", "pools_named"}
+LOOKUPS = {"json", "observes", "gauges", "claims", "stages", "pools", "observe", "gauge", "claim", "stage", "stages_named", "pool", "pools_named"}
 
 
 def test_the_report_is_its_json_by_name():
     arrays = pyserq.run(pyserq.compile(source=ARRAYS, horizon=100))
     assert [p.index for p in arrays.pools_named("kv")] == [0, 1] and arrays.pool("reqs").index is None
-    for r in [pyserq.run(pyserq.compile(MG1, seed=4, horizon=20000.0, warmup=1000.0)),
-              arrays,
-              pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}, horizon=6000))]:
+    replay = pyserq.run(pyserq.compile(REPLAY, sets={"N": 40}, horizon=6000))
+    kong = pyserq.run(pyserq.compile(KONG, horizon=100000))  # a program with claims
+    for r in [pyserq.run(pyserq.compile(MG1, seed=4, horizon=20000.0, warmup=1000.0)), arrays, replay, kong]:
         js = json.loads(r.json())
-        scalars = {k: v for k, v in js.items() if k not in ("observes", "gauges", "stages", "pools")}
+        scalars = {k: v for k, v in js.items() if k not in ("observes", "gauges", "claims", "stages", "pools")}
         # every field, both ways: nothing JSON has is missing, nothing it lacks is added
         assert attrs(r) == set(scalars) | LOOKUPS
         assert all(same(getattr(r, k), v) for k, v in scalars.items())
@@ -125,9 +126,15 @@ def test_the_report_is_its_json_by_name():
                 members = [m.index for m in named(x.name)]
                 assert members in ([None], list(range(len(members))))
         assert list(r.gauges) == list(js["gauges"])
+        # the JSON leaves `claims` out when the program has none
+        assert list(r.claims) == [c["name"] for c in js.get("claims", [])]
+        for c in js.get("claims", []):
+            cl = r.claim(c["name"])
+            assert attrs(cl) == set(c) and all(same(getattr(cl, k), v) for k, v in c.items())
         assert r.observe("nope") is None and r.stage("nope") is None and r.pool("nope") is None
-        assert r.gauge("nope") is None
-    assert type(r.pools[0]).__module__ == "pyserq" and type(r.observe("ttft")).__module__ == "pyserq"
+        assert r.gauge("nope") is None and r.claim("nope") is None
+    assert type(replay.pools[0]).__module__ == "pyserq" and type(replay.observe("ttft")).__module__ == "pyserq"
+    assert kong.claim("queueing_bound").result == "holds" and type(kong.claim("queueing_bound")).__module__ == "pyserq"
     assert pyserq.run(pyserq.compile(MG1, horizon=5.0, warmup=0.0)).observe("response").ci == math.inf
 
 

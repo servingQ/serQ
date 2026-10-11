@@ -135,6 +135,7 @@ nav:
           - pyserq.Report: python/report.md
           - pyserq.Observe: python/observe.md
           - pyserq.Gauge: python/gauge.md
+          - pyserq.Claim: python/claim.md
           - pyserq.Stage: python/stage.md
           - pyserq.Pool: python/pool.md
       - Visualization and inputs:

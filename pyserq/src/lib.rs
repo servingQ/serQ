@@ -11,7 +11,8 @@
 //! o = r.observe("response")    # o.mean, o.ci, ...; o.samples, o.times: what `--dump` writes
 //! g = pyserq.run(pyserq.compile("examples/pd-disaggregation/llmd_nixl_pull.sq", horizon=2000, warmup=200)).gauge("load_spread")
 //! g.mean, g.ci, g.min, g.max  # g.times, g.values: what `--dump` writes
-//! r.stage("svc").utilization; r.observes, r.gauges, r.stages, r.pools: all of them
+//! r.stage("svc").utilization; r.observes, r.gauges, r.claims, r.stages, r.pools: all of them
+//! r.claim("bound").result     # "holds", "fails", ...: what `serq run` says of the claim
 //! pyserq.read_trace("examples/replay/data/short_base.csv")  # the sessions a replay draws from
 //! pyserq.draw("examples/multi-turn/vllm.sq")  # what `serq draw` prints
 //! ```
@@ -128,6 +129,22 @@ impl Report {
     fn gauge(&self, name: &str) -> Option<Gauge> {
         let i = self.0.gauges.iter().position(|g| g.name == name)?;
         Some(Gauge(self.0.clone(), i))
+    }
+
+    /// The claims by name, in the program's order.
+    #[getter]
+    fn claims<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let d = PyDict::new(py);
+        for (i, c) in self.0.claims.iter().enumerate() {
+            d.set_item(&c.name, Claim(self.0.clone(), i))?;
+        }
+        Ok(d)
+    }
+
+    /// The claim `name`, or `None` (`serq::Report::claim`).
+    fn claim(&self, name: &str) -> Option<Claim> {
+        let i = self.0.claims.iter().position(|c| c.name == name)?;
+        Some(Claim(self.0.clone(), i))
     }
 
     /// One row per stage (a replicated stage has a row per replica, under
@@ -271,6 +288,54 @@ impl Gauge {
     #[getter]
     fn values(&self) -> Vec<f64> {
         self.get().points.iter().map(|p| p.1).collect()
+    }
+}
+
+/// One claim: what the run found of it, by the names of `serq run --json`.
+#[pyclass(frozen, module = "pyserq")]
+struct Claim(Arc<serq::Report>, usize);
+
+impl Claim {
+    fn get(&self) -> &serq::engine::report::ClaimReport {
+        &self.0.claims[self.1]
+    }
+}
+
+#[pymethods]
+impl Claim {
+    #[getter]
+    fn name(&self) -> &str {
+        &self.get().name
+    }
+    /// `every_iteration`, `some_iteration` or `at_end`.
+    #[getter]
+    fn kind(&self) -> &'static str {
+        self.get().kind_name()
+    }
+    /// `holds`, `fails`, `witnessed`, `not_witnessed`, `not_evaluated` or
+    /// `out_of_scope`.
+    #[getter]
+    fn result(&self) -> &'static str {
+        self.get().result.name()
+    }
+    /// Iterations read (an iteration claim), or 1 when a claim `at end` was.
+    #[getter]
+    fn checked(&self) -> u64 {
+        self.get().checked
+    }
+    #[getter]
+    fn failures(&self) -> u64 {
+        self.get().failures
+    }
+    /// The time of the first failure, or of the first witness, or `None`.
+    #[getter]
+    fn first(&self) -> Option<f64> {
+        self.get().first
+    }
+    /// Why the claim was not read, or `None`.
+    #[getter]
+    fn note(&self) -> Option<&str> {
+        self.get().note.as_deref()
     }
 }
 
@@ -462,6 +527,7 @@ fn pyserq(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<Report>()?;
     m.add_class::<Observe>()?;
     m.add_class::<Gauge>()?;
+    m.add_class::<Claim>()?;
     m.add_class::<serq::engine::report::StageReport>()?;
     m.add_class::<serq::engine::report::PoolReport>()?;
     m.add_function(wrap_pyfunction!(compile, m)?)?;
