@@ -182,37 +182,31 @@ remote (`thr = 1`). `sessions.md` has the table; `sessions.py` adds one
 `observe` to the prefill pods' entry to count what they compute, and
 records each deployment's edits in `sessions.csv`.
 
-`sessions.csv`, `sessions.md` and the numbers below are from before the
-session streams were reseeded (#297) and were not regenerated with them:
-`sessions.py` now stops at the first colocated open run (`thr` past any
-prompt, 2 sessions/s, every seed) on the negative decode amount that
-[the P/D use case](../../docs/use-cases/pd.md) warns of (#494).
-
 - **With prefix reuse the cache decides before the batching does.** At
-  3 sessions/s (27 turns/s) TTFT is 167 ms colocated, 36 ms
-  colocated_cache and 192 ms split, the response 344, 86 and 237 ms, the
-  prompt tokens computed a turn 5016, 1316 and 2294. A colocated pod
+  3 sessions/s (27 turns/s) TTFT is 172 ms colocated, 37 ms
+  colocated_cache and 217 ms split, the response 359, 86 and 263 ms, the
+  prompt tokens computed a turn 5051, 1339 and 2389. A colocated pod
   caches the prompt and the answer of a turn, and the next turn's prompt
   is them and the new tokens; a prefill pod caches the prompt only
   (`cache (prompt)`), so the split computes the previous answer again.
   Routed by load, the colocated pods lose the prefix and prefill most of
-  every prompt: their decodes then wait behind prefills, 177 ms of decode
-  against 46 split, an ITL of 0.89 ms against 0.23 (a mean above the
+  every prompt: their decodes then wait behind prefills, 187 ms of decode
+  against 46 split, an ITL of 0.94 ms against 0.23 (a mean above the
   p99 of 0.38: the gaps beyond the p99 are the prefills a decode rides
   with). Routed by prefix, they prefill little, and the decode is 50 ms
   against 46, the ITL 0.25 against 0.23 ms.
 - **At low load the split answers before the load-routed colocated pods,
-  and that is the cache too.** At 1 session/s TTFT is 57 ms colocated,
-  18 ms colocated_cache and 43 ms split; the decode time is 43.6 ms
-  colocated and split. The split's 43 ms are its prefill of 1157 tokens
-  (23 ms), the read of the 2050 the decode pod lacks (2 ms of wait and
-  10 on the NIC), and the waits between.
+  and that is the cache too.** At 1 session/s TTFT is 55 ms colocated,
+  17 ms colocated_cache and 41 ms split; the decode time is 43.0 ms
+  colocated and 43.3 split. The split's 41 ms are its prefill of 1130
+  tokens (23 ms), the read of the 2000 the decode pod lacks (2 ms of wait
+  and 10 on the NIC), and the waits between.
 - **Closed sessions: a faster answer brings the next turn a little
-  sooner.** With 60 users colocated serves 21.11 turns/s, split 21.39 and
-  colocated_cache 21.90, with responses of 180, 142 and 77 ms. A turn's
-  cycle is 60/21.11 = 2.84 s, most of it the tool; Little's law, users =
-  turns/s × cycle, gives 21.11 × 2.84 / (2.84 − 0.038) = 21.40 for the
-  split and 21.11 × 2.84 / (2.84 − 0.103) = 21.90 for colocated_cache.
+  sooner.** With 60 users colocated serves 21.06 turns/s, split 21.37 and
+  colocated_cache 21.88, with responses of 182, 143 and 77 ms. A turn's
+  cycle is 60/21.06 = 2.85 s, most of it the tool; Little's law, users =
+  turns/s × cycle, gives 21.06 × 2.85 / (2.85 − 0.039) = 21.35 for the
+  split and 21.06 × 2.85 / (2.85 − 0.106) = 21.87 for colocated_cache.
   With a tool call that long, a gain in the answer is the user's more
   than the throughput's.
 
