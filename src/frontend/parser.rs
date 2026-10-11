@@ -1941,6 +1941,7 @@ impl Parser {
         served.shared = shared;
         self.assemble(&mut prog, &mut served)?;
         self.link_engines(&mut prog)?;
+        self.check_binding_names(&prog)?;
         self.check_body_bindings(&prog)?;
         self.check_def_names(&prog)?;
         self.check_declared_names(&prog)?;
@@ -2149,10 +2150,43 @@ impl Parser {
         }
     }
 
+    /// A header's binding names a value of its hold alone: an attribute or
+    /// a constant of the program with its name would have one word mean two
+    /// things, in the header (`at admission (k = 1)` beside `let k = 3;`)
+    /// and in the body, where a binding it reads is set at the top. A name
+    /// the language supplies is refused where the binding is parsed, and a
+    /// declaration's by `check_declared_names`.
+    fn check_binding_names(&self, prog: &Program) -> PResult<()> {
+        let lets: Vec<&String> = prog.lets.iter().map(|(n, _)| n).collect();
+        // the bindings' own `set`s are not recorded as definitions
+        let set = |name: &String| {
+            self.definitions
+                .iter()
+                .any(|(n, _)| n == name && !lets.contains(&n))
+        };
+        for (at, name) in &self.header_binds {
+            let what = if BUILTIN_ATTRS.contains(&name.as_str()) {
+                "an attribute the scheduler sets"
+            } else if lets.contains(&name) {
+                "a `let` constant"
+            } else if set(name) {
+                "an attribute the program sets"
+            } else {
+                continue;
+            };
+            return self.err_at(
+                *at,
+                format!(
+                    "`{name}` is {what}; a binding named `{name}` would make the one word \
+                     mean two things\nhelp: rename the binding"
+                ),
+            );
+        }
+        Ok(())
+    }
+
     /// A binding its hold's body reads was set at the top of the body. That
-    /// is its admission value only if it reads attributes and constants, and
-    /// the `set` is the binding's alone only if no attribute or constant has
-    /// its name. A declaration's name is `check_declared_names`'s.
+    /// is its admission value only if it reads attributes and constants.
     fn check_body_bindings(&self, prog: &Program) -> PResult<()> {
         if self.body_binds.is_empty() {
             return Ok(());
@@ -2167,26 +2201,6 @@ impl Parser {
             .filter(|n| !lets.contains(n))
             .collect();
         for (at, name, e) in &self.body_binds {
-            let clash = if BUILTIN_ATTRS.contains(&name.as_str()) {
-                Some("an attribute the scheduler sets")
-            } else if is_context_var(name) || name == "inf" {
-                Some("a name the language supplies")
-            } else if lets.contains(name) {
-                Some("a `let` constant")
-            } else if assigned.contains(name) {
-                Some("an attribute the program sets")
-            } else {
-                None
-            };
-            if let Some(what) = clash {
-                return self.err_at(
-                    *at,
-                    format!(
-                        "the body reads `{name}`, which is also {what}: the body would not \
-                         say which it means\nhelp: rename the binding"
-                    ),
-                );
-            }
             if expr_reads(e, name) {
                 return self.err_at(*at, format!("the binding `{name}` reads itself"));
             }
@@ -4751,8 +4765,10 @@ impl Parser {
     fn bindings(&mut self, clause: &str) -> PResult<Vec<(String, Expr)>> {
         let mut binds: Vec<(String, Expr)> = vec![];
         loop {
-            self.bind_at.push(self.pos);
+            let at = self.pos;
+            self.bind_at.push(at);
             let name = self.name()?;
+            self.own_name(at, &name, "a binding")?;
             if binds.iter().any(|(n, _)| *n == name) {
                 return self.err(format!("`{name}` is bound twice in one `{clause}`"));
             }

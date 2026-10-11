@@ -353,8 +353,8 @@ queue P[NP] : prefill {
   pool reqs on P { queue fifo; }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   prefill (prompt) {
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt))
-         at admission (hit = min(cachedin(kv), reusable(prompt, bs))) {
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(P)))) reserve (cost(kv, prompt))
+         at admission (reused = min(cachedin(kv), reusable(prompt, bs))) {
       set c = cached;
       run P prefill (cost(P, prompt - c)) growing kv;
     } cache (cost(reqs, kv, prompt)) lease kv (inf);
@@ -939,10 +939,10 @@ is in the AST and the IR like any other. A binding that reads live state —
 an observable such as `cachedin(kv)`, a context variable, or `cached`, which
 the admission itself sets — has another value there, so the body reading it
 is a parse error; the body reads `cached`, the units the admission consumed.
-A binding's name is its own: no declaration (a `def`, an observation, a
-gauge, a pool, a stage, …) may share it. The name of one the body reads is
-not a builtin attribute, a context variable, a `let` or an attribute the
-program sets either, and is not read outside the holds that bind it. A binding reads only the ones
+A binding's name is its own: no declaration anywhere in the program (a
+`def`, an observation, a gauge, a pool, a stage, …) may share it, nor a
+builtin attribute, a context variable, a `let` or an attribute the program
+sets, and it is not read outside the holds that bind it. A binding reads only the ones
 before it in its clause.
 
 ### `hidden`

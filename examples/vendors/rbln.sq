@@ -26,10 +26,10 @@ fn main() {
   server {
     set t0 = now;
     set kept = prompt;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + min(128, left)))) reserve (cost(kv, known))
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + min(128, left)))) reserve (cost(kv, known))
          at admission (known = max(kept, computed + 1),
                        left = budget_left(llm),
-                       hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
+                       reused = min(cachedin(kv), reusable(known, blocksize(kv)))) {
       set kept = known;
       set c = min(cached, reusable(known, blocksize(kv)));
       run llm prefill (cost(llm, known - c)) growing kv;
