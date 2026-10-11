@@ -1718,6 +1718,9 @@ impl Linker<'_> {
                     .iter()
                     .map(|a| match a {
                         Arg::Expr(e) => self.eval_const(e),
+                        Arg::Ref(r) if r.index.is_some() => {
+                            Err(self.indexed_number(f, r).at(r.span))
+                        }
                         Arg::Ref(r) => self
                             .eval_const(&Expr::Var(r.name.clone()))
                             .map_err(|e| e.at(r.span)),

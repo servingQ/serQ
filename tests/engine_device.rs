@@ -1395,4 +1395,9 @@ server {{ hold kv[j] (cost(kv, {size})) {{ run E[j] prefill (cost(E, 1)) growing
     ] {
         refused(&src(size), message);
     }
+    // a constant's function call too: `min(N[1], 4)` was `min(N, 4)`
+    refused(
+        &format!("let N = 2; let A = min(N[1], 4);\n{}", src("A")),
+        "`min` reads `N[…]`, but a number has no index: write `N`",
+    );
 }
