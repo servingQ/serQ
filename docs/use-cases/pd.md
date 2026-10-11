@@ -47,13 +47,13 @@ than a delayed or approximate cache index.
 
 The model uses `thr = 1` for always-remote prefill and larger thresholds to
 keep short uncached suffixes on the decoder. The server's `max_model_len`
-check and the gateway's output cap limit request length.
+check and the decode entries' output cap limit request length.
 
 ### Scheduler correspondence
 
 | vLLM | serQ | Where |
 |---|---|---|
-| a prompt of `max_model_len` tokens or more is refused before it is scheduled; a generation stops at `max_model_len` tokens; no KV cache smaller than one request of `max_model_len` is started | `branch (K + n < max_model_len) { gw.route(); } else { set more = 0; }` in `server`; `set o = min(o, max_model_len - prompt)` in the route; `max_model_len = 16384` below every pool | `input_processor.py:512-536`; `sched/utils.py:114-120`; `kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742` |
+| a prompt of `max_model_len` tokens or more is refused before it is scheduled; a generation stops at `max_model_len` tokens; no KV cache smaller than one request of `max_model_len` is started | `set accepted = K + n < max_model_len; branch (accepted) { gw.route(); }` in `server`; `set produced = min(o, max_model_len - prompt)` in each decode entry; `max_model_len = 16384` below every pool | `input_processor.py:512-536`; `sched/utils.py:114-120`; `kv_cache_utils.py:864-900`, called at `kv_cache_utils.py:2742` |
 | the prefiller admits like any vLLM engine: a slot, the blocks of the first chunk, room for the whole prompt, the prefix hit looked up when the scheduler takes the request | `hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(P)))) reserve (cost(kv, prompt)) at admission (hit = …)` in `P`'s `prefill` entry | the waiting loop, `scheduler.py:868-1128`; [the vLLM use case](vllm.md) |
 | the prefiller computes the prompt in chunks and samples one token, which the sidecar discards | `run P prefill (cost(P, prompt - c)) growing kv` | `scheduler.py:624-823`; the truncation for Mamba and MTP only, `nixl/base_scheduler.py:409-436` |
 | the request finishes on the prefiller: its slot is freed, its blocks are not — `request_finished` returns `delay_free_blocks` and a lease of `kv_lease_duration` (30 s), renewed by the decoder's heartbeats while the request waits | `} cache (prompt) lease kv (inf);` — the scope ends, the slot goes, the blocks stay the session's | `nixl/pull_scheduler.py:191-292`; `_free_request`, `scheduler.py:2628-2657`; the renewal, `nixl/base_scheduler.py:199-238`, `nixl/base_worker.py:3010-3030` |
@@ -147,22 +147,15 @@ At the defaults (seed 1, horizon 2 000 s, warm-up 200 s), the run gives:
 
 | Metric | Result |
 |---|---|
-| Remote-prefill fraction | 57.8% |
+| Remote-prefill fraction | 57.7% |
 | Mean TTFT | 27.3 ms |
-| Mean response | 70.1 ms |
-| Mean source lease | 12.8 ms |
+| Mean response | 69.9 ms |
+| Mean source lease | 12.9 ms |
 | Rejected / stuck sessions | 0 / 0 |
 
 These are simulation observations, not hardware measurements or intervals
 across seeds. The lease includes waiting for decoder capacity and the
 transfer. Use `--dump` to inspect per-request observations.
-
-!!! warning "Fractional lengths limit this example"
-    The workload draws fractional token lengths. Near `max_model_len`, its
-    output cap can leave less than one token, while the request body
-    subtracts one for the first token. The run then rejects a negative
-    decode amount. Seed 1 with `--horizon 10000 --warmup 1000` reaches this
-    error; long-run comparisons from this example are not validated.
 
 ## Validation
 
