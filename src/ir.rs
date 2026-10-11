@@ -1759,17 +1759,7 @@ impl Program {
                         }
                     }
                     if let CServe::By(keys) = &st.serve {
-                        for k in keys {
-                            v.expr(k, Moment::Serve).map_err(at)?;
-                            if draws(k) {
-                                return Err(at(
-                                    "an `advance running by (…)` key may not draw (`~`): it is read for every \
-                                     resident at every iteration, and the order would change \
-                                     under the scheduler's feet"
-                                        .into(),
-                                ));
-                            }
-                        }
+                        keys.iter().try_for_each(|k| v.serve_key(k)).map_err(at)?;
                     }
                     if let Some(body) = &st.iteration {
                         if matches!(st.serve, CServe::ExclusivePrefill) {
@@ -2028,12 +2018,50 @@ struct Validator<'a> {
 }
 
 impl Validator<'_> {
-    /// A step stage's iteration body: `serve`'s and `admit`'s `only` and
-    /// keys are read as a serve key is, a guard and an `admit`'s `while` as
-    /// the iteration is planned; none draws or reads the clock (an engine
-    /// whose `schedule` schedules nothing waits for an event, and the clock moving
-    /// is none, #263), and a guard does not read this stage's
-    /// `budget_left`, which plans the iteration the body is planning.
+    /// An `advance running by (…)` key, in either form of `schedule`: read
+    /// for every resident at every iteration, so it does not draw. It may
+    /// read the clock: a key orders the residents and excludes none.
+    fn serve_key(&self, k: &CExpr) -> Result<(), String> {
+        self.expr(k, Moment::Serve)?;
+        if draws(k) {
+            return Err(
+                "an `advance running by (…)` key may not draw (`~`): it is read for every \
+                 resident at every iteration, and the order would change under the \
+                 scheduler's feet"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// An `only` of `advance running` or `admit waiting`: read as a key is,
+    /// and not reading the clock either, since an engine whose residents it
+    /// all excludes waits for an event, and the clock moving is none (#263).
+    fn only(&self, e: &CExpr) -> Result<(), String> {
+        self.expr(e, Moment::Serve)?;
+        if draws(e) {
+            return Err(
+                "an `only` may not draw (`~`): it is read for every resident at every \
+                 iteration"
+                    .into(),
+            );
+        }
+        if reads_clock(e) {
+            return Err(
+                "an `only` may not read `now` or `work(…)`: an engine whose residents it \
+                 all excludes waits for an event, and the clock moving is none"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// A step stage's iteration body: its keys and `only`s as above, a
+    /// guard and an `admit`'s `while` as the iteration is planned, neither
+    /// drawing nor reading the clock (an engine whose `schedule` schedules
+    /// nothing waits for an event, and the clock moving is none, #263), and
+    /// a guard does not read this stage's `budget_left`, which plans the
+    /// iteration the body is planning.
     fn iteration(&self, st: usize, body: &[CIter]) -> Result<(), String> {
         let plan = |e: &CExpr, what: &str| -> Result<(), String> {
             self.expr(e, Moment::Plan)?;
@@ -2060,36 +2088,14 @@ impl Validator<'_> {
             }
             Ok(())
         };
-        let served = |e: &CExpr| -> Result<(), String> {
-            self.expr(e, Moment::Serve)?;
-            if draws(e) {
-                return Err(
-                    "an `advance running by (…)` key or an `only` may not draw (`~`): it is \
-                     read for every \
-                            resident at every iteration"
-                        .into(),
-                );
-            }
-            if reads_clock(e) {
-                return Err(
-                    "an `advance running by (…)` key or an `only` may not read `now` or \
-                     `work(…)`: an engine \
-                            whose residents it all excludes waits for an event, and the clock \
-                            moving is none"
-                        .into(),
-                );
-            }
-            Ok(())
-        };
         for s in body {
             match s {
                 CIter::Serve { only, by } => {
-                    only.iter()
-                        .chain(by.iter().flatten())
-                        .try_for_each(served)?;
+                    only.iter().try_for_each(|e| self.only(e))?;
+                    by.iter().flatten().try_for_each(|k| self.serve_key(k))?;
                 }
                 CIter::Admit { only, gate } => {
-                    only.iter().try_for_each(served)?;
+                    only.iter().try_for_each(|e| self.only(e))?;
                     if let Some(g) = gate {
                         plan(g, "`admit waiting while (…)`")?;
                     }

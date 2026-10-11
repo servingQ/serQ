@@ -286,6 +286,23 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
     );
 }
 
+/// A key orders the residents and excludes none, so reading the clock
+/// cannot leave the engine waiting: `by (now)` links in either form of
+/// `schedule`. A body refused it, with the reason that fits `only` (#453).
+#[test]
+fn a_key_may_read_now_in_either_form_of_schedule() {
+    for schedule in [
+        "advance running by (now); admit waiting while (running.preempted == 0);",
+        "advance running only (decoding || !decoding) by (now); admit waiting while (running.preempted == 0);",
+    ] {
+        compile_source(
+            &common::main_source(&source(schedule)),
+            &common::horizon(20.0),
+        )
+        .unwrap_or_else(|e| panic!("{schedule}: {e}"));
+    }
+}
+
 #[test]
 fn only_is_refused_where_it_is_ambiguous_or_unreadable() {
     // `only` beside `exclusive prefill`: a schedule with `only` is a body,
