@@ -123,7 +123,7 @@ def vllmTurn : Prog := [route|
   set 13 = x.attr 12;
   run 1 (0);
   set 14 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
-  hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 14) (((x.attr 8) / 16) * 16))) + (min ((max (x.attr 13) ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 14) (((x.attr 8) / 16) * 16)))) x.budgetLeft)) fits (max (x.attr 13) ((x.attr 8) + 1)) reuse (max (x.attr 14) (((x.attr 8) / 16) * 16)) {
+  hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16))) + (min ((max (x.attr 13) ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16)))) x.budgetLeft)) fits (max (x.attr 13) ((x.attr 8) + 1)) reuse (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16)) {
     set 15 = max (x.attr 13) ((x.attr 8) + 1);
     set 13 = x.attr 15;
     set 16 = x.cached;
@@ -151,7 +151,7 @@ def vllmTurn : Prog := [route|
     set 13 = x.attr 12;
     run 1 (0);
     set 14 = if ((x.attr 7) ≠ 0) then 0 else (((min (x.attr 9) ((x.attr 12) - 1)) / 16) * 16);
-    hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 14) (((x.attr 8) / 16) * 16))) + (min ((max (x.attr 13) ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 14) (((x.attr 8) / 16) * 16)))) x.budgetLeft)) fits (max (x.attr 13) ((x.attr 8) + 1)) reuse (max (x.attr 14) (((x.attr 8) / 16) * 16)) {
+    hold 1 (1), 0 ((min (x.cachedIn 0) (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16))) + (min ((max (x.attr 13) ((x.attr 8) + 1)) - (min (x.cachedIn 0) (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16)))) x.budgetLeft)) fits (max (x.attr 13) ((x.attr 8) + 1)) reuse (max (x.attr 14) (((max (if ((x.attr 13) > (x.attr 12)) then ((x.attr 13) - 1) else 0) (x.attr 8)) / 16) * 16)) {
       set 15 = max (x.attr 13) ((x.attr 8) + 1);
       set 13 = x.attr 15;
       set 16 = x.cached;

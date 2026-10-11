@@ -188,14 +188,31 @@ fn preempted_twice(set_kept: &str, known_is: &str) -> String {
 }
 
 /// scheduler.py:1560-1561 again: a preemption resets `num_computed_tokens`
-/// and keeps the outputs, however many times it comes. B is preempted with
-/// 32 computed, its first token sampled (33 known), and again during its
-/// re-prefill of those 33, at 24, short of its prompt. `computed` is the
-/// position of the last preemption only, so a program that reads `known`
-/// from it alone (`computed < prompt ? prompt : computed + 1`, the vLLM
-/// examples before #475) brings B back with its prompt: it has lost its
-/// output token, recomputes it and records its first token twice. Carrying
-/// the most it had, `kept`, it comes back with 33, as vLLM does.
+/// and keeps the outputs, however many times it comes.
+///
+/// Step 1 admits A, C and B (one block each for A and C, two for B, all
+/// reserved); with chunks of 8 A and C finish their prefill at step 2, B at
+/// step 4 (32 computed, its first token sampled). By then A and C have grown
+/// a block each at step 3: the 6 blocks are taken. At step 5 B needs a
+/// third block and, the last admitted, is preempted with 32 computed: 33
+/// known, 3 blocks to reserve, 2 free. A and C both grow at step 19 (token
+/// 33). A ends at step 31 (its prefill, then 29 decodes from step 3),
+/// freeing 3 blocks; B is admitted at step 32 with all 33 allocated, and at
+/// step 35 C's token 49 needs a block: B, the last admitted, is preempted
+/// at 24 (three chunks), short of its prompt. C ends at step 61; B is
+/// admitted at 62, recomputes its 33 tokens in 5 chunks and decodes the 8
+/// left: done at 74.
+///
+/// `computed` is the position of the last preemption only, so a program
+/// that reads `known` from it alone
+/// (`computed < prompt ? prompt : computed + 1`, the vLLM examples before
+/// #475) brings B back at step 36 with its
+/// prompt (2 blocks fit): it has lost its output token, computes it again
+/// at step 39 and records its first token twice, and is preempted at 32 by
+/// the same lack of a block, to return at 62 with 33. `done` is the same in
+/// both forms, so the bug shows only in what is observed: `known` and
+/// `first`. Carrying the most it had, `kept`, B comes back with 33, as vLLM
+/// does.
 #[test]
 fn a_request_preempted_twice_keeps_its_outputs() {
     let r = run(
@@ -214,6 +231,7 @@ fn a_request_preempted_twice_keeps_its_outputs() {
         r.observe("first").unwrap().samples,
         vec![0.0, 1.0, 2.0, 2.0]
     );
+    assert_eq!(r.observe("done").unwrap().samples, vec![31.0, 61.0, 74.0]);
 
     let r = run(
         &preempted_twice("set kept = known;", "max(kept, computed + 1)"),

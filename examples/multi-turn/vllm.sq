@@ -81,7 +81,6 @@ fn main() {
   server {
     set t0 = now;
     set prompt = K + n;
-    set kept = prompt;
     // A slot of `reqs` and the blocks of `kv`. The scheduler looks up the
     // prefix hit when it admits (scheduler.py:932-939) and allocates the hit
     // plus the chunk the budget allows (scheduler.py:1078-1128, 1214-1226),
@@ -93,6 +92,7 @@ fn main() {
     // it had reached plus the token sampled there, and never fewer than it
     // had before (`kept`: vLLM keeps the generated tokens and drops only
     // their KV, scheduler.py:1560-1561).
+    set kept = prompt;
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm)))) reserve (cost(kv, known))
          at admission (known = max(kept, computed + 1),
                        hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
