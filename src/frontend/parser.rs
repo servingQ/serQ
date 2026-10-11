@@ -2400,19 +2400,41 @@ impl Parser {
     /// set (#470): `stage think` beside the attribute `think`, or `set svc`
     /// beside `stage svc`, would have one word mean two things, and a bare
     /// `E` passed where a stage or a number goes reads one or the other by
-    /// its place alone (#467). Writing a built-in attribute stays a `set`.
+    /// its place alone (#467). A header's binding the body reads is set at
+    /// the top of the body, so it is an attribute too. Writing a built-in
+    /// attribute stays a `set`.
     fn check_declared_names(&self, prog: &Program) -> PResult<()> {
-        for (at, name, kind) in &self.declared {
-            let attribute = if BUILTIN_ATTRS.contains(&name.as_str()) {
-                "a built-in attribute".to_string()
-            } else if let Some((_, span)) = self
+        let set_at = |name: &str| {
+            let set = self
                 .definitions
                 .iter()
                 .find(|(n, _)| n == name && !prog.lets.iter().any(|(l, _)| l == n))
-            {
-                format!(
-                    "an attribute the program sets at {}",
-                    self.place(span.file, span.line, span.col)
+                .map(|(_, span)| (span.file, span.line, span.col));
+            let bound = || {
+                self.body_binds
+                    .iter()
+                    .find(|(_, n, _)| n == name)
+                    .map(|(at, _, _)| {
+                        let t = &self.toks[*at];
+                        (t.file, t.line, t.col)
+                    })
+            };
+            set.or_else(bound)
+        };
+        for (at, name, kind) in &self.declared {
+            let (attribute, help) = if BUILTIN_ATTRS.contains(&name.as_str()) {
+                (
+                    "a built-in attribute".to_string(),
+                    "name the declaration otherwise (docs/api/attributes.md lists the \
+                     built-in attributes)",
+                )
+            } else if let Some((file, line, col)) = set_at(name) {
+                (
+                    format!(
+                        "an attribute the program sets at {}",
+                        self.place(file, line, col)
+                    ),
+                    "rename the declaration or the attribute",
                 )
             } else {
                 continue;
@@ -2421,7 +2443,7 @@ impl Parser {
                 *at,
                 format!(
                     "`{name}` is {attribute}; {kind} named `{name}` would make the one word \
-                     mean two things\nhelp: name the declaration otherwise"
+                     mean two things\nhelp: {help}"
                 ),
             );
         }

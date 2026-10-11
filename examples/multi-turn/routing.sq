@@ -59,6 +59,7 @@ fn main() {
   // the router and the replicas: where a turn is served, and the KV's new home
   server {
     set t0 = now;
+    // the service time on a hit, and on a miss
     set S_hit = s0 + a * n + b * n * (K + n / 2) + o * (d + dv * (K + n));
     set S_miss = s0 + a * (K + n) + b * (K + n) * (K + n) / 2 + o * (d + dv * (K + n));
     set mig = work(link) + K / bw;

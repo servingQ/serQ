@@ -863,5 +863,19 @@ fn a_declaration_cannot_share_its_name_with_an_attribute() {
         e.contains(&format!("an observation named `hit` {two_things}")),
         "{e}"
     );
+    assert!(
+        e.contains("help: rename the declaration or the attribute"),
+        "{e}"
+    );
+    // a header's binding the body reads is set at the top of the body
+    let bound = observe("k").replace(
+        "run svc (cost(svc, 1));",
+        "hold kv (cost(kv, 1)) at admission (k = computed + 1) { run svc (cost(svc, k)); }",
+    );
+    let e = refusal(&format!("pool kv {{ cap 4; }} {bound}"));
+    assert!(
+        e.contains(&format!("an observation named `k` {two_things}")),
+        "{e}"
+    );
     check(&set(&set(&observe("hit"), "warm"), "more")).expect("links");
 }
