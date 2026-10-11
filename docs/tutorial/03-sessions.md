@@ -19,7 +19,7 @@ session {
   observe context = K + n + o;
   while (~bernoulli(p)) {
     set K = K + n + o;
-    run tool (cost(tool, ~exp(Z)));
+    tool (~exp(Z));
     turn;
     observe context = K + n + o;
   }
@@ -47,15 +47,20 @@ set K = K + n + o;
 attribute**, which survives from turn to turn. `K` is the context the session
 has accumulated. It grows with each turn, increasing the memory the session needs.
 
-### `delay`
+### `tool`
 
 ```serq
-stage tool : delay;
+tool (~exp(Z));
 ```
 
-A `delay` stage is an infinite-server station: every job runs immediately at
-rate 1, nobody waits. It is how you model something outside your system — a
-tool call, a human reading, a downstream API.
+`tool (Z)` is the client's time between turns: a tool call, a human
+reading, a downstream API. It is outside your system, so the program
+declares nothing for it. It runs on a `delay`, an infinite-server station
+the workload owns and the report calls `tool`: every call runs immediately
+at rate 1, nobody waits. It is the same as declaring `stage tool : delay;`
+after your stages. A tool server that sessions share, with a
+capacity, is part of the deployment: declare it as a stage
+(`stage sandbox : fifo;`) and name it, `tool on sandbox (Z);`.
 
 ## Running it
 

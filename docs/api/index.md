@@ -56,7 +56,7 @@ constructs that say it and a program that uses them.
 | To model… | Read | In a program |
 |---|---|---|
 | a request queue and a server | [`stage`](stage.md) (`fifo`, `ps`, `delay`), [`run`](statements.md#run) | `examples/single-turn/mg1.sq`; [tutorial 1](../tutorial/01-a-queue.md) |
-| arrivals, turns and think time | [`arrive`](workload.md#arrive), [`turn`](workload.md#turn), [`session`](program.md#session); think time as a [`delay`](stage.md#delay) stage, [`tool`](serving.md#tool) | [the workloads use case](../use-cases/workloads.md) |
+| arrivals, turns and think time | [`arrive`](workload.md#arrive), [`turn`](workload.md#turn), [`session`](program.md#session); think time as [`tool`](serving.md#tool), on the workload's own [`delay`](stage.md#delay) | [the workloads use case](../use-cases/workloads.md) |
 | replaying a production trace | [`trace`](workload.md#trace) | `examples/replay/vllm_replay.sq` ([measured replay](../use-cases/vllm.md#measured-replay)) |
 | memory a request holds while it runs | [`pool`](pool.md), [`hold`](statements.md#hold) | [tutorial 2](../tutorial/02-memory.md) |
 | what the scheduler reads at admission | [`at admission`](statements.md#hold), [moments](context.md) | `examples/multi-turn/vllm.sq` (`known`, `reused`) |

@@ -125,9 +125,11 @@ fn main() {
     // Decode only: the pod prefills the prompt itself (examples/multi-turn/vllm.sq).
     decode (prompt) {
       set produced = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
+      set kept = prompt;   // the most tokens an attempt had: a preemption keeps the outputs
       hold kv (cost(kv, min(known, reused + budget_left(D)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
-           at admission (known = computed < prompt ? prompt : computed + 1,
+           at admission (known = max(kept, computed + 1),
                          reused = min(cachedin(kv), reusable(known, bs))) {
+        set kept = known;
         set c = min(cached, reusable(known, bs));
         observe local_tokens = known - c;
         run D prefill (cost(D, known - c)) growing kv;
@@ -143,9 +145,11 @@ fn main() {
     decode (prompt) from src {
       set produced = min(o, max_model_len - prompt);   // generation stops at max_model_len tokens (sched/utils.py:114-120)
       set transferred = 0;   // one KV transfer per request (nixl/pull_scheduler.py:187-189)
+      set kept = prompt;     // the most tokens an attempt had: a preemption keeps the outputs
       hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
            reuse (cost(kv, reqs, reusable(known, bs)))
-           at admission (known = computed < prompt ? prompt : computed + 1) {
+           at admission (known = max(kept, computed + 1)) {
+        set kept = known;
         set c = cached;
         branch (!transferred) {
           // WAITING_FOR_REMOTE_KVS: every block past the local hit is read
@@ -176,8 +180,6 @@ fn main() {
   // two NICs is UCX's and the fabric's, not vLLM's: max-min fairness is the
   // model, not a measurement (docs/design/bandwidth-sharing.md).
   D pull P latency x0 share maxmin;
-
-  stage tool : delay;
 
   // The client: sessions arrive, each turn brings a prompt of n new tokens on
   // a context of K and wants o tokens back, and after a turn the session calls

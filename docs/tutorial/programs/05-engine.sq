@@ -37,7 +37,6 @@ fn main() {
   }
   pool kv on gpu { block bs; evict lru; preempt lifo; }
   pool reqs on llm { queue fifo; }
-  stage tool : delay;
 
   workload {
     arrive poisson(Lambda);
@@ -52,7 +51,7 @@ fn main() {
       loop {
         turn;
         set K = prompt + o;
-        branch with (p) { run tool (cost(tool, ~exp(Z))); } else { drop kv; end; }
+        branch with (p) { tool (~exp(Z)); } else { drop kv; end; }
       }
     }
   }

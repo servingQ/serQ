@@ -489,10 +489,8 @@ impl Parser {
         });
         let qi = self.queues.len() - 1;
         self.in_request = Some(engine.to_string());
-        self.request_states = states.iter().map(|(n, _)| n.text.clone()).collect();
         let read = self.entry(qi, "request".into());
         self.in_request = None;
-        self.request_states.clear();
         read
     }
 
