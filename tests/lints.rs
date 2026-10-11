@@ -749,6 +749,8 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
             "device gpu { kv cap 1; } engine served on gpu { execute (1); }",
             "an engine named `served`",
         ),
+        // the engine's lists are the language's for #231's check too
+        ("let running = 1;", "a `let` constant named `running`"),
     ] {
         let e = check(&SRC.replace("DECL", decl)).expect_err(decl);
         assert!(
@@ -758,6 +760,14 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
             "{decl}: {e}"
         );
     }
+    let set = SRC
+        .replace("DECL", "")
+        .replace("session { turn; }", "session { set running = 1; turn; }");
+    let e = check(&set).expect_err("rejected");
+    assert!(
+        e.contains("a session attribute named `running` would make the one word mean two things"),
+        "{e}"
+    );
     let observe = SRC.replace("DECL", "").replace(
         "observe response",
         "observe admitted = now; observe response",
