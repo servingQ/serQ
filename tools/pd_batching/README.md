@@ -45,7 +45,12 @@ the report's: the gaps between a request's successive tokens.
   by 4.0 at every load. Per station: in the whole system, colocated has
   four times as many decoding. And the 4× holds at any load only because
   `f` is fixed: an idle colocated engine still decodes at a quarter of its
-  speed.
+  speed. The identity needs `N f ≤ 1`: the split's `N f` engines give a
+  request alone one engine (`ps(min(present, N * f))`). With `f = 1/2`,
+  two decode engines, the split's decode time is 38.6, 42.7, 60.6 ms at
+  λ = 5, 15, 30 (seed 1, 300 s): near the 40 ms of a request alone on one
+  engine at low load, where a station of capacity 2 gave 21.4, 27.5,
+  48.3 ms.
 - **With a 0.2 ms decode step the engines gain little at low load.** At
   λ = 20 a colocated engine is idle 60 % of the time, its decodes rarely
   wait for a prefill, and TPOT is 0.220 ms colocated against 0.208 ms

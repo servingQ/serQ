@@ -2,10 +2,13 @@
 // processor sharing at a constant fraction of an engine. Colocated, each
 // of N engines gives its decodes the fraction f of its time and takes a
 // random N-th of the requests; split, N f decode engines share all of
-// them as one station of capacity N f. The split is the colocated
-// station with the arrival rate and the capacity both multiplied by N:
-// the number decoding at a station is the same, and the time each request
-// spends decoding is divided by N — by 1/f when N f = 1.
+// them as one station, where a request alone has one engine and N f
+// requests or more share all N f. When N f <= 1 (here N f = 1) the split
+// is the colocated station with the arrival rate and the capacity both
+// multiplied by N: the number decoding at a station is the same, and the
+// time each request spends decoding is divided by N — by 1/f when
+// N f = 1. When N f > 1 it is not: a request alone decodes at one
+// engine's rate, not N f engines'.
 //
 // This is an identity of the model, not a property of an engine: an
 // engine does not give its decodes a constant fraction of its time, and a
@@ -25,7 +28,7 @@ fn main() {
   let Lambda = args.number("Lambda", 15.0);     // requests per second (load Lambda E[o - 1] tok / (N f) = 0.6)
 
   stage colo[N] : ps(f);
-  stage dec : ps(N * f);
+  stage dec : ps(min(present, N * f));   // N f engines: a request alone has one of them
 
   workload {
     arrive poisson(Lambda);
