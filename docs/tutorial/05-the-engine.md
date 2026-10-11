@@ -91,6 +91,9 @@ growth can preempt the most recently admitted running request. The hold is
 retried; see [preemption semantics](../language.md) for the state preserved
 across retries. A retried hold runs its body again, so the program observes
 `hit` only on the first attempt, where `computed` is 0.
+It observes `ttft` only while `computed < prompt`, before the first token was
+produced, so a request preempted during its prefill still records its one
+TTFT and one preempted after its first token does not record a second.
 
 **`budget_left(llm)`** is the token budget left after serving the running requests.
 The admission allocates memory for the cached prefix plus the prefill chunk
