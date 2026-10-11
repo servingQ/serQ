@@ -1002,22 +1002,26 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
             Expr::Sample(_, xs) => xs.iter().flat_map(|e| certain(e, t)).collect(),
             // Resource annotations are checked but not evaluated. Only the
             // converted quantity can reveal a hidden input when work ends.
+            // A bare name reads its attribute only where the function takes
+            // a number: `work(E)` reads the stage `E`, not an attribute `E`.
             Expr::Call(f, args) => args
                 .iter()
+                .enumerate()
                 .skip(if f == "cost" {
                     args.len().saturating_sub(1)
                 } else {
                     0
                 })
-                .flat_map(|a| match a {
+                .flat_map(|(k, a)| match a {
                     Arg::Expr(e) => certain(e, t),
                     Arg::Ref(r) => match &r.index {
                         Some(e) => certain(e, t),
-                        None => t
+                        None if takes_number(f, k, args.len()) => t
                             .attrs
                             .get(&r.name)
                             .map(|s| s.certain.clone())
                             .unwrap_or_default(),
+                        None => BTreeSet::new(),
                     },
                 })
                 .collect(),

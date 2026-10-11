@@ -264,3 +264,32 @@ fn a_cost_family_annotation_does_not_reveal_its_index() {
     let e = compile_source(source, &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("hidden"), "{e}");
 }
+
+/// A bare name reveals its attribute only where the function takes a
+/// number (#467): `work(E)` reads the engine `E`, so a run by it does not
+/// reveal a hidden attribute `E`, and a decision on `E` after it is the
+/// scheduler reading what it cannot see.
+#[test]
+fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
+    let source = |work: &str| {
+        format!(
+            "fn main() {{
+        device gpu {{ kv cap 1000; }}
+        engine E on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+        pool kv on gpu {{ block 16; }}
+        workload {{ arrive batch(1); hidden E;
+          init {{ set prompt = 32; set E = 4; }}
+          session {{ turn; end; }} }}
+        server {{ hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, {work})) growing kv; }}
+          branch (E > 2) {{ observe big = 1; }} else {{ observe small = 1; }} }}
+        }}"
+        )
+    };
+    let e = compile_source(&source("prompt + 0 * work(E)"), &common::horizon(10.0)).unwrap_err();
+    assert!(
+        e.contains("`E` is hidden from the scheduler, but the server's branch reads it"),
+        "{e}"
+    );
+    // a run whose work reads the attribute reveals it
+    compile_source(&source("prompt + 0 * E"), &common::horizon(10.0)).unwrap();
+}
