@@ -54,7 +54,8 @@
 //! and `run` here, so the AST, the IR and the interpreter know only the
 //! kernel. A role finds its stage among the stages declared above the
 //! statement: the stage of the role's name (`link` or `transfer`, `tool`);
-//! `on STAGE` names it explicitly. The run is plain. Prefill and decode are
+//! `on STAGE` names it explicitly. The workload's `tool` with none declared
+//! runs on a delay the parser supplies, named `tool`. The run is plain. Prefill and decode are
 //! not roles: they are the mode of a `run` on a step engine.
 //!
 //! A workload's optional session describes complete turns and their continuation.
@@ -199,6 +200,10 @@ struct Parser {
     relation_share: Option<&'static str>,
     /// The queues whose relation gives the wait before each copy they post.
     posters: Vec<String>,
+    /// The token of the workload's first `tool` that found no stage `tool`
+    /// declared above it: it runs on the workload's own delay, which the
+    /// parser supplies after the declared stages.
+    implicit_tool: Option<usize>,
     /// Parsing the `serve` of a link queue, which may take a `latency`.
     latency_ok: bool,
     /// `Q.x` read as an expression, with the position: a mark or a pool of `Q`.
@@ -1406,13 +1411,17 @@ fn collect_entry(
 }
 
 /// The expressions of an entry's body, the holds' headers apart from the
-/// rest: the header is the admission and sees less. The index of every
-/// reference the body names (`run nic[k]`, `hold kv`, `release src`) is in
-/// `indices`: read as the body reads, and the only place a `from` name may
-/// stand as a number. A `Stmt::Unread`'s arguments are in `unread`.
+/// rest: the header is the admission and sees less. Each header comes with
+/// the locals set above its hold (`set kept = prompt;` before it, in the
+/// entry's statement order: in both arms of a `branch`, not in a loop or a
+/// `fork` that may not have run), the only ones it reads. The index of every reference the body
+/// names (`run nic[k]`, `hold kv`, `release src`) is in `indices`: read as
+/// the body reads, and the only place a `from` name may stand as a number.
+/// A `Stmt::Unread`'s arguments are in `unread`.
 fn split_reads<'a>(
     stmts: &'a [Stmt],
-    headers: &mut Vec<&'a Expr>,
+    above: &mut Vec<String>,
+    headers: &mut Vec<(&'a Expr, Vec<String>)>,
     bodies: &mut Vec<&'a Expr>,
     indices: &mut Vec<&'a Expr>,
     unread: &mut Vec<&'a Arg>,
@@ -1431,7 +1440,11 @@ fn split_reads<'a>(
             | Stmt::Request
             | Stmt::Mark(_)
             | Stmt::Join => {}
-            Stmt::Set(_, e) | Stmt::Observe(_, e) => bodies.push(e),
+            Stmt::Set(n, e) => {
+                bodies.push(e);
+                above.push(n.clone());
+            }
+            Stmt::Observe(_, e) => bodies.push(e),
             Stmt::Unread(args) => unread.extend(args),
             Stmt::Grow(r, e) | Stmt::Load(r, e) => {
                 index(r, indices);
@@ -1447,13 +1460,13 @@ fn split_reads<'a>(
             } => {
                 for (r, e, f) in pools {
                     index(r, indices);
-                    headers.push(e);
+                    headers.push((e, above.clone()));
                     if let Some(f) = f {
-                        headers.push(f);
+                        headers.push((f, above.clone()));
                     }
                 }
                 if let Some(r) = reuse {
-                    headers.push(r);
+                    headers.push((r, above.clone()));
                 }
                 if let Some(c) = cache {
                     bodies.push(c);
@@ -1462,7 +1475,8 @@ fn split_reads<'a>(
                     index(r, indices);
                     bodies.push(t);
                 }
-                split_reads(body, headers, bodies, indices, unread);
+                // the body runs to its end before the next statement
+                split_reads(body, above, headers, bodies, indices, unread);
             }
             Stmt::Run {
                 stage,
@@ -1478,19 +1492,32 @@ fn split_reads<'a>(
                 }
                 bodies.push(work);
             }
+            // a branch sets after it what both arms set; a pass of a loop,
+            // or a fork beside the session, may not have run
             Stmt::Branch(p, a, b) => {
                 bodies.push(p);
-                split_reads(a, headers, bodies, indices, unread);
-                split_reads(b, headers, bodies, indices, unread);
+                let (mut in_a, mut in_b) = (above.clone(), above.clone());
+                split_reads(a, &mut in_a, headers, bodies, indices, unread);
+                split_reads(b, &mut in_b, headers, bodies, indices, unread);
+                for n in in_a {
+                    if in_b.contains(&n) && !above.contains(&n) {
+                        above.push(n);
+                    }
+                }
             }
             Stmt::While(e, b) => {
                 bodies.push(e);
-                split_reads(b, headers, bodies, indices, unread);
+                split_reads(b, &mut above.clone(), headers, bodies, indices, unread);
             }
-            Stmt::Loop(b) | Stmt::Fork(b) => split_reads(b, headers, bodies, indices, unread),
-            Stmt::Choose { count, key, .. } => {
+            Stmt::Loop(b) | Stmt::Fork(b) => {
+                split_reads(b, &mut above.clone(), headers, bodies, indices, unread)
+            }
+            Stmt::Choose {
+                var, count, key, ..
+            } => {
                 bodies.push(count);
                 bodies.extend(key);
+                above.push(var.clone());
             }
             Stmt::Call {
                 queue,
@@ -1594,6 +1621,7 @@ impl Parser {
             entry_gateway: false,
             relation_share: None,
             posters: vec![],
+            implicit_tool: None,
             latency_ok: false,
             dotted_reads: vec![],
             indexed_dotted: vec![],
@@ -1699,7 +1727,12 @@ impl Parser {
     }
 
     fn span(&self) -> Span {
-        let t = &self.toks[self.pos];
+        self.span_at(self.pos)
+    }
+
+    /// The span of the token at `pos`.
+    fn span_at(&self, pos: usize) -> Span {
+        let t = &self.toks[pos];
         Span {
             line: t.line,
             col: t.col,
@@ -2059,6 +2092,51 @@ impl Parser {
             return self.err(
                 "`args` names the imported std/args module; give the declaration another name",
             );
+        }
+        // the workload's tool call is the client's time: a delay the
+        // workload owns, after every stage the deployment declares
+        if let Some(at) = self.implicit_tool {
+            // the supplied stage is a declaration too: its name is no
+            // other's (#483), and a stage `tool` below the call is a second
+            let supplied = Declaration {
+                at,
+                name: "tool".into(),
+                kind: Kind::Stage,
+                scope: Scope::Program,
+            };
+            if let Some(e) = self
+                .declared
+                .iter()
+                .find(|e| e.name == "tool" && (e.kind == Kind::Stage || e.meets(&supplied)))
+            {
+                let t = &self.toks[e.at];
+                let place = self.place(t.file, t.line, t.col);
+                let (is, help) = if e.kind == Kind::Stage {
+                    (
+                        "a stage declared below it".to_string(),
+                        "declare `stage tool` above the workload to use it, or remove that \
+                         declaration"
+                            .to_string(),
+                    )
+                } else {
+                    (e.described(), e.help(&supplied))
+                };
+                return self.err_at(
+                    at,
+                    format!(
+                        "the workload's `tool` runs on a stage `tool` the parser supplies, and \
+                         `tool` is {is} at {place}\nhelp: {help}"
+                    ),
+                );
+            }
+            self.stages.push("tool".into());
+            prog.stages.push(StageDecl {
+                span: Some(self.span_at(at)),
+                name: "tool".into(),
+                count: 1,
+                array: false,
+                kind: StageKind::Delay,
+            });
         }
         // a request runs the server or a named gateway's `route`, whose
         // admissions set `cached` and `computed`, and the entries it calls
@@ -3971,13 +4049,16 @@ impl Parser {
         // the gateway's `route` is the deployment's and reads as a server
         // does; any other entry of a queue that is also a gateway is an entry
         let is_gateway = verb == "route" && q.roles.iter().any(|r| r == "gateway");
-        let allowed_var = |n: &str, header: bool| -> bool {
+        // `seen`: the locals a read sees, all of them in the body and in a
+        // header those set above its hold
+        let allowed_var = |n: &str, header: bool, seen: &[String]| -> bool {
             params.iter().any(|p| p == n)
                 || n == "self"
                 || n == "inf"
                 || self.consts.iter().any(|(c, _)| c == n)
                 || CONTEXT.contains(&n)
-                || (!header && (n == "now" || locals.contains(&n.to_string())))
+                || (!header && n == "now")
+                || seen.iter().any(|l| l == n)
         };
         let own_ref = |r: &Ref| -> bool {
             q.pools.contains(&r.name)
@@ -3990,7 +4071,14 @@ impl Parser {
             let mut bodies = vec![];
             let mut indices = vec![];
             let mut unread = vec![];
-            split_reads(&body, &mut headers, &mut bodies, &mut indices, &mut unread);
+            split_reads(
+                &body,
+                &mut vec![],
+                &mut headers,
+                &mut bodies,
+                &mut indices,
+                &mut unread,
+            );
             // an own pool, or the `from` name, is all an entry's statements hold
             let mut named = vec![];
             pools_named(&body, &mut named);
@@ -4012,23 +4100,23 @@ impl Parser {
                 );
             }
             let mut sources = vec![];
-            for (e, header, in_index) in headers
+            for (e, header, in_index, seen) in headers
                 .iter()
-                .map(|e| (e, true, false))
-                .chain(bodies.iter().map(|e| (e, false, false)))
-                .chain(indices.iter().map(|e| (e, false, true)))
+                .map(|(e, above)| (*e, true, false, above))
+                .chain(bodies.iter().map(|e| (*e, false, false, &locals)))
+                .chain(indices.iter().map(|e| (*e, false, true, &locals)))
             {
                 let (mut vars, mut indexed, mut refs) = (vec![], vec![], vec![]);
                 names_in(e, &mut vars, &mut indexed, &mut refs);
-                sources.push((vars, indexed, refs, header, in_index));
+                sources.push((vars, indexed, refs, header, in_index, seen));
             }
             // what a statement definition's use does not read is resolved as its body
             let (mut vars, mut indexed, mut refs) = (vec![], vec![], vec![]);
             for a in unread {
                 arg_names(a, &mut vars, &mut indexed, &mut refs);
             }
-            sources.push((vars, indexed, refs, false, false));
-            for (mut vars, indexed, refs, header, in_index) in sources {
+            sources.push((vars, indexed, refs, false, false, &locals));
+            for (mut vars, indexed, refs, header, in_index, seen) in sources {
                 // a bare reference that is not the queue's own (`queued(gkv)`,
                 // or `f(now)` to a definition that does not read it) is read
                 // as a name: whether it names a pool or stage elsewhere,
@@ -4056,12 +4144,12 @@ impl Parser {
                             ),
                         );
                     }
-                    if allowed_var(&v, header) {
+                    if allowed_var(&v, header, seen) {
                         continue;
                     }
                     if header && locals.contains(&v) {
                         return self.err_at(at, format!(
-                            "`{qname}.{verb}`: the admission header reads local `{v}`; it sees parameters and the queue's resources, not values calculated by its body. Write the resource conversion in the header or pass a quantity as a parameter"
+                            "`{qname}.{verb}`: the admission header reads local `{v}`, which the entry does not set above this hold; a header sees the parameters, the queue's resources and the locals set before its hold, not a value its own body or a later statement calculates\nhelp: set `{v}` before the hold, in both arms of a `branch` and not in a loop or `fork` that ends before it, or write its value in the header"
                         ));
                     }
                     if v.contains('.') {
@@ -5050,7 +5138,19 @@ impl Parser {
             } else {
                 None
             };
-            let name = self.role_stage(role, at)?;
+            // the workload's unindexed `tool` with none declared runs on a
+            // delay the parser supplies: the client's time between turns is
+            // no resource of the deployment
+            let name = if role == Role::Tool
+                && index.is_none()
+                && self.side == Side::WorkloadSession
+                && !self.stages.iter().any(|n| n == "tool")
+            {
+                self.implicit_tool.get_or_insert(at);
+                "tool".to_string()
+            } else {
+                self.role_stage(role, at)?
+            };
             Ref { span, name, index }
         };
         let raw_work = self.expr()?;

@@ -39,7 +39,6 @@ fn main() {
   pool reqs on vllm { queue fifo; }  // the scheduler admits (scheduler.py:868)
   stage front : delay;
   stage gate : delay;
-  stage tool : delay;
 
   // The client: the trace's sessions, sent `spacing` apart; a turn is sent
   // `think` seconds after the previous one completes.

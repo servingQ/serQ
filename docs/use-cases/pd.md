@@ -79,7 +79,6 @@ queue gw : gateway { route { … } }                 // the router and the sidec
 queue P[NP] : prefill { device gpu { … kv cap blocksP * bs; } engine on gpu { … } pool reqs on P { … } pool kv on gpu { … } nic ps(BwP); prefill (prompt) { … } }
 queue D[ND] : decode  { device gpu { … kv cap blocksD * bs; } engine on gpu { … } pool reqs on D { … } pool kv on D.gpu { … } nic ps(BwD); decode (prompt) { … } decode (prompt) from src { … } }
 D pull P latency x0 share maxmin;                  // the decoder reads the KV from the prefiller
-stage tool : delay;
 ```
 
 A queue's device, engine and pools are its members': `P[i].kv` is the KV of

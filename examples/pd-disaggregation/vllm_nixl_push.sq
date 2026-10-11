@@ -115,9 +115,11 @@ fn main() {
     // the prompt.
     decode (prompt) from src {
       set transferred = 0;   // one KV transfer per request
+      set kept = prompt;     // the most tokens an attempt had: a preemption keeps the outputs
       hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))
            reuse (cost(kv, reqs, reusable(known, bs)))
-           at admission (known = computed < prompt ? prompt : computed + 1) {
+           at admission (known = max(kept, computed + 1)) {
+        set kept = known;
         set c = cached;
         branch (!transferred) {
           // WAITING_FOR_REMOTE_KVS: the blocks are registered with the
@@ -151,7 +153,6 @@ fn main() {
 
   stage front : delay;
   stage gate : delay;
-  stage tool : delay;
 
   // The client: the trace's first N sessions, sent `spacing` apart; a turn is
   // sent `think` seconds after the previous one completes.

@@ -386,15 +386,26 @@ fn queue_records_keep_their_own_names_and_admission_rules() {
     let report: serde_json::Value =
         serde_json::from_str(&run_ir(&p, None).unwrap().json()).unwrap();
     assert_eq!(report["observes"]["finished"]["mean"], 3.0);
-    let bad = r#"fn main() {
-      queue A : prefill {
-        pool mem { cap 10; } serve fifo;
-        prefill(n) { Cost c = { mem: n, A: n }; hold mem(c.mem) { run(c.A); } }
-      }
-      workload { arrive batch(1); }
-      server { A.prefill(1); }
-    }"#;
-    let e = compile_source(bad, &common::horizon(10.0)).unwrap_err();
+    // a record set above the hold is its header's (#475); one its body sets is not
+    let entry = |body: &str| {
+        format!(
+            r#"fn main() {{
+              queue A : prefill {{ pool mem {{ cap 10; }} serve fifo; prefill(n) {{ {body} }} }}
+              workload {{ arrive batch(1); }}
+              server {{ A.prefill(1); }}
+            }}"#
+        )
+    };
+    compile_source(
+        &entry("Cost c = { mem: n, A: n }; hold mem(c.mem) { run(c.A); }"),
+        &common::horizon(10.0),
+    )
+    .unwrap();
+    let e = compile_source(
+        &entry("hold mem(c.mem) { Cost c = { mem: n, A: n }; run(c.A); }"),
+        &common::horizon(10.0),
+    )
+    .unwrap_err();
     assert!(e.contains("admission header reads local `c.mem`"), "{e}");
 }
 

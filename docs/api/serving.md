@@ -13,7 +13,7 @@ An already converted cost belongs in `run` or `load` directly.
 
 | Form | The request… | Kernel |
 |---|---|---|
-| [`tool Z;`](#tool) | waits outside the engine (a tool call, a person reading) | `run tool (cost(tool, Z));` |
+| [`tool Z;`](#tool) | waits outside the engine (a tool call, a person reading) | `run tool (cost(tool, Z));`, on the workload's own delay when no stage `tool` is declared; the kernel form alone needs the declared stage (without it, `run tool` is an unknown stage) |
 | [`transfer (X) from P to Q (n);`](#transfer-from-to) | has its KV moved to another instance | `run link (cost(link, X)); load Q (cost(Q, n)); release P;` |
 
 Each form is shorthand for the [kernel statements](statements.md) in the
@@ -36,7 +36,11 @@ tool [ '[' j ']' | on STAGE [, STAGE]* ] work;
 Without `[j]` or `on`, the form finds its stage among those
 declared above it: the stage named for the role (`link` or `transfer`,
 `tool`). Exactly one must qualify: with none or several the parser stops
-at the form. The run is plain: `transfer` and `tool` on a step engine are
+at the form. In the workload, a `tool` with none declared runs on a delay
+of the workload's own: the parser supplies `stage tool : delay;` after the
+declared stages, so a client's tool call declares nothing. A tool server
+with capacity is the deployment's: declare it and name it,
+`tool on sandbox[j] (Z);`. The run is plain: `transfer` and `tool` on a step engine are
 link errors, so they take no `growing`, which needs one. `transfer` finds its stage by the same rule and
 always says where the KV goes ([below](#transfer-from-to)); a link that only
 takes time is `run link (cost(link, X));`.

@@ -32,7 +32,6 @@ def tool_time() { ~exp(Z) }
 fn main() {
   stage rep[4] : fifo;
   stage link : fifo;
-  stage tool : delay;
 
   workload {
     arrive poisson(rate);
@@ -51,7 +50,7 @@ fn main() {
         turn;
         set first = 0;
         set K = K + n + o;
-        branch with (p) { run tool (cost(tool, tool_time())); } else { end; }
+        branch with (p) { tool (tool_time()); } else { end; }
       }
     }
   }
