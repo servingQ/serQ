@@ -1431,8 +1431,8 @@ server {{ hold kv[j] (cost(kv, {size})) {{ run E[j] prefill (cost(E, 1)) growing
 
 /// `cost`'s last argument takes a number as `min`'s do, and a constant reads
 /// a name only where its function takes one (#467): `cost(kv, prompt[7])`
-/// was "cost's last argument is an expression", and `let A = queued(kv)`
-/// said `queued` read `kv` as a number.
+/// was "cost's last argument is an expression", `cost(kv, kv)` an unknown
+/// name, and `let A = queued(kv)` said `queued` read `kv` as a number.
 #[test]
 fn a_name_is_a_number_only_where_its_function_takes_one() {
     let src = |pre: &str, size: &str| {
@@ -1447,6 +1447,10 @@ server {{ hold kv (cost(kv, {size})) {{ run E prefill (cost(E, 1)) growing kv; }
     refused(
         &src("", "prompt[7]"),
         "`prompt[…]`: an attribute has no index: write `prompt`",
+    );
+    refused(
+        &src("", "kv"),
+        "`cost` reads `kv` as a number, but a pool is none",
     );
     refused(
         &src("let A = queued(kv);", "A"),

@@ -5285,15 +5285,6 @@ impl Parser {
                                 }
                             }
                         }
-                        if let Some(last @ Arg::Ref(_)) = args.last_mut() {
-                            let Arg::Ref(r) = last else { unreachable!() };
-                            if r.index.is_none() {
-                                *last = Arg::Expr(Expr::Located(
-                                    r.span.unwrap_or(span),
-                                    Box::new(Expr::Var(r.name.clone())),
-                                ));
-                            }
-                        }
                     }
                     Ok(Expr::Located(span, Box::new(Expr::Call(name, args))))
                 } else if LISTS.contains(&name.as_str()) && *self.peek() == Tok::Dot {

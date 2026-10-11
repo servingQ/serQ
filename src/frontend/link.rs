@@ -1485,7 +1485,7 @@ impl Linker<'_> {
         let target = crate::ir::CostTarget::joint(targets);
         let value = match value {
             Arg::Expr(e) => self.expr(e)?,
-            Arg::Ref(r) => self.expr(&self.number_name("cost", r)?)?,
+            Arg::Ref(r) => self.expr(&self.as_number("cost", r)?)?,
         };
         Ok(CExpr::Cost(target, Box::new(value)))
     }
@@ -1721,7 +1721,7 @@ impl Linker<'_> {
                     .map(|(k, a)| match a {
                         Arg::Expr(e) => self.eval_const(e),
                         Arg::Ref(r) if takes_number(f, k, args.len()) => {
-                            self.eval_const(&self.number_name(f, r)?)
+                            self.eval_const(&self.as_number(f, r)?)
                         }
                         Arg::Ref(_) => Err(not_constant()),
                     })
@@ -1840,7 +1840,7 @@ impl Linker<'_> {
     /// name that is no place, or reads a value though a stage shares its
     /// name (`set svc = 3` beside `stage svc`), is the value: the caller
     /// resolves it, or refuses it as unknown or no constant.
-    fn number_name(&self, f: &str, r: &Ref) -> LResult<Expr> {
+    fn as_number(&self, f: &str, r: &Ref) -> LResult<Expr> {
         let n = &r.name;
         let value = self.expr(&Expr::Var(n.clone()));
         let place = self.pools.contains_key(n) || self.stages.contains_key(n);
@@ -1967,7 +1967,7 @@ impl Linker<'_> {
                     cargs.push(match (kind, a) {
                         (ArgKind::Expr, Arg::Expr(e)) => CArg::Expr(self.expr(e)?),
                         (ArgKind::Expr, Arg::Ref(r)) => {
-                            CArg::Expr(self.expr(&self.number_name(f, r)?)?)
+                            CArg::Expr(self.expr(&self.as_number(f, r)?)?)
                         }
                         (ArgKind::Pool, Arg::Ref(r)) => CArg::Pool(self.pool_ref(r)?),
                         (ArgKind::Stage, Arg::Ref(r)) => CArg::Stage(self.stage_ref(r)?),
