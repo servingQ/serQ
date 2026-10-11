@@ -1914,7 +1914,7 @@ impl Parser {
                 .map(|w| w.hidden.clone())
                 .unwrap_or_default();
             // a name some pool or stage has, its own or another queue's
-            let place = |n: &String| {
+            let is_pool_or_stage = |n: &String| {
                 prog.pools.iter().any(|p| p.name == *n)
                     || self.stages.contains(n)
                     || self
@@ -1924,8 +1924,8 @@ impl Parser {
             };
             for q in &self.queues {
                 for e in &q.entries {
-                    if let Some(n) = e.header_reads.first() {
-                        let message = if place(n) {
+                    if let Some(n) = &e.header_refused {
+                        let message = if is_pool_or_stage(n) {
                             not_its_own(&q.name, &e.verb, n)
                         } else {
                             format!(
@@ -1937,7 +1937,7 @@ impl Parser {
                         return self.err_at(e.at, message);
                     }
                     if let Some(n) = e.reads.iter().find(|n| !hidden.contains(n)) {
-                        if place(n) {
+                        if is_pool_or_stage(n) {
                             return self.err_at(e.at, not_its_own(&q.name, &e.verb, n));
                         }
                         // a name nothing sets is no attribute set outside
@@ -3731,7 +3731,7 @@ impl Parser {
         // the header sees the parameters and the queue's own; the body also
         // the context and the request's hidden attributes
         let mut reads = vec![];
-        let mut header_reads = vec![];
+        let mut header_refused = None;
         // the gateway's `route` is the deployment's and reads as a server
         // does; any other entry of a queue that is also a gateway is an entry
         let is_gateway = verb == "route" && q.roles.iter().any(|r| r == "gateway");
@@ -3837,13 +3837,10 @@ impl Parser {
                             ),
                         );
                     }
-                    let read = if header {
-                        &mut header_reads
-                    } else {
-                        &mut reads
-                    };
-                    if !read.contains(&v) {
-                        read.push(v);
+                    if header {
+                        header_refused.get_or_insert(v);
+                    } else if !reads.contains(&v) {
+                        reads.push(v);
                     }
                 }
                 if let Some(r) = refs.iter().find(|r| !own_ref(r)) {
@@ -3869,7 +3866,7 @@ impl Parser {
             body,
             locals: if is_gateway { vec![] } else { locals },
             reads,
-            header_reads,
+            header_refused,
             at,
         });
         Ok(())

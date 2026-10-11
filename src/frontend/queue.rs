@@ -44,14 +44,15 @@ pub struct Entry {
     pub body: Vec<Stmt>,
     /// Names the body `set`s or `choose`s: the entry's own.
     pub locals: Vec<String>,
-    /// Session attributes the body reads that are neither parameters, locals
-    /// nor context: legal only as the workload's `hidden` attributes, which
-    /// `assemble` checks once the workload is known.
+    /// Names the body reads that are neither parameters, locals nor context:
+    /// legal only as the workload's `hidden` attributes, which `assemble`
+    /// checks once the workload is known; another place's pool or stage
+    /// among them it refuses as not the queue's own.
     pub reads: Vec<String>,
-    /// Names the header reads that are neither parameters nor the queue's
-    /// own: each is refused in `assemble`, as another place's pool or stage
-    /// or as a value to pass as a parameter.
-    pub header_reads: Vec<String>,
+    /// The first name the header reads that is neither a parameter nor the
+    /// queue's own, refused in `assemble` once every place is declared: as
+    /// another place's pool or stage, or as a value to pass as a parameter.
+    pub header_refused: Option<String>,
     /// Token position of the header, for errors.
     pub at: usize,
 }

@@ -493,17 +493,20 @@ fn a_header_reads_a_bare_name_as_a_value() {
 
 /// A pool or stage that is not the entry's queue's is refused as one,
 /// however it is read and wherever it is declared: at the top level (`top`,
-/// `tl`) or in a queue declared after this one (`F`).
+/// `tl`, the family `pf`) or in a queue declared after this one (`F`, the
+/// family `G`).
 #[test]
 fn an_entry_reads_another_place_as_not_its_own() {
     let program = |size: &str, body: &str| {
         format!(
-            "device g0 {{ top cap 100; }} pool top on g0 {{ }} stage tl : delay;
+            "device g0 {{ top cap 100; }} pool top on g0 {{ }} stage tl : delay; pool pf[2] {{ cap 10; }}
              queue gw : gateway {{ route {{ E.decode (prompt); }} }}
              queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; {body} }} }} }}
              queue F : decode {{ device gpu {{ kv2 cap 100; }} pool kv2 on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
                decode (prompt) {{ hold kv2 (1) {{ run F prefill (cost(F, 1)) growing kv2; }} }} }}
+             queue G[2] : decode {{ device gpu {{ kv3 cap 100; }} pool kv3 on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               decode (prompt) {{ hold kv3 (1) {{ run G prefill (cost(G, 1)) growing kv3; }} }} }}
              {WORKLOAD}"
         )
     };
@@ -515,6 +518,10 @@ fn an_entry_reads_another_place_as_not_its_own() {
         ("min(kv2 + 0, 1)", "", "kv2"),
         ("1", "set y = queued(kv2);", "kv2"),
         ("1", "set y = holders(top);", "top"),
+        ("min(pf, 1)", "", "pf"),
+        ("1", "set y = queued(pf);", "pf"),
+        ("budget_left(G)", "", "G"),
+        ("1", "set y = min(G, 1);", "G"),
     ] {
         refused(
             &program(size, body),
