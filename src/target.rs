@@ -177,7 +177,8 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
         number(p, &step.budget, "the `tokens cap`")?,
         "the `tokens cap`",
     )?;
-    let chunk = count(vllm_chunk(p, &step.chunk, slots)?, "the `each at most`")?;
+    let (chunk, adaptive) = vllm_chunk(p, &step.chunk, &step.budget, slots)?;
+    let chunk = count(chunk, "the `each at most`")?;
     let (seqs, block, blocks) = (
         count(sp.cap, &format!("pool `{}`'s cap", sp.name))?,
         count(block, &format!("pool `{}`'s block", kvp.name))?,
@@ -203,6 +204,9 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
             "enable_prefix_caching": prefix_caching,
         }
     });
+    if adaptive {
+        out["config"]["long_prefill_token_threshold_adaptive"] = json!(true);
+    }
     if !serve_by.is_empty() {
         out["config"]["scheduler_cls"] = json!("serq_vllm.SerqScheduler");
         out["serve_by"] = serde_json::to_value(&serve_by).expect("the IR serialises");
@@ -217,36 +221,78 @@ pub fn vllm(p: &Program) -> Result<Value, String> {
 /// waiting.count > 1 ? c : inf;`, or no `each at most` for no cap. In the IR
 /// that is the chunk `residents + queued(reqs) > 1 ? c : 0`, `reqs` the
 /// request-slot pool, or 0.
-fn vllm_chunk(p: &Program, e: &CExpr, slots: usize) -> Result<f64, String> {
+///
+/// With `long_prefill_token_threshold_adaptive` (config/scheduler.py:87-91)
+/// vLLM floors a nonzero cap at a fair share of the budget, `max(c,
+/// input_budget // num_eligible_reqs)` (scheduler.py:617-622): the engine
+/// writes `n > 1 ? max(c, floor(B / n)) : inf`, `n` the count above and `B`
+/// its `tokens cap`. The second of the pair says the cap is adaptive.
+fn vllm_chunk(p: &Program, e: &CExpr, budget: &CExpr, slots: usize) -> Result<(f64, bool), String> {
     use crate::ir::{CArg, Fun};
-    let refuse = || {
+    let refuse = |why: &str| {
         Err(format!(
-            "not on vLLM's architecture: the `each at most` is `{}`; vLLM caps a prefill only while \
-             another request is running or waiting (scheduler.py:606-616)\nhelp: in an \
+            "not on vLLM's architecture: the `each at most` is `{}`; {why}\nhelp: in an \
              engine's schedule, `let threshold = running.count + waiting.count > 1 ? c : inf;` \
-             and `each at most (threshold)`, or no `each at most` for no cap",
+             and `each at most (threshold)`, or no `each at most` for no cap; vLLM's adaptive \
+             threshold is `max(c, floor(B / (running.count + waiting.count)))` in place of `c`, \
+             `B` the `tokens cap`",
             p.show_expr(e),
         ))
     };
-    match e {
-        CExpr::Num(x) if *x == 0.0 => return Ok(0.0),
-        CExpr::Cond(test, then, other) if **other == CExpr::Num(0.0) => {
-            if let (CExpr::Num(c), CExpr::Binary(BinOp::Gt, lhs, one)) = (&**then, &**test)
-                && **one == CExpr::Num(1.0)
-                && let CExpr::Binary(BinOp::Add, res, q) = &**lhs
-                && **res == CExpr::Ctx(CtxVar::Nres)
-                && let CExpr::Call(Fun::Queued, args) = &**q
-                && let [CArg::Pool(r)] = args.as_slice()
-                && r.base == slots
-                && r.count == 1
-                && r.index.is_none()
-            {
-                return Ok(*c);
-            }
+    let alone = "vLLM caps a prefill only while another request is running or waiting \
+                 (scheduler.py:606-616)";
+    // `residents + queued(reqs)`, vLLM's `num_eligible_reqs`
+    let eligible = |n: &CExpr| {
+        if let CExpr::Binary(BinOp::Add, res, q) = n
+            && **res == CExpr::Ctx(CtxVar::Nres)
+            && let CExpr::Call(Fun::Queued, args) = &**q
+            && let [CArg::Pool(r)] = args.as_slice()
+        {
+            r.base == slots && r.count == 1 && r.index.is_none()
+        } else {
+            false
         }
-        _ => {}
+    };
+    let (test, then) = match e {
+        CExpr::Num(x) if *x == 0.0 => return Ok((0.0, false)),
+        CExpr::Cond(test, then, other) if **other == CExpr::Num(0.0) => (test, then),
+        _ => return refuse(alone),
+    };
+    match &**test {
+        CExpr::Binary(BinOp::Gt, n, one) if **one == CExpr::Num(1.0) && eligible(n) => {}
+        _ => return refuse(alone),
     }
-    refuse()
+    // `floor(B / n)`, the fair share
+    let share = |a: &CArg| {
+        if let CArg::Expr(CExpr::Call(Fun::Floor, f)) = a
+            && let [CArg::Expr(CExpr::Binary(BinOp::Div, b, n))] = f.as_slice()
+        {
+            **b == *budget && eligible(n)
+        } else {
+            false
+        }
+    };
+    // vLLM floors only a nonzero threshold (scheduler.py:617)
+    let threshold = |a: &CArg| match a {
+        CArg::Expr(CExpr::Num(c)) if *c > 0.0 => Some(*c),
+        _ => None,
+    };
+    match &**then {
+        CExpr::Num(c) => Ok((*c, false)),
+        CExpr::Call(Fun::Max, args)
+            if let [a, b] = args.as_slice()
+                && let Some(c) = threshold(a)
+                    .filter(|_| share(b))
+                    .or_else(|| threshold(b).filter(|_| share(a))) =>
+        {
+            Ok((c, true))
+        }
+        _ => refuse(
+            "the cap computes a share other than vLLM's, which is a constant `c` or, adaptive, \
+             `max(c, floor(B / (running.count + waiting.count)))` with `c` above 0 and `B` the \
+             `tokens cap` (scheduler.py:617-622)",
+        ),
+    }
 }
 
 /// A serve key `tools/serq_vllm.py` can evaluate on a running request:

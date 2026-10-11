@@ -182,6 +182,55 @@ fn a_constant_chunk_cap_is_refused_and_the_rule_taken() {
     );
 }
 
+/// vLLM's adaptive threshold (config/scheduler.py:87-91) floors the cap at
+/// the budget's share, `max(c, input_budget // num_eligible_reqs)`
+/// (scheduler.py:617-622): the target takes that cap, with `B` the `tokens
+/// cap`, and refuses another share with the reason (#451).
+#[test]
+fn the_adaptive_chunk_cap_is_taken_and_another_share_refused() {
+    let src = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
+    let dir = root().join("examples/multi-turn");
+    let rule = "let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;";
+    assert!(src.contains(rule), "the program's chunk moved");
+    let target = |cap: &str| {
+        let src = src.replace(
+            rule,
+            &format!("let n = running.count + waiting.count; let threshold = n > 1 ? {cap} : inf;"),
+        );
+        let p = serq::compile_source_at(
+            &common::main_source(&src),
+            Some(&dir),
+            &common::horizon(10.0),
+        )
+        .unwrap();
+        serq::target::vllm(&p)
+    };
+    for cap in ["max(1000, floor(B / n))", "max(floor(B / n), 1000)"] {
+        let c = target(cap).unwrap_or_else(|e| panic!("{cap}: {e}"))["config"].clone();
+        assert_eq!(c["long_prefill_token_threshold"], 1000, "{cap}");
+        assert_eq!(c["long_prefill_token_threshold_adaptive"], true, "{cap}");
+    }
+    // a constant cap is not adaptive, and says nothing of it
+    let c = target("1000").unwrap()["config"].clone();
+    assert_eq!(c["long_prefill_token_threshold"], 1000);
+    assert!(c.get("long_prefill_token_threshold_adaptive").is_none());
+    // another share: of a budget not the engine's, of another count, or
+    // without the floor
+    for cap in [
+        "max(1000, floor(4096 / n))",
+        "max(1000, floor(B / (n + 1)))",
+        "max(1000, B / n)",
+        "max(1000, floor(B / n) + 1)",
+    ] {
+        let e = target(cap).unwrap_err();
+        assert!(
+            e.contains("the cap computes a share other than vLLM's")
+                && e.contains("scheduler.py:617-622"),
+            "{cap}: {e}"
+        );
+    }
+}
+
 /// What vLLM's scheduler does not have since the iteration became a body:
 /// a body of its own (and with it a register), a held reservation, a
 /// request's legs.
