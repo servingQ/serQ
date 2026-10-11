@@ -47,10 +47,11 @@ the report's: the gaps between a request's successive tokens.
   `f` is fixed: an idle colocated engine still decodes at a quarter of its
   speed. The identity needs `N f ≤ 1`: the split's `N f` engines give a
   request alone one engine (`ps(min(present, N * f))`). With `f = 1/2`,
-  two decode engines, the split's decode time is 38.6, 42.7, 60.6 ms at
-  λ = 5, 15, 30 (seed 1, 300 s): near the 40 ms of a request alone on one
-  engine at low load, where a station of capacity 2 gave 21.4, 27.5,
-  48.3 ms.
+  two decode engines, the split is a symmetric queue whose mean sojourn
+  is M/M/2's: 40.5, 44.1, 62.8 ms at λ = 5, 15, 30, and a 5000 s run
+  (seed 1) gives 40.3 ± 0.6, 44.0 ± 0.5, 62.4 ± 1.0 — near the 40 ms of a
+  request alone on one engine at low load. A station of capacity 2,
+  `ps(N * f)`, gives 22.3, 28.7, 50.3 ms (run: 22.1, 28.6, 50.0).
 - **With a 0.2 ms decode step the engines gain little at low load.** At
   λ = 20 a colocated engine is idle 60 % of the time, its decodes rarely
   wait for a prefill, and TPOT is 0.220 ms colocated against 0.208 ms
