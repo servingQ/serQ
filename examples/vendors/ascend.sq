@@ -32,7 +32,7 @@ fn main() {
     run delay (cost(delay, serial == 2 ? 0.001 : serial == 3 ? 0.002 : serial >= 4 ? 0.003 : 0));
     hold reqs (cost(reqs, 1)), kv (cost(kv, prompt + out)) {
       observe selected = serial;
-      observe admitted = now;
+      observe admitted_at = now;
       run llm prefill (cost(llm, prompt));
       run llm decode (cost(llm, out));
     }

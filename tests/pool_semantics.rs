@@ -270,7 +270,7 @@ fn grow_waits_under_preempt_none() {
           run gate (cost(gate, serial));
           hold kv (cost(kv, 50)) {
             run svc (cost(svc, 5));
-            branch (serial == 0) { set t = now; grow kv (cost(kv, 30)); observe waited = now - t; }
+            branch (serial == 0) { set t = now; grow kv (cost(kv, 30)); observe grow_wait = now - t; }
           }
           observe done = now;
         }
@@ -279,7 +279,7 @@ fn grow_waits_under_preempt_none() {
     let r = run(src, &common::horizon(100.0));
     // s0 asks for 30 more at t = 5 while s1 holds 50 until t = 6: waits 1
     assert_eq!(
-        r.observe("waited").unwrap().samples,
+        r.observe("grow_wait").unwrap().samples,
         vec![1.0],
         "{}",
         r.text()
@@ -702,12 +702,12 @@ fn a_hold_without_cache_leaves_the_prefix_to_the_hold_that_caches() {
           execute (batch.tokens * 1e-5 + 1e-4);
         }}
         pool kv on gpu {{ block 16; evict lru; }}
-        stage think : delay;
+        stage user : delay;
         workload {{ arrive closed(1);
           session {{ turn;
           }}
         }}
-        server {{ loop {{ run think (cost(think, 1)); {wrap} }}
+        server {{ loop {{ run user (cost(user, 1)); {wrap} }}
         }}
 
 "#
@@ -1040,7 +1040,7 @@ fn a_held_reservation_counts_against_later_admissions() {
         }}
         server {{
           hold reqs (cost(reqs, 1)), kv (cost(kv, 4)) reserve (cost(kv, 10)) {{
-            observe admitted = now;
+            observe admitted_at = now;
             run llm prefill (cost(llm, 4)) growing kv;
             run llm decode (cost(llm, 6)) growing kv;
           }} cache (cost(reqs, kv, 0));
@@ -1067,7 +1067,7 @@ fn a_held_reservation_counts_against_later_admissions() {
         },
     );
     assert_eq!(held.pool("kv").unwrap().preemptions, 0, "{}", held.text());
-    let admitted = &held.observe("admitted").unwrap().samples;
+    let admitted = &held.observe("admitted_at").unwrap().samples;
     // the first two at 0; the third when the first leaves, after its prefill
     // (1 iteration) and 6 decodes
     assert_eq!(admitted, &[0.0, 0.0, 7.0], "{}", held.text());
@@ -1100,7 +1100,7 @@ fn a_held_reservation_is_each_live_hold_s() {
             }}
           }}
           branch (serial == 1) {{
-            hold kv (cost(kv, {second})) {{ observe admitted = now; run gate (cost(gate, 1)); }}
+            hold kv (cost(kv, {second})) {{ observe admitted_at = now; run gate (cost(gate, 1)); }}
           }}
         }}
 
@@ -1116,7 +1116,7 @@ fn a_held_reservation_is_each_live_hold_s() {
                 ..common::horizon(100.0)
             },
         );
-        r.observe("admitted").unwrap().samples.clone()
+        r.observe("admitted_at").unwrap().samples.clone()
     };
     // 2 + 8 + 2 = 12: admitted on arrival, at 1
     assert_eq!(admitted(&prog("", 2)), [1.0]);
@@ -1124,4 +1124,112 @@ fn a_held_reservation_is_each_live_hold_s() {
     // still reserves 4 until 20 (counted by holders, it was lost at 10):
     // 1 + 4 + 8 = 13 > 12 until then
     assert_eq!(admitted(&prog("run gate (cost(gate, 10));", 8)), [20.0]);
+}
+
+/// A run ends at its start plus its work, not at the sum of its chunks
+/// (#479). 0.4 then 1.2 in chunks of 1 sums to 0.4 + 1 + 0.19999999999999996
+/// = 1.5999999999999999, an ulp short of 0.4 + 1.2: the cached extent and
+/// the `computed` of a hold preempted right after its prefill read a
+/// finished prefill as unfinished (`computed < prompt`).
+#[test]
+fn a_run_ends_at_its_start_plus_its_work() {
+    let prog = |sessions: u32, cap: u32, body: &str| {
+        format!(
+            r#"
+        device gpu {{ kv cap {cap}; }}
+        engine llm on gpu {{
+          reqs cap 2;
+          tokens cap 4;
+          schedule {{
+            advance running each at most (1);
+            admit waiting each at most (1);
+          }}
+          execute (1);
+        }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ preempt lifo; }}
+        workload {{ arrive batch({sessions}); session {{ turn; end; }} }}
+        server {{
+          set prompt = 0.4 + 1.2;
+          {body}
+        }}
+"#
+        )
+    };
+    // the cached extent: the position the prefill ended at
+    let src = prog(
+        1,
+        10,
+        "hold reqs (cost(reqs, 1)), kv (cost(kv, 0)) {
+           run llm prefill (cost(llm, 0.4)) growing kv;
+           run llm prefill (cost(llm, 1.2)) growing kv;
+         } cache (cost(reqs, kv, 100));
+         observe extent = cachedin(kv);",
+    );
+    let r = run(&src, &common::horizon(20.0));
+    assert_eq!(r.observe("extent").unwrap().samples, [0.4 + 1.2]);
+    // `computed`: B ends its prefill at 1.6 with A, and A's first decode
+    // token preempts it (lifo); B's re-executed hold reads where it was
+    let src = prog(
+        2,
+        4,
+        "hold reqs (cost(reqs, 1)), kv (cost(kv, 0)) {
+           branch (computed > 0) { observe at_prompt = computed == prompt; }
+           branch (computed == 0) {
+             run llm prefill (cost(llm, 0.4)) growing kv;
+             run llm prefill (cost(llm, 1.2)) growing kv;
+           }
+           run llm decode (cost(llm, 2)) growing kv;
+         }",
+    );
+    let r = run(&src, &common::horizon(20.0));
+    assert_eq!(r.ended, 2, "{}", r.text());
+    assert_eq!(
+        r.observe("at_prompt").unwrap().samples[0],
+        1.0,
+        "{}",
+        r.text()
+    );
+}
+
+/// A growth that stalled and resumes does not move its hold's position: the
+/// tokens it stalled on move it once, when they are computed (#482). B's
+/// decode stalls on a token's growth (A holds 3 of 7 until its gate ends)
+/// and resumes when A releases; main counted the stalled token twice and B
+/// ended at 7, not 2 + 4. The run's end is checked against the sum of its
+/// chunks (a `debug_assert!` in the interpreter), so a position moved twice
+/// mid-run fails there too.
+#[test]
+fn a_resumed_growth_moves_the_position_once() {
+    let src = r#"
+        device gpu { kv cap 7; }
+        engine llm on gpu {
+          reqs cap 2;
+          tokens cap 4;
+          schedule {
+            advance running;
+            admit waiting;
+          }
+          execute (1);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { }
+        stage gate : delay;
+        workload { arrive batch(2); session { turn; end; } }
+        server {
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 0)) {
+            run llm prefill (cost(llm, 2)) growing kv;
+            branch (serial == 0) {
+              run llm decode (cost(llm, 1)) growing kv;
+              run gate (cost(gate, 5));
+            } else {
+              run llm decode (cost(llm, 4)) growing kv;
+            }
+          } cache (cost(reqs, kv, 100));
+          branch (serial == 1) { observe extent = cachedin(kv); }
+        }
+"#;
+    let r = run(src, &common::horizon(50.0));
+    assert_eq!(r.ended, 2, "{}", r.text());
+    assert_eq!(r.observe("extent").unwrap().samples, [6.0], "{}", r.text());
 }

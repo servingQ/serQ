@@ -5,7 +5,11 @@ typed declarations, [`set`](statements.md#set) or [`choose`](statements.md#choos
 are attributes; a `set` in a stage’s `iteration` body instead assigns a stage
 register. The built-in attributes below need no assignment.
 A name may not be both an attribute and a `let` constant, and neither may take
-a [context variable](context.md)'s name.
+a [context variable](context.md)'s name. Nor may a declaration (a `def`, an
+`observe`, a `stage`, a `pool`, a `device`, an `engine`, a `queue`, a
+`gauge` or a `claim`) take an attribute's name, built in or set: `stage
+think` beside the built-in `think` would make the one word mean two things.
+A program may still `set` a built-in attribute (`set more = …`).
 
 ## Sizes, values and costs
 

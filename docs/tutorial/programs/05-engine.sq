@@ -63,14 +63,20 @@ fn main() {
     set prompt = K + n;
     // how much of the prompt the cache could supply, in whole blocks. The
     // cache itself is read inside the hold's units, so it is read when the
-    // request is admitted -- while it waits, its prefix is still evictable
+    // request is admitted -- while it waits, its prefix is still evictable.
+    // It is admitted only if the whole prompt fits, as vLLM's default
+    // scheduler_reserve_full_isl (config/scheduler.py:191): the `reserve`
     set hitmax = floor((prompt - 1) / bs) * bs;
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
+    set sent = 0;
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm)))) reserve (cost(kv, prompt))
          at admission (hit = min(cachedin(kv), hitmax)) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
-      observe hit = c > 0;
+      // a request preempted runs this body again; count its hit once
+      branch (computed == 0) { observe hit = c > 0; }
       run llm prefill (cost(llm, prompt - c)) growing kv;
-      observe ttft = now - t0;
+      // and its first token once: not again after a preemption, however
+      // many attempts it takes
+      branch (!sent) { observe ttft = now - t0; set sent = 1; }
       run llm decode (cost(llm, o - 1)) growing kv;
     } cache (cost(reqs, kv, prompt + o));
     observe response = now - t0;

@@ -8,7 +8,7 @@ let Z = 4.0;
 
 fn main() {
   stage svc : fifo;
-  stage think : delay;
+  stage user : delay;
 
   workload {
     arrive closed(N);
@@ -17,7 +17,7 @@ fn main() {
         set t0 = now;
         set s = ~exp(1 / mu);
         turn;
-        run think (cost(think, ~exp(Z)));
+        run user (cost(user, ~exp(Z)));
       }
     }
   }

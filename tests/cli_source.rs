@@ -72,6 +72,115 @@ fn names_and_bare_references_keep_their_locations() {
 }
 
 #[test]
+fn an_argument_its_definition_does_not_read_is_still_resolved() {
+    // #431: `one(no_such_name)` expanded to `1`, and the name was never read
+    let defs = "def one(x) { 1 }\ndef take(n) { turn; }\npool kv { cap 10; }\n";
+    let run = |session: &str, server: &str| {
+        let src = format!("{defs}workload {{ session {{ {session} }} }}\nserver {{ {server}\n}}\n");
+        compile_source(&common::main_source(&src), &common::horizon(1.0))
+    };
+    for (session, server, location, cause) in [
+        (
+            "turn;",
+            "set a = one(no_such_name);",
+            "5:22:",
+            "unknown name `no_such_name`",
+        ),
+        (
+            "set b = 1; take(bb);",
+            "",
+            "4:38:",
+            "did you mean name `b`?",
+        ),
+    ] {
+        let err = run(session, server).unwrap_err();
+        assert!(err.contains(location), "{err}");
+        assert!(err.contains(cause), "{err}");
+    }
+    // a parameter the body does not read is a fair definition, and a name
+    // bound where the use stands is not a misspelt one
+    run(
+        "set b = 1; take(b);",
+        "set a = one(kv) + max j in 3 (one(j));\n hold kv (cost(kv, one(need))) at admission (need = 1) { }",
+    )
+    .unwrap();
+    // in a queue's entry, by the entry's rules: its parameter, not a name
+    // from outside
+    let entry = |body: &str| {
+        let src = format!(
+            "def one(x) {{ 1 }}\ndef go(n) {{ run (cost(engine, 1)); }}\nqueue engine : prefill \
+             {{\n  serve fifo;\n  prefill (prompt) {{ {body} }}\n}}\nworkload {{ arrive \
+             batch(1); session {{ turn; end; }} }} server {{ engine.prefill(3); }}\n"
+        );
+        compile_source(&common::main_source(&src), &common::horizon(1.0))
+    };
+    // in a hold's body, an unread argument sees the header's binding and is
+    // not a read of it: the body sets nothing for it
+    let hold = |body: &str, need: &str| {
+        let src = format!(
+            "def one(x) {{ 1 }}\nstage svc : fifo;\nstage f[2] : fifo;\npool kv {{ cap 10; }}\n\
+             pool g[2] {{ cap 10; }}\nworkload {{ arrive batch(1); session {{ set s = 1; turn; \
+             end; }} }}\nserver {{ hold kv (cost(kv, 1)) at admission (need = {need}) {{ {body} \
+             }} }}\n"
+        );
+        compile_source(&common::main_source(&src), &common::horizon(1.0))
+            .map(|p| serde_json::to_string(&p).unwrap())
+    };
+    assert_eq!(
+        hold("run svc (cost(svc, s + one(need)));", "s + 1").unwrap(),
+        hold("run svc (cost(svc, s + 1));", "s + 1").unwrap()
+    );
+    // a binding the body may not read (it reads live state) may be passed unread
+    hold("run svc (cost(svc, s + one(need)));", "cachedin(kv)").unwrap();
+    // so it does in a reference's index: a nested hold's pool, a run's stage
+    for (unread, read) in [
+        (
+            "hold g[one(need)] (cost(g[0], 1)) { }",
+            "hold g[1] (cost(g[0], 1)) { }",
+        ),
+        (
+            "run f[one(need)] (cost(f[0], s));",
+            "run f[1] (cost(f[0], s));",
+        ),
+    ] {
+        assert_eq!(hold(unread, "1").unwrap(), hold(read, "1").unwrap());
+    }
+    // the boundary: it is resolved as the use is parsed, so a check of
+    // the use itself still applies (a statement definition's `turn;`
+    // assigns `new`, which the argument would capture)
+    let err = run("take(new);", "").unwrap_err();
+    assert!(err.contains("which its `turn;` assigns"), "{err}");
+    entry("run (cost(engine, one(prompt)));").unwrap();
+    entry("go(prompt);").unwrap();
+    for body in [
+        "run (cost(engine, zz));",
+        "run (cost(engine, one(zz)));",
+        "go(zz);",
+    ] {
+        let err = entry(body).unwrap_err();
+        assert!(err.contains("`engine.prefill` reads `zz`"), "{err}");
+    }
+    // in a constant it is resolved and never evaluated, so it need not be a
+    // constant; an array size, which the linker never sees, knows constants
+    // only
+    let constant = |arg: &str, size: &str| {
+        let src = format!(
+            "def one(x) {{ 1 }}\npool kv {{ cap 10; }}\nlet n = one({arg});\npool g[{size}] \
+             {{ cap n; }}\nworkload {{ session {{ turn; }} }}\nserver {{ }}\n"
+        );
+        compile_source(&common::main_source(&src), &common::horizon(1.0))
+    };
+    constant("kv", "one(n)").unwrap();
+    let err = constant("zz", "1").unwrap_err();
+    assert!(err.contains("unknown name `zz`"), "{err}");
+    let err = constant("kv", "one(kv)").unwrap_err();
+    assert!(
+        err.contains("array size: `kv` is not a `let` constant"),
+        "{err}"
+    );
+}
+
+#[test]
 fn duplicate_declarations_point_to_both_sites() {
     for (src, first, second) in [
         ("stage svc : fifo;\nstage svc : delay;\n", "1:19", "2:7:"),

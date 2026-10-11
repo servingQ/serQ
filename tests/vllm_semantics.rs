@@ -38,7 +38,7 @@ fn engine(
         server {{
           set t0 = now;
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, {budget}))) {{
-            observe admitted = now - t0;
+            observe admitted_at = now - t0;
             observe who_admitted = serial;
             run llm prefill (cost(llm, prompt)) growing kv;
             observe ttft = now - t0;
@@ -117,7 +117,7 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
         server {
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, 1000))) reserve (cost(kv, known))
           at admission (known = computed < prompt ? prompt : computed + 1) {
-            observe known = known;
+            observe known_at = known;
             run llm prefill (cost(llm, known)) growing kv;
             branch (known == prompt) { observe first = now; }
             run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
@@ -131,7 +131,10 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
     let kv = r.pool("kv").unwrap();
     assert_eq!(kv.preemptions, 1, "{}", r.text());
     assert_eq!(kv.stuck, 0, "{}", r.text());
-    assert_eq!(r.observe("known").unwrap().samples, vec![64.0, 48.0, 65.0]);
+    assert_eq!(
+        r.observe("known_at").unwrap().samples,
+        vec![64.0, 48.0, 65.0]
+    );
     // the first token is recorded once per request: B's re-prefill at 21 is
     // not a first token (vLLM's oracle records `first` once, too)
     assert_eq!(r.observe("first").unwrap().samples, vec![1.0, 1.0]);
@@ -139,6 +142,115 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
     assert_eq!(
         r.observe("done").unwrap().samples,
         vec![20.0, 43.0],
+        "{}",
+        r.text()
+    );
+}
+
+/// Three requests on 6 blocks of 16, prefill chunks of 8: A (16 tokens, 30
+/// out), C (16, 60) and B (32, 10), admitted in that order. `known` is
+/// written `known_is`; `kept` starts at the prompt, and `set_kept` opens the
+/// body.
+fn preempted_twice(set_kept: &str, known_is: &str) -> String {
+    format!(
+        r#"
+        let bs = 16;
+        device gpu {{ kv cap 6 * bs; }}
+        engine llm on gpu {{
+          tokens cap 64;
+          schedule {{
+            advance running each at most (8);
+            admit waiting while (running.preempted == 0) each at most (8);
+          }}
+          execute (1);
+        }}
+        pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
+        pool reqs {{ cap 16; }}
+        workload {{ arrive batch(3);
+          init {{ set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }}
+          session {{ turn;
+            end;
+
+          }}
+        }}
+        server {{
+          set kept = prompt;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(llm)))) reserve (cost(kv, known))
+          at admission (known = {known_is}) {{
+            {set_kept}
+            branch (serial == 2) {{ observe known_at = known; observe at = computed; }}
+            run llm prefill (cost(llm, known)) growing kv;
+            branch (known == prompt) {{ observe first = serial; }}
+            run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
+          }}
+          observe done = now;
+        }}
+
+"#
+    )
+}
+
+/// scheduler.py:1560-1561 again: a preemption resets `num_computed_tokens`
+/// and keeps the outputs, however many times it comes.
+///
+/// Step 1 admits A, C and B (one block each for A and C, two for B, all
+/// reserved); with chunks of 8 A and C finish their prefill at step 2, B at
+/// step 4 (32 computed, its first token sampled). By then A and C have grown
+/// a block each at step 3: the 6 blocks are taken. At step 5 B needs a
+/// third block and, the last admitted, is preempted with 32 computed: 33
+/// known, 3 blocks to reserve, 2 free. A and C both grow at step 19 (token
+/// 33). A ends at step 31 (its prefill, then 29 decodes from step 3),
+/// freeing 3 blocks; B is admitted at step 32 with all 33 allocated, and at
+/// step 35 C's token 49 needs a block: B, the last admitted, is preempted
+/// at 24 (three chunks), short of its prompt. C ends at step 61; B is
+/// admitted at 62, recomputes its 33 tokens in 5 chunks and decodes the 8
+/// left: done at 74.
+///
+/// `computed` is the position of the last preemption only, so a program
+/// that reads `known` from it alone
+/// (`computed < prompt ? prompt : computed + 1`, the vLLM examples before
+/// #475) brings B back at step 36 with its
+/// prompt (2 blocks fit): it has lost its output token, computes it again
+/// at step 39 and records its first token twice, and is preempted at 32 by
+/// the same lack of a block, to return at 62 with 33. `done` is the same in
+/// both forms, so the bug shows only in what is observed: `known_at` and
+/// `first`. Carrying the most it had, `kept`, B comes back with 33, as vLLM
+/// does.
+#[test]
+fn a_request_preempted_twice_keeps_its_outputs() {
+    let r = run(
+        &preempted_twice("", "computed < prompt ? prompt : computed + 1"),
+        &common::horizon(1000.0),
+    );
+    assert_eq!(
+        r.observe("at").unwrap().samples,
+        vec![0.0, 32.0, 24.0, 32.0]
+    );
+    assert_eq!(
+        r.observe("known_at").unwrap().samples,
+        vec![32.0, 33.0, 32.0, 33.0]
+    );
+    assert_eq!(
+        r.observe("first").unwrap().samples,
+        vec![0.0, 1.0, 2.0, 2.0]
+    );
+    assert_eq!(r.observe("done").unwrap().samples, vec![31.0, 61.0, 74.0]);
+
+    let r = run(
+        &preempted_twice("set kept = known;", "max(kept, computed + 1)"),
+        &common::horizon(1000.0),
+    );
+    let kv = r.pool("kv").unwrap();
+    assert_eq!(kv.preemptions, 2, "{}", r.text());
+    assert_eq!(r.observe("at").unwrap().samples, vec![0.0, 32.0, 24.0]);
+    assert_eq!(
+        r.observe("known_at").unwrap().samples,
+        vec![32.0, 33.0, 33.0]
+    );
+    assert_eq!(r.observe("first").unwrap().samples, vec![0.0, 1.0, 2.0]);
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![31.0, 61.0, 74.0],
         "{}",
         r.text()
     );
@@ -346,7 +458,7 @@ fn admission_is_fcfs_with_head_of_line_blocking() {
     // with r0), r2: 16 (would fit). r2 must wait behind r1.
     let src = engine(3, "serial == 2 ? 16 : 96", "2", 10, 16, 1000, 16, VLLM);
     let r = run(&src, &common::horizon(1000.0));
-    let adm = &r.observe("admitted").unwrap().samples;
+    let adm = &r.observe("admitted_at").unwrap().samples;
     let order = &r.observe("who_admitted").unwrap().samples;
     // observations are in admission order; find r2
     let i2 = order.iter().position(|&s| s == 2.0).unwrap();
@@ -372,8 +484,7 @@ fn chunked_prefill_takes_ceil_prompt_over_budget_steps() {
 
 /// scheduler.py:606-616, 675-676: `long_prefill_token_threshold` caps one
 /// request's chunk only when it is not alone. The program says so in its
-/// `each at most` (`lib/vllm.sq`'s `long_prefill`); a constant cap is not
-/// vLLM's.
+/// `each at most`; a constant cap is not vLLM's.
 #[test]
 fn long_prefill_threshold_applies_only_with_company() {
     let chunk = "let c = running.count + queued(reqs) > 1 ? 1000 : inf;
@@ -575,7 +686,7 @@ fn request_cap_is_a_slot_pool() {
         &engine(4, "16", "5", 1000, 16, 8192, 2, VLLM),
         &common::horizon(1000.0),
     );
-    let adm = &r.observe("admitted").unwrap().samples;
+    let adm = &r.observe("admitted_at").unwrap().samples;
     let mut a = adm.clone();
     a.sort_by(f64::total_cmp);
     assert_eq!(a, vec![0.0, 0.0, 5.0, 5.0], "{}", r.text());

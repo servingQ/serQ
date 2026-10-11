@@ -41,11 +41,11 @@ fn main() {
     hold kv (cost(kv, K + n + o)) {
       // `cached` is how much of this session's own prefix survived,
       // decided at the moment the hold is admitted
-      set hit = cached >= K;
-      run engine (cost(engine, (hit ? a * n : a * (K + n)) + d * o));
+      set warm = cached >= K;
+      run engine (cost(engine, (warm ? a * n : a * (K + n)) + d * o));
     } cache (cost(kv, K + n + o));
     observe response = now - t0;
-    branch (K > 0) { observe hit = hit; }
+    branch (K > 0) { observe hit = warm; }
   }
 
 

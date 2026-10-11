@@ -564,7 +564,7 @@ const CACHE_ENGINE: &str = "device gpu { kv cap 1e5; }
       execute (1e-3);
     }
     pool kv on gpu { block 16; evict lru; }
-    stage think : delay;
+    stage user : delay;
     ";
 const CACHE_ENGINE_WORKLOAD: &str = "arrive closed(1);";
 
@@ -576,7 +576,7 @@ fn cached_in_a_hold_without_cache_is_rejected() {
     let src = format!(
         "{CACHE_ENGINE} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
         }} }}
-        server {{ loop {{ run think (cost(think, 1));
+        server {{ loop {{ run user (cost(user, 1));
             hold kv (cost(kv, 1000)) {{ observe hit = cached > 0; run llm prefill (cost(llm, 1000 - cached)) growing kv; }}
           }}
         }} "
@@ -596,7 +596,7 @@ fn cache_zero_is_the_way_through() {
         let src = format!(
             "{CACHE_ENGINE} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
         }} }}
-        server {{ loop {{ run think (cost(think, 1));
+        server {{ loop {{ run user (cost(user, 1));
             hold kv (cost(kv, 1000)) {{ observe hit = cached > 0; run llm prefill (cost(llm, 1000 - cached)) growing kv; }} {clause};
           }}
         }} "
@@ -612,7 +612,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
     let src = format!(
         "{CACHE_ENGINE} pool reqs {{ cap 4; }} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
         }} }}
-        server {{ loop {{ run think (cost(think, 1));
+        server {{ loop {{ run user (cost(user, 1));
             hold kv (cost(kv, 1000)) {{ hold reqs (cost(reqs, 1)) {{ run llm prefill (cost(llm, 1000 - cached)) growing kv; }} }} cache (cost(kv, 1000));
           }}
         }} "
@@ -622,7 +622,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
     let src = format!(
         "{CACHE_ENGINE} pool reqs {{ cap 4; }} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
         }} }}
-        server {{ loop {{ run think (cost(think, 1));
+        server {{ loop {{ run user (cost(user, 1));
             hold kv (cost(kv, 1000)) {{ set c = cached; hold reqs (cost(reqs, 1)) {{ run llm prefill (cost(llm, 1000 - c)) growing kv; }} }} cache (cost(kv, 1000));
           }}
         }} "
@@ -631,7 +631,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
     // read after the inner hold, in the outer body: the inner admission set
     // it, so `c` was 0 every turn where 992 was kept (#237); in a branch
     // after it, and in a loop whose next iteration comes after it
-    let inner = "hold reqs (cost(reqs, 1)) { run think (cost(think, 0.01)); }";
+    let inner = "hold reqs (cost(reqs, 1)) { run user (cost(user, 0.01)); }";
     for body in [
         format!("{inner} observe c = cached;"),
         format!("{inner} branch (1 > 0) {{ observe c = cached; }}"),
@@ -640,7 +640,7 @@ fn cached_in_a_nested_hold_on_another_pool_is_rejected() {
         let src = format!(
             "{CACHE_ENGINE} pool reqs {{ cap 4; }} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
             }} }}
-            server {{ loop {{ run think (cost(think, 1));
+            server {{ loop {{ run user (cost(user, 1));
                 hold kv (cost(kv, 1000)) {{ {body} }} cache (cost(kv, 1000));
               }}
             }} "
@@ -659,7 +659,7 @@ fn reuse_without_cache_is_rejected() {
     let src = format!(
         "{CACHE_ENGINE} workload {{ {CACHE_ENGINE_WORKLOAD} session {{ turn;
         }} }}
-        server {{ loop {{ run think (cost(think, 1));
+        server {{ loop {{ run user (cost(user, 1));
             hold kv (cost(kv, 1000)) reuse (cost(kv, 512)) {{ run llm prefill (cost(llm, 1000)) growing kv; }}
           }}
         }} "
@@ -679,12 +679,12 @@ fn reuse_without_cache_is_rejected() {
 #[test]
 fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
     const PS: &str = "stage dec : ps(min(present, 16));
-        stage think : delay;
+        stage user : delay;
         workload { arrive closed(2);
           session { turn;
           }
         }
-        server { loop { SET run dec (cost(dec, 1)); observe r = now; run think (cost(think, 1)); }
+        server { loop { SET run dec (cost(dec, 1)); observe r = now; run user (cost(user, 1)); }
         }
         ";
     let e = check(&PS.replace("SET", "set present = 500;")).expect_err("rejected");
@@ -719,4 +719,163 @@ fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
     )
     .unwrap();
     assert_eq!(r.stage("dec").unwrap().mean_service, 1.0, "{}", r.text());
+}
+
+/// #460: the same holds for a declaration and a parameter. `def now(x)`
+/// beside `now`, or `observe admitted` beside `admitted`, linked, and one
+/// word meant the program's thing in one place and the language's in
+/// another. An engine's list (`running.count`) is the language's as well.
+#[test]
+fn a_declaration_cannot_take_a_name_the_language_supplies() {
+    const SRC: &str = "DECL
+        stage svc : fifo;
+        workload { arrive closed(2); session { turn; } }
+        server { run svc (cost(svc, 1)); observe response = now; }
+        ";
+    for (decl, refused) in [
+        ("def now(x) { x * 2 }", "a definition named `now`"),
+        ("def running(x) { x * 2 }", "a definition named `running`"),
+        ("def f(now) { now * 2 }", "a parameter named `now`"),
+        ("gauge present = 1;", "a gauge named `present`"),
+        ("stage size : delay;", "a stage named `size`"),
+        ("pool position { cap 1; }", "a pool named `position`"),
+        ("claim tokens : at end (1);", "a claim named `tokens`"),
+        ("device now { kv cap 1; }", "a device named `now`"),
+        (
+            "device gpu { step_time (age) = 1; }",
+            "a parameter named `age`",
+        ),
+        (
+            "device gpu { kv cap 1; } engine served on gpu { execute (1); }",
+            "an engine named `served`",
+        ),
+        // the engine's lists are the language's for #231's check too
+        ("let running = 1;", "a `let` constant named `running`"),
+    ] {
+        let e = check(&SRC.replace("DECL", decl)).expect_err(decl);
+        assert!(
+            e.contains(&format!(
+                "{refused} would make the one word mean two things"
+            )),
+            "{decl}: {e}"
+        );
+    }
+    let set = SRC
+        .replace("DECL", "")
+        .replace("session { turn; }", "session { set running = 1; turn; }");
+    let e = check(&set).expect_err("rejected");
+    assert!(
+        e.contains("a session attribute named `running` would make the one word mean two things"),
+        "{e}"
+    );
+    let observe = SRC.replace("DECL", "").replace(
+        "observe response",
+        "observe admitted = now; observe response",
+    );
+    let e = check(&observe).expect_err("rejected");
+    assert!(
+        e.contains("`admitted` is a name the language supplies, read in an engine's `schedule`"),
+        "{e}"
+    );
+    // renamed, it links
+    check(&observe.replace("observe admitted", "observe admitted_at")).expect("links");
+}
+
+/// A schedule's `let` is a declaration too: `let inf = 1;` in vllm.sq's
+/// schedule linked, and its threshold's `: inf` read 1.
+#[test]
+fn a_schedules_let_cannot_take_a_name_the_language_supplies() {
+    let src = format!(
+        "{} workload {{ {ENGINE_WORKLOAD} session {{ turn; }} }}
+        server {{ hold reqs (cost(reqs, 1)) {{ run llm prefill (cost(llm, n)); }} }}",
+        ENGINE.replace("schedule { ", "schedule { let inf = 1; ")
+    );
+    let e = check(&src).expect_err("rejected");
+    assert!(
+        e.contains("a schedule's `let` named `inf` would make the one word mean two things"),
+        "{e}"
+    );
+    check(&src.replace("let inf = 1; ", "")).expect("links");
+}
+
+/// #470: nor may a declaration share its name with an attribute, built in
+/// or set anywhere in the program. `stage think` beside the attribute
+/// `think`, or `set svc` beside `stage svc`, linked, and a bare name read
+/// the one or the other by its place alone (#467). Writing a built-in
+/// attribute is a `set`, and stays legal.
+#[test]
+fn a_declaration_cannot_share_its_name_with_an_attribute() {
+    const SRC: &str = "DECL
+        stage svc : fifo;
+        workload { arrive closed(2); session { turn; } }
+        server { run svc (cost(svc, 1)); observe response = now; }
+        ";
+    let refusal = |src: &str| check(src).expect_err("refused");
+    let two_things = "would make the one word mean two things";
+    for (decl, refused) in [
+        (
+            "stage think : delay;",
+            "`think` is a built-in attribute; a stage named `think`",
+        ),
+        (
+            "def more(x) { x }",
+            "`more` is a built-in attribute; a definition named `more`",
+        ),
+        (
+            "gauge serial = 1;",
+            "`serial` is a built-in attribute; a gauge named `serial`",
+        ),
+    ] {
+        let e = refusal(&SRC.replace("DECL", decl));
+        assert!(
+            e.contains(&format!("{refused} {two_things}")),
+            "{decl}: {e}"
+        );
+    }
+    let src = SRC.replace("DECL", "");
+    let observe = |name: &str| {
+        src.replace(
+            "observe response",
+            &format!("observe {name} = 1; observe response"),
+        )
+    };
+    let set = |src: &str, name: &str| {
+        src.replace(
+            "session { turn; }",
+            &format!("session {{ set {name} = 1; turn; }}"),
+        )
+    };
+    let e = refusal(&observe("out"));
+    assert!(
+        e.contains(&format!("an observation named `out` {two_things}")),
+        "{e}"
+    );
+    // the `set` comes after the declaration, or before it
+    let e = refusal(&set(&src, "svc"));
+    assert!(
+        e.contains(&format!(
+            "`svc` is an attribute the program sets at 3:52; a stage named `svc` {two_things}"
+        )),
+        "{e}"
+    );
+    let e = refusal(&set(&observe("hit"), "hit"));
+    assert!(
+        e.contains(&format!("an observation named `hit` {two_things}")),
+        "{e}"
+    );
+    assert!(
+        e.contains("help: rename the declaration or the attribute"),
+        "{e}"
+    );
+    // a header's binding the body reads is set at the top of the body
+    let bound = observe("k").replace(
+        "run svc (cost(svc, 1));",
+        "hold kv (cost(kv, 1)) at admission (k = computed + 1) { run svc (cost(svc, k)); }",
+    );
+    let e = refusal(&format!("pool kv {{ cap 4; }} {bound}"));
+    assert!(
+        e.contains(&format!("an observation named `k` {two_things}")),
+        "{e}"
+    );
+    check(&set(&set(&observe("hit"), "warm"), "more")).expect("links");
 }

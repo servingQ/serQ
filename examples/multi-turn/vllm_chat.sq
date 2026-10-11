@@ -30,7 +30,9 @@ fn main() {
     reqs cap max_seqs;
     tokens cap B;
     schedule {
-      let threshold = long_prefill(chunk_cap);
+      // long_prefill_token_threshold binds only while another request is
+      // running or waiting; a request alone takes the whole budget (scheduler.py:606-616)
+      let threshold = running.count + waiting.count > 1 ? chunk_cap : inf;
       advance running each at most (threshold);
       admit waiting while (running.preempted == 0) each at most (threshold);
     }
@@ -68,14 +70,20 @@ fn main() {
     set prompt = K + n;
     // A slot of `reqs` and the blocks of `kv`. The scheduler looks up the
     // prefix hit when it admits (scheduler.py:932-939) and allocates the hit
-    // plus the chunk the budget allows (scheduler.py:1078-1128, 1214-1226);
+    // plus the chunk the budget allows (scheduler.py:1078-1128, 1214-1226),
+    // but admits only if every token fits, the hit counted
+    // (scheduler_reserve_full_isl, on by default: config/scheduler.py:191,
+    // kv_cache_manager.py:515-531): the `reserve`.
     // docs/language.md §7 "Admission" has the argument. `known` is every
     // token the request has: the prompt, or after a preemption the position
-    // it had reached plus the token sampled there (vLLM keeps the generated
-    // tokens and drops only their KV, scheduler.py:1560-1561).
-    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))
-         at admission (known = computed < prompt ? prompt : computed + 1,
+    // it had reached plus the token sampled there, and never fewer than it
+    // had before (`kept`: vLLM keeps the generated tokens and drops only
+    // their KV, scheduler.py:1560-1561).
+    set kept = prompt;
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm)))) reserve (cost(kv, known))
+         at admission (known = max(kept, computed + 1),
                        hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {
+      set kept = known;
       set c = min(cached, reusable(known, blocksize(kv)));
       observe hit = c > 0;                    // any reused block, again after a preemption
       observe prefill_tokens = known - c;

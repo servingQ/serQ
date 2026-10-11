@@ -47,7 +47,7 @@ def case(rng):
     cap = float(rng.choice([0, 0, 0, rng.randint(1, 512)]))
     if cap and rng.random() < 0.5:
         # vLLM's rule: the cap only while another request runs or waits for
-        # a slot of `reqs` (pool 1), as `lib/vllm.sq`'s `long_prefill` writes it
+        # a slot of `reqs` (pool 1), as the vLLM programs' schedules write it
         reqs = {"Call": ["Queued", [{"Pool": {"base": 1, "count": 1, "index": None}}]]}
         test = {"Binary": ["Gt", {"Binary": ["Add", {"Ctx": "Nres"}, reqs]}, {"Num": 1.0}]}
         step["chunk"] = {"Cond": [test, {"Num": cap}, {"Num": 0.0}]}

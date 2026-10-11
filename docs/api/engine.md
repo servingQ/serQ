@@ -132,8 +132,9 @@ stage …` (`idle_with_work` in JSON).
 | `by (k1, …)` | ascending keys per request, ties by admission order |
 | `decode first` | decodes before prefills |
 
-Keys read `decoding`, `admission`, `remaining` and `running.count`,
-`running.decoding`, `running.kv_…`, and may not draw. `by (remaining)` is
+Keys read `decoding`, `admission`, `remaining`, `running.count`,
+`running.decoding`, `running.kv_…` and the clock (`now`, `work(…)`), and
+may not draw. `by (remaining)` is
 shortest-remaining-first; `by (-remaining)` is the opposite.
 
 `only (p)` is read for each request at its turn, on the running requests
@@ -172,7 +173,9 @@ let c = n > 1 ? max(threshold, floor(budget / n)) : inf;
 ```
 
 It is vLLM's only when `budget` is the engine's `tokens cap`, vLLM's
-`max_num_batched_tokens` (`scheduler.py:580`). `max(0, e)`, `min(k, e)`
+`max_num_batched_tokens` (`scheduler.py:580`); `serq target` exports it
+as `long_prefill_token_threshold` with
+`long_prefill_token_threshold_adaptive`. `max(0, e)`, `min(k, e)`
 or a bare `e` does not link; a cap that shrinks writes its floor,
 `max(1, min(k, e))`.
 

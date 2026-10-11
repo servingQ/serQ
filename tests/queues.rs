@@ -474,6 +474,181 @@ fn an_admission_binding_sees_the_entry_only() {
     );
 }
 
+/// A bare name that is not a pool or stage is a value the header reads, and
+/// is refused as one: `min(now, 1)` as `min(now + 0, 1)` (#447).
+#[test]
+fn a_header_reads_a_bare_name_as_a_value() {
+    for size in ["min(now, 1)", "min(now + 0, 1)"] {
+        refused(
+            &format!(
+                "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+                   decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; }} }} }}
+                 {WORKLOAD}"
+            ),
+            "the header reads `now`",
+        );
+    }
+}
+
+/// A pool or stage that is not the entry's queue's is refused as one,
+/// however it is read and wherever it is declared: at the top level (`top`,
+/// `tl`, the family `pf`) or in a queue declared after this one (`F`, the
+/// family `G`).
+#[test]
+fn an_entry_reads_another_place_as_not_its_own() {
+    let program = |size: &str, body: &str| {
+        format!(
+            "device g0 {{ top cap 100; }} pool top on g0 {{ }} stage tl : delay; pool pf[2] {{ cap 10; }}
+             queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; {body} }} }} }}
+             queue F : decode {{ device gpu {{ kv2 cap 100; }} pool kv2 on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               decode (prompt) {{ hold kv2 (1) {{ run F prefill (cost(F, 1)) growing kv2; }} }} }}
+             queue G[2] : decode {{ device gpu {{ kv3 cap 100; }} pool kv3 on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               decode (prompt) {{ hold kv3 (1) {{ run G prefill (cost(G, 1)) growing kv3; }} }} }}
+             {WORKLOAD}"
+        )
+    };
+    for (size, body, name) in [
+        ("min(top, 1)", "", "top"),
+        ("queued(top)", "", "top"),
+        ("min(tl, 1)", "", "tl"),
+        ("budget_left(F)", "", "F"),
+        ("min(kv2 + 0, 1)", "", "kv2"),
+        ("1", "set y = queued(kv2);", "kv2"),
+        ("1", "set y = holders(top);", "top"),
+        ("min(pf, 1)", "", "pf"),
+        ("1", "set y = queued(pf);", "pf"),
+        ("budget_left(G)", "", "G"),
+        ("1", "set y = min(G, 1);", "G"),
+    ] {
+        refused(
+            &program(size, body),
+            &format!("`E.decode` reads `{name}`, which is not a pool or stage of `E`"),
+        );
+    }
+}
+
+/// A device is no value: an entry reads its queue's pools. The queue's own
+/// device and a top-level one are refused as devices in the header and the
+/// body alike, bare or through the queue (#461).
+#[test]
+fn an_entry_reads_a_device_as_a_device() {
+    for (size, body, name) in [
+        ("min(gpu, 1)", "", "gpu"),
+        ("min(g0, 1)", "", "g0"),
+        ("queued(E.gpu)", "", "E.gpu"),
+        ("1", "set y = gpu;", "gpu"),
+        ("1", "set y = min(g0, 1);", "g0"),
+        ("1", "set y = E.gpu;", "E.gpu"),
+    ] {
+        refused(
+            &format!(
+                "device g0 {{ top cap 100; }} pool top on g0 {{ }}
+                 queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+                 queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+                   decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; {body} }} }} }}
+                 {WORKLOAD}"
+            ),
+            &format!(
+                "`E.decode` reads `{name}`, a device, which holds no value: an entry reads its queue's pools"
+            ),
+        );
+    }
+}
+
+/// Another queue's device is out of an entry's scope, so its name is free
+/// for a session attribute, which the body is refused as one (#461).
+#[test]
+fn another_queues_device_leaves_its_name_to_an_attribute() {
+    refused(
+        &format!(
+            "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               decode (prompt) {{ hold kv (1) {{ run E prefill (cost(E, 1)) growing kv; set y = j; }} }} }}
+             queue F : decode {{ device j {{ kv2 cap 100; }} pool kv2 on j {{ }} engine on j {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               decode (prompt) {{ hold kv2 (1) {{ run F prefill (cost(F, 1)) growing kv2; }} }} }}
+             {WORKLOAD}"
+        ),
+        "`E.decode` reads `j`, a session attribute set outside the queue",
+    );
+}
+
+/// Inside its queue an own pool is named bare: `queued(E.kv)` is refused with
+/// the name to write, as `kv[…]` is; read as a number, bare or not, it is
+/// refused as a pool, which holds none, and the own stage as a stage (#461).
+#[test]
+fn an_entry_names_its_own_pool_bare() {
+    let program = |size: &str, body: &str| {
+        format!(
+            "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               decode (prompt) {{ hold kv ({size}) {{ run E prefill (cost(E, 1)) growing kv; {body} }} }} }}
+             {WORKLOAD}"
+        )
+    };
+    for (size, body) in [
+        ("queued(E.kv)", ""),
+        ("1", "set y = queued(E.kv);"),
+        ("1", "set y = holders(E.kv);"),
+    ] {
+        refused(
+            &program(size, body),
+            "`E.decode` reads `E.kv`, its own pool: inside the queue write `kv`",
+        );
+    }
+    for (size, body, name) in [
+        ("min(E.kv + 0, 1)", "", "E.kv"),
+        ("min(kv + 0, 1)", "", "kv"),
+        // bare in a value argument, as in a sum (#463)
+        ("min(kv, 1)", "", "kv"),
+        ("1", "set y = max(kv, 1);", "kv"),
+        ("1", "set y = E.kv;", "E.kv"),
+        ("1", "set y = kv;", "kv"),
+    ] {
+        refused(
+            &program(size, body),
+            &format!(
+                "`E.decode` reads `{name}` as a number, but a pool is none: read `queued(kv)` or `holders(kv)`"
+            ),
+        );
+    }
+    // the own stage, named as the queue, is no number either
+    for (size, body) in [
+        ("min(E + 0, 1)", ""),
+        ("min(E, 1)", ""),
+        ("1", "set y = E;"),
+    ] {
+        refused(
+            &program(size, body),
+            "`E.decode` reads `E` as a number, but a stage is none: read `budget_left(E)` or `work(E)`",
+        );
+    }
+}
+
+/// A definition's parameter is what its body makes of it: the own pool
+/// passed to `queued(p)` is a reference, and to `min(p, 1)` a number (#463).
+#[test]
+fn a_definition_passes_an_own_pool_where_its_body_puts_it() {
+    let program = |def: &str| {
+        format!(
+            "{def}
+             queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               decode (prompt) {{ hold kv (1) {{ run E prefill (cost(E, 1)) growing kv; set y = go(kv); }} }} }}
+             {WORKLOAD}"
+        )
+    };
+    let src = common::main_source(&program("def go(p) { queued(p) }"));
+    let linked = parse(&src).map(|p| serq::frontend::link::link(&p, &common::horizon(100.0)));
+    assert!(matches!(linked, Ok(Ok(_))), "a pool passed to `queued`");
+    refused(
+        &program("def go(p) { min(p, 1) }"),
+        "`E.decode` reads `kv` as a number, but a pool is none: read `queued(kv)` or `holders(kv)`",
+    );
+}
+
 #[test]
 fn an_entry_sees_its_parameters_and_its_queue() {
     let program = |entry: &str, gw: &str| {

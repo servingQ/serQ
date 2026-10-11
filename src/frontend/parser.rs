@@ -68,12 +68,14 @@ use std::path::{Path, PathBuf};
 use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
-use crate::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, RENAMED};
+use crate::frontend::link::{
+    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, LISTS, RENAMED, takes_supplied,
+};
 use crate::frontend::queue::{self, QueueDecl};
 
 mod device;
 
-pub use device::engine_name;
+pub use device::{ENGINE_VALUES, engine_name};
 
 #[derive(Debug, Clone)]
 pub struct ParseError {
@@ -136,6 +138,10 @@ struct Parser {
     /// stage against.
     stages: Vec<String>,
     definitions: Vec<(String, Span)>,
+    /// Each declaration's name, with its position and its kind (`a stage`,
+    /// …): an attribute may not share it, which only the whole program says
+    /// (`check_declared_names`).
+    declared: Vec<(usize, String, &'static str)>,
     /// Composite costs lower to named scalar fields in declaration order.
     cost_records: std::collections::BTreeMap<String, Vec<String>>,
     /// Which side the statement being parsed is on.
@@ -274,10 +280,6 @@ struct Def {
 /// an expansion ends; one can still double at every level.
 const MAX_TOKENS: usize = 100_000;
 
-/// The names an engine reads its values under: `running.count`,
-/// `waiting.count`, `batch.tokens` (`parser/device.rs`).
-const LISTS: [&str; 3] = ["running", "waiting", "batch"];
-
 /// The most members a family (`pool p[N]`, `queue D[N]`) may have.
 const MAX_FAMILY: usize = 10_000;
 
@@ -288,7 +290,7 @@ const DISTRIBUTIONS: [&str; 6] = ["exp", "det", "uniform", "erlang", "h2", "bern
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 113] = [
+pub const KEYWORDS: [&str; 115] = [
     "Cost",
     "Size",
     "admission",
@@ -316,6 +318,7 @@ pub const KEYWORDS: [&str; 113] = [
     "delay",
     "device",
     "drop",
+    "each",
     "else",
     "end",
     "engine",
@@ -354,6 +357,7 @@ pub const KEYWORDS: [&str; 113] = [
     "mark",
     "maxmin",
     "memory",
+    "most",
     "nic",
     "none",
     "observe",
@@ -679,6 +683,51 @@ fn says(b: &[Token], w: &str) -> bool {
         .any(|x| x[0].tok == Tok::Ident(w.into()) && x[1].tok == Tok::Semi)
 }
 
+/// The error for an entry that reads a pool or stage not its queue's.
+fn not_its_own(queue: &str, verb: &str, name: &str) -> String {
+    format!(
+        "`{queue}.{verb}` reads `{name}`, which is not a pool or stage of `{queue}`: \
+         a queue sees its own; the deployment reads across queues"
+    )
+}
+
+/// The error for an entry that reads a device, which holds no value.
+fn a_device(queue: &str, verb: &str, name: &str) -> String {
+    format!(
+        "`{queue}.{verb}` reads `{name}`, a device, which holds no value: an entry reads \
+         its queue's pools (`queued(p)`, `holders(p)`)"
+    )
+}
+
+/// The error for an entry that reads its own pool `pool`, written `name`,
+/// as a number.
+fn pool_as_number(queue: &str, verb: &str, name: &str, pool: &str) -> String {
+    format!(
+        "`{queue}.{verb}` reads `{name}` as a number, but a pool is none: read \
+         `queued({pool})` or `holders({pool})`"
+    )
+}
+
+/// The error for an entry that reads its own stage, named as its queue, as
+/// a number.
+fn stage_as_number(queue: &str, verb: &str) -> String {
+    format!(
+        "`{queue}.{verb}` reads `{queue}` as a number, but a stage is none: read \
+         `budget_left({queue})` or `work({queue})`"
+    )
+}
+
+/// The error for an entry that names its own pool through its queue
+/// (`queued(E.kv)` inside `E`).
+fn own_pool_dotted(queue: &str, verb: &str, name: &str, pool: &str) -> String {
+    format!("`{queue}.{verb}` reads `{name}`, its own pool: inside the queue write `{pool}`")
+}
+
+/// The part of `name` after `queue.`, when `name` is written through the queue.
+fn through_queue<'a>(queue: &str, name: &'a str) -> Option<&'a str> {
+    name.strip_prefix(queue)?.strip_prefix('.')
+}
+
 /// A pool declared with a stage's name, or a stage with a pool's.
 fn one_name_space(name: &str) -> String {
     format!(
@@ -737,10 +786,15 @@ fn expr_reads(e: &Expr, n: &str) -> bool {
         Expr::Var(v) => v == n,
         Expr::Num(_) => false,
         Expr::Sample(_, args) => args.iter().any(|a| expr_reads(a, n)),
+        // a bare name in any position, not only where `takes_number`: a
+        // binding named as a pool (`queued(kw)`) must reach the check that
+        // the body would not say which it means
         Expr::Call(_, args) => args.iter().any(|a| match a {
             Arg::Expr(x) => expr_reads(x, n),
             Arg::Ref(r) => ref_reads(r, n) || (r.index.is_none() && r.name == n),
         }),
+        // an unread argument is resolved where it stands, not read
+        Expr::Unread(_, e) => expr_reads(e, n),
         Expr::Unary(_, a) => expr_reads(a, n),
         Expr::Binary(_, a, b) => expr_reads(a, n) || expr_reads(b, n),
         Expr::Cond(c, a, b) => expr_reads(c, n) || expr_reads(a, n) || expr_reads(b, n),
@@ -756,9 +810,13 @@ fn ref_reads(r: &Ref, n: &str) -> bool {
 fn stmt_reads(s: &Stmt, n: &str) -> bool {
     let block = |b: &[Stmt]| b.iter().any(|s| stmt_reads(s, n));
     match s {
-        Stmt::Declare(..) | Stmt::Side(_) | Stmt::Turn | Stmt::Request | Stmt::End | Stmt::Join => {
-            false
-        }
+        Stmt::Declare(..)
+        | Stmt::Side(_)
+        | Stmt::Turn
+        | Stmt::Request
+        | Stmt::End
+        | Stmt::Join
+        | Stmt::Unread(_) => false,
         Stmt::Set(_, e) | Stmt::Observe(_, e) => expr_reads(e, n),
         Stmt::Hold { body, .. } => {
             // a nested hold that binds `n` itself gives its body its own `n`
@@ -822,6 +880,20 @@ fn header_reads(s: &Stmt, n: &str) -> bool {
         || lease
             .as_ref()
             .is_some_and(|(r, t)| ref_reads(r, n) || expr_reads(t, n))
+}
+
+/// `Expr::bind_unread` in every part of `stmts` (`each_part_mut`): its
+/// expressions, the index of each reference, and a `Stmt::Unread`'s
+/// arguments, which are unread whole.
+fn bind_unread(stmts: &mut [Stmt], binds: &[(String, Expr)]) {
+    each_part_mut(
+        stmts,
+        &mut Parts {
+            expr: |e: &mut Expr| e.bind_unread(binds),
+            reference: |r: &mut Ref| r.index.iter_mut().for_each(|i| i.bind_unread(binds)),
+            unread: |a: &mut Arg| a.substitute(binds),
+        },
+    );
 }
 
 /// Does this hold body begin with the `set` of a binding `n`? The parser
@@ -938,12 +1010,14 @@ fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
             if !PURE.contains(&f.as_str()) {
                 return Some(format!("{f}(…)"));
             }
-            args.iter().find_map(|a| match a {
+            args.iter().enumerate().find_map(|(k, a)| match a {
                 Arg::Expr(x) => live_read(x, attrs, lets),
-                Arg::Ref(r) if r.index.is_none() => var(&r.name),
+                Arg::Ref(r) if r.index.is_none() && takes_number(f, k, args.len()) => var(&r.name),
                 Arg::Ref(_) => None,
             })
         }
+        // an unread argument is never evaluated
+        Expr::Unread(_, e) => live_read(e, attrs, lets),
         Expr::Unary(_, a) => live_read(a, attrs, lets),
         Expr::Binary(_, a, b) => live_read(a, attrs, lets).or_else(|| live_read(b, attrs, lets)),
         Expr::Cond(c, a, b) => live_read(c, attrs, lets)
@@ -1048,6 +1122,21 @@ pub(crate) fn names(e: &Expr, vars: &mut Vec<String>, refs: &mut Vec<Ref>) {
     vars.extend(indexed);
 }
 
+/// `names_in` of a call's argument: a reference, with its index's names.
+fn arg_names(a: &Arg, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &mut Vec<Ref>) {
+    match a {
+        Arg::Expr(x) => names_in(x, vars, indexed, refs),
+        Arg::Ref(r) => {
+            if let Some(i) = &r.index {
+                let mut inner = vec![];
+                names_in(i, &mut inner, indexed, refs);
+                indexed.extend(inner);
+            }
+            refs.push(r.clone());
+        }
+    }
+}
+
 /// `names`, with the names read inside a reference's index (`cachedin(P[i].kv)`)
 /// apart in `indexed`.
 fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &mut Vec<Ref>) {
@@ -1056,25 +1145,28 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
         Expr::Num(_) => {}
         Expr::Var(n) => vars.push(n.clone()),
         Expr::Sample(_, args) => args.iter().for_each(|a| names_in(a, vars, indexed, refs)),
-        Expr::Call(f, args) if f == "cost" => {
-            if let Some(arg) = args.last() {
-                match arg {
-                    Arg::Expr(e) => names_in(e, vars, indexed, refs),
-                    Arg::Ref(r) => vars.push(r.name.clone()),
+        // a bare name where the function takes a number is a value
+        // (`takes_number`), elsewhere a reference; `cost`'s resources are
+        // its type, not what it reads
+        Expr::Call(f, args) => {
+            let resources = if f == "cost" {
+                args.len().saturating_sub(1)
+            } else {
+                0
+            };
+            for (k, a) in args.iter().enumerate().skip(resources) {
+                match a {
+                    Arg::Ref(r) if r.index.is_none() && takes_number(f, k, args.len()) => {
+                        vars.push(r.name.clone())
+                    }
+                    _ => arg_names(a, vars, indexed, refs),
                 }
             }
         }
-        Expr::Call(_, args) => args.iter().for_each(|a| match a {
-            Arg::Expr(x) => names_in(x, vars, indexed, refs),
-            Arg::Ref(r) => {
-                if let Some(i) = &r.index {
-                    let mut inner = vec![];
-                    names_in(i, &mut inner, indexed, refs);
-                    indexed.extend(inner);
-                }
-                refs.push(r.clone());
-            }
-        }),
+        Expr::Unread(args, e) => {
+            args.iter().for_each(|a| arg_names(a, vars, indexed, refs));
+            names_in(e, vars, indexed, refs);
+        }
         Expr::Unary(_, a) => names_in(a, vars, indexed, refs),
         Expr::Binary(_, a, b) => {
             names_in(a, vars, indexed, refs);
@@ -1092,7 +1184,7 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
             names_in(body, &mut v, &mut i, &mut r);
             vars.extend(v.into_iter().filter(|x| x != j));
             indexed.extend(i.into_iter().filter(|x| x != j));
-            // a bare `j` argument (`max(j, 1)`) parses as a reference
+            // a bare `j` reference (`f(j)` to a definition that does not read it)
             refs.extend(r.into_iter().filter(|x| x.index.is_some() || x.name != *j));
         }
     }
@@ -1168,12 +1260,13 @@ fn collect_entry(
 /// rest: the header is the admission and sees less. The index of every
 /// reference the body names (`run nic[k]`, `hold kv`, `release src`) is in
 /// `indices`: read as the body reads, and the only place a `from` name may
-/// stand as a number.
+/// stand as a number. A `Stmt::Unread`'s arguments are in `unread`.
 fn split_reads<'a>(
     stmts: &'a [Stmt],
     headers: &mut Vec<&'a Expr>,
     bodies: &mut Vec<&'a Expr>,
     indices: &mut Vec<&'a Expr>,
+    unread: &mut Vec<&'a Arg>,
 ) {
     let index = |r: &'a Ref, indices: &mut Vec<&'a Expr>| {
         if let Some(i) = &r.index {
@@ -1190,6 +1283,7 @@ fn split_reads<'a>(
             | Stmt::Mark(_)
             | Stmt::Join => {}
             Stmt::Set(_, e) | Stmt::Observe(_, e) => bodies.push(e),
+            Stmt::Unread(args) => unread.extend(args),
             Stmt::Grow(r, e) | Stmt::Load(r, e) => {
                 index(r, indices);
                 bodies.push(e);
@@ -1219,7 +1313,7 @@ fn split_reads<'a>(
                     index(r, indices);
                     bodies.push(t);
                 }
-                split_reads(body, headers, bodies, indices);
+                split_reads(body, headers, bodies, indices, unread);
             }
             Stmt::Run {
                 stage,
@@ -1237,14 +1331,14 @@ fn split_reads<'a>(
             }
             Stmt::Branch(p, a, b) => {
                 bodies.push(p);
-                split_reads(a, headers, bodies, indices);
-                split_reads(b, headers, bodies, indices);
+                split_reads(a, headers, bodies, indices, unread);
+                split_reads(b, headers, bodies, indices, unread);
             }
             Stmt::While(e, b) => {
                 bodies.push(e);
-                split_reads(b, headers, bodies, indices);
+                split_reads(b, headers, bodies, indices, unread);
             }
-            Stmt::Loop(b) | Stmt::Fork(b) => split_reads(b, headers, bodies, indices),
+            Stmt::Loop(b) | Stmt::Fork(b) => split_reads(b, headers, bodies, indices, unread),
             Stmt::Choose { count, key, .. } => {
                 bodies.push(count);
                 bodies.extend(key);
@@ -1325,6 +1419,7 @@ impl Parser {
             pos: 0,
             stages: vec![],
             definitions: vec![],
+            declared: vec![],
             cost_records: Default::default(),
             side: Side::Session,
             wl_session: None,
@@ -1517,7 +1612,9 @@ impl Parser {
     /// every path, which reads and does not act.
     fn claim(&mut self) -> PResult<ClaimDecl> {
         let span = Some(self.span());
+        let at = self.pos;
         let name = self.name()?;
+        self.declare(at, &name, "a claim")?;
         let given = if self.eat_kw("given") {
             self.expect(&Tok::LParen)?;
             let e = self.expr()?;
@@ -1710,7 +1807,9 @@ impl Parser {
             } else if self.eat_kw("claim") {
                 prog.claims.push(self.claim()?);
             } else if self.eat_kw("gauge") {
+                let at = self.pos;
                 let name = self.ident()?;
+                self.declare(at, &name, "a gauge")?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
@@ -1840,11 +1939,39 @@ impl Parser {
         self.link_engines(&mut prog)?;
         self.check_body_bindings(&prog)?;
         self.check_def_names(&prog)?;
+        self.check_declared_names(&prog)?;
         self.check_deferred(&prog, &served)?;
         prog.definitions = std::mem::take(&mut self.definitions);
         prog.cost_records = std::mem::take(&mut self.cost_records).into_iter().collect();
         prog.libs = self.libs.clone();
         Ok(prog)
+    }
+
+    /// The refusal for an entry of `q` that reads `n` as a value when `n`
+    /// names a pool or stage: its own pool or stage is no number, and
+    /// another place's is not its queue's own.
+    fn place_refusal(&self, prog: &Program, q: &QueueDecl, verb: &str, n: &str) -> Option<String> {
+        if q.pools.iter().any(|p| p == n) {
+            return Some(pool_as_number(&q.name, verb, n, n));
+        }
+        if q.name == n {
+            return Some(stage_as_number(&q.name, verb));
+        }
+        let some_place = prog.pools.iter().any(|p| p.name == n)
+            || self.stages.iter().any(|s| s == n)
+            || self
+                .queues
+                .iter()
+                .any(|o| o.name == n || o.pools.iter().any(|p| p == n));
+        some_place.then(|| not_its_own(&q.name, verb, n))
+    }
+
+    /// Whether `n`, read bare in an entry of `q`, names a device: the
+    /// queue's own (`Q.n`) or a top-level one. Another queue's device is
+    /// not in scope, so its name is free for an attribute.
+    fn names_device(&self, q: &QueueDecl, n: &str) -> bool {
+        let own = format!("{}.{n}", q.name);
+        self.devices.iter().any(|d| d.name == n || d.name == own)
     }
 
     /// Expand queue entries, then insert the server after each turn draw.
@@ -1874,12 +2001,34 @@ impl Parser {
                 .unwrap_or_default();
             for q in &self.queues {
                 for e in &q.entries {
+                    // the header sees no attribute: a device it reads is one
+                    if let Some(n) = &e.header_refused {
+                        let message = self
+                            .place_refusal(prog, q, &e.verb, n)
+                            .or_else(|| self.names_device(q, n).then(|| a_device(&q.name, &e.verb, n)))
+                            .unwrap_or_else(|| {
+                                format!(
+                                    "`{}.{}`: the header reads `{n}`; an entry's header sees its \
+                                     parameters and the queue's pools and stage. Pass `{n}` as a parameter",
+                                    q.name, e.verb
+                                )
+                            });
+                        return self.err_at(e.at, message);
+                    }
                     if let Some(n) = e.reads.iter().find(|n| !hidden.contains(n)) {
+                        if let Some(message) = self.place_refusal(prog, q, &e.verb, n) {
+                            return self.err_at(e.at, message);
+                        }
                         // a name nothing sets is no attribute set outside
                         // the queue: it is unknown, as it is anywhere (#444)
                         let set = self.definitions.iter().any(|(d, _)| d == n)
                             || BUILTIN_ATTRS.contains(&n.as_str())
                             || self.body_binds.iter().any(|(_, b, _)| b == n);
+                        // the body sees attributes: a device is one only
+                        // when nothing sets the name
+                        if !set && self.names_device(q, n) {
+                            return self.err_at(e.at, a_device(&q.name, &e.verb, n));
+                        }
                         if !set {
                             let help = crate::frontend::diagnostic::suggestion(
                                 n,
@@ -2227,6 +2376,80 @@ impl Parser {
         Ok(())
     }
 
+    /// A declaration or a parameter may not take a name the language
+    /// supplies, as a `set` or a `let` may not (`link`, #231): `def now(x)`
+    /// beside `now`, or `observe admitted` beside `admitted`, would have one
+    /// word mean two things (#460).
+    fn own_name(&self, at: usize, name: &str, kind: &str) -> PResult<()> {
+        match takes_supplied(name, kind) {
+            Some(refusal) => self.err_at(at, refusal),
+            None => Ok(()),
+        }
+    }
+
+    /// A declaration's name: one the language supplies is refused here
+    /// (`own_name`), an attribute's once the whole program, every `set`
+    /// in it, has been read (`check_declared_names`).
+    fn declare(&mut self, at: usize, name: &str, kind: &'static str) -> PResult<()> {
+        self.own_name(at, name, kind)?;
+        self.declared.push((at, name.to_string(), kind));
+        Ok(())
+    }
+
+    /// A declaration may not share its name with an attribute, built in or
+    /// set (#470): `stage think` beside the attribute `think`, or `set svc`
+    /// beside `stage svc`, would have one word mean two things, and a bare
+    /// `E` passed where a stage or a number goes reads one or the other by
+    /// its place alone (#467). A header's binding the body reads is set at
+    /// the top of the body, so it is an attribute too. Writing a built-in
+    /// attribute stays a `set`.
+    fn check_declared_names(&self, prog: &Program) -> PResult<()> {
+        let set_at = |name: &str| {
+            let set = self
+                .definitions
+                .iter()
+                .find(|(n, _)| n == name && !prog.lets.iter().any(|(l, _)| l == n))
+                .map(|(_, span)| (span.file, span.line, span.col));
+            let bound = || {
+                self.body_binds
+                    .iter()
+                    .find(|(_, n, _)| n == name)
+                    .map(|(at, _, _)| {
+                        let t = &self.toks[*at];
+                        (t.file, t.line, t.col)
+                    })
+            };
+            set.or_else(bound)
+        };
+        for (at, name, kind) in &self.declared {
+            let (attribute, help) = if BUILTIN_ATTRS.contains(&name.as_str()) {
+                (
+                    "a built-in attribute".to_string(),
+                    "name the declaration otherwise (docs/api/attributes.md lists the \
+                     built-in attributes)",
+                )
+            } else if let Some((file, line, col)) = set_at(name) {
+                (
+                    format!(
+                        "an attribute the program sets at {}",
+                        self.place(file, line, col)
+                    ),
+                    "rename the declaration or the attribute",
+                )
+            } else {
+                continue;
+            };
+            return self.err_at(
+                *at,
+                format!(
+                    "`{name}` is {attribute}; {kind} named `{name}` would make the one word \
+                     mean two things\nhelp: {help}"
+                ),
+            );
+        }
+        Ok(())
+    }
+
     /// `def name(x, …) { e }` or `def name(x, …) { … }`, after `def`.
     fn def(&mut self) -> PResult<()> {
         let at = self.pos;
@@ -2237,6 +2460,7 @@ impl Parser {
         {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
+        self.declare(at, &name, "a definition")?;
         if let Some(now) = retired(&name) {
             return self.err_at(
                 at,
@@ -2275,6 +2499,7 @@ impl Parser {
                     format!("`{p}` is a word of the language: name the parameter otherwise"),
                 );
             }
+            self.own_name(p_at, &p, "a parameter")?;
             if params.contains(&p) {
                 return self.err_at(p_at, format!("`{p}` is a parameter twice"));
             }
@@ -2607,9 +2832,21 @@ impl Parser {
                 ),
             );
         }
+        // how many times the body reads each parameter: an argument read
+        // twice is evaluated twice, and one never read is left unread
+        let uses: Vec<usize> = d
+            .params
+            .iter()
+            .map(|p| {
+                d.body
+                    .iter()
+                    .filter(|t| t.tok == Tok::Ident(p.clone()))
+                    .count()
+            })
+            .collect();
         // the names the body assigns: an argument that reads one would read
         // the body's value, not the one at the use
-        for (p, a) in d.params.iter().zip(&args) {
+        for ((p, a), &uses) in d.params.iter().zip(&args).zip(&uses) {
             if a.is_empty() {
                 return self.err_at(at, format!("`{}`: the argument for `{p}` is empty", d.name));
             }
@@ -2625,11 +2862,6 @@ impl Parser {
                 let by = format!("`{}`'s call of `{q}.{v}` writes", d.name);
                 return self.err_at(at, capture_message(p, &n, &by));
             }
-            let uses = d
-                .body
-                .iter()
-                .filter(|t| t.tok == Tok::Ident(p.clone()))
-                .count();
             if uses > 1 && (a.iter().any(|t| t.tok == Tok::Tilde) || self.draws_through(a)) {
                 return self.err_at(
                     at,
@@ -2708,6 +2940,34 @@ impl Parser {
         if !d.stmts {
             out.push(paren(Tok::RParen, ")", &self.toks[end - 1]));
         }
+        // an argument the body never reads stays, to be resolved here:
+        // `Unread((body), a, …)`, or `Unread(a, …); body`
+        let unread: Vec<&Vec<Token>> = args
+            .iter()
+            .zip(&uses)
+            .filter(|(_, n)| **n == 0)
+            .map(|(a, _)| a)
+            .collect();
+        if !unread.is_empty() {
+            let like = &self.toks[at];
+            let mut head = vec![paren(Tok::Unread, "", like), paren(Tok::LParen, "(", like)];
+            if !d.stmts {
+                head.append(&mut out);
+                head.push(paren(Tok::Comma, ",", like));
+            }
+            for (k, a) in unread.into_iter().enumerate() {
+                if k > 0 {
+                    head.push(paren(Tok::Comma, ",", &a[0]));
+                }
+                head.extend(a.iter().cloned());
+            }
+            head.push(paren(Tok::RParen, ")", &self.toks[end - 1]));
+            if d.stmts {
+                head.push(paren(Tok::Semi, ";", &self.toks[end - 1]));
+                head.append(&mut out);
+            }
+            out = head;
+        }
         if self.toks.len() - (end - at) + out.len() > MAX_TOKENS {
             return self.err_at(at, "the definitions expand to more than a program can hold");
         }
@@ -2742,7 +3002,8 @@ impl Parser {
             let at = self.pos;
             let e = self.expr()?;
             let mut vars = vec![];
-            names(&e, &mut vars, &mut Vec::new());
+            let mut refs = vec![];
+            names(&e, &mut vars, &mut refs);
             if let Some(name) = vars
                 .iter()
                 .find(|name| self.structural_overrides.contains(*name))
@@ -2778,6 +3039,22 @@ impl Parser {
                     );
                 }
             };
+            // the size folded, so a name that is no constant is an argument
+            // a definition does not read; the linker never sees an array
+            // size, so it is resolved here, where only constants are known
+            if let Some(name) = vars
+                .iter()
+                .chain(refs.iter().map(|r| &r.name))
+                .find(|n| self.const_value(&Expr::Var(n.to_string())).is_none())
+            {
+                return self.err_at(
+                    at,
+                    format!(
+                        "array size: `{name}` is not a `let` constant, and an array size is \
+                         resolved during parsing, where no other name is known"
+                    ),
+                );
+            }
             self.expect(&Tok::RBracket)?;
             Ok(Some(n))
         } else {
@@ -2789,6 +3066,16 @@ impl Parser {
     /// if it is one.
     fn const_value(&self, e: &Expr) -> Option<f64> {
         self.fold(e, &std::cell::Cell::new(0))
+    }
+
+    /// `a, …)` after a `Tok::Unread`'s `(` (and an expression's body).
+    fn unread_args(&mut self) -> PResult<Vec<Arg>> {
+        let mut args = vec![self.arg()?];
+        while self.eat(&Tok::Comma) {
+            args.push(self.arg()?);
+        }
+        self.expect(&Tok::RParen)?;
+        Ok(args)
     }
 
     /// `const_value` with the terms its aggregates have written out so far:
@@ -2850,9 +3137,10 @@ impl Parser {
             Expr::Call(f, args) => {
                 let xs = args
                     .iter()
-                    .map(|a| match a {
+                    .enumerate()
+                    .map(|(k, a)| match a {
                         Arg::Expr(e) => self.fold(e, terms),
-                        Arg::Ref(r) if r.index.is_none() => {
+                        Arg::Ref(r) if r.index.is_none() && takes_number(f, k, args.len()) => {
                             self.fold(&Expr::Var(r.name.clone()), terms)
                         }
                         Arg::Ref(_) => None,
@@ -2860,6 +3148,10 @@ impl Parser {
                     .collect::<Option<Vec<f64>>>()?;
                 crate::frontend::link::const_call(f, &xs)?
             }
+            // an unread argument is never evaluated: the linker resolves
+            // it where the expression goes (a `let`), and `array_count`
+            // where it goes nowhere
+            Expr::Unread(_, body) => self.fold(body, terms)?,
             Expr::Sample(..) => return None,
         })
     }
@@ -2870,6 +3162,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
+        self.declare(at, &name, "a pool")?;
         let array = self.array_count()?;
         let mut on = None;
         let mut count = array.unwrap_or(1);
@@ -3066,7 +3359,9 @@ impl Parser {
 
     fn stage(&mut self) -> PResult<StageDecl> {
         let span = Some(self.span());
+        let at = self.pos;
         let name = self.ident()?;
+        self.declare(at, &name, "a stage")?;
         let array = self.array_count()?;
         self.expect(&Tok::Colon)?;
         let kind = self.stage_kind()?;
@@ -3147,12 +3442,7 @@ impl Parser {
         {
             return self.err_at(at + 1, format!("`{name}` is declared twice"));
         }
-        if LISTS.contains(&name.as_str()) {
-            return self.err_at(
-                at + 1,
-                format!("`{name}.…` is a value of an engine; a queue needs another name"),
-            );
-        }
+        self.declare(at + 1, &name, "a queue")?;
         // `Q[n]` is a family whatever `n`, called by index, and its pools and
         // stages are arrays; `Q` is one queue
         let array = self.array_count()?;
@@ -3246,6 +3536,7 @@ impl Parser {
                 if KEYWORDS.contains(&dev.as_str()) {
                     return self.err_at(d_at, format!("`{dev}` is a word of the language"));
                 }
+                self.declare(d_at, &dev, "a device")?;
                 if dev == name {
                     return self.err_at(
                         d_at,
@@ -3499,7 +3790,9 @@ impl Parser {
             self.advance();
             if *self.peek() != Tok::RParen {
                 loop {
+                    let p_at = self.pos;
                     let p = self.ident()?;
+                    self.own_name(p_at, &p, "a parameter")?;
                     if params.contains(&p) {
                         return self.err(format!("parameter `{p}` twice"));
                     }
@@ -3598,6 +3891,7 @@ impl Parser {
         // the header sees the parameters and the queue's own; the body also
         // the context and the request's hidden attributes
         let mut reads = vec![];
+        let mut header_refused = None;
         // the gateway's `route` is the deployment's and reads as a server
         // does; any other entry of a queue that is also a gateway is an entry
         let is_gateway = verb == "route" && q.roles.iter().any(|r| r == "gateway");
@@ -3619,7 +3913,8 @@ impl Parser {
             let mut headers = vec![];
             let mut bodies = vec![];
             let mut indices = vec![];
-            split_reads(&body, &mut headers, &mut bodies, &mut indices);
+            let mut unread = vec![];
+            split_reads(&body, &mut headers, &mut bodies, &mut indices, &mut unread);
             // an own pool, or the `from` name, is all an entry's statements hold
             let mut named = vec![];
             pools_named(&body, &mut named);
@@ -3640,16 +3935,33 @@ impl Parser {
                     ),
                 );
             }
+            let mut sources = vec![];
             for (e, header, in_index) in headers
                 .iter()
                 .map(|e| (e, true, false))
                 .chain(bodies.iter().map(|e| (e, false, false)))
                 .chain(indices.iter().map(|e| (e, false, true)))
             {
-                let mut vars = vec![];
-                let mut indexed = vec![];
-                let mut refs = vec![];
+                let (mut vars, mut indexed, mut refs) = (vec![], vec![], vec![]);
                 names_in(e, &mut vars, &mut indexed, &mut refs);
+                sources.push((vars, indexed, refs, header, in_index));
+            }
+            // what a statement definition's use does not read is resolved as its body
+            let (mut vars, mut indexed, mut refs) = (vec![], vec![], vec![]);
+            for a in unread {
+                arg_names(a, &mut vars, &mut indexed, &mut refs);
+            }
+            sources.push((vars, indexed, refs, false, false));
+            for (mut vars, indexed, refs, header, in_index) in sources {
+                // a bare reference that is not the queue's own (`queued(gkv)`,
+                // or `f(now)` to a definition that does not read it) is read
+                // as a name: whether it names a pool or stage elsewhere,
+                // `assemble` tells once all are declared; a dotted or indexed
+                // one stays a reference, checked below
+                let (values, refs): (Vec<Ref>, Vec<Ref>) = refs
+                    .into_iter()
+                    .partition(|r| r.index.is_none() && !own_ref(r) && !r.name.contains('.'));
+                vars.extend(values.into_iter().map(|r| r.name));
                 let tagged = vars
                     .into_iter()
                     .map(|v| (v, in_index))
@@ -3677,53 +3989,37 @@ impl Parser {
                         ));
                     }
                     if v.contains('.') {
-                        return self.err_at(
-                            at,
-                            format!(
+                        let message = match through_queue(&qname, &v) {
+                            Some(p) if q.pools.iter().any(|o| o == p) => {
+                                pool_as_number(&qname, &verb, &v, p)
+                            }
+                            Some(_) if self.devices.iter().any(|d| d.name == v) => {
+                                a_device(&qname, &verb, &v)
+                            }
+                            _ => format!(
                                 "`{qname}.{verb}` reads `{v}`, another queue's: an entry sees its own; \
                                  the gateway reads across queues and passes what an entry needs"
                             ),
-                        );
+                        };
+                        return self.err_at(at, message);
                     }
                     if header {
-                        return self.err_at(
-                            at,
-                            format!(
-                                "`{qname}.{verb}`: the header reads `{v}`; an entry's header sees its \
-                                 parameters and the queue's pools and stage. Pass `{v}` as a parameter",
-                            ),
-                        );
-                    }
-                    if !reads.contains(&v) {
+                        header_refused.get_or_insert(v);
+                    } else if !reads.contains(&v) {
                         reads.push(v);
                     }
                 }
-                for r in refs {
-                    // a bare identifier argument may be a variable; a dotted
-                    // one is another queue's pool
-                    if r.index.is_none()
-                        && !own_ref(&r)
-                        && !r.name.contains('.')
-                        && allowed_var(&r.name, header)
-                    {
-                        continue;
-                    }
-                    if r.index.is_none() && !own_ref(&r) && !r.name.contains('.') && !header {
-                        if !reads.contains(&r.name) {
-                            reads.push(r.name.clone());
+                if let Some(r) = refs.iter().find(|r| !own_ref(r)) {
+                    let message = match through_queue(&qname, &r.name) {
+                        Some(p) if q.pools.iter().any(|o| o == p) => {
+                            own_pool_dotted(&qname, &verb, &r.name, p)
                         }
-                        continue;
-                    }
-                    if !own_ref(&r) {
-                        return self.err_at(
-                            at,
-                            format!(
-                                "`{qname}.{verb}` reads `{}`, which is not a pool or stage of `{qname}`: \
-                                 a queue sees its own; the deployment reads across queues",
-                                r.name
-                            ),
-                        );
-                    }
+                        Some(_) if self.devices.iter().any(|d| d.name == r.name) => {
+                            a_device(&qname, &verb, &r.name)
+                        }
+                        _ => not_its_own(&qname, &verb, &r.name),
+                    };
+                    return self.err_at(at, message);
                 }
             }
         }
@@ -3745,6 +4041,7 @@ impl Parser {
             body,
             locals: if is_gateway { vec![] } else { locals },
             reads,
+            header_refused,
             at,
         });
         Ok(())
@@ -3833,6 +4130,11 @@ impl Parser {
     /// One statement into `out`. A serving form is parsed here because
     /// `transfer … from P to Q (n)` stands for three kernel statements.
     fn stmt_into(&mut self, out: &mut Vec<Stmt>) -> PResult<()> {
+        if self.eat(&Tok::Unread) {
+            self.expect(&Tok::LParen)?;
+            out.push(Stmt::Unread(self.unread_args()?));
+            return self.expect(&Tok::Semi);
+        }
         if let Some(i) = self.use_of_def() {
             if !self.defs[i].stmts {
                 return self.err(format!(
@@ -4153,7 +4455,9 @@ impl Parser {
             }
             "observe" => {
                 self.advance();
+                let at = self.pos;
                 let name = self.ident()?;
+                self.declare(at, &name, "an observation")?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
@@ -4367,6 +4671,8 @@ impl Parser {
         }
         let bind_at = std::mem::take(&mut self.bind_at);
         let mut body = self.block()?;
+        // an unread argument reads nothing, and sees the binding as written
+        bind_unread(&mut body, &binds);
         // A binding the body reads is set at the top of the body, to the
         // value it had at the admission: the body runs at the admission's
         // instant, so an expression of attributes and constants reads the
@@ -4973,6 +5279,12 @@ impl Parser {
         let span = self.span();
         match self.advance() {
             Tok::Num(x) => Ok(Expr::Num(x)),
+            Tok::Unread => {
+                self.expect(&Tok::LParen)?;
+                let body = self.expr()?;
+                self.expect(&Tok::Comma)?;
+                Ok(Expr::Unread(self.unread_args()?, Box::new(body)))
+            }
             Tok::LParen => {
                 let e = self.expr()?;
                 self.expect(&Tok::RParen)?;
@@ -5038,15 +5350,6 @@ impl Parser {
                                 if r.index.as_deref().is_some_and(Expr::draws) {
                                     return self.err_at(at, "a cost names a resource family; its type annotation cannot draw a member index");
                                 }
-                            }
-                        }
-                        if let Some(last @ Arg::Ref(_)) = args.last_mut() {
-                            let Arg::Ref(r) = last else { unreachable!() };
-                            if r.index.is_none() {
-                                *last = Arg::Expr(Expr::Located(
-                                    r.span.unwrap_or(span),
-                                    Box::new(Expr::Var(r.name.clone())),
-                                ));
                             }
                         }
                     }
@@ -5725,12 +6028,17 @@ mod tests {
             err("def engine(x) { x } workload { session { turn; \n} }\nserver {\n}")
                 .contains("a word of the language")
         );
-        // the name of a statement body's attribute is not a use
-        parse(&main_source(&format!(
+        // the name of a statement body's attribute is not a use, but an
+        // attribute may not take its definition's name (#470)
+        let e = parse(&main_source(&format!(
             "{ENGINE} def c(x) {{ set c = x; }} workload {{ session {{ turn; \n}} }}\nserver {{ c(1);\n}}"
-        )
-        ))
-        .unwrap();
+        )))
+        .unwrap_err();
+        assert!(
+            e.msg.contains("a definition named `c` would make"),
+            "{}",
+            e.msg
+        );
         // an error in the body says where the definition was used
         let e =
             err("def take(n) { turn; } workload { session { turn; end; } } server { take(4); }");

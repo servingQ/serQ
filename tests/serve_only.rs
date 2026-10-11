@@ -168,7 +168,7 @@ fn admitted(schedule: &str) -> String {
         server {{
           run gate (cost(gate, serial > 0 ? 1 : 0));
           hold reqs (cost(reqs, 1)) {{
-            observe admitted = now;
+            observe admitted_at = now;
             run llm prefill (cost(llm, 1));
             run llm decode (cost(llm, 2));
           }}
@@ -197,7 +197,7 @@ fn an_excluded_admission_waits_as_a_resident() {
     );
     let r = run_source(&common::main_source(&src), &common::horizon(20.0), None).unwrap();
     assert_eq!(r.ended, 3);
-    assert_eq!(r.observe("admitted").unwrap().samples, [0.0, 1.0, 1.0]);
+    assert_eq!(r.observe("admitted_at").unwrap().samples, [0.0, 1.0, 1.0]);
 }
 
 #[test]
@@ -284,6 +284,37 @@ fn an_engine_that_excludes_every_resident_waits_for_the_residents_to_change() {
         trace("waits", src),
         ["ITER 2.0000 0:1:p1 1:1:p1", "ITER 3.0000 0:1:d1 1:1:d1"]
     );
+}
+
+/// A key orders the residents and excludes none, so reading the clock
+/// cannot leave the engine waiting: a key may read `now` and `work(…)`, and
+/// may not draw, whichever form the `schedule` takes. A body refused the
+/// clock, with the reason that fits `only` (#453); a `branch` makes one.
+#[test]
+fn a_key_is_checked_alike_in_either_form_of_schedule() {
+    for body in [false, true] {
+        let schedule = |key: &str| {
+            let branch = if body { " branch (1) { }" } else { "" };
+            format!(
+                "advance running by ({key}); admit waiting while (running.preempted == 0);{branch}"
+            )
+        };
+        let compiled = |key: &str| {
+            compile_source(
+                &common::main_source(&source(&schedule(key))),
+                &common::horizon(20.0),
+            )
+        };
+        for key in ["now", "work(llm)"] {
+            let p = compiled(key).unwrap_or_else(|e| panic!("{}: {e}", schedule(key)));
+            let serq::ir::CStageKind::Step(st) = &p.stages[1].kind else {
+                panic!("engine is a step stage")
+            };
+            assert_eq!(st.iteration.is_some(), body, "{}", schedule(key));
+        }
+        let error = compiled("~uniform(0, 1)").unwrap_err().to_string();
+        assert!(error.contains("key may not draw"), "{error}");
+    }
 }
 
 #[test]

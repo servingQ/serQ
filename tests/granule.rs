@@ -237,7 +237,7 @@ fn a_refused_prefill_ends_the_admissions() {
         }
         server {
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(6, left))) at admission (left = budget_left(llm)) {
-            observe admitted = now;
+            observe admitted_at = now;
             run llm prefill (cost(llm, 6)) growing kv;
           }
         }
@@ -253,7 +253,7 @@ fn a_refused_prefill_ends_the_admissions() {
         None,
     )
     .unwrap();
-    let admitted = &r.observe("admitted").unwrap().samples;
+    let admitted = &r.observe("admitted_at").unwrap().samples;
     assert_eq!(
         admitted.iter().filter(|&&t| t == 0.0).count(),
         2,

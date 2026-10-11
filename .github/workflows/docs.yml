@@ -6,12 +6,16 @@ on:
     paths:
       - docs/**
       - examples/**
+      - lib/**
+      - scripts/check_docs_lexer.py
       - mkdocs.yml
       - .github/workflows/docs.yml
   pull_request:
     paths:
       - docs/**
       - examples/**
+      - lib/**
+      - scripts/check_docs_lexer.py
       - mkdocs.yml
       - .github/workflows/docs.yml
   workflow_dispatch:
@@ -40,6 +44,8 @@ jobs:
           cache: pip
           cache-dependency-path: docs/requirements.txt
       - run: pip install -r docs/requirements.txt
+      # A character the serQ lexer has no rule for is drawn boxed in red
+      - run: python scripts/check_docs_lexer.py
       # The pages include programs/*.sq and docs/tutorial/programs/*.sq with
       # pymdownx.snippets, so --strict fails if one is renamed or removed.
       - run: mkdocs build --strict

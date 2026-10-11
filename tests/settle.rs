@@ -334,13 +334,13 @@ fn a_large_batch_that_ends_at_once_settles() {
           session { turn; end;
           }
         }
-        server { observe w = w;
+        server { observe drawn = w;
         }
         ",
         &common::horizon(10.0),
     )
     .expect("settles");
-    assert_eq!(r.observe("w").unwrap().count, 2000);
+    assert_eq!(r.observe("drawn").unwrap().count, 2000);
 }
 
 /// A hold's header is re-read at every admission attempt, so it may not

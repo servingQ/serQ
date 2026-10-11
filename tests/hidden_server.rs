@@ -53,6 +53,24 @@ fn the_server_may_not_decide_on_a_hidden_attribute() {
     );
 }
 
+/// A hidden attribute passed bare to a function that takes a number is read
+/// as it is in a sum: `min(o, 1)` decides on `o` as `min(o + 0, 1)` does.
+#[test]
+fn the_server_may_not_decide_on_a_hidden_attribute_passed_to_a_function() {
+    refused(
+        "branch (min(o, 1) > 0) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { observe skipped = 1; }",
+        &["`o` is hidden from the scheduler, but the server's branch reads it"],
+    );
+    refused(
+        "choose j in 2 by (min(o, 1)); hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; }",
+        &["server's choice reads it"],
+    );
+    refused(
+        "set y = min(o, 1); branch (y > 0) { hold kv (cost(kv, prompt)) { run E prefill (cost(E, prompt)) growing kv; } } else { observe skipped = 1; }",
+        &["`y` is set from the hidden `o`", "branch"],
+    );
+}
+
 /// What the server sets from a hidden attribute is hidden as well:
 /// `Program::validate` sees only `long`, an attribute it may read.
 #[test]
@@ -245,4 +263,40 @@ fn a_cost_family_annotation_does_not_reveal_its_index() {
     }";
     let e = compile_source(source, &common::horizon(10.0)).unwrap_err();
     assert!(e.contains("hidden"), "{e}");
+}
+
+/// A bare name reveals its attribute only where the function takes a
+/// number (#467): `work(E)` reads the engine `E`, so a run by it did not
+/// reveal a hidden attribute `E`. Since #470 no attribute may take the
+/// engine's name, and a run reveals a hidden attribute only where its work
+/// reads it.
+#[test]
+fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
+    let source = |attribute: &str, work: &str| {
+        format!(
+            "fn main() {{
+        device gpu {{ kv cap 1000; }}
+        engine E on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+        pool kv on gpu {{ block 16; }}
+        workload {{ arrive batch(1); hidden {attribute};
+          init {{ set prompt = 32; set {attribute} = 4; }}
+          session {{ turn; end; }} }}
+        server {{ hold kv (cost(kv, prompt)) {{ run E prefill (cost(E, {work})) growing kv; }}
+          branch ({attribute} > 2) {{ observe big = 1; }} else {{ observe small = 1; }} }}
+        }}"
+        )
+    };
+    let horizon = common::horizon(10.0);
+    let e = compile_source(&source("E", "prompt + 0 * work(E)"), &horizon).unwrap_err();
+    assert!(
+        e.contains("an engine named `E` would make the one word mean two things"),
+        "{e}"
+    );
+    let e = compile_source(&source("L", "prompt + 0 * work(E)"), &horizon).unwrap_err();
+    assert!(
+        e.contains("`L` is hidden from the scheduler, but the server's branch reads it"),
+        "{e}"
+    );
+    // a run whose work reads the attribute reveals it
+    compile_source(&source("L", "prompt + 0 * L"), &horizon).unwrap();
 }

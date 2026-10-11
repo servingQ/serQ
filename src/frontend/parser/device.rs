@@ -103,7 +103,7 @@ const RESIDENTS: &[&str] = &[
 /// the residents' before the batch is formed and as the batch's in `cost`
 /// (#416), so the engine names them twice. Within a schedule, `only`, `by`
 /// and `each at most` are read at their own moments, not the statements'.
-const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
+pub const ENGINE_VALUES: [(&str, &str, &[&str]); 13] = [
     ("running.count", "residents", RESIDENTS),
     ("running.decoding", "decoders", AS_THEY_STAND),
     ("running.kv_decode", "kv_decode", AS_THEY_STAND),
@@ -172,6 +172,7 @@ impl Parser {
         if KEYWORDS.contains(&name.as_str()) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
+        self.declare(at, &name, "a device")?;
         // a queue is named whether or not it has a stage (a gateway has none)
         if self.devices.iter().any(|d| d.name == name)
             || prog.pools.iter().any(|p| p.name == name)
@@ -250,6 +251,7 @@ impl Parser {
             if KEYWORDS.contains(&p.as_str()) || is_function(&p) {
                 return self.err_at(p_at, format!("`{p}` is a word of the language"));
             }
+            self.own_name(p_at, &p, "a parameter")?;
             if params.contains(&p) {
                 return self.err_at(p_at, format!("`{p}` is a parameter twice"));
             }
@@ -326,6 +328,7 @@ impl Parser {
         if KEYWORDS.contains(&name.as_str()) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
+        self.declare(at, &name, "an engine")?;
         if prog.pools.iter().any(|p| p.name == name) {
             return self.err_at(at, one_name_space(&name));
         }
@@ -640,6 +643,7 @@ impl Parser {
                 if KEYWORDS.contains(&n.as_str()) || lets.iter().any(|(l, _)| *l == n) {
                     return self.err_at(n_at, format!("`{n}` cannot name a `let` here"));
                 }
+                self.own_name(n_at, &n, "a schedule's `let`")?;
                 self.expect(&Tok::Assign)?;
                 let e = self.engine_expr("each at most", |p| p.expr())?;
                 self.expect(&Tok::Semi)?;

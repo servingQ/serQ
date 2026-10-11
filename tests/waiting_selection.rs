@@ -41,7 +41,7 @@ fn aging_source(bound: bool, key: &str) -> String {
           set queued = now;
           hold reqs (cost(reqs, 1)) {{
             observe selected = serial;
-            observe admitted = now;
+            observe admitted_at = now;
             {run} (cost(llm, serial == 0 ? 4 : 1));
           }}
         }}
@@ -67,7 +67,7 @@ fn immediate_then_aged_long_then_short_at_both_admission_paths() {
             [0., 4., 1., 5., 2., 3.]
         );
         assert_eq!(
-            r.observe("admitted").unwrap().samples,
+            r.observe("admitted_at").unwrap().samples,
             [0., 4., 5., 6., 7., 8.]
         );
         let p = compile_source(&common::main_source(&src), &common::horizon(20.0)).unwrap();
@@ -118,7 +118,7 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
           run delay (cost(delay, serial == 0 ? 0 : 0.25));
           hold reqs (cost(reqs, 1)) {
             observe selected = serial;
-            observe admitted = now;
+            observe admitted_at = now;
             branch (serial == 0) { run llm decode (cost(llm, 1)); }
             else { run llm prefill (cost(llm, serial == 2 ? 1 : serial == 1 ? 2 : 3)); }
           }
@@ -128,7 +128,7 @@ fn each_selection_reads_the_current_remaining_iteration_budget() {
     let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
     assert_eq!(r.ended, 4);
     assert_eq!(r.observe("selected").unwrap().samples, [0., 1., 3., 2.]);
-    assert_eq!(r.observe("admitted").unwrap().samples, [0., 1., 1., 2.]);
+    assert_eq!(r.observe("admitted_at").unwrap().samples, [0., 1., 1., 2.]);
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn a_selected_request_that_cannot_fit_still_blocks_lower_priority_requests() {
           run delay (cost(delay, serial == 0 ? 0 : 0.25));
           hold kv (cost(kv, serial == 0 ? 3 : serial == 1 ? 2 : 1)) {
             observe selected = serial;
-            observe admitted = now;
+            observe admitted_at = now;
             run service (cost(service, serial == 0 ? 4 : 1));
           }
         }
@@ -240,7 +240,7 @@ fn a_selected_request_that_cannot_fit_still_blocks_lower_priority_requests() {
 "#;
     let r = run_source(&common::main_source(src), &common::horizon(10.0), None).unwrap();
     assert_eq!(r.observe("selected").unwrap().samples, [0., 1., 2.]);
-    assert_eq!(r.observe("admitted").unwrap().samples, [0., 4., 4.]);
+    assert_eq!(r.observe("admitted_at").unwrap().samples, [0., 4., 4.]);
 }
 
 #[test]
@@ -275,7 +275,7 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
           hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, left))) reserve (cost(kv, known))
           at admission (known = serial == 2 ? 0 : max(2, computed), left = budget_left(llm)) {
             observe selected = serial;
-            observe admitted = now;
+            observe admitted_at = now;
             branch (serial == 2) { run llm decode (cost(llm, 1)); }
             else {
               run llm prefill (cost(llm, known)) growing kv;
@@ -289,7 +289,7 @@ fn resumed_holds_keep_prepend_priority_over_recomputed_keys() {
     assert_eq!(r.ended, 3);
     assert_eq!(r.pool("kv").unwrap().preemptions, 1);
     assert_eq!(r.observe("selected").unwrap().samples, [1., 0., 0., 2.]);
-    assert_eq!(r.observe("admitted").unwrap().samples, [0., 1., 5., 7.]);
+    assert_eq!(r.observe("admitted_at").unwrap().samples, [0., 1., 5., 7.]);
 }
 
 #[test]

@@ -7,7 +7,7 @@
     "CtxVar": 23
   },
   "surface": {
-    "keywords": 113,
+    "keywords": 115,
     "functions": 29,
     "context_variables": 23
   },
@@ -15,7 +15,7 @@
     "admit waiting while (running.preempted == 0) each at most (threshold);",
     "advance running each at most (threshold);",
     "at admission (known = computed < prompt ? prompt : computed + 1) {",
-    "at admission (known = computed < prompt ? prompt : computed + 1,",
+    "at admission (known = max(kept, computed + 1),",
     "branch (known == prompt) { mark first_token; }",
     "branch (known == prompt) { observe ttft = now - t0; }",
     "branch (more) { tool (~exp(Z)); } else { end; }",
@@ -25,7 +25,7 @@
     "execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));",
     "hit = min(cachedin(kv), reusable(known, blocksize(kv)))) {",
     "hold kv (cost(kv, known)) reserve (cost(kv, known)), reqs (cost(reqs, 0)) reserve (cost(reqs, 1))",
-    "hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm))))",
+    "hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, hit + budget_left(vllm)))) reserve (cost(kv, known))",
     "observe prefill_tokens = known - c;",
     "pool kv on D.gpu { block bs; evict lru; preempt lifo; }",
     "pool kv on gpu { block bs; evict lru; preempt lifo; }",

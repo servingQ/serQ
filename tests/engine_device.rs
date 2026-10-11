@@ -193,7 +193,7 @@ fn reg(r: usize) -> CExpr {
 /// as it fits (`on gpu`) and `reqs` by the engine. `tokens cap B` is the
 /// budget, `execute (c0 + …)` the cost, and the per-run cap the kernel's
 /// `chunk`, applied only while more than one request is in the engine
-/// (`long_prefill`): `inf`, no cap, is its 0, and a cap of 512 is 512.
+/// (vLLM's `long_prefill_token_threshold`): `inf`, no cap, is its 0, and a cap of 512 is 512.
 #[test]
 fn vllm_as_an_engine_is_the_procedure() {
     let text = std::fs::read_to_string(root().join("examples/multi-turn/vllm.sq")).unwrap();
@@ -762,6 +762,12 @@ fn the_design_refuses_what_it_says() {
              written with `set k = …;`",
         );
     }
+    // `step_time (t) = 1` drops its argument, whose names are still resolved
+    // (#431)
+    refused(
+        &engine(ok).replace("step_time(batch.tokens)", "step_time(no_such_name)"),
+        "unknown name `no_such_name`",
+    );
     // a device's time resource is read in an engine's `execute` only
     refused(
         &engine(ok).replace("tokens cap 8;", "tokens cap step_time(1);"),
@@ -977,7 +983,7 @@ engine e2 on gpu {{ tokens cap 4; schedule {{ advance running; }} execute (t(bat
     );
     refused(
         &format!("queue waiting : link {{ serve fifo; }} {}", engine(ok)),
-        "a queue needs another name",
+        "a queue named `waiting` would make the one word mean two things",
     );
     refused(
         &engine("advance running; branch (residents == 0) { admit waiting; }"),
@@ -1399,5 +1405,152 @@ server {{ E.prefill (prompt); }}
                 "while (waiting.count > 0)",
             ),
         "its `waiting.count` would read every member's",
+    );
+}
+
+/// An argument a definition does not read is resolved where the use stands
+/// (#431), and is not in the IR.
+#[test]
+fn an_argument_its_definition_drops_is_resolved_where_the_use_stands() {
+    let one = |s: String| format!("def one(x) {{ 1 }}\n{s}");
+    let ok = "advance running; admit waiting while (running.preempted == 0);";
+    let ov = common::horizon(10.0);
+    let ir = |src: &str| serde_json::to_string(&compiled(src, None, &ov)).unwrap();
+    // a value of the engine, read in `execute`
+    let execute = |e: &str| {
+        one(engine(ok)).replace(
+            "step_time(batch.tokens)",
+            &format!("step_time(batch.tokens) + {e}"),
+        )
+    };
+    // never evaluated, it is not checked for its moment: `prompt` alone
+    // would be read for the stage, with no session
+    for unread in ["one(waiting.count)", "one(prompt)"] {
+        assert_eq!(ir(&execute(unread)), ir(&execute("1")));
+    }
+    // a schedule's `let`, read in `each at most`
+    let capped = |c: &str| {
+        one(engine(&format!(
+            "let L = 4; advance running each at most ({c}); admit waiting while \
+             (running.preempted == 0) each at most ({c});"
+        )))
+    };
+    assert_eq!(ir(&capped("one(L)")), ir(&capped("1")));
+    // the boundary: it is parsed where it stands, and the parser reads
+    // `batch.…` as a name the batch has not formed yet in `each at most`
+    refused(
+        &capped("L + one(batch.tokens)"),
+        "`each at most` is read before the batch is formed",
+    );
+}
+
+/// `each at most` is an engine's clause, so its words are the language's:
+/// they were missing from `KEYWORDS` while the engine form read them, and
+/// `def each(x) { x }` linked.
+#[test]
+fn a_def_may_not_be_named_each_or_most() {
+    let src = std::fs::read_to_string(root().join("docs/tutorial/programs/01-queue.sq")).unwrap();
+    for w in ["each", "most"] {
+        let prog = src.replacen(
+            "let S = 1.0;",
+            &format!("def {w}(x) {{ x }}\nlet S = 1.0;"),
+            1,
+        );
+        assert_ne!(prog, src);
+        refused(&prog, &format!("`{w}` is a word of the language"));
+    }
+}
+
+/// A name passed where a function takes a number is read as written
+/// (#469): `min(prompt[7], 1000)` linked as `min(prompt, 1000)`. A value
+/// has no index, and a pool or stage, whole or a member, is no number;
+/// the same holds in a constant, through a definition's parameter, and
+/// for an argument the definition does not read.
+#[test]
+fn a_name_passed_as_a_number_is_read_as_written() {
+    let src = |size: &str| {
+        format!(
+            "def g(x) {{ min(x, 1) }}
+def h(x) {{ 1 }}
+device gpu[2] {{ kv cap 100; }} pool kv on gpu {{ }}
+engine E[2] on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+workload {{ arrive batch(1); init {{ set prompt = 32; set j = 0; }} }}
+server {{ hold kv[j] (cost(kv, {size})) {{ run E[j] prefill (cost(E, 1)) growing kv[j]; }} }}"
+        )
+    };
+    let ov = common::horizon(10.0);
+    compiled(&src("min(prompt, 1000)"), None, &ov);
+    // a value may not share a stage's name, so a bare `E` is the stage (#470)
+    let shared = error(&src("min(E, 1)").replace("set j = 0;", "set j = 0; set E = 3;"));
+    assert!(
+        shared.contains("an engine named `E` would make the one word mean two things"),
+        "{shared}"
+    );
+    let pool = "as a number, but a pool is none: read";
+    let stage = "as a number, but a stage is none: read";
+    let attribute = "`prompt[…]`: an attribute has no index: write `prompt`";
+    for (size, message) in [
+        ("min(prompt[7], 1000)", attribute.to_string()),
+        (
+            "min(kv[j], 1)",
+            format!("`min` reads `kv[…]` {pool} `queued(kv[…])` or `holders(kv[…])`"),
+        ),
+        (
+            "min(E[j], 1)",
+            format!("`min` reads `E[…]` {stage} `budget_left(E[…])` or `work(E[…])`"),
+        ),
+        (
+            "min(kv, 1)",
+            format!("`min` reads `kv` {pool} `queued(kv)` or `holders(kv)`"),
+        ),
+        (
+            "min(E, 1)",
+            format!("`min` reads `E` {stage} `budget_left(E)` or `work(E)`"),
+        ),
+        (
+            "g(kv[j])",
+            format!("`min` reads `kv[…]` {pool} `queued(kv[…])`"),
+        ),
+        ("h(prompt[zz])", attribute.to_string()),
+        (
+            "min(no_such_name[0], 1)",
+            "unknown name `no_such_name`".to_string(),
+        ),
+    ] {
+        refused(&src(size), &message);
+    }
+    // a constant's function call: `min(N[1], 4)` was `min(N, 4)`
+    refused(
+        &format!("let N = 2; let A = min(N[1], 4);\n{}", src("A")),
+        "`N[…]`: a number has no index: write `N`",
+    );
+}
+
+/// `cost`'s last argument takes a number as `min`'s do, and a constant reads
+/// a name only where its function takes one (#467): `cost(kv, prompt[7])`
+/// was "cost's last argument is an expression", `cost(kv, kv)` an unknown
+/// name, and `let A = queued(kv)` said `queued` read `kv` as a number.
+#[test]
+fn a_name_is_a_number_only_where_its_function_takes_one() {
+    let src = |pre: &str, size: &str| {
+        format!(
+            "{pre}
+device gpu {{ kv cap 100; }} pool kv on gpu {{ }}
+engine E on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+workload {{ arrive batch(1); init {{ set prompt = 32; }} }}
+server {{ hold kv (cost(kv, {size})) {{ run E prefill (cost(E, 1)) growing kv; }} }}"
+        )
+    };
+    refused(
+        &src("", "prompt[7]"),
+        "`prompt[…]`: an attribute has no index: write `prompt`",
+    );
+    refused(
+        &src("", "kv"),
+        "`cost` reads `kv` as a number, but a pool is none",
+    );
+    refused(
+        &src("let A = queued(kv);", "A"),
+        "`queued` with 1 argument(s) is not a constant function",
     );
 }

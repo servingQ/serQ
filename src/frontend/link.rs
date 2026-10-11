@@ -253,6 +253,46 @@ pub const CONTEXT_VARS: [(&str, CtxVar); 23] = [
     ("preempted", CtxVar::Preempted),
 ];
 
+/// The names an engine reads its values under: `running.count`,
+/// `waiting.count`, `batch.tokens` (`parser/device.rs`).
+pub(crate) const LISTS: [&str; 3] = ["running", "waiting", "batch"];
+
+/// Where the language reads `name`, when it supplies it: a context
+/// variable at its moments, `inf` in every expression, an engine's list in
+/// the engine.
+fn read_in(name: &str) -> Option<String> {
+    let moments = if name == "inf" {
+        &[][..]
+    } else if let Some((_, var)) = CONTEXT_VARS.iter().find(|(n, _)| *n == name) {
+        var.moments()
+    } else {
+        return LISTS
+            .contains(&name)
+            .then(|| format!("an engine, as `{name}.…`"));
+    };
+    Some(match moments {
+        [] => "every expression".to_string(),
+        ms => ms
+            .iter()
+            .map(|m| m.to_string())
+            .collect::<Vec<_>>()
+            .join(", or "),
+    })
+}
+
+/// The refusal of `kind` (`a session attribute`, `a stage`, …) named
+/// `name`, when the language supplies that name. A program may not name its
+/// own thing so, an attribute or a `let` (`link`, #231) or a declaration or
+/// a parameter (`parser.rs`, #460): the one word would mean two things.
+pub(crate) fn takes_supplied(name: &str, kind: &str) -> Option<String> {
+    let read_in = read_in(name)?;
+    Some(format!(
+        "`{name}` is a name the language supplies, read in {read_in}; {kind} named \
+         `{name}` would make the one word mean two things\n\
+         help: name it otherwise (docs/api/context.md lists the names the language supplies)"
+    ))
+}
+
 /// The most terms the aggregates (`max j in n (e)`) of one program write
 /// out, nested ones included.
 pub(crate) const MAX_OVER: usize = 4096;
@@ -395,33 +435,11 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
     // would make a stage's `ps(min(present, 16))` read the attribute, not
     // the jobs present, with no warning (#231: a PS service time off by 8×;
     // before it, the PD lecture's attribute `n`).
-    let supplied = CONTEXT_VARS
-        .iter()
-        .map(|(n, v)| (*n, v.moments()))
-        .chain(std::iter::once(("inf", &[][..])));
-    for (name, moments) in supplied {
-        let taken = if lk.attr_index.contains_key(name) {
-            Some("session attribute")
-        } else if prog.lets.iter().any(|(n, _)| n == name) {
-            Some("`let` constant")
-        } else {
-            None
-        };
-        if let Some(kind) = taken {
-            let read_in = match moments {
-                [] => "every expression".to_string(),
-                ms => ms
-                    .iter()
-                    .map(|m| m.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", or "),
-            };
-            return Err(LinkError::new(format!(
-                "`{name}` is a name the language supplies, read in {read_in}; a {kind} \
-                 named `{name}` would be read there instead\n\
-                 help: give the {kind} a name of its own (docs/api/context.md lists the \
-                 context variables)"
-            )));
+    let declared = lk.attrs.iter().map(|n| (n, "a session attribute"));
+    let declared = declared.chain(prog.lets.iter().map(|(n, _)| (n, "a `let` constant")));
+    for (name, kind) in declared {
+        if let Some(refusal) = takes_supplied(name, kind) {
+            return Err(LinkError::new(refusal));
         }
     }
     // Constants, in order; supplied inputs replace only their declared defaults.
@@ -844,6 +862,7 @@ fn stmt_span(s: &Stmt) -> Option<Span> {
                 .or_else(|| expr_span(a))
                 .or_else(|| expr_span(b)),
             Expr::Sample(_, xs) => xs.iter().find_map(expr_span),
+            Expr::Unread(_, x) => expr_span(x),
             Expr::Call(_, args) => args.iter().find_map(|a| match a {
                 Arg::Expr(x) => expr_span(x),
                 Arg::Ref(r) => r.span,
@@ -971,7 +990,8 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
     /// right side of a short-circuit operator need not be evaluated.
     fn certain(e: &Expr, t: &Taint) -> BTreeSet<String> {
         match e {
-            Expr::Located(_, e) | Expr::Unary(_, e) => certain(e, t),
+            // an unread argument is checked, never evaluated
+            Expr::Located(_, e) | Expr::Unary(_, e) | Expr::Unread(_, e) => certain(e, t),
             Expr::Cond(c, a, b) => {
                 let mut out = certain(c, t);
                 out.extend(certain(a, t).intersection(&certain(b, t)).cloned());
@@ -982,22 +1002,26 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
             Expr::Sample(_, xs) => xs.iter().flat_map(|e| certain(e, t)).collect(),
             // Resource annotations are checked but not evaluated. Only the
             // converted quantity can reveal a hidden input when work ends.
+            // A bare name reads its attribute only where the function takes
+            // a number: `work(E)` reads the stage `E`, not an attribute `E`.
             Expr::Call(f, args) => args
                 .iter()
+                .enumerate()
                 .skip(if f == "cost" {
                     args.len().saturating_sub(1)
                 } else {
                     0
                 })
-                .flat_map(|a| match a {
+                .flat_map(|(k, a)| match a {
                     Arg::Expr(e) => certain(e, t),
                     Arg::Ref(r) => match &r.index {
                         Some(e) => certain(e, t),
-                        None => t
+                        None if takes_number(f, k, args.len()) => t
                             .attrs
                             .get(&r.name)
                             .map(|s| s.certain.clone())
                             .unwrap_or_default(),
+                        None => BTreeSet::new(),
                     },
                 })
                 .collect(),
@@ -1179,6 +1203,7 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                 | Stmt::Request
                 | Stmt::Call { .. }
                 | Stmt::Mark(_)
+                | Stmt::Unread(_)
                 | Stmt::Join => {}
             }
         }
@@ -1464,12 +1489,7 @@ impl Linker<'_> {
         let target = crate::ir::CostTarget::joint(targets);
         let value = match value {
             Arg::Expr(e) => self.expr(e)?,
-            Arg::Ref(r) if r.index.is_none() => self.expr(&Expr::Var(r.name.clone()))?,
-            _ => {
-                return Err(LinkError::new(
-                    "cost's last argument is an expression".into(),
-                ));
-            }
+            Arg::Ref(r) => self.expr(&self.as_number("cost", r)?)?,
         };
         Ok(CExpr::Cost(target, Box::new(value)))
     }
@@ -1684,25 +1704,33 @@ impl Linker<'_> {
                         .into(),
                 ));
             }
+            // an unread argument is resolved, as in any expression, and
+            // never evaluated: it need not be a constant (`one(kv)`)
+            Expr::Unread(args, body) => {
+                for a in args {
+                    self.unread(a)?;
+                }
+                self.eval_const(body)?
+            }
             Expr::Call(f, args) => {
+                let not_constant = || {
+                    LinkError::new(format!(
+                        "`{f}` with {} argument(s) is not a constant function",
+                        args.len()
+                    ))
+                };
                 let xs: Vec<f64> = args
                     .iter()
-                    .map(|a| match a {
+                    .enumerate()
+                    .map(|(k, a)| match a {
                         Arg::Expr(e) => self.eval_const(e),
-                        Arg::Ref(r) => self
-                            .eval_const(&Expr::Var(r.name.clone()))
-                            .map_err(|e| e.at(r.span)),
+                        Arg::Ref(r) if takes_number(f, k, args.len()) => {
+                            self.eval_const(&self.as_number(f, r)?)
+                        }
+                        Arg::Ref(_) => Err(not_constant()),
                     })
                     .collect::<LResult<_>>()?;
-                match const_call(f, &xs) {
-                    Some(x) => x,
-                    None => {
-                        return Err(LinkError::new(format!(
-                            "`{f}` with {} argument(s) is not a constant function",
-                            xs.len()
-                        )));
-                    }
-                }
+                const_call(f, &xs).ok_or_else(not_constant)?
             }
             Expr::Sample(..) => return Err(LinkError::new("a constant cannot sample".into())),
             Expr::Over(agg, j, n, body) => {
@@ -1786,9 +1814,90 @@ impl Linker<'_> {
         })
     }
 
+    /// Resolve an argument a use does not read (`Expr::Unread`) where it
+    /// stands, and discard it: a pool or a stage as a reference, any other
+    /// name as a value. Never evaluated, it is not checked for its moment.
+    fn unread(&self, a: &Arg) -> LResult<()> {
+        match a {
+            Arg::Expr(e) => self.expr(e).map(drop),
+            Arg::Ref(r)
+                if self.pools.contains_key(&r.name) || self.stages.contains_key(&r.name) =>
+            {
+                r.index
+                    .as_deref()
+                    .map_or(Ok(()), |i| self.expr(i).map(drop))
+            }
+            Arg::Ref(r) => {
+                self.expr(&Expr::Var(r.name.clone()))
+                    .map_err(|e| e.at(r.span))?;
+                match r.index {
+                    Some(_) => Err(self.indexed_value(r).at(r.span)),
+                    None => Ok(()),
+                }
+            }
+        }
+    }
+
+    /// A name passed where `f` takes a number (`takes_number`), as the value
+    /// it names, or why it is none as written (#469): a pool or a stage,
+    /// whole or a member, is no number, and a value has no index. A bare
+    /// name that is no place, or reads a value though a stage shares its
+    /// name (`set svc = 3` beside `stage svc`), is the value: the caller
+    /// resolves it, or refuses it as unknown or no constant.
+    fn as_number(&self, f: &str, r: &Ref) -> LResult<Expr> {
+        let n = &r.name;
+        let value = self.expr(&Expr::Var(n.clone()));
+        let place = self.pools.contains_key(n) || self.stages.contains_key(n);
+        if r.index.is_none() && (value.is_ok() || !place) {
+            let var = Expr::Var(n.clone());
+            return Ok(match r.span {
+                Some(span) => Expr::Located(span, Box::new(var)),
+                None => var,
+            });
+        }
+        let written = match r.index {
+            Some(_) => format!("{n}[…]"),
+            None => n.clone(),
+        };
+        let why = if self.pools.contains_key(n) {
+            LinkError::new(format!(
+                "`{f}` reads `{written}` as a number, but a pool is none: read \
+                 `queued({written})` or `holders({written})`"
+            ))
+        } else if self.stages.contains_key(n) {
+            LinkError::new(format!(
+                "`{f}` reads `{written}` as a number, but a stage is none: read \
+                 `budget_left({written})` or `work({written})`"
+            ))
+        } else {
+            match value {
+                Err(unknown) => unknown,
+                Ok(_) => self.indexed_value(r),
+            }
+        };
+        Err(why.at(r.span))
+    }
+
+    /// The refusal for `n[…]` where `n` names a value: it has no members.
+    fn indexed_value(&self, r: &Ref) -> LinkError {
+        let n = &r.name;
+        let what = if self.attr_index.contains_key(n) {
+            "an attribute"
+        } else {
+            "a number"
+        };
+        LinkError::new(format!("`{n}[…]`: {what} has no index: write `{n}`"))
+    }
+
     fn expr(&self, e: &Expr) -> LResult<CExpr> {
         Ok(match e {
             Expr::Located(span, inner) => self.expr(inner).map_err(|e| e.at(Some(*span)))?,
+            Expr::Unread(args, body) => {
+                for a in args {
+                    self.unread(a)?;
+                }
+                self.expr(body)?
+            }
             Expr::Num(x) => CExpr::Num(*x),
             Expr::Var(n) => {
                 if let Some(&i) = self.attr_index.get(n) {
@@ -1861,10 +1970,9 @@ impl Linker<'_> {
                 for (a, kind) in args.iter().zip(sig) {
                     cargs.push(match (kind, a) {
                         (ArgKind::Expr, Arg::Expr(e)) => CArg::Expr(self.expr(e)?),
-                        (ArgKind::Expr, Arg::Ref(r)) => CArg::Expr(
-                            self.expr(&Expr::Var(r.name.clone()))
-                                .map_err(|e| e.at(r.span))?,
-                        ),
+                        (ArgKind::Expr, Arg::Ref(r)) => {
+                            CArg::Expr(self.expr(&self.as_number(f, r)?)?)
+                        }
                         (ArgKind::Pool, Arg::Ref(r)) => CArg::Pool(self.pool_ref(r)?),
                         (ArgKind::Stage, Arg::Ref(r)) => CArg::Stage(self.stage_ref(r)?),
                         (k, _) => {
@@ -1912,6 +2020,12 @@ impl Linker<'_> {
                 self.declarations.push((self.attr_index[name], *kind));
                 continue;
             }
+            if let Stmt::Unread(args) = s {
+                for a in args {
+                    self.unread(a)?;
+                }
+                continue;
+            }
             if let Stmt::Side(side) = s {
                 match side {
                     crate::ir::Side::Server => {
@@ -1934,7 +2048,7 @@ impl Linker<'_> {
                 }
                 Stmt::Turn => CStmt::Turn,
                 Stmt::End => CStmt::End,
-                Stmt::Declare(..) | Stmt::Side(_) => unreachable!(),
+                Stmt::Declare(..) | Stmt::Side(_) | Stmt::Unread(_) => unreachable!(),
                 Stmt::Request => {
                     return Err(LinkError::new(
                         "`request` survived parsing: the parser splices the server in its place"

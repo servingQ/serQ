@@ -74,17 +74,17 @@ fn main() {
   server {
     set t0 = now;
     hold reqs (cost(reqs, 1)), kv (cost(kv, K + n + o)) {
-      set hit = !cold && cached >= K;
+      set warm = !cold && cached >= K;
       // prefill work in tokens: the overhead and the attention term are
       // converted at the compute rate 1/a
-      set P = s0 / a + (hit ? n + (b / a) * n * (K + n / 2)
+      set P = s0 / a + (warm ? n + (b / a) * n * (K + n / 2)
                             : (K + n) + (b / a) * (K + n) * (K + n) / 2);
       run llm prefill (cost(llm, P));
       observe ttft = now - t0;
       run llm decode (cost(llm, o));
     } cache (cost(reqs, kv, K + n + o));
     observe response = now - t0;
-    branch (!cold) { observe hit = hit; }
+    branch (!cold) { observe hit = warm; }
   }
 
 

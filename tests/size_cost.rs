@@ -357,12 +357,21 @@ fn composite_cost_fields_require_initialization_on_every_path() {
 fn record_names_cannot_also_name_scalars_or_resources() {
     for body in [
         "Cost c = cost(svc, 2); Cost c = { mem: 3 }; run svc (c);",
-        "Cost mem = { svc: 1 }; run svc (mem.svc);",
         "set c = 0; Cost c = { svc: 1 }; run svc (c.svc);",
     ] {
         let e = compile(body, "Size items = 3;").unwrap_err();
         assert!(e.contains("conflicts"), "{e}");
     }
+    // a record is an attribute, which may not take a pool's name (#470)
+    let e = compile(
+        "Cost mem = { svc: 1 }; run svc (mem.svc);",
+        "Size items = 3;",
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("a pool named `mem` would make the one word mean two things"),
+        "{e}"
+    );
 }
 
 #[test]
