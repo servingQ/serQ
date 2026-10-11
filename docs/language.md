@@ -167,9 +167,12 @@ The rules that are the language's, not the catalogue's:
   `budget_left(step)` plans an iteration and cannot be read by that
   stage's own `budget` or `chunk`.
 - **Names** do not collide: session attributes, `let` constants and the
-  names the language supplies (the context variables, `inf`) are kept
-  apart, so `set present = …` does not link (a `ps` capacity reading
-  `present` would read the attribute).
+  names the language supplies (the context variables, `inf`, an engine's
+  lists `running`, `waiting` and `batch`) are kept apart, so
+  `set present = …` does not link (a `ps` capacity reading `present` would
+  read the attribute). Nor does a `def`, a parameter, an `observe`, a
+  `stage`, a `pool`, a `device`, an `engine`, a `queue`, a `gauge` or a
+  `claim` take a supplied name: `observe admitted = now;` does not link.
 - **Constants** (a `let`, a `cap`, a `block`, a `fifo` count, the arrival
   rate or population) are numbers or `inf`; one that
   evaluates to NaN does not link.

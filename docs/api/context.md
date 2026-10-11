@@ -2,10 +2,13 @@
 
 A context variable is supplied at specific evaluation moments. Reading it
 elsewhere is a link error: a session cannot use `set x = tokens;`.
-Context-variable names are reserved: they cannot be assigned by `set`,
-`choose` or `let`, nor name a `def`, `observe`, `stage`, `pool`, `device`,
-`engine`, `queue`, `gauge` or `claim`. Those declarations cannot take an
-engine's list either, `running` or `waiting` (`running.count`).
+
+The names the language supplies are the context variables below, `inf`, and
+an engine's lists `running`, `waiting` and `batch` (`running.count`). They
+are reserved: a `set`, `choose` or `let` cannot assign one, and a `def`, a
+parameter, an `observe`, a `stage`, a `pool`, a `device`, an `engine`, a
+`queue`, a `gauge`, a `claim` or a schedule's `let` cannot take one as its
+name.
 
 ## Moments
 

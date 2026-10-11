@@ -721,10 +721,10 @@ fn a_context_variable_name_cannot_be_an_attribute_or_a_constant() {
     assert_eq!(r.stage("dec").unwrap().mean_service, 1.0, "{}", r.text());
 }
 
-/// #460: the same holds for a declaration. `def now(x)` beside `now`, or
-/// `observe admitted` beside `admitted`, linked, and one word meant the
-/// program's thing in one place and the language's in another. An engine's
-/// list (`running.count`) is the language's as well.
+/// #460: the same holds for a declaration and a parameter. `def now(x)`
+/// beside `now`, or `observe admitted` beside `admitted`, linked, and one
+/// word meant the program's thing in one place and the language's in
+/// another. An engine's list (`running.count`) is the language's as well.
 #[test]
 fn a_declaration_cannot_take_a_name_the_language_supplies() {
     const SRC: &str = "DECL
@@ -733,12 +733,22 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
         server { run svc (cost(svc, 1)); observe response = now; }
         ";
     for (decl, refused) in [
-        ("def now(x) { x * 2 }", "`def now`"),
-        ("def running(x) { x * 2 }", "`def running`"),
-        ("gauge present = 1;", "`gauge present`"),
-        ("stage size : delay;", "`stage size`"),
-        ("pool position { cap 1; }", "`pool position`"),
-        ("claim tokens : at end (1);", "`claim tokens`"),
+        ("def now(x) { x * 2 }", "a definition named `now`"),
+        ("def running(x) { x * 2 }", "a definition named `running`"),
+        ("def f(now) { now * 2 }", "a parameter named `now`"),
+        ("gauge present = 1;", "a gauge named `present`"),
+        ("stage size : delay;", "a stage named `size`"),
+        ("pool position { cap 1; }", "a pool named `position`"),
+        ("claim tokens : at end (1);", "a claim named `tokens`"),
+        ("device now { kv cap 1; }", "a device named `now`"),
+        (
+            "device gpu { step_time (age) = 1; }",
+            "a parameter named `age`",
+        ),
+        (
+            "device gpu { kv cap 1; } engine served on gpu { execute (1); }",
+            "an engine named `served`",
+        ),
     ] {
         let e = check(&SRC.replace("DECL", decl)).expect_err(decl);
         assert!(
@@ -759,4 +769,21 @@ fn a_declaration_cannot_take_a_name_the_language_supplies() {
     );
     // renamed, it links
     check(&observe.replace("observe admitted", "observe admitted_at")).expect("links");
+}
+
+/// A schedule's `let` is a declaration too: `let inf = 1;` in vllm.sq's
+/// schedule linked, and its threshold's `: inf` read 1.
+#[test]
+fn a_schedules_let_cannot_take_a_name_the_language_supplies() {
+    let src = format!(
+        "{} workload {{ {ENGINE_WORKLOAD} session {{ turn; }} }}
+        server {{ hold reqs (cost(reqs, 1)) {{ run llm prefill (cost(llm, n)); }} }}",
+        ENGINE.replace("schedule { ", "schedule { let inf = 1; ")
+    );
+    let e = check(&src).expect_err("rejected");
+    assert!(
+        e.contains("a schedule's `let` named `inf` would make the one word mean two things"),
+        "{e}"
+    );
+    check(&src.replace("let inf = 1; ", "")).expect("links");
 }

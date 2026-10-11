@@ -69,7 +69,7 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostic::Source;
 use crate::frontend::lexer::{LexError, Tok, Token, lex};
 use crate::frontend::link::{
-    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, RENAMED, supplied,
+    AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS, LISTS, RENAMED, takes_supplied,
 };
 use crate::frontend::queue::{self, QueueDecl};
 use crate::ir::{ArgKind, Fun};
@@ -276,10 +276,6 @@ struct Def {
 /// Tokens a program may expand to. Definitions use only earlier ones, so
 /// an expansion ends; one can still double at every level.
 const MAX_TOKENS: usize = 100_000;
-
-/// The names an engine reads its values under: `running.count`,
-/// `waiting.count`, `batch.tokens` (`parser/device.rs`).
-const LISTS: [&str; 3] = ["running", "waiting", "batch"];
 
 /// The most members a family (`pool p[N]`, `queue D[N]`) may have.
 const MAX_FAMILY: usize = 10_000;
@@ -1614,7 +1610,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.name()?;
-        self.own_name(at, &name, "claim")?;
+        self.own_name(at, &name, "a claim")?;
         let given = if self.eat_kw("given") {
             self.expect(&Tok::LParen)?;
             let e = self.expr()?;
@@ -1809,7 +1805,7 @@ impl Parser {
             } else if self.eat_kw("gauge") {
                 let at = self.pos;
                 let name = self.ident()?;
-                self.own_name(at, &name, "gauge")?;
+                self.own_name(at, &name, "a gauge")?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
@@ -2375,24 +2371,15 @@ impl Parser {
         Ok(())
     }
 
-    /// A declaration may not take a name the language supplies, as a `set`
-    /// or a `let` may not (`link`, #231): `def now(x)` beside `now`, or
-    /// `observe admitted` beside `admitted`, would have one word mean two
-    /// things (#460).
-    fn own_name(&self, at: usize, name: &str, keyword: &str) -> PResult<()> {
-        let read_in = match supplied(name) {
-            Some(read_in) => read_in,
-            None if LISTS.contains(&name) => format!("an engine, as `{name}.…`"),
-            None => return Ok(()),
-        };
-        self.err_at(
-            at,
-            format!(
-                "`{name}` is a name the language supplies, read in {read_in}; `{keyword} \
-                 {name}` would make the one word mean two things\n\
-                 help: name it otherwise (docs/api/context.md lists the context variables)"
-            ),
-        )
+    /// A declaration or a parameter may not take a name the language
+    /// supplies, as a `set` or a `let` may not (`link`, #231): `def now(x)`
+    /// beside `now`, or `observe admitted` beside `admitted`, would have one
+    /// word mean two things (#460).
+    fn own_name(&self, at: usize, name: &str, kind: &str) -> PResult<()> {
+        match takes_supplied(name, kind) {
+            Some(refusal) => self.err_at(at, refusal),
+            None => Ok(()),
+        }
     }
 
     /// `def name(x, …) { e }` or `def name(x, …) { … }`, after `def`.
@@ -2405,7 +2392,7 @@ impl Parser {
         {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
-        self.own_name(at, &name, "def")?;
+        self.own_name(at, &name, "a definition")?;
         if let Some(now) = retired(&name) {
             return self.err_at(
                 at,
@@ -2444,6 +2431,7 @@ impl Parser {
                     format!("`{p}` is a word of the language: name the parameter otherwise"),
                 );
             }
+            self.own_name(p_at, &p, "a parameter")?;
             if params.contains(&p) {
                 return self.err_at(p_at, format!("`{p}` is a parameter twice"));
             }
@@ -3105,7 +3093,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
-        self.own_name(at, &name, "pool")?;
+        self.own_name(at, &name, "a pool")?;
         let array = self.array_count()?;
         let mut on = None;
         let mut count = array.unwrap_or(1);
@@ -3306,7 +3294,7 @@ impl Parser {
         let span = Some(self.span());
         let at = self.pos;
         let name = self.ident()?;
-        self.own_name(at, &name, "stage")?;
+        self.own_name(at, &name, "a stage")?;
         let array = self.array_count()?;
         self.expect(&Tok::Colon)?;
         let kind = self.stage_kind()?;
@@ -3387,7 +3375,7 @@ impl Parser {
         {
             return self.err_at(at + 1, format!("`{name}` is declared twice"));
         }
-        self.own_name(at + 1, &name, "queue")?;
+        self.own_name(at + 1, &name, "a queue")?;
         // `Q[n]` is a family whatever `n`, called by index, and its pools and
         // stages are arrays; `Q` is one queue
         let array = self.array_count()?;
@@ -3481,7 +3469,7 @@ impl Parser {
                 if KEYWORDS.contains(&dev.as_str()) {
                     return self.err_at(d_at, format!("`{dev}` is a word of the language"));
                 }
-                self.own_name(d_at, &dev, "device")?;
+                self.own_name(d_at, &dev, "a device")?;
                 if dev == name {
                     return self.err_at(
                         d_at,
@@ -3735,7 +3723,9 @@ impl Parser {
             self.advance();
             if *self.peek() != Tok::RParen {
                 loop {
+                    let p_at = self.pos;
                     let p = self.ident()?;
+                    self.own_name(p_at, &p, "a parameter")?;
                     if params.contains(&p) {
                         return self.err(format!("parameter `{p}` twice"));
                     }
@@ -4400,7 +4390,7 @@ impl Parser {
                 self.advance();
                 let at = self.pos;
                 let name = self.ident()?;
-                self.own_name(at, &name, "observe")?;
+                self.own_name(at, &name, "an observation")?;
                 self.expect(&Tok::Assign)?;
                 let e = self.expr()?;
                 self.expect(&Tok::Semi)?;
