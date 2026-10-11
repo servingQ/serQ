@@ -1120,3 +1120,111 @@ fn a_held_reservation_is_each_live_hold_s() {
     // 1 + 4 + 8 = 13 > 12 until then
     assert_eq!(admitted(&prog("run gate (cost(gate, 10));", 8)), [20.0]);
 }
+
+/// A run ends at its start plus its work, not at the sum of its chunks
+/// (#479). 0.4 then 1.2 in chunks of 1 sums to 0.4 + 1 + 0.19999999999999996
+/// = 1.5999999999999999, an ulp short of 0.4 + 1.2: the cached extent and
+/// the `computed` of a hold preempted right after its prefill read a
+/// finished prefill as unfinished (`computed < prompt`).
+#[test]
+fn a_run_ends_at_its_start_plus_its_work() {
+    let prog = |sessions: u32, cap: u32, body: &str| {
+        format!(
+            r#"
+        device gpu {{ kv cap {cap}; }}
+        engine llm on gpu {{
+          reqs cap 2;
+          tokens cap 4;
+          schedule {{
+            advance running each at most (1);
+            admit waiting each at most (1);
+          }}
+          execute (1);
+        }}
+        pool reqs on llm {{ }}
+        pool kv on gpu {{ preempt lifo; }}
+        workload {{ arrive batch({sessions}); session {{ turn; end; }} }}
+        server {{
+          set prompt = 0.4 + 1.2;
+          {body}
+        }}
+"#
+        )
+    };
+    // the cached extent: the position the prefill ended at
+    let src = prog(
+        1,
+        10,
+        "hold reqs (cost(reqs, 1)), kv (cost(kv, 0)) {
+           run llm prefill (cost(llm, 0.4)) growing kv;
+           run llm prefill (cost(llm, 1.2)) growing kv;
+         } cache (cost(reqs, kv, 100));
+         observe extent = cachedin(kv);",
+    );
+    let r = run(&src, &common::horizon(20.0));
+    assert_eq!(r.observe("extent").unwrap().samples, [0.4 + 1.2]);
+    // `computed`: B ends its prefill at 1.6 with A, and A's first decode
+    // token preempts it (lifo); B's re-executed hold reads where it was
+    let src = prog(
+        2,
+        4,
+        "hold reqs (cost(reqs, 1)), kv (cost(kv, 0)) {
+           branch (computed > 0) { observe at_prompt = computed == prompt; }
+           branch (computed == 0) {
+             run llm prefill (cost(llm, 0.4)) growing kv;
+             run llm prefill (cost(llm, 1.2)) growing kv;
+           }
+           run llm decode (cost(llm, 2)) growing kv;
+         }",
+    );
+    let r = run(&src, &common::horizon(20.0));
+    assert_eq!(r.ended, 2, "{}", r.text());
+    assert_eq!(
+        r.observe("at_prompt").unwrap().samples[0],
+        1.0,
+        "{}",
+        r.text()
+    );
+}
+
+/// A growth that stalled and resumes does not move its hold's position: the
+/// tokens it stalled on move it once, when they are computed (#482). B's
+/// decode stalls on a token's growth (A holds 3 of 7 until its gate ends)
+/// and resumes when A releases; main counted the stalled token twice and B
+/// ended at 7, not 2 + 4. The run's end is checked against the sum of its
+/// chunks (a `debug_assert!` in the interpreter), so a position moved twice
+/// mid-run fails there too.
+#[test]
+fn a_resumed_growth_moves_the_position_once() {
+    let src = r#"
+        device gpu { kv cap 7; }
+        engine llm on gpu {
+          reqs cap 2;
+          tokens cap 4;
+          schedule {
+            advance running;
+            admit waiting;
+          }
+          execute (1);
+        }
+        pool reqs on llm { }
+        pool kv on gpu { }
+        stage gate : delay;
+        workload { arrive batch(2); session { turn; end; } }
+        server {
+          hold reqs (cost(reqs, 1)), kv (cost(kv, 0)) {
+            run llm prefill (cost(llm, 2)) growing kv;
+            branch (serial == 0) {
+              run llm decode (cost(llm, 1)) growing kv;
+              run gate (cost(gate, 5));
+            } else {
+              run llm decode (cost(llm, 4)) growing kv;
+            }
+          } cache (cost(reqs, kv, 100));
+          branch (serial == 1) { observe extent = cachedin(kv); }
+        }
+"#;
+    let r = run(src, &common::horizon(50.0));
+    assert_eq!(r.ended, 2, "{}", r.text());
+    assert_eq!(r.observe("extent").unwrap().samples, [6.0], "{}", r.text());
+}
