@@ -13,7 +13,7 @@ An already converted cost belongs in `run` or `load` directly.
 
 | Form | The request… | Kernel |
 |---|---|---|
-| [`tool Z;`](#tool) | waits outside the engine (a tool call, a person reading) | `run tool (cost(tool, Z));`, on the workload's own delay when no stage `tool` is declared |
+| [`tool Z;`](#tool) | waits outside the engine (a tool call, a person reading) | `run tool (cost(tool, Z));`, on the workload's own delay when no stage `tool` is declared; the kernel form alone needs the declared stage (without it, `run tool` is an unknown stage) |
 | [`transfer (X) from P to Q (n);`](#transfer-from-to) | has its KV moved to another instance | `run link (cost(link, X)); load Q (cost(Q, n)); release P;` |
 
 Each form is shorthand for the [kernel statements](statements.md) in the

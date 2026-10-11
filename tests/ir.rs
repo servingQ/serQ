@@ -510,6 +510,16 @@ fn the_workload_delay_stands_in_only_for_an_undeclared_tool() {
     let e = compile_source(&common::main_source(below), &common::horizon(10.0))
         .expect_err("a stage `tool` below the call");
     assert!(e.contains("declared below"), "{e}");
+    // the supplied stage's name is no other declaration's (#483)
+    let pool = "stage svc : fifo; pool tool { cap 4; }
+        workload { arrive batch(1); session { turn; tool (1); turn; } }
+        server { run svc (cost(svc, 1)); }";
+    let e = compile_source(&common::main_source(pool), &common::horizon(10.0))
+        .expect_err("a pool `tool` beside the supplied stage");
+    assert!(
+        e.contains("runs on a stage `tool` the parser supplies, and `tool` is a pool at"),
+        "{e}"
+    );
     let server = "stage svc : fifo;
         workload { arrive batch(1); }
         server { run svc (cost(svc, 1)); tool (1); }";

@@ -1727,7 +1727,12 @@ impl Parser {
     }
 
     fn span(&self) -> Span {
-        let t = &self.toks[self.pos];
+        self.span_at(self.pos)
+    }
+
+    /// The span of the token at `pos`.
+    fn span_at(&self, pos: usize) -> Span {
+        let t = &self.toks[pos];
         Span {
             line: t.line,
             col: t.col,
@@ -2091,27 +2096,42 @@ impl Parser {
         // the workload's tool call is the client's time: a delay the
         // workload owns, after every stage the deployment declares
         if let Some(at) = self.implicit_tool {
-            if let Some(d) = prog.stages.iter().find(|s| s.name == "tool") {
-                let line = d.span.map_or(0, |s| s.line);
+            // the supplied stage is a declaration too: its name is no
+            // other's (#483), and a stage `tool` below the call is a second
+            let supplied = Declaration {
+                at,
+                name: "tool".into(),
+                kind: Kind::Stage,
+                scope: Scope::Program,
+            };
+            if let Some(e) = self
+                .declared
+                .iter()
+                .find(|e| e.name == "tool" && (e.kind == Kind::Stage || e.meets(&supplied)))
+            {
+                let t = &self.toks[e.at];
+                let place = self.place(t.file, t.line, t.col);
+                let (is, help) = if e.kind == Kind::Stage {
+                    (
+                        "a stage declared below it".to_string(),
+                        "declare `stage tool` above the workload to use it, or remove that \
+                         declaration"
+                            .to_string(),
+                    )
+                } else {
+                    (e.described(), e.help(&supplied))
+                };
                 return self.err_at(
                     at,
                     format!(
-                        "this `tool` found no stage `tool` declared above it and runs on the \
-                         workload's own delay, but a stage `tool` is declared below, on line {line}\n\
-                         help: declare the stage above the workload, or remove it"
+                        "the workload's `tool` runs on a stage `tool` the parser supplies, and \
+                         `tool` is {is} at {place}\nhelp: {help}"
                     ),
                 );
             }
-            let t = &self.toks[at];
-            let span = Span {
-                line: t.line,
-                col: t.col,
-                len: t.text.chars().count().max(1),
-                file: t.file,
-            };
             self.stages.push("tool".into());
             prog.stages.push(StageDecl {
-                span: Some(span),
+                span: Some(self.span_at(at)),
                 name: "tool".into(),
                 count: 1,
                 array: false,
@@ -5118,7 +5138,19 @@ impl Parser {
             } else {
                 None
             };
-            let name = self.role_stage(role, at, index.is_some())?;
+            // the workload's unindexed `tool` with none declared runs on a
+            // delay the parser supplies: the client's time between turns is
+            // no resource of the deployment
+            let name = if role == Role::Tool
+                && index.is_none()
+                && self.side == Side::WorkloadSession
+                && !self.stages.iter().any(|n| n == "tool")
+            {
+                self.implicit_tool.get_or_insert(at);
+                "tool".to_string()
+            } else {
+                self.role_stage(role, at)?
+            };
             Ref { span, name, index }
         };
         let raw_work = self.expr()?;
@@ -5263,19 +5295,9 @@ impl Parser {
     }
 
     /// The stage a role names when none is given: the stage of the role's
-    /// name; exactly one. The workload's unindexed `tool` with none declared
-    /// runs on the workload's own delay, which the parser supplies: the
-    /// client's time between turns is no resource of the deployment.
-    fn role_stage(&mut self, role: Role, at: usize, indexed: bool) -> PResult<String> {
+    /// name; exactly one.
+    fn role_stage(&self, role: Role, at: usize) -> PResult<String> {
         let kw = role.keyword();
-        if role == Role::Tool
-            && !indexed
-            && self.side == Side::WorkloadSession
-            && !self.stages.iter().any(|n| n == "tool")
-        {
-            self.implicit_tool.get_or_insert(at);
-            return Ok("tool".into());
-        }
         let found: Vec<&str> = self
             .stages
             .iter()

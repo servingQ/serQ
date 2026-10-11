@@ -57,7 +57,8 @@ tool (~exp(Z));
 reading, a downstream API. It is outside your system, so the program
 declares nothing for it. It runs on a `delay`, an infinite-server station
 the workload owns and the report calls `tool`: every call runs immediately
-at rate 1, nobody waits. A tool server that sessions share, with a
+at rate 1, nobody waits. It is the same as declaring `stage tool : delay;`
+after your stages. A tool server that sessions share, with a
 capacity, is part of the deployment: declare it as a stage
 (`stage sandbox : fifo;`) and name it, `tool on sandbox (Z);`.
 
