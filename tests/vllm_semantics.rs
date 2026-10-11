@@ -144,6 +144,94 @@ fn a_request_preempted_during_decode_resumes_from_its_outputs() {
     );
 }
 
+/// Three requests on 6 blocks of 16, prefill chunks of 8: A (16 tokens, 30
+/// out), C (16, 60) and B (32, 10), admitted in that order. `known` is
+/// written `known_is`; `kept` starts at the prompt, and `set_kept` opens the
+/// body.
+fn preempted_twice(set_kept: &str, known_is: &str) -> String {
+    format!(
+        r#"
+        let bs = 16;
+        device gpu {{ kv cap 6 * bs; }}
+        engine llm on gpu {{
+          tokens cap 64;
+          schedule {{
+            advance running each at most (8);
+            admit waiting while (running.preempted == 0) each at most (8);
+          }}
+          execute (1);
+        }}
+        pool kv on gpu {{ block bs; evict lru; preempt lifo; }}
+        pool reqs {{ cap 16; }}
+        workload {{ arrive batch(3);
+          init {{ set prompt = serial == 2 ? 32 : 16; set o = serial == 0 ? 30 : (serial == 1 ? 60 : 10); }}
+          session {{ turn;
+            end;
+
+          }}
+        }}
+        server {{
+          set kept = prompt;
+          hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, budget_left(llm)))) reserve (cost(kv, known))
+          at admission (known = {known_is}) {{
+            {set_kept}
+            branch (serial == 2) {{ observe known = known; observe at = computed; }}
+            run llm prefill (cost(llm, known)) growing kv;
+            branch (known == prompt) {{ observe first = serial; }}
+            run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
+          }}
+          observe done = now;
+        }}
+
+"#
+    )
+}
+
+/// scheduler.py:1560-1561 again: a preemption resets `num_computed_tokens`
+/// and keeps the outputs, however many times it comes. B is preempted with
+/// 32 computed, its first token sampled (33 known), and again during its
+/// re-prefill of those 33, at 24, short of its prompt. `computed` is the
+/// position of the last preemption only, so a program that reads `known`
+/// from it alone (`computed < prompt ? prompt : computed + 1`, the vLLM
+/// examples before #475) brings B back with its prompt: it has lost its
+/// output token, recomputes it and records its first token twice. Carrying
+/// the most it had, `kept`, it comes back with 33, as vLLM does.
+#[test]
+fn a_request_preempted_twice_keeps_its_outputs() {
+    let r = run(
+        &preempted_twice("", "computed < prompt ? prompt : computed + 1"),
+        &common::horizon(1000.0),
+    );
+    assert_eq!(
+        r.observe("at").unwrap().samples,
+        vec![0.0, 32.0, 24.0, 32.0]
+    );
+    assert_eq!(
+        r.observe("known").unwrap().samples,
+        vec![32.0, 33.0, 32.0, 33.0]
+    );
+    assert_eq!(
+        r.observe("first").unwrap().samples,
+        vec![0.0, 1.0, 2.0, 2.0]
+    );
+
+    let r = run(
+        &preempted_twice("set kept = known;", "max(kept, computed + 1)"),
+        &common::horizon(1000.0),
+    );
+    let kv = r.pool("kv").unwrap();
+    assert_eq!(kv.preemptions, 2, "{}", r.text());
+    assert_eq!(r.observe("at").unwrap().samples, vec![0.0, 32.0, 24.0]);
+    assert_eq!(r.observe("known").unwrap().samples, vec![32.0, 33.0, 33.0]);
+    assert_eq!(r.observe("first").unwrap().samples, vec![0.0, 1.0, 2.0]);
+    assert_eq!(
+        r.observe("done").unwrap().samples,
+        vec![31.0, 61.0, 74.0],
+        "{}",
+        r.text()
+    );
+}
+
 /// A holder preempted before it computed anything resumes from nothing.
 /// B holds 32 tokens of the same pool for a fifo stage and is the latest
 /// admitted when A's decode needs a fifth block at step 2: B is the victim

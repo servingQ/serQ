@@ -13,6 +13,7 @@
     "prompt",
     "o",
     "arrive",
+    "kept",
     "known"
   ],
   "attr_types": [
@@ -28,6 +29,7 @@
     "Size",
     "Size",
     "Size",
+    "Value",
     "Value"
   ],
   "sides": [
@@ -42,9 +44,11 @@
       "Workload",
       "Server",
       "Server",
+      "Server",
       "Workload"
     ],
     [
+      "Server",
       "Server",
       "Server",
       "Server",
@@ -303,6 +307,14 @@
       },
       "Turn",
       {
+        "Set": [
+          12,
+          {
+            "Attr": 9
+          }
+        ]
+      },
+      {
         "Hold": {
           "pools": [
             [
@@ -346,32 +358,28 @@
                       [
                         {
                           "Expr": {
-                            "Cond": [
-                              {
-                                "Binary": [
-                                  "Lt",
-                                  {
-                                    "Attr": 8
-                                  },
-                                  {
-                                    "Attr": 9
+                            "Call": [
+                              "Max",
+                              [
+                                {
+                                  "Expr": {
+                                    "Attr": 12
                                   }
-                                ]
-                              },
-                              {
-                                "Attr": 9
-                              },
-                              {
-                                "Binary": [
-                                  "Add",
-                                  {
-                                    "Attr": 8
-                                  },
-                                  {
-                                    "Num": 1.0
+                                },
+                                {
+                                  "Expr": {
+                                    "Binary": [
+                                      "Add",
+                                      {
+                                        "Attr": 8
+                                      },
+                                      {
+                                        "Num": 1.0
+                                      }
+                                    ]
                                   }
-                                ]
-                              }
+                                }
+                              ]
                             ]
                           }
                         },
@@ -405,32 +413,28 @@
                     }
                   },
                   {
-                    "Cond": [
-                      {
-                        "Binary": [
-                          "Lt",
-                          {
-                            "Attr": 8
-                          },
-                          {
-                            "Attr": 9
+                    "Call": [
+                      "Max",
+                      [
+                        {
+                          "Expr": {
+                            "Attr": 12
                           }
-                        ]
-                      },
-                      {
-                        "Attr": 9
-                      },
-                      {
-                        "Binary": [
-                          "Add",
-                          {
-                            "Attr": 8
-                          },
-                          {
-                            "Num": 1.0
+                        },
+                        {
+                          "Expr": {
+                            "Binary": [
+                              "Add",
+                              {
+                                "Attr": 8
+                              },
+                              {
+                                "Num": 1.0
+                              }
+                            ]
                           }
-                        ]
-                      }
+                        }
+                      ]
                     ]
                   }
                 ]
@@ -456,35 +460,39 @@
     [
       {
         "Set": [
+          13,
+          {
+            "Call": [
+              "Max",
+              [
+                {
+                  "Expr": {
+                    "Attr": 12
+                  }
+                },
+                {
+                  "Expr": {
+                    "Binary": [
+                      "Add",
+                      {
+                        "Attr": 8
+                      },
+                      {
+                        "Num": 1.0
+                      }
+                    ]
+                  }
+                }
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "Set": [
           12,
           {
-            "Cond": [
-              {
-                "Binary": [
-                  "Lt",
-                  {
-                    "Attr": 8
-                  },
-                  {
-                    "Attr": 9
-                  }
-                ]
-              },
-              {
-                "Attr": 9
-              },
-              {
-                "Binary": [
-                  "Add",
-                  {
-                    "Attr": 8
-                  },
-                  {
-                    "Num": 1.0
-                  }
-                ]
-              }
-            ]
+            "Attr": 13
           }
         ]
       },
@@ -505,7 +513,7 @@
                 }
               },
               {
-                "Attr": 12
+                "Attr": 13
               }
             ]
           },
@@ -522,7 +530,7 @@
             "Binary": [
               "Eq",
               {
-                "Attr": 12
+                "Attr": 13
               },
               {
                 "Attr": 9
@@ -567,7 +575,7 @@
                     "Binary": [
                       "Sub",
                       {
-                        "Attr": 12
+                        "Attr": 13
                       },
                       {
                         "Attr": 9

@@ -67,14 +67,16 @@ fn main() {
     // It is admitted only if the whole prompt fits, as vLLM's default
     // scheduler_reserve_full_isl (config/scheduler.py:191): the `reserve`
     set hitmax = floor((prompt - 1) / bs) * bs;
+    set sent = 0;
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm)))) reserve (cost(kv, prompt))
          at admission (hit = min(cachedin(kv), hitmax)) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       // a request preempted runs this body again; count its hit once
       branch (computed == 0) { observe hit = c > 0; }
       run llm prefill (cost(llm, prompt - c)) growing kv;
-      // and its first token once: not again if it was preempted after it
-      branch (computed < prompt) { observe ttft = now - t0; }
+      // and its first token once: not again after a preemption, however
+      // many attempts it takes
+      branch (!sent) { observe ttft = now - t0; set sent = 1; }
       run llm decode (cost(llm, o - 1)) growing kv;
     } cache (cost(reqs, kv, prompt + o));
     observe response = now - t0;
