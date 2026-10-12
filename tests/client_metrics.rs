@@ -18,23 +18,33 @@ fn samples(r: &serq::Report, name: &str) -> Vec<f64> {
     r.client(name).unwrap().samples.clone()
 }
 
-const ENGINE: &str = "
-device gpu { }
-engine llm on gpu {
+/// An engine `llm` that does `request` with one request.
+fn engine(request: &str) -> String {
+    format!(
+        "
+device gpu {{ }}
+engine llm on gpu {{
   tokens cap 8;
-  schedule { advance running; admit waiting while (running.preempted == 0); }
+  {request}
+  schedule {{ advance running; admit waiting while (running.preempted == 0); }}
   execute (1);
+}}
+"
+    )
 }
-";
+
+/// The request most tests send: a prefill, then a decode.
+const PREFILL_DECODE: &str = "request (prompt, output) { prefill (prompt); decode (output); }";
 
 /// One request: a prefill of 8 tokens in the first iteration samples the
 /// first token at 1; the decode's two tokens come at 2 and 3.
 #[test]
 fn a_request_s_first_token_and_the_tokens_after_it() {
     let r = run(&format!(
-        "{ENGINE}
+        "{}
 workload {{ arrive batch(1); }}
-server {{ run llm prefill (cost(llm, 8)); run llm decode (cost(llm, 2)); }}"
+server {{ llm (8, 2); }}",
+        engine(PREFILL_DECODE)
     ));
     assert_eq!(samples(&r, "ttft"), [1.0]);
     assert_eq!(samples(&r, "tpot"), [1.0]);
@@ -46,10 +56,11 @@ server {{ run llm prefill (cost(llm, 8)); run llm decode (cost(llm, 2)); }}"
 #[test]
 fn a_turn_ends_where_the_server_does() {
     let r = run(&format!(
-        "{ENGINE}
+        "{}
 stage pause : delay;
 workload {{ arrive batch(1); session {{ turn; run pause (cost(pause, 5)); turn; }} }}
-server {{ run llm prefill (cost(llm, 8)); run llm decode (cost(llm, 1)); }}"
+server {{ llm (8, 1); }}",
+        engine(PREFILL_DECODE)
     ));
     assert_eq!(samples(&r, "ttft"), [1.0, 1.0]);
     assert_eq!(samples(&r, "response"), [2.0, 2.0]);
@@ -71,9 +82,10 @@ server { run svc (cost(svc, 2)); }");
 #[test]
 fn a_decode_alone_samples_the_first_token() {
     let r = run(&format!(
-        "{ENGINE}
+        "{}
 workload {{ arrive batch(1); }}
-server {{ run llm decode (cost(llm, 3)); }}"
+server {{ llm (3); }}",
+        engine("request (output) { decode (output); }")
     ));
     assert_eq!(samples(&r, "ttft"), [1.0]);
     assert_eq!(samples(&r, "tpot"), [1.0]);
@@ -85,11 +97,12 @@ server {{ run llm decode (cost(llm, 3)); }}"
 #[test]
 fn a_leg_works_for_the_turn_it_was_forked_in() {
     let r = run(&format!(
-        "{ENGINE}
+        "{}
 workload {{ arrive batch(1); session {{ turn; turn; }} }}
 server {{
-  branch (turn_no == 1) {{ fork {{ run llm decode (cost(llm, 4)); }} }} else {{ join; }}
-}}"
+  branch (turn_no == 1) {{ fork {{ llm (4); }} }} else {{ join; }}
+}}",
+        engine("request (output) { decode (output); }")
     ));
     assert_eq!(samples(&r, "response"), [0.0, 4.0]);
     assert_eq!(r.client("ttft").unwrap().count, 0);
@@ -115,9 +128,10 @@ server {
 #[test]
 fn one_output_token_has_no_tpot() {
     let r = run(&format!(
-        "{ENGINE}
+        "{}
 workload {{ arrive batch(1); }}
-server {{ run llm prefill (cost(llm, 8)); run llm decode (cost(llm, 0)); }}"
+server {{ llm (8, 0); }}",
+        engine(PREFILL_DECODE)
     ));
     assert_eq!(samples(&r, "ttft"), [1.0]);
     assert_eq!(r.client("tpot").unwrap().count, 0);
@@ -130,13 +144,22 @@ fn the_first_token_is_the_decoder_s() {
     let r = run("
 device g1 { }
 device g2 { }
-engine p on g1 { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
-engine d on g2 { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+engine p on g1 {
+  tokens cap 8;
+  request (prompt) { prefill (prompt); }
+  schedule { advance running; admit waiting while (running.preempted == 0); }
+  execute (1);
+}
+engine d on g2 {
+  tokens cap 8;
+  request (prompt, output) { prefill (prompt); decode (output); }
+  schedule { advance running; admit waiting while (running.preempted == 0); }
+  execute (1);
+}
 workload { arrive batch(1); }
 server {
-  run p prefill (cost(p, 8));
-  run d prefill (cost(d, 1));
-  run d decode (cost(d, 2));
+  p (8);
+  d (1, 2);
 }");
     assert_eq!(samples(&r, "ttft"), [2.0]);
     assert_eq!(samples(&r, "tpot"), [1.0]);
@@ -147,9 +170,12 @@ server {
 #[test]
 fn a_program_s_observe_keeps_its_name() {
     let r = run(&format!(
-        "{ENGINE}
+        "{}
 workload {{ arrive batch(1); }}
-server {{ run llm prefill (cost(llm, 8)); observe ttft = 42; run llm decode (cost(llm, 2)); }}"
+server {{ llm (8, 2); }}",
+        engine(
+            "request (prompt, output) { prefill (prompt); observe ttft = 42; decode (output); }"
+        )
     ));
     assert_eq!(r.observe("ttft").unwrap().samples, [42.0]);
     assert_eq!(samples(&r, "ttft"), [1.0]);

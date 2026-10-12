@@ -474,9 +474,9 @@ fn an_admission_binding_sees_the_entry_only() {
     );
 }
 
-/// A local the entry sets above a hold is the header's, as a session
-/// attribute set before it is a server hold's (#475): the entry is the server, its
-/// `kept` and `known` renamed `E.kept` and `E.known`.
+/// A local the entry sets above a hold is the header's, as what an engine's
+/// request sets above its `at admission` is (#475): the entry is the
+/// request, its `kept` and `known` renamed `E.kept` and `E.known`.
 #[test]
 fn a_header_reads_a_local_set_above_its_hold() {
     same_ir(
@@ -497,14 +497,18 @@ fn a_header_reads_a_local_set_above_its_hold() {
         ),
         &format!(
             "device gpu {{ kv cap 100; }} pool kv on gpu {{ block 16; }}
-             engine E on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
-             server {{
-               set kept = prompt;
-               hold kv (cost(kv, known)) at admission (known = max(kept, computed + 1)) {{
+             engine E on gpu {{
+               tokens cap inf;
+               request (prompt) {{
+                 set kept = prompt;
+                 at admission {{ known = max(kept, computed + 1); }}
                  set kept = known;
-                 run E prefill (cost(E, known)) growing kv;
+                 prefill (known) growing kv;
                }}
+               schedule {{ advance running; admit waiting while (running.preempted == 0) taking kv (known); }}
+               execute (1);
              }}
+             server {{ E (prompt); }}
              {}",
             WORKLOAD.replace("server { gw.route(); }", "")
         ),
