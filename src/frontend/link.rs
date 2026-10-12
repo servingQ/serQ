@@ -368,6 +368,11 @@ pub const BUILTIN_ATTRS: [&str; 9] = [
 /// session's own (`out`, `more`, …) it reads only if hidden.
 pub const SCHEDULER_ATTRS: [&str; 2] = ["cached", "computed"];
 
+/// The session attribute a queue entry's `prefix` key reads without
+/// `hidden`: the session's number, by which a request keys its own context
+/// apart from the segments it shares (`prefix (system: S, serial: inf)`).
+pub const KEY_ATTRS: [&str; 1] = ["serial"];
+
 pub fn link(prog: &Program, ov: &Overrides) -> LResult<Linked> {
     link_located(prog, ov).map(|(p, _)| p)
 }

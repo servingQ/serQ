@@ -262,10 +262,21 @@ that is worth, and the program has an argument for each:
    it in every program's tokens (`count_shared` 1), so with k programs on a
    replica its count is (k − 1) × S above what vLLM holds. The wiki's
    capacity subtracts it (`count_shared` 0), but the code never computes
-   that subtraction. `S` is its length: the replica keeps its blocks
-   resident (`kv cap blocks * bs - S`), a request holds and caches only its
-   own tokens beyond it, every request reads and attends to it, and its
-   tokens count as hits.
+   that subtraction. `S` is its length. The replica's request names its
+   prompt as two segments, `prefix (system: S, serial: inf)`: the system
+   prompt every program shares, then the program's own context
+   (`examples/multi-turn/vllm_system_prompt.sq`). Its cache keeps the
+   first once, allocated once however many requests read it (vLLM's
+   `ref_cnt`), from the first request on a replica that ends: serQ's
+   cache takes a hold's blocks when it ends, vLLM's when it allocates
+   them, so the requests a replica admits before then each compute their
+   own copy (a dozen in the first second of a run, inside the warm-up).
+   Once cached it is never evicted here: every request's chain starts
+   with it, an admission reads it before it evicts, and the cache evicts
+   a chain's last blocks first, so it outlives every context cached
+   after it (no request missed it in any run of the tables below, nor
+   with `blocks` 1 200). It behaves as the constant prefix it stood for
+   before the cache was shared.
 4. **The tool time.** While a program calls a tool its KV is held and the
    GPU does not run it. The longer the call, the fewer programs TR mode
    keeps running for the same KV.
@@ -279,26 +290,26 @@ paper`), one factor at a time:
 
 | Setting | ratio at N = 96, 144, 192 | TR hit | default hit |
 |---|---|---|---|
-| preset: `g` 3.3e-9, `S` 3 968 | 3.09, 3.10, 3.09 | 0.90-0.91 | 0.23-0.24 |
+| preset: `g` 3.3e-9, `S` 3 968 | 3.08, 3.10, 3.08 | 0.90-0.91 | 0.23-0.24 |
 | `S` 0 | 2.20, 2.19, 2.20 | 0.68 | 0.01 |
-| `S` 2 048 | 3.00, 2.97, 2.97 | 0.86 | 0.12-0.13 |
-| `count_shared` 0 | 2.16, 2.19, 2.20 | 0.73-0.74 | 0.23-0.24 |
-| `g` 0 | 1.18, 1.21, 1.21 | 0.90-0.91 | 0.23-0.28 |
-| `g` 1.1e-9 | 1.88, 1.91, 1.91 | 0.90-0.91 | 0.23-0.26 |
-| `Z` 1 s | 3.33, 3.31, 3.28 | 0.90 | 0.23-0.24 |
-| `Z` 10 s | 2.00, 2.13, 2.12 | 0.89 | 0.23-0.30 |
-| `w` 0.5 | 2.05, 2.05, 2.03 | 0.69-0.72 | 0.23-0.24 |
-| `w` 0 | 1.03, 1.03, 1.04 | 0.25-0.27 | 0.23-0.24 |
+| `S` 2 048 | 2.99, 2.97, 2.96 | 0.86 | 0.12-0.13 |
+| `count_shared` 0 | 2.18, 2.19, 2.20 | 0.73-0.74 | 0.23-0.24 |
+| `g` 0 | 1.19, 1.21, 1.21 | 0.90-0.91 | 0.23-0.28 |
+| `g` 1.1e-9 | 1.88, 1.92, 1.91 | 0.90-0.91 | 0.23-0.26 |
+| `Z` 1 s | 3.32, 3.30, 3.28 | 0.90 | 0.23-0.24 |
+| `Z` 10 s | 2.01, 2.12, 2.12 | 0.89 | 0.23-0.30 |
+| `w` 0.5 | 2.05, 2.04, 2.02 | 0.69-0.72 | 0.23-0.24 |
+| `w` 0 | 1.03, 1.04, 1.04 | 0.25-0.27 | 0.23-0.24 |
 
 The preset in full:
 
 | N | TR steps/min | default steps/min | ratio | TR hit | default hit | TR resumed/turn |
 |---|---|---|---|---|---|---|
 | 24 | 170.9 | 170.9 | 1.00 | 0.94 | 0.94 | 0.000 |
-| 48 | 294.9 | 285.7 | 1.03 | 0.94 | 0.93 | 0.013 |
-| 96 | 310.3 | 100.6 | 3.09 | 0.91 | 0.24 | 0.151 |
-| 144 | 308.3 | 99.5 | 3.10 | 0.91 | 0.23 | 0.151 |
-| 192 | 306.7 | 99.4 | 3.09 | 0.90 | 0.23 | 0.149 |
+| 48 | 294.8 | 286.1 | 1.03 | 0.94 | 0.93 | 0.013 |
+| 96 | 309.9 | 100.5 | 3.08 | 0.91 | 0.24 | 0.150 |
+| 144 | 308.2 | 99.3 | 3.10 | 0.91 | 0.23 | 0.151 |
+| 192 | 306.5 | 99.6 | 3.08 | 0.90 | 0.23 | 0.150 |
 
 Beside Fig. 4a and Fig. 5a (SWE-agent on GLM-4.6), whose vLLM serves 218,
 275, 162 and 140 steps/min and ThunderAgent 220, 350, 382 and 370 at 24-96
@@ -340,7 +351,7 @@ programs, with hit rates falling to 30 % and 93 %:
 - **The absolute steps/min** are within a fifth of Fig. 4a's for TR mode
   (307-310 against 370-382) and about a third below for default mode
   (99-101 against 140-162), with `g` at 3.3 ns; at 1.1 ns default mode is
-  above the paper's (183-187). The preset's constants are estimates, so
+  above the paper's (183-186). The preset's constants are estimates, so
   this agreement is not a check.
 - **A few trajectories end at a preemption.** At the example's scale a
   preempted request that has grown past what the replica's KV holds
@@ -353,10 +364,9 @@ What the program does not reproduce:
   lengths, its output lengths, its coding tools' times, its system
   prompts' length or the vLLM version, so the program cannot be fitted
   to one.
-- **Sharing beyond one prompt.** `S` is one prefix every program shares
-  and every replica keeps. Programs that share part of a task, or a
-  prompt a replica may evict, need a shared prefix cache
-  (`shared-prefix-cache.md`); serQ's cache is per session otherwise.
+- **Sharing beyond one prompt.** `S` is one prefix every program shares,
+  which no replica evicts in these runs. Programs that share part of a
+  task are not written.
 
 ## What the program still does not write
 

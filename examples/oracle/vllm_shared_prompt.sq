@@ -3,7 +3,7 @@
 // three turns, the first S tokens of every prompt the same). vLLM matches
 // the system prompt's blocks by content, whichever session computed them
 // (kv_cache_utils.py:650-680, block_pool.py:754-768); the request says the
-// same with `prefix (product: floor(system, bs), session: inf)`, its first item: the
+// same with `prefix (product: floor(system, bs), serial: inf)`, its first item: the
 // product's system prompt, then the session's own. A session's first turn
 // may reuse the system prompt; a follow-up, its previous prompt.
 use "std/args";
@@ -24,9 +24,9 @@ fn main() {
     reqs cap max_seqs;
     tokens cap B;
     // `vllm_replay.sq`'s request, its prompt's segments named: the system
-    // prompt of `product`, `system` tokens long, then the context of `session`
-    request (prompt, output, hitmax, product, system, session, t0) {
-      prefix (product: floor(system, bs), session: inf);   // vLLM shares full blocks
+    // prompt of `product`, `system` tokens long, then the session's own context
+    request (prompt, output, hitmax, product, system, t0) {
+      prefix (product: floor(system, bs), serial: inf);   // vLLM shares full blocks
       set kept = prompt;
       at admission {
         known = max(kept, computed + 1);
@@ -80,7 +80,7 @@ fn main() {
     // reusable: the previous prompt, or at least the system prompt (the
     // generated tokens are not in this prompt), never the whole prompt
     set hitmax = floor(min(max(prev, S), prompt - 1), bs);
-    vllm (prompt, out, hitmax, system, S, serial, t0);
+    vllm (prompt, out, hitmax, system, S, t0);
     observe response = now - t0;
   }
 }

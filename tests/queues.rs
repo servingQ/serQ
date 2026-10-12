@@ -1024,9 +1024,15 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
         &program("").replace("cost(E, out)", "cost(E, ot)"),
         "reads `ot`, which nothing sets: an unknown name\nhelp: did you mean `out`?",
     );
+    // a role fixes the entry's parameters, so the help does not offer one;
+    // the session's number a `prefix` key reads, and nothing else
+    // (tests/shared_prefix.rs)
     refused(
         &program("").replace("cost(E, out)", "cost(E, serial)"),
-        "reads `serial`, a session attribute set outside the queue",
+        "reads `serial`, a session attribute set outside the queue: an entry sees its \
+         parameters, the queue's pools, the context and the request's `hidden` attributes; \
+         `decode`'s parameters are its role's: mark `serial` `hidden` or `mark` a moment for \
+         the caller to read. A `prefix` key reads `serial` as it is",
     );
 }
 
