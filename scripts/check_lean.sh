@@ -12,6 +12,20 @@ echo "== claims of the paper programs current =="
 python3 scripts/gen_lean_claims.py --check
 
 cd lean
+# Mathlib's prebuilt oleans, as CI fetches them before this script
+# (.github/workflows/ci.yml, "Mathlib cache"): without them `lake build`
+# compiles Mathlib from source, which took a fresh worktree over 18 minutes.
+# Once per toolchain and manifest; offline it still succeeds when
+# ~/.cache/mathlib holds the files.
+stamp=".lake/packages/.serq-cache-$(cat lean-toolchain lake-manifest.json | cksum | cut -d' ' -f1)"
+if [ ! -e "$stamp" ]; then
+  echo "== Mathlib cache =="
+  if lake exe cache get; then
+    touch "$stamp"
+  else
+    echo "warning: lake exe cache get failed; lake build may compile Mathlib from source"
+  fi
+fi
 echo "== lake build =="
 lake build 2>&1 | tee build.log
 if grep -q "declaration uses 'sorry'" build.log; then
