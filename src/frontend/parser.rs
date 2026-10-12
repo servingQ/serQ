@@ -717,16 +717,16 @@ fn is_pure(name: &str) -> bool {
     Fun::from_name(name).is_some_and(Fun::is_arithmetic)
 }
 
-/// The words #136 took out of the language, with what a program writes
-/// instead: one spelling for one admission.
-fn retired(word: &str) -> Option<&'static str> {
+/// The words taken out of the language, with what a program writes
+/// instead: one spelling for one admission (#136), one for a power.
+pub(crate) fn retired(word: &str) -> Option<&'static str> {
     RETIRED
         .iter()
         .find(|(w, _)| *w == word)
         .map(|(_, now)| *now)
 }
 
-const RETIRED: [(&str, &str); 5] = [
+const RETIRED: [(&str, &str); 6] = [
     (
         "enter",
         "`enter` is now `hold`: `hold P (u) … at admission (x = e) { … } cache (ℓ);`",
@@ -742,6 +742,7 @@ const RETIRED: [(&str, &str); 5] = [
         "fit",
         "`fit` is gone: the pools of a `hold` are the condition",
     ),
+    ("pow", "`pow(x, y)` is now `x ^ y`"),
 ];
 
 /// Do these tokens say the statement `w;`?
@@ -848,7 +849,7 @@ fn through_queue<'a>(queue: &str, name: &'a str) -> Option<&'a str> {
 }
 
 /// A function of the language: one the linker resolves or one it folds.
-fn is_function(name: &str) -> bool {
+pub(crate) fn is_function(name: &str) -> bool {
     Fun::from_name(name).is_some()
         || FOLDED.contains(&name)
         || AGGREGATES.iter().any(|(n, _)| *n == name)

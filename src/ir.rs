@@ -366,7 +366,6 @@ pub enum Fun {
     Sqrt,
     Exp,
     Ln,
-    Pow,
     /// jobs present at a stage (queue + service)
     Queue,
     /// jobs in service at a stage
@@ -2782,7 +2781,7 @@ use ArgKind::{Expr as E, Pool as P, Stage as S};
 
 /// Every function a call may name, for lookup by name; `Fun::entry` is
 /// the definition and a match, so a new `Fun` without one does not compile.
-const FUNS: [Fun; 22] = [
+const FUNS: [Fun; 21] = [
     Fun::Min,
     Fun::Max,
     Fun::Abs,
@@ -2791,7 +2790,6 @@ const FUNS: [Fun; 22] = [
     Fun::Sqrt,
     Fun::Exp,
     Fun::Ln,
-    Fun::Pow,
     Fun::Queue,
     Fun::Busy,
     Fun::Work,
@@ -2820,8 +2818,7 @@ impl Fun {
             | Fun::Ceil
             | Fun::Sqrt
             | Fun::Exp
-            | Fun::Ln
-            | Fun::Pow => true,
+            | Fun::Ln => true,
             Fun::Queue
             | Fun::Busy
             | Fun::Work
@@ -2851,7 +2848,6 @@ impl Fun {
             (Fun::Sqrt, [a]) => a.sqrt(),
             (Fun::Exp, [a]) => a.exp(),
             (Fun::Ln, [a]) => a.ln(),
-            (Fun::Pow, [a, b]) => a.powf(*b),
             _ => return None,
         })
     }
@@ -2868,7 +2864,6 @@ impl Fun {
             Fun::Sqrt => ("sqrt", &[E]),
             Fun::Exp => ("exp", &[E]),
             Fun::Ln => ("ln", &[E]),
-            Fun::Pow => ("pow", &[E, E]),
             Fun::Queue => ("queue", &[S]),
             Fun::Busy => ("busy", &[S]),
             Fun::Work => ("work", &[S]),

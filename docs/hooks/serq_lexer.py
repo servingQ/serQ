@@ -77,7 +77,7 @@ ENGINE_VALUES = (
 # `tests/docs_lexer.rs` holds these lists to the linker's (`CONTEXT_VARS`,
 # `Fun::names`, `AGGREGATES`, `FOLDED`, `BUILTIN_ATTRS`); `ARITHMETIC` is
 # exactly `Fun::is_arithmetic`.
-ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow")
+ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln")
 
 BUILTINS = (
     # functions

@@ -21,7 +21,6 @@ See [types](index.md#types) and [evaluation moments](context.md).
 | [`sqrt(x: expr)`](#sqrt) | The square root of `x`. |
 | [`exp(x: expr)`](#exp) | The exponential `eˣ`. |
 | [`ln(x: expr)`](#ln) | The natural logarithm of `x`. |
-| [`pow(x: expr, y: expr)`](#pow) | `x` raised to the power `y`; the operator `x ^ y` is equivalent. |
 
 **[Stage](#stage)**
 
@@ -193,16 +192,6 @@ ln(x: expr) -> number
 **Returns:** The natural logarithm of `x`.
 
 For a finite real result, use `x > 0`. Zero gives negative infinity; a negative input produces NaN.
-
-### `pow` {#pow}
-
-```text
-pow(x: expr, y: expr) -> number
-```
-
-**Returns:** `x` raised to the power `y`; the operator `x ^ y` is equivalent.
-
-Floating-point arithmetic applies; a result outside the real domain can be NaN.
 
 ## Observables
 

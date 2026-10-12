@@ -1780,7 +1780,7 @@ impl Linker<'_> {
             Expr::Call(f, args) if f == "cost" => self.cost(args)?,
             Expr::Call(f, args) => {
                 let Some(fun) = Fun::from_name(f) else {
-                    return Err(LinkError::new(format!("unknown function `{f}`")));
+                    return Err(unknown_function(f));
                 };
                 let sig = fun.signature();
                 if args.len() != sig.len() {
@@ -2023,6 +2023,9 @@ pub(crate) trait Constants {
                 }
                 self.eval_const(body)?
             }
+            Expr::Call(f, _) if !crate::frontend::parser::is_function(f) => {
+                return Err(unknown_function(f));
+            }
             Expr::Call(f, args) => {
                 let not_constant = || {
                     LinkError::new(format!(
@@ -2155,6 +2158,15 @@ impl Constants for Linker<'_> {
 
     fn terms_written(&self) -> &Cell<usize> {
         &self.terms_written
+    }
+}
+
+/// A call of a name that is no function, with what to write instead when
+/// the language took the function out.
+fn unknown_function(f: &str) -> LinkError {
+    match crate::frontend::parser::retired(f) {
+        Some(now) => LinkError::new(format!("unknown function `{f}`: {now}")),
+        None => LinkError::new(format!("unknown function `{f}`")),
     }
 }
 
