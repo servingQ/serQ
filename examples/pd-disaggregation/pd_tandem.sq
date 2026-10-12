@@ -43,7 +43,7 @@ fn main() {
         run link (cost(link, kv / bnet));
         run decode (cost(decode, sd / gD));
       }
-      observe response = now - t0;
+      observe cycle = now - t0;
     }
   }
 

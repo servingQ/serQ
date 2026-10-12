@@ -8,7 +8,7 @@
 //!     known = max(kept, computed + 1);        // an admission binding
 //!     set kept = known;                       // the statements while admitted
 //!     prefill (known - cached) growing kv;
-//!     mark first_token;
+//!     mark prefilled;
 //!     decode (output - 1) growing kv;
 //!   }
 //!   schedule { …; admit waiting … taking reqs (1), kv (known) reserve (known); }
@@ -26,7 +26,7 @@
 //!        at admission (known = max(kept, computed + 1)) {
 //!     set kept = known;
 //!     run vllm prefill (cost(vllm, known - cached)) growing kv;
-//!     mark first_token;
+//!     mark prefilled;
 //!     run vllm decode (cost(vllm, output - 1)) growing kv;
 //!   } cache (cost(reqs, kv, prompt + output));
 //! }

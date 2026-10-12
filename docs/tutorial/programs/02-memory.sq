@@ -31,7 +31,6 @@ fn main() {
       observe admit_wait = now - t0;
       run svc (processing.svc);
     }
-    observe response = now - t0;
   }
 
 

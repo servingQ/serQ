@@ -96,6 +96,7 @@ def num(x):
 def row(mode, workload, x, seed, rep):
     span = rep["end"] - rep["warmup"]
     obs = rep["observes"]
+    client = rep["client"]
     dec = [s for s in rep["stages"] if s["name"] == "D" and s["iterations"] > 0]
     pods = [s for s in rep["stages"] if s["name"] in ("P", "D") and s["iterations"] > 0]
     split = mode == "split"
@@ -110,9 +111,10 @@ def row(mode, workload, x, seed, rep):
         "seed": seed,
         "turns_per_s": rep["turns"] / span,
         "live": rep["mean_live"],
-        "ttft": obs["ttft"]["mean"],
-        "response": obs["response"]["mean"],
-        "decode": obs["response"]["mean"] - obs["ttft"]["mean"],
+        # what each turn's client saw (the report's `client` section)
+        "ttft": client["ttft"]["mean"],
+        "response": client["response"]["mean"],
+        "decode": client["response"]["mean"] - client["ttft"]["mean"],
         "remote": obs["remote"]["mean"],
         # prompt tokens computed by whichever pod prefills, per prefill
         # (a turn, but for the few preempted and run again)

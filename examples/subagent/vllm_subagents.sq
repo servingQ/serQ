@@ -55,7 +55,6 @@ fn main() {
       observe hit = c > 0;                    // any reused block, again after a preemption
       observe prefill_tokens = known - c;
       prefill (known - c) growing kv;
-      branch (known == prompt) { mark first_token; }   // not a resumed request's re-prefill
       decode (output - 1 - (known - prompt)) growing kv;
     }
     schedule {
@@ -117,11 +116,8 @@ fn main() {
   // --8<-- [end:workload]
 
   server {
-    set t0 = now;
     set prompt = K + n;
     vllm (prompt, o);
-    observe ttft = vllm.first_token - t0;
-    observe response = now - t0;
   }
 
 

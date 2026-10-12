@@ -115,11 +115,11 @@ fn a_mark_is_a_set_the_caller_reads_afterwards() {
         &[
             (
                 "prefill (known - cached) growing kv;",
-                "prefill (known - cached) growing kv;\n    mark first_token;",
+                "prefill (known - cached) growing kv;\n    mark prefilled;",
             ),
             (
                 "llm (prompt, o);",
-                "llm (prompt, o);\n  observe ttft = llm.first_token - t0;",
+                "llm (prompt, o);\n  observe prefill_done = llm.prefilled - t0;",
             ),
         ],
     );
@@ -127,14 +127,14 @@ fn a_mark_is_a_set_the_caller_reads_afterwards() {
     let slot = p
         .attrs
         .iter()
-        .position(|a| a == "llm.first_token")
+        .position(|a| a == "llm.prefilled")
         .expect("the mark is an attribute");
     let sets_now = |s: &CStmt| matches!(s, CStmt::Set(k, CExpr::Ctx(CtxVar::Now)) if *k == slot);
     assert!(
         p.blocks.iter().flatten().any(sets_now),
-        "no `set llm.first_token = now`"
+        "no `set llm.prefilled = now`"
     );
-    assert!(p.observes.iter().any(|o| o == "ttft"));
+    assert!(p.observes.iter().any(|o| o == "prefill_done"));
 }
 
 #[test]

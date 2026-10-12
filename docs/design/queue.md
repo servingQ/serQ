@@ -147,7 +147,11 @@ at seed 7 the batch-means estimator sees `lease` in another order (its
 interval moves by 0.1 %). The IR is not byte-identical: `set transferred =
 0` moved from the router into the decoder's entry (it is the pull
 scheduler's per-request flag, `nixl/pull_scheduler.py:187-189`), two
-`mark`s are two `set`s, and the pools are `P.kv`, not `kvP`.
+`mark`s are two `set`s, and the pools are `P.kv`, not `kvP`. The
+program's `ttft` and the decoder's `mark first_token` have gone since: the
+report's `client` section gives every turn's time to first token
+([What the client sees](client-metrics.md)), and `lease` is the mark the
+gateway still reads.
 
 ## What it earns
 
@@ -160,8 +164,9 @@ scheduler's per-request flag, `nixl/pull_scheduler.py:187-189`), two
 
 ## Self-critique
 
-**`mark` exports one moment, not an observation.** `ttft` and `lease` are
-the deployment's names and the gateway observes them; but a queue may still
+**`mark` exports one moment, not an observation.** `lease` is the
+deployment's name and the gateway observes it (`ttft` was, until the
+client's took its place); but a queue may still
 `observe` its own (`local_tokens`, `remote_tokens`), so the boundary is not
 clean.
 

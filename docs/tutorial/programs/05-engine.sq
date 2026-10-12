@@ -58,7 +58,6 @@ fn main() {
 
   // the engine: what it does with one request
   server {
-    set t0 = now;
     set prompt = K + n;
     // how much of the prompt the cache could supply, in whole blocks. The
     // cache itself is read inside the hold's units, so it is read when the
@@ -66,19 +65,14 @@ fn main() {
     // It is admitted only if the whole prompt fits, as vLLM's default
     // scheduler_reserve_full_isl (config/scheduler.py:191): the `reserve`
     set hitmax = floor((prompt - 1) / bs) * bs;
-    set sent = 0;
     hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, reused + budget_left(llm)))) reserve (cost(kv, prompt))
          at admission (reused = min(cachedin(kv), hitmax)) {
       set c = min(cached, floor((prompt - 1) / bs) * bs);
       // a request preempted runs this body again; count its hit once
       branch (computed == 0) { observe hit = c > 0; }
       run llm prefill (cost(llm, prompt - c)) growing kv;
-      // and its first token once: not again after a preemption, however
-      // many attempts it takes
-      branch (!sent) { observe ttft = now - t0; set sent = 1; }
       run llm decode (cost(llm, o - 1)) growing kv;
     } cache (cost(reqs, kv, prompt + o));
-    observe response = now - t0;
   }
 
 

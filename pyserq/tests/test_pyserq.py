@@ -98,7 +98,7 @@ def attrs(x):
 
 
 SAMPLES = {"samples", "times", "sessions", "turns"}
-LOOKUPS = {"json", "observes", "gauges", "claims", "stages", "pools", "observe", "gauge", "claim", "stage", "stages_named", "pool", "pools_named"}
+LOOKUPS = {"json", "observes", "client", "gauges", "claims", "stages", "pools", "observe", "gauge", "claim", "stage", "stages_named", "pool", "pools_named"}
 
 
 def test_the_report_is_its_json_by_name():
@@ -112,13 +112,19 @@ def test_the_report_is_its_json_by_name():
     assert fails.claim("none").result == "fails" and fails.claim("none").first == fails.end
     for r in [pyserq.run(pyserq.compile(MG1, seed=4, horizon=20000.0, warmup=1000.0)), arrays, replay, kong, live, fails]:
         js = json.loads(r.json())
-        scalars = {k: v for k, v in js.items() if k not in ("observes", "gauges", "claims", "stages", "pools")}
+        scalars = {k: v for k, v in js.items() if k not in ("observes", "client", "gauges", "claims", "stages", "pools")}
         # every field, both ways: nothing JSON has is missing, nothing it lacks is added
         assert attrs(r) == set(scalars) | LOOKUPS
         assert all(same(getattr(r, k), v) for k, v in scalars.items())
         assert list(r.observes) == list(js["observes"])
         for name, o in js["observes"].items():
             ob = r.observe(name)
+            assert ob.name == name and attrs(ob) == set(o) | {"name"} | SAMPLES
+            assert all(same(getattr(ob, k), v) for k, v in o.items())
+            assert len(ob.samples) == ob.count
+        assert list(r.client) == list(js["client"]) == ["ttft", "tpot", "response"]
+        for name, o in js["client"].items():
+            ob = r.client[name]
             assert ob.name == name and attrs(ob) == set(o) | {"name"} | SAMPLES
             assert all(same(getattr(ob, k), v) for k, v in o.items())
             assert len(ob.samples) == ob.count
@@ -144,9 +150,9 @@ def test_the_report_is_its_json_by_name():
             assert attrs(cl) == set(c) and all(same(getattr(cl, k), v) for k, v in c.items())
         assert r.observe("nope") is None and r.stage("nope") is None and r.pool("nope") is None
         assert r.gauge("nope") is None and r.claim("nope") is None
-    assert type(replay.pools[0]).__module__ == "pyserq" and type(replay.observe("ttft")).__module__ == "pyserq"
+    assert type(replay.pools[0]).__module__ == "pyserq" and type(replay.client["ttft"]).__module__ == "pyserq"
     assert kong.claim("queueing_bound").result == "holds" and type(kong.claim("queueing_bound")).__module__ == "pyserq"
-    assert pyserq.run(pyserq.compile(MG1, horizon=5.0, warmup=0.0)).observe("response").ci == math.inf
+    assert pyserq.run(pyserq.compile(MG1, horizon=5.0, warmup=0.0)).client["response"].ci == math.inf
 
 
 def test_program_text_with_run_options():

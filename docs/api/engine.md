@@ -282,7 +282,6 @@ engine vllm on gpu {
     observe hit = c > 0;
     observe prefill_tokens = known - c;
     prefill (known - c) growing kv;
-    branch (known == prompt) { mark first_token; }
     decode (output - 1 - (known - prompt)) growing kv;
   }
   schedule {
