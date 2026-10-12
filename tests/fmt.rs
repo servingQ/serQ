@@ -112,16 +112,18 @@ fn braced_definitions_format_and_preserve_expansion() {
 /// or the file; a blank line inside a block comment is the comment's.
 #[test]
 fn blank_lines_are_one_and_none_at_the_edge_of_a_block() {
-    let source = "\n\nlet C = 1;\n\n\n/* a\n\n\nb */\nfn main() {\n\n\
+    // a comment after `{` or before `}` does not keep the blank line by it
+    let source = "\n\nlet C = 1;\n\n\n/* a\n\n\nb */\nfn main() { // c\n\n\
         stage svc : delay;\n  workload { session { turn; end; } }\n\n\n\
-        server { run svc (cost(svc, C)); }\n\n}\n\n\n";
+        server { run svc (cost(svc, C)); }\n  // last\n\n}\n\n\n";
     let formatted = format(source).unwrap();
     assert_eq!(
         formatted,
-        "let C = 1;\n\n/* a\n\n\nb */\nfn main() {\n\
+        "let C = 1;\n\n/* a\n\n\nb */\nfn main() { // c\n\
          \x20 stage svc : delay;\n\
          \x20 workload { session { turn; end; } }\n\n\
-         \x20 server { run svc (cost(svc, C)); }\n}\n"
+         \x20 server { run svc (cost(svc, C)); }\n\
+         \x20 // last\n}\n"
     );
     assert_eq!(format(&formatted).unwrap(), formatted);
 }

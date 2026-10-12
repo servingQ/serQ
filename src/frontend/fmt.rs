@@ -53,8 +53,9 @@ fn format_code(tokens: &[&Token]) -> String {
 }
 
 /// Format program text while keeping comments, token spellings and line
-/// breaks. Blank lines are kept one at a time between lines, and none at the
-/// start or end of the file or of a block. Formatting twice has the same result as formatting once.
+/// breaks. A run of blank lines becomes one, and none is kept at the start
+/// or end of the file or of a block. Formatting twice has the same result as
+/// formatting once.
 pub fn format(src: &str) -> Result<String, String> {
     format_at(src, None)
 }
