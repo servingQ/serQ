@@ -726,6 +726,7 @@ impl Parser {
             mode,
             growing,
             also: vec![],
+            share: None,
         })
     }
 

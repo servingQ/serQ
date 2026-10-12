@@ -28,7 +28,7 @@ OUT = os.path.join(ROOT, "lean", "Serq", "Oracle.lean")
 # which are outside the fragment: a program that uses them fails below.
 # 6 adds renewal arrivals and finite open runs, outside explicit-session semantics.
 # 7 makes `choose` compare a tuple of keys. 8 lets a run hold several stages
-# at once (`Run.also`, under `Program.share`), outside the fragment.
+# at once (`Run.also`, under its `Run.share`), outside the fragment.
 # 9 reevaluates non-FIFO queue keys and supplies Waited, outside this fragment.
 # 10 makes a hold's `cache` clause what consumes the session's own prefix
 # (serQ #234): a hold without it leaves the entry where it is, and the
@@ -586,7 +586,12 @@ def load(name):
         ir = json.load(source)
     if ir["version"] not in SUPPORTED_IR_VERSIONS:
         raise Fragment(f"{name}: IR version {ir['version']} (this generator reads {SUPPORTED_IR_VERSIONS})")
-    if ir.get("share") is not None:
+    # a shared stage makes every run on it a flow, a single-stage one too
+    if any(
+        isinstance(st, dict) and "Run" in st and st["Run"].get("share") is not None
+        for block in ir["blocks"]
+        for st in block
+    ):
         raise Fragment(f"{name}: shared multi-stage execution is outside the fragment")
     if ir.get("arrivals") is not None:
         raise Fragment(f"{name}: finite arrival limits are outside the fragment")

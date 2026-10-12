@@ -144,6 +144,8 @@ pub struct Takes {
     /// source in a push.
     pub latency: Option<Expr>,
     pub push: bool,
+    /// `share = share.maxmin`: how the copies divide the two NICs.
+    pub share: crate::ir::Share,
 }
 
 /// The stage a `transfer` without `on` names inside an entry of a queue
@@ -430,6 +432,7 @@ impl Ctx<'_> {
             source,
             latency,
             push,
+            share,
         }) = &self.q.takes
         else {
             return err(
@@ -473,6 +476,7 @@ impl Ctx<'_> {
                 work: Expr::cost(std::slice::from_ref(&stage), l.clone()),
                 growing: None,
                 also: vec![],
+                share: None,
             });
         }
         out.push(Stmt::Run {
@@ -495,6 +499,7 @@ impl Ctx<'_> {
             ),
             growing: None,
             also: vec![own(format!("{}.nic", self.q.name))],
+            share: Some(*share),
         });
         Ok(out)
     }
@@ -554,6 +559,7 @@ impl Ctx<'_> {
                 work,
                 growing,
                 also,
+                share,
             } => Stmt::Run {
                 stage: self.reference(stage)?,
                 mode: *mode,
@@ -563,6 +569,7 @@ impl Ctx<'_> {
                     .iter()
                     .map(|r| self.reference(r))
                     .collect::<Result<_, _>>()?,
+                share: *share,
             },
             Stmt::Branch(p, a, b) => Stmt::Branch(self.expr(p)?, self.stmts(a)?, self.stmts(b)?),
             Stmt::Loop(b) => Stmt::Loop(self.stmts(b)?),

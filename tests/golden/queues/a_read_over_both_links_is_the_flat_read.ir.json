@@ -424,7 +424,8 @@
                 "Attr": 12
               }
             }
-          ]
+          ],
+          "share": "MaxMin"
         }
       },
       {
@@ -524,6 +525,5 @@
   "slot_computed": 8,
   "hidden": [
     10
-  ],
-  "share": "MaxMin"
+  ]
 }

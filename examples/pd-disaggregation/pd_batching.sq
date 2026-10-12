@@ -31,6 +31,7 @@
 // The queues of the other mode are declared and stay idle.
 use "std/args";
 use "std/kvt";
+use "std/share";
 
 let N = 4;             // colocated engines
 let NP = 3;            // prefill engines when split
@@ -186,8 +187,7 @@ fn main() {
 
   // How concurrent reads divide the two NICs is the fabric's, not vLLM's:
   // max-min fairness is the model (docs/design/bandwidth-sharing.md).
-  share maxmin;
-  kvt.nixl_pull (P, D, latency = x0);
+  kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);
 
   workload {
     arrive poisson(Lambda);

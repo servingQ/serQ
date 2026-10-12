@@ -41,9 +41,13 @@ class FragmentBoundaries(unittest.TestCase):
             self.assertEqual(reference.block(ir["session"], 1), lean.block(ir["session"], 1))
 
     def test_unknown_versions_and_shared_execution_are_rejected(self):
-        for update, message in [({"version": 99}, "IR version 99"),
-                                ({"share": "MaxMin"}, "shared multi-stage")]:
-            ir = {**copy.deepcopy(self.ir), **update}
+        # a run over several stages names its fabric's policy (`Run.share`)
+        flow = {"Run": {"stage": {"base": 0, "count": 1}, "mode": "Plain", "work": {"Num": 1.0},
+                        "growing": None, "also": [{"base": 0, "count": 1}], "share": "MaxMin"}}
+        shared = copy.deepcopy(self.ir)
+        shared["blocks"][shared["session"]].insert(0, flow)
+        for ir, message in [({**copy.deepcopy(self.ir), "version": 99}, "IR version 99"),
+                            (shared, "shared multi-stage")]:
             with tempfile.TemporaryDirectory() as directory:
                 Path(directory, "mixed.ir.json").write_text(json.dumps(ir))
                 with patch.object(generator, "ODIR", directory):

@@ -1117,13 +1117,13 @@ fn a_decision_is_named_by_its_leading_chooses() {
 #[test]
 fn the_looking_pass_leaves_nothing() {
     let src = "stage A : delay; stage x : ps(1); stage y : ps(1);
-        share maxmin;
+        use \"std/share\";
         workload { arrive batch(1);
           session {
             loop {
               set c = ~bernoulli(0.5);
               branch (c) { end; } turn;
-              run x, y (cost(x, y, 1));
+              run x, y (cost(x, y, 1), share = share.maxmin);
               run A (cost(A, 1));
             }
           }
@@ -1417,7 +1417,7 @@ fn the_examples_start_at_their_decision() {
 fn a_run_over_several_stages_is_one_bracketed_job() {
     let src = "pool kvP { cap 100; } pool kvD[2] { cap 100; }
         stage P : delay; stage egress : ps(1); stage ingress[2] : ps(1); stage D[2] : delay;
-        share maxmin;
+        use \"std/share\";
         workload { arrive batch(2);
           session { turn;
             end;
@@ -1428,7 +1428,7 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
           set j = serial;
           hold kvP (cost(kvP, 10)) { run P (cost(P, 1)); } lease kvP (inf);
           hold kvD[j] (cost(kvD, 10)) {
-            transfer on egress, ingress[j] (1) from kvP to kvD[j] (10);
+            transfer on egress, ingress[j] (1, share = share.maxmin) from kvP to kvD[j] (10);
             run D[j] (cost(D, 1));
           }
         }
@@ -1456,7 +1456,7 @@ fn a_run_over_several_stages_is_one_bracketed_job() {
 fn only_a_links_latency_folds_into_the_transfer() {
     let src = "pool kvP { cap 100; } pool kvD { cap 100; }
         stage P : delay; stage wait : delay; stage egress : ps(1); stage ingress : ps(1); stage D : delay;
-        share maxmin;
+        use \"std/share\";
         workload { arrive batch(1);
           session { turn;
             end;
@@ -1465,7 +1465,7 @@ fn only_a_links_latency_folds_into_the_transfer() {
         }
         server {
           hold kvP (cost(kvP, 10)) { run P (cost(P, 1)); } lease kvP (inf);
-          hold kvD (cost(kvD, 10)) { run wait (cost(wait, 1)); transfer on egress, ingress (1) from kvP to kvD (10); run D (cost(D, 1)); }
+          hold kvD (cost(kvD, 10)) { run wait (cost(wait, 1)); transfer on egress, ingress (1, share = share.maxmin) from kvP to kvD (10); run D (cost(D, 1)); }
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1481,7 +1481,7 @@ fn only_a_links_latency_folds_into_the_transfer() {
 fn a_run_from_an_unboxed_choice_does_not_span() {
     let src =
         "pool kv[2] { cap 100; } stage nic[2] : ps(1); stage ing[2] : ps(1); stage D[2] : delay;
-        share maxmin;
+        use \"std/share\";
         workload { arrive batch(1);
           session { turn;
             end;
@@ -1491,7 +1491,7 @@ fn a_run_from_an_unboxed_choice_does_not_span() {
         server {
           choose i in 2 by (0);
           choose j in 2 by (0);
-          hold kv[j] (cost(kv, 10)) { run nic[i], ing[j] (cost(nic, ing, 1)); run D[j] (cost(D, 1)); }
+          hold kv[j] (cost(kv, 10)) { run nic[i], ing[j] (cost(nic, ing, 1), share = share.maxmin); run D[j] (cost(D, 1)); }
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1515,7 +1515,7 @@ fn a_latency_before_two_transfers_stays_a_station() {
     let src = "pool kvP { cap 100; } pool kvD { cap 100; }
         stage P : delay; stage a : ps(1); stage b : ps(1);
         queue L : link { serve ps(1) latency 0.5; }
-        share maxmin;
+        use \"std/share\";
         workload { arrive batch(1);
           session { turn;
             end;
@@ -1526,8 +1526,8 @@ fn a_latency_before_two_transfers_stays_a_station() {
           hold kvP (cost(kvP, 10)) { run P (cost(P, 1)); } lease kvP (inf);
           set c = ~bernoulli(0.5);
           hold kvD (cost(kvD, 10)) {
-            branch (c) { transfer on a, L (1) from kvP to kvD (10); }
-            else { transfer on b, L (1) from kvP to kvD (10); }
+            branch (c) { transfer on a, L (1, share = share.maxmin) from kvP to kvD (10); }
+            else { transfer on b, L (1, share = share.maxmin) from kvP to kvD (10); }
           }
         }
         ";
@@ -1547,7 +1547,7 @@ fn a_latency_before_two_transfers_stays_a_station() {
 fn a_transfers_note_is_what_every_run_over_it_moves() {
     let src = "pool p1 { cap 9; } pool p2 { cap 9; } pool q1 { cap 9; } pool q2 { cap 9; }
         stage s : delay; stage a : ps(1); stage b : ps(1);
-        share maxmin;
+        use \"std/share\";
         workload { arrive batch(1);
           session { turn;
             end;
@@ -1558,10 +1558,10 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
           set c = ~bernoulli(0.5);
           branch (c) {
             hold p1 (cost(p1, 1)) { run s (cost(s, 1)); } lease p1 (inf);
-            hold q1 (cost(q1, 1)) { transfer on a, b (1) from p1 to q1 (1); }
+            hold q1 (cost(q1, 1)) { transfer on a, b (1, share = share.maxmin) from p1 to q1 (1); }
           } else {
             hold p2 (cost(p2, 1)) { run s (cost(s, 1)); } lease p2 (inf);
-            hold q2 (cost(q2, 1)) { transfer on a, b (1) from p2 to q2 (1); }
+            hold q2 (cost(q2, 1)) { transfer on a, b (1, share = share.maxmin) from p2 to q2 (1); }
           }
         }
         ";
@@ -1574,7 +1574,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
     let src = "pool kP { cap 9; } pool kD { cap 9; } stage P : delay;
         queue A : link { serve ps(1) latency 0.25; }
         queue B : link { serve ps(1) latency 0.5; }
-        share maxmin;
+        use \"std/share\";
         workload { arrive batch(1);
           session { turn;
             end;
@@ -1583,7 +1583,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
         }
         server {
           hold kP (cost(kP, 1)) { run P (cost(P, 1)); } lease kP (inf);
-          hold kD (cost(kD, 1)) { transfer on A, B (1) from kP to kD (1); }
+          hold kD (cost(kD, 1)) { transfer on A, B (1, share = share.maxmin) from kP to kD (1); }
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1595,7 +1595,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
 
     let src = "pool kv[2] { cap 9; } stage a[2] : ps(1); stage b[2] : ps(1); stage c[2] : ps(1);
         stage A[2] : delay; stage B[2] : delay;
-        share maxmin;
+        use \"std/share\";
         workload { arrive batch(1);
           session { turn;
             end;
@@ -1607,7 +1607,7 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
           choose j in 2 by (0);
           hold kv[i] (cost(kv, 1)) { run A[i] (cost(A, 1)); }
           hold kv[j] (cost(kv, 1)) { run B[j] (cost(B, 1)); }
-          run a[i], b[j], c[i] (cost(a, b, c, 1));
+          run a[i], b[j], c[i] (cost(a, b, c, 1), share = share.maxmin);
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1621,12 +1621,12 @@ fn a_transfers_note_is_what_every_run_over_it_moves() {
 #[test]
 fn a_flows_stations_are_neighbours_in_the_row() {
     let src = "stage ingress : ps(1); stage D : delay; stage egress : ps(1);
-        share maxmin;
+        use \"std/share\";
         workload { arrive batch(1);
           session { turn; end;
           }
         }
-        server { run ingress (cost(ingress, 1)); run D (cost(D, 1)); run egress, ingress (cost(egress, ingress, 1));
+        server { run ingress (cost(ingress, 1)); run D (cost(D, 1)); run egress, ingress (cost(egress, ingress, 1), share = share.maxmin);
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1701,12 +1701,12 @@ fn an_arrow_past_stations_goes_below_the_row() {
 #[test]
 fn a_reordered_arrow_is_drawn_the_way_it_points() {
     let src = "stage a : ps(1); stage v : delay; stage u : ps(1);
-        share maxmin;
+        use \"std/share\";
         workload { arrive batch(1);
           session { turn; end;
           }
         }
-        server { run a (cost(a, 1)); run v (cost(v, 1)); run u (cost(u, 1)); run v (cost(v, 1)); run a, u (cost(a, u, 1));
+        server { run a (cost(a, 1)); run v (cost(v, 1)); run u (cost(u, 1)); run v (cost(v, 1)); run a, u (cost(a, u, 1), share = share.maxmin);
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -1844,11 +1844,11 @@ fn a_pool_two_instances_hold_is_neither_instances() {
 #[test]
 fn a_load_in_the_else_arm_is_not_the_then_arms_transfer() {
     let (_, net) = instance_net(
-        "pool p[2] { cap 9; } pool q[2] { cap 9; } stage A[2] : delay; stage a[2] : ps(1); stage b[2] : ps(1); share maxmin;",
+        "pool p[2] { cap 9; } pool q[2] { cap 9; } stage A[2] : delay; stage a[2] : ps(1); stage b[2] : ps(1); use \"std/share\";",
         "set c = ~bernoulli(0.5);
          hold p[i] (cost(p, 1)) { run A[i] (cost(A, 1)); } lease p[i] (inf);
          hold q[j] (cost(q, 1)) {
-           branch (c) { run a[i], b[j] (cost(a, b, 1)); } else { load q[j] (cost(q, 1)); release p[i]; }
+           branch (c) { run a[i], b[j] (cost(a, b, 1), share = share.maxmin); } else { load q[j] (cost(q, 1)); release p[i]; }
          }",
     );
     let n = &net.flow_notes[0];
@@ -1860,8 +1860,8 @@ fn a_load_in_the_else_arm_is_not_the_then_arms_transfer() {
 #[test]
 fn boxing_instances_keeps_a_transfers_stations_together() {
     let (p, net) = instance_net(
-        "stage a[2] : ps(1); stage b[2] : ps(1); stage c[2] : delay; stage d[2] : delay; share maxmin;",
-        "run a[i], b[j] (cost(a, b, 1)); run c[i] (cost(c, 1)); run d[j] (cost(d, 1));",
+        "stage a[2] : ps(1); stage b[2] : ps(1); stage c[2] : delay; stage d[2] : delay; use \"std/share\";",
+        "run a[i], b[j] (cost(a, b, 1), share = share.maxmin); run c[i] (cost(c, 1)); run d[j] (cost(d, 1));",
     );
     let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
     assert_eq!(net.flows, vec![vec![at("a"), at("b")]]);
@@ -1914,9 +1914,9 @@ fn a_transfer_back_stays_between_the_boxes() {
         "pool kp[2] { cap 9; } pool kd[2] { cap 9; }
          stage P[2] : delay; stage D[2] : delay;
          stage a[2] : ps(1); stage b[2] : ps(1); stage a2[2] : ps(1); stage b2[2] : ps(1);
-         share maxmin;",
-        "hold kp[i] (cost(kp, 1)) { run P[i] (cost(P, 1)); run a[i], b[j] (cost(a, b, 1)); }
-         hold kd[j] (cost(kd, 1)) { run D[j] (cost(D, 1)); run b2[j], a2[i] (cost(b2, a2, 1)); }",
+         use \"std/share\";",
+        "hold kp[i] (cost(kp, 1)) { run P[i] (cost(P, 1)); run a[i], b[j] (cost(a, b, 1), share = share.maxmin); }
+         hold kd[j] (cost(kd, 1)) { run D[j] (cost(D, 1)); run b2[j], a2[i] (cost(b2, a2, 1), share = share.maxmin); }",
     );
     let at = |name: &str| net.node_of(stage(&p, name)).unwrap();
     assert_eq!(net.flows.len(), 2);
@@ -1948,10 +1948,10 @@ fn an_instances_pool_is_drawn_only_in_its_box() {
 fn after_a_branch_a_load_follows_no_arms_transfer() {
     let (_, net) = instance_net(
         "pool q[2] { cap 9; } stage P[2] : delay; stage a[2] : ps(1); stage b[2] : ps(1);
-         share maxmin;",
+         use \"std/share\";",
         "set c = ~bernoulli(0.5);
          hold q[j] (cost(q, 1)) {
-           run a[i], b[j] (cost(a, b, 1));
+           run a[i], b[j] (cost(a, b, 1), share = share.maxmin);
            branch (c) { run P[i] (cost(P, 1)); } else { }
            load q[j] (cost(q, 1));
          }",

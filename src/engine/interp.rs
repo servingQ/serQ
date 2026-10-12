@@ -500,9 +500,10 @@ enum Kind {
         epoch: u64,
     },
     /// A `ps(cap)` stage some run holds together with another: its jobs are
-    /// flows of `Interp::flows`, their rates set by the program's `share`.
+    /// flows of `Interp::flows`, their rates set by its fabric's `share`.
     Shared {
         cap: f64,
+        share: crate::ir::Share,
     },
 }
 
@@ -850,7 +851,9 @@ impl<'p> Interp<'p> {
                 stuck: 0,
             })
             .collect();
-        let shared = p.shared_stages();
+        let shared = p
+            .stage_shares()
+            .expect("a linked program's fabrics have one policy each");
         let stages = p
             .stages
             .iter()
@@ -862,7 +865,9 @@ impl<'p> Interp<'p> {
                         queue: VecDeque::new(),
                         active: vec![],
                     },
-                    CStageKind::Ps(CExpr::Num(cap)) if shared[k] => Kind::Shared { cap: *cap },
+                    CStageKind::Ps(CExpr::Num(cap)) if let Some(share) = shared[k] => {
+                        Kind::Shared { cap: *cap, share }
+                    }
                     // `ps(present)` gives every job rate 1: a finish event
                     // each, no virtual time to re-share at every arrival
                     _ if cs.kind.is_delay() => Kind::Delay,
@@ -1368,7 +1373,7 @@ impl<'p> Interp<'p> {
             let busy = match st.kind {
                 // the capacity the flows carry, not whether any is there: a
                 // `bottleneck` flow leaves the rest of its other stages unused
-                Kind::Shared { cap } => {
+                Kind::Shared { cap, .. } => {
                     // summed in job order: a HashMap's order is not the
                     // seed's, and a float sum depends on it
                     let mut ids: Vec<u64> = st.jobs.keys().copied().collect();
@@ -2147,6 +2152,7 @@ impl<'p> Interp<'p> {
                     work,
                     growing,
                     also,
+                    ..
                 } => {
                     let st = self.session_index(stage, sid);
                     // the kernel's spelling: `run E decode (…)`
@@ -3579,15 +3585,11 @@ impl<'p> Interp<'p> {
         self.flows_last = self.now;
     }
 
-    /// The rates of every flow under the program's `share`, and the earliest
+    /// The rates of every flow under its fabric's `share`, and the earliest
     /// end among them scheduled; an end scheduled before is stale.
     fn flows_reschedule(&mut self) {
         self.flows_dirty = false;
         self.flows_advance();
-        let cap = |st: &StageState| match st.kind {
-            Kind::Shared { cap } => cap,
-            _ => unreachable!("a flow holds shared stages only"),
-        };
         // Only the flows that share a stage, however indirectly, with one
         // that started or ended can change rate: the connected component of
         // the touched stages. The others keep theirs, which a recomputation
@@ -3619,10 +3621,60 @@ impl<'p> Interp<'p> {
         }
         ids.sort_unstable();
         ids.dedup();
-        match self.p.share.expect("a program with flows has a share") {
+        // a fabric has one policy (`Program::stage_shares`), so the flows of
+        // a component are all of it, and the touched components of each
+        // policy are solved apart from the others'
+        let policy = |st: &StageState| match st.kind {
+            Kind::Shared { share, .. } => share,
+            _ => unreachable!("a flow holds shared stages only"),
+        };
+        for share in crate::ir::Share::ALL.map(|(_, s)| s) {
+            let ids: Vec<u64> = ids
+                .iter()
+                .copied()
+                .filter(|id| policy(&self.stages[self.flows[id].stages[0]]) == share)
+                .collect();
+            let comp_stages: Vec<usize> = comp_stages
+                .iter()
+                .copied()
+                .filter(|&s| policy(&self.stages[s]) == share)
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            self.flows_solve(share, &ids, &comp_stages);
+        }
+        self.flow_epoch += 1;
+        let now = self.now;
+        let next = self
+            .flows
+            .iter()
+            .filter(|(_, f)| f.rate > 0.0)
+            .map(|(id, f)| (now + f.remaining / f.rate, *id))
+            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        if let Some((t, id)) = next {
+            self.at(
+                t,
+                Ev::Finish {
+                    stage: self.flows[&id].stages[0],
+                    job: id,
+                    epoch: self.flow_epoch,
+                },
+            );
+        }
+    }
+
+    /// The rates of the flows `ids`, all of policy `policy`, over the stages
+    /// `comp_stages` they hold.
+    fn flows_solve(&mut self, policy: crate::ir::Share, ids: &[u64], comp_stages: &[usize]) {
+        let cap = |st: &StageState| match st.kind {
+            Kind::Shared { cap, .. } => cap,
+            _ => unreachable!("a flow holds shared stages only"),
+        };
+        match policy {
             crate::ir::Share::Bottleneck => {
                 // each flow's equal share at the tightest of its stages
-                for &id in &ids {
+                for &id in ids {
                     let r = self.flows[&id]
                         .stages
                         .iter()
@@ -3643,7 +3695,7 @@ impl<'p> Interp<'p> {
                 let mut rising = vec![0usize; n];
                 let mut on: Vec<Vec<usize>> = vec![vec![]; n];
                 let mut frozen = vec![false; ids.len()];
-                for &s in &comp_stages {
+                for &s in comp_stages {
                     left[s] = cap(&self.stages[s]);
                 }
                 for (k, id) in ids.iter().enumerate() {
@@ -3676,24 +3728,6 @@ impl<'p> Interp<'p> {
                     }
                 }
             }
-        }
-        self.flow_epoch += 1;
-        let now = self.now;
-        let next = self
-            .flows
-            .iter()
-            .filter(|(_, f)| f.rate > 0.0)
-            .map(|(id, f)| (now + f.remaining / f.rate, *id))
-            .min_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
-        if let Some((t, id)) = next {
-            self.at(
-                t,
-                Ev::Finish {
-                    stage: self.flows[&id].stages[0],
-                    job: id,
-                    epoch: self.flow_epoch,
-                },
-            );
         }
     }
 

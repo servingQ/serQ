@@ -141,7 +141,8 @@ fn a_program_is_one_file() {
     let out = f.run(&["check", "model.sq"]);
     assert!(!out.status.success());
     assert!(
-        String::from_utf8_lossy(&out.stderr).contains("`use` reads only `std/args` and `std/kvt`")
+        String::from_utf8_lossy(&out.stderr)
+            .contains("`use` reads only `std/args`, `std/kvt` and `std/share`")
     );
 }
 

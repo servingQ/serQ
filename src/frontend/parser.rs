@@ -123,11 +123,29 @@ impl From<LexError> for ParseError {
 
 type PResult<T> = Result<T, ParseError>;
 
+/// `A, B[j]`: the stages a job holds, as the program names them.
+fn stage_list(stage: &Ref, also: &[Ref]) -> String {
+    std::iter::once(stage)
+        .chain(also)
+        .map(|r| {
+            if r.index.is_some() {
+                format!("{}[…]", r.name)
+            } else {
+                r.name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 struct Parser {
     args_imported: bool,
     /// `use "std/kvt";`: the KV-transfer vocabulary, `kvt.nixl_pull (…)` and
     /// the rest.
     kvt_imported: bool,
+    /// `use "std/share";`: the sharing policies, `share.maxmin` and the
+    /// rest (`Share::ALL`).
+    share_imported: bool,
     supplied_inputs: Vec<String>,
     toks: Vec<Token>,
     pos: usize,
@@ -147,8 +165,6 @@ struct Parser {
     /// position of its keyword, until `assemble` puts them together.
     wl_session: Option<(usize, Vec<Stmt>)>,
     server: Option<(usize, Vec<Stmt>)>,
-    /// Where `share` was given, for the error that it is given twice.
-    share_at: Option<usize>,
     /// Header bindings the body of their hold reads, with the position of
     /// the name: `set` at the top of the body, checked once the program's
     /// attributes are known (`check_body_bindings`).
@@ -180,8 +196,6 @@ struct Parser {
     /// The `from` name of the entry being parsed.
     entry_from: Option<String>,
     entry_gateway: bool,
-    /// The verb of the relation that gave the program's `share`.
-    relation: Option<(usize, String)>,
     /// The queues whose relation gives the wait before each copy they post.
     posters: Vec<String>,
     /// The token of the workload's first `tool` that found no stage `tool`
@@ -400,7 +414,7 @@ const MAX_FAMILY: usize = 10_000;
 /// parameter may not be one: a parameter is replaced token by token, and a
 /// keyword in the body is a token of the same spelling. `tests/docs_lexer.rs`
 /// keeps the list whole.
-pub const KEYWORDS: [&str; 117] = [
+pub const KEYWORDS: [&str; 114] = [
     "Cost",
     "Size",
     "admission",
@@ -412,7 +426,6 @@ pub const KEYWORDS: [&str; 117] = [
     "batch",
     "bernoulli",
     "block",
-    "bottleneck",
     "branch",
     "budget",
     "by",
@@ -466,7 +479,6 @@ pub const KEYWORDS: [&str; 117] = [
     "loop",
     "lru",
     "mark",
-    "maxmin",
     "memory",
     "most",
     "nic",
@@ -496,7 +508,6 @@ pub const KEYWORDS: [&str; 117] = [
     "server",
     "session",
     "set",
-    "share",
     "shrink",
     "some",
     "spill",
@@ -1537,6 +1548,7 @@ impl Parser {
         Parser {
             args_imported: false,
             kvt_imported: false,
+            share_imported: false,
             supplied_inputs: vec![],
             toks,
             pos: 0,
@@ -1547,7 +1559,6 @@ impl Parser {
             side: Side::Session,
             wl_session: None,
             server: None,
-            share_at: None,
             body_binds: vec![],
             header_binds: vec![],
             bind_at: vec![],
@@ -1561,7 +1572,6 @@ impl Parser {
             in_queue: None,
             entry_from: None,
             entry_gateway: false,
-            relation: None,
             posters: vec![],
             implicit_tool: None,
             latency_ok: false,
@@ -1978,31 +1988,19 @@ impl Parser {
                 };
                 return self.err(format!(
                     "`{first} {verb} {second} …;` is std/kvt's now: `use \"std/kvt\";`, \
-                     `kvt.nixl_{verb} ({source}, {reader}, latency = …);` and the program's \
-                     `share maxmin;`"
+                     `use \"std/share\";` and \
+                     `kvt.nixl_{verb} ({source}, {reader}, latency = …, share = share.maxmin);`"
                 ));
-            } else if self.is_kw("share") {
-                let at = self.pos;
-                self.advance();
-                if let Some(first) = self.share_at {
-                    let line = self.toks[first].line;
-                    return self.err_at(
-                        at,
-                        format!("`share` is given twice: the first is on line {line}"),
-                    );
-                }
-                self.share_at = Some(at);
-                prog.share = Some(if self.eat_kw("maxmin") {
-                    crate::ir::Share::MaxMin
-                } else if self.eat_kw("bottleneck") {
-                    crate::ir::Share::Bottleneck
-                } else {
-                    return self.err(format!(
-                        "`share` takes `maxmin` or `bottleneck`, found {}",
-                        self.peek()
-                    ));
-                });
-                self.expect(&Tok::Semi)?;
+            } else if let Tok::Ident(policy) = self.peek_at(1).clone()
+                && *self.peek() == Tok::Ident("share".into())
+                && crate::ir::Share::ALL.iter().any(|(n, _)| *n == policy)
+            {
+                // the program's one policy is gone: each fabric names its own
+                return self.err(format!(
+                    "`share {policy};` is std/share's now, and each relation's: \
+                     `use \"std/share\";` and `kvt.nixl_pull (P, D, …, share = share.{policy});`, \
+                     or `run A, B (w, share = share.{policy});`"
+                ));
             } else if self.eat_kw("run") {
                 return self.err("execution settings do not belong in a model\nhelp: supply --horizon T (and --warmup, --seed, --arrivals) or --instance FILE; `run STAGE (work);` belongs in a session or server");
             } else {
@@ -2012,20 +2010,14 @@ impl Parser {
         if in_main {
             return self.err("unclosed `fn main()`; expected `}`");
         }
-        if let Some((at, written)) = &self.relation
-            && prog.share.is_none()
-        {
-            return self.err_at(
-                *at,
-                format!(
-                    "{written}: concurrent copies divide the NICs by the program's `share`; \
-                     write `share maxmin;` or `share bottleneck;`"
-                ),
-            );
-        }
         if self.kvt_imported && self.declares(&prog, "kvt") {
             return self
                 .err("`kvt` names the imported std/kvt module; give the declaration another name");
+        }
+        if self.share_imported && self.declares(&prog, "share") {
+            return self.err(
+                "`share` names the imported std/share module; give the declaration another name",
+            );
         }
         if self.args_imported && self.declares(&prog, "args") {
             return self.err(
@@ -2485,9 +2477,9 @@ impl Parser {
             || self.defs.iter().any(|d| d.name == name)
     }
 
-    /// `use "std/args";`, the program's inputs, and `use "std/kvt";`, the
-    /// KV-transfer vocabulary. A program is one file, so no other `use`
-    /// reads anything.
+    /// `use "std/args";`, the program's inputs, `use "std/kvt";`, the
+    /// KV-transfer vocabulary, and `use "std/share";`, the sharing policies.
+    /// A program is one file, so no other `use` reads anything.
     fn use_std(&mut self) -> PResult<()> {
         let at = self.pos;
         self.advance();
@@ -2496,12 +2488,13 @@ impl Parser {
         match path.as_str() {
             "std/args" => self.args_imported = true,
             "std/kvt" => self.kvt_imported = true,
+            "std/share" => self.share_imported = true,
             _ => {
                 return self.err_at(
                     at,
                     format!(
-                        "`use \"{path}\"`: `use` reads only `std/args` and `std/kvt`; a program \
-                         is one file, so write its definitions in it"
+                        "`use \"{path}\"`: `use` reads only `std/args`, `std/kvt` and \
+                         `std/share`; a program is one file, so write its definitions in it"
                     ),
                 );
             }
@@ -2540,27 +2533,135 @@ impl Parser {
         let b_at = self.pos;
         let reader = self.ident()?;
         let mut latency = None;
-        if self.eat(&Tok::Comma) {
+        let mut share = None;
+        while self.eat(&Tok::Comma) {
             let n_at = self.pos;
             let name = self.ident()?;
-            if name != "latency" {
+            // the arguments' names, not keywords (`share` is std/share's)
+            let given = if name == "latency" {
+                latency.is_some()
+            } else if name == "share" {
+                share.is_some()
+            } else {
                 return self.err_at(
                     n_at,
-                    if name == "share" {
-                        "`share` is the program's: write `share maxmin;` or `share bottleneck;` \
-                         once, beside the relations"
-                            .to_string()
-                    } else {
-                        format!("`kvt.{function}` takes `latency = …`, found `{name}`")
-                    },
+                    format!("`kvt.{function}` takes `latency = …` and `share = …`, found `{name}`"),
                 );
+            };
+            if given {
+                return self.err_at(n_at, format!("`kvt.{function}` takes `{name}` once"));
             }
             self.expect(&Tok::Assign)?;
-            latency = Some((self.pos, self.expr()?));
+            if name == "latency" {
+                latency = Some((self.pos, self.expr()?));
+            } else {
+                share = Some(self.share_policy()?);
+            }
         }
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::Semi)?;
-        self.copy_relation(prog, at, push, (source, a_at), (reader, b_at), latency)
+        // concurrent copies divide the NICs by a policy the relation names,
+        // which has no default
+        let Some(share) = share else {
+            return self.err_at(
+                at,
+                format!(
+                    "`kvt.{function} ({source}, {reader})`: concurrent copies divide the NICs by \
+                     the policy the relation names; write `share = share.maxmin` or \
+                     `share = share.bottleneck` (`use \"std/share\";`)"
+                ),
+            );
+        };
+        self.copy_relation(
+            prog,
+            at,
+            push,
+            (source, a_at),
+            (reader, b_at),
+            latency,
+            share,
+        )
+    }
+
+    /// `share.maxmin`: a policy of std/share (`Share::ALL`), how the flows
+    /// that hold several stages at once divide them.
+    fn share_policy(&mut self) -> PResult<crate::ir::Share> {
+        let at = self.pos;
+        let names = || {
+            crate::ir::Share::ALL
+                .iter()
+                .map(|(n, _)| format!("`share.{n}`"))
+                .collect::<Vec<_>>()
+                .join(" or ")
+        };
+        // a module's name, not a keyword (`kvt` likewise)
+        if *self.peek() != Tok::Ident("share".into()) || *self.peek_at(1) != Tok::Dot {
+            return self.err(format!(
+                "a sharing policy is std/share's: {}, found {}",
+                names(),
+                self.peek()
+            ));
+        }
+        if !self.share_imported {
+            return self.err_at(at, "`share.…` needs `use \"std/share\";`");
+        }
+        self.advance();
+        self.advance();
+        let p_at = self.pos;
+        let name = self.ident()?;
+        match crate::ir::Share::ALL.iter().find(|(n, _)| *n == name) {
+            Some((_, s)) => Ok(*s),
+            None => self.err_at(
+                p_at,
+                format!("std/share has no policy `{name}`; it has {}", names()),
+            ),
+        }
+    }
+
+    /// `(w)`, or `(w, share = share.maxmin)` for a job that holds several
+    /// stages at once (`multi`): its work, and how its fabric divides it.
+    /// `what` is the statement, for the errors.
+    fn work_and_share(
+        &mut self,
+        multi: bool,
+        what: &str,
+    ) -> PResult<(Expr, Option<crate::ir::Share>)> {
+        let at = self.pos;
+        self.expect(&Tok::LParen)?;
+        let work = self.expr()?;
+        let share = if self.eat(&Tok::Comma) {
+            let n_at = self.pos;
+            if *self.peek() != Tok::Ident("share".into()) {
+                return self.err_at(
+                    n_at,
+                    format!("`{what} (w, …)` takes `share = …`, found {}", self.peek()),
+                );
+            }
+            self.advance();
+            self.expect(&Tok::Assign)?;
+            Some(self.share_policy()?)
+        } else {
+            None
+        };
+        self.expect(&Tok::RParen)?;
+        match (multi, share) {
+            (true, None) => self.err_at(
+                at,
+                format!(
+                    "`{what}` holds several stages at once: name how their flows divide them, \
+                     `(w, share = share.maxmin)` or `(w, share = share.bottleneck)` \
+                     (`use \"std/share\";`)"
+                ),
+            ),
+            (false, Some(_)) => self.err_at(
+                at,
+                format!(
+                    "`{what}` holds one stage: a `share` divides the stages a job holds at once, \
+                     and a job on a shared stage takes its fabric's"
+                ),
+            ),
+            _ => Ok((work, share)),
+        }
     }
 
     /// The L2 queue `n` names, as its stage (`lmc`) or its pool (`lmc.kv`):
@@ -2678,6 +2779,7 @@ impl Parser {
                     work: Expr::cost(std::slice::from_ref(&stage), times(n.clone())),
                     growing: None,
                     also: vec![],
+                    share: None,
                 },
                 Stmt::Load(pool.clone(), Expr::cost(&[pool], n)),
             ]);
@@ -2726,6 +2828,7 @@ impl Parser {
                     work: Expr::cost(std::slice::from_ref(&stage), times(new.clone())),
                     growing: None,
                     also: vec![],
+                    share: None,
                 },
                 Stmt::Load(kv.clone(), Expr::cost(std::slice::from_ref(&kv), new)),
             ],
@@ -4977,7 +5080,8 @@ impl Parser {
                 } else {
                     RunMode::Plain
                 };
-                let work = self.paren_expr()?;
+                let what = format!("run {}", stage_list(&stage, &also));
+                let (work, share) = self.work_and_share(!also.is_empty(), &what)?;
                 let growing = if self.eat_kw("growing") {
                     Some(self.own_pool("growing")?)
                 } else {
@@ -4990,6 +5094,7 @@ impl Parser {
                     work,
                     growing,
                     also,
+                    share,
                 })
             }
             "branch" => {
@@ -5279,10 +5384,11 @@ impl Parser {
 
     /// `kvt.nixl_pull (P, D, latency = x);`: the KV the entries of `D`
     /// take `from P` is read by `D`, over `P`'s NIC and `D`'s at once, after
-    /// `D` waits `x`; concurrent reads divide the two NICs by the program's
+    /// `D` waits `x`; concurrent reads divide the two NICs by the relation's
     /// `share`. `kvt.nixl_push (P, D, latency = x);`: the same copy over the
     /// same two NICs, written by `P` (NIXL's push mode), so the wait `x`
     /// before each write is `P`'s.
+    #[allow(clippy::too_many_arguments)]
     fn copy_relation(
         &mut self,
         prog: &mut Program,
@@ -5291,6 +5397,7 @@ impl Parser {
         (source, s_at): (String, usize),
         (reader, r_at): (String, usize),
         latency: Option<(usize, Expr)>,
+        share: crate::ir::Share,
     ) -> PResult<()> {
         let span = Some(self.span_at(s_at));
         let verb = if push { "push" } else { "pull" };
@@ -5406,13 +5513,11 @@ impl Parser {
         } else {
             None
         };
-        // concurrent copies divide the NICs by the program's `share`, which
-        // it writes (checked once the program is read)
-        self.relation.get_or_insert((at, written));
         self.queues[qi].takes = Some(queue::Takes {
             source,
             latency,
             push,
+            share,
         });
         Ok(())
     }
@@ -5468,7 +5573,12 @@ impl Parser {
             };
             Ref { span, name, index }
         };
-        let raw_work = self.expr()?;
+        let (raw_work, share) = if also.is_empty() {
+            (self.expr()?, None)
+        } else {
+            let what = format!("{kw} on {}", stage_list(&stage, &also));
+            self.work_and_share(true, &what)?
+        };
         let resources: Vec<_> = std::iter::once(&stage)
             .chain(also.iter())
             .cloned()
@@ -5535,6 +5645,7 @@ impl Parser {
                         ),
                         growing: None,
                         also: vec![],
+                        share: None,
                     })
                 })
                 .collect();
@@ -5545,6 +5656,7 @@ impl Parser {
                     work,
                     growing: None,
                     also,
+                    share,
                 },
                 Stmt::Load(to.clone(), Expr::cost(&[to], units)),
                 Stmt::Release(from),
@@ -5574,6 +5686,7 @@ impl Parser {
             work,
             growing,
             also,
+            share,
         }])
     }
 

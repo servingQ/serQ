@@ -27,7 +27,7 @@ prefills in the compute its decode step leaves is a stage kind of its own
 program  := (constant | definition | import)* fn main ( ) { item* }
 constant := let NAME = expr ;
 definition := def NAME ( NAME , ... ) ( { expr } | block )
-import   := use "std/args" ; | use "std/kvt" ;   -- a program is one file
+import   := use "std/args" ; | use "std/kvt" ; | use "std/share" ;   -- a program is one file
 item     := let NAME = expr ;
           | let NAME = args.number ( "argument_name" , expr ) ;
           | def NAME ( NAME , ... ) { expr }   -- a name for an expression: NAME ( arg , ... )
@@ -41,9 +41,8 @@ item     := let NAME = expr ;
           | workload { wlitem* }
           | server block                      -- request handling; the session lives inside workload
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
-          | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
-          | kvt.nixl_pull ( QUEUE , QUEUE [, latency = expr ] ) ;   -- the source, its reader, the read (below, *Queues*); needs the program's share
-          | kvt.nixl_push ( QUEUE , QUEUE [, latency = expr ] ) ;   -- the source, its reader, the write
+          | kvt.nixl_pull ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the read (below, *Queues*)
+          | kvt.nixl_push ( QUEUE , QUEUE [, latency = expr ] , share = POLICY ) ;   -- the source, its reader, the write
           | gauge NAME = expr ;              -- the time average of a function of the state (Gauges)
           | claim NAME [given ( expr )] : every iteration of STAGE ( expr ) ;   -- a proposition about every path (Claims)
           | claim NAME [given ( expr )] : some iteration of STAGE ( expr ) ;
@@ -113,7 +112,7 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | run STAGE [prefill | decode] ( expr ) [ growing POOL ] ;
                                              -- the mode: required on an engine, refused on any other stage
                                              -- growing: inside a hold of POOL, which grows with the tokens
-          | run STAGE , STAGE [, STAGE]* ( expr ) ;   -- one job holding every stage at once
+          | run STAGE , STAGE [, STAGE]* ( expr , share = POLICY ) ;   -- one job holding every stage at once
           | run ( expr ) ;                   -- in a queue's entry: the queue's own stage
           | branch ( expr ) block [ else block ]          -- a test
           | branch with ( expr ) block [ else block ]     -- a draw, w.p. expr
@@ -130,9 +129,11 @@ stmt     := turn ;                           -- draw attributes, submit, wait fo
           | serving                          -- the serving vocabulary, sugar for run
 serving  := transfer [ '[' expr ']' | on STAGE [, STAGE]* ] expr from POOL to POOL ( expr ) ;
                                              -- the KV moves: run link; load; release
+                                             -- on several stages, expr is ( expr , share = POLICY )
           | tool     [ '[' expr ']' | on STAGE [, STAGE]* ] expr ;
           | kvt.l2_load ( CACHE , POOL , expr , per_token = expr ) ;   -- std/kvt: copy the cache's KV in, the cache keeps it
           | kvt.l2_store ( POOL , CACHE , expr , per_token = expr ) ;  -- std/kvt: the session's entry in the cache comes to hold expr tokens
+POLICY   := share.maxmin | share.bottleneck   -- std/share: how the flows of a fabric divide it (below, *Stages*)
 ```
 
 ### Arrivals and the run
@@ -230,7 +231,9 @@ result is the same IR as a program written with those values. An input that
 would change a parse-time array size is refused. See [std/args](api/std/args.md)
 for the full input contract. `use "std/kvt";` supplies the KV-transfer
 vocabulary ([std/kvt](api/std/kvt.md)), `kvt.nixl_pull (…)`, `kvt.nixl_push (…)`, `kvt.l2_load (…)` and
-`kvt.l2_store (…)` (below, *Queues*).
+`kvt.l2_store (…)` (below, *Queues*), and `use "std/share";` the sharing
+policies ([std/share](api/std/share.md)), `share.maxmin` and
+`share.bottleneck` (below, *Stages*).
 Syntax snippets elsewhere may show just a main body or one of its nested
 blocks.
 
@@ -261,7 +264,7 @@ engine themselves.
 | `tool Z;` | `run tool (cost(tool, Z));` |
 | `tool[j] Z;` | `run tool[j] (cost(tool, Z));` (the index applies to the role's stage array) |
 | `tool on S[j] (Z);` | `run S[j] (cost(S, Z));` |
-| `transfer on egress[i], ingress[j] (X) from P to Q (n);` | `run egress[i], ingress[j] (cost(egress, ingress, X)); load Q (cost(Q, n)); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*) |
+| `transfer on egress[i], ingress[j] (X, share = s) from P to Q (n);` | `run egress[i], ingress[j] (cost(egress, ingress, X), share = s); load Q (cost(Q, n)); release P;` — one read that holds the sender's link and the receiver's at once (below, *Stages*) |
 
 The argument is work in the unit of the stage it runs on: the time the job
 takes alone on a `fifo`, `ps` or `delay` stage (seconds, when the program's
@@ -463,16 +466,15 @@ queue D[ND] : decode {
     transfer (prompt - c) from P to kv (prompt - 1 - c);   // over P's NIC and this pod's
   }
 }
-share maxmin;
-kvt.nixl_pull (P, D, latency = x0);
+kvt.nixl_pull (P, D, latency = x0, share = share.maxmin);
 ```
 
-`kvt.nixl_pull (P, D)` is one line for the topology and the mode: the KV
-goes from `P` to `D`, the source first as the bytes go, `D` starts the
-read (NIXL pull), and `D` waits `x0` before each one (a number or a
-constant over `let`s; `latency = …` may be left out). Concurrent reads
-divide the two NICs by the program's `share`, which a program with a
-relation must write: it is not left to a default. Inside an entry of `D` called `from P[i]`, a `transfer`
+`kvt.nixl_pull (P, D)` is one line for the topology, the mode and the
+policy: the KV goes from `P` to `D`, the source first as the bytes go,
+`D` starts the read (NIXL pull), `D` waits `x0` before each one (a number
+or a constant over `let`s; `latency = …` may be left out), and concurrent
+reads divide the two NICs by its `share` (*Stages*), which the relation
+must name: it is not left to a default. Inside an entry of `D` called `from P[i]`, a `transfer`
 without `on` is the read: the kernel's `run D.nic.latency[j] (x0); run
 P.nic[i], D.nic[j] (…); load D.kv[j] (…); release P.kv[i];`. Both queues
 are declared above the relation and have a `nic`; a reader has one source;
@@ -849,19 +851,24 @@ pool declared first is served first.
 `ps(φ)`: every job at once, each at `φ(present)/present`. `delay`: every job on its
 own at rate 1, which is `ps(present)` and links to it. `run a, b (cost(a, b, w))` is one job that holds `a` and `b` from its
 start to its end: a *flow*, whose work goes down at one rate at all its
-stages, set by the program's `share` from their capacities. `share maxmin`
+stages, set by the run's `share` from their capacities:
+`run a, b (cost(a, b, w), share = share.maxmin)`. The policies are
+[std/share](api/std/share.md)'s. `share.maxmin`
 is max-min fair: every flow's rate rises together until a stage fills,
-the flows through it stop there, and the others go on. `share bottleneck`
+the flows through it stop there, and the others go on. `share.bottleneck`
 gives each flow its equal share at the tightest of its stages,
 `min over s of φ_s / n_s`, and leaves what that does not use at the other
 stages unused. Every stage of such a run is `ps(φ)` with a constant `φ` above 0
 (a flow is not described by the `present` a capacity could read), a run
 names each stage array once (an index is known only when the run starts),
-and a program with one declares its `share`, which has no default. A
-stage array held by some run with another is *shared* for the whole run:
-every job on it, a single-stage `run` included, is a flow of the policy,
-and its utilisation is the capacity its flows carry, `Σ rate / φ`. Every
-other `ps` stage serves as above.
+and it names its `share`, which has no default; a run on one stage names
+none. A stage array held by some run with another is *shared* for the
+whole run: every job on it, a single-stage `run` included, is a flow, and
+its utilisation is the capacity its flows carry, `Σ rate / φ`. The stages
+runs join, however indirectly, are one *fabric*, whose flows are solved
+together: a fabric has one policy, and runs that join their stages and
+name two do not link, while two fabrics that share no stage may name two.
+Every other `ps` stage serves as above.
 
 ### Engines
 

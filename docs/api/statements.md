@@ -234,7 +234,7 @@ and `cached` count them.
 
 ```serq
 run STAGE [prefill | decode] (work) [growing POOL];
-run STAGE, STAGE [, STAGE]* (work);
+run STAGE, STAGE [, STAGE]* (work, share = POLICY);
 ```
 
 | Argument | Type | Description |
@@ -255,8 +255,8 @@ the request instead, and do not hold a pool an engine admits either
 
 With several stages the run is one job, a *flow*, that holds all of them
 from its start to its end; its work goes down at one rate everywhere, which
-the program's [`share`](program.md#share) sets from the stages'
-capacities. Every stage is `ps(φ)` with a constant `φ` above 0, a run names each
+the run's `share`, a policy of [std/share](std/share.md), sets from the
+stages' capacities; the stages runs join are one fabric, with one policy. Every stage is `ps(φ)` with a constant `φ` above 0, a run names each
 stage array once, and the work is in the unit the capacities share (tokens
 at tokens per second, say). A stage array some run holds with another is
 *shared* for the whole run: every job on it, a single-stage run included,
@@ -265,9 +265,8 @@ is a flow, and the report's utilisation is the capacity its flows carry.
 ```serq
 stage egress[2] : ps(BwP);     // a prefiller's NIC, tokens per second
 stage ingress[2] : ps(BwD);    // a decoder's NIC
-share maxmin;
 …
-run egress[i], ingress[j] (cost(egress, ingress, tokens));
+run egress[i], ingress[j] (cost(egress, ingress, tokens), share = share.maxmin);
 ```
 
 ## `branch`

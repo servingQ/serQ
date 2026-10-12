@@ -41,8 +41,8 @@ stage svc : ps(1);
 ```
 
 (`examples/single-turn/ps.sq`, M/G/1-PS.) A `ps` stage some run holds
-together with another is served by the program's
-[`share`](program.md#share) instead: its jobs are flows, not an equal
+together with another is served by its fabric's
+[`share`](std/share.md) instead: its jobs are flows, not an equal
 split.
 
 ## `delay`
