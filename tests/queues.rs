@@ -1076,6 +1076,36 @@ fn a_session_attribute_reaches_an_entry_only_if_hidden() {
     );
 }
 
+/// Every context variable an entry reads is the language's, refused where
+/// it does not exist, never an unknown name: the entry's list was a copy
+/// that left out `position`, `demand`, `served`, `arrived`, `admitted` and
+/// `preempted`, and an entry that read one was told nothing sets it.
+#[test]
+fn an_entry_reads_every_context_variable_as_the_languages() {
+    let program = |v: &str| {
+        format!(
+            "queue gw : gateway {{ route {{ E.decode (prompt); }} }}
+             queue E : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+               decode (p) {{ set zz = {v}; hold kv (cost(kv, p)) {{ run E prefill (cost(E, p)) growing kv; run E decode (cost(E, 1)) growing kv; }} }} }}
+             workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }}
+             "
+        )
+    };
+    for (v, _) in serq::frontend::link::CONTEXT_VARS {
+        if v == "now" {
+            continue;
+        }
+        // the moment is `Program::validate`'s, after the link
+        let e = compile_source(&common::main_source(&program(v)), &common::horizon(100.0))
+            .expect_err(v)
+            .to_string();
+        assert!(
+            e.contains(&format!("`{v}` is read in a session statement")),
+            "{v}: {e}"
+        );
+    }
+}
+
 /// A turn in a definition changes only the actual server's attributes;
 /// an unused gateway cannot capture a caller's argument.
 #[test]

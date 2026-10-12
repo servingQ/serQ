@@ -1302,31 +1302,18 @@ fn names_in(e: &Expr, vars: &mut Vec<String>, indexed: &mut Vec<String>, refs: &
     }
 }
 
-/// The context an expression may read anywhere: the pool, stage and
-/// step-iteration variables, and the built-in session attributes.
-const CONTEXT: &[&str] = &[
-    "waited",
-    "size",
-    "age",
-    "last",
-    "waiting",
-    "present",
-    "tokens",
-    "decoders",
-    "prefilled",
-    "residents",
-    "kv_decode",
-    "kv_prefill",
-    "attention",
-    "decoding",
-    "admission",
-    "remaining",
-    // what the scheduler keeps of a request: its cache hit and the tokens
-    // it has computed. The session's own (`out`, `think`, `more`, `forced`,
-    // `new`, `turn_no`, `serial`) an entry reads only if `hidden`.
-    "cached",
-    "computed",
-];
+/// Whether an entry reads `n` as the language's: a context variable but
+/// `now` (a header may not read the clock, so the caller decides), or what
+/// the scheduler keeps of a request, its cache hit and the tokens it has
+/// computed. The session's own (`out`, `think`, `more`, `forced`, `new`,
+/// `turn_no`, `serial`) an entry reads only if `hidden`. Read from
+/// `CONTEXT_VARS`, not copied: a copy left six variables out, and an entry
+/// that read one was told nothing sets it.
+fn in_context(n: &str) -> bool {
+    n != "now" && CONTEXT_VARS.iter().any(|(name, _)| *name == n)
+        || n == "cached"
+        || n == "computed"
+}
 
 /// An entry's body: what it `set`s or `choose`s, what it `mark`s, and the
 /// pools its holds lease.
@@ -3982,7 +3969,7 @@ impl Parser {
                 || n == "self"
                 || n == "inf"
                 || self.consts.iter().any(|(c, _)| c == n)
-                || CONTEXT.contains(&n)
+                || in_context(n)
                 || (!header && n == "now")
                 || seen.iter().any(|l| l == n)
         };
