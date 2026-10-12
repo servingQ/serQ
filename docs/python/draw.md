@@ -5,14 +5,13 @@ pyserq.draw(path=None, *, source=None, sets={}, defs={}, format="tikz") -> str
 ```
 
 Render the [deployment view](../visualization/index.md). Supply exactly one
-of `path` and `source`. This function accepts source or an IR file; it does
-not accept a compiled `Program`.
+of `path` and `source`.
 
 ## Parameters
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `path` | `str` or `os.PathLike` | `None` | A `.sq` source file or `.json` IR file. |
+| `path` | `str`, `os.PathLike` or [`Program`](program.md) | `None` | A `.sq` source file, a `.json` IR file, or a compiled program. |
 
 ## Keyword arguments
 
@@ -29,9 +28,10 @@ not accept a compiled `Program`.
 a file. In a notebook, pass SVG output to `IPython.display.SVG`.
 
 For a program split into a workload and a server, the diagram shows one
-request's route, from source or from its JSON IR alike: the IR marks each
-statement as the workload's or the server's. JSON IR rejects `sets` and
-`defs`.
+request's route, from source, from its JSON IR or from a compiled
+`Program` alike: the IR marks each statement as the workload's or the
+server's. JSON IR and a `Program` reject `sets` and `defs`: their
+constants are already folded and their definitions expanded.
 
 ## Raises
 
@@ -57,6 +57,13 @@ fn main() {
 }
 """, format="svg")
 Path("deployment.svg").write_text(svg, encoding="utf-8")
+```
+
+A program already compiled draws the same figure as its file:
+
+```python
+prog = pyserq.compile("examples/multi-turn/vllm.sq", horizon=100)
+assert pyserq.draw(prog, format="svg") == pyserq.draw("examples/multi-turn/vllm.sq", format="svg")
 ```
 
 ## See also

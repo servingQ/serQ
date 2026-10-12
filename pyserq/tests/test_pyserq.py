@@ -23,6 +23,7 @@ import pyserq
 ROOT = Path(__file__).resolve().parents[2]
 CLI = os.environ.get("SERQ_CLI", str(ROOT / "target" / "release" / "serq"))
 MG1 = ROOT / "examples" / "single-turn" / "mg1.sq"
+VLLM = ROOT / "examples" / "multi-turn" / "vllm.sq"
 REPLAY = ROOT / "examples" / "replay" / "vllm_replay.sq"
 KONG = ROOT / "examples" / "papers" / "kong_svf.sq"
 ARRAYS = """fn main() { pool kv[2] { cap 10; } pool reqs { cap 4; } stage svc[2] : fifo;
@@ -243,6 +244,9 @@ def test_draw_is_serq_draw():
     ir = Path(tempfile.mkdtemp(prefix="pyserq-")) / "mg1.json"
     ir.write_text(pyserq.compile(MG1, horizon=250000, warmup=25000).to_json())
     assert pyserq.draw(ir) == subprocess.run([CLI, "draw", str(ir)], capture_output=True, text=True, check=True).stdout
+    # A compiled Program draws as its IR file does, and as its text does
+    prog = pyserq.compile(VLLM, horizon=100)
+    assert pyserq.draw(prog, format="svg") == pyserq.draw(VLLM, format="svg")
 
 
 def test_errors_are_value_errors():
@@ -280,6 +284,8 @@ def test_an_override_on_ir_says_what_it_overrides():
         (lambda: pyserq.compile(ir, defs={"service": "~exp(1)"}), "a `def` override"),
         (lambda: pyserq.draw(ir, sets={"lam": 1}), "a program argument"),
         (lambda: pyserq.draw(ir, defs={"service": "~exp(1)"}), "a `def` override"),
+        (lambda: pyserq.draw(pyserq.Program.from_json(ir.read_text()), sets={"lam": 1}), "a program argument"),
+        (lambda: pyserq.draw(pyserq.Program.from_json(ir.read_text()), defs={"service": "~exp(1)"}), "a `def` override"),
     ]:
         try:
             call()

@@ -433,13 +433,21 @@ fn overriding(
     Ok(())
 }
 
+/// What `draw` draws: a compiled program, or a program file.
+#[derive(FromPyObject)]
+enum Drawn {
+    Program(Py<Program>),
+    Path(PathBuf),
+}
+
 /// `draw(path=None, *, source=None, sets={}, defs={}, format="tikz")`: the
 /// deployment view, as `serq draw` prints it: what one request runs
-/// (`serq::view::deployment::request`).
+/// (`serq::view::deployment::request`). `path` may be a compiled
+/// `Program`, drawn from its IR as a `.json` file is.
 #[pyfunction]
 #[pyo3(signature = (path=None, *, source=None, sets=HashMap::new(), defs=HashMap::new(), format="tikz"))]
 fn draw(
-    path: Option<PathBuf>,
+    path: Option<Drawn>,
     source: Option<&str>,
     sets: HashMap<String, SetValue>,
     defs: HashMap<String, String>,
@@ -447,9 +455,16 @@ fn draw(
 ) -> PyResult<String> {
     let mut ov = serq::Overrides::default();
     overriding(&mut ov, sets, defs)?;
-    let ir = match (&path, source) {
-        (Some(p), None) => serq::load_inspected(p, &ov),
-        (None, Some(src)) => serq::compile_inspected(src, &ov),
+    let figure = match (&path, source) {
+        (Some(Drawn::Program(p)), None) => {
+            serq::refuse_text_overrides(&ov).map(|()| serq::view::deployment::figure(&p.get().ir))
+        }
+        (Some(Drawn::Path(p)), None) => {
+            serq::load_inspected(p, &ov).map(|ir| serq::view::deployment::figure(&ir))
+        }
+        (None, Some(src)) => {
+            serq::compile_inspected(src, &ov).map(|ir| serq::view::deployment::figure(&ir))
+        }
         _ => {
             return Err(PyValueError::new_err(
                 "draw takes exactly one of a path and a source",
@@ -457,7 +472,7 @@ fn draw(
         }
     }
     .map_err(PyValueError::new_err)?;
-    serq::view::render(&serq::view::deployment::figure(&ir), format).map_err(PyValueError::new_err)
+    serq::view::render(&figure, format).map_err(PyValueError::new_err)
 }
 
 /// `run(program)`: run it. The run does not hold the GIL, so runs in
