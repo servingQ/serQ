@@ -2122,12 +2122,19 @@ impl Parser {
                             .or_else(|| self.names_device(q, n).then(|| a_device(&q.name, &e.verb, n)))
                             .unwrap_or_else(|| {
                                 if q.engine {
+                                    // a context variable moves, and a parameter of it
+                                    // would be refused where the header reads it
+                                    let help = if CONTEXT_VARS.iter().any(|(c, _)| c == n) {
+                                        String::new()
+                                    } else {
+                                        format!(". Pass `{n}` as a parameter")
+                                    };
                                     format!(
-                                        "engine `{}`'s admission (its `taking` and `at admission`) \
-                                         reads `{n}`: it sees the request's parameters, what the \
-                                         request sets before `at admission`, its bindings, the \
-                                         engine's pools and stage and the constants. Pass `{n}` \
-                                         as a parameter",
+                                        "engine `{}`'s admission (its request's `prefix`, its \
+                                         `taking` and `at admission`) reads `{n}`: it sees the \
+                                         request's parameters, what the request sets before `at \
+                                         admission`, its bindings, the engine's pools and stage \
+                                         and the constants{help}",
                                         q.name
                                     )
                                 } else {

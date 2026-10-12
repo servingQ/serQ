@@ -2207,6 +2207,20 @@ impl Validator<'_> {
             Err(format!("attribute slot {a} out of range"))
         }
     }
+    /// `serial` is the session's number, which the run gives it: a session's
+    /// cache entry is what hangs under the key of its serial, and a program
+    /// that set one would hand its context to another session by value.
+    fn serial_unset(&self, a: usize) -> Result<(), String> {
+        if a == self.p.slot_serial {
+            Err(
+                "`serial` is the session's number, which the run assigns; set another \
+                 attribute"
+                    .into(),
+            )
+        } else {
+            Ok(())
+        }
+    }
     fn observe(&self, a: usize) -> Result<(), String> {
         if a < self.p.observes.len() {
             Ok(())
@@ -2546,6 +2560,7 @@ impl Validator<'_> {
             CStmt::Turn | CStmt::End => Ok(()),
             CStmt::Set(a, e) => {
                 self.attr(*a)?;
+                self.serial_unset(*a)?;
                 self.expr(e, m)
             }
             CStmt::Observe(k, e) => {
@@ -2818,6 +2833,7 @@ impl Validator<'_> {
             }
             CStmt::Choose { var, count, key } => {
                 self.attr(*var)?;
+                self.serial_unset(*var)?;
                 self.expr(count, m)?;
                 if key.is_empty() {
                     return Err("a `choose` has no key".into());

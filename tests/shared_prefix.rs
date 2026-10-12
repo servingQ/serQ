@@ -511,7 +511,7 @@ fn the_own_chain_is_consumed_whole() {
 }
 
 /// Holds reading a shared prompt are preempted and admitted again: four
-/// sessions decode past what the pool holds, the newest is preempted
+/// sessions grow past what the pool holds (`grow kv`), the newest is preempted
 /// (`preempt lifo`), and each reads the prompt again when it is admitted.
 /// The run's conservation check (debug builds) holds through it.
 #[test]
@@ -541,39 +541,57 @@ fn a_preempted_reader_reads_the_prompt_again() {
     );
 }
 
-/// A session's entry is under its own serial. A program that sets every
-/// session's `serial` attribute to 0 keys their chains by 0: session 1's
-/// context, written under 0, is shared, not session 0's, and session 0's
-/// `drop` leaves it for session 2. The key's value used to make it session
-/// 0's (the third review of #374).
+/// A session's entry is under its own serial, the number the run gives
+/// it. A program that set every session's `serial` to 0 keyed their chains
+/// by 0, and whether session 0's `drop` took session 1's context depended
+/// on which wrote first (the third and fourth reviews of #374): `serial`
+/// is not set, in the workload either.
 #[test]
-fn a_key_of_another_serial_is_shared() {
+fn serial_is_not_set() {
     let src = r#"
         device gpu { kv cap 100000; }
         pool kv on gpu { block 16; evict lru; }
         stage user : delay;
-        stage llm : delay;
         workload { arrive batch(3); init { set d = serial; set serial = 0; } session { turn; } }
         server {
-          branch (d == 0) {
-            run user (cost(user, 15));
-            drop kv;
-          } else {
-            run user (cost(user, d * 10));
-            hold kv (cost(kv, 1600)) prefix (serial: 1e12) {
-              observe got = cached;
-              run llm (cost(llm, 1));
-            } cache (cost(kv, 1600));
-          }
+          run user (cost(user, d * 10));
+          hold kv (cost(kv, 1600)) prefix (serial: 1e12) {
+            observe got = cached;
+          } cache (cost(kv, 1600));
         }
 "#;
-    let r = run(src, &options(100.0));
-    assert_eq!(
-        r.observe("got").unwrap().samples,
-        [0.0, 1600.0],
-        "{}",
-        r.text()
+    let error = run_source(&common::main_source(src), &options(100.0), None).unwrap_err();
+    assert!(
+        error.contains("`serial` is the session's number"),
+        "{error}"
     );
+}
+
+/// A request's chain is its first item, read before the request does
+/// anything: a name the request sets is not yet set there, and the chain
+/// may not read it (the fourth review of #374).
+#[test]
+fn a_request_s_chain_reads_nothing_the_request_sets() {
+    let src = r#"
+        device gpu { kv cap 100000; }
+        pool kv on gpu { block 16; evict lru; preempt lifo; }
+        engine llm on gpu {
+          tokens cap 8192;
+          request (n, product, system, session) {
+            prefix (product: system, session: k);
+            set k = n;
+            at admission { reused = min(cachedin(kv), floor(n - 1, 16)); }
+            prefill (n - cached) growing kv;
+            cache (n);
+          }
+          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (n); }
+          execute (batch.tokens * 1e-5 + 1e-4);
+        }
+        workload { arrive batch(1); init { set sys = 7; } session { turn; } }
+        server { llm (1600, sys, 1200, serial); }
+"#;
+    let error = run_source(&common::main_source(src), &options(10.0), None).unwrap_err();
+    assert!(error.contains("which the request sets after it"), "{error}");
 }
 
 /// A chain says what a hold reads and keeps of the cache, which a hold

@@ -191,8 +191,17 @@ serving `M` products this way.
   the second spelling a reader writes.
 - **A key's value as its session.** A segment keyed `serial` made the
   node the entry of the session its value named, so a program that set
-  `serial` made another session's context that session's to drop. A node
-  is a session's entry when its key is the writing session's own serial.
+  `serial` made another session's context that session's to drop; judged
+  at the write against the writer's own serial, whose entry it was still
+  depended on which session wrote first. No program sets `serial` (the
+  linker refuses it), and a node is a session's entry when its key is its
+  own serial.
+- **An alias of `serial` as a session's key.** `set sid = serial;` and a
+  chain keyed `sid` name the same sessions, but the key reads another
+  attribute, so the chain's nodes are shared segments, not entries: no
+  `drop` takes them and no `reuse` cuts them. Following what an attribute
+  was set from would read the program's statements; the key is what it
+  reads, and the entry is under `serial`.
 - **A writer as owner.** With the last writer as a node's owner, whether
   `drop` took a shared system prompt, and whose attributes `evict by`
   read, depended on which session came last; with the first writer, the

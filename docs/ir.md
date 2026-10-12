@@ -205,8 +205,10 @@ text and directly constructed IR meet the same rules. Validation covers:
   segment's key and length read no state, no clock, no draw, and not
   `cached` or `computed`: they are read while the hold waits and when it
   is admitted, and the trie they index must not move under them. A hold
-  with `prefix` takes at least one pool with `block`, and none that spills
-  or is spilled to.
+  with `prefix` has a segment, only its last one endless, takes at least
+  one pool with `block`, and none that spills
+  or is spilled to. No statement sets `serial`, the session's number:
+  a session's cache entry is what hangs under the key of its serial.
   `BudgetLeft` references only step stages, including every member of an
   indexed family.
 - **Ownership.** `Grow`, `Load`, `Release` and a run's `growing` require an

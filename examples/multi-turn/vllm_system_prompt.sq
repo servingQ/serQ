@@ -82,7 +82,7 @@ fn main() {
     hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
     init {
       set K = 0;
-      set system = floor(~uniform(0, M));
+      set product = floor(~uniform(0, M));
     }
     turn {
       set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
@@ -102,6 +102,6 @@ fn main() {
   // A turn is one request to the engine.
   server {
     set prompt = S + K + n;
-    vllm (prompt, o, system, S, serial);
+    vllm (prompt, o, product, S, serial);
   }
 }

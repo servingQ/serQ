@@ -638,7 +638,7 @@ segment may be endless, and a hold with `prefix` has `cache` (else it
 reads and keeps nothing, and does not link). An engine's request writes
 its chain as its first item, `prefix (k: n, …);` (*An engine's
 request*). A session's *entry* is what hangs under the key of its own
-serial (a `serial` a program set otherwise names no session's); the rest is shared, and no
+serial (`serial` is the run's number for the session, and no program sets it); the rest is shared, and no
 session's `reuse`, `cache`, `drop` or consumption takes it. A hold with
 `prefix` reads at most what it allocates; a hold without consumes its
 entry whole, and what its allocation does not hold of it is gone. A

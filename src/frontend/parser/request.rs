@@ -433,6 +433,33 @@ impl Parser {
             cache = Some((body_at + i, e));
             after = &body[offset..i];
         }
+        // the chain is read where its item is written, first: a name the
+        // request sets after it would be read before it was set, and is the
+        // value the item does not see
+        if let Some((at, segs)) = &prefix {
+            let set: Vec<&str> = before
+                .windows(2)
+                .chain(after.windows(2))
+                .filter(|w| is_word(Some(&w[0]), "set"))
+                .filter_map(|w| match &w[1].tok {
+                    Tok::Ident(n) => Some(n.as_str()),
+                    _ => None,
+                })
+                .collect();
+            if let Some(n) = segs.iter().find_map(|t| match &t.tok {
+                Tok::Ident(n) if set.contains(&n.as_str()) => Some(n),
+                _ => None,
+            }) {
+                return self.err_at(
+                    *at,
+                    format!(
+                        "the request's `prefix` reads `{n}`, which the request sets after it: \
+                         a chain is written first, of the parameters and the session's \
+                         attributes\nhelp: pass the value as a parameter"
+                    ),
+                );
+            }
+        }
         Ok(RequestItems {
             before,
             admission,
