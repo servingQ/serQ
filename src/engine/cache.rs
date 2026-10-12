@@ -175,9 +175,12 @@ impl Trie {
     }
 
     fn add_child(&mut self, parent: usize, e: Edge, node: Node) -> usize {
-        // under the key of a session's serial, the session's entry
+        // under the key of the writing session's own serial, its entry (a
+        // `serial` a program set to another value names no session's)
         let own = match e {
-            Edge::Key(ns, bits) if ns == self.serial_ns => Some(f64::from_bits(bits) as u64),
+            Edge::Key(ns, bits) if ns == self.serial_ns => {
+                (f64::from_bits(bits) == node.owner as f64).then_some(node.owner)
+            }
             _ => self.nodes[parent].own,
         };
         let id = self.alloc(Node {

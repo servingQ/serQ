@@ -2667,6 +2667,23 @@ impl Validator<'_> {
                         }
                     }
                 }
+                // a chain has a segment, and only its last runs on without
+                // end: past an endless one no other is reached
+                if let Some(segs) = prefix {
+                    if segs.is_empty() {
+                        return Err("an empty `prefix`: a chain has a segment".into());
+                    }
+                    if segs[..segs.len() - 1]
+                        .iter()
+                        .any(|(_, n)| matches!(n, CExpr::Num(x) if x.is_infinite()))
+                    {
+                        return Err(
+                            "a `prefix` segment other than the last is endless (`inf`): \
+                                    no segment after it would be reached"
+                                .into(),
+                        );
+                    }
+                }
                 // one meaning, one spelling: the chain a hold without the
                 // clause has is not written
                 if let Some([(CExpr::Attr(a), CExpr::Num(n))]) = prefix.as_deref()

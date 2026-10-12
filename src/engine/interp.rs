@@ -2501,13 +2501,14 @@ impl<'p> Interp<'p> {
         };
         let ctx = Ctx::session(sid);
         let mut chain = Vec::with_capacity(segs.len());
-        for (k, n) in segs {
+        for (j, (k, n)) in segs.iter().enumerate() {
             let key = self.eval(k, &ctx, Which::Session);
             let len = self.eval(n, &ctx, Which::Session);
-            if (key.is_nan() || len.is_nan() || len < 0.0) && self.error.is_none() {
+            let endless = len.is_infinite() && j + 1 < segs.len();
+            if (key.is_nan() || len.is_nan() || len < 0.0 || endless) && self.error.is_none() {
                 self.error = Some(format!(
-                    "a `prefix` segment is ({key}: {len}): a key is a number and a length is \
-                     not negative"
+                    "a `prefix` segment is ({key}: {len}): a key is a number, a length is not \
+                     negative, and only the last segment is endless"
                 ));
             }
             // an empty segment holds nothing to share: `(tools: 0, …)`, a

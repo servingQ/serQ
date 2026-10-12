@@ -17,18 +17,14 @@ fn options(horizon: f64) -> Overrides {
     }
 }
 
-/// One engine on a pool of `cap`; `N` sessions, each a 1600-token request
+/// A stage on a pool of `cap`; `N` sessions, each a 1600-token request
 /// whose first 1200 tokens are the system prompt `sys`. Session `k` is sent
 /// at `STAGGER`; the request's hold reads its chain with `PREFIX`.
 fn program(cap: u32, n: u32, stagger: &str, prefix: &str) -> String {
     format!(
         r#"
         device gpu {{ kv cap {cap}; }}
-        engine llm on gpu {{
-          tokens cap 8192;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
-          execute (batch.tokens * 1e-5 + 1e-4);
-        }}
+        stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
         workload {{ arrive batch({n}); init {{ set sys = 7; }}
@@ -39,7 +35,7 @@ fn program(cap: u32, n: u32, stagger: &str, prefix: &str) -> String {
           hold kv (cost(kv, 1600)) {prefix} {{
             observe got = cached;
             observe together = holders(kv);
-            run llm prefill (cost(llm, 1600 - cached)) growing kv;
+            run llm (cost(llm, 1));
           }} cache (cost(kv, 1600));
         }}
 "#
@@ -112,18 +108,14 @@ fn the_own_chain_is_the_default() {
         format!(
             r#"
         device gpu {{ kv cap 4000; }}
-        engine llm on gpu {{
-          tokens cap 8192;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
-          execute (batch.tokens * 1e-5 + 1e-4);
-        }}
+        stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
         workload {{ arrive closed(3); session {{ turn; }} }}
         server {{ loop {{ run user (cost(user, ~exp(1)));
           hold kv (cost(kv, min(cachedin(kv), 992) + 8)) {prefix} {{
             observe got = cached;
-            run llm prefill (cost(llm, 1000 - cached)) growing kv;
+            run llm (cost(llm, 1));
           }} cache (cost(kv, 1000)); }}
         }}
 "#
@@ -180,24 +172,20 @@ fn two_requests(reuse: &str, inner: &str) -> String {
     format!(
         r#"
         device gpu {{ kv cap 100000; }}
-        engine llm on gpu {{
-          tokens cap 8192;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
-          execute (batch.tokens * 1e-5 + 1e-4);
-        }}
+        stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
         workload {{ arrive batch(3); init {{ set sys = 7; }} session {{ turn; }} }}
         server {{
           run user (cost(user, serial * 10));
           hold kv (cost(kv, 1600)) {CHAIN} {reuse} {{
-            run llm prefill (cost(llm, 1600 - cached)) growing kv;
+            run llm (cost(llm, 1));
             {inner}
           }} cache (cost(kv, 1600));
           run user (cost(user, 40 - serial * 10));
           hold kv (cost(kv, 2000)) {CHAIN} {{
             observe second = cached;
-            run llm prefill (cost(llm, 2000 - cached)) growing kv;
+            run llm (cost(llm, 1));
           }} cache (cost(kv, 2000));
         }}
 "#
@@ -262,11 +250,6 @@ fn a_shared_prefix_is_no_session_s_consumed_entry() {
 fn a_hold_reads_at_most_what_it_allocates() {
     let src = r#"
         device gpu { kv cap 100000; }
-        engine llm on gpu {
-          tokens cap 8192;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
-          execute (batch.tokens * 1e-5 + 1e-4);
-        }
         pool kv on gpu { block 16; evict lru; }
         stage user : delay;
         workload { arrive batch(3); init { set sys = 7; } session { turn; } }
@@ -302,11 +285,7 @@ fn a_key_is_its_attribute_and_its_value() {
     let src = format!(
         r#"
         device gpu {{ kv cap 100000; }}
-        engine llm on gpu {{
-          tokens cap 8192;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
-          execute (batch.tokens * 1e-5 + 1e-4);
-        }}
+        stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; }}
         stage user : delay;
         workload {{ arrive batch(3); init {{ set sys = 1; }} session {{ turn; }} }}
@@ -314,13 +293,13 @@ fn a_key_is_its_attribute_and_its_value() {
           run user (cost(user, serial * 10));
           branch (serial == 1) {{
             hold kv (cost(kv, 1600)) {{
-              run llm prefill (cost(llm, 1600)) growing kv;
+              run llm (cost(llm, 1));
             }} cache (cost(kv, 1600));
           }}
           branch (serial == 2) {{
             hold kv (cost(kv, 1600)) {CHAIN} {{
               observe got = cached;
-              run llm prefill (cost(llm, 1600 - cached)) growing kv;
+              run llm (cost(llm, 1));
             }} cache (cost(kv, 1600));
           }}
         }}
@@ -330,17 +309,13 @@ fn a_key_is_its_attribute_and_its_value() {
     assert_eq!(r.observe("got").unwrap().samples, [0.0], "{}", r.text());
 }
 
-/// `N` sessions with `sys = 7` on one engine and a pool of `cap` (block 16),
+/// `N` sessions with `sys = 7` on a stage and a pool of `cap` (block 16),
 /// the server's statements `server`.
 fn deployment(cap: u32, n: u32, pools: &str, server: &str) -> String {
     format!(
         r#"
         device gpu {{ kv cap {cap}; }}
-        engine llm on gpu {{
-          tokens cap 8192;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
-          execute (batch.tokens * 1e-5 + 1e-4);
-        }}
+        stage llm : delay;
         pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
         {pools}
         stage user : delay;
@@ -367,7 +342,7 @@ fn the_first_writer_does_not_own_the_shared_prompt() {
                 "run user (cost(user, serial * 10));
                  hold kv (cost(kv, serial == 1 ? 1200 : 1600)) {CHAIN} {{
                    branch (serial == 2) {{ observe late = cached; }}
-                   run llm prefill (cost(llm, max(0, (serial == 1 ? 1200 : 1600) - cached))) growing kv;
+                   run llm (cost(llm, 1));
                  }} cache (cost(kv, 1600));
                  branch (serial == 0) {{
                    run user (cost(user, 15));
@@ -400,7 +375,7 @@ fn drop_takes_the_session_s_entry_alone() {
             "run user (cost(user, serial * 10));
              hold kv (cost(kv, 1600)) {CHAIN} {{
                branch (serial == 1) {{ observe mid = cached; }}
-               run llm prefill (cost(llm, 1600 - cached)) growing kv;
+               run llm (cost(llm, 1));
              }} cache (cost(kv, 1600));
              run user (cost(user, 1));
              branch (serial == 0) {{ drop kv; }}"
@@ -423,7 +398,7 @@ fn two_legs_read_one_prompt() {
         "",
         &format!(
             "hold kv (cost(kv, 1600)) {CHAIN} {{
-               run llm prefill (cost(llm, 1600 - cached)) growing kv;
+               run llm (cost(llm, 1));
              }} cache (cost(kv, 1600));
              fork {{
                hold kv (cost(kv, 2000)) {CHAIN} {{
@@ -435,7 +410,7 @@ fn two_legs_read_one_prompt() {
                run user (cost(user, 1));
                hold kv (cost(kv, 2000)) {CHAIN} {{
                  observe b = cached;
-                 run llm prefill (cost(llm, 2000 - cached)) growing kv;
+                 run llm (cost(llm, 1));
                }} cache (cost(kv, 2000));
              }}
              join;"
@@ -461,12 +436,12 @@ fn an_empty_segment_is_left_out() {
            set ctx = ctx + 400;
            hold kv (cost(kv, ctx)) prefix (sys: 0, serial: inf) {
              observe got = cached;
-             run llm prefill (cost(llm, ctx - cached)) growing kv;
+             run llm (cost(llm, 1));
            } cache (cost(kv, ctx));
            run user (cost(user, 1));
          }",
     );
-    let r = run(&src, &options(4.5));
+    let r = run(&src, &options(9.5));
     assert_eq!(
         r.observe("got").unwrap().samples,
         [0.0, 400.0, 800.0, 1200.0, 1600.0],
@@ -524,7 +499,7 @@ fn the_own_chain_is_consumed_whole() {
         1,
         "",
         "hold kv (cost(kv, 1600)) {
-           run llm prefill (cost(llm, 1600)) growing kv;
+           run llm (cost(llm, 1));
          } cache (cost(kv, 1600));
          run user (cost(user, 1));
          hold kv (cost(kv, 320)) {
@@ -549,8 +524,8 @@ fn a_preempted_reader_reads_the_prompt_again() {
             "run user (cost(user, serial == 0 ? 0 : 10));
              hold kv (cost(kv, 1600)) {CHAIN} {{
                observe got = cached;
-               run llm prefill (cost(llm, 1600 - cached)) growing kv;
-               run llm decode (cost(llm, 600)) growing kv;
+               run llm (cost(llm, 1));
+               grow kv (cost(kv, 600)); run llm (cost(llm, 1));
              }} cache (cost(kv, 2200));"
         ),
     );
@@ -564,4 +539,123 @@ fn a_preempted_reader_reads_the_prompt_again() {
         "every later admission reads the prompt: {got:?}\n{}",
         r.text()
     );
+}
+
+/// A session's entry is under its own serial. A program that sets every
+/// session's `serial` attribute to 0 keys their chains by 0: session 1's
+/// context, written under 0, is shared, not session 0's, and session 0's
+/// `drop` leaves it for session 2. The key's value used to make it session
+/// 0's (the third review of #374).
+#[test]
+fn a_key_of_another_serial_is_shared() {
+    let src = r#"
+        device gpu { kv cap 100000; }
+        pool kv on gpu { block 16; evict lru; }
+        stage user : delay;
+        stage llm : delay;
+        workload { arrive batch(3); init { set d = serial; set serial = 0; } session { turn; } }
+        server {
+          branch (d == 0) {
+            run user (cost(user, 15));
+            drop kv;
+          } else {
+            run user (cost(user, d * 10));
+            hold kv (cost(kv, 1600)) prefix (serial: 1e12) {
+              observe got = cached;
+              run llm (cost(llm, 1));
+            } cache (cost(kv, 1600));
+          }
+        }
+"#;
+    let r = run(src, &options(100.0));
+    assert_eq!(
+        r.observe("got").unwrap().samples,
+        [0.0, 1600.0],
+        "{}",
+        r.text()
+    );
+}
+
+/// A chain says what a hold reads and keeps of the cache, which a hold
+/// without `cache` does neither of: the linker refuses it, as it refuses
+/// `reuse` there (the third review of #374). Only the last segment may be
+/// endless: past an endless one no other is reached, and the sessions'
+/// contexts piled into the first.
+#[test]
+fn a_chain_without_cache_or_with_an_endless_middle_does_not_link() {
+    let base = program(100_000, 1, "0", CHAIN);
+    for (src, said) in [
+        (
+            base.replace("}} cache (cost(kv, 1600));", "}}")
+                .replace("} cache (cost(kv, 1600));", "}"),
+            "no `cache` clause",
+        ),
+        (
+            program(100_000, 1, "0", "prefix (sys: inf, serial: inf)"),
+            "other than the last is endless",
+        ),
+    ] {
+        let error = run_source(&common::main_source(&src), &options(10.0), None).unwrap_err();
+        assert!(error.contains(said), "{error}\n{src}");
+    }
+}
+
+/// An engine's request says what its prompt is made of, its first item:
+/// `prefix (product: system, session: inf);`, read by the hold of its
+/// admission. The system prompt is computed once, by the first session,
+/// and every later one reads it, prefilling only its own (#374).
+#[test]
+fn an_engine_s_request_takes_a_chain() {
+    let src = |prefix: &str| {
+        format!(
+            r#"
+        device gpu {{ kv cap 100000; }}
+        pool kv on gpu {{ block 16; evict lru; preempt lifo; }}
+        engine llm on gpu {{
+          tokens cap 8192;
+          request (n, product, system, session) {{
+            {prefix}
+            at admission {{ reused = min(cachedin(kv), floor(n - 1, 16)); }}
+            set c = min(cached, floor(n - 1, 16));
+            observe got = c;
+            prefill (n - c) growing kv;
+            cache (n);
+          }}
+          schedule {{
+            advance running;
+            admit waiting while (running.preempted == 0) taking kv (n) ;
+          }}
+          execute (batch.tokens * 1e-5 + 1e-4);
+        }}
+        stage user : delay;
+        workload {{ arrive batch(4); init {{ set sys = 7; }} session {{ turn; }} }}
+        server {{
+          run user (cost(user, serial * 10));
+          llm (1600, sys, 1200, serial);
+        }}
+"#
+        )
+    };
+    let r = run(
+        &src("prefix (product: system, session: inf);"),
+        &options(100.0),
+    );
+    assert_eq!(
+        r.observe("got").unwrap().samples,
+        [0.0, 1200.0, 1200.0, 1200.0],
+        "{}",
+        r.text()
+    );
+    let own = run(&src(""), &options(100.0));
+    assert_eq!(own.observe("got").unwrap().samples, [0.0; 4]);
+    for (body, said) in [
+        (
+            "set x = 1; prefix (product: system, session: inf);",
+            "is its first item",
+        ),
+        ("prefix (product: system, session: inf)", "ends with `;`"),
+    ] {
+        let error = run_source(&common::main_source(&src(body)), &options(10.0), None).unwrap_err();
+        assert!(error.contains(said), "{body}: {error}");
+    }
 }

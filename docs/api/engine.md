@@ -247,7 +247,9 @@ The report flags an engine left in this state as `idle: engine …`.
 
 `request (PARAM, …) { … }` says what the engine does with one request, and
 the server runs it with `ENGINE (arg, …);`. Its items come in the order
-they happen: the statements when the call is reached, `at admission {
+they happen: `prefix (k: n, …);`, what its sequence is made of (the
+admission's hold's [`prefix`](statements.md#hold), first if written), the
+statements when the call is reached, `at admission {
 NAME = e; … }` with the bindings read when the request is admitted, the
 statements while it is admitted (`prefill (e)` and `decode (e)` are the
 engine's runs in that mode), and `cache (e);`, what it leaves cached. What

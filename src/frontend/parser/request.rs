@@ -350,10 +350,13 @@ impl Parser {
             prefix = Some((r.body_at, segs));
             skip = close + 1;
         }
-        if let Some(i) = top_level(&r.body)
-            .into_iter()
-            .find(|&i| i >= skip && is_word(r.body.get(i), "prefix"))
-        {
+        // an item's first word: at the start, or after a `;` or a block
+        if let Some(i) = top_level(&r.body).into_iter().find(|&i| {
+            i >= skip
+                && is_word(r.body.get(i), "prefix")
+                && r.body.get(i + 1).is_some_and(|t| t.tok == Tok::LParen)
+                && (i == 0 || matches!(r.body[i - 1].tok, Tok::Semi | Tok::RBrace))
+        }) {
             return self.err_at(
                 r.body_at + i,
                 "a request's `prefix (k: n, …);` is its first item: what its sequence is made \

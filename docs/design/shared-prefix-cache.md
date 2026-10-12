@@ -146,8 +146,10 @@ serving `M` products this way.
    program that shares a system prompt (this document).
 2. A vLLM oracle scenario with a shared system prompt, run by the real
    scheduler (`tools/vllm_replay_oracle.py`), before any other engine.
-3. The engine form's request with a chain, LPM, and the agent workloads
-   written with it.
+3. The engine form's request with a chain: `prefix (k: n, …);`, the
+   request's first item, written into the hold of its admission
+   (`examples/multi-turn/vllm_system_prompt.sq`). Then LPM, and the agent
+   workloads written with it.
 
 ## Self-critique
 
@@ -182,10 +184,15 @@ serving `M` products this way.
   reads and its value; the default `(serial: ∞)` reads `serial`, and is
   still the chain of no clause.
 - **The written default refused by value.** `prefix (serial: inf)` does
-  not link; `prefix (serial: 1e12)` does, and runs as no clause on any
-  sequence shorter than 10¹² units. Refusing every length a run cannot
-  reach would read the run; the literal default is the second spelling a
-  reader writes.
+  not link; `prefix (serial: 1e12)` does. It keys the cache as no clause
+  does, but it is a chain: its hold reads at most what it allocates, where
+  a hold without the clause consumes its entry whole. Refusing every
+  length a run cannot reach would read the run; the literal default is
+  the second spelling a reader writes.
+- **A key's value as its session.** A segment keyed `serial` made the
+  node the entry of the session its value named, so a program that set
+  `serial` made another session's context that session's to drop. A node
+  is a session's entry when its key is the writing session's own serial.
 - **A writer as owner.** With the last writer as a node's owner, whether
   `drop` took a shared system prompt, and whose attributes `evict by`
   read, depended on which session came last; with the first writer, the

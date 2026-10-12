@@ -232,9 +232,17 @@ fn cached_in_a_hold_without_cache(
                 reuse,
                 body,
                 cache,
+                prefix,
                 ..
             } => {
                 let pool = p.show_pool_ref(&pools[0].0);
+                if prefix.is_some() && cache.is_none() {
+                    out.push(format!(
+                        "`prefix` on a hold on `{pool}` that has no `cache` clause: such a hold \
+                         reads and keeps nothing of the cache, so its chain says nothing. Write \
+                         `cache (ℓ)` to read the chain's cached prefix and keep ℓ along it."
+                    ));
+                }
                 if reuse.is_some() && cache.is_none() {
                     out.push(format!(
                         "`reuse` on a hold on `{pool}` that has no `cache` clause: such a hold \
