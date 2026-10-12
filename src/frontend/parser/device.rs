@@ -194,7 +194,7 @@ impl Parser {
         while *self.peek() != Tok::RBrace {
             let r_at = self.pos;
             let r = self.ident()?;
-            if is_word(&r) || self.defs.iter().any(|def| def.name == r) {
+            if is_reserved(&r) || self.defs.iter().any(|def| def.name == r) {
                 return self.err_at(
                     r_at,
                     format!("`{r}` is already a word or a definition: name the resource otherwise"),
@@ -239,7 +239,7 @@ impl Parser {
         while *self.peek() != Tok::RParen {
             let p_at = self.pos;
             let p = self.name()?;
-            if is_word(&p) {
+            if is_reserved(&p) {
                 return self.err_at(p_at, format!("`{p}` is a word of the language"));
             }
             self.own_name(p_at, &p, "a parameter")?;

@@ -1982,7 +1982,7 @@ pub(crate) trait Constants {
     fn terms_written(&self) -> &Cell<usize>;
 
     /// The value of a constant expression: numbers, `inf` and constants,
-    /// combined by the operators, the constant functions (`const_call`), a
+    /// combined by the operators, the arithmetic functions (`Fun::arithmetic`), a
     /// condition and an aggregate written out. An attribute, a draw or
     /// `blocksize` is no constant; an unread argument is resolved, as in
     /// any expression, and never evaluated, so it need not be one

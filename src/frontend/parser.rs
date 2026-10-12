@@ -856,7 +856,7 @@ fn is_function(name: &str) -> bool {
 /// A word a definition or its parameter may not take: a keyword, a
 /// function or a distribution. A parameter is replaced token by token, so
 /// one named `uniform` turned `~uniform(…)` in its body into `~3(…)`.
-fn is_word(name: &str) -> bool {
+fn is_reserved(name: &str) -> bool {
     KEYWORDS.contains(&name) || is_function(name) || DistKind::from_name(name).is_some()
 }
 
@@ -2559,7 +2559,7 @@ impl Parser {
     fn def(&mut self) -> PResult<()> {
         let at = self.pos;
         let name = self.ident()?;
-        if is_word(&name) {
+        if is_reserved(&name) {
             return self.err_at(at, format!("`{name}` is a word of the language"));
         }
         self.declare(at, &name, Kind::Definition)?;
@@ -2595,7 +2595,7 @@ impl Parser {
         while *self.peek() != Tok::RParen {
             let p_at = self.pos;
             let p = self.name()?;
-            if is_word(&p) {
+            if is_reserved(&p) {
                 return self.err_at(
                     p_at,
                     format!("`{p}` is a word of the language: name the parameter otherwise"),
@@ -3561,7 +3561,7 @@ impl Parser {
                         "a queue's device is the member's, one per member of `{name}`: write `device {dev}`"
                     ));
                 }
-                if KEYWORDS.contains(&dev.as_str()) {
+                if is_reserved(&dev) {
                     return self.err_at(d_at, format!("`{dev}` is a word of the language"));
                 }
                 self.declare_in(Scope::Queue(name.clone()), d_at, &dev, Kind::Device)?;

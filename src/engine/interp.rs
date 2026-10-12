@@ -4496,14 +4496,12 @@ impl<'p> Interp<'p> {
         if f.is_arithmetic() {
             // in order: an argument's draw is the stream's next
             let a = num(self, 0);
-            let xs = if args.len() == 2 {
-                [a, num(self, 1)]
+            let value = if args.len() == 2 {
+                f.arithmetic(&[a, num(self, 1)])
             } else {
-                [a, 0.0]
+                f.arithmetic(&[a])
             };
-            return f
-                .arithmetic(&xs[..args.len()])
-                .expect("Program::validate checks the arguments");
+            return value.expect("Program::validate checks the arguments");
         }
         match f {
             Fun::Min

@@ -2809,9 +2809,33 @@ const FUNS: [Fun; 22] = [
 
 impl Fun {
     /// A function of its arguments alone (`min`, `ceil`, …), which reads
-    /// no state: every argument is a number, none a pool or a stage.
+    /// no state. Written out, not read off the signature: a function of
+    /// numbers alone may still read state.
     pub fn is_arithmetic(self) -> bool {
-        self.signature().iter().all(|a| *a == ArgKind::Expr)
+        match self {
+            Fun::Min
+            | Fun::Max
+            | Fun::Abs
+            | Fun::Floor
+            | Fun::Ceil
+            | Fun::Sqrt
+            | Fun::Exp
+            | Fun::Ln
+            | Fun::Pow => true,
+            Fun::Queue
+            | Fun::Busy
+            | Fun::Work
+            | Fun::Used
+            | Fun::Free
+            | Fun::CachedIn
+            | Fun::Holders
+            | Fun::Queued
+            | Fun::Price
+            | Fun::BudgetLeft
+            | Fun::EstLambda
+            | Fun::EstRho
+            | Fun::EstWait => false,
+        }
     }
 
     /// The value of an arithmetic function, the one definition the
