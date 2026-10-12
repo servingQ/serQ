@@ -219,6 +219,4 @@ fn main() {
   gauge kv_usage_mean = sum k in ND (used(D[k].kv) / (used(D[k].kv) + free(D[k].kv))) / ND;
   gauge load_spread = max k in ND (holders(D[k].kv) + queued(D[k].kv))
                     - min k in ND (holders(D[k].kv) + queued(D[k].kv));
-
-
 }

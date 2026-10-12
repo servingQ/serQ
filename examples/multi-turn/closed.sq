@@ -26,6 +26,4 @@ fn main() {
     run svc (cost(svc, s));
     observe wait = now - t0 - s;
   }
-
-
 }

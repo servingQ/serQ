@@ -74,6 +74,4 @@ fn main() {
     set prompt = K + n;
     tgi (prompt, o);
   }
-
-
 }

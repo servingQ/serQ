@@ -61,6 +61,4 @@ fn main() {
     vllm (prompt, o);
     observe done = now;
   }
-
-
 }

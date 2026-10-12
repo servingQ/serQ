@@ -46,6 +46,4 @@ fn main() {
       observe cycle = now - t0;
     }
   }
-
-
 }
