@@ -4167,6 +4167,12 @@ impl Parser {
         if let Some(p) = locals.iter().find(|l| params.contains(l)) {
             return self.err_at(at, format!("`{qname}.{verb}` sets its parameter `{p}`"));
         }
+        // a local is the queue's attribute (`Q.l`), which the linker's check
+        // of a name the language supplies never sees bare: `self` is read
+        // as the member's index before any local (`queue::in_entry`)
+        for l in &locals {
+            self.own_name(at, l, &format!("`{qname}.{verb}`'s local"))?;
+        }
         if let Some(l) = locals
             .iter()
             .find(|l| self.consts.iter().any(|(c, _)| c == *l))
