@@ -10,10 +10,17 @@ fn main() {
   engine llm on gpu {
     slots cap 2;
     tokens cap 32;
+    request (prompt, output) {
+      prefill (prompt) growing kv;
+      observe first = now;
+      decode (output) growing kv;
+      observe done = now;
+    }
     schedule {
       let c = waiting.count + running.count > 2 ? 8 : inf;
       advance running each at most (c);
-      admit waiting while (running.preempted == 0) each at most (c);
+      admit waiting while (running.preempted == 0) each at most (c)
+        taking slots (1), kv (prompt);
     }
     execute (1);
   }
@@ -26,11 +33,6 @@ fn main() {
   }
 
   server {
-    hold slots (cost(slots, 1)), kv (cost(kv, p)) {
-      run llm prefill (cost(llm, p)) growing kv;
-      observe first = now;
-      run llm decode (cost(llm, o)) growing kv;
-      observe done = now;
-    }
+    llm (p, o);
   }
 }
