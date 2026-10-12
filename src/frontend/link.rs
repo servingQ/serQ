@@ -293,7 +293,9 @@ fn read_in(name: &str) -> Option<String> {
         Some(Supplied::Ctx(var)) => var.moments(),
         // `self` is a queue's entry's: the member's index, read before any
         // parameter or local of that name (`queue::in_entry`)
-        None if name == "self" => return Some("a queue's entry, as its member's index".into()),
+        None if name == crate::frontend::queue::SELF => {
+            return Some("a queue's entry, as its member's index".into());
+        }
         None => {
             return LISTS
                 .contains(&name)

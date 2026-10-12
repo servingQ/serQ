@@ -5828,9 +5828,10 @@ impl Parser {
                         .push((at, name.clone(), self.cost_scope()));
                     Ok(Expr::Located(span, Box::new(Expr::Var(name))))
                 } else {
-                    if name == "self" && self.in_queue.is_none() {
+                    if name == queue::SELF && self.in_queue.is_none() {
                         self.pos -= 1;
-                        return self.err("`self` is a queue entry's word: the member's own index");
+                        return self
+                            .err("`self` is read in a queue's entry, as its member's index");
                     }
                     self.retired_in_engine(self.pos - 1, &name)?;
                     Ok(Expr::Located(span, Box::new(Expr::Var(name))))

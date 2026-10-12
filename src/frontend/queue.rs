@@ -159,6 +159,10 @@ impl QueueDecl {
     }
 }
 
+/// A queue entry's word for its member's index: the language's, read
+/// before a parameter or local, so nothing may be declared so.
+pub(crate) const SELF: &str = "self";
+
 /// What a bare name read in a queue's entry is before it is the
 /// program's: the member's index (`self`), one of the entry's parameters,
 /// or a local the entry sets. The one order both the entry's check
@@ -178,7 +182,7 @@ pub(crate) fn in_entry<'a>(
     params: impl IntoIterator<Item = &'a str>,
     locals: &[String],
 ) -> Option<InEntry> {
-    if n == "self" {
+    if n == SELF {
         return Some(InEntry::SelfIndex);
     }
     if let Some(i) = params.into_iter().position(|p| p == n) {

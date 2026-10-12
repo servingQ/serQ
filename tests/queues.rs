@@ -830,7 +830,7 @@ fn a_call_is_checked_against_the_entry() {
     // `self` is a member's word
     refused(
         "stage s : fifo; workload { session { turn; end; \n} }\nserver { observe member = self;\n} ",
-        "`self` is a queue entry's word",
+        "`self` is read in a queue's entry, as its member's index",
     );
     refused(
         "queue gw : gateway { route { observe member = self; } } stage s : fifo;
@@ -1079,6 +1079,14 @@ fn self_names_nothing_a_program_declares() {
             "set self = 2; E[j].decode (prompt);",
         ),
         &format!("{supplied}; `gw.route`'s local named `self`"),
+    );
+    // and anything else the program declares
+    refused(
+        &format!(
+            "let self = 2; {}",
+            program(&format!("decode (p) {{ {hold} }}"), "E[j].decode (prompt);")
+        ),
+        &format!("{supplied}; a `let` constant named `self`"),
     );
 }
 
