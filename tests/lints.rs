@@ -308,7 +308,8 @@ fn a_context_variable_outside_its_moment_is_rejected() {
         "device gpu[2] { kv cap 1e5; }
         pool kv on gpu { evict by (age, size + used(kv[size > 1e9 ? 1 : 0]) * 0, now * 0); }
         stage svc : ps (min(present, 4) + now * 0);
-        engine llm[2] on gpu {
+        device chip { }
+        engine llm on chip {
           tokens cap 512 + running.count + running.decoding + running.kv_decode * 0 + running.kv_prefill * 0 + now * 0;
           schedule {
             let c = running.decoding > 0 ? 64 : 128;

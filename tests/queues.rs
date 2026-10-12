@@ -26,6 +26,28 @@ fn same_ir(queues: &str, flat: &str, renames: &[(&str, &str)]) {
     assert_eq!(q, f);
 }
 
+/// The queue program's IR with `renames` applied to its JSON is the flat
+/// program's, kept in `tests/golden/queues/NAME.ir.json`: the flat program
+/// ran an engine family from the server, which #539 refused in favour of
+/// the queue family, so its IR is the one it compiled to on 3d23f4a.
+/// `SERQ_BLESS` rewrites it from the queue side.
+fn same_ir_as_flat(queues: &str, name: &str, renames: &[(&str, &str)]) {
+    let mut q = compile_source(&common::main_source(queues), &common::horizon(100.0))
+        .unwrap_or_else(|e| panic!("queues: {e}\n{queues}"))
+        .to_json();
+    for (from, to) in renames {
+        q = q.replace(&format!("\"{from}\""), &format!("\"{to}\""));
+    }
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/golden/queues")
+        .join(format!("{name}.ir.json"));
+    if std::env::var_os("SERQ_BLESS").is_some() {
+        std::fs::write(&path, &q).unwrap();
+    }
+    let flat = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    assert_eq!(q, flat);
+}
+
 fn refused(src: &str, needle: &str) {
     let e = match parse(&common::main_source(src)) {
         Err(e) => e.to_string(),
@@ -43,7 +65,7 @@ const WORKLOAD: &str = "workload { arrive batch(1); hidden o; init { set prompt 
 /// named request selects the gateway's `route`; the family's size is a constant.
 #[test]
 fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
-    same_ir(
+    same_ir_as_flat(
         &format!(
             "use \"std/args\"; let N = args.number(\"N\", 2);
              queue gw : gateway {{ route {{ E[j].decode (prompt); observe done = now; }} }}
@@ -58,19 +80,7 @@ fn a_queue_is_its_pools_its_stage_and_the_server_statements() {
              }}
              {WORKLOAD}"
         ),
-        &format!(
-            "use \"std/args\"; let N = args.number(\"N\", 2);
-             device gpu[2] {{ kv cap 100; }} pool kv on gpu {{ block 16; }}
-             engine E[2] on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
-             server {{
-               hold kv[j] (cost(kv, min(prompt, budget_left(E[j])))) reserve (cost(kv, prompt)) {{
-                 run E[j] prefill (cost(E, prompt)) growing kv[j]; run E[j] decode (cost(E, o - 1)) growing kv[j];
-               }} cache (cost(kv, prompt + o));
-               observe done = now;
-             }}
-             {}",
-            WORKLOAD.replace("server { gw.route(); }", "")
-        ),
+        "a_queue_is_its_pools_its_stage_and_the_server_statements",
         &[("E.kv", "kv")],
     );
 }
@@ -133,29 +143,9 @@ fn a_transfer_between_queues_is_the_flat_transfer() {
       queue nic[ND] : link { serve ps(1); transfer (n) { run (cost(nic, n / Bw)); } }
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { turn; end; } } server { gw.route(); }
       ";
-    let flat = "
-        let ND = 2; let Bw = 1000;
-        pool kvP { cap 1000; }
-        device gpu[2] { kvD cap 1000; } pool kvD on gpu { block 16; }
-        stage P : fifo;
-        engine D[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
-        stage nic[2] : ps(1);
-        server {
-          set t0 = now;
-          hold kvP (cost(kvP, prompt)) { run P (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP (inf);
-          set c = 0;
-          hold kvD[j] (cost(kvD, prompt)) {
-            transfer on nic[j] ((prompt - c) / Bw) from kvP to kvD[j] (prompt - 1);
-            run D[j] prefill (cost(D, 1)) growing kvD[j]; set first = now;
-            run D[j] decode (cost(D, o - 1)) growing kvD[j];
-          }
-          observe ttft = first - t0;
-        }
-        workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set j = 0; } session { turn; end; } }
-        ";
-    same_ir(
+    same_ir_as_flat(
         queues,
-        flat,
+        "a_transfer_between_queues_is_the_flat_transfer",
         &[
             ("P.kv", "kvP"),
             ("D.kv", "kvD"),
@@ -200,27 +190,11 @@ fn a_read_over_both_links_is_the_flat_read() {
       share maxmin;
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } } server { gw.route(); }
       ";
-    let flat = "
-        let NP = 2; let ND = 2;
-        stage egress : ps(100);
-        stage ingress[2] : ps(200);
-        stage setup : delay;
-        pool kvP[2] { cap 1000; }
-        stage P[2] : fifo;
-        device gpu[2] { kvD cap 1000; } pool kvD on gpu { block 16; }
-        engine D[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
-        share maxmin;
-        server {
-          hold kvP[i] (cost(kvP, prompt)) { run P[i] (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP[i] (inf);
-          hold kvD[j] (cost(kvD, prompt)) {
-            run setup (cost(setup, 1));
-            transfer on egress, ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
-            run D[j] decode (cost(D, o - 1)) growing kvD[j];
-          }
-        }
-        workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } }
-        ";
-    same_ir(queues, flat, &[("P.kv", "kvP"), ("D.kv", "kvD")]);
+    same_ir_as_flat(
+        queues,
+        "a_read_over_both_links_is_the_flat_read",
+        &[("P.kv", "kvP"), ("D.kv", "kvD")],
+    );
 }
 
 /// A link's `latency` is a wait before every transfer over it: a delay
@@ -254,31 +228,9 @@ fn a_link_latency_is_a_wait_before_the_read() {
       share maxmin;
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } } server { gw.route(); }
       ";
-    let flat = "
-        let x0 = 0.5; let x1 = 0.25;
-        stage egress : ps(100);
-        stage egressL : delay;
-        stage ingress[2] : ps(200);
-        stage ingressL[2] : delay;
-        pool kvP[2] { cap 1000; }
-        stage P[2] : fifo;
-        device gpu[2] { kvD cap 1000; } pool kvD on gpu { block 16; }
-        engine D[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
-        share maxmin;
-        server {
-          hold kvP[i] (cost(kvP, prompt)) { run P[i] (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP[i] (inf);
-          hold kvD[j] (cost(kvD, prompt)) {
-            run egressL (cost(egressL, x1));
-            run ingressL[j] (cost(ingressL, x0));
-            transfer on egress, ingress[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
-            run D[j] decode (cost(D, o - 1)) growing kvD[j];
-          }
-        }
-        workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } }
-        ";
-    same_ir(
+    same_ir_as_flat(
         queues,
-        flat,
+        "a_link_latency_is_a_wait_before_the_read",
         &[
             ("P.kv", "kvP"),
             ("D.kv", "kvD"),
@@ -1328,29 +1280,9 @@ fn a_pull_relation_is_the_flat_read() {
       use \"std/kvt\"; share maxmin; kvt.nixl_pull (P, D, latency = x0);
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } } server { gw.route(); }
       ";
-    let flat = "
-        let x0 = 0.5;
-        pool kvP[2] { cap 1000; }
-        stage P[2] : fifo;
-        stage nicP[2] : ps(100);
-        device gpu[2] { kvD cap 1000; } pool kvD on gpu { block 16; }
-        engine D[2] on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
-        stage nicD[2] : ps(200);
-        stage wait[2] : delay;
-        share maxmin;
-        server {
-          hold kvP[i] (cost(kvP, prompt)) { run P[i] (cost(P, prompt)); } cache (cost(kvP, prompt)) lease kvP[i] (inf);
-          hold kvD[j] (cost(kvD, prompt)) {
-            run wait[j] (cost(wait, x0));
-            transfer on nicP[i], nicD[j] (prompt) from kvP[i] to kvD[j] (prompt - 1);
-            run D[j] decode (cost(D, o - 1)) growing kvD[j];
-          }
-        }
-        workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } }
-        ";
-    same_ir(
+    same_ir_as_flat(
         queues,
-        flat,
+        "a_pull_relation_is_the_flat_read",
         &[
             ("P.kv", "kvP"),
             ("D.kv", "kvD"),

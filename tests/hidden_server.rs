@@ -69,7 +69,7 @@ fn the_server_may_not_decide_on_a_hidden_attribute() {
         "branch (o > 2) { E (prompt); } else { observe skipped = 1; }",
         &[
             "`o` is hidden from the scheduler, but the server's branch reads it",
-            "run E decode (cost(E, o))",
+            "`decode (o);`",
         ],
     );
     refused(
