@@ -27,7 +27,7 @@ prefills in the compute its decode step leaves is a stage kind of its own
 program  := (constant | definition | import)* fn main ( ) { item* }
 constant := let NAME = expr ;
 definition := def NAME ( NAME , ... ) ( { expr } | block )
-import   := use "std/args" ;                 -- a program is one file
+import   := use "std/args" ; | use "std/kvt" ;   -- a program is one file
 item     := let NAME = expr ;
           | let NAME = args.number ( "argument_name" , expr ) ;
           | def NAME ( NAME , ... ) { expr }   -- a name for an expression: NAME ( arg , ... )
@@ -42,8 +42,8 @@ item     := let NAME = expr ;
           | server block                      -- request handling; the session lives inside workload
           | queue NAME [ '[' expr ']' ] [ : ROLE [, ROLE]* ] { qitem* }   -- a station: its pools, stage and entries (below, *Queues*)
           | share maxmin ; | share bottleneck ;   -- how a run over several stages divides them
-          | QUEUE pull QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the reader, its source, the read (below, *Queues*)
-          | QUEUE push QUEUE [ latency expr ] share ( maxmin | bottleneck ) ;   -- the source, its reader, the write
+          | kvt.nixl_pull ( QUEUE , QUEUE [, latency = expr ] ) ;   -- the source, its reader, the read (below, *Queues*); needs the program's share
+          | kvt.nixl_push ( QUEUE , QUEUE [, latency = expr ] ) ;   -- the source, its reader, the write
           | gauge NAME = expr ;              -- the time average of a function of the state (Gauges)
           | claim NAME [given ( expr )] : every iteration of STAGE ( expr ) ;   -- a proposition about every path (Claims)
           | claim NAME [given ( expr )] : some iteration of STAGE ( expr ) ;
@@ -223,8 +223,10 @@ A plain `let` cannot be replaced externally. With `use "std/args";`, a
 inputs. Defaults and supplied expressions are resolved at link time; the
 result is the same IR as a program written with those values. An input that
 would change a parse-time array size is refused. See [Program](api/program.md)
-for the full input contract. Syntax snippets elsewhere may show just a main
-body or one of its nested blocks.
+for the full input contract. `use "std/kvt";` supplies the KV-transfer
+vocabulary, `kvt.nixl_pull (…)` and `kvt.nixl_push (…)` (below, *Queues*).
+Syntax snippets elsewhere may show just a main body or one of its nested
+blocks.
 
 ### The serving vocabulary
 
@@ -422,7 +424,7 @@ queue and its entry, then expands the route at the call site. Declarations
 may follow the server and several gateways may coexist. Declaring a gateway
 does not execute it or register a default server.
 
-`queue`, `pool`, `serve`, `nic`, `pull`, `turn` and `mark` are language
+`queue`, `pool`, `serve`, `nic`, `turn` and `mark` are language
 syntax. The role names and their entry signatures in the table are
 predefined vocabulary; `gw`, `P` and `D` are names declared by this
 program. User-defined roles are not supported.
@@ -451,23 +453,27 @@ queue D[ND] : decode {
     transfer (prompt - c) from P to kv (prompt - 1 - c);   // over P's NIC and this pod's
   }
 }
-D pull P latency x0 share maxmin;
+share maxmin;
+kvt.nixl_pull (P, D, latency = x0);
 ```
 
-`D pull P` is one line for the topology and the mode: the KV goes from `P`
-to `D`, `D` starts the read (NIXL pull), `D` waits `x0` before each one
-(a number or a constant over `let`s), and concurrent reads divide the two
-NICs by the policy, which is the program's `share` and is written here, not
-left to a default. Inside an entry of `D` called `from P[i]`, a `transfer`
+`kvt.nixl_pull (P, D)` is one line for the topology and the mode: the KV
+goes from `P` to `D`, the source first as the bytes go, `D` starts the
+read (NIXL pull), and `D` waits `x0` before each one (a number or a
+constant over `let`s; `latency = …` may be left out). Concurrent reads
+divide the two NICs by the program's `share`, which a program with a
+relation must write: it is not left to a default. Inside an entry of `D` called `from P[i]`, a `transfer`
 without `on` is the read: the kernel's `run D.nic.latency[j] (x0); run
 P.nic[i], D.nic[j] (…); load D.kv[j] (…); release P.kv[i];`. Both queues
 are declared above the relation and have a `nic`; a reader has one source;
-an entry of `D` `from` another queue is an error, and so is a
-`transfer` without `on` in a queue that pulls from none. A program with a
-relation does not also write `share` on its own.
+an entry of `D` `from` another queue is an error, and so is a reader with
+no entry `from` its source (the queues the wrong way round), and a
+`transfer` without `on` in a queue that pulls from none. The relation is std/kvt's:
+the program imports it with `use "std/kvt";`, and then declares nothing
+named `kvt`.
 
-`P push D latency x0 share maxmin;` is the same copy written by the other
-side (NIXL push): the bytes cross the same two NICs, and the source's
+`kvt.nixl_push (P, D, latency = x0);` is the same copy written by the
+other side (NIXL push): the bytes cross the same two NICs, and the source's
 worker posts the write, so the wait before each copy is `P`'s, the delay
 stage `P.nic.latency`, indexed by the source member. A push says who moves
 the bytes, not when the decoder is asked for its blocks: that is the

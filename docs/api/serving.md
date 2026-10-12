@@ -73,8 +73,8 @@ named.
 From `examples/pd-disaggregation/llmd_nixl_pull.sq`, the decoder's read of
 the prefiller's leased blocks, over the prefiller's NIC and its own, in the
 decoder's `decode (prompt) from P` entry (in it `P` is the KV the request
-leased on the prefiller). The NICs are the pods' (`nic ps(BwD);`), and the relation `D pull P
-latency x0 share maxmin;` makes a `transfer` without `on` the read over
+leased on the prefiller). The NICs are the pods' (`nic ps(BwD);`), and the relation
+`kvt.nixl_pull (P, D, latency = x0);` from `std/kvt` makes a `transfer` without `on` the read over
 `P.nic[i]` and `D.nic[j]`, after the decoder's wait `x0`:
 
 ```serq

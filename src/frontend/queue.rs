@@ -116,7 +116,7 @@ pub struct QueueDecl {
     pub latency: Option<Expr>,
     /// `nic kind;`: the queue's NIC, the stage `Q.nic`.
     pub nic: bool,
-    /// `Q pull S …;` or `S push Q …;`: where its entries take the KV from.
+    /// `kvt.nixl_pull (S, Q, …);` or `kvt.nixl_push (S, Q, …);`: where its entries take the KV from.
     pub takes: Option<Takes>,
     /// An engine's request (`docs/design/engine-request.md`), its one
     /// entry `request`: it keeps its names and its pools are the program's.
@@ -127,8 +127,8 @@ pub struct QueueDecl {
     pub at: usize,
 }
 
-/// The KV relation of a reader: `D pull P latency x share s;` or
-/// `P push D latency x share s;`.
+/// The KV relation of a reader: `kvt.nixl_pull (P, D, latency = x);` or
+/// `kvt.nixl_push (P, D, latency = x);`.
 #[derive(Clone, Debug)]
 pub struct Takes {
     /// The queue the entries take the KV `from`.
@@ -391,7 +391,8 @@ impl Ctx<'_> {
                 self.at,
                 format!(
                     "`{}`'s `transfer` names no NIC and `{}` pulls from no queue, nor is \
-                     pushed to: declare `{} pull SOURCE share …;` or `SOURCE push {} share …;`, \
+                     pushed to: declare `kvt.nixl_pull (SOURCE, {});` or \
+                     `kvt.nixl_push (SOURCE, {});` (`use \"std/kvt\";`), \
                      or write `transfer on …`",
                     self.q.name, self.q.name, self.q.name, self.q.name
                 ),

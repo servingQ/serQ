@@ -7,7 +7,9 @@ soon as it has both its finished blocks and the decoder's registration. A
 serQ session waited at one place at a time, so the decoder's allocation
 could only be written after the prefill, which is the serial dispatch. This
 document is the design of `fork { … }`, `join;` and `P push D …;`, issue
-#368: two IR statements and a parse-time relation.
+#368: two IR statements and a parse-time relation. Since [the KV-transfer
+library](kv-transfer.md) the relation is spelled `kvt.nixl_push (P, D,
+latency = x);` beside the program's `share s;`.
 
 ## What vLLM does
 

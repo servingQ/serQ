@@ -157,7 +157,9 @@ fn a_program_is_one_file() {
     f.write("model.sq", "use \"lib.sq\"; fn main() {  }");
     let out = f.run(&["check", "model.sq"]);
     assert!(!out.status.success());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("`use` reads only `std/args`"));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("`use` reads only `std/args` and `std/kvt`")
+    );
 }
 
 #[test]

@@ -48,7 +48,7 @@ IR serialization. Compilation does not simulate it.
 `sets` accepts infinities as `inf` or `-inf`; NaN is rejected. With JSON IR
 input, `sets` and `defs` are rejected; run overrides remain available.
 
-Text supplied with `source=` can import the built-in `std/args` library.
+Text supplied with `source=` can import the built-in `std/args` and `std/kvt` libraries.
 A relative trace named in a source file is resolved beside that file.
 With `source=`, a `trace=` override, or `Program.from_json`, traces resolve
 from the current working directory. Trace contents are read when the

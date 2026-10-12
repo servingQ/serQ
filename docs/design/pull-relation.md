@@ -5,7 +5,9 @@ KV goes to which, who starts the copy, what it waits for, and how
 concurrent copies share the wire. `examples/pd-disaggregation/llmd_nixl_pull.sq`
 wrote that fact in three places, none of which said it. This document is
 the design of `nic` and `D pull P latency x share s;`, issue #200: parse-time
-sugar, no IR change.
+sugar, no IR change. Since [the KV-transfer library](kv-transfer.md) the
+relation is spelled `kvt.nixl_pull (P, D, latency = x);` beside the
+program's `share s;`.
 
 ## Before
 
