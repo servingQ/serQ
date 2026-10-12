@@ -62,7 +62,7 @@ serq run examples/replay/vllm_replay.sq --instance experiment.sq
 ```
 
 This supplies the same inputs and execution conditions as
-`--set spacing=3.0 --horizon 6000 --warmup 0 --seed 2`. Flags and instances
+`--spacing 3.0 --horizon 6000 --warmup 0 --seed 2`. Flags and instances
 apply in command-line order; later values win.
 
 Example commands state their execution conditions directly. An instance is

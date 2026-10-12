@@ -1,8 +1,10 @@
-//! `serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--set k=expr]... [--trace F] [--json] [--dump DIR]`
-//! `serq check FILE [--instance F] [--set k=expr]...`
-//! `serq ir FILE [--instance F] [--set k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace]`
-//! `serq draw FILE [--format tikz|svg] [--out PATH]` (experimental)
-//! `serq target FILE [--instance F] [--set k=expr]...`
+//! `serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--def k=expr]... [--trace F] [--json] [--dump DIR] [--name value]...`
+//! `serq check FILE [--instance F] [--def k=expr]... [--name value]...`
+//! `serq ir FILE [--instance F] [--def k=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [--name value]...`
+//! `serq draw FILE [--format tikz|svg] [--out PATH] [--name value]...` (experimental)
+//! `serq target FILE [--instance F] [--def k=expr]... [--name value]...`
+//!
+//! `--name value` is an input the program declares with `args.number`.
 //! `serq fmt [--check] FILE...`
 //! `serq --version`
 //!
@@ -12,25 +14,20 @@ use std::path::Path;
 use std::process::exit;
 
 use serq::Overrides;
-use serq::frontend::parser;
 
 fn usage(cmd: &str) -> &'static str {
     match cmd {
         "run" => {
-            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--set name=expr]... [--def name=expr]... [--trace F] [--json] [--dump DIR] [-- --name value ...]"
+            "serq run FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--def name=expr]... [--trace F] [--json] [--dump DIR] [--name value]..."
         }
-        "check" => {
-            "serq check FILE [--instance F] [--set name=expr]... [--def name=expr]... [-- --name value ...]"
-        }
+        "check" => "serq check FILE [--instance F] [--def name=expr]... [--name value]...",
         "ir" => {
-            "serq ir FILE [--instance F] [--set name=expr]... [--def name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [-- --name value ...]"
+            "serq ir FILE [--instance F] [--def name=expr]... [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--trace F] [--inline-trace] [--name value]..."
         }
         "draw" => {
-            "serq draw FILE [--instance F] [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH] [-- --name value ...]"
+            "serq draw FILE [--instance F] [--def name=expr]... [--format tikz|svg] [--out PATH] [--name value]..."
         }
-        "target" => {
-            "serq target FILE [--instance F] [--set name=expr]... [--def name=expr]... [-- --name value ...]"
-        }
+        "target" => "serq target FILE [--instance F] [--def name=expr]... [--name value]...",
         "fmt" => "serq fmt [--check] FILE...",
         _ => "serq <run|check|ir|draw|target|fmt> FILE [OPTIONS] | serq --version",
     }
@@ -141,26 +138,35 @@ fn main() {
     let mut i = 2;
     while i < args.len() {
         let flag = args[i].as_str();
-        if flag == "--" {
-            let values = serq::frontend::args::numbers(&args[i + 1..])
-                .unwrap_or_else(|e| argument_error(cmd, e));
-            ov.lets.extend(
-                values
-                    .into_iter()
-                    .map(|(n, v)| (n, serq::frontend::ast::Expr::Num(v))),
+        let option = flag.strip_prefix("--").unwrap_or_else(|| {
+            argument_error(
+                cmd,
+                format!("unexpected argument `{flag}`\nhelp: options and program inputs are written --name value"),
+            )
+        });
+        if option.is_empty() {
+            argument_error(
+                cmd,
+                "unexpected `--`\nhelp: program inputs stand among the options, for example --seed 2 --Lambda 0.3",
             );
-            break;
+        }
+        // A word that is not the interpreter's is the program's: an input
+        // declared with `args.number`, which the linker checks by name.
+        if !serq::frontend::args::OPTIONS.contains(&option) {
+            let (name, value, consumed) =
+                serq::frontend::args::number(option, args.get(i + 1).map(String::as_str))
+                    .unwrap_or_else(|e| argument_error(cmd, e));
+            ov.lets.push((name, serq::frontend::ast::Expr::Num(value)));
+            i += if consumed { 2 } else { 1 };
+            continue;
         }
         let allowed: &[&str] = match flag {
-            "--set" | "--def" | "--instance" => &["run", "check", "ir", "draw", "target"],
+            "--def" | "--instance" => &["run", "check", "ir", "draw", "target"],
             "--seed" | "--horizon" | "--warmup" | "--arrivals" | "--trace" => &["run", "ir"],
             "--json" | "--dump" => &["run"],
             "--inline-trace" => &["ir"],
             "--format" | "--out" => &["draw"],
-            _ => argument_error(
-                cmd,
-                format!("unknown option `{flag}`\nhelp: use the options in the usage below"),
-            ),
+            _ => unreachable!("`{flag}` is in args::OPTIONS but has no arm"),
         };
         if !allowed.contains(&cmd) {
             argument_error(
@@ -192,36 +198,6 @@ fn main() {
             "--horizon" => ov.horizon = Some(time_arg(cmd, flag, &next(&mut i), true)),
             "--warmup" => ov.warmup = Some(time_arg(cmd, flag, &next(&mut i), false)),
             "--trace" => ov.trace = Some(next(&mut i)),
-            "--set" => {
-                let kv = next(&mut i);
-                let (k, v) = kv.split_once('=').unwrap_or_else(|| {
-                    argument_error(
-                        cmd,
-                        format!("invalid --set `{kv}`; expected name=expr\nhelp: use --set rate=2"),
-                    )
-                });
-                let name = k.trim();
-                if name.is_empty()
-                    || !name.chars().enumerate().all(|(i, c)| {
-                        c == '_'
-                            || if i == 0 {
-                                c.is_alphabetic()
-                            } else {
-                                c.is_alphanumeric()
-                            }
-                    })
-                {
-                    argument_error(
-                        cmd,
-                        format!(
-                            "invalid --set name `{name}`; expected an identifier\nhelp: use --set name=expr with an input declared by args.number"
-                        ),
-                    );
-                }
-                let e = parser::parse_expr(v).unwrap_or_else(|e| argument_error(cmd,
-                    format!("invalid expression in --set `{kv}`: {e}\nhelp: use --set name=expr, for example --set rate=2")));
-                ov.lets.push((name.to_string(), e));
-            }
             "--instance" => {
                 let path = next(&mut i);
                 let text = std::fs::read_to_string(&path)

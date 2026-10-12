@@ -25,4 +25,4 @@ Run the examples with the listed settings to reproduce the reports.
     cargo build --release
     ./target/release/serq run docs/tutorial/programs/01-queue.sq --horizon 100000 --warmup 5000 --seed 1
     ```
-    Every chapter ends with a sweep you can reproduce with `--set`.
+    Every chapter ends with a sweep you can reproduce with `--name value`.

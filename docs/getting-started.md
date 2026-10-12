@@ -90,27 +90,6 @@ queue wait, and counters for admissions, evictions, preemptions, spills,
 rejections and `stuck` (sessions preempted again without progress since
 their previous preemption, which a run would otherwise hide).
 
-## Changing a program without editing it
-
-A program constructs its deployment inside `fn main()`. It explicitly declares
-external inputs through the standard `args` library:
-
-```serq
-use "std/args";
-
-fn main() {
-  let Lambda = args.number("Lambda", 0.3);
-  // The deployment, workload, session and run settings go here.
-}
-```
-
-Pass program inputs after `--`, and interpreter run settings before it.
-Ordinary `let` constants cannot be changed from the command line:
-
-```bash
-serq run examples/multi-turn/vllm.sq --seed 2 --horizon 3000 -- --Lambda 0.3
-```
-
 `--json` prints the same report as JSON, and `--dump DIR` writes every
 observation as `DIR/<name>.csv` with `time,session,turn,value` — one row per
 sample, which is what you pair against a measured run.

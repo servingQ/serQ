@@ -67,7 +67,7 @@ has moved to the pool.
 
 ```bash
 for C in 4 6 10 20; do
-  serq run docs/tutorial/programs/02-memory.sq --horizon 100000 --warmup 5000 --seed 1 --set C=$C
+  serq run docs/tutorial/programs/02-memory.sq --horizon 100000 --warmup 5000 --seed 1 --C $C
 done
 ```
 

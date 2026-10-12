@@ -1,20 +1,23 @@
 # CLI reference
 
 ```
-serq run   FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F] [--set name=expr]...
-                    [--def name=expr]... [--trace F] [--json] [--dump DIR]
-serq check FILE [--instance F] [--set name=expr]... [--def name=expr]...
-serq ir    FILE [--instance F] [--set name=expr]... [--def name=expr]... [--seed N] [--horizon T] [--warmup T]
-                    [--arrivals N] [--trace F] [--inline-trace]
-serq draw  FILE [--instance F] [--set name=expr]... [--def name=expr]... [--format tikz|svg] [--out PATH]   (experimental)
-serq target FILE [--instance F] [--set name=expr]... [--def name=expr]...
+serq run   FILE [--seed N] [--horizon T] [--warmup T] [--arrivals N] [--instance F]
+                    [--def name=expr]... [--trace F] [--json] [--dump DIR] [--name value]...
+serq check FILE [--instance F] [--def name=expr]... [--name value]...
+serq ir    FILE [--instance F] [--def name=expr]... [--seed N] [--horizon T] [--warmup T]
+                    [--arrivals N] [--trace F] [--inline-trace] [--name value]...
+serq draw  FILE [--instance F] [--def name=expr]... [--format tikz|svg] [--out PATH]
+                    [--name value]...   (experimental)
+serq target FILE [--instance F] [--def name=expr]... [--name value]...
 serq fmt   [--check] FILE...
 serq --version
 ```
 
-Append `[-- --name value ...]` to `run`, `check`, `ir`, `draw` or `target`
-to supply numeric inputs declared by [`args.number`](../api/std/args.md). The separator occurs once;
-all interpreter options precede it.
+`--name value` supplies a numeric input the program declares with
+[`args.number("name", default)`](../api/std/args.md). Any option that is not one of the
+interpreter's below is such an input, in any order among them:
+`serq run examples/multi-turn/vllm.sq --seed 2 --horizon 3000 --Lambda 0.3`.
+An input may not be named like an interpreter option (`seed`, `horizon`, …).
 
 `FILE` is program text (`.sq`) or IR (`.json`, as written by `serq ir`).
 
@@ -43,9 +46,8 @@ to 0 and `seed` to 1. JSON IR contains all resolved settings already.
 | `--horizon T` | run, ir | simulated seconds |
 | `--warmup T` | run, ir | exclude the first `T` seconds from measured statistics; claims and whole-run counters still include them |
 | `--arrivals N` | run, ir | stop after `N` arrivals and drain their sessions ([a finite run](../api/program.md#a-finite-run)); open workloads only |
-| `-- --name value` | run, check, ir, draw, target | numeric program inputs declared with `args.number`; `--name=value` also works. Interpreter flags must precede the separator. Rejected on `.json`, whose inputs are already resolved |
-| `--set name=expr` | run, check, ir, draw, target | supply an input declared with `args.number` (plain `let` constants and unknown names are errors; the last value wins). Rejected if the constant, directly or through another `let`, sets a queue family's size. **Rejected on `.json`**: an IR's constants are already folded |
-| `--instance F` | run, check, ir, draw, target | read an [instance](../api/program.md#instances) from `F`: each of its `let`s supplies a declared input as `--set` would and each option of its `run` block the flag of the same name, applied where the flag stands, so a later `--set` or flag wins over the instance and the instance over an earlier one. Anything else in `F` (a pool, a `def`, a `use`, a second `run`) is an error |
+| `--name value` | run, check, ir, draw, target | supply a number to an input declared with `args.number`; `--name=value` also works (plain `let` constants and unknown names are errors; the last value wins). Rejected if the constant, directly or through another `let`, sets a queue family's size. **Rejected on `.json`**: an IR's constants are already folded |
+| `--instance F` | run, check, ir, draw, target | read an [instance](../api/program.md#instances) from `F`: each of its `let`s supplies a declared input as `--name value` would and each option of its `run` block the flag of the same name, applied where the flag stands, so a later input or flag wins over the instance and the instance over an earlier one. Anything else in `F` (a pool, a `def`, a `use`, a second `run`) is an error |
 | `--def name=expr` | run, check, ir, draw, target | replace the body of a declared expression [`def`](../api/program.md#def), which then expands at each use as if written so: a distribution, a policy key or a law per class passed in as a parameter (`--def service='~erlang(4, 1)'`). The body may draw and read what the program's body could; the definition keeps its parameters. Unknown names and statement definitions are errors; the last override of a name wins. **Rejected on `.json`**: an IR's definitions are already expanded |
 | `--trace F` | run, ir | replace the program's trace corpus |
 | `--inline-trace` | ir | turn the trace file into the sessions' turns, as `CArrival::Sessions` data |

@@ -415,7 +415,7 @@ fn compile(
     })
 }
 
-/// `sets` and `defs` into `ov`, as `--set` and `--def`.
+/// `sets` and `defs` into `ov`, as `--name value` and `--def`.
 fn overriding(
     ov: &mut serq::Overrides,
     sets: HashMap<String, SetValue>,

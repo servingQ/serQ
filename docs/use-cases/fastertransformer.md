@@ -59,7 +59,7 @@ larger decode batches; it also leaves a substantial backlog in this run.
 To reproduce a row, replace the example's `advance running only …; admit
 waiting only …` with the listed policy (`advance running decode first;`,
 `exclusive prefill;`, … then `admit waiting while (running.preempted ==
-0);`) and pass `--set bmax=…`. These finite runs compare queue accumulation;
+0);`) and pass `--bmax …`. These finite runs compare queue accumulation;
 they do not by themselves prove stability or divergence.
 
 ## Validation

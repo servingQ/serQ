@@ -1,5 +1,5 @@
 //! `--instance FILE`: the values of a program's constants and its run
-//! options, in a file of their own. An instance is the `--set`s and run
+//! options, in a file of their own. An instance is the inputs and run
 //! flags it is equivalent to, so the IR it gives is one they give.
 
 mod common;
@@ -18,8 +18,8 @@ fn an_instance_is_the_sets_and_flags_it_writes() {
     let by_flags = f.run(&[
         "ir",
         "model.sq",
-        "--set",
-        "rate=0.5",
+        "--rate",
+        "0.5",
         "--horizon",
         "20",
         "--warmup",

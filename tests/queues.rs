@@ -328,7 +328,7 @@ fn a_latency_is_the_links_constant() {
     let other = wait(&program("x", "y"), &common::horizon(100.0));
     assert_eq!(named, other.replace("\"y\"", "\"x\""));
     assert!(named.contains("0.5"), "waits 0.5, the constant");
-    // --set reaches the latency
+    // a supplied input reaches the latency
     let ov = Overrides {
         lets: vec![("x".into(), parse_expr("0.125").unwrap())],
         ..common::horizon(100.0)

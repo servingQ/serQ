@@ -88,7 +88,7 @@ The approximation has three parts:
   6000)`, which stands for the parent's context it copies. The cache does not
   share entries across sessions, so the subagent misses that prefix.
 
-`--set q=0` gives the same agents with no delegation. Here are both next to
+`--q 0` gives the same agents with no delegation. Here are both next to
 the other three (seed 1, 1 800 s after warm-up; requests/s is the number of
 `response` observations over those 1 800 s; each program runs at its own
 arrival rate, so compare the rows within a pair, not across the table):
@@ -98,7 +98,7 @@ arrival rate, so compare the rows within a pair, not across the table):
 | `vllm_single_turn` | 2.98 | 0.00 | 1 995 | 43 | 96 | 0.23 |
 | `vllm_chat` | 1.62 | 0.80 | 221 | 5 | 66 | 0.10 |
 | `vllm` | 2.94 | 0.89 | 727 | 16 | 62 | 0.16 |
-| `vllm_subagents --set q=0` | 0.90 | 0.89 | 665 | 13 | 58 | 0.05 |
+| `vllm_subagents --q 0` | 0.90 | 0.89 | 665 | 13 | 58 | 0.05 |
 | `vllm_subagents` | 3.77 | 0.68 | 1 997 | 53 | 112 | 0.29 |
 
 Delegation increases request traffic and the mean prefill work in this

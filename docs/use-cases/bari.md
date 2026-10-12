@@ -133,7 +133,7 @@ Run for 100 s with seed 1, at 20 and 30 requests per second:
 
 ```bash
 serq run examples/papers/bari_rad.sq --horizon 100000000 --warmup 0 --seed 1
-serq run examples/papers/bari_rad.sq --horizon 100000000 --warmup 0 --seed 1 --set rate=0.00003
+serq run examples/papers/bari_rad.sq --horizon 100000000 --warmup 0 --seed 1 --rate 0.00003
 ```
 
 Claim-table excerpts, 20 requests/s first:

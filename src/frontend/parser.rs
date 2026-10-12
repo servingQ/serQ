@@ -611,7 +611,7 @@ pub fn parse_instance(src: &str) -> PResult<(Vec<(String, Expr)>, RunOpts)> {
     Parser::new(toks).instance()
 }
 
-/// Parse a standalone expression (an override's: `--set name=expr`, `sets=`).
+/// Parse a standalone expression (an override's: an instance's `let`, `sets=`).
 pub fn parse_expr(src: &str) -> PResult<Expr> {
     let toks = lex(src)?;
     let mut p = Parser::new(toks);
@@ -3942,7 +3942,7 @@ impl Parser {
                     // a constant of its own, which the transfer's wait reads: an
                     // entry the transfer is written in substitutes its parameters
                     // and locals by name, and no name of one has a dot. The
-                    // expression stays the program's, so `--set` reaches it.
+                    // expression stays the program's, so a supplied input reaches it.
                     let lname = format!("{name}.latency.time");
                     self.consts.push((lname.clone(), v));
                     prog.lets.push((lname.clone(), e));

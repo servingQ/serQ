@@ -43,7 +43,7 @@ cargo run --release -- draw examples/multi-turn/vllm.sq --format svg --out vllm.
 
 Source programs construct their deployment inside `fn main()`. Import
 `"std/args"` and use `let rate = args.number("rate", 0.3);` to expose a numeric
-input; pass it after `--`, as `serq run model.sq --horizon 10 -- --rate 0.5`. Ordinary
+input; pass it as `serq run model.sq --horizon 10 --rate 0.5`. Ordinary
 `let` constants stay internal. See the [complete example](examples/single-turn/arguments.sq)
 and [input reference](docs/api/std/args.md).
 

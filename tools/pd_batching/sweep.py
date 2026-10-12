@@ -47,10 +47,10 @@ CASES = {
 EXCLUSIVE = ("        exclusive prefill each at most (chunk_cap);\n", "        advance running each at most (chunk_cap);\n")
 
 # The variations of the baseline, one at a time, on prompts of 2000
-# tokens: (title, the modes, the loads, `--set`s, edits of the program's
+# tokens: (title, the modes, the loads, inputs, edits of the program's
 # text). An edit is a line the program states and the variation states
 # otherwise: a policy (`exclusive prefill`) or a family's size
-# (`NP`), which `--set` refuses.
+# (`NP`), which an input may not set.
 VARIATIONS = {
     "mixed": ("mixed batches, whole prompts (`exclusive prefill` read as `advance running`)", [0, 1], [40, 60, 70], {}, [EXCLUSIVE]),
     "mixed_c512": ("mixed batches, prompts in chunks of 512 (`chunk_cap = 512`)", [0, 1], [40, 60, 70], {"chunk_cap": 512}, [EXCLUSIVE]),
@@ -77,7 +77,7 @@ def run(program, sets, defs, seed, edits=()):
             program.write_text(text)
         cmd = [SERQ, "run", str(program), "--horizon", "300", "--warmup", "30", "--json", "--seed", str(seed), "--dump", dump]
         for k, v in sets.items():
-            cmd += ["--set", f"{k}={v}"]
+            cmd += [f"--{k}", str(v)]
         for k, v in defs.items():
             cmd += ["--def", f"{k}={v}"]
         out = subprocess.run(cmd, check=True, capture_output=True, text=True).stdout

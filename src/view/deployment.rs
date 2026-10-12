@@ -712,7 +712,7 @@ impl Walker<'_> {
     /// The value of an expression that reads only constants and attributes
     /// this path has set to constants, and whether it read an attribute. A
     /// guard that reads none is not decided: a guard on a constant
-    /// (`mode == 0`) is the program's setting, which `--set` changes, and
+    /// (`mode == 0`) is the program's setting, which a supplied input changes, and
     /// the figure draws every setting.
     fn value(&self, e: &CExpr) -> Option<(f64, bool)> {
         fn eval(e: &CExpr, known: &[(usize, f64)], read: &mut bool) -> Option<f64> {
