@@ -270,3 +270,17 @@ fn an_l2_load_at_a_low_rate_is_not_left_waiting() {
     let worst = ttft.iter().cloned().fold(0.0, f64::max);
     assert!(worst < 1.0, "the slowest first token took {worst} s");
 }
+
+/// A request the GPU preempted copies nothing in from the L2 when it is
+/// admitted again, as LMCache's connector answers 0 for it
+/// (`lmcache_mp_connector.py`, `get_num_new_matched_tokens`): the run
+/// preempts, the requests come back, and each copies 0 (#529 review).
+#[test]
+fn a_preempted_request_copies_nothing_in() {
+    let src = std::fs::read_to_string("examples/multi-turn/vllm_lmcache.sq").unwrap();
+    let r = run_source(&src, &common::horizon(3000.0), None).unwrap_or_else(|e| panic!("{e}"));
+    assert!(r.pool("kv").unwrap().preemptions > 0, "{}", r.text());
+    let after = samples(&r, "l2_after_preemption");
+    assert!(!after.is_empty(), "no preempted request came back");
+    assert!(after.iter().all(|&g| g == 0.0), "{after:?}");
+}
