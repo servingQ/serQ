@@ -2349,6 +2349,16 @@ fn pool_notes(p: &Program, i: usize, cached: bool) -> Vec<String> {
     if let Some(b) = pool.block {
         parts.push(format!("block {}", crate::ir::show_num(b)));
     }
+    // the order the pool's waiting holds are let in; FIFO says nothing
+    if let Some(keys) = &pool.queue {
+        parts.push(format!(
+            "queue by ({})",
+            keys.iter()
+                .map(|k| p.show_expr(k))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     // An eviction order says nothing about a pool nothing is cached in.
     if cached {
         match &pool.evict {
