@@ -897,6 +897,13 @@ fn is_context_var(v: &str) -> bool {
     matches!(supplied(v), Some(Supplied::Ctx(_)))
 }
 
+/// Whether `v` reads the context variable of its name: the program's
+/// attributes and constants shadow one, as `Linker::resolve` reads them
+/// (#538).
+fn reads_context<'a>(v: &str, program: impl IntoIterator<Item = &'a str>) -> bool {
+    is_context_var(v) && !program.into_iter().any(|a| a == v)
+}
+
 /// Does this expression read the name `n` (an attribute, a constant, or a
 /// binding)?
 fn expr_reads(e: &Expr, n: &str) -> bool {
@@ -1117,8 +1124,8 @@ fn decl_exprs(prog: &Program) -> Vec<&Expr> {
 /// context variable of the same name as the linker resolves them.
 fn live_read(e: &Expr, attrs: &[String], lets: &[String]) -> Option<String> {
     let var = |v: &str| {
-        let shadowed = attrs.iter().chain(lets).any(|a| a == v);
-        (v == "cached" || (!shadowed && is_context_var(v))).then(|| v.to_string())
+        let program = attrs.iter().chain(lets).map(String::as_str);
+        (v == "cached" || reads_context(v, program)).then(|| v.to_string())
     };
     match e {
         Expr::Located(_, inner) => live_read(inner, attrs, lets),
@@ -2374,9 +2381,11 @@ impl Parser {
             .filter(|n| !lets.contains(n))
             .collect();
         for u in &self.deferred {
-            if let Some(v) = u.reads.iter().find(|v| {
-                is_context_var(v) && !attrs.contains(&v.as_str()) && !lets.contains(&v.as_str())
-            }) {
+            if let Some(v) = u
+                .reads
+                .iter()
+                .find(|v| reads_context(v, attrs.iter().chain(&lets).copied()))
+            {
                 return Err(ParseError {
                     line: u.line,
                     col: u.col,
@@ -4198,13 +4207,11 @@ impl Parser {
         // `seen`: the locals a read sees, all of them in the body and in a
         // header those set above its hold
         let allowed_var = |n: &str, header: bool, seen: &[String]| -> bool {
-            params.iter().any(|p| p == n)
-                || n == "self"
+            queue::in_entry(n, params.iter().map(String::as_str), seen).is_some()
                 || supplied(n) == Some(Supplied::Inf)
                 || self.consts.iter().any(|(c, _)| c == n)
                 || in_context(n)
                 || (!header && n == "now")
-                || seen.iter().any(|l| l == n)
                 || q.registers.iter().any(|r| r == n)
         };
         // an L2 queue's pool and stage are every entry's to read and copy

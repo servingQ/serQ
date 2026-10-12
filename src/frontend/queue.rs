@@ -161,6 +161,32 @@ impl QueueDecl {
 
 /// The error type of an expansion: a message and the source location it is
 /// reported at.
+/// What a bare name read in a queue's entry is before it is the
+/// program's: the member's index (`self`), one of the entry's parameters,
+/// or a local the entry sets. The one order both the entry's check
+/// (`Parser::entry`) and its expansion (`Expand::var`) read (#538); a name
+/// none of these is the program's, which the linker resolves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum InEntry {
+    SelfIndex,
+    Param(usize),
+    Local,
+}
+
+pub(crate) fn in_entry<'a>(
+    n: &str,
+    params: impl IntoIterator<Item = &'a str>,
+    locals: &[String],
+) -> Option<InEntry> {
+    if n == "self" {
+        return Some(InEntry::SelfIndex);
+    }
+    if let Some(i) = params.into_iter().position(|p| p == n) {
+        return Some(InEntry::Param(i));
+    }
+    locals.iter().any(|l| l == n).then_some(InEntry::Local)
+}
+
 pub struct ExpandError {
     pub at: Span,
     pub msg: String,
@@ -250,8 +276,9 @@ impl Ctx<'_> {
     }
 
     fn var(&self, n: &str) -> Result<Expr, ExpandError> {
-        if n == "self" {
-            return match &self.index {
+        let params = self.params.iter().map(|(p, _)| p.as_str());
+        match in_entry(n, params, self.locals) {
+            Some(InEntry::SelfIndex) => match &self.index {
                 Some(i) => Ok(i.clone()),
                 None => err(
                     self.at,
@@ -260,15 +287,11 @@ impl Ctx<'_> {
                         self.q.name
                     ),
                 ),
-            };
+            },
+            Some(InEntry::Param(i)) => Ok(self.params[i].1.clone()),
+            Some(InEntry::Local) => Ok(Expr::Var(format!("{}.{n}", self.q.name))),
+            None => Ok(Expr::Var(n.to_string())),
         }
-        if let Some((_, e)) = self.params.iter().find(|(p, _)| p == n) {
-            return Ok(e.clone());
-        }
-        if self.locals.iter().any(|l| l == n) {
-            return Ok(Expr::Var(format!("{}.{n}", self.q.name)));
-        }
-        Ok(Expr::Var(n.to_string()))
     }
 
     fn expr(&self, e: &Expr) -> Result<Expr, ExpandError> {
