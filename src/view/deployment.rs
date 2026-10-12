@@ -1055,11 +1055,40 @@ fn sites(p: &Program, block: usize, holds: &mut Vec<CStmt>, out: &mut Vec<Site>)
     }
 }
 
-/// Two sites run the same serving path inside holds of the same pools. The
-/// server's statements are the same at every site, since the parser splices
-/// one server at each `request`; the units held do not change what the
-/// figure draws, so `hold live (1)` and `hold live (2)` are one.
-fn same_site(a: &Site, b: &Site) -> bool {
+/// Two statement lists that run the same thing, block ids aside.
+fn same_stmts(p: &Program, a: &[CStmt], b: &[CStmt]) -> bool {
+    let same_block = |x: usize, y: usize| same_stmts(p, &p.blocks[x], &p.blocks[y]);
+    // a statement with its blocks numbered 0, for comparing what is left
+    let shape = |s: &CStmt| {
+        let mut s = s.clone();
+        match &mut s {
+            CStmt::Hold { body, .. } => *body = 0,
+            CStmt::Branch(_, t, e) => (*t, *e) = (0, 0),
+            CStmt::Loop(b) | CStmt::While(_, b) | CStmt::Fork(b) => *b = 0,
+            _ => {}
+        }
+        serde_json::to_value(&s).expect("a statement serialises")
+    };
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            shape(x) == shape(y)
+                && match (x, y) {
+                    (CStmt::Hold { body: x, .. }, CStmt::Hold { body: y, .. })
+                    | (CStmt::Loop(x), CStmt::Loop(y))
+                    | (CStmt::While(_, x), CStmt::While(_, y))
+                    | (CStmt::Fork(x), CStmt::Fork(y)) => same_block(*x, *y),
+                    (CStmt::Branch(_, t, e), CStmt::Branch(_, u, f)) => {
+                        same_block(*t, *u) && same_block(*e, *f)
+                    }
+                    _ => true,
+                }
+        })
+}
+
+/// Two sites run the same serving path inside holds of the same pools; the
+/// units held do not change what the figure draws, so `hold live (1)` and
+/// `hold live (2)` are one.
+fn same_site(p: &Program, a: &Site, b: &Site) -> bool {
     let pools = |h: &CStmt| -> Vec<CRef> {
         match h {
             CStmt::Hold { pools, .. } => pools.iter().map(|(r, _, _)| r.clone()).collect(),
@@ -1071,6 +1100,11 @@ fn same_site(a: &Site, b: &Site) -> bool {
             .iter()
             .zip(&b.holds)
             .all(|(x, y)| pools(x) == pools(y))
+        && same_stmts(
+            p,
+            &p.blocks[a.block][a.from..a.to],
+            &p.blocks[b.block][b.from..b.to],
+        )
 }
 
 /// What one request runs, in place of the session: the server's statements
@@ -1085,7 +1119,7 @@ pub fn request(p: &Program) -> Option<Program> {
     sites(p, p.session, &mut vec![], &mut found);
     let mut distinct: Vec<Site> = vec![];
     for s in found {
-        if !distinct.iter().any(|d| same_site(d, &s)) {
+        if !distinct.iter().any(|d| same_site(p, d, &s)) {
             distinct.push(s);
         }
     }

@@ -752,6 +752,43 @@ fn requests_that_run_different_things_draw_the_session() {
     assert_eq!(drawn_stages(&p, &net), ["A", "tool"]);
 }
 
+/// The view reads what each request runs from the IR, not from the parser's
+/// splicing one server at every `turn`: an IR whose second request runs B
+/// where the first runs A has no one request, and B is drawn.
+#[test]
+fn requests_that_differ_in_the_ir_draw_the_session() {
+    let mut p = compile(
+        "stage A : fifo; stage B : fifo; stage C : delay;
+        workload { arrive poisson(1); session { turn; run C (cost(C, 1)); turn; } }
+        server { run A (cost(A, 1)); }
+        ",
+    );
+    let b = stage(&p, "B");
+    let server_runs: Vec<(usize, usize)> = (0..p.blocks.len())
+        .flat_map(|k| (0..p.blocks[k].len()).map(move |i| (k, i)))
+        .filter(|&(k, i)| {
+            p.sides[k][i] == serq::ir::Side::Server
+                && matches!(p.blocks[k][i], serq::ir::CStmt::Run { .. })
+        })
+        .collect();
+    assert_eq!(server_runs.len(), 2, "one run of the server at each turn");
+    let (k, i) = server_runs[1];
+    let serq::ir::CStmt::Run {
+        stage: s,
+        work: serq::ir::CExpr::Cost(t, _),
+        ..
+    } = &mut p.blocks[k][i]
+    else {
+        unreachable!("a run of a cost")
+    };
+    s.base = b;
+    *t = serq::ir::CostTarget::Stage { base: b, count: 1 };
+    let p = Program::from_json(&p.to_json()).unwrap();
+    assert!(deployment::request(&p).is_none());
+    let net = deployment::project(&p);
+    assert_eq!(drawn_stages(&p, &net), ["A", "B", "C"]);
+}
+
 /// A server's guard on a workload attribute is not decided by the figure:
 /// the server does not know what the workload set (`routing.sq`'s
 /// `branch (first)`).
