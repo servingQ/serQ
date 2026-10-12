@@ -18,7 +18,7 @@ not accept a compiled `Program`.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `source` | `str` | `None` | Source text, instead of a file. `std/args` and `std/kvt` are built in; relative file imports require `path`. |
+| `source` | `str` | `None` | Source text, instead of `path`: give exactly one. It may import the built-in [`std/args`](../api/std/args.md) and [`std/kvt`](../api/std/kvt.md). |
 | `sets` | `dict[str, float or str]` | `{}` | Declared program inputs, as in [`compile`](compile.md). |
 | `defs` | `dict[str, str]` | `{}` | Expression-definition overrides. |
 | `format` | `str` | `"tikz"` | `"tikz"` or `"svg"`. |

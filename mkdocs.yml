@@ -108,6 +108,9 @@ nav:
   - API Reference:
       - api/index.md
       - Program: api/program.md
+      - Standard library:
+          - std/args: api/std/args.md
+          - std/kvt: api/std/kvt.md
       - Pool: api/pool.md
       - Stage: api/stage.md
       - Engine: api/engine.md

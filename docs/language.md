@@ -224,9 +224,9 @@ A plain `let` cannot be replaced externally. With `use "std/args";`, a
 `--`, `--set`, instance bindings and API `sets` supply only those named
 inputs. Defaults and supplied expressions are resolved at link time; the
 result is the same IR as a program written with those values. An input that
-would change a parse-time array size is refused. See [Program](api/program.md)
+would change a parse-time array size is refused. See [std/args](api/std/args.md)
 for the full input contract. `use "std/kvt";` supplies the KV-transfer
-vocabulary, `kvt.nixl_pull (…)`, `kvt.nixl_push (…)`, `kvt.l2_load (…)` and
+vocabulary ([std/kvt](api/std/kvt.md)), `kvt.nixl_pull (…)`, `kvt.nixl_push (…)`, `kvt.l2_load (…)` and
 `kvt.l2_store (…)` (below, *Queues*).
 Syntax snippets elsewhere may show just a main body or one of its nested
 blocks.
