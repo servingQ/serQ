@@ -78,6 +78,17 @@ class FragmentBoundaries(unittest.TestCase):
                     return
         self.fail("the mixed oracle must contain a Hold")
 
+    def test_prefix_chains_are_not_silently_discarded(self):
+        ir = copy.deepcopy(self.ir)
+        for block in ir["blocks"]:
+            for stmt in block:
+                if "Hold" in stmt:
+                    stmt["Hold"]["prefix"] = [[{"Num": 1}, {"Num": 16}]]
+                    with self.assertRaisesRegex(generator.Fragment, "prefix"):
+                        generator.Lean(ir).block(ir["session"], 1)
+                    return
+        self.fail("the mixed oracle must contain a Hold")
+
 
 
 class Sessions(unittest.TestCase):

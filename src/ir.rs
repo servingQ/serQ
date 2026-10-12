@@ -617,6 +617,13 @@ pub enum CStmt {
         reuse: Option<CExpr>,
         body: BlockId,
         cache: Option<CExpr>,
+        /// `prefix (k₁: n₁, …)`: what the hold's sequence is made of, as a
+        /// chain of segments, each a key and a length. Two holds share the
+        /// first `j` segments of their pool's prefix cache when their first
+        /// `j` keys are equal. `None` is the chain `(serial: ∞)`: the
+        /// session's own prefix, shared with no other session.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prefix: Option<Vec<(CExpr, CExpr)>>,
         /// The pool (one of `pools`) whose allocation outlives the scope as
         /// a lease, and for how long at most: it stays allocated, neither
         /// evictable nor a preemption victim, until the session's `Release`
@@ -2550,6 +2557,7 @@ impl Validator<'_> {
                 reuse,
                 body,
                 cache,
+                prefix,
                 lease,
             } => {
                 // the header is read when the scheduler admits; `cache` when
@@ -2635,6 +2643,63 @@ impl Validator<'_> {
                 }
                 if let Some(e) = cache {
                     self.expr(e, m)?;
+                }
+                // a key names what a segment holds: it is read while the
+                // hold waits (a waiting order may read `cachedin`) and at its
+                // admission, and the trie the keys index must not move under
+                // them, so a key or a length reads no state, no clock, no
+                // draw, and not the `cached` and `computed` admission sets
+                for (k, n) in prefix.iter().flatten() {
+                    for (e, what) in [(k, "key"), (n, "length")] {
+                        self.expr(e, Moment::Admit)?;
+                        if moves(e)
+                            || e.any(&|x| {
+                                matches!(x, CExpr::Attr(a)
+                                    if *a == self.p.slot_cached || *a == self.p.slot_computed)
+                            })
+                        {
+                            return Err(format!(
+                                "a `prefix` segment's {what} reads the state, the clock, a draw, \
+                                 or the `cached` and `computed` admission sets; a key names \
+                                 content, so it is an attribute or a number, read the same while \
+                                 the hold waits and when it is admitted"
+                            ));
+                        }
+                    }
+                }
+                // one meaning, one spelling: the chain a hold without the
+                // clause has is not written
+                if let Some([(CExpr::Attr(a), CExpr::Num(n))]) = prefix.as_deref()
+                    && *a == self.p.slot_serial
+                    && *n == f64::INFINITY
+                {
+                    return Err(
+                        "`prefix (serial: inf)` is the chain of a hold without `prefix`, \
+                                the session's own; leave the clause out"
+                            .into(),
+                    );
+                }
+                // a spilled block goes to the tier under its session's
+                // serial, which a chain of shared segments does not have
+                if prefix.is_some()
+                    && let Some((r, _, _)) = pools.iter().find(|(r, _, _)| {
+                        self.p.pools[r.base..r.base + r.count]
+                            .iter()
+                            .enumerate()
+                            .any(|(k, q)| {
+                                q.spill.is_some()
+                                    || self.p.pools.iter().any(|o| {
+                                        o.spill.as_ref().is_some_and(|s| s.to == r.base + k)
+                                    })
+                            })
+                    })
+                {
+                    return Err(format!(
+                        "a hold with `prefix` on `{}`, which spills or is spilled to: a spilled \
+                         block keeps its session's entry, not a chain of shared segments; not \
+                         supported yet",
+                        self.p.show_pool_ref(r)
+                    ));
                 }
                 if let Some((r, t)) = lease {
                     self.cref(r, np, "pool", m)?;

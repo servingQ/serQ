@@ -2,12 +2,10 @@
 
 Every engine of [Engine neutrality](engine-neutrality.md) shares cached KV
 across requests by content. vLLM hashes full blocks, SGLang and TGI keep a
-radix tree, and TensorRT-LLM reuses blocks. serQ keys a cache entry by the
-session that released it (`entries: serial → entry`,
-`src/engine/interp.rs`), so a system prompt common to every session is
-computed once per session. That gap is not vLLM's: it is the largest one
-the survey found, and it is every engine's. This document proposes the
-construct and prices it. It changes nothing yet.
+radix tree, and TensorRT-LLM reuses blocks. A serQ hold names what its
+sequence is made of, as a chain of keyed segments, and a pool's prefix
+cache is a trie of those segments (`src/engine/cache.rs`), so a system
+prompt common to every session is computed once, not once per session.
 
 ## What a program has to say
 
@@ -24,80 +22,105 @@ So a hold names its prefix as a sequence of segments, each a key and a
 length:
 
 ```
-hold reqs (1), kv (…) prefix (sys: 1200, task: 300, serial: K) … {
+hold reqs (cost(reqs, 1)), kv (…) prefix (system: S, serial: inf) … {
   …
-} cache kv (prompt + o);
+} cache (cost(reqs, kv, prompt + o));
 ```
 
-A segment's key is an expression the program evaluates at admission:
-here `sys` and `task` are attributes the workload draws, and `serial` is
-the session's own. Two holds share their first `j` segments when their
-first `j` keys are equal. The engine's lookup then finds the longest
-cached prefix, up to the block, along the chain of equal keys.
+A segment's key is an expression of attributes and numbers: here
+`system` is an attribute the workload draws (which product's system prompt
+the session sends), and `serial` is the session's own. Two holds share
+their first `j` segments when their first `j` keys are equal. The lookup
+finds the longest cached prefix, in whole blocks, along the chain of
+equal keys. `examples/multi-turn/vllm_system_prompt.sq` is `vllm.sq`
+serving `M` products this way.
 
 ## The construct
 
-- `prefix (k₁: n₁, …, k_m: n_m)` on a hold: the hold's prefix chain.
-  Without it, a hold's chain is `(serial: ∞)`, a single segment that is the
-  session's own. That is today's cache, so every program runs as before.
-- `cache P (ℓ)` names the pool it caches on (#366). Only `P` caches, the
-  first `ℓ` units of the chain, and `cached` is what `P` consumed.
-- The pool's cache is a trie of segments. An entry is a node: a key, a
-  length up to the segment's, a reference count of live holds that read
-  through it, and the release time and order for eviction.
-- `cachedin(P)` is the longest cached prefix along the hold's chain, read
-  as a hold's header reads it today.
-- Eviction takes leaves only, so that no cached suffix outlives its
-  prefix (SGLang's radix leaf eviction, TGI's LRU over leaves). `evict
-  lru` and `evict by (…)` order the leaves, and a node a live hold reads
-  through is not evictable (SGLang's `lock_ref`).
-- `drop P` drops the leaves only the session owns.
-
-The per-session cache is the case where every chain is `(serial: …)`:
-the trie is a forest of one-node trees, which is today's map from serial
-to entry. The vLLM oracle scenarios and the trace replay compile to it
-unchanged.
+- `prefix (k₁: n₁, …, k_m: n_m)` on a hold: the hold's chain. Without it
+  the chain is `(serial: ∞)`, a single segment that is the session's own,
+  and the trie is a forest of one-node trees, one per session: the map
+  from serial to entry the interpreter kept before, with the same answers
+  (`make check`, the oracles and the cache trace unchanged). Written out,
+  `prefix (serial: inf)` is a second spelling of no clause, and does not
+  link.
+- A key and a length read attributes and numbers, not the state, the
+  clock, a draw or the `cached` and `computed` admission sets. They are
+  read when the hold asks and again when it is admitted (a waiting order
+  may read `cachedin`), and the trie they index must not move under them.
+  The linker refuses one that does.
+- A node of the trie is a run of one segment, `[off, off + len)`. A
+  segment's runs follow one another; the next segment hangs off the run
+  that ends where its segment ends, under its key.
+- Admission with `cache` reads the cached prefix of the chain, at most
+  `reuse` of it, and locks the nodes it read: they are allocated while the
+  hold lasts, counted once in the pool however many holds read them
+  (vLLM's `ref_cnt`, `block_pool.py:754-768`), and an admission does not
+  ask again for what another hold already reads. The run of a node the
+  match stops inside is split, unless a hold reads it, in which case it
+  is locked whole.
+- Release lets the nodes go, and `min(ℓ, computed)` units stay cached
+  along the chain, aged now. With `ℓ > 0` the chain past it that only this
+  session wrote, and no hold reads, goes: the session's entry is replaced.
+  With `ℓ = 0` the nodes the hold read go, unless another hold reads them
+  or another session wrote them.
+- A prefix the session's own hold reads, and no other session's, is the
+  session's consumed entry: its other holds do not see it (#230: a hold
+  nested in one that consumed the prefix finds none), and a write of the
+  session's chain there displaces it, unreachable, until its hold lets it
+  go.
+- `reuse` bounding the match cuts what the chain held past the bound off,
+  cached and unusable, as a dead node with its age, unless a live hold
+  reads it.
+- Eviction takes cached leaves, so no cached suffix outlives its prefix
+  (SGLang's radix leaf eviction, TGI's LRU over leaves), one block at a
+  time from the leaf's tail; `evict lru` and `evict by (…)` order the
+  leaves, and a node a live hold reads is not evictable (SGLang's
+  `lock_ref`).
+- `drop P` drops the cached leaves the session wrote, leaves first.
+- `cachedin(P)` is the cached prefix of the session's waiting hold's
+  chain, else of its innermost hold's, else of its own, in whole blocks.
 
 ## What it buys
 
-- SGLang's LPM waiting order. `queue by (-cachedin(kv))` is then the
-  longest prefix match in the shared tree, as SGLang sorts it
-  ([`schedule_policy.py` L487-L495](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/schedule_policy.py#L487-L495)).
+- Agent workloads with a shared system prompt. On
+  `vllm_system_prompt.sq` (seed 1, horizon 3000 s, warm-up 300 s), one
+  product's sessions prefill 710 tokens a turn on average and wait 16 ms
+  for the first token; a thousand products' (no sharing to speak of)
+  prefill 1529 and wait 44 ms.
+- SGLang's LPM waiting order: `queue by (-cachedin(kv))` is the longest
+  prefix match in the shared tree, as SGLang sorts it
+  ([`schedule_policy.py` L487-L495](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/schedule_policy.py#L487-L495)),
+  once `engines/sglang.sq` writes its chains.
 - TensorRT-LLM's prefix-aware skip
   ([`capacityScheduler.cpp` L367-L376](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/capacityScheduler.cpp#L367-L376)),
   which defers a context whose first blocks another one admitted in the
   same pass will compute. That needs a "will contribute" read, a later
   step.
-- Agent and subagent workloads (`docs/design/subagents.md` lists
-  cross-session cache as its gap) with a shared system prompt. These are
-  where the cliff of [the tutorial](../tutorial/06-the-cliff.md) is most
-  sensitive to the hit rate.
 
 ## The price
 
-- IR: `CStmt::Hold` gains `prefix: Option<Vec<(CExpr, CExpr)>>` and its
-  `cache` names a pool. Every program changes one word (`cache` →
-  `cache kv`), and the IR files change shape. IR 11 is untagged, so the
-  change goes in the coming tag's message.
-- Interpreter: the pool's `entries` become a trie. Eviction, `drop`,
-  spill and the conservation check move with it. A dead entry, the
-  unmatched tail that `reuse` leaves today, becomes a leaf past the match.
-- Lean: `Exec.lean`'s cache is a list of per-session entries. A trie is a
-  new model. Until it is written, a program with a `prefix` is outside the
-  fragment, and the generators raise `Fragment` on one. Programs without
-  one keep their theorems if the per-session case is the same list.
-- Oracles: vLLM's own cache is shared by content. A scenario of two
-  sessions with a common system prompt, run by the real scheduler
-  (`tools/vllm_replay_oracle.py`), would check the trie against vLLM
-  before any other engine.
+- IR: `CStmt::Hold` gains `prefix: Option<Vec<(CExpr, CExpr)>>`, absent
+  from the IR when `None`, so no IR file changes. A reader that ignores it
+  computes a different answer for a program that writes it: IR 13 is
+  untagged, so it goes in the coming tag's message.
+- Interpreter: a pool's entries are the trie. Eviction, `drop`, spill and
+  the conservation check (now: `used` is the holds' allocations less what
+  they read, plus what is read, once) moved with it.
+- Lean: `Exec.lean`'s cache is a list of per-session entries. Until a trie
+  is written there, a program with a `prefix` is outside the fragment, and
+  `gen_lean_oracle.py` raises `Fragment` on one. Programs without one keep
+  their theorems: the per-session case is the same list.
+- Frontend: one clause on `hold`, one keyword (`prefix`).
 
 ## Order
 
-1. #366, `cache P (ℓ)`. It is needed by this design, it fixes the
-   slot-pool cache on its own, and it costs one word per program.
-2. The trie with keys, the same answers for per-session chains, and a
-   vLLM oracle scenario with a shared system prompt.
-3. LPM and the agent workloads written with it.
+1. The trie with keys, the same answers for per-session chains, and a
+   program that shares a system prompt (this document).
+2. A vLLM oracle scenario with a shared system prompt, run by the real
+   scheduler (`tools/vllm_replay_oracle.py`), before any other engine.
+3. The engine form's request with a chain, LPM, and the agent workloads
+   written with it.
 
 ## Self-critique
 
@@ -113,3 +136,27 @@ unchanged.
 - **Keys read at admission only.** A key that read state would move
   under the trie. Keys are attributes and numbers, as a hold's index is
   (`docs/language.md` §3), and the linker refuses one that reads state.
+- **`cache P (ℓ)` first (#366).** The clause still caches on every pool of
+  the hold, so a slot pool can cache a slot when nothing grows, and
+  `cached` is the largest of the pools' reads. Naming the pool fixes that,
+  and was planned before the trie; the trie went first, and it inherits
+  the per-pool rule unchanged.
+- **Cache a prefix while it is computed.** vLLM caches a request's blocks
+  as it schedules them (`kv_cache_manager.py:602-606`), so two requests
+  admitted one after the other read one system prompt while the first is
+  still computing it; here the second computes it too. A hold would have
+  to publish the units its `growing` run has reached, and a reader would
+  have to wait for units not yet computed. Left out: the sharing that
+  matters for agent workloads is across turns and sessions, seconds apart.
+- **A segment's key namespaced by its position.** A key is a value at its
+  depth in the chain. A chain without `prefix` is `(serial: ∞)`, and a
+  program whose first key's value equals a session's serial shares with
+  that session's entry on the same pool. Namespacing the default would
+  make `prefix (serial: inf)` differ from no clause, two spellings with two
+  meanings; the program keeps its keys apart instead.
+- **A run split where any hold's match stops.** Splitting a run a hold
+  reads would leave that hold's nodes stale. Such a run is locked whole by
+  the second reader; its units are allocated once either way.
+- **Spill along the chain.** A spilled block goes to the tier under its
+  session's serial. A chain of shared segments has none, and a hold with
+  `prefix` on a pool that spills or is spilled to does not link yet.

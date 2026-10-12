@@ -508,6 +508,8 @@ pub enum Stmt {
         reuse: Option<Expr>,
         body: Vec<Stmt>,
         cache: Option<Expr>,
+        /// `prefix (k₁: n₁, …)`: the hold's sequence as keyed segments.
+        prefix: Option<Vec<(Expr, Expr)>>,
         /// `lease P (t)`: at the scope's end the allocation on `P` (one of
         /// the hold's pools) stays, neither evictable nor a preemption
         /// victim, until a `release`/`transfer … from P` of this session
@@ -600,12 +602,17 @@ where
                 reuse,
                 body,
                 cache,
+                prefix,
                 lease,
             } => {
                 for (r, e, reserve) in pools {
                     (parts.reference)(r);
                     (parts.expr)(e);
                     reserve.iter_mut().for_each(&mut parts.expr);
+                }
+                for (k, n) in prefix.iter_mut().flatten() {
+                    (parts.expr)(k);
+                    (parts.expr)(n);
                 }
                 reuse.iter_mut().for_each(&mut parts.expr);
                 cache.iter_mut().for_each(&mut parts.expr);

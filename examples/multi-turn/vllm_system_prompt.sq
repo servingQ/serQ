@@ -1,0 +1,89 @@
+// vLLM v1 serving agents whose sessions begin with a system prompt (the
+// instructions and the tool schemas, S tokens) that other sessions of the
+// same product send too. vLLM's prefix cache is keyed by content: a block's
+// hash is its tokens and its parent's hash (kv_cache_utils.py:650-671), so
+// a session finds the blocks of a system prompt another session computed,
+// and a block several requests read is allocated once (`ref_cnt`,
+// block_pool.py:754-768) and goes back to the free queue only when the last
+// of them frees it (block_pool.py:776-796). The request's hold says what its
+// prompt is made of: `prefix (system: S, serial: inf)`, the product's system
+// prompt, then the session's own context. The engine and the workload are
+// `vllm.sq`'s, written as the hold its request lowers to.
+use "std/args";
+
+let B = 8192;          // max_num_batched_tokens
+let bs = 16;           // block_size
+let a = 2e-5;          // compute per scheduled token (s)
+let omega = 2e-4;      // weights read per iteration (s)
+let beta = 2e-9;       // KV read per iteration per resident context token (s)
+let c0 = 0;            // fixed cost per iteration (s)
+let p = 0.9;           // continue after a turn
+
+fn main() {
+  let max_seqs = args.number("max_seqs", 16);     // max_num_seqs
+  let blocks = args.number("blocks", 10000);    // num_gpu_blocks (less the null block)
+  let Lambda = args.number("Lambda", 0.3);      // sessions per second
+  let Z = args.number("Z", 3.0);           // tool time (s)
+  let S = args.number("S", 4000);          // tokens of a system prompt
+  let M = args.number("M", 1);             // products, each with its own system prompt
+
+  device gpu {
+    compute (t) = t * a;
+    hbm (k) = omega + beta * k;
+    kv cap blocks * bs;
+  }
+  pool kv on gpu { block bs; evict lru; preempt lifo; }
+  engine vllm on gpu {
+    reqs cap max_seqs;
+    tokens cap B;
+    schedule { advance running; admit waiting while (running.preempted == 0); }
+    execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+  }
+  pool reqs on vllm { queue fifo; }   // the engine admits the waiting, FCFS
+
+  // The client: `vllm.sq`'s sessions, each of one of M products chosen
+  // uniformly; a prompt is the product's system prompt, the session's
+  // context K and the turn's n new tokens.
+  workload {
+    arrive poisson(Lambda);
+    hidden o;              // the scheduler knows max_tokens, not the length (sched/utils.py:98-119)
+    init {
+      set K = 0;
+      set system = floor(~uniform(0, M));
+    }
+    turn {
+      set n = ceil(K == 0 ? ~uniform(1000, 3000) : ~exp(500));
+      set o = floor(~exp(200)) + 1;
+      set more = ~bernoulli(p);
+    }
+    session {
+      turn;
+      while (more) {
+        set K = K + n + o;
+        tool (~exp(Z));
+        turn;
+      }
+    }
+  }
+
+  // A turn is one request: `vllm.sq`'s, with its prompt's segments named.
+  // `known` is every token it has (after a preemption, the position it had
+  // reached plus the token sampled there, scheduler.py:1560-1561); `reused`
+  // is what the prefix cache holds of it in full blocks, never the last
+  // token (kv_cache_manager.py:289-300), now across sessions.
+  server {
+    set prompt = S + K + n;
+    set kept = prompt;
+    hold reqs (cost(reqs, 1)), kv (cost(kv, min(known, reused + budget_left(vllm)))) reserve (cost(kv, known))
+         prefix (system: S, serial: inf)
+         at admission (known = max(kept, computed + 1),
+                       reused = min(cachedin(kv), floor(known - 1, blocksize(kv)))) {
+      set kept = known;
+      set c = min(cached, floor(known - 1, blocksize(kv)));
+      observe reused_tokens = c;
+      observe prefill_tokens = known - c;
+      run vllm prefill (cost(vllm, known - c)) growing kv;
+      run vllm decode (cost(vllm, o - 1 - (known - prompt))) growing kv;
+    } cache (cost(reqs, kv, prompt + o));   // a finished request's blocks stay cached
+  }
+}

@@ -102,6 +102,7 @@ of the workload's own unless a stage `tool` is declared.
 
 ```serq
 hold POOL (units) [reserve (r)] [, POOL (units) [reserve (r)]]*
+     [prefix (key: n, …)]
      [reuse (ρ)]
      [at admission (NAME = expr, …)]
      block
@@ -116,13 +117,17 @@ what makes the hold take part in the prefix cache: with it the admission
 consumes the session's own cached prefix (`cached`); without it the hold
 leaves the session's cached blocks where they are and `cached` is 0 in its
 body (a body that reads it there, or a `reuse` there, does not link).
-`cache (0)` consumes the prefix and keeps nothing.
+`cache (0)` consumes the prefix and keeps nothing. The prefix is the cached
+part of the hold's chain: its `prefix`, or the session's own without one.
+Holds whose chains start with equal keys share those segments' cache, and
+a prefix several holds read is allocated once.
 
 | Argument | Type | Moment | Default | Description |
 |---|---|---|---|---|
 | `POOL` | `pool` | | | One or more. Admission needs room in every one; the hold waits in the first pool's queue. |
 | `units` | `Cost(POOL)` | `Admit` | | Units to allocate at admission. |
 | `reserve` | `Cost(POOL)` | `Admit` | `units` | Room required before admitting: `max(units, r)`, rounded up to blocks. It does not change the allocation. See [`reserve held`](pool.md#reserve-held) for outstanding reservations. |
+| `prefix` | `key: n, …` | `Admit` | `(serial: inf)` | The sequence as segments, each a key and a length. Keys and lengths read attributes and numbers only (no state, clock, draw, `cached` or `computed`). Not on a pool that spills or is spilled to. |
 | `reuse` | `Cost(all held pools)` | `Admit` | no bound | At most this many units of the session's own cached prefix are consumed (rounded down to blocks); `cached` is set to what was. The rest stays as a dead entry until evicted. Without `reuse`, the whole own prefix is consumed. Only with `cache`: a hold without the clause consumes nothing. |
 | `at admission` | `NAME = expr, …` | `Admit` | | Names used in the header and body; see below. |
 | `block` | `block` | `Session` | | The body. |

@@ -690,6 +690,7 @@ impl Program {
                         reuse,
                         body,
                         cache,
+                        prefix,
                         lease,
                     } => {
                         for (_, e, reserve) in pools {
@@ -697,6 +698,10 @@ impl Program {
                             if let Some(e) = reserve {
                                 read(e, ready)?;
                             }
+                        }
+                        for (k, n) in prefix.iter().flatten() {
+                            read(k, ready)?;
+                            read(n, ready)?;
                         }
                         if let Some(e) = reuse {
                             read(e, ready)?;
