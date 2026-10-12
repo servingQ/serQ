@@ -27,14 +27,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SERQ = os.environ.get("SERQ", str(ROOT / "target/release/serq"))
 PROGRAM = ROOT / "examples/multi-turn/thunderagent.sq"
-HORIZON, WARMUP = 3000, 500
+# long enough that the contexts' distribution has settled (a shorter run
+# reads it before the longest agents have grown)
+HORIZON, WARMUP = 25000, 5000
 
 # The paper's scale (docs/design/thunderagent.md, *Why the numbers differ*):
-# each replica a GLM-4.6-class model in FP8 on one 8xH100 node, about
-# 500 000 tokens of KV, 64 GFLOP per token at about 4 PFLOP/s, 15 ms of
-# weights and 14 ns of KV read per context token per iteration, and the
-# attention of a prefill over its context at 3.3 ns per token pair (1.1 ns
-# at the matrix units' rate; a third of it). Every program starts with the
+# each replica a GLM-4.6-class model (355B, 32B active) in FP8 weights on
+# one 8xH100 node with a BF16 KV of 377 KB a token (92 layers, 8 KV heads of
+# 128): about 500 000 tokens of KV; 64 GFLOP a token at 4 PFLOP/s, about
+# half the node's BF16 peak; 15 ms to read the weights an iteration, 14 ns a
+# context token's KV; a prefill's attention 4.5 MFLOP a token pair, 1.1 ns
+# at that rate and 3.3 ns at a third of it. Every program starts with the
 # same 3 968-token system prompt. Both replicas together hold about 50 of
 # the agents' contexts. None of it is fitted: the paper states none of it.
 PRESETS = {
@@ -65,7 +68,7 @@ def run(n, tr, seed, sets):
 
 
 def main(argv):
-    preset, seeds, extra = "example", [1, 2, 3], {}
+    preset, seeds, extra = "example", [1, 2, 3, 4], {}
     it = iter(argv)
     for a in it:
         if a == "--preset":

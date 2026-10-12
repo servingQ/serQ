@@ -93,11 +93,18 @@ fn the_square_of_a_recompute_is_what_default_mode_loses() {
 /// stores it once: the KV that leaves free keeps paused programs' prefixes.
 #[test]
 fn a_shared_system_prompt_keeps_paused_prefixes_and_gives_default_mode_its_hits() {
-    let hit = |tr: &str, s: &str| token_hit(&paper(tr, &["g=3.3e-9", s]));
-    let (alone, shared) = (hit("tr=1", "S=0"), hit("tr=1", "S=3968"));
-    let default = hit("tr=0", "S=3968");
+    let hit = |tr: &str, more: &[&str]| {
+        let mut sets = vec!["g=3.3e-9"];
+        sets.extend_from_slice(more);
+        token_hit(&paper(tr, &sets))
+    };
+    let (alone, shared) = (hit("tr=1", &["S=0"]), hit("tr=1", &["S=3968"]));
+    let once = hit("tr=1", &["S=3968", "count_shared=0"]);
+    let default = hit("tr=0", &["S=3968"]);
+    // the overcount is what keeps them: counted once, the prompt's own
+    // hits remain and the paused prefixes are evicted
     assert!(
-        alone < 0.75 && shared > 0.85 && default > 0.2,
-        "TR hit: S 0 {alone}, S 3968 {shared}; default hit, S 3968 {default}"
+        alone < 0.75 && shared > 0.85 && once < shared - 0.1 && default > 0.2,
+        "TR hit: S 0 {alone}, S 3968 {shared}, counted once {once}; default hit {default}"
     );
 }
