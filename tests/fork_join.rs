@@ -230,7 +230,7 @@ fn the_decode_leg_holds_its_blocks_during_the_prefill() {
             }}
           }}
         }}
-        P push D latency 1 share maxmin;
+        use "std/kvt"; kvt.nixl_push (P, D, latency = 1, share = maxmin);
         workload {{ arrive batch(1); init {{ set prompt = 10; }} session {{ turn; end; }} }} server {{ gw.route(); }}
 
     "#
@@ -274,7 +274,7 @@ fn legs_that_wait_for_each_other_fail_the_run() {
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
           decode (p) from P { hold kv (cost(kv, p)) { join; transfer (p) from P to kv (p); } }
         }
-        P push D share maxmin;
+        use "std/kvt"; kvt.nixl_push (P, D, share = maxmin);
         stage gate : delay;
         stage client_gate : delay;
         workload {
@@ -463,7 +463,7 @@ fn a_lease_that_expires_is_not_a_deadlock() {
           decode (p) { hold kv (cost(kv, p)) { run D prefill (cost(D, p)) growing kv; } }
           decode (p) from P { hold kv (cost(kv, p)) { join; transfer (p) from P to kv (p); } }
         }
-        P push D share maxmin;
+        use "std/kvt"; kvt.nixl_push (P, D, share = maxmin);
         stage gate : delay;
         stage client_gate : delay;
         workload {
@@ -526,8 +526,8 @@ fn a_queue_posts_the_copies_of_one_relation() {
           engine on gpu { tokens cap inf; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); } nic ps(1);
           decode (p) { hold kv (cost(kv, p)) { run E prefill (cost(E, p)) growing kv; } }
           decode (p) from P { hold kv (cost(kv, p)) { transfer (p) from P to kv (p); } } }
-        P push D latency 1 share maxmin;
-        P push E latency 1 share maxmin;
+        use \"std/kvt\"; kvt.nixl_push (P, D, latency = 1, share = maxmin);
+        kvt.nixl_push (P, E, latency = 1, share = maxmin);
         workload { arrive batch(1);
           session { turn; end;
           }

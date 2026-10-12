@@ -2,7 +2,7 @@
 
 ```
 program := (let | def | use)* fn main() { item* }
-item    := let | def | use | pool | stage | queue | workload | server | share | gauge | claim
+item    := let | def | use | pool | stage | queue | workload | server | share | kvt.CALL | gauge | claim
 ```
 
 `fn main()` is the single execution entry point: it constructs the deployment and
@@ -19,7 +19,7 @@ finds its stage among the stages declared above it.
 | [`let`](#let) | Declare a constant. |
 | [`args.number`](#stdargs) | Declare a numeric program input. |
 | [`def`](#def) | Define a reusable expression or statement body. |
-| [`use`](#use) | Import `std/args`, the program's inputs. |
+| [`use`](#use) | Import `std/args`, the program's inputs, or `std/kvt`, the KV-transfer vocabulary. |
 | [`pool`](#pool) | Declare resource capacity, cache and admission policy. |
 | [`stage`](#stage) | Declare a server or step engine. |
 | [`workload`](#workload) | Define arrivals and request attributes. |
@@ -107,6 +107,33 @@ Example commands state their execution conditions directly. An instance is
 optional: use one to name an experiment, and select it explicitly with
 `--instance`. Settings files are never auto-loaded.
 
+### `std/kvt`
+
+```serq
+use "std/kvt";
+
+kvt.nixl_pull (READER, SOURCE, latency = x, share = s);
+kvt.nixl_push (SOURCE, READER, latency = x, share = s);
+```
+
+The KV-transfer vocabulary: NIXL's two modes of one copy between two
+queues with a `nic`, declared above the call. `kvt.nixl_pull` is the
+*pull relation*: the KV goes from `SOURCE` to `READER`, and the reader's
+worker starts each read, waiting `x` before it (`READER.nic.latency`).
+`kvt.nixl_push` is the same copy written by the source (NIXL push): the
+source's worker posts the write and waits `x` before it
+(`SOURCE.nic.latency`). In both, an entry of the reader called `from
+SOURCE[i]` reads with a `transfer` without `on`, over both NICs.
+
+| Argument | Type | Description |
+|---|---|---|
+| `latency = x` | `const` | The wait before each copy; optional. |
+| `share = s` | `maxmin` or `bottleneck` | How concurrent copies divide the two NICs: the program's [`share`](#share); required. |
+
+The named arguments come in any order, each at most once. A program that
+imports `std/kvt` declares nothing named `kvt`. See
+[Queues](../language.md#queues).
+
 ## `def`
 
 ```serq
@@ -168,10 +195,11 @@ identify both the body and its use.
 
 ```serq
 use "std/args";
+use "std/kvt";
 ```
 
-Imports [`std/args`](#stdargs), the program's inputs; no other path is
-read. A program is one file: what several programs share, each writes, so
+Imports [`std/args`](#stdargs), the program's inputs, and
+[`std/kvt`](#stdkvt), the KV-transfer vocabulary; no other path is read. A program is one file: what several programs share, each writes, so
 a reader of one program reads all of it.
 
 ## `pool`

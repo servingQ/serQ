@@ -20,6 +20,7 @@
 // and a token of budget, recomputes the last prompt token for its logits,
 // and decodes. docs/use-cases/pd.md has the line-by-line correspondence.
 use "std/args";
+use "std/kvt";
 
 let NP = 2;            // prefill instances
 let ND = 2;            // decode instances
@@ -172,7 +173,7 @@ fn main() {
   // prefiller's NIC and the decoder's at once. How concurrent reads divide the
   // two NICs is UCX's and the fabric's, not vLLM's: max-min fairness is the
   // model, not a measurement (docs/design/bandwidth-sharing.md).
-  D pull P latency x0 share maxmin;
+  kvt.nixl_pull (D, P, latency = x0, share = maxmin);
 
   // The client: sessions arrive, each turn brings a prompt of n new tokens on
   // a context of K and wants o tokens back, and after a turn the session calls

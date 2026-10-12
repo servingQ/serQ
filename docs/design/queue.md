@@ -95,7 +95,7 @@ expr  += QUEUE [ '[' expr ']' ] . POOL            -- from outside, a pool's read
 | `Q[i].decode (…) from S[k]`, to the entry `decode (…) from S` | the body's `S` := `S.kv[k]` |
 | `L[j].transfer (n) from S to kv (m)` | `run L[j] (t); load Q.kv[i] (m); release S.kv[k]`, `t` the link entry's `run (…)` |
 | `nic k;` in `queue Q[N]` | `stage Q.nic[N] : k;` |
-| `D pull P latency x share s;`, and `transfer (n) from P to kv (m)` in `D[j]`'s `decode … from P`, called `from P[i]` | `stage D.nic.latency[N] : delay; share s;`, and `run D.nic.latency[j] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i]` ([The pull relation](pull-relation.md)) |
+| `kvt.nixl_pull (D, P, latency = x, share = s);`, and `transfer (n) from P to kv (m)` in `D[j]`'s `decode … from P`, called `from P[i]` | `stage D.nic.latency[N] : delay; share s;`, and `run D.nic.latency[j] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i]` ([The pull relation](pull-relation.md)) |
 | `queue L[N] : link { serve k latency x; }`, and a `transfer on L[k] …` | `stage L[N] : k; stage L.latency[N] : delay;`, and `run L.latency[k] (x);` before the transfer's `run` |
 | `mark x;` / `Q.x` | `set Q.x = now;` / the attribute |
 | `request Q;` | the named gateway's `route` body in place; no request node in the IR |

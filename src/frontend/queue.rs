@@ -391,7 +391,8 @@ impl Ctx<'_> {
                 self.at,
                 format!(
                     "`{}`'s `transfer` names no NIC and `{}` pulls from no queue, nor is \
-                     pushed to: declare `{} pull SOURCE share …;` or `SOURCE push {} share …;`, \
+                     pushed to: declare `kvt.nixl_pull ({}, SOURCE, share = …);` or \
+                     `kvt.nixl_push (SOURCE, {}, share = …);` (`use \"std/kvt\";`), \
                      or write `transfer on …`",
                     self.q.name, self.q.name, self.q.name, self.q.name
                 ),

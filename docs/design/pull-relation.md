@@ -4,8 +4,10 @@ A KV transfer between two pods is one fact of the deployment: which pod's
 KV goes to which, who starts the copy, what it waits for, and how
 concurrent copies share the wire. `examples/pd-disaggregation/llmd_nixl_pull.sq`
 wrote that fact in three places, none of which said it. This document is
-the design of `nic` and `D pull P latency x share s;`, issue #200: parse-time
-sugar, no IR change.
+the design of `nic` and `kvt.nixl_pull (D, P, latency = x, share = s);`,
+issue #200: parse-time sugar, no IR change. Since [the KV transfer
+module](kv-transfer.md) the relation is spelled through `std/kvt`; it was
+`D pull P latency x share s;`, with the same meaning.
 
 ## Before
 
@@ -55,7 +57,7 @@ queue D[ND] : decode {
         transfer (prompt - c) from P to kv (prompt - 1 - c);   // over P's NIC and this pod's
   }
 }
-D pull P latency x0 share maxmin;
+kvt.nixl_pull (D, P, latency = x0, share = maxmin);
 ```
 
 The two programs run the same: at seeds 1 and 7 every count, observable,
@@ -69,14 +71,14 @@ member, declared after the `serve` and before the entries. It is a stage
 like any other: `transfer on P.nic[i], …` still works, and the deployment
 figure puts it in the pod's box.
 
-**The relation is one line for the topology and the mode.** `D pull P
-latency x share s;`, after both queues:
+**The relation is one line for the topology and the mode.**
+`kvt.nixl_pull (D, P, latency = x, share = s);`, after both queues:
 
 | Part | Says |
 |---|---|
-| `D pull P` | the KV goes from `P` to `D`, and `D` starts the copy |
-| `latency x` | `D` waits `x` before each read (a number or a constant over `let`s); optional |
-| `share s` | concurrent reads divide the two NICs by `s`: the program's `share`, written here |
+| `kvt.nixl_pull (D, P, …)` | the KV goes from `P` to `D`, and `D` starts the copy |
+| `latency = x` | `D` waits `x` before each read (a number or a constant over `let`s); optional |
+| `share = s` | concurrent reads divide the two NICs by `s`: the program's `share`, written here |
 
 **A `transfer` without `on` is the read.** Inside an entry of `D` called
 `from P[i]`, `transfer (n) from P to kv (m);` names no stage, and the
@@ -85,7 +87,7 @@ relation supplies both ends:
 | Surface | Kernel |
 |---|---|
 | `nic k;` in `queue Q[N]` | `stage Q.nic[N] : k;` |
-| `D pull P latency x share s;` | `stage D.nic.latency[N] : delay; share s;`, `x` a constant of its own |
+| `kvt.nixl_pull (D, P, latency = x, share = s);` | `stage D.nic.latency[N] : delay; share s;`, `x` a constant of its own |
 | `transfer (n) from P to kv (m)` in `D[j]`, called `from P[i]` | `run D.nic.latency[j] (x); run P.nic[i], D.nic[j] (n); load D.kv[j] (m); release P.kv[i];` |
 
 The latency's constant has a name of its own (`D.pull.time`), as a link's
@@ -111,8 +113,8 @@ not replace it, and `--set` still reaches the expression.
 
 ## Self-critique
 
-**No `push` here.** `P push D` would read as the push a reader expects, vLLM's
-proxy, which sends the prefill and the decode request at once
+**No `push` here.** A push relation, `kvt.nixl_push (P, D, …)`, would read
+as the push a reader expects, vLLM's proxy, which sends the prefill and the decode request at once
 (`disagg_proxy_pushconnector_demo.py:227-270`), so that the decoder
 allocates during the prefill and the prefiller writes as soon as it has
 both the finished request and the decoder's registration

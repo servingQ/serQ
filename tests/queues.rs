@@ -1245,7 +1245,7 @@ fn the_contract_holds_at_four_more_edges() {
     );
 }
 
-/// `D pull P latency x share maxmin;`: the queues own their NICs, and a
+/// `kvt.nixl_pull (D, P, latency = x, share = maxmin);`: the queues own their NICs, and a
 /// `transfer` without `on` in `D`'s entry is the read over `P`'s NIC and
 /// `D`'s at once, after `D`'s wait - the flat program with the stages and
 /// the policy written out (#200).
@@ -1275,7 +1275,7 @@ fn a_pull_relation_is_the_flat_read() {
           }
         }
       }
-      D pull P latency x0 share maxmin;
+      use \"std/kvt\"; kvt.nixl_pull (D, P, latency = x0, share = maxmin);
       workload { arrive batch(1); hidden o; init { set prompt = 32; set o = 4; set i = 1; set j = 0; } session { turn; end; } } server { gw.route(); }
       ";
     let flat = "
@@ -1331,30 +1331,43 @@ fn a_pull_relation_says_what_it_couples() {
         )
     };
     compile_source(
-        &common::main_source(&program("nic ps(1);", "D pull P share maxmin;", "P")),
+        &common::main_source(&program(
+            "nic ps(1);",
+            "use \"std/kvt\"; kvt.nixl_pull (D, P, share = maxmin);",
+            "P",
+        )),
         &common::horizon(10.0),
     )
     .unwrap();
     refused(
-        &program("", "D pull P share maxmin;", "P"),
+        &program(
+            "",
+            "use \"std/kvt\"; kvt.nixl_pull (D, P, share = maxmin);",
+            "P",
+        ),
         "queue `P` has no `nic`",
     );
     refused(
-        &program("nic ps(1);", "D pull P;", "P"),
+        &program("nic ps(1);", "use \"std/kvt\"; kvt.nixl_pull (D, P);", "P"),
         "names how concurrent reads divide the NICs",
     );
     refused(
         &program(
             "nic ps(1);",
-            "D pull P share maxmin; share bottleneck;",
+            "use \"std/kvt\"; kvt.nixl_pull (D, P, share = maxmin); share bottleneck;",
             "P",
         ),
-        "`share` is given twice: the pull relation",
+        "`share` is given twice: `kvt.nixl_pull` names it",
     );
     refused(&program("nic ps(1);", "", "P"), "pulls from no queue");
     // the read takes from the entry's source, not any pool (#207 review)
     refused(
-        &program("nic ps(1);", "D pull P share maxmin;", "P").replace(
+        &program(
+            "nic ps(1);",
+            "use \"std/kvt\"; kvt.nixl_pull (D, P, share = maxmin);",
+            "P",
+        )
+        .replace(
             "transfer (p) from P to kv (p)",
             "transfer (p) from kv to kv (p)",
         ),
@@ -1363,22 +1376,85 @@ fn a_pull_relation_says_what_it_couples() {
     // the call takes from the queue the entry names, and the entry from the
     // relation's source
     refused(
-        &program("nic ps(1);", "D pull P share maxmin;", "Q"),
+        &program(
+            "nic ps(1);",
+            "use \"std/kvt\"; kvt.nixl_pull (D, P, share = maxmin);",
+            "Q",
+        ),
         "`D.decode (…) from Q`: the entry takes the KV `from P`",
     );
     refused(
-        &program("nic ps(1);", "D pull P share maxmin;", "Q")
-            .replace(" from P {", " from Q {")
-            .replace("from P to kv", "from Q to kv"),
-        "`D pull P`, and `D.decode (…)` takes the KV `from Q`",
+        &program(
+            "nic ps(1);",
+            "use \"std/kvt\"; kvt.nixl_pull (D, P, share = maxmin);",
+            "Q",
+        )
+        .replace(" from P {", " from Q {")
+        .replace("from P to kv", "from Q to kv"),
+        "`kvt.nixl_pull (D, P)`, and `D.decode (…)` takes the KV `from Q`",
     );
     refused(
-        &program("nic ps(1);", "D pull P latency ~exp(1) share maxmin;", "P"),
+        &program(
+            "nic ps(1);",
+            "use \"std/kvt\"; kvt.nixl_pull (D, P, latency = ~exp(1), share = maxmin);",
+            "P",
+        ),
         "`latency` is a number or a constant over `let`s",
     );
     refused(
-        &format!("D pull P share maxmin; {}", program("nic ps(1);", "", "P")),
+        &format!(
+            "use \"std/kvt\"; kvt.nixl_pull (D, P, share = maxmin); {}",
+            program("nic ps(1);", "", "P")
+        ),
         "no queue `D` is declared above",
+    );
+}
+
+/// std/kvt is the relation's vocabulary: it is imported, its functions and
+/// arguments are its own, and the relation's old spelling says where it went.
+#[test]
+fn std_kvt_names_the_relation() {
+    let program = |rel: &str| {
+        format!(
+            "queue gw : gateway {{ route {{ P.prefill (prompt); D.decode (prompt) from P; }} }}
+             queue P : prefill {{ pool kv {{ cap 100; }} serve fifo; nic ps(1);
+               prefill (p) {{ hold kv (cost(kv, p)) {{ run (cost(P, p)); }} cache (cost(kv, p)) lease kv (inf); }} }}
+             queue D : decode {{ device gpu {{ kv cap 100; }} pool kv on gpu {{ }} engine on gpu {{ tokens cap inf; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }} nic ps(1);
+               decode (p) from P {{ hold kv (cost(kv, p)) {{ transfer (p) from P to kv (p); }} }} }}
+             {rel}
+             workload {{ arrive batch(1); init {{ set prompt = 3; }} session {{ turn; end; }} }} server {{ gw.route(); }} "
+        )
+    };
+    refused(
+        &program("kvt.nixl_pull (D, P, share = maxmin);"),
+        "`kvt.nixl_pull` needs `use \"std/kvt\";`",
+    );
+    refused(
+        &program("use \"std/kvt\"; kvt.nixl_read (D, P, share = maxmin);"),
+        "std/kvt has no function `nixl_read`",
+    );
+    refused(
+        &program("use \"std/kvt\"; kvt.nixl_pull (D, P, share = maxmin, wait = 1);"),
+        "`kvt.nixl_pull` takes `latency = …` and `share = …`, found `wait`",
+    );
+    refused(
+        &program("use \"std/kvt\"; kvt.nixl_pull (D, P, share = maxmin, share = maxmin);"),
+        "`share` is given twice",
+    );
+    refused(
+        &program("D pull P latency 1 share maxmin;"),
+        "`D pull P …;` is std/kvt's now: `use \"std/kvt\";` and `kvt.nixl_pull (D, P, latency = …, share = …);`",
+    );
+    refused(
+        &program("P push D share maxmin;"),
+        "`kvt.nixl_push (P, D, latency = …, share = …);`",
+    );
+    refused(
+        &format!(
+            "let kvt = 1; {}",
+            program("use \"std/kvt\"; kvt.nixl_pull (D, P, share = maxmin);")
+        ),
+        "`kvt` names the imported std/kvt module",
     );
 }
 

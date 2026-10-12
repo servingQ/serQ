@@ -27,6 +27,8 @@
 // fitted on lone requests through the pull proxy: a prefill step costs
 // aP * prefilled + bP * attention, a decode step cD, a copy x0 + tokens / Bw,
 // and the proxy's hops and the API server h per request).
+use "std/kvt";
+
 let concurrent = 1;    // 1: both requests at once (the push proxy); 0: the decode request after the prefill's answer
 let spacing = 3.0;     // seconds between session arrivals
 let N = 96;            // sessions replayed (957 requests)
@@ -144,7 +146,7 @@ fn main() {
   // the decoder finds it done at a later step, a fixed wait per copy, and the
   // bytes cross the prefiller's NIC and the decoder's at once
   // (docs/design/bandwidth-sharing.md).
-  P push D latency x0 share maxmin;
+  kvt.nixl_push (P, D, latency = x0, share = maxmin);
 
   stage front : delay;
   stage gate : delay;
