@@ -1323,6 +1323,7 @@ that program's paths ([use cases](use-cases/index.md), `docs/lean.md`).
 | `single-turn/mg1.sq`, `single-turn/ps.sq`, `multi-turn/closed.sq` | M/G/1 FIFO, M/G/1-PS, M/M/1//N | a run against the closed form, by hand, in [getting started](getting-started.md) and the [tutorial](tutorial/01-a-queue.md); no test |
 | `multi-turn/replica.sq` | the paper's two-resource replica on the open-session scenario (`advance running decode first`, `drop kv` before `end`) | — |
 | `multi-turn/routing.sq` | four replicas, five routing policies | — |
+| `multi-turn/thunderagent.sq` | ThunderAgent's router in TR mode in front of two vLLM replicas, a fixed number of agents at once ([the design record](https://github.com/servingQ/serQ/blob/main/docs/design/thunderagent.md)) | the source (ThunderAgent at 7ddc861), read; `tests/thunderagent.rs` against the router's default mode; no oracle |
 | `multi-turn/vllm.sq` | vLLM v1's engine under a multi-turn agent workload | its engine is the other vLLM workloads' (`tests/workloads.rs`) |
 | `multi-turn/vllm_lmcache.sq` | `vllm.sq` with an LMCache server as its L2 (`queue lmc : l2`, `kvt.l2_load`, `kvt.l2_store`) | the source (vLLM at 0c87a197); `tests/kvt_l2.rs`; no scheduler oracle |
 | `single-turn/vllm_single_turn.sq`, `multi-turn/vllm_chat.sq`, `subagent/vllm_subagents.sq` | the same engine under a single-turn, a chat and an approximated subagent workload ([use case](use-cases/workloads.md)) | `tests/workloads.rs` |

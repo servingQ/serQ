@@ -1,0 +1,111 @@
+// ThunderAgent (ThunderAgent-org/ThunderAgent at 7ddc861, its router in TR
+// mode) in front of J vLLM replicas, running a fixed number of agents at
+// once, as a rollout or a benchmark run does. The router admits programs,
+// not requests: a program (a session, by its `program_id`) is placed on a
+// replica at its first request and stays there, and it counts against that
+// replica's KV capacity while it reasons and while it calls a tool, so that
+// a program coming back from its tool still finds its prefix in the
+// replica's cache. A program is let in only where its tokens fit; otherwise
+// it waits. docs/design/thunderagent.md has the correspondence and what this
+// program does not write.
+//
+// `--tr 0` is the router's `default` mode: the replica with the fewest
+// programs, no capacity. The model's constants are of the order of a 32B
+// model on one GPU (an iteration of 20 ms), not a fit.
+use "std/args";
+
+let J = 2;             // vLLM replicas (--backends)
+let B = 8192;          // max_num_batched_tokens
+let max_seqs = 256;    // max_num_seqs
+let bs = 16;           // block_size
+let a = 2e-4;          // compute per scheduled token (s)
+let omega = 0.02;      // weights read per iteration (s)
+let beta = 2e-7;       // KV read per iteration per resident context token (s)
+let c0 = 0;            // fixed cost per iteration (s)
+let buffer = 100;      // BUFFER_PER_PROGRAM: decode headroom per program (tokens)
+let p = 0.9;           // the agent continues after a turn
+let Z = 3.0;           // tool time (s)
+
+fn main() {
+  let tr = args.number("tr", 1);             // 1: --router tr, 0: --router default
+  let blocks = args.number("blocks", 4000);  // num_gpu_blocks of a replica
+  let N = args.number("N", 32);              // agents at once
+
+  // A replica: vLLM's engine on one device, its prefix cache in the blocks,
+  // examples/pd-disaggregation/llmd_nixl_pull.sq's local decoder without
+  // its max_model_len cap.
+  queue E[J] : decode {
+    device gpu { compute (t) = t * a; hbm (k) = omega + beta * k; kv cap blocks * bs; }
+    engine on gpu {
+      reqs cap max_seqs;
+      tokens cap B;
+      schedule { advance running; admit waiting while (running.preempted == 0); }
+      execute (c0 + max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
+    }
+    pool reqs on E { queue fifo; }
+    pool kv on E.gpu { block bs; evict lru; preempt lifo; }
+    decode (prompt) {
+      set kept = prompt;   // the most tokens an attempt had: a preemption keeps the outputs
+      hold kv (cost(kv, min(known, reused + budget_left(E)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
+           at admission (known = max(kept, computed + 1),
+                         reused = min(cachedin(kv), floor(known - 1, bs))) {
+        set kept = known;
+        set c = min(cached, floor(known - 1, bs));
+        observe hit = c > 0;
+        observe prefill_tokens = known - c;
+        run E prefill (cost(E, known - c)) growing kv;
+        run E decode (cost(E, o - 1 - (known - prompt))) growing kv;
+      } cache (cost(kv, reqs, prompt + o));
+    }
+  }
+
+  // The agent: a task's first prompt, then a tool call and a short
+  // observation per step. Nothing here is ThunderAgent's.
+  workload {
+    arrive closed(N);
+    hidden o;              // the router knows the prompt, not the length of the answer
+    init { set K = 0; }
+    turn {
+      set n = ceil(K == 0 ? ~uniform(4000, 8000) : ~exp(1000));
+      set o = floor(~exp(300)) + 1;
+      set more = ~bernoulli(p);
+    }
+    session {
+      turn;
+      while (more) {
+        set K = K + n + o;
+        tool (~exp(Z));
+        turn;
+      }
+    }
+  }
+
+  // The router's picture of a replica: the tokens of the programs placed on
+  // it, against vLLM's KV capacity (cache_config.total_tokens_capacity).
+  // Waiting programs that already have a step go before new ones, the
+  // smaller first in each (_greedy_resume's groups).
+  pool prog[J] { cap tr ? blocks * bs : inf; queue by (turn_no == 0, prompt); }
+
+  // The router. A new program goes to the replica with the fewest program
+  // tokens among those it fits (_select_backend_for_new_program), and waits
+  // there when none has room; in default mode, to the one with the fewest
+  // programs. A program's tokens are its prompt, the router's estimate
+  // before the request (update_program_before_request), and they stay
+  // counted until its next request, through the tool call
+  // (acting_token_weight 1, the default): the lease. The program is released
+  // when the session ends (/programs/release).
+  server {
+    set prompt = K + n;
+    branch (K == 0) {
+      choose j in J by (tr ? (free(prog[j]) >= prompt + buffer ? 0 : 1) : 0,
+                        tr ? used(prog[j]) : holders(prog[j]));
+      set home = j;
+    }
+    set t_q = now;
+    release prog[home];    // the tokens it had, from the last step
+    hold prog[home] (cost(prog, prompt + buffer)) {
+      branch (K > 0) { observe resume_wait = now - t_q; }
+      E[home].decode (prompt);
+    } lease prog[home] (inf);
+  }
+}
