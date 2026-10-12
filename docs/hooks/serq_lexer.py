@@ -75,7 +75,8 @@ ENGINE_VALUES = (
 # computes, not what it means, and they read as calls without help. Leaving
 # them plain is what lets the observable colour mean exactly one thing.
 # `tests/docs_lexer.rs` holds these lists to the linker's (`CONTEXT_VARS`,
-# `FUNCTIONS`, `AGGREGATES`, `FOLDED`, `BUILTIN_ATTRS`).
+# `Fun::names`, `AGGREGATES`, `FOLDED`, `BUILTIN_ATTRS`); `ARITHMETIC` is
+# exactly `Fun::is_arithmetic`.
 ARITHMETIC = ("min", "max", "abs", "floor", "ceil", "sqrt", "exp", "ln", "pow")
 
 BUILTINS = (

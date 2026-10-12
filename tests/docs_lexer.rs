@@ -93,9 +93,11 @@ fn lexer_list(name: &str) -> BTreeSet<String> {
         .find(&head)
         .unwrap_or_else(|| panic!("{LEXER} has no `{name} = (`"));
     let body = &text[at + head.len()..];
-    let body = &body[..body
-        .find("\n)")
-        .or_else(|| body.find(')'))
+    // a tuple on one line closes on it; a longer one on a line of its own
+    let first = &body[..body.find('\n').unwrap_or(body.len())];
+    let body = &body[..first
+        .find(')')
+        .or_else(|| body.find("\n)"))
         .expect("a closing paren")];
     let code: String = body
         .lines()
@@ -195,14 +197,15 @@ fn the_docs_lexer_knows_every_engine_value() {
     );
 }
 
-/// A `def` may not be named like a function: `link::FUNCTIONS` is every
-/// function a call may name, the IR's table (`Fun::names`) by which the
-/// linker resolves a call and `Program::validate` checks one.
+/// The arithmetic the lexer leaves plain is `Fun::is_arithmetic`, both
+/// ways: a function added or retired moves the list.
 #[test]
-fn the_function_list_is_every_function_the_linker_resolves() {
-    let resolved: BTreeSet<&str> = serq::ir::Fun::names().collect();
-    let listed: BTreeSet<&str> = serq::frontend::link::FUNCTIONS.iter().copied().collect();
-    assert_eq!(resolved, listed);
+fn the_docs_lexer_leaves_exactly_the_arithmetic_functions_plain() {
+    let arithmetic: BTreeSet<String> = serq::ir::Fun::names()
+        .filter(|n| serq::ir::Fun::from_name(n).is_some_and(serq::ir::Fun::is_arithmetic))
+        .map(String::from)
+        .collect();
+    assert_eq!(lexer_list("ARITHMETIC"), arithmetic);
 }
 
 /// The names the language supplies - context variables, functions, a run's
@@ -212,11 +215,11 @@ fn the_function_list_is_every_function_the_linker_resolves() {
 /// nor a declaration an attribute's (#470).
 #[test]
 fn the_docs_lexer_knows_every_name_the_language_supplies() {
-    use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED, FUNCTIONS};
+    use serq::frontend::link::{AGGREGATES, BUILTIN_ATTRS, CONTEXT_VARS, FOLDED};
     let supplied = CONTEXT_VARS
         .iter()
         .map(|(n, _)| *n)
-        .chain(FUNCTIONS)
+        .chain(serq::ir::Fun::names())
         .chain(AGGREGATES.iter().map(|(n, _)| *n))
         .chain(FOLDED)
         .chain(BUILTIN_ATTRS)
