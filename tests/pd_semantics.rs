@@ -185,13 +185,14 @@ fn release_and_load_need_an_enclosing_hold() {
 
 /// `grow` and `growing` act on an enclosing hold's allocation as `load`
 /// does; outside one they used to link and fail only in the run (#267).
+/// A `growing` run outside a hold is written in a queue's entry, the kernel
+/// an engine's request lowers to: the request itself refuses a pool it did
+/// not take before the hold is looked for.
 #[test]
 fn grow_and_growing_need_an_enclosing_hold() {
     for stmt in [
         "grow kv (cost(kv, 16));",
         "hold q (cost(q, 1)) { grow kv (cost(kv, 16)); }",
-        "run llm prefill (cost(llm, 8)) growing kv;",
-        "hold q (cost(q, 1)) { run llm prefill (cost(llm, 8)) growing kv; }",
     ] {
         let src = format!(
             "device gpu {{ kv cap 64; }} pool kv on gpu {{ }} pool q {{ cap 10; }}
@@ -208,6 +209,28 @@ fn grow_and_growing_need_an_enclosing_hold() {
             .unwrap_or_else(|| panic!("`{stmt}` linked"));
         assert!(e.contains("outside a hold of `kv`"), "{stmt}: {e}");
     }
+    for stmt in [
+        "run llm prefill (cost(llm, 8)) growing kv;",
+        "hold q (cost(q, 1)) { run llm prefill (cost(llm, 8)) growing kv; }",
+    ] {
+        let src = format!(
+            "queue llm : prefill {{
+          device gpu {{ kv cap 64; }} pool kv on gpu {{ }} pool q {{ cap 10; }}
+          engine on gpu {{ tokens cap 8; schedule {{ advance running; admit waiting while (running.preempted == 0); }} execute (1); }}
+          prefill (n) {{ {stmt} }}
+        }}
+        workload {{ arrive batch(1);
+          session {{ turn; end;
+          }}
+        }}
+        server {{ llm.prefill (8);
+        }} "
+        );
+        let e = check_source(&common::main_source(&src), &common::horizon(10.0))
+            .err()
+            .unwrap_or_else(|| panic!("`{stmt}` linked"));
+        assert!(e.contains("outside a hold of `llm.kv`"), "{stmt}: {e}");
+    }
     // a lease is not a hold: `grow` there is refused, and the hint does
     // not blame the index, which is the same
     let src = "pool kv { cap 64; } stage d : delay;
@@ -223,14 +246,19 @@ fn grow_and_growing_need_an_enclosing_hold() {
         e.contains("it acts on an enclosing hold's allocation"),
         "{e}"
     );
-    // inside one, both link
+    // inside one, both link: the request's admission is its hold
     let src = "device gpu { kv cap 64; } pool kv on gpu { }
-        engine llm on gpu { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        engine llm on gpu {
+          tokens cap 8;
+          request () { grow kv (cost(kv, 8)); prefill (8) growing kv; }
+          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (8); }
+          execute (1);
+        }
         workload { arrive batch(1);
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, 8)) { grow kv (cost(kv, 8)); run llm prefill (cost(llm, 8)) growing kv; }
+        server { llm ();
         }
         ";
     check_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -238,20 +266,17 @@ fn grow_and_growing_need_an_enclosing_hold() {
 
 /// A hold a pool may preempt is admitted anew and reads its indices again:
 /// one that reads the clock held another member after the preemption (#317).
+/// The hold grows `kv` with `grow`: an engine's request takes only the
+/// engine's and its device's pools, and a queue's entry only the queue's, so
+/// neither holds a member of `aux` with them; the check reads the hold, not
+/// what grows it.
 #[test]
 fn a_preemptible_hold_reads_no_moving_index() {
     let src = |preempt: &str| {
         format!(
             "device gpu {{ kv cap 128; }} pool kv on gpu {{ block 16; preempt {preempt}; }}
         pool aux[2] {{ cap 64; }}
-        engine llm on gpu {{
-          tokens cap 128;
-          schedule {{
-            advance running each at most (128);
-            admit waiting while (running.preempted == 0) each at most (128);
-          }}
-          execute (0.5);
-        }}
+        stage d : delay;
         workload {{ arrive batch(4);
           session {{ turn;
             end;
@@ -260,7 +285,7 @@ fn a_preemptible_hold_reads_no_moving_index() {
         }}
         server {{
           hold kv (cost(kv, 16)), aux[1 - min(1, floor(now))] (cost(aux, 1)) {{
-            run llm prefill (cost(llm, 16)) growing kv; run llm decode (cost(llm, 200)) growing kv;
+            grow kv (cost(kv, 200)); run d (cost(d, 1));
           }}
         }}
         "
@@ -282,10 +307,7 @@ fn a_preemptible_hold_reads_no_moving_index() {
         "hold kv (cost(kv, 16)), aux[1 - min(1, floor(now))] (cost(aux, 1)) {",
         "hold kv (cost(kv, 16)) { hold aux[1 - min(1, floor(now))] (cost(aux, 1)) {",
     );
-    let nested = nested.replace(
-        "run llm decode (cost(llm, 200)) growing kv;",
-        "run llm decode (cost(llm, 200)) growing kv; }",
-    );
+    let nested = nested.replace("run d (cost(d, 1));", "run d (cost(d, 1)); }");
     let e = check_source(&common::main_source(&nested), &common::horizon(500.0)).unwrap_err();
     assert!(e.contains("`kv` may preempt it"), "{e}");
     // a hold no pool preempts reads its index once
@@ -479,17 +501,30 @@ fn decode_pressure_backs_into_the_prefill_pool() {
 
 /// A hold re-executed after a preemption reaches its `release` again and
 /// finds nothing to give back; the run neither frees units twice nor stops.
+/// The two holds are a queue's entry: an engine's request transfers out of
+/// no pool it did not take.
 #[test]
 fn a_re_executed_hold_releases_nothing_twice() {
     let src = r#"
-        pool memP { cap 100; }
-        device gpu { memD cap 20; }
-        pool memD on gpu { block 10; preempt lifo; }
         stage link : delay;
-        engine llm on gpu {
-          tokens cap 100;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
-          execute (1);
+        queue llm : decode {
+          device gpu { memD cap 20; }
+          pool memP { cap 100; }
+          pool memD on gpu { block 10; preempt lifo; }
+          engine on gpu {
+            tokens cap 100;
+            schedule { advance running; admit waiting while (running.preempted == 0); }
+            execute (1);
+          }
+          decode (prompt) {
+            hold memP (cost(memP, 10)) {
+              hold memD (cost(memD, 10)) {
+                transfer (1) from memP to memD (10);
+                observe p_free = free(memP);
+                run llm decode (cost(llm, 25)) growing memD;
+              }
+            }
+          }
         }
         workload { arrive batch(1);
           session { turn;
@@ -497,22 +532,14 @@ fn a_re_executed_hold_releases_nothing_twice() {
 
           }
         }
-        server {
-          hold memP (cost(memP, 10)) {
-            hold memD (cost(memD, 10)) {
-              transfer (1) from memP to memD (10);
-              observe p_free = free(memP);
-              run llm decode (cost(llm, 25)) growing memD;
-            }
-          }
-        }
+        server { llm.decode (0); }
 
 "#;
     let r = run(src, &common::horizon(30.0));
     let free = samples(&r, "p_free");
     assert!(free.len() > 1, "the hold was re-executed: {free:?}");
     assert!(free.iter().all(|&f| f == 100.0), "{free:?}");
-    assert!(r.pool("memD").unwrap().preemptions > 0);
+    assert!(r.pool("llm.memD").unwrap().preemptions > 0);
 }
 
 /// A step stage that serves several queues tries them in the order their
@@ -520,21 +547,30 @@ fn a_re_executed_hold_releases_nothing_twice() {
 /// step's admissions. `examples/pd-disaggregation/llmd_nixl_pull.sq` relies on it: the decoder's
 /// requests whose KV has arrived (its `D.reqs` queue) are declared before
 /// the new ones (`D.kv`), as vLLM serves `skipped_waiting` before `waiting`.
+/// The engine is a queue's, as there: a request takes the same pools at
+/// every admission, and these requests wait on one pool or the other.
 #[test]
 fn an_engine_serves_its_queues_in_declaration_order() {
     let program = |first: &str, second: &str| {
         format!(
             r#"
-        device gpu {{ }}
-        engine llm on gpu {{
-          a cap 1;
-          b cap 1;
-          tokens cap 1000;
-          schedule {{ advance running; admit waiting while (running.preempted == 0); }}
-          execute (1);
+        queue llm : decode {{
+          device gpu {{ }}
+          engine on gpu {{
+            a cap 1;
+            b cap 1;
+            tokens cap 1000;
+            schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+            execute (1);
+          }}
+          pool {first} on llm {{ }}
+          pool {second} on llm {{ }}
+          decode (s) {{
+            branch (s == 0) {{ hold a (cost(a, 1)) {{ run llm decode (cost(llm, 50)); }} }}
+            branch (s == 1) {{ hold a (cost(a, 1)) {{ run llm decode (cost(llm, 1)); }} }}
+            branch (s == 2) {{ hold b (cost(b, 1)) {{ observe b_admitted = now; run llm decode (cost(llm, 1)); }} }}
+          }}
         }}
-        pool {first} on llm {{ }}
-        pool {second} on llm {{ }}
         stage gate : delay;
         workload {{ arrive batch(3);
           session {{ turn;
@@ -544,9 +580,7 @@ fn an_engine_serves_its_queues_in_declaration_order() {
         }}
         server {{
           run gate (cost(gate, serial));
-          branch (serial == 0) {{ hold a (cost(a, 1)) {{ run llm decode (cost(llm, 50)); }} }}
-          branch (serial == 1) {{ hold a (cost(a, 1)) {{ run llm decode (cost(llm, 1)); }} }}
-          branch (serial == 2) {{ hold b (cost(b, 1)) {{ observe b_admitted = now; run llm decode (cost(llm, 1)); }} }}
+          llm.decode (serial);
         }}
 
 "#

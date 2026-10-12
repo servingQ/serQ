@@ -181,29 +181,37 @@ fn compile(src: &str) -> Program {
 /// `grow` advances the *innermost* hold holding the pool, so a `growing` run
 /// nested inside another hold still belongs to the outer one. Walking only
 /// `Run`/`Branch`/`Loop` misses it and the figure claims a prefix cache on
-/// pools the interpreter never caches in.
+/// pools the interpreter never caches in. The nested hold is written as a
+/// queue's entry: an engine's request holds only the pools it takes.
 #[test]
 fn growing_is_found_through_nested_holds() {
     let p = compile(
         r#"
-        device gpu { kv cap 100000; }
-        engine llm on gpu { tokens cap 512; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1e-3); }
-        pool kv on gpu { } pool reqs { cap 8; } pool gate { cap 4; }
-        workload { arrive poisson(0.2); turn { set n = 100; set o = 2; }
+        queue llm : prefill {
+          device gpu { kv cap 100000; }
+          pool kv on gpu { } pool reqs { cap 8; } pool gate { cap 4; }
+          engine on gpu { tokens cap 512; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1e-3); }
+          prefill (n) {
+            hold kv (cost(kv, 32)), reqs (cost(reqs, 1)) {
+              hold gate (cost(gate, 1)) { run llm prefill (cost(llm, n)) growing kv; }
+            } cache (cost(kv, reqs, n + o));
+          }
+        }
+        workload { arrive poisson(0.2); hidden o; turn { set n = 100; set o = 2; }
           session {  turn;
             end;
           }
         }
-        server {
-          hold kv (cost(kv, 32)), reqs (cost(reqs, 1)) {
-            hold gate (cost(gate, 1)) { run llm prefill (cost(llm, n)) growing kv; }
-          } cache (cost(kv, reqs, n + o));
-        }
+        server { llm.prefill (n); }
 
 "#,
     );
     let net = deployment::project(&p);
-    assert_eq!(net.cached, vec![pool(&p, "kv")], "reqs is never cached in");
+    assert_eq!(
+        net.cached,
+        vec![pool(&p, "llm.kv")],
+        "reqs is never cached in"
+    );
 }
 
 /// A pool held around two stations with an unheld one between them gets one

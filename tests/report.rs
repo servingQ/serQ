@@ -173,7 +173,17 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
         let src = format!(
             "stage gate : delay;
         device gpu {{ kv cap 20; }}
-        engine llm on gpu {{ reqs cap 2; tokens cap 4; schedule {{ {schedule} }} execute (1); }}
+        engine llm on gpu {{
+          reqs cap 2;
+          tokens cap 4;
+          request (prompt, s) {{
+            at admission {{ left = budget_left(llm); }}
+            prefill (prompt) growing kv;
+            branch (s == 0) {{ decode (3) growing kv; }}
+          }}
+          schedule {{ {schedule} }}
+          execute (1);
+        }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
         workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
@@ -184,11 +194,7 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
         }}
         server {{
           run gate (cost(gate, 2 * serial));
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
-          at admission (left = budget_left(llm)) {{
-            run llm prefill (cost(llm, prompt)) growing kv;
-            branch (serial == 0) {{ run llm decode (cost(llm, 3)) growing kv; }}
-          }}
+          llm (prompt, serial);
         }}
         "
         );
@@ -206,12 +212,12 @@ fn the_gaps_between_tokens_count_a_prefill_that_cuts_in() {
         (s.mean_itl, s.itl_p99)
     };
     let (mean, p99) = itl(
-        "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4);",
+        "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);",
     );
     assert_eq!(mean, 4.0 / 3.0);
     assert!(near(p99, 2.0), "{p99}");
     let (mean, p99) = itl(
-        "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4);",
+        "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);",
     );
     assert_eq!(mean, 1.0);
     assert!(near(p99, 1.0), "{p99}");
@@ -230,11 +236,16 @@ fn a_gap_holds_the_transfer_between_two_engines() {
         device gpu_d {{ }}
         engine p on gpu_p {{
           tokens cap inf;
+          request () {{ prefill (2); }}
           schedule {{ advance running; admit waiting while (running.preempted == 0); }}
           execute (1);
         }}
         engine d on gpu_d {{
           tokens cap inf;
+          request () {{
+            {recompute}
+            decode (2);
+          }}
           schedule {{ advance running; admit waiting while (running.preempted == 0); }}
           execute (1);
         }}
@@ -246,10 +257,9 @@ fn a_gap_holds_the_transfer_between_two_engines() {
           }}
         }}
         server {{
-          run p prefill (cost(p, 2));
+          p ();
           run link (cost(link, 5));
-          {recompute}
-          run d decode (cost(d, 2));
+          d ();
         }}
         "
         );
@@ -268,7 +278,7 @@ fn a_gap_holds_the_transfer_between_two_engines() {
         d.mean_itl
     };
     assert_eq!(itl(""), 3.5);
-    assert_eq!(itl("run d prefill (cost(d, 1));"), 1.0);
+    assert_eq!(itl("prefill (1);"), 1.0);
 }
 
 #[test]
@@ -281,7 +291,17 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
         engine llm on gpu {
           reqs cap 64;
           tokens cap 2048;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (prompt, output) {
+            at admission { known = computed < prompt ? prompt : computed + 1; }
+            prefill (known) growing kv;
+            branch (known == prompt) { mark first; }
+            decode (output - 1 - (known - prompt)) growing kv;
+          }
+          schedule {
+            advance running;
+            admit waiting while (running.preempted == 0)
+              taking kv (min(known, budget_left(llm))) reserve (known), reqs (1);
+          }
           execute (0.001 + 1e-6 * batch.tokens);
         }
         pool reqs on llm { }
@@ -297,13 +317,8 @@ fn the_gaps_add_up_to_the_decode_time_through_preemptions() {
           }
         }
         server {
-          hold kv (cost(kv, min(known, budget_left(llm)))) reserve (cost(kv, known)), reqs (cost(reqs, 1))
-          at admission (known = computed < prompt ? prompt : computed + 1) {
-            run llm prefill (cost(llm, known)) growing kv;
-            branch (known == prompt) { set first = now; }
-            run llm decode (cost(llm, o - 1 - (known - prompt))) growing kv;
-          }
-          observe span = now - first;
+          llm (prompt, o);
+          observe span = now - llm.first;
           observe gaps = o - 1;
         }
         ";
@@ -384,7 +399,17 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         format!(
             "stage gate : delay;
         device gpu {{ kv cap 20; }}
-        engine llm on gpu {{ reqs cap 2; tokens cap 4; schedule {{ {schedule} }} execute (1); }}
+        engine llm on gpu {{
+          reqs cap 2;
+          tokens cap 4;
+          request (prompt, s) {{
+            at admission {{ left = budget_left(llm); }}
+            prefill (prompt) growing kv;
+            branch (s == 0) {{ decode (2) growing kv; }}
+          }}
+          schedule {{ {schedule} }}
+          execute (1);
+        }}
         pool reqs on llm {{ }}
         pool kv on gpu {{ }}
         workload {{ arrive batch(2); init {{ set prompt = serial == 0 ? 2 : 4; }}
@@ -395,11 +420,7 @@ fn a_step_stage_reports_what_its_iterations_carried() {
         }}
         server {{
           run gate (cost(gate, serial));
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, left))) reserve (cost(kv, prompt))
-          at admission (left = budget_left(llm)) {{
-            run llm prefill (cost(llm, prompt)) growing kv;
-            branch (serial == 0) {{ run llm decode (cost(llm, 2)) growing kv; }}
-          }}
+          llm (prompt, serial);
         }}
         "
         )
@@ -427,13 +448,13 @@ fn a_step_stage_reports_what_its_iterations_carried() {
     };
     assert_eq!(
         stage(
-            "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4);"
+            "exclusive prefill each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);"
         ),
         (0.1, 0.1, 0.0, 0.1, 1.0, 1.0)
     );
     assert_eq!(
         stage(
-            "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4);"
+            "advance running each at most (4); admit waiting while (running.preempted == 0) each at most (4) taking reqs (1), kv (min(prompt, left)) reserve (prompt);"
         ),
         (0.05, 0.0, 0.1, 0.1, 1.0, 1.0)
     );
@@ -563,17 +584,18 @@ fn a_growth_left_waiting_is_noted() {
     let src = "device gpu { kv cap 2015; }
         engine llm on gpu {
           tokens cap 8192;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request () {
+            at admission { hit = min(cachedin(kv), 992); }
+            prefill (1000 - cached) growing kv;
+            cache (1000);
+          }
+          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (hit + 8); }
           execute (1e-4 + 1e-5 * batch.tokens);
         }
         pool kv on gpu { block 16; evict lru; }
         workload { arrive batch(1); session { loop { turn; } } }
         server {
-          hold kv (cost(kv, 1000)) {
-            hold kv (cost(kv, hit + 8)) at admission (hit = min(cachedin(kv), 992)) {
-              run llm prefill (cost(llm, 1000 - cached)) growing kv;
-            } cache (cost(kv, 1000));
-          }
+          hold kv (cost(kv, 1000)) { llm (); }
         }
         ";
     let r = run_ir(

@@ -88,14 +88,19 @@ fn ir_runs_like_text() {
 fn ir_that_skips_the_linker_meets_its_checks() {
     use serq::ir::{CArg, CExpr, CRef, CStmt, DistKind, Fun};
     let src = "device gpu { kv cap 64; }
-        engine llm on gpu { tokens cap 8; schedule { advance running; admit waiting while (running.preempted == 0); } execute (1); }
+        engine llm on gpu {
+          tokens cap 8;
+          request () { prefill (8) growing kv; }
+          schedule { advance running; admit waiting while (running.preempted == 0) taking kv (8); }
+          execute (1);
+        }
         pool kv on gpu { }
         stage d : delay;
         workload { arrive batch(1); init { set x = 1; }
           session { turn; end;
           }
         }
-        server { hold kv (cost(kv, 8)) { run llm prefill (cost(llm, 8)) growing kv; }
+        server { llm ();
         }
         ";
     let p = compile_source(&common::main_source(src), &common::horizon(10.0)).unwrap();
@@ -621,36 +626,50 @@ fn a_draw_is_labelled_w_p() {
 /// it must reach the kernel as the inlined expression and nothing else.
 #[test]
 fn at_admission_is_substituted_into_the_header() {
-    let head = "device gpu { kv cap 1e5; }
-        engine llm on gpu {
+    let head = |admission: &str, take: &str| {
+        format!(
+            "device gpu {{ kv cap 1e5; }}
+        engine llm on gpu {{
+          reqs cap 8;
           tokens cap 512;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (prompt, output) {{
+            {admission}
+            prefill (prompt - cached) growing kv;
+            cache (prompt + output);
+          }}
+          schedule {{
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv ({take});
+          }}
           execute (1e-3);
-        }
-        pool kv on gpu { block 16; evict lru; }
-        pool reqs { cap 8; }
+        }}
+        pool kv on gpu {{ block 16; evict lru; }}
+        pool reqs on llm {{ }}
 
-        ";
+        "
+        )
+    };
     let head_workload = "arrive poisson(0.3); init { set K = 0; }
                    turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     let bound = format!(
-        "{head} workload {{ {head_workload} session {{ loop {{ turn; set K = prompt + o; end; }}
+        "{} workload {{ {head_workload} session {{ loop {{ turn; set K = prompt + o; end; }}
         }} }}
-        server {{ set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
-          at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            run llm prefill (cost(llm, prompt - cached)) growing kv;
-          }} cache (cost(reqs, kv, prompt + o));
-        }}"
+        server {{ set prompt = K + n; llm (prompt, o);
+        }}",
+        head(
+            "at admission { hit = min(cachedin(kv), prompt - 1); }",
+            "min(prompt, hit + budget_left(llm))"
+        )
     );
     let inlined = format!(
-        "{head} workload {{ {head_workload} session {{ loop {{ turn; set K = prompt + o; end; }}
+        "{} workload {{ {head_workload} session {{ loop {{ turn; set K = prompt + o; end; }}
         }} }}
-        server {{ set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, min(cachedin(kv), prompt - 1) + budget_left(llm)))) {{
-            run llm prefill (cost(llm, prompt - cached)) growing kv;
-          }} cache (cost(reqs, kv, prompt + o));
-        }}"
+        server {{ set prompt = K + n; llm (prompt, o);
+        }}",
+        head(
+            "",
+            "min(prompt, min(cachedin(kv), prompt - 1) + budget_left(llm))"
+        )
     );
     let ov = common::horizon(500.0);
     let a = serq::compile_source(&common::main_source(&bound), &ov).expect("the clause compiles");
@@ -669,35 +688,47 @@ fn at_admission_is_substituted_into_the_header() {
 /// session attribute of that name, 0 on a first admission, silently.
 #[test]
 fn a_bound_name_is_substituted_when_it_stands_alone_as_an_argument() {
-    let head = "device gpu { kv cap 1e5; }
-        engine llm on gpu {
+    let head = |admission: &str, take: &str| {
+        format!(
+            "device gpu {{ kv cap 1e5; }}
+        engine llm on gpu {{
+          reqs cap 8;
           tokens cap 512;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (prompt, output) {{
+            {admission}
+            prefill (prompt - cached) growing kv;
+            cache (prompt + output);
+          }}
+          schedule {{
+            advance running;
+            admit waiting while (running.preempted == 0) taking reqs (1), kv ({take});
+          }}
           execute (1e-3);
-        }
-        pool kv on gpu { block 16; evict lru; }
-        pool reqs { cap 8; }
+        }}
+        pool kv on gpu {{ block 16; evict lru; }}
+        pool reqs on llm {{ }}
 
-        ";
+        "
+        )
+    };
     let head_workload = "arrive poisson(0.3); init { set K = 0; }
                    turn { set n = ~exp(500); set o = ~exp(200) + 1; }";
     let bound = format!(
-        "{head} workload {{ {head_workload} session {{  turn; end;
+        "{} workload {{ {head_workload} session {{  turn; end;
         }} }}
-        server {{ set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(hit, 10))) at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            run llm prefill (cost(llm, prompt - cached)) growing kv;
-          }} cache (cost(reqs, kv, prompt + o));
-        }}"
+        server {{ set prompt = K + n; llm (prompt, o);
+        }}",
+        head(
+            "at admission { hit = min(cachedin(kv), prompt - 1); }",
+            "min(hit, 10)"
+        )
     );
     let inlined = format!(
-        "{head} workload {{ {head_workload} session {{  turn; end;
+        "{} workload {{ {head_workload} session {{  turn; end;
         }} }}
-        server {{ set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(min(cachedin(kv), prompt - 1), 10))) {{
-            run llm prefill (cost(llm, prompt - cached)) growing kv;
-          }} cache (cost(reqs, kv, prompt + o));
-        }}"
+        server {{ set prompt = K + n; llm (prompt, o);
+        }}",
+        head("", "min(min(cachedin(kv), prompt - 1), 10)")
     );
     let ov = common::horizon(500.0);
     let a = serq::compile_source(&common::main_source(&bound), &ov).expect("the clause compiles");
@@ -796,12 +827,24 @@ fn admit_as_a_statement_says_what_to_write() {
 fn the_request_boundary_preserves_size_ownership() {
     let head = "device gpu { kv cap 1e5; }
         engine llm on gpu {
+          reqs cap 8;
           tokens cap 512;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
+          request (prompt, output, t0) {
+            at admission { hit = min(cachedin(kv), prompt - 1); }
+            prefill (prompt - cached) growing kv;
+            observe ttft = now - t0;
+            decode (output - 1) growing kv;
+            cache (prompt + output);
+          }
+          schedule {
+            advance running;
+            admit waiting while (running.preempted == 0)
+              taking reqs (1), kv (min(prompt, hit + budget_left(llm)));
+          }
           execute (1e-3);
         }
         pool kv on gpu { block 16; evict lru; }
-        pool reqs { cap 8; }
+        pool reqs on llm { }
         stage tool : delay;
         ";
     let client = "arrive poisson(0.3); init { set K = 0; }
@@ -821,12 +864,7 @@ fn the_request_boundary_preserves_size_ownership() {
         server {{
           set t0 = now;
           set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
-          at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            run llm prefill (cost(llm, prompt - cached)) growing kv;
-            observe ttft = now - t0;
-            run llm decode (cost(llm, o - 1)) growing kv;
-          }} cache (cost(reqs, kv, prompt + o));
+          llm (prompt, o, t0);
           observe response = now - t0;
         }}"
     );
@@ -844,12 +882,7 @@ fn the_request_boundary_preserves_size_ownership() {
         server {{
           set t0 = now;
           set prompt = K + n;
-          hold reqs (cost(reqs, 1)), kv (cost(kv, min(prompt, hit + budget_left(llm))))
-          at admission (hit = min(cachedin(kv), prompt - 1)) {{
-            run llm prefill (cost(llm, prompt - cached)) growing kv;
-            observe ttft = now - t0;
-            run llm decode (cost(llm, o - 1)) growing kv;
-          }} cache (cost(reqs, kv, prompt + o));
+          llm (prompt, o, t0);
           observe response = now - t0;
           set K = prompt + o;
         }}"
@@ -872,25 +905,39 @@ fn the_request_boundary_preserves_size_ownership() {
     );
 }
 
-/// `enter … keep` is `hold … cache`, next to a pool its engine admits.
+/// `enter … keep` was `hold … cache`, next to a pool its engine admits; an
+/// engine's request is that hold now, and it is the hold a queue's entry
+/// writes, up to the names the queue gives its own (`llm.kv`).
 #[test]
 fn enter_is_hold_next_to_a_pool_the_engine_admits() {
-    let head = "device gpu { kv cap 1000; }
-        engine llm on gpu {
-          reqs cap 4;
-          tokens cap 64;
-          schedule { advance running; admit waiting while (running.preempted == 0); }
-          execute (1);
-        }
-        pool kv on gpu { } pool reqs on llm { }
-
-        ";
     let head_workload = "arrive poisson(1); init { set n = 10; }";
     let sugar = format!(
-        "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }} cache (cost(reqs, kv, n));\n}}"
+        "device gpu {{ kv cap 1000; }}
+        engine llm on gpu {{
+          reqs cap 4;
+          tokens cap 64;
+          request (n) {{ prefill (n) growing kv; cache (n); }}
+          schedule {{ advance running; admit waiting while (running.preempted == 0) taking reqs (1), kv (n); }}
+          execute (1);
+        }}
+        pool kv on gpu {{ }} pool reqs on llm {{ }}
+
+        workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ llm (n);\n}}"
     );
     let kernel = format!(
-        "{head} workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }} cache (cost(reqs, kv, n));\n}}"
+        "queue llm : prefill {{
+          device gpu {{ kv cap 1000; }}
+          engine on gpu {{
+            reqs cap 4;
+            tokens cap 64;
+            schedule {{ advance running; admit waiting while (running.preempted == 0); }}
+            execute (1);
+          }}
+          pool kv on gpu {{ }} pool reqs on llm {{ }}
+          prefill (n) {{ hold reqs (cost(reqs, 1)), kv (cost(kv, n)) {{ run llm prefill (cost(llm, n)) growing kv; }} cache (cost(reqs, kv, n)); }}
+        }}
+
+        workload {{ {head_workload} session {{ turn; end; \n}} }}\nserver {{ llm.prefill (n);\n}}"
     );
     let ov = common::horizon(20.0);
     assert_eq!(
@@ -900,6 +947,7 @@ fn enter_is_hold_next_to_a_pool_the_engine_admits() {
         serq::compile_source(&common::main_source(&kernel), &ov)
             .unwrap()
             .to_json()
+            .replace("\"llm.", "\"")
     );
 }
 
