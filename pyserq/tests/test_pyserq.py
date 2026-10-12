@@ -247,6 +247,18 @@ def test_draw_is_serq_draw():
     # A compiled Program draws as its IR file does, and as its text does
     prog = pyserq.compile(VLLM, horizon=100)
     assert pyserq.draw(prog, format="svg") == pyserq.draw(VLLM, format="svg")
+    # the run settings do not enter the figure; inputs do, as in the file's
+    prog = pyserq.compile(VLLM, horizon=100, warmup=10, seed=3)
+    assert pyserq.draw(prog, format="svg") == pyserq.draw(VLLM, format="svg")
+    prog = pyserq.compile(MG1, sets={"lam": 0.3}, horizon=100)
+    assert pyserq.draw(prog) == pyserq.draw(MG1, sets={"lam": 0.3})
+    # a wrong type names what draw takes, not how it was extracted
+    try:
+        pyserq.draw(3)
+    except TypeError as e:
+        assert "str, an os.PathLike or a Program, not int" in str(e) and "Drawn" not in str(e), e
+    else:
+        raise AssertionError("no TypeError")
 
 
 def test_errors_are_value_errors():

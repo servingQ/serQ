@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rand::rngs::StdRng;
@@ -434,10 +434,23 @@ fn overriding(
 }
 
 /// What `draw` draws: a compiled program, or a program file.
-#[derive(FromPyObject)]
 enum Drawn {
     Program(Py<Program>),
     Path(PathBuf),
+}
+
+impl<'py> FromPyObject<'py> for Drawn {
+    fn extract_bound(a: &Bound<'py, PyAny>) -> PyResult<Self> {
+        if let Ok(p) = a.downcast::<Program>() {
+            return Ok(Drawn::Program(p.clone().unbind()));
+        }
+        a.extract().map(Drawn::Path).map_err(|_| {
+            let ty = a.get_type().name().map_or("?".into(), |n| n.to_string());
+            PyTypeError::new_err(format!(
+                "expected a str, an os.PathLike or a Program, not {ty}"
+            ))
+        })
+    }
 }
 
 /// `draw(path=None, *, source=None, sets={}, defs={}, format="tikz")`: the

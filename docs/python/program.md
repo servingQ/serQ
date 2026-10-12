@@ -60,4 +60,4 @@ assert pyserq.run(restored).json() == pyserq.run(program).json()
 
 ## See also
 
-[`compile`](compile.md), [`run`](run.md), [the IR](../ir.md).
+[`compile`](compile.md), [`run`](run.md), [`draw`](draw.md), [the IR](../ir.md).

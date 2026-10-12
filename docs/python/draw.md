@@ -11,7 +11,7 @@ of `path` and `source`.
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `path` | `str`, `os.PathLike` or [`Program`](program.md) | `None` | A `.sq` source file, a `.json` IR file, or a compiled program. |
+| `path` | `str`, `os.PathLike` or [`Program`](program.md) | `None` | A `.sq` source file, a `.json` IR file, or a compiled program (the name stays `path` for callers that pass it by keyword). |
 
 ## Keyword arguments
 
@@ -59,11 +59,13 @@ fn main() {
 Path("deployment.svg").write_text(svg, encoding="utf-8")
 ```
 
-A program already compiled draws the same figure as its file:
+A program already compiled draws the same figure as its file drawn with
+the same `sets` and `defs`; the run settings (`horizon`, `warmup`, `seed`,
+`arrivals`, `trace`) do not enter the figure:
 
 ```python
-prog = pyserq.compile("examples/multi-turn/vllm.sq", horizon=100)
-assert pyserq.draw(prog, format="svg") == pyserq.draw("examples/multi-turn/vllm.sq", format="svg")
+prog = pyserq.compile("examples/single-turn/mg1.sq", sets={"lam": 0.3}, horizon=100)
+assert pyserq.draw(prog) == pyserq.draw("examples/single-turn/mg1.sq", sets={"lam": 0.3})
 ```
 
 ## See also
