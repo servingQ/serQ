@@ -718,7 +718,7 @@ pub fn link_located(prog: &Program, ov: &Overrides) -> LResult<(Linked, Spans)> 
         }
     }
     if let Some(w) = prog.workload.as_ref() {
-        hidden_in_server(&prog.server, &w.hidden)?;
+        hidden_in_server(&w.init, &w.turn, &prog.server, &w.hidden)?;
     }
     let mut gauges = vec![];
     for (name, e) in &prog.gauges {
@@ -936,14 +936,26 @@ fn iteration(lk: &Linker, stage: usize, body: &[IterStmt]) -> LResult<Vec<CIter>
 /// which the IR does not tell from the workload's, so they are checked
 /// here, on the server as the parser expanded it. An attribute the server
 /// sets from a hidden one is hidden until each hidden one it was set from
-/// is revealed. Paths join conservatively: after a branch an attribute is
-/// revealed only if both arms reveal it, and a loop's body may not run.
-fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
+/// is revealed, and so is what the workload's `init` and `turn` set from
+/// one: they run before the request, so the value they move to another name
+/// is the one the request has yet to reveal (#547). The session's own
+/// statements are not read: between two `turn`s they see the outputs of
+/// the turn that has ended. Paths join conservatively: after a branch an
+/// attribute is revealed only if both arms reveal it, and a loop's body
+/// may not run.
+fn hidden_in_server(
+    init: &[Stmt],
+    turn: &[Stmt],
+    server: &[Stmt],
+    hidden: &[String],
+) -> LResult<()> {
     #[derive(Clone, Default, PartialEq)]
     struct Origins {
         possible: BTreeSet<String>,
         certain: BTreeSet<String>,
         derived: bool,
+        /// where it was set from a hidden attribute, for the message
+        site: &'static str,
     }
     #[derive(Clone, Default, PartialEq)]
     struct Taint {
@@ -1011,9 +1023,10 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
     }
     /// Possible origins prohibit decisions; only certain origins let a run
     /// reveal an input. The two differ after control-flow paths join.
-    fn origins(e: &Expr, t: &Taint) -> Origins {
+    fn origins(e: &Expr, t: &Taint, site: &'static str) -> Origins {
         let mut out = Origins {
             derived: true,
+            site,
             certain: certain(e, t),
             ..Default::default()
         };
@@ -1049,8 +1062,9 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
         } else {
             let hidden: Vec<_> = from.possible.difference(&t.revealed).cloned().collect();
             format!(
-                "`{name}` is set from the hidden `{}` in the server",
-                hidden.join("`, `")
+                "`{name}` is set from the hidden `{}` in {}",
+                hidden.join("`, `"),
+                from.site
             )
         };
         let span = match e {
@@ -1083,7 +1097,7 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
             match s {
                 Stmt::Set(n, e) => {
                     // a later `set` of a visible value makes it visible again
-                    let from = origins(e, t);
+                    let from = origins(e, t, "the server");
                     t.attrs.remove(n);
                     if !from.possible.is_empty() {
                         t.attrs.insert(n.clone(), from);
@@ -1103,7 +1117,7 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                         }
                     }
                     // the run's end reveals the hidden attributes its work reads
-                    t.revealed.extend(origins(work, t).certain);
+                    t.revealed.extend(origins(work, t, "the server").certain);
                 }
                 Stmt::Hold {
                     pools,
@@ -1198,12 +1212,28 @@ fn hidden_in_server(server: &[Stmt], hidden: &[String]) -> LResult<()> {
                         possible: BTreeSet::from([h.clone()]),
                         certain: BTreeSet::from([h.clone()]),
                         derived: false,
+                        ..Default::default()
                     },
                 )
             })
             .collect(),
         ..Default::default()
     };
+    // `init` and `turn` hold only `set` and `observe`; a hidden attribute
+    // they set stays hidden whatever it is set from
+    for (block, site) in [(init, "the workload's init"), (turn, "the workload's turn")] {
+        for s in block {
+            if let Stmt::Set(n, e) = s
+                && !hidden.contains(n)
+            {
+                let from = origins(e, &tainted, site);
+                tainted.attrs.remove(n);
+                if !from.possible.is_empty() {
+                    tainted.attrs.insert(n.clone(), from);
+                }
+            }
+        }
+    }
     walk(server, &mut tainted)
 }
 

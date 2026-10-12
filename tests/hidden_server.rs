@@ -318,3 +318,50 @@ fn a_stage_passed_bare_does_not_reveal_an_attribute_of_its_name() {
     // a run whose work reads the attribute reveals it
     compile_source(&source("L", "prompt + 0 * L"), &horizon).unwrap();
 }
+
+/// What the workload's `turn` or `init` sets from a hidden attribute runs
+/// before the request, so it is hidden as what the server sets from it is:
+/// the same `x = o + 1` passed when the turn computed it and was refused
+/// when the server did (#547). What the session sets after a turn reads
+/// that turn's outputs, and stays visible (`examples/multi-turn/vllm.sq`).
+#[test]
+fn what_the_workload_sets_from_a_hidden_attribute_before_the_request_is_hidden() {
+    let src = |init: &str, turn: &str, session: &str| {
+        format!(
+            "stage A : fifo; stage B : fifo;
+            workload {{ arrive poisson(1); hidden o;
+              init {{ {init} }}
+              turn {{ {turn} }}
+              session {{ {session} }} }}
+            server {{ branch (x > 5) {{ run A (cost(A, o)); }} else {{ run B (cost(B, o)); }} }}
+            "
+        )
+    };
+    let check = |s: String| compile_source(&common::main_source(&s), &common::horizon(100.0));
+    let err = check(src(
+        "set x = 0;",
+        "set o = ~exp(10); set x = o + 1;",
+        "turn;",
+    ))
+    .unwrap_err();
+    assert!(
+        err.contains(
+            "`x` is set from the hidden `o` in the workload's turn, but the server's branch reads it"
+        ),
+        "{err}"
+    );
+    let err = check(src("set o = 4; set x = o;", "set y = 1;", "turn;")).unwrap_err();
+    assert!(
+        err.contains("`x` is set from the hidden `o` in the workload's init"),
+        "{err}"
+    );
+    // a later `set` in the turn of a visible value makes it visible again
+    check(src("set o = 4; set x = o;", "set x = 1;", "turn;")).unwrap();
+    // the session reads the turn that has ended
+    check(src(
+        "set x = 0; set o = 0;",
+        "set o = ~exp(10);",
+        "turn; set x = x + o; turn;",
+    ))
+    .unwrap();
+}
