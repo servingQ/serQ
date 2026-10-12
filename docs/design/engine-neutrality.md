@@ -253,9 +253,10 @@ in its own design.
   None needs a GPU; a GPU run, as for vLLM's A100 testbed, checks a cost
   model, not a scheduler.
 - **SGLang's LPM waiting order** sorts by the prefix match in the shared
-  tree. `queue by (-cachedin(kv))` links but matches only a session's own
-  prefix, so it is LPM for multi-turn reuse alone. Real LPM waits for the
-  shared cache.
+  tree. `queue by (-cachedin(kv))` matches along the waiting request's
+  chain in the shared cache ([A shared prefix cache](shared-prefix-cache.md));
+  `engines/sglang.sq --lpm 1` writes it, with SGLang's fall back to FCFS
+  past 128 waiting.
 - **`granule` per run.** A prefill run could carry its own granule,
   `prefill on engine (n) granule g`. Rejected: TensorRT-LLM's chunk unit is
   an engine setting, and a per-run one would write a scheduler rule on the

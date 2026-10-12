@@ -22,8 +22,12 @@
 //   its lower bound, so it admits more boldly than SGLang after one;
 // - SGLang retracts only in a decode batch; here a chunked prefill's growth
 //   may preempt too, and its iteration does not move the ratio;
-// - the radix cache is shared across requests, and serQ's entries are a
-//   session's own (#374).
+// - the radix cache is shared across requests by content; this workload
+//   shares nothing across sessions, so the request writes no chain
+//   (`prefix`, docs/design/shared-prefix-cache.md) and LPM orders the
+//   waiting by their own sessions' cached prefixes; SGLang also moves an
+//   in-batch duplicate prefix to the back, which no request here has.
+use "std/args";
 
 let B = 8192;           // chunked_prefill_size
 let max_run = 256;      // max_running_requests
@@ -42,6 +46,7 @@ let p = 0.9;            // continue after a turn
 let Z = 3.0;            // tool time (s)
 
 fn main() {
+  let lpm = args.number("lpm", 0);         // 1: --schedule-policy lpm
   device gpu {
     compute (t) = t * a;
     hbm (k) = omega + beta * k;
@@ -91,7 +96,11 @@ fn main() {
     }
     execute (max(hbm(batch.kv_decode + batch.kv_prefill), compute(batch.tokens)));
   }
-  pool reqs on sglang { queue fifo; }
+  // FCFS, SGLang's default; `--lpm 1` is `--schedule-policy lpm`: the
+  // waiting requests by their cached prefix, longest first, ties in queue
+  // order, and FCFS while more than 128 wait (schedule_policy.py,
+  // `_sort_by_longest_prefix`, `_determine_active_policy`)
+  pool reqs on sglang { queue by (lpm == 1 && queued(reqs) <= 128 ? -cachedin(kv) : 0); }
   pool kv on gpu { evict lru; preempt by (1 - decoding, position - prompt, -prompt) requeue tail; }
 
   workload {

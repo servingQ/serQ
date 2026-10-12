@@ -115,8 +115,13 @@ serving `M` products this way.
   tokens and the thousand 1529–2601, the latter sensitive to bursts.
 - SGLang's LPM waiting order: `queue by (-cachedin(kv))` is the longest
   prefix match in the shared tree, as SGLang sorts it
-  ([`schedule_policy.py` L487-L495](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/schedule_policy.py#L487-L495)),
-  once `engines/sglang.sq` writes its chains.
+  ([`schedule_policy.py` L487-L495](https://github.com/sgl-project/sglang/blob/b792228b35b21565067520857319dfc05e4d134e/python/sglang/srt/managers/schedule_policy.py#L487-L495)):
+  `engines/sglang.sq --lpm 1`, FCFS past 128 waiting as SGLang's
+  `_determine_active_policy`, ties in queue order as its stable sort; on
+  its workload (seed 1, horizon 3000 s, warm-up 300 s) the first token
+  comes in 0.42 s against FCFS's 0.47 s, within the runs' intervals.
+  `tests/shared_prefix.rs` admits by it the request whose system prompt
+  is cached before one sent earlier.
 - TensorRT-LLM's prefix-aware skip
   ([`capacityScheduler.cpp` L367-L376](https://github.com/NVIDIA/TensorRT-LLM/blob/bf414e37291b9d15a5328af99e349db8dedf7a4d/cpp/tensorrt_llm/batch_manager/capacityScheduler.cpp#L367-L376)),
   which defers a context whose first blocks another one admitted in the
@@ -151,8 +156,8 @@ serving `M` products this way.
    (`docs/language.md` §7).
 3. The engine form's request with a chain: `prefix (k: n, …);`, the
    request's first item, written into the hold of its admission
-   (`examples/multi-turn/vllm_system_prompt.sq`). Then LPM, and the agent
-   workloads written with it.
+   (`examples/multi-turn/vllm_system_prompt.sq`, the agent workload); and
+   SGLang's LPM order (`engines/sglang.sq --lpm 1`).
 
 ## Self-critique
 
